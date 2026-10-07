@@ -1,5 +1,7 @@
 # ADR-0065 — A bond must be earned, and a failure is not a verdict
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -21,15 +23,15 @@ separate change and it IS a re-mint** — testnet-11 Relaunch 4, below.
 > genesis** on testnet-11 since Relaunch 5 (`palw_rc_arm_phase1`, [ADR-0068](0068-the-llm-primary-economy-and-the-floors-minimum.md)
 > Phase 2); devnet and mainnet leave it `None`. Decision 1 (`palw_bond_maturity`) is armable — the RC
 > registry holds eight cards — but is still `None` on every preset; arming it is the out-of-band
-> window this ADR names. Decision 2a stays dormant. The "0.004 MSK" registration floor measured
-> here is the post-genesis carrier's `min_collateral_sompi`; genesis seats are 10,000 MSK
+> window this ADR names. Decision 2a stays dormant. The "0.004 BILI" registration floor measured
+> here is the post-genesis carrier's `min_collateral_sompi`; genesis seats are 10,000 BILI
 > ([ADR-0061](0061-zero-seat-genesis-and-right-sized-collateral.md)). Map: [`README.md`](README.md).
 
 ## The single root
 
 Three facts about a bond, all verified in the tree:
 
-* registration gates on `min_collateral_sompi` alone — **400,000 sompi (0.004 MSK)**, refundable;
+* registration gates on `min_collateral_sompi` alone — **400,000 sompi (0.004 BILI)**, refundable;
 * **`write_bond(key, None)` has no callers** — a bond never leaves the registry, retired or not;
 * **`registered_daa` is written and read by no consensus gate anywhere** — no maturity, no soak.
 
@@ -43,7 +45,7 @@ collects no receipts, so it has no frontier* — is already false.
 
 **Liveness side, measured on testnet-11.** The shipped panel is `seat_count = 5, quorum = 3`, and
 **one host runs three seats** — exactly quorum. 443 of ~1,265 claims (35 %) ended in
-`ProducerDefaulted`, each voiding ≈2,756 MSK.
+`ProducerDefaulted`, each voiding ≈2,756 BILI.
 
 That host holds three seats *legitimately*: three bonds, three distinct `operator_id`s, three
 distinct bond keys. The draw is working as designed (see D3). Cheap, permanent, instantly-usable

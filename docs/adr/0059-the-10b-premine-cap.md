@@ -1,5 +1,7 @@
 # ADR-0059: The 10B premine cap — genesis mints one number, everything else is a carve
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 - Status: Accepted
 - Date: 2026-08-30
 - Depends on: ADR-0042 (the RC atomic bundle and its genesis registry), audit C-08 (a bond's
@@ -51,14 +53,14 @@ lessons are structural now:
   inside `palw_ruleset_id`), and fleet units name float outpoints in their configs — indices
   are names, not positions, and the gap at 6..39 is deliberate.
 * **The collateral value.** 0.1B per seat at this ADR's cut — *superseded the same day by
-  ADR-0061*, which re-sizes the outputs to 10,000 MSK per seat (the declared collateral stays
+  ADR-0061*, which re-sizes the outputs to 10,000 BILI per seat (the declared collateral stays
   the derived figure, so `palw_ruleset_id` still does not move).
 * **The emission schedule.** 15B over 20 years, untouched. Final supply follows the cap:
   10B + 15B = **25B** (`MAX_SOMPI` 28B → 25B, the same follow-the-premine move as the
   30B → 28B re-derivation of 2026-06-17).
-* **The community table.** All 11 entrants, 547M MSK, same addresses, same order — now paid
+* **The community table.** All 11 entrants, 547M BILI, same addresses, same order — now paid
   for by the main wallet (t11 main = 10B − 0.6B collateral − 600 floats − 547M community
-  = 8,852,999,400 MSK).
+  = 8,852,999,400 BILI).
 
 ## Safety of "the main wallet bonds"
 

@@ -1,5 +1,7 @@
 # PALW — third-pass audit of the mainnet remediation, and the testnet-11 re-mint decision (2026-08-29)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **What this is.** A third read of the same changeset, run after
 `docs/palw-mainnet-reaudit-2026-08-29.md` and against the tree that document's own repairs produced:
 branch `claude/mainnet-audit-fixes-9g6oh9`, HEAD `65674f89`, 29 files, ~4,250 insertions over `main`

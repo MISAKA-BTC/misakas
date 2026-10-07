@@ -1,5 +1,7 @@
 # ADR-0131 — A claim is paid for the compute it cost, in economic compute, not leaves
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -7,7 +9,7 @@
   `feat/palw-exec-lane-and-validator-retirement` (§7). No consensus rule, parameter or fingerprint
   moves: everything here is node-local measurement until Decision 3 gets a height.
 * **ADR-0144 alignment (2026-09-21).** Decisions 3–6 do not arm a scalar CCU until ADR-0146. See the end section.
-* Operator's direction, in the operator's words: "次に見るべきは claim数ではなく `MSK / canonical compute`";
+* Operator's direction, in the operator's words: "次に見るべきは claim数ではなく `BILI / canonical compute`";
   "PWU = fork choice / consensus work、CCU = model間の経済価格 を分離"; "M4で何秒だったかを直接consensus値に
   しない — 時間は校正用データに留めます"; "DAA補正を二重に掛けないこと"; "Producer CCUとPanel CCUを分離";
   "45% domain capは報酬計算から切り離す"; "新モデル追加時に、shadow期間を必須にする"; "ここからモデル間の歪みを
@@ -22,7 +24,7 @@
 **A claim's pay is the network's rate times the economic compute the claim cost — the expected draw forwards
 at its class's target plus its canonical job, each priced by a versioned, deterministic cost of the kernels it
 runs — while fork choice keeps its leaves; and no rate, class or unit changes pay until the node has measured,
-in the open, how many MSK each class earns per unit of compute it finalized and per unit it attempted.**
+in the open, how many BILI each class earns per unit of compute it finalized and per unit it attempted.**
 
 ## 1. What testnet-11 pays today (read from its genesis objects and live node, 2026-09-17)
 
@@ -64,8 +66,8 @@ in the open, how many MSK each class earns per unit of compute it finalized and 
 
 **Decision 1 — measure first: per-class economics over RPC (node-local).** For each class and each span: attempts
 accepted, claims `Final` and voided, final rate; Σ `claim.pwu`, Σ static leaves, Σ economic compute (Decision 2);
-producer MSK, panel MSK and execution-fee MSK actually paid; average class target and expected attempts; and
-the ratios `F_m = paid MSK / Final compute`, `G_m = paid MSK / attempted compute` (voided claims included) and
+producer BILI, panel BILI and execution-fee BILI actually paid; average class target and expected attempts; and
+the ratios `F_m = paid BILI / Final compute`, `G_m = paid BILI / attempted compute` (voided claims included) and
 `Gap = max(F) / min(F) − 1`, reported for the leaf basis and the compute basis side by side. A recorder follows
 the chain and keys every row by claim id, so a reorg rewrites a row rather than adding one.
 

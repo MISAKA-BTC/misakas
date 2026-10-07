@@ -121,7 +121,7 @@ footer { color: var(--ink-2); font-size: 12px; }
   const token = new URLSearchParams(location.search).get("token");
   const api = (path) => fetch(path + (token ? (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token) : ""), { cache: "no-store" })
     .then((r) => r.ok ? r.json() : r.text().then((t) => { throw new Error(t || r.status); }));
-  const msk = (sompi) => (Number(sompi) / 1e8).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " MSK";
+  const msk = (sompi) => (Number(sompi) / 1e8).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " BILI";
   const short = (s, n) => (s || "").slice(0, n || 8);
   const tone = (state) => ({ DRAWING: "good", READY: "good", NOT_PRODUCING: "dim", NOT_SET_UP: "dim" })[state]
     || (["HOLDING", "SYNCING", "STARTING", "STOPPING"].includes(state) ? "warn" : "bad");

@@ -387,8 +387,8 @@ struct SetupCliArgs {
     /// setup writes a profile; this flag remains for compatibility and clearer operator intent).
     #[arg(long)]
     verify_artifact: bool,
-    /// The validator's stake in MSK (validator setup; default: the network's minimum bond).
-    #[arg(long, value_name = "MSK")]
+    /// The validator's stake in BILI (validator setup; default: the network's minimum bond).
+    #[arg(long, value_name = "BILI")]
     amount: Option<String>,
     /// Answer yes to every question: make the key, register the bond, declare, write the file.
     #[arg(long)]
@@ -651,8 +651,8 @@ enum MarketCmd {
         /// Another line of the class (128 hex) instead of its founding line.
         #[arg(long)]
         line: Option<String>,
-        /// How much to pay now, in MSK (default: what is still owed).
-        #[arg(long, value_name = "MSK")]
+        /// How much to pay now, in BILI (default: what is still owed).
+        #[arg(long, value_name = "BILI")]
         seed: Option<String>,
         #[arg(long)]
         yes: bool,
@@ -872,12 +872,12 @@ enum WalletCmd {
     /// UTXO-set operations (list / consolidate).
     #[command(subcommand)]
     Utxo(UtxoCmd),
-    /// Send MSK to a recipient (dry-run unless --yes).
+    /// Send BILI to a recipient (dry-run unless --yes).
     Send {
         /// Recipient address (must match --network).
         #[arg(long)]
         to: String,
-        /// Amount in MSK (decimal, e.g. 10.5).
+        /// Amount in BILI (decimal, e.g. 10.5).
         #[arg(long)]
         amount: String,
         /// Actually broadcast (otherwise a dry-run preview).
@@ -1434,7 +1434,7 @@ enum PalwCmd {
     ModelShow {
         /// 128-hex line id (a class id names the class's founding line).
         line_id: String,
-        /// Quote a buy of this many MSK (e.g. `12.5`, or `1250000000sompi`).
+        /// Quote a buy of this many BILI (e.g. `12.5`, or `1250000000sompi`).
         #[arg(long)]
         quote_msk: Option<String>,
         /// JSON output (`--output json` does the same).
@@ -1455,7 +1455,7 @@ enum PalwCmd {
         json: bool,
     },
     /// ADR-0089 Decision 5: buy a position FROM THE EVM — a signed call to the ModelWriter
-    /// (0x…F013) carrying `sendAction(buy)` with the MSK as the call's value; the fold applies it
+    /// (0x…F013) carrying `sendAction(buy)` with the BILI as the call's value; the fold applies it
     /// after the block and the next chain block settles it. [needs --features evm-send]
     #[cfg(feature = "evm-send")]
     ModelEvmBuy {
@@ -1464,7 +1464,7 @@ enum PalwCmd {
         /// The line (128 hex; a class's own line has the class id).
         #[arg(long)]
         line: String,
-        /// MSK to pay, whole sompi (e.g. "5" or "0.25").
+        /// BILI to pay, whole sompi (e.g. "5" or "0.25").
         #[arg(long)]
         msk: String,
         #[arg(long, default_value_t = 0)]
@@ -1481,7 +1481,7 @@ enum PalwCmd {
         wait: bool,
     },
     /// ADR-0089 Decision 5: sell positions FROM THE EVM — `sendAction(sell)` with no value; the
-    /// net MSK is credited to the signing account when the next chain block settles it.
+    /// net BILI is credited to the signing account when the next chain block settles it.
     #[cfg(feature = "evm-send")]
     ModelEvmSell {
         #[command(flatten)]
@@ -1490,7 +1490,7 @@ enum PalwCmd {
         line: String,
         #[arg(long)]
         positions: u64,
-        /// The least MSK (whole sompi) the sell may net, else the fold refuses it.
+        /// The least BILI (whole sompi) the sell may net, else the fold refuses it.
         #[arg(long, default_value = "0")]
         min_msk: String,
         #[arg(long)]
@@ -1512,8 +1512,8 @@ enum PalwCmd {
         #[arg(long)]
         address: String,
     },
-    /// **Seed a line's market — lock MSK in the line's sink, for good.** Past ADR-0162's fence the
-    /// market is already open (from the line's creation, on a 10,000,000 MSK virtual reserve that
+    /// **Seed a line's market — lock BILI in the line's sink, for good.** Past ADR-0162's fence the
+    /// market is already open (from the line's creation, on a 10,000,000 BILI virtual reserve that
     /// prices and is never paid), and a seed is OPTIONAL depth: any amount, before the market's first
     /// trade, joining the real reserve and raising the floor `(V + seed) / 500,000`; refused after the
     /// first trade; at the opener's risk (a class never approved never trades). Below the fence
@@ -1526,7 +1526,7 @@ enum PalwCmd {
         /// 128-hex line id (a class id names the class's founding line)
         #[arg(long)]
         line: String,
-        /// MSK to lock (e.g. `250000`, or `25000000000000sompi`)
+        /// BILI to lock (e.g. `250000`, or `25000000000000sompi`)
         #[arg(long)]
         msk: String,
         /// Actually broadcast (otherwise a dry-run preview)
@@ -1534,7 +1534,7 @@ enum PalwCmd {
         yes: bool,
     },
     /// **ADR-0152-adjacent: sponsor a model's listing** — top its class's Activation Pool up with
-    /// MSK paid into the class's activation sink. Anyone may, its registrant included; a donation,
+    /// BILI paid into the class's activation sink. Anyone may, its registrant included; a donation,
     /// never refunded once folded. While the class is a Candidate 40 % funds the preparation reward
     /// its prepared jurors are paid at its audit, the rest the activation bonus paid at
     /// `Probation → ActiveLimited` to the operators its probe Finals credited.
@@ -1543,7 +1543,7 @@ enum PalwCmd {
         key: KeyArgs,
         /// 128-hex class id (or 8+ hex of one)
         class: String,
-        /// MSK to add (e.g. `100`, or `10000000000sompi`); at least the chain's least top-up
+        /// BILI to add (e.g. `100`, or `10000000000sompi`); at least the chain's least top-up
         msk: String,
         /// Actually broadcast (otherwise a dry-run preview)
         #[arg(long)]
@@ -1566,7 +1566,7 @@ enum PalwCmd {
         key: EvmKeyArgs,
         #[arg(long)]
         line: String,
-        /// MSK to lock, whole sompi (e.g. "250000")
+        /// BILI to lock, whole sompi (e.g. "250000")
         #[arg(long)]
         msk: String,
         #[arg(long)]
@@ -1591,7 +1591,7 @@ enum PalwCmd {
         /// 128-hex line id (a class id names the class's founding line).
         #[arg(long)]
         line: String,
-        /// MSK to pay (e.g. `12.5`, or `1250000000sompi`).
+        /// BILI to pay (e.g. `12.5`, or `1250000000sompi`).
         #[arg(long)]
         msk: String,
         /// The fewest positions to accept; the move is refused, never partially filled, below it.
@@ -1622,7 +1622,7 @@ enum PalwCmd {
         /// Positions to sell.
         #[arg(long)]
         positions: u64,
-        /// The least MSK to accept for them (e.g. `12.5`).
+        /// The least BILI to accept for them (e.g. `12.5`).
         #[arg(long)]
         min_msk: Option<String>,
         /// Actually broadcast (otherwise a dry-run preview with the quote).
@@ -1669,7 +1669,7 @@ enum PalwCmd {
         json: bool,
     },
     /// **ADR-0088: found a further line on a class.** `--bond` becomes its owner, developer and
-    /// maintainer and signs; V1 is `--root`. Rent-priced (1 MSK of the fee is burned).
+    /// maintainer and signs; V1 is `--root`. Rent-priced (1 BILI of the fee is burned).
     LineFound {
         #[command(flatten)]
         key: KeyArgs,
@@ -1854,7 +1854,7 @@ enum PalwCmd {
         yes: bool,
     },
     /// **ADR-0088: post a proposal on a line** — a root and a note — from any Active bond.
-    /// Rent-priced (1 MSK of the fee is burned). Paid when a version adopts it.
+    /// Rent-priced (1 BILI of the fee is burned). Paid when a version adopts it.
     ProposalPost {
         #[command(flatten)]
         key: KeyArgs,
@@ -1889,7 +1889,7 @@ enum PalwCmd {
         yes: bool,
     },
     /// **ADR-0088: post an evaluation of a version** — a declaration from any Active bond, at
-    /// most 16 per version, one per bond. Rent-priced (1 MSK of the fee is burned).
+    /// most 16 per version, one per bond. Rent-priced (1 BILI of the fee is burned).
     Evaluate {
         #[command(flatten)]
         key: KeyArgs,
@@ -2131,7 +2131,7 @@ enum BondCmd {
     },
 }
 
-/// Parse a decimal MSK string (e.g. "10.5") into sompi (1 MSK = 1e8 sompi).
+/// Parse a decimal BILI string (e.g. "10.5") into sompi (1 BILI = 1e8 sompi).
 fn parse_msk_to_sompi(s: &str) -> Result<u64, CliError> {
     let (whole, frac) = match s.split_once('.') {
         Some((w, f)) => (w, f),
@@ -2143,7 +2143,7 @@ fn parse_msk_to_sompi(s: &str) -> Result<u64, CliError> {
     let whole: u64 =
         if whole.is_empty() { 0 } else { whole.parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))? };
     if frac.len() > 8 || !frac.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(CliError::new(exit::GENERIC, format!("amount '{s}' has >8 fractional digits (1 MSK = 1e8 sompi)")));
+        return Err(CliError::new(exit::GENERIC, format!("amount '{s}' has >8 fractional digits (1 BILI = 1e8 sompi)")));
     }
     let frac_sompi: u64 = format!("{frac:0<8}").parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))?;
     whole
@@ -2316,7 +2316,7 @@ enum BootstrapCmd {
 
 #[derive(Subcommand, Debug)]
 enum EvmCmd {
-    /// Native MSK balance of an EVM address (`eth_getBalance`).
+    /// Native BILI balance of an EVM address (`eth_getBalance`).
     Balance {
         /// 0x-prefixed 20-byte EVM address.
         #[arg(long)]
@@ -2341,7 +2341,7 @@ enum EvmCmd {
         #[arg(long)]
         data: Option<String>,
     },
-    /// Bridge MSK into the EVM lane: lock it for an EVM address (dry-run unless --yes). Claim the
+    /// Bridge BILI into the EVM lane: lock it for an EVM address (dry-run unless --yes). Claim the
     /// lock afterwards with `evm claim` against a mining node.
     DepositLock {
         /// The EVM address to credit — paste the EIP-55 checksummed form so a typo is caught.
@@ -2392,7 +2392,7 @@ enum EvmCmd {
         /// Recipient 0x address.
         #[arg(long)]
         to: String,
-        /// Amount in MSK (decimal; 1 MSK = 1e18 wei).
+        /// Amount in BILI (decimal; 1 BILI = 1e18 wei).
         #[arg(long)]
         amount: String,
         /// Gas limit (default: eth_estimateGas).
@@ -2422,7 +2422,7 @@ enum EvmCmd {
         /// Init code from a file (hex). Use this for large blobs.
         #[arg(long)]
         bytecode_file: Option<String>,
-        /// Value to endow, MSK (decimal; usually 0).
+        /// Value to endow, BILI (decimal; usually 0).
         #[arg(long, default_value = "0")]
         value: String,
         #[arg(long)]
@@ -2450,7 +2450,7 @@ enum EvmCmd {
         /// Calldata from a file (hex).
         #[arg(long)]
         data_file: Option<String>,
-        /// Value to send, MSK (decimal; usually 0).
+        /// Value to send, BILI (decimal; usually 0).
         #[arg(long, default_value = "0")]
         value: String,
         #[arg(long)]

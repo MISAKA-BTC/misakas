@@ -1,5 +1,7 @@
 # testnet-12 panel backlog, 2026-10-01 — root cause, fixes (int-10.1), verification
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 Status: analysis done on the live fleet (read-only); fixes F1–F4 on `rcore/int-10-p1` (node-only, the
 t12 identity does not move); consensus proposal for int-11 below. Written by lane P.
 
@@ -130,8 +132,8 @@ From `sweep_deadlines` / `void_and_slash_at` (consensus/core `palw_state_v2.rs`)
   whole cost of two panels failing to conclude falls on the producer, whoever caused the silence.
 * `BindTimeout` and `NoCapablePanel` voids are never charged.
 
-On the live chain (b6's RPC, DAA 3,109, 18 bonds): **every bond's `bondSlashed` is 0 except two with 1 MSK** (`5e0d…:1` and
-`8ad9…` = P; P's 1 MSK was taken at DAA ~508, `transitions.tsv`; b1's journal since 09-29 02:00 shows no slash line).
+On the live chain (b6's RPC, DAA 3,109, 18 bonds): **every bond's `bondSlashed` is 0 except two with 1 BILI** (`5e0d…:1` and
+`8ad9…` = P; P's 1 BILI was taken at DAA ~508, `transitions.tsv`; b1's journal since 09-29 02:00 shows no slash line).
 The floor class ledger reads voided 171 and **redrawn 0 (ever)**, all `BindTimeout` (the 12 in the tracker's window voided
 at DAA 629–749); the 8k class voided 4 (`BindTimeout`) and redrawn 6 cumulative (none open now; the open ones are 171 DAA into
 a 600-DAA window, so none belongs to this backlog). So **no honest bond has been slashed, no seat can be, and no open claim has

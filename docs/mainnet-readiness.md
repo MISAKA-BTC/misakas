@@ -1,5 +1,7 @@
 # Mainnet readiness
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **Where MISAKA stands against what a production L1 needs before its mainnet genesis.** Each item is
 marked only by what this repository can show. The mark is not a plan or an intention:
 
@@ -70,7 +72,7 @@ add more rules.
 | **PASS** | Explorer, web wallet, public RPC | [misakascan.com](https://misakascan.com), [wallet.misakascan.com](https://wallet.misakascan.com), `misakascan.com/evm` |
 | **PASS** | App on the chain | [misakaoptions.com](https://misakaoptions.com) ([web/misaka-options](../web/misaka-options/README.md)) |
 | **PARTIAL** | Model market in use | active on testnet-12 from genesis and reachable from the app, the EVM lane and the CLI; at launch no store was opened yet, and two of the three genesis classes were still `Prefetching` (`getPalwModelMarket`) |
-| **TODO** | Usage published live | stores opened, members, reserve, burned MSK and owner fees per model, read from the chain and shown on the explorer or the app, never typed into a README |
+| **TODO** | Usage published live | stores opened, members, reserve, burned BILI and owner fees per model, read from the chain and shown on the explorer or the app, never typed into a README |
 | **PARTIAL** | DNS finality | in Bootstrap on testnet-12 until validators are funded (launch note §2.3) |
 | **TODO** | Faucet | testnet-12 faucet is unfunded ([join guide §4](testnet12-join-mining.md)) |
 | **TODO** | Long soak with no consensus change | the plan exists ([testing/public-testnet-soak.md](testing/public-testnet-soak.md)); no public network has yet run 30 days on one ruleset |

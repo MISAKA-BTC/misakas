@@ -1,5 +1,7 @@
 # Mining with the A16 model on testnet-11 — from `v3 executed` to a paid block
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 This page is for an operator who already has the free-prompt gateway answering prompts — the
 worker prints `[palw-worker] [qwen25-a16] v3 executed: prefill=… decode=… exec root=…` — and
 cannot tell whether any of it is mining. **On its own, it is not.** An executed job is an answer

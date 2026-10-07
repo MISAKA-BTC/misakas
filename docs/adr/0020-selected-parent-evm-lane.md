@@ -1,5 +1,7 @@
 # ADR-0020: Selected-Parent EVM Execution Lane on L1
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 ## Status
 Accepted & implemented through design **v0.4 (mergeset delayed acceptance)**; **ACTIVATED ON
 TESTNET 2026-06-11**. All build phases are on `pr-19-s5f-…`: P0–P3 (types/executor/state), M10

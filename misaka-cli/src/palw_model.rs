@@ -32,7 +32,7 @@ pub(crate) fn served_schedule(r: &kaspa_rpc_core::GetPalwModelMarketResponse) ->
 /// or buy still lands, and its sink output is the payment (P-B1). A node older than version 7 served
 /// no gate — its fold asked none — and reads as `None`. A sell never asks.
 ///
-/// It used to say the MSK paid into the sink "would not come back": a node does not relay such a
+/// It used to say the BILI paid into the sink "would not come back": a node does not relay such a
 /// carrier, and where one is mined anyway the chain pays it back past the 2026-09-23 audit fence
 /// (P-B1) — [`refusal_line`] says which, per network (the 2026-09-25 Position review's N3).
 ///
@@ -98,7 +98,7 @@ pub(crate) fn seed_refusal(r: &kaspa_rpc_core::GetPalwModelMarketResponse, line_
 }
 
 /// **What a seed of `msk_seed` does, said before it is signed** (the 2026-09-25 Position review's N1:
-/// the preview ignored what was already pledged — it priced a 600,000 MSK instalment as if it were the
+/// the preview ignored what was already pledged — it priced a 600,000 BILI instalment as if it were the
 /// whole seed). Past ADR-0162's fence: the pool it deepens and the floor it raises, by the chain's
 /// own arithmetic. Below it: the pledge it adds to, and the market it opens when the total reaches
 /// the floor.
@@ -155,7 +155,7 @@ pub(crate) fn seed_preview(
         ));
     }
     out.push(
-        "  LOCKED FOR GOOD: no object pays a seed out; only a holder's sell moves MSK out of the curve, and never below the seed."
+        "  LOCKED FOR GOOD: no object pays a seed out; only a holder's sell moves BILI out of the curve, and never below the seed."
             .into(),
     );
     out
@@ -163,8 +163,8 @@ pub(crate) fn seed_preview(
 
 /// **Why a seed this carrier cannot fund is refused, and what to pay instead** (the 2026-09-25
 /// Position review's #5). One carrier spends at most [`PALW_CARRIER_MAX_INPUTS`] utxos, so the advice
-/// is an instalment of what those utxos hold less the fee — in whole MSK, and only when that is at
-/// least one MSK. It used to advise `--msk 0` when the utxos held less than the fee, an amount this
+/// is an instalment of what those utxos hold less the fee — in whole BILI, and only when that is at
+/// least one BILI. It used to advise `--msk 0` when the utxos held less than the fee, an amount this
 /// command and the chain both refuse; there the only advice is to fund the address.
 pub(crate) fn seed_shortfall_message(
     utxos: usize,
@@ -179,7 +179,7 @@ pub(crate) fn seed_shortfall_message(
     if instalment_msk == 0 {
         return format!(
             "the {utxos} mature utxo(s) this carrier can spend at {addr} hold {}, which does not cover {} plus a fee — nor \
-             even a one-MSK payment and the fee ({}). Fund {addr} first.",
+             even a one-BILI payment and the fee ({}). Fund {addr} first.",
             msk(reach),
             msk(msk_seed),
             msk(fee)
@@ -264,7 +264,7 @@ fn parse_line(line_id: &str) -> Result<kaspa_consensus_core::Hash64, CliError> {
         .map_err(|_| CliError::new(exit::GENERIC, format!("line id '{line_id}' is not a 128-hex Hash64")))
 }
 
-/// MSK with an optional fraction ("12.5"), or sompi with a `sompi` suffix ("1250000000sompi").
+/// BILI with an optional fraction ("12.5"), or sompi with a `sompi` suffix ("1250000000sompi").
 pub(crate) fn parse_msk_amount(text: &str) -> Result<u64, CliError> {
     let t = text.trim();
     if let Some(sompi) = t.strip_suffix("sompi") {
@@ -275,7 +275,7 @@ pub(crate) fn parse_msk_amount(text: &str) -> Result<u64, CliError> {
         None => (t, ""),
     };
     if frac.len() > 8 || frac.chars().any(|c| !c.is_ascii_digit()) || whole.chars().any(|c| !c.is_ascii_digit()) || whole.is_empty() {
-        return Err(CliError::new(exit::GENERIC, format!("'{text}' is not an MSK amount (up to 8 decimals, or a `sompi` suffix)")));
+        return Err(CliError::new(exit::GENERIC, format!("'{text}' is not an BILI amount (up to 8 decimals, or a `sompi` suffix)")));
     }
     let whole: u64 = whole.parse().map_err(|_| CliError::new(exit::GENERIC, format!("'{text}' is out of range")))?;
     let mut frac_sompi = 0u64;
@@ -289,7 +289,7 @@ pub(crate) fn parse_msk_amount(text: &str) -> Result<u64, CliError> {
 }
 
 pub(crate) fn msk(sompi: u64) -> String {
-    format!("{}.{:08} MSK", sompi / SOMPI_PER_MSK, sompi % SOMPI_PER_MSK)
+    format!("{}.{:08} BILI", sompi / SOMPI_PER_MSK, sompi % SOMPI_PER_MSK)
 }
 
 pub(crate) fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelMarketV1 {
@@ -779,7 +779,7 @@ impl BuyFloor {
     /// The whole positions the buy insists on, given the curve's quote and whether this chain pays
     /// a refused carrier back.
     ///
-    /// **Unstated on a chain that keeps a refused carrier's MSK, nothing is guessed.** A floor there
+    /// **Unstated on a chain that keeps a refused carrier's BILI, nothing is guessed.** A floor there
     /// is a bet the whole payment on the price holding until inclusion, and no floor is a buy at any
     /// price; both are the buyer's call, so the tool asks for one — as `model-sell` asks for
     /// `--min-msk`.
@@ -791,7 +791,7 @@ impl BuyFloor {
             BuyFloor::Unstated => {
                 return Err(CliError::new(
                     exit::GENERIC,
-                    "state --min-positions <n> or --slippage <p%>: this chain keeps a refused carrier's MSK in the line's sink, \
+                    "state --min-positions <n> or --slippage <p%>: this chain keeps a refused carrier's BILI in the line's sink, \
                      so a floor risks the whole payment on the price holding until the carrier is accepted, and \
                      --min-positions 0 buys at any price"
                         .to_string(),
@@ -803,7 +803,7 @@ impl BuyFloor {
 }
 
 /// **Whether this chain pays a refused carrier back** (P-B1): past `palw_audit_2026_09_23` at the
-/// tip the node reported, the sink's MSK is paid back to the carrier's change address.
+/// tip the node reported, the sink's BILI is paid back to the carrier's change address.
 fn refused_is_refunded(nv: &crate::wallet::NodeView) -> bool {
     nv.params.palw_audit_2026_09_23_active_at(nv.virtual_daa)
 }
@@ -1095,7 +1095,7 @@ mod tests {
         };
         let why = market_refusal(&refused).expect("refused");
         assert!(why.contains("Prefetching") && why.contains("would refuse"), "{why}");
-        // N3: it no longer promises the MSK is lost — a node does not relay such a carrier, and the
+        // N3: it no longer promises the BILI is lost — a node does not relay such a carrier, and the
         // chain pays a mined one back where it refunds (P-B1); `refusal_line` says which, per network.
         assert!(!why.contains("would not come back"), "{why}");
     }
@@ -1152,13 +1152,13 @@ mod tests {
         const MSK: u64 = 100_000_000;
         let pledge = PalwModelMarketV1::pledge_v1(5, 400_000 * MSK, kaspa_consensus_core::Hash64::from_u64_word(1));
         let why = unseeded_refusal(&answer(MILLION_MSK, pledge)).expect("unseeded");
-        assert!(why.contains("not seeded (pledged 400000.00000000 MSK / needs 1000000.00000000 MSK)"), "{why}");
+        assert!(why.contains("not seeded (pledged 400000.00000000 BILI / needs 1000000.00000000 BILI)"), "{why}");
         let open = PalwModelMarketV1::seed_v1(5, 1_000_000 * MSK, kaspa_consensus_core::Hash64::from_u64_word(1));
         assert_eq!(unseeded_refusal(&answer(MILLION_MSK, open)), None, "an open market is not");
     }
 
-    /// **#5: a short seed never advises `--msk 0`.** Under the fee (or under one MSK after it) the
-    /// advice is to fund the address; above it, a whole-MSK payment of what the utxos hold less the
+    /// **#5: a short seed never advises `--msk 0`.** Under the fee (or under one BILI after it) the
+    /// advice is to fund the address; above it, a whole-BILI payment of what the utxos hold less the
     /// fee.
     #[test]
     fn a_short_seed_never_advises_zero() {
@@ -1193,8 +1193,8 @@ mod tests {
     }
 
     /// **The 2026-09-25 Position review's N1: the seed preview adds the payment to what is already
-    /// pledged** — on the live drill it priced a 600,000 MSK instalment on a 400,000 MSK pledge as a
-    /// whole seed (0.8 and 1.2 MSK) where the market opened at 2.0.
+    /// pledged** — on the live drill it priced a 600,000 BILI instalment on a 400,000 BILI pledge as a
+    /// whole seed (0.8 and 1.2 BILI) where the market opened at 2.0.
     #[test]
     fn the_seed_preview_counts_what_is_already_pledged() {
         use super::seed_preview;
@@ -1203,9 +1203,9 @@ mod tests {
         let pledge = PalwModelMarketV1::pledge_v1(5, 400_000 * MSK, kaspa_consensus_core::Hash64::from_u64_word(1));
         let r = answer(MILLION_MSK, pledge);
         let opens = seed_preview(&r, &kaspa_consensus_core::Hash64::from_u64_word(2), 600_000 * MSK).join("\n");
-        assert!(opens.contains("opens the pair") && opens.contains("first price 2.00000000 MSK"), "400k + 600k opens at 2.0: {opens}");
+        assert!(opens.contains("opens the pair") && opens.contains("first price 2.00000000 BILI"), "400k + 600k opens at 2.0: {opens}");
         let part = seed_preview(&r, &kaspa_consensus_core::Hash64::from_u64_word(2), 100_000 * MSK).join("\n");
-        assert!(part.contains("500000.00000000 MSK of 1000000.00000000 MSK") && part.contains("500000.00000000 MSK to go"), "{part}");
+        assert!(part.contains("500000.00000000 BILI of 1000000.00000000 BILI") && part.contains("500000.00000000 BILI to go"), "{part}");
     }
 
     /// **The 2026-09-25 Position review's N4: the owner's leg is named as the chain pays it** — burned
@@ -1235,8 +1235,8 @@ mod tests {
         assert_eq!(seed_refusal(&r, Some("Active")), None, "before the first trade a seed is taken");
         assert_eq!(unseeded_refusal(&r), None, "every line is a market past the fence");
         let preview = seed_preview(&r, &kaspa_consensus_core::Hash64::from_u64_word(1), 500_000 * MSK).join("\n");
-        assert!(preview.contains("real reserve   0.00000000 MSK -> 500000.00000000 MSK"), "{preview}");
-        assert!(preview.contains("price floor    20.00000000 MSK -> 21.00000000 MSK per position"), "{preview}");
+        assert!(preview.contains("real reserve   0.00000000 BILI -> 500000.00000000 BILI"), "{preview}");
+        assert!(preview.contains("price floor    20.00000000 BILI -> 21.00000000 BILI per position"), "{preview}");
         assert!(preview.contains("OPTIONAL") && preview.contains("AT YOUR RISK"), "{preview}");
         let traded = palw_model_buy_quote_with(&opening, 1_000 * MSK, PalwModelFeesV1::V2).unwrap().after;
         let why = seed_refusal(&answer(0, traded), None).expect("refused after a trade");

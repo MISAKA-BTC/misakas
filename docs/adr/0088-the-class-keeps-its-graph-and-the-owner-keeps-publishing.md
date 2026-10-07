@@ -1,5 +1,7 @@
 # ADR-0088 — the class keeps its graph; a line keeps its owner, and the owner keeps publishing
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **Status:** PROPOSED 2026-09-05, **revised the same day** — design only (no implementation yet).
 The first draft of this number (commit `4f198f6e`, "the class keeps its graph, and the exam
 names its weights") made the successor of a model's weights the verdict of an on-chain exam:
@@ -142,7 +144,7 @@ what follows is what it means once the market is keyed by a *line* rather than a
   each trade (Decision 8), **paid by the trader for the work of keeping the line alive**, not out
   of any holder's return, and it stops the day the line stops trading.
 * **The seed is not capital, and nobody subscribed to it.** A market opens because somebody locked
-  at least 100,000 MSK into the pair for good ([0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
+  at least 100,000 BILI into the pair for good ([0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
   Decision 2, accumulated over as many transactions as it takes —
   [0094](0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md)). The seeder gets no position
   for it and can never take it back. It is the pair's floor, not a share issue, and there is no
@@ -273,7 +275,7 @@ proposals off the chain, in its own environment, on its own data — which is wh
 evaluation happens anyway; the chain records the candidates, the choice and the credit.
 
 **Decision 8 — The registrant leg is the owner's, by line, and shared when the owner says so.**
-ADR-0087 Decision 4's 1 % leg on every MSK leg of a line's market goes to the line's **owner**
+ADR-0087 Decision 4's 1 % leg on every BILI leg of a line's market goes to the line's **owner**
 bond's payout payload — the registrant's, for a founding line whose ownership never moved, so
 ADR-0087's arithmetic is unchanged; burned when the line has no owner (a genesis line), as
 ADR-0087 already burns it. When the current version was adopted from a proposal and the owner
@@ -357,7 +359,7 @@ chain never takes the host's word* (README §"Security amendments").
 | A1 | **A developer publishes broken or malicious weights as current.** | Producers keep the previous root through the grace; a preview lets them (and users) try first; the market and the usage counters are the judgment; the owner can withdraw a preview and succeed a current. A bad model costs its line, not the chain: weight and share are the class's and unchanged (principle 3). |
 | A2 | **A stolen developer key.** | It can publish and promote; it cannot transfer, retire, set roles or the contributor share — those are the owner's, which the design keeps cold. The owner re-sets the developer; the junk versions stay in the history as a record of the theft. Residual: a stolen *owner* key is a stolen line, as a stolen key is a stolen anything. |
 | A3 | **Name squatting / impersonation** (`QWEN-27B-001` founded by a stranger). | The line id includes the founder; two lines may share a name and the explorer shows the owner beside it; nothing routes by name. |
-| A4 | **Filling the bounded tables** (lines, proposals, evaluations). | Per-class / per-line / per-version caps, first come, and a burned rent on the filling objects; the developer can close proposals. Residual: a well-funded party can hold a line's 32 proposal slots for 32 MSK until closed — the developer's slots to clear. |
+| A4 | **Filling the bounded tables** (lines, proposals, evaluations). | Per-class / per-line / per-version caps, first come, and a burned rent on the filling objects; the developer can close proposals. Residual: a well-funded party can hold a line's 32 proposal slots for 32 BILI until closed — the developer's slots to clear. |
 | A5 | **Declared hashes that lie** (dataset, config, evaluation). | They are declarations, labelled as such, signed by a bond that can be named; no rule reads them; they are the explorer's and the market's to weigh (principle 4). |
 | A6 | **Redirecting the fee leg.** | It follows the owner, and the owner moves only by the owner's signature; positions never move (ADR-0087 D5). |
 | A7 | **A claim naming a root that is not in force.** | Refused at admission, as a wrong `artifact_root` is today; the set is bounded and read from the fold. |

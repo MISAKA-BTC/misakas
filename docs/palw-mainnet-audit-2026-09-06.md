@@ -1,5 +1,7 @@
 # PALW mainnet audit, 2026-09-06 — the two-tree pass
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 ## 要旨 (日本語)
 
 **結論: 今日 mainnet card を鋳造してはならない。** そもそも今日は鋳造「できない」— `PALW_MAINNET_GENESIS_ARTIFACT_ROOT` を埋めた `mainnet_shipped_params()` は 09-05 監査が追加した ambient-target ゲートで panic する (params.rs:8186)。fail-closed なので実害は無いが、儀式手順書が指す検証コマンドはその panic を踏まない定数を pin しており、card 組立を実行するテストは一つも存在しない。

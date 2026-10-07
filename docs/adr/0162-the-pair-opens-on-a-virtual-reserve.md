@@ -1,5 +1,7 @@
 # ADR-0162 — The pair opens on a virtual reserve
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 * Status: PROPOSED 2026-10-01 at the operator's request; **IMPLEMENTED the same day** on
   `position/virtual-reserve` (§10), behind its own dormant fence `Params::palw_model_virtual_v1` —
   `None` on every preset, so no network's fingerprint, schedule or fold moves.
@@ -19,8 +21,8 @@
 
 ## 0. The sentence this ADR is
 
-A model's market opens the moment the model is added, on ten million MSK of virtual reserve that
-prices every position and is never paid to anyone, so nobody has to lock a million MSK for a market
+A model's market opens the moment the model is added, on ten million BILI of virtual reserve that
+prices every position and is never paid to anyone, so nobody has to lock a million BILI for a market
 to exist; trading starts when the chain approves the model, a seed is optional depth paid before the
 first trade, and every sompi a seller receives is a sompi a buyer, or the reward, paid in.
 
@@ -30,12 +32,12 @@ Relayed by the coordinating session on 2026-10-01, approved by the operator, and
 operator twice the same day:
 
 1. **Model Positions open on a virtual reserve, pump.fun-style**, so that a model's market no longer
-   needs a large locked MSK seed: `V = 10,000,000 MSK`, the curve over `X = V + reserve`, 500,000 whole
-   positions, a first price of 20 MSK, the fees and the reward's buyback unchanged.
+   needs a large locked BILI seed: `V = 10,000,000 BILI`, the curve over `X = V + reserve`, 500,000 whole
+   positions, a first price of 20 BILI, the fees and the reward's buyback unchanged.
 2. **The seed is optional.** It may still be paid, in any amount and in instalments; it is locked for
    good and raises the price floor. **Seeds are accepted only before the first trade.**
 3. No anti-spam is added and no opening fee: a market exists only for a registered line, and
-   registration already costs MSK and bonds.
+   registration already costs BILI and bonds.
 4. **The market opens automatically at the moment the model is added.** No later opening step, no
    seed step, no first-buy opening; a line that exists when the fence activates is open from the
    activation height.
@@ -47,8 +49,8 @@ operator twice the same day:
 ## 2. What ADR-0090 had, and why it changes
 
 ADR-0090 retired ADR-0087's virtual reserve because "the curve conjures its liquidity from a
-constant": a market had to be MADE by somebody locking real MSK, 100,000 MSK and, past ADR-0120, one
-million. That made every pair a pair someone had paid a permanent million MSK to open — before the
+constant": a market had to be MADE by somebody locking real BILI, 100,000 BILI and, past ADR-0120, one
+million. That made every pair a pair someone had paid a permanent million BILI to open — before the
 model had earned anything, and whether or not it ever would. On testnet-12, where ADR-0120's floor is
 in force from genesis, no line has a market today.
 
@@ -66,7 +68,7 @@ buyers and the reward paid in, less what sellers were paid: the curve is `(S + r
 sell may take at most `r`, and the seed's `S` never moves. Now replace the locked `S` by a virtual
 `V = S` that nobody locked: the curve is `(V + r) × units = K`, a sell may take at most `r` (the real
 reserve above a seed of zero), and `V` never moves. Every buy releases the same units for the same
-MSK, every sell pays the same gross, every reward slice retires the same positions, and the two
+BILI, every sell pays the same gross, every reward slice retires the same positions, and the two
 markets' real reserves differ by exactly `S` at every step. The seed's ONLY effect was its opener's
 permanent cost.
 
@@ -78,16 +80,16 @@ the reserves `V` apart.
 
 **Decision 1 — every line's market is open from the line's creation.** Past the fence a line's market
 is the row the fold wrote, or else the opening every reader synthesizes: `X = V`, the whole supply in
-the curve, no MSK, `opened_daa` the line's founding height (the class's registration for a founding
+the curve, no BILI, `opened_daa` the line's founding height (the class's registration for a founding
 line, the `ModelLineFounded` block for the others) — or the fence's height for a line older than the
-fence. The first quote is `V / 500,000` = 20 MSK. The row is written lazily, by the first move that
+fence. The first quote is `V / 500,000` = 20 BILI. The row is written lazily, by the first move that
 changes it (a seed, a buy, the reward's buy), as ADR-0087 §7 learnt: the same observable market at a
 fraction of the fold, and no edge at the activation. ONE function opens a line —
 `PalwChainStateV2::model_market_in_force_v2` over `palw_model_market_in_force_v2` — and the fold,
 `getPalwModelMarket`, the EVM window and ADR-0152's lock price all call it. The floor class has no
 line (`ModelLineOnFloor`, ADR-0088), so the fence opens nothing for it.
 
-**Decision 2 — the curve.** `PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2 = 10,000,000 MSK`. The curve is over
+**Decision 2 — the curve.** `PALW_MODEL_MARKET_VIRTUAL_SOMPI_V2 = 10,000,000 BILI`. The curve is over
 `X = virtual_sompi + msk_reserve` and the positions in the curve, `K = X × units` taken from the row
 at every move, exactly as before: a buy adds its net leg to the real reserve and releases
 `units − ⌈K / X′⌉` whole positions; a sell pays `X − ⌈K / units′⌉`, and **never more than the real
@@ -135,7 +137,7 @@ Buying before approval was a bet on approval; past this fence it cannot be place
 claim's escrowed worker reward buys from the line's pair at the claim's `Final` "if that line's market
 exists and is open to buys" — and past the fence "open to buys" is Decision 5's gate. Before approval
 the miner is paid the whole escrow (ADR-0091 Decision 3's "a market closed to buys"), so a class
-rejected before approval has locked no miner's MSK in a pair that never trades, and trading opens
+rejected before approval has locked no miner's BILI in a pair that never trades, and trading opens
 exactly at `(V + seed) / supply`. ADR-0152's lock price reads the same function
 (`model_buyback_market_v2`), so a seat's lock and the fold never disagree about the slice.
 
@@ -174,18 +176,18 @@ the real reserve, the price, the floor and the positions out, with the approval 
 
 ### 5.1 The four moves, no fee
 
-From the opening, `X = 10,000,000 MSK`, 500,000 positions (pinned by
+From the opening, `X = 10,000,000 BILI`, 500,000 positions (pinned by
 `the_adr_0162_table_is_the_virtual_curves_arithmetic`):
 
-| move | positions | real reserve after | price after (MSK) |
+| move | positions | real reserve after | price after (BILI) |
 |---|---|---|---|
 | the opening | 500,000 in the curve | 0 | 20.00000000 |
-| A buys with 100,000 MSK | 4,950 out | 100,000 | 20.40197959 |
-| B buys with 1,000,000 MSK | 44,599 out | 1,100,000 | 24.64196993 |
-| A sells all 4,950 | paid **120,651.90897692** MSK | 979,348.09102308 | 24.10918748 |
-| B sells all 44,599 | paid **979,335.89102307** MSK | **12.20000001** | 20.00002440 |
+| A buys with 100,000 BILI | 4,950 out | 100,000 | 20.40197959 |
+| B buys with 1,000,000 BILI | 44,599 out | 1,100,000 | 24.64196993 |
+| A sells all 4,950 | paid **120,651.90897692** BILI | 979,348.09102308 | 24.10918748 |
+| B sells all 44,599 | paid **979,335.89102307** BILI | **12.20000001** | 20.00002440 |
 
-Every position is back in the curve and the real reserve holds 12.2 MSK: the rounding's dust (whole
+Every position is back in the curve and the real reserve holds 12.2 BILI: the rounding's dust (whole
 positions round every buy down, ceilings round every sell down), at most a position's worth a move.
 `120,651.91 + 979,335.89 + 12.20 = 1,100,000`: nobody was paid out of `V`.
 
@@ -196,23 +198,23 @@ positions round every buy down, ceilings round every sell down), at most a posit
 | ADR-0087 (5 % burn + 1 % owner) | 4,656 | 42,198 | 105,486.31452026 | 866,449.31315975 | 25.92800001 |
 | ADR-0114 (5 % burn + 5 % owner) | 4,459 | 40,581 | 95,999.44495113 | 794,981.83504888 | 20.80000001 |
 
-The curve is scale-free: 94,000 MSK into ten million releases ADR-0090 §4's 4,656, which was 940 MSK
+The curve is scale-free: 94,000 BILI into ten million releases ADR-0090 §4's 4,656, which was 940 BILI
 into a hundred thousand.
 
 ### 5.3 What a late seed would do
 
-After A's and B's buys (no fee), a seed of 1,000,000 MSK paid by someone else would let A sell for
-**131,521.45** MSK what was worth 120,651.91 — 10,869.54 MSK of the seed's price taken out by A — and
-B could then not leave at all: the curve would owe B 1,067,564.35 MSK against 968,478.55 above the
-seed, so B's sell is refused, and paid unguarded it would have taken the reserve **99,085.80 MSK under
+After A's and B's buys (no fee), a seed of 1,000,000 BILI paid by someone else would let A sell for
+**131,521.45** BILI what was worth 120,651.91 — 10,869.54 BILI of the seed's price taken out by A — and
+B could then not leave at all: the curve would owe B 1,067,564.35 BILI against 968,478.55 above the
+seed, so B's sell is refused, and paid unguarded it would have taken the reserve **99,085.80 BILI under
 the seed** that was "locked for good". Before the first trade the same seed is safe: no position is
 out for anyone to sell it to. Pinned by `a_late_seed_would_be_sold_out_of_the_curve_so_it_is_refused`.
 
 ### 5.4 Depth
 
 The price is `X² / K`, so from the opening (net legs, no fee): doubling it takes
-`(√2 − 1) × V ≈ 4.14 M MSK`, four times it takes exactly `V` = 10 M MSK (half the positions leave), and
-ten times it takes `(√10 − 1) × V ≈ 21.6 M MSK`
+`(√2 − 1) × V ≈ 4.14 M BILI`, four times it takes exactly `V` = 10 M BILI (half the positions leave), and
+ten times it takes `(√10 − 1) × V ≈ 21.6 M BILI`
 (`doubling_the_first_price_takes_four_million_msk_and_ten_times_it_takes_twenty_one`).
 
 ## 6. Invariants the tests hold
@@ -252,8 +254,8 @@ Every row of §0's table holds, and the virtual reserve adds none:
 
 * **No issuer.** A line is a `(class, owner, name)` row; the market opening at its creation makes no
   one an issuer — the opening is the chain's arithmetic, not anybody's offer.
-* **Nothing is paid to a holder.** The fold still has no move that pays one; the only MSK a holder
-  receives is what the curve pays for a position they sell back, and that is MSK buyers or the reward
+* **Nothing is paid to a holder.** The fold still has no move that pays one; the only BILI a holder
+  receives is what the curve pays for a position they sell back, and that is BILI buyers or the reward
   paid in (I-V2).
 * **No claim on anything.** Not on the seed, not on the reserve — and not on `V`, which is not an
   asset, a debt or a pool: it is a constant in a price formula, and no object can move a sompi of it.
@@ -275,10 +277,10 @@ Every row of §0's table holds, and the virtual reserve adds none:
 
 | | threat | why it is not one |
 |---|---|---|
-| A1 | register lines to get markets | a market is a pure function of a registered line; registration already costs MSK and bonds; a market nobody trades costs the chain nothing (no row is written) |
+| A1 | register lines to get markets | a market is a pure function of a registered line; registration already costs BILI and bonds; a market nobody trades costs the chain nothing (no row is written) |
 | A2 | seed after holders are in, to let some of them extract it | refused (Decision 4, §5.3) |
 | A3 | buy before approval, dump at approval | there is no buy before approval (Decision 5) |
-| A4 | the reward's buy before approval locks miners' MSK in a pair that never trades | the reward buys only a pair that trades (Decision 6) |
+| A4 | the reward's buy before approval locks miners' BILI in a pair that never trades | the reward buys only a pair that trades (Decision 6) |
 | A5 | the fence reprices an existing market | `V` is per row; a pre-fence market keeps `V = 0` (I-V8) |
 | A6 | a sell paid out of `V` or the seed | a checked refusal at the arithmetic (I-V2), whatever the rounding |
 | A7 | a market on the floor class | the floor has no line, so nothing opens (Decision 1) |

@@ -1,4 +1,4 @@
-//! **The UTXO side of the EVM bridge** (EVM lane §7.2 / §9.2): lock MSK for an EVM address, then
+//! **The UTXO side of the EVM bridge** (EVM lane §7.2 / §9.2): lock BILI for an EVM address, then
 //! claim the lock on a mining node, which credits the address when an accepting chain block
 //! executes the claim.
 //!
@@ -131,7 +131,7 @@ pub async fn deposit_lock(
     let needed = amount_sompi.checked_add(fee_sompi).ok_or_else(|| generic("amount + fee overflows".to_string()))?;
     if selected.is_empty() || sum < needed {
         return Err(generic(format!(
-            "insufficient mature funds at {from}: have {} MSK across {} UTXO(s) (cap {MAX_DEPOSIT_INPUTS}), need {} MSK (amount + fee {fee_sompi} sompi)",
+            "insufficient mature funds at {from}: have {} BILI across {} UTXO(s) (cap {MAX_DEPOSIT_INPUTS}), need {} BILI (amount + fee {fee_sompi} sompi)",
             sompi_to_msk(sum),
             selected.len(),
             sompi_to_msk(needed)
@@ -173,7 +173,7 @@ pub async fn deposit_lock(
             if destination.system {
                 println!("              WARNING: a system or precompile address — almost certainly a mistake");
             }
-            println!("Amount      : {} MSK   Claim tip: {claim_tip_sompi} sompi   Fee: {fee_sompi} sompi", sompi_to_msk(amount_sompi));
+            println!("Amount      : {} BILI   Claim tip: {claim_tip_sompi} sompi   Fee: {fee_sompi} sompi", sompi_to_msk(amount_sompi));
             println!("Refund after: DAA {timeout_daa_score} (to this key)");
             match &txid {
                 Some(t) => {

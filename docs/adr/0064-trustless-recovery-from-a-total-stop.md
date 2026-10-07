@@ -1,5 +1,7 @@
 # ADR-0064 — Trustless recovery from a total producer stop: the bond becomes usable in the block that registers it
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 Status: **Partially superseded by its own correction** (2026-08-30). It was written to answer the
 one item ADR-0060 §12 left open after the audit withdrew the heartbeat lane. **It does not answer
 it** — see the correction under §Decision, verified against the code and the reason the title is now
@@ -169,7 +171,7 @@ not be read as "the chain is back".
 The red team's strongest attack is that the rescue procedure, run six times, manufactures a
 `safe_frontier` on a private branch. The mechanism is real, and every link was verified here:
 
-* post-genesis registration gates on `min_collateral_sompi` alone — **400,000 sompi (0.004 MSK)**,
+* post-genesis registration gates on `min_collateral_sompi` alone — **400,000 sompi (0.004 BILI)**,
   and the collateral is refundable;
 * `write_bond(key, None)` has **no callers**: a bond never leaves the registry, retired or not;
 * `registered_daa` is written and **read by no consensus gate anywhere** — there is no bond
@@ -182,7 +184,7 @@ The red team's strongest attack is that the rescue procedure, run six times, man
 before the fork point can already fork, carry sybil `BondRegistered` objects inside fork blocks
 (they fold at the accepting block today, with no rule change), seat their own panels, self-license
 and grow `safe_frontier`. `palw_fork_choice`'s stated invariant — *a fork nobody could see collects
-no receipts, so it has no frontier* — **is already false for anyone who has ever paid 0.004 MSK**,
+no receipts, so it has no frontier* — **is already false for anyone who has ever paid 0.004 BILI**,
 and the right is permanent and retroactive because bonds never leave.
 
 That is a P0 in its own right and is tracked separately (seat maturity + frontier provenance —

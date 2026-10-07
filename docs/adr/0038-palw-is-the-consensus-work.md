@@ -1,5 +1,7 @@
 # ADR-0038: PALW is the consensus work — sampled-verified LLM PoW, a receipt-licensed weight ramp, and a hash anti-stall floor
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -699,7 +701,7 @@ decision above is what keeps the *option* of closing that gap open; it does not 
 
 * `PalwScheduleParamsV1::stage1_defaults_two_minute_bps` is the only preset admissible on a value
   network. `stage1_defaults_deci_bps` is test-only.
-* Emission is the rate-preserving 120-second table (4445.62 MSK/block).
+* Emission is the rate-preserving 120-second table (4445.62 BILI/block).
 * Any future proposal to shorten the interval must first re-measure headroom on the then-current
   class and re-derive the affordable ladder depth. Neither is a review comment; both are numbers.
 * Enforced as `PalwScheduleParamsV1::validate_for_value_network_v1`, which checks the cadence

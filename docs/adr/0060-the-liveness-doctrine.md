@@ -1,5 +1,7 @@
 # ADR-0060: The liveness doctrine — time is permissionless, weight is bonded, finality is an overlay
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -228,8 +230,8 @@ merge.*
 
 * **Removing the genesis bond seats** and **right-sizing the genesis collateral** — *decided
   the same day as ADR-0061*: the gate now admits any registry size down to zero (Decision 1's
-  heartbeat carries the first bond registrations), and the collateral outputs are 10,000 MSK
-  per seat against the 3,223.07 MSK derived demand.
+  heartbeat carries the first bond registrations), and the collateral outputs are 10,000 BILI
+  per seat against the 3,223.07 BILI derived demand.
 * **Mainnet finality topology** — the leak's parameters for a mainnet validator set are a
   launch-time decision.
 

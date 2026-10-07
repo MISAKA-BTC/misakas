@@ -1,5 +1,7 @@
 # misakas Wiki
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 この Wiki は、**現行 `main` と公開テストネット `testnet-12`(R-core+、ADR-0152 v3.1)** を使う人向けのガイドです。testnet-12 は release commit `0e8ec984e` から 2026-09-25/26 JST に公開されました。内容は 2026-09-25 に [公開ノート](https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md)、[参加手順](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md)、`Params` と照合しました。
 
 仕様の正本は [MISAKA-BTC/misakas](https://github.com/MISAKA-BTC/misakas) のコード、[docs](https://github.com/MISAKA-BTC/misakas/tree/main/docs)、各バイナリの `--help` です。この Wiki と食い違う場合は、node の表示と `misaka bond status` を正としてください。
@@ -47,7 +49,7 @@ testnet-12 のルールは、DAA 750 で有効になった 13 本の post-launch
 
 - **現行 `main` のビルドでは testnet-11 に参加できません。** testnet-11 のノードを動かし続ける場合は、旧 `main` の commit `1f98d3bf4` をビルドします(詳細は [README](https://github.com/MISAKA-BTC/misakas#readme))。
 - testnet-12 は新しいチェーンです。testnet-11 の bond はありません。key file は流用できますが、bond は testnet-12 で登録し直します。
-- Bond の額は mainnet 想定です: producer は **13,000 MSK 以上**、panel seat は **130,000 MSK 以上**、DNS finality の validator は **20,000,000 MSK 以上**。
+- Bond の額は mainnet 想定です: producer は **13,000 BILI 以上**、panel seat は **130,000 BILI 以上**、DNS finality の validator は **20,000,000 BILI 以上**。
 - Bond の UTXO が locked でも、registry に正式登録済みとは限りません(`misaka bond status` で確認します)。
 - 1 つの key で登録できる bond は、チェーンの存続期間を通じて 1 つだけです。登録後に collateral を追加することもできません。
 - **1 つの bond は 1 つの process だけで動かしてください。** 同じ bond の key と outpoint で `kaspad` を 2 つ動かすと round permit に二重署名し、bond 全体が slash されます(`RoundPermitEquivocated`)。

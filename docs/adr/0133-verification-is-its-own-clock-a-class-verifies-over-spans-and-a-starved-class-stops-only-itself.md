@@ -1,5 +1,7 @@
 # ADR-0133 — Verification is its own clock: a class verifies over spans, and a starved class stops only itself
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -138,7 +140,7 @@ and the free collateral are the three limits, and the gate is what keeps the que
 two lag.
 
 **Decision 5 — collateral.** Inflight duties hold `inflight × seat_count × seat_exposure`; at ADR-0130's λ = 2
-(256 MSK a seat on the dense tier) a 10,000 MSK bond carries 39 duties, so a five-span window at 2.2 claims a
+(256 BILI a seat on the dense tier) a 10,000 BILI bond carries 39 duties, so a five-span window at 2.2 claims a
 span holds 55 duties over 26 seats — two a seat, well inside — and a seat exposure two hundred times larger
 needs more bonds than seats: the cap must hold before the collateral runs out, and the profile's cap is
 derived so that it does (the census now prints each class's free collateral beside its duties).
@@ -252,12 +254,12 @@ step because its routes exist (checkpoints, resume, the interval draw) and its c
 
 Four axes that never fork together: **Execution** (1 BPS, the fast UX), **PALW anchor** (~120 s, settlement
 cadence), **Verification** (a class profile: short for the dense tier, long for a Kimi-class), **Economics**
-(`EconomicAttempted` CCU, MSK per compute). And the absolute condition: a Kimi class stopping ≠ the dense tier
+(`EconomicAttempted` CCU, BILI per compute). And the absolute condition: a Kimi class stopping ≠ the dense tier
 stopping ≠ execution stopping ≠ the anchor stopping.
 
 * **Phase 0 — operations, before any fence:** the hybrid's artifact on three seat hosts that are not its
   producer; the `.t11b` node out of IBD; the `not-held` openings diagnosed. Goal: the hybrid `licensed > 0`,
-  `Final > 0`. `actual MSK / attempted CCU = 0` is not a pricing bug and no rate is decided while it is zero.
+  `Final > 0`. `actual BILI / attempted CCU = 0` is not a pricing bug and no rate is decided while it is zero.
   ADR-0132's and this ADR's shadow observability merge as they are.
 * **Fence 1 — panel liveness + verification profile** (ADR-0132 F1/F2 with this ADR's profile, gate and
   capacity): `PalwVerificationProfileV1 { verification_window_spans, artifact_prefetch_spans,
@@ -268,7 +270,7 @@ stopping ≠ execution stopping ≠ the anchor stopping.
   `Incapable` does not get to say it again and again for free; class-local inflight cap; eligible-seat capacity
   gate; free-collateral gate; early redraw on `Incapable`/`Unavailable`; `NoCapablePanel`; a class-specific
   receipt/verification window; no compute credit before `Final` (already the rule, pinned).
-* **Measure after Fence 1**, per model: actual MSK / attempted CCU, licence and `Final` rates, warm/cold
+* **Measure after Fence 1**, per model: actual BILI / attempted CCU, licence and `Final` rates, warm/cold
   verification p95/p99, artifact cache hits and bytes fetched, panel utilization, eligible seats, inflight
   duties, free collateral, reserved exposure. Targets: p95 utilization < 70 %, cap hits ≈ 0, `NoCapablePanel`
   ≈ 0, the protocol-caused difference between the two tiers' `Final` rates small, spare eligible seats ≥ 2.
@@ -279,12 +281,12 @@ stopping ≠ execution stopping ≠ the anchor stopping.
   last factor under the single lottery, and a payout forked first would be re-forked at once.
 * **Fence 3 — `EconomicAttempted` payout**, once liveness is normal and the lottery is decided: snapshot at
   acceptance (`draw_ccu`, `EA_class_q32`, `EA_network_q32` unless single-lottery, `economic_rate`); producer
-  `actual MSK / attempted CCU ≈ constant`; panel `panel MSK / verification CCU ≈ constant`, the two CCUs never
+  `actual BILI / attempted CCU ≈ constant`; panel `panel BILI / verification CCU ≈ constant`, the two CCUs never
   mixed. **`min(escrow, CCU × rate)` is not the mainnet design as it stands:** a Kimi-class whose economic
-  payout is 7,000 MSK against a 3,200 MSK escrow cap is capped and its MSK / CCU falls again. Before any class
+  payout is 7,000 BILI against a 3,200 BILI escrow cap is capped and its BILI / CCU falls again. Before any class
   is activated as paid, the shadow shows `uncapped_economic_reward`, `capped_reward`, `cap_utilization` and
   `cap_saturation_rate`; a class above 80 % cap utilization is not activatable. Long term the three cannot all
-  hold unconditionally — MSK / CCU constant, total issuance constant, any model claiming at any frequency —
+  hold unconditionally — BILI / CCU constant, total issuance constant, any model claiming at any frequency —
   so a heavy class is a high reward per claim at a low claim frequency: economic CCU (a claim's value), class
   DAA / admission (its frequency), a global issuance budget (the total).
 * **A Kimi-class, step by step:** register (share 0, artifact root, bytes, graph) → artifact prefetch on

@@ -1,5 +1,7 @@
 # ADR-0125 — The execution lane is a second lane inside the cadence, and it widens one permit at a time
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -313,7 +315,7 @@ from this branch before the compute credit (§8) and before the chain walk named
 | 1 | attempts reached `Final` in span 3 and span 4 was scheduled from them | DAA 120 at 10:09; the step took 76 minutes at 1.2–2.4 DAA a minute, which is why a step now waits on chain progress (`STALL_WAIT`) and a stalled run can `ATTACH=1` |
 | 2 | a node produced a round block for a permit its bond held | `[palw-round-producer] 1 round blocks produced (latest round 41216982)`, 10:09:42 |
 | 3 | chain blocks merged round blocks and granted their permits | 10:09:48: 3 round blocks, 3 permits, 4 transactions accepted from them; later merges of 6, 1, 51 and 3 |
-| 4 | **partly established** — see below | 16 transactions accepted from permitted round blocks after the first payment (8 at 10:09:59, 7 in the 51-block merge at 10:11:44, 1 at 10:11:50); the recipient's balance went 0 → 3.00000003 MSK (three of five payments applied when read) |
+| 4 | **partly established** — see below | 16 transactions accepted from permitted round blocks after the first payment (8 at 10:09:59, 7 in the 51-block merge at 10:11:44, 1 at 10:11:50); the recipient's balance went 0 → 3.00000003 BILI (three of five payments applied when read) |
 | 5 | two nodes reported one lane | node-1 and node-3: span 4, width 2, one domain |
 
 **What step 4 did not prove.** Round blocks carried fee-paying transactions — the chain walk accepted

@@ -1,4 +1,6 @@
-# ADR-0090 — The pair is seeded with real MSK, locked for good, and a position is whole
+# ADR-0090 — The pair is seeded with real BILI, locked for good, and a position is whole
+
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 * Status: PROPOSED 2026-09-05; IMPLEMENTED 2026-09-05 on `palw-adr0088-0089-impl` (§8)
 * Amends: [0087](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) Decisions 1, 2,
@@ -15,15 +17,15 @@
 
 ## 0. The sentence this ADR is
 
-A model's market is a pair the model's people make by locking at least one hundred thousand MSK
-into it, MSK that no one — not the one who locked it, not the chain — ever pays out again; the
+A model's market is a pair the model's people make by locking at least one hundred thousand BILI
+into it, BILI that no one — not the one who locked it, not the chain — ever pays out again; the
 pair holds five hundred thousand whole positions, no fraction of one, and trades on a curve whose
 product never falls, so buying raises the price and the seed stays under everything.
 
 ## 1. What the operator asked, in the operator's words
 
-Adding a model to the site (misakaoptions.com) must make a *model–MSK pair*. To make it the user
-prepares at least 100,000 MSK, and that MSK is fully locked: the user who made the pair cannot
+Adding a model to the site (misakaoptions.com) must make a *model–BILI pair*. To make it the user
+prepares at least 100,000 BILI, and that BILI is fully locked: the user who made the pair cannot
 withdraw it. The model is then approved as one that earns mining rewards. After that the pair
 trades on the site as model positions and the price rises as people buy. The positions number
 500,000, whole numbers only, fixed at issue. People buy them and the price goes up. That is the
@@ -31,8 +33,8 @@ goal, and this ADR is the rule set that makes each clause true.
 
 ## 2. What ADR-0087 had, and where it did not match
 
-ADR-0087 opened every market by itself on the class's first buy, with **no MSK** in it and a
-*virtual* reserve `V = 1,000 MSK` that set the first price and the curve's steepness; its supply
+ADR-0087 opened every market by itself on the class's first buy, with **no BILI** in it and a
+*virtual* reserve `V = 1,000 BILI` that set the first price and the curve's steepness; its supply
 was 100,000 positions of `10^6` units each, so a position was divisible to a millionth; and the
 constant `K = V × supply` was fixed at opening. Three clauses of §1 fail against that:
 
@@ -52,7 +54,7 @@ whole supply in the curve. The facade's `decimals()` is `0`. A buy that would re
 one position releases nothing and is refused; a sell names whole positions.
 
 **Decision 2 — a market opens by a seed and by nothing else; the seed is the reserve, and it
-never leaves.** `PALW_MODEL_SEED_MIN_SOMPI_V1 = 100,000 MSK`. A line's market does not exist
+never leaves.** `PALW_MODEL_SEED_MIN_SOMPI_V1 = 100,000 BILI`. A line's market does not exist
 until a seed of at least that reaches its sink. The whole seed becomes `msk_reserve` — no burn, no
 leg, no position minted to anyone: the seeder holds nothing. There is no virtual reserve
 (`PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1` is kept at zero so old arithmetic adds nothing). The curve
@@ -62,7 +64,7 @@ and pays `reserve − ⌈K / units′⌉`, never more than the reserve — so th
 the invariant the operator asked for in words: **with every position back in the curve the
 product puts the reserve at the seed or above; the reserve never falls under the seed.** No object
 pays a reserve out but a holder's sell, and a sell cannot reach the seed. The first price is
-`seed / 500,000` (0.2 MSK at the least seed). One seed a line: a second is refused. A line whose
+`seed / 500,000` (0.2 BILI at the least seed). One seed a line: a second is refused. A line whose
 class is frozen takes no seed; a class still waiting for its activation does — the pair is made
 when the model is added, before approval (§1's order) — and its buys wait for `Active` as before.
 
@@ -81,7 +83,7 @@ The settlement row names its move by `action` (buy 1 / sell 2 / seed 3) rather t
 
 **Decision 4 — the fees are ADR-0087's, and the seed pays none.** 5 % burned and 1 % to the
 line's owner (split with an adopted contributor, ADR-0088 Decision 8) on every buy's and sell's
-MSK leg; nothing on the seed, which is liquidity, not a trade.
+BILI leg; nothing on the seed, which is liquidity, not a trade.
 
 **Decision 5 — what a participant reads.** `getPalwModelMarket(lineId)` gains `seedSompi`,
 `seededBy` (empty while unseeded) and `seedMinSompi`; `virtualSompi` is served as zero. The EVM
@@ -103,17 +105,17 @@ the market that opens. The drill flag `--palw-model-devnet` arms all three on a 
 
 ## 4. The arithmetic, worked
 
-From a market seeded with the least seed (100,000 MSK; `K = 10^13 × 500,000`):
+From a market seeded with the least seed (100,000 BILI; `K = 10^13 × 500,000`):
 
-| move | MSK leg | positions | reserve after | price after |
+| move | BILI leg | positions | reserve after | price after |
 |---|---|---|---|---|
 | seed | 100,000 in, no fee | 500,000 in the curve | 100,000 | 0.2 |
-| buy 1,000 MSK | 50 burned, 10 to the owner, 940 in | 4,656 out | 100,940 | 0.20377757 |
-| buy 1,000 MSK | 50, 10, 940 | 4,570 out | 101,880 | 0.20759045 |
+| buy 1,000 BILI | 50 burned, 10 to the owner, 940 in | 4,656 out | 100,940 | 0.20377757 |
+| buy 1,000 BILI | 50, 10, 940 | 4,570 out | 101,880 | 0.20759045 |
 | sell 9,226 | 1,879.88976 gross; 1,767.0963744 net | 500,000 back | 100,000.11024 | 0.20000022 |
 
 Selling everything ever bought leaves the reserve **above** the seed by the rounding the curve
-keeps: the seed is not withdrawable by trading either. A buy of 0.1 MSK releases nothing; 0.22 MSK
+keeps: the seed is not withdrawable by trading either. A buy of 0.1 BILI releases nothing; 0.22 BILI
 releases one position.
 
 ## 5. Security — the four principles, checked

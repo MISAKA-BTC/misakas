@@ -1,5 +1,7 @@
 # 既存モデルを `.palwart` に変換してチェーンに追加する手順
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > 対象: 手元に Qwen 系の checkpoint（HF safetensors か GGUF）があり、それを MISAKA の PALW
 > クラスとして **変換 → 検証 → 登録 → 認証 → 着席** まで持っていきたい運用者。
 > 2026-09-23 時点の `feat/testnet-12-regenesis` の build で実在するコマンドだけで書いてある。
@@ -73,7 +75,7 @@
     claim を 1 件も開けず永久に hold する）。
   * **fee 出力**（`--palw-fee-outpoint <txid>:<index>`）: bond 鍵の P2PKH に払う UTXO。lifecycle
     オブジェクト（登録、認証、possession proof）の carrier がここから払い、お釣りは同じアドレスに
-    戻って rolling するので 1 回の funding で複数回持つ。genesis bond には 100 MSK の float が
+    戻って rolling するので 1 回の funding で複数回持つ。genesis bond には 100 BILI の float が
     同梱されている。
 * 座席（§6）を提供するホスト: artifact を **同じファイル**で持ち、replay できるだけのメモリ。
   artifact は mmap で host に 1 部（ADR-0136）だが、**K/V と replay の working set は class の
@@ -278,26 +280,26 @@ Registered ──(登録者以外の operator の seat が ready)──> Prefetc
 
 `palw registry` の各行には derived profile が出る: `verification_window_spans`,
 `artifact_prefetch_spans`, `required_ready_seats`, `max_inflight_claims`, `registration_bond_sompi`
-（= 1,000 MSK × window spans）。**2026-09-23 時点で `registration_bond_sompi` は表示のみで、読む
+（= 1,000 BILI × window spans）。**2026-09-23 時点で `registration_bond_sompi` は表示のみで、読む
 規則が無い**（未強制。将来 fence で強制され得る）。実際に縛るのは ready seats と
 `collateral_ok`（seat の担保 ≥ 露出 × 倍率）。
 
 **2026-09-25（Activation Pool の P4、ユーザー決定）: `registration_bond_sompi` は価格ではない。**
 RPC では DEPRECATED（意味・wire 位置は据え置き、refund 0 のまま未強制）。代わりに
-`recommendedPoolSompi`（非拘束の推奨 pool、`16 · A_MAX / α`、現行 terms で 2,400 MSK）を見る。
+`recommendedPoolSompi`（非拘束の推奨 pool、`16 · A_MAX / α`、現行 terms で 2,400 BILI）を見る。
 `misaka model add` と `misaka palw extension submit` は、登録が fold された後に別 carrier で
-500 MSK（`10·A0/α`）をその class の Activation Pool に sponsor する（寄付・fold 後は返金なし。
-`--sponsor <MSK>` で変更、`--no-sponsor` で無し）。Candidate 以外の class への top-up は全額 (b)
+500 BILI（`10·A0/α`）をその class の Activation Pool に sponsor する（寄付・fold 後は返金なし。
+`--sponsor <BILI>` で変更、`--no-sponsor` で無し）。Candidate 以外の class への top-up は全額 (b)
 になり、次の formation（または再 formation）でしか払われない — `misaka palw model-pool` が警告する。
 
 実測（testnet-12 の globals、`palw_derive_profile_v1`）:
 
 | 行 | verification CCU | window | 表示 bond | required seats | seat 1 席の K/V（i16） |
 |---|---|---|---|---|---|
-| `Qwen/Qwen2.5-1.5B/graph-v7@8192`（genesis） | 1.39×10¹² | 3 spans | 3,000 MSK | 7 | ≈ 0.22 GiB（28 層 × 2 kv head × 128 × K/V 2 本 × 2 B × 8,192） |
-| `Qwen/Qwen2.5-1.5B/graph-v7@2097152`（genesis） | 3.36×10¹⁵ | 2,799 | 2,799,000 MSK | 7 | ≈ 7–11 GiB |
-| `Qwen3.6-35B-A3B/graph-v7@512`（登録候補、held map 修正待ち） | 1.6×10¹¹ | 2 spans | 2,000 MSK | 7 | 小 |
-| `Qwen3.6-35B-A3B/graph-v7@2097152`（登録候補） | 3.50×10¹⁵ | 2,918 | 2,918,000 MSK | 7 | **≥ 43 GB**（10 attn 層 × 2 kv head × 256 × K/V 2 本 × 2 B（i16 換算）× 2M。i32 なら 2 倍。GDN の状態は別） |
+| `Qwen/Qwen2.5-1.5B/graph-v7@8192`（genesis） | 1.39×10¹² | 3 spans | 3,000 BILI | 7 | ≈ 0.22 GiB（28 層 × 2 kv head × 128 × K/V 2 本 × 2 B × 8,192） |
+| `Qwen/Qwen2.5-1.5B/graph-v7@2097152`（genesis） | 3.36×10¹⁵ | 2,799 | 2,799,000 BILI | 7 | ≈ 7–11 GiB |
+| `Qwen3.6-35B-A3B/graph-v7@512`（登録候補、held map 修正待ち） | 1.6×10¹¹ | 2 spans | 2,000 BILI | 7 | 小 |
+| `Qwen3.6-35B-A3B/graph-v7@2097152`（登録候補） | 3.50×10¹⁵ | 2,918 | 2,918,000 BILI | 7 | **≥ 43 GB**（10 attn 層 × 2 kv head × 256 × K/V 2 本 × 2 B（i16 換算）× 2M。i32 なら 2 倍。GDN の状態は別） |
 
 つまり **2M の hybrid 行は 23 GiB のホスト 7 台では ready seat が 1 つも立たず、chain は
 `Prefetching`（ready 0 < 7）と名指しして Held 相当のまま止める**。これは path の故障ではなく
@@ -305,12 +307,12 @@ registry の正しい答え。context を狭めた行（例 `@8192`、window 3 s
 （testnet-12 はその 8k 行を genesis に持つ）。
 
 **seat の担保（testnet-12、option A）**: runtime は claim ごとに「escrow + weight」を bond に予約
-する（escrow は block 1 の subsidy 444,562,014,000 sompi × worker carve 720‰ = 3,200.85 MSK）。
+する（escrow は block 1 の subsidy 444,562,014,000 sompi × worker carve 720‰ = 3,200.85 BILI）。
 bond が同時に持てる claim 数は `担保 × 50 % ÷ (escrow + weight)` で決まり、担保に比例する。
-genesis の seat は floor 64 本 + 各 model 行 4 本で 939,063.21 MSK。
+genesis の seat は floor 64 本 + 各 model 行 4 本で 939,063.21 BILI。
 
-market（任意、ADR-0087〜0090）: `misaka model market open <model> [--seed <MSK>]` で class の
-founding line を seed する（最小 seed 100,000 MSK、分割払い可）。position の売買は
+market（任意、ADR-0087〜0090）: `misaka model market open <model> [--seed <BILI>]` で class の
+founding line を seed する（最小 seed 100,000 BILI、分割払い可）。position の売買は
 `misaka position list|quote|buy|sell`。登録・認証とは独立で、後からでよい。
 
 ## 8. 実例: Qwen3.6-35B-A3B @ 2,097,152（2026-09-23、ibm）

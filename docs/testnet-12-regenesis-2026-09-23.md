@@ -1,5 +1,7 @@
 # testnet-12 regenesis — deployment record, 2026-09-23
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **状態（2026-09-24 更新）: 新しい genesis `a27f8f44…` で起動し直す準備中（`f6cc9576…` は
 > replay 分離で置き換え、`d73dbf44…` は運用者の 100M 追加で置き換えた。下の「replay 分離」）。consensus params fingerprint と出荷 binary の
 > sha256 は未確定（TBD）。** 別 session が実装中の DoS 監査修正

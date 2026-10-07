@@ -257,7 +257,7 @@ fn main() {
         println!();
         println!("  --emit-row   ON the host holding the seeds. Prints ONE public row.");
         println!("      --bond-index      this bond's collateral outpoint index (0..40, below the main");
-        println!("                        wallet at 40; the genesis carves a 10,000 MSK collateral output");
+        println!("                        wallet at 40; the genesis carves a 10,000 BILI collateral output");
         println!("                        there (ADR-0061; ~3.1x the derived claim-lifetime requirement),");
         println!("                        owned by the main wallet — ADR-0059)");
         println!("      --bond-seed       path to the bond key's seed (or --bond-pubkey <hex>)");

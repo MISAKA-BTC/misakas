@@ -1,5 +1,7 @@
 # ADR-0173 — MISAKA's purpose: public-verifier dispute completeness
 
+**トークンの表示名は Misaka、ticker は BILI。** `misaka` 系アドレスプレフィックスと既存のprotocol/CLI/API識別子は維持する（[ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)）。
+
 * **Status:** Accepted as the project's design mandate at the user's request, 2026-10-07. Implementation and activation remain pending. This decision assigns no wire id, consensus fingerprint, activation height or deployment.
 * **Purpose:** Panel外の普通のpublic bondが、producerの秘密状態を使わず、public authenticated materialだけから不正をlocalizeして客観的convictionまで進めることを、完全に成立させる。
 * **Design path:** [RFC-0014](../rfc/0014-panel-independent-fraud-prosecution.md) specifies the implementation work and completion gates. [RFC-0015](../rfc/0015-panel-free-permissionless-verification.md) specifies a separately gated, deferred Panel=0 mode.

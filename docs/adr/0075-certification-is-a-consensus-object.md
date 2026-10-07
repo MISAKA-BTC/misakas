@@ -1,5 +1,7 @@
 # ADR-0075: Certification is a consensus object
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -300,7 +302,7 @@ each certification carrier's fee from the block reward by don't-mint — the mec
 burn and the §F service share already use — capped at the fee, so carriage above the rent is still
 the miner's and objects no rule prices (court moves, free-prompt commitments) burn nothing. The
 residual, stated plainly: the worst case is still two graded objects × 32 vectors = 64 court
-re-executions per block, and past the fence that block costs its author 20,000,000 sompi (0.2 MSK)
+re-executions per block, and past the fence that block costs its author 20,000,000 sompi (0.2 BILI)
 destroyed. The bound on validator CPU per block is `PALW_CERTIFICATION_MAX_PER_BLOCK ×
 PALW_CERTIFICATION_MAX_VECTORS`, a constant this binary enforces; what the rent buys is that the
 bound cannot be reached for free, by a miner or by anyone else.

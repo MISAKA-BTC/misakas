@@ -198,7 +198,8 @@ struct BondArgs {
     /// Amount to stake. Becomes the bond's locked output-0. Covered by aggregating up
     /// to 20 of the LARGEST mature funding UTXOs at this key's address (amount + fee); no manual
     /// consolidation needed unless the 20 largest still fall short.
-    /// Accepts `10MSK` / `10.5MSK` / `10KAS` (1 MSK = 100_000_000 sompi, up to 8 decimals),
+    /// Accepts `10BILI` / `10.5BILI` (1 BILI = 100_000_000 sompi, up to 8 decimals),
+    /// with legacy `MSK` / `KAS` suffixes still accepted,
     /// or a bare integer / `<n>sompi` for raw sompi.
     #[arg(long, value_parser = parse_amount_sompi)]
     amount: u64,
@@ -893,7 +894,7 @@ async fn spam(args: SpamArgs) -> Result<(), String> {
 }
 
 /// kaspa-pq: one-shot headless balance. Resolves each address, queries the node's
-/// `getBalancesByAddresses` (requires --utxoindex), and prints `address <sompi> <MSK> MSK` to
+/// `getBalancesByAddresses` (requires --utxoindex), and prints `address <sompi> <BILI> BILI` to
 /// STDOUT — one tab-separated line per address (plus a TOTAL line for several) — then exits.
 /// Connection / sync notes go to the log so STDOUT stays clean for scripting
 /// (e.g. `kaspa-pq-validator balance --address misakatest:q... | awk '{print $2}'`).
@@ -926,16 +927,16 @@ async fn balance(args: BalanceArgs) -> Result<(), String> {
     for a in &addrs {
         let bal = found.get(&a.to_string()).copied().unwrap_or(0);
         total = total.saturating_add(bal);
-        println!("{a}\t{bal}\t{} MSK", format_msk(bal));
+        println!("{a}\t{bal}\t{} BILI", format_msk(bal));
     }
     if addrs.len() > 1 {
-        println!("TOTAL\t{total}\t{} MSK", format_msk(total));
+        println!("TOTAL\t{total}\t{} BILI", format_msk(total));
     }
     let _ = client.disconnect().await;
     Ok(())
 }
 
-/// Format a sompi amount as MSK for display (L1 = 8 decimals; 1 MSK = 100_000_000 sompi).
+/// Format a sompi amount as BILI for display (L1 = 8 decimals; 1 BILI = 100_000_000 sompi).
 fn format_msk(sompi: u64) -> String {
     format!("{}.{:08}", sompi / 100_000_000, sompi % 100_000_000)
 }
@@ -2069,7 +2070,8 @@ async fn sleep_secs(secs: u64) {
 
 /// Parse a stake/amount string into u64 sompi (design §13.3). Accepts:
 ///   - a bare integer or `<n>sompi` — already sompi (whole numbers only);
-///   - `<n>MSK` / `<n>KAS` / `<n.m>MSK` — 1 MSK = 100_000_000 sompi, up to 8 decimals.
+///   - `<n>BILI` / `<n.m>BILI` — 1 BILI = 100_000_000 sompi, up to 8 decimals;
+///     legacy `MSK` and `KAS` suffixes remain accepted.
 /// Integer math throughout (no f64 precision loss); rejects junk and u64 overflow.
 fn parse_amount_sompi(s: &str) -> Result<u64, String> {
     const SOMPI_PER_MSK: u64 = 100_000_000;
@@ -2080,6 +2082,8 @@ fn parse_amount_sompi(s: &str) -> Result<u64, String> {
     let lower = s.to_ascii_lowercase();
     let (num, is_coins) = if let Some(n) = lower.strip_suffix("sompi") {
         (n.trim(), false)
+    } else if let Some(n) = lower.strip_suffix("bili") {
+        (n.trim(), true)
     } else if let Some(n) = lower.strip_suffix("msk") {
         (n.trim(), true)
     } else if let Some(n) = lower.strip_suffix("kas") {
@@ -2094,10 +2098,10 @@ fn parse_amount_sompi(s: &str) -> Result<u64, String> {
         // sompi is indivisible — whole numbers only.
         return num.parse::<u64>().map_err(|_| format!("invalid sompi amount '{s}' (must be a whole number)"));
     }
-    // MSK/KAS: fixed-point with up to 8 fractional digits, parsed as integers.
+    // BILI (and legacy aliases): fixed-point with up to 8 fractional digits, parsed as integers.
     let (int_part, frac_part) = num.split_once('.').unwrap_or((num, ""));
     if frac_part.len() > 8 {
-        return Err(format!("too many decimals in '{s}' (max 8 for MSK/KAS)"));
+        return Err(format!("too many decimals in '{s}' (max 8 for BILI)"));
     }
     if !int_part.chars().all(|c| c.is_ascii_digit()) || !frac_part.chars().all(|c| c.is_ascii_digit()) {
         return Err(format!("invalid amount '{s}'"));
@@ -2272,6 +2276,12 @@ mod tests {
 
     #[test]
     fn parse_amount_sompi_units() {
+        // Current ticker: exact smallest-unit conversion, case-insensitive, no float rounding.
+        assert_eq!(parse_amount_sompi("10BILI").unwrap(), 1_000_000_000);
+        assert_eq!(parse_amount_sompi(" 10.5 bili ").unwrap(), 1_050_000_000);
+        assert_eq!(parse_amount_sompi("0.00000001BILI").unwrap(), 1);
+        assert_eq!(parse_amount_sompi(".5BILI").unwrap(), 50_000_000);
+        assert_eq!(parse_amount_sompi("184467440737.09551615BILI").unwrap(), u64::MAX);
         // bare + explicit sompi
         assert_eq!(parse_amount_sompi("1000000000").unwrap(), 1_000_000_000);
         assert_eq!(parse_amount_sompi("1000000000sompi").unwrap(), 1_000_000_000);
@@ -2308,6 +2318,10 @@ mod tests {
 
     #[test]
     fn parse_amount_sompi_rejects_junk() {
+        assert!(parse_amount_sompi("BILI").is_err());
+        assert!(parse_amount_sompi("10.123456789BILI").is_err(), "more than 8 decimals");
+        assert!(parse_amount_sompi("abcBILI").is_err());
+        assert!(parse_amount_sompi("184467440737.09551616BILI").is_err(), "one sompi past u64::MAX");
         assert!(parse_amount_sompi("").is_err());
         assert!(parse_amount_sompi("MSK").is_err());
         assert!(parse_amount_sompi("10.5").is_err(), "fractional sompi is invalid");

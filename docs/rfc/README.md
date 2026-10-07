@@ -1,5 +1,7 @@
 # RFC index
 
+**トークン名は Misaka、ticker は BILI。** アドレスの `misaka` 系プレフィックスと既存のチェーンID・コマンド・wire/API識別子は維持する。過去の実測・出力のMSKは旧表記として保存する（[ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)）。
+
 ## MISAKAの中核目標と設計の優先順位（2026-10-07）
 
 [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を優先する。**普通の非Panel public bondが、producerの秘密状態を使わず、public authenticated materialだけから不正をlocalizeしobjective convictionまで完結できること**を中核目標にする。[RFC14](0014-panel-independent-fraud-prosecution.md)が主実装設計、[RFC15](0015-panel-free-permissionless-verification.md)はその全gate成立後も別途受入・activationを必要とするPanel=0設計である。全RFC/ADRの確認・改定範囲は[監査記録](../adr/evidence/0173-mission-alignment-audit-2026-10-07.md)に記載する。文書の追加・改定でruntimeを更新したとは扱わない。

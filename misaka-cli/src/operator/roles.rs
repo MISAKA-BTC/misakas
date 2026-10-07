@@ -173,7 +173,7 @@ pub(crate) async fn rewards(ctx: &crate::node::Ctx, profile: Profile) -> CliResu
     let line = |label: &str, amount: String, claims: String, what: &str| {
         println!("  {label:<12}{amount:>20}  {claims:>7}  {}", paint::dim(what));
     };
-    line("", "MSK".into(), "claims".into(), "");
+    line("", "BILI".into(), "claims".into(), "");
     match &snap.wallet {
         Some(Ok(w)) => {
             line("spendable", msk(w.spendable_sompi), "—".into(), "mature outputs at the pay address");

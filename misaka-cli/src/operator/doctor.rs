@@ -354,7 +354,7 @@ async fn identity_checks(snap: &Snapshot, out: &mut Vec<Check>) {
                             Some((_, op)) => format!("{op}: not among the key's unspent outputs, and no other output there fits"),
                             None => "no fee outpoint named, and no spendable output at the key's address".to_string(),
                         })
-                        .required("a mature, unbonded, non-coinbase UTXO at the producer key's address, ≥ 0.1 MSK")
+                        .required("a mature, unbonded, non-coinbase UTXO at the producer key's address, ≥ 0.1 BILI")
                         .fix("misaka mining setup   (it offers a self-send that makes one)"),
                 )),
             }

@@ -51,12 +51,12 @@ pub fn sompi_to_kaspa_string_with_trailing_zeroes(sompi: u64) -> String {
 }
 
 pub fn kaspa_suffix(network_type: &NetworkType) -> &'static str {
-    // kaspa-pq (MISAKA) branding: the coin ticker is MSK (per-network prefixed for non-mainnet).
+    // kaspa-pq (MISAKA) branding: the coin ticker is BILI (per-network prefixed for non-mainnet).
     match network_type {
-        NetworkType::Mainnet => "MSK",
-        NetworkType::Testnet => "TMSK",
-        NetworkType::Simnet => "SMSK",
-        NetworkType::Devnet => "DMSK",
+        NetworkType::Mainnet => "BILI",
+        NetworkType::Testnet => "TBILI",
+        NetworkType::Simnet => "SBILI",
+        NetworkType::Devnet => "DBILI",
     }
 }
 

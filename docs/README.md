@@ -1,5 +1,7 @@
 # Documentation map
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 The code, current `main` CLI `--help` and ADR decisions are authoritative. This index separates live operator instructions from dated engineering evidence.
 
 ## Current Testnet-12 documents
@@ -54,5 +56,5 @@ When a historical report conflicts with a current operator document, use the cur
 - fingerprint: `400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8` (the current main build; DAA 7,100 is the held/deep-audit boundary, 7,101 is the `6001`-named PALW upgrade bundle including ADR-0125's 1-BPS execution lane, 7,200 arms ADR-0133 Verification V2/readiness multiproofs, 7,300 shortens the execution span 5 DAA → 1 DAA, and 7,301 retires the compute overlay)
 - PALW cadence: 120 seconds per block
 - class shares at Relaunch 5f genesis: Floor 22‰, A16 489‰, QWEN36 489‰
-- DNS Testnet-11 minimum stake Bond: 10 MSK
+- DNS Testnet-11 minimum stake Bond: 10 BILI
 - ADR-0123 epoch-budget release: implemented, dormant on shipped presets

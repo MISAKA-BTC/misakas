@@ -1,5 +1,7 @@
 # ADR-0114 — The owner's leg is five percent, and it arrives at a height
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 * Status: PROPOSED 2026-09-11 at the operator's request ("追加で現在の売買の burn 5% 開発者への手数料 1% から
   burn 5% 開発者への手数料 5% にあげて　つまり売って買うと 20% は fee として持ってかれるようにして").
   **IMPLEMENTED the same day**, and **scheduled on testnet-11 at DAA 3,500** by the operator the same
@@ -9,7 +11,7 @@
   the fence stay peers until 3,500 (`the_owner_leg_flag_day_keeps_every_current_node_until_3500`).
   **3,500 is a flag day: every node must run a build carrying the fence before it.**
 * Amends: [0087](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) Decision 4 (the split of
-  every MSK leg: 5 % burned, 1 % to the class's registrant), [0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md)
+  every BILI leg: 5 % burned, 1 % to the class's registrant), [0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md)
   Decision 8 (that leg is the line OWNER's, and an adopted contributor takes `contributor_permille_of_leg`
   of it — of the five percent past the fence), [0089](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md)
   (the window's `quoteBuy`/`quoteSell` and `constants()`), and [0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
@@ -18,8 +20,8 @@
 
 ## 0. The sentence this ADR is
 
-**Past the fence every join and every leave splits its MSK leg 5 % burned, 5 % to the line's owner and
-90 % to the curve (a join) or to the seller (a leave), so a round trip leaves about a fifth of the MSK
+**Past the fence every join and every leave splits its BILI leg 5 % burned, 5 % to the line's owner and
+90 % to the curve (a join) or to the seller (a leave), so a round trip leaves about a fifth of the BILI
 behind before the curve's own slippage; below the fence nothing changes, and because the fold writes the
 split into the state root, the change arrives at a height every node crosses together.**
 
@@ -51,16 +53,16 @@ split into the state root, the change arrives at a height every node crosses tog
 
 ## 2. The numbers (pinned in `palw_model_market_v1.rs`)
 
-ADR-0090 §4's table again, from the least seed (100,000 MSK, 500,000 positions), under V2:
+ADR-0090 §4's table again, from the least seed (100,000 BILI, 500,000 positions), under V2:
 
 | move | burn | owner | net | positions | reserve after |
 |---|---|---|---|---|---|
-| join 1,000 MSK | 50 | 50 | 900 | 4,459 out (V1: 4,656) | 100,900 MSK (price 0.20361584) |
-| join 1,000 MSK | 50 | 50 | 900 | 4,381 out (V1: 4,570) | 101,800 MSK |
-| leave all 8,840 | 89.9912 | 89.9912 | 1,619.8416 | 8,840 in | 100,000.176 MSK |
+| join 1,000 BILI | 50 | 50 | 900 | 4,459 out (V1: 4,656) | 100,900 BILI (price 0.20361584) |
+| join 1,000 BILI | 50 | 50 | 900 | 4,381 out (V1: 4,570) | 101,800 BILI |
+| leave all 8,840 | 89.9912 | 89.9912 | 1,619.8416 | 8,840 in | 100,000.176 BILI |
 
-A join of 100 MSK and the leave of what it bought return **80.892738 MSK** (V1: 88.25488168): 0.9² of the
-MSK less the slippage — the "20 % taken as fees" of the request. M2 holds exactly under both schedules.
+A join of 100 BILI and the leave of what it bought return **80.892738 BILI** (V1: 88.25488168): 0.9² of the
+BILI less the slippage — the "20 % taken as fees" of the request. M2 holds exactly under both schedules.
 
 ## 3. Why a height and not an edit
 
@@ -77,7 +79,7 @@ The burn, the seed floor and its lock, the supply, the curve and its rounding, t
 falls, the refusals (a join that releases nothing, a leave that pays nothing), ADR-0091's buyback (no leg),
 ADR-0095's memberships (a position still pays its holder nothing), and the carrier and EVM mechanics of a
 move. A contributor's `contributor_permille_of_leg` is a share OF the leg, so past the fence the same
-permille pays five times the MSK.
+permille pays five times the BILI.
 
 ## 5. Arming it on testnet-11 — done at DAA 3,500 (2026-09-11)
 

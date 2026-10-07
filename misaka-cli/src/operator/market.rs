@@ -1,5 +1,5 @@
 //! **`misaka model list` and `misaka position list | quote | buy | sell`** — ADR-0122 Decision 7,
-//! the same treatment for models and positions: one screen per question, amounts in MSK, and a
+//! the same treatment for models and positions: one screen per question, amounts in BILI, and a
 //! move that computes its own protection instead of asking the holder to do the arithmetic.
 //!
 //! Every number is the chain's: the class table (`getPalwClasses`), the lines
@@ -389,7 +389,7 @@ pub(crate) async fn model_status(ctx: &crate::node::Ctx, profile: Profile, selec
         }
     };
     println!("  {:<11}{artifact}", "Artifact");
-    // What each role's bond locks — a saturated sizing reads as words, never as `u64::MAX` in MSK.
+    // What each role's bond locks — a saturated sizing reads as words, never as `u64::MAX` in BILI.
     {
         use crate::operator::wizard::{BondLock, BondRole};
         let mut bond_lines = Vec::new();
@@ -457,7 +457,7 @@ pub(crate) async fn model_status(ctx: &crate::node::Ctx, profile: Profile, selec
 
 /// What a seed payment would do to a line's market, decided before anything is signed — because a
 /// refused `ModelSeed` still lands its carrier, and the carrier's sink output is the payment: on the
-/// PQ lane the MSK is gone and no pledge is recorded.
+/// PQ lane the BILI is gone and no pledge is recorded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SeedPlan {
     /// The market is open: nothing to pay.
@@ -482,7 +482,7 @@ pub(crate) fn seed_plan(open: bool, pledged: u64, floor: u64, instalments: bool,
     match amount {
         0 => SeedPlan::Refused("a seed of nothing pays nothing".into()),
         a if !instalments && a < floor => SeedPlan::Refused(format!(
-            "{} is under the least seed of {} and this chain takes no instalments: the chain would refuse it and the MSK would be burned",
+            "{} is under the least seed of {} and this chain takes no instalments: the chain would refuse it and the BILI would be burned",
             catalog::msk(a as u128),
             catalog::msk(floor as u128)
         )),
@@ -505,7 +505,7 @@ pub(crate) fn seed_plan_virtual(sold_units: u64, amount: Option<u64>) -> SeedPla
     }
 }
 
-/// `misaka model market open <model> [--line <id>] [--seed <MSK>]`: make a model's positions
+/// `misaka model market open <model> [--line <id>] [--seed <BILI>]`: make a model's positions
 /// buyable — the class's founding line (which every class has, with no object), or a line named,
 /// seeded up to the least seed in one payment or in instalments, each checked before it is signed.
 pub(crate) async fn market_open(
@@ -560,7 +560,7 @@ pub(crate) async fn market_open(
             Severity::Ok,
             "rules",
             if virtual_regime {
-                "market armed · every line open from its creation on a 10,000,000 MSK virtual reserve · trading from the \
+                "market armed · every line open from its creation on a 10,000,000 BILI virtual reserve · trading from the \
                  class's approval · a seed is optional, before the first trade"
                     .to_string()
             } else {
@@ -596,7 +596,7 @@ pub(crate) async fn market_open(
             return Err(Halt::Blocked(
                 Finding::error("E-MARKET-NO-LINE", exit::MODEL, "The chain holds no such line")
                     .current(line_id.clone())
-                    .reason("a seed into a line the chain does not hold is refused, and on this lane the MSK is burned")
+                    .reason("a seed into a line the chain does not hold is refused, and on this lane the BILI is burned")
                     .fix("omit --line to open the class's founding line, or wait for a founding to be mined"),
             ));
         }
@@ -668,7 +668,7 @@ pub(crate) async fn market_open(
             return Err(Halt::Blocked(
                 Finding::error("E-MARKET-NOT-ELIGIBLE", exit::MODEL, "The registry has not admitted this model")
                     .current(why)
-                    .reason("a seed into a model the chain does not serve is refused, and on this lane the MSK is burned")
+                    .reason("a seed into a model the chain does not serve is refused, and on this lane the BILI is burned")
                     .fix(format!("misaka model status {selector}")),
             ));
         }
@@ -718,7 +718,7 @@ pub(crate) async fn market_open(
                     ))
                     .required(format!("{} plus the carrier's fee", catalog::msk(amount as u128)))
                     .fix(if instalments {
-                        format!("pay what they hold now: misaka model market open {selector} --seed <MSK>, and again later")
+                        format!("pay what they hold now: misaka model market open {selector} --seed <BILI>, and again later")
                     } else {
                         "fund the key's address, or consolidate: misaka wallet utxo consolidate --max-inputs 15 --yes".to_string()
                     }),
@@ -1056,7 +1056,7 @@ mod tests {
         assert!(matches!(seed_plan_virtual(0, Some(0)), P::Refused(_)));
     }
 
-    /// A refused seed burns its MSK on this lane, so the plan refuses what the chain would: under
+    /// A refused seed burns its BILI on this lane, so the plan refuses what the chain would: under
     /// the floor without instalments, onto a pledge the chain will not add to, or nothing at all.
     #[test]
     fn a_seed_is_planned_so_nothing_the_chain_refuses_is_paid() {

@@ -49,7 +49,7 @@ pub(crate) struct ModelAddArgs {
     pub(crate) yes: bool,
     pub(crate) no_wait: bool,
     /// The sompi to sponsor into the class's Activation Pool once its registration folds
-    /// (`--sponsor` / `--no-sponsor`; 500 MSK by default — the pool's P4). `None`: no sponsor.
+    /// (`--sponsor` / `--no-sponsor`; 500 BILI by default — the pool's P4). `None`: no sponsor.
     pub(crate) sponsor: Option<u64>,
     /// The runtime pack gate of an IR artifact (RFC-0002 Part II §II.7.5, decided 2026-10-01).
     pub(crate) pack_gate: crate::pack_gate::PackGateFlags,
@@ -880,7 +880,7 @@ async fn register(
             kaspa_consensus_core::palw_activation_pool_v1::palw_activation_recommended_pool_sompi_v1(&terms);
         flow.ui.sub(&format!(
             "sponsor   {} into its Activation Pool once registered — a donation to its preparers, never refunded once \
-             folded (recommended pool {}, non-binding; --sponsor <MSK> changes it, --no-sponsor skips it)",
+             folded (recommended pool {}, non-binding; --sponsor <BILI> changes it, --no-sponsor skips it)",
             crate::palw_model::msk(amount),
             crate::palw_model::msk(recommended)
         ));

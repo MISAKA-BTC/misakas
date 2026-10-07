@@ -1,5 +1,7 @@
 # Quick Start — testnet-12
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 対象は公開テストネット `testnet-12` です。ビルドする commit は 2026-09-27 の 2 回目の post-launch flag day のリリース `587cab2b0` です。2 本の fence が DAA 1,300(2026-09-28 05:25 JST 前後)で有効になるので、それより前に動かしてください。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
 
 ## 1. Build
@@ -69,11 +71,11 @@ testnet-12 の bond は mainnet 想定の額です。
 
 | 役割 | 必要な bond collateral |
 |---|---|
-| Floor producer | **13,000 MSK 以上**。同時に持てる floor claim 1 本につき約 6,402 MSK(13,000 MSK なら 2 本、100,000 MSK なら 15 本) |
-| Panel seat | **130,000 MSK 以上** |
-| DNS finality の validator | **20,000,000 MSK 以上**(別の bond) |
+| Floor producer | **13,000 BILI 以上**。同時に持てる floor claim 1 本につき約 6,402 BILI(13,000 BILI なら 2 本、100,000 BILI なら 15 本) |
+| Panel seat | **130,000 BILI 以上** |
+| DNS finality の validator | **20,000,000 BILI 以上**(別の bond) |
 
-このほかに、bond とは別の output として fee float(0.1 MSK 以上)を key のアドレスに置きます。
+このほかに、bond とは別の output として fee float(0.1 BILI 以上)を key のアドレスに置きます。
 
 ## 5. Existing Bond
 
@@ -84,7 +86,7 @@ misaka --network testnet-12 bond status --key-file ~/.misaka/miner.seed
 
 - `registry: REGISTERED`: 正式に登録された PALW bond です。登録し直さないでください。
 - `registry: NOT REGISTERED`: ふつうの UTXO、予約された output、または lock された output で、registry の記録ではありません。
-- `UNDERSIZED`: 古い weight だけの式(Floor で約 31,191 MSK)より collateral が少ない、という表示です。testnet-12 では 13,000 MSK 以上なら生産でき、同時に持てる本数が collateral に比例するだけです(下の表)。
+- `UNDERSIZED`: 古い weight だけの式(Floor で約 31,191 BILI)より collateral が少ない、という表示です。testnet-12 では 13,000 BILI 以上なら生産でき、同時に持てる本数が collateral に比例するだけです(下の表)。
 
 ## 6. Floor producer
 
@@ -94,7 +96,7 @@ misaka --network testnet-12 bond status --key-file ~/.misaka/miner.seed
 misaka --network testnet-12 mining setup
 ```
 
-ウィザードは `kaspad --palw-register-bond` で登録します。collateral にはノードが導出した既定値(Floor で約 31,191 MSK。`--model` に 8k を指定すると約 2,000,332,625 MSK と調達できない額)を使い、その額に合う資金を求めます。額を自分で決めたい場合と model class の場合は、[参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) の手動の形で `--palw-bond-collateral=<sompi>` を明示してください。
+ウィザードは `kaspad --palw-register-bond` で登録します。collateral にはノードが導出した既定値(Floor で約 31,191 BILI。`--model` に 8k を指定すると約 2,000,332,625 BILI と調達できない額)を使い、その額に合う資金を求めます。額を自分で決めたい場合と model class の場合は、[参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) の手動の形で `--palw-bond-collateral=<sompi>` を明示してください。
 
 既存の key と Bond を指定する場合:
 

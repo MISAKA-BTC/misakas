@@ -381,7 +381,7 @@ mod tests {
             ..Default::default()
         };
         let text = render(&r, 600);
-        assert!(text.contains("burned by convictions 25.00 MSK"), "{text}");
+        assert!(text.contains("burned by convictions 25.00 BILI"), "{text}");
         assert!(text.contains("moved to the payout queue 1,000.00"), "moved is not minted yet: {text}");
         assert!(!text.contains("latched backlog"), "no backlog, no line: {text}");
         let backlog = render(&GetPalwVestingResponse { backlog_keys: 21, backlog_blocks_est: 3, ..r.clone() }, 600);
@@ -390,10 +390,10 @@ mod tests {
         let held = render(&GetPalwVestingResponse { lock_live_rows: 50, lock_live_last_expiry_daa: Some(12_049), ..r.clone() }, 600);
         assert!(held.contains("— 50 such row(s), the last DAA clock among them runs to DAA 12,049"), "{held}");
         assert!(
-            text.contains("5.00 MSK  vesting: held") && !text.contains("10.00 MSK  vesting"),
-            "a payee read prints the payee's legs (5 MSK), not the row (10): {text}"
+            text.contains("5.00 BILI  vesting: held") && !text.contains("10.00 BILI  vesting"),
+            "a payee read prints the payee's legs (5 BILI), not the row (10): {text}"
         );
-        assert!(!text.contains("MSK MSK"), "{text}");
+        assert!(!text.contains("BILI BILI"), "{text}");
         assert!(text.contains("awarded — moves in the next block"), "{text}");
         assert!(text.contains("spendable 600 DAA after its block"), "{text}");
         let halted = render(&GetPalwVestingResponse { halted: true, ..r.clone() }, 600);

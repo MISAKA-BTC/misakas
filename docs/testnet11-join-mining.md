@@ -1,5 +1,7 @@
 # Joining Testnet-11 as a PALW producer
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 Verified against current `main` on 2026-09-22. Testnet-11 Relaunch 5f produces blocks with PALW ConsensusV2 at a frozen 120-second cadence. `kaspa-pq-miner` and `misaminer` cannot create the required attempt envelope; production runs inside `kaspad --palw-produce`.
 
 ## 1. Build

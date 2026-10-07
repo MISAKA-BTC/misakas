@@ -1,5 +1,7 @@
 # ADR-0160 stage 4 (rcore/cap-s1) — status: gate PASS
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 Same branch and base (`rcore/cap-s1` off `c3dbaee3c`; nothing armed; the t12 pins `dbbc9104…` /
 `5de80e64…` / `7c652212…` unmoved). Commit `042053712` (lane N, F-R past F-N, lane S's burst).
 

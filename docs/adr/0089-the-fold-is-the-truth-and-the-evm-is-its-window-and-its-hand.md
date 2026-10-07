@@ -1,8 +1,10 @@
 # ADR-0089 — the fold is the truth; the EVM is its window and its hand
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Amended a third time (2026-10-01, implemented the same day behind the dormant fence `palw_model_virtual_v1`).** [0162](0162-the-pair-opens-on-a-virtual-reserve.md): past the fence the AMM window's `market()` answers a twelfth word (the row's own virtual reserve), `constants()`' third word is the virtual reserve again, `quoteSell`'s first word is the gross MSK out, and the writer reverts a seed after the market's first trade (`SeedAfterTrade()`) and a buy of a line whose class does not trade (`ClassNotEligible()`); a seed before the class's approval is taken.
 >
-> **Amended again (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md): the AMM window's `market()` (Decision 2) gains two words at its end — `buybackSompi`, `retiredUnits` — the MSK the mining reward has put into the pair and the positions the chain holds for good; every earlier word keeps its offset. The move itself is the fold's, on no lane: no action, no event.
+> **Amended again (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md): the AMM window's `market()` (Decision 2) gains two words at its end — `buybackSompi`, `retiredUnits` — the BILI the mining reward has put into the pair and the positions the chain holds for good; every earlier word keeps its offset. The move itself is the fold's, on no lane: no action, no event.
 >
 > **Amended (2026-09-05, implemented the same day).** [ADR-0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) adds a third action to the writer (`3`, the seed — `msg.value` is the seed, at least 100,000 MSK), `seed()` and the `Seeded` event to the facade, `SeedTooSmall()`, the settlement's `action` in place of `is_buy`, and puts the least seed in `constants()` where the virtual reserve was; `decimals()` is 0. Decisions 3, 5 and 6 read with that in mind.
 
@@ -267,7 +269,7 @@ payable`: byte 1 = encoding version (`1`), bytes 2–4 = action id big-endian, t
 
 | id | action | ABI | value |
 |---|---|---|---|
-| 1 | buy | `(bytes32 lineA, bytes32 lineB, uint256 minUnitsOut)` | `msg.value` = the gross MSK leg, wei, a multiple of `EVM_NATIVE_SCALE` |
+| 1 | buy | `(bytes32 lineA, bytes32 lineB, uint256 minUnitsOut)` | `msg.value` = the gross BILI leg, wei, a multiple of `EVM_NATIVE_SCALE` |
 | 2 | sell | `(bytes32 lineA, bytes32 lineB, uint256 unitsIn, uint256 minMskOutSompi)` | 0 |
 | 3–255 | reserved | — | — |
 
@@ -352,7 +354,7 @@ version bump: the settlement list and the EVM-namespace rows enter the root only
 **Decision 10 — What HyperEVM has that this ADR does not take, and why.**
 * *The asset crossing by system address.* A position never crosses: the facade has no supply,
   holds none, and links to nothing — there is no "total non-system balance on the other side"
-  to keep, and so nothing that "is not checked". Only MSK crosses, and it crosses by the bridge
+  to keep, and so nothing that "is not checked". Only BILI crosses, and it crosses by the bridge
   that exists (deposit lock/claim, F002, and now the escrow/settlement pair).
 * *Contracts as core actors.* Refused by Decision 4.
 * *Dual blocks.* The EVM block cadence is the selected chain's, and the chain's interval is
@@ -419,7 +421,7 @@ chain never takes the host's word* (README §"Security amendments").
 | A6 | **Gas griefing**: fill the block with actions that will be refused. | Each costs its caller the full call gas; refusals are free for the fold (O(1)) and for the settling block (a refund op under the system-gas cap). |
 | A7 | **Supply**: mint through the credit path. | An EVM credit is written only by the fold from a filled sell, whose `net` came off the reserve ADR-0087 M2 bounds; the coinbase skips `EvmCredit`; the accumulator check (Decision 8) is O(1) and every node runs it. |
 | A8 | **The chain takes the host's word**: a precompile answering from RPC state. | A read is served from the consensus store's fold row for the selected parent — the same rows `evm_commitment_root` is computed over; an executor answering from anywhere else produces a different commitment and is disqualified. |
-| A9 | **Cross-namespace laundering**: buy on the EVM, sell on the UTXO side to move MSK across the bridge without the bridge. | No object crosses namespaces (Decision 7); the only MSK path is the bridge's own, and a sell pays the namespace it was bought in. |
+| A9 | **Cross-namespace laundering**: buy on the EVM, sell on the UTXO side to move BILI across the bridge without the bridge. | No object crosses namespaces (Decision 7); the only BILI path is the bridge's own, and a sell pays the namespace it was bought in. |
 | A10 | **Security downgrade by default**: a wallet routing a PQ holder into the EVM door. | Positions never move between doors; a wallet cannot route what does not move. ADR-0023 FD-SUPPLY's display rule applies to the *label* of an EVM-held position, which `getPalwModelPositions` carries. |
 | A11 | **Weight**: an EVM action bearing on fork choice. | It bears on nothing but a market row: no share, no budget, no ticket, no blue work (ADR-0087 §2's "a position grants nothing but the right to sell it back"). |
 

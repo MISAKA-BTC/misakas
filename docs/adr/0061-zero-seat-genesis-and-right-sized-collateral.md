@@ -1,5 +1,7 @@
 # ADR-0061: Zero-seat genesis, and collateral sized by arithmetic instead of history
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -20,7 +22,7 @@
 > the RC registry holds eight cards so that [ADR-0065](0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md)
 > Decision 1 can be armed (`seat_count + 3`); devnet ships six public-seed bonds
 > ([ADR-0075](0075-certification-is-a-consensus-object.md) §7's rehearsal chain). Decision 2's
-> 10,000 MSK per seat stands. Map: [`README.md`](README.md).
+> 10,000 BILI per seat stands. Map: [`README.md`](README.md).
 
 ## The two decisions
 
@@ -52,10 +54,10 @@ runtime warns per voided block), which is what distinguishes today's bootstrap p
 silent-forever failure the old gate was written against. The gate keeps every other check:
 collateral coverage (C-08), the bind-window sustain rule, the catalog root, the class list.
 
-**2. Genesis collateral is 10,000 MSK per seat** (was 0.1B — the old vault denomination, kept
+**2. Genesis collateral is 10,000 BILI per seat** (was 0.1B — the old vault denomination, kept
 "because it was there"). The binding constraint is the DERIVED requirement —
 `palw_v2_collateral_for_claim_lifetime_v1` over the dearest registered class, measured at
-**3,223.07 MSK** on the shipped three-class card — and the C-08 gate only demands the output
+**3,223.07 BILI** on the shipped three-class card — and the C-08 gate only demands the output
 COVER the declaration. 10,000 is a ~3.1× margin over that structural minimum; the margin
 absorbs DAA advancing slower than one per block (parallel production against one bond), while
 the derivation itself already covers the whole claim-lifetime exposure horizon, `+1` included.
@@ -65,17 +67,17 @@ carve, so the cap never moves):
 
 | | before | after |
 |---|---:|---:|
-| collateral per seat | 100,000,000 MSK | 10,000 MSK |
-| locked across 6 seats | 600,000,000 MSK | 60,000 MSK |
-| t11 main wallet (spendable) | 8,852,999,400 MSK | 9,452,939,400 MSK |
+| collateral per seat | 100,000,000 BILI | 10,000 BILI |
+| locked across 6 seats | 600,000,000 BILI | 60,000 BILI |
+| t11 main wallet (spendable) | 8,852,999,400 BILI | 9,452,939,400 BILI |
 | genesis total | 10B exactly | 10B exactly |
 
-A slash of one seat now burns at most 10,000 MSK of operator money instead of 100M — the
+A slash of one seat now burns at most 10,000 BILI of operator money instead of 100M — the
 penalty finally matches the protocol's own accounting instead of a historical denomination.
 
 ## What deliberately does not move
 
-* **The declared collateral** in every `BondRegistered` (the derived 3,223.07 MSK) — so
+* **The declared collateral** in every `BondRegistered` (the derived 3,223.07 BILI) — so
   `palw_ruleset_id` is byte-identical. What moves is the genesis UTXO set, its commitment, the
   t11 genesis hash and the t11 fingerprint (`17bdff18…`), all riding the re-mint already in
   progress. No other preset's fingerprint moves.
@@ -98,13 +100,13 @@ the operator wants a running start — a registry it could equally have grown on
 
 ## Audit note on the collateral figure
 
-The 10,000 MSK carve did not, as first written, buy a ≈3× runtime margin: every exposure ceiling
+The 10,000 BILI carve did not, as first written, buy a ≈3× runtime margin: every exposure ceiling
 reads the DECLARED collateral, and that was pinned to the derived structural minimum, so the
 surplus in the outpoint bought exactly one extra concurrent claim. The declaration is now
 `max(derived, held)` and the margin is real. Two consequences follow and are deliberate: the
 derived minimum itself rose (the redraw's extra bind+receipt pair belongs in
 `MAX_CLAIM_EXPOSURE_DAA`), and the carve is now a CEILING on the dearest class a genesis may
-register — 10,000 MSK admits `pwu_per_inference ≤ ~8.3M` against Qwen3.6's 2.69M, a 3.1× headroom,
+register — 10,000 BILI admits `pwu_per_inference ≤ ~8.3M` against Qwen3.6's 2.69M, a 3.1× headroom,
 and exceeding it aborts every binary inside `Params::from`. Raising the carve is a supply decision
 under ADR-0059's cap.
 

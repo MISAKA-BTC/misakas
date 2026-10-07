@@ -1,5 +1,7 @@
 # RFC-0004: PALW Model Improvement Protocol — self-improvement and distillation over PALW-TIR
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 
@@ -436,7 +438,7 @@ forfeits its bond. An honest failure costs only its fee.
 
 A candidate is an **admitted class under its pinned active kernel** (legacy IR uses Phase F v10) of the parent's family: the same
 tokenizer, the same output interface (a `Logits` program whose logits scheme equals the parent's), and a
-program the family rule accepts. It is registered as any IR class is (`ClassRegisteredTirV1`, the 1 MSK
+program the family rule accepts. It is registered as any IR class is (`ClassRegisteredTirV1`, the 1 BILI
 burn, the per-block cap), and then entered in the epoch by `CandidateSubmitted` with its fees, bond and
 declarations. That wire path describes the legacy profile; new kernel-bound classes use §0's
 versioned admission/identity without rewriting legacy ids. Its artifact is one of two kinds.
@@ -800,7 +802,7 @@ money not yet paid out is the only lever left.
   `n × (k_max + 1)` subject jobs plus judge jobs, times their positions — is capped per epoch by the
   policy and by a network ceiling expressed as a share of the span's claim capacity, so evaluation cannot
   crowd out attempts.
-- **Candidates pay.** A registration fee (plus the IR class's own 1 MSK burn), and evaluation fees for
+- **Candidates pay.** A registration fee (plus the IR class's own 1 BILI burn), and evaluation fees for
   their own `n` subject jobs and pairwise jobs.
 - **Candidates per epoch** are capped by `k_max` and by the network's ceiling.
 - **Prefetch (legacy replay baseline).** Under the legacy full-replay profile every seat must hold the subject's artifact. Adapters

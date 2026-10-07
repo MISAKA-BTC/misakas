@@ -167,7 +167,7 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
             OutputFormat::Human if facts.bond_known => {
                 println!("bond:       {outpoint}");
                 println!("registry:   REGISTERED");
-                println!("collateral: {} sompi ({} MSK)", facts.bond_collateral, sompi_to_msk(facts.bond_collateral));
+                println!("collateral: {} sompi ({} BILI)", facts.bond_collateral, sompi_to_msk(facts.bond_collateral));
                 println!("operator:   {}", short_identity(&facts.bond_operator_id));
                 println!("pubkey:     {} (full value: --output json)", short_identity(&facts.bond_registered_pubkey));
                 println!("exposure:   {} reserved / {} ceiling", facts.bond_reserved_exposure, facts.bond_exposure_ceiling);
@@ -175,7 +175,7 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
                     (Some(need), Some(short)) => {
                         println!("sizing:     UNDERSIZED for sustained mining in the inspected class");
                         println!(
-                            "            {need} sompi ({} MSK) required / {short} sompi ({} MSK) short",
+                            "            {need} sompi ({} BILI) required / {short} sompi ({} BILI) short",
                             sompi_to_msk(need),
                             sompi_to_msk(short)
                         );
@@ -368,14 +368,14 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
                 // settle it.
                 println!("locked:  {} outpoint(s) at this address", locked.len());
                 for u in &locked {
-                    println!("  {}:{}  {} MSK", u.outpoint.transaction_id, u.outpoint.index, sompi_to_msk(u.amount));
+                    println!("  {}:{}  {} BILI", u.outpoint.transaction_id, u.outpoint.index, sompi_to_msk(u.amount));
                 }
                 println!();
                 println!("These are consensus-locked collateral AND this node's reserved PALW funding");
                 println!("outpoints — the node reports them as one set. To classify any one exactly, run");
                 println!("`misaka bond status --bond <outpoint>`; it reads the registry and needs no key.");
             }
-            println!("spendable (mature, unbonded): {} MSK", sompi_to_msk(spendable));
+            println!("spendable (mature, unbonded): {} BILI", sompi_to_msk(spendable));
         }
         OutputFormat::Json => {
             // Named `locked`, not `bonds`: see the human branch — this set unions collateral with the
@@ -470,7 +470,7 @@ fn retire_lock_verdict(r: &kaspa_rpc_core::GetPalwClaimsResponse) -> Result<(), 
         _ => String::new(),
     };
     Err(format!(
-        "this bond still holds {} live Valid lock(s) totalling {locked} sompi ({} MSK) from panels it served, and the chain drops a \
+        "this bond still holds {} live Valid lock(s) totalling {locked} sompi ({} BILI) from panels it served, and the chain drops a \
          retirement while any is live (\"withdraw is refused until liability expiry\") — after its carrier is mined and paid for. \
          The last DAA clock among them runs to DAA {}{bound}; retire from then (the node reads DAA {} now). `misaka bond status \
          --bond <txid>:<index>` lists them.",
@@ -493,7 +493,7 @@ fn lock_status_lines(r: &kaspa_rpc_core::GetPalwClaimsResponse) -> Vec<String> {
     } else {
         let locked: u128 = r.bond_live_locked_sompi.parse().unwrap_or(0);
         out.push(format!(
-            "locks:      {} live Valid lock(s), {locked} sompi ({} MSK){}",
+            "locks:      {} live Valid lock(s), {locked} sompi ({} BILI){}",
             r.bond_live_lock_count,
             sompi_to_msk(u64::try_from(locked).unwrap_or(u64::MAX)),
             if r.bond_retire_refused_while_locked { " — the chain refuses `bond retire` while any is live" } else { "" }
@@ -509,7 +509,7 @@ fn lock_status_lines(r: &kaspa_rpc_core::GetPalwClaimsResponse) -> Vec<String> {
         for lock in &r.bond_locks {
             let amount: u128 = lock.amount_sompi.parse().unwrap_or(0);
             out.push(format!(
-                "            claim {}…  {} MSK  until DAA {}{}",
+                "            claim {}…  {} BILI  until DAA {}{}",
                 &lock.claim_id[..lock.claim_id.len().min(16)],
                 sompi_to_msk(u64::try_from(amount).unwrap_or(u64::MAX)),
                 lock.expiry_daa,

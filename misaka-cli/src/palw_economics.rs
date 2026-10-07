@@ -297,9 +297,9 @@ pub(crate) fn report(r: &GetPalwClassEconomicsResponse) -> Report {
     let network_expected_attempts_q32 = parse_u128(&r.network_expected_attempts_q32).max(PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1);
     let measures: Vec<PalwClassMeasureV1> = r.classes.iter().map(|row| measure_of(row, network_expected_attempts_q32)).collect();
     let actual_gaps = [
-        actual_gap("producer MSK / attempted CCU", &r.classes, |row| parse_u128(&row.ledger.producer_per_attempted_compute)),
-        actual_gap("panel MSK / verification CCU", &r.classes, |row| parse_u128(&row.ledger.panel_per_verification_compute)),
-        actual_gap("total MSK / attempted CCU", &r.classes, |row| parse_u128(&row.ledger.total_per_attempted_compute)),
+        actual_gap("producer BILI / attempted CCU", &r.classes, |row| parse_u128(&row.ledger.producer_per_attempted_compute)),
+        actual_gap("panel BILI / verification CCU", &r.classes, |row| parse_u128(&row.ledger.panel_per_verification_compute)),
+        actual_gap("total BILI / attempted CCU", &r.classes, |row| parse_u128(&row.ledger.total_per_attempted_compute)),
     ];
     let (end_to_end, rate_sompi_per_giga) = end_to_end(r, &measures);
     let capacity = capacity_of(r, r.seat_count);
@@ -374,7 +374,7 @@ fn msk(sompi: u128) -> String {
     format!("{}.{:02}", sompi / 100_000_000, (sompi % 100_000_000) / 1_000_000)
 }
 
-/// Sompi per 10⁹ MAC-equivalents, printed as MSK per 10¹² (`MSK/T`): three decimals.
+/// Sompi per 10⁹ MAC-equivalents, printed as BILI per 10¹² (`BILI/T`): three decimals.
 fn rate(sompi_per_giga: u128) -> String {
     let per_tera = sompi_per_giga.saturating_mul(1000);
     format!("{}.{:03}", per_tera / 100_000_000, (per_tera % 100_000_000) / 100_000)
@@ -421,7 +421,7 @@ pub(crate) fn render(report: &Report) -> String {
         ));
     }
     for (name, unit, classes, gap_final, gap_attempted, gap_panel) in &report.bases {
-        out.push_str(&format!("\nBasis {name} (unit {unit}) — MSK per 10¹² MAC-eq:\n"));
+        out.push_str(&format!("\nBasis {name} (unit {unit}) — BILI per 10¹² MAC-eq:\n"));
         out.push_str(&format!(
             "  {:<28} {:>6} {:>12} {:>10} {:>10} {:>10} {:>10} {:>12}\n",
             "class", "price‰", "reward/Final", "F prod", "F total", "A prod", "A total", "panel/verify"
@@ -471,7 +471,7 @@ pub(crate) fn render(report: &Report) -> String {
     ));
     out.push_str(&format!(
         "  {:<28} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>12} {:>10} {:>10}\n",
-        "class", "claims", "bound", "licens", "final", "voided", "lic‰", "fin‰", "producer nmd", "panel nmd", "burned MSK"
+        "class", "claims", "bound", "licens", "final", "voided", "lic‰", "fin‰", "producer nmd", "panel nmd", "burned BILI"
     ));
     for row in report.rows.iter().filter(|r| r.ledger.available) {
         let l = &row.ledger;
@@ -598,8 +598,8 @@ pub(crate) fn render(report: &Report) -> String {
             "bound",
             "duties",
             "util‰",
-            "exposure MSK",
-            "free MSK",
+            "exposure BILI",
+            "free BILI",
             "live"
         ));
         for c in &report.capacity {
@@ -846,7 +846,7 @@ mod tests {
         assert_eq!(*unit_att, 172_919_123_392 * 3_165, "…and its 3,165 expected attempts on the attempted basis");
         // The dense tier on the leaf basis: 48 finals of 797 accepted.
         let e = &classes[2].economics;
-        assert_eq!(e.reward_per_final_sompi, 320_084_650_080 * 6_630_544 / 9_000_776, "73.6 % of 3,200.85 MSK: 2,357.95 MSK");
+        assert_eq!(e.reward_per_final_sompi, 320_084_650_080 * 6_630_544 / 9_000_776, "73.6 % of 3,200.85 BILI: 2,357.95 BILI");
         assert_eq!(e.final_compute, 83_102_171_136 * 48);
         assert_eq!(e.attempted_compute, 83_102_171_136 * 797);
         let text = render(&report);
@@ -965,8 +965,8 @@ mod tests {
         let hybrid_by_rate = hybrid.under.iter().find(|(b, _, _)| b.starts_with("EconomicRate")).unwrap();
         assert_eq!(hybrid_by_rate.1 as u128 * 1_000 / escrow, 217, "18.06 G × 2 draws against 83.10 G × 2: 21.7 % of the escrow");
         // The cap is each class's OWN escrow per claim: the dense tier sets the rate, so it sits at
-        // its cap; the hybrid's rate-priced reward is 21.7 % of the dense tier's 2,756 MSK Final
-        // escrow and 18.7 % of its own 3,200 MSK per accepted claim (no Final yet, so the census's
+        // its cap; the hybrid's rate-priced reward is 21.7 % of the dense tier's 2,756 BILI Final
+        // escrow and 18.7 % of its own 3,200 BILI per accepted claim (no Final yet, so the census's
         // escrow per accepted claim) — both far under the 80 % activation limit. A Kimi-class at 7×
         // the dense tier's compute would read 7,000 ‰ and be refused as a paid class.
         assert_eq!(hybrid.cap_utilization_permille, 187);
@@ -975,7 +975,7 @@ mod tests {
         let text = render(&report);
         assert!(text.contains("Escrow cap under the rate"));
         assert!(text.contains("End to end — this node's ledger: 1419 claims, accepted DAA 3542–5774"));
-        assert!(text.contains("actual gap, producer MSK / attempted CCU: ∞ (Qwen3.6-35B-A3B/graph-v3 paid nothing)"));
+        assert!(text.contains("actual gap, producer BILI / attempted CCU: ∞ (Qwen3.6-35B-A3B/graph-v3 paid nothing)"));
         assert!(text.contains("draws 979 · class wins 977 · blocks 202 · 120 s/draw · 9700 MiB/draw"));
         assert!(text.contains("EconomicRate (C)"));
         let doc = json_report(&report);

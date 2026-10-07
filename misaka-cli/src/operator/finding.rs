@@ -193,9 +193,9 @@ mod tests {
     fn sample() -> Finding {
         Finding::error("E-BOND-EXPOSURE-FULL", crate::exit::NOT_READY, "Not mining: the bond's exposure is full")
             .reason("every claim reserves collateral until it is final")
-            .current("3 claims reserve 2,150 of 2,200 MSK")
-            .current("one more needs 740 MSK")
-            .required("740 MSK of room")
+            .current("3 claims reserve 2,150 of 2,200 BILI")
+            .current("one more needs 740 BILI")
+            .required("740 BILI of room")
             .fix("wait: room returns as claims turn final")
             .docs("docs/testnet11-join-mining.md#exposure")
     }
@@ -209,9 +209,9 @@ mod tests {
         assert!(lines[0].starts_with("✗ Not mining: the bond's exposure is full"), "{text}");
         assert!(lines[0].ends_with("[E-BOND-EXPOSURE-FULL]"), "{text}");
         assert_eq!(lines[1], "  Reason    every claim reserves collateral until it is final");
-        assert_eq!(lines[2], "  Current   3 claims reserve 2,150 of 2,200 MSK");
-        assert_eq!(lines[3], "            one more needs 740 MSK");
-        assert_eq!(lines[4], "  Required  740 MSK of room");
+        assert_eq!(lines[2], "  Current   3 claims reserve 2,150 of 2,200 BILI");
+        assert_eq!(lines[3], "            one more needs 740 BILI");
+        assert_eq!(lines[4], "  Required  740 BILI of room");
         assert_eq!(lines[5], "  Fix       wait: room returns as claims turn final");
         assert_eq!(lines[6], "  Docs      docs/testnet11-join-mining.md#exposure");
         assert_eq!(lines.len(), 7);

@@ -1,5 +1,7 @@
 # ADR-0023: MISAKA Base + Three Execution Lanes (PQ-EVM / ETH-compat / Proof-verified Parallel EVM)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 ## Status
 **Proposed — design freeze, 2026-06-25. Nothing is implemented.** This ADR is a forward-looking
 execution architecture for MISAKA L1. **Source design:**

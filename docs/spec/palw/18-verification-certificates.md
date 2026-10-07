@@ -1,5 +1,7 @@
 # PALW spec — 18. Verification certificates: vertices, licence by tally, equivocation, `Held` leaves, security parameters, the witness manifest, the audit mesh, capped onboarding
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Normative.** This chapter specifies RFC-0007 Parts I and III (`docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md`,
 > branch `rfc7/vertex`):
 > - the **verification vertex**: one signed statement per seat per round of every verdict the seat reached;
@@ -479,7 +481,7 @@ the fold reads how a seat checked.
 **18.16.1 The draw.** At a claim's **acceptance** past `palw_audit_mesh_v1` (so a claim the panel never licenses is still audited — the mesh is a
 sensor, not a licence), a claim of an IR class (`tir_classes` row) with a non-zero audit pay draws [`PALW_AUDITS_PER_CLAIM_V1`] = **2** auditors
 from **all bonded seats**: every Active bond registered before the claim, other than its producer, with free collateral for the penalty
-(`collateral − reserved_exposure − registration_exposure`), weighted by stake (whole MSK, capped as the panel's stake draw caps it), one seat per
+(`collateral − reserved_exposure − registration_exposure`), weighted by stake (whole BILI, capped as the panel's stake draw caps it), one seat per
 operator. The race is the panel's (`−ln u / w`, `palw_draw_key_cmp_v1`) over tickets `H(seed ‖ bond)` under a seed bound to the claim id, its
 carrying block, its execution root and the draw's DAA. Each winner draws its **leaf ticket** (a `u64`; the auditor audits committed tile
 `ticket % tiles`, the chain does not know the tile count). **The hook cannot fail**: it runs after the claim is written, where a refusal would
@@ -500,7 +502,7 @@ nothing. An audit leaf below the fence is refused by name by the acceptance gate
 
 **18.16.4 Traps** (open question 7). A bonded **setter** drawn by the slot lottery (`palw_trap_slot_drawn_v1`: a uniform ticket over `(bond, ⌊DAA /
 100⌋)` against `PALW_TRAP_RATE_BP_V1` = 100 of 10,000, i.e. 1 %) carries `TrapCommittedV1 { setter_bond, commitment, signature }` (tag 102) with
-`commitment = H(claim ‖ fault leaf ‖ tiles ‖ salt)`, reserving a 100 MSK deposit (one trap open per setter, at most 1,024 open). It then produces a claim of
+`commitment = H(claim ‖ fault leaf ‖ tiles ‖ salt)`, reserving a 100 BILI deposit (one trap open per setter, at most 1,024 open). It then produces a claim of
 its own with a fault planted in committed tile `fault_leaf` of `tiles` (at most 64), and after the audit window carries `TrapRevealedV1 { setter_bond,
 claim, fault_leaf, tiles, salt, signature }` (tag 103), admissible only for **the setter's own audited claim**, after `audit_end` and no later than
 `row_end`. The fold: releases the deposit and spends the commitment; for each drawn auditor whose ticket landed on the planted tile
@@ -581,7 +583,7 @@ The drill flags work only with `--palw-drill-genesis-salt`; each moves nothing e
 | --- | --- | --- | --- |
 | 5 | Witness bytes in the class profile | They enter the verification-window derivation, **not** seat pay | §18.15.4 |
 | 6 | Seat pay for algebraic checks | A sketching seat's receipt earns what a replay's earns | §18.15.4 |
-| 7 | Audit-mesh parameters | `trap_rate` 1 %; `trap_penalty` a reservation equal to 10 × the audit pay; 2 audits per claim; audit pay 4 ‰ of the claim's escrowed reward per attested audit, from the panel reserve; trap bounty 5 audit pays; trap deposit 100 MSK | §18.16 |
+| 7 | Audit-mesh parameters | `trap_rate` 1 %; `trap_penalty` a reservation equal to 10 × the audit pay; 2 audits per claim; audit pay 4 ‰ of the claim's escrowed reward per attested audit, from the panel reserve; trap bounty 5 audit pays; trap deposit 100 BILI | §18.16 |
 | 8 | `w_cap` and re-verification | `w_cap` = 1 % (10 ‰); `capped_admission_permille` = 20; re-verify **all** capped claims on testnet-12 | §18.17 |
 | 9 | Per-row history sketches | Build them | §18.15.5, `misaka-palw-tir-sketch::history` |
 | 10 | The canonical serving set | Pin it in the class profile | §18.15.2 |

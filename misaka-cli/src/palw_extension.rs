@@ -650,7 +650,7 @@ pub async fn submit(
             {
                 println!(
                     "then: sponsor {} into the class's Activation Pool once the registration folds (a donation to its preparers; \
-                     --sponsor <MSK> changes it, --no-sponsor skips it)",
+                     --sponsor <BILI> changes it, --no-sponsor skips it)",
                     crate::palw_model::msk(amount)
                 );
             }

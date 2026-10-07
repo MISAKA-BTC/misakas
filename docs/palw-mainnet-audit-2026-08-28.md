@@ -1,5 +1,7 @@
 # PALW ConsensusV2 — mainnet audit (2026-08-28)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **Method.** Twelve independent lanes (pull transport, merged work / ADR-0058, class registration,
 slashing economics, crypto domains, validator spend, mainnet params, panel duty, court/dispute,
 engine determinism, IBD/pruning, fail-open), every finding then put through a two-lens refutation

@@ -1,5 +1,7 @@
 # RFC-0009: PALW Remote Client — node を持たないモデル登録・claim・非保管型の報酬回収
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 * Status: Draft, 2026-10-04 — design only; activation height、fingerprint、wire format は未決定。
@@ -11,7 +13,7 @@
 
 **miner 自身が full `kaspad` を立てずに claim し、正当に得た報酬を回収できる設計として進めてよい。** pool は必須ではない。ただし「署名済み claim + 任意 relay」だけでは目標に届かない。現在の free-prompt lane は Panel が producer の node から material を取得し、`Final` 後の winning quantum は**同じ bond の producer が receipt block に使う**。この二つを protocol 上で切り離す必要がある。
 
-**モデル登録者も、自分の full node や Panel を立てずにモデルを追加できる経路を提供する。登録は無料ではなく、ユーザーが MSK の GAS と登録に必要な bond 資金を用意する。** ローカル/委託 builder が artifact と登録 object を作り、ユーザーが自分の鍵で登録 object と funding transaction を署名し、任意 node/relay が提出する。node-less はノード運用を不要にするだけで、登録の審査・署名・経済条件をなくさない。詳細は §3.3–§3.6 と [RFC11 §11.2](0011-permissionless-model-and-long-context-onboarding.md#112-exact-duplicates-must-be-idempotent-without-inventing-a-new-mandatory-registry)。
+**モデル登録者も、自分の full node や Panel を立てずにモデルを追加できる経路を提供する。登録は無料ではなく、ユーザーが BILI の GAS と登録に必要な bond 資金を用意する。** ローカル/委託 builder が artifact と登録 object を作り、ユーザーが自分の鍵で登録 object と funding transaction を署名し、任意 node/relay が提出する。node-less はノード運用を不要にするだけで、登録の審査・署名・経済条件をなくさない。詳細は §3.3–§3.6 と [RFC11 §11.2](0011-permissionless-model-and-long-context-onboarding.md#112-exact-duplicates-must-be-idempotent-without-inventing-a-new-mandatory-registry)。
 
 推奨する最終形は次のとおり。
 
@@ -82,12 +84,12 @@ attempt は claim を載せる**block 自体が work**である。外部 node �
 
 ### 3.4 GAS は登録者が用意する: 固定登録費・carrier fee・担保を区別
 
-**「node を立てない」≠「無料でモデルを追加できる」。ユーザーは署名前に必要な MSK を用意し、費用を確認する。** 本 RFC の登録 UI でいう GAS は登録操作のネットワーク費用であり、モデル登録を EVM transaction に変えたり、EVM の `gasLimit × gasPrice` を native carrier の料金へそのまま当てはめたりしない。
+**「node を立てない」≠「無料でモデルを追加できる」。ユーザーは署名前に必要な BILI を用意し、費用を確認する。** 本 RFC の登録 UI でいう GAS は登録操作のネットワーク費用であり、モデル登録を EVM transaction に変えたり、EVM の `gasLimit × gasPrice` を native carrier の料金へそのまま当てはめたりしない。
 
 | 項目 | 支払元・扱い |
 | --- | --- |
-| 固定の登録価格 / burn | 現行 T12 の対象 fence 以降は `PALW_CLASS_REGISTRATION_BURN_SOMPI_V1` = **1 MSK**。受理・fold 時に registrant bond の collateral から burn する。wallet の carrier fee から引かれるわけではなく、返金される担保や fraud penalty とも別。対象 network/fence の現行規則を確認する。 |
-| Carrier transaction fee | funding wallet の spendable MSK/UTXO から支払う。実際の carrier の mass、network fee policy、選択した priority を用いて見積もる。固定の登録価格と別であり、total GAS を常に 1 MSK と表示しない。 |
+| 固定の登録価格 / burn | 現行 T12 の対象 fence 以降は `PALW_CLASS_REGISTRATION_BURN_SOMPI_V1` = **1 BILI**。受理・fold 時に registrant bond の collateral から burn する。wallet の carrier fee から引かれるわけではなく、返金される担保や fraud penalty とも別。対象 network/fence の現行規則を確認する。 |
+| Carrier transaction fee | funding wallet の spendable BILI/UTXO から支払う。実際の carrier の mass、network fee policy、選択した priority を用いて見積もる。固定の登録価格と別であり、total GAS を常に 1 BILI と表示しない。 |
 | Bond / registration exposure | Active bond の存在と残余 collateral を検査する。既存 reservation、live slashable locks、今回の exposure、burn 後の backing を同じ chain gate で確認する。GAS が払えても担保不足なら登録不可。 |
 | その他の filing / 任意サービス | certification 等に追加 filing/rent が必要なら個別に表示する。activation pool、市場開設 deposit、worker/relay/seeding の任意サービス料金は登録 GAS と混ぜず、別承認とする。 |
 

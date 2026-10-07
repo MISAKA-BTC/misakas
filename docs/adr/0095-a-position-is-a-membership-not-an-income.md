@@ -1,5 +1,7 @@
 # ADR-0095 — A position is a membership, not an income
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 * Status: PROPOSED 2026-09-07
 * Amends: [0087](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) Decision 1's
   "grants nothing but the right to sell it back" — it now also grants what its LINE declares;
@@ -119,7 +121,7 @@ line:
 | 7 | `SUPPORT` | the line answers holders' reports first |
 
 What a line may NOT declare is anything that pays. There is no bit for a share, a rebate, a discount
-in MSK, or a claim on the reserve, and an unknown bit is **refused at the fold**, not stored and
+in BILI, or a claim on the reserve, and an unknown bit is **refused at the fold**, not stored and
 ignored (§6 N5): a promise no reader can render is not a promise. **A grant is a service or it is
 not a grant.**
 
@@ -206,7 +208,7 @@ With `HOLDER_VOICE`, an evaluation (ADR-0088 Decision 5) or a proposal (Decision
 holder evaluations first, and a developer looking for what to fix next reads the people who paid to
 be there.
 
-This is also the one place a holder can legitimately receive MSK from the line, and it is worth
+This is also the one place a holder can legitimately receive BILI from the line, and it is worth
 being precise about why it is not income: ADR-0088 Decision 8 pays the **contributor share** of the
 owner's leg to the author of an **adopted proposal** while that version is current. That is payment
 for work that was adopted, available to holders and non-holders alike; it is not a return on

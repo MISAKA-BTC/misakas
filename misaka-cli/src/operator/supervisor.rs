@@ -149,7 +149,7 @@ pub(crate) fn kaspad_args(p: &Profile, role: Role) -> Result<Vec<String>, Findin
         // kaspad panics without one on a ConsensusV2 network: say it here, as a fix.
         return Err(missing(
             "which UTXO funds the panel's carriers",
-            "set [advanced] fee_outpoint = \"<txid>:<index>\" (a mature, unbonded UTXO at the key's address, ≥ 0.1 MSK), or: misaka mining setup",
+            "set [advanced] fee_outpoint = \"<txid>:<index>\" (a mature, unbonded UTXO at the key's address, ≥ 0.1 BILI), or: misaka mining setup",
         ));
     }
     if let Some(class) = &p.class {

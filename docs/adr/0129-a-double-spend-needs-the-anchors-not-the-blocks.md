@@ -1,5 +1,7 @@
 # ADR-0129 — A double spend needs the anchors, not the blocks
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 * Status: **ACCEPTED and IMPLEMENTED 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement`.
   No consensus rule and no fence of its own: it states which existing rules defend a payment, pins each
   with a test, and adds the read that counts confirmations in anchors. testnet-11 runs it from DAA 6,001
@@ -67,7 +69,7 @@ block's draw is its header position (ADR-0072) — and (b) license each of their
 the seats drawn for it *on that branch*: honest seats judge only claims on the chain they follow, so an
 unpublished branch settles only with three of five seats the attacker holds, claim after claim, until
 its frontier passes the public one. The seats are drawn one ticket per bond above ten producer floors
-(ADR-0124 Decisions 4–5; 100,000 MSK a seat on mainnet), so the second resource is bonded capital
+(ADR-0124 Decisions 4–5; 100,000 BILI a seat on mainnet), so the second resource is bonded capital
 across many bonds, and the draw's anchor on the branch is a block whose hash costs a winning draw to
 re-roll.
 *The limit, stated:* receipts for honest inferences on a private branch are not slashable on the public

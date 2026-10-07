@@ -1,5 +1,7 @@
 # RFC-0002: PALW Canonical Tensor IR v1 (PALW-TIR) — a bounded, deterministic integer tensor program as the consensus meaning of a class, with a reference evaluator and optional fused kernels
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 
@@ -443,7 +445,7 @@ are adjudicable at three levels, **IR node → canonical chunk → tile**:
 
 Size caps (proposed; sized in Phase D): program ≤ 256 KiB; blocks ≤ 16; nodes per block ≤ 512;
 layers ≤ 1024; inputs per node ≤ 8; rank ≤ 4; any dimension ≤ 2^24; elements per tensor ≤ 2^28;
-consts ≤ 64 KiB; states ≤ 16 per layer; step leaves ≤ 2^22 (existing). The registration price (1 MSK
+consts ≤ 64 KiB; states ≤ 16 per layer; step leaves ≤ 2^22 (existing). The registration price (1 BILI
 burned, ≤ 4 bought registrations per block, `palw_state_v2.rs:7411,7426`) bounds how often admission
 runs.
 
@@ -650,7 +652,7 @@ after the capacity steps (ADR-0160), at a height chosen when Phase F's drill pas
   PALW-TIR-11 fixes the tie rule and commits the selection.
 - **Identity grinding.** Encodings of one program would give free class ids. Normal form makes the
   encoding unique; node-local knobs leave the id.
-- **Registration DoS.** Linear-time admission with capped sizes; the 1 MSK burn and the 4-per-block
+- **Registration DoS.** Linear-time admission with capped sizes; the 1 BILI burn and the 4-per-block
   cap stay; admission CPU time is measured in Phase D and becomes a ceiling if needed.
 - **Canonical work.** Derived structurally: `dense_matmul` = `MatMul` with a non-gathered `Param`;
   `routed_expert_matmul` = `MatMul` whose `Param` passes through a `Gather` indexed by a `TopK`
@@ -960,7 +962,7 @@ Each item names the function that answers it, so the preflight is a composition 
    - **the canonical job**: the declared prefill and decode token counts, `max_context` and the history bound against the
      network's canonical-job bounds and the class's profile;
    - **the fences**: every fence the class needs (`palw_tir_v1`, `palw_tir_fence2`, …) against what the network has armed at the
-     height (`FENCE_NOT_ARMED(name)`), and the registration's price (the 1 MSK burn and the carrier fee).
+     height (`FENCE_NOT_ARMED(name)`), and the registration's price (the 1 BILI burn and the carrier fee).
 8. **The seat.** The memory one seat needs to replay the class — the artifact (mapped) plus the replay working set, which
    grows with the context (the K/V history and the scratch of the widest cone) — against the memory share a seat declares
    (`--palw-host-memory-share`), and the time to page the artifact in. A seat whose share is below the replay never becomes
@@ -1635,7 +1637,7 @@ pub fn palw_class_seating_v1(
 - *Operators, not bonds.* As the panel room's `ready_eff` already counts. On testnet-12, where `palw_operator_id_unique` makes an
   operator one bond, it changes no number; elsewhere it removes an over-count.
 - *What it cannot do.* The chain cannot tell two keys of one party from two parties (§II.7.3 F1(iii)): a registrant that funds three
-  more keys, each with the collateral of a panel-eligible bond (130,000 MSK on testnet-12), passes condition 2. The independence is
+  more keys, each with the collateral of a panel-eligible bond (130,000 BILI on testnet-12), passes condition 2. The independence is
   bought and priced in collateral locked, which is the most that a rule reading only the chain can ask.
 
 **The ADR-0147 outsider seat (lane D's caveat).** A bought class's claim has an outsider seat, drawn **per claim** from `Base`, which

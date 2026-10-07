@@ -1,3 +1,5 @@
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **SUPERSEDED 2026-08-26 by [ADR-0053](adr/0053-palw-one-execution-family.md).** There is one
 > lane. Family M — the Metal/GGUF lane this document describes as "the one nobody can seat yet" —
 > was withdrawn, and the document's own central observation is why: a lane that cannot be seated

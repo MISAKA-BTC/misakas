@@ -12,7 +12,7 @@
 //! **A registration sponsors its own listing by default** (user decision 2026-09-25, the pool's
 //! P4): `misaka model add` and `misaka palw extension submit` file one `ActivationPoolFunded` of
 //! [`PALW_REGISTRATION_SPONSOR_DEFAULT_SOMPI`] for the class they registered, once the chain has
-//! folded the registration ([`sponsor_listing`]); `--sponsor <MSK>` changes the amount and
+//! folded the registration ([`sponsor_listing`]); `--sponsor <BILI>` changes the amount and
 //! `--no-sponsor` files none. The chain's own seed stays 0 — this is the tool's default, not a rule.
 //! Every figure shown as what a listing needs is the NON-BINDING recommended pool (`16 · A_MAX / α`,
 //! op 200's `recommendedPoolSompi`), never the registry's derived registration bond, which nothing
@@ -29,22 +29,22 @@ use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_rpc_core::{GetPalwActivationPoolRequest, GetPalwActivationPoolResponse};
 use std::time::{Duration, Instant};
 
-/// **The sponsor a registration files by default: 500 MSK** (user decision 2026-09-25) — `10·A0/α`
-/// at the pool's terms of 2026-09-25 (`A0` = 20 MSK, `α` = 400 ‰). The least top-up whose
-/// preparation share (`α` of it: 200 MSK = `10·A0`) keeps `a = min(A_MAX, ⌊prep/10⌋)` at the full
+/// **The sponsor a registration files by default: 500 BILI** (user decision 2026-09-25) — `10·A0/α`
+/// at the pool's terms of 2026-09-25 (`A0` = 20 BILI, `α` = 400 ‰). The least top-up whose
+/// preparation share (`α` of it: 200 BILI = `10·A0`) keeps `a = min(A_MAX, ⌊prep/10⌋)` at the full
 /// `A0` at the pool's opening, so the listing's first jury is paid the full base reward each. A CLI
 /// default and nothing more: the chain's seed is 0, and any amount from the least top-up up is a
 /// sponsor. **The terms are illustrative and may change with the mainnet-values decision — re-derive
 /// this with them** (`the_registration_sponsor_default_is_ten_a0_over_alpha` fails until it is).
 pub(crate) const PALW_REGISTRATION_SPONSOR_DEFAULT_SOMPI: u64 = 500 * kaspa_consensus_core::constants::SOMPI_PER_KASPA;
 
-/// `--sponsor <MSK>` / `--no-sponsor`, on every command that registers a class.
+/// `--sponsor <BILI>` / `--no-sponsor`, on every command that registers a class.
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct ListingSponsorArgs {
-    /// MSK to sponsor into the new class's Activation Pool once the registration folds (default
+    /// BILI to sponsor into the new class's Activation Pool once the registration folds (default
     /// 500: 10·A0/α at the pool's terms). A donation to the class's preparers, never refunded once
     /// folded; `0` is `--no-sponsor`.
-    #[arg(long, value_name = "MSK", conflicts_with = "no_sponsor")]
+    #[arg(long, value_name = "BILI", conflicts_with = "no_sponsor")]
     pub(crate) sponsor: Option<String>,
     /// File no sponsor with the registration.
     #[arg(long)]
@@ -65,10 +65,10 @@ impl ListingSponsorArgs {
     }
 }
 
-/// `sompi` as the plain MSK number `model-sponsor` takes (`500`, `12.5`).
+/// `sompi` as the plain BILI number `model-sponsor` takes (`500`, `12.5`).
 fn msk_arg(sompi: u64) -> String {
     let text = msk(sompi);
-    let number = text.trim_end_matches(" MSK");
+    let number = text.trim_end_matches(" BILI");
     if number.contains('.') { number.trim_end_matches('0').trim_end_matches('.').to_string() } else { number.to_string() }
 }
 
@@ -188,7 +188,7 @@ pub async fn pool(ctx: &Ctx, class_text: &str) -> CliResult {
         println!("  ! {warning}");
     }
     if !r.has_pool {
-        println!("  pool           none yet — the first top-up opens it (`misaka palw model-sponsor {} <MSK>`)", r.class_id);
+        println!("  pool           none yet — the first top-up opens it (`misaka palw model-sponsor {} <BILI>`)", r.class_id);
     } else {
         println!("  preparation    {} — (a): paid at this Candidate's audit to each prepared juror, once", msk(r.prep_sompi));
         println!(
@@ -274,7 +274,7 @@ async fn top_up_carrier(
     Ok((tx, fee, addr.to_string()))
 }
 
-/// `misaka palw model-sponsor <class> <MSK> --key … [--yes]` — top a class's Activation Pool up.
+/// `misaka palw model-sponsor <class> <BILI> --key … [--yes]` — top a class's Activation Pool up.
 pub async fn sponsor(ctx: &Ctx, ks: &crate::keys::KeySource, class_text: &str, msk_text: &str, yes: bool) -> CliResult {
     let class = parse_class(class_text)?;
     let amount = parse_msk_amount(msk_text)?;

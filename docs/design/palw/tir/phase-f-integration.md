@@ -1,5 +1,7 @@
 # PALW-TIR Phase F — consensus integration design (Gate F1)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Design record, Gate F1 (design only; nothing here is implemented).** How PALW-TIR v1 classes
 > become real on chain behind the dormant fence `palw_tir_v1` (RFC-0002 Phase F), and the
 > independent Phase 0(a) fix for the live GDN `k_heads ≠ v_heads` defect. Inputs: RFC-0002
@@ -90,7 +92,7 @@ for byte; IR behaviour is added beside it and reachable only through the fence.
 | `consensus/core/src/palw_state_v2.rs:6237-6281` | `PalwConsensusObjectV2::ClassRegistered { …, admission: Option<Box<PalwClassAdmissionCarriageV2>> }` | unchanged (its borsh is on chain) |
 | `palw_state_v2.rs:5689` | `PalwClassAdmissionCarriageV2 { profile, canonical, registrant_bond, signature }` | unchanged; new `PalwTirAdmissionCarriageV1` (Appendix A) |
 | end of `PalwConsensusObjectV2` | positional borsh discriminants | append `ClassRegisteredTirV1`, `CourtTirRootClaimed`, `CourtTirDissected`, `CourtTirChildChosen` (§2.8) |
-| `palw_state_v2.rs:7394-7410, 7426` | 4 bought registrations per block; 1 MSK burn | the IR variant counts in `palw_class_registration_buyer_v1` and pays the same burn |
+| `palw_state_v2.rs:7394-7410, 7426` | 4 bought registrations per block; 1 BILI burn | the IR variant counts in `palw_class_registration_buyer_v1` and pays the same burn |
 | `palw_state_v2.rs:7453-7469, 7667` | ObjectChunk (100 KB × 16, 8 groups; FamilyCertified only) | unchanged (D3 does not use it) |
 | `palw_state_v2.rs:4940-4987` | `PalwClassStateV2` (hashed whole in `classes`) | unchanged; IR sets `fused_attention = true` iff some commit point is dissected (reuses the Terminal clock at `26740-26776`) |
 | `palw_state_v2.rs:11648` | `state_root` (collections in frozen order; late tables enter once non-empty, ADR-0087 M7) | new `tir_classes` and `tir_dissections` tables, rooted only once written (impossible before the fence) |
@@ -348,7 +350,7 @@ table (the state-only facts the court clock and the lane need; `step_shape` is p
 
 **DoS.** Admission is linear in the unrolled node count, bounded by `max_unrolled_nodes`; its CPU
 time is measured with `consensus/core/tests/dos_l2_registration.rs`'s harness; the existing 4 per
-block and 1 MSK burn apply.
+block and 1 BILI burn apply.
 
 **As built (F6, `palw_tir_admission_v1.rs`).** Where the implementation settled what the sketch above
 left open:

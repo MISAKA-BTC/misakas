@@ -157,7 +157,7 @@ impl HoldNumbers {
     }
 }
 
-/// `2,150.00 MSK` from sompi.
+/// `2,150.00 BILI` from sompi.
 pub(crate) fn msk(sompi: u128) -> String {
     let whole = sompi / 100_000_000;
     let frac = (sompi % 100_000_000) / 1_000_000;
@@ -167,7 +167,7 @@ pub(crate) fn msk(sompi: u128) -> String {
         let tail = digits.split_off(digits.len() - 3);
         grouped = format!(",{tail}{grouped}");
     }
-    format!("{digits}{grouped}.{frac:02} MSK")
+    format!("{digits}{grouped}.{frac:02} BILI")
 }
 
 /// **`ready_to_produce`'s verdict, as the operator should read it.** `reason` is the node's
@@ -219,7 +219,7 @@ pub(crate) fn not_ready(reason: &str, n: &HoldNumbers, bond: Option<&str>) -> Fi
     if reason.starts_with(PALW_NOT_READY_ISSUANCE_CAPPED_V1) {
         return Finding::error("E-ISSUANCE-CAPPED", exit::NOT_READY, "Not mining: the bond's issuance is capped for now")
             .reason(
-                "past ADR-0160's issuance slots a bond holds at most u·ρ outstanding claims (u = ⌊C / 6,500 MSK⌋) and issues from \
+                "past ADR-0160's issuance slots a bond holds at most u·ρ outstanding claims (u = ⌊C / 6,500 BILI⌋) and issues from \
                  a token bucket refilled u·ρ/20 a DAA and one DAA's refill deep — queue bounds, not a penalty",
             )
             .current(format!("bond {bond} at its cap"))
@@ -413,7 +413,7 @@ pub(crate) fn fee_outpoint_missing() -> Finding {
     Finding::error("E-FUNDS-FEE-OUTPOINT-MISSING", exit::FUNDS, "The panel has no fee outpoint")
         .reason("a producer on a ConsensusV2 network must be able to carry receipts and answers; kaspad panics without one")
         .current("no --palw-fee-outpoint and none persisted in palw-panel/palw-fee-outpoint")
-        .required("a mature, unbonded UTXO at the producer's key, ≥ 0.1 MSK")
+        .required("a mature, unbonded UTXO at the producer's key, ≥ 0.1 BILI")
         .fix("misaka mining setup --fee-outpoint auto")
         .docs(DOCS_PRODUCE)
 }
@@ -539,8 +539,8 @@ mod tests {
         );
         let f = hold_from_log(&line, Some("aa:0"));
         assert_eq!(f.code, "E-BOND-EXPOSURE-FULL");
-        assert_eq!(f.current, vec!["reserved 2,150.00 MSK of 2,200.00 MSK".to_string()]);
-        assert_eq!(f.required, "740.00 MSK of room for one more claim");
+        assert_eq!(f.current, vec!["reserved 2,150.00 BILI of 2,200.00 BILI".to_string()]);
+        assert_eq!(f.required, "740.00 BILI of room for one more claim");
 
         let f = hold_from_log(&format!("{PALW_NOT_READY_EPOCH_BUDGET_V2} [class=ab epoch=9 produced=0 budget=0]"), None);
         assert_eq!(f.code, "E-MODEL-EPOCH-BUDGET");
@@ -563,9 +563,9 @@ mod tests {
 
     #[test]
     fn msk_reads_like_an_amount() {
-        assert_eq!(msk(0), "0.00 MSK");
-        assert_eq!(msk(1_110_106_160), "11.10 MSK");
-        assert_eq!(msk(215_000_000_000), "2,150.00 MSK");
-        assert_eq!(msk(123_456_789_000_000), "1,234,567.89 MSK");
+        assert_eq!(msk(0), "0.00 BILI");
+        assert_eq!(msk(1_110_106_160), "11.10 BILI");
+        assert_eq!(msk(215_000_000_000), "2,150.00 BILI");
+        assert_eq!(msk(123_456_789_000_000), "1,234,567.89 BILI");
     }
 }

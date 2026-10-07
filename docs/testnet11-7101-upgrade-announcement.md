@@ -1,5 +1,7 @@
 # Testnet-11: the DAA 7,101 PALW upgrade, and Verification V2 at 7,200
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **The heights moved a FOURTH time on 2026-09-19, to 7,100.** The release drill's own devnet runs
 > its clock on heartbeats past its anchor-clock fence, so the DAA-denominated challenge window its
 > finals phase waits on is hours of wall clock rather than minutes — the estimate that set the third

@@ -1,5 +1,7 @@
 # ADR-0091 — The reward buys the pair, and no holder is paid
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 * Status: PROPOSED 2026-09-06 (design first, at the operator's word; the implementation follows
   on `palw-adr0088-0089-impl` and is recorded in §8 when it lands)
 * Amends: [0087](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) Decision 3 (a
@@ -9,7 +11,7 @@
   (decided: no — the reward's share goes to the pair, not to a person); [0089](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md)
   Decision 2 (the AMM window's `market()` gains two words); [0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
   Decision 2 (the reserve now grows by the reward as well as by buys) and §5's conservation
-  identity (a third source of MSK).
+  identity (a third source of BILI).
 * Builds on: [0042](0042-palw-mainnet-candidate-ruleset.md) Decision 10 (the worker reward is a
   carve of the subsidy, ESCROWED at the accepting block and named as a payout at `Final`, never
   minted before), 0088 Decision 4 (a claim is attributed to the version whose root it named),
@@ -28,7 +30,7 @@ holder is raise the price the curve will pay them when they sell.
 ## 1. What the operator asked, in the operator's words
 
 > 今の設計はそのモデルを使用したマイナー報酬の一部をモデルの position 保有者に分配する仕組みだけど、
-> それを分配からマイナー報酬でモデルと MSK のペア流動性から MSK で買い上げるようにして価格が上がる
+> それを分配からマイナー報酬でモデルと BILI のペア流動性から BILI で買い上げるようにして価格が上がる
 > 仕組みに変更して　そっちの方が証券などに近くなくなる
 >
 > またそのモデルのマイナー報酬全体のうちの 5% で買い上げるとすること　95% はマイナーに支払うこと
@@ -37,7 +39,7 @@ holder is raise the price the curve will pay them when they sell.
 
 The design had been read as "a part of the mining reward from using the model is *distributed* to
 the model's position holders". Change that: instead of a distribution, the mining reward **buys**
-from the model–MSK pair's liquidity with MSK, so that the price rises — that is further from a
+from the model–BILI pair's liquidity with BILI, so that the price rises — that is further from a
 security. Of the model's whole mining reward, **5 % buys**; **95 % is paid to the miner**. Write
 the ADR first.
 
@@ -53,16 +55,16 @@ is the channel the operator's first reading assumed and the one this ADR builds 
   it as a `PalwPayoutV2` to the bond's payout payload only when the claim reaches `Final`, and the
   next block's coinbase pays it. A claim that voids pays nobody — the carve was never minted.
   Fees are not part of the carve: they are paid at once, to the miner, as the block's own.
-* **ADR-0090 Decision 2 — the pair.** A line's market is a reserve of real MSK (the seed and
+* **ADR-0090 Decision 2 — the pair.** A line's market is a reserve of real BILI (the seed and
   every buy's net leg) against 500,000 whole positions on `reserve × units = K`, the product taken
-  from the row at every move so it never falls. MSK that enters the reserve leaves it only through
+  from the row at every move so it never falls. BILI that enters the reserve leaves it only through
   a holder's sell, at the curve's price, less the legs.
 
-A distribution would have taken MSK out of the escrow and handed it, pro rata, to every holder —
+A distribution would have taken BILI out of the escrow and handed it, pro rata, to every holder —
 income that arrives without a sale, from the work of others, which is exactly the shape a
 security has. The operator withdrew it before it was built. What replaces it needs no new channel:
 the reward is already withheld and only *named* at `Final`, so a slice of it that is never named
-as a payout is a slice that was never minted; and the pair already turns MSK that enters it into a
+as a payout is a slice that was never minted; and the pair already turns BILI that enters it into a
 higher price for every position equally. Put the slice into the pair and nothing is distributed:
 nothing is owed to a holder, nothing is paid to one, and a holder who wants the value sells a
 position back to the curve like anyone else.
@@ -116,7 +118,7 @@ slice; the coinbase renders the queue as before. A voided or retired claim buys 
 nobody (don't-mint, as before). A merged blue's attempt (escrow 0, ADR-0058) and a free-prompt
 claim (escrow 0, ADR-0044) have no slice.
 
-**Decision 6 — what a participant reads.** The row gains `buyback_sompi` (MSK the reward has put
+**Decision 6 — what a participant reads.** The row gains `buyback_sompi` (BILI the reward has put
 into the curve, cumulative) and `retired_units` (positions the chain holds for good).
 `getPalwModelMarket` carries both (wire version 4; proto fields 19–20); `misaka palw model-show`
 prints them; the AMM window's `market()` gains two words at its END — `buybackSompi`,
@@ -137,16 +139,16 @@ market was first withheld or sunk.
 
 ## 4. The arithmetic, worked
 
-From a market seeded with the least seed (100,000 MSK, `K = 10^13 × 500,000` sompi·positions), on
+From a market seeded with the least seed (100,000 BILI, `K = 10^13 × 500,000` sompi·positions), on
 testnet-11's pre-deflationary subsidy of 370,468,345 sompi a block and a 620 ‰ carve:
 
-| | sompi | MSK |
+| | sompi | BILI |
 |---|---|---|
 | the block's escrowed worker reward | 229,690,373 | 2.29690373 |
 | the slice (5 %) | 11,484,518 | 0.11484518 |
 | named for the miner at `Final` (95 %) | 218,205,855 | 2.18205855 |
 
-| after | reserve (sompi) | positions in the curve | retired | price (sompi) | vs 0.2 MSK |
+| after | reserve (sompi) | positions in the curve | retired | price (sompi) | vs 0.2 BILI |
 |---|---|---|---|---|---|
 | the seed | 10,000,000,000,000 | 500,000 | 0 | 20,000,000 | — |
 | one block's `Final` | 10,000,011,484,518 | 500,000 | 0 | 20,000,022 | +0.0001 % |
@@ -154,21 +156,21 @@ testnet-11's pre-deflationary subsidy of 370,468,345 sompi a block and a 620 ‰
 | a month (21,600) | 10,248,065,588,800 | 500,000 | 0 | 20,496,131 | +2.48 % |
 | a year (262,800) | 13,018,131,330,400 | 500,000 | 0 | 26,036,262 | +30.2 % |
 
-A slice of 0.11 MSK is under the 0.2 MSK a position costs, so at this size the curve gives up no
+A slice of 0.11 BILI is under the 0.2 BILI a position costs, so at this size the curve gives up no
 position: the reserve rises, the product rises, the price rises. On a network whose subsidy were
-100 MSK a block (escrow 62 MSK, slice 3.1 MSK) one block retires 15 positions and lifts the price
-to 20,001,220. And the holder of ADR-0090 §4's first buy (4,656 positions for 1,000 MSK at
+100 BILI a block (escrow 62 BILI, slice 3.1 BILI) one block retires 15 positions and lifts the price
+to 20,001,220. And the holder of ADR-0090 §4's first buy (4,656 positions for 1,000 BILI at
 20,377,757 after) who holds through a year of such blocks sells them all at 26,470,758 a position:
-1,221.00166948 MSK gross, 1,147.74156932 MSK net after the legs — and the reserve after that sale
-is 129,900.31 MSK on 500,000 positions, above the seed by everything the reward put in. Nothing
+1,221.00166948 BILI gross, 1,147.74156932 BILI net after the legs — and the reserve after that sale
+is 129,900.31 BILI on 500,000 positions, above the seed by everything the reward put in. Nothing
 was paid to that holder while they held; the price was.
 
 ## 5. Security — the four principles, checked
 
 * **Nothing is minted.** The slice is a part of an escrow the coinbase already withheld; it
   becomes a reserve entry, never an output; the identity of Decision 8 is a test (B2). The four
-  ways MSK reaches a market — seed, buy, slice, and nothing else — are each a sink or a withhold.
-* **Nothing is distributed.** No object moves MSK to a holder by virtue of holding; the payout
+  ways BILI reaches a market — seed, buy, slice, and nothing else — are each a sink or a withhold.
+* **Nothing is distributed.** No object moves BILI to a holder by virtue of holding; the payout
   table of the fold has one payee for the reward, the bond's payload, and its amount is smaller.
   The word "holder" does not appear in the move (B4).
 * **Nobody steers it.** The line is the claim's (attribution at accept, the same rule the court

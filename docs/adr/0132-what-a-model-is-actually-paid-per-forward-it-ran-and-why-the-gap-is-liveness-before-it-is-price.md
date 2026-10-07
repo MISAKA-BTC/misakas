@@ -1,12 +1,14 @@
 # ADR-0132 — What a model is actually paid per forward it ran, and why the gap is liveness before it is price
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
 * Status: **PROPOSED 2026-09-17; the end-to-end shadow (§6) built the same day** on
   `feat/palw-exec-lane-and-validator-retirement`. No consensus rule, parameter or fingerprint moves.
-* Operator's direction, in the operator's words: "価格式だけ公平ではなく … 実際に支払われた MSK まで含めた end-to-end
-  の actual MSK / attempted Economic CCU をモデル間で可能な限り一致させること"; "Final 率差の原因が protocol 上の
+* Operator's direction, in the operator's words: "価格式だけ公平ではなく … 実際に支払われた BILI まで含めた end-to-end
+  の actual BILI / attempted Economic CCU をモデル間で可能な限り一致させること"; "Final 率差の原因が protocol 上の
   不公平なのか、単なる runtime / artifact availability 問題なのかを分離"; "compute cost と data movement /
   availability cost は分離"; "モデル名ごとの手書き固定倍率は禁止"; "5 年後にモデルが 10 種類になっても破綻しにくい案".
 * Builds on: [0131](0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md) (economic
@@ -18,7 +20,7 @@
 
 ## 0. The sentence this ADR is
 
-**On testnet-11 today a dense-tier claim is paid, in expectation, 0.60 MSK per 10⁹ MAC-equivalents its producer
+**On testnet-11 today a dense-tier claim is paid, in expectation, 0.60 BILI per 10⁹ MAC-equivalents its producer
 ran, and a hybrid claim is paid nothing — not because the price is wrong but because no seat that can run the
 hybrid ever sits on its panel; the price, once the hybrid licenses at all, pays it 2.8 × more per forward than the
 dense tier on today's leaf basis and exactly the same on an attempted-compute basis; so the order of work is
@@ -57,9 +59,9 @@ per-model multiplier.**
    sampled-interval path (ADR-0098) never verified anything: **every licence on testnet-11 is a full replay by
    every live seat**, so a claim's verification compute is `live seats × the attempt's job`, not the four
    intervals the design prices.
-7. **Final → MSK.** Below DAA 6,001 every `Final` names its producer the whole escrow — coinbase outputs of exactly
-   `275,628,448,680` sompi (2,756.28 MSK) at DAA 5,758 (×2), 5,763, 5,765 and 5,766 on the selected chain — and
-   no seat is paid. From 6,001: escrow 3,200.85 MSK × the class's leaf price (dense tier 73.7 %, hybrid 29.8 %,
+7. **Final → BILI.** Below DAA 6,001 every `Final` names its producer the whole escrow — coinbase outputs of exactly
+   `275,628,448,680` sompi (2,756.28 BILI) at DAA 5,758 (×2), 5,763, 5,765 and 5,766 on the selected chain — and
+   no seat is paid. From 6,001: escrow 3,200.85 BILI × the class's leaf price (dense tier 73.7 %, hybrid 29.8 %,
    unit = the 1 ‰ 27B) → 80 % producer / 20 % panel pool (unused seats' shares → reserve; the priced-away
    remainder never minted). Claims whose attempt block was merged below the deep fence hold `escrow 0` (paid at
    acceptance, ADR-0058 B-1 before 6,000): 111 dense, 81 hybrid in the window.
@@ -77,7 +79,7 @@ DAA 5,774 → 5,785):
 | seats drawn (bond index : panels) | 0–7 + 4 external, uniform | `1–7` uniform, **never `:0`** | |
 | licence rate (licensed + Final) / accepted | 18.0 % | **0 %** | 60 % |
 | Final rate, terminal claims | 48 / 368 = **13.0 %** | — | — |
-| paid so far (pre-6,001 rule) | 48 × 2,756.28 = **132,301 MSK**, producers only | **0** | 0 |
+| paid so far (pre-6,001 rule) | 48 × 2,756.28 = **132,301 BILI**, producers only | **0** | 0 |
 
 **Why the hybrid never licenses — three facts, none a price.** The only host holding its artifact (`:0`) is its
 only producer and is excluded from its own panels; bond `:1` (same host, no hybrid artifact) is drawn on 344 of
@@ -100,10 +102,10 @@ in 20 s; the rest of the fleet does not keep up, and 87 % of terminal dense clai
 | data moved per forward | not measured (A16, resident) | ~9.7 GiB | host property |
 | panel verification CCU per bound claim (today: full replay × live seats) | ≤ 5 × 83.1 G = 415 G | ≤ 5 × 18.06 G (never run) | design: 4 intervals a seat |
 | P(Final) per terminal claim | 0.130 | 0 | |
-| **producer actual MSK / attempted 10⁹ CCU, pre-6,001** | 0.130 × 2,756.28 / 601.6 = **0.598** | **0** | gap ∞ |
+| **producer actual BILI / attempted 10⁹ CCU, pre-6,001** | 0.130 × 2,756.28 / 601.6 = **0.598** | **0** | gap ∞ |
 | producer actual, 6,001 leaf basis (× 0.737 × 0.8) | 0.130 × 1,886.36 / 601.6 = **0.408** | 0 (would be **1.134** at the dense tier's Final rate) | price gap 178 % |
 | producer actual, 6,001 economic-attempted basis, dense-tier unit | 0.130 × 2,560.68 / 601.6 = 0.553 | (0.553 at equal Final rate) | price gap 0 % |
-| panel actual MSK / verification CCU, pre-6,001 | 0 | 0 | seats unpaid below 6,001 |
+| panel actual BILI / verification CCU, pre-6,001 | 0 | 0 | seats unpaid below 6,001 |
 
 **Decomposition of the realized gap** (`actual_A₃₆ / actual_A₂₅`):
 `= [price per claim ratio 954.96 / 2,357.95 = 0.405] × [attempted CCU ratio 601.6 / 87.8 = 6.85] × [Final-rate
@@ -146,7 +148,7 @@ Twelve attributes each. "Consensus" = changes a rule a block is judged by (needs
 | liveness impact | none | none | none | none | none | **large positive** | positive (seat capacity) | negative (rewards silence) | positive (fewer wasted forwards) |
 | panel load | none | none | none | none | none | less (no hopeless duties) | **much less** | none | none |
 | producer load | none | none | none | none | none | less waiting | none | none | **÷ 2–5** |
-| MSK emission | unchanged (remainder never minted) | unchanged | unchanged | unchanged (by construction) | unchanged | unchanged | unchanged | unchanged | unchanged |
+| BILI emission | unchanged (remainder never minted) | unchanged | unchanged | unchanged (by construction) | unchanged | unchanged | unchanged | unchanged | unchanged |
 | implementation | small (shadow exists) | small–medium | small (one fence, one constant) | small | medium (meter first) | F1 small (reuse `palw_bond_produced_on_class` + a receipt fact); F2 small; F3 node-side medium | G1 investigation; G2 exists; G3 medium | trivial | large |
 | rollback | fence height → `never` before it fires | same | same | same | same | same | node-side: config | — | hard |
 
@@ -156,7 +158,7 @@ Twelve attributes each. "Consensus" = changes a rule a block is judged by (needs
    (or make bonds `2–7`'s hosts able to page it — a 24 GB Q4 file needs a 32 GB host or NVMe page cache); fix the
    `.t11b` node stuck in IBD; find why openings are `not-held` (G1). None of this is consensus, and it is the whole
    of today's realized gap.
-2. **Measure end to end in shadow (§6, built)**: actual MSK paid, attempted CCU with both lotteries, verification
+2. **Measure end to end in shadow (§6, built)**: actual BILI paid, attempted CCU with both lotteries, verification
    CCU, lifetimes, per class; the fleet's artifact I/O beside its compute. Then the gap has a number that is not
    infinity.
 3. **One fence, when the shadow says so** (ADR-0131 Decision 3's height): **C + A + B + F1 + F2** together — a

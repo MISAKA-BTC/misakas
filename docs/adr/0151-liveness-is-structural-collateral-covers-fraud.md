@@ -1,5 +1,7 @@
 # ADR-0151 — Liveness is structural; collateral covers fraud
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -97,19 +99,19 @@ suggest, and D4 is what stops that from blocking new work.
   the fraud a Valid Final AUTHORIZES, not the compute it counts.
 
 **The second correction RAISES the figure, and that was the finding.** The expectation was a refinement
-downward; measured, the dense row's gain is 2,702.96 MSK against 1,350.15 MSK of `pwu × slash`, because
+downward; measured, the dense row's gain is 2,702.96 BILI against 1,350.15 BILI of `pwu × slash`, because
 a claim's `pwu` is the expected attempt count times one inference — so the fork weight a Final buys is
 twice what the bond reserves against it. And the ESCROW half of a gain does not shrink with a cheap
-claim, so the floor's term (7,201 concurrent × 2.66814 MSK) becomes the largest of the three.
+claim, so the floor's term (7,201 concurrent × 2.66814 BILI) becomes the largest of the three.
 
 | class | concurrent | gain/claim | collateral |
 |---|---|---|---|
-| BASE-0 floor | 7,201 | 2.66814 MSK | 38,426.56 MSK |
-| held Qwen3.6 @512 | 4 | 4.73917 MSK | 37.91 MSK |
-| held Qwen2.5 @2M | 4 | 2,702.96409 MSK | 21,623.71 MSK |
-| | | | **60,088.18 MSK** |
+| BASE-0 floor | 7,201 | 2.66814 BILI | 38,426.56 BILI |
+| held Qwen3.6 @512 | 4 | 4.73917 BILI | 37.91 BILI |
+| held Qwen2.5 @2M | 4 | 2,702.96409 BILI | 21,623.71 BILI |
+| | | | **60,088.18 BILI** |
 
-Eight seats: 480,705.47 MSK, 0.0048 % of the 10B cap.
+Eight seats: 480,705.47 BILI, 0.0048 % of the 10B cap.
 
 **The runtime half is NOT done, and this is the one place testnet-12 knowingly ships a gap.** A
 producer's live reservation is still `palw_exposure_pwu_v1 × slash_value`, i.e. half the gain on the

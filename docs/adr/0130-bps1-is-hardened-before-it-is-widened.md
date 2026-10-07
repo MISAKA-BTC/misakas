@@ -1,5 +1,7 @@
 # ADR-0130 — BPS 1 is hardened before it is widened
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -28,7 +30,7 @@ chosen from was fixed — with a missed round, never a relaxed rule, where nobod
 ## 1. What exists, and where it fails at width 1
 
 * **A seat earns one to five orders of magnitude more than it risks, and a producer more still.** Past DAA
-  6,001 a testnet-11 claim escrows 3,200.85 MSK before ADR-0124's work price; the pool is a fifth, 128.03 MSK
+  6,001 a testnet-11 claim escrows 3,200.85 BILI before ADR-0124's work price; the pool is a fifth, 128.03 BILI
   a seat at full price. A claim reserves one inference's worth at the network's slash value, 5 sompi a pwu
   (read from the live node's registration terms), and a seat three times that. A model class is priced by
   its pwu against the heaviest weight-bearing model class (the unit), so its reward-to-exposure ratio does
@@ -36,8 +38,8 @@ chosen from was fixed — with a missed round, never a relaxed rule, where nobod
 
   | role | model class (unit = 9,000,776 pwu: `Qwen3.8-27B/graph-v3`, share 1 ‰) | floor (7,708 pwu, unpriced) |
   |---|---|---|
-  | panel seat: `128.03 MSK × price ÷ (3 × pwu × 5 sompi)` | ~95× | ~110,700× (128.03 / 0.0012 MSK) |
-  | producer: `2,560.68 MSK × price ÷ (pwu × 5 sompi)` | ~5,700× | ~6,640,000× |
+  | panel seat: `128.03 BILI × price ÷ (3 × pwu × 5 sompi)` | ~95× | ~110,700× (128.03 / 0.0012 BILI) |
+  | producer: `2,560.68 BILI × price ÷ (pwu × 5 sompi)` | ~5,700× | ~6,640,000× |
 
   The unit is the heaviest *weight-bearing* model class, and a class bears weight once its share is above
   zero: testnet-11's `Qwen3.8-27B/graph-v3` (registered at DAA 1,165, 1 ‰) is therefore the unit, pricing
@@ -62,7 +64,7 @@ Past it a seat reserves `max(3 × claim.reserved, λ × max_seat_reward)`, where
 per-seat share of the pool the claim's escrow holds (work pricing only lowers it) — resolved at the claim's
 anchor with the rest of the draw policy, used by the eligibility headroom and by the reservation alike, and
 stored on the seat's duty so release and the dissent slash move exactly what was reserved. The panel floor
-(ten producer floors: 130,000 MSK on a mainnet card since `a3c5db22`, 2026-09-24; 100,000 before) stays a
+(ten producer floors: 130,000 BILI on a mainnet card since `a3c5db22`, 2026-09-24; 100,000 before) stays a
 separate participation floor. Mainnet's λ is **5** (the user's 2026-09-25 decision, from the 5–10 this
 paragraph recorded as under consideration): testnet-12 arms it at `reward_multiple_permille = 5_000` from
 genesis; the mainnet card does not state it yet, and testnet-11 and devnet keep `None`. §3 is why
@@ -184,7 +186,7 @@ seconds ahead (before mainnet); Decision 7's slash.
   under the consecutive-round rule (round misses and settlement progress).
 * **What BPS 1 must show over weeks**, readable over RPC: rounds total/produced/missed, permit conflicts and
   double signs, operator and domain shares (p50/p95/max), consecutive-round rejections, settlement latency and
-  reorgs, panel response/correct/slash rates, panel and producer reward per reserved sompi, MSK per canonical
+  reorgs, panel response/correct/slash rates, panel and producer reward per reserved sompi, BILI per canonical
   compute by class.
 
 ## 7. Implementation record (2026-09-17)

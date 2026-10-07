@@ -1,5 +1,7 @@
 # testnet-11 Relaunch 2 — the public re-genesis and its community allocation
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Historical (superseded 2026-08-30 by Relaunch 3, the 10B premine cap —
 > [ADR-0059](adr/0059-the-10b-premine-cap.md)).** The community table itself lives on (11
 > entrants / 547M as of the cap re-genesis), but it is now carved OUT of the single 10B main

@@ -1,5 +1,7 @@
 # ADR-0122 — Mining is a purpose: an operator runs one command and reads one work id
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -31,7 +33,7 @@ These counts come from the documents and code as they stand on `main` (`480705e5
 | Goal | Steps | Processes | What goes wrong in practice |
 |---|---|---|---|
 | Floor-class mining (`docs/testnet11-join-mining.md` §1–§4) | 8 | `kaspad`, started twice | The bond outpoint is copied by hand from one log line. The §4 code block leaves out `--palw-fee-outpoint`, and without it the node panics. The fingerprint and the fence schedule are checked by eye. |
-| LLM class on the block lane | +4 | same | Artifact conversion, a root check, and a class id from `--palw-dump-classes`, which prints nothing on a fresh appdir for about 45 s. The funding needed (2,290 / 3,868 MSK) is far above the faucet's 12. |
+| LLM class on the block lane | +4 | same | Artifact conversion, a root check, and a class id from `--palw-dump-classes`, which prints nothing on a fresh appdir for about 45 s. The funding needed (2,290 / 3,868 BILI) is far above the faucet's 12. |
 | Prompt lane (free-prompt) | +7 | `kaspad`, gateway (spawns the worker), `misaka-palw-fp-rail --watch` | "`v3 executed` is not mining". The worker path must be absolute. The unbound artifact is refused. 33 carriers produced 5 claims because of the exposure ceiling. |
 | Panel seat (verifier) | none written | `kaspad --palw-panel` | No guide exists. Capability is declared with `misaka bond capability`. Seats are never paid, and no document says so. |
 | Add a model | 4 | `kaspad --palw-register-class`, `palw-certify`, `misaka palw submit-object` | Chunks must be submitted in order. A class registered mid-epoch has no budget until the next epoch. |
@@ -476,7 +478,7 @@ worker  = "/abs/path/palw-a16-fp-worker"   # must be absolute: the gateway spawn
 | 1 | Network | written to `mining.toml` | — |
 | 2 | Model | lists `getPalwClasses` with what each needs: memory, disk, collateral, whether it has a prompt lane, and share | a class is chosen |
 | 3 | Key | uses `~/.misaka/miner.seed`, or makes one (0600, never printed) | the key file exists |
-| 4 | Funds | shows the address, the amount the class needs (floor about 11.2 MSK; QWEN25-A16 2,290; QWEN36 3,868 — read from the chain, not from this text), the testnet faucet, and polls the balance (coinbase excluded) | enough is spendable |
+| 4 | Funds | shows the address, the amount the class needs (floor about 11.2 BILI; QWEN25-A16 2,290; QWEN36 3,868 — read from the chain, not from this text), the testnet faucet, and polls the balance (coinbase excluded) | enough is spendable |
 | 5 | Bond | if the key has none, runs `kaspad --palw-register-bond` under the supervisor and **reads the `[palw-panel] registered bond <txid>:<i>` line itself**. No copy-paste; the outpoint goes into the file. | `bond_known` |
 | 6 | Fee outpoint | picks one; if none fits, offers one self-send that splits it off (`wallet send`, confirmed) | a UTXO is chosen |
 | 7 | Artifact | finds, downloads or converts it, and checks its root against the class's `artifact_root`. For the prompt lane it also binds the tokenizer and checks the bound file's sha. | the root matches |
@@ -521,7 +523,7 @@ answer on the operator's own machine, and a CLI and a node from different commit
     drill|bind`, `submit-object` chunk by chunk, in order) and resumes from the chain's state, not
     from a journal.
 * `market open` founds a line, then seeds it. Instalments accumulate toward the least seed, which
-  on testnet-11 is 1,000,000 MSK from DAA 6,900 (ADR-0120). The screen shows pledged / required.
+  on testnet-11 is 1,000,000 BILI from DAA 6,900 (ADR-0120). The screen shows pledged / required.
 
 **`misaka position`**:
 * `list` shows PQ-held and EVM-held positions together, labelled by where they are held.

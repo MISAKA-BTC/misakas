@@ -1,5 +1,7 @@
 # RFC-0010: Permissionless PALW Panel binding and claim completion
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 
@@ -109,7 +111,7 @@ No new `anchor bond` is introduced. The existing bond object may carry producer 
 
 Panel seats also have a Sybil limit: distinct bond keys are not evidence of distinct people. A single owner can split enough collateral into multiple seat-eligible bonds and may occupy several Panel positions. The security proof must calculate quorum-capture probability and minimum attack collateral under such splitting, including the class jury, outsider seat, redraw and court. Stake-weighted first-seat selection alone does not establish a multi-seat independence guarantee. State the honest-bonded-weight assumption and check that the required collateral and slashable exposure exceed the value a captured Panel can extract.
 
-An elected-binder variant would add work without improving Panel fairness after §3.3: it needs a bond snapshot, stake-weighted candidate order, offline fallback and a split-invariance proof. If pursued, it MUST freeze the eligible set before the beacon, use one canonical score per bond and opportunity, make all fallback ranks public before the first timeout, and keep **the same Panel seed** across every rank. Where both bond sizes meet that role's threshold, the first weighted winner's aggregate probability for `130,000 MSK × 1` and `13,000 MSK × 10` should match when total effective collateral matches. The full fallback distribution and an actor controlling many bonds require separate adversarial analysis; different keys are not evidence of independent owners. This RFC's recommended binder rule avoids that extra lottery.
+An elected-binder variant would add work without improving Panel fairness after §3.3: it needs a bond snapshot, stake-weighted candidate order, offline fallback and a split-invariance proof. If pursued, it MUST freeze the eligible set before the beacon, use one canonical score per bond and opportunity, make all fallback ranks public before the first timeout, and keep **the same Panel seed** across every rank. Where both bond sizes meet that role's threshold, the first weighted winner's aggregate probability for `130,000 BILI × 1` and `13,000 BILI × 10` should match when total effective collateral matches. The full fallback distribution and an actor controlling many bonds require separate adversarial analysis; different keys are not evidence of independent owners. This RFC's recommended binder rule avoids that extra lottery.
 
 ## 5. Completing a claim without the existing fleet
 

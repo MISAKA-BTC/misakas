@@ -1,5 +1,7 @@
 # ADR-0035: The public PALW testnet is testnet-11, continued — and it pins its determinism class at the door
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 - Status: Accepted (implemented 2026-08-17; operator items listed in §6)
 - Track A gate 5. Evidence base: gates 1–4 —
   `docs/palw-algo4-forgery-audit-2026-08-16.md` (gate 1),
@@ -35,7 +37,7 @@ Two competing deployment plans have coexisted since the PALW work began:
 Facts that decide between them:
 
 1. t10 today is the **hash-PoW + PoS-finality + EVM** experiment: bonded validators
-   (A/B/C, 20k MSK each), the misakastake.com/MTP infrastructure, a public entry
+   (A/B/C, 20k BILI each), the misakastake.com/MTP infrastructure, a public entry
    (A's 26211 socket bridge) — and its own unresolved wedge (DNS finality anchor
    stale). Re-genesising it for PALW destroys a working experiment to fix nothing.
 2. The soak chain already demonstrates the public-testnet shape end to end: real
@@ -125,9 +127,9 @@ At launch, validating/mining testnet-11 requires being in the pinned class:
 
 ## 5. Economics at launch (facts an announcement must carry)
 
-- Full schedule: **4445.62 MSK/block** (rate-preserving 120 s table,
+- Full schedule: **4445.62 BILI/block** (rate-preserving 120 s table,
   `YEAR1_PER_BLOCK_TWO_MINUTE`). Until validators bond, the chain mints the
-  ADR-0018 §F worker BASE share only — **62 %, 2756.28 MSK/block to the miner**;
+  ADR-0018 §F worker BASE share only — **62 %, 2756.28 BILI/block to the miner**;
   the validator 30 % is don't-minted and the §D inclusion 8 % follows its own
   pool path (gate-3 measured this to the sompi on 118 consecutive coinbases).
 - The fixed-difficulty launch window is exactly `min_difficulty_window_size = 150`

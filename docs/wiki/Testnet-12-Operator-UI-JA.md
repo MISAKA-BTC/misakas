@@ -1,5 +1,7 @@
 # Testnet-12 Operator UI(ADR-0122)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 `misaka` は mining、Bond、work、reward、model、verifier、validator を 1 つの入口から扱います。対象は testnet-12 と、その現行ビルド `587cab2b0`(2026-09-27 の 2 回目の post-launch flag day のリリース。2 本の fence が DAA 1,300 で有効になる)です。`misaka` はネットワークを指定しなければ testnet-12 を使いますが、このページの例では `--network testnet-12` を明示しています。
 
 ## セットアップ
@@ -11,7 +13,7 @@ misaka --network testnet-12 mining setup
 ウィザードは node、network、model、key、資金、Bond registry、artifact、capability、fee output を順に確認し、`~/.misaka/mining.toml` を作ります。途中で止まっても、同じコマンドを実行すればチェーンとローカルの状態から再開します。
 
 - 登録には `kaspad --palw-register-bond` を使います(operator-possession 署名つき)。
-- `--palw-bond-collateral` は渡しません。ノードが導出した既定の collateral を登録し、その額に合う資金を求めます(Floor で約 31,191 MSK、`--model` に 8k を指定すると約 2,000,332,625 MSK で調達できません)。額を自分で決めるとき、および model class のときは [参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) の手動の形を使います。
+- `--palw-bond-collateral` は渡しません。ノードが導出した既定の collateral を登録し、その額に合う資金を求めます(Floor で約 31,191 BILI、`--model` に 8k を指定すると約 2,000,332,625 BILI で調達できません)。額を自分で決めるとき、および model class のときは [参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) の手動の形を使います。
 - testnet-12 には faucet がまだないので、ウィザードは faucet の案内を出しません。
 
 ## 既存 Bond の確認
@@ -91,7 +93,7 @@ misaka --network testnet-12 model list
 misaka --network testnet-12 model status --help
 ```
 
-verifier は、他の Bond の claim を判定する panel seat です。seat の bond には 130,000 MSK 以上が要ります。**producer として動かしている bond を、別の process の verifier として動かさないでください。** producer の node は、同じ bond の seat の義務をすでに実行しています。2 つ目の process は round permit への二重署名(slash)の原因になります。手順は [検証参加ガイド](Testnet-12-Verification-Participation-JA) を見てください。
+verifier は、他の Bond の claim を判定する panel seat です。seat の bond には 130,000 BILI 以上が要ります。**producer として動かしている bond を、別の process の verifier として動かさないでください。** producer の node は、同じ bond の seat の義務をすでに実行しています。2 つ目の process は round permit への二重署名(slash)の原因になります。手順は [検証参加ガイド](Testnet-12-Verification-Participation-JA) を見てください。
 
 ## Stop
 
@@ -101,7 +103,7 @@ misaka --network testnet-12 mining stop --drain
 
 防御が終わっていない claim がある間は、ふつうの停止は拒否されます。`--drain` は新しい work を止め、開いている claim、panel、court の義務が終わるまで process を動かし続けます。
 
-**testnet-12 では、消えた producer は課金されます。** `ProducerWithholding` の void(DA court が default を確定)と、2 回目の `ReceiptTimeout` は、weight + escrow(floor claim 1 本で約 3,200.85 MSK)を没収します。わざと隠した場合も、node が単に落ちていた場合も同じです。`BindTimeout` と `NoCapablePanel` は課金されません。`--force` は緊急時だけ使ってください。
+**testnet-12 では、消えた producer は課金されます。** `ProducerWithholding` の void(DA court が default を確定)と、2 回目の `ReceiptTimeout` は、weight + escrow(floor claim 1 本で約 3,200.85 BILI)を没収します。わざと隠した場合も、node が単に落ちていた場合も同じです。`BindTimeout` と `NoCapablePanel` は課金されません。`--force` は緊急時だけ使ってください。
 
 ## 正本
 

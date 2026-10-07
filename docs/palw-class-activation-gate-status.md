@@ -1,5 +1,7 @@
 # PALW ClassActivationGate — status ledger and the Stage ladder's decision records
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **Normative:** `docs/palw-full-logits-trace-v2-design.md` §12 (the twelve gate items) + §13
 (the staged-rollout order) · ADR-0028 §6 additions (`P_check`, no-show telemetry) · ADR-0027
 §6 / ADR-0026 the four-stage ladder · **Date opened:** 2026-08-16 ·

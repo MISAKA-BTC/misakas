@@ -249,7 +249,7 @@ pub fn send(
         OutputFormat::Human => {
             println!("From   : {from_s}");
             println!("To     : {to_addr}");
-            println!("Amount : {} MSK  ({amount_wei} wei)", format_msk(amount_wei));
+            println!("Amount : {} BILI  ({amount_wei} wei)", format_msk(amount_wei));
             println!("Nonce  : {nonce}   Gas: {gas}   MaxFee: {max_fee} wei/gas");
             println!("Mode   : {}", if submit { "SUBMIT" } else { "dry-run (no broadcast; pass --yes)" });
             if let Some(t) = &txid {
@@ -385,7 +385,7 @@ pub fn call(
             println!("From   : {from_s}");
             println!("To     : {to_addr}");
             println!("Data   : {} bytes", input.len());
-            println!("Value  : {} MSK  ({value_wei} wei)", format_msk(value_wei));
+            println!("Value  : {} BILI  ({value_wei} wei)", format_msk(value_wei));
             println!("Nonce  : {nonce}   Gas: {gas}   MaxFee: {max_fee} wei/gas");
             println!("Mode   : {}", if yes { "SUBMIT" } else { "dry-run (no broadcast; pass --yes)" });
             if let Some(t) = &txid {
@@ -509,11 +509,11 @@ fn format_msk(wei: u128) -> String {
     if frac == 0 { whole.to_string() } else { format!("{whole}.{}", format!("{frac:018}").trim_end_matches('0')) }
 }
 
-/// Parse a decimal MSK string into wei (1 MSK = 1e18 wei).
+/// Parse a decimal BILI string into wei (1 BILI = 1e18 wei).
 pub fn parse_msk_to_wei(s: &str) -> Result<u128, CliError> {
     let (whole, frac) = s.split_once('.').unwrap_or((s, ""));
     if frac.len() > 18 || !frac.bytes().all(|b| b.is_ascii_digit()) || !whole.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(CliError::new(exit::GENERIC, format!("invalid amount '{s}' (MSK, max 18 decimals)")));
+        return Err(CliError::new(exit::GENERIC, format!("invalid amount '{s}' (BILI, max 18 decimals)")));
     }
     let whole: u128 =
         if whole.is_empty() { 0 } else { whole.parse().map_err(|_| CliError::new(exit::GENERIC, format!("invalid amount '{s}'")))? };
@@ -536,7 +536,7 @@ fn writer_address_hex() -> String {
     format!("0x{}", kaspa_consensus_core::evm::model_market::MISAKA_MODEL_WRITER)
 }
 
-/// `misaka palw model-evm-buy`: the MSK is the call's value and MUST be whole sompi — the writer
+/// `misaka palw model-evm-buy`: the BILI is the call's value and MUST be whole sompi — the writer
 /// refuses a value that is not a multiple of `EVM_NATIVE_SCALE` (`BadValue`).
 #[allow(clippy::too_many_arguments)]
 pub fn model_evm_buy(
@@ -606,8 +606,8 @@ pub fn model_evm_sell(
 }
 
 /// `misaka palw model-evm-seed`: the seed is the call's value — whole sompi, at least ADR-0090's
-/// least seed (100,000 MSK), under which this command refuses before anything queues. Past
-/// ADR-0120's height (testnet-11: DAA 6,900) the pair opens only at 1,000,000 MSK paid in, and a
+/// least seed (100,000 BILI), under which this command refuses before anything queues. Past
+/// ADR-0120's height (testnet-11: DAA 6,900) the pair opens only at 1,000,000 BILI paid in, and a
 /// smaller seed is collected toward it (ADR-0094) — `misaka palw model-market` prints the floor the
 /// node's tip is under.
 #[allow(clippy::too_many_arguments)]
@@ -650,7 +650,7 @@ pub fn model_evm_seed(
     // virtual reserve): a seed is optional depth, taken only while nothing has been bought (word 3),
     // and the writer reverts `SeedAfterTrade()` after that. Below it the window answers eleven words
     // and the writer takes any nonzero seed, which the fold collects toward the least seed (ADR-0094)
-    // — the old refusal here of anything under ADR-0090's 100,000 MSK refused what the chain takes.
+    // — the old refusal here of anything under ADR-0090's 100,000 BILI refused what the chain takes.
     match amm_market_words(ctx, &line) {
         Some(words) if words.len() >= 12 => {
             if words[3] > 0 {
@@ -671,7 +671,7 @@ pub fn model_evm_seed(
             }
         }
         _ if !ctx.quiet => eprintln!(
-            "model-evm-seed: note — the pair opens once the MSK paid in reaches the least seed (`constants()`, `misaka palw \
+            "model-evm-seed: note — the pair opens once the BILI paid in reaches the least seed (`constants()`, `misaka palw \
              model-show`); a payment under it is collected toward it where the chain takes instalments (ADR-0094)"
         ),
         _ => {}

@@ -1,5 +1,7 @@
 # Joining Testnet-12 as a PALW producer
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **testnet-12 launched on 2026-09-25/26 JST** from release commit `0e8ec984e` (`rcore/int-3`, now
 `main`). The identity values below were checked against that release. Read
 [`t12-launch-2026-09-25.md`](t12-launch-2026-09-25.md) first: it lists what the release contains, the
@@ -27,7 +29,7 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
   spend signed on another chain is valid here. The indices are the usual ones (genesis bonds 0–7,
   fee floats 41–48); a command line that named `<sentinel>:<index>` must name the new txid.
 * **Collateral backs the whole fraud gain.** Every claim reserves its escrow plus its weight against
-  the bond, and at the current subsidy that is about 3,200.85 MSK per claim (§5). One bond holds only
+  the bond, and at the current subsidy that is about 3,200.85 BILI per claim (§5). One bond holds only
   as many claims at once as its collateral covers. The escrow part is released when the claim is
   **licensed** (its receipt quorum lands); the small weight part stays until the claim is `Final`
   (measured on the release build, 2026-09-26).
@@ -111,28 +113,28 @@ The examples below still pass `--network testnet-12` explicitly.
 **Faucet: TBD.** A testnet-12 faucet needs funding from the testnet-12 premine, and that is the
 operator's decision. The setup wizard has a faucet hint for testnet-11 only, so on testnet-12 it
 prints none. Once someone has funds, `misaka --network testnet-12 wallet send --key-file <k> --to
-<addr> --amount <MSK> --yes` moves them.
+<addr> --amount <BILI> --yes` moves them.
 
 **testnet-12 runs the mainnet-assumed bonds** (decided 2026-09-24): a producer bond needs at least
-**13,000 MSK** (the producer floor), a panel seat at least **130,000 MSK** (ten producer floors), and
-a DNS-finality validator bond at least **20,000,000 MSK** (below).
+**13,000 BILI** (the producer floor), a panel seat at least **130,000 BILI** (ten producer floors), and
+a DNS-finality validator bond at least **20,000,000 BILI** (below).
 
 What each role needs, from §5:
 
 | role | bond collateral | also |
 |---|---|---|
-| panel seat on the floor only (`misaka verifier`) | **at least 130,000 MSK** (the seat floor); a seat must also hold the floor claim's `Valid` lock free (about **640.17 MSK**, measured on the release build: 15 locks = 9,602.54 MSK) for each panel it signs `Valid` on — and each lock stays live about `window_court` (3,000 DAA) past that claim's `Final` | a fee float at the key's address (≥ 0.1 MSK) |
-| floor producer | **at least 13,000 MSK** (the producer floor), and **about 6,402 MSK for each floor claim held at once**: 13,000 MSK holds 2, 100,000 MSK holds 15 | the fee float |
-| `Qwen2.5 graph-v7@8192` producer | **about 6,452 MSK for each 8k claim held at once** | the artifact, and memory (§6) |
-| `Qwen2.5 graph-v7@2097152` producer | **about 125,888 MSK for each claim held at once** | about 11.6 GiB per attempt, and a week of CPU per attempt on a fleet host |
+| panel seat on the floor only (`misaka verifier`) | **at least 130,000 BILI** (the seat floor); a seat must also hold the floor claim's `Valid` lock free (about **640.17 BILI**, measured on the release build: 15 locks = 9,602.54 BILI) for each panel it signs `Valid` on — and each lock stays live about `window_court` (3,000 DAA) past that claim's `Final` | a fee float at the key's address (≥ 0.1 BILI) |
+| floor producer | **at least 13,000 BILI** (the producer floor), and **about 6,402 BILI for each floor claim held at once**: 13,000 BILI holds 2, 100,000 BILI holds 15 | the fee float |
+| `Qwen2.5 graph-v7@8192` producer | **about 6,452 BILI for each 8k claim held at once** | the artifact, and memory (§6) |
+| `Qwen2.5 graph-v7@2097152` producer | **about 125,888 BILI for each claim held at once** | about 11.6 GiB per attempt, and a week of CPU per attempt on a fleet host |
 
 The fee float pays the lifecycle carriers: registrations, receipts, readiness proofs and court
 answers. Change returns to the same address, so one funding lasts for many carriers. The float must
 be a different output from the bond collateral.
 
-**DNS-finality validators** (`misaka validator`) stake a separate bond of **at least 20,000,000 MSK**.
+**DNS-finality validators** (`misaka validator`) stake a separate bond of **at least 20,000,000 BILI**.
 DNS finality activates only once **at least 6 validators** are active with **at least 120,000,000
-MSK** of active stake between them; until then no anchor is DNS-confirmed and a coinbase matures on
+BILI** of active stake between them; until then no anchor is DNS-confirmed and a coinbase matures on
 the 600-DAA fallback alone (about 20 hours). The unbonding period is 10,083 blocks, **about 14 days
 and 6 minutes** at the 120-second cadence (14 days of evidence window plus the reorg horizon).
 
@@ -163,7 +165,7 @@ room               = collateral x 500 permille - everything the bond already bac
 ```
 
 A bond therefore holds `collateral × 0.5 ÷ (escrow + weight)` claims at once. For the floor that is
-one claim per ≈ 6,401.69 MSK. When the room is full the producer holds with `the bond's exposure
+one claim per ≈ 6,401.69 BILI. When the room is full the producer holds with `the bond's exposure
 ceiling leaves no room for another claim` until room frees: a claim's **escrow** part is released
 when the claim is **licensed** (its receipt quorum lands, about 20 DAA after acceptance on the
 lifecycle drill), and its **weight** part when it reaches `Final` or is voided. `getPalwClaims`
@@ -173,10 +175,10 @@ Registration and each declared class also reserve small fixed amounts on the bon
 **Pass `--palw-bond-collateral` explicitly (in sompi).** Without it the node locks its own derived
 default: the weight-only whole-lifetime figure for the class in `--palw-producer-class`, or the floor
 when that flag is absent. The permissionless drill on 2026-09-23 measured that default at
-3,119,145,986,560 sompi (≈ 31,191 MSK) for the floor, and public testnet-12 showed the same figure on
+3,119,145,986,560 sompi (≈ 31,191 BILI) for the floor, and public testnet-12 showed the same figure on
 2026-09-26. The default does not include the escrow, so it holds about 4 floor claims at once, not
 the lifetime it was sized for. **It is a producer's figure: a bond of that size is never drawn onto a
-panel**, because the panel draw seats only a bond holding the seat floor (130,000 MSK).
+panel**, because the panel draw seats only a bond holding the seat floor (130,000 BILI).
 
 ### The wizard (recommended)
 
@@ -192,11 +194,11 @@ the operator-possession fix, and it always passes `--palw-bond-collateral` with 
 you, so the node locks exactly what you confirmed. The amount depends on what the bond is for:
 
 * **`mining setup`** locks the producer figure for the model you chose: the node's own
-  whole-lifetime sizing above (≈ 31,191.45 MSK for the floor). That is below the seat floor, so the
+  whole-lifetime sizing above (≈ 31,191.45 BILI for the floor). That is below the seat floor, so the
   bond produces but is not drawn onto panels; the confirmation says so.
-* **`verifier setup`** locks the seat floor, **130,000 MSK** (ten producer floors), whichever model
+* **`verifier setup`** locks the seat floor, **130,000 BILI** (ten producer floors), whichever model
   the seat judges besides the floor: the least collateral the panel draw seats. It needs one ordinary
-  output of at least 130,000.1 MSK at the key's address (the collateral plus 0.1 MSK for the carrier's
+  output of at least 130,000.1 BILI at the key's address (the collateral plus 0.1 BILI for the carrier's
   fee and change). With less, it stops with `E-FUNDS-BELOW-SEAT-FLOOR` and does not offer a smaller
   bond: a smaller one would lock the money, never be seated, and use up the key's only bond. A key
   whose bond is already below the seat floor stops with `E-IDENT-BOND-BELOW-SEAT-FLOOR`: retire that
@@ -466,7 +468,7 @@ misaka --network testnet-12 mining stop --drain
 
 Drain stops new work and keeps the process up for the claims, panels and court duties that are still
 open. **On testnet-12 a producer that disappears is charged.** Past `palw_audit_2026_09_23` two voids
-forfeit weight + escrow (≈ 3,200.85 MSK per floor claim), the same amount a proven fraud forfeits:
+forfeit weight + escrow (≈ 3,200.85 BILI per floor claim), the same amount a proven fraud forfeits:
 
 * a `ProducerWithholding` void, where the data-availability court confirms the default;
 * the second `ReceiptTimeout`, where two independently drawn panels could not conclude.
@@ -480,7 +482,7 @@ these duties.
 `misaka bond retire` asks the chain to move the bond to `Retiring`; the collateral moves only after the
 withdrawal delay (12,900 DAA on testnet-12) and after every vesting row the bond is payee of has
 matured (`misaka wallet utxo list` shows the B-3 lock). **A seat cannot even start retiring while it
-holds a live `Valid` lock**: each panel it signed `Valid` on locks about 640.17 MSK until about
+holds a live `Valid` lock**: each panel it signed `Valid` on locks about 640.17 BILI until about
 `window_court` (3,000 DAA) after that claim's `Final`, and the chain drops a retirement while any lock
 is live — after its carrier is mined and its fee paid. `misaka bond status --bond <txid>:<index>`
 lists the live locks and the DAA the last one releases at, and `bond retire` refuses (before paying)

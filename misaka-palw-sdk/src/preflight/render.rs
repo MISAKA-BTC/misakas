@@ -389,7 +389,7 @@ impl Report {
             let _ = writeln!(o);
             let _ = writeln!(
                 o,
-                "forecast        {} ready seats, registration bond {} MSK, {} claim(s) in flight at most, {}/1000 claims a span admitted",
+                "forecast        {} ready seats, registration bond {} BILI, {} claim(s) in flight at most, {}/1000 claims a span admitted",
                 f.required_ready_seats,
                 n(f.registration_bond_sompi / 100_000_000),
                 n(u64::from(f.max_inflight_claims)),

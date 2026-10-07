@@ -1,5 +1,7 @@
 # ADR-0143 — An artifact root has one owner on the chain, and competing weights stay permissionless
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **Status:** IMPLEMENTED 2026-09-18, **withdrawn from the 7,100 flag day and REWORKED** after the
 adversarial audit of 2026-09-19 found two defects in the index this ADR installs. Both are fixed on
 `fix/audit-2026-09-19`; `palw_artifact_root_ownership` stays `None` on every preset and arms on its
@@ -155,7 +157,7 @@ history. They simply stop being the answer: past activation they attract no usag
 owner fee for a root they do not own.
 
 **D8. Nothing settled before the fence is recomputed.** Past payouts and buybacks are final, the
-12,816 MSK already attributed included. The fence changes attribution from the fence, and no earlier
+12,816 BILI already attributed included. The fence changes attribution from the fence, and no earlier
 state root moves.
 
 **D9. Its own fence.** `palw_artifact_root_ownership`, independent of the 7,101 bundle, so a failure

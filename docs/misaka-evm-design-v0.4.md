@@ -1,5 +1,7 @@
 # MISAKA/Kaspa L1 Selected-Parent EVM 設計書 v0.4
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **版:** v0.4 統合版(v0.2 Audit-Revised + v0.3 DEX/Uniswap Addendum + v0.4 §21 Scaling Addendum を単一文書に統合)
 **日付:** 2026-06-10
 **対象:** MISAKA/Kaspa L1 における consensus-native EVM 実行レーン。外部ブリッジなし・L2 シーケンサなし。

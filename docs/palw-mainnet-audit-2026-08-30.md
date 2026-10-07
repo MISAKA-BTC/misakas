@@ -1,5 +1,7 @@
 # PALW mainnet audit, 2026-08-30 — the union build
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 Scope: everything the 2026-08-30 train adds over `acc430a2` (68 files, +4,593 lines) — the 10B
 premine cap (ADR-0059), the liveness doctrine (ADR-0060), zero-seat genesis and right-sized
 collateral (ADR-0061), and the bond-economics pass (VLT floors, escrow backing, the panel

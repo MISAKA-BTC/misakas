@@ -1,5 +1,7 @@
 # MISAKA PQルート型EVM資産管理 設計書 v1.1
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **文書種別:** セキュリティ・コンセンサス・ウォレット統合設計
 **対象コード:** `MISAKA-BTC/misakas` 公開 `main`（snapshot `2e4e04a378c2ddfca5a2428d99cbb4218f280969` 基準）＋ローカル監査remediation差分
 **作成日:** 2026-06-23（v1.0）／改訂 2026-06-23（v1.1）
@@ -110,7 +112,7 @@ EVMへclaimされたnative balance、ERC-20、NFT、admin/minter権限は、通�
 
 ### 2.1 必須目的
 
-- 同一native MSKをUTXOとEVMで同時に使用可能にしない。
+- 同一native BILIをUTXOとEVMで同時に使用可能にしない。
 - native残高の長期保管をML-DSA-87 UTXO側へ寄せる。
 - EVM上のNFT・token・native balanceをML-DSAルートで所有できるようにする。
 - MetaMask等で扱いやすいsecp256k1鍵を、制限付き日常操作鍵として利用可能にする。
@@ -925,7 +927,7 @@ struct SessionGrant {
 - `validUntil`必須。無期限grantは禁止。
 - `maxCalls`必須。
 - native value cap必須。
-- **非 native 資産を扱う grant は §14.6 の数量 limit を必須**（`maxNativeValue` は native MSK しか縛らない）。
+- **非 native 資産を扱う grant は §14.6 の数量 limit を必須**（`maxNativeValue` は native BILI しか縛らない）。
 - targetまたはpolicy module必須。任意target grantは禁止。
 - grantはrootEpochへbindし、root recovery後に旧grantを一括失効。
 - session自身によるgrant追加・延長・cap拡大は禁止。
@@ -1499,7 +1501,7 @@ NFT download、商品発送、CEX credit等はcanonical finalized mappingを使�
 
 ## 27. 既存EOA資産の移行
 
-### Native MSK
+### Native BILI
 
 ```text
 legacy EOA → PQ account

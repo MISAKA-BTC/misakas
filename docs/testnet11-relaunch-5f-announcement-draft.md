@@ -1,5 +1,7 @@
 # MISAKA testnet-11, Relaunch 5f — announcement draft
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **Status: DRAFT.** Every `<…>` is a value the cut fills in.
 
 **Two rules this draft is held to, because a reviewer caught it breaking both.**

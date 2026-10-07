@@ -1,5 +1,7 @@
 # PALW の役割とネットワーク範囲
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 ## 現行ネットワーク
 
 この Wiki で案内する現行の公開テストネットは **`testnet-12`**(R-core+、公開時の release commit `0e8ec984e`、2026-09-27 19:37 JST からの現行ビルド `587cab2b0`、fence は DAA 750)です。testnet-11 は旧ネットワークで、現行 `main` のビルドでは参加できません。
@@ -17,15 +19,15 @@ testnet-12 では、producer の node は同じ bond の panel seat の義務も
 
 | 役割 | bond collateral |
 |---|---|
-| Producer / miner | 13,000 MSK 以上 |
-| Panel verifier(seat) | 130,000 MSK 以上 |
-| DNS finality の validator(PALW とは別の役割) | 20,000,000 MSK 以上 |
+| Producer / miner | 13,000 BILI 以上 |
+| Panel verifier(seat) | 130,000 BILI 以上 |
+| DNS finality の validator(PALW とは別の役割) | 20,000,000 BILI 以上 |
 
 ## DNS の位置づけ
 
 DNS seeder は peer を見つけるためのネットワーク基盤です。PALW の仕事を作らず、採掘せず、Panel verifier として verdict を返すこともありません。DNS の運用と PALW の参加手順を混同しないでください。node は組み込みの seeder 名(`seeder1.misakascan.com` など)を引き、返ってきた IP の 26311 番に接続します。DNS で見つからない場合は `--addpeer=169.58.232.113:26311` を追加します。
 
-DNS finality の validator(`misaka validator`)は DNS seeder とは別物です。testnet-12 では、validator が 6 つ以上、active stake が合計 120,000,000 MSK 以上になるまで DNS finality は Bootstrap の状態で、DNS の reorg gate は効きません(公開ノートの既知の問題 3)。その間、coinbase は 600 DAA(約 20 時間)の fallback だけで成熟します。
+DNS finality の validator(`misaka validator`)は DNS seeder とは別物です。testnet-12 では、validator が 6 つ以上、active stake が合計 120,000,000 BILI 以上になるまで DNS finality は Bootstrap の状態で、DNS の reorg gate は効きません(公開ノートの既知の問題 3)。その間、coinbase は 600 DAA(約 20 時間)の fallback だけで成熟します。
 
 ## 参加コマンド
 

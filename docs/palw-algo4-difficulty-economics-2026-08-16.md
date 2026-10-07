@@ -1,5 +1,7 @@
 # PALW algo_id=4 難易度と経済の実測 — DAAレプリカ + 隔離devnet実走 (2026-08-16)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 公開テストネット Track A ゲート3。方法は二段構え:
 
 1. **DAAの正確なレプリカ** (`scripts/misaka-palw-daa-sim.py`) を書き、**live実測の

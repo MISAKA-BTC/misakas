@@ -1,5 +1,7 @@
 # Audit — is PALW a practical reward foundation for LLM mining? (2026-09-19)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 Four agents: a protocol/consensus auditor, an ML-systems economist, an adversarial economist, and a
 red-team verifier whose job was to refute the other three. Every number below is reproduced by a
 probe that links `kaspa-consensus-core` and calls the repo's own functions; sources and outputs are

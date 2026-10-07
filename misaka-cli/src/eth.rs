@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use crate::node::Ctx;
 use crate::{CliError, CliResult, OutputFormat, exit};
 
-const WEI_PER_MSK: u128 = 1_000_000_000_000_000_000; // 1 MSK = 1e18 wei
+const WEI_PER_MSK: u128 = 1_000_000_000_000_000_000; // 1 BILI = 1e18 wei
 
 // ---------------------------------------------------------------------------
 // minimal HTTP/1.1 JSON-RPC client
@@ -103,7 +103,7 @@ pub(crate) fn parse_hex_u128(v: &Value) -> Result<u128, CliError> {
     u128::from_str_radix(h, 16).map_err(|e| CliError::generic(format!("bad hex quantity {s}: {e}")))
 }
 
-/// wei -> "X[.frac] MSK" (1 MSK = 1e18 wei), trailing zeros trimmed.
+/// wei -> "X[.frac] BILI" (1 BILI = 1e18 wei), trailing zeros trimmed.
 fn format_msk(wei: u128) -> String {
     let whole = wei / WEI_PER_MSK;
     let frac = wei % WEI_PER_MSK;
@@ -127,7 +127,7 @@ pub fn balance(ctx: &Ctx, address: &str) -> CliResult {
     let addr = normalize_evm_addr(address)?;
     let wei = parse_hex_u128(&rpc_call(ctx, "eth_getBalance", json!([addr, "latest"]))?)?;
     match ctx.output {
-        OutputFormat::Human => println!("{} MSK  ({wei} wei)", format_msk(wei)),
+        OutputFormat::Human => println!("{} BILI  ({wei} wei)", format_msk(wei)),
         OutputFormat::Json => {
             println!("{}", json!({ "ok": true, "address": addr, "balanceWei": wei.to_string(), "balanceMsk": format_msk(wei) }))
         }

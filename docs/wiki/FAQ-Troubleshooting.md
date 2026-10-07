@@ -1,5 +1,7 @@
 # FAQ / Troubleshooting — testnet-12
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 ## Bond carrier は正式に登録されているか
 
 ```bash
@@ -10,15 +12,15 @@ misaka --network testnet-12 bond status --bond <txid>:<index>
 
 ## bond の額はいくらか
 
-testnet-12 は mainnet 想定の額です。producer は **13,000 MSK 以上**、panel seat は **130,000 MSK 以上**、DNS finality の validator は **20,000,000 MSK 以上** です。testnet-11 の少額 bond(0.004 MSK)は通りません。
+testnet-12 は mainnet 想定の額です。producer は **13,000 BILI 以上**、panel seat は **130,000 BILI 以上**、DNS finality の validator は **20,000,000 BILI 以上** です。testnet-11 の少額 bond(0.004 BILI)は通りません。
 
 ## REGISTERED なのに UNDERSIZED / holding
 
-登録されていることと、生産できる量は別です。testnet-12 では、claim ごとに不正で得られる額の全額(escrow + weight、floor claim 1 本で約 3,200.95 MSK)が bond に予約されます。予約できる上限は `collateral × 500‰` です。
+登録されていることと、生産できる量は別です。testnet-12 では、claim ごとに不正で得られる額の全額(escrow + weight、floor claim 1 本で約 3,200.95 BILI)が bond に予約されます。予約できる上限は `collateral × 500‰` です。
 
-- 1 つの bond が同時に持てる floor claim は、collateral 約 6,402 MSK ごとに 1 本です(13,000 MSK なら 2 本)。
+- 1 つの bond が同時に持てる floor claim は、collateral 約 6,402 BILI ごとに 1 本です(13,000 BILI なら 2 本)。
 - 上限に達すると、producer は `the bond's exposure ceiling leaves no room for another claim` で待ちます。止まったままになるわけではありません。panel を引き直さずに全 seat が `Valid` を返した claim は、licence の時点で escrow 分が先に解放されます(2M class を除く)。それ以外は claim が `Final` になるか void になると空きます。
-- ノードが出す「may then hold forever」の警告と `bond status` の `UNDERSIZED` は、古い weight だけの式(Floor で約 31,191 MSK)との比較です。testnet-12 の実際の空きとは別物なので、`exposure_ceiling` と `reserved_exposure` を見てください。
+- ノードが出す「may then hold forever」の警告と `bond status` の `UNDERSIZED` は、古い weight だけの式(Floor で約 31,191 BILI)との比較です。testnet-12 の実際の空きとは別物なので、`exposure_ceiling` と `reserved_exposure` を見てください。
 - 登録後に collateral を追加することはできません。容量を増やすには、新しい producer key と新しい Bond を作ります。
 - 同じ key での再登録は `DuplicateBondKey` で拒否されます。
 

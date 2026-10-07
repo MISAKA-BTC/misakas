@@ -1,5 +1,7 @@
 # ADR-0063 — The operator's half of the protocol is missing, and one gap locks money in
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > Renumbered 0060 → 0063 at the 2026-08-30 branch merge: 0060 was taken the same day by the
 > liveness doctrine, and 0061/0062 by the zero-seat genesis and the DA court. Same content.
 
@@ -52,7 +54,7 @@ Meanwhile `docs/testnet11-join-mining.md` §6 tells an operator:
 The consensus rule is real and the sentence is true about the rule. It is false about the
 software: nothing an operator can run produces that signature in that object. **PALW collateral
 goes in and does not come out.** On testnet-11 the smallest carryable bond is 8,333,924 sompi, and
-the 2026-08-30 economics pass proposes floors above it (ADR-0061 sets 10,000 MSK a seat) — every one of those is currently
+the 2026-08-30 economics pass proposes floors above it (ADR-0061 sets 10,000 BILI a seat) — every one of those is currently
 a one-way door.
 
 `ClassFrozen` has the same shape. Whether that matters depends on who is supposed to freeze a

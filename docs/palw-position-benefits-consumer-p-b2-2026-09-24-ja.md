@@ -1,5 +1,7 @@
 # P-B2: Position の特典は誰が消費するのか — 設計メモ（C1 に決定）
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 対象: `feat/testnet-12-regenesis`。出典: 2026-09-23 Position route matrix の P10、P11、P12、P15 と §3.4。
 
 ## 決定（2026-09-24、ユーザー）

@@ -1,5 +1,7 @@
 # PALW Stage-0 shadow drill runbook — carriage on a live chain, telemetry only
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **Normative:** ADR-0029 §5 · **Binary:** `palw-shadow` (`misaka-palw-shadow`) · **Stage:** 0
 **Nature:** consensus-inert. Every object rides the native subnetwork; no node change, no
 offense evidence against anyone, no credit. The output is the §12 artifact set: observed check
@@ -53,15 +55,15 @@ Collect every printed `validator_id` into one roster file, shared by all hosts:
 `class` is the worker's own `runtime_class_id` (`palw-worker --mode v2-manifest`); `delta_bind`
 matches the parameter set (10 on the 120 s net, 120 on deci). Fund each printed address with a
 **non-coinbase** transfer (instant spendability; coinbase outputs sit behind maturity).
-~10 M sompi (0.1 MSK) per host covers a long session.
+~10 M sompi (0.1 BILI) per host covers a long session.
 
 **Funding source — confirmed 2026-08-16, read-only, key untouched:**
 
 * The operator wallet is the t10 premine / miner-payout / 9B-validator funding address
   `misakatest:qtpflz03z576h02mtpn2vtwg5npj8fhlau3fgmsjl2a2uw0venj3573l07uahcs4gnsl8eqc7nlq5phakthxy606q2jyuxh2a08weduxa2yqlxuz`
   — measured via `misaka wallet utxo list --address …` over an SSH tunnel to B's RPC:
-  **491,432 mature UTXOs, 9,001,069,939.21 MSK** (plus 82 immature). The whole drill budget
-  (4 × 0.1 MSK) is ~4×10⁻⁹ of it.
+  **491,432 mature UTXOs, 9,001,069,939.21 BILI** (plus 82 immature). The whole drill budget
+  (4 × 0.1 BILI) is ~4×10⁻⁹ of it.
 * Its key is `/home/ubuntu/kpq-9b-validator.seed` on host A (0600, 32-byte hex — exactly the
   `--key-file` format `misaka` expects). **The key stays on A**; the CLI runs there and points
   at B's RPC, the same pattern the 2026-08-15 bond used (A's own RPC is degraded under load).

@@ -54,7 +54,7 @@ pub(crate) struct Funding {
     /// **Held back by this node's own PALW panel, and NOT a bond** (audit3 H12): the outpoint the
     /// panel funds its lifecycle carriers from — its `--palw-fee-outpoint` or a rolling successor,
     /// i.e. output 0 of the panel's last carrier. The node lists it beside consensus-locked
-    /// collateral, and reading the whole list as `bonded` labelled bond 7's 99.96 MSK fee change
+    /// collateral, and reading the whole list as `bonded` labelled bond 7's 99.96 BILI fee change
     /// "locked bond collateral — NOT spendable" through the node hosting bond 7's panel, while bonds
     /// 2 and 5's identical change read "mature", and `model add` under bond 7's key found nothing to
     /// fund its carrier (testnet-12, 2026-09-23).
@@ -226,7 +226,7 @@ impl UtxoVesting {
         if v.rows_total > 0 || !v.reporter_rewards.is_empty() {
             let next = v.rows.iter().map(|row| row.eta_daa).min().map(|daa| format!(", next moves ≥ DAA {daa}")).unwrap_or_default();
             out.push(format!(
-                "  vesting    : {} row(s)  ({} MSK; {} latched){next}  [PALW rewards not minted yet — rows, not outputs: never \
+                "  vesting    : {} row(s)  ({} BILI; {} latched){next}  [PALW rewards not minted yet — rows, not outputs: never \
                  selectable; each is minted when its row matures, then spendable {spend_after} DAA after that coinbase; a \
                  conviction first burns it]",
                 v.rows_total,
@@ -235,7 +235,7 @@ impl UtxoVesting {
             ));
             let reporter: u64 = v.reporter_rewards.iter().fold(0u64, |sum, r| sum.saturating_add(r.sompi));
             if reporter > 0 {
-                out.push(format!("               reporter rewards to this address: {} MSK", sompi_to_msk(reporter)));
+                out.push(format!("               reporter rewards to this address: {} BILI", sompi_to_msk(reporter)));
             }
             if v.halted {
                 out.push("               the chain is in a licence halt: no row matures until an anchor settles".to_string());
@@ -607,9 +607,9 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource, recent:
     //
     // `page_all` computes `bonded` for every entry and this loop was the only place that had it and
     // discarded it, while BOTH spenders drop those outputs (`u.mature && !u.bonded`). So the
-    // command operators are told to use for a balance printed 20,000 MSK for an address whose only
+    // command operators are told to use for a balance printed 20,000 BILI for an address whose only
     // output is locked collateral, and `wallet send` on the same address answered "have
-    // 0.00000000 MSK across 0 UTXO(s)". Two shipped commands, one node, one address, two answers,
+    // 0.00000000 BILI across 0 UTXO(s)". Two shipped commands, one node, one address, two answers,
     // and no line anywhere saying the gap is a bond.
     let mut bonded_n = 0usize;
     let mut bonded_sum = 0u64;
@@ -660,9 +660,9 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource, recent:
         OutputFormat::Human => {
             println!("Address      : {addr}");
             println!("UTXOs total  : {}", utxos.len());
-            println!("  mature     : {mature_n}  ({} MSK)", sompi_to_msk(mature_sum));
+            println!("  mature     : {mature_n}  ({} BILI)", sompi_to_msk(mature_sum));
             println!(
-                "  immature   : {imm_n}  ({} MSK)  [coinbase younger than {} DAA: maturity {} + settlement {}]",
+                "  immature   : {imm_n}  ({} BILI)  [coinbase younger than {} DAA: maturity {} + settlement {}]",
                 sompi_to_msk(imm_sum),
                 nv.coinbase_maturity.max(nv.settlement_long_maturity_daa),
                 nv.coinbase_maturity,
@@ -678,13 +678,13 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource, recent:
             }
             if bonded_n > 0 {
                 println!(
-                    "  bonded     : {bonded_n}  ({} MSK)  [locked bond collateral — NOT spendable; `wallet send` will not select it]",
+                    "  bonded     : {bonded_n}  ({} BILI)  [locked bond collateral — NOT spendable; `wallet send` will not select it]",
                     sompi_to_msk(bonded_sum)
                 );
             }
             if reserved_n > 0 {
                 println!(
-                    "  reserved   : {reserved_n}  ({} MSK)  [this node's PALW panel funds its carriers from it — not a bond; `wallet send` leaves it to the panel, `model add` may fund a carrier from it last]",
+                    "  reserved   : {reserved_n}  ({} BILI)  [this node's PALW panel funds its carriers from it — not a bond; `wallet send` leaves it to the panel, `model add` may fund a carrier from it last]",
                     sompi_to_msk(reserved_sum)
                 );
             }
@@ -766,7 +766,7 @@ fn recent_output_line(
 ) -> String {
     let marks = output_marks(u);
     let mut line =
-        format!("{}:{}  {} MSK  daa {}", u.outpoint.transaction_id, u.outpoint.index, sompi_to_msk(u.amount), u.entry.block_daa_score);
+        format!("{}:{}  {} BILI  daa {}", u.outpoint.transaction_id, u.outpoint.index, sompi_to_msk(u.amount), u.entry.block_daa_score);
     if !marks.is_empty() {
         line.push_str(&format!("  [{}]", marks.join(", ")));
     }
@@ -903,7 +903,7 @@ pub async fn consolidate(
             println!("Run limit    : {max_txs_per_run} tx(s), sleep {sleep_ms}ms");
             for (i, (n, sum, fee, out, txid)) in planned.iter().enumerate() {
                 println!(
-                    "  tx#{i}: {n} inputs, {} MSK in -> {} MSK out (fee {} sompi){}",
+                    "  tx#{i}: {n} inputs, {} BILI in -> {} BILI out (fee {} sompi){}",
                     sompi_to_msk(*sum),
                     sompi_to_msk(*out),
                     fee,
@@ -970,7 +970,7 @@ pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_ru
         return Err(CliError::new(
             exit::GENERIC,
             format!(
-                "insufficient mature funds at {from_addr}: have {} MSK across {} UTXO(s) (cap {MAX_INPUTS_PER_TX}), need {} MSK (amount {} + fee {fee}). Consolidate or lower --amount.",
+                "insufficient mature funds at {from_addr}: have {} BILI across {} UTXO(s) (cap {MAX_INPUTS_PER_TX}), need {} BILI (amount {} + fee {fee}). Consolidate or lower --amount.",
                 sompi_to_msk(sum),
                 selected.len(),
                 sompi_to_msk(needed),
@@ -1004,8 +1004,8 @@ pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_ru
         OutputFormat::Human => {
             println!("From    : {from_addr}");
             println!("To      : {to_addr}");
-            println!("Amount  : {} MSK", sompi_to_msk(amount_sompi));
-            println!("Fee     : {fee} sompi   Inputs: {}   Change: {} MSK", fundings.len(), sompi_to_msk(change));
+            println!("Amount  : {} BILI", sompi_to_msk(amount_sompi));
+            println!("Fee     : {fee} sompi   Inputs: {}   Change: {} BILI", fundings.len(), sompi_to_msk(change));
             println!("Mode    : {}", if submit { "SUBMIT" } else { "dry-run (no submit; pass --yes to broadcast)" });
             if let Some(t) = &txid {
                 println!("Txid    : {t}");
@@ -1139,7 +1139,7 @@ mod recent_output_tests {
 mod locked_outpoint_tests {
     //! **Only a registered bond outpoint is bonded** (testnet-12, 2026-09-23). The node's PALW
     //! must-not-spend list unions consensus-locked collateral with the outpoints its own panel
-    //! reserved; reading the union as bonds marked bond 7's 99.96 MSK panel fee change
+    //! reserved; reading the union as bonds marked bond 7's 99.96 BILI panel fee change
     //! (`ec222814…:0`, DAA 11) "[bonded] locked bond collateral" on the node hosting that panel,
     //! while bonds 2 and 5's identical change read "mature", and `model add` under bond 7's key
     //! found nothing to fund its carrier.
@@ -1197,9 +1197,9 @@ mod locked_outpoint_tests {
             held: vec![(bond.outpoint, 1, Some(12_000))],
         };
         let lines = v.lines(600).join("\n");
-        assert!(lines.contains("vesting    : 2 row(s)  (400.00000000 MSK; 100.00000000 latched), next moves ≥ DAA 9000"), "{lines}");
+        assert!(lines.contains("vesting    : 2 row(s)  (400.00000000 BILI; 100.00000000 latched), next moves ≥ DAA 9000"), "{lines}");
         assert!(lines.contains("never selectable") && lines.contains("spendable 600 DAA after that coinbase"), "{lines}");
-        assert!(lines.contains("reporter rewards to this address: 1.00000000 MSK"), "{lines}");
+        assert!(lines.contains("reporter rewards to this address: 1.00000000 BILI"), "{lines}");
         assert!(
             lines.contains(&format!("held (B-3) : {}", bond.outpoint)) && lines.contains("the last DAA clock runs to 12000"),
             "{lines}"

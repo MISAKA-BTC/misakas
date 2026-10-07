@@ -1,7 +1,7 @@
 //! **`misaka palw capacity-shadow` — ADR-0160's shadow accounting, read from a node** (lane shadow).
 //!
 //! What the capacity formulas would reserve, weigh and allow on this chain, per ramp step, next to
-//! today's values: the fork weight today vs under J-1's per-bond cap, what a fresh 13,000 MSK bond
+//! today's values: the fork weight today vs under J-1's per-bond cap, what a fresh 13,000 BILI bond
 //! holds, the seats' capacity per DAA, the licence queue, and the attribution counters Stage 0's gate
 //! reads. Read-only (`getPalwCapacityShadow`, op 201: a node built before it drops the connection,
 //! so the read goes on a connection of its own). Nothing here is a rule: no capacity fence is armed.
@@ -118,7 +118,7 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
         fcw(&r.safe_weight)
     ));
     out.push_str(&format!(
-        "reference floor claim: E {} MSK, w {} MSK, conviction tier {} MSK (v1's L = 3G {} MSK); {} seats, duty {} / lock {} MSK\n",
+        "reference floor claim: E {} BILI, w {} BILI, conviction tier {} BILI (v1's L = 3G {} BILI); {} seats, duty {} / lock {} BILI\n",
         msk(&r.reference_escrow_sompi),
         msk(&r.reference_w_floor_sompi),
         if r.reference_conviction_tier_sompi.is_empty() { "whole bond".to_string() } else { msk(&r.reference_conviction_tier_sompi) },
@@ -128,7 +128,7 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
         msk(&r.reference_lock_sompi)
     ));
     out.push_str(&format!(
-        "seats {} (usable {} MSK): duty {} / lock {} MSK today → {}/DAA; licence queue {} ({} per block, {} blocks)\n",
+        "seats {} (usable {} BILI): duty {} / lock {} BILI today → {}/DAA; licence queue {} ({} per block, {} blocks)\n",
         r.seats,
         msk(&r.seat_usable_capital_sompi),
         msk(&r.seat_duty_today_sompi),
@@ -139,7 +139,7 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
         r.carriage_blocks_to_drain
     ));
     out.push_str(
-        "  ρ     q‰  m_floor MSK  q_needed‰  13k holds  seats/DAA (if D-5)  claims commit MSK  A8 bar‰  alarm  | superseded v1: m MSK / 13k\n",
+        "  ρ     q‰  m_floor BILI  q_needed‰  13k holds  seats/DAA (if D-5)  claims commit BILI  A8 bar‰  alarm  | superseded v1: m BILI / 13k\n",
     );
     for s in &r.steps {
         out.push_str(&format!(
@@ -174,7 +174,7 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
     out.push_str(&format!("bonds ({} of {}):\n", r.bonds.len(), r.bonds_total));
     for b in &r.bonds {
         out.push_str(&format!(
-            "  {} {} MSK{}: {} live ({} unlicensed), weight {} → {} FCW, holds {} today → {:?}{}\n",
+            "  {} {} BILI{}: {} live ({} unlicensed), weight {} → {} FCW, holds {} today → {:?}{}\n",
             b.bond,
             msk(&b.collateral_sompi.to_string()),
             if b.seat { " seat" } else { "" },
@@ -191,7 +191,7 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
         out.push_str(&format!("claims ({} of {}):\n", r.claims.len(), r.claims_total));
         for c in &r.claims {
             out.push_str(&format!(
-                "  {}… {} {} commit {} → {:?} MSK\n",
+                "  {}… {} {} commit {} → {:?} BILI\n",
                 &c.claim_id[..c.claim_id.len().min(12)],
                 c.phase,
                 c.stage,

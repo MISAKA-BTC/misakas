@@ -1,5 +1,10 @@
 <h1>misakas — post-quantum (PQ-only) Kaspa</h1>
 
+The native token is **Misaka**, ticker **BILI**. Native addresses keep the `misaka`
+prefix (with the existing network-specific variants); see [ADR-0174](docs/adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md).
+
+> Retained measurements, quotations and command/output examples may use the legacy label `MSK`. Amounts, protocol identifiers and address prefixes are unchanged.
+
 **misakas** is a post-quantum, **PQ-only** fork of [rusty-kaspa](https://github.com/kaspanet/rusty-kaspa). It replaces Kaspa's secp256k1/Schnorr transaction authorization with **ML-DSA-87** (FIPS 204, NIST category 5) and makes every non-PQ path — legacy secp256k1/Schnorr/ECDSA signatures, legacy addresses, and P2SH — **unrepresentable at the consensus, mempool, and wallet layers**. It is a new, independent network with its own genesis; it is **not** compatible with Kaspa or with any prior kaspa-pq chain state, UTXO set, or address.
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
@@ -290,7 +295,7 @@ operational state and can change or be withdrawn.
 | Consensus identity | 64-byte BLAKE2b-512 (`Hash64`): block hash / txid / merkle roots / UTXO commitment / parents |
 | secp256k1 | feature-gated out of both `kaspa-consensus` and the `kaspad` node binary (default `pq-only`) |
 | Script caps | `MAX_SCRIPT_ELEMENT_SIZE` = 8192, `MAX_SCRIPTS_SIZE` / `max_signature_script_len` = 16_384 |
-| Genesis / tokenomics | new genesis; **28B MSK cap = 13B premine** (40 vaults × 0.1B + 1 main × 9B, ML-DSA-87 P2PKH) **+ 15B network emission** over 20 yr, 5%/yr exponential decay (`coinbase::SUBSIDY_BY_MONTH_TABLE`). The premine constants live in `consensus/core/src/config/premine.rs`; a change there moves every network's genesis hash and is refused at startup until re-pinned (audit M-07) |
+| Genesis / tokenomics | new genesis; **28B BILI cap = 13B premine** (40 vaults × 0.1B + 1 main × 9B, ML-DSA-87 P2PKH) **+ 15B network emission** over 20 yr, 5%/yr exponential decay (`coinbase::SUBSIDY_BY_MONTH_TABLE`). The premine constants live in `consensus/core/src/config/premine.rs`; a change there moves every network's genesis hash and is refused at startup until re-pinned (audit M-07) |
 | Block cadence | **120 s** on PALW networks (`PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS`), frozen — refused at parameter construction, because a block interval shorter than the inference it certifies certifies nothing |
 
 Authoritative design & spec live under [`docs/`](docs/):
@@ -527,7 +532,7 @@ explorer backend) needs to connect locally.
 - **Headless balance (no interactive wallet).** For scripting / monitoring, query a balance in one
   shot over wRPC:
   `kaspa-pq-validator balance --node-rpc 127.0.0.1:27210 --address misakatest:q… [--address …] [--network testnet-11]`.
-  It prints `address <sompi> <MSK> MSK` per line (plus `TOTAL` for several) to stdout — connection /
+  It prints `address <sompi> <BILI> BILI` per line (plus `TOTAL` for several) to stdout — connection /
   sync notes go to stderr, so `… balance --address misakatest:q… | awk '{print $2}'` yields just the
   sompi. The node must run `--utxoindex`.
 - Add `--enable-unsynced-mining` **only** when bootstrapping a brand-new isolated network with no peers (mining before you have synced to the public testnet would fork from genesis).
@@ -572,7 +577,7 @@ stops counting until it attests again, and the DNS stake reorg gate refuses chai
 confirmed anchor until it goes stale. The sidecar and the in-node validator precommit by themselves
 from `getPrecommitDuty` and keep a second safety log, `<signed-epoch-db>.precommits.json` — back it up
 with the seed. Validators are paid 20 % of each block's subsidy from DAA 7,101 (30 % before). PALW does
-not wait for any of this: its payments settle on PALW anchors (`misaka palw settlement`). The current experimental mesh permits one active validator, but the 10 MSK minimum
+not wait for any of this: its payments settle on PALW anchors (`misaka palw settlement`). The current experimental mesh permits one active validator, but the 10 BILI minimum
 does not bypass the work-depth, anchor-attester or freshness checks. Per-block finality is queryable:
 `getDnsConfirmation` accepts an optional `blockHash` and answers whether that block is DNS-final
 (`blockIsDnsFinal` / `blockIsConfirmedAnchor`); the explorer's **DNS Finality** page lists the

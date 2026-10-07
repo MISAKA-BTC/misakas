@@ -1,5 +1,7 @@
 # testnet-11 — history
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **This page is a record, not an entry point.** testnet-11 (Relaunch 5f, 2026-09-03 → 2026-09-25)
 was the public network before [testnet-12](../t12-launch-2026-09-25.md). Current `main` no longer
 builds a testnet-11 node: to run one, build commit **`1f98d3bf4`** (the last testnet-11 `main`) and

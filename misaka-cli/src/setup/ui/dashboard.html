@@ -722,7 +722,7 @@
     }
 
     function renderMaturity(maturity, balance) {
-      text('visibleBalance', balance?.validator?.balanceMsk ? `${balance.validator.balanceMsk} MSK` : tr('balanceUnknown'));
+      text('visibleBalance', balance?.validator?.balanceMsk ? `${balance.validator.balanceMsk} BILI` : tr('balanceUnknown'));
       if (!maturity || maturity.elapsedBlocks === null || maturity.elapsedBlocks === undefined) {
         text('requiredBlocks', '-');
         text('elapsedBlocks', '-');

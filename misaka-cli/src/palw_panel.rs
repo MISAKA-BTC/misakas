@@ -36,7 +36,7 @@ fn fmt_gib(bytes: u64) -> String {
 
 fn fmt_msk(sompi: u64) -> String {
     let s = sompi_to_msk(sompi);
-    if s.contains('.') { s } else { format!("{s} MSK") }
+    if s.contains('.') { s } else { format!("{s} BILI") }
 }
 
 fn render_local(c: &RpcPalwLocalPanelClass) -> String {

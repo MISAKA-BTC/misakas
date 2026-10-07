@@ -1,5 +1,7 @@
 # Connecting Ethereum tooling to MISAKA (Foundry / Hardhat / ethers / viem / MetaMask)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 Status 2026‑06‑27. The MISAKA node exposes an Ethereum JSON‑RPC endpoint (the `kaspa-eth-rpc`
 adapter) on `--evm-rpc-listen` (default `:8545`). Unmodified Ethereum tooling connects to it. See
 `ethereum-rpc-compat-matrix.md` for per‑method status and `evm-differences-from-ethereum.md` for the
@@ -8,7 +10,7 @@ compat profile.
 ```
 EVM chain id : 0x4D534B (5067595)
 EVM spec     : Shanghai
-Native unit  : 18 decimals, symbol MSK
+Native unit  : 18 decimals, symbol BILI
 RPC URL      : http://<node-host>:8545   (HTTP JSON-RPC)
 WebSocket    : ws://<node-host>:8545      (same listener; eth_subscribe: newHeads / newPendingTransactions / logs)
 ```
@@ -26,7 +28,7 @@ Settings → Networks → Add network → Add manually:
 | Network name | MISAKA Testnet (EVM) |
 | New RPC URL | `http://<node-host>:8545` |
 | Chain ID | `5067595` |
-| Currency symbol | `MSK` |
+| Currency symbol | `BILI` |
 | Block explorer URL | (optional) |
 
 Then balance display, send, and contract interaction work. MetaMask polls `eth_chainId`,

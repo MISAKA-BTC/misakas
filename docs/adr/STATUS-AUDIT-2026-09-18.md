@@ -1,5 +1,7 @@
 # ADR status audit — 2026-09-18 (mechanical pass; see the reviewed notes at the end)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 Classification per Decision / Phase / Follow-up section and per keyword line (future, follow-up, deferred, not built/shipped, TODO, candidate, Phase 2, V2). Evidence: backticked identifiers checked with `git grep -w` against the code — `name:code_hits/test_hits`. Fences: `ACTIVE(fence=height)` when the testnet-11 preset arms it, `DORMANT(fence)` when it exists but no preset arms it. Rows with no identifier are `UNCLASSIFIED` and were reviewed by hand where the ADR is recent (0124–0137).
 
 | ADR | section | class | fence | evidence (identifier:code/tests) | kw lines |

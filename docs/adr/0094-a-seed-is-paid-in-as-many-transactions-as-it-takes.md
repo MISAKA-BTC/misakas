@@ -1,5 +1,7 @@
 # ADR-0094 — A seed is paid in as many transactions as it takes
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 * Status: PROPOSED 2026-09-07; IMPLEMENTED 2026-09-07 (§8)
 * Amends: [0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
   Decision 2's last clause ("One seed a line: a second is refused") and Decision 5's row.
@@ -11,7 +13,7 @@
 
 ## 0. The sentence this ADR is
 
-A hundred thousand MSK does not fit in one post-quantum transaction, so the seed is allowed to
+A hundred thousand BILI does not fit in one post-quantum transaction, so the seed is allowed to
 arrive in several: every payment into the line's sink is locked the moment it lands, the market
 opens on the payment that carries the total across the floor, and nothing in between is a market —
 no price, no positions, no buys.
@@ -79,7 +81,7 @@ total (the crossing payment's excess included, exactly as a single over-floor se
 behaved), and the first price is `total / 500,000`. Opening happens once; a `ModelSeed` on an open
 market is refused as it is today (`ModelMarketAlreadySeeded`).
 
-**Decision 3 — anyone may pay, and the row names who started it.** The sink takes MSK from any
+**Decision 3 — anyone may pay, and the row names who started it.** The sink takes BILI from any
 key: a line's people can fund a pair together, and nothing about the fold depends on them being
 one wallet. `seeded_by` keeps its meaning as a record and names the **first** payer — the one who
 opened the pledge — because that is the fact a reader wants ("who is behind this pair") and
@@ -102,14 +104,14 @@ get the same multi-input funding, because the single-utxo `find` is the same def
 
 ## 4. The arithmetic, worked
 
-A producer earning 1,400 MSK a block, seeding the least pair:
+A producer earning 1,400 BILI a block, seeding the least pair:
 
 | | before | after |
 |---|---|---|
-| what one transaction can carry | 1 utxo (~1,400 MSK), and the seed is refused | 15 utxos (~21,000 MSK) |
-| transactions to a 100,000 MSK pair | 14 consolidation rounds, then 1 seed | **5 seeds** |
+| what one transaction can carry | 1 utxo (~1,400 BILI), and the seed is refused | 15 utxos (~21,000 BILI) |
+| transactions to a 100,000 BILI pair | 14 consolidation rounds, then 1 seed | **5 seeds** |
 | wall-clock at 240 s a block | ~1 hour of consolidation, then the seed | ~20 minutes |
-| MSK locked before the market exists | 0 (nothing is paid until it all is) | each payment, on arrival |
+| BILI locked before the market exists | 0 (nothing is paid until it all is) | each payment, on arrival |
 
 The last row is the trade this ADR makes: a participant who stops halfway has locked what they
 paid and has no market. That is the same bargain ADR-0090 already struck for a single seed — the
@@ -122,7 +124,7 @@ the first payment, because a rule that surprises is worse than a rule that costs
   the sum of the sink outputs that fed it. `seed + Σ buys + Σ slices = reserve + Σ sells + burned +
   legs` (ADR-0090 P2, ADR-0091 B2) holds with the sum in place of the single seed.
 * **Nothing is withdrawn.** There is no object that pays a pledge back, opened or not. A pledge on a
-  line that never opens is burned MSK, which is what paying into an `OP_RETURN` means.
+  line that never opens is burned BILI, which is what paying into an `OP_RETURN` means.
 * **No market before the floor.** A buy or a sell on an unopened row is refused by the fold, and
   the row carries no positions to sell — the supply does not exist until the market does.
 * **A user-input fault is a revert, a chain fault is a refusal, never a block fault.** Unchanged.
@@ -132,8 +134,8 @@ Attacks considered:
 | | threat | why it is not one |
 |---|---|---|
 | A1 | a stranger pledges 1 sompi to a line to be named its seeder | `seeded_by` names the FIRST payer, and the first payer is the one who chose to start; a later sompi names nobody |
-| A2 | a griefer pledges to a line they dislike, to open it at a price they choose | opening at a HIGHER total is a higher first price and more locked MSK — they pay for the privilege, and the line's people keep every sompi of it |
-| A3 | a pledge sits unopened forever, MSK locked | the same as any under-floor payment into the sink, which ADR-0090 already burns; the CLI states it before the first payment |
+| A2 | a griefer pledges to a line they dislike, to open it at a price they choose | opening at a HIGHER total is a higher first price and more locked BILI — they pay for the privilege, and the line's people keep every sompi of it |
+| A3 | a pledge sits unopened forever, BILI locked | the same as any under-floor payment into the sink, which ADR-0090 already burns; the CLI states it before the first payment |
 | A4 | the accumulated row is read as a market by an old node | the fences are the same; below them there is no row at all, and past them a row with `position_units == 0` is refused by every move |
 
 ## 6. Invariants the tests must hold

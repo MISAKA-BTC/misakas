@@ -16,7 +16,7 @@
 //! purpose, and always with `--palw-bond-collateral` set to the figure setup showed and the
 //! operator confirmed. That figure is the purpose's: a producer's bond locks what the node sizes for
 //! the class's claims; a verifier seat's locks at least what the panel draw seats
-//! ([`seat_requirement`]: ten producer floors, 130,000 MSK, on testnet-12). Setup reads the outcome
+//! ([`seat_requirement`]: ten producer floors, 130,000 BILI, on testnet-12). Setup reads the outcome
 //! from that node's log and from the chain; nobody copies an outpoint off a log line.
 
 use crate::operator::finding::{Finding, Severity, paint};
@@ -36,8 +36,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Beyond the collateral, what a registration's one funding output must hold: the carrier's fee
-/// and a change output large enough to relay (the join doc's "+0.1 MSK": the smallest change a
-/// carrier can leave is 0.0833 MSK, and the fee is a few hundred thousand sompi).
+/// and a change output large enough to relay (the join doc's "+0.1 BILI": the smallest change a
+/// carrier can leave is 0.0833 BILI, and the fee is a few hundred thousand sompi).
 const REGISTRATION_MARGIN_SOMPI: u64 = 10_000_000;
 /// The registration's change becomes the panel's fee float; this much keeps it paying for a while.
 const FLOAT_RECOMMENDED_SOMPI: u64 = 50_000_000;
@@ -253,7 +253,7 @@ pub(crate) fn class_closed_reason(
 ///
 /// A producer's collateral backs its own claims for their whole life; a seat's is what the panel
 /// draw reads before it seats the bond at all (ADR-0124 Decision 4). Where the chain states a panel
-/// floor the two are different numbers — testnet-12: a 13,000 MSK producer floor and a 130,000 MSK
+/// floor the two are different numbers — testnet-12: a 13,000 BILI producer floor and a 130,000 BILI
 /// seat floor — and a bond meant to do both holds the larger. The registry takes one bond per key
 /// for the life of the chain and its collateral cannot be topped up, so the figure is settled
 /// before the lock, never after.
@@ -312,7 +312,7 @@ impl BondLock {
         }
     }
 
-    /// The chooser's cell: an amount, or words — a saturated sizing is never printed as MSK.
+    /// The chooser's cell: an amount, or words — a saturated sizing is never printed as BILI.
     pub(crate) fn shown(self) -> String {
         match self {
             BondLock::Sompi(sompi) => catalog::msk(sompi as u128),
@@ -353,7 +353,7 @@ fn stated(fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -
 ///
 /// * **The seat floor** (ADR-0124 Decision 4): past the panel economy a bond is drawn only with
 ///   `palw_panel_collateral_floor_v1` of the producer floor posted — ten producer floors, 130,000
-///   MSK on testnet-12. Taken wherever the network states the economy, in force or scheduled, since
+///   BILI on testnet-12. Taken wherever the network states the economy, in force or scheduled, since
 ///   a bond is registered once and outlives every fence; without it, the producer floor, as the
 ///   draw does.
 /// * **A ready seat for a model class** (ADR-0135 Decision 4): under the registry a seat judges a
@@ -363,7 +363,7 @@ fn stated(fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -
 /// * **One panel's reservation.** Past R-core+ (ADR-0152 L-4b) the room a seat needs to be bound
 ///   is priced per claim, `max(duty_bind, lock_2)`, which no read serves before the claim exists;
 ///   the seat floor's 500 ‰ room holds it on every class testnet-12 carries (the dearest, the 2M
-///   row's `lock_2`, is about 33,400 MSK against the 65,000 MSK room of a 130,000 MSK bond —
+///   row's `lock_2`, is about 33,400 BILI against the 65,000 BILI room of a 130,000 BILI bond —
 ///   `rcore_s3_one_ledger` T78). Before R-core+ a seat reserved three times the claim's own
 ///   exposure (ADR-0124 Decision 3); there setup keeps the producer's whole-lifetime figure for
 ///   the class as the bound, as it always did, and is `None` where that figure is unknown.
@@ -2243,7 +2243,7 @@ impl<'a> Wizard<'a> {
         }
         self.row(Severity::Info, "stake bond", "none registered to this validator key yet");
 
-        // Stake one. The amount: the flag, else the network's minimum (1 MSK where it has none).
+        // Stake one. The amount: the flag, else the network's minimum (1 BILI where it has none).
         let min = dns.min_bond_amount_sompi;
         let amount = self.args.amount.or(self.validator.amount_sompi).unwrap_or(min.max(100_000_000));
         if amount < min {
@@ -2251,7 +2251,7 @@ impl<'a> Wizard<'a> {
                 Finding::error("E-VALIDATOR-BOND-BELOW-MIN", exit::FUNDS, "The stake is below this network's minimum bond")
                     .current(catalog::msk(amount as u128))
                     .required(format!("≥ {} on {}", catalog::msk(min as u128), self.network))
-                    .fix("misaka validator setup --amount <MSK>"),
+                    .fix("misaka validator setup --amount <BILI>"),
             ));
         }
         let prefix = params.prefix();
@@ -2959,8 +2959,8 @@ mod tests {
     }
 
     /// The figures the lifecycle auditor read off public testnet-12 (TB-W1, 2026-09-26): the node's
-    /// own producer sizing for the floor (3,119,145,986,560 sompi = 31,191.45 MSK), for the 8k row
-    /// (2,000,332,625.67 MSK) and for the 2M row (`u64::MAX`, saturated).
+    /// own producer sizing for the floor (3,119,145,986,560 sompi = 31,191.45 BILI), for the 8k row
+    /// (2,000,332,625.67 BILI) and for the 2M row (`u64::MAX`, saturated).
     const TB_W1_FLOOR: u64 = 3_119_145_986_560;
     const TB_W1_8K: u64 = 200_033_262_567 * 1_000_000;
     const TB_W1_2M: u64 = u64::MAX;
@@ -3027,8 +3027,8 @@ mod tests {
 
     /// **The bug TB-W1 found, closed: a verifier seat is sized by the seat floor the draw reads,
     /// a producer's bond by the node's own sizing, unchanged.** The wizard offered a seat
-    /// 31,191.45 MSK — the floor's PRODUCER figure — on a chain whose panel draw seats nothing under
-    /// 130,000 MSK, spending the key's only bond on a seat that could never sit.
+    /// 31,191.45 BILI — the floor's PRODUCER figure — on a chain whose panel draw seats nothing under
+    /// 130,000 BILI, spending the key's only bond on a seat that could never sit.
     #[test]
     fn a_verifier_seat_locks_at_least_the_seat_floor_and_a_producer_bond_is_unchanged() {
         let t12 = t12();
@@ -3036,7 +3036,7 @@ mod tests {
         let daa = 750;
         let panel_floor = t12.palw_seat_economy_at(daa).expect("testnet-12 states the seat economy").panel_floor_sompi;
         assert_eq!(panel_floor, kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_v1(producer_floor));
-        assert_eq!(panel_floor, 130_000 * MSK, "the join doc's seat floor: ten producer floors of 13,000 MSK");
+        assert_eq!(panel_floor, 130_000 * MSK, "the join doc's seat floor: ten producer floors of 13,000 BILI");
         assert!(TB_W1_FLOOR < panel_floor, "the figure the wizard offered a seat was below the floor the draw reads");
         for daa in [0, 750, 1_000] {
             for (is_base, producer) in [(true, Some(TB_W1_FLOOR)), (false, Some(TB_W1_8K)), (false, Some(TB_W1_2M)), (true, None)] {
@@ -3075,7 +3075,7 @@ mod tests {
     }
 
     /// **A figure no output can carry is words, never a number** — the 2M row's `u64::MAX` printed
-    /// as 184,467,440,737.09 MSK in the chooser, and anything past `MAX_SOMPI`, and a class that
+    /// as 184,467,440,737.09 BILI in the chooser, and anything past `MAX_SOMPI`, and a class that
     /// takes no new work.
     #[test]
     fn a_saturated_figure_is_not_available_on_this_chain_and_never_a_number() {
@@ -3113,8 +3113,8 @@ mod tests {
             }
             assert!(rows[2].contains(NOT_AVAILABLE), "the 2M row: {rows:?}");
             match role.produce {
-                true => assert!(rows[0].contains("31,191.45 MSK") && rows[1].contains("2,000,332,625.67 MSK"), "{rows:?}"),
-                false => assert!(rows[..2].iter().all(|r| r.contains("130,000.00 MSK")), "{rows:?}"),
+                true => assert!(rows[0].contains("31,191.45 BILI") && rows[1].contains("2,000,332,625.67 BILI"), "{rows:?}"),
+                false => assert!(rows[..2].iter().all(|r| r.contains("130,000.00 BILI")), "{rows:?}"),
             }
         }
         // A founding line's long name widens its column instead of running into the next one.
@@ -3122,7 +3122,7 @@ mod tests {
         named[1].name = "Qwen/Qwen2.5-1.5B/graph-v7@8192".into();
         let (head, rows) = class_table(&named, BondRole::SEAT);
         let collateral_col = head.find("COLLATERAL").expect("a COLLATERAL column");
-        for (row, cell) in rows.iter().zip(["130,000.00 MSK", "130,000.00 MSK", NOT_AVAILABLE]) {
+        for (row, cell) in rows.iter().zip(["130,000.00 BILI", "130,000.00 BILI", NOT_AVAILABLE]) {
             let from: String = row.chars().skip(collateral_col).collect();
             assert!(from.starts_with(cell), "the COLLATERAL column is misaligned: {row:?}");
         }
@@ -3226,9 +3226,9 @@ withdraw  the collateral stays locked while the bond is registered. To get it ba
                 "\
 Register a verifier seat bond for this key:
 role      verifier seat: it sits on panels and judges other producers' claims; it does not mine
-lock      130,000.00 MSK as its collateral: the least a verifier seat needs on this chain
+lock      130,000.00 BILI as its collateral: the least a verifier seat needs on this chain
 judges    base (the floor)
-from      2eca7516…:0 (400,000.00 MSK)
+from      2eca7516…:0 (400,000.00 BILI)
 {way_out}"
             )
         );
@@ -3241,9 +3241,9 @@ from      2eca7516…:0 (400,000.00 MSK)
                 "\
 Register a producer bond for this key:
 role      producer: it mines base (the floor), and this collateral backs its claims
-lock      31,191.45 MSK as its collateral: the node's own sizing for claims of base (the floor) over their whole life
-seats     none: under the 130,000.00 MSK a verifier seat needs, the panel draw never seats this bond
-from      2eca7516…:0 (400,000.00 MSK)
+lock      31,191.45 BILI as its collateral: the node's own sizing for claims of base (the floor) over their whole life
+seats     none: under the 130,000.00 BILI a verifier seat needs, the panel draw never seats this bond
+from      2eca7516…:0 (400,000.00 BILI)
 {way_out}"
             )
         );
@@ -3263,7 +3263,7 @@ from      2eca7516…:0 (400,000.00 MSK)
     }
 
     /// **Funds below what a seat needs are refused, never met with a smaller lock** (TB-W1's
-    /// second half: 100,000 MSK at the key would have bought a 31,191.45 MSK seat that never sits).
+    /// second half: 100,000 BILI at the key would have bought a 31,191.45 BILI seat that never sits).
     #[test]
     fn a_verifier_short_of_the_seat_floor_is_refused_and_never_offered_a_smaller_lock() {
         let f = seat_funds_refusal(
@@ -3280,12 +3280,12 @@ from      2eca7516…:0 (400,000.00 MSK)
         assert_eq!(
             text,
             "\
-✗ A verifier seat bond locks at least 130,000.00 MSK, and this key holds 100,000.00 MSK   [E-FUNDS-BELOW-SEAT-FLOOR]
+✗ A verifier seat bond locks at least 130,000.00 BILI, and this key holds 100,000.00 BILI   [E-FUNDS-BELOW-SEAT-FLOOR]
   Reason    the panel draw seats only a bond that holds the seat floor, so setup never registers a smaller seat bond: it would lock the funds, never be drawn onto a panel, and use up this key's only bond
-  Current   100,000.00 MSK spendable at misakatest:qz
-  Required  one ordinary output of at least 130,000.10 MSK — 130,000.00 MSK of collateral for base (the floor), and 0.10 MSK for the carrier's fee and change
-  Fix       send 130,000.10 MSK or more to misakatest:qz in one transfer, then run misaka verifier setup again
-            or send the missing 30,000.10 MSK and merge the outputs first: misaka --network testnet-12 wallet utxo consolidate --key-file ~/.misaka/miner.seed --yes
+  Current   100,000.00 BILI spendable at misakatest:qz
+  Required  one ordinary output of at least 130,000.10 BILI — 130,000.00 BILI of collateral for base (the floor), and 0.10 BILI for the carrier's fee and change
+  Fix       send 130,000.10 BILI or more to misakatest:qz in one transfer, then run misaka verifier setup again
+            or send the missing 30,000.10 BILI and merge the outputs first: misaka --network testnet-12 wallet utxo consolidate --key-file ~/.misaka/miner.seed --yes
   Docs      docs/testnet12-join-mining.md#4-funds"
         );
     }

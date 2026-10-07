@@ -1,5 +1,7 @@
 # testnet-11 — what was verified, and what could not be
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **Genesis:** `d25a80b9045abb97…` · **Consensus fingerprint:**
 `048e69026e559e67584ded64f1b6279148e3459975ef9d710e029eaaed638ee0`
 

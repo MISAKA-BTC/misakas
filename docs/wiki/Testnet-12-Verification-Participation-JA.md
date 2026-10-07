@@ -1,12 +1,14 @@
 # Testnet-12 検証参加ガイド
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 このページは、testnet-12 に PALW の検証席(panel seat / verifier)として参加する手順です。検証席は、他の参加者が出した PALW claim を再実行し、その結果(receipt)をチェーンに提出します。検証席は block を採掘しませんが、claim を Final に進めるのに欠かせない役割です。
 
 対象は **testnet-12 と、その現行ビルド `587cab2b0`**(2026-09-27 の 2 回目の post-launch flag day のリリース。2 本の fence が DAA 1,300 で有効になる。DAA 750 の 13 本も含む)です。network id や consensus fingerprint が違う node は参加できません。
 
 ## testnet-11 からの主な変更
 
-- **seat の bond は 130,000 MSK 以上**(producer floor 13,000 MSK の 10 倍)。testnet-11 の少額 bond は使えません。
+- **seat の bond は 130,000 BILI 以上**(producer floor 13,000 BILI の 10 倍)。testnet-11 の少額 bond は使えません。
 - **S1 / S2 / S3 は DAA 0 から有効です。** testnet-11 のように DAA 7,200 / 8,600 / 8,700 で切り替わることはありません。fence schedule は `750, 1000` です(750 は post-launch fence 13 本、1000 は bond maturity window)。
 - **DAA 750 以降、genesis 以外の bond は登録から 1,000 DAA(約 33 時間)経つまで panel の抽選と ready seat の数に入りません**(ADR-0065 D1、`palw_bond_maturity_early`)。DAA 750 より前に登録した bond も登録 DAA から数えるので、DAA 750 でいったん外れ、登録 DAA + 1,000 で戻ります。
 - **seat の義務は常に on です。** `--palw-panel` は受け付けますが何もせず、警告を 1 行出すだけです。
@@ -20,8 +22,8 @@
 - `kaspad` を動かせるディスク、メモリ、安定したネットワーク
 - `--utxoindex` を付けた testnet-12 の node
 - 検証する class の artifact(Floor だけを検証するなら不要)
-- 検証する class の capability を宣言した PALW Bond(**130,000 MSK 以上**)と、その key
-- bond とは別の output の fee float(0.1 MSK 以上)。receipt、readiness 証明、data-availability の応答、court の応答などの carrier の手数料に使います
+- 検証する class の capability を宣言した PALW Bond(**130,000 BILI 以上**)と、その key
+- bond とは別の output の fee float(0.1 BILI 以上)。receipt、readiness 証明、data-availability の応答、court の応答などの carrier の手数料に使います
 
 検証席は、Bond が宣言した class だけを検証します。秘密鍵はコマンドラインに書かず、key file の権限は `0600` にしてください。
 
@@ -111,8 +113,8 @@ misaka --network testnet-12 verifier start --detach
 ## seat が選ばれる条件
 
 - Bond が class の capability を宣言している(Floor の場合)。model class の場合は、新しい readiness(possession)証明がある。証明は artifact を持った panel が自動で提出します。
-- seat の 500‰ ceiling の下に、bind される panel 1 つにつき約 640.17 MSK の空きがある(floor と 8k)。満たせない bond は、選ばれてから失敗するのではなく、最初から抽選で外されます。
-- model class の readiness には、空き collateral が 39,000 MSK(producer floor の 3 倍)必要です。
+- seat の 500‰ ceiling の下に、bind される panel 1 つにつき約 640.17 BILI の空きがある(floor と 8k)。満たせない bond は、選ばれてから失敗するのではなく、最初から抽選で外されます。
+- model class の readiness には、空き collateral が 39,000 BILI(producer floor の 3 倍)必要です。
 - DAA 750 以降は、bond の登録から 1,000 DAA 経っている(genesis の bond を除く)。
 
 ## S1 / S2 / S3
@@ -168,7 +170,7 @@ misaka --network testnet-12 logs node
 | `0 peers` | DNS、firewall、peer の ruleset の不一致 | `--addpeer=169.58.232.113:26311`、P2P `26311/tcp`、ログの fork-id を確認 |
 | `bond unknown` | outpoint の間違い、または別のネットワーク | `bond status --bond <txid>:<index>` で outpoint を確認。genesis の bond は txid `5e0d5f1b…` の上にある |
 | `judges nothing` | Bond が capability を宣言していない | `verifier setup --model ...` を実行する。登録済みの Bond は登録し直さない |
-| seat が選ばれない | panel 1 つあたり約 640.17 MSK の空きがない、bond が 1,000 DAA 未満、readiness 証明がない | `bond status`、`model readiness`、`palw panel list` を確認 |
+| seat が選ばれない | panel 1 つあたり約 640.17 BILI の空きがない、bond が 1,000 DAA 未満、readiness 証明がない | `bond status`、`model readiness`、`palw panel list` を確認 |
 | `readiness … no proof — a replay needs 3.37 GiB` | memory share が足りない | `--palw-host-memory-share=3758096384` 以上を `extra_kaspad_args` に書く |
 | artifact missing / mismatch | class に合わない artifact、またはパスの間違い | `model list` で class を確認し、絶対パスを指定する。`palw-class manifest --check` で sidecar を確認 |
 | panel が動かない | node が同期中、key file が読めない、bond が解釈できない | `PALW duties NOT as planned: …` の行、`doctor`、`getPalwNodeStatus.panelRunning` を確認 |

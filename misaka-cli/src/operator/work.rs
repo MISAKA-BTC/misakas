@@ -894,11 +894,11 @@ mod tests {
             &ClaimExtra { escrow_sompi: 170_800_000_000, payout_pending_sompi: Some(170_800_000_000), ..Default::default() },
         );
         assert_eq!((queued.state, queued.estimated), (WorkState::RewardPending, false));
-        assert!(queued.detail.contains("1,708.00 MSK queued"), "{}", queued.detail);
+        assert!(queued.detail.contains("1,708.00 BILI queued"), "{}", queued.detail);
         let merged = refine(Lane::Block, fin.clone(), &ClaimExtra::default());
         assert_eq!((merged.state, merged.estimated), (WorkState::Rewarded, false), "no escrow: nothing is pending");
         let paid = refine(Lane::Block, fin, &ClaimExtra { escrow_sompi: 170_800_000_000, ..Default::default() });
-        assert!(paid.detail.starts_with("escrow 1,708.00 MSK paid"), "{}", paid.detail);
+        assert!(paid.detail.starts_with("escrow 1,708.00 BILI paid"), "{}", paid.detail);
         let prompt = at(Lane::Prompt, &prompt_final(8, 0, NOW - 100));
         assert_eq!(refine(Lane::Prompt, prompt.clone(), &ClaimExtra::default()), prompt, "the prompt lane has no escrow to read");
     }
@@ -929,7 +929,7 @@ mod tests {
         assert_eq!((r.state, r.deadline_daa, r.estimated), (WorkState::RewardPending, Some(12_990), true));
         assert_eq!(
             r.detail,
-            "reward 500.00 MSK vesting until ≈ DAA 12990 (DAA clock) and 26 more licence(s) — a conviction before then burns it"
+            "reward 500.00 BILI vesting until ≈ DAA 12990 (DAA clock) and 26 more licence(s) — a conviction before then burns it"
         );
         let latched = VestingExtra {
             stage: VestingStage::Latched,

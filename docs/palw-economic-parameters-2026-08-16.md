@@ -1,5 +1,7 @@
 # PALW economic parameters — derivation, and the leverage defect it found
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **Date:** 2026-08-16 · **Tool:** `scripts/misaka-palw-economics-sim.py` (re-run it; every number
 below is its output) · **Normative:** ADR-0028 §4 (issuance split, no-show floor, admission
 caps), ADR-0032 (fee-bond escrow), ADR-0027 §4 (bounty cap) · **Gate:** B15

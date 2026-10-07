@@ -1,5 +1,7 @@
 # DNS-finality validator runbook
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 Verified against current `main` / Testnet-11 Relaunch 5f on 2026-09-13. The precommit section describes the build that schedules Testnet-11's DAA 7,101 flag day (ADR-0128).
 
 This validator is separate from a PALW producer/panel Bond. It signs DNS-finality attestations through `kaspa-pq-validator`.
@@ -12,7 +14,7 @@ This validator is separate from a PALW producer/panel Bond. It signs DNS-finalit
 - validator seed stored on one host
 - mature funds at the seed's funding address
 
-Testnet-11's DNS stake minimum is **10 MSK = 1,000,000,000 sompi**. This is not the PALW class collateral amount.
+Testnet-11's DNS stake minimum is **10 BILI = 1,000,000,000 sompi**. This is not the PALW class collateral amount.
 
 ## Recommended setup
 

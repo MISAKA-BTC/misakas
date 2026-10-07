@@ -774,7 +774,7 @@
           <button id="btn-validator-balance" onclick="callApi('/api/validator/balance')" data-i18n="btnFunding">11. Check bond balance</button>
           <div class="field">
             <label id="bondAmountLabel" class="label" for="bondAmount" data-i18n="bondAmount">Bond amount</label>
-            <input id="bondAmount" value="10MSK" autocomplete="off">
+            <input id="bondAmount" value="10BILI" autocomplete="off">
             <div id="bondHint" class="hint-note" data-i18n="bondHintUnknown">Check bond balance before creating bond.</div>
             <div class="hint-note warn" data-i18n="bondMaturityExplainer">Visible balance is not always bondable. Mined rewards need coinbase maturity first.</div>
           </div>
@@ -1151,11 +1151,11 @@
         bondAmount: 'Bond amount',
         bondHintUnknown: '先に「11. Bond用残高確認」を押してください。',
         bondHintZero: '残高は0です。マイニング後、coinbase maturityを待ってから再確認してください。',
-        bondHintLow: '残高 {balance} MSK は Bond amount {amount} に足りません。',
-        bondHintReady: '残高 {balance} MSK を確認しました。ただしBond作成には成熟済みUTXOが必要です。',
-        bondHintInvalid: 'Bond amountを 10MSK のように入力してください。',
+        bondHintLow: '残高 {balance} BILI は Bond amount {amount} に足りません。',
+        bondHintReady: '残高 {balance} BILI を確認しました。ただしBond作成には成熟済みUTXOが必要です。',
+        bondHintInvalid: 'Bond amountを 10BILI のように入力してください。',
         bondMaturityExplainer: '注意: 表示される残高と、Bondに使える成熟済みUTXOは別です。マイニング報酬はcoinbase maturityを過ぎてからBondに使えます。現在の必要block数はmaturity表示で確認してください。',
-        balanceLine: 'Funding balance: {balance} MSK',
+        balanceLine: 'Funding balance: {balance} BILI',
         balanceMaturityLine: '注意: 残高があっても、成熟済みUTXOでなければBondには使えません。現在の必要block数はmaturity表示で確認してください。',
         balanceZeroLine: 'Funding残高は0です。報酬が未成熟、またはnode/UTXO indexの反映待ちの可能性があります。待ってから再確認してください。',
         bondMatureErrorTitle: 'Bondに使える成熟UTXOがまだ足りません。',
@@ -1212,7 +1212,7 @@
         errorPrefix: 'エラー: ',
         requiredBond: 'Bond amount が必要です。',
         bondConfirm: 'Bondはtestnet資金を使います。すぐには戻せません。続けますか: ',
-        bondReadyLog: 'Bond作成前確認: 残高 {balance} MSK / Bond amount {amount}',
+        bondReadyLog: 'Bond作成前確認: 残高 {balance} BILI / Bond amount {amount}',
         minerConfirm: 'VPS上でマイニングを開始します。VPSのCPUを{threads}スレッド使い、報酬はfunding addressに入ります。開始しますか？',
         minerStartedPause: 'マイニングを開始しました。しばらく待ってから「11. Bond用残高確認」を押してください。十分に貯まったら、もう一度「自動でvalidator参加」を押します。',
         minerDiagnoseHint: '診断対象はVPSです。あなたのPC/Macではなく、VPSのCPU数と現在負荷からおすすめを出します。',
@@ -1263,7 +1263,7 @@
         nodeSyncingHuman: '同期中です。このまま待ってください。',
         startMinerFunding: '次: まず「9. VPS CPU診断」を押し、おすすめスレッドを確認してから「10. マイニング開始」を押してください。',
         waitMatureFunding: '次: マイニング中です。しばらく待ってから「11. Bond用残高確認」を押してください。Bondに使える成熟UTXOが足りたらBond作成へ進みます。',
-        needBond: '次: マイニングでMSKを用意します。まだ開始していなければ「9. VPS CPU診断」から進めてください。',
+        needBond: '次: マイニングでBILIを用意します。まだ開始していなければ「9. VPS CPU診断」から進めてください。',
         needValidator: '次: validator開始を押して、validator serviceを起動してください。',
         allDone: '完了: node と validator が動作しています。必要ならログ確認だけ行ってください。',
         stepApp: 'アプリ',
@@ -1416,11 +1416,11 @@
         bondAmount: 'Bond amount',
         bondHintUnknown: 'Press "11. Check bond balance" before creating a bond.',
         bondHintZero: 'Balance is 0. After mining, wait for coinbase maturity, then check again.',
-        bondHintLow: 'Balance {balance} MSK is below the bond amount {amount}.',
-        bondHintReady: 'Balance {balance} MSK found. Bond creation still requires mature UTXOs.',
-        bondHintInvalid: 'Enter a bond amount like 10MSK.',
+        bondHintLow: 'Balance {balance} BILI is below the bond amount {amount}.',
+        bondHintReady: 'Balance {balance} BILI found. Bond creation still requires mature UTXOs.',
+        bondHintInvalid: 'Enter a bond amount like 10BILI.',
         bondMaturityExplainer: 'Note: visible balance and bondable mature UTXOs are different. Mined rewards become bondable only after coinbase maturity. Check the maturity display for the current required block count.',
-        balanceLine: 'Funding balance: {balance} MSK',
+        balanceLine: 'Funding balance: {balance} BILI',
         balanceMaturityLine: 'Note: a visible balance is not always bondable. Check the maturity display for the current required block count.',
         balanceZeroLine: 'Funding balance is 0. Mined rewards may still be immature, or the node/UTXO index may still be catching up. Wait and check again.',
         bondMatureErrorTitle: 'Not enough mature UTXOs for bond yet.',
@@ -1477,7 +1477,7 @@
         errorPrefix: 'Error: ',
         requiredBond: 'Bond amount is required.',
         bondConfirm: 'Bond uses your testnet funds and cannot be undone immediately. Continue with ',
-        bondReadyLog: 'Bond pre-check: balance {balance} MSK / bond amount {amount}',
+        bondReadyLog: 'Bond pre-check: balance {balance} BILI / bond amount {amount}',
         minerConfirm: 'Start mining on the VPS? It uses {threads} VPS CPU thread(s) and sends rewards to the funding address.',
         minerStartedPause: 'Mining started. Wait for maturity, then press "11. Check bond balance". When enough mature UTXOs are available, press Auto validator setup again.',
         minerDiagnoseHint: 'The diagnosis checks the VPS, not your PC/Mac. It recommends threads from VPS CPU count and current load.',
@@ -1528,7 +1528,7 @@
         nodeSyncingHuman: 'Syncing. Keep waiting.',
         startMinerFunding: 'Next: press "9. VPS CPU check", review the recommended threads, then press "10. Start mining".',
         waitMatureFunding: 'Next: mining is running. Wait for maturity, then press "11. Check bond balance". Create the bond when enough mature UTXOs are available.',
-        needBond: 'Next: prepare MSK by mining. If mining is not running, start from "9. VPS CPU check".',
+        needBond: 'Next: prepare BILI by mining. If mining is not running, start from "9. VPS CPU check".',
         needValidator: 'Next: start the validator service.',
         allDone: 'Done: node and validator are running. Check logs when needed.',
         stepApp: 'App',
@@ -2344,7 +2344,7 @@
       setCardPill('minerCardState', gate.minerRunning ? 'done' : 'warn', gate.minerRunning ? 'RUNNING' : (gate.minerKnown ? 'STOPPED' : 'WAIT'));
       document.getElementById('minerCardService').textContent = gate.minerRunning ? t('statusRunning') : (gate.minerKnown ? t('statusStopped') : t('statusUnknown'));
       document.getElementById('minerCardAddress').textContent = gate.validatorFundingAddress || '-';
-      document.getElementById('minerCardBalance').textContent = gate.fundingBalanceMsk ? `${gate.fundingBalanceMsk} MSK` : t('balanceNotChecked');
+      document.getElementById('minerCardBalance').textContent = gate.fundingBalanceMsk ? `${gate.fundingBalanceMsk} BILI` : t('balanceNotChecked');
       document.getElementById('minerCardBlocks').textContent = gate.minedBlocks === null
         ? '-'
         : (gate.minedBlocks > 0 ? formatCount(gate.minedBlocks) : t('minedNoBlocks'));

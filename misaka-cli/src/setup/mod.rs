@@ -1889,7 +1889,7 @@ fn validator_keygen(ctx: &Ctx, args: &WebArgs) -> SetupResult<serde_json::Value>
     write_state(&args.state_file, &state)?;
     Ok(serde_json::json!({
         "ok": true,
-        "message": "Validator key created. Start the funding miner to mine testnet MSK to this funding address, or fund it from a wallet/faucet, then press Check Funding.",
+        "message": "Validator key created. Start the funding miner to mine testnet BILI to this funding address, or fund it from a wallet/faucet, then press Check Funding.",
         "validator": {
             "keyPath": key_path.display().to_string(),
             "keyExists": true,
@@ -1938,7 +1938,7 @@ async fn validator_balance(ctx: &Ctx, args: &WebArgs) -> SetupResult<serde_json:
 
 async fn validator_bond(ctx: &Ctx, args: &WebArgs, amount: &str) -> SetupResult<serde_json::Value> {
     if amount.trim().is_empty() {
-        return Err(CliError::new(exit::GENERIC, "amount is required, e.g. 10MSK"));
+        return Err(CliError::new(exit::GENERIC, "amount is required, e.g. 10BILI"));
     }
     let key_path = validator_key_path();
     if !key_path.is_file() {
@@ -2222,7 +2222,7 @@ async fn miner_service_install(ctx: &Ctx, args: &WebArgs, threads: u16) -> Setup
     write_state(&args.state_file, &state)?;
     Ok(serde_json::json!({
         "ok": true,
-        "message": "Funding miner started. It mines testnet MSK to the validator funding address. Wait for coinbase maturity, then check funding and create the bond.",
+        "message": "Funding miner started. It mines testnet BILI to the validator funding address. Wait for coinbase maturity, then check funding and create the bond.",
         "miner": {
             "service": DEFAULT_MINER_SERVICE,
             "serviceState": service_state(DEFAULT_MINER_SERVICE),
@@ -2541,7 +2541,7 @@ async fn web_route(ctx: &Ctx, args: &WebArgs, token: &str, req: &HttpRequest) ->
             Err(e) => json_error(500, e.msg),
         },
         ("POST", "/api/validator/bond") => {
-            let amount = query_param(&req.target, "amount").unwrap_or_else(|| "10MSK".to_string());
+            let amount = query_param(&req.target, "amount").unwrap_or_else(|| "10BILI".to_string());
             match validator_bond(ctx, args, &amount).await {
                 Ok(value) => json_response(value),
                 Err(e) => json_error(500, e.msg),
@@ -3141,9 +3141,9 @@ mod tests {
     #[test]
     fn parses_validator_balance_output() {
         let addr = "misakatest:qexample";
-        let output = format!("[validator] note\n{addr}\t123456789\t1.23456789 MSK\n");
+        let output = format!("[validator] note\n{addr}\t123456789\t1.23456789 BILI\n");
         assert_eq!(parse_balance_output(&output, addr), Some((123456789, "1.23456789".to_string())));
-        assert_eq!(parse_balance_output("other\t1\t0.00000001 MSK\n", addr), None);
+        assert_eq!(parse_balance_output("other\t1\t0.00000001 BILI\n", addr), None);
     }
 
     #[test]

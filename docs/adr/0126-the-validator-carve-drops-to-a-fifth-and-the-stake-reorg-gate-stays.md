@@ -1,5 +1,7 @@
 # ADR-0126 — The validator carve drops to a fifth, and the stake reorg gate stays
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -129,8 +131,8 @@ without the compute worker, compute declarations or verdicts, and without VLT st
 ## 6. testnet-11
 
 `palw_overlay_carve` = `{ activation: 6,001, subsidy_validator_bps: 2,000, worker_carve_permille: 720 }`:
-worker base 72 %, inclusion 8 %, validator 20 %, service 0. At testnet-11's 4,445.62 MSK block the
-escrow grows from 2,756.28 to 3,200.85 MSK. Scheduled in the preset on 2026-09-17 (`d6c46f25`, at DAA
+worker base 72 %, inclusion 8 %, validator 20 %, service 0. At testnet-11's 4,445.62 BILI block the
+escrow grows from 2,756.28 to 3,200.85 BILI. Scheduled in the preset on 2026-09-17 (`d6c46f25`, at DAA
 ≈5,773) with ADR-0124, ADR-0125 and ADR-0128 at the same height; fingerprint `4787b92a…`, re-pinned to
 `ab4e7b9c…` when ADR-0130 joined the height the same day.
 
@@ -140,8 +142,8 @@ testnet-12 arms the same `{ 2,000 bps, 720‰ }` from genesis (its arming walk m
 0). **Mainnet takes it too** (the user's 2026-09-25 decision that testnet-12 and mainnet run one set of
 numbers): a mainnet card states `palw_overlay_carve = { always, 2,000, 720 }` beside ADR-0124's economy,
 so a carded mainnet's validator pool is 20 % of the subsidy, not the production split's 30 %, and a
-claim's escrow is 720‰ of its block's subsidy (3,200.85 MSK at 120 s), not the bundle's 620‰
-(2,756.28 MSK). The bundle-free mainnet preset (`MAINNET_PARAMS`) carries no PALW and is unchanged:
+claim's escrow is 720‰ of its block's subsidy (3,200.85 BILI at 120 s), not the bundle's 620‰
+(2,756.28 BILI). The bundle-free mainnet preset (`MAINNET_PARAMS`) carries no PALW and is unchanged:
 `PRODUCTION_DNS_PARAMS`' `fee_split` stays 30 %, because testnet-10 and testnet-11 inherit it.
 
 ## 7. Tests

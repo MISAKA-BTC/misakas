@@ -1,5 +1,7 @@
 # testnet-11 regenesis — the audited union build (2026-08-30)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **This is a regenesis, not an upgrade.** The genesis block itself moves: the 10B premine cap
 (ADR-0059) rewrites the UTXO set every network is born with, and the coinbase marker goes to
 `11,3`. `deploy-t11.sh` gates on "the candidate synced this chain and disqualified nothing", which

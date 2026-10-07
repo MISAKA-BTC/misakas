@@ -1,5 +1,7 @@
 # testnet-11 re-mint onto the audit3 build (2026-08-29)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **SUPERSEDED 2026-08-30** by the 10B-premine-cap re-mint
 > ([ADR-0059](adr/0059-the-10b-premine-cap.md), "Relaunch 3"): fingerprint
 > `95265934…` → `f3bf86b4e9327f8b02ab2ad1d121d62ecd11bd78cca1455d8bcd7372595153d8`, genesis

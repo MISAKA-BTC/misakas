@@ -1,11 +1,13 @@
 # PALW 参加手順(testnet-12)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 PALW の参加者のロールは 2 つです。
 
 | 役割 | モデル | Bond | 主なコマンド |
 |---|---|---|---|
-| Producer / miner | Floor は不要、8k class は必要 | PALW Bond(**13,000 MSK 以上**) | `misaka mining setup` |
-| Panel seat(verifier) | 検証する class のものが必要 | capability を宣言した PALW Bond(**130,000 MSK 以上**) | `misaka verifier setup` |
+| Producer / miner | Floor は不要、8k class は必要 | PALW Bond(**13,000 BILI 以上**) | `misaka mining setup` |
+| Panel seat(verifier) | 検証する class のものが必要 | capability を宣言した PALW Bond(**130,000 BILI 以上**) | `misaka verifier setup` |
 
 **producer の node は panel seat の義務も常に実行します。** producer の bond で別に verifier を起動しないでください(1 つの bond は 1 つの process だけ)。seat だけを動かしたいときに `verifier` を使います。
 
@@ -47,13 +49,13 @@ misaka --network testnet-12 model readiness <class-id>
 
 ## Bond and exposure
 
-PALW Bond は、開いている claim の exposure の上限を持ちます。testnet-12 では、claim ごとに不正で得られる額の全額(escrow + weight)を bond に予約し、上限は `collateral × 500‰` です。floor claim 1 本の予約は約 3,200.95 MSK なので、同時に持てる floor claim は collateral 約 6,402 MSK ごとに 1 本です。
+PALW Bond は、開いている claim の exposure の上限を持ちます。testnet-12 では、claim ごとに不正で得られる額の全額(escrow + weight)を bond に予約し、上限は `collateral × 500‰` です。floor claim 1 本の予約は約 3,200.95 BILI なので、同時に持てる floor claim は collateral 約 6,402 BILI ごとに 1 本です。
 
 | class | 同時 1 本あたりの collateral |
 |---|---|
-| Floor | 約 6,402 MSK |
-| 8k | 約 6,451 MSK |
-| 2M | 約 125,888 MSK |
+| Floor | 約 6,402 BILI |
+| 8k | 約 6,451 BILI |
+| 2M | 約 125,888 BILI |
 
 ```bash
 misaka --network testnet-12 bond status --bond <txid>:<index>
@@ -69,7 +71,7 @@ misaka --network testnet-12 verifier start
 misaka --network testnet-12 verifier status
 ```
 
-panel seat は、panel に選ばれた claim を再実行して判定します。検証する class の artifact と capability の宣言が必要です。seat の bond は 130,000 MSK 以上で、`Valid` 署名が取る lock を払える空き collateral が必要です。quorum と違う判定をした seat は課金されます。
+panel seat は、panel に選ばれた claim を再実行して判定します。検証する class の artifact と capability の宣言が必要です。seat の bond は 130,000 BILI 以上で、`Valid` 署名が取る lock を払える空き collateral が必要です。quorum と違う判定をした seat は課金されます。
 
 S1 / S2 / S3 は DAA 0 から有効で、別のプロセスやフラグはありません。上の 3 つのコマンドのまま動きます。手順、ログの見方、よくある失敗は [検証参加ガイド](Testnet-12-Verification-Participation-JA) にあります。
 
@@ -79,7 +81,7 @@ S1 / S2 / S3 は DAA 0 から有効で、別のプロセスやフラグはあり
 misaka --network testnet-12 mining stop --drain
 ```
 
-testnet-12 では、消えた producer は課金されます。`ProducerWithholding` の void と 2 回目の `ReceiptTimeout` は weight + escrow(floor claim 1 本で約 3,200.85 MSK)を没収します。`BindTimeout` と `NoCapablePanel` は課金されません。
+testnet-12 では、消えた producer は課金されます。`ProducerWithholding` の void と 2 回目の `ReceiptTimeout` は weight + escrow(floor claim 1 本で約 3,200.85 BILI)を没収します。`BindTimeout` と `NoCapablePanel` は課金されません。
 
 ## 報酬
 

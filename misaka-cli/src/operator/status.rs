@@ -1074,7 +1074,7 @@ mod tests {
         };
         assert_eq!(
             vesting_suffix(&v),
-            " · vesting 500.00 MSK in 3 row(s), next moves ≥ DAA 12,345 · reporter 1.00 MSK · bond held by B-3"
+            " · vesting 500.00 BILI in 3 row(s), next moves ≥ DAA 12,345 · reporter 1.00 BILI · bond held by B-3"
         );
         let halted = crate::operator::snapshot::VestingFacts { halted: true, bond_held: None, reporter_pending_sompi: 0, ..v };
         assert!(vesting_suffix(&halted).ends_with("HALTED (no anchor settling: nothing matures)"));

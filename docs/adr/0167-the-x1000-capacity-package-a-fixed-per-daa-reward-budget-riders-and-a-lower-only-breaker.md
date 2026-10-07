@@ -1,5 +1,7 @@
 # ADR-0167 — The ×1000 capacity package: a fixed per-DAA PALW reward budget, riders, a lower-only breaker, and the ρ = 250 / ρ = 1000 steps
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -88,7 +90,7 @@ convictions and data-availability defaults — never expiries.
 accepted (there is no per-claim price record; a claim keeps its price, ADR-0160 §5) and does not change the credit's discount for new
 claims. The aggregate exposure bound is what matters: a bond's uncovered reward across its live claims is at most
 `N_out × (E − m_c)`, with `m_c = ⌈E/ρ_step⌉`; lowering `N_out` to `u·ρ_eff` multiplies that bound by `ρ_eff/ρ_step ≤ 1`, so the breaker's
-output is never riskier than the schedule's, and at level 0 a 13,000 MSK bond holds at most u = 2 claims whatever the discount. A credited
+output is never riskier than the schedule's, and at level 0 a 13,000 BILI bond holds at most u = 2 claims whatever the discount. A credited
 claim reaches `Final` only through `k_aud` audit receipts (D-23), so the discount is not what a fraud walks through. Re-pricing new
 claims at the lowered ρ would need a per-claim price record (a claim-record schema change, i.e. a state-version fence); it is named as
 the follow-up if the breaker ever trips for a reason the issuance bound does not answer.
@@ -96,7 +98,7 @@ the follow-up if the breaker ever trips for a reason the issuance bound does not
 ## 4. Stage 7 — ρ = 250 and ρ = 1000
 
 Ready entries (`PALW_T12_CAPACITY_RHO250_STEP_4_V1`, `…RHO1000_STEP_5_V1`) at 5,490 and 5,585. `k_aud` = 2 from ρ = 250 (already in the
-audit door). `N_out` for a 13,000 MSK bond: 500 at ρ = 250, 2,000 at ρ = 1000 (ADR-0160 §9.1's last row: 2,030 with the 6,500 MSK unit
+audit door). `N_out` for a 13,000 BILI bond: 500 at ρ = 250, 2,000 at ρ = 1000 (ADR-0160 §9.1's last row: 2,030 with the 6,500 BILI unit
 rounding). The per-bond ceilings and the per-bond burst scale linearly in collateral at every ρ of Λ (property test over 2,000 random
 splits per ρ), so splitting a bond never gains slots, refill or burst; 13k × 10 bonds never admits more than 130k × 1 (fold-level test at
 both tiers). 2M keeps its C7 cap of 1 (ADR-0153).

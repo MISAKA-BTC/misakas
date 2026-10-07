@@ -1,5 +1,7 @@
 # Ethereum JSON-RPC compatibility matrix (MISAKA eth-rpc adapter)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 Status 2026‑06‑27. The adapter is the `kaspa-eth-rpc` crate (`rpc/eth`) served by kaspad on
 `--evm-rpc-listen` (default `:8545`), HTTP JSON‑RPC 2.0 (+ batch + CORS). It is a thin front end
 over the node‑side `EthProvider` (`kaspad/src/eth_rpc.rs`); all consensus reads + the read‑only
@@ -59,7 +61,7 @@ per connection; a slow consumer (bounded outbound queue) is disconnected.
 
 ### Verified live (testnet, 2026‑06‑20)
 - Identity + state: `eth_chainId 0x4d534b`, `eth_getBalance` returned a bridge‑credited
-  `0xde0b6b3a7640000` (1 MSK = 1e18 wei), `eth_estimateGas` = `0x5208` (21000 intrinsic).
+  `0xde0b6b3a7640000` (1 BILI = 1e18 wei), `eth_estimateGas` = `0x5208` (21000 intrinsic).
 - Block/log index: `eth_getBlockByNumber("latest")` / by‑N / by‑hash resolve the same canonical
   block; `eth_getLogs` range‑cap returns `-32000`.
 - Full contract deploy: `eth_sendRawTransaction` deployed a CREATE tx whose constructor emits

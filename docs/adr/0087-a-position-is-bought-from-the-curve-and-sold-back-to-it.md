@@ -1,9 +1,11 @@
 # ADR-0087 — a position is bought from the curve and sold back to it
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **Status:** PROPOSED 2026-09-05, design only (no implementation yet). Requested by the operator
 on 2026-09-05: "Model Positions" — a per-model, fixed-supply position whose price is set by
 market participants' beliefs about the model's future (its usage, its PALW work, its evaluation,
-its migration to new versions, the scarcity of its capacity), traded against MSK on an AMM, with
+its migration to new versions, the scarcity of its capacity), traded against BILI on an AMM, with
 1 % of every trade to the model's registrant and 5 % of every trade burned, and with **no
 transfer between holders**, so that a position is never something one person hands another.
 The operator's word is *position* (ポジション), not *share*: it is bought from the protocol's
@@ -50,7 +52,7 @@ every row names the rule, so a reader checks it instead of believing it.
 | what a share does | what a position does — and the rule that makes it so |
 |---|---|
 | is issued by a company that owes its holders | **no issuer exists.** A line is a `(class, owner, name)` row and its owner is a *publisher of weights*, not a debtor ([0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md) Decision 1) |
-| pays a dividend out of profit | **nothing is ever paid to a holder.** The fold has no move that pays one; the only MSK a holder ever receives is what the curve pays for a position they themselves sell back ([0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) §0) |
+| pays a dividend out of profit | **nothing is ever paid to a holder.** The fold has no move that pays one; the only BILI a holder ever receives is what the curve pays for a position they themselves sell back ([0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) §0) |
 | is a claim on the enterprise's assets | **a holder has no claim on anything** — not the seed, not the reserve, not the weights, not the owner. The seed is locked for good and is paid back to nobody, not even the one who locked it ([0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) Decision 2) |
 | carries a vote, a seat, governance | no weight, no vote, no seat, no quorum, no bond (§2, Decision 5); the grant set a line may declare is **closed at the fold** and has no bit for any of them ([0095](0095-a-position-is-a-membership-not-an-income.md) §4.2) |
 | is transferred, lent, pledged, wrapped, scalped | **no transfer object exists**, on either lane. The only way in is to pay the curve and the only way out is to sell back to it; the MRC-20 facade is ERC-20's read half with the curve where its transfer half would be, and `supportsInterface(ERC-20) == false` (Decision 5; [0089](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md)) |
@@ -81,11 +83,11 @@ supports: usage is the input, the pair is the meter, and the price is the readin
 the line**: the artifact of a new version ahead of its promotion — a window the fold *enforces*,
 refusing an early promotion rather than trusting a promise — the private beta, experimental modes, the developer's own room, a voice in what ships next,
 and support. The set is closed at the fold and contains **nothing that pays**: no share, no
-rebate, no discount in MSK, no claim on the reserve, and an unknown grant bit is *refused*, not
+rebate, no discount in BILI, no claim on the reserve, and an unknown grant bit is *refused*, not
 stored and ignored. **A grant is a service or it is not a grant.** What is bought is access to
 what the model can do; what is not bought is anyone else's income.
 
-The one place a holder may legitimately be paid MSK by a line is the contributor share of an
+The one place a holder may legitimately be paid BILI by a line is the contributor share of an
 adopted **proposal** ([0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md)
 Decision 8) — pay for work that was adopted, open to holders and non-holders alike, not scaled to
 units and not owed to anyone for holding.
@@ -139,8 +141,8 @@ verdict.
 
 ## 2. The requirement
 
-A per-class position with a fixed supply, bought from a protocol-owned curve in MSK and sold
-back to it, never moved between holders; every trade burns 5 % of its MSK leg and pays 1 % to
+A per-class position with a fixed supply, bought from a protocol-owned curve in BILI and sold
+back to it, never moved between holders; every trade burns 5 % of its BILI leg and pays 1 % to
 the class's registrant; the whole is supply-neutral except for the burn; every balance and every
 price is a function of the chain alone. As first written, a position granted nothing but the
 right to sell it back: no weight, no vote, no seat, no fee discount, no bond — so its price is
@@ -165,11 +167,11 @@ issued more room than another — the operator's example, and the number this AD
 the tests. The state root covers markets and positions (state v21).
 
 **Decision 2 — the curve is constant-product over the reserve plus a virtual reserve, and the
-curve is the only counterparty.** A market opens with the whole supply in the curve and no MSK:
+curve is the only counterparty.** A market opens with the whole supply in the curve and no BILI:
 `(msk_reserve + V) × position_units = K`, `K` fixed at opening as `V × supply`, where
 `PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1 = V` is a network constant that sets the first position's
 price (`V / supply`) and the curve's steepness. No liquidity provider, no pool token, no pair
-other than MSK↔class, no market a user can create: the market of a class is opened by the fold
+other than BILI↔class, no market a user can create: the market of a class is opened by the fold
 when the class is registered (post-genesis) or when this rule activates (genesis classes).
 The price at any moment is `(msk_reserve + V) / position_units`; there is no other price.
 
@@ -179,13 +181,13 @@ min_units_out }` and `PalwModelSellV1 { class_id, holder, units_in, min_msk_out 
 class market's sink — a consensus-recognised, provably unspendable output the fold credits to
 `msk_reserve`; the fold computes `units_out` from the curve over the NET leg and credits the
 holder, refusing the object when `units_out < min_units_out`. A sell is signed by the holder's
-key; the fold debits `units_in`, computes the gross MSK leg from the curve, and writes a
+key; the fold debits `units_in`, computes the gross BILI leg from the curve, and writes a
 `PalwPayoutV2 { payload: holder, amount: net }` the coinbase honours, refusing the object when
 `net < min_msk_out`. The reserve never sits in a spendable output: it is an accounting entry
 funded by sinks and drained by coinbase payouts, exactly as escrowed rewards are today.
 
-**Decision 4 — the fee is on the MSK leg of every move, split three ways, and the split is
-the operator's.** Of a gross MSK leg `m`: `burn = 5 % of m`, never paid to anyone and subtracted
+**Decision 4 — the fee is on the BILI leg of every move, split three ways, and the split is
+the operator's.** Of a gross BILI leg `m`: `burn = 5 % of m`, never paid to anyone and subtracted
 from supply; `registrant = 1 % of m`, a `PalwPayoutV2` to the class's `registrant_bond`'s
 `payout_payload`, or burned as well when the class has no registrant (a genesis class); the
 remaining `94 %` is the net leg — on a buy it enters the reserve, on a sell it is paid out.
@@ -341,11 +343,11 @@ misakaoptions.com) reads the market over wRPC and the EVM windows, and offers on
 
 * The virtual reserve `V` and the supply constant: numbers the operator sets when the flag is
   armed; the tests carry the operator's example.
-* Whether a registrant may seed its market with MSK at opening (a curve with a non-zero
+* Whether a registrant may seed its market with BILI at opening (a curve with a non-zero
   starting reserve); not needed for the curve to work.
 * Any on-chain human-preference or usage metric beyond what the fold already counts.
 * Any incentive to migrate holders to a successor class.
-* Whether burned MSK is reported against the premine cap in the explorer (the cap binds
+* Whether burned BILI is reported against the premine cap in the explorer (the cap binds
   genesis; burns only lower supply).
 
 ## 9. Number hygiene

@@ -1,5 +1,7 @@
 # ADR-0124 — The panel is paid out of the claim's reward, a seat holds exposure, and a claim is paid for the compute it certifies
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -15,7 +17,7 @@
   carve of the subsidy, escrowed at the accepting block and named at `Final`, never minted before),
   [0045](0045-palw-class-economy-on-chain.md) Decision 1 (`pwu` has one legal value) and Decision 3
   (the share table is chain state), [0061](0061-zero-seat-genesis-and-right-sized-collateral.md)
-  Decision 2 (10,000 MSK per genesis seat), [0065](0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md)
+  Decision 2 (10,000 BILI per genesis seat), [0065](0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md)
   Decision 4 (`Unavailable` abstains), [0069](0069-e2e-adjudicability-is-the-price-of-weight.md)
   Decision 7 (an uncertified class bears no weight — the classes that set the unit are the ones that
   bear weight), [0076](0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md)
@@ -69,13 +71,13 @@ the escrow the accepting block already withheld. Below the fences nothing change
 >
 > 必要 exposure を満たした eligible bond ↓ 1 operator = 1 ticket に戻す考えもあります。
 >
-> mainnet では Miner 10000 MSK、panel 100000 MSK で固定して。
+> mainnet では Miner 10000 BILI、panel 100000 BILI で固定して。
 >
 > 小さいモデルと大きいモデルで同じ 1 claim 1 ブロックだと圧倒的に小さいモデルが有利な点を改善する。
-> … MSK / canonical compute を揃えられます。
+> … BILI / canonical compute を揃えられます。
 
-*(2026-09-24, `a3c5db22`: the user raised the two mainnet figures to Miner 13,000 MSK and panel
-130,000 MSK. Decision 4 and §9 state the current values.)*
+*(2026-09-24, `a3c5db22`: the user raised the two mainnet figures to Miner 13,000 BILI and panel
+130,000 BILI. Decision 4 and §9 state the current values.)*
 
 Two further parts of the operator's design — a Panel share derived from verification cost
 (10–30 %) and a Panel reward proportional to a per-model verification cost — are recorded in §9 as
@@ -102,18 +104,18 @@ off the licensing object's receipts is a reward the assembler distributes.
 `reserved_exposure` is moved by the producer's claim, by registrations and by accusers and
 challengers; the `PanelBound` fold writes the panel record, the phase and a deadline. A seat's stake
 on a claim was therefore a *balance it happened to hold* — the deep fence made the dissent slash
-`claim.reserved`, but a bond with `min_collateral` (0.004 MSK on testnet-11) risked at most that,
+`claim.reserved`, but a bond with `min_collateral` (0.004 BILI on testnet-11) risked at most that,
 and the draw's eligibility read the same floor a producer reads.
 
 ### 2.3 One claim, one carve, whatever the model
 
-Every attempt block withholds the same carve (62 % of its subsidy: 2,756.28 MSK on testnet-11) and
+Every attempt block withholds the same carve (62 % of its subsidy: 2,756.28 BILI on testnet-11) and
 every `Final` names it whole. ADR-0076 seeds each class's target from `share × pwu_per_inference`
 so that, *at the seed*, a heavier class wins more often per forward and the pwu a block costs is
 the same for every class at equal share. That equalisation lives in the lottery. Where the lottery
 no longer rations — a class at its budget with a target at or near saturation, which is where
 ADR-0117's one-forward draw and ADR-0123's release take a class — every forward is a block, and one
-block pays the same 2,756 MSK whether the forward was 7,708 leaves or 2.7 million. The operator's
+block pays the same 2,756 BILI whether the forward was 7,708 leaves or 2.7 million. The operator's
 sentence is this regime: "同じ 1 claim 1 ブロックだと圧倒的に小さいモデルが有利".
 
 ADR-0038 Decision D refused a cross-class pwu price because a *hand-set* table is a standing
@@ -183,7 +185,7 @@ covers the reservation.** `PALW_PANEL_COLLATERAL_MULTIPLE_V1 = 10`; the seat flo
 — the same ceiling every other reservation on the bond lives under, so the collateral behind a claim
 a bond produces cannot double as the collateral behind a claim it judges ("reserved collateral は
 同時 job 間で共有不可"). One rule, and the operator's mainnet numbers fall out of it: a card whose
-producer floor is 13,000 MSK draws seats from bonds holding 130,000 MSK (10,000 / 100,000 until
+producer floor is 13,000 BILI draws seats from bonds holding 130,000 BILI (10,000 / 100,000 until
 `a3c5db22`, 2026-09-24; §9 records what the card's producer floor is today). `palw_seatable_operators_v1` — the operator warning — counts against the
 same floor, so the warning cannot drift from the draw.
 
@@ -233,10 +235,10 @@ height or not at all (§8).
 
 ## 4. The numbers (pinned in `palw_panel_economy_v1.rs`)
 
-testnet-11's attempt escrow is 62 % of the 4,445.62 MSK block: **275,628,448,680 sompi**
-(2,756.28 MSK). A five-seat panel, no pair on the line:
+testnet-11's attempt escrow is 62 % of the 4,445.62 BILI block: **275,628,448,680 sompi**
+(2,756.28 BILI). A five-seat panel, no pair on the line:
 
-| | sompi | MSK |
+| | sompi | BILI |
 |---|---|---|
 | producer (80 %) | 220,502,758,944 | 2,205.03 |
 | pool (20 %) | 55,125,689,736 | 551.26 |
@@ -255,7 +257,7 @@ The shipped classes under Decision 6, with `PALW-QWEN36` (2,685,360 pwu per infe
 
 (The floor's fraction would be 0.29 %, 791,158,013 sompi; the module pins the number and the fold
 does not apply it.) The panel's pool follows the priced escrow, so a lighter class's seats are paid
-proportionally to the work they replayed — the operator's "Panel についても MSK / canonical
+proportionally to the work they replayed — the operator's "Panel についても BILI / canonical
 compute を揃えられます", with the chain's one canonical measure.
 
 ## 5. Why a height and not an edit
@@ -368,12 +370,12 @@ past it are under Decisions 2–5.
 * **Equivocation by name** (SA-3) and **the stratified draw** (SA-6).
 
 The mainnet card's producer floor IS decided, as a bundle value rather than a consensus rule: a
-card's bundle states `PALW_MAINNET_MIN_COLLATERAL_SOMPI` (13,000 MSK since `a3c5db22`, 2026-09-24;
+card's bundle states `PALW_MAINNET_MIN_COLLATERAL_SOMPI` (13,000 BILI since `a3c5db22`, 2026-09-24;
 10,000 before) as its `min_collateral_sompi` (`palw_fp_bundle_with_windows_and_floor_v3`, chosen by
-network type where the windows are), so Decision 4 yields the operator's 130,000 MSK seat floor. Its
-genesis bonds declare `max(derived, 13,000 MSK)` (`genesis_bond_collateral_for`); testnet-12 sizes
-its genesis seats by ADR-0151 D1 instead (939,063.21 MSK each). testnet-11
-and devnet keep the 0.004 MSK policy floor, and their bundles and fingerprints are byte-identical
+network type where the windows are), so Decision 4 yields the operator's 130,000 BILI seat floor. Its
+genesis bonds declare `max(derived, 13,000 BILI)` (`genesis_bond_collateral_for`); testnet-12 sizes
+its genesis seats by ADR-0151 D1 instead (939,063.21 BILI each). testnet-11
+and devnet keep the 0.004 BILI policy floor, and their bundles and fingerprints are byte-identical
 (`adr0124_the_panel_economy_and_the_work_price_are_dormant_everywhere_and_stated_on_a_card` pins
 both floors). Mainnet has not launched, so its ruleset id may move.
 

@@ -1,5 +1,7 @@
 # ADR-0107 — A class's share grows on work that reached Final, not on blocks that were accepted
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -95,8 +97,8 @@ the pinned void test.
 * **Merged work is paid before it is verified.** ADR-0058 Decision 5 pays a merged blue (and an
   entitled in-window red) its full worker share in the merging block's coinbase, with no escrow.
   Its justification was `reserved ≫ carve`, and on the shipped economy the reverse holds by many
-  orders of magnitude: a testnet-11 claim reserves on the order of 10⁻³–1 MSK against a carve of
-  ≈2,756 MSK. So a bogus merged block is not "full production price" (ADR-0056's attack table): it
+  orders of magnitude: a testnet-11 claim reserves on the order of 10⁻³–1 BILI against a carve of
+  ≈2,756 BILI. So a bogus merged block is not "full production price" (ADR-0056's attack table): it
   is paid. That is a reward rule, separate from this ADR and larger than it. It needs its own
   decision (escrow merged work to `Final` like the chain block's, or price the exposure against the
   carve).

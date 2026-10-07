@@ -1,5 +1,7 @@
 # モデルを追加する(testnet-12 / 現行 main)
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 「既存の class を使う」ことと「新しい class をチェーンに追加する」ことは別の作業です。詳しい手順の正本は [palw-add-a-model-runbook.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/palw-add-a-model-runbook.md) です。
 
 ## Existing class
@@ -91,4 +93,4 @@ producer と verifier は同じ artifact のバイト列を検証できなけれ
 
 ## Collateral
 
-必要な collateral は、class と現在の規則から CLI が導出します。testnet-12 では claim ごとに escrow + weight を予約するので、同時 1 本あたりの目安は Floor 約 6,402 MSK、8k 約 6,451 MSK、2M 約 125,888 MSK です(escrow は block の subsidy に比例します)。ノードの既定 collateral(`--palw-bond-collateral` を省略したときの値)は devnet 由来の古い weight だけの式で、Floor で約 31,191 MSK(同時 4 本)、**8k class では約 2,000,332,625 MSK と調達できない額**になります。額はいつも明示してください。実際の空きは `bond status` の `exposure_ceiling` と `reserved_exposure` で確認してください。登録済みの Bond には collateral を追加できず、同じ key では再登録できません。
+必要な collateral は、class と現在の規則から CLI が導出します。testnet-12 では claim ごとに escrow + weight を予約するので、同時 1 本あたりの目安は Floor 約 6,402 BILI、8k 約 6,451 BILI、2M 約 125,888 BILI です(escrow は block の subsidy に比例します)。ノードの既定 collateral(`--palw-bond-collateral` を省略したときの値)は devnet 由来の古い weight だけの式で、Floor で約 31,191 BILI(同時 4 本)、**8k class では約 2,000,332,625 BILI と調達できない額**になります。額はいつも明示してください。実際の空きは `bond status` の `exposure_ceiling` と `reserved_exposure` で確認してください。登録済みの Bond には collateral を追加できず、同じ key では再登録できません。

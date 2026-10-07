@@ -1,5 +1,7 @@
 # ADR-0115 — A pending transaction is announced until it lands
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 * Status: PROPOSED 2026-09-11, from the operator's report ("また購入してもトランザクションやチャートに反映されてない
   原因は" / "何回購入しても balance が減らない") and their standing instruction to put liveness first.
   **IMPLEMENTED the same day, consensus-inert**: node policy only — no validity rule, no `Params`

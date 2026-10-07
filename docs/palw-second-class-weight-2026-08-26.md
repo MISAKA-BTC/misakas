@@ -1,5 +1,7 @@
 # The second class's weight — measured, and what it decides
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 **Gate 3 of road-to-mainnet is "a second class holds weight."** This is the measurement that was
 missing, taken on 2026-08-26 against the running testnet-11 and the hardware its producers run on.
 

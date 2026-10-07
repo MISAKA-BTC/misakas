@@ -1,5 +1,7 @@
 # ADR-0137 — A block buys one unit of work from any model, and a share is a result, not an input
 
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
@@ -21,7 +23,7 @@ It keeps: the registry's lifecycle as a *verifiability* gate (ADR-0135 D6), the 
 
 **Asked (2026-09-18):** redesign "model share" itself. Anyone may register a model; a model that
 brings more real compute should hold more of the network, without a person setting `Qwen = 40 %`;
-a small and a large model must earn the same MSK per Economic CCU; share should mean *what fraction
+a small and a large model must earn the same BILI per Economic CCU; share should mean *what fraction
 of PALW compute the model actually provided*; suspect first whether share must be a lottery input
 at all; find the positive feedback, the cold-start trap and the registration Sybil; compare at
 least three designs with simulation; define "usage"; check the issuance identities; keep execution
@@ -34,7 +36,7 @@ registry's shares-from-admission hand the model classes 980 ‰ of a cadence the
 floor's class DAA hardens toward its 20 ‰, so a network that arms the registry one height and the
 work target a later one runs the cadence collapse for the gap. Armed together, from 6,001 a model
 class draws against `MAX · min(1, CCU / W₀)` with `W₀ = escrow / rate` off the block's own subsidy
-(306.25 G MAC-eq at the payout's 9 MSK a G MAC-eq, against forwards of 21–199 G), no share, model
+(306.25 G MAC-eq at the payout's 9 BILI a G MAC-eq, against forwards of 21–199 G), no share, model
 class target or epoch budget is read, the registry keeps its rows, proofs and lifecycle gate, and one
 network-wide verification budget replaces the per-class in-flight cap. The fingerprint moves from
 `135b6ee0…` to `32c2e8e3…`, and on 2026-09-18 to `8af89f85…` when the single lottery and the short challenge window (ADR-0132 S, §7.6) joined the same day; the fork id's height set does not (6,001 was already scheduled), so the
@@ -54,7 +56,7 @@ finalized work a reader computes, never a number the chain feeds back into anyon
 Notation: `CCU_m` the economic compute of one forward of class `m` (MAC-eq, derived from the graph:
 `PalwModelWorkV1::economic_ccu_per_claim`, ADR-0131); `r_m` forwards per second its producers run;
 `C_m = r_m · CCU_m` the compute it supplies; `E` the block's escrow (the worker carve of the subsidy,
-2,756.28 MSK on testnet-11); `p_m` the class ticket's probability a forward; `p_net` the network
+2,756.28 BILI on testnet-11); `p_m` the class ticket's probability a forward; `p_net` the network
 draw against `bits`; `s_m` the class share in permille.
 
 1. **The ticket** (`check_palw_class_lottery_v3`): a forward admits iff
@@ -137,7 +139,7 @@ cadence a share hands a class (`s_m · BPS`, 2.45 blocks a span at 490 ‰) is *
 capacity the share was derived from (about one claim a span for either Qwen on eight seats). So a
 class the registry admits in full overloads its own panel by construction and is HELD; the surge
 scenario (`Q36 supply × 10`) walks `ACTIVE → HELD → PROBATION` and pays Q36 `2.97` against Q25's
-`7.20` MSK per G-CCU afterwards. A bang-bang controller with a ÷20 reset is an oscillator, and the
+`7.20` BILI per G-CCU afterwards. A bang-bang controller with a ÷20 reset is an oscillator, and the
 thing it oscillates is a model's income.
 
 ### 3.3 The inverse-cost share
@@ -202,7 +204,7 @@ Register `N` classes (the same weights, `N` variants, `N` graphs a node apart). 
   diluted;
 * if admitted, share ∝ 1 / CCU (§3.3): a thousand cheap variants own the room.
 
-Cost: the registration bond (`registration_bond_per_span · window`, 1,000 MSK a span-window) —
+Cost: the registration bond (`registration_bond_per_span · window`, 1,000 BILI a span-window) —
 locked, released at reclamation. **A bond prices classes, not blocks**: it bounds how many classes
 an attacker holds, not how much cadence each one takes, and a refundable bond is an interest cost.
 It cannot close this on its own; only removing the per-class allocation does.
@@ -215,7 +217,7 @@ It cannot close this on its own; only removing the per-class allocation does.
 | **accepted CCU** | every attempt block | forgeries and no-panel claims count until they void | for a cadence census, not for money |
 | **licensed CCU** | `ReceiptLicensed` | the panel's liveness (a dead seat licenses nothing) | yes, delayed |
 | **Final CCU** | the claim's `Final` | the panel's liveness *and* the window; a HELD class finalizes nothing | yes — the strongest, the latest |
-| **paid CCU** | the payout rows | the price (Upgrade C's min) — it measures MSK, not work | no, it is the answer, not the question |
+| **paid CCU** | the payout rows | the price (Upgrade C's min) — it measures BILI, not work | no, it is the answer, not the question |
 
 **Decisions.** (a) The lottery reads none of them: a ticket is priced from `CCU_m` and `W` (§7).
 (b) Under §7 every accepted claim represents `W` of work in expectation, so `attempted CCU` becomes
@@ -232,7 +234,7 @@ enters any of it.
 |---|---|---|---|---|---|---|
 | lottery input | share → class target (DAA) | share → seat price → DAA | `CCU_m / W` | `CCU_m / W` | `CCU_m / W`, `W ≥ W₀`, one DAA over model blocks | `CCU_m / W · (1 − load)` |
 | reward a claim | `E` | `min(E, attempted · rate)` | `E` | `attempted · rate` (= `W · rate`) | `E` (and Upgrade C's formula degenerates to `E`) | `E` |
-| MSK / CCU across models | `∝ s_m / C_m` — spread 4.02 (Qwens), 169 (tiny) | equal only while uncapped; the cap trap | equal, `E / W` | equal | **equal, `0.8 · E / W`, every scenario** | unequal for capacity-bound classes (2.02) |
+| BILI / CCU across models | `∝ s_m / C_m` — spread 4.02 (Qwens), 169 (tiny) | equal only while uncapped; the cap trap | equal, `E / W` | equal | **equal, `0.8 · E / W`, every scenario** | unequal for capacity-bound classes (2.02) |
 | cold start | permanent (floor price) | seat price, then §3.2 | none needed | none | **none needed** | none |
 | Sybil by classes | cadence per class (§4) | same, for unadmitted classes | none: a block costs `W` whatever the class | none | **none; 1000 classes = 1 class** | none |
 | cadence | collapses to the models' rate / 0.98 | same | collapses without a residual floor (0.37 of 5 blocks a span) | as B | **held: the floor is the residual** | held |
@@ -270,7 +272,7 @@ at every epoch boundary:
 ```
 
 `rate_max` is the one constant a network states: the most it will ever pay for a unit of compute
-(the arming branch's `rate_sompi_per_giga`, 9 MSK per G MAC-eq, is exactly this number and needs no
+(the arming branch's `rate_sompi_per_giga`, 9 BILI per G MAC-eq, is exactly this number and needs no
 recalibration). Below `W₀ · BPS` of supply the network pays `rate_max` and the models fill
 `C / (W₀ · BPS)` of the cadence; above it `W = C / BPS`, the models fill the cadence and the rate is
 `E · BPS / C`. `W` is a fold value (computed from the epoch counters the state already keeps), not a
@@ -334,7 +336,7 @@ fork-choice-touching change (§17) and is not needed for this ADR's goals.
 
 ## 8. Issuance — what can and cannot be fixed at once
 
-Let `I` be issuance a second, `ρ_m` MSK per CCU of model `m`, `C = Σ C_m`.
+Let `I` be issuance a second, `ρ_m` BILI per CCU of model `m`, `C = Σ C_m`.
 
 1. **Equal pay:** `ρ_m = ρ` for all `m`.
 2. **Fixed issuance:** `I = const`.
@@ -354,8 +356,8 @@ time. Hence:
 
 Regimes: `I = min( rate_max · C , E · BPS )` (the floor's blocks are unpaid and complete the cadence
 in the first regime). On testnet-11 today (`C ≈ 4.5 G MAC-eq/s` verifiable, `W₀ = 306 G`) the models
-fill ~1.5 % of the cadence and issuance is `rate_max · C ≈ 40 MSK/s`; the simulation's
-`issuance/epoch` column prints it (4,032 MSK an epoch at 1 × capacity, 403 at 0.1 ×, 20,000 at 10 ×
+fill ~1.5 % of the cadence and issuance is `rate_max · C ≈ 40 BILI/s`; the simulation's
+`issuance/epoch` column prints it (4,032 BILI an epoch at 1 × capacity, 403 at 0.1 ×, 20,000 at 10 ×
 supply of the cheap class).
 
 ## 9. Fairness — the proof and the one limit
