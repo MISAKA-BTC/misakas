@@ -125,6 +125,6 @@ here (an external gate: review, measurement, real-chain drill, activation).
 1. Independent soundness review of the composition, the alias bounds and the CRT argument (RFC-0011 §15.4, ADR-0172 §6).
 2. Review of the beacon as unbiased under withholding; a transcript construction if a GKR family is ever proposed (§15.3).
 3. Cost on real models: producer, verifier, DA, court and dispute load for 9B-8k, validated long context and Kimi K3 (§15.6–15.7).
-4. Commitments are flat BLAKE2b-512 per tensor; chunked/Merkle openings would shrink court bytes (a commitment-suite extension).
+4. Node values carry row/column Merkle commitments (`merkle.rs`): a `MatMul` scalar court opens one row of X, one column of W and one row of Y (O(k + n) bytes). Other courts open the one instance they recompute; Merkle tiling of those (e.g. a long `ReduceSum`) is a further suite extension if measurements call for it.
 5. Authenticated public availability (who serves, retention, demand/default on chain) is RFC-0009 stage B / RFC-0014's DA path.
 6. Shadow comparison, the G14 drill on a real chain, audits, soak, and only then a proposal to give the fence a height.

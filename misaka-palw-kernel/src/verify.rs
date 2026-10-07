@@ -33,6 +33,7 @@ use crate::evidence::{EvidenceHeaderV1, VerificationEvidenceV1, check_evidence_v
 use crate::family::CheckerIdV1;
 use crate::field::{F89, F107, FieldElemV1, Fp, MODULI_V2};
 use crate::hash::{Digest, finish, keyed};
+use crate::merkle::TensorOpeningV1;
 use crate::plan::{PlanRelationV1, VerificationPlanV1, derived_error_bits, relation_moduli};
 use crate::trace::{EvidenceV1, ParamCommitmentsV1, SourceV1, StageBindingV1, WiringV1, const_tensor, eval_node, tensor_commitment};
 
@@ -192,9 +193,63 @@ pub struct KernelFaultProofV1 {
     pub occurrence: u16,
     pub node: u16,
     pub kind: FaultKindV1,
+    /// The whole output, inputs and history rows (every kind but a `MatMul` scalar, whose court reads [`Self::scalar`]).
     pub output: Tensor,
     pub inputs: Vec<Tensor>,
     pub prior_rows: Vec<Tensor>,
+    /// A `MatMul` scalar's compact openings: one row of the left operand, one column of the right, one row of the output.
+    pub scalar: Option<ScalarOpeningsV1>,
+}
+
+/// **A `MatMul` scalar court's whole input** (RFC-0011 §15.5's bounded localization): `Y[slice, i, j]` against
+/// `Σ_k X[slice, i, k] · W[slice, k, j]`, each operand opened as one Merkle row or column of its committed value.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ScalarOpeningsV1 {
+    /// Row `i` of the left operand's slice.
+    pub x: TensorOpeningV1,
+    /// Column `j` of the right operand's slice.
+    pub w: TensorOpeningV1,
+    /// Row `i` of the output's slice (the scalar is element `j`).
+    pub y: TensorOpeningV1,
+}
+
+impl ScalarOpeningsV1 {
+    /// Bytes a court reads.
+    pub fn byte_len(&self) -> u64 {
+        self.x.byte_len() + self.w.byte_len() + self.y.byte_len()
+    }
+}
+
+/// The leaf indices of `Y[slice, i, j]`'s operands: `(left row, right column, output row)`.
+fn scalar_leaves(
+    x_shape: &[usize],
+    w_shape: &[usize],
+    y_shape: &[usize],
+    slice: usize,
+    i: usize,
+    j: usize,
+) -> Option<(u64, u64, u64)> {
+    let (xr, wr, yr) = (x_shape.len(), w_shape.len(), y_shape.len());
+    if xr < 2 || wr < 2 || yr < 2 {
+        return None;
+    }
+    let (m, n, k) = (y_shape[yr - 2], y_shape[yr - 1], x_shape[xr - 1]);
+    if x_shape[xr - 2] != m || w_shape[wr - 2] != k || w_shape[wr - 1] != n || i >= m || j >= n || k == 0 {
+        return None;
+    }
+    let out_batch = &y_shape[..yr - 2];
+    if slice >= out_batch.iter().product::<usize>().max(1) {
+        return None;
+    }
+    let xo = slice_offset(out_batch, x_shape, slice);
+    let wo = slice_offset(out_batch, w_shape, slice);
+    Some(((xo / k + i) as u64, ((wo / (k * n)) * n + j) as u64, (slice * m + i) as u64))
+}
+
+/// **The compact openings of `Y[slice, i, j]`** from the full values (the verifier that found the fault holds them).
+pub fn scalar_openings_v1(x: &Tensor, w: &Tensor, y: &Tensor, slice: u64, i: u64, j: u64) -> Option<ScalarOpeningsV1> {
+    let (xr, wc, yr) = scalar_leaves(&x.shape, &w.shape, &y.shape, slice as usize, i as usize, j as usize)?;
+    Some(ScalarOpeningsV1 { x: TensorOpeningV1::row(x, xr)?, w: TensorOpeningV1::col(w, wc)?, y: TensorOpeningV1::row(y, yr)? })
 }
 
 /// What a scope's check cost (RFC-0007 §V.8 asks for it, measured).
@@ -264,6 +319,21 @@ impl Ctx<'_> {
             }
             _ => self.w.source_commitment(self.c.trace, src).ok_or("a node outside the evidence")? == tensor_commitment(t),
         })
+    }
+
+    /// The commitment a source names (a const's is recomputed from the program).
+    fn commitment_of(&self, src: &SourceV1) -> Result<Digest, String> {
+        match src {
+            SourceV1::Const(j) => const_tensor(self.c.program, *j).map(|c| tensor_commitment(&c)).map_err(|e| e.to_string()),
+            SourceV1::Param { index, layer } => self
+                .c
+                .params
+                .by_instance
+                .get(&(*index, *layer))
+                .copied()
+                .ok_or(format!("no commitment for param {index} layer {layer:?}")),
+            _ => self.w.source_commitment(self.c.trace, src).ok_or_else(|| "a node outside the evidence".to_string()),
+        }
     }
 
     fn open(&self, m: &dyn MaterialV1, src: &SourceV1) -> Result<Tensor, ScopeVerdictV1> {
@@ -640,14 +710,21 @@ fn check_instance(
         .map(|src| ctx.open(m, src))
         .collect::<Result<Vec<_>, _>>()?;
     let fault = |kind| {
+        // A MatMul scalar is proved by three Merkle openings, never by the three tensors.
+        let scalar = match kind {
+            FaultKindV1::MatMulScalar { slice, i, j } => scalar_openings_v1(&inputs[0], &inputs[1], &output, slice, i, j),
+            _ => None,
+        };
+        let compact = scalar.is_some();
         ScopeVerdictV1::Fault(Box::new(KernelFaultProofV1 {
             position: p,
             occurrence: s,
             node: n,
             kind,
-            output: output.clone(),
-            inputs: inputs.clone(),
-            prior_rows: prior.clone(),
+            output: if compact { Tensor::zeros(output.dtype, &[0]) } else { output.clone() },
+            inputs: if compact { Vec::new() } else { inputs.clone() },
+            prior_rows: if compact { Vec::new() } else { prior.clone() },
+            scalar,
         }))
     };
     if !ctx.well_typed(s, p, n, &output) {
@@ -738,6 +815,9 @@ pub fn verify_fault_proof_v1(c: &ClaimContextV1<'_>, proof: &KernelFaultProofV1)
     }
     let node = ctx.w.node(s, n);
     let na = DismissalV1::NotAuthentic;
+    if let FaultKindV1::MatMulScalar { slice, i, j } = proof.kind {
+        return scalar_court(&ctx, proof, (slice, i, j));
+    }
     let check = |src: &SourceV1, t: &Tensor, what: &str| -> Result<(), DismissalV1> {
         match ctx.authentic(src, t) {
             Ok(true) => Ok(()),
@@ -770,26 +850,49 @@ pub fn verify_fault_proof_v1(c: &ClaimContextV1<'_>, proof: &KernelFaultProofV1)
             Ok(v) if v == proof.output => Err(DismissalV1::NoFault),
             _ => Ok(convicted),
         },
-        FaultKindV1::MatMulScalar { slice, i, j } => {
-            if !matches!(node.prim, Prim::MatMul) {
-                return Err(na("a MatMul scalar fault on another primitive".into()));
-            }
-            let y = &proof.output;
-            let r = y.shape.len();
-            let (m, nn) = (y.shape[r - 2], y.shape[r - 1]);
-            let slices: usize = y.shape[..r - 2].iter().product();
-            if slice as usize >= slices || i as usize >= m || j as usize >= nn {
-                return Err(na("the scalar is outside the product".into()));
-            }
-            let claimed = y.data[slice as usize * m * nn + i as usize * nn + j as usize];
-            // The exact integer under the reference semantics: a refused sum (an overflow) convicts any committed value.
-            if matmul_scalar(&proof.inputs[0], &proof.inputs[1], &y.shape, y.dtype, slice as usize, i as usize, j as usize)
-                == Some(claimed)
-            {
-                Err(DismissalV1::NoFault)
-            } else {
-                Ok(convicted)
-            }
+        FaultKindV1::MatMulScalar { .. } => Err(na("unreachable: a scalar is tried by its own court".into())),
+    }
+}
+
+/// **The `MatMul` scalar court**: three Merkle openings authenticated against the committed operands and output, and one exact
+/// dot product under the reference semantics.
+fn scalar_court(ctx: &Ctx<'_>, proof: &KernelFaultProofV1, (slice, i, j): (u64, u64, u64)) -> Result<ConvictionV1, DismissalV1> {
+    let na = DismissalV1::NotAuthentic;
+    let c = ctx.c;
+    let (p, s, n) = (proof.position, proof.occurrence, proof.node);
+    let node = ctx.w.node(s, n);
+    if !matches!(node.prim, Prim::MatMul) {
+        return Err(na("a MatMul scalar fault on another primitive".into()));
+    }
+    let o = proof.scalar.as_ref().ok_or_else(|| na("a MatMul scalar fault without its openings".into()))?;
+    let src = |idx: usize| ctx.w.input_source(c.tokens, p, s, n, idx).map_err(|e| na(e.to_string()));
+    let cm = |src: &SourceV1| ctx.commitment_of(src).map_err(na);
+    let out_src = SourceV1::Node { position: p, occurrence: s, node: n };
+    for (opening, commitment, what) in [
+        (&o.x, cm(&src(0)?)?, "the left operand's row"),
+        (&o.w, cm(&src(1)?)?, "the right operand's column"),
+        (&o.y, cm(&out_src)?, "the output's row"),
+    ] {
+        if !opening.authenticates(&commitment) {
+            return Err(na(format!("{what} is not an opening of the committed value")));
         }
     }
+    let shape = |t: &TensorOpeningV1| t.shape_usize().ok_or_else(|| na("a shape past usize".into()));
+    let (xs, ws, ys) = (shape(&o.x)?, shape(&o.w)?, shape(&o.y)?);
+    let out_dtype = o.y.dtype().ok_or_else(|| na("an unknown dtype".into()))?;
+    let convicted = ConvictionV1 { position: p, occurrence: s, node: n, kind: proof.kind.clone() };
+    // The committed output has another type than the node declares: malformed, whatever the arithmetic.
+    if out_dtype != node.out.dtype || ys != node.out.resolve(ctx.w.h(s, p)) {
+        return Ok(ConvictionV1 { kind: FaultKindV1::Malformed, ..convicted });
+    }
+    let (xr, wc, yr) = scalar_leaves(&xs, &ws, &ys, slice as usize, i as usize, j as usize)
+        .ok_or_else(|| na("the scalar is outside the product".into()))?;
+    if (o.x.axis, o.x.index, o.w.axis, o.w.index, o.y.axis, o.y.index)
+        != (crate::merkle::AXIS_ROW, xr, crate::merkle::AXIS_COL, wc, crate::merkle::AXIS_ROW, yr)
+    {
+        return Err(na("the openings are not the row, column and row this scalar reads".into()));
+    }
+    let claimed = o.y.values[j as usize];
+    let exact = exact_sum(o.x.values.iter().zip(&o.w.values).map(|(a, b)| a.checked_mul(*b)), out_dtype);
+    if exact == Some(claimed) { Err(DismissalV1::NoFault) } else { Ok(convicted) }
 }

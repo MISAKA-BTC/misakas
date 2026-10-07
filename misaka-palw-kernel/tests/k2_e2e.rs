@@ -10,6 +10,7 @@ use misaka_palw_kernel::challenge::ChallengeBindingV1;
 use misaka_palw_kernel::check::{check_plan_v1, registration_outcome_v1};
 use misaka_palw_kernel::descriptor::{KernelScheduleV1, KernelStatusV1, builtin_schedule_v1, k2_tir_v1_descriptor};
 use misaka_palw_kernel::family::{CheckerIdV1, ConstraintFamilyV1};
+use misaka_palw_kernel::merkle::TensorOpeningV1;
 use misaka_palw_kernel::outcome::{CoverageBucketV1, CoverageEvidenceV1, RegistrationOutcomeV1};
 use misaka_palw_kernel::plan::plan_for_tir_program_v1;
 use misaka_palw_kernel::trace::TraceV1;
@@ -155,13 +156,25 @@ fn a_false_matmul_scalar_is_found_by_freivalds_localized_and_convicted_by_the_pu
     let honest_material = TraceMaterialV1 { trace: &c.trace, params: &c.params };
     let (_, honest_court) = c.verify_with(&c.trace, &honest_material);
     let mut false_accusation = (*proof).clone();
-    false_accusation.output = c.trace.values[at.0 as usize][at.1 as usize][at.2 as usize].clone();
+    let honest_y = &c.trace.values[at.0 as usize][at.1 as usize][at.2 as usize];
+    let o = false_accusation.scalar.as_mut().expect("a MatMul scalar is proved by its openings");
+    o.y = TensorOpeningV1::row(honest_y, o.y.index).unwrap();
     assert_eq!(honest_court(&false_accusation).unwrap_err(), DismissalV1::NoFault);
 
-    // A proof whose openings are not the committed values is not authentic.
+    // The court reads three openings, not three tensors.
+    let o = proof.scalar.as_ref().unwrap();
+    assert!(proof.inputs.is_empty() && proof.output.data.is_empty());
+    let k = o.x.values.len() as u64;
+    assert!(o.byte_len() < 64 * (k + 64), "a scalar court is O(k) bytes plus paths: {}", o.byte_len());
+
+    // Openings that are not of the committed values are not authentic.
     let mut forged = (*proof).clone();
-    bump(&mut forged.inputs[0], 0);
+    forged.scalar.as_mut().unwrap().x.values[0] += 1;
     assert!(matches!(court(&forged), Err(DismissalV1::NotAuthentic(_))));
+    let mut moved = (*proof).clone();
+    let m = moved.scalar.as_mut().unwrap();
+    m.x = m.y.clone();
+    assert!(matches!(court(&moved), Err(DismissalV1::NotAuthentic(_))), "an opening of another value");
 }
 
 #[test]

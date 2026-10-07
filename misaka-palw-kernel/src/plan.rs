@@ -281,8 +281,14 @@ pub(crate) fn relation_costs(rel: &PlanRelationV1, window_rows: u64, row_bytes: 
             let moduli = relation_moduli(rel).unwrap_or(crate::field::MODULI_V2.len()) as u128;
             let per_rep =
                 moduli * d.batch as u128 * (d.k as u128 * d.n as u128 + d.m as u128 * d.k as u128 + d.m as u128 * d.n as u128);
-            // The court opens the three tensors (flat commitments) and computes one dot product.
-            (reads + rel.repetitions as u128 * per_rep, in_bytes + out_bytes, reads as u64 + d.k)
+            // The court opens one Merkle row of X (k elements), one column of W (k), one row of Y (n), each with its path and the
+            // other root, and computes one dot product: O(k + n) bytes whatever the product's size.
+            let wd = |i: usize| rel.in_dtypes.get(i).map(|t| width(*t)).unwrap_or(16);
+            let (rows, cols) = (d.batch.saturating_mul(d.m), d.batch.saturating_mul(d.n));
+            let path = |leaves: u64| (crate::merkle::depth(leaves) as u128 + 1) * 64 + 96;
+            let court_bytes = d.k as u128 * (wd(0) + wd(1)) + d.n as u128 * width(rel.out_dtype) + 2 * path(rows) + path(cols);
+            let court_work = d.k + 3 * (crate::merkle::depth(rows.max(cols)) + 1);
+            (reads + rel.repetitions as u128 * per_rep, court_bytes, court_work)
         }
         (CheckerIdV1::StateContinuity, _) => {
             // The window's prior rows are opened from earlier positions' committed rows.

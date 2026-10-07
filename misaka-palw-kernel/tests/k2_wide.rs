@@ -14,6 +14,7 @@ use misaka_palw_kernel::descriptor::{
 };
 use misaka_palw_kernel::family::{CheckerIdV1, ConstraintFamilyV1};
 use misaka_palw_kernel::field::{F107, Fp};
+use misaka_palw_kernel::merkle::TensorOpeningV1;
 use misaka_palw_kernel::outcome::RegistrationOutcomeV1;
 use misaka_palw_kernel::plan::{dense_moduli_v2, relation_moduli};
 use misaka_palw_kernel::verify::{ClaimVerdictV1, FaultKindV1, ScopeV1, TraceMaterialV1};
@@ -118,7 +119,8 @@ fn a_lie_that_aliases_to_zero_mod_2_127_minus_1_is_caught_by_the_second_modulus(
     // The honest claim, accused of the same scalar, is dismissed.
     let (_, honest_court) = c.verify_with(&c.trace, &TraceMaterialV1 { trace: &c.trace, params: &c.params });
     let mut accusation = (*proof).clone();
-    accusation.output = c.trace.values[at.0 as usize][at.1 as usize][at.2 as usize].clone();
+    let o = accusation.scalar.as_mut().expect("a MatMul scalar is proved by its openings");
+    o.y = TensorOpeningV1::row(&c.trace.values[at.0 as usize][at.1 as usize][at.2 as usize], o.y.index).unwrap();
     assert!(honest_court(&accusation).is_err());
 }
 

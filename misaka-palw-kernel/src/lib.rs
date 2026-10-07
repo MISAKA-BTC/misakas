@@ -58,9 +58,9 @@
 //! * **Not a soundness review.** The error bound is the Freivalds/union-bound arithmetic of this suite
 //!   under its stated assumptions (post-commit unbiased beacon, BLAKE2b-512 binding). The independent
 //!   review of the composition and of the beacon (see [`beacon`]) and the Panel/DA analyses RFC-0011 §15.3–§15.4 require are open.
-//! * **Flat commitments.** A node value is committed by one BLAKE2b-512 over its canonical bytes, so a
-//!   fault proof opens the whole tensors of one relation. Chunked (Merkle) openings would shrink the
-//!   court's bytes; their cost is reported, not hidden ([`plan::PlanBudgetsV1`]).
+//! * **Row/column Merkle commitments** ([`merkle`]). A `MatMul` scalar court opens one row of `X`, one column of `W` and one
+//!   row of `Y` with their paths — `O(k + n)` bytes. Every other court still opens the whole instance it recomputes (one
+//!   primitive's inputs and output); their worst cost is declared and bounded, not hidden ([`plan::PlanBudgetsV1`]).
 
 pub mod assurance;
 pub mod beacon;
@@ -73,6 +73,7 @@ pub mod field;
 pub mod hash;
 pub mod improve;
 pub mod lifecycle;
+pub mod merkle;
 pub mod outcome;
 pub mod pipeline;
 pub mod plan;

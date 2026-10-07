@@ -28,21 +28,15 @@ use misaka_palw_tir::{DType, ParamSource, Prim, Tensor, TirError, TirResult};
 
 use crate::hash::{Digest, finish, keyed};
 
-pub const TENSOR_COMMITMENT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/tensor/v1";
 pub const EVIDENCE_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/evidence/v1";
 pub const OUTPUT_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/output/v1";
 pub const PARAM_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/params/v1";
 pub const STATE_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/state-root/v1";
 
-/// `H(dtype ‖ rank ‖ dims ‖ canonical little-endian elements)`.
+/// A node value's commitment: the row/column Merkle commitment of [`crate::merkle`] (dtype, shape, row root, column
+/// root), so a court can open one row or one column against it as well as the whole tensor.
 pub fn tensor_commitment(t: &Tensor) -> Digest {
-    let mut s = keyed(TENSOR_COMMITMENT_DOMAIN_V1);
-    s.update(&[t.dtype.tag(), t.shape.len() as u8]);
-    for d in &t.shape {
-        s.update(&(*d as u64).to_le_bytes());
-    }
-    s.update(&t.to_le_bytes());
-    finish(s)
+    crate::merkle::tensor_commitment_v2(t)
 }
 
 /// The commitment of every param instance the artifact holds: `(param, layer) → commitment`.

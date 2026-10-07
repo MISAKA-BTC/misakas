@@ -117,8 +117,9 @@ impl KernelDescriptorV1 {
 /// for this reference kernel, named by this string until an RFC section pins the bytes.
 pub const K2_TIR_V1_SEMANTICS: &[u8] = b"misaka-palw-kernel K2-TIR-v1: PALW-TIR v1 semantics (RFC-0002 Part I, PRIM_SET_ID_V1); \
 exact recompute for structure, exact-arithmetic, quant-range, nonlinear and selection; Freivalds over GF(2^127-1) with post-commit \
-vectors for MatMul up to an i64 accumulator; state continuity by wiring for StateWrite/HistAppend; flat BLAKE2b-512 node commitments; \
-instance-recompute and matmul-scalar courts";
+vectors for MatMul up to an i64 accumulator; state continuity by wiring for StateWrite/HistAppend; row/column Merkle node \
+commitments (BLAKE2b-512); instance-recompute and matmul-scalar courts, the latter opening one row of X, one column of W and one \
+row of Y";
 
 /// **K2-TIR-v1**: the first reference kernel — every PALW-TIR v1 family except media pipelines.
 pub fn k2_tir_v1_descriptor() -> KernelDescriptorV1 {
@@ -135,7 +136,7 @@ pub fn k2_tir_v1_descriptor() -> KernelDescriptorV1 {
         constraint_set_id: 1,
         arithmetic_id: 1,
         memory_model_id: 1,
-        commitment_suite_id: 1,
+        commitment_suite_id: 2,
         checker_suite_id: 1,
         challenge_policy_id: 1,
         court_suite_id: 1,

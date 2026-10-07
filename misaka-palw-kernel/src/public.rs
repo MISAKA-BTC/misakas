@@ -32,7 +32,7 @@ use crate::outcome::{CoverageBucketV1, RegistrationOutcomeV1};
 use crate::plan::{VerificationPlanV1, dtype_of_tag};
 use crate::trace::{EvidenceV1, ParamCommitmentsV1, tensor_commitment};
 use crate::verify::{
-    ClaimContextV1, ConvictionV1, DismissalV1, FaultKindV1, KernelFaultProofV1, MaterialV1, ScopeV1, ScopeVerdictV1,
+    ClaimContextV1, ConvictionV1, DismissalV1, FaultKindV1, KernelFaultProofV1, MaterialV1, ScalarOpeningsV1, ScopeV1, ScopeVerdictV1,
     verify_fault_proof_v1, verify_scope_v1,
 };
 
@@ -186,6 +186,8 @@ pub struct FaultProofWireV1 {
     pub output: TensorWireV1,
     pub inputs: Vec<TensorWireV1>,
     pub prior_rows: Vec<TensorWireV1>,
+    /// A `MatMul` scalar's three Merkle openings (its whole court input).
+    pub openings: Option<ScalarOpeningsV1>,
 }
 
 impl FaultProofWireV1 {
@@ -204,6 +206,7 @@ impl FaultProofWireV1 {
             output: TensorWireV1::of(&p.output),
             inputs: p.inputs.iter().map(TensorWireV1::of).collect(),
             prior_rows: p.prior_rows.iter().map(TensorWireV1::of).collect(),
+            openings: p.scalar.clone(),
         }
     }
 
@@ -227,6 +230,7 @@ impl FaultProofWireV1 {
             output: self.output.decode()?,
             inputs: all(&self.inputs)?,
             prior_rows: all(&self.prior_rows)?,
+            scalar: self.openings.clone(),
         })
     }
 }
