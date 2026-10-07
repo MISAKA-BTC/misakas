@@ -404,7 +404,8 @@ async fn daemon_cleaning_test() {
 ///
 /// A testnet-12 daemon that dials nobody (no DNS seeding, no peers, outbound target 0) answers over
 /// gRPC with the shadow of its own genesis tip: the eight genesis cards as seats, the default display
-/// the uncredited ramp (ρ 10 … 1000 at q 0), and that answer is EXACTLY the service's builder
+/// the F-L schedule testnet-12's params arm (ρ = 10 credited at the DAA-1,700 flag day, ρ 25 … 1000
+/// appended by int-11's) — never v1's reference ramp — and that answer is EXACTLY the service's builder
 /// applied to the consensus read taken in-process on the same tip — the request parse, the
 /// processor's read, the builder and both gRPC conversions agree, field for field. Named steps are
 /// priced as named (v1's reference ramp at q 143‰: credited, and with nothing measured every step
@@ -431,7 +432,17 @@ async fn daemon_palw_capacity_shadow_round_trips_on_a_testnet12_node() {
         outbound_target: 0,
         ..Default::default()
     };
-    let max_block_mass = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12)).max_block_mass;
+    let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+    let max_block_mass = t12.max_block_mass;
+    // The default display: the schedule the params arm (the shadow's contract, `palw_capacity_display_steps_v1`).
+    let armed: Vec<(u32, u32)> = t12
+        .palw_capacity_aggregate_liability
+        .as_ref()
+        .expect("testnet-12 arms F-L (the DAA-1,700 flag day)")
+        .steps
+        .iter()
+        .map(|s| (s.rho, u32::from(s.q_credit_permille)))
+        .collect();
     let total_fd_limit = 10;
     let mut kaspad = Daemon::new_random_with_args(args, total_fd_limit);
     let consensus_manager =
@@ -457,11 +468,21 @@ async fn daemon_palw_capacity_shadow_round_trips_on_a_testnet12_node() {
     assert!(answer.claims.is_empty() && answer.claims_total == 0, "no claim at genesis");
     assert_eq!(
         answer.steps.iter().map(|s| (s.step.rho, s.step.q_credit_permille)).collect::<Vec<_>>(),
-        vec![(10, 0), (25, 0), (50, 0), (100, 0), (1000, 0)],
-        "the default display is the uncredited ramp, never the reference one"
+        armed,
+        "the default display is the schedule the params arm, never the reference one"
     );
-    assert!(answer.steps.iter().all(|s| !s.seat_credit && !s.q_alarm));
-    assert!(answer.summary.starts_with("capacity-shadow: daa=") && answer.summary.contains("N13k[ρ@q‰]=10@0:"), "{}", answer.summary);
+    assert!(answer.steps.iter().all(|s| s.step.q_credit_permille != 143), "never v1's reference credit");
+    for s in &answer.steps {
+        let q = u16::try_from(s.step.q_credit_permille).unwrap();
+        assert_eq!(s.seat_credit, kaspa_consensus_core::palw_capacity_formulas_v1::palw_capacity_seat_credit_liab_v1(q));
+        assert_eq!(s.q_alarm_unmeasured, q > 0, "on a chain with no claims a credit nobody measured alarms, and only a credit");
+    }
+    let (rho0, q0) = armed[0];
+    assert!(
+        answer.summary.starts_with("capacity-shadow: daa=") && answer.summary.contains(&format!("N13k[ρ@q‰]={rho0}@{q0}:")),
+        "{}",
+        answer.summary
+    );
     assert_eq!(answer.reference_escrow_sompi, "0", "the genesis point carries no subsidy, so no claim's E yet");
 
     // Named: the reference ramp, one bond's row, and that bond as an O-3 adversary.

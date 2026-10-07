@@ -7,7 +7,7 @@ use std::{
 };
 
 use duration_string::DurationString;
-use futures_util::future::{join_all, try_join_all};
+use futures_util::future::join_all;
 use itertools::Itertools;
 use kaspa_addressmanager::{AddressManager, NetAddress};
 use kaspa_core::{debug, info, warn};
@@ -21,6 +21,7 @@ use tokio::{
         Mutex as TokioMutex,
         mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     },
+    task::JoinHandle,
     time::{MissedTickBehavior, interval},
 };
 
@@ -34,6 +35,9 @@ pub struct ConnectionManager {
     connection_requests: TokioMutex<HashMap<SocketAddr, ConnectionRequest>>,
     force_next_iteration: UnboundedSender<()>,
     shutdown_signal: SingleTrigger,
+    /// The event loop, joined by [`ConnectionManager::stop`]: the loop owns an `Arc` of the manager (and through its
+    /// adaptor, the flow context and everything that holds), so a shutdown is complete only once it has exited.
+    event_loop: ParkingLotMutex<Option<JoinHandle<()>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -67,15 +71,17 @@ impl ConnectionManager {
             connection_requests: Default::default(),
             force_next_iteration: tx,
             shutdown_signal: SingleTrigger::new(),
+            event_loop: ParkingLotMutex::new(None),
             dns_seeders,
             default_port,
         });
-        manager.clone().start_event_loop(rx);
+        let handle = manager.clone().start_event_loop(rx);
+        *manager.event_loop.lock() = Some(handle);
         manager.force_next_iteration.send(()).unwrap();
         manager
     }
 
-    fn start_event_loop(self: Arc<Self>, mut rx: UnboundedReceiver<()>) {
+    fn start_event_loop(self: Arc<Self>, mut rx: UnboundedReceiver<()>) -> JoinHandle<()> {
         let mut ticker = interval(Duration::from_secs(30));
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         tokio::spawn(async move {
@@ -84,13 +90,19 @@ impl ConnectionManager {
                     break;
                 }
                 select! {
-                    _ = rx.recv() => self.clone().handle_event().await,
-                    _ = ticker.tick() => self.clone().handle_event().await,
+                    _ = rx.recv() => {}
+                    _ = ticker.tick() => {}
+                    _ = self.shutdown_signal.listener.clone() => break,
+                }
+                // An iteration — DNS seeding included, whose lookups can take seconds — is cut short by a shutdown, so
+                // nothing it holds outlives `stop`.
+                select! {
+                    _ = self.clone().handle_event() => {}
                     _ = self.shutdown_signal.listener.clone() => break,
                 }
             }
             debug!("Connection manager event loop exiting");
-        });
+        })
     }
 
     async fn handle_event(self: Arc<Self>) {
@@ -106,11 +118,18 @@ impl ConnectionManager {
     pub async fn add_connection_request(&self, address: SocketAddr, is_permanent: bool) {
         // If the request already exists, it resets the attempts count and overrides the `is_permanent` setting.
         self.connection_requests.lock().await.insert(address, ConnectionRequest::new(is_permanent));
-        self.force_next_iteration.send(()).unwrap(); // We force the next iteration of the connection loop.
+        // We force the next iteration of the connection loop (after a shutdown there is none, and nothing to force).
+        let _ = self.force_next_iteration.send(());
     }
 
+    /// **Stop the manager and wait for its event loop to exit**: once this returns the loop, and any iteration it was in,
+    /// holds nothing (a DNS lookup still running on the blocking pool owns only the seeder's name).
     pub async fn stop(&self) {
-        self.shutdown_signal.trigger.trigger()
+        self.shutdown_signal.trigger.trigger();
+        let handle = self.event_loop.lock().take();
+        if let Some(handle) = handle {
+            let _ = handle.await;
+        }
     }
 
     async fn handle_connection_requests(self: &Arc<Self>, peer_by_address: &HashMap<SocketAddr, Peer>) {
@@ -252,16 +271,12 @@ impl ConnectionManager {
     }
 
     /// Queries DNS seeders in random order, one after the other, until obtaining `min_addresses_to_fetch` addresses
-    async fn dns_seed_with_address_target(self: &Arc<Self>, min_addresses_to_fetch: usize) {
-        let cmgr = self.clone();
-        tokio::task::spawn_blocking(move || cmgr.dns_seed_with_address_target_blocking(min_addresses_to_fetch)).await.unwrap();
-    }
-
-    fn dns_seed_with_address_target_blocking(self: &Arc<Self>, mut min_addresses_to_fetch: usize) {
-        let shuffled_dns_seeders = self.dns_seeders.choose_multiple(&mut thread_rng(), self.dns_seeders.len());
-        for &seeder in shuffled_dns_seeders {
+    async fn dns_seed_with_address_target(self: &Arc<Self>, mut min_addresses_to_fetch: usize) {
+        let shuffled_dns_seeders: Vec<&'static str> =
+            self.dns_seeders.choose_multiple(&mut thread_rng(), self.dns_seeders.len()).copied().collect();
+        for seeder in shuffled_dns_seeders {
             // Query seeders sequentially until reaching the desired number of addresses
-            let addrs_len = self.dns_seed_single(seeder);
+            let addrs_len = self.dns_seed_single(seeder).await;
             if addrs_len >= min_addresses_to_fetch {
                 break;
             } else {
@@ -273,25 +288,28 @@ impl ConnectionManager {
     /// Queries `num_seeders_to_query` random DNS seeders in parallel
     async fn dns_seed_many(self: &Arc<Self>, num_seeders_to_query: usize) -> usize {
         info!("Querying {} DNS seeders", num_seeders_to_query);
-        let shuffled_dns_seeders = self.dns_seeders.choose_multiple(&mut thread_rng(), num_seeders_to_query);
-        let jobs = shuffled_dns_seeders.map(|seeder| {
-            let cmgr = self.clone();
-            tokio::task::spawn_blocking(move || cmgr.dns_seed_single(seeder))
-        });
-        try_join_all(jobs).await.unwrap().into_iter().sum()
+        let shuffled_dns_seeders: Vec<&'static str> =
+            self.dns_seeders.choose_multiple(&mut thread_rng(), num_seeders_to_query).copied().collect();
+        join_all(shuffled_dns_seeders.into_iter().map(|seeder| self.dns_seed_single(seeder))).await.into_iter().sum()
     }
 
     /// Query a single DNS seeder and add the obtained addresses to the address manager.
     ///
-    /// DNS lookup is a blocking i/o operation so this function is assumed to be called
-    /// from a blocking execution context.
-    fn dns_seed_single(self: &Arc<Self>, seeder: &str) -> usize {
+    /// DNS lookup is blocking i/o, so it runs on the blocking pool — owning nothing but the seeder's name and the port: a
+    /// shutdown that cancels this future releases the manager at once, while a lookup already started finishes on its own.
+    async fn dns_seed_single(&self, seeder: &'static str) -> usize {
         info!("Querying DNS seeder {}", seeder);
         // Since the DNS lookup protocol doesn't come with a port, we must assume that the default port is used.
-        let addrs = match (seeder, self.default_port).to_socket_addrs() {
-            Ok(addrs) => addrs,
-            Err(e) => {
+        let port = self.default_port;
+        let lookup = tokio::task::spawn_blocking(move || (seeder, port).to_socket_addrs().map(|addrs| addrs.collect::<Vec<_>>()));
+        let addrs = match lookup.await {
+            Ok(Ok(addrs)) => addrs,
+            Ok(Err(e)) => {
                 warn!("Error connecting to DNS seeder {}: {}", seeder, e);
+                return 0;
+            }
+            Err(e) => {
+                warn!("DNS seeder {} lookup did not complete: {}", seeder, e);
                 return 0;
             }
         };
