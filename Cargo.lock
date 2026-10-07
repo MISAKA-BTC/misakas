@@ -6038,6 +6038,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-challenge"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "thiserror 1.0.64",
+]
+
+[[package]]
 name = "misaka-palw-constraint"
 version = "1.1.0"
 dependencies = [
