@@ -772,6 +772,8 @@ mod tests {
             // FP Job V5 (RFC-0003 §II.2.1): a bare height.
             "palw_fp_job_v5" => params.palw_fp_job_v5 = Some(at),
             "palw_gen_range_twin_v1" => params.palw_gen_range_twin_v1 = Some(at),
+            // RFC-0011 §15.7's dormant kernel-route fence: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_probabilistic_constraints_v1" => params.palw_probabilistic_constraints_v1 = Some(at),
             "palw_fp_prefix_inherit" => params.palw_fp_prefix_inherit = Some(at),
             "palw_fp_prefix_state" => params.palw_fp_prefix_state = Some(at),
             "palw_fp_tokenizer_match" => params.palw_fp_tokenizer_match = Some(at),
