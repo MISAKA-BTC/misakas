@@ -71,6 +71,14 @@ schedule authorizes descriptor digests implemented by the binary. Registration s
 descriptor. A binary/code hash identifies an implementation; it neither proves soundness nor makes
 downloaded code executable by consensus.
 
+**2026-10-08 challenge-policy binding:** `challenge_policy_id` resolves the immutable digest of
+[RFC07 Part VI's PostCommitChallengePolicyV1](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol).
+It is a required Kernel security parameter, not a local seed preference. Approve `checker_suite_id +
+challenge_policy_id + soundness_policy_id` as one tuple: field, sampling, repetitions, source qualification,
+commit timing, GKR mode, retry/grinding and reorg assumptions must agree. Reject unknown/mismatched policies;
+no per-model weaker confidence setting. Policy changes require a new descriptor/version and coordinated review.
+The actual beacon, sampled queries and conformance transcript are later evidence, never part of the pre-beacon Kernel id.
+
 New-format class identity commits to the whole binding using canonical encoding and a new domain.
 Legacy class hashes are unchanged and resolve to their historic profile. Claims, receipts, challenges,
 proof transcripts, cache keys and DA manifests bind the complete applicable class/kernel identity.
@@ -107,14 +115,17 @@ Raw `s`-of-`N` spot checks still miss a unique bad segment with probability `1 -
 2. Node/SDK validate plan grammar, kernel activation, typed composition, complete relation coverage,
    integer semantics and worst-case parse/DA/localization/court budgets. Static admission is
    deterministic; it does not assert that future outputs are already proven correct.
-3. Execute once, commit output/state/material and encoded evidence before the applicable challenge.
+3. Before new-format model Active eligibility, follow [RFC11 §17](0011-permissionless-model-and-long-context-onboarding.md#17-three-stage-model-onboarding-with-post-commit-conformance-2026-10-08):
+   Static Admission, fixed candidate commitment, RFC07 Beacon Conformance, then G14/availability/resource eligibility.
+   RegisteredDormant may wait asynchronously; a conformance pass neither approves unknown semantics nor activates a Kernel.
+4. Execute once, commit output/state/material and encoded evidence before the applicable challenge.
    Bind every interactive round or reviewed transcript transform in order; prevent adaptive response
    selection, challenge reuse and unbounded grinding. Retain RFC07's suite/scope-bound receipt tally.
-4. Panel checks the approved relations/proof, not entire selected segments. Positive evidence,
+5. Panel checks the approved relations/proof, not entire selected segments. Positive evidence,
    quorum, DA/retention and no outstanding dispute after the challenge window are required for Final.
    Node replay is deterministic: signatures/commitments/lifecycle plus any explicitly metered
    public-proof verifier, never fresh private randomness or an implicit full LLM replay.
-5. Mismatch triggers bounded localization to a named **kernel primitive/state transition**, then exact
+6. Mismatch triggers bounded localization to a named **kernel primitive/state transition**, then exact
    terminal adjudication. New primitives need a matching court; there is no generic ISA-step fallback.
    Missing material follows DA rules, not an invented arithmetic conviction.
 
@@ -122,6 +133,19 @@ The conditional proposed error target stays `ε_check ≤ 2^-128` for a false wh
 specified checker/binding assumptions. It is not a posterior probability, an established production
 parameter or total network security. Add the separately stated Panel, randomness, DA, retry and
 consensus risks. The court cannot remove false claims that escape all checks and challenges.
+
+### K.4.1 Kernel extension conformance, after completeness (2026-10-08)
+
+A new Kernel relation needs semantics, complete constraint coverage, exact court, authenticated public material
+and resource bounds before beacon-backed testing. Unknown operations cannot pass admission by being missed in samples.
+Freeze reference/checker/court/independent/optimized implementation revisions and vector-generation scope before
+an RFC07 `KERNEL_CONFORMANCE` commitment. Differential vectors may cover matrix relations, rounding, routing/TopK,
+state/checkpoint boundaries and pipeline stages; all required deterministic adversarial vectors remain mandatory.
+Compare authenticated results across reference, independent implementation and optimized backend; publish scope,
+fault model, conditional error assumptions and cost. Random test agreement does not prove Kernel soundness or replace
+semantic/court review. A changed implementation requires a new commitment and future source window, with retries counted.
+After checks, a Kernel still needs the coordinated shadow/release/activation path of ADR0172. Committee votes and
+DNS/BFT beacons supply neither verification challenges nor upgrade authority in this route.
 
 ## K.5 Versioning, activation and historical coexistence
 

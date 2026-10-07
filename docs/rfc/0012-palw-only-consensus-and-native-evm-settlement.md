@@ -86,6 +86,10 @@ this RFC. All live dependencies above must disappear together; historical reader
 4. PALW Panel receipts certify computation, not a BFT vote for a preferred chain. No new
    `PALW precommit`, committee checkpoint or “Panel-final reorg veto” may replace the deleted DNS
    gate under a new name. Existing PALW fork-choice protections are not abolished by this rule.
+   [RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)'s
+   proposed verification randomness is a fact derived from qualifying future canonical PALW work,
+   not validator voting, DNS finality, committee/threshold signatures or a new settlement authority.
+   Its branch-relative BeaconLocked predicate neither forbids a valid PALW reorg nor adds a finality overlay.
 5. RFC08 multiple blocks per claim must bind `(claim, slice, work budget)` and prevent replay,
    duplicated weight or multiple rewards for the same work. More carrier blocks do not imply
    more independent verified work, independent challenges or settlement confidence.

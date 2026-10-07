@@ -5,7 +5,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Revised design, 2026-10-06: **Part V is the selected new Panel verification direction**, aligned with RFC11/ADR-0171; unimplemented and unactivated. Parts I–IV retain the 2026-10-01 design/prototype record; several components have since landed (see current spec 18 and §V.1), so their old implementation/activation claims are historical, not live status. |
+| Status | Revised design, 2026-10-08: **Part VI is the sole post-commit challenge protocol for the proposed new Kernel/model/claim/slice/public-check route**; Part V remains the new Panel verification direction. Neither revision is implemented or activated by this document. Parts I–IV preserve their historical design/prototype results, not live status. |
 | Author(s) | MISAKA core (drafted with Claude; lane M4) |
 | Created | 2026-10-01 |
 | Normative dependencies | **RFC-0002** (TIR semantics and court), **RFC-0011 §§13/15** (verification-plan admission, probabilistic acceptance), **ADR-0171** (selected direction); existing Panel/segment rules, ADR-0065/0098/0111 and spec 18 for compatible legacy paths. New receipts and coverage rules require the separate Part V fence. |
@@ -13,7 +13,7 @@
 | Original prototype branch | `rfc7/algebraic` (off `rfc4/int` @ `ce04e5c22`); the 2026-10-06 design revision is audited against `main` commit `7bff920dc`. No claim that the new scheme runs on a deployed node. |
 | Related | RFC-0006 (layer-sharded panels, lane M3), lane M2's runtime residency for IR classes (`TirRowSourceV1`, ADR-0112 for IR classes), lane P's root-cause report of the testnet-12 panel backlog (`rcore/int-10-p1:docs/design/palw/t12-panel-backlog-1001.md`), ADR-0029 (carriage), ADR-0038 (receipts are claims), ADR-0062 (the data-availability court), ADR-0069 (weight needs adjudicability), ADR-0072 (the ticket is the execution), ADR-0080 (a receipt is 4,772 bytes), ADR-0097/0099/0100 (shards, the stratified panel), ADR-0103 (held context), ADR-0112 (residency), ADR-0124 (supplementary receipts), ADR-0133 (verification is its own clock), ADR-0147 (the admission jury), ADR-0152 (collateral, ejection), ADR-0160 (capacity) |
 
-> **Revision precedence:** Part V and the goals below govern the proposed new route. Part II documents the existing private-sketch baseline; its optional witness, secrecy, node-local policy and historical measurements do not specify Part V's public, evidence-bound protocol. Part III's raw-sampling warning remains valid. Part IV's mesh-only capped experiment cannot substitute for Part V's claim coverage or Final conditions. Existing consensus is governed by [spec 18](../spec/palw/18-verification-certificates.md), not retroactively changed by this RFC.
+> **Revision precedence:** Part VI owns new post-commit source eligibility, ordering, seed derivation, sampling, interactive-round timing and recovery; other RFCs reference it instead of defining competing seeds. Part V owns checker/receipt coverage. Part II's private sketches and Parts III/IV's older assignment/audit sources are historical or legacy protocols, not substitutions for the new public challenge source. Existing consensus is governed by [spec 18](../spec/palw/18-verification-certificates.md), not retroactively changed by this RFC.
 
 > **Kernel-only boundary (2026-10-06):** [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)
 > and [RFC05 §§K.0–K.8](0005-palw-ml-vm.md) govern Part V. Checkers are approved versioned kernel
@@ -823,9 +823,9 @@ A partial-segment GKR proof remains partial. A whole-claim aggregate proof cover
 
 Before deriving check positions or coefficients, bind the claim, class/profile/suite, initial/final and segment boundary states, trace/constraint/batch directory, complete witness commitments and artifact/input roots. Evidence openings must refer to those exact roots. Private-sketch baseline witnesses without a commitment cannot be adopted as the new public-challenge protocol.
 
-Derive `sample_seed` from a ruleset-defined future challenge anchor and those bindings, with separate domains for assignment, segment/query selection, vector generation, aggregation and each proof round. Node validation recomputes the seed; seats cannot choose favorable seeds or counts. Pin inclusion cutoff, beacon eligibility/finality, unbiased field sampling and reorg/abort rules. Panel sortition randomness alone is not proof that the verifier's algebraic challenges are unbiased.
+Resolve `PostCommitChallengePolicyV1` and derive `sample_seed` exclusively under [Part VI](#post-commit-challenge-protocol), from its future qualifying PALW work and the bound statement. Node validation recomputes its source selection, lock, seed and queries; neither seats nor registrants choose seeds or counts. Panel assignment and generation randomness have separate domains and security contracts and cannot replace this source.
 
-Every interactive prover message precedes **its own** challenge. A single seed that exposes all future sum-check challenges is insufficient. Before shipping, choose a reviewed staged-beacon or transcript-bound Fiat–Shamir construction, including grinding/query bounds and post-quantum assumptions. All nodes replay the fixed transcript/anchor, never freshly draw local randomness for consensus. A new claim commitment, branch or attempt cannot reset an unbounded number of free trials.
+Every interactive prover message precedes **its own** challenge, using the mode pinned by Part VI. A single seed exposing all future sum-check challenges is prohibited. All nodes replay the fixed transcript/source facts, never freshly draw local consensus randomness. Part VI bounds identity changes, aborts, retries, reorgs and Fiat–Shamir queries; a new branch or carrier grants no free fresh draw.
 
 ### V.6 Typed receipts and a coverage-aware tally
 
@@ -834,7 +834,8 @@ Propose `PalwConstraintReceiptV1` (conceptual schema; tag allocation pending):
 ```text
 claim_id, class_id, verification_profile_hash, verification_scheme_id, scheme_version
 assignment_root, scope_kind, scope_root, covered_relation_count
-challenge_anchor, sample_seed, sample_count, sampled_cells_root
+challenge_policy_id, commitment_root, challenge_anchor, beacon_evidence_root
+sample_seed, sample_count, sampled_cells_root
 field_policy_id, freivalds_rounds, soundness_policy_id, derived_soundness_bits
 evidence_manifest_root, algebraic_check_root, transition_check_root, transcript_root
 verdict, seat_bond, signed_daa, signature
@@ -900,6 +901,227 @@ Normative requirements for the new route:
 * **PALW-CV-6:** old receipt/claim semantics, unique work accounting, replay determinism and the explicit error/Panel assumptions are preserved by the migration. Unimplemented schemes stay ineligible.
 
 These are proposed requirements. Implementations must attach a test/evidence artifact to each before activation. The execution blueprint follows [RFC11 §15](0011-permissionless-model-and-long-context-onboarding.md#15-sampling-first--court-on-dispute-2026-10-06-decision) and [ADR-0171](../adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md); neither the sketches in Part II nor this text proves the new protocol complete.
+
+<a id="post-commit-challenge-protocol"></a>
+
+## Part VI — Post-commit challenge protocol: the single source of truth (2026-10-08)
+
+### VI.1 Authority, scope and security boundary
+
+This part is the sole proposed protocol for challenge randomness shared by Kernel differential conformance,
+model onboarding, per-claim verification, EXEC work slices and public verification/prosecution. RFC02/05/11/13/14/15
+bind or use it; they must not invent alternative beacon/seed formulas. Its names are proposed schemas, not current
+Rust types, wire ids or activated rules. Existing claims, ticket draws and Panel assignments retain their old rules.
+
+The beacon selects unpredictable checks of an already fixed statement. It does not approve a model, define an
+unknown operator, prove constraint completeness, attest availability or authorize a Kernel upgrade. Require, in order:
+semantic completeness, constraint coverage, exact-court completeness, public-material completeness, resource bounds,
+then this challenge protocol and probabilistic checking. G14 remains conjunctive with all those obligations.
+
+```text
+VerificationPlanV1             = what is checked
+PostCommitChallengePolicyV1     = how/when challenges are derived
+PalwDisputePlanV1 (RFC14)       = public material and exact failure prosecution
+```
+
+These are bound together by the new class/profile. `PalwDisputePlanV1` is the public-prosecution plan; do not introduce
+a second independent `PublicProsecutionPlan` codec. No BFT committee, validator ballot, threshold signature, DNS-final
+or external attestation issues/locks a beacon. Nodes derive it from their PALW canonical history.
+
+### VI.2 Immutable policy and committed subject
+
+```text
+PostCommitChallengePolicyV1 {
+    version, randomness_source_policy_id,
+    anchor_delay_slots, work_count_k, source_eligibility_policy_id,
+    anchor_settlement_policy_id, settlement_depth_D,
+    binding_schema_id, hash_suite_id, seed_hash_domain,
+    sampling_algorithm_id, field_sampling_algorithm_id, field_policy_id,
+    repetition_policy_id, repetition_count, soundness_policy_id, security_bits,
+    grinding_budget_policy_id, retry_limit, abort_policy_id, reorg_policy_id,
+    interactive_mode, transcript_transform_id,
+    resource_schedule_id, retention_policy_id
+}
+```
+
+`challenge_policy_id` is the digest of the complete canonical descriptor. Checker suite, challenge policy and
+soundness policy form one approved tuple; reject unknown/inconsistent ids or registrant-selected weaker repetitions.
+The exact canonical codec/hash suite, integer widths, tagged optional fields and resource ceilings must be pinned in
+the release; missing values are an activation blocker, not node-local defaults. No k, D, delay or retry value is
+selected by this document. Changing a policy creates a new identity/version, never changes an in-flight subject.
+
+`subject_kind` is one of `KERNEL_CONFORMANCE`, `MODEL_CONFORMANCE`, `CLAIM_VERIFICATION`, `WORK_SLICE`,
+`PUBLIC_PROSECUTION`. Before challenge collection, bind its immutable subject id and roots: Kernel descriptor,
+VerificationPlan, program/artifact/tokenizer/input schema, layout, input, initial/final/boundary state, all constraints,
+evidence/oracle/batch directory, conformance scope, implementation set and the commitment object. A scope-specific
+binding grammar uses explicit typed absence where a root is inapplicable, never an ambiguous zero wildcard.
+
+Artifact/layout/plan/implementation/scope changes require a new pre-beacon commitment and a newly eligible future
+window. Preserve the failed/aborted attempt in the retry ledger and resource accounting. Changing a candidate id,
+job nonce, signature or carrier does not reset the allowed grinding budget.
+
+### VI.3 PALW Work Beacon source eligibility and non-circularity
+
+The selected source direction is `PalwWorkBeaconV1`: aggregate k distinct future qualifying useful-work commitments.
+An eligible source must be an independently valid useful-work claim of a pre-existing Active Kernel/model profile
+whose complete verification plan, G14 public prosecution and required public DA/retention are established. Freeze
+eligible source profiles from the subject's commitment state, check their applicable status/obligations at contribution,
+and exclude the model/Kernel candidate under test and all work depending on its proposed semantics.
+
+G14 is a release-completion criterion, not a registrant-provided `complete=true` or committee signature. The active
+versioned eligibility rule must derive qualifying capability/class/claim/DA facts from authenticated state; runtime
+validation never asks a maintainer to approve a source or fetches an off-chain test report as consensus authority.
+The release review proves that the source profile rules implement the G14 and independent-validity requirements.
+
+Sources must have their canonical work commitment accepted/sealed after the subject's commitment and the policy's
+future start slot S, then reach claim Final and the policy's PALW-native settlement condition. A claim computed or
+committed earlier that merely reaches Final after S is not a fresh source. Future inclusion alone does not prove
+physical execution time or entropy; the source profile must demonstrate unpredictable execution inputs/results
+under the stated adversary and that an alternative valid entropy sample requires additional paid useful computation.
+
+Eligibility requires unique canonical work identity and independence of validity from the challenge consuming it.
+The source/challenge dependency graph must be acyclic: the target claim cannot seed its own verification, two pending
+claims cannot mutually certify each other, and a candidate cannot generate its own conformance randomness. Existing
+independently verified source profiles/bootstrap evidence need a separate eligibility review; absence of such a
+profile leaves this route pending, without a trusted genesis-operator exception or self-certification loop.
+
+Exclude heartbeat, BASE-0 fallback, receipt-only/signature-only material, EXEC_TX/round carriers, provisional or merely
+header-valid attempts, unverified slices and bare Panel receipts. A long claim may contribute at most once through
+its eligible, independently Final root useful-work identity; its N EXEC carriers never become N samples. EXEC
+weight/DAA stays zero. Finishing a slice does not make it an entropy source.
+
+Do not use block hash, timestamp, nonce, signature, freely rewrappable claim id or settlement-anchor hash as entropy.
+`source_ref`/settlement position are provenance and deterministic-order facts, not fresh randomness. Canonical
+work identity and execution commitment must be stable under header/carrier reattachment; if a profile cannot prove
+that changing entropy requires new useful computation, it is ineligible. Correctness/Final/G14 alone is not an entropy
+theorem. Cheap unadmitted attempts and precomputed public deterministic outputs remain explicit source threats.
+
+### VI.4 Canonical collection, accumulator and lock
+
+Derive S from the accepted commitment position and the policy's delay under the existing chain clock. Do not change
+REAL/heartbeat/BASE-0 cadence to obtain randomness. On the canonical PALW selected history, enumerate eligible Final
+events in `(settlement_position, occurrence_index, canonical_work_id)` order and use the first k distinct work identities.
+Positions are chain-derived logical positions, not local arrival times, RPC ordering or producer-selected lists.
+Duplicate/reincluded/reattached work cannot enlarge the set. Pin treatment of simultaneous events and dependency order.
+
+Under the policy's canonical hash/encoding suite, define only here:
+
+```text
+entropy_item_i = H("MISAKA/PALW/WORK-BEACON/ITEM/V1",
+                   source_profile_id, canonical_work_id_i, execution_commitment_i)
+acc_0 = H("MISAKA/PALW/WORK-BEACON/V1",
+          chain_genesis, ruleset_id, challenge_policy_id, commitment_root, challenge_epoch)
+acc_i = H("MISAKA/PALW/WORK-BEACON/MIX/V1", acc_(i-1), i, entropy_item_i)
+beacon_output = acc_k
+```
+
+The public evidence records each source reference, eligibility/Final/settlement proof, immutable work identity,
+order, accumulator and policy. `anchor_settlement_policy_id` uses reviewed PALW-native settlement evidence/depth D,
+never DNS/BFT finality. A raw count of heartbeat/EXEC blocks cannot manufacture useful-work settlement confidence.
+`BeaconLocked` is a branch-relative protocol state after that predicate, not absolute finality or a new reorg veto.
+
+Mixing several work items does not automatically yield unbiased randomness. One honest unpredictable contribution
+helps only under the reviewed commitment/selection/withholding assumptions; an adaptive last contributor, producer
+collusion, reordering, censorship, reorg and selective publication can bias a simple accumulator. Bound that bias,
+grinding cost and adversarial retry exposure explicitly. Hashing more known work is not evidence of new entropy.
+Claim Final is a lifecycle result with its applicable residual-check/Panel/DA assumptions, not certainty that a
+source is correct. Compose source false-acceptance and correlated failure/bias into the environment/network error
+model alongside downstream adaptive trials; a consumer's conditional checker epsilon does not cover those events.
+VDF is not part of v1; a later VDF cannot repair an invalid or biased entropy source by itself.
+
+### VI.5 One seed derivation and domain-separated sampling
+
+After the statement commitment and BeaconLocked predicate, define only here:
+
+```text
+challenge_seed = H("MISAKA/PALW/CHALLENGE/V1",
+    chain_genesis, ruleset_id, challenge_policy_id,
+    subject_kind, subject_id, kernel_id, verification_plan_root,
+    program_root, artifact_root, tokenizer_or_schema_root, layout_root,
+    input_root, state_root, constraint_root, commitment_root,
+    challenge_anchor, beacon_output)
+```
+
+`challenge_anchor` is the normalized policy-bound window/epoch and stable ordered work-identity descriptor,
+not a producer-chosen block hash. Header hashes/signatures and mutable provenance wrappers used to prove inclusion
+or settlement remain outside seed-bearing bytes: rewrapping the same work or advancing a heartbeat cannot reroll
+the challenge. Any seed-bearing anchor field must be fixed before the source randomness or change only through
+new qualifying work/a recorded canonical reorg under the reviewed bias model.
+The binding schema covers all additional subject-specific roots inside `commitment_root`. Resolve and validate
+every root/anchor from authenticated public history; cached seeds or exporter metadata are not authoritative.
+
+Derived streams have distinct domains for `query`, `segment`, `tensor-range`, `vector`, `freivalds`, `aggregation`
+and `proof-round`, with subject/scope/relation, repetition and coordinate indices. Panel draw/ticket/generation R
+have separate domains and contracts. Replaying a claim's original checks uses its original subject kind and seed;
+`PUBLIC_PROSECUTION` is only for explicitly committed supplemental checks, not an alternate favorable reroll or a
+prerequisite for filing an already authenticated exact fraud proof.
+
+The policy fixes unbiased field and index sampling, no-replacement/query weighting and rejection behavior. Pin a
+reviewed rejection sampler/expansion with golden vectors; modulo reduction without a proven uniform mapping is
+not sufficient. Enforce bounded work and named exhaustion failure rather than biased fallback coefficients.
+Uniform field vectors, repetitions and whole-statement composition must match the suite's reviewed soundness.
+Substreams are computational derivations under their stated assumptions; N watchers of the same seed are not
+N independent repetitions. Raw sampling of a few rows does not prove unchecked semantic/constraint families.
+
+### VI.6 Freivalds versus interactive GKR/sum-check
+
+Freivalds fixes the full matrix statement/oracles before the source window, then derives the specified indexed
+repetition vectors from this seed. Authenticate all sampled/evaluated material and include integer/field equivalence,
+constraint/boundary coverage and any query selection loss. A sampled conformance PASS has an explicit scoped error
+model; it is not full semantic admission, a test of every tensor or a universal whole-model correctness theorem.
+
+For interactive GKR/sum-check, the active policy pins exactly one reviewed mode:
+
+- **Staged beacon:** commit prover message j and the transcript prefix on the canonical history before collecting
+  a new qualifying future source window for challenge j. Its roots/index are subject-specific bindings of this
+  same protocol. Message j+1 may depend on challenge j, but must be fixed before challenge j+1. Price window latency,
+  source scarcity, retention and total rounds. Reusing the already exposed initial beacon for every round is prohibited.
+- **Transcript-bound Fiat–Shamir:** the approved transform absorbs the immutable statement, policy/source binding,
+  round index and every prior message/challenge, including message j before deriving challenge j. Recompute it from
+  canonical bytes, using the pinned transform and distinct round domain. Require its own random-oracle/QROM,
+  commitment-binding, adaptive grinding/query and post-quantum review; a public beacon does not prove that transform sound.
+
+Choose/freeze the mode before execution; it is not a per-prover fallback. Publishing a single seed and all future
+interactive challenges before later messages is never acceptable. Transcript mismatch, missing round or source
+exhaustion is unresolved/failed verification, not a passing receipt. No client RFC specifies its own transform.
+
+### VI.7 Reorg, abort, scarcity and deterministic recovery
+
+`Committed → BeaconCollecting → BeaconCandidate → BeaconLocked → Checked` is a semantic lifecycle, not a current enum.
+Before lock, recompute the source list/accumulator under canonical reorg. After lock, a reorg removing commitment,
+source Final/settlement or lock evidence rolls back all dependent challenge/conformance/activation/settlement state
+with that branch. Do not preserve a stale seed or silently rewrite an already accepted result. Once changes are
+canonical again, retry according to the same policy and bounded ledger. Lock neither forbids valid reorg nor adds
+DNS/BFT finality. Final/post-Final liability follows the applicable lifecycle; this protocol adds no unbounded rollback.
+
+Each changed commitment, unpublished attempt, abort, reattachment, alternate source window, transcript query and
+permitted retry contributes to the stated grinding/exposure bound. Record enforceable on-chain limits and separately
+analyze unobservable off-chain trials; a fee or retry ledger alone cannot bound all adversarial precomputation.
+An honest timeout/reorg is not equivocation evidence. Slashing needs the actual proof/obligation rule.
+
+With too little qualifying work, return `BEACON_UNAVAILABLE` / pending. Models can remain `RegisteredDormant`;
+claims obey their explicit pending/deadline/DA rules without a false pass. Never fall back to heartbeat/BASE-0 hash,
+EXEC hash, committee signature, local RNG or caller-chosen seed after a timeout. Chain, transactions, heartbeat and
+BASE-0 continue under existing liveness; reserve their validation/relay resources even during collecting/backlog.
+Cold/restarted/IBD/pruned nodes reconstruct the same policy, commitment, source facts, seed, queries and transcript.
+Pruning cannot discard the public provenance/material needed before its last retention/liability deadline.
+
+### VI.8 Activation and evidence gates
+
+All gates remain open; this text performs no new beacon, conformance run or soundness proof. A separate coordinated
+version/fingerprint release must supply:
+
+1. Complete policy/codec/hash/domain/sampling/transform vectors; per-field mutations and unknown/version mismatch refusal.
+2. Independent source-cost, unpredictability, bootstrap/non-circularity, bias/last-contributor/withholding/reorg and
+   adaptive-grinding analysis. k/D/delay selection and measured completion latency; no inference-cost-only entropy claim.
+3. Candidate/kernel/source substitution, precommit/prefinal/cheap-header exclusion, duplicated root/slice/carrier,
+   abort/retry and changed artifact/plan/layout tests; bad sources cannot activate a candidate or settle work.
+4. Fixed-statement Freivalds and per-message GKR transcript/order tests, soundness composition, failed-check-to-bounded
+   exact court, DA/default distinction and cold outsider replay without producer-private state.
+5. RFC11's three onboarding stages, RFC13's resumable commitment/evidence records, RFC14/G14 and RFC15's separate gates;
+   no semantic admission or Panel=0 inferred from conformance alone.
+6. Restart/IBD/pruning/reorg/activation-boundary equality and useful-work scarcity/flood tests showing unchanged main
+   heartbeat/BASE-0/clock/EXEC_TX liveness. Existing ticket/Panel seed rules and old identities stay frozen for old subjects.
 
 ## Relations
 

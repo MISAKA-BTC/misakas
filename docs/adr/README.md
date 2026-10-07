@@ -55,6 +55,22 @@ implementation order is in "What to build next" below.
 > retires the compute overlay. Historical **`6000` / `6001` / `6100` / `6201`** rollout labels do not
 > name current DAA heights; `6001` is the 7,101 bundle's internal label, not an independent fence.
 
+## Post-commit challenge alignment — 2026-10-08
+
+[RFC07 Part VI](../rfc/0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)
+is the sole proposed challenge protocol. [ADR0171 §7](0171-probabilistic-constraint-checks-and-court-on-dispute.md),
+[ADR0172 §7](0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) and
+[ADR0173 D8](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) add immutable checker/challenge/soundness
+binding, three-stage model onboarding and fresh-public-verifier reconstruction/exact escalation to G14.
+
+[ADR0044](0044-palw-free-prompt-receipts.md) and [ADR0074](0074-the-attempt-is-a-claim-drawn-by-the-chain.md)
+keep their legacy ticket/Panel beacon scope, without qualifying cheap floors/headers as new challenge entropy.
+[ADR0169](0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md)
+inherits the shared policy while preserving zero-weight/zero-DAA EXEC and root-level work settlement.
+No BFT/DNS beacon, timeout entropy fallback, new finality overlay or runtime activation is introduced.
+Source security/implementation/G14 gates remain open; details are in the
+[2026-10-08 alignment record](../rfc/evidence/0007-post-commit-randomness-alignment-2026-10-08.md).
+
 ## The direction that governs the PALW lineage (2026-09-02)
 
 **PALW is the consensus work, and PALW produces the blocks.** The load-bearing chain is:

@@ -94,6 +94,16 @@ Panelは移行中の担当分散・通常の検査・receipt・経済的監視�
 
 Panel=0の方向は、固定Panelをpermissionless verifierとobjective fraud proofへ移行すること。検証自体をなくしたり、challengeがなければ必ず正しいと扱ったりすることではない。
 
+### D8 — Post-commit challengeを外部参加者も完全再構成する（2026-10-08）
+
+新しいKernel/model/claim/EXEC slice/public-check経路は、[RFC07 Part VI](../rfc/0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)の唯一のpost-commit protocolをbindする。ordinary outsiderは公開のpolicy、statement/prover-message commitment、将来のqualifying PALW useful workとFinal/settlement provenanceから、同じsource順序・seed・query/vector・各interactive transcriptを再構成できなければならない。producer/Panelから配布されたseedを信頼しない。
+
+beaconはcommit済みstatementのchallengeを決めるだけで、semantic/constraint/court/public-material/resource completenessやG14を代替しない。モデル登録はStatic Admission → Beacon Conformance → Active Eligibilityに分け、RegisteredDormantやsampled conformance PASSを報酬資格と混同しない。Kernel作者が選んだfixtureだけの一致もKernel soundnessの証明にはならない。
+
+sourceはconsuming challengeと独立に有効な将来canonical workに限定し、candidate self-source・循環verification・free header reroll・committee/DNS/BFT beaconを排除する。複数Final workのmixだけでunbiasedと主張せず、source unpredictability、grinding、withholding、retry/reorgのboundsを立証する。source不足はpending/既定deadlineで扱い、heartbeat・BASE-0・取引・chainを止めたり弱めたりしない。
+
+同じseedを多数watcherが検査しても独立試行とは数えない。mismatchは認証localization・exact courtへ進め、probabilistic failureだけでconvict/slashしない。有効なexact fraud proofを出すために新beacon待ちを要求しない。challenge再現・公的material・objective outcomeの全経路をG14に追加し、RFC15のPanel=0はその達成後も別gate/activationを要する。この追記は実装・activationの宣言ではない。
+
 ## 4. RFC/ADR間の優先順位
 
 1. 将来のPALW設計で、Panel-only evidence、honest-majority arithmetic authority、producer-private prosecution、kernel-only adjudicability certificate、無条件のPanel=0と本ADRが衝突した場合は、**本ADRとRFC-0014/0015の厳しいcompletion/activation条件を優先する**。

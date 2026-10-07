@@ -196,6 +196,13 @@ activate a partial v2 where slices still enter the consensus mergeset while TX b
 
 ## 6. Verification, failure and independent transaction acceptance
 
+Bind the class/root/slice `challenge_policy_id` and use [RFC07 Part VI](../../rfc/0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)
+as the only source/seed/sampling/transcript protocol. A WORK_SLICE binds root/index/range, states and complete evidence
+before its own future source window; a seed exposed at root-open cannot test arbitrarily later-created slice statements.
+Whole-root checking follows the same scope/boundary composition. No alternative seed formula or per-slice independent
+Final credit is introduced. Missing qualifying sources remains pending/deadline-limited; EXEC_TX/heartbeat/BASE-0
+liveness and all EXEC zero-weight/zero-clock invariants remain unchanged.
+
 Apply ADR-0173 / RFC14 public-bond prosecution and RFC07 Part V / RFC11 §15's active kernel/constraint rules.
 Each slice and boundary has public authenticated material for complete bounded localization and exact court.
 Compose whole-root soundness over every required range/boundary; repeated carriers/receipts are not independent tests.

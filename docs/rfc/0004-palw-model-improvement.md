@@ -1048,6 +1048,19 @@ without the A-2 tolerance.
   BVM/GVM implementation programme. Existing Phase A engineering estimates do not include the new
   probabilistic kernel's prover/checker work and must be re-estimated before scheduling that route.
 
+## Shared verification-challenge boundary — 2026-10-08
+
+For new Kernel/model conformance or probabilistic claim checks in this improvement workflow, bind and use only
+[RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol).
+RFC05's approved checker/challenge/soundness tuple and RFC11's Static Admission → Beacon Conformance → Active
+Eligibility apply to newly onboarded candidate profiles. Conformance sampling authorizes neither an unknown op nor
+a Kernel activation, and does not replace this RFC's evaluation/promotion criteria or per-claim checks.
+
+The earlier epoch hold-out/item/judge/generation-R draws are separate protocols and preserve their existing scope;
+their beacon formula is not the new algebraic/conformance seed, nor evidence that its source is unbiased. Share
+source facts only under independently reviewed bindings/timing and completely distinct domains. No new seed formula,
+committee/DNS/BFT authority, runtime activation or successful candidate benchmark is supplied by this amendment.
+
 ## Mission alignment amendment — 2026-10-07
 
 candidate/evaluation/promotionの各claimにも、外部public bondによる証拠取得とobjective courtを適用する。admission/evaluationのjury多数決は計算の真偽を決めない。draw前のholdout secrecyは保てるが、評価claimの検査と裁定に必要な入力が公開に認証・取得できないまま新しい報酬を有効にしない。品質比較と計算の一致は別の主張である。

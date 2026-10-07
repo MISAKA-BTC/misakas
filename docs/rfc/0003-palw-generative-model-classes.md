@@ -22,7 +22,13 @@ and [RFC11 §15](0011-permissionless-model-and-long-context-onboarding.md) selec
 checks over encoded constraints, with exact bounded court only on disputes. Every stage, derived
 input, decode rule, cross-stage edge and output belongs to the checked statement. Compose soundness
 over the whole pipeline; a checked decoder alone is not verification of a multimodal model.
-Generation randomness `R` is distinct from post-commit verifier challenges. Legacy replay below
+Generation randomness `R` is distinct from post-commit verifier challenges. The proposed challenge path uses only
+[RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol), with a
+class-bound policy and fully separated generation/challenge/Panel/ticket domains. Generation R is an input to the
+deterministic output statement and is fixed with its task/seed/input commitments before checking; it is not a beacon
+replacement or a means to reroll checks after seeing verification randomness. Whole media/pipeline state and relation
+coverage remain mandatory; onboarding conformance follows RFC11 §17 and RFC13 without admitting unknown semantics.
+Legacy replay below
 remains a reference/old-profile rule, not a requirement for routine whole-stage/segment replay in
 the new profile. This amendment changes no active implementation or fence.
 

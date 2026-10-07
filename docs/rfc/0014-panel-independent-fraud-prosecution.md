@@ -148,13 +148,16 @@ PalwDisputePlanV1 (proposed)
     class-bound distribution / availability policy identities (section 16)
     max rounds, total bytes, carrier bytes, checker work, RAM/storage
     cold-fetch/verify/localize/disclose/court/inclusion deadline envelopes
-    soundness profile and challenge-domain policy
+    soundness profile, challenge_policy_id, challenge_binding_policy_id
+    public commitment/source/lock/transcript reconstruction and retention schema
 ~~~
 
 registrantが記載した「complete=true」や宣言soundnessを信頼しない。
 合意checkerは、既存kernel templateへの適合、全relationのcoverage、全分岐のterminal reachability、
 数値範囲・layoutと最悪時資源を検査する。許可されない演算・courtが必要なら
 `KERNEL_EXTENSION_REQUIRED`として待つ。
+
+`challenge_policy_id`は[RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)のimmutable policy digestである。`challenge_binding_policy_id`はそのpolicy内の承認済みsubject binding schemaを参照し、別のbeacon/seed方式を作らない。`PalwDisputePlanV1`がpublic-prosecution planを兼ねる。actual beacon・queries・transcriptは後続の認証evidenceであり、class identityを変えない。
 
 ### 3.2 admissionで必須とする五つの性質
 
@@ -182,6 +185,7 @@ admissionは既存の `palw_class_admission_v2.rs` / `palw_tir_admission_v1.rs` 
 RegisteredUnrewarded
     → semantic / coverage / dispute / resource admission
     → DisputeAdmissible
+    → fixed candidate commitment + RFC07 Beacon Conformance / ConformancePassed
     → class-bound MISAKA Transport distribution + DownloadAvailabilityReady (§16)
     → ordinary readiness and licensing rules
     → reward-bearing / weight-bearing claims
@@ -192,6 +196,37 @@ RegisteredUnrewarded
 
 現行の「held」は計算・保持形式にも使われるため、「安全審査待ち」の意味として流用しない。
 既存reward classをこの文書だけで停止しない。移行判断は§11の別upgrade規則で行う。
+
+### 3.4 G14に含めるpost-commit challenge再現性（2026-10-08）
+
+新しいreward-bearing profileは、RFC07 Part VIのpolicyとRFC11 §17の三段階をbindする。
+semantic/constraint/court/public-material/resource admission、Beacon Conformance、Active Eligibilityを分ける。
+beacon samplingで未知演算を承認せず、ConformancePassedだけでG14や報酬資格を成立させない。
+
+fresh non-Panel public bondは公開chain/materialから次の全経路を再現できなければならない。
+
+```text
+class / Kernel / verification / dispute / challenge policy resolve
+-> canonical statement commitment and its position
+-> future source eligibility / independent Final / settlement evidence
+-> canonical ordered source set and branch-relative lock
+-> RFC07 seed, identical queries/vectors and every interactive transcript round
+-> authenticated mismatch localization -> exact court / appropriate DA default
+```
+
+producerの内部cache、非公開API、Panelのseed配布、operator署名を使わない。seed・epsilonをexporterから信頼せず再計算する。
+original claim/sliceチェックの再現は元のsubject/seedを使い、`PUBLIC_PROSECUTION`で有利な別drawへ切り替えない。
+追加検査はRFC07の明示的なsupplemental commitment/coverage規則に従う。有効な既存exact proofの提出に新beacon待ちを要求しない。
+
+probabilistic mismatchはconvictionではない。statement/source/transcriptのbindingを確認し、有界の認証witnessへlocalizeし、
+exact terminalから客観的convictionへ進む。未開示は適格なDA/default、honest claim/誤challengeは棄却で区別する。
+同じseedを多数watcherが検査しても独立repetitionとしてepsilonを人数分掛け合わせない。
+
+post-commit順序、qualifying future work、非循環source、grinding/retry/withholding/reorgのbounds、公開のquery/transcript再現と
+exact escalationを、全許可profileについてG14 evidenceに追加する。cold verifier、restart/IBD/pruning、changed roots、偽source、
+source不足、GKR後出しmessage、Final阻止・回収まで実nodeで試す。元の実装結果をこの追加gateの合格と扱わない。
+source不足ではcandidate/verificationをpending/既定deadline扱いにし、heartbeat・BASE-0・取引・chainを止めない。
+no BFT/DNS beacon、no seed timeout fallback、no新finality overlayを維持する。
 
 ## 4. 階層commitmentと独立した局所化
 
