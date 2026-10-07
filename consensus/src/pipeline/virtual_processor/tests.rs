@@ -14776,6 +14776,7 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
                     &Default::default(),
                     &Default::default(),
                     v4,
+                    0,
                 )
                 .expect("the coinbase builds")
                 .tx
