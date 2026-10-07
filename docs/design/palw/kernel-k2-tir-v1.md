@@ -16,6 +16,13 @@ This is not a soundness review, not a beacon design and not an activation propos
 | Deterministic plan checker (RFC05 §K.4 step 2) | `check.rs` | Re-derives everything from the program and descriptor: active descriptor; program validates and is in the primitive set; every node covered exactly once with the kernel's checker (no weaker checker, no fewer repetitions); the GF(2^127−1) alias bound for every `MatMul`; one boundary per state; budgets equal to the derived ones and within ceilings; the whole-claim error **derived** (`t·126 − ⌈log2 R⌉`, union with the binding term) ≥ target, and the declaration ≤ derived. |
 | Registration outcomes (RFC11 §16.2) | `outcome.rs` | `ELIGIBLE_AT`, `FRONTEND_REQUIRED`, `KERNEL_EXTENSION_REQUIRED` (family, relation, required, available), `KERNEL_NOT_ACTIVE`, `BOUNDS_EXCEEDED`, `INCOMPLETE_COVERAGE`, `PLAN_FORGED`, `EXTERNAL_BLOCKER`. |
 | Coverage buckets (RFC11 §16.4) | `outcome.rs` | Only `supported_active_kernel` (eligible AND on-chain registration evidence) counts as success; eligibility alone is `untested`. |
+| `VerificationEvidenceV1` (RFC11 §15.3) | `evidence.rs` | Binds network domain, ruleset, class binding, program/artifact/plan roots, job input, initial/final state roots, trace and output roots, positions, a segment directory and the suite's parameters; its root is the challenge's evidence root. Every derivable field is recomputed; segment boundaries are derived from the committed trace, so a fabricated entry state is refused. |
+| Scopes (RFC07 §V.6) | `verify.rs` `ScopeV1` | `WholeClaim`, `Segments(ix)`, `AuditOnly(positions)`; `scope_root` binds the scope, its boundary roots and the evidence. A segment reads its entry from the predecessor's committed exit. |
+| Cross-token batching (RFC07 §V.3) | `verify.rs` | A weight product (a rank-2 operand computed from params/consts alone, either side) is one stacked check per scope and repetition: `X (W r) = Y r` or `(rᵀ W) X = rᵀ Y`; the weight is projected once per scope and its commitment compared at every position. `CheckCostV1` reports field mults, opened bytes and param bytes. |
+| `PalwConstraintReceiptV1` + tally (RFC07 §V.6) | `receipt.rs` | One seat, one scope, one verdict; fold-side admission recomputes scheme, evidence, challenge, scope root, assignment and derived soundness, and enforces the deadline. The tally covers each segment by `quorum` distinct operators; `AuditOnly` never counts; a seat's first receipt per duty counts; a flipped one is equivocation; a counted failure is a dispute no later pass erases. Signing (ML-DSA-87) is the node's: the module gives the message and a verifier trait. |
+| Lifecycle (RFC11 §15.5) | `lifecycle.rs` | Committed → ChallengeBound → Checking → ProbabilisticPass → WindowClosed → Final; Disputed (any public bond, until the window ends; blocks Final); Unavailable (DA, producer default recorded apart); TimedOut (silence or late coverage). `DisputeBudgetV1` bounds open disputes per claim/accuser and court work in flight. |
+| Network bound (RFC11 §15.4) | `lifecycle.rs` | `min(1, Q·ε_check + ε_env)` as bits; the algebraic target is never the network's security level. |
+| RFC04 §0 / §6 / §7.5 | `improve.rs` | `EpochKernelPolicyV1` pinned at `Open` (permitted descriptors, evaluation composition, cross-kernel pairs); candidates are new classes `ELIGIBLE_AT` under a pinned kernel of the parent's family; results carry their assurance and an unpinned kernel is refused; the promotion's exact integer sign test (table to 120 decisive items) is reported beside, never merged with, the union-bound computational error. |
 | Bind first, then draw (RFC11 §15.3) | `challenge.rs` | Seed = H(network, claim, class binding, plan root, evidence root, beacon); per-instance labelled streams; unbiased 127-bit sampling. **The beacon itself is not supplied.** |
 | Evidence and wiring | `trace.rs` | Evidence = every node value of every occurrence of every position (flat BLAKE2b-512 per tensor). Inputs are wired, never stated: a `Fixed` state's entry value is the previous position's committed `StateWrite` output (zeros at 0); a `Hist` window's prior rows are the earlier positions' committed appended rows. |
 | K2 checker (RFC11 §15.2 rows) | `verify.rs` | `MatMul`: Freivalds over GF(2^127−1), fresh public vector per batch slice and repetition. Other families: exact recompute from authenticated inputs (RFC11 §15.1 "small cheap constraints may be checked exactly"). Every opened output: dtype, shape, range. |
@@ -38,6 +45,20 @@ assurance union bound. End-to-end (`tests/k2_e2e.rs`) on RFC07 Part II's dense G
 * one false value in TopK, Gather, Div, Add and HistAppend is recomputed and convicted; a forged history window at a later position is caught at
   that position (its prior rows are re-read from the committed earlier rows);
 * served ≠ committed and withheld material → `Unavailable`; a challenge not bound to this evidence → refused.
+
+## Where the RFCs and the current code differ (the RFCs lead)
+
+RFC-0004/0005/0011 are the design of record for this route. Where the existing network code says otherwise, this crate follows
+the RFC and the difference is listed here rather than reconciled by bending the kernel:
+
+* **Verification**: the live Panel replays (`palw_verification_v2`, `PalwSeatReceiptV3`); the kernel route checks constraints and
+  files `PalwConstraintReceiptV1` per scope. The two are not mixed: no V3 receipt is read as a kernel receipt.
+* **Admission**: live classes pass TIR admission v10 and family certification; a kernel-bound class passes `check_plan_v1` under an
+  active descriptor and binds `ModelKernelBindingV1` under a new class-id domain. Legacy class ids are untouched.
+* **Improvement**: the live `palw_improvement_v1` example fixes candidates to Phase F v10; on this route an epoch pins kernels and
+  composition profiles first (RFC-0004 §0), and grading uses the pinned set even if the schedule changes mid-epoch.
+* **Evidence**: live claims commit captures and FOLD prefixes that only producers and bound seats read; here every node value is
+  committed and every input is wired to a commitment, so a fresh public bond can open and convict (ADR-0173).
 
 ## What is NOT done (open, in the order the RFCs gate them)
 

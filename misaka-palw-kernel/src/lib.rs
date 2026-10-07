@@ -32,6 +32,8 @@
 //!   of it (scheme, evidence, challenge, scope, assignment, recomputed soundness, deadline) and the per-segment coverage tally.
 //! * [`lifecycle`] — RFC-0011 §15.5's claim states (pass needs complete coverage; Final needs the window, retention and no open
 //!   dispute; DA outcomes apart from convictions), the dispute budget any public bond files against, and §15.4's network bound.
+//! * [`improve`] — RFC-0004 §0 on this route: the epoch's pinned kernel policy, candidate admission under a pinned kernel of the
+//!   parent's family, assurance-labelled evaluation results, and §7.5's integer promotion rule kept apart from the computational error.
 //! * [`assurance`] — RFC-0004 §0's labels for evaluation evidence and the promotion error budget.
 //!
 //! # What this is not
@@ -56,6 +58,7 @@ pub mod evidence;
 pub mod family;
 pub mod field;
 pub mod hash;
+pub mod improve;
 pub mod lifecycle;
 pub mod outcome;
 pub mod plan;
