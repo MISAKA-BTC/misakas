@@ -373,7 +373,7 @@ Committed → ChallengeBound → Checking → ProbabilisticPass → WindowClosed
                                  └─ missing evidence / deadline → DA or timeout outcome
 ```
 
-`ProbabilisticPass` requires the complete suite's positive evidence and the specified receipt rule. Silence, missing rounds, absent required constraints or unavailable witnesses never count as pass. Final requires the armed challenge window to close, required DA/retention obligations, and no unresolved accepted dispute. Reward escrow and useful-work maturation follow this lifecycle. Any pre-Final fork-choice weight and its aggregate adversarial exposure must be explicitly bounded and drilled with RFC-0008/ADR-0069; sampling receipts must not immediately release an entire session's budget or duplicate slice credit. A single network-versioned policy applies to all claims using this route, not a model-selected confidence level.
+`ProbabilisticPass` requires the complete suite's positive evidence and the specified receipt rule. Silence, missing rounds, absent required constraints or unavailable witnesses never count as pass. Final requires the armed challenge window to close, required DA/retention obligations, and no unresolved accepted dispute. Reward escrow and useful-work maturation follow this lifecycle. Any REAL claim's pre-Final fork-choice weight and aggregate adversarial exposure must remain bounded and drilled under ADR-0069. Revised RFC-0008's EXEC slices contribute zero fork-choice weight before and after Final; their pending reward/collateral/DA/court exposure still needs bounds, with one aggregate root Final and settlement. Sampling receipts must not immediately release an entire session's budget or duplicate slice credit. A single network-versioned policy applies to all claims using this route, not a model-selected confidence level.
 
 A failing random check suspends acceptance and identifies an evidence/relation disagreement. It does **not** by itself convict a miner: the served witness may differ from the committed claim, or a verifier may be faulty. Localize via authenticated matrix tiling or proof/dissection into named TIR/kernel primitive transitions with bounded inputs, weights and entry state. Then the existing compatible terminal court recomputes the exact step; a new primitive requires a versioned court extension, not a generic VM fallback. A GKR mismatch does not automatically identify a false terminal leaf: the plan must supply and test that localization protocol, its total bytes, work and deadline. No emergency end-to-end replay of a multi-terabyte model is an acceptable hidden dependency.
 
@@ -462,8 +462,8 @@ Publish the actual probability of detection **and successful enforceable convict
 collateral, saved compute/proof cost, maximum external/reorg gain, checker participation costs,
 fees/rewards, collusion/Sybil assumptions, and dispute backlog. As a screening requirement, expected
 enforceable loss must exceed the bounded gain from fraud; that inequality alone is not a Nash-
-equilibrium proof for MISAKA. RFC08's pre-Final fork-choice exposure and RFC12's settlement risk
-must be included, not priced as zero. PoSP's paper “validators” map to computation checkers/Panel
+equilibrium proof for MISAKA. Include RFC08's REAL-root exposure, pending EXEC work reward/collateral/DA/court exposure,
+and RFC12's settlement risk. EXEC slice fork-choice weight is zero under revised RFC08; that does not make its other exposure zero. PoSP's paper “validators” map to computation checkers/Panel
 seats here, never a new DNS attestation/precommit/finality authority.
 
 ## 16. Model extensibility without a VM (2026-10-06 revision)

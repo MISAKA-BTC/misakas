@@ -381,8 +381,9 @@ UI上のFinalだけを遅らせ、reward/weightを先に確定させる実装は
 
 Panelの3票はReceiptLicensedへ進める条件の一部であって、客観的正しさの証明ではない。
 required positive evidenceの存在を検査し、欠落をsilence=passにしない。
-pre-Final weightとclaim-backed sliceの最大損失はRFC08 [S25] と整合させ、
-reservation/convictionで重複creditが発生しないようにする。
+REAL rootのpre-Final weightとclaim-backed sliceの最大損失は改定RFC08 [S25] と整合させる。
+EXEC slice自体はFinal前後ともfork-choice weight 0だが、pending reward・collateral・DA・court exposureは有界化を必要とする。
+root単位の一回のFinal/精算とし、reservation/convictionで重複creditが発生しないようにする。
 
 期限後の未検出不正について、新しい無期限rollbackを導入しない。
 現行のpost-Final liabilityは保持期間・担保・適用fenceに従い、
