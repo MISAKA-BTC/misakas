@@ -231,6 +231,16 @@ impl Report {
             }
         }
 
+        if let Some(k) = &self.kernel {
+            let _ = writeln!(o);
+            let _ = writeln!(
+                o,
+                "kernel route    {}: {} as shipped, {} if armed — {} (ADR-0172; reported, not a verdict)",
+                k.kernel, k.shipped, k.hypothetical, k.bucket
+            );
+            let _ = writeln!(o, "  armed         {}", k.detail);
+        }
+
         if let Some(r) = &self.residency {
             let _ = writeln!(o);
             let _ = writeln!(

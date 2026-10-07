@@ -10,7 +10,8 @@
 //! (`PalwGenFenceV1::testnet12_v1`) — **armed hypothetically at the judged height** (the fence is dormant on every network; so is FP
 //! Job V5). A verdict here is a measurement of what the dormant fences would carry, never a live shape-ready.
 //!
-//! Shape-only conventions, recorded in every result: the image slot is 448×448 when the configuration declares no size; the image
+//! Shape-only conventions, recorded in every result: the image slot is 448×448 when the configuration declares no size (then 224, 196 and 192
+//! px square, [`VLM_PROBE_IMAGE_SIZES_V1`]); the image
 //! rows' requantisation unit is 1.0 (a scale changes constants, not the program's structure or cost); the artifact root is a
 //! placeholder (the inventory needs the weights).
 
@@ -31,9 +32,11 @@ use serde_json::{Value, json};
 use crate::gen_class::{GenLayoutChoiceV1, gen_default_layouts_v1};
 use crate::preflight::chain::PreflightNetwork;
 
-/// The image slot when the configuration declares none (a census convention, recorded): 448×448, then 224×224 and 196×196 (the smallest
-/// slot a registrant would declare) when the larger is refused.
-pub const VLM_PROBE_IMAGE_SIZE_V1: (u32, u32) = (448, 448);
+/// The image slot when the configuration declares none (a census convention, recorded): 448×448, then 224×224, 196×196 and 192×192
+/// when the larger is refused. 196 tiles 14-px patches merged 2×2 (Qwen2/2.5-VL, 7-px fixtures); 192 is the largest of them that tiles
+/// 16-px merged patches (Qwen3.5's 8 × 2, a real 16 × 2 config's half) — a size a tower cannot tile is refused for that size only and the
+/// next is tried.
+pub const VLM_PROBE_IMAGE_SIZE_V1: (u32, u32) = VLM_PROBE_IMAGE_SIZES_V1[0];
 pub const VLM_PROBE_IMAGE_SIZES_V1: [(u32, u32); 4] = [(448, 448), (224, 224), (196, 196), (192, 192)];
 
 /// The two programs and the pipeline of a vision-chat model's `Text` class at `max_context` positions.
@@ -183,8 +186,12 @@ fn class_with_tower_tiles(
 }
 
 /// **The pipeline admission of a vision-chat model's `Text` class**, `palw_gen_v1` armed hypothetically at `height` with its
-/// testnet-12 ceilings: the first layout admitted (tiles 64/256/1,024, history tiles 64/32/16, checkpoint 64/8/1), else the
-/// refusal at the first layout tried.
+/// testnet-12 ceilings: the first layout admitted (tiles 16/64/256, output tiles 256/1,024/4,096, history tiles 32/16 — 16/8/4/2 with
+/// the range twin's fitted tower tiles — checkpoint 64/8/1), else the refusal at the first layout tried.
+///
+/// Each (context, size) attempt is caught on its own: a lowering that panics at one size (Qwen2.5-VL's tower at 448 px exceeds a block's
+/// node cap in the builder) is that size's refusal, and the smaller sizes are still tried. A refusal that no size changes — no tower
+/// adapter, an unread key, the text stage, no placeholder — stops the walk.
 pub fn vlm_text_class_admission_v1(config: &Value, net: &PreflightNetwork, height: u64, max_context: u32, range_twin: bool) -> Value {
     let run = || -> Result<Value, String> {
         // The declared context first, then the census's narrower ones (a class admitted only at a narrower context is its own
@@ -194,11 +201,15 @@ pub fn vlm_text_class_admission_v1(config: &Value, net: &PreflightNetwork, heigh
         contexts.extend([4_096u32, 2_048].into_iter().filter(|c| *c < max_context));
         for ctx in contexts {
             for size in VLM_PROBE_IMAGE_SIZES_V1 {
-                match admit_at_size(config, net, height, ctx, size, range_twin) {
+                let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    admit_at_size(config, net, height, ctx, size, range_twin)
+                }))
+                .unwrap_or_else(|_| Err("the probe panicked at this size".into()));
+                match attempt {
                     Ok(v) => return Ok(v),
                     Err(e) => refusals.push(format!("{ctx}@{}x{}: {}", size.0, size.1, e.chars().take(160).collect::<String>())),
                 }
-                if refusals.last().is_some_and(|r| r.contains("is not a vision tower") || r.contains("config key(s)") || r.contains("text spec") || r.contains("placeholder")) {
+                if refusals.last().is_some_and(|r| refusal_ends_walk(r)) {
                     return Err(refusals.join(" | "));
                 }
             }
@@ -216,6 +227,14 @@ pub fn vlm_text_class_admission_v1(config: &Value, net: &PreflightNetwork, heigh
     v["max_context"] = json!(max_context);
     v["range_twin"] = json!(range_twin);
     v
+}
+
+/// A refusal no other context or image size can change.
+fn refusal_ends_walk(refusal: &str) -> bool {
+    refusal.contains("is not a vision tower")
+        || refusal.contains("config key(s)")
+        || refusal.contains("text spec")
+        || refusal.contains("placeholder")
 }
 
 fn admit_at_size(
@@ -284,7 +303,13 @@ fn admit_at_size(
             None
         };
         let layouts: Vec<(u32, Option<u32>, u32, u32)> = if fitted.is_some() {
-            vec![(64, Some(256), 16, 64), (64, Some(256), 8, 64), (64, Some(256), 4, 64), (64, Some(256), 2, 64), (64, Some(1024), 16, 8)]
+            vec![
+                (64, Some(256), 16, 64),
+                (64, Some(256), 8, 64),
+                (64, Some(256), 4, 64),
+                (64, Some(256), 2, 64),
+                (64, Some(1024), 16, 8),
+            ]
         } else {
             LAYOUTS.to_vec()
         };
@@ -515,4 +540,52 @@ fn fit_tower_tiles(
 /// The court's terminal multiply-accumulates per tile (testnet-12's court: 2^24).
 fn mac_cap_of_tile() -> u64 {
     1 << 24
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(name: &str) -> Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../misaka-palw-tir-lower/tests/fixtures/hf-vis")
+            .join(name)
+            .join("config.json");
+        serde_json::from_slice(&std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))).unwrap()
+    }
+
+    fn stages(name: &str, size: (u32, u32)) -> Result<usize, String> {
+        let c = fixture(name);
+        std::panic::catch_unwind(|| vlm_stages_v1(&c, 256, size).map(|s| s.rows)).unwrap_or_else(|_| Err("panicked".into()))
+    }
+
+    #[test]
+    fn every_vlm_fixture_stages_at_some_probe_size_and_a_size_refusal_never_ends_the_walk() {
+        for name in ["qwen2_vl", "qwen2_5_vl", "qwen3_5", "llava"] {
+            let results: Vec<_> = VLM_PROBE_IMAGE_SIZES_V1.iter().map(|s| (*s, stages(name, *s))).collect();
+            assert!(results.iter().any(|(_, r)| r.is_ok()), "{name}: no probe size stages: {results:?}");
+            for (size, r) in &results {
+                if let Err(e) = r {
+                    assert!(!refusal_ends_walk(e), "{name} at {size:?}: a size-dependent refusal must let the next size run: {e}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn qwen3_5_needs_192_px_where_the_14_px_towers_take_196() {
+        // 8-px patches merged 2×2: 196 does not tile, 192 does (12 × 12 merged rows).
+        assert!(stages("qwen3_5", (196, 196)).unwrap_err().contains("does not tile"));
+        assert_eq!(stages("qwen3_5", (192, 192)), Ok(144));
+        // 7-px patches merged 2×2: the other way round.
+        assert_eq!(stages("qwen2_vl", (196, 196)), Ok(196));
+        assert!(stages("qwen2_vl", (192, 192)).unwrap_err().contains("does not tile"));
+    }
+
+    #[test]
+    fn a_panic_at_one_size_is_that_sizes_refusal_and_smaller_sizes_still_run() {
+        // Qwen2.5-VL's fixture tower at 448 px exceeds the builder's per-block node cap (a panic in the IR builder); 224 stages.
+        assert_eq!(stages("qwen2_5_vl", (448, 448)), Err("panicked".into()));
+        assert_eq!(stages("qwen2_5_vl", (224, 224)), Ok(256));
+    }
 }

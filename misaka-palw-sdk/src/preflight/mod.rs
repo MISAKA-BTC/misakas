@@ -20,6 +20,7 @@
 
 pub mod chain;
 pub mod full;
+pub mod kernel;
 pub mod model;
 pub mod node;
 pub mod remote;
@@ -342,6 +343,9 @@ pub struct Report {
     pub artifact: Option<model::ArtifactInfo>,
     /// The class's residency as a node holds it, read off the program (reported, not judged).
     pub residency: Option<residency::ResidencyInfo>,
+    /// ADR-0172: the K2-TIR-v1 kernel's static route of the program, shipped and hypothetically armed (reported, not judged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kernel: Option<kernel::KernelRouteInfo>,
     pub admission: Option<chain::AdmissionInfo>,
     pub chain: Vec<Condition>,
     pub seat: Option<chain::SeatInfo>,
@@ -648,6 +652,12 @@ fn run_on_source_cached(
         .and_then(|l| kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(l.max_context));
     let rules = misaka_palw_tir_exec::tiers::TirTierRulesV1 { pin_below_bytes: opts.residency_pin_below_bytes };
     let residency = analysis.program.as_ref().map(|p| residency::residency_of(p, rules, canonical));
+    let kernel_positions =
+        chain_out.admission.as_ref().and_then(|a| a.layout.as_ref()).map(|l| l.max_context).or(opts.max_context).unwrap_or(u32::MAX);
+    let kernel = analysis
+        .program
+        .as_ref()
+        .map(|p| kernel::kernel_route_of(p, kernel_positions, network.as_ref().map(|n: &chain::NetworkInfo| n.daa).unwrap_or(0)));
     Ok(Report {
         schema: PREFLIGHT_SCHEMA_V1,
         mode: "model",
@@ -665,6 +675,7 @@ fn run_on_source_cached(
         tensors: analysis.tensors.clone(),
         artifact: analysis.artifact.clone(),
         residency,
+        kernel,
         admission: chain_out.admission.clone(),
         chain: chain_out.conditions.clone(),
         seat: chain_out.seat.clone(),

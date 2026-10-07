@@ -99,6 +99,10 @@ pub struct PreflightSummaryV1 {
     pub artifact_bytes: Option<u64>,
     pub download_bytes_needed: Option<u64>,
     pub notes: Vec<String>,
+    /// RFC-0011 §16.4 (ADR-0172): the K2-TIR-v1 kernel's route — `shipped/hypothetical` codes, e.g.
+    /// `KERNEL_NOT_ACTIVE/ELIGIBLE_AT` — and the bucket of the shipped outcome. Reported, never counted as coverage.
+    pub kernel_route: Option<String>,
+    pub kernel_bucket: Option<String>,
 }
 
 /// The ruleset a row was judged against.
@@ -550,6 +554,8 @@ fn summary(r: &Report) -> PreflightSummaryV1 {
         artifact_bytes: r.artifact.as_ref().map(|a| a.estimate_bytes),
         download_bytes_needed: r.artifact.as_ref().and_then(|a| a.download_bytes_needed),
         notes: r.notes.iter().take(6).cloned().collect(),
+        kernel_route: r.kernel.as_ref().map(|k| format!("{}/{}", k.shipped, k.hypothetical)),
+        kernel_bucket: r.kernel.as_ref().map(|k| k.bucket.clone()),
     }
 }
 
