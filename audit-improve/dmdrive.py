@@ -515,19 +515,31 @@ def outcome_of(erow):
 # post-genesis bonds, the just-in-time liar nodes, the capacity sampler (int-11 combined drill)
 # ---------------------------------------------------------------------------------------------------------------------
 XB = PLAN.get("extra_bonds", {})
-XB_ORDER = [int(x) for x in XB.get("order", [10, 11, 12, 13, 8, 9])]     # lane D's 10..13 are needed first (DG-4 from ~150); the liars' 8, 9 by ~440
+XB_ORDER = [int(x) for x in (E.get("XB_ORDER", "").replace(",", " ").split() or XB.get("order", [10, 11, 12, 13, 8, 9]))]     # lane D's 10..13 are needed first (DG-4 from ~150); the liars' 8, 9 by ~440
 XB_FROM_DAA = int(E.get("XB_FROM_DAA") or XB.get("from_daa", 44))                                 # after the improvement fence: below it the main wallet is D-M5's
 XB_FLOAT_MSK = int(XB.get("float_msk", 150))                              # on top of the collateral: the 100 MSK fee float the genesis seats carry, and fees
 XB_WAIT_DAA = int(XB.get("registrar_wait_daa", 12))                       # a registrar that has not printed its bond after this many DAA is stopped and tried again
-LIARS = PLAN.get("liars", {})
+LIARS = {} if E.get("DM_NO_LIARS") == "1" else PLAN.get("liars", {})     # the combined drill has no D-M3: no sacrificial liars
 LIAR_START_DAA = int(LIARS.get("start_daa", 440))
 LIAR_DEADLINE_DAA = int(LIARS.get("deadline_daa", 300))                   # past start + this a liar that never lied or was never convicted is stopped, and the verdict says so
 CAP = PLAN.get("capacity", {})
-CAP_WINDOWS = {                                                           # the measured windows, DAA: [lo, hi)
-    "rho25": (int(E.get("CAP2_AT", "560")) + int(CAP.get("settle_daa", 10)), int(E.get("CAP2_AT", "560")) + int(CAP.get("settle_daa", 10)) + int(CAP.get("window_daa", 80))),
-    "rho100": (int(E.get("CAP3_AT", "655")) + int(CAP.get("settle_daa", 10)), int(E.get("CAP3_AT", "655")) + int(CAP.get("settle_daa", 10)) + int(CAP.get("window_daa", 80))),
-}
-CAP_STEPS = (("rho25", "capacity_step2"), ("rho100", "capacity_step3"))
+_W, _S = int(E.get("CAP_WINDOW_DAA") or CAP.get("window_daa", 80)), int(E.get("CAP_SETTLE_DAA") or CAP.get("settle_daa", 10))
+if E.get("INT12") == "1":     # the combined drill of the DAA-5,300 candidate: rho 25 / 100 / 250 / 1000 at H' / +95 / +190 / +285 (the release's offsets)
+    _H = int(E.get("CAP2_AT", "560"))
+    _OFF = {"rho25": 0, "rho100": 95, "rho250": 190, "rho1000": 285}
+    _NAMES = [n for n in (E.get("CAP_RHOS") or "rho25,rho100,rho250,rho1000").replace(",", " ").split() if n in _OFF]    # CAP_RHOS: the steps measured (the combined drill skips rho25: no REAL load yet)
+    CAP_STEPS = tuple((n, "int11") for n in _NAMES)
+    CAP_WINDOWS = {n: (_H + _OFF[n] + _S, _H + _OFF[n] + _S + _W) for n in _NAMES}
+    for _tok in (E.get("CAP_AT") or "").replace(",", " ").split():      # CAP_AT="rho100:170 rho250:224": a window's start DAA, inside its rho regime (the legs of the floor checks sit between windows)
+        _n, _, _at = _tok.partition(":")
+        if _n in CAP_WINDOWS and _at.isdigit():
+            CAP_WINDOWS[_n] = (int(_at), int(_at) + _W)
+else:
+    CAP_WINDOWS = {                                                           # the measured windows, DAA: [lo, hi)
+        "rho25": (int(E.get("CAP2_AT", "560")) + _S, int(E.get("CAP2_AT", "560")) + _S + _W),
+        "rho100": (int(E.get("CAP3_AT", "655")) + _S, int(E.get("CAP3_AT", "655")) + _S + _W),
+    }
+    CAP_STEPS = (("rho25", "capacity_step2"), ("rho100", "capacity_step3"))
 LIVE_PHASES = ("provisional", "panel_bound", "receipt_licensed", "default_disputed")   # a claim not yet Final and not void
 UNLICENSED_PHASES = ("provisional", "panel_bound", "default_disputed")                  # accepted and waiting for its licence: the backlog
 
@@ -590,6 +602,7 @@ def capacity_summary(series, claims, lo, hi):
     acc = [c for c in claims.values() if c.get("acc") is not None and lo <= c["acc"] < hi]
     lic = [c for c in claims.values() if c.get("lic") is not None and lo <= c["lic"] < hi]
     lat = [c["lic"] - c["acc"] for c in claims.values() if c.get("acc") is not None and c.get("lic") is not None and lo <= c["acc"] < hi]
+    lat_b = [c["lic"] - c["bound"] for c in claims.values() if c.get("bound") is not None and c.get("lic") is not None and lo <= c["bound"] < hi]
     rows = [r for r in series if lo <= r["daa"] < hi]
     q = max(len(rows) // 4, 1)
     first_half = [(r["daa"], r["backlog"]) for r in rows[len(rows) // 2:]]
@@ -602,6 +615,8 @@ def capacity_summary(series, claims, lo, hi):
     return {"lo": lo, "hi": hi, "samples": len(rows), "accepted": len(acc), "accepted_per_daa": round(len(acc) / span, 3),
             "licensed": len(lic), "licensed_per_daa": round(len(lic) / span, 3),
             "latency_p50": percentile(lat, 0.5), "latency_p95": percentile(lat, 0.95), "latency_n": len(lat),
+            "bind_latency_p50": percentile(lat_b, 0.5), "bind_latency_p95": percentile(lat_b, 0.95), "bind_latency_n": len(lat_b),
+            "oldest_wait_max": max((r.get("oldest_wait", 0) for r in rows), default=None),
             "backlog_first": rows[0]["backlog"] if rows else None, "backlog_last": rows[-1]["backlog"] if rows else None,
             "backlog_max": max((r["backlog"] for r in rows), default=None), "backlog_slope_per_daa_second_half": None if sl is None else round(sl, 4),
             "backlog_q2_mean": None if q2 is None else round(q2, 2), "backlog_q4_mean": None if q4 is None else round(q4, 2),
@@ -626,7 +641,7 @@ def verdict_cap(sd):
             checks.append((None, f"{name}: window {CAP_WINDOWS[name][0]}..{CAP_WINDOWS[name][1]} not measured yet"))
             continue
         txt = (f"{name}: accepted {sm['accepted_per_daa']}/DAA, licensed {sm['licensed_per_daa']}/DAA, licence latency p50 {sm['latency_p50']} p95 {sm['latency_p95']} DAA "
-               f"(n={sm['latency_n']}), backlog {sm['backlog_first']}->{sm['backlog_last']} (max {sm['backlog_max']}, slope {sm['backlog_slope_per_daa_second_half']}/DAA), "
+               f"(n={sm['latency_n']}; accepted->licence includes the ~20-DAA anchor delay), bind->licence p50 {sm.get('bind_latency_p50')} p95 {sm.get('bind_latency_p95')} (n={sm.get('bind_latency_n')}), oldest wait max {sm.get('oldest_wait_max')}, backlog {sm['backlog_first']}->{sm['backlog_last']} (max {sm['backlog_max']}, slope {sm['backlog_slope_per_daa_second_half']}/DAA), "
                f"seat occupancy max {sm['occupancy_max']} mean {sm['occupancy_mean']}, exposure reserved/ceiling max {sm['exposure_reserved_ratio_max']}")
         checks.append((None if sm["diverges"] is None else (not sm["diverges"]), txt))
     return v_all(checks)
@@ -658,8 +673,8 @@ class Drive:
         self.status, self.status_path = got if got else (None, None)
         self.ids = {n: model_id(n) for n in ASSETS}
         self.milestones()
-        for step in (self.step_memory, self.step_m5_below, self.step_m5_below_verify, self.step_m5_cross, self.step_register_classes, self.step_lines, self.step_policies,
-                     self.step_material, self.step_epochs, self.step_rollbacks, self.step_attacks, self.step_dm3_probe, self.step_seat_operator_ids, self.step_extra_bonds, self.step_liars_jit,
+        for step in (self.step_memory, self.step_m5_below, self.step_m5_below_verify, self.step_m5_cross, self.step_head_register, self.step_register_classes, self.step_lines, self.step_policies,
+                     self.step_material, self.step_epochs, self.step_rollbacks, self.step_attacks, self.step_dm3_probe, self.step_seat_operator_ids, self.step_extra_bonds, self.step_liars_jit, self.step_outsider,
                      self.step_capacity):
             key = step.__name__
             if self.s.d["failed"].get(key):
@@ -828,6 +843,9 @@ class Drive:
                         why=f"new0 {'dropped it' if got_new else 'did NOT log the drop'}; old {'skipped it' if got_old else 'did NOT log the skip'}; tips {agree}")
 
     def step_m5_cross(self):
+        """D-M5's crossing, and FORK-a of the combined drill. On a build with the crossing re-judgement (int-10.7: a connection kept since before a gate fence is dropped
+        when this node crosses it) the refusal is logged AT the crossing, no restart. A build without it logs the refusal only when the old relay reconnects: after
+        STALL ticks without the line the old relay is restarted (what an operator's old node does) and the result says so (old_restarted)."""
         if self.s.done("m5-cross") or not self.s.done("m5-below"):
             return
         lack = first_lacking_fence()
@@ -836,20 +854,41 @@ class Drive:
         pat = rf"Fork-id mismatch on network \S+ at DAA \d+ - this node has crossed fence (\d+)"
         line = self.log_after("new0", 0, pat)
         d_old = daa_of("old") if node_alive("old") else None
-        info = {"lack": lack, "refusal": line, "old_daa": d_old, "new_daa": self.daa}
-        if line is None and node_alive("old") and not self.s.get("m5-old-restarted"):
-            # A peer connected before the fence is never handshaken again: the old relay keeps relaying, rejects every block past the fence (disqualified: PALW state
-            # root) and stalls at the fence's DAA, and the fork-id refusal is only logged when it RECONNECTS. A restart is what an operator's old node does.
-            self.s.put("m5-old-restarted", self.daa)
-            run(["bash", f"{HERE}/nodes.sh", "stop", "old"], timeout=200)
-            run(["bash", f"{HERE}/nodes.sh", "start", "old"], timeout=200)
-            return
+        restarted = bool(self.s.get("m5-old-restarted"))
+        info = {"lack": lack, "refusal": line, "old_daa": d_old, "new_daa": self.daa, "old_restarted": restarted}
+        write_json(f"{WORK}/fork-a.json", {"mismatch_line": line, "old_restarted": restarted, "old_daa": d_old, "new_daa": self.daa, "fence": lack[1]})
         if line is None:
             n = self.s.tried("m5-cross")
-            if n >= 10:
-                self.s.mark("m5-cross", result="FAIL", why="no fork-id refusal logged by new0 after the fence", **info)
+            if not restarted and node_alive("old") and n >= int(E.get("M5_STALL_TICKS", "12")):
+                self.s.put("m5-old-restarted", self.daa)
+                run(["bash", f"{HERE}/nodes.sh", "stop", "old"], timeout=200)
+                run(["bash", f"{HERE}/nodes.sh", "start", "old"], timeout=200)
+                return
+            if n >= int(E.get("M5_STALL_TICKS", "12")) + 12:
+                self.s.mark("m5-cross", result="FAIL", why="no fork-id refusal logged by new0 after the fence, even after the old relay was restarted", **info)
             return
         self.s.mark("m5-cross", result="PASS", **info)
+
+    # ----- the head class H: new4's panel registers it ONCE at start; before the IR fence the gate answers FAMILY_FENCE_CLOSED and the node never retries ----------
+    def step_head_register(self):
+        """In the int-11 drill the nodes were restarted across the IR fence, so new4 registered H at ~DAA 21. The combined drill runs the nodes through it without a restart: new4's single attempt
+        at start is refused (FAMILY_FENCE_CLOSED) and H stays 'absent' for ever, so no line, no extra bond, no gen claim and no REAL producer can start (run 1, 2026-10-04: 0 REAL attempts to DAA 160).
+        Once the IR fence is past, restart new4 (its env: HEAD_PRODUCE as the driver holds it) so it registers H; retried every 3 DAA while H is still absent."""
+        if not self.ids.get("head") or self.daa < TIR_AT:
+            return
+        if lifecycle_of(self.reg, self.ids["head"])[0] != "absent":
+            if not self.s.done("head-register"):
+                self.s.mark("head-register", daa=self.daa, note="H is in the registry")
+            return
+        last = int(self.s.get("head-register-last") or -99)
+        n = int(self.s.get("head-register-tries") or 0)
+        if self.daa < last + 3 or n >= 6:
+            return
+        self.s.put("head-register-last", self.daa)
+        self.s.put("head-register-tries", n + 1)
+        self.nodes_sh("stop", "new4")
+        rc, text = self.nodes_sh("start", "new4")
+        log(f"head class absent past the IR fence at DAA {self.daa}: new4 restarted so its panel registers H (try {n + 1}, rc {rc}: {text.strip()[-120:]})")
 
     # ----- candidate classes: ordinary registrations, early, so the lifecycle is done long before the draw -----------
     def step_register_classes(self):
@@ -865,11 +904,20 @@ class Drive:
                     a = asset_of(c["class"], line_name)
                     if a not in wanted:
                         wanted.append(a)
+        late = {}
+        for tok in (E.get("REGISTER_LATE") or "").replace(",", " ").split():     # REGISTER_LATE="lose:152": an asset is registered from that DAA on (G-A1: a class registered with REAL flowing)
+            k, _, v = tok.partition(":")
+            if v.isdigit():
+                late[k] = int(v)
+        deferred = False
         for asset in wanted:
             cls = asset
             if is_composite(asset) and not os.path.exists(f"{MODEL}/{asset}.palwtirs"):
                 continue
-            if not self.ids.get(asset) or lifecycle_of(self.reg, self.ids[asset])[0] != "absent":
+            if asset in late and self.daa < late[asset] and (not self.ids.get(asset) or lifecycle_of(self.reg, self.ids[asset])[0] == "absent"):
+                deferred = True
+                continue
+            if not self.ids.get(asset) or lifecycle_of(self.reg, self.ids[asset])[0] != "absent" or asset in (self.s.get("reg-submitted") or []):
                 continue
             out = f"{OBJ}/register-{asset}.obj"
             if is_composite(asset):
@@ -885,13 +933,16 @@ class Drive:
                 continue
             objs.append(out)
         if not objs:
-            self.s.mark("register-classes", note="every class is registered already")
+            if not deferred:
+                self.s.mark("register-classes", note="every class is registered already")
             return
         ok, text = submit(objs)
         if not ok:
             raise RuntimeError(f"cannot submit the registrations: {text.strip()[-300:]}")
-        self.s.mark("register-classes", daa=self.daa, objects=objs)
-        log(f"classes registered (seat 7) at DAA {self.daa}: {[os.path.basename(o) for o in objs]}")
+        self.s.put("reg-submitted", sorted(set((self.s.get("reg-submitted") or []) + [os.path.basename(o)[len("register-"):-len(".obj")] for o in objs])))
+        if not deferred:
+            self.s.mark("register-classes", daa=self.daa, objects=objs)
+        log(f"classes registered (seat 7) at DAA {self.daa}: {[os.path.basename(o) for o in objs]}" + (" (more deferred: REGISTER_LATE)" if deferred else ""))
         span = int(pick(self.reg, "spanDaa", "span_daa", default=0) or 0)
         if span:
             log("admission-audit slots (DAA mod period): " + ", ".join(
@@ -1356,6 +1407,16 @@ class Drive:
             got = self.log_after("reg", int(st["cursor"]), pat)
             m = re.search(pat, got or "")
             if not m:
+                # A registrar that is stopped before it prints (the harness's 120 s start check) has still registered its bond: the next run reads
+                # "this key already holds bond T:I on this chain" and prints no "registered bond" line. The bond is the same one.
+                g2 = self.log_after("reg", int(st["cursor"]), r"this key already holds bond ([0-9a-f]{128}):(\d+) on this chain")
+                m2 = re.search(r"this key already holds bond ([0-9a-f]{128}):(\d+) on this chain", g2 or "")
+                if m2:
+                    class _M:   # same four groups as the registered-bond line; the transaction id is not printed in this form
+                        def group(self, i):
+                            return {1: m2.group(1), 2: m2.group(2), 3: str(int(st["collateral"])), 4: ""}[i]
+                    m = _M()
+            if not m:
                 if self.daa > int(st["start_daa"]) + XB_WAIT_DAA:
                     self.nodes_sh("stop", "reg")
                     st["attempts"] = int(st.get("attempts", 0)) + 1
@@ -1426,6 +1487,27 @@ class Drive:
             self.s.mark(kp, daa=self.daa, why=reason)
             log(f"D-M3: the liar node {node} stopped at DAA {self.daa}: {reason}")
 
+    def step_outsider(self):
+        """The combined drill's OUTSIDER seat (OUTSIDER=1): a node on a post-genesis bond, started once the bond is registered and never stopped. Also stops
+        the old relay once D-M5's crossing is done (ten processes are too many for this Mac)."""
+        for node, v in NODES.items():
+            if v["role"] != "outsider":       # extfloor and joiner are started by dc-run.sh, on its own clock
+                continue
+            if "m5-cross" in self.s.d["done"] and "old" in NODES and node_alive("old") and not self.s.done("old-stopped") and node == next(iter(n for n, w in NODES.items() if w["role"] == "outsider")):
+                self.nodes_sh("stop", "old")
+                self.s.mark("old-stopped", daa=self.daa)
+                log(f"the old relay stopped at DAA {self.daa} (D-M5's crossing is done)")
+            if self.s.done(f"outsider-start:{node}") or extra_bond(v["seat"]) is None:
+                continue
+            rc, out = self.nodes_sh("start", node, timeout=300)
+            if rc != 0:
+                if "not starting" in out:
+                    log(f"{node}: the outsider is not started yet ({out.strip().splitlines()[-1][:100]})")
+                    continue
+                raise RuntimeError(f"cannot start {node}: {out.strip()[-200:]}")
+            self.s.mark(f"outsider-start:{node}", daa=self.daa)
+            log(f"the outsider seat {node} (post-genesis bond {v['seat']}) started at DAA {self.daa}")
+
     # ----- the capacity line: ρ=25 and ρ=100 windows measured on the same chain ---------------------------------------------
     def step_capacity(self):
         lo_all = min(w[0] for w in CAP_WINDOWS.values())
@@ -1441,13 +1523,20 @@ class Drive:
         series = list(self.s.get("cap-series") or [])
         sampling = any(lo - 3 <= self.daa < hi + 1 for lo, hi in CAP_WINDOWS.values())
         if sampling:
-            backlog, occ, rsv = 0, [], None
+            backlog, occ, rsv, oldest = 0, [], None, 0
             for node, seat in seat_bonds():
                 bond = bond_of(seat)
                 for c in claims_of(bond):
                     cid = str(pick(c, "claimId", default=""))
                     ph = str(pick(c, "phase", default=""))
                     rec = claims.setdefault(cid, {"acc": int(pick(c, "acceptedDaa", default=0) or 0), "lic": None, "fin": None})
+                    bd = pick(c, "boundDaa", default=None)
+                    if bd is not None and rec.get("bound") is None:
+                        rec["bound"] = int(bd)
+                    if ph in UNLICENSED_PHASES and rec.get("bound") is not None:
+                        oldest = max(oldest, self.daa - rec["bound"])
+                    if "void" in ph and not rec.get("void"):
+                        rec["void"] = str(pick(c, "voidReason", "void", default=ph) or ph)
                     if ph == "receipt_licensed" and rec["lic"] is None:
                         rec["lic"] = int(pick(c, "phaseDaa", default=self.daa) or self.daa)
                     elif ph == "final" and rec["fin"] is None:
@@ -1461,7 +1550,7 @@ class Drive:
                     f = rpc("getPalwProducerFacts", {"classId": self.ids["head"], "bondTransactionId": t, "bondIndex": int(i), "withBond": True})
                     res, ceil = int(pick(f, "bondReservedExposure", default=0) or 0), int(pick(f, "bondExposureCeiling", default=0) or 0)
                     rsv = round(res / ceil, 4) if ceil else None
-            row = {"daa": self.daa, "backlog": backlog, "occ_max": max(occ, default=0), "occ_mean": round(sum(occ) / max(len(occ), 1), 2), "reserved_ratio": rsv}
+            row = {"daa": self.daa, "backlog": backlog, "oldest_wait": oldest, "occ_max": max(occ, default=0), "occ_mean": round(sum(occ) / max(len(occ), 1), 2), "reserved_ratio": rsv}
             series.append(row)
             self.s.put("cap-claims", claims)
             self.s.put("cap-series", series)
@@ -1620,7 +1709,8 @@ def verdict_dm5(sd):
     lack = cross["lack"]
     note = "" if lack[0] == "improve" else (f" (the old release is int-10: the first fence it lacks is {lack[0]}@{lack[1]}, the flag day that follows it on testnet-12; the improvement fence "
                                              f"comes after it, so the crossing shown is that flag day's, refused by the fork id as every later one would be)")
-    return "PASS", f"below: dropped by name / skipped / one tip at DAA {ver['tips'][0]}; crossed fence {lack[1]}: {cross['refusal']}{note}"
+    how = "re-judged AT the crossing, no restart" if not cross.get("old_restarted") else "logged only after the old relay was restarted (no crossing re-judgement in this build)"
+    return "PASS", f"below: dropped by name / skipped / one tip at DAA {ver['tips'][0]}; crossed fence {lack[1]} ({how}): {cross['refusal']}{note}"
 
 
 def _outcome_class(outcome):
