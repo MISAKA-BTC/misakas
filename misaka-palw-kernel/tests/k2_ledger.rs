@@ -22,7 +22,7 @@ use misaka_palw_kernel::ledger::{
 use misaka_palw_kernel::lifecycle::ClaimStateV1;
 use misaka_palw_kernel::merkle::TensorOpeningV1;
 use misaka_palw_kernel::plan::plan_for_tir_program_v1;
-use misaka_palw_kernel::public::{MaterialKeyV1, MaterialResponseV1, TensorWireV1};
+use misaka_palw_kernel::public::{MaterialResponseV1, TensorWireV1};
 use misaka_palw_kernel::trace::{TraceV1, WiringV1, trace_v1};
 use misaka_palw_tir::program::TirProgramV1;
 use misaka_palw_tir::{MapParams, Prim, Tensor};
@@ -35,7 +35,7 @@ const SPAM2: Digest = [0x52; 64];
 
 const PROSECUTION: ProsecutionPolicyV1 = ProsecutionPolicyV1 {
     court_deadline_daa: 20,
-    max_open_demands_per_claim: 4,
+    max_sessions_per_claim: 1 << 10,
     max_public_bytes: 1 << 40,
     max_verifier_ram: 1 << 36,
     max_retained_state: 1 << 32,
@@ -50,8 +50,7 @@ fn policy() -> LedgerPolicyV1 {
         court_deadline_daa: 20,
         liability_daa: 200,
         exit_delay_daa: 30,
-        max_open_demands_per_claim: 4,
-        max_open_demands_per_accuser: 2,
+        dismissed_proof_fee: 5,
         accuser_reward_permille: 500,
         default_penalty: 100,
         claim_reward: 7,
@@ -115,7 +114,7 @@ impl World {
     fn with(policy: LedgerPolicyV1) -> Self {
         let fx = dense_moe_v1(7);
         let d = k2_tir_v1_descriptor();
-        let genesis = KernelLedgerV1::genesis(policy, active_for(&d), vec![k2_tir_v1_descriptor(), k2_tir_v2_descriptor()]);
+        let genesis = KernelLedgerV1::genesis(policy, active_for(&d), vec![k2_tir_v1_descriptor(), k2_tir_v2_descriptor()]).unwrap();
         let mut w =
             World { genesis: genesis.clone(), blocks: vec![], l: genesis, class: [0; 64], program: fx.program, params: fx.params };
         let ev = w.block(1, vec![bond(PRODUCER, 5000), bond(OUTSIDER, 1000), bond(SPAM1, 1000), bond(SPAM2, 1000), w.register()]);
@@ -158,7 +157,7 @@ impl World {
             nonce: [nonce; 64],
         };
         let ev = self.block(daa, vec![T::PostJob { job: job.clone() }]);
-        assert_eq!(ev, vec![E::JobPosted { job: job.id() }]);
+        assert!(ev.contains(&E::JobPosted { job: job.id() }), "{ev:?}");
         job
     }
 
@@ -245,12 +244,12 @@ fn refused(ev: &[E]) -> Option<String> {
     })
 }
 
-fn node(at: (u32, u16, u16)) -> MaterialKeyV1 {
-    MaterialKeyV1::Node { position: at.0, occurrence: at.1, node: at.2 }
-}
-
-fn whole(t: &Tensor) -> Vec<u8> {
-    borsh::to_vec(&MaterialResponseV1::Whole(TensorWireV1::of(t))).unwrap()
+/// A position demand's response: every committed value of position `p` of `trace`, whole, then `edit`ed.
+fn position(trace: &TraceV1, p: u32, edit: impl FnOnce(&mut Vec<Vec<MaterialResponseV1>>)) -> Vec<u8> {
+    let mut r: Vec<Vec<MaterialResponseV1>> =
+        trace.values[p as usize].iter().map(|o| o.iter().map(|t| MaterialResponseV1::Whole(TensorWireV1::of(t))).collect()).collect();
+    edit(&mut r);
+    borsh::to_vec(&r).unwrap()
 }
 
 // ── A: the producer and every Panel seat collude ──────────────────────────────────────────────────────────────────────────
@@ -345,6 +344,7 @@ fn a_self_consistent_trace_under_other_weights_is_convicted_and_a_failed_check_a
         ],
     );
     assert_eq!(ev.iter().filter(|e| matches!(e, E::ProofDismissed { .. })).count(), 3, "{ev:?}");
+    assert_eq!(w.l.bonds[&OUTSIDER].collateral, 1000 - 3 * 5, "a dismissed filing forfeits its fee");
     assert!(convicted(&ev).is_none());
     let ev = w.block(62, vec![]);
     assert!(ev.contains(&E::Final { claim: hid, reward: 7 }), "{ev:?}");
@@ -429,30 +429,50 @@ fn a_borrowed_trace_is_refused_at_inclusion_and_a_substituted_output_is_convicte
 // ── D: withheld values are obtained through the chain, never a served view ────────────────────────────────────────────────
 
 #[test]
-fn a_withheld_value_is_demanded_on_chain_and_the_served_value_convicts_or_silence_defaults() {
+fn withheld_positions_are_demanded_in_one_round_and_the_served_values_convict_or_silence_defaults() {
     let mut w = World::new();
     let job = w.post_job(2, &[3, 17, 9], 3, 1);
     let (at, lie) = w.lying(&job, 3);
     let id = lie.claim.id();
-    // The producer publishes everything but the value that convicts it; keeps its committed bytes for later.
-    let da = Da::publishing(&lie.trace, &[at]);
-    let committed = lie.trace.values[at.0 as usize][at.1 as usize][at.2 as usize].clone();
+    // The producer publishes everything but the value that convicts it and one value of position 3; it keeps its trace.
+    let da = Da::publishing(&lie.trace, &[at, (3, 0, 0)]);
+    let trace = lie.trace.clone();
     w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
-    assert_eq!(outsider(&w, id, &da), OutsiderFindingV1::Demand(node(at)), "no pass, no conviction: a demand");
+    assert_eq!(outsider(&w, id, &da), OutsiderFindingV1::Demand(vec![1, 3]), "no pass, no conviction: one round of demands");
 
-    let ev = w.block(11, vec![T::FileDemand { demander: OUTSIDER, claim: id, key: node(at) }]);
-    assert_eq!(ev, vec![E::DemandOpened { claim: id, key: node(at), deadline: 31 }]);
-    assert!(matches!(w.state(&id), ClaimStateV1::Disputed { .. }), "an open demand blocks Final");
-    // An authentic row is not the value: the demand stays open.
-    let row = borsh::to_vec(&MaterialResponseV1::Part(TensorOpeningV1::row(&committed, 0).unwrap())).unwrap();
-    let ev = w.block(12, vec![T::Respond { claim: id, key: node(at), bytes: row }]);
-    assert_eq!(ev, vec![E::ResponseRejected { claim: id, key: node(at), class: "partial" }]);
-    // The committed value, served on chain: public from then on, and it convicts (an authentic opening is not an acquittal).
-    let ev = w.block(13, vec![T::Respond { claim: id, key: node(at), bytes: whole(&committed) }]);
-    assert_eq!(ev, vec![E::Served { claim: id, key: node(at) }]);
-    assert_eq!(w.l.bonds[&OUTSIDER].reserved, 0, "the demand bond returns");
-    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!("the served value completes the check") };
-    let ev = w.block(14, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+    let ev = w.block(
+        11,
+        vec![
+            T::FileDemand { demander: OUTSIDER, claim: id, position: 1 },
+            T::FileDemand { demander: OUTSIDER, claim: id, position: 3 },
+        ],
+    );
+    assert_eq!(
+        ev,
+        vec![E::DemandOpened { claim: id, position: 1, deadline: 31 }, E::DemandOpened { claim: id, position: 3, deadline: 31 }]
+    );
+    assert!(matches!(w.state(&id), ClaimStateV1::Disputed { open: 2, .. }), "open demands block Final");
+    // An authentic row where the whole value is owed does not serve the position: the demand stays open.
+    let committed = trace.values[at.0 as usize][at.1 as usize][at.2 as usize].clone();
+    let row = position(&trace, 1, |r| {
+        r[at.1 as usize][at.2 as usize] = MaterialResponseV1::Part(TensorOpeningV1::row(&committed, 0).unwrap())
+    });
+    let ev = w.block(12, vec![T::Respond { claim: id, position: 1, bytes: row }]);
+    assert_eq!(ev, vec![E::ResponseRejected { claim: id, position: 1, class: "partial" }]);
+    // The committed values, served on chain: public from then on, and they convict (an authentic opening is not an acquittal).
+    let ev = w.block(
+        13,
+        vec![
+            T::Respond { claim: id, position: 1, bytes: position(&trace, 1, |_| {}) },
+            T::Respond { claim: id, position: 3, bytes: position(&trace, 3, |_| {}) },
+        ],
+    );
+    assert_eq!(ev, vec![E::Served { claim: id, position: 1 }, E::Served { claim: id, position: 3 }]);
+    assert_eq!(w.l.bonds[&OUTSIDER].reserved, 0, "the demand bonds return");
+    let ev = w.block(14, vec![T::FileDemand { demander: SPAM1, claim: id, position: 1 }]);
+    assert_eq!(refused(&ev).as_deref(), Some("already served: it is public"));
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!("the served values complete the check") };
+    let ev = w.block(15, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
     assert_eq!(convicted(&ev), Some((1000, 500, false)));
 
     // The same lie, and the producer stays silent: an availability default, never the fraud slash.
@@ -460,11 +480,12 @@ fn a_withheld_value_is_demanded_on_chain_and_the_served_value_convicts_or_silenc
     let (at, lie) = w.lying(&job, 3);
     let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[at]));
     w.block(21, vec![lie.tx, T::PanelCovered { claim: id }]);
-    let OutsiderFindingV1::Demand(key) = outsider(&w, id, &da) else { panic!() };
-    w.block(22, vec![T::FileDemand { demander: OUTSIDER, claim: id, key }]);
+    let OutsiderFindingV1::Demand(positions) = outsider(&w, id, &da) else { panic!() };
+    assert_eq!(positions, vec![at.0]);
+    w.block(22, vec![T::FileDemand { demander: OUTSIDER, claim: id, position: at.0 }]);
     let collateral = w.l.bonds[&PRODUCER].collateral;
     let ev = w.block(42, vec![]);
-    assert_eq!(ev, vec![E::ProducerDefault { claim: id, key, last: None, penalty: 100 }]);
+    assert_eq!(ev, vec![E::ProducerDefault { claim: id, position: at.0, last: None, penalty: 100 }]);
     assert_eq!(w.state(&id), ClaimStateV1::Unavailable { daa: 42, producer_defaulted: true });
     assert_eq!(w.l.bonds[&PRODUCER].collateral, collateral - 100);
     assert_eq!(w.l.bonds[&PRODUCER].reserved, 0, "the reservation is released, not slashed");
@@ -482,6 +503,11 @@ fn a_class_without_a_complete_public_prosecution_never_registers() {
     assert!(w.l.classes.is_empty());
     let why = refused(&w.l.events.iter().map(|(_, e)| e.clone()).collect::<Vec<_>>()).unwrap();
     assert!(why.starts_with("not publicly prosecutable") && why.contains("public bytes"), "{why}");
+    // Fewer demand sessions than the plan has positions: some position could not be demanded, so the class is refused.
+    let mut p = policy();
+    p.prosecution.max_sessions_per_claim = MAX_POSITIONS - 1;
+    let w = World::with(p);
+    assert!(w.l.classes.is_empty());
 
     // A kernel this binary does not implement, and a plan for another program, are refused too.
     let mut w = World::new();
@@ -515,40 +541,46 @@ fn a_class_without_a_complete_public_prosecution_never_registers() {
     );
     assert!(refused(&ev).is_some());
     assert!(borsh::from_slice::<DecodeRuleV1>(&[1]).is_err(), "no decode rule but those implemented");
+
+    // A ledger policy whose liability horizon a demand's deadline outlasts is refused at genesis.
+    let mut p = policy();
+    p.liability_daa = p.court_deadline_daa;
+    let d = k2_tir_v1_descriptor();
+    assert!(KernelLedgerV1::genesis(p, active_for(&d), vec![d.clone()]).is_err());
 }
 
-// ── E: a direct proof is never pre-empted ─────────────────────────────────────────────────────────────────────────────────
+// ── E: a direct proof is never pre-empted, and no demander starves another ───────────────────────────────────────────────
 
 #[test]
-fn open_demand_sessions_never_preempt_a_direct_proof_and_settle_deterministically() {
+fn open_demand_sessions_never_preempt_a_direct_proof_or_crowd_out_a_demand_and_settle_deterministically() {
     let mut w = World::new();
     let job = w.post_job(2, &[3, 17, 9], 3, 1);
     let (_, lie) = w.lying(&job, 3);
     let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[]));
     w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
-    // Every demand slot of the claim is held by others.
-    let k = |n: u16| MaterialKeyV1::Node { position: 0, occurrence: 0, node: n };
+    // The producer's friends hold demands on most positions; another bond still opens the last one and joins another.
     let ev = w.block(
         11,
         vec![
-            T::FileDemand { demander: SPAM1, claim: id, key: k(0) },
-            T::FileDemand { demander: SPAM1, claim: id, key: k(1) },
-            T::FileDemand { demander: SPAM2, claim: id, key: k(2) },
-            T::FileDemand { demander: SPAM2, claim: id, key: k(3) },
-            T::FileDemand { demander: OUTSIDER, claim: id, key: k(4) },
+            T::FileDemand { demander: SPAM1, claim: id, position: 0 },
+            T::FileDemand { demander: SPAM1, claim: id, position: 1 },
+            T::FileDemand { demander: SPAM2, claim: id, position: 2 },
+            T::FileDemand { demander: SPAM2, claim: id, position: 3 },
+            T::FileDemand { demander: OUTSIDER, claim: id, position: 4 },
+            T::FileDemand { demander: OUTSIDER, claim: id, position: 0 },
         ],
     );
-    assert_eq!(refused(&ev).as_deref(), Some("the claim has the most open demands it may"));
-    assert_eq!(w.l.bonds[&SPAM1].reserved + w.l.bonds[&SPAM2].reserved, 40);
-    // Joining an open demand shares it rather than being refused by it.
-    let ev = w.block(12, vec![T::FileDemand { demander: OUTSIDER, claim: id, key: k(0) }]);
-    assert_eq!(ev, vec![E::DemandJoined { claim: id, key: k(0) }]);
+    assert!(refused(&ev).is_none(), "{ev:?}");
+    assert_eq!(ev.iter().filter(|e| matches!(e, E::DemandOpened { .. })).count(), 5);
+    assert!(ev.contains(&E::DemandJoined { claim: id, position: 0 }));
+    let ev = w.block(12, vec![T::FileDemand { demander: OUTSIDER, claim: id, position: 5 }]);
+    assert_eq!(refused(&ev).as_deref(), Some("the claim commits no such position"), "sessions are bounded by positions");
 
     // The direct proof convicts in the block that carries it; every open session settles as moot and every bond returns.
     let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!() };
     let ev = w.block(13, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
     assert_eq!(convicted(&ev), Some((1000, 500, false)));
-    assert!(ev.contains(&E::DemandsMoot { claim: id, refunded: 5 }), "{ev:?}");
+    assert!(ev.contains(&E::DemandsMoot { claim: id, refunded: 6 }), "{ev:?}");
     assert!(w.l.demands.is_empty());
     for b in [SPAM1, SPAM2, OUTSIDER] {
         assert_eq!(w.l.bonds[&b].reserved, 0);
@@ -569,20 +601,19 @@ fn spam_cannot_hold_final_past_window_end_plus_court_deadline_and_a_proof_at_win
     let id = h.claim.id();
     let trace = h.trace.clone();
     w.block(10, vec![h.tx, T::PanelCovered { claim: id }]); // window end 60
-    let k = |n: u16| MaterialKeyV1::Node { position: 1, occurrence: 0, node: n };
     let ev = w.block(
         59,
         vec![
-            T::FileDemand { demander: SPAM1, claim: id, key: k(0) },
-            T::FileDemand { demander: SPAM1, claim: id, key: k(1) },
-            T::FileDemand { demander: SPAM2, claim: id, key: k(2) },
+            T::FileDemand { demander: SPAM1, claim: id, position: 0 },
+            T::FileDemand { demander: SPAM1, claim: id, position: 1 },
+            T::FileDemand { demander: SPAM2, claim: id, position: 2 },
         ],
     );
     assert_eq!(ev.iter().filter(|e| matches!(e, E::DemandOpened { .. })).count(), 3);
-    let ev = w.block(60, vec![T::FileDemand { demander: SPAM2, claim: id, key: k(3) }]);
+    let ev = w.block(60, vec![T::FileDemand { demander: SPAM2, claim: id, position: 3 }]);
     assert_eq!(refused(&ev).as_deref(), Some("the challenge window is closed"), "the window closes on time");
     // The honest producer answers each demand at its last moment.
-    let serve = |n: u16| T::Respond { claim: id, key: k(n), bytes: whole(&trace.values[1][0][n as usize]) };
+    let serve = |p: u32| T::Respond { claim: id, position: p, bytes: position(&trace, p, |_| {}) };
     w.block(78, vec![serve(0), serve(1)]);
     assert!(matches!(w.state(&id), ClaimStateV1::Disputed { .. }));
     let ev = w.block(78, vec![serve(2)]);
@@ -596,9 +627,9 @@ fn spam_cannot_hold_final_past_window_end_plus_court_deadline_and_a_proof_at_win
     let id = h.claim.id();
     let trace = h.trace.clone();
     w.block(101, vec![h.tx]);
-    w.block(102, vec![T::FileDemand { demander: SPAM1, claim: id, key: k(0) }]);
+    w.block(102, vec![T::FileDemand { demander: SPAM1, claim: id, position: 0 }]);
     w.block(103, vec![T::PanelCovered { claim: id }]); // window end 153
-    w.block(110, vec![T::Respond { claim: id, key: k(0), bytes: whole(&trace.values[1][0][0]) }]);
+    w.block(110, vec![T::Respond { claim: id, position: 0, bytes: position(&trace, 0, |_| {}) }]);
     assert!(matches!(w.state(&id), ClaimStateV1::ProbabilisticPass { window_end_daa: 153, .. }));
     let ev = w.block(153, vec![]);
     assert_eq!(ev, vec![E::Final { claim: id, reward: 7 }]);
@@ -612,6 +643,19 @@ fn spam_cannot_hold_final_past_window_end_plus_court_deadline_and_a_proof_at_win
     let ev = w.block(251, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
     assert_eq!(convicted(&ev), Some((1000, 500, false)), "{ev:?}");
     assert!(!ev.iter().any(|e| matches!(e, E::Final { .. })));
+
+    // A demand in the window's last block, served at its deadline, still reaches a post-Final proof inside the liability horizon.
+    let job = w.post_job(300, &[3, 17, 9], 3, 4);
+    let (at, lie) = w.lying(&job, 3);
+    let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[at]));
+    let trace = lie.trace.clone();
+    w.block(301, vec![lie.tx, T::PanelCovered { claim: id }]); // window end 351
+    w.block(350, vec![T::FileDemand { demander: OUTSIDER, claim: id, position: at.0 }]);
+    let ev = w.block(369, vec![T::Respond { claim: id, position: at.0, bytes: position(&trace, at.0, |_| {}) }]);
+    assert!(ev.contains(&E::Final { claim: id, reward: 7 }), "{ev:?}");
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!() };
+    let ev = w.block(370, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+    assert_eq!(convicted(&ev), Some((1000, 500, true)));
 }
 
 // ── G: DA outcomes are classified, and none of them is the fraud slash ───────────────────────────────────────────────────
@@ -622,51 +666,62 @@ fn da_responses_are_classified_and_a_default_is_an_availability_penalty_not_a_co
     let job = w.post_job(2, &[3, 17, 9], 3, 1);
     let h = w.honest(&job, 3);
     let id = h.claim.id();
-    let value = h.trace.values[1][0][0].clone();
-    let other = h.trace.values[2][0][0].clone();
+    let trace = h.trace.clone();
+    let other = trace.values[2][0][0].clone();
     w.block(10, vec![h.tx, T::PanelCovered { claim: id }]);
-    let key = MaterialKeyV1::Node { position: 1, occurrence: 0, node: 0 };
 
     let ev = w.block(
         11,
         vec![
-            T::Respond { claim: id, key, bytes: whole(&value) },
-            T::FileDemand { demander: OUTSIDER, claim: id, key: MaterialKeyV1::Node { position: 99, occurrence: 0, node: 0 } },
+            T::Respond { claim: id, position: 1, bytes: position(&trace, 1, |_| {}) },
+            T::FileDemand { demander: OUTSIDER, claim: id, position: 99 },
         ],
     );
     assert_eq!(
         ev.iter().filter_map(|e| if let E::Refused { why, .. } = e { Some(why.as_str()) } else { None }).collect::<Vec<_>>(),
-        ["no open demand for this value", "the claim commits no such value"]
+        ["no open demand for this position", "the claim commits no such position"]
     );
-    w.block(12, vec![T::FileDemand { demander: OUTSIDER, claim: id, key }]);
-    let mut fake = TensorOpeningV1::row(&value, 0).unwrap();
-    fake.siblings.push([0; 64]);
-    fake.siblings.push([0; 64]);
-    fake.siblings.push([0; 64]);
-    let part = |o: TensorOpeningV1| borsh::to_vec(&MaterialResponseV1::Part(o)).unwrap();
+    w.block(12, vec![T::FileDemand { demander: OUTSIDER, claim: id, position: 1 }]);
+    let mut fake = TensorOpeningV1::row(&trace.values[1][0][0], 0).unwrap();
+    fake.siblings.extend([[0; 64]; 3]);
     let ev = w.block(
         13,
         vec![
-            T::Respond { claim: id, key, bytes: vec![0xFF, 0x00] },
-            T::Respond { claim: id, key, bytes: whole(&other) },
-            T::Respond { claim: id, key, bytes: part(TensorOpeningV1::row(&other, 0).unwrap()) },
-            T::Respond { claim: id, key, bytes: part(fake) },
+            T::Respond { claim: id, position: 1, bytes: vec![0xFF, 0x00] },
+            T::Respond {
+                claim: id,
+                position: 1,
+                bytes: position(&trace, 1, |r| {
+                    r.pop();
+                }),
+            },
+            T::Respond {
+                claim: id,
+                position: 1,
+                bytes: position(&trace, 1, |r| r[0][0] = MaterialResponseV1::Whole(TensorWireV1::of(&other))),
+            },
+            T::Respond {
+                claim: id,
+                position: 1,
+                bytes: position(&trace, 1, |r| r[0][0] = MaterialResponseV1::Part(TensorOpeningV1::row(&other, 0).unwrap())),
+            },
+            T::Respond { claim: id, position: 1, bytes: position(&trace, 1, |r| r[0][0] = MaterialResponseV1::Part(fake)) },
         ],
     );
     let classes: Vec<_> =
         ev.iter().filter_map(|e| if let E::ResponseRejected { class, .. } = e { Some(*class) } else { None }).collect();
-    assert_eq!(classes, ["malformed", "wrong_bytes", "wrong_root", "fake_opening"]);
+    assert_eq!(classes, ["malformed", "malformed", "wrong_bytes", "wrong_root", "fake_opening"]);
 
     // The deadline passes on a non-serving response: the producer's default, a fixed penalty to the demander.
     let (collateral, credits) = (w.l.bonds[&PRODUCER].collateral, w.l.bonds[&OUTSIDER].credits);
     let ev = w.block(32, vec![]);
-    assert_eq!(ev, vec![E::ProducerDefault { claim: id, key, last: Some("fake_opening"), penalty: 100 }]);
+    assert_eq!(ev, vec![E::ProducerDefault { claim: id, position: 1, last: Some("fake_opening"), penalty: 100 }]);
     assert!(convicted(&ev).is_none());
     assert_eq!(w.l.bonds[&PRODUCER].collateral, collateral - 100, "a penalty, not the 1000 fraud slash");
     assert_eq!(w.l.bonds[&OUTSIDER].credits, credits + 100);
     assert_eq!(w.l.bonds[&OUTSIDER].reserved, 0);
     assert_eq!(w.state(&id), ClaimStateV1::Unavailable { daa: 32, producer_defaulted: true });
-    let ev = w.block(33, vec![T::FileDemand { demander: OUTSIDER, claim: id, key }]);
+    let ev = w.block(33, vec![T::FileDemand { demander: OUTSIDER, claim: id, position: 1 }]);
     assert_eq!(refused(&ev).as_deref(), Some("the claim is already decided"));
 }
 

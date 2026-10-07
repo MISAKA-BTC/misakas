@@ -21,8 +21,10 @@ use crate::public::ProfileMaterialV1;
 pub struct ProsecutionPolicyV1 {
     /// A demand's response window, and a filed proof's inclusion bound.
     pub court_deadline_daa: u64,
-    /// Open demand sessions per claim (direct proofs are never limited: they settle in the block that carries them).
-    pub max_open_demands_per_claim: u32,
+    /// The ceiling on concurrent demand sessions per claim. A demand names one position (every committed value of it), so a
+    /// plan needs `max_positions` sessions: every position demandable at once, and nobody's demands can starve anybody's.
+    /// Direct proofs are never limited: they settle in the block that carries them.
+    pub max_sessions_per_claim: u32,
     /// Ceilings the derived bounds must fit.
     pub max_public_bytes: u128,
     pub max_verifier_ram: u128,
@@ -36,7 +38,12 @@ pub struct ProsecutionBoundsV1 {
     pub max_public_bytes: u128,
     /// The largest single court opening (a filed proof's payload).
     pub max_opening_bytes: u64,
-    /// On-chain rounds: at most one demand (then the response) and one direct proof.
+    /// The envelope a filed proof's bytes must fit (the court's bytes plus the wire headers).
+    pub max_filing_bytes: u64,
+    /// The envelope one demand's response must fit: one position's committed values, with their wire headers.
+    pub max_response_bytes: u128,
+    /// On-chain rounds: one round of demands (every missing position at once, each answered or defaulted by its deadline) and
+    /// one direct proof.
     pub max_localization_rounds: u32,
     /// The largest single court's work.
     pub max_court_work: u64,
@@ -44,6 +51,7 @@ pub struct ProsecutionBoundsV1 {
     pub max_verifier_ram: u128,
     /// What the chain retains per claim until its liability horizon: the commitments and the evidence object.
     pub max_retained_state: u128,
+    /// One demand session per position.
     pub max_concurrent_sessions: u32,
     pub deadline_daa: u64,
 }
@@ -64,6 +72,11 @@ pub enum ProsecutionGapV1 {
     /// The plan names another descriptor.
     WrongDescriptor,
 }
+
+/// A tensor's wire header (dtype, shape at rank ≤ 12, lengths, the response variant), an upper bound.
+pub const WIRE_HEADER_BYTES_V1: u64 = 128;
+/// A filing's fixed allowance beyond twice the court's bytes (position, node, kind, scalar, every tensor's header).
+pub const FILING_HEADER_BYTES_V1: u64 = 64 * 1024;
 
 /// Courts this code implements, every one over public authenticated material.
 fn public_court(c: CourtIdV1) -> bool {
@@ -121,11 +134,16 @@ pub fn public_prosecution_complete_v1(
             .saturating_add(b.artifact_bytes)
             .saturating_add(commitments),
         max_opening_bytes: b.worst_court_bytes,
+        max_filing_bytes: b.worst_court_bytes.saturating_mul(2).saturating_add(FILING_HEADER_BYTES_V1),
+        max_response_bytes: b
+            .evidence_bytes_per_position
+            .saturating_add((nodes_per_position as u128).saturating_mul(WIRE_HEADER_BYTES_V1 as u128))
+            .saturating_add(WIRE_HEADER_BYTES_V1 as u128),
         max_localization_rounds: 2,
         max_court_work: b.worst_court_work,
         max_verifier_ram: b.artifact_bytes.saturating_add(b.evidence_bytes_per_position),
         max_retained_state: commitments.saturating_add(64 * (positions + 16)),
-        max_concurrent_sessions: policy.max_open_demands_per_claim,
+        max_concurrent_sessions: plan.max_positions,
         deadline_daa: policy.court_deadline_daa,
     };
     let l = &descriptor.limits;
@@ -135,13 +153,13 @@ pub fn public_prosecution_complete_v1(
         ("court work", bounds.max_court_work as u128, l.max_court_work as u128),
         ("verifier RAM", bounds.max_verifier_ram, policy.max_verifier_ram),
         ("retained state", bounds.max_retained_state, policy.max_retained_state),
-        ("concurrent sessions", bounds.max_concurrent_sessions as u128, 1 << 16),
+        ("concurrent sessions", bounds.max_concurrent_sessions as u128, policy.max_sessions_per_claim as u128),
     ] {
         if required >= u128::MAX / 2 || required > limit {
             gaps.push(G::Unbounded { what, required, limit });
         }
     }
-    if policy.court_deadline_daa == 0 || policy.max_open_demands_per_claim == 0 {
+    if policy.court_deadline_daa == 0 || plan.max_positions == 0 {
         gaps.push(G::Unbounded { what: "deadline or sessions (zero: nobody can prosecute)", required: 1, limit: 0 });
     }
     if gaps.is_empty() { Ok(bounds) } else { Err(gaps) }

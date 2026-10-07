@@ -152,7 +152,7 @@ fn withheld_material_ends_in_an_objective_producer_default_never_a_conviction() 
 
 const POLICY: ProsecutionPolicyV1 = ProsecutionPolicyV1 {
     court_deadline_daa: 100,
-    max_open_demands_per_claim: 8,
+    max_sessions_per_claim: 1 << 10,
     max_public_bytes: 1 << 40,
     max_verifier_ram: 1 << 36,
     max_retained_state: 1 << 32,
