@@ -26,6 +26,7 @@ fn repo_root() -> PathBuf {
 /// prompt. Adding a crate to this list is how a new one comes under the guard.
 const SCANNED: &[&str] = &[
     "misaka-palw/src",
+    "misaka-palw-host-security/src",
     "misaka-palw-agent/src",
     "misaka-palw-gateway/src",
     "misaka-palw-worker/src",
@@ -309,7 +310,7 @@ fn no_shipped_path_relays_a_worker_s_stderr_unless_it_is_named_here() {
 #[test]
 fn only_an_installer_declares_a_backend_in_force() {
     /// The files that ARE the installers: each declares a backend only after its drill returned.
-    const INSTALLERS: &[&str] = &["misaka-palw/src/host_security.rs", "misaka-palw/src/host_security_linux.rs"];
+    const INSTALLERS: &[&str] = &["misaka-palw-host-security/src/lib.rs", "misaka-palw-host-security/src/host_security_linux.rs"];
 
     let mut findings = Vec::new();
     let mut declared_in = Vec::new();
@@ -336,8 +337,8 @@ fn only_an_installer_declares_a_backend_in_force() {
         findings.join("\n  ")
     );
     assert!(
-        declared_in.iter().any(|f| f == "misaka-palw/src/host_security.rs"),
-        "the declaration point itself must still exist in host_security.rs — this guard is empty if it does not"
+        declared_in.iter().any(|f| f == "misaka-palw-host-security/src/lib.rs"),
+        "the declaration point itself must still exist in misaka-palw-host-security — this guard is empty if it does not"
     );
 }
 

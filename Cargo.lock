@@ -5981,8 +5981,8 @@ dependencies = [
  "faster-hex 0.9.0",
  "kaspa-consensus-core",
  "kaspa-hashes",
- "libc",
  "log",
+ "misaka-palw-host-security",
  "serde",
  "serde_json",
  "tempfile",
@@ -6015,9 +6015,9 @@ dependencies = [
  "kaspa-pq-validator-core",
  "kaspa-txscript",
  "libc",
- "misaka-palw",
  "misaka-palw-constraint",
  "misaka-palw-gen",
+ "misaka-palw-host-security",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
  "rayon",
@@ -6136,6 +6136,13 @@ dependencies = [
  "borsh",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "misaka-palw-host-security"
+version = "1.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

@@ -180,7 +180,7 @@ fn main() {
     // ADR-0079 Decision 5: the supervisor's filter is installed before this exec and cannot deny
     // it; seccomp filters stack, so the worker denies `execve` on itself. A no-op unless a
     // confining supervisor spawned us.
-    if let misaka_palw::host_security::ExecveDenial::Failed(why) = misaka_palw::host_security::confine_self_after_exec() {
+    if let misaka_palw_host_security::ExecveDenial::Failed(why) = misaka_palw_host_security::confine_self_after_exec() {
         die(format!("refusing to run: cannot stack the execve denial: {why}"));
     }
     let args: Vec<String> = std::env::args().collect();

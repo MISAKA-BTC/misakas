@@ -80,7 +80,11 @@ pub mod agent_client;
 /// construction — a platform without a backend reports `none` and keeps the environment
 /// discipline — so it is NOT `#[cfg(unix)]`-gated: `kaspad` is a non-optional dependent and a
 /// Windows build must not lose the module that tells it what posture it is running under.
-pub mod host_security;
+///
+/// It lives in its own crate, `misaka-palw-host-security`, and is re-exported here under its old path: it runs no model and
+/// spawns no worker, so a crate that defines validity (or one consensus links, such as `misaka-palw-base0`) may depend on it
+/// without reaching this runtime bridge (ADR-0042 Decision 4).
+pub use misaka_palw_host_security as host_security;
 
 /// The submission schema this bridge understands.
 pub const PALW_SUBMISSION_SCHEMA_V3: &str = "misaka.palw.testnet-submission.v3";

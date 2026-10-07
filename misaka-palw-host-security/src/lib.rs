@@ -728,7 +728,8 @@ pub fn confinement_backend_available() -> ConfinementBackend {
 ///
 /// ```no_run
 /// // first line of a worker binary's main():
-/// let _ = misaka_palw::host_security::confine_self_after_exec();
+/// // (`misaka_palw::host_security::confine_self_after_exec` is the same function, re-exported.)
+/// let _ = misaka_palw_host_security::confine_self_after_exec();
 /// ```
 ///
 /// It stacks the denial only when a filter is ALREADY in force — i.e. when a confining supervisor
