@@ -161,6 +161,10 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// network without a V2 bundle. See `expected_coinbase_transaction`'s parameter for why these
     /// go unpaid rather than rejected.
     pub palw_v2_unentitled_blues: BlockHashSet,
+    /// **RFC-0009: the merged V4 receipt blocks and how each is paid** — `{ block → (miner leg script, builder fee bps) }`, from the same
+    /// selected-parent state, mergeset and non-DAA set the entitlement above reads. Empty on every shipped preset (the fence is dormant), where
+    /// the coinbase is built exactly as before.
+    pub palw_v2_receipt_v4_payouts: BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
     /// **Audit C-08 part three: what a released bond's spend must destroy, per outpoint.**
     ///
     /// The lock keeps a live bond's collateral unspendable; this is the other end. A bond that was
@@ -236,6 +240,7 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_escrow_withheld: 0,
             palw_v2_merged_escrow_withheld: BlockHashMap::default(),
             palw_v2_unentitled_blues: BlockHashSet::default(),
+            palw_v2_receipt_v4_payouts: BlockHashMap::default(),
             palw_v2_bond_burns: Default::default(),
             palw_v2_accepted_tx_fees: Default::default(),
             palw_round_verdicts: None,
@@ -1094,6 +1099,7 @@ impl VirtualStateProcessor {
             &ctx.palw_v2_unentitled_blues,
             &ctx.palw_v2_merged_escrow_withheld,
             &self.palw_round_blocks_of(&ctx.ghostdag_data),
+            &ctx.palw_v2_receipt_v4_payouts,
         )?;
 
         // Verify the header pruning point
@@ -1159,6 +1165,9 @@ impl VirtualStateProcessor {
         // ADR-0125: the merged round blocks, threaded to `expected_coinbase_transaction`. Empty
         // where the lane is not open.
         palw_round_blocks: &BlockHashSet,
+        // RFC-0009: the merged V4 receipt blocks' split payouts, threaded to `expected_coinbase_transaction`. Empty where the fence is
+        // dormant.
+        palw_receipt_v4_payouts: &BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
     ) -> BlockProcessResult<()> {
         // Extract only miner data from the provided coinbase
         let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
@@ -1179,6 +1188,7 @@ impl VirtualStateProcessor {
                 self.palw_state_params_v2.is_some(),
                 palw_merged_escrow_withheld,
                 palw_round_blocks,
+                palw_receipt_v4_payouts,
             )
             .unwrap()
             .tx;

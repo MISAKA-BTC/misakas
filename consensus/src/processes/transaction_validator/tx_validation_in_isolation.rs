@@ -253,7 +253,10 @@ impl TransactionValidator {
                 kaspa_consensus_core::palw_execution_lane_v1::PALW_EXEC_MAX_BONDS_PER_MERGESET_V1 as u64
             } else {
                 0
-            };
+            }
+            // RFC-0009: a V4 receipt block is paid as two outputs (the miner leg and the builder's), so a ruleset that declares the
+            // redemption may carry one more per mergeset block.
+            + if self.palw_receipt_v4_declared { self.mergeset_size_limit } else { 0 };
         if tx.outputs.len() as u64 > outputs_limit {
             return Err(TxRuleError::CoinbaseTooManyOutputs(tx.outputs.len(), outputs_limit));
         }

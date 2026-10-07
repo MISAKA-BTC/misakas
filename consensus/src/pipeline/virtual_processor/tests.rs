@@ -1828,6 +1828,71 @@ async fn palw_v3_a_receipt_carriage_with_a_junk_signature_is_refused_at_the_head
     }
 }
 
+/// **RFC-0009: a `PFS4` receipt header is a block only past `palw_receipt_spend_v4`, and past it both ML-DSA-87 signatures are checked at
+/// the header stage.** Below the fence (every shipped preset) the carriage is refused BY NAME — the set of valid blocks is exactly what it was.
+/// Past it a junk signature is refused for the signature (one solve, unbounded distinct blocks otherwise), and the same header with real
+/// signatures gets past this stage.
+#[tokio::test]
+async fn rfc9_a_pfs4_receipt_header_is_refused_below_the_fence_and_signature_checked_past_it() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::errors::block::RuleError;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    for armed in [false, true] {
+        let config = ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(|p| {
+                p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+                *p = p.clone().with_palw_v2_cadence();
+                if armed {
+                    // The fence's prerequisites (`validate_palw_v2` refuses it without them), then the fence.
+                    p.palw_audit_2026_09_11 = Some(ForkActivation::always());
+                    p.palw_audit_2026_09_23 = Some(ForkActivation::always());
+                    p.sync_palw_escrow_backed_exposure();
+                    p.palw_receipt_spend_v4 = Some(ForkActivation::always());
+                }
+            })
+            .build();
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        // The audit fences the armed ruleset needs change what the fixture's first block must carry, and this test is about the HEADER stage
+        // alone — so the armed run builds its candidates straight on genesis rather than mining a row first.
+        if !armed {
+            ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        }
+        let honest = ctx.build_block_template(7, ctx.simulated_time + 1);
+
+        let mut signed = honest.block.clone();
+        signed.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+        signed.header.palw_commitment = ctx.consensus.palw_v4_test_receipt_carriage(&signed.header, true);
+        signed.header.finalize();
+        let mut junk = honest.block.clone();
+        junk.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+        junk.header.palw_commitment = ctx.consensus.palw_v4_test_receipt_carriage(&junk.header, false);
+        junk.header.finalize();
+
+        let verdict = |r: Result<_, RuleError>| match r {
+            Err(RuleError::BadPalwCarriageAdmission { algo_id: 7, reason }) => Some(reason.to_lowercase()),
+            _ => None,
+        };
+        let signed_verdict = verdict(ctx.consensus.validate_and_insert_block(signed.to_immutable()).virtual_state_task.await.map(|_| ()));
+        let junk_verdict = verdict(ctx.consensus.validate_and_insert_block(junk.to_immutable()).virtual_state_task.await.map(|_| ()));
+        if !armed {
+            // Both refused, and for the fence — not for a signature and not for a size.
+            for reason in [signed_verdict, junk_verdict] {
+                let reason = reason.expect("a PFS4 header below the fence is refused");
+                assert!(reason.contains("below") && reason.contains("palw_receipt_spend_v4"), "refused for the fence by name, got: {reason}");
+            }
+        } else {
+            let reason = junk_verdict.expect("a junk-signed PFS4 header is refused past the fence");
+            assert!(reason.contains("signature"), "refused for its signature, got: {reason}");
+            if let Some(reason) = signed_verdict {
+                assert!(!reason.contains("signature") && !reason.contains("below"), "real signatures get past this stage; got: {reason}");
+            }
+        }
+    }
+}
+
 ///    file's existing disqualification tests assert it — the sink does not move — because "did
 ///    not become the selected chain" is the property, and a status code is only its shadow.
 #[tokio::test]
@@ -14434,6 +14499,355 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
         merged_skips.len(),
         2 - unentitled.len()
     );
+}
+
+#[tokio::test]
+async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_paid_once() {
+    use crate::model::stores::ghostdag::{GhostdagData, HashKTypeMap};
+    use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
+    use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PalwReceiptSpendUnsignedV3, fp_quantum_ticket_v3};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_pwu::palw_ticket_admits_v1;
+    use kaspa_consensus_core::palw_state_v2::{
+        PALW_RECEIPT_TARGET_SEED_V1, PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2,
+        PalwConsensusObjectV2 as Obj, PalwMergedWorkV1, PalwPanelSeatV2, PalwPwuRuleV2, PalwStateParamsV2, PalwTransitionExtrasV1,
+        apply_palw_transition_v2, apply_palw_transition_v7,
+    };
+    use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use kaspa_consensus_core::{BlockHashMap, BlockHashSet, blockhash::BlockHashes};
+    use kaspa_hashes::Hash64;
+
+    let h64 = Hash64::from_u64_word;
+
+    // ---- 1. A V2+FP chain on DEVNET windows (receipt maturity 20) so the draw beacon
+    //         sits at a low DAA and the chain need only be a couple dozen blocks. The
+    //         harness registry (row 0 = the harness ML-DSA identity, bond (0xB0,0)) is the
+    //         one `palw_v2_test_carriage`/`palw_v3_test_receipt_carriage_for` sign under. ----
+    let catalog = palw_v2_test_catalog();
+    let bundle = {
+        let registry = {
+            let mut registry = kaspa_consensus_core::palw_fp_devnet_v3::palw_devnet_bond_registry_v1(
+                kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1(),
+            );
+            registry[0].pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey();
+            registry[0].operator_pubkey = vec![21u8; 8];
+            for (i, row) in registry.iter_mut().enumerate().skip(1) {
+                row.pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_registry_pubkey(i as u64);
+            }
+            registry
+        };
+        let mut b = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_bundle_with_windows_v3(
+            h64(1),
+            catalog.root(),
+            h64(0xC0757),
+            4_096,
+            h64(0xA7),
+            registry,
+            &kaspa_consensus_core::palw_fp_devnet_v3::PALW_DEVNET_WINDOWS_V1,
+        )
+        .expect("the devnet-windowed harness bundle validates");
+        b.class_catalog_root = catalog.root();
+        // Fund every genesis bond generously — every mined attempt block reserves exposure, and
+        // a couple dozen concurrent claims must fit. `verify_palw_genesis_v2` (the UTXO-backing
+        // gate) does not run on this construction path, exactly as `palw_v2_test_bundle_funded_for`.
+        for object in b.genesis_objects.iter_mut() {
+            if let Obj::BondRegistered { collateral, .. } = object {
+                *collateral = 1u64 << 60;
+            }
+        }
+        b
+    };
+    let maturity = bundle.freeprompt.receipt_maturity_daa();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            // B-5's pay-once dedup lives past the audit flag day; arm it.
+            p.palw_audit_2026_09_11 = Some(kaspa_consensus_core::config::params::ForkActivation::always());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    // RFC-0009: arm the redemption fence on the built (validated, dormant) ruleset — `validate_palw_v2` would ask for the 2026-09-23 audit
+    // fence too, which changes what this fixture's attempt blocks must carry; the fence's own prerequisites are held by
+    // `palw_receipt_spend_v4_fence.rs`. Everything below reads the fence through the processor, as the node does.
+    let mut config = config;
+    config.params.palw_receipt_spend_v4 = Some(kaspa_consensus_core::config::params::ForkActivation::always());
+    let net_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // ---- 2. A standalone certified (Final) free-prompt claim state, built with the SAME harness
+    //         bond identity (bond (0xB0,0), harness pubkey) so a spend's signature and the
+    //         `bond.pubkey == producer_pubkey` check pass. This is the `state` the coinbase pay-set
+    //         predicate is evaluated against — the selected parent's state, where the quantum is
+    //         still unspent. Built through the public transition API only; no production change. ----
+    let harness_bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
+    let harness_bond_key = PalwBondKeyV2(harness_bond);
+    let harness_pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey();
+    let base_class = h64(1);
+    let inj_params =
+        PalwStateParamsV2::new(100, 1, 1, 1, 500, 1_000, base_class, 4, 1_000, 100, 1_000, 0).unwrap().with_fp_quanta(8, 64).unwrap();
+    let build_injected = |claim_id: Hash64| -> PalwChainStateV2 {
+        let cx = |w: u64, daa: u64, blue: u64| PalwBlockContextV2 { block: h64(w), daa_score: daa, blue_score: blue, subsidy: 0 };
+        let reg = vec![
+            Obj::ClassRegistered {
+                class_id: base_class,
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            Obj::BondRegistered {
+                bond: harness_bond_key,
+                pubkey: harness_pubkey.clone(),
+                operator_pubkey: vec![21u8; 8],
+                collateral: 1u64 << 40,
+                payout_payload: h64(0x9A11),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            },
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &inj_params, &cx(1, 1, 1), &reg, None).unwrap();
+        let commit = Obj::FreePromptCommitted {
+            job_pin: kaspa_hashes::Hash64::default(),
+            eval: None,
+            claim: claim_id,
+            class_id: base_class,
+            bond: harness_bond_key,
+            executor_pubkey: harness_pubkey.clone(),
+            work_leaves: 60,
+            prompt_token_ids_hash: h64(0x7E),
+            // ADR-0145 §5's two execution facts, unread below the derived-work fence — which this
+            // harness is, since it drives `apply_palw_transition_v2` directly.
+            prompt_tokens: 0,
+            prompt_token_ids: Vec::new(),
+            decode_tokens_executed: 3,
+            trace_root: h64(41),
+            output_root: h64(42),
+            execution_root: h64(43),
+            trace_chunk_count: 4,
+            trace_retention_daa: 999_999,
+            consumed_prefix_state: kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(base_class),
+        };
+        let (s2, _) = apply_palw_transition_v2(&s1, &inj_params, &cx(2, 2, 2), &[commit], None).unwrap();
+        let seats = vec![PalwPanelSeatV2 { bond: harness_bond_key, operator_id: h64(90) }];
+        let (s3, _) = apply_palw_transition_v2(
+            &s2,
+            &inj_params,
+            &cx(3, 3, 3),
+            &[Obj::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+            None,
+        )
+        .unwrap();
+        let (s4, _) = apply_palw_transition_v2(
+            &s3,
+            &inj_params,
+            &cx(4, 4, 4),
+            &[Obj::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }],
+            None,
+        )
+        .unwrap();
+        let (s5, _) = apply_palw_transition_v2(&s4, &inj_params, &cx(5, 6, 5), &[], None).unwrap();
+        s5
+    };
+
+    // final_daa is deterministic (6) from the walk above; the draw slot is final_daa + maturity.
+    let probe = build_injected(h64(0xFC));
+    let final_daa = match &probe.claim(&h64(0xFC)).expect("the fixture certifies a claim").phase {
+        PalwClaimPhaseV2::Final { final_daa } => *final_daa,
+        other => panic!("the fixture must reach Final, got {other:?}"),
+    };
+    let slot = final_daa + maturity;
+
+    // ---- 3. Mine attempt blocks until the chain reaches the draw slot, so a beacon exists. ----
+    while ctx.consensus.get_virtual_daa_score() < slot + 2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let tip = ctx.consensus.get_sink();
+    let vp = ctx.consensus.virtual_processor();
+    let beacon = vp.palw_beacon_fact_of_candidate(tip, slot).expect("the chain reached the draw slot, so a beacon derives");
+
+    // A claim id whose quantum-0 ticket admits under the receipt-lane seed target (MAX/2).
+    let claim_id = (0u64..2_000)
+        .map(|i| h64(0xFC00 + i))
+        .find(|cid| palw_ticket_admits_v1(fp_quantum_ticket_v3(net_domain, beacon.beacon_block, *cid, 0), PALW_RECEIPT_TARGET_SEED_V1))
+        .expect("some claim id wins the receipt lottery under the seed target");
+    let injected = build_injected(claim_id);
+
+    // ---- 4. V4 (public redemption) receipt blocks: the builder is the harness identity here (the only key the harness can sign with), but
+    //         everything the chain checks is the V4 path's — both real ML-DSA-87 signatures, the authorization's range and fee, the executor
+    //         bond's key and the claim's draw. ----
+    let mk_v4 = |nonce: u64, ts_bump: u64, fee_bps: u16| {
+        let mut r = ctx.consensus.build_block_with_parents_and_transactions(blockhash::NONE, vec![tip], vec![]);
+        r.header.timestamp = ctx.simulated_time + ts_bump;
+        r.header.nonce = nonce;
+        r.header.pow_algo_id = POW_ALGO_ID_PALW_RECEIPT_V3;
+        r.header.palw_commitment =
+            ctx.consensus.palw_v4_test_receipt_carriage_for(&r.header, true, claim_id, 0, beacon.beacon_block, fee_bps);
+        r.header.finalize();
+        r
+    };
+    let mut ids: Vec<Hash64> = Vec::new();
+    for (nonce, ts_bump, fee_bps) in [(0xC1u64, 100u64, 500u16), (0xC2, 200, 750)] {
+        let r = mk_v4(nonce, ts_bump, fee_bps);
+        ids.push(r.header.hash);
+        let verdict = ctx.consensus.validate_and_insert_block(r.to_immutable()).virtual_state_task.await;
+        assert!(
+            !matches!(&verdict, Err(kaspa_consensus_core::errors::block::RuleError::BadPalwCarriageAdmission { .. })),
+            "a correctly signed V4 spend past the fence gets through the header stage: {verdict:?}"
+        );
+    }
+    let (v4_a, v4_b) = (ids[0], ids[1]);
+    // A V3 spend of the SAME quantum, for the cross-version case.
+    let mut v3 = ctx.consensus.build_block_with_parents_and_transactions(blockhash::NONE, vec![tip], vec![]);
+    v3.header.timestamp = ctx.simulated_time + 300;
+    v3.header.nonce = 0xC3;
+    v3.header.pow_algo_id = POW_ALGO_ID_PALW_RECEIPT_V3;
+    v3.header.palw_commitment = ctx.consensus.palw_v3_test_receipt_carriage_for(&v3.header, true, claim_id, 0, harness_bond, beacon.beacon_block);
+    v3.header.finalize();
+    let v3_hash = v3.header.hash;
+    let _ = ctx.consensus.validate_and_insert_block(v3.to_immutable()).virtual_state_task.await;
+
+    let point = PalwBlockContextV2 { block: h64(0xC0DE), daa_score: beacon.beacon_daa, blue_score: 1 << 20, subsidy: 0 };
+    let non_daa = BlockHashSet::default();
+    let anticone = || HashKTypeMap::new(BlockHashMap::default());
+
+    // Positive control: ONE valid V4 spend, as a merged red, is entitled — and the payout map names the executor bond's registered payout
+    // (`0x9A11`, derived to a script) and the authorization's fee, so the coinbase splits it.
+    let gd_one = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v4_a]), anticone());
+    let unentitled_one = vp.palw_v2_unentitled_blues(&injected, &gd_one, &non_daa, &point);
+    assert!(unentitled_one.is_empty(), "positive control: a valid V4 spend is entitled; got unentitled={unentitled_one:?}");
+    let payouts = vp.palw_v2_receipt_v4_payouts(&injected, &gd_one, &non_daa, &unentitled_one);
+    let expected_script = kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_miner_script(&h64(0x9A11));
+    let entry = payouts.get(&v4_a).expect("an entitled V4 block has a payout entry");
+    assert_eq!(entry.miner_script, expected_script, "the miner leg goes to the executor bond's registered payout");
+    assert_eq!(entry.fee_bps, 500);
+    assert_eq!(payouts.len(), 1);
+
+    // Two V4 siblings of ONE quantum: exactly one is entitled, and only that one has a payout entry (B-5's dedup runs on the fold view).
+    let gd_two = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v4_a, v4_b]), anticone());
+    let unentitled_two = vp.palw_v2_unentitled_blues(&injected, &gd_two, &non_daa, &point);
+    assert_eq!(unentitled_two.len(), 1, "one quantum, two V4 siblings: paid once");
+    assert!(unentitled_two.contains(&v4_b) && !unentitled_two.contains(&v4_a), "the first in acceptance order wins");
+    let payouts_two = vp.palw_v2_receipt_v4_payouts(&injected, &gd_two, &non_daa, &unentitled_two);
+    assert_eq!(payouts_two.keys().copied().collect::<Vec<_>>(), vec![v4_a], "the refused double spend has no payout entry");
+
+    // A V3 and a V4 spend of the SAME quantum are the same double spend: paid once, whichever is first.
+    let gd_mixed = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v3_hash, v4_a]), anticone());
+    let unentitled_mixed = vp.palw_v2_unentitled_blues(&injected, &gd_mixed, &non_daa, &point);
+    assert_eq!(unentitled_mixed.len(), 1, "V3 and V4 share one spent-quantum ledger: paid once");
+    assert!(unentitled_mixed.contains(&v4_a));
+    let payouts_mixed = vp.palw_v2_receipt_v4_payouts(&injected, &gd_mixed, &non_daa, &unentitled_mixed);
+    assert!(payouts_mixed.is_empty(), "the V3 block is paid as V3 always was (no split); the refused V4 one is not paid at all");
+
+    // **The coinbase, through the processor's own manager and fee split** (the template path's expression, fed the entitlement and payout map
+    // the walk computed above): the V4 receipt block is paid as two outputs — the miner leg to the executor's payout, the rest to the block's
+    // own script — and the pair sums to exactly what the V3 expression pays the same block.
+    {
+        use kaspa_consensus_core::coinbase::{BlockRewardData, MinerData};
+        use kaspa_consensus_core::tx::ScriptPublicKey;
+        let a_daa = ctx.consensus.headers_store.get_header(v4_a).unwrap().daa_score;
+        let subsidy = vp.coinbase_manager.calc_block_subsidy(a_daa);
+        let carve = vp.fee_split_at(a_daa);
+        let builder_script = kaspa_txscript::pay_to_script_hash_script(b"rfc9-builder");
+        let tip_script = kaspa_txscript::pay_to_script_hash_script(b"rfc9-tip");
+        let mut rewards = BlockHashMap::default();
+        rewards.insert(tip, BlockRewardData::new(subsidy, 0, 0, tip_script));
+        rewards.insert(v4_a, BlockRewardData::new(subsidy, 0, 0, builder_script.clone()));
+        let miner = MinerData::new(builder_script.clone(), vec![]);
+        let build = |v4: &BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>| {
+            vp.coinbase_manager
+                .expected_coinbase_transaction(
+                    a_daa,
+                    subsidy,
+                    miner.clone(),
+                    &gd_one,
+                    &rewards,
+                    &non_daa,
+                    &[],
+                    carve.as_ref(),
+                    (0, 0),
+                    0,
+                    &unentitled_one,
+                    true,
+                    &Default::default(),
+                    &Default::default(),
+                    v4,
+                )
+                .expect("the coinbase builds")
+                .tx
+        };
+        let v3_like = build(&BlockHashMap::default());
+        let v4_cb = build(&payouts);
+        let total = |tx: &kaspa_consensus_core::tx::Transaction| tx.outputs.iter().map(|o| o.value).sum::<u64>();
+        assert_eq!(total(&v4_cb), total(&v3_like), "the split moves value between two payees of one block, never in or out");
+        let part = match &carve {
+            Some(fs) => kaspa_consensus_core::dns_finality::split_block_subsidy(subsidy, fs).worker_base_sompi,
+            None => subsidy,
+        };
+        let (leg, fee) = kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_split_v1(part, 500);
+        let paid = |tx: &kaspa_consensus_core::tx::Transaction, s: &ScriptPublicKey| {
+            tx.outputs.iter().filter(|o| &o.script_public_key == s).map(|o| o.value).sum::<u64>()
+        };
+        assert_eq!(paid(&v4_cb, &expected_script), leg, "the miner leg reaches the executor bond's registered payout");
+        assert!(leg > 0 && fee > 0, "the fixture's reward is large enough for both legs to be non-zero (leg {leg}, fee {fee})");
+        assert_eq!(
+            paid(&v4_cb, &builder_script) + leg,
+            paid(&v3_like, &builder_script),
+            "the builder keeps exactly what the V3 expression paid, less the miner leg"
+        );
+    }
+
+    // The fold takes the winning V4 spend exactly once: weight added once, the second is skipped as QuantumAlreadySpent.
+    let spend_view = |bytes: &[u8]| {
+        kaspa_consensus_core::palw_receipt_v4::PalwReceiptSpendEnvelopeV4::decode(bytes).expect("decodes").to_fold_envelope()
+    };
+    let (ea, eb) = (
+        spend_view(&ctx.consensus.headers_store.get_header(v4_a).unwrap().palw_commitment),
+        spend_view(&ctx.consensus.headers_store.get_header(v4_b).unwrap().palw_commitment),
+    );
+    let merged = vec![
+        PalwMergedWorkV1 {
+            carrying_block: v4_a,
+            work: PalwBlockWorkV3::ReceiptSpend(&ea.spend),
+            execution_key: Default::default(),
+            subsidy: 0,
+            escrow_carve: None,
+            bits: 0,
+            job_anchor: Hash64::default(),
+        },
+        PalwMergedWorkV1 {
+            carrying_block: v4_b,
+            work: PalwBlockWorkV3::ReceiptSpend(&eb.spend),
+            execution_key: Default::default(),
+            subsidy: 0,
+            escrow_carve: None,
+            bits: 0,
+            job_anchor: Hash64::default(),
+        },
+    ];
+    let fold_point = PalwBlockContextV2 { block: h64(0xF01D), daa_score: 7, blue_score: 6, subsidy: 0 };
+    let (folded, _delta, merged_skips) = apply_palw_transition_v7(
+        &injected,
+        &inj_params,
+        None,
+        &fold_point,
+        &[],
+        PalwBlockWorkV3::None,
+        &merged,
+        Default::default(),
+        false,
+        false,
+        false,
+        false,
+        &PalwTransitionExtrasV1::default(),
+    )
+    .expect("the fold applies");
+    assert_eq!(merged_skips.len(), 1, "the FOLD resolves the V4 double spend: one applied, one skipped");
+    assert!(folded.safe_weight() > injected.safe_weight(), "exactly one quantum's weight is folded");
 }
 
 // =================================================================================================

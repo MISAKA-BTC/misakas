@@ -16,6 +16,7 @@ kaspa-hashes.workspace = true
 kaspa-txscript.workspace = true
 blake2b_simd.workspace = true
 borsh.workspace = true
+libcrux-ml-dsa.workspace = true
 thiserror.workspace = true
 
 [lints]

@@ -37,9 +37,12 @@ file or the `kaspa-pq-signer` sidecar) and `misaka-palw-fp-submit` submits. Stag
   recorded as `TamperedOrRefused` and never counted). Success = at least `policy.min_accept` nodes accept. **ACK is not inclusion.**
   Re-sending is idempotent: "already in mempool/accepted" counts as accept, and the tx id does not depend on the signature script
   (the kaspa id excludes it), so a relay cannot change the id by re-encoding.
-* rail `--relay <rpc1,rpc2,...>` with `--bond-key-seed` and `--funding-outpoint/--funding-amount`: sign, write the raw tx, relay to
-  all, **stage no material** (the node-less miner has no retention dir; Stage B owns that) and print the tx id, claim id and the
-  tracking record. `--submit` (single node + staging) is unchanged.
+* rail `--relay <rpc1,rpc2,...>` with `--bond-key-seed` and `--funding-outpoint/--funding-amount`: sign, write the raw tx, pre-flight
+  the funding signature, relay to all, **stage no material** (the node-less miner has no retention dir; Stage B owns that) and print the
+  per-node outcome. `--checkpoint <daa>:<hash>` first asks the nodes for a quorum view pinned to that checkpoint and sends nothing on any
+  disagreement. `--submit` (single node + staging) is unchanged and is refused together with `--relay`.
+* rail `--track <claim-id> --bond <txid:index> [--tx-id <hex>] (--relay a,b | --rpc a)` polls each node once through `getBlockDagInfo`,
+  `getMempoolEntry` and `getPalwFreePromptClaim` and prints the tracker state per node and whether the nodes agree.
 
 ### 2.2 Sighash audit (result, with tests in `kaspa-pq-validator-core`)
 `calc_mldsa87_signature_hash` (SIG_HASH_ALL) commits to: tx version; the hash of **all** input outpoints, **all** sequences, **all**
@@ -163,6 +166,16 @@ maturity change). A missing claim/bond at the accepting state ⇒ the block is p
 Output order: the miner-leg output is placed immediately before its block's builder output, in mergeset iteration order. A zero
 output is dropped (as V3 does).
 
+### 3.4a Plumbing (what reads the fence)
+* `Params::palw_receipt_spend_v4_fence()` feeds three readers, each resolved once at construction: the header processor (`PFS4` refused by
+  name below the fence; past it, shape + challenge + both signatures on the relay path), the virtual processor
+  (`palw_v2_check_receipt_spend` admits through `check_palw_receipt_spend_admission_full_v5`; `palw_v2_receipt_v4_payouts` builds the
+  per-block payout map for the template AND the validating walk from the same selected-parent state), and the transaction validator
+  (isolation's coinbase output cap widens by one output per mergeset block where the fence is declared — height-free, like the round lane).
+* The PoW arm for algo 7 expands `Expand(spend_id_v4)` for a `PFS4` carriage and is unchanged for `PFS3`; the shape gate takes the V4 cap
+  only for a `PFS4` payload on algo 7.
+* No state-delta, object-tag, tail or DB change: the spent-quantum set, weight, census and reorg revert are the V3 fold's own.
+
 ### 3.5 Producer / template
 `kaspa_consensus_core::palw_receipt_v4` also exposes the builder-side constructor so a producer and the verifier call one function. The
 shipped producer (`kaspad/src/palw_producer.rs`) keeps building V3 for its own claims; a V4 *builder* mode (take authorizations from the
@@ -230,3 +243,13 @@ state.
 C-1 V4 builder mode in the shipped producer and authorization discovery (relay of authorizations); A-1 extract the attempt loop from the
 node producer so a node-less miner can run attempts end to end; B-1 panel-side fetch wiring inside `kaspad` (library only here);
 B-2 the court; D-2 state proofs.
+
+## 8. Status at the end of the lane (what is built, what is not, what was run)
+
+| Stage | Built | NOT done / NOT guaranteed |
+| --- | --- | --- |
+| Spec | this file; allocation line in `lanes/COMMON.md` (fences `palw_receipt_spend_v4`, `palw_evidence_court_v1`; no tag/delta/tail/op taken) | — |
+| A | `misaka-palw-remote`: quorum view + pinned/signed checkpoint, idempotent relay, template digest, claim tracker, **`attempt`** (a remote attempt: miner-side executor and signer traits, one shared assembly function `palw_attempt_from_execution_v1` that the node's producer now calls too, class/network draw, sign-once-on-win, publish re-check); sighash audit tests; rail `--relay`, `--checkpoint`, `--track`, `--evidence-out`, `--redeem-auth-out` | The executor itself (the model backend in `kaspad/src/palw_backends`) is not extracted: a remote miner links its own behind `AttemptExecutor`; there is no ready-made remote-miner binary and no wRPC adapter that turns `getBlockTemplate` + `getPalwProducerFacts` into `TemplateObservation`/`Header`; a colluding quorum defeats the view |
+| B | `palw_evidence_v1` (manifest, preclaim id, chunk and claim-root checks, storage receipt) in consensus-core; directory provider and `fetch_claim_material`; **kaspad wiring**: `--palw-evidence-provider-dir`, the panel's material pull is also answered from providers (manifest agreeing with the claim's on-chain roots, every chunk verified), injected into the same inbox as a peer's answer (`PalwGossip::inject_local_material`) so the seat's own `verify_material`/re-execution still judge it; the producer pull is unchanged and is the fallback; **`palw_evidence_court_v1`**: a pure, tested provider challenge court (file/challenge/answer/sweep; deadline; charge once per (claim, provider); every filed provider defaulted ⇒ claim lapses with `miner_fraud = false`; a Panel's local timeout is a no-op; producer-withholding refused for a claim under the court, so one failure is one party's) + the dormant fence (four places, prerequisites, fork-id, tests) | **The court is not folded into `palw_state_v2`**: no object tags/deltas/carriage, no collateral movement, no claim-version bit — the fence has no reader in consensus; a storage receipt on chain does not exist yet; the directory transport serves only materials up to the 16 MiB gossip cap (interval transport for huge captures is unchanged); nothing about "PC can be off" is guaranteed until the court is folded and armed |
+| C | as before + the redemption block tests through the processor's coinbase expression | dormant; no full-chain drill |
+| D | `palw_state_proof_v1`: `state_root_preimage` (the state root is now hash(preimage), one spelling), `palw_collection_root_of_entries_v1`, header→pinned-block→state-root→collection→row proofs for bonds, classes and claims (presence AND absence), the client policy `proof::verify_bond_against_pin` | The state commitment is flat, so a proof is O(rows) (megabytes for a bond table); a tree-shaped commitment is a state-root version bump (design only); PoW verification of the header chain is not implemented — the pinned block's standing is the signed checkpoint's trust; fences are params, not state, so there is no state proof for them |

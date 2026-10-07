@@ -11,6 +11,8 @@
 //!
 //! * A *quorum* of independent nodes agreeing with a pinned checkpoint is an **operational** defence (RFC §6). It is not a light
 //!   client: colluding or co-hosted nodes defeat it, and a header alone cannot prove a bond, a class or a fence (stage D).
+//! * [`attempt`] mounts an attempt on a quorum-checked template with the miner's OWN executor and signer: the node supplies a template and
+//!   relays the finished block, and never sees the inference, the key, or a signature made before the draw is won.
 //! * An accepted relay is **not** inclusion: [`track::ClaimTracker`] follows tx id, claim id, block, licence, challenge window and
 //!   `Final`/void separately and walks backwards on a reorg.
 //! * Stage B's [`evidence`] gives the Panel somewhere other than the miner's PC to read from; a storage receipt is a promise, not a
@@ -18,8 +20,10 @@
 //!
 //! Domain strings are `misaka-palw/remote/...`; none of them is a consensus rule.
 
+pub mod attempt;
 pub mod checkpoint;
 pub mod evidence;
+pub mod proof;
 pub mod relay;
 pub mod template;
 pub mod track;

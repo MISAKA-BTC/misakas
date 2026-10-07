@@ -162,6 +162,9 @@ pub struct HeaderProcessor {
     /// leaves `check_palw_carriage_stateless` byte-identical to what it was.
     pub(super) palw_attempt_header_pins:
         Option<(kaspa_consensus_core::config::params::ForkActivation, kaspa_consensus_core::palw_state_v2::PalwStateParamsV2)>,
+    /// **RFC-0009: `Params::palw_receipt_spend_v4`** resolved off a `ConsensusV2` ruleset. `None` on every shipped preset, which leaves a
+    /// `PFS4` header refused by name (`ReceiptV4BelowFence`) at every height — exactly the set of valid blocks there is today.
+    pub(super) palw_receipt_spend_v4: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// MISAKA Phase 4b PoW: PALW-Ollama (`algo_id = 5`) activation — supersedes everything.
     pub(super) pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
     /// kaspa-pq EVM Lane v0.4 (ADR-0020): drives the per-header version rule
@@ -277,6 +280,7 @@ impl HeaderProcessor {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some((fence, bundle.state.clone())),
                 _ => None,
             }),
+            palw_receipt_spend_v4: params.palw_receipt_spend_v4_fence(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             evm_activation_daa_score: params.evm_activation_daa_score,
         }

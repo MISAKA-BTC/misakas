@@ -273,6 +273,14 @@ pub struct Args {
     /// submitted, the producer executes `N` further jobs of its own bond under the riders' derived anchors and queues one
     /// `AttemptRidersV1` object (tag 95) for the panel's carrier lane to file. Inert below `palw_capacity_multi_claim`.
     pub palw_riders: u32,
+    /// **RFC-0009 stage C: BUILDER mode** (`--palw-redemption-auth-dir=<dir>`). A directory of `RDA4` redemption authorizations miners
+    /// published (`misaka-palw-fp-rail --redeem-auth-out`): past `palw_receipt_spend_v4` this producer spends a winning quantum of any
+    /// authorized claim into a receipt block of its OWN bond and keeps the authorization's builder fee; the miner leg is paid by the chain to
+    /// the executor bond's registered payout. Inert (and the directory unread) while the fence is dormant — every shipped preset.
+    pub palw_redemption_auth_dir: Option<String>,
+    /// **RFC-0009 stage B: evidence provider directories** (`--palw-evidence-provider-dir=<dir>[,<dir>...]`). The panel also answers a material pull from
+    /// these (a manifest that agrees with the claim's on-chain roots, every chunk checked against it); the producer pull stays the fallback.
+    pub palw_evidence_provider_dir: Option<String>,
     /// **Register the class of this node's converted artifact on the running chain, once.**
     ///
     /// A network is born with the classes its ruleset id commits to; every later one arrives as a
@@ -848,6 +856,8 @@ impl Default for Args {
             palw_class_resident_bytes: None,
             palw_attempt_retention_minutes: 60,
             palw_riders: 0,
+            palw_redemption_auth_dir: None,
+            palw_evidence_provider_dir: None,
             palw_register_class: None,
             palw_register_bond: false,
             palw_dump_classes: false,
@@ -2614,6 +2624,26 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-evidence-provider-dir")
+                .long("palw-evidence-provider-dir")
+                .value_name("dirs")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "MISAKA PALW (RFC-0009 stage B): comma-separated evidence provider directories. A panel seat's material pull is also answered                      from these: a manifest any directory holds for the claim that agrees with the claim's on-chain roots, every chunk checked against                      it, then handed to the same verification and re-execution a peer's copy goes through. The producer pull stays the fallback.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-redemption-auth-dir")
+                .long("palw-redemption-auth-dir")
+                .value_name("dir")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "MISAKA PALW (RFC-0009, DORMANT): builder mode — a directory of RDA4 redemption authorizations that miners published. Past                      palw_receipt_spend_v4 this producer spends a winning quantum of any authorized free-prompt claim into a receipt block of its own                      bond and keeps the authorization's builder fee (at most 10% of the subsidy-derived worker share); the chain pays the rest to the                      executor bond's registered payout. Unread while the fence is dormant.",
+                ),
+        )
+        .arg(
             Arg::new("palw-riders")
                 .long("palw-riders")
                 .value_name("riders")
@@ -3529,6 +3559,8 @@ impl Args {
             palw_class_cache_bytes: m.get_one::<u64>("palw-class-cache-bytes").copied().unwrap_or(defaults.palw_class_cache_bytes),
             palw_class_resident_bytes: m.get_one::<u64>("palw-class-resident-bytes").copied().or(defaults.palw_class_resident_bytes),
             palw_riders: m.get_one::<u32>("palw-riders").copied().unwrap_or(defaults.palw_riders),
+            palw_redemption_auth_dir: m.get_one::<String>("palw-redemption-auth-dir").cloned().or(defaults.palw_redemption_auth_dir),
+            palw_evidence_provider_dir: m.get_one::<String>("palw-evidence-provider-dir").cloned().or(defaults.palw_evidence_provider_dir),
             palw_attempt_retention_minutes: m
                 .get_one::<u64>("palw-attempt-retention-minutes")
                 .copied()

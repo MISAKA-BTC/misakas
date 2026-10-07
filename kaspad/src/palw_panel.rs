@@ -3805,6 +3805,10 @@ pub struct PalwPanelConfig {
     /// (`trace_retention_daa`); this is the panel reading it rather than a second copy of the
     /// same promise. Measured on the drill: 143 sessions opened, 4 answered.
     pub retention_dir: PathBuf,
+    /// **RFC-0009 stage B: evidence provider directories** (`--palw-evidence-provider-dir`). A pull for a claim's material is ALSO answered from
+    /// these — a manifest any provider holds for the claim that agrees with the claim's own roots, every chunk checked against it — in addition
+    /// to the producer pull, which is unchanged and stays the fallback. Empty: no provider source, the node behaves as before.
+    pub evidence_provider_dirs: Vec<PathBuf>,
     /// **Register this node's worker class on the running chain, once** (ADR-0049 Decision H).
     ///
     /// A network is born with the classes its ruleset id commits to, and every later one arrives
@@ -17517,12 +17521,62 @@ impl PalwPanelService {
         true
     }
 
+    /// **RFC-0009 stage B: the material from ANY evidence provider, root-checked before it is handed on.**
+    ///
+    /// The claim's roots are the CHAIN's (`trace_root`, `output_root`, `execution_root`, the chunk count and the retention it obliges): a
+    /// provider's manifest that disagrees with them is another execution's evidence, whoever signed for it. Each chunk is checked against the
+    /// manifest; the reassembled bytes are then injected into the same inbox a peer's answer enters, so the seat's own `verify_material` and
+    /// re-execution still judge them. A miss costs nothing: the producer pull that follows is unchanged. Provider silence is never evidence of
+    /// anything (no slash rests on it — see `misaka_palw_remote::evidence::evidence_responsibility_v1`).
+    async fn pull_material_from_evidence_providers(&self, network_domain: Hash64, claim: Hash64) {
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some((state, _, _)) = session.palw_derived_artifacts_v1(claim) else { return };
+        let roots = misaka_palw_remote::evidence::ClaimRoots {
+            network_domain,
+            trace_root: state.trace_root,
+            output_root: state.output_root,
+            execution_root: state.execution_root,
+            trace_chunk_count: state.trace_chunk_count,
+            retention_deadline: state.trace_retention_daa,
+        };
+        let dirs = self.config.evidence_provider_dirs.clone();
+        let claim_hex = claim.to_string();
+        let fetched = tokio::task::spawn_blocking(move || {
+            misaka_palw_remote::evidence::fs::fetch_claim_material(
+                &dirs,
+                &claim_hex,
+                &roots,
+                &misaka_palw_remote::evidence::ManifestLimits::default(),
+                claim,
+            )
+        })
+        .await;
+        match fetched {
+            Ok(Ok((bytes, report))) => {
+                let admitted = self.flow_context.palw_gossip().inject_local_material(claim, &bytes);
+                info!(
+                    "[{PALW_PANEL}] claim {claim}: {} byte(s) of material from evidence provider(s) {:?} ({admitted:?}); {} failed attempt(s) on the way",
+                    bytes.len(),
+                    report.served_by,
+                    report.failures.len()
+                );
+            }
+            // No provider offered an admissible manifest, or a chunk would not verify: say so once per pull, and fall through to the producer.
+            Ok(Err(why)) => info!("[{PALW_PANEL}] claim {claim}: no evidence-provider material ({why})"),
+            Err(join) => warn!("[{PALW_PANEL}] claim {claim}: the evidence-provider fetch did not finish ({join})"),
+        }
+    }
+
     /// **The signed whole-capture pull** (ADR-0077 SA-2's last sentence). The attempt lane keeps
     /// the whole-capture transport — Decision 8 retires it on the FREE-PROMPT lane only — so the
     /// pull stays, with a bond in front of it. Falls back to the unsigned form for a node with no
     /// key, which is a node that files no receipts either.
     pub async fn request_material_signed(&self, network_domain: Hash64, claim: Hash64, requested_daa: u64) {
         self.flow_context.palw_gossip().note_pull_request(claim);
+        // RFC-0009 stage B: a provider may already hold the material — ask the directories too, before and beside the producer pull.
+        if !self.config.evidence_provider_dirs.is_empty() {
+            self.pull_material_from_evidence_providers(network_domain, claim).await;
+        }
         let signed = self.keypair.as_ref().and_then(|kp| {
             crate::palw_fp_seat::palw_fp_sign_opening_request_v1(&kp.signing_key, network_domain, claim, None, requested_daa)
                 .map(|signature| (kp.verification_key.as_ref().to_vec(), signature))

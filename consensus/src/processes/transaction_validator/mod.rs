@@ -92,6 +92,12 @@ pub struct TransactionValidator {
     /// lane exists — a size guard fails wide, and the exact-hash coinbase rule decides correctness.
     palw_round_lane_declared: bool,
 
+    /// **RFC-0009, height-free: whether this ruleset configures `palw_receipt_spend_v4`.** A V4 receipt block splits its reward into a
+    /// miner leg and the builder's own output, so a merging block may carry up to one extra output per mergeset block; the isolation cap
+    /// widens by the mergeset limit where the fence exists (a size guard fails wide; the exact-hash coinbase rule decides correctness).
+    /// `false` on every shipped preset, which leaves the cap exactly where it was.
+    palw_receipt_v4_declared: bool,
+
     /// **ADR-0152-adjacent (Activation Pool): `Params::palw_activation_pool_fence()`'s height**
     /// (`never()` read as absence). Isolation derives the height-free question from `.is_some()`: an
     /// activation sink (`OP_RETURN "MSKACT01" <class>`) is a consensus-legal output class only on a
@@ -200,6 +206,7 @@ impl TransactionValidator {
             palw_held_context_fence: palw_held_context_fence
                 .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never()),
             palw_round_lane_declared: false,
+            palw_receipt_v4_declared: false,
             palw_activation_pool_fence: None,
             palw_improvement_fence: None,
             palw_model_sink_bound_fence: None,
@@ -291,6 +298,13 @@ impl TransactionValidator {
         self
     }
 
+    /// RFC-0009: declare `palw_receipt_spend_v4` (`Params::palw_receipt_spend_v4_fence().is_some()`), which widens the coinbase output cap
+    /// by the mergeset limit (one builder output beside each V4 block's miner leg).
+    pub fn with_receipt_v4_declared(mut self, declared: bool) -> Self {
+        self.palw_receipt_v4_declared = declared;
+        self
+    }
+
     pub fn new_for_tests(
         max_tx_inputs: usize,
         max_tx_outputs: usize,
@@ -331,6 +345,7 @@ impl TransactionValidator {
             palw_held_context_fence: None,
             // Every shipped preset's door: no execution lane, no payee outputs.
             palw_round_lane_declared: false,
+            palw_receipt_v4_declared: false,
             // Every shipped preset's door but testnet-12's: no pool, no activation sink.
             palw_activation_pool_fence: None,
             palw_improvement_fence: None,
