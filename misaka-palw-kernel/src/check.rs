@@ -1,0 +1,248 @@
+//! **The deterministic plan checker** (RFC-0005 §K.4 step 2, RFC-0011 §16.2–§16.3).
+//!
+//! Everything a plan states is re-derived here from the program and the descriptor and compared:
+//!
+//! 1. the descriptor the plan names is this one and is **Active** at the DAA (else `KERNEL_NOT_ACTIVE`);
+//! 2. the program validates and is in the descriptor's primitive set (else `FRONTEND_REQUIRED` /
+//!    `KERNEL_EXTENSION_REQUIRED`), and the plan is about this program;
+//! 3. every node of every scheduled block has exactly one relation, with the descriptor's checker,
+//!    court and repetitions, the right dimensions, and nothing extra (else `INCOMPLETE_COVERAGE`);
+//! 4. every family is implemented (else `KERNEL_EXTENSION_REQUIRED`, naming the node) and every
+//!    `MatMul` satisfies the field's alias bound: an integer error stays nonzero in GF(p);
+//! 5. every state has its boundary;
+//! 6. the budgets agree with the derivation and every total fits the descriptor's ceilings;
+//! 7. the whole-claim error is derived (`t·126 − ⌈log2 R⌉`, union with the binding term), must reach
+//!    the descriptor's target, and the declaration may not exceed it.
+//!
+//! Static admission does not assert that future outputs are correct (RFC-0005 §K.4).
+
+use misaka_palw_tir::program::TirProgramV1;
+use misaka_palw_tir::{DType, Prim};
+
+use crate::descriptor::{KernelDescriptorV1, KernelScheduleV1, KernelStandingV1};
+use crate::family::{ConstraintFamilyV1, family_of_prim};
+use crate::field::P;
+use crate::hash::Digest;
+use crate::outcome::RegistrationOutcomeV1 as O;
+use crate::plan::{
+    PLAN_GRAMMAR_V1, VerificationPlanV1, block_occurrences, derive_budgets, derived_error_bits, dtype_of_tag, expected_boundaries,
+    expected_relation,
+};
+
+/// What a plan that passed carries forward.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanAcceptanceV1 {
+    pub plan_root: Digest,
+    pub error_bits: u16,
+    pub claim_verifier_work: u128,
+    pub claim_evidence_bytes: u128,
+}
+
+fn max_abs(d: DType) -> u128 {
+    (d.min_value().unsigned_abs()).max(d.max_value().unsigned_abs())
+}
+
+/// The largest integer error a `MatMul` can make: `|Y_claim| + |Y_true| ≤ max|out| + k·max|a|·max|b|`.
+/// `None` on overflow (an `i128` operand).
+fn matmul_error_span(k: u64, a: DType, b: DType, out: DType) -> Option<u128> {
+    (k as u128).checked_mul(max_abs(a))?.checked_mul(max_abs(b))?.checked_add(max_abs(out))
+}
+
+pub fn check_plan_v1(
+    schedule: &KernelScheduleV1,
+    descriptor: &KernelDescriptorV1,
+    program: &TirProgramV1,
+    program_root: Digest,
+    plan: &VerificationPlanV1,
+    daa: u64,
+) -> Result<PlanAcceptanceV1, O> {
+    // 1. The descriptor and its standing.
+    let digest = descriptor.digest();
+    if plan.descriptor_digest != digest {
+        return Err(O::PlanForged { why: "the plan names another kernel descriptor".into() });
+    }
+    descriptor.well_formed().map_err(|why| O::PlanForged { why: format!("descriptor: {why}") })?;
+    match schedule.standing_at(&digest, daa) {
+        KernelStandingV1::Active => {}
+        KernelStandingV1::NotActive(status) => return Err(O::KernelNotActive { descriptor: digest, status: Some(status) }),
+        KernelStandingV1::Unknown => return Err(O::KernelNotActive { descriptor: digest, status: None }),
+    }
+    if plan.grammar != PLAN_GRAMMAR_V1 {
+        return Err(O::KernelExtensionRequired {
+            family: None,
+            relation: format!("plan grammar {}", plan.grammar),
+            required: format!("grammar {}", plan.grammar),
+            available: format!("grammar {PLAN_GRAMMAR_V1}"),
+        });
+    }
+    let plan_bytes = plan.encoded_len() as u64;
+    if plan_bytes > descriptor.limits.max_plan_bytes {
+        return Err(O::BoundsExceeded {
+            what: "plan bytes",
+            required: plan_bytes as u128,
+            limit: descriptor.limits.max_plan_bytes as u128,
+        });
+    }
+    // 2. The program.
+    if program.prim_set_id != descriptor.primitive_set_id {
+        return Err(O::KernelExtensionRequired {
+            family: None,
+            relation: "the program's primitive set".into(),
+            required: format!("prim set {}…", crate::hash::hex(&program.prim_set_id[..8])),
+            available: format!("prim set {}…", crate::hash::hex(&descriptor.primitive_set_id[..8])),
+        });
+    }
+    misaka_palw_tir::validate::validate(program)
+        .map_err(|e| O::FrontendRequired { reason: format!("the program does not validate: {e}") })?;
+    if plan.program_root != program_root {
+        return Err(O::PlanForged { why: "the plan is about another program".into() });
+    }
+    if plan.max_positions == 0 || plan.max_positions > program.history_bound || plan.max_positions > descriptor.limits.max_positions {
+        return Err(O::BoundsExceeded {
+            what: "positions",
+            required: plan.max_positions as u128,
+            limit: program.history_bound.min(descriptor.limits.max_positions) as u128,
+        });
+    }
+    // 3–4. Coverage, family support and the alias bound, node by node.
+    let occ = block_occurrences(program);
+    let mut expected = Vec::new();
+    for (b, block) in program.blocks.iter().enumerate() {
+        if occ[b] == 0 {
+            continue;
+        }
+        for (ni, node) in block.nodes.iter().enumerate() {
+            let rel = expected_relation(descriptor, program, b, ni, occ[b]).map_err(|(family, why)| O::KernelExtensionRequired {
+                family: Some(family),
+                relation: format!("block {b} node {ni} ({})", node.prim.name()),
+                required: format!("a {} relation", family.name()),
+                available: why,
+            })?;
+            if let (Prim::MatMul, Some(d)) = (&node.prim, rel.matmul) {
+                let dt = |t: u8| dtype_of_tag(t).unwrap_or(DType::I128);
+                let span = matmul_error_span(d.k, dt(rel.in_dtypes[0]), dt(rel.in_dtypes[1]), dt(rel.out_dtype));
+                if span.is_none_or(|s| s >= P) {
+                    return Err(O::KernelExtensionRequired {
+                        family: Some(ConstraintFamilyV1::DenseMatrix),
+                        relation: format!(
+                            "block {b} node {ni} (MatMul {}×{}→{}, k {})",
+                            dt(rel.in_dtypes[0]).name(),
+                            dt(rel.in_dtypes[1]).name(),
+                            dt(rel.out_dtype).name(),
+                            d.k
+                        ),
+                        required: "an integer error span below 2^127 − 1 (or a multi-modulus dense-matrix relation)".into(),
+                        available: "one GF(2^127 − 1) Freivalds relation".into(),
+                    });
+                }
+            }
+            debug_assert_eq!(family_of_prim(&node.prim), rel.family);
+            expected.push(rel);
+        }
+    }
+    if plan.relations.len() as u64 > descriptor.limits.max_relations as u64 {
+        return Err(O::BoundsExceeded {
+            what: "relations",
+            required: plan.relations.len() as u128,
+            limit: descriptor.limits.max_relations as u128,
+        });
+    }
+    for rel in &plan.relations {
+        if !expected.iter().any(|e| e.block == rel.block && e.node == rel.node) {
+            return Err(O::IncompleteCoverage {
+                what: format!("block {} node {}: a relation the program does not have", rel.block, rel.node),
+            });
+        }
+    }
+    for e in &expected {
+        let mine: Vec<_> = plan.relations.iter().filter(|r| r.block == e.block && r.node == e.node).collect();
+        match mine.as_slice() {
+            [] => {
+                return Err(O::IncompleteCoverage {
+                    what: format!("block {} node {}: omitted (no relation checks it)", e.block, e.node),
+                });
+            }
+            [one] if *one == e => {}
+            [one] if one.checker != e.checker || one.repetitions < e.repetitions => {
+                return Err(O::PlanForged {
+                    why: format!(
+                        "block {} node {}: checker {:?}×{} where the kernel requires {:?}×{}",
+                        e.block, e.node, one.checker, one.repetitions, e.checker, e.repetitions
+                    ),
+                });
+            }
+            [_] => {
+                return Err(O::IncompleteCoverage {
+                    what: format!("block {} node {}: the relation's shape or family differs from the program's", e.block, e.node),
+                });
+            }
+            _ => return Err(O::IncompleteCoverage { what: format!("block {} node {}: covered twice", e.block, e.node) }),
+        }
+    }
+    // 5. Boundaries.
+    if plan.boundaries != expected_boundaries(program) {
+        return Err(O::IncompleteCoverage { what: "the state boundaries are not one per state, as declared".into() });
+    }
+    // 6. Budgets and ceilings.
+    let budgets = derive_budgets(program, &expected);
+    if plan.budgets != budgets {
+        return Err(O::IncompleteCoverage { what: "the declared budgets are not the derived ones".into() });
+    }
+    let positions = plan.max_positions as u128;
+    let claim_work = budgets.verifier_work_per_position.saturating_mul(positions);
+    let claim_bytes = budgets.evidence_bytes_per_position.saturating_mul(positions).saturating_add(budgets.artifact_bytes);
+    let l = &descriptor.limits;
+    for (what, required, limit) in [
+        ("claim verifier work", claim_work, l.max_claim_verifier_work),
+        ("claim evidence bytes", claim_bytes, l.max_claim_evidence_bytes),
+        ("court bytes", budgets.worst_court_bytes as u128, l.max_court_bytes as u128),
+        ("court work", budgets.worst_court_work as u128, l.max_court_work as u128),
+    ] {
+        if required > limit {
+            return Err(O::BoundsExceeded { what, required, limit });
+        }
+    }
+    // 7. The derived error.
+    let instances = budgets.probabilistic_instances_per_position as u128 * positions;
+    let error_bits = derived_error_bits(descriptor, instances);
+    if error_bits < descriptor.soundness.target_bits {
+        return Err(O::BoundsExceeded {
+            what: "whole-claim error bits (below the target)",
+            required: descriptor.soundness.target_bits as u128,
+            limit: error_bits as u128,
+        });
+    }
+    if plan.declared_error_bits > error_bits {
+        return Err(O::PlanForged {
+            why: format!("declares ε ≤ 2^-{} where the suite derives 2^-{error_bits}", plan.declared_error_bits),
+        });
+    }
+    Ok(PlanAcceptanceV1 { plan_root: plan.root(), error_bits, claim_verifier_work: claim_work, claim_evidence_bytes: claim_bytes })
+}
+
+/// **Registration's static outcome** for a TIR v1 program: the reference plan, checked. A caller with a
+/// plan from elsewhere calls [`check_plan_v1`] on it directly.
+pub fn registration_outcome_v1(
+    schedule: &KernelScheduleV1,
+    descriptor: &KernelDescriptorV1,
+    program: &TirProgramV1,
+    program_root: Digest,
+    max_positions: u32,
+    daa: u64,
+) -> O {
+    let plan = match crate::plan::plan_for_tir_program_v1(descriptor, program, program_root, max_positions) {
+        Ok(p) => p,
+        Err((family, why)) => {
+            return O::KernelExtensionRequired {
+                family: Some(family),
+                relation: why.clone(),
+                required: format!("a {} relation", family.name()),
+                available: why,
+            };
+        }
+    };
+    match check_plan_v1(schedule, descriptor, program, program_root, &plan, daa) {
+        Ok(a) => O::EligibleAt { daa, descriptor: descriptor.digest(), plan_root: a.plan_root, error_bits: a.error_bits },
+        Err(o) => o,
+    }
+}
