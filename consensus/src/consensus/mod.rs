@@ -1567,6 +1567,7 @@ impl ConsensusApi for Consensus {
     }
 
     fn get_dns_confirmation(&self) -> Option<DnsConfirmation> {
+        if self.config.params.palw_dns_retired_at(self.get_sink_daa_score_timestamp().daa_score) { return None; }
         // kaspa-pq Phase 10 (ADR-0009): build the DNS confirmation view from the
         // current DnsState + this network's thresholds. `None` when the overlay
         // is not configured or no DnsState has been written yet.
@@ -1608,6 +1609,7 @@ impl ConsensusApi for Consensus {
     }
 
     fn get_active_validator_set(&self) -> Option<ActiveValidatorSet> {
+        if self.config.params.palw_dns_retired_at(self.get_sink_daa_score_timestamp().daa_score) { return None; }
         // kaspa-pq Phase 13 (ADR-0017): all active-bond validators attest every
         // epoch — there is no sortition committee. Return the full active set at
         // the sink (the pov is the sink DAA score so the epoch matches the
@@ -1710,6 +1712,7 @@ impl ConsensusApi for Consensus {
         from_epoch: u64,
         limit: usize,
     ) -> Vec<ValidatorAttestationTarget> {
+        if self.config.params.palw_dns_retired_at(self.get_sink_daa_score_timestamp().daa_score) { return Vec::new(); }
         // kaspa-pq DNS v3 (batch): scan only the current stake-score window, not `[0, lifetime]`.
         // Return under-certified epochs first in ascending order so optional hard-inclusion forks
         // can clear oldest-first and shipped liveness-first validators still improve stale
@@ -2867,10 +2870,103 @@ impl ConsensusApi for Consensus {
         Ok(self.storage.evm_header_store.get(block).optional().unwrap())
     }
 
+    fn get_native_settlement_snapshot(
+        &self,
+    ) -> ConsensusResult<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
+        let sink = self.get_sink();
+        let Some(retirement) =
+            self.config.params.palw_dns_retirement.filter(|r| r.activation.is_active(self.get_sink_daa_score_timestamp().daa_score))
+        else {
+            return Ok(None);
+        };
+        let snapshot = self
+            .storage
+            .evm_heads_store
+            .read()
+            .native_snapshot()
+            .optional()
+            .map_err(|e| ConsensusError::GeneralOwned(format!("native settlement snapshot: {e}")))?
+            .flatten();
+        if let Some(s) = &snapshot {
+            if s.version != 1
+                || s.generation != sink
+                || s.policy_id != retirement.settlement.id()
+                || s.ruleset_id != self.config.params.consensus_params_id()
+            {
+                return Err(ConsensusError::General("native settlement generation/ruleset mismatch; reconstruct or resync"));
+            }
+            // The public evidence API and ETH tags share the same root/provenance checks.
+            use crate::model::stores::evm::EvmHeaderStoreReader;
+            for block in [s.latest, s.safe, s.finalized].into_iter().flatten() {
+                let execution = self.storage.evm_header_store.get(block).map_err(|_| ConsensusError::MissingData(block))?;
+                let header = self.headers_store.get_header(block).map_err(|_| ConsensusError::MissingData(block))?;
+                if header.evm_commitment_root != execution.commitment_root()
+                    || !self.services.reachability_service.try_is_chain_ancestor_of(block, sink).unwrap_or(false)
+                {
+                    return Err(ConsensusError::General("native settlement lacks a canonical, root-verified result"));
+                }
+            }
+            if s.safe.is_some_and(|safe| {
+                s.latest
+                    .is_none_or(|latest| !self.services.reachability_service.try_is_chain_ancestor_of(safe, latest).unwrap_or(false))
+            }) || s.finalized.is_some_and(|finalized| {
+                s.safe
+                    .is_none_or(|safe| !self.services.reachability_service.try_is_chain_ancestor_of(finalized, safe).unwrap_or(false))
+            }) {
+                return Err(ConsensusError::General("native settlement heads are not an ordered executed prefix"));
+            }
+        }
+        Ok(snapshot)
+    }
+
     fn get_evm_canonical_heads(&self) -> ConsensusResult<Option<kaspa_consensus_core::evm::CanonicalEvmHeads>> {
-        use crate::model::stores::evm::EvmCanonicalHeadsStoreReader;
-        // Absent (pre-activation / non-EVM) reads as None rather than an error.
-        Ok(self.storage.evm_heads_store.read().get().optional().unwrap())
+        use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader};
+        let mut heads = self
+            .storage
+            .evm_heads_store
+            .read()
+            .get()
+            .optional()
+            .map_err(|e| ConsensusError::GeneralOwned(format!("EVM canonical heads: {e}")))?;
+        if self.config.params.palw_dns_retired_at(self.get_sink_daa_score_timestamp().daa_score) {
+            let snapshot = self.get_native_settlement_snapshot()?;
+            if let Some(h) = &mut heads {
+                match snapshot {
+                    None => {
+                        h.safe = BlockHash::default();
+                        h.finalized = BlockHash::default();
+                    }
+                    Some(s) if h.latest_head() == s.latest && h.safe_head() == s.safe && h.finalized_head() == s.finalized => {}
+                    Some(_) => {
+                        return Err(ConsensusError::General(
+                            "EVM heads and native settlement snapshot disagree; reconstruct or resync",
+                        ));
+                    }
+                }
+                let sink = self.get_sink();
+                for block in [h.latest_head(), h.safe_head(), h.finalized_head()].into_iter().flatten() {
+                    let execution = self.storage.evm_header_store.get(block).map_err(|_| ConsensusError::MissingData(block))?;
+                    let header = self.headers_store.get_header(block).map_err(|_| ConsensusError::MissingData(block))?;
+                    if header.evm_commitment_root != execution.commitment_root()
+                        || !self.services.reachability_service.try_is_chain_ancestor_of(block, sink).unwrap_or(false)
+                    {
+                        return Err(ConsensusError::General("EVM settlement head lacks a canonical, root-verified result"));
+                    }
+                }
+                if h.safe_head().is_some_and(|safe| {
+                    h.latest_head().is_none_or(|latest| {
+                        !self.services.reachability_service.try_is_chain_ancestor_of(safe, latest).unwrap_or(false)
+                    })
+                }) || h.finalized_head().is_some_and(|finalized| {
+                    h.safe_head().is_none_or(|safe| {
+                        !self.services.reachability_service.try_is_chain_ancestor_of(finalized, safe).unwrap_or(false)
+                    })
+                }) {
+                    return Err(ConsensusError::General("EVM finalized/safe/latest are not an ordered executed prefix"));
+                }
+            }
+        }
+        Ok(heads)
     }
 
     fn get_evm_state_snapshot_of(&self, block: BlockHash) -> ConsensusResult<Option<kaspa_consensus_core::evm::EvmStateSnapshot>> {

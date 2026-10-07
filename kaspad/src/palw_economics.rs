@@ -261,12 +261,18 @@ impl PalwEconomicsRecorderV1 {
     }
 }
 
-/// The recorder's own thread: a refresh every [`PALW_ECONOMICS_REFRESH_SECS`] seconds, for the life
-/// of the process. Errors are logged at debug (a node that is still syncing has no state to read).
+/// The recorder's own thread: a refresh every [`PALW_ECONOMICS_REFRESH_SECS`] seconds, for as long as
+/// the recorder lives. Errors are logged at debug (a node that is still syncing has no state to read).
+///
+/// The thread holds the recorder only weakly: the RPC service's provider owns it, so a daemon
+/// shutdown that drops the service releases the recorder — and with it the `ConsensusManager` — at
+/// once, and the thread exits at its next wake instead of keeping both alive for the process.
 pub fn spawn_recorder_thread(recorder: Arc<PalwEconomicsRecorderV1>) {
+    let recorder = Arc::downgrade(&recorder);
     let spawned = std::thread::Builder::new().name("palw-economics".to_string()).spawn(move || {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(PALW_ECONOMICS_REFRESH_SECS));
+            let Some(recorder) = recorder.upgrade() else { break };
             match recorder.refresh() {
                 Ok(n) if n > 0 => info!("[palw-economics] ledger: {n} claim row(s) written"),
                 Ok(_) => {}

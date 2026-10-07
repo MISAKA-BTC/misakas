@@ -1,13 +1,11 @@
-# ADR-0165 — Useful work carries the clock: the floor is the idle-only bonded fallback behind a floor state machine (A″), a REAL attempt carries the slot's tick (B); the bonded FALLBACK-V1 block and header-level floor invalidation are the next fence
+# ADR-0165 - Useful work carries the clock: BASE-0 remains the idle-only bonded floor (A″), REAL attempts can carry slot ticks (B), and heartbeat remains an independent emergency lane
 
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 
-**Status:** PROPOSED 2026-10-03 on `rcore/real-share` (lane RS), for the DAA-5,300 flag day (the Useful Work
-Transition). **Revision 4** (coordinator decisions of 2026-10-03: FALLBACK-V1 is the NEXT fence, 5,300 ships A″ + B; after
-P2's live measurement the floor became a rooted state machine with `floor_idle_slots` = 20 and `probe_cooldown_slots` = 20, and,
-on P2's second replay, `probe_slots` = 8; header-level floor invalidation is **not** built: §10). Consensus change behind two
-fences, **dormant on every shipped preset**: `Params::palw_floor_reserve_v1` (A″) and `Params::palw_real_clock_tick_v1` (B).
+**Status:** Direction amended **2026-10-07 (revision 5, user decision)**. Retain A″ (the idle-only bonded BASE-0 floor) and B (an attempt can carry a slot tick). Retain the independent bondless heartbeat lane of [ADR-0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md) and [ADR-0140](0140-the-heartbeat-is-the-emergency-generator.md). **The proposed FALLBACK-V1 integration and heartbeat retirement are withdrawn**, including its added weight, bond envelope and per-bond slot credit; it is not the next fence. Sections 5-8 and 10.5 record this change.
+
+Revision 4's 2026-10-03 implementation and measurement record remains: A″ uses `floor_idle_slots = 20`, `probe_cooldown_slots = 20` and `probe_slots = 8`; the two implementation fences are `Params::palw_floor_reserve_v1` and `Params::palw_real_clock_tick_v1`. The historical DAA-5,300 release plan and preset status below are retained as implementation history. **This revision changes design direction only; it does not change activation heights, shipped presets, consensus fingerprints or runtime accounting.** Header-level floor invalidation remains an unbuilt research question, not a scheduled follow-on fence.
 
 **Builds on:** ADR-0060/0064 (the liveness doctrine), ADR-0066 (the heartbeat lane), ADR-0105 (heartbeat
 transparency, `LaneColoring`), ADR-0138 (the anchor clock), ADR-0142 (the cursor; §9 the floor), ADR-0045/0135
@@ -67,7 +65,7 @@ exposure ceiling and share, the network room — **and wrote its claim**. The st
 Within a block the order is the fold's: the block's own attempt first (BLUE: a chain block), then the merged works in
 consensus acceptance order, each stepping the state the one before left, all at the accepting block's DAA (Idle + [RED, BLUE]
 is Probe then Normal; Idle + [BLUE, RED] is Normal and the RED changes nothing). A merged attempt's colour is its place in the
-accepting block's mergeset: the processor hands the fold `GhostdagData::mergeset_reds` (`extras.merged_reds`), and the fold
+accepting block's mergeset: the processor hands the fold the classified `genuine_reds()` (`extras.merged_reds`, ADR-0125 semantic amendment), and the fold
 reads a carrying block in it as RED, every other attempt as BLUE. The time step runs once at the start of every block's fold
 (step 1e, before the sweeps and before any attempt, in the acceptance rehearsal too) so own and merged attempts read one state;
 a floor attempt's gate reads the state at its place in the order.
@@ -120,8 +118,8 @@ here with the shipped probe as well.) **The fold-level refusal without the produ
 every role that mines floors** — the kaspad PALW producer service, the only one — and has no off switch except the drill flag
 `--palw-drill-floor-ignore-policy` (a salted private drill only). Non-compliance is not version skew: a binary without the rule
 forks off at the flag day, so a non-compliant floor producer on the chain is a *modified* one, whose only motive is to degrade
-REAL work (its floors earn nothing). The cure that does not depend on anyone's compliance is the next fence (§10); this one is a
-policy the producers must follow, and says so.
+REAL work (its floors earn nothing). Possible answers that do not depend on producer compliance remain open research questions (§10); this implemented rule is a
+policy the producers must follow, and says so. None authorizes replacing the heartbeat with a bonded block.
 
 ### 00.3 The constants, from the measurements
 
@@ -303,7 +301,7 @@ lands):
   (lane P2, branch `anchor/window`, user-approved). This ADR neither implements nor assumes it: without it, A″ leaves the ADR-0130 schedule
   and the ADR-0147 admission jury without an anchor in almost every span (measured above), and the tests that assert that gap are to be
   flipped when it merges.
-* **Class-aware colouring — the next fence** (§10.3), handed to lane RF8 (RFC-0008) as the alternative to its merge-admission design.
+* **Class-aware colouring — open research** (§10.3), handed to lane RF8 (RFC-0008) as the alternative to its merge-admission design.
 
 ## 0. Where the implementation stands
 
@@ -311,26 +309,28 @@ lands):
 |---|---|
 | **B** — a REAL attempt carries the slot's tick, one tick per slot (`palw_real_clock_tick_v1`) | built, tested (00.6) |
 | **A″** — the floor is the idle-only bonded fallback, behind the floor state machine, 20 / 8 / 20 (`palw_floor_reserve_v1`) | built, tested (00.1–00.5); **the producer hold is default-on** |
-| **FALLBACK-V1** — the bonded fallback block, its weight, reward, cap, idle rule, retiring the heartbeat | **designed here (§5–§8), the next fence, not built** |
-| anchors under Normal (lane A's binding; the round seed and the jury) | **00.9**: measured in-tree; **anchor duty built** (binding); the round seed / jury are `palw_anchor_window_v1`'s (separate fence); class-aware colouring (§10.3) is the next fence |
+| **Independent heartbeat** — algo 8, bondless, claimless, fee-only, epsilon weight | retained under ADR-0066/0140; never replaced by FALLBACK-V1 |
+| **FALLBACK-V1 integration** — formerly proposed bonded heartbeat and fallback accounting | **WITHDRAWN 2026-10-07 (§5–§8); not built, no planned fence** |
+| anchors under Normal (lane A's binding; the round seed and the jury) | **00.9**: measured in-tree; **anchor duty built** (binding); the round seed / jury are `palw_anchor_window_v1`'s (separate fence); class-aware colouring (§10.3) remains an unbuilt research option |
 | header-level floor invalidation / class-aware colouring / re-anchored inference | **open problems, §10, not built** |
 
 ## 1. The defect
 
 The 600 blocks of testnet-12 at DAA 3,939–4,071: 67 % attempts, 33 % heartbeats, and almost every attempt the
-`PALW-BASE-0` floor class. Two block kinds exist to keep the chain alive — the floor attempt and the heartbeat — and
-together they were two thirds of the chain. Neither is a model. And the floor was not only idle weight: it buried the
+`PALW-BASE-0` floor class. Two distinct mechanisms contribute to liveness — the bonded BASE-0 floor model attempt and the independent heartbeat — and
+together they were two thirds of the observed chain. BASE-0 is a model class; heartbeat carries no model work. And the floor was not only idle weight: it buried the
 models that did run (00.2).
 
 ## 2. The block kinds
 
 | kind | what it is | claim / panel / court | clock | weight | reward |
 |---|---|---|---|---|---|
-| **REAL** | an attempt of a registered, Active class other than `PALW-BASE-0` | yes (unchanged) | carries the slot's tick (B) | its pwu (ADR-0149) | unchanged |
-| **EXEC** | the execution lane's round block (ADR-0125) | permit | none (outside the DAA set) | unchanged | unchanged |
-| **FALLBACK** (5,300) | a floor attempt past the fence, accepted only while Idle (A″) | yes — it IS the floor claim | carries the tick like any attempt | today's floor weight | today's |
-| **FALLBACK-V1** (next fence) | a bonded, idle-only block that is not a model class (§5) | **none** | carries the slot's tick when nothing REAL did | bond-derived `w_fb`, one per bond per slot | fee-only |
-| **LEGACY_HEARTBEAT / LEGACY_FLOOR** | the pre-fence heartbeat / floor attempt | as before | as before | as before | as before |
+| **REAL** | an attempt of a registered, Active class other than `PALW-BASE-0` | yes (unchanged) | can carry the slot's tick (B) | its pwu (ADR-0149) | unchanged |
+| **BASE-0** | the bonded floor model class; A″ accepts its claim only while Idle | yes: floor claim, panel and court | carries the tick like an attempt under B | existing floor useful-work weight | existing floor useful-work reward |
+| **HEARTBEAT** | independent emergency clock/liveness lane, algo 8; bondless | no claim, no panel, no useful-work credit | emergency slot tick under its existing rules | epsilon (`ε`), not floor weight | fee-only, zero useful-work subsidy |
+| **ROUND / EXEC** | algo-10 execution lane block under ADR-0125; raw GHOSTDAG red | its execution permit; no new floor claim | DAA +0, never a selected parent | no added blue score/work or useful-work claim credit | existing round fee payout |
+
+BASE-0 and heartbeat remain different lanes with different admission, collateral and accounting. An RPC `blockKind=FALLBACK` for a post-fence floor attempt is a retained compatibility spelling for **BASE-0**, not the withdrawn FALLBACK-V1 block kind. `LEGACY_HEARTBEAT` and `LEGACY_FLOOR` are old RPC names, not a decision to retire either mechanism.
 
 ## 3. How the rule got here (and A′, superseded)
 
@@ -345,49 +345,32 @@ anything; and a RED-only stream is bounded by the cooldown.
 
 ## 4. B — see 00.6
 
-## 5. FALLBACK-V1 (the next fence; design, not built)
+## 5. FALLBACK-V1 integration - WITHDRAWN 2026-10-07
 
-A **block kind**, not a model class: no claim, no panel, no court, no TIR. It is the heartbeat lane (algo 8, its fixed 2^24
-canonical hash puzzle, ε `blue_work`, declared subsidy 0, the stamp/slot/lead-cap rules of ADR-0142) with three additions and
-one retirement:
+The earlier proposal combined the heartbeat lane (algo 8) with a bond requirement, an idle-only economic gate and floor-equivalent fallback credit, retiring the independent heartbeat. **That direction is withdrawn.** It is neither a new block kind to build nor the next fence.
 
-1. **Bond-required.** The block carries a fallback envelope `{ version, operator bond outpoint, pubkey, ML-DSA-87 signature
-   over (domain "MISAKA-FALLBACK-V1", selected parent, DAA score, bond) }`, verified statelessly against the embedded pubkey
-   (a malformed or unsigned algo-8 block is invalid past the fence — **the heartbeat's retirement**). The fold checks the bond:
-   registered, the pubkey is the bond's, not `Retiring`, not frozen, `palw_bond_may_take_work_v2` — *exactly the attempt
-   producer's eligibility*. It reuses the attempt signature context; a **new** context is not an option, because
-   `signature_contexts_root` is part of testnet-12's ruleset id and adding one would re-mint the network.
-2. **Idle-only.** Valid for weight and reward only when the floor state of 00.1 is Idle, read from the block's own parent state.
-   A fallback that fails any fold check is *skipped*; its header-level tick is unaffected (00.6: lane-based).
-3. **Capped.** One credited fallback block per bond per slot (J-1's per-bond cap restated), in a rooted `bond → last credited
-   DAA` map.
+The algo-8 lane remains the independent heartbeat of ADR-0066/0140: bondless, claimless, no panel, fee-only, no useful-work subsidy, epsilon weight. This ADR adds no fallback envelope or bond signature requirement and does not make an existing unsigned heartbeat invalid. Its fixed header/slot validity rules remain independent of the floor's state. Local miner policy may yield to attempts under B; it does not make consensus heartbeat validity conditional on Idle or on useful-work production.
 
-## 6. Weight, reward and the order of kinds (FALLBACK-V1)
+BASE-0 remains the bonded minimum useful-work model class under A″, with its existing claim, panel/court, weight and reward. Its floor claim is admitted while Idle. It does not become an algo-8 heartbeat substitute.
 
-* **Credit.** A valid fallback adds `w_fb` to a rooted `fallback_weight`, and the economic fork-choice key becomes `(safe_frontier,
-  safe_weight + fallback_weight, immature)` — a chain whose frontier advances beats a fallback-only chain on the first key.
-  `w_fb` is one floor claim's canonical weight (604,250,611, ADR-0160 Appendix A).
-* **REAL > FALLBACK by construction.** A REAL attempt's credited weight is `max(its pwu-derived weight, 2·w_fb)`.
-* **Reward.** Fee-only; REAL pays its subsidy share. **Useful-work accounting: 0.**
+## 6. Fallback accounting - WITHDRAWN 2026-10-07
 
-## 7. Security analysis (FALLBACK-V1)
+Withdraw all accounting introduced solely for the former FALLBACK-V1 proposal:
 
-* **A fallback-only stretch is as expensive to rewrite as today's floor stretch**: it weighs `S·B·w_fb` for `B` bonds credited a
-  slot, each eligible exactly as a producer and credited once a slot — the same collateral and the same time as the honest
-  stretch, and not cheaper by any hash trick: the puzzle is the heartbeat's fixed 2^24, which secures nothing by itself
-  (t12's PoW target is 1); the security was always the bonds.
-* **Withholding REAL work to force the fallback gains nothing:** it gives up REAL's weight and reward for strictly less of both.
-* **Free tick sources** can move the DAA at most once per slot (00.6); bond, idleness and cap are fold rules about WEIGHT.
-* **Reorg determinism.** Idle, bond eligibility, the per-bond slot and the credit are functions of the parent state and the block;
-  each write is a delta entry reverted exactly.
+* `fallback_weight` and floor-equivalent `w_fb` credit on heartbeat blocks;
+* the `safe_weight + fallback_weight` fork-choice key;
+* one fallback credit per bond per slot and its rooted per-bond ledger;
+* the `REAL >= 2*w_fb` requirement, including `max(pwu-derived weight, 2*w_fb)`.
 
-## 8. What FALLBACK-V1 costs
+Existing BASE-0 useful-work weight/reward, REAL pwu-derived weight/reward and heartbeat epsilon/fee-only accounting remain separate. No replacement credit, reward carve or minimum REAL weight is chosen here.
 
-Three rooted fields (the floor state exists; `fallback_weight` and the per-bond map are new: root, carriage tails, delta
-variants), a stateless envelope check on algo-8 headers past the fence (`palw_commitment` is hashed only for PALW algos, so either
-the envelope rides in the coinbase payload or the hashing gate widens behind the fence), the fold step and its refusals, the
-fork-choice key change, the `max(…, 2·w_fb)` weight floor, a producer and miner change, tests and a drill; about 20 hours and two
-re-pins. It is the next fence by decision; 5,300 is a sound release without it (00.1–00.6).
+## 7. Security consequence of keeping the lanes separate
+
+The bonded floor continues to provide its existing useful-work collateral and claim lifecycle in Idle. Heartbeat provides emergency clock/liveness with epsilon weight and no bonded economic security. A heartbeat-only stretch must not be described or accounted as a bonded floor stretch; the existing risks and measurements in 00.4 remain relevant. A″ and B retain their existing limits, including the producer-hold dependence measured in 00.2.
+
+## 8. Implementation boundary
+
+The former FALLBACK-V1 envelope, heartbeat retirement, rooted fallback weight, per-bond slot map and REAL weight floor are not implementation work authorized by this ADR. No migration, fingerprint, fence or activation is introduced for them. `rcore/consensus-accounting-v2` remains excluded. Retain A″ and B with their existing validation and release record; any further consensus change needs a separate decision.
 
 ## 9. Prerequisites and the release
 
@@ -397,7 +380,7 @@ re-pins. It is the next fence by decision; 5,300 is a sound release without it (
 `PALW_T12_REAL_CLOCK_TICK_ENTRY` (`PALW_T12_USEFUL_WORK_FENCES_V1`); the fence name `palw_floor_reserve_v1` is kept for A″.
 State: delta variant 104, carriage tail `0xEA`. The three constants are in the fingerprint (`palw_floor_reserve_value_v1`).
 
-## 10. The next fence: closing the policy gap (open; none of this is built)
+## 10. Open research beyond A″ + B (no follow-on fence selected)
 
 The fold-level rule leaves one thing open, and 00.2 measured how much it matters: **a floor-lane block the fold refuses still
 exists, and still colours.** Three directions, an honest account of each, and the boundary problem that makes all of them hard.
@@ -423,7 +406,7 @@ it as a recursive header-level machine:
   A header-level one would have to commit its state in the header (a header-hash change) and validate each header's value as the
   step from its parent's — which fixes the memory, and not the forgery.
 
-**10.3 Class-aware colouring (the structural alternative; the next fence, lane RF8's RFC-0008 alternative to its merge-admission design).**
+**10.3 Class-aware colouring (an unbuilt structural research option, historically handed to lane RF8 as an alternative to merge admission).**
 ADR-0105's `LaneColoring::Weighted` already makes heartbeats invisible to a bonded candidate by lane. Extending it so floor-lane peers
 are invisible to a REAL candidate needs no state machine, no probe, no producer hold and no anchor duty: the floors keep flowing, so the
 anchors (the round seed, the jury, lane A's binding), the clock and the bonded stretches are exactly as they were, and REAL BLUE stops
@@ -451,12 +434,9 @@ side block — the slow-producer problem that A″ mitigates by silence. A produ
 if the job anchor came from a coarser clock — the slot — instead of the exact parent set. That touches ADR-0072's anchor, ADR-0152
 J-1's weight cap and the replay rule; it is the structural cure and is not designed here.
 
-**10.5 One clock, carried by the work.** FALLBACK-V1 (§5) retires the heartbeat: the DAA is ticked by the model's attempt where
-there is one and by the bonded fallback block otherwise, a single model-carried clock. It belongs in the same fence as whichever
-of 10.2–10.4 is chosen, because the fallback block's idle-only rule reads the floor state this ADR introduces.
+**10.5 Shared slot ticks, independent heartbeat.** B lets an attempt carry a slot tick under the existing cursor, lead-cap and one-tick-per-slot rules. The independent heartbeat remains an emergency tick source. Sharing the clock does not combine their lanes, collateral, claims, weight or reward, and does not retire heartbeat. The former FALLBACK-V1 replacement in this subsection is withdrawn.
 
-**What is decided today:** 5,300 ships A″ + B as built, with the producer hold on by default everywhere a floor is mined. §10 is
-the agenda of the fence after it.
+**Current direction:** retain A″ + B and the independent heartbeat. The historical DAA-5,300 plan retained A″ + B with the producer hold on by default. Questions 10.1-10.4 remain research only; none is selected or activated here, and none revives the withdrawn integration.
 
 ## Mission alignment amendment — 2026-10-07
 

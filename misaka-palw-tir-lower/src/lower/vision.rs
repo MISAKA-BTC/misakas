@@ -89,6 +89,11 @@ pub struct VisionSpec {
     pub cls: bool,
     pub patch_bias: bool,
     pub learned_pos: bool,
+    /// **A learned square position table resampled to the grid** (Qwen3-VL, Qwen3.5): with `learned_pos`, `pos` is a
+    /// `side × side` table, bilinearly resampled (`align_corners`, border padding — `F.interpolate`'s, as transformers'
+    /// `get_vision_interpolation_indices_and_weights` computes it) to the class's `gh × gw` patch grid in block-major order.
+    #[serde(default)]
+    pub pos_interp: Option<u32>,
     pub rope_theta: Option<f64>,
     /// Qwen2.5-VL: windows of `units × units` merge units; these layers attend over every row.
     pub window: Option<(u32, Vec<usize>)>,
@@ -298,6 +303,7 @@ pub fn parse_vision_rust(config: &str, size: Option<(u32, u32)>, mean_std: Optio
                 cls: true,
                 patch_bias: false,
                 learned_pos: true,
+                pos_interp: None,
                 rope_theta: None,
                 window: None,
                 out,
@@ -353,6 +359,7 @@ pub fn parse_vision_rust(config: &str, size: Option<(u32, u32)>, mean_std: Optio
                 cls: false,
                 patch_bias: true,
                 learned_pos: true,
+                pos_interp: None,
                 rope_theta: None,
                 window: None,
                 out: VisionOut::SiglipHead,
@@ -431,6 +438,7 @@ pub fn parse_vision_rust(config: &str, size: Option<(u32, u32)>, mean_std: Optio
                 cls: false,
                 patch_bias: false,
                 learned_pos: false,
+                pos_interp: None,
                 rope_theta: Some(theta),
                 window,
                 out: VisionOut::Merger { out },
@@ -483,7 +491,8 @@ fn param_table(s: &VisionSpec) -> Result<Vec<(String, Vec<usize>, bool, Src)>> {
         v.push(("cls".into(), vec![d], false, Src::t(n("cls")?).reshape(vec![d])));
     }
     if s.learned_pos {
-        v.push(("pos".into(), vec![s.rows(), d], false, Src::t(n("pos")?).reshape(vec![s.rows(), d])));
+        let rows = s.pos_interp.map_or(s.rows(), |side| (side * side) as usize);
+        v.push(("pos".into(), vec![rows, d], false, Src::t(n("pos")?).reshape(vec![rows, d])));
     }
     if s.pre_norm {
         norm(&mut v, "pre_norm", "pre_norm", d, true, false)?;
@@ -834,6 +843,10 @@ pub fn float_forward(
     }
     if s.learned_pos {
         let pos = p("pos", None)?;
+        let pos = match s.pos_interp {
+            Some(side) => interpolated_pos_rows(&pos, side, s),
+            None => pos,
+        };
         for (i, row) in x.iter_mut().enumerate() {
             for (j, v) in row.iter_mut().enumerate() {
                 *v += pos[i * d + j];
@@ -1033,6 +1046,13 @@ pub fn float_forward(
 /// one block per layer kind, `post` (the output). The program's "logits" node is the output rows
 /// `[R, width]` in a power-of-two fixed point.
 pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
+    lower_vision_with(hl, s, false)
+}
+
+/// [`lower_vision`] with the rows' projections stored out-major (`out_major`: `[out, in]`, so a commit tile of output channels
+/// reads contiguous weight rows — the layout a tower declared as a pipeline class's stage needs for its closes to be carriable;
+/// the same integers either way).
+pub fn lower_vision_with(hl: &HlProgram, s: &VisionSpec, out_major: bool) -> Result<Lowered> {
     let hb = tir::program::HISTORY_BOUND_V1_SMALL;
     let mut pb = ProgramBuilder::new(1, hb);
     let mut cx = Cx {
@@ -1056,6 +1076,7 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
         carry_keys: BTreeMap::new(),
         table_chunk: 1 << 24,
         conv_weight_bits: 8,
+        out_major_rows: out_major,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];
@@ -1130,6 +1151,25 @@ fn out_key() -> ScaleKey {
 
 /// A pinned `idx` table as a global param, clamped to `[0, bound)` so the range analysis sees the
 /// index range its reader needs (the clamp never fires: the table is data the lowering wrote).
+/// **A pinned row permutation as static slices** (a pipeline-class tower, `out_major_rows`): row `i` of the result is row `perm[i]`
+/// of `x`, as `Gather(x, perm)` computes it, built from the permutation's contiguous runs (`Slice` along axis 0, one `Concat`) so
+/// every read of it maps to the rows it names — a court reads exactly them, where a gather by a param index reads the whole axis.
+fn permute_rows_static(b: &mut BlockBuilder<'_>, x: tir::Ref, perm: &[u32]) -> tir::Ref {
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for &p in perm {
+        match runs.last_mut() {
+            Some((start, len)) if *start + *len == p => *len += 1,
+            _ => runs.push((p, 1)),
+        }
+    }
+    let mut parts: Vec<tir::Ref> = runs.iter().map(|&(start, len)| b.slice(x, 0, start, len)).collect();
+    // `Concat` takes at most 8 operands: a tree of them, in order.
+    while parts.len() > 1 {
+        parts = parts.chunks(8).map(|c| if c.len() == 1 { c[0] } else { b.concat(c, 0) }).collect();
+    }
+    parts[0]
+}
+
 fn idx_param(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, name: &str, v: Vec<u32>, bound: usize) -> Result<tir::Ref> {
     let n = v.len();
     let p = decl(b, cx, lb, name, DType::Idx, &[n], false, Arc::new(move |_| Ok(IntTensor::idx(vec![n], v.clone()))))?;
@@ -1277,8 +1317,12 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
             // Window order (Qwen2.5-VL): a pinned row permutation.
             if let Some((perm, _, _)) = window_tables(s) {
                 let np = perm.len();
-                let pi = idx_param(&mut b, cx, &lb, "pre.window_order", perm, np)?;
-                let r = b.gather(e.r, pi, 0, 0);
+                let r = if cx.out_major_rows {
+                    permute_rows_static(&mut b, e.r, &perm)
+                } else {
+                    let pi = idx_param(&mut b, cx, &lb, "pre.window_order", perm, np)?;
+                    b.gather(e.r, pi, 0, 0)
+                };
                 e = Val { r, ..e };
             }
             // CLS (a param row at the residual scale) and the learned positions.
@@ -1310,10 +1354,18 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                     DType::I32,
                     &[l, d],
                     false,
-                    Arc::new(move |c| {
-                        let sr = c.scale(&ScaleKey::resid())?;
-                        Ok(IntTensor::i32(vec![l, d], c.f(pp)?.data.iter().map(|v| (*v as f64 / sr).round() as i32).collect()))
-                    }),
+                    {
+                        let interp = s.pos_interp.map(|side| (side, s.clone()));
+                        Arc::new(move |c| {
+                            let sr = c.scale(&ScaleKey::resid())?;
+                            let table: Vec<f64> = c.f(pp)?.data.iter().map(|v| *v as f64).collect();
+                            let rows = match &interp {
+                                Some((side, spec)) => interpolated_pos_rows(&table, *side, spec),
+                                None => table,
+                            };
+                            Ok(IntTensor::i32(vec![l, d], rows.iter().map(|v| (*v / sr).round() as i32).collect()))
+                        })
+                    },
                 )?;
                 let sum = b.add(e.r, pos, DType::I64);
                 let r = b.clamp(sum, i32::MIN as i64, i32::MAX as i64, DType::I32);
@@ -1509,8 +1561,12 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                     match window_tables(s) {
                         Some((_, _, inv)) => {
                             let ni = inv.len();
-                            let ii = idx_param(&mut b, cx, &lb, "post.window_restore", inv, ni)?;
-                            let r = b.gather(down.r, ii, 0, 0);
+                            let r = if cx.out_major_rows {
+                                permute_rows_static(&mut b, down.r, &inv)
+                            } else {
+                                let ii = idx_param(&mut b, cx, &lb, "post.window_restore", inv, ni)?;
+                                b.gather(down.r, ii, 0, 0)
+                            };
                             Val { r, ..down }
                         }
                         None => down,
@@ -1533,4 +1589,44 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
             Ok((b.finish(&[]), Some(oi)))
         }
     }
+}
+
+/// **A `side × side` learned position table resampled to the class's patch grid** (`VisionSpec::pos_interp`): bilinear,
+/// `align_corners` (source `i·(side−1)/max(n−1, 1)`), border padding, the separable taps of transformers'
+/// `_interpolation_axis_taps_weights`, the rows in block-major order under the spatial merge — `[gh·gw · d]`.
+pub fn interpolated_pos_rows(table: &[f64], side: u32, s: &VisionSpec) -> Vec<f64> {
+    let d = s.d;
+    let (gh, gw) = s.grid();
+    let m = s.merge;
+    let side_u = side as usize;
+    let taps = |i: u32, n: u32| -> [(usize, f64); 2] {
+        let src = i as f64 * (side as f64 - 1.0) / ((n.max(2) - 1) as f64);
+        let f = src.floor();
+        let lo = (f as i64).clamp(0, side as i64 - 1) as usize;
+        let hi = (f as i64 + 1).clamp(0, side as i64 - 1) as usize;
+        let w_lo = (1.0 - (src - f).abs()).max(0.0);
+        let w_hi = (1.0 - (src - f - 1.0).abs()).max(0.0);
+        [(lo, w_lo), (hi, w_hi)]
+    };
+    let blocks_w = gw / m;
+    let mut out = vec![0.0f64; (gh * gw) as usize * d];
+    for k in 0..gh * gw {
+        let (in_col, in_row) = (k % m, (k / m) % m);
+        let (block_col, block_row) = ((k / (m * m)) % blocks_w, k / (m * m * blocks_w));
+        let (row, col) = (block_row * m + in_row, block_col * m + in_col);
+        let row_out = &mut out[k as usize * d..(k as usize + 1) * d];
+        for (hi, hw) in taps(row, gh) {
+            for (wi, ww) in taps(col, gw) {
+                let w = hw * ww;
+                if w == 0.0 {
+                    continue;
+                }
+                let src = &table[(hi * side_u + wi) * d..(hi * side_u + wi + 1) * d];
+                for (o, v) in row_out.iter_mut().zip(src) {
+                    *o += w * v;
+                }
+            }
+        }
+    }
+    out
 }

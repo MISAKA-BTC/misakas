@@ -101,6 +101,12 @@ pub enum TxRuleError {
     #[error("transaction subnetwork id {0} is the retired compute overlay's")]
     ComputeOverlayRetired(SubnetworkId),
 
+    #[error("DNS participation subnetwork {0} is retired by RFC-0012")]
+    DnsParticipationRetired(SubnetworkId),
+
+    #[error("DNS evidence is outside the retired role's finite historical window")]
+    DnsLegacyEvidenceOutsideWindow,
+
     /// kaspa-pq Phase 10 (ADR-0009): a transaction routed by a DNS finality
     /// overlay subnetwork carried a payload that failed stateless validation
     /// (see [`crate::dns_finality::dns_tx_kind`] + `validate_*_payload`).

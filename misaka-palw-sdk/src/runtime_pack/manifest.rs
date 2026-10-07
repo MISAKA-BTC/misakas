@@ -474,7 +474,7 @@ impl RuntimePackV1 {
         };
         hexn("model.config_digest", &self.model.config_digest, 64)?;
         for f in &self.model.files {
-            hexn(&format!("model.files[{}].sha256", f.path), &f.sha256, 64)?;
+            hexn(&format!("the sha256 of model.files[{}]", f.path), &f.sha256, 64)?;
             safe_name(&f.path)?;
         }
         hexn("frontend.spec_digest", &self.frontend.spec_digest, 64)?;

@@ -763,6 +763,74 @@ impl PalwAttemptEnvelopeV2 {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------
+// RFC-0009 stage A: the attempt's assembly, as ONE function shared by the node's producer and a remote (node-less) miner.
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/// What an execution hands back for an attempt: the roots and the trace manifest of the capture it made. Produced by whichever backend ran the
+/// inference — in the node's producer or on a miner's own machine — and consumed by [`palw_attempt_from_execution_v1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwAttemptExecutionV1 {
+    pub trace_root: Hash64,
+    pub output_root: Hash64,
+    pub execution_root: Hash64,
+    pub trace_manifest_root: Hash64,
+    pub trace_chunk_count: u32,
+}
+
+/// The chain's facts an attempt is mounted on (`getPalwProducerFacts`): derived by the chain, never chosen by the producer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwAttemptChainFactsV1 {
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    pub pwu: u64,
+    pub min_trace_retention_daa: u64,
+    /// RFC-0007 Part II: `0` for a class with no witness profile.
+    pub witness_chunks: u32,
+    pub operator_id: Hash64,
+}
+
+/// **The attempt, assembled from an execution** — every field fixed: the roots are the execution's, the six chain facts are `facts`', the
+/// challenge binds the position (this template, timestamp and nonce) and moves neither lottery, and the retention is the block's own DAA plus
+/// the chain's pin. This is the expression `kaspad`'s producer used inline; it now lives here so the producer and a remote miner build the same
+/// bytes by the same code (a second spelling is a second answer to "what does the chain expect", which this tree has paid for before).
+#[allow(clippy::too_many_arguments)]
+pub fn palw_attempt_from_execution_v1(
+    network_domain: Hash64,
+    pre_pow_hash: Hash64,
+    timestamp: u64,
+    nonce: u64,
+    bond: TransactionOutpoint,
+    executor_pubkey: Vec<u8>,
+    facts: &PalwAttemptChainFactsV1,
+    execution: &PalwAttemptExecutionV1,
+    header_daa_score: u64,
+) -> PalwAttemptUnsignedV2 {
+    PalwAttemptUnsignedV2 {
+        version: PALW_ATTEMPT_V2_VERSION,
+        network_domain,
+        challenge: challenge_v2(network_domain, pre_pow_hash, timestamp, nonce, facts.class_id, &bond),
+        class_id: facts.class_id,
+        executor_bond: bond,
+        executor_pubkey,
+        operator_id: facts.operator_id,
+        artifact_root: facts.artifact_root,
+        trace_root: execution.trace_root,
+        output_root: execution.output_root,
+        execution_root: execution.execution_root,
+        pwu: facts.pwu,
+        // A class with a witness profile commits `1 + chunks` trace chunks under the v2 manifest root — the chain's pin, derived from the facts
+        // and the trace root, never chosen. A class without one keeps the backend's own count and root, byte for byte.
+        trace_manifest_root: if facts.witness_chunks > 0 {
+            crate::palw_mesh_v1::palw_attempt_trace_manifest_root_v2(execution.trace_root, 1 + facts.witness_chunks)
+        } else {
+            execution.trace_manifest_root
+        },
+        trace_chunk_count: if facts.witness_chunks > 0 { 1 + facts.witness_chunks } else { execution.trace_chunk_count },
+        trace_retention_daa: header_daa_score.saturating_add(facts.min_trace_retention_daa),
+    }
+}
+
 #[cfg(test)]
 mod tests {
 

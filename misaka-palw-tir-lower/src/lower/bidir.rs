@@ -311,6 +311,7 @@ pub fn lower_bidir(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg) -> Result<Lo
         carry_keys: BTreeMap::new(),
         table_chunk: 1 << 24,
         conv_weight_bits: 8,
+        out_major_rows: false,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];
@@ -903,8 +904,27 @@ pub(super) fn linear_rows_shared(
         return Err(LowerError::eval(format!("internal: `{site}` reads {:?} rows of {}, W has {inp} columns", x.dt, x.len)));
     }
     let pl = per_layer(lb);
+    let out_major = cx.out_major_rows;
     let wt = match *wt_slot {
         Some(r) => r,
+        None if out_major => {
+            // `[out, in]`, the rows' codes as stored: a tile of output channels reads whole contiguous rows.
+            let r = decl(
+                b,
+                cx,
+                lb,
+                &format!("{w_name}.o"),
+                DType::I8,
+                &[out, inp],
+                pl,
+                Arc::new(move |c| {
+                    let rc = c.rows(w)?;
+                    Ok(IntTensor::i8(vec![out, inp], rc.codes.clone()))
+                }),
+            )?;
+            *wt_slot = Some(r);
+            r
+        }
         None => {
             let r = decl(
                 b,
@@ -963,7 +983,20 @@ pub(super) fn linear_rows_shared(
         }
         None => None,
     };
-    let acc = b.matmul(x.r, wt, DType::I64);
+    let acc = if out_major {
+        // `[1, out, in] · [L, in, 1] → [L, out, 1]` (a batched product over the rows, no transpose): the same sums as `X · Wᵀ`,
+        // element for element; output element `(r, o)` reads weight row `o` and input row `r`, both contiguous.
+        let rows = match b.shape(x.r).first() {
+            Some(tir::Dim::Fixed(n)) => *n,
+            _ => return Err(LowerError::eval(format!("internal: `{site}` rows of no fixed count"))),
+        };
+        let w3 = b.reshape_fixed(wt, &[1, out as u32, inp as u32]);
+        let x3 = b.reshape_fixed(x.r, &[rows, inp as u32, 1]);
+        let acc3 = b.matmul(w3, x3, DType::I64);
+        b.reshape_fixed(acc3, &[rows, out as u32])
+    } else {
+        b.matmul(x.r, wt, DType::I64)
+    };
     let r = narrow(b, acc, m, s, z, want.dt);
     if want.dt == DType::I16 {
         b.commit(r);

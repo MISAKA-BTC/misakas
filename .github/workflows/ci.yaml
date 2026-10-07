@@ -245,6 +245,16 @@ jobs:
     name: Test Suite
     # runs-on: ${{ matrix.os }}
     runs-on: ubuntu-latest
+    # **The runner's disk is the limit, not the code.** `cargo build --features devnet-prealloc
+    # --tests --benches` links one binary per integration test across the whole workspace, and with
+    # full debug info those binaries outgrow the runner's free disk (run 37634951325: `rustc-LLVM
+    # ERROR: IO failure on output stream: No space left on device` while linking a
+    # kaspa-consensus-core test, before any test ran). No debug info in this job's dev/test
+    # profile shrinks every artifact; symbols stay, so a failing test still names its frames.
+    # Release, heap and the other jobs are untouched.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     strategy:
       fail-fast: false
       # matrix:

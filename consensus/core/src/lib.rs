@@ -8,6 +8,9 @@ extern crate alloc;
 extern crate core;
 extern crate self as consensus_core;
 
+pub mod palw_mergeset_v1;
+pub mod palw_native_settlement_v1;
+
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
 
@@ -483,6 +486,9 @@ pub mod palw_gen_admission_v1;
 pub mod palw_gen_worker_v1;
 /// RFC-0003 §II.2.1 (RFC-0001's lane): FP Job V5 — a V4 job with image inputs, for a vision-language class; dormant behind `palw_fp_job_v5`.
 pub mod palw_fp_job_v5;
+pub mod palw_gen_range_twin_v1;
+/// RFC-0011 §15.7: the kernel route's fence `palw_probabilistic_constraints_v1` — dormant, no height, refused when armed.
+pub mod palw_probabilistic_constraints_v1;
 /// RFC-0001 §2.6 stage 2: FP job version 11 — the prefix-state receipt; dormant behind `palw_fp_prefix_state`.
 pub mod palw_fp_prefix_v1;
 /// RFC-0001 §2.9: the job's tokenizer must be the class's listed one; dormant behind `palw_fp_tokenizer_match`.
@@ -498,6 +504,18 @@ pub mod palw_tir_fence2_v1;
 pub mod palw_real_share_v1;
 /// ADR-0170, the seed anchor as a window: a merged admitted attempt anchors, the anchor survives span boundaries, and the admission jury and the schedule seeding read the latest anchor of `S − 24 … S − 1` (`palw_anchor_window_v1`).
 pub mod palw_anchor_window_v1;
+/// RFC-0009 stage C: public receipt redemption (`palw_receipt_spend_v4`, DORMANT): the V4 spend envelope, its admission and the reward split.
+pub mod palw_receipt_v4;
+/// RFC-0009 stage B: the canonical evidence manifest and the checks a claim's material is held to.
+pub mod palw_evidence_v1;
+/// RFC-0009 stage B: the provider challenge court (`palw_evidence_court_v1`, DORMANT, not yet folded into the chain state).
+pub mod palw_evidence_court_v1;
+/// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
+pub mod palw_state_proof_v1;
+/// Lane PA: the 2026-10-04 audit's consensus fixes behind one dormant fence (`palw_audit_1004_v1`).
+pub mod palw_audit_1004_v1;
+/// Lane MU (ADR-0173): the dormant Validation + Activation skeleton (no state, no object, no fence read).
+pub mod palw_root_activation_v1;
 /// RFC-0004: the Model Improvement Protocol — the dormant `palw_improvement_v1` fence and its constants.
 pub mod palw_improve_v1;
 /// RFC-0004: the protocol's state-side types (policy, lines, epochs, candidates, evaluation, promotion, rewards).

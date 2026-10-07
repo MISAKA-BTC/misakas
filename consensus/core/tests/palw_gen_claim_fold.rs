@@ -565,3 +565,62 @@ fn a_claim_flows_only_once_a_panels_worth_of_operators_can_replay_the_class() {
     ready(&mut net.chain, &[net.image]);
     assert!(fold_one(&net, object).is_ok());
 }
+
+// ---------------------------------------------------------------------------------------------
+// Lane PA (`palw_audit_1004_v1`): G-3 and G-2.
+// ---------------------------------------------------------------------------------------------
+
+/// testnet-12 with the generative lane armed at [`AT`] and lane PA's audit fence armed at the same height.
+fn armed_1004() -> Params {
+    let mut p = armed();
+    (kaspa_consensus_core::palw_audit_1004_v1::PALW_T12_AUDIT_1004_ENTRY.set)(&mut p, Some(ForkActivation::new(AT)));
+    p.validate_palw_v2().unwrap_or_else(|e| panic!("the audit fence at {AT}: {e}"));
+    p
+}
+
+/// **G-3**: a generative registration is sized like an IR one — one a block past the fence (the second lock in the fold); below it any number
+/// folds, as `net()` does with three.
+#[test]
+fn audit_1004_generative_registrations_take_one_place_a_block() {
+    for on in [false, true] {
+        let mut chain = Chain::new(if on { armed_1004() } else { armed() });
+        chain.room = true;
+        let (registrant, _, _) = floor_producer(&chain.p);
+        let (a, _) = registration(&chain, image_class(), h(0xA9), registrant);
+        let (b, _) = registration(&chain, vision_class(), h(0xAB), registrant);
+        chain.step_at(AT - 1, &[executor_bond(EXECUTOR), executor_bond(OTHER_EXECUTOR)], PalwBlockWorkV3::None, Hash64::default(), 0);
+        let c = ctx(0xCA_0000 + AT, AT, AT, 0);
+        let one = chain.try_fold(&chain.s, &c, &[a.clone()], PalwBlockWorkV3::None, Hash64::default());
+        assert!(one.is_ok(), "fence {on}: one registration folds: {:?}", one.err());
+        let two = chain.try_fold(&chain.s, &c, &[a, b], PalwBlockWorkV3::None, Hash64::default());
+        if on {
+            assert!(matches!(two, Err(PalwStateV2Error::TirRegistrationsPerBlockExceeded { .. })), "a second registration in the block: {:?}", two.err());
+        } else {
+            assert!(two.is_ok(), "below the fence two fold: {:?}", two.err());
+        }
+    }
+}
+
+/// **G-2**: the token bindings a claim's step count would allocate are bounded first — a job declaring more ids than the cap is refused by
+/// name before anything is built; the golden image class is under every bound.
+#[test]
+fn audit_1004_a_tensor_claims_token_binding_is_bounded_before_it_is_allocated() {
+    let net = net();
+    let row = net.chain.s.gen_class_v1(&net.image).expect("registered");
+    let class = image_class();
+    let good = image_job(&class, net.image, EXECUTOR, PALW_FP_PRIVACY_PUBLIC_DA, 1, 0x33, 0);
+    let mut accepted = palw_gen_job_resolve_class_v1(&good, row).expect("the class's job");
+    assert_eq!(palw_gen_job_bound_v1(row, &accepted), Ok(()), "the golden job is under the cap");
+    for (what, edit) in [
+        ("prompt", (|a: &mut PalwGenAcceptedJobV1| a.prompt_tokens = u32::MAX) as fn(&mut PalwGenAcceptedJobV1)),
+        ("negative prompt", |a| a.negative_tokens = 1 << 20),
+    ] {
+        let before = accepted.clone();
+        edit(&mut accepted);
+        assert!(
+            matches!(palw_gen_job_bound_v1(row, &accepted), Err(PalwGenClaimErrorV1::TokenBindingAboveCap { what: w, .. }) if w == what),
+            "a {what} count above the cap is refused by name"
+        );
+        accepted = before;
+    }
+}

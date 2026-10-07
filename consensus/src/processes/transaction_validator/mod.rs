@@ -14,6 +14,7 @@ use kaspa_txscript::ScriptPolicy;
 
 #[derive(Clone)]
 pub struct TransactionValidator {
+    palw_dns_retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
     max_tx_inputs: usize,
     max_tx_outputs: usize,
     max_signature_script_len: usize,
@@ -91,6 +92,12 @@ pub struct TransactionValidator {
     /// `PALW_EXEC_MAX_BONDS_PER_MERGESET_V1` of them, so the isolation cap widens by that where the
     /// lane exists — a size guard fails wide, and the exact-hash coinbase rule decides correctness.
     palw_round_lane_declared: bool,
+
+    /// **RFC-0009, height-free: whether this ruleset configures `palw_receipt_spend_v4`.** A V4 receipt block splits its reward into a
+    /// miner leg and the builder's own output, so a merging block may carry up to one extra output per mergeset block; the isolation cap
+    /// widens by the mergeset limit where the fence exists (a size guard fails wide; the exact-hash coinbase rule decides correctness).
+    /// `false` on every shipped preset, which leaves the cap exactly where it was.
+    palw_receipt_v4_declared: bool,
 
     /// **ADR-0152-adjacent (Activation Pool): `Params::palw_activation_pool_fence()`'s height**
     /// (`never()` read as absence). Isolation derives the height-free question from `.is_some()`: an
@@ -180,6 +187,7 @@ impl TransactionValidator {
         palw_held_context_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Self {
         Self {
+            palw_dns_retirement: None,
             max_tx_inputs,
             max_tx_outputs,
             max_signature_script_len,
@@ -200,6 +208,7 @@ impl TransactionValidator {
             palw_held_context_fence: palw_held_context_fence
                 .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never()),
             palw_round_lane_declared: false,
+            palw_receipt_v4_declared: false,
             palw_activation_pool_fence: None,
             palw_improvement_fence: None,
             palw_model_sink_bound_fence: None,
@@ -215,6 +224,22 @@ impl TransactionValidator {
     /// ADR-0082 D10/D11 + RFC-0001 §A.4: declare the decode-rules fence
     /// (`Params::palw_fp_decode_rules_fence()`), which admits the V4 job's shape at isolation and
     /// splits V3 from V4 by the containing block's height in the header context.
+    pub fn with_dns_retirement(mut self, retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>) -> Self {
+        self.palw_dns_retirement = retirement;
+        self
+    }
+
+    pub(crate) fn check_dns_retirement(&self, tx: &kaspa_consensus_core::tx::Transaction, daa: u64) -> errors::TxResult<()> {
+        if self.palw_dns_retirement.is_some_and(|r| r.activation.is_active(daa))
+            && kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id) {
+            return Err(errors::TxRuleError::DnsParticipationRetired(tx.subnetwork_id.clone()));
+        }
+        if self.palw_dns_retirement.is_some_and(|r| !kaspa_consensus_core::palw_native_settlement_v1::legacy_dns_evidence_allowed_v1(r, tx, daa)) {
+            return Err(errors::TxRuleError::DnsLegacyEvidenceOutsideWindow);
+        }
+        Ok(())
+    }
+
     pub fn with_fp_decode_rules_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
         self.palw_fp_decode_rules_fence =
             fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
@@ -291,6 +316,13 @@ impl TransactionValidator {
         self
     }
 
+    /// RFC-0009: declare `palw_receipt_spend_v4` (`Params::palw_receipt_spend_v4_fence().is_some()`), which widens the coinbase output cap
+    /// by the mergeset limit (one builder output beside each V4 block's miner leg).
+    pub fn with_receipt_v4_declared(mut self, declared: bool) -> Self {
+        self.palw_receipt_v4_declared = declared;
+        self
+    }
+
     pub fn new_for_tests(
         max_tx_inputs: usize,
         max_tx_outputs: usize,
@@ -302,6 +334,7 @@ impl TransactionValidator {
         counters: Arc<TxScriptCacheCounters>,
     ) -> Self {
         Self {
+            palw_dns_retirement: None,
             max_tx_inputs,
             max_tx_outputs,
             max_signature_script_len,
@@ -331,6 +364,7 @@ impl TransactionValidator {
             palw_held_context_fence: None,
             // Every shipped preset's door: no execution lane, no payee outputs.
             palw_round_lane_declared: false,
+            palw_receipt_v4_declared: false,
             // Every shipped preset's door but testnet-12's: no pool, no activation sink.
             palw_activation_pool_fence: None,
             palw_improvement_fence: None,

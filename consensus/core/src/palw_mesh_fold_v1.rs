@@ -31,6 +31,8 @@ fn refused(why: impl ToString) -> PalwStateV2Error {
     PalwStateV2Error::MeshRefused(why.to_string())
 }
 
+use crate::palw_audit_1004_v1::PALW_AUDIT_1004_MIN_TRAP_TILES_V1;
+
 /// An unrevealed trap forfeits its deposit this long after its commitment: the audit window, the reveal window, and the same again
 /// for the claim to have been produced at all.
 pub const PALW_TRAP_COMMIT_TTL_DAA_V1: u64 = 2 * (PALW_AUDIT_WINDOW_DAA_V1 + PALW_TRAP_REVEAL_WINDOW_DAA_V1);
@@ -311,7 +313,11 @@ pub(super) fn on_claim_accepted_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
             ),
         })
         .collect();
-    let seed = palw_mesh_audit_seed_v1(claim_id, &claim.accepted_block, &claim.execution_root, ctx.daa_score);
+    // **Lane PA, P-F5**: past the fence the seed reads the beacon, not the carrying block's own (grindable) hash.
+    let seed = match builder.extras.audit_1004_draw_seed_source.filter(|_| builder.params.audit_1004_active_at(ctx.daa_score)) {
+        Some(beacon) => crate::palw_mesh_v1::palw_mesh_audit_seed_beacon_v1(claim_id, &beacon, &claim.execution_root, ctx.daa_score),
+        None => palw_mesh_audit_seed_v1(claim_id, &claim.accepted_block, &claim.execution_root, ctx.daa_score),
+    };
     let drawn = palw_mesh_audit_draw_v1(&seed, &candidates, PALW_AUDITS_PER_CLAIM_V1);
     if drawn.is_empty() {
         return;
@@ -413,10 +419,18 @@ pub(super) fn count_audited_leaf_v1(
         1 => false,
         other => return Err(refused(PalwMeshErrorV1::AuditResultUnknown(other))),
     };
+    // **Lane PA, C-F4 (`palw_audit_1004_v1`): an answer is paid only once it has stood** — at the row's sweep, unless a trap
+    // revealed on the claim caught it (below), so a lazy "match" on a trap is never paid. A row a trap already settled takes no answer.
+    let deferred = builder.params.audit_1004_active_at(ctx.daa_score);
+    if deferred && row.trap_settled {
+        return Ok(());
+    }
     assignment.outcome = Some(PalwAuditOutcomeV1 { matched, signed_daa });
     let pay = row.pay;
     builder.write_mesh_audit(*claim_id, Some(row));
-    builder.mesh_pay_from_reserve(seat, pay);
+    if !deferred {
+        builder.mesh_pay_from_reserve(seat, pay);
+    }
     Ok(())
 }
 
@@ -515,7 +529,22 @@ pub(super) fn apply_trap_committed_v1(
 /// and inside the reveal window. Pure over the state.
 impl PalwChainStateV2 {
     pub fn mesh_trap_revealed_admissible_v1(&self, reveal: &PalwTrapRevealedV1, daa_score: u64) -> Result<(), PalwMeshErrorV1> {
+        self.mesh_trap_revealed_admissible_v2(reveal, daa_score, false)
+    }
+
+    /// [`Self::mesh_trap_revealed_admissible_v1`] with lane PA's rule (`palw_audit_1004_v1`, **P-F4**) when `audit_1004`: a single-tile
+    /// trap is refused (every ticket lands on the planted tile) and the commitment must precede the audit draw it is revealed
+    /// against — a trap committed after the draw can be sized to the draw, slashing honest auditors.
+    pub fn mesh_trap_revealed_admissible_v2(
+        &self,
+        reveal: &PalwTrapRevealedV1,
+        daa_score: u64,
+        audit_1004: bool,
+    ) -> Result<(), PalwMeshErrorV1> {
         let state = self;
+        if audit_1004 && reveal.tiles < PALW_AUDIT_1004_MIN_TRAP_TILES_V1 {
+            return Err(PalwMeshErrorV1::TrapTilesInvalid { tiles: reveal.tiles, fault_leaf: reveal.fault_leaf });
+        }
     if reveal.tiles == 0 || reveal.tiles > PALW_TRAP_MAX_TILES_V1 || reveal.fault_leaf >= reveal.tiles {
         return Err(PalwMeshErrorV1::TrapTilesInvalid { tiles: reveal.tiles, fault_leaf: reveal.fault_leaf });
     }
@@ -527,6 +556,9 @@ impl PalwChainStateV2 {
         return Err(PalwMeshErrorV1::TrapAlreadyRevealed);
     }
     let audit = state.vertex.mesh.audits.get(&reveal.claim).ok_or(PalwMeshErrorV1::TrapClaimNotAudited(reveal.claim))?;
+    if audit_1004 && row.committed_daa >= audit.drawn_daa {
+        return Err(PalwMeshErrorV1::TrapCommittedAfterTheDraw { committed: row.committed_daa, drawn: audit.drawn_daa });
+    }
     let claim = state.claims.get(&reveal.claim).ok_or(PalwMeshErrorV1::TrapClaimNotAudited(reveal.claim))?;
     if claim.bond != reveal.setter_bond {
         return Err(PalwMeshErrorV1::TrapClaimNotTheSetters(reveal.claim));
@@ -553,7 +585,7 @@ pub(super) fn apply_trap_revealed_v1(
     if !builder.params.audit_mesh_active_at(ctx.daa_score) {
         return Err(refused(PalwMeshErrorV1::Dormant("palw_audit_mesh_v1")));
     }
-    builder.state.mesh_trap_revealed_admissible_v1(reveal, ctx.daa_score).map_err(refused)?;
+    builder.state.mesh_trap_revealed_admissible_v2(reveal, ctx.daa_score, builder.params.audit_1004_active_at(ctx.daa_score)).map_err(refused)?;
     let commitment = reveal.commitment();
     let trap = builder.state.vertex.mesh.traps.get(&commitment).cloned().ok_or_else(|| refused(PalwMeshErrorV1::TrapNotCommitted))?;
     let mut audit = builder.state.vertex.mesh.audits.get(&reveal.claim).cloned().ok_or_else(|| refused(PalwMeshErrorV1::TrapClaimNotAudited(reveal.claim)))?;
@@ -565,7 +597,8 @@ pub(super) fn apply_trap_revealed_v1(
     // 2. The auditors the planted tile caught (once per claim).
     if !audit.trap_settled {
         let bounty = palw_mesh_trap_bounty_v1(audit.pay);
-        for assignment in &audit.assignments {
+        let deferred = builder.params.audit_1004_active_at(ctx.daa_score);
+        for assignment in audit.assignments.iter_mut() {
             let (Some(outcome), true) =
                 (assignment.outcome, palw_trap_ticket_hits_v1(assignment.ticket, reveal.fault_leaf, reveal.tiles))
             else {
@@ -573,6 +606,10 @@ pub(super) fn apply_trap_revealed_v1(
             };
             if outcome.matched {
                 builder.slash_bond(assignment.auditor, audit.penalty)?;
+                // C-F4: the slashed answer was wrong — it earns no audit pay at the sweep.
+                if deferred {
+                    assignment.outcome = None;
+                }
             } else {
                 builder.mesh_pay_from_reserve(&assignment.auditor, bounty);
             }
@@ -581,8 +618,13 @@ pub(super) fn apply_trap_revealed_v1(
         builder.write_mesh_audit(reveal.claim, Some(audit));
     }
 
-    // 3. The trap claim: voided, its setter not slashed.
-    if let Some(claim) = builder.state.claims.get(&reveal.claim).cloned()
+    // 3. The trap claim: voided, its setter not slashed. **Lane PA, P-F1 (`palw_audit_1004_v1`): never a claim with a dispute open** — a
+    // court session or a DA session on it is its challenger's to win (a void closes the court NEUTRALLY, so a fraudulent executor
+    // could reveal a trap on its own claim after a challenger opened a court and walk away unconvicted).
+    let disputed = builder.params.audit_1004_active_at(ctx.daa_score)
+        && (builder.state.open_courts_of(&reveal.claim) > 0 || builder.state.da_sessions_of(&reveal.claim).next().is_some());
+    if !disputed
+        && let Some(claim) = builder.state.claims.get(&reveal.claim).cloned()
         && !claim.phase.is_terminal()
     {
         builder.void_claim(reveal.claim, &claim, ctx.daa_score, PalwVoidReasonV2::ReceiptTimeout)?;
@@ -601,6 +643,7 @@ pub(super) fn sweep_mesh_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
     if builder.state.vertex.mesh.audits.is_empty() && builder.state.vertex.mesh.traps.is_empty() {
         return;
     }
+    let deferred = builder.params.audit_1004_active_at(ctx.daa_score);
     let dead_audits: Vec<Hash64> = builder
         .state
         .vertex
@@ -614,6 +657,10 @@ pub(super) fn sweep_mesh_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
     for claim in dead_audits {
         if let Some(row) = builder.state.vertex.mesh.audits.get(&claim).cloned() {
             for assignment in &row.assignments {
+                // **C-F4 (`palw_audit_1004_v1`): the audit pay of an answer that stood**, paid once, from the reserve (clamped).
+                if deferred && assignment.outcome.is_some() {
+                    builder.mesh_pay_from_reserve(&assignment.auditor, row.pay);
+                }
                 let _ = builder.mesh_release(assignment.auditor, assignment.reserved);
             }
         }
@@ -690,4 +737,18 @@ impl PalwChainStateV2 {
         }
         Ok(())
     }
+}
+
+/// **Lane PA, C-F4 (`palw_audit_1004_v1`): re-snapshot a lead claim's audit pay at a riders split.** The lead's escrow is split `1 + n`
+/// ways and each rider draws its own audit at its share; the lead's row still carried 4 ‰ of the whole, so the batch funded
+/// `pay(E) + Σ pay(E/(1+n))` — more than one claim's worth. The row's `pay` follows the escrow the lead keeps (its reservation, the
+/// penalty, stays: auditors reserved it at the draw). A lead with no row changes nothing.
+pub(super) fn resnapshot_audit_pay_v1(builder: &mut TransitionBuilder<'_>, lead_id: &Hash64, kept_escrow: u64) {
+    let Some(mut row) = builder.state.vertex.mesh.audits.get(lead_id).cloned() else { return };
+    let pay = palw_mesh_audit_pay_v1(kept_escrow);
+    if pay == row.pay {
+        return;
+    }
+    row.pay = pay;
+    builder.write_mesh_audit(*lead_id, Some(row));
 }

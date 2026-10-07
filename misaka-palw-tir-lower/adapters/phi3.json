@@ -14,7 +14,7 @@
     {"name": "rope_dim", "value": {"$floor": {"$mul": [{"$var": "hd"}, {"$var": "partial"}]}}},
     {"name": "rope_partial", "value": {"$var": "partial"}},
     {"name": "rope", "value": {"$rope": {"dim": {"$var": "rope_dim"}, "style": "Half", "theta": {"$var": "rope_theta"}, "partial": {"$var": "rope_partial"}, "max_pos": {"$var": "max_pos"}, "top_orig": {"$var": "orig"}}}},
-    {"name": "abias", "value": false},
+    {"name": "abias", "value": {"$let": ["_", {"$forbid": ["attention_bias", "Phi3Attention's qkv_proj has no bias"]}, false]}},
     {"name": "mbias", "value": false},
     {"name": "qkv_layout", "value": "FusedConcat"},
     {"name": "mlp_layout", "value": "FusedGateFirst"},

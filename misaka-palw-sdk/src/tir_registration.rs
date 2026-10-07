@@ -159,3 +159,43 @@ pub fn build_tir_registration_v1(
         .map_err(|e| format!("{}: the admission gate refuses the registration: {e}", entry.model_id))?;
     Ok(object)
 }
+
+/// RFC-0002 §II.11.3: the onboarding label of a class whose relation to a named checkpoint nothing reproducible establishes.
+pub const SOURCE_EQUIVALENCE_UNVERIFIED: &str = "SOURCE_EQUIVALENCE_UNVERIFIED";
+
+/// **What an onboarding report says about a class and the checkpoint it is said to import** (RFC-0002 §II.11.3). A class registers
+/// by its bytes alone — `prim_set_id`, program version, canonical encoding, admission, artifact commitment, lifecycle — whoever
+/// compiled it; that proves the integer program can be adjudicated, not that it faithfully imports a named checkpoint. So the
+/// report shows `Verified` only when a runtime pack was verified with every check passing (its source hashes and frontend
+/// included, §II.4) **and** names this very artifact; otherwise `SOURCE_EQUIVALENCE_UNVERIFIED` with the reason. Nothing here
+/// enters the registration verdict, the class id or the court.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum TirSourceEquivalenceV1 {
+    Verified { pack_digest: String },
+    Unverified { code: &'static str, why: String },
+}
+
+/// `artifact_digest` is the container's file digest (hex); `pack` is a runtime pack, whether its verification passed every
+/// check, and the pack's digest.
+pub fn tir_source_equivalence_v1(
+    artifact_digest_hex: &str,
+    pack: Option<(&crate::runtime_pack::manifest::RuntimePackV1, bool)>,
+) -> TirSourceEquivalenceV1 {
+    let unverified = |why: String| TirSourceEquivalenceV1::Unverified { code: SOURCE_EQUIVALENCE_UNVERIFIED, why };
+    match pack {
+        None => unverified(
+            "no runtime pack names this artifact: the class is adjudicable as submitted, its equivalence to a named checkpoint is not established"
+                .into(),
+        ),
+        Some((p, _)) if !p.result.artifact_digest.eq_ignore_ascii_case(artifact_digest_hex) => unverified(format!(
+            "the runtime pack names artifact {}…, not this one ({}…)",
+            &p.result.artifact_digest.get(..16).unwrap_or(""),
+            artifact_digest_hex.get(..16).unwrap_or("")
+        )),
+        Some((p, false)) => unverified(format!(
+            "runtime pack {}… did not verify with every check passing (a source, frontend or rebuild check failed or was skipped)",
+            &p.digest()[..16]
+        )),
+        Some((p, true)) => TirSourceEquivalenceV1::Verified { pack_digest: p.digest() },
+    }
+}

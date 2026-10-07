@@ -2368,6 +2368,9 @@ pub struct Params {
     /// `None` on every shipped preset.
     pub palw_overlay_carve: Option<PalwOverlayCarveV1>,
 
+    /// RFC-0012 coordinated retirement and settlement policy. Unassigned on every shipped network.
+    pub palw_dns_retirement: Option<crate::palw_native_settlement_v1::PalwDnsRetirementV1>,
+
     /// **ADR-0130: the seat exposure floor** — see [`PalwPanelExposureFloorV1`]. Resolved at the
     /// claim's anchor for the draw and at the binding block's DAA for the reservation, which the
     /// duty row stores. `None` on every shipped preset and on every card.
@@ -2927,6 +2930,22 @@ pub struct Params {
     /// force at or below it ([`Self::validate_palw_fp_job_v5_v1`]).
     pub palw_fp_job_v5: Option<ForkActivation>,
 
+    /// **RFC-0003 PALW-GEN-20 by the range twin** ([`crate::palw_gen_range_twin_v1`]): past this height the pipeline admission sizes a
+    /// generative class's closes with the range twin (`palw_tir_close_range_v1`, `palw_tir_fence2`'s twin) instead of the element
+    /// twin — the same bounds, far fewer steps of the same work cap — so a real-size image stage (a vision tower) is sized rather than
+    /// refused at the cap. Below it, and on every network that leaves it `None`, the element twin sizes exactly as before.
+    ///
+    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only in both fingerprints, the whole option
+    /// collapsed from `Some(never())`. Requires `palw_gen_v1` in force at or below it ([`Self::validate_palw_gen_range_twin_v1`]).
+    pub palw_gen_range_twin_v1: Option<ForkActivation>,
+
+    /// **RFC-0011 §15.7: the probabilistic-constraint route's fence** ([`crate::palw_probabilistic_constraints_v1`]): the separately
+    /// named fence under which kernel-bound classes (ADR-0172; `misaka-palw-kernel`'s versioned descriptors, `VerificationPlanV1`,
+    /// constraint receipts) would be registered and their claims finalized. **Dormant with no activation height**: `None` on every
+    /// preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from `Some(never())`, and refused when armed
+    /// ([`Self::validate_palw_probabilistic_constraints_v1`]) — the RFC assigns none, and shadow comparison precedes any proposal.
+    pub palw_probabilistic_constraints_v1: Option<ForkActivation>,
+
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
     /// context ([`crate::palw_v2::PalwJobContextV2::prefix_context_hash_v1`], context version 3), so every claim over the same prefix
@@ -3020,6 +3039,32 @@ pub struct Params {
     /// [`Self::validate_palw_anchor_window_v1`] off ConsensusV2, without the execution lane, the economic-safety bundle, the
     /// admission jury or the model registry at or below it, or with the bundle's mirror unsynced.
     pub palw_anchor_window_v1: Option<ForkActivation>,
+
+    /// **RFC-0009 stage C (lane R9): public receipt redemption** (`crate::palw_receipt_v4`). Past it a free-prompt receipt block may carry a
+    /// `PFS4` spend: the executor's position-free redemption authorization (signed once, any time before the fence's use window) plus an
+    /// eligible BUILDER's own signature, so a block builder other than the claim's executor spends a winning quantum, and the receipt
+    /// block's subsidy-derived worker reward is split in the coinbase — the miner leg to the executor bond's registered payout, a
+    /// pre-authorized fee (at most [`crate::palw_receipt_v4::PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS`]) to the builder. V3 spends decode and
+    /// admit exactly as before. A bare height; the cap is a companion value hashed with it
+    /// ([`crate::palw_receipt_v4::palw_receipt_spend_v4_value_v1`]). `None` on every preset (not in the DAA-5,300 release). Hashed Some-only
+    /// in every writer with the `never()` collapse. Refused by [`Self::validate_palw_receipt_spend_v4`] off ConsensusV2 or without
+    /// `palw_audit_2026_09_11` and `palw_audit_2026_09_23` at or below it.
+    pub palw_receipt_spend_v4: Option<ForkActivation>,
+
+    /// **RFC-0009 stage B: the provider challenge court** (`crate::palw_evidence_court_v1`). Past it a claim may be made accountable to its evidence
+    /// PROVIDERS instead of its producer: providers file storage receipts from their own bonds, anyone may challenge one chunk with a deadline, and
+    /// silence past it charges that provider once (a claim every provider has defaulted on lapses, which is not the miner's fraud). A bare height;
+    /// the response window is a companion value hashed with it ([`crate::palw_evidence_court_v1::palw_evidence_court_value_v1`]). `None` on every
+    /// preset, and **no fold reads it yet** — the machine is pure and tested, the chain integration is the next step. Hashed Some-only in every
+    /// writer with the `never()` collapse. Refused by [`Self::validate_palw_evidence_court_v1`] off ConsensusV2 or without `palw_da_court` at or
+    /// below it.
+    pub palw_evidence_court_v1: Option<ForkActivation>,
+    /// **Lane PA: the 2026-10-04 audit's consensus fixes** (`crate::palw_audit_1004_v1`) — P-F1, P-F4, B-F3, B-F4, C-F1, S-1/B-F5, RF-1,
+    /// RF-3, RF-4, G-3, G-2, P-F5, C-F4 — behind ONE dormant fence. A bare height; its companion value (the beacon depth) is hashed
+    /// with it. `None` on EVERY preset (the lead sets the height after the DAA-5,300 release). Hashed Some-only in every writer with
+    /// the `never()` collapse. Refused by [`Self::validate_palw_audit_1004_v1`] off ConsensusV2, without the economic-safety bundle
+    /// or the model registry at or below it, or with the bundle's mirror unsynced.
+    pub palw_audit_1004_v1: Option<ForkActivation>,
 
     /// **RFC-0004 — the Model Improvement Protocol** (`crate::palw_improve_v1`): a line may be governed
     /// by consensus-native improvement epochs — hard cases, datasets, a candidate registry, evaluation
@@ -4088,6 +4133,10 @@ impl Params {
         self.validate_palw_gen_v1()?;
         // **FP Job V5** (`crate::palw_fp_job_v5`): over the generative fence and FP Job V4's.
         self.validate_palw_fp_job_v5_v1()?;
+        // **The generative range twin** (`crate::palw_gen_range_twin_v1`): over the generative fence.
+        self.validate_palw_gen_range_twin_v1()?;
+        // **RFC-0011 §15.7's dormant fence** (`crate::palw_probabilistic_constraints_v1`): refused when armed.
+        self.validate_palw_probabilistic_constraints_v1()?;
         // **palw_fp_prefix_inherit** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_inherit_v1()?;
         // **palw_fp_prefix_state** (`crate::palw_fp_prefix_v1`).
@@ -4786,6 +4835,23 @@ impl Params {
                 ));
             }
         }
+        if let Some(retirement) = self.palw_dns_retirement {
+            if self.dns_params.as_ref().is_some_and(|dns| retirement.activation.daa_score() < dns.full_reward_split_daa_score
+                || retirement.activation.daa_score() < dns.dns_activation_daa_score) {
+                return Err(PalwModeV2Error::Invalid("RFC-0012 retirement must follow DNS activation and its full subsidy split"));
+            }
+            if self.palw_overlay_carve.is_some_and(|c| c.worker_carve_permille > 920)
+                || matches!(&self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(b) if b.state.worker_carve_permille() > 920) {
+                return Err(PalwModeV2Error::Invalid("RFC-0012 recovery escrow must fit inside the 92% worker base"));
+            }
+            if !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_))
+                || self.dns_params.is_none()
+                || !retirement.settlement.valid()
+                || retirement.legacy_evidence_horizon_daa == 0
+            {
+                return Err(PalwModeV2Error::Invalid("RFC-0012 requires ConsensusV2, historical DNS rules, a complete settlement policy and a finite evidence horizon"));
+            }
+        }
         // **ADR-0126 Decision 4: the overlay carve lowers a split this network runs, and the escrow it
         // grows must fit the worker base that lower split leaves** — the invariant the bundle's own
         // carve is refused on below, at the fence's numbers. A fence that hashes and cannot fire, or
@@ -4974,7 +5040,10 @@ impl Params {
             // ADR-0160 lane liab (F-L): over R-core+ and the attribution fence, likewise.
             self.validate_palw_capacity_liability_v1()?;
             // ADR-0170's window: last on this path too (see the ConsensusV2 tail below); a ruleset with no V2 bundle refuses it by name.
-            return self.validate_palw_anchor_window_v1();
+            self.validate_palw_anchor_window_v1()?;
+            self.validate_palw_receipt_spend_v4()?;
+            self.validate_palw_evidence_court_v1()?;
+            return self.validate_palw_audit_1004_v1();
         };
         bundle.validate()?;
         // **ADR-0103 Decision 1: a ladder past the bisection's clock is a network on which no
@@ -5847,7 +5916,13 @@ impl Params {
         // **ADR-0170: the seed anchor window's refusals** (`crate::palw_anchor_window_v1`) — last, after every fence's own refusal, so a
         // prerequisite it shares with another fence (the execution lane, the economic-safety bundle, ADR-0147's jury, the registry) is
         // named by that fence's own refusal first.
-        self.validate_palw_anchor_window_v1()
+        self.validate_palw_anchor_window_v1()?;
+        // **RFC-0009: the receipt redemption's refusals** (`crate::palw_receipt_v4`) — after the audit fences it names.
+        self.validate_palw_receipt_spend_v4()?;
+        // **RFC-0009 stage B: the provider court's refusals** — after the fences it names.
+        self.validate_palw_evidence_court_v1()?;
+        // Lane PA's audit-1004 fence: last, likewise.
+        self.validate_palw_audit_1004_v1()
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
@@ -6397,6 +6472,14 @@ impl Params {
         if self.palw_fp_job_v5 == Some(ForkActivation::never()) {
             self.palw_fp_job_v5 = None;
         }
+        // The generative range twin, likewise.
+        if self.palw_gen_range_twin_v1 == Some(ForkActivation::never()) {
+            self.palw_gen_range_twin_v1 = None;
+        }
+        // The probabilistic-constraint fence, likewise.
+        if self.palw_probabilistic_constraints_v1 == Some(ForkActivation::never()) {
+            self.palw_probabilistic_constraints_v1 = None;
+        }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
         }
@@ -6430,6 +6513,17 @@ impl Params {
         // ADR-0170's window: Some-only hashed, so the same collapse.
         if self.palw_anchor_window_v1 == Some(ForkActivation::never()) {
             self.palw_anchor_window_v1 = None;
+        }
+        // RFC-0009's receipt redemption: Some-only hashed, so the same collapse.
+        if self.palw_receipt_spend_v4 == Some(ForkActivation::never()) {
+            self.palw_receipt_spend_v4 = None;
+        }
+        if self.palw_evidence_court_v1 == Some(ForkActivation::never()) {
+            self.palw_evidence_court_v1 = None;
+        }
+        // Lane PA's audit-1004 fence: Some-only hashed, so the same collapse.
+        if self.palw_audit_1004_v1 == Some(ForkActivation::never()) {
+            self.palw_audit_1004_v1 = None;
         }
         // RFC-0004, likewise: the WHOLE option collapses from `Some(never())`.
         if self.palw_improvement_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
@@ -6561,6 +6655,9 @@ impl Params {
         }
         // ADR-0126, the lane's shape again: the whole option collapses, so the two numbers beside a
         // scheduled height leave the identity with it (the schedule id reports them).
+        if self.palw_dns_retirement.is_some_and(|r| r.activation == ForkActivation::never()) {
+            self.palw_dns_retirement = None;
+        }
         if self.palw_overlay_carve.is_some_and(|carve| carve.activation == ForkActivation::never()) {
             self.palw_overlay_carve = None;
         }
@@ -9295,6 +9392,12 @@ impl Params {
         }
     }
 
+    /// RFC-0012: evaluated at the authoritative context (incumbent for fork choice,
+    /// accepting block for transactions/rewards, canonical sink for service duties).
+    pub fn palw_dns_retired_at(&self, daa_score: u64) -> bool {
+        self.palw_dns_retirement.is_some_and(|r| r.activation.is_active(daa_score))
+    }
+
     /// ADR-0130: the seat exposure floor, meaningful only on a `ConsensusV2` network (the seats it
     /// floors are a V2 panel's) — what the processors store.
     pub fn palw_panel_exposure_floor_fence(&self) -> Option<PalwPanelExposureFloorV1> {
@@ -10005,6 +10108,7 @@ impl Params {
             palw_work_priced_reward,
             palw_execution_lane,
             palw_overlay_carve,
+            palw_dns_retirement,
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_model_market,
@@ -10044,6 +10148,8 @@ impl Params {
             palw_tir_v1,
             palw_gen_v1,
             palw_fp_job_v5,
+            palw_gen_range_twin_v1,
+            palw_probabilistic_constraints_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -10054,6 +10160,9 @@ impl Params {
             palw_floor_reserve_v1,
             palw_real_clock_tick_v1,
             palw_anchor_window_v1,
+            palw_receipt_spend_v4,
+            palw_evidence_court_v1,
+            palw_audit_1004_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
@@ -10265,6 +10374,7 @@ impl Params {
                 palw_execution_lane.and_then(|lane| lane.short_span.is_used().then_some(lane.short_span.activation)),
             ),
             ("palw_overlay_carve", palw_overlay_carve.map(|carve| carve.activation)),
+            ("palw_dns_retirement_v1", palw_dns_retirement.map(|r| r.activation)),
             ("palw_panel_exposure_floor", palw_panel_exposure_floor.map(|floor| floor.activation)),
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
             ("palw_model_market", *palw_model_market),
@@ -10305,6 +10415,8 @@ impl Params {
             ("palw_tir_v1", palw_tir_v1.map(|fence| fence.activation)),
             ("palw_gen_v1", palw_gen_v1.map(|fence| fence.activation)),
             ("palw_fp_job_v5", *palw_fp_job_v5),
+            ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
+            ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -10315,6 +10427,9 @@ impl Params {
             ("palw_floor_reserve_v1", *palw_floor_reserve_v1),
             ("palw_real_clock_tick_v1", *palw_real_clock_tick_v1),
             ("palw_anchor_window_v1", *palw_anchor_window_v1),
+            ("palw_receipt_spend_v4", *palw_receipt_spend_v4),
+            ("palw_evidence_court_v1", *palw_evidence_court_v1),
+            ("palw_audit_1004_v1", *palw_audit_1004_v1),
             ("palw_improvement_v1", palw_improvement_v1.map(|fence| fence.activation)),
             ("palw_held_close_chunks_v1", *palw_held_close_chunks_v1),
             ("palw_verification_vertex_v1", *palw_verification_vertex_v1),
@@ -10575,6 +10690,16 @@ impl Params {
             h.write(b"palw_fp_job_v5");
             h.write(v5.daa_score().to_le_bytes());
         }
+        // The generative range twin, NAMED likewise.
+        if let Some(at) = self.palw_gen_range_twin_v1 {
+            h.write(b"palw_gen_range_twin_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // The probabilistic-constraint fence, NAMED likewise.
+        if let Some(at) = self.palw_probabilistic_constraints_v1 {
+            h.write(b"palw_probabilistic_constraints_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
         // palw_fp_prefix_inherit, NAMED likewise.
         if let Some(at) = self.palw_fp_prefix_inherit {
             h.write(b"palw_fp_prefix_inherit");
@@ -10630,6 +10755,31 @@ impl Params {
             h.write(b"palw_anchor_window_v1");
             h.write(activation.daa_score().to_le_bytes());
             for v in crate::palw_anchor_window_v1::palw_anchor_window_value_v1() {
+                h.write(v.to_le_bytes());
+            }
+        }
+        // RFC-0009, NAMED likewise: it changes what a receipt block's header may carry and how its reward is paid from its height, and
+        // the fee cap is part of the rule (hashed with it, so changing the cap is a new network id).
+        if let Some(activation) = self.palw_receipt_spend_v4 {
+            h.write(b"palw_receipt_spend_v4");
+            h.write(activation.daa_score().to_le_bytes());
+            for v in crate::palw_receipt_v4::palw_receipt_spend_v4_value_v1() {
+                h.write(v.to_le_bytes());
+            }
+        }
+        // RFC-0009 stage B's provider court, NAMED likewise, its response window hashed with it.
+        if let Some(activation) = self.palw_evidence_court_v1 {
+            h.write(b"palw_evidence_court_v1");
+            h.write(activation.daa_score().to_le_bytes());
+            for v in crate::palw_evidence_court_v1::palw_evidence_court_value_v1() {
+                h.write(v.to_le_bytes());
+            }
+        }
+        // Lane PA, NAMED likewise: the audit-1004 rules change what the folds accept from its height; the beacon depth is part of the rule.
+        if let Some(activation) = self.palw_audit_1004_v1 {
+            h.write(b"palw_audit_1004_v1");
+            h.write(activation.daa_score().to_le_bytes());
+            for v in crate::palw_audit_1004_v1::palw_audit_1004_value_v1() {
                 h.write(v.to_le_bytes());
             }
         }
@@ -10912,6 +11062,10 @@ impl Params {
         }
         // ADR-0126: the height, and beside it the two numbers it moves. Some-only, like its siblings;
         // reported here and never gated, for the SA-4 reason the lane's shape is.
+        if let Some(r) = self.palw_dns_retirement {
+            h.write(b"palw_dns_retirement_v1");
+            h.write(r.commitment_bytes());
+        }
         if let Some(carve) = self.palw_overlay_carve {
             h.write(b"palw_overlay_carve");
             h.write(carve.activation.daa_score().to_le_bytes());
@@ -11215,6 +11369,8 @@ impl Params {
             palw_tir_v1,
             palw_gen_v1,
             palw_fp_job_v5,
+            palw_gen_range_twin_v1,
+            palw_probabilistic_constraints_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -11225,6 +11381,9 @@ impl Params {
             palw_floor_reserve_v1,
             palw_real_clock_tick_v1,
             palw_anchor_window_v1,
+            palw_receipt_spend_v4,
+            palw_evidence_court_v1,
+            palw_audit_1004_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
@@ -11261,6 +11420,7 @@ impl Params {
             palw_work_priced_reward,
             palw_execution_lane,
             palw_overlay_carve,
+            palw_dns_retirement,
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
@@ -11949,6 +12109,14 @@ impl Params {
         if let Some(activation) = palw_fp_job_v5.as_mut() {
             fork(activation, visit);
         }
+        // The generative range twin. Some-only.
+        if let Some(activation) = palw_gen_range_twin_v1.as_mut() {
+            fork(activation, visit);
+        }
+        // The probabilistic-constraint fence. Some-only.
+        if let Some(activation) = palw_probabilistic_constraints_v1.as_mut() {
+            fork(activation, visit);
+        }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
             fork(activation, visit);
@@ -11986,6 +12154,18 @@ impl Params {
         }
         // ADR-0170's window: Some-only, a bare height.
         if let Some(activation) = palw_anchor_window_v1.as_mut() {
+            fork(activation, visit);
+        }
+        // RFC-0009's receipt redemption: Some-only, a bare height.
+        if let Some(activation) = palw_receipt_spend_v4.as_mut() {
+            fork(activation, visit);
+        }
+        // RFC-0009 stage B's provider court: Some-only, a bare height.
+        if let Some(activation) = palw_evidence_court_v1.as_mut() {
+            fork(activation, visit);
+        }
+        // Lane PA's audit-1004 fence: Some-only, a bare height.
+        if let Some(activation) = palw_audit_1004_v1.as_mut() {
             fork(activation, visit);
         }
         // RFC-0004. Some-only, and the ACTIVATION only (the value is a limit set).
@@ -12101,6 +12281,9 @@ impl Params {
             }
         }
         // ADR-0126: the height only — the validator share and the escrow carve are values beside it.
+        if let Some(r) = palw_dns_retirement.as_mut() {
+            fork(&mut r.activation, visit);
+        }
         if let Some(carve) = palw_overlay_carve.as_mut() {
             fork(&mut carve.activation, visit);
         }
@@ -12459,6 +12642,8 @@ impl Params {
             palw_tir_v1,
             palw_gen_v1,
             palw_fp_job_v5,
+            palw_gen_range_twin_v1,
+            palw_probabilistic_constraints_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -12469,6 +12654,9 @@ impl Params {
             palw_floor_reserve_v1,
             palw_real_clock_tick_v1,
             palw_anchor_window_v1,
+            palw_receipt_spend_v4,
+            palw_evidence_court_v1,
+            palw_audit_1004_v1,
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
@@ -12500,6 +12688,7 @@ impl Params {
             palw_work_priced_reward,
             palw_execution_lane,
             palw_overlay_carve,
+            palw_dns_retirement,
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
@@ -13243,6 +13432,16 @@ impl Params {
             h.write(b"palw_fp_job_v5");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The generative range twin, Some-only for the same reason.
+        if let Some(activation) = palw_gen_range_twin_v1 {
+            h.write(b"palw_gen_range_twin_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // The probabilistic-constraint fence, Some-only for the same reason.
+        if let Some(activation) = palw_probabilistic_constraints_v1 {
+            h.write(b"palw_probabilistic_constraints_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // palw_fp_prefix_inherit, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_inherit {
             h.write(b"palw_fp_prefix_inherit");
@@ -13296,6 +13495,30 @@ impl Params {
             h.write(b"palw_anchor_window_v1");
             h.write(activation.daa_score().to_le_bytes());
             for v in crate::palw_anchor_window_v1::palw_anchor_window_value_v1() {
+                h.write(v.to_le_bytes());
+            }
+        }
+        // RFC-0009, Some-only: every shipped preset leaves it `None` and fingerprints byte-identically.
+        if let Some(activation) = palw_receipt_spend_v4 {
+            h.write(b"palw_receipt_spend_v4");
+            h.write(activation.daa_score().to_le_bytes());
+            for v in crate::palw_receipt_v4::palw_receipt_spend_v4_value_v1() {
+                h.write(v.to_le_bytes());
+            }
+        }
+        // RFC-0009 stage B's provider court, Some-only.
+        if let Some(activation) = palw_evidence_court_v1 {
+            h.write(b"palw_evidence_court_v1");
+            h.write(activation.daa_score().to_le_bytes());
+            for v in crate::palw_evidence_court_v1::palw_evidence_court_value_v1() {
+                h.write(v.to_le_bytes());
+            }
+        }
+        // Lane PA, Some-only: every shipped preset leaves it `None` and fingerprints byte-identically.
+        if let Some(activation) = palw_audit_1004_v1 {
+            h.write(b"palw_audit_1004_v1");
+            h.write(activation.daa_score().to_le_bytes());
+            for v in crate::palw_audit_1004_v1::palw_audit_1004_value_v1() {
                 h.write(v.to_le_bytes());
             }
         }
@@ -13492,6 +13715,10 @@ impl Params {
         }
         // ADR-0126: Some-only, so every preset that leaves the carve unset fingerprints exactly as a
         // build without the field; the two numbers ride with the height.
+        if let Some(r) = palw_dns_retirement {
+            h.write(b"palw_dns_retirement_v1");
+            h.write(r.commitment_bytes());
+        }
         if let Some(carve) = palw_overlay_carve {
             h.write(b"palw_overlay_carve/v1");
             h.write(carve.activation.daa_score().to_le_bytes());
@@ -13998,6 +14225,8 @@ impl Params {
             palw_tir_v1: self.palw_tir_v1,
             palw_gen_v1: self.palw_gen_v1,
             palw_fp_job_v5: self.palw_fp_job_v5,
+            palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
+            palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -14008,6 +14237,9 @@ impl Params {
             palw_floor_reserve_v1: self.palw_floor_reserve_v1,
             palw_real_clock_tick_v1: self.palw_real_clock_tick_v1,
             palw_anchor_window_v1: self.palw_anchor_window_v1,
+            palw_receipt_spend_v4: self.palw_receipt_spend_v4,
+            palw_evidence_court_v1: self.palw_evidence_court_v1,
+            palw_audit_1004_v1: self.palw_audit_1004_v1,
             palw_improvement_v1: self.palw_improvement_v1,
             palw_held_close_chunks_v1: self.palw_held_close_chunks_v1,
             palw_verification_vertex_v1: self.palw_verification_vertex_v1,
@@ -14041,6 +14273,7 @@ impl Params {
             palw_work_priced_reward: self.palw_work_priced_reward,
             palw_execution_lane: self.palw_execution_lane,
             palw_overlay_carve: self.palw_overlay_carve,
+            palw_dns_retirement: self.palw_dns_retirement,
             palw_panel_exposure_floor: self.palw_panel_exposure_floor,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
@@ -15083,6 +15316,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_gen_range_twin_v1: None,
+    palw_probabilistic_constraints_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15093,6 +15328,9 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_floor_reserve_v1: None,
     palw_real_clock_tick_v1: None,
     palw_anchor_window_v1: None,
+    palw_receipt_spend_v4: None,
+    palw_evidence_court_v1: None,
+    palw_audit_1004_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -15125,6 +15363,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_work_priced_reward: None,
     palw_execution_lane: None,
     palw_overlay_carve: None,
+    palw_dns_retirement: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
@@ -15364,6 +15603,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_gen_range_twin_v1: None,
+    palw_probabilistic_constraints_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15374,6 +15615,9 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_floor_reserve_v1: None,
     palw_real_clock_tick_v1: None,
     palw_anchor_window_v1: None,
+    palw_receipt_spend_v4: None,
+    palw_evidence_court_v1: None,
+    palw_audit_1004_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -15406,6 +15650,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_work_priced_reward: None,
     palw_execution_lane: None,
     palw_overlay_carve: None,
+    palw_dns_retirement: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
@@ -15627,6 +15872,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_gen_range_twin_v1: None,
+    palw_probabilistic_constraints_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15637,6 +15884,9 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_floor_reserve_v1: None,
     palw_real_clock_tick_v1: None,
     palw_anchor_window_v1: None,
+    palw_receipt_spend_v4: None,
+    palw_evidence_court_v1: None,
+    palw_audit_1004_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -15669,6 +15919,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_work_priced_reward: None,
     palw_execution_lane: None,
     palw_overlay_carve: None,
+    palw_dns_retirement: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
@@ -22865,10 +23116,14 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_floor_reserve_v1();
     // ADR-0170's seed anchor window, likewise.
     params.sync_palw_anchor_window_v1();
+    // Lane PA's audit-1004 fence, likewise.
+    params.sync_palw_audit_1004_v1();
     // RFC-0004's improvement fence, likewise.
     params.sync_palw_improvement_v1();
     // RFC-0003's held leaf challenge, likewise.
     params.sync_palw_held_close_chunks_v1();
+    // RFC-0003's generative range twin, likewise.
+    params.sync_palw_gen_range_twin_v1();
     // RFC-0007's verification vertex, likewise.
     params.sync_palw_verification_vertex_v1();
     // RFC-0007 Parts II and IV, likewise.
@@ -23146,6 +23401,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_tir_v1: None,
     palw_gen_v1: None,
     palw_fp_job_v5: None,
+    palw_gen_range_twin_v1: None,
+    palw_probabilistic_constraints_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -23156,6 +23413,9 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_floor_reserve_v1: None,
     palw_real_clock_tick_v1: None,
     palw_anchor_window_v1: None,
+    palw_receipt_spend_v4: None,
+    palw_evidence_court_v1: None,
+    palw_audit_1004_v1: None,
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
@@ -23188,6 +23448,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_work_priced_reward: None,
     palw_execution_lane: None,
     palw_overlay_carve: None,
+    palw_dns_retirement: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).

@@ -510,3 +510,63 @@ fn the_vertex_tail_is_pinned_at_0xe4() {
     assert_eq!(bytes[at], 0xE4);
     assert_eq!(bytes[at + 1..at + 5], 1u32.to_le_bytes());
 }
+
+// ---------------------------------------------------------------------------------------------
+// Lane PA (`palw_audit_1004_v1`): B-F3, B-F4.
+// ---------------------------------------------------------------------------------------------
+
+/// **B-F3**: a vertex `Valid` leaf that completes the tally of an RFC-0006 layer-sharded claim reached `LicensedByParts` and the `?` dropped
+/// the whole vertex (and its block's other leaves); past the fence the leaf is Ignored and the vertex stands.
+#[test]
+fn audit_1004_a_leaf_for_a_layer_sharded_claim_is_ignored_not_a_vertex_refusal() {
+    for on in [false, true] {
+        let (mut p, mut s, claim) = world(Some(0));
+        if on {
+            p = p.with_audit_1004_from_daa(Some(0));
+        }
+        s.tir_shard_claims.insert(claim, crate::palw_tir_shard_v1::PalwTirShardClaimV1::bound(2, 1, false, vec![500, 500]).unwrap());
+        let mut result = Ok(());
+        for (i, seat) in seats().into_iter().enumerate() {
+            let daa = 104 + i as u64;
+            let v = vertex(seat, daa, vec![leaf(claim, Verdict::Valid)]);
+            // (No consistency check here: the shard record is injected, not bound through a plan.)
+            match apply_palw_transition_v2_with_extras(&s, &p, &ctx(10 + i as u64, daa, 10 + i as u64), &[object(v)], None, true, false, false, false, &vx()) {
+                Ok((next, _)) => s = next,
+                Err(e) => {
+                    result = Err(e.to_string());
+                    break;
+                }
+            }
+        }
+        assert_eq!(result.is_err(), !on, "fence {on}: the vertex that completes the tally is refused below the fence and stands past it: {result:?}");
+        if on {
+            assert!(matches!(phase(&s, claim), PalwClaimPhaseV2::PanelBound { .. }), "the claim waits for its shard parts");
+        }
+    }
+}
+
+/// **B-F4**: equivocation evidence signed in the future was admitted by `saturating_sub` and wrote a round row nothing swept; past the
+/// fence it is refused as a plain vertex's future date is.
+#[test]
+fn audit_1004_future_dated_equivocation_evidence_is_refused() {
+    for on in [false, true] {
+        let (mut p, s0, claim) = world(Some(0));
+        if on {
+            p = p.with_audit_1004_from_daa(Some(0));
+        }
+        let seat = seats()[2];
+        let a = vertex(seat, 4_000, vec![leaf(claim, Verdict::Valid)]);
+        let b = vertex(
+            seat,
+            4_000,
+            vec![PalwVertexLeafV1::Held { claim: PalwClaimRefV1::Full(h64(0xAB)), object: 0, first: 0, last: 1, digest: h64(2) }],
+        );
+        let evidence = PalwVertexEquivocationV1 { a: a.header(), b: b.header(), a_leaves: Vec::new(), b_leaves: Vec::new() };
+        let result = step(&s0, &p, 70, 152, &[PalwConsensusObjectV2::VertexEquivocationV1 { evidence: Box::new(evidence) }]);
+        assert_eq!(result.is_err(), on, "fence {on}: a pair signed 3,848 DAA ahead of its block");
+        if on {
+            let why = result.unwrap_err().to_string();
+            assert!(why.contains("4000") && why.contains("152"), "refused by name, with both DAAs: {why}");
+        }
+    }
+}

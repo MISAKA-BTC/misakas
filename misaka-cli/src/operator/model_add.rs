@@ -53,6 +53,8 @@ pub(crate) struct ModelAddArgs {
     pub(crate) sponsor: Option<u64>,
     /// The runtime pack gate of an IR artifact (RFC-0002 Part II §II.7.5, decided 2026-10-01).
     pub(crate) pack_gate: crate::pack_gate::PackGateFlags,
+    /// RFC-0009 A0: quote / relay through several nodes (`--quote`, `--relay`, `--relay-min`, `--max-fee`).
+    pub(crate) remote: crate::operator::model_remote::RemoteArgs,
 }
 
 /// A certified family as the chain holds it.
@@ -830,6 +832,9 @@ async fn register(
         Halt::Blocked(Finding::error("E-MODEL-SHAPE", exit::MODEL, "The chain would not admit this class's shape").current(e))
     })?;
     let candidate = misaka_palw_sdk::PalwRegistrationCandidateV1 { entry: entry.clone(), artifact_root };
+    if walk.args.remote.active() {
+        return register_remote(walk, flow, bundle, sdk, &candidate, terms, &shape, &bond, bond_op, &ks, &key).await;
+    }
     let object = signed_class_registration(
         &walk.params,
         bundle,
@@ -876,8 +881,7 @@ async fn register(
     let pool_terms = walk.params.palw_activation_pool_at(walk.node.daa());
     let sponsor = walk.args.sponsor.filter(|_| pool_terms.is_some());
     if let (Some(terms), Some(amount)) = (pool_terms, sponsor) {
-        let recommended =
-            kaspa_consensus_core::palw_activation_pool_v1::palw_activation_recommended_pool_sompi_v1(&terms);
+        let recommended = kaspa_consensus_core::palw_activation_pool_v1::palw_activation_recommended_pool_sompi_v1(&terms);
         flow.ui.sub(&format!(
             "sponsor   {} into its Activation Pool once registered — a donation to its preparers, never refunded once \
              folded (recommended pool {}, non-binding; --sponsor <BILI> changes it, --no-sponsor skips it)",
@@ -909,10 +913,7 @@ async fn register(
                 .map(|c| c.code().to_string())
                 .unwrap_or_default();
             flow.ui.sub("submitted  ✅");
-            flow.ui.sub(&format!(
-                "accepted   ❌{}",
-                if code.is_empty() { String::new() } else { format!("  {code}") }
-            ));
+            flow.ui.sub(&format!("accepted   ❌{}", if code.is_empty() { String::new() } else { format!("  {code}") }));
             return Err(Halt::Blocked(finding));
         }
         Err(other) => return Err(other),
@@ -925,8 +926,7 @@ async fn register(
     crate::palw_model_ops::print_pipeline(&tracked);
     if !tracked.accepted && !tracked.reject_code.is_empty() {
         return Err(Halt::Blocked(
-            Finding::error("E-OBJECT-REFUSED", exit::FUNDS, "The registration was not accepted")
-                .current(tracked.reject_code),
+            Finding::error("E-OBJECT-REFUSED", exit::FUNDS, "The registration was not accepted").current(tracked.reject_code),
         ));
     }
     // **A mined carrier the processor dropped is a verdict, not a wait** (testnet-12 lifecycle audit
@@ -971,28 +971,169 @@ async fn register(
             format!("class {}… · share {share} ‰ · included DAA {}", &class_hex[..16], included.included_daa),
         );
     } else {
-        return Err(Halt::Blocked(
-            Finding::error("E-OBJECT-REFUSED", exit::NOT_READY, "The registration was not included")
-                .current(kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded.code().to_string()),
-        ));
+        return Err(Halt::Blocked(Finding::error("E-OBJECT-REFUSED", exit::NOT_READY, "The registration was not included").current(
+            kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded.code().to_string(),
+        )));
     }
     if let Some(amount) = sponsor {
-        let class_id = entry.class_id();
-        flow.ui.mark(Severity::Info, "sponsor", &format!("filing {} into its Activation Pool…", crate::palw_model::msk(amount)));
-        match crate::palw_activation_pool::sponsor_listing(&walk.submit_ctx(), &ks, class_id, amount, Duration::from_secs(20 * 60)).await
-        {
-            Ok(txid) => flow.row(
-                Severity::Ok,
-                "sponsored",
-                format!("{} into its Activation Pool · tx {}", crate::palw_model::msk(amount), if txid.len() > 16 { &txid[..16] } else { &txid }),
+        file_sponsor(walk, flow, &ks, entry.class_id(), amount).await;
+    }
+    Ok(())
+}
+
+/// The registration's sponsor carrier, once it folded: a warning and a command when it is not filed, never a halt.
+async fn file_sponsor(walk: &Walk<'_>, flow: &mut Flow, ks: &crate::keys::KeySource, class_id: Hash64, amount: u64) {
+    flow.ui.mark(Severity::Info, "sponsor", &format!("filing {} into its Activation Pool…", crate::palw_model::msk(amount)));
+    match crate::palw_activation_pool::sponsor_listing(&walk.submit_ctx(), ks, class_id, amount, Duration::from_secs(20 * 60)).await {
+        Ok(txid) => flow.row(
+            Severity::Ok,
+            "sponsored",
+            format!(
+                "{} into its Activation Pool · tx {}",
+                crate::palw_model::msk(amount),
+                if txid.len() > 16 { &txid[..16] } else { &txid }
             ),
-            // The registration stands: a sponsor not filed is a warning and a command, never a halt.
-            Err(why) => flow.row(
-                Severity::Warning,
-                "sponsor",
-                format!("not filed: {why} — {}", crate::palw_activation_pool::sponsor_retry_hint(&class_id, amount)),
-            ),
+        ),
+        // The registration stands: a sponsor not filed is a warning and a command, never a halt.
+        Err(why) => flow.row(
+            Severity::Warning,
+            "sponsor",
+            format!("not filed: {why} — {}", crate::palw_activation_pool::sponsor_retry_hint(&class_id, amount)),
+        ),
+    }
+}
+
+/// **RFC-0009 A0: register through any nodes, signing here** (`--quote`, `--relay`). The same checks as the one-node path
+/// ran above; this path quotes every cost by its payer, re-reads the chain before the key signs, relays the finished carrier
+/// to several nodes and believes a state only when a quorum of them reports it.
+#[allow(clippy::too_many_arguments)]
+async fn register_remote(
+    walk: &Walk<'_>,
+    flow: &mut Flow,
+    bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    sdk: &misaka_palw_sdk::PalwClassSdk,
+    candidate: &misaka_palw_sdk::PalwRegistrationCandidateV1,
+    terms: &PalwRegistrationTermsV2,
+    shape: &kaspa_consensus_core::palw_class_admission_v2::PalwAdmissionShapeV1,
+    bond: &str,
+    bond_op: kaspa_consensus_core::tx::TransactionOutpoint,
+    ks: &crate::keys::KeySource,
+    key: &kaspa_pq_validator_core::ValidatorKey,
+) -> Step {
+    use crate::operator::model_remote as remote;
+    use misaka_palw_remote::register::{RegistrationStateV1, pre_sign_gate_v1, quote_registration_v1};
+    let remote_args = &walk.args.remote;
+    let bond_key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond_op);
+    let build = |signature: Vec<u8>| sdk.build_post_genesis_registration(bundle, candidate, terms, 0, bond_key, signature, shape);
+    let refuse = |e: String| {
+        Halt::Blocked(Finding::error("E-MODEL-REGISTRATION", exit::MODEL, "The registration could not be built").current(e))
+    };
+    let unsigned = build(Vec::new()).map_err(refuse)?;
+    let probe = build(vec![0u8; remote::MLDSA87_SIGNATURE_LEN]).map_err(refuse)?;
+    let sponsor = walk.args.sponsor.filter(|_| walk.params.palw_activation_pool_at(walk.node.daa()).is_some());
+    let read = || remote::read_facts(&walk.node, &walk.params, bundle, key, bond, bond_op, &unsigned, &probe, sponsor);
+    let facts = read().await?;
+    let cap = remote_args.max_wallet_sompi.unwrap_or_else(|| {
+        facts.carrier_fee_sompi.saturating_add(facts.filings.iter().filter(|f| f.from_wallet).map(|f| f.sompi).sum::<u64>())
+    });
+    let quote = quote_registration_v1(facts, remote::QUOTE_VALIDITY_DAA, cap).map_err(|e| {
+        Halt::Blocked(
+            Finding::error("E-MODEL-NEEDS-GAS-OR-BOND", exit::FUNDS, "This registration cannot be paid for as things stand")
+                .current(e.to_string())
+                .reason("registration is not free: the carrier fee comes from the wallet, the burn and the exposure from the bond")
+                .fix("top up the wallet (gas) or the bond's collateral (bond), then re-run — nothing was signed or sent"),
+        )
+    })?;
+    remote::show(flow, &quote);
+    if remote_args.quote_only {
+        return Err(Halt::Declined("--quote: the quote above was read from the chain; nothing was signed or sent".into()));
+    }
+    flow.ask("Sign this registration and relay it?", false, "the class was not registered").await?;
+    // Re-read just before the key signs: anything that moved since the quote stops here.
+    let fresh = read().await?;
+    pre_sign_gate_v1(&quote, &fresh, remote::object_digest(&build(Vec::new()).map_err(refuse)?)).map_err(|stop| {
+        Halt::Blocked(
+            Finding::error("E-MODEL-QUOTE-STALE", exit::NOT_READY, "The quote no longer holds; nothing was signed")
+                .current(stop.to_string()),
+        )
+    })?;
+    let object = signed_class_registration(&walk.params, bundle, sdk, candidate, terms, shape, bond_key, key).map_err(refuse)?;
+    let fund = remote::funding(&walk.node, key).await?;
+    let (tx, _, fee) = crate::palw_fp::build_carrier_priced_v1(key, &walk.node.nv, &object, fund.outpoint, &fund.entry)
+        .map_err(|e| Halt::Blocked(Finding::error("E-FUNDS-SHORT", exit::FUNDS, "The carrier cannot be funded").current(e)))?;
+    if fee > quote.facts.carrier_fee_sompi {
+        return Err(Halt::Blocked(
+            Finding::error("E-MODEL-QUOTE-STALE", exit::NOT_READY, "The signed carrier costs more than the quote")
+                .current(format!("{fee} sompi against the quoted {}", quote.facts.carrier_fee_sompi))
+                .fix("re-run: a higher fee is a new quote and a new approval"),
+        ));
+    }
+    misaka_palw_remote::relay::carrier_funding_signature_valid(&tx, &fund.entry).map_err(|e| {
+        Halt::Blocked(Finding::error("E-SIGNER", exit::IDENTITY, "The carrier's own signature does not verify").current(e))
+    })?;
+    let urls: Vec<String> = if remote_args.relay.is_empty() {
+        vec![walk.node.url.trim_start_matches("ws://").to_string()]
+    } else {
+        remote_args.relay.clone()
+    };
+    let min = remote_args.min_agree().min(urls.len());
+    let timeout = Duration::from_secs(walk.ctx.timeout_secs.clamp(2, 15));
+    let report = remote::relay(&walk.profile.network, &urls, &tx, min, timeout).await.map_err(|e| {
+        Halt::Blocked(Finding::error("E-RELAY", exit::COMPONENT_DOWN, "Too few nodes took the signed carrier").current(e))
+    })?;
+    for (node, outcome) in &report.per_node {
+        flow.ui.sub(&format!("relay      {node}: {outcome:?}"));
+    }
+    for liar in report.tampered() {
+        flow.row(Severity::Warning, "relay", format!("{liar} answered with another transaction id — it did not relay these bytes"));
+    }
+    let object_id =
+        kaspa_consensus_core::palw_model_registration_v1::palw_registration_object_id_v1(&borsh::to_vec(&object).unwrap_or_default())
+            .to_string();
+    let class_hex = candidate.entry.class_id().to_string();
+    let txid = report.id.to_string();
+    crate::palw_model_ops::write_registration_journal(&walk.workdir, &class_hex, &object_id, &txid);
+    flow.ui.sub(&format!(
+        "relayed    ✅  tx {} via {} of {} node(s) — an ACK is not inclusion",
+        &txid[..16],
+        report.successes,
+        urls.len()
+    ));
+    let tracker = std::cell::RefCell::new(remote::tracker(&tx, &unsigned, bond, min));
+    tracker.borrow_mut().relayed();
+    let network = walk.profile.network.clone();
+    walk.wait_for(flow, "a quorum of nodes to report the registration's fate", 20, || {
+        let (urls, network, class_hex, object_id, txid, tx, tracker) = (&urls, &network, &class_hex, &object_id, &txid, &tx, &tracker);
+        async move {
+            let round = remote::observe(network, urls, class_hex, object_id, txid, timeout).await;
+            let state = tracker.borrow_mut().observe(&round).clone();
+            match state {
+                RegistrationStateV1::RegistrationAccepted { .. } => Ok(true),
+                RegistrationStateV1::Refused { code } => Err(Halt::Blocked(
+                    Finding::error("E-MODEL-REGISTRATION-DROPPED", exit::MODEL, "The registration was mined and the chain refused it")
+                        .reason("the carrier's fee is spent and no class row was written")
+                        .current(code),
+                )),
+                RegistrationStateV1::Misattributed(why) => Err(Halt::Blocked(
+                    Finding::error("E-MODEL-MISATTRIBUTED", exit::MODEL, "The registry holds this class under another bond or root")
+                        .current(why),
+                )),
+                // Only the SAME signed bytes are re-sent; nothing that costs a new fee happens on its own.
+                RegistrationStateV1::Reorged => {
+                    let _ = remote::relay(network, urls, tx, 1, timeout).await;
+                    Ok(false)
+                }
+                _ => Ok(false),
+            }
         }
+    })
+    .await?;
+    flow.row(Severity::Ok, "registered", format!("class {}… · accepted by a quorum of {min} node(s)", &class_hex[..16]));
+    flow.ui.sub(&paint::dim(
+        "registration accepted is not Panel readiness, a first Final claim, reward eligibility, block production or a market — `misaka model status` reads each",
+    ));
+    if let Some(amount) = sponsor {
+        file_sponsor(walk, flow, ks, candidate.entry.class_id(), amount).await;
     }
     Ok(())
 }

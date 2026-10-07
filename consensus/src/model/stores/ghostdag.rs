@@ -80,6 +80,18 @@ impl From<&GhostdagData> for ExternalGhostdagData {
 }
 
 impl GhostdagData {
+    /// ADR-0125 semantic amendment: separate execution rounds from ordinary reds without changing stored GHOSTDAG data.
+    pub fn classify_palw_mergeset_v1(
+        &self,
+        is_round: impl FnMut(BlockHash) -> bool,
+    ) -> kaspa_consensus_core::palw_mergeset_v1::ClassifiedMergesetV1 {
+        kaspa_consensus_core::palw_mergeset_v1::classify_palw_mergeset_v1(
+            self.mergeset_blues.iter().copied(),
+            self.mergeset_reds.iter().copied(),
+            is_round,
+        )
+    }
+
     pub fn new(
         blue_score: u64,
         blue_work: BlueWorkType,

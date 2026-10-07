@@ -771,6 +771,23 @@ mod tests {
             "palw_gen_v1" => params.palw_gen_v1 = Some(crate::palw_gen_v1::PalwGenFenceV1::drill_v1(at)),
             // FP Job V5 (RFC-0003 §II.2.1): a bare height.
             "palw_fp_job_v5" => params.palw_fp_job_v5 = Some(at),
+            "palw_gen_range_twin_v1" => params.palw_gen_range_twin_v1 = Some(at),
+            // RFC-0011 §15.7's dormant kernel-route fence: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_probabilistic_constraints_v1" => params.palw_probabilistic_constraints_v1 = Some(at),
+            // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
+            // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
+            "palw_dns_retirement_v1" => {
+                params.palw_dns_retirement = Some(crate::palw_native_settlement_v1::PalwDnsRetirementV1 {
+                    activation: at,
+                    settlement: crate::palw_native_settlement_v1::PalwSettlementPolicyV1 {
+                        settled_anchor_depth: 1,
+                        unique_mature_work: 1,
+                        max_operator_permille: 1000,
+                        max_class_permille: 1000,
+                    },
+                    legacy_evidence_horizon_daa: 1,
+                })
+            }
             "palw_fp_prefix_inherit" => params.palw_fp_prefix_inherit = Some(at),
             "palw_fp_prefix_state" => params.palw_fp_prefix_state = Some(at),
             "palw_fp_tokenizer_match" => params.palw_fp_tokenizer_match = Some(at),
@@ -782,6 +799,11 @@ mod tests {
             "palw_floor_reserve_v1" => params.palw_floor_reserve_v1 = Some(at),
             "palw_real_clock_tick_v1" => params.palw_real_clock_tick_v1 = Some(at),
             "palw_anchor_window_v1" => params.palw_anchor_window_v1 = Some(at),
+            // RFC-0009: a bare height (its prerequisites are `validate_palw_v2`'s, which the probe does not run).
+            "palw_receipt_spend_v4" => params.palw_receipt_spend_v4 = Some(at),
+            // RFC-0009 stage B: a bare height.
+            "palw_evidence_court_v1" => params.palw_evidence_court_v1 = Some(at),
+            "palw_audit_1004_v1" => params.palw_audit_1004_v1 = Some(at),
             // RFC-0004, likewise: the drill's value (the fence is in no network's release).
             "palw_improvement_v1" => params.palw_improvement_v1 = Some(crate::palw_improve_v1::PalwImprovementFenceV1::drill_v1(at)),
             // RFC-0003 decision 22: a bare height.

@@ -45,6 +45,11 @@ impl TransactionValidator {
         // singleton (see the field doc on `coinbase_settlement_long_maturity_daa`).
         dns_settlement: Option<&DnsCoinbaseSettlement>,
     ) -> TxResult<u64> {
+        self.check_dns_retirement(tx.tx(), pov_daa_score)?;
+        let without_dns_anchor = dns_settlement.map(|s| DnsCoinbaseSettlement { long_maturity_daa: s.long_maturity_daa, confirmed_anchor_daa: None });
+        let dns_settlement = if self.palw_dns_retirement.is_some_and(|r| r.activation.is_active(pov_daa_score)) {
+            without_dns_anchor.as_ref()
+        } else { dns_settlement };
         self.check_transaction_coinbase_maturity(tx, pov_daa_score, dns_settlement)?;
         let total_in = self.check_transaction_input_amounts(tx)?;
         let fee = self.check_output_values_and_compute_fee(tx, total_in)?;

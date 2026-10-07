@@ -16,6 +16,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The one line `misaka palw settlement` prints.
 pub(crate) fn settlement_line(r: &GetPalwSettlementResponse) -> String {
+    if let Some(native) = &r.native_settlement {
+        let head = |h: Option<kaspa_consensus_core::Hash64>| h.map(|h| h.to_string()).unwrap_or_else(|| "unavailable".into());
+        return format!("PALW native settlement: latest={} safe={} finalized={} depth={} work={} stop={:?}",
+            head(native.latest), head(native.safe), head(native.finalized), native.depth, native.unique_work, native.stop);
+    }
+    if let Some(fence) = r.dns_retired_at { return format!("DNS retired at DAA {fence}; native settlement snapshot unavailable"); }
     if !r.available {
         return format!(
             "settlement unavailable at DAA {}: the node keeps no PALW state, or cannot date its safe frontier",
@@ -46,7 +52,7 @@ pub(crate) fn settlement_exit(r: &GetPalwSettlementResponse, min_depth: Option<u
     }
     match min_depth {
         None => exit::SUCCESS,
-        Some(n) if r.settled && r.depth >= n => exit::SUCCESS,
+        Some(n) if r.settled && r.native_settlement.as_ref().map_or(r.depth, |s| s.depth) >= n => exit::SUCCESS,
         Some(_) => exit::TIMEOUT_PENDING,
     }
 }
@@ -66,7 +72,7 @@ pub(crate) async fn run(ctx: &Ctx, daa: u64, min_depth: Option<u64>) -> CliResul
     match ctx.output {
         OutputFormat::Json => {
             let mut doc = serde_json::to_value(&response).expect("a response serializes");
-            doc["schema"] = "misaka.palw.settlement.v1".into();
+            doc["schema"] = if response.dns_retired_at.is_some() { "misaka.palw.settlement.v2" } else { "misaka.palw.settlement.v1" }.into();
             doc["minDepth"] = min_depth.into();
             doc["reached"] = min_depth.map(|_| code == exit::SUCCESS).into();
             println!("{doc}");
@@ -89,6 +95,7 @@ pub(crate) async fn run(ctx: &Ctx, daa: u64, min_depth: Option<u64>) -> CliResul
 
 /// The settlement column `wallet utxo list` prints for one output.
 pub(crate) fn settlement_cell(r: &GetPalwSettlementResponse) -> String {
+    if r.dns_retired_at.is_some() && !r.settled { return "native unsettled / unavailable".into(); }
     if r.settled { format!("depth {}", depth_text(r)) } else { format!("unsettled ({} pending)", r.pending_anchors) }
 }
 
@@ -118,6 +125,7 @@ mod tests {
 
     fn answer(settled: bool, depth: u64, pending: u64, lower_bound: bool) -> GetPalwSettlementResponse {
         GetPalwSettlementResponse {
+            dns_retired_at: None, native_settlement: None,
             available: true,
             sink_daa: 5_000,
             daa_score: 4_000,

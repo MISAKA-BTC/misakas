@@ -5208,6 +5208,10 @@ impl Deserializer for GetPalwSettlementRequest {
 pub struct GetPalwSettlementResponse {
     /// The node keeps PALW V2 state and can date its safe frontier. When false, every field but
     /// `daa_score` and `sink_daa` is a default and says nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_retired_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_settlement: Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>,
     pub available: bool,
     /// The DAA score of the chain block the answer stands at.
     pub sink_daa: u64,
@@ -5227,7 +5231,7 @@ pub struct GetPalwSettlementResponse {
 
 impl Serializer for GetPalwSettlementResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &if self.dns_retired_at.is_some() || self.native_settlement.is_some() { 2 } else { 1 }, writer)?;
         store!(bool, &self.available, writer)?;
         store!(u64, &self.sink_daa, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -5237,13 +5241,19 @@ impl Serializer for GetPalwSettlementResponse {
         store!(bool, &self.depth_is_lower_bound, writer)?;
         store!(u64, &self.safe_frontier_blue_score, writer)?;
         store!(u64, &self.safe_frontier_daa, writer)?;
+        if self.dns_retired_at.is_some() || self.native_settlement.is_some() {
+            store!(Option<u64>, &self.dns_retired_at, writer)?;
+            let json = self.native_settlement.as_ref().map(serde_json::to_string).transpose().map_err(std::io::Error::other)?;
+            store!(Option<String>, &json, writer)?;
+        }
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwSettlementResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
+        if version != 1 && version != 2 { return Err(std::io::Error::other("unknown PALW settlement response version")); }
         Ok(Self {
             available: load!(bool, reader)?,
             sink_daa: load!(u64, reader)?,
@@ -5254,6 +5264,10 @@ impl Deserializer for GetPalwSettlementResponse {
             depth_is_lower_bound: load!(bool, reader)?,
             safe_frontier_blue_score: load!(u64, reader)?,
             safe_frontier_daa: load!(u64, reader)?,
+            dns_retired_at: if version == 2 { load!(Option<u64>, reader)? } else { None },
+            native_settlement: if version == 2 {
+                load!(Option<String>, reader)?.map(|s| serde_json::from_str(&s)).transpose().map_err(std::io::Error::other)?
+            } else { None },
         })
     }
 }
@@ -5326,6 +5340,9 @@ pub struct GetPrecommitDutyResponse {
     /// False when the node has no duty view for this validator (no overlay, or the read is not
     /// implemented on this node); every other field is then a default. A malformed id or outpoint
     /// is a request error.
+    /// RFC-0012 retirement is distinct from a dormant or temporarily unavailable duty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_at: Option<u64>,
     pub available: bool,
     /// The precommit round is live at the sink.
     pub round_active: bool,
@@ -5340,20 +5357,22 @@ pub struct GetPrecommitDutyResponse {
 
 impl Serializer for GetPrecommitDutyResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &if self.retired_at.is_some() { 2 } else { 1 }, writer)?;
         store!(bool, &self.available, writer)?;
         store!(bool, &self.round_active, writer)?;
         store!(u64, &self.sink_daa_score, writer)?;
         store!(u64, &self.held_epoch, writer)?;
         store!(String, &self.held_anchor, writer)?;
         serialize!(Vec<RpcPrecommitDue>, &self.due, writer)?;
+        if self.retired_at.is_some() { store!(Option<u64>, &self.retired_at, writer)?; }
         Ok(())
     }
 }
 
 impl Deserializer for GetPrecommitDutyResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
+        if version != 1 && version != 2 { return Err(std::io::Error::other("unknown precommit duty response version")); }
         Ok(Self {
             available: load!(bool, reader)?,
             round_active: load!(bool, reader)?,
@@ -5361,6 +5380,7 @@ impl Deserializer for GetPrecommitDutyResponse {
             held_epoch: load!(u64, reader)?,
             held_anchor: load!(String, reader)?,
             due: deserialize!(Vec<RpcPrecommitDue>, reader)?,
+            retired_at: if version == 2 { load!(Option<u64>, reader)? } else { None },
         })
     }
 }

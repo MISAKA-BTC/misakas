@@ -866,6 +866,10 @@ pub(super) fn apply_improvement_policy_set_v1(
     if let Some(policy) = &payload.policy {
         palw_improvement_policy_check_v1(policy, &ceilings, builder.params.improve_lifecycle_at(ctx.daa_score))
             .map_err(policy_refused)?;
+        // **Lane PA, RF-3 / RF-4 (`palw_audit_1004_v1`)**: the beacon must follow the pool's close, and no fee is free.
+        if builder.params.audit_1004_active_at(ctx.daa_score) {
+            crate::palw_improve_policy_v1::palw_improvement_policy_audit_1004_check_v1(policy).map_err(policy_refused)?;
+        }
         if policy.eval.judge_set.iter().any(|judge| !builder.state.tir_classes.contains_key(judge)) {
             return Err(policy_refused("a judge is not an admitted IR class"));
         }
@@ -1425,7 +1429,14 @@ fn draw_epoch_v1(
     policy: &PalwImprovementPolicyV1,
 ) -> Result<bool, PalwStateV2Error> {
     let (line_id, epoch) = (line.line_id, header.epoch);
-    let seed = palw_improve_epoch_seed_v1(&ctx.block, &line_id, epoch);
+    // **Lane PA, RF-3 (`palw_audit_1004_v1`)**: past the fence the seed reads the beacon — a selected-chain block below the drawing
+    // block's selected parent, later than the pool's close under the fenced `beacon_delay` floor — not the drawing block's own hash,
+    // which its producer can grind after the pool has closed.
+    let seed_block = match builder.extras.audit_1004_draw_seed_source.filter(|_| builder.params.audit_1004_active_at(ctx.daa_score)) {
+        Some(beacon) => beacon,
+        None => ctx.block,
+    };
+    let seed = palw_improve_epoch_seed_v1(&seed_block, &line_id, epoch);
     let mut entries = Vec::new();
     let mut sources = Vec::new();
     for entry in builder.state.improvement_pool_entries(&line_id, epoch) {
@@ -1442,7 +1453,23 @@ fn draw_epoch_v1(
             }
         }
     }
-    let drawn = palw_improve_draw_v1(&seed, &entries, policy.eval.n, policy.eval.setter_cap_permille);
+    // **Lane PA, RF-2 (`palw_audit_1004_v1`)**: past the fence the draw excludes the candidates' own submitters' entries and needs
+    // `PALW_AUDIT_1004_MIN_SUPPLIERS_V1` independent suppliers; a draw that does not is a short one (`TooFewItems` below).
+    let drawn = if builder.params.audit_1004_active_at(ctx.daa_score) {
+        let submitters: Vec<PalwBondKeyV2> =
+            builder.state.improvement_candidates(&line_id, epoch).into_iter().map(|(_, row)| row.submitter).collect();
+        palw_improve_draw_independent_v1(
+            &seed,
+            &entries,
+            policy.eval.n,
+            policy.eval.setter_cap_permille,
+            &submitters,
+            crate::palw_audit_1004_v1::PALW_AUDIT_1004_MIN_SUPPLIERS_V1,
+        )
+        .unwrap_or_default()
+    } else {
+        palw_improve_draw_v1(&seed, &entries, policy.eval.n, policy.eval.setter_cap_permille)
+    };
     if (drawn.len() as u32) < policy.eval.n_min {
         header.seed = Some(seed);
         builder.write_improvement_epoch((line_id, epoch), Some(header));
@@ -1617,6 +1644,14 @@ fn decide_epoch_v1(
     let line_id = line.line_id;
     let policy = builder.improvement_policy_of_v1(&line_id)?;
     let mut header = builder.improvement_epoch_of_v1(&line_id, epoch)?;
+    // **Lane MU (ADR-0173, past `palw_audit_1004_v1`): a head moves only to a class that is Active AND seated** — the old head
+    // stays live until then (the epoch is decided as no change).
+    let outcome = match outcome {
+        PalwPromotionOutcomeV1::Promoted { class_id, .. } if !builder.read().class_ready_for_head_v1(&class_id, daa) => {
+            PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::HeadNotReady }
+        }
+        other => other,
+    };
     let aborted = matches!(outcome, PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::Aborted });
     let winner = match outcome {
         PalwPromotionOutcomeV1::Promoted { class_id, .. } => Some(class_id),

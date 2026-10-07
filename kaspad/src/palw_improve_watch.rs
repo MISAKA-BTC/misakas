@@ -453,6 +453,7 @@ mod tests {
             final_work_share_100_permille: 0,
             class_id: h(id),
             artifact_root: h(0),
+            roots_in_force: Vec::new(),
             is_base_class: base,
             row: state.map(|state| PalwModelLifecycleRowV1 {
                 state,

@@ -120,6 +120,15 @@ new8 8 9 liar 0 1 jit
 reg 9 - reg 0 0 jit
 old 10 - old 0 0"
 
+# OUTSIDER=1 (the combined drill of the DAA-5,300 candidate): one more seat, an OUTSIDER — a post-genesis bond (bond 14, registered FIRST by the driver from DAA
+# XB_FROM_DAA) on its own node new9, started by the driver once its bond is registered and never stopped: the panels then seat an operator that is not
+# a genesis one. Ten processes would be too many for this Mac, so the driver also stops the old relay as soon as D-M5's crossing is done.
+if [ "${OUTSIDER:-0}" = 1 ]; then NODES="$NODES
+new9 11 14 outsider 0 1 jit
+extfloor 12 15 extfloor 0 0 jit
+joiner 13 - joiner 0 0 jit"; fi
+# RIDERS=N: --palw-riders=N on every producing node (ADR-0164 F-M1: N further jobs of the producer's own bond per lead attempt).
+
 # NO_OLD=1: no old relay (D-M5 is then not run). The just-in-time nodes (liars, registrar) never run in the steady state: seven nodes + the relay.
 [ "${NO_OLD:-0}" = 1 ] && NODES=$(echo "$NODES" | grep -v '^old ')
 
@@ -160,6 +169,7 @@ tir|--palw-drill-tir-at|$TIR_AT
 tir2|--palw-drill-tir2-at|$TIR2_AT
 int11|--palw-drill-int11-at|$INT11_AT
 EOF
+        [ -n "${USEFUL_WORK_AT:-}" ] && echo "useful_work|--palw-drill-useful-work-at|$USEFUL_WORK_AT"
         return 0
     fi
     cat <<EOF
@@ -204,7 +214,7 @@ node_args() {
     d=$WORK_DIR/$n
     local a=(--testnet --netsuffix=12 "--palw-drill-genesis-salt=$(salt)" "--appdir=$d/app" --yes
              --nodnsseed --disable-upnp
-             "--listen=127.0.0.1:$((P2P_BASE + k))" "--rpclisten-borsh=127.0.0.1:$((BORSH_BASE + k))"
+             "--listen=127.0.0.1:$((P2P_BASE + k + $([ "${ISOLATE_NODE:-}" = "$n" ] && echo "${ISO_PORT_SHIFT:-800}" || echo 0)))" "--rpclisten-borsh=127.0.0.1:$((BORSH_BASE + k))"
              "--rpclisten-json=127.0.0.1:$((JSON_BASE + k))" "--evm-rpc-listen=127.0.0.1:$((EVM_BASE + k))"
              --utxoindex --unsaferpc --nogrpc)
     local bin=$KASPAD_BIN
@@ -220,6 +230,9 @@ node_args() {
         return
     fi
     a+=("--ram-scale=$RAM_SCALE" "--palw-host-memory-share=$(( $(cat "$d/share-mib" 2>/dev/null || echo "$SHARE_MIB") * 1048576 ))")
+    # INT12=1 (the combined drill): p2p flow_context and the heartbeat relay at DEBUG, so H2's 'kept, not announced' line (a second beat for a slot is validated but not announced: a 1-slot sink split)
+    # is captured directly. Few debug lines in those modules; LOGLEVEL overrides.
+    [ "${INT12:-0}" = 1 ] && a+=("--loglevel=${LOGLEVEL:-info,kaspa_p2p_flows::flow_context=debug,kaspa_p2p_flows::palw_heartbeat_relay=debug}")
     if [ "$seat" != - ] && [ "$seat" -lt 8 ]; then
         a+=("--palw-producer-key=$KR/bond-$seat.seed"
             "--palw-producer-bond=$(manifest "m['seats'][$seat]['bond_outpoint']")"
@@ -243,18 +256,44 @@ node_args() {
         a+=("--palw-improve-artifact-dir=$MODEL_DIR/drop")
         # Lane D's RFC-0003 Plan B classes (toy-image, toy-embed, wide-embed; `gen_drill_classes --ignored` writes them to $GEN_DIR): every IR holder loads all of
         # them from the start, the wide class included, as it loads the head before the head is registered (a class the chain does not list yet is not an error).
-        local g; for g in "$GEN_DIR"/*.class.palwtir2; do [ -s "$g" ] && a+=("--palw-class-artifact=$g"); done
+        # GEN_PARTIAL_CLASS=<name>: that gen class is held only by GEN_PARTIAL_HOLDERS (fewer than five: the readiness gate, DG-2's GenClassNotReady); dg2 starts the
+        # others with the class once it has seen the refusal.
+        local g; for g in "$GEN_DIR"/*.class.palwtir2; do
+            if [ -n "${GEN_PARTIAL_CLASS:-}" ] && [ "$(basename "$g")" = "$GEN_PARTIAL_CLASS.class.palwtir2" ] && ! grep -qw "$n" <<<"${GEN_PARTIAL_HOLDERS:-}"; then continue; fi
+            [ -s "$g" ] && a+=("--palw-class-artifact=$g")
+        done
     fi
+    local rid=(); [ "${RIDERS:-0}" -gt 0 ] && rid=("--palw-riders=$RIDERS")
     case $role in
-        floor) a+=(--palw-produce) ;;
-        head) a+=(--palw-produce "--palw-register-class=$HEAD_MODEL_ID" "--palw-producer-class=$(model_id head)") ;;
+        floor) a+=(--palw-produce)
+               # ANCHOR_DUTY_AFTER_SLOTS=N (RS's --palw-drill-anchor-duty-after-slots; the release's value is 30): how long a claim waits for an operator attempt, with the floor held as the idle-only
+               # fallback, before this OPERATOR floor producer fires its anchor-duty binder (one floor the fold refuses); added only where the binary lists the flag
+               if [ -n "${ANCHOR_DUTY_AFTER_SLOTS:-}" ] && grep -q -- "--palw-drill-anchor-duty-after-slots" <<<"$(bin_help "$bin")"; then a+=("--palw-drill-anchor-duty-after-slots=$ANCHOR_DUTY_AFTER_SLOTS"); fi ;;
+        # OUTSIDER_PRODUCE=1: the outsider (a NON-operator bond) also makes REAL attempts of class win, riders on (G-A3 splits bind waits by operator / non-operator bond)
+        outsider) if [ "${OUTSIDER_PRODUCE:-0}" = 1 ]; then a+=(--palw-produce "${rid[@]}" "--palw-producer-class=$(model_id win)"); fi ;;
+        # extfloor (OUTSIDER=1): the EXTERNAL floor producer of the combined drill (post-genesis bond 15): a floor producer that does not honour the idle rule where the build has
+        # a drill flag for that (EXT_FLOOR_FLAG, else the first `--palw-drill-*floor*` flag the binary lists besides the fence movers), so its blocks must be REJECTED in
+        # Normal / Probe by the honest nodes' header rule. Without such a flag it is an ordinary floor producer (the gate then reports it could not test rejection).
+        extfloor) a+=(--palw-produce)
+                  local ef=${EXT_FLOOR_FLAG:-$(bin_help "$bin" | grep -oE -- '--palw-drill-[a-z0-9-]*floor[a-z0-9-]*' | grep -vE -- '-at$|reserve' | head -1)}
+                  [ -n "$ef" ] && grep -q -- "$ef" <<<"$(bin_help "$bin")" && a+=("$ef") ;;
+        # HEAD_PRODUCE=0: new4 is a SEAT only (it still registers the class, and holds every artifact): the combined drill's first leg lets only the delayed producer
+        # (new6) make REAL attempts, all of them stale; new4 produces from leg B on.
+        head) if [ "${HEAD_PRODUCE:-1}" = 0 ]; then a+=("--palw-register-class=$HEAD_MODEL_ID")
+              else a+=(--palw-produce "${rid[@]}" "--palw-register-class=$HEAD_MODEL_ID" "--palw-producer-class=$(model_id head)"); fi ;;
         eval|liar) a+=(--palw-improve-evaluate) ;;
         # evalw produces the FULL-WEIGHT winner's claims: the usage of line R once `win` heads it (D-M4's second epoch). W1's composite winner
         # has no second epoch any more, so nothing produces winc.
-        evalw) a+=(--palw-improve-evaluate --palw-produce "--palw-producer-class=$(model_id win)") ;;
+        evalw) a+=(--palw-improve-evaluate --palw-produce "${rid[@]}" "--palw-producer-class=$(model_id win)")
+               # REAL_SUBMIT_DELAY_S=N (lane RS's --palw-drill-real-submit-delay-s): this ONE REAL producer holds each attempt N s before it submits it, the
+               # way an 8k model infers (the live failure: fast floor attempts fill its anticone meanwhile and it turns RED). new4 stays fast. A binary
+               # without the flag runs without it and `dc.sh dry` says so.
+               if [ -n "${REAL_SUBMIT_DELAY_S:-}" ] && grep -q -- "--palw-drill-real-submit-delay-s" <<<"$(bin_help "$bin")"; then
+                   a+=("--palw-drill-real-submit-delay-s=$REAL_SUBMIT_DELAY_S"); fi ;;
     esac
     [ "$hb" = 1 ] && a+=("--palw-heartbeat-miner-address=$(manifest "m['heartbeat'][$k]['address']")" --enable-unsynced-mining)
-    local m; for m in $(peer_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done
+    # ISOLATE_NODE=<n>: that node is partitioned — it listens on a shifted P2P port (nobody dials the old one) and dials nobody (FORK-c: a reorg across the fence)
+    local m; if [ "${ISOLATE_NODE:-}" != "$n" ]; then for m in $(peer_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done; fi
     # Per-node additions (a tamper flag, a challenger), one per line.
     local extra="$d/extra-args"; if [ -s "$extra" ]; then while read -r x; do [ -n "$x" ] && a+=("$x"); done < "$extra"; fi
     printf '%s\n' "${a[@]}" "$@"
@@ -268,6 +307,6 @@ tip() { python3 "$A/rpc.py" call --port "$(jport "${1:-new0}")" getBlockDagInfo 
 # The environment the Python driver reads (everything it needs to find a node, a key, a tool or a model file).
 export_env() {
     export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TOOLS_BIN VENV_PY KR UHOME MODEL_DIR VERDICT_DIR CAND_FORM NODES
-    export INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
+    export LOGLEVEL INT12 USEFUL_WORK_AT ANCHOR_DUTY_AFTER_SLOTS OUTSIDER_PRODUCE HEAD_PRODUCE ISOLATE_NODE ISO_PORT_SHIFT EXT_FLOOR_FLAG REAL_SUBMIT_DELAY_S GEN_PARTIAL_CLASS GEN_PARTIAL_HOLDERS OUTSIDER RIDERS INT12 INT11 INT11_AT XB_FROM_DAA FENCE_AT FENCE2_AT FENCE3_AT TIR_AT TIR2_AT GEN_AT DECODE_AT IMPROVE_AT MODEL_COURT_AT FPV5_AT HELD_AT SEAT_AT CAP2_AT CAP3_AT LATE_AT GEN_DIR
     export P2P_BASE BORSH_BASE JSON_BASE EVM_BASE GRPC_BASE
 }

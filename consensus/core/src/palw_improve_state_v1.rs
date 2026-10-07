@@ -640,6 +640,8 @@ pub enum PalwNoChangeReasonV1 {
     Aborted = 4,
     /// The pool could not cover the parent's evaluation escrow.
     PoolInsufficient = 5,
+    /// **Lane MU (ADR-0173, past `palw_audit_1004_v1`): the winner is not yet `Active` and seated** — the head stays where it was.
+    HeadNotReady = 6,
 }
 
 /// **The epoch's decision** (spec 17 §17.9.5).

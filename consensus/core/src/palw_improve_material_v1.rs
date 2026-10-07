@@ -320,6 +320,15 @@ pub fn palw_dataset_id_v1(d: &PalwDatasetV1) -> Hash64 {
     )
 }
 
+/// **Lane PA, RF-1 (`palw_audit_1004_v1`): a dataset's id past the fence** — [`palw_dataset_id_v1`]'s id bound to its registrant's bond.
+pub fn palw_dataset_id_bound_v1(d: &PalwDatasetV1, registrant: &crate::palw_state_v2::PalwBondKeyV2) -> Hash64 {
+    let plain = palw_dataset_id_v1(d);
+    keyed(
+        PALW_IMPROVE_DATASET_DOMAIN_V1,
+        &[b"bound/v1", plain.as_byte_slice(), registrant.0.transaction_id.as_byte_slice(), &registrant.0.index.to_le_bytes()],
+    )
+}
+
 /// **A teaching artifact's commitment** — `H(artifact ‖ salt)` over the revealed payload whole (its
 /// salt inside it); also the artifact's id (a hard case's `Artifact { artifact_id }`).
 pub fn palw_teaching_artifact_commit_v1(a: &PalwTeachingArtifactV1) -> Hash64 {
@@ -476,6 +485,24 @@ pub fn palw_teacher_classes_defined_v1() -> u8 {
 /// licence classes, sorted and distinct, teacher classes defined and at least one, its id derived.
 /// Whether the policy allows its classes is the fold's.
 pub fn palw_dataset_form_v1(d: &PalwDatasetV1) -> PalwMaterialFormV1 {
+    palw_dataset_shape_v1(d)?;
+    if d.dataset_id != palw_dataset_id_v1(d) {
+        return Err("a dataset's id is not its derived id");
+    }
+    Ok(())
+}
+
+/// [`palw_dataset_form_v1`] past `palw_audit_1004_v1` (RF-1): the id is [`palw_dataset_id_bound_v1`] — the registrant's.
+pub fn palw_dataset_form_bound_v1(d: &PalwDatasetV1, registrant: &crate::palw_state_v2::PalwBondKeyV2) -> PalwMaterialFormV1 {
+    palw_dataset_shape_v1(d)?;
+    if d.dataset_id != palw_dataset_id_bound_v1(d, registrant) {
+        return Err("a dataset's id is not its derived id bound to its registrant");
+    }
+    Ok(())
+}
+
+/// The form of a dataset but for its id.
+fn palw_dataset_shape_v1(d: &PalwDatasetV1) -> PalwMaterialFormV1 {
     if d.items == 0 {
         return Err("a dataset of no items");
     }
@@ -487,9 +514,6 @@ pub fn palw_dataset_form_v1(d: &PalwDatasetV1) -> PalwMaterialFormV1 {
     }
     if d.teacher_classes == 0 || d.teacher_classes & !palw_teacher_classes_defined_v1() != 0 {
         return Err("a dataset's teacher classes are none, or not the protocol's");
-    }
-    if d.dataset_id != palw_dataset_id_v1(d) {
-        return Err("a dataset's id is not its derived id");
     }
     Ok(())
 }

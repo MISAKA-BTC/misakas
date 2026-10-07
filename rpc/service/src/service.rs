@@ -2032,19 +2032,32 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     ) -> RpcResult<GetPalwSettlementResponse> {
         // ADR-0127 Decision 3: one read of the sink's PALW state. Unavailable is not unsettled — a
         // node with no V2 state, or one that cannot date its frontier, says so.
-        let session = self.consensus_manager.consensus().unguarded_session();
+        let session = self.consensus_manager.consensus().session().await;
+        let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
+        let dns_retired_at = self.config.params.palw_dns_retirement.filter(|r| r.activation.is_active(sink_daa)).map(|r| r.activation.daa_score());
+        let native_settlement = session.async_get_native_settlement_snapshot().await.map_err(|e| RpcError::General(e.to_string()))?;
+        // DAA alone cannot identify the last effect within an equal-DAA group. Only a strictly
+        // older DAA is certified through this compatibility API; exact heads are in native_settlement.
+        let native_settled = if dns_retired_at.is_some() {
+            match native_settlement.as_ref().and_then(|s| s.safe) {
+                Some(safe) => session.async_get_header(safe).await.ok().is_some_and(|h| h.daa_score > request.daa_score),
+                None => false,
+            }
+        } else { false };
         let Some(settlement) = session.async_palw_settlement_v1(request.daa_score).await else {
             let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
-            return Ok(GetPalwSettlementResponse { sink_daa, daa_score: request.daa_score, ..Default::default() });
+            return Ok(GetPalwSettlementResponse { available: native_settlement.is_some(), settled: native_settled, depth: native_settlement.as_ref().map_or(0, |s| s.depth), sink_daa, daa_score: request.daa_score, dns_retired_at, native_settlement, ..Default::default() });
         };
+        let depth = if dns_retired_at.is_some() { native_settlement.as_ref().map_or(0, |s| s.depth) } else { settlement.depth };
         Ok(GetPalwSettlementResponse {
+            dns_retired_at, native_settlement,
             available: true,
             sink_daa: settlement.sink_daa,
             daa_score: request.daa_score,
-            settled: settlement.settled,
-            depth: settlement.depth,
+            settled: if dns_retired_at.is_some() { native_settled } else { settlement.settled },
+            depth,
             pending_anchors: settlement.pending,
-            depth_is_lower_bound: settlement.depth_is_lower_bound,
+            depth_is_lower_bound: dns_retired_at.is_some() || settlement.depth_is_lower_bound,
             safe_frontier_blue_score: settlement.safe_frontier_blue_score,
             safe_frontier_daa: settlement.safe_frontier_daa,
         })
@@ -2066,6 +2079,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let session = self.consensus_manager.consensus().unguarded_session();
         Ok(match session.async_get_precommit_duty(validator_id, bond_outpoint).await {
             Some(duty) => GetPrecommitDutyResponse {
+                retired_at: self.config.params.palw_dns_retirement.filter(|r| r.activation.is_active(duty.sink_daa_score)).map(|r| r.activation.daa_score()),
                 available: true,
                 round_active: duty.round_active,
                 sink_daa_score: duty.sink_daa_score,
@@ -3707,7 +3721,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         // ADR-0109 Decision 2: under `Label` (the default) a stale anchor refuses nothing here — the
         // claim waits in the queue like any other; under `Pause` the pre-ADR refusal stands.
-        if !bridge_finality_fresh
+        if !self.config.params.palw_dns_retired_at(sink_daa)
+            && !bridge_finality_fresh
             && self.config.evm_bridge_finality_effective() == kaspa_consensus_core::evm::EvmBridgeFinalityPolicy::Pause
         {
             return Err(RpcError::RpcSubsystem(format!(
@@ -3767,6 +3782,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         _: GetValidatorStatusRequest,
     ) -> RpcResult<GetValidatorStatusResponse> {
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
+        if let Some(retirement) = self.config.params.palw_dns_retirement.filter(|r| r.activation.is_active(daa)) {
+            return Ok(GetValidatorStatusResponse { enabled: false, mode: "retired".into(),
+                status_label: format!("Retired at DAA {} by palw_dns_retirement_v1; PALW remains active", retirement.activation.daa_score()),
+                ..Default::default() });
+        }
         // kaspa-pq Phase 11 (ADR-0010): delegate to the in-process validator service when
         // present (`--enable-validator`); `enabled: false` otherwise.
         Ok(match &self.validator_status_provider {

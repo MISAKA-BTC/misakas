@@ -45,6 +45,7 @@ paste.workspace = true
 rand.workspace = true
 serde-wasm-bindgen.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
@@ -53,8 +54,6 @@ workflow-core.workspace = true
 workflow-serializer.workspace = true
 workflow-wasm.workspace = true
 
-[dev-dependencies]
-serde_json.workspace = true
 
 [lints]
 workspace = true

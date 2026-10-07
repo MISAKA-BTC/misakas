@@ -209,6 +209,29 @@ impl RequestPruningPointPalwStateFlow {
                 },
                 None => PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![] },
             };
+            // **Lane PA, B-F2: the serving side holds the requester's own cap.** A carriage the requester would refuse after the whole
+            // transfer is answered `found: false` instead (the same answer an unprepared peer gives, so the requester tries another
+            // peer at once), and a state over half the cap is logged where an operator reads it, long before it matters.
+            let reply = {
+                let bytes = reply.palw_state.len() + reply.class_carriages.iter().map(|e| e.carriage.len()).sum::<usize>();
+                if bytes > crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES {
+                    kaspa_core::warn!(
+                        "[palw-sidecar] the PALW state for {pp} is {bytes} bytes, over the {} byte transport cap (PALW_PRUNING_STATE_MAX_BYTES): \
+                         answering not-found; pruned IBD needs the chunked transport (docs/design/palw/pruned-ibd-palw-state-chunked-transport.md)",
+                        crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES
+                    );
+                    PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![] }
+                } else {
+                    if bytes > crate::palw_gossip::PALW_PRUNING_STATE_WARN_BYTES {
+                        kaspa_core::warn!(
+                            "[palw-sidecar] the PALW state for {pp} is {bytes} bytes: past half of the {} byte single-message cap — the chunked \
+                             transport is due (docs/design/palw/pruned-ibd-palw-state-chunked-transport.md)",
+                            crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES
+                        );
+                    }
+                    reply
+                }
+            };
             let served = (reply.palw_state.len() + reply.class_carriages.iter().map(|e| e.carriage.len()).sum::<usize>()) as u64;
             self.ctx.palw_gossip().charge_sidecar_serve(peer, served);
             self.router.enqueue(make_message!(Payload::PruningPointPalwState, reply)).await?;

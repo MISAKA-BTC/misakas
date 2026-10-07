@@ -1,0 +1,23 @@
+[package]
+name = "misaka-palw-remote"
+description = "RFC-0009: the client half of a PALW miner that runs no kaspad — a multi-node chain view with a pinned checkpoint, idempotent relay of a locally signed carrier or block, the attempt-template digest, claim tracking that survives a reorg, and (stage B) the evidence manifest with any-provider fetch. Pure: no RPC, no runtime; the binaries adapt their own nodes to its traits."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+kaspa-txscript.workspace = true
+blake2b_simd.workspace = true
+borsh.workspace = true
+libcrux-ml-dsa.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -873,8 +873,16 @@ pub fn check_palw_commitment_shape_at(
     }
     // The cap is checked first so an oversized payload reports the cap it broke rather than the
     // binding rule — the two errors mean different things to an operator.
-    if palw_commitment.len() > PALW_COMMITMENT_MAX_BYTES {
-        return Err(PowLayer0Error::PalwCommitmentTooLong { got: palw_commitment.len(), cap: PALW_COMMITMENT_MAX_BYTES });
+    // RFC-0009: a `PFS4` receipt carriage (two signatures and two keys) has its own, larger cap. Every other carriage — including a `PFS3`
+    // receipt — keeps the 8,192-byte one, so the set of acceptable payloads below `palw_receipt_spend_v4` is unchanged (a `PFS4` header is
+    // refused by name at the header stage until the fence opens).
+    let cap = if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 && crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment) {
+        crate::palw_receipt_v4::PALW_COMMITMENT_MAX_BYTES_V4
+    } else {
+        PALW_COMMITMENT_MAX_BYTES
+    };
+    if palw_commitment.len() > cap {
+        return Err(PowLayer0Error::PalwCommitmentTooLong { got: palw_commitment.len(), cap });
     }
     // The V2-lineage lanes carry their OWN objects under their own magics, and they carry them
     // ALWAYS — not behind the V1 fence (ADR-0042 Decision 1 removed that machine, and ADR-0044
@@ -900,6 +908,12 @@ pub fn check_palw_commitment_shape_at(
             .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
     }
     if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 {
+        // RFC-0009: the magic says which receipt carriage this is; both are the receipt lane's, and a payload of neither is malformed.
+        if crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment) {
+            return crate::palw_receipt_v4::PalwReceiptSpendEnvelopeV4::decode(palw_commitment)
+                .map(|_| ())
+                .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
+        }
         return crate::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(palw_commitment)
             .map(|_| ())
             .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });

@@ -1152,16 +1152,16 @@ async fn t12_a_skipped_own_attempt_has_its_carve_withheld_from_the_child_coinbas
     assert!(skipped_state.claim(&claim_id).is_none(), "the state a skip leaves holds no claim for the attempt");
 
     assert_eq!(
-        vp.palw_v2_escrow_withheld_at(&admitted_state, attempt_hash),
+        vp.palw_v2_escrow_withheld_at(&admitted_state, attempt_hash, attempt_block.header.daa_score),
         claim.escrowed_reward,
         "an admitted attempt is withheld from its claim's record, once"
     );
     assert_eq!(
-        vp.palw_v2_escrow_withheld_at(&skipped_state, attempt_hash),
+        vp.palw_v2_escrow_withheld_at(&skipped_state, attempt_hash, attempt_block.header.daa_score),
         claim.escrowed_reward,
         "a skipped attempt is withheld the carve its claim would have escrowed, and it is never released"
     );
-    assert_eq!(vp.palw_v2_escrow_withheld_at(&skipped_state, beat.header.hash), 0, "a heartbeat carries no attempt");
+    assert_eq!(vp.palw_v2_escrow_withheld_at(&skipped_state, beat.header.hash, beat.header.daa_score), 0, "a heartbeat carries no attempt");
 
     // And the child's coinbase, built by the node's own template path against the admitted state,
     // pays the attempt block's worker base less exactly that escrow — the figure the skipped state

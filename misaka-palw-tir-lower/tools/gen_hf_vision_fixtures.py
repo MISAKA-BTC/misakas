@@ -116,6 +116,10 @@ CONFIGS = {
                      std=CLIP_STD, layout="qwen2vl"),
     "qwen2_5_vl": dict(cfg=("Qwen2_5_VLConfig", None), model="Qwen2_5_VLForConditionalGeneration", size=(56, 56),
                        mean=CLIP_MEAN, std=CLIP_STD, layout="qwen2vl"),
+    # Qwen3.5: the tower with its learned position table resampled to the grid, the hybrid (Gated DeltaNet + attention)
+    # language model with interleaved M-RoPE.
+    "qwen3_5": dict(cfg=("Qwen3_5Config", None), model="Qwen3_5ForConditionalGeneration", size=(48, 48), mean=HALF,
+                    std=HALF, layout="qwen2vl"),
 }
 NEW_TOKENS = 8
 
@@ -131,6 +135,19 @@ def build_config(name, spec):
         cfg = getattr(transformers, cls)(text_config=text, vision_config=vis, image_token_id=63, vision_start_token_id=62,
                                          vision_end_token_id=61, video_token_id=60, tie_word_embeddings=False)
         return cfg
+    if name == "qwen3_5":
+        text = dict(vocab_size=V, hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=4,
+                    num_key_value_heads=2, head_dim=16, max_position_embeddings=128, rms_norm_eps=1e-6,
+                    tie_word_embeddings=False, layer_types=["linear_attention", "full_attention"],
+                    linear_num_key_heads=2, linear_num_value_heads=4, linear_key_head_dim=8, linear_value_head_dim=8,
+                    linear_conv_kernel_dim=4, partial_rotary_factor=0.5,
+                    rope_parameters={"rope_type": "default", "rope_theta": 10000.0, "partial_rotary_factor": 0.5,
+                                     "mrope_section": [2, 1, 1], "mrope_interleaved": True})
+        vis = dict(depth=2, hidden_size=32, hidden_act="gelu_pytorch_tanh", intermediate_size=64, num_heads=4,
+                   in_channels=3, patch_size=8, spatial_merge_size=2, temporal_patch_size=2, out_hidden_size=32,
+                   num_position_embeddings=36)
+        return transformers.Qwen3_5Config(text_config=text, vision_config=vis, image_token_id=63, vision_start_token_id=62,
+                                          vision_end_token_id=61, video_token_id=60, tie_word_embeddings=False)
     if name == "llava":
         vis = transformers.CLIPVisionConfig(**TINY_CLIP)
         txt = transformers.LlamaConfig(vocab_size=V, hidden_size=32, intermediate_size=64, num_hidden_layers=2,
@@ -221,7 +238,7 @@ def make(name):
         hidden = cfg.embed_dim
     if name.startswith("resnet"):
         hidden = 72  # about a 3x3 convolution's fan-in over 8 channels: the weights' scale keeps activations O(1)
-    if name in ("qwen2_vl", "qwen2_5_vl"):
+    if name in ("qwen2_vl", "qwen2_5_vl", "qwen3_5"):
         hidden = cfg.text_config.hidden_size
     if name.startswith(("convnext", "mobilenet")):
         randomise_cnn(model, seed, grid=name.endswith("_grid"))
@@ -239,7 +256,7 @@ def make(name):
     with torch.no_grad():
         for _ in range(2):
             img = rng.integers(0, 256, size=(h, w, 3), dtype=np.uint8)
-            vcfg = cfg.vision_config if name in ("llava", "qwen2_vl", "qwen2_5_vl") else cfg
+            vcfg = cfg.vision_config if name in ("llava", "qwen2_vl", "qwen2_5_vl", "qwen3_5") else cfg
             pv, grid = pixel_values(img, spec, vcfg)
             out = {}
             if name == "clip_vision":
@@ -259,14 +276,16 @@ def make(name):
             elif name in ("qwen2_vl_vision", "qwen2_5_vl_vision"):
                 o = fresh(pv, grid_thw=grid)
                 out = {"merged": o.pooler_output.tolist(), "last_hidden_state": o.last_hidden_state.tolist()}
-            elif name in ("qwen2_vl", "qwen2_5_vl"):
+            elif name in ("qwen2_vl", "qwen2_5_vl", "qwen3_5"):
                 vc = cfg.vision_config
                 n_img = (grid[0, 1] * grid[0, 2] // (vc.spatial_merge_size ** 2)).item()
                 ids = [5, 62] + [63] * n_img + [61, 7, 9]
                 t = torch.tensor([ids])
                 mm = (t == 63).int()
+                # The special ids (image, vision start/end, video) are never generated: a stream holds the prompt's image rows only.
                 gen = fresh.generate(input_ids=t, pixel_values=pv, image_grid_thw=grid, mm_token_type_ids=mm,
-                                     max_new_tokens=NEW_TOKENS, do_sample=False)[0, len(ids):].tolist()
+                                     max_new_tokens=NEW_TOKENS, do_sample=False,
+                                     bad_words_ids=[[60], [61], [62], [63]] if name == "qwen3_5" else None)[0, len(ids):].tolist()
                 stream = torch.tensor([ids + gen[:-1]])
                 # The processor's mm_token_type_ids: 1 on the prompt's image rows only.
                 smm = torch.zeros_like(stream, dtype=torch.int32)

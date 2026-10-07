@@ -177,6 +177,7 @@ async fn status(ctx: &Ctx, args: StatusArgs, named_network: Option<&str>) -> Cli
         None => None,
     };
     let dns_read = client.get_dns_confirmation().await;
+    let retirement = client.get_palw_settlement(0).await.ok().and_then(|r| r.dns_retired_at);
     let attesting = args.stake_bond.as_deref().and_then(attesting_here);
     // The chain's own liveness gauge: the ready epochs still waiting for this bond's attestation.
     let owed = match &args.stake_bond {
@@ -193,6 +194,8 @@ async fn status(ctx: &Ctx, args: StatusArgs, named_network: Option<&str>) -> Cli
     };
     let group = crate::operator::status::group;
     let (headline, next): (String, Option<String>) = match (&args.stake_bond, &bond_read) {
+        _ if retirement.is_some() => (paint::dim(&format!("DNS validator role retired at DAA {}; PALW remains active", retirement.unwrap())),
+            args.stake_bond.as_ref().map(|_| "Use validator bonds / unbond for historical bond exits".into())),
         (None, _) => (
             paint::dim("○ NOT A VALIDATOR — no stake bond named here (--stake-bond, or ~/.misaka/validator.toml)"),
             Some("misaka validator setup".into()),

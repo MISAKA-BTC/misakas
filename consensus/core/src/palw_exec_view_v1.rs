@@ -234,8 +234,8 @@ pub fn palw_round_lane_telemetry_v1() -> &'static PalwRoundLaneTelemetryV1 {
 }
 
 /// A block's class as an explorer shows it: `BLUE` (a chain block or merged blue), `EXEC` (a round
-/// block that held its permit), `RED` (merged red: a round block without its permit, or a red of the
-/// ordinary lane), `ROUND` (a round block whose verdict this node cannot recall) or unclassified
+/// block that held its permit), `RED` (an ordinary GHOSTDAG red), `ROUND` (a refused round or a
+/// round block whose verdict this node cannot recall) or unclassified
 /// (not merged yet, or outside what the node keeps).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwBlockClassV1 {
@@ -268,12 +268,12 @@ pub struct PalwBlockLaneV1 {
     pub record: Option<PalwRoundBlockRecordV1>,
 }
 
-/// The class of a ROUND block from the ledger alone: a granted permit is `EXEC`, a refusal `RED`, and
+/// The class of a ROUND block from the ledger alone: a granted permit is `EXEC`, a refusal `ROUND`, and
 /// no record `ROUND`. One function for the node and its tests.
 pub fn palw_round_block_class_v1(record: Option<&PalwRoundBlockRecordV1>) -> PalwBlockClassV1 {
     match record.map(|r| r.outcome) {
         Some(PalwRoundOutcomeV1::Exec(_)) => PalwBlockClassV1::Exec,
-        Some(PalwRoundOutcomeV1::Refused(_)) => PalwBlockClassV1::Red,
+        Some(PalwRoundOutcomeV1::Refused(_)) => PalwBlockClassV1::Round,
         None => PalwBlockClassV1::Round,
     }
 }
@@ -600,11 +600,11 @@ mod tests {
     }
 
     #[test]
-    fn a_round_block_is_exec_red_or_unknown_by_its_verdict_alone() {
+    fn a_round_block_is_exec_or_round_and_its_verdict_never_makes_it_a_genuine_red() {
         let granted = rec(1, 1_000, exec(5));
         let refused_rec = rec(2, 2_000, refused(PalwRoundRefusalV1::PermitNotGranted));
         assert_eq!(palw_round_block_class_v1(Some(&granted)), PalwBlockClassV1::Exec);
-        assert_eq!(palw_round_block_class_v1(Some(&refused_rec)), PalwBlockClassV1::Red);
+        assert_eq!(palw_round_block_class_v1(Some(&refused_rec)), PalwBlockClassV1::Round, "a refused round is never a genuine red");
         assert_eq!(palw_round_block_class_v1(None), PalwBlockClassV1::Round, "no verdict is never guessed");
         assert_eq!(
             [PalwBlockClassV1::Blue, PalwBlockClassV1::Exec, PalwBlockClassV1::Red, PalwBlockClassV1::Round, PalwBlockClassV1::Unmerged].map(|c| c.name()),

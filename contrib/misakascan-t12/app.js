@@ -986,37 +986,33 @@ function scanDecodeRound(raw){
 }
 const scanIsRound = b => Number(b.algo) === 10;
 
-// ---- block KIND (design of the 5,300 release: heartbeat and PALW-BASE-0 give way to ONE liveness block,
-//      MISAKA-FALLBACK-V1): REAL (a real-model attempt) · EXEC (an execution round block) · FALLBACK (idle-time
-//      liveness) · RED (merged, not selected). The node's own field (verboseData.blockKind / kind, lane RS) is
-//      read first; otherwise the kind is derived from the header. Before the fence a heartbeat (algo-8) or a
-//      floor attempt shows as before, labelled "legacy".
+// ADR-0168: execution rounds, heartbeat and BASE-0 remain distinct. Kind identifies the lane;
+// genuine RED is a separate GHOSTDAG class. Older node kind names remain readable.
 function scanKindOf(b){
   const nk = String(b.nodeKind || "").toUpperCase();
-  const lc = String(b.laneClass || "").toUpperCase();
-  const exact = { REAL_ROUND: { k: "REAL_ROUND", legacy: false }, REAL: { k: "REAL", legacy: false }, EXEC: { k: "EXEC", legacy: false }, FALLBACK: { k: "FALLBACK", legacy: false },
-    LEGACY_HEARTBEAT: { k: "FALLBACK", legacy: true, what: "heartbeat" }, LEGACY_FLOOR: { k: "FALLBACK", legacy: true, what: "floor attempt" } };
+  if (scanIsRound(b)) return { k: "EXEC", legacy: false };
+  if (Number(b.algo) === 8) return { k: "HEARTBEAT", legacy: false };
+  if (b.classId && llmIsFloor(b.classId)) return { k: "BASE-0", legacy: false };
+  const exact = { REAL_ROUND: { k: "EXEC", legacy: false }, REAL: { k: "REAL", legacy: false }, EXEC: { k: "EXEC", legacy: false }, FALLBACK: { k: "FALLBACK", legacy: false },
+    LEGACY_HEARTBEAT: { k: "HEARTBEAT", legacy: false }, LEGACY_FLOOR: { k: "BASE-0", legacy: false } };
   if (exact[nk]) return exact[nk];   // lane RS's exact values; the substring matches below tolerate a rename
   if (nk) {
     if (/FALLBACK/.test(nk)) return { k: "FALLBACK", legacy: false };
-    if (/REAL.*ROUND|ROUND.*REAL/.test(nk)) return { k: "REAL_ROUND", legacy: false };
+    if (/REAL.*ROUND|ROUND.*REAL/.test(nk)) return { k: "EXEC", legacy: false };
     if (/REAL/.test(nk)) return { k: "REAL", legacy: false };
     if (/EXEC/.test(nk)) return { k: "EXEC", legacy: false };
-    if (/LEGACY.*HEARTBEAT|HEARTBEAT/.test(nk)) return { k: "FALLBACK", legacy: true, what: "heartbeat" };
-    if (/LEGACY.*FLOOR|FLOOR/.test(nk)) return { k: "FALLBACK", legacy: true, what: "floor attempt" };
+    if (/HEARTBEAT/.test(nk)) return { k: "HEARTBEAT", legacy: false };
+    if (/FLOOR/.test(nk)) return { k: "BASE-0", legacy: false };
   }
-  if (scanIsRound(b)) return { k: "EXEC", legacy: false };
-  if (Number(b.algo) === 8) return { k: "FALLBACK", legacy: true, what: "heartbeat" };
-  if (b.classId && llmIsFloor(b.classId)) return { k: "FALLBACK", legacy: true, what: "floor attempt" };
   if (b.classId) return { k: "REAL", legacy: false };
   return { k: "", legacy: false };
 }
 function scanKindPill(b){
   const x = scanKindOf(b);
   if (!x.k) return "";
-  const title = x.legacy ? `legacy ${x.what}: replaced by MISAKA-FALLBACK-V1 at the DAA-5,300 flag day` : ({ REAL_ROUND: "a real-model execution round: a canonical member of the DAG (lane EX)", REAL: "a real-model attempt", EXEC: "an execution round block", FALLBACK: "an idle-time liveness block (MISAKA-FALLBACK-V1)" })[x.k];
-  const cls = (x.k === "REAL" || x.k === "REAL_ROUND") ? "blue" : x.k === "EXEC" ? "chain" : "";
-  return `<span class="pill ${cls}" title="${esc(title)}">${x.k === "REAL_ROUND" ? "BLUE · canonical round" : x.k}${x.legacy ? " · legacy" : ""}</span>`;
+  const title = ({ REAL: "a real-model attempt", EXEC: "an execution round block", HEARTBEAT: "the independent chain clock", "BASE-0": "a floor-model attempt", FALLBACK: "an idle-time liveness block" })[x.k];
+  const cls = x.k === "REAL" ? "blue" : x.k === "EXEC" ? "chain" : "";
+  return `<span class="pill ${cls}" title="${esc(title)}">${x.k === "EXEC" ? "E / ROUND" : x.k}</span>`;
 }
 // ---- claims of an executor bond (cached; one call per bond per 20 s)
 const scanClaimCache = new Map();   // bond -> { ts, rows|null }
@@ -1076,7 +1072,7 @@ function scanRoundsCell(g){
   }
   return `<span class="dim" title="tickets of this claim are not known to this page: ${g.ambiguous ? "the producing bond holds " + g.ambiguous + " claims whose ticket ranges overlap this round" : "no claim of the producing bond covers this round"}">${num(g.blocks.length)} seen</span>`;
 }
-const scanCanonical = b => scanKindOf(b).k === "REAL_ROUND";   // past the lane-EX fence the node says so; before it, round blocks are merged beside the chain
+const scanAcceptedRound = b => scanIsRound(b) && b.exec && b.exec.verdict === "granted";
 function scanRoundLabel(b, g){
   const q = b.exec && b.exec.quantumIndex;
   const t = g.claim && Number(g.claim.execTickets);
@@ -1095,8 +1091,8 @@ function scanRenderExecutions(rows, claimsByBond){
       : `<span class="dim">${g.ambiguous ? g.ambiguous + " claims (overlap)" : "claim unknown"}</span>`;
     const anchor = c && c.acceptedBlock ? linkBlock(c.acceptedBlock) : `<span class="dim">—</span>`;
     const sub = !open ? "" : `<tr class="scan-sub"><td colspan="8">${g.blocks.slice(0, 120).map(b =>
-        `<span class="scan-chip" title="${esc(dt(b.timestamp))} · DAA ${num(b.daaScore)}${scanCanonical(b) ? " · BLUE · canonical round" : ""}">${esc(scanRoundLabel(b, g))} · ${linkBlock(b.hash)}${scanCanonical(b) ? ' <span class="scan-ok">BLUE</span>' : ""}</span>`).join("")}
-        <div class="dim" style="margin-top:4px">${num(g.blocks.length)} round block(s) of this execution in the window. ${g.blocks.some(scanCanonical) ? "They are canonical members of the DAG (BLUE)." : "They are merged beside the chain by design."}${g.blocks.some(b => b.exec && b.exec.quantumIndex != null) ? "" : " Ticket numbers (Round 001…) appear when the node reports them; until then the wall-clock round is shown."}</div></td></tr>`;
+        `<span class="scan-chip" title="${esc(dt(b.timestamp))} · DAA ${num(b.daaScore)}${scanAcceptedRound(b) ? " · round accepted" : ""}">${esc(scanRoundLabel(b, g))} · ${linkBlock(b.hash)}${scanAcceptedRound(b) ? ' <span class="scan-ok">accepted</span>' : ""}</span>`).join("")}
+        <div class="dim" style="margin-top:4px">${num(g.blocks.length)} round block(s) of this execution in the window. ${g.blocks.some(scanAcceptedRound) ? "Their permits were accepted; they remain execution rounds." : "They are merged beside the chain by design."}${g.blocks.some(b => b.exec && b.exec.quantumIndex != null) ? "" : " Ticket numbers (Round 001…) appear when the node reports them; until then the wall-clock round is shown."}</div></td></tr>`;
     return `<tr class="scan-row-x" data-k="${esc(g.key)}"><td>${open ? "▾" : "▸"} <span class="pill blue">${esc(model)}</span></td>
       <td>${claimCell}</td><td class="nowrap">${scanRoundsCell(g)}</td><td>${esc(final)}</td>
       <td class="mono" title="${esc(g.bond || "")}">${esc(short(g.bond || "—", 8))}</td>
@@ -1279,7 +1275,7 @@ async function renderClaim(arg){
     <h2 class="sec">Timeline</h2>
     <ol class="scan-tl">${steps.map(s => `<li class="${s.k}"><b>${s.n}</b> <span class="dim">·</span> ${s.d}</li>`).join("")}</ol>
     <h2 class="sec">Round blocks seen (${roundBlocks.length}) <span class="dim" style="font-size:13px">on this page's recent window</span></h2>
-    <div class="note">${roundBlocks.length ? roundBlocks.map(b => `<span class="scan-chip" title="${esc(dt(b.timestamp))}">${esc(b.exec && b.exec.quantumIndex != null ? "Round " + String(Number(b.exec.quantumIndex) + 1).padStart(3, "0") : "round " + num(b.round.round))} · ${linkBlock(b.hash)}${scanCanonical(b) ? ' <span class="scan-ok">BLUE</span>' : ""}</span>`).join("") : "none in the window — round blocks are merged beside the chain and age out of it quickly."}</div>`;
+    <div class="note">${roundBlocks.length ? roundBlocks.map(b => `<span class="scan-chip" title="${esc(dt(b.timestamp))}">${esc(b.exec && b.exec.quantumIndex != null ? "Round " + String(Number(b.exec.quantumIndex) + 1).padStart(3, "0") : "round " + num(b.round.round))} · ${linkBlock(b.hash)}${scanAcceptedRound(b) ? ' <span class="scan-ok">accepted</span>' : ""}</span>`).join("") : "none in the window — round blocks are merged beside the chain and age out of it quickly."}</div>`;
 }
 /* ===================== end SCAN ===================== */
 
@@ -1452,6 +1448,7 @@ async function refreshHomeInner(){
   // coin supply needs --utxoindex; treat as best-effort so it never blanks the page
   let supply = null;
   try { supply = await rpc("getCoinSupply"); } catch { supply = null; }
+  const nativeSettlement = await readNativeSettlement();
   // DNS-finality overlay status (kaspa-pq) — cheap, best-effort
   let dns = null;
   try { dns = await rpc("getDnsConfirmation"); } catch { dns = null; }
@@ -1490,9 +1487,9 @@ async function refreshHomeInner(){
   document.getElementById("footNet").textContent = dag.network || "—";
   const supplyVal = supply ? coin(supply.circulatingSompi)+" "+SYMBOL : "n/a";
   const supplySub = supply ? "max "+coin(supply.maxSompi)+" "+SYMBOL : "needs --utxoindex";
-  const dnsVal = dns ? (dns.dnsConfirmed ? "DNS confirmed" : (dns.powConfirmed ? "PoW confirmed" : "pending"))
+  const dnsVal = nativeSettlement && nativeSettlement.dnsRetiredAt != null ? "PALW native settlement" : dns ? (dns.dnsConfirmed ? "DNS confirmed" : (dns.powConfirmed ? "PoW confirmed" : "pending"))
                      : "n/a";
-  const dnsSub = dns ? `${ROLLOUT_STAGES[dns.rolloutStage]||("stage "+dns.rolloutStage)} · ${DNS_HEALTH[dns.health]||("health "+dns.health)}`
+  const dnsSub = nativeSettlement && nativeSettlement.dnsRetiredAt != null ? "DNS validator role retired" : dns ? `${ROLLOUT_STAGES[dns.rolloutStage]||("stage "+dns.rolloutStage)} · ${DNS_HEALTH[dns.health]||("health "+dns.health)}`
                        + bridgeFreshNote(dns, sbs)
                      : "overlay";
   // ONE uniform grid: headline metrics + chain/overlay/economics detail, every box the same size
@@ -1555,7 +1552,7 @@ async function refreshHomeInner(){
 
     { sec:"Network", k:"Network", v: esc(dag.network||"—"), s:"v"+esc(info.serverVersion||"?"), cls:"acc" },
     { sec:"Network", k:"Nodes", v: peersVal, s: peersSub, href:"#/peers", cls:"ov" },
-    { sec:"Network", k:"DNS finality", v: dnsVal, s: dnsSub, href:"#/overlay", cls:"ov" },
+    { sec:"Network", k: nativeSettlement && nativeSettlement.dnsRetiredAt != null ? "PALW settlement" : "DNS finality", v: dnsVal, s: dnsSub, href:"#/overlay", cls:"ov" },
     { sec:"Network", k:"Validators", v: num(overlayStats.activeValidators),
       s: overlayStats.bonds.length ? overlayStats.bonds.length+" active bond"+(overlayStats.bonds.length>1?"s":"") : (overlayStats.rolloutActive?"overlay active":"0 bonds"), href:"#/overlay", cls:"ov" },
     { sec:"Network", k:"Staked", v: overlayStats.bonds.length ? coin(overlayStats.totalStaked)+" "+SYMBOL : (overlayStats.rolloutActive?"syncing…":"—"),
@@ -1647,24 +1644,26 @@ async function updateRecent(sink, liveBlue){
 
 
 // ---- ONE "Recent blocks" table: every block in arrival order, round blocks individually, a Type column and filters.
-//   C-BLUE      consensus: a chain/blue attempt, a legacy heartbeat or floor block
-//   E / E-BLUE  model execution: a round block. Before the lane-EX fence it is merged beside the chain, not canonical
-//               ("E · model execution (merged)"); once the node says REAL_ROUND it is canonical ("E-BLUE").
-//   FALLBACK    the idle-time liveness block (blockKind FALLBACK)
-//   RED         not selected: a non-chain, non-round block, or a block the node marked RED
+//   C-BLUE      a selected-chain or merged-blue block
+//   E / ROUND  every execution round, with acceptance reported separately
+//   RED         a confirmed non-round GHOSTDAG red; unclassified blocks remain unknown
+//   HEARTBEAT and BASE-0 identify independent mechanisms in the consensus lane
 let scanAll = [], scanFilter = "all", scanPage = 0;
 const SCAN_PAGE = 25;
 function scanTypeOf(b){
   const kind = scanKindOf(b), lc = String(b.laneClass || "").toUpperCase();
   if (scanIsRound(b)) {
-    if (lc === "RED") return { cat: "red", pill: `<span class="pill red" title="a round block the node judged without a permit: merged, its transactions not accepted">RED · not selected</span>` };
-    if (kind.k === "REAL_ROUND") return { cat: "exec", pill: `<span class="pill blue" title="a canonical member of the DAG (lane EX)">E-BLUE · model execution</span>` };
-    return { cat: "exec", pill: `<span class="pill chain" title="an execution round block: merged into the DAG beside the chain, not yet canonical on this network">E · model execution (merged)</span>` };
+    const verdict = b.exec && b.exec.verdict;
+    const state = verdict === "refused" ? "permit refused" : verdict === "granted" ? "accepted" : "verdict unknown";
+    return { cat: "exec", pill: `<span class="pill chain" title="${esc(state)}">E / ROUND · ${esc(state)}</span>` };
   }
-  if (kind.k === "FALLBACK" && !kind.legacy) return { cat: "consensus", pill: `<span class="pill" title="MISAKA-FALLBACK-V1: an idle-time liveness block">FALLBACK</span>` };
-  if (lc === "RED") return { cat: "red", pill: `<span class="pill red" title="merged into the DAG as a red: not on the selected chain, its transactions not accepted">RED · not selected</span>` };
-  if (b.isChain || lc === "BLUE") return { cat: "consensus", pill: `<span class="pill blue" title="${b.isChain ? "on the selected chain" : "a merged blue"}${kind.legacy ? " · legacy " + kind.what : ""}">C-BLUE · consensus</span>` };
-  return { cat: "red", pill: `<span class="pill red" title="in the DAG but not on the selected chain (a red, or not merged yet); this is not a rejection">RED · not selected</span>` };
+  if (lc === "RED") return { cat: "red", pill: `<span class="pill red" title="an ordinary GHOSTDAG red; acceptance is independent of colour">RED</span>` };
+  if (kind.k === "FALLBACK" && !kind.legacy) return { cat: "consensus", pill: `<span class="pill" title="an idle-time liveness block">FALLBACK</span>` };
+  if (b.isChain || lc === "BLUE") {
+    const label = ["HEARTBEAT", "BASE-0"].includes(kind.k) ? kind.k : "C-BLUE · consensus";
+    return { cat: "consensus", pill: `<span class="pill blue" title="${b.isChain ? "on the selected chain" : "a merged blue"}">${label}</span>` };
+  }
+  return { cat: "unknown", pill: `<span class="pill" title="the node has not classified this block">unclassified</span>` };
 }
 function scanBlockContext(b, lookup){
   if (!scanIsRound(b)) return { model: recentModelCell(b), claim: "" };
@@ -1721,8 +1720,8 @@ let compMiss = 0, compRows = new Map(), compBusy = false, compSink = null, compP
 try { const c = JSON.parse(localStorage.getItem(COMP_KEY) || "null"); if (c && Array.isArray(c.rows)) compRows = new Map(c.rows.map(r => [r.h, r])); } catch {}
 function compLabelOf(r){
   const x = scanKindOf({ algo: r.algo, classId: r.classId, nodeKind: r.nodeKind, laneClass: "" });
-  if (x.k === "FALLBACK") return x.legacy ? (x.what === "heartbeat" ? "heartbeat (legacy)" : "PALW-BASE-0 floor (legacy)") : "FALLBACK";
-  if (x.k === "REAL" || x.k === "REAL_ROUND") return r.classId ? scanClaimClassName(r.classId) : "real model (class unknown)";
+  if (["HEARTBEAT", "BASE-0", "FALLBACK"].includes(x.k)) return x.k;
+  if (x.k === "REAL") return r.classId ? scanClaimClassName(r.classId) : "real model (class unknown)";
   return r.algo == null ? "unknown" : "other (algo-" + r.algo + ")";
 }
 async function scanCompTick(sink){
@@ -1927,7 +1926,10 @@ async function renderBlock(hash){
                               : (_anchorHash && /[1-9a-f]/.test(_anchorHash) && _anchorHash === String(hd.hash).toLowerCase());
   const _dnsFinal   = _hasSrv ? !!bdns.blockIsDnsFinal
                               : (bdns && bdns.dnsConfirmed && _anchorDaa > 0 && vd.isChainBlock && _bDaa <= _anchorDaa);
-  const _dnsCell = _isAnchor
+  const blockNativeStatus = await readNativeSettlement();
+  const _dnsCell = blockNativeStatus && blockNativeStatus.dnsRetiredAt != null
+    ? `<span class="pill">DNS role retired</span> · <a href="#/finality">native settlement heads</a>`
+    : _isAnchor
     ? '<span class="pill chain">stake-confirmed anchor</span>'
     : _dnsFinal
       ? `<span class="pill chain">DNS-final</span> <span class="dim">(≤ confirmed anchor @ DAA ${num(_anchorDaa)})</span>`
@@ -1960,7 +1962,7 @@ async function renderBlock(hash){
     ["Timestamp", `${esc(dt(hd.timestamp))} <span class="dim">(${ago(hd.timestamp)})</span>`],
     ["DAA score", num(hd.daaScore)],
     ["Blue score", num(hd.blueScore)],
-    ["DNS finality", _dnsCell],
+    [blockNativeStatus && blockNativeStatus.dnsRetiredAt != null ? "PALW settlement" : "DNS finality", _dnsCell],
     ["DNS score", _scoreCell],
     ["Blue work", `<span class="hash">${esc(hd.blueWork)}</span>`],
     ["Difficulty", Number(vd.difficulty||0).toLocaleString("en-US",{maximumFractionDigits:0})],
@@ -1975,7 +1977,8 @@ async function renderBlock(hash){
     ["UTXO commitment", `<span class="hash">${esc(hd.utxoCommitment)}</span>`],
     ["Pruning point", linkBlock(hd.pruningPoint)],
     ["Merge set (blues)", num((vd.mergeSetBluesHashes||[]).length)],
-    ["Merge set (reds)", num((vd.mergeSetRedsHashes||[]).length)],
+    ["Merge set (E / ROUND)", vd.palwMergeView ? num(vd.palwMergeView.roundBlocks.length) : "unknown (node view unavailable)"],
+    ["Merge set (RED)", vd.palwMergeView ? num(vd.palwMergeView.genuineRedBlocks.length) : "unknown (node view unavailable)"],
   ];
   // kaspa-pq EVM Lane (ADR-0020 §4): v2 blocks carry the two EVM header commitments. Show them
   // plus whether this block's own payload carries EVM content (bytes beyond the empty baseline).
@@ -2511,7 +2514,40 @@ async function scanOverlay(anchor){
   overlayStats.attShards = attShards;
 }
 
+async function readNativeSettlement() {
+  try { return await rpc("getPalwSettlement", {daaScore: 0}); } catch { return null; }
+}
+function nativeSettlementView(status) {
+  const s = status && status.nativeSettlement;
+  return `<div class="note">DNS validator role retired at DAA ${esc(String(status.dnsRetiredAt))}. Consensus and native UTXO ↔ EVM settlement use PALW. Historical bonds and evidence remain readable.</div>` +
+    (s ? `<div class="cards">${["latest", "safe", "finalized"].map(k => `<div class="card"><div class="k">${k}</div><div class="v sm">${s[k] ? linkBlock(s[k]) : "unavailable"}</div></div>`).join("")}</div><div class="note">Settled anchors: ${esc(String(s.depth))}; unique matured work: ${esc(s.uniqueWork)}${s.stop ? ` · ${esc(s.stop)}` : ""}</div>` : `<div class="note">Native settlement snapshot unavailable; safe/finalized are not inferred from the tip.</div>`);
+}
+
+function showNativeSettlement(status, generation) {
+  viewFor(generation).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › PALW settlement</div><h1 class="page">PALW settlement</h1>${nativeSettlementView(status)}`;
+}
+async function refreshNativeSettlement(generation) {
+  const status = await readNativeSettlement();
+  if (generation !== routeGen) return;
+  if (status && status.dnsRetiredAt != null) { showNativeSettlement(status, generation); return; }
+  viewFor(generation).innerHTML = `<h1 class="page">PALW settlement</h1><div class="note">${status ? "Native settlement is inactive in the current view." : "Native settlement status unavailable; refresh when the node is reachable."}</div>`;
+}
+function armNativeSettlementRefresh(generation) {
+  const refresh = () => refreshNativeSettlement(generation);
+  armPoll(refresh, 20000);
+  onBlockAdded(refresh);
+}
+
 async function renderOverlay(){
+  const generation = routeGen;
+  const status = await readNativeSettlement();
+  if (generation !== routeGen) return;
+  if (status && status.dnsRetiredAt != null) {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    showNativeSettlement(status, generation);
+    armNativeSettlementRefresh(generation);
+    return;
+  }
   const __g = routeGen;   // claude-route-guard-v1: the generation this render belongs to
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   viewFor(__g).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › Overlay</div>
@@ -2628,6 +2664,15 @@ async function walkChainBack(fromHash, stopAt, limit){
 }
 
 async function renderFinality(){
+  const generation = routeGen;
+  const status = await readNativeSettlement();
+  if (generation !== routeGen) return;
+  if (status && status.dnsRetiredAt != null) {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    showNativeSettlement(status, generation);
+    armNativeSettlementRefresh(generation);
+    return;
+  }
   const __g = routeGen;   // claude-route-guard-v1: the generation this render belongs to
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   finalFeed = []; finalKnown = new Set(); finalAnchor = null;
@@ -2767,6 +2812,8 @@ async function renderEvmLane(){
   viewFor(__g).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › EVM Lane</div>
     <h1 class="page">EVM lane <span class="dim" style="font-size:14px">(ADR-0020 — selected-parent EVM execution on L1)</span></h1>
     <div class="loading">Loading EVM lane state…</div>`;
+  const nativeStatus = await readNativeSettlement();
+  if (__g !== routeGen) return;
   let dag=null, sinkBlk=null;
   try { dag = await rpc("getBlockDagInfo"); } catch {}
   if (dag && dag.sink){ try { sinkBlk = await rpc("getBlock", { hash: dag.sink, includeTransactions:false }); } catch {} }
@@ -2853,18 +2900,19 @@ async function renderEvmLane(){
         <td class="right dim" title="${esc(dt(t.ts))}">${ago(t.ts)}</td></tr>`).join("")
     }</tbody></table>${evmBlocks.length?`<div class="note" style="margin-top:8px">${num(recentTxs.length)} EVM transaction(s) across ${num(evmBlocks.length)} payload block(s) in the recent window.</div>`:""}`
       : `<div class="note">No EVM transactions in the recent block window. Blocks carry EVM transactions only while accounts are transacting — submit one (or use the lookup above) and it appears here. On testnet-12 the lane is active from genesis: every block commits to its (possibly empty) payload hash.${(typeof keccak256!=="function")?" <b>Note:</b> the keccak library did not load, so tx hashes can't be derived in-browser.":""}</div>`}
+    ${nativeStatus && nativeStatus.dnsRetiredAt != null ? nativeSettlementView(nativeStatus) : ""}
     <h2 class="sec">Recent bridge deposit-claims <span class="dim" style="font-size:13px">(UTXO→EVM credits · §9.2 system ops in payloads)</span></h2>
-    ${recentClaims.length ? `<table class="tbl"><thead><tr><th>EVM address (credited)</th><th class="num">Amount (MSK)</th><th class="num">Tip</th><th>Lock outpoint</th><th>In block</th><th>Executed</th><th class="right">Age</th></tr></thead><tbody>${
+    ${recentClaims.length ? `<table class="tbl"><thead><tr><th>EVM address (credited)</th><th class="num">Amount (MSK)</th><th class="num">Tip</th><th>Lock outpoint</th><th>In block</th><th>${nativeStatus && nativeStatus.dnsRetiredAt != null ? "Carrier status" : "Executed"}</th><th class="right">Age</th></tr></thead><tbody>${
       recentClaims.slice(0,40).map(c=>`<tr>
         <td><span class="mono">${esc(c.evmAddress)}</span></td>
         <td class="num">${coin(c.amountSompi)}</td>
         <td class="num dim">${coin(c.tipSompi)}</td>
         <td><span class="hash" title="${esc(c.outpoint)}">${esc(c.outpoint.slice(0,12))}…:${esc(c.outpoint.split(":")[1]||"0")}</span></td>
         <td>${linkBlock(c.block)}</td>
-        <td>${c.chain ? `<span class="pill chain">credited</span>` : `<span class="pill" title="Only a chain block's payload executes; this block is not on the selected chain, so this copy of the claim credits nothing.">not executed · off the selected chain</span>`}</td>
+        <td>${c.chain ? (nativeStatus && nativeStatus.dnsRetiredAt != null ? `<span class="pill chain" title="Canonical inclusion is not proof that the child execution result has credited this claim.">canonical carrier · verify execution result</span>` : `<span class="pill chain">credited</span>`) : `<span class="pill" title="Only a chain block's payload executes; this block is not on the selected chain, so this copy of the claim credits nothing.">not executed · off the selected chain</span>`}</td>
         <td class="right dim" title="${esc(dt(c.ts))}">${ago(c.ts)}</td></tr>`).join("")
-    }</tbody></table><div class="note" style="margin-top:8px">${num(recentClaims.length)} deposit-claim(s) in the recent window, ${num(recentClaims.filter(c=>c.chain).length)} executed by a chain block — a claim two producers both carried shows twice, and only the chain block's copy credits. Claims are §9.2 bridge system ops (UTXO→EVM credits), not Ethereum transactions, so they carry no 0x tx hash.</div>`
-      : `<div class="note">No bridge deposit-claims in the recent block window. A claim appears here when a deposit-lock is claimed on a mining node (credits the destination EVM address). Producers carry a claim only while DNS finality is confirmed and keeping up with the tip; on testnet-12 DNS finality is in Bootstrap until its validators are funded, so deposit claims wait until then.</div>`}
+    }</tbody></table><div class="note" style="margin-top:8px">${num(recentClaims.length)} deposit-claim(s) in the recent window, ${nativeStatus && nativeStatus.dnsRetiredAt != null ? `${num(recentClaims.filter(c=>c.chain).length)} canonical carriers. Verify the accepting child's execution result before reporting a credit; carrier inclusion alone is not execution or settlement.` : `${num(recentClaims.filter(c=>c.chain).length)} executed by a chain block — a claim two producers both carried shows twice, and only the chain block's copy credits.`} Claims are §9.2 bridge system ops (UTXO→EVM credits), not Ethereum transactions, so they carry no 0x tx hash.</div>`
+      : `<div class="note">No bridge deposit-claims in the recent block window. A claim appears here when a deposit-lock is claimed on a mining node (credits the destination EVM address). ${nativeStatus && nativeStatus.dnsRetiredAt != null ? "Native claims follow canonical acceptance and timeout rules. Settlement confidence is shown above; an absent safe head is unavailable." : "Producers carry a claim only while DNS finality is confirmed and keeping up with the tip; on testnet-12 DNS finality is in Bootstrap until its validators are funded, so deposit claims wait until then."}</div>`}
     <div class="note" style="margin-top:12px"><b>Bridge:</b> UTXO→EVM via a deposit-lock output claimed on a mining node (credits the EVM address); EVM→UTXO via the <span class="mono">0x…F002</span> withdraw precompile, which materializes a synthetic UTXO at the destination. Native <b>MSK</b> is the EVM gas + value token (18 decimals).</div>
     ${evmLaneExtraSections()}`;
   const f = document.getElementById("evmLookup");
@@ -4456,7 +4504,10 @@ function censusRemedy(r){
 // could never hold: the newest confirmable anchor sits at least 3 blue (10–12 DAA) below the tip.
 const BRIDGE_MAX_ANCHOR_DISTANCE_BLUE = 14;
 let bridgeAnchor = { hash: null, blue: null };
+let bridgeNativeSettlement = null;
 async function refreshBridgeAnchorBlue(dns){
+  bridgeNativeSettlement = await readNativeSettlement();
+  if (bridgeNativeSettlement && bridgeNativeSettlement.dnsRetiredAt != null) { bridgeAnchor = { hash: null, blue: null }; return; }
   const hash = dns && dns.lastDnsConfirmedAnchor ? String(dns.lastDnsConfirmedAnchor).toLowerCase() : null;
   if (!hash) { bridgeAnchor = { hash: null, blue: null }; return; }
   if (hash === bridgeAnchor.hash && bridgeAnchor.blue != null) return;   // one header read per anchor
@@ -4467,6 +4518,10 @@ async function refreshBridgeAnchorBlue(dns){
   } catch { bridgeAnchor = { hash, blue: null }; }
 }
 function bridgeFreshNote(dns, sbs){
+  if (bridgeNativeSettlement && bridgeNativeSettlement.dnsRetiredAt != null) {
+    const s = bridgeNativeSettlement.nativeSettlement;
+    return s && s.safe ? " · native settlement safe prefix available" : " · native settlement safe head unavailable";
+  }
   const anchorDaa = Number(dns.lastDnsConfirmedAnchorDaaScore) || 0;
   if (!dns.dnsConfirmed)
     return ` · <b>EVM bridge paused</b> — DNS not confirmed` + (anchorDaa ? ` (last anchor DAA ${num(anchorDaa)})` : "");

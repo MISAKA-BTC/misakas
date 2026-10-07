@@ -342,6 +342,9 @@ pub enum RuleError {
     #[error("block includes a compute-overlay transaction {0} past the overlay's retirement")]
     ComputeOverlayRetired(TransactionId),
 
+    #[error("block contains retired DNS participation transaction {0} (RFC-0012)")]
+    DnsParticipationRetired(TransactionId),
+
     // MISAKA §5 round 2: a block carrying precommit evidence whose bond is unknown, whose
     // precommits are not bound to that bond's validator key, whose bond held no slashable stake
     // when it signed, or either of whose ML-DSA signatures does not verify, is rejected. The

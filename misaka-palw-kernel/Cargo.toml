@@ -1,0 +1,30 @@
+[package]
+name = "misaka-palw-kernel"
+description = "ADR-0172 / RFC-0005 §§K.0–K.8 / RFC-0011 §16 / RFC-0004 §0: the versioned-kernel route to model extensibility — KernelDescriptorV1 and the class binding, the bounded typed VerificationPlanV1 and its deterministic checker, the structured registration outcomes (ELIGIBLE_AT, FRONTEND_REQUIRED, KERNEL_EXTENSION_REQUIRED, KERNEL_NOT_ACTIVE, …) and RFC-0011's coverage buckets, and the first K2 reference kernel: post-commit public Freivalds over GF(2^127 − 1) for MatMul, exact recompute for the cheap families, authenticated state continuity, and public fault proofs any bond can file. Dormant and off consensus: no fence, tag, delta or wire id."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The IR is the semantics a K1/K2 kernel binds (its primitive set and its reference evaluator are
+# the exact half of every check). Nothing of consensus: the descriptor schedule here is the BINARY's
+# view, and no network arms it (ADR-0172 §3).
+[dependencies]
+misaka-palw-tir.workspace = true
+# RFC-0003's R (blake2b + borsh only): a pipeline's random inputs are a public function of the job's seed.
+misaka-palw-gen.workspace = true
+blake2b_simd.workspace = true
+borsh.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The tiny dense + MoE + history classes RFC-0007 Part II's prototype tests on: real TIR programs
+# with every MatMul kind, TopK routing, Gather and Hist state.
+misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }
+
+[lints]
+workspace = true

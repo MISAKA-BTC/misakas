@@ -1536,6 +1536,10 @@ pub trait ConsensusApi: Send + Sync {
     /// `latest` / `safe` / `finalized` L1 block hashes — used to resolve the
     /// `safe`/`finalized` block tags and to read account state at a non-reorgable
     /// height (holder-gated access). `None` on a non-EVM node / before activation.
+    fn get_native_settlement_snapshot(&self) -> ConsensusResult<Option<crate::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
+        Ok(None)
+    }
+
     fn get_evm_canonical_heads(&self) -> ConsensusResult<Option<crate::evm::CanonicalEvmHeads>> {
         Ok(None)
     }

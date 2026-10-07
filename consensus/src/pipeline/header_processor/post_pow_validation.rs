@@ -46,8 +46,8 @@ impl HeaderProcessor {
     }
 
     /// ADR-0125: the round blocks of a mergeset as `(round, permit index)`, in mergeset order. Round
-    /// blocks are always red, so only the reds are read — and nothing at all on a network that has
-    /// not configured the lane.
+    /// discovery reads all members except the selected parent, independently of raw colour — and
+    /// nothing at all on a network that has not configured the lane.
     fn round_lane_members(
         &self,
         ghostdag_data: &crate::model::stores::ghostdag::GhostdagData,
@@ -56,12 +56,12 @@ impl HeaderProcessor {
         if self.palw_execution_lane.is_none() {
             return Ok(members);
         }
-        for red in ghostdag_data.mergeset_reds.iter().copied() {
-            let red_header = self.headers_store.get_header(red).map_err(|_| RuleError::MissingParents(vec![red]))?;
-            if red_header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 {
+        for member in ghostdag_data.unordered_mergeset_without_selected_parent() {
+            let header = self.headers_store.get_header(member).map_err(|_| RuleError::MissingParents(vec![member]))?;
+            if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 {
                 continue;
             }
-            let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&red_header.palw_commitment)
+            let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&header.palw_commitment)
                 .map_err(|e| RuleError::BadRoundLaneMergeset(e.to_string()))?;
             members.push((envelope.round, envelope.permit_index, envelope.bond));
         }
@@ -157,10 +157,10 @@ impl HeaderProcessor {
         let bound = kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET;
         let ghostdag_data = ctx.ghostdag_data();
         let mut heartbeats = Vec::new();
-        for member in ghostdag_data.mergeset_blues.iter().chain(ghostdag_data.mergeset_reds.iter()) {
-            let member_header = self.headers_store.get_header(*member).unwrap();
+        for member in ghostdag_data.unordered_mergeset() {
+            let member_header = self.headers_store.get_header(member).unwrap();
             if member_header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
-                heartbeats.push((member_header.blue_score, *member, member_header.timestamp));
+                heartbeats.push((member_header.blue_score, member, member_header.timestamp));
             }
         }
         if heartbeats.len() as u64 <= bound {

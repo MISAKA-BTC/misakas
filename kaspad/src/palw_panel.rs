@@ -3792,6 +3792,9 @@ pub struct PalwPanelConfig {
     pub tir_shard_run_leaves: u32,
     /// **RFC-0004 (A10): where this node finds a candidate's artifact** (`--palw-improve-artifact-dir`).
     pub improve_artifact_dir: Option<PathBuf>,
+    /// **ADR-0173 §4**: the fetch command and the drop directory for roots this node holds no bundle of.
+    pub root_fetch_cmd: Option<String>,
+    pub root_drop_dir: Option<PathBuf>,
     /// **RFC-0004 (D-M3): where evaluation captures are retained and read** (`--palw-improve-capture-dir`) — the
     /// drill's evidence transport on one machine; default beside the node's other retention.
     pub improve_capture_dir: Option<PathBuf>,
@@ -3805,6 +3808,10 @@ pub struct PalwPanelConfig {
     /// (`trace_retention_daa`); this is the panel reading it rather than a second copy of the
     /// same promise. Measured on the drill: 143 sessions opened, 4 answered.
     pub retention_dir: PathBuf,
+    /// **RFC-0009 stage B: evidence provider directories** (`--palw-evidence-provider-dir`). A pull for a claim's material is ALSO answered from
+    /// these — a manifest any provider holds for the claim that agrees with the claim's own roots, every chunk checked against it — in addition
+    /// to the producer pull, which is unchanged and stays the fallback. Empty: no provider source, the node behaves as before.
+    pub evidence_provider_dirs: Vec<PathBuf>,
     /// **Register this node's worker class on the running chain, once** (ADR-0049 Decision H).
     ///
     /// A network is born with the classes its ruleset id commits to, and every later one arrives
@@ -3904,6 +3911,8 @@ pub struct PalwPanelService {
     /// **RFC-0004 (A10): the classes prefetched since the node started** (`improve`), which
     /// [`Self::backends`] serves beside `class_holdings`.
     improve_holdings: std::sync::Mutex<Vec<misaka_palw_sdk::PalwLoadedArtifactV1>>,
+    /// ADR-0173 §4: the root-fetch hook's memory.
+    root_fetch: std::sync::Mutex<crate::palw_root_fetch::PalwRootFetchStateV1>,
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
     consensus_config: Arc<Config>,
@@ -4329,6 +4338,7 @@ impl PalwPanelService {
             bond,
             class_holdings,
             improve_holdings: std::sync::Mutex::new(Vec::new()),
+            root_fetch: std::sync::Mutex::new(Default::default()),
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             foreign_pinned: std::sync::Mutex::new(HashSet::new()),
             served_openings: std::sync::Mutex::new(Vec::new()),
@@ -4653,7 +4663,21 @@ impl PalwPanelService {
         // RFC-0004 §6.7: the chain's composite records, read once and only if a held class is a composite.
         let mut composite_records: Option<Vec<(Hash64, kaspa_consensus_core::palw_improve_composite_v1::PalwTirCompositeRefV1)>> =
             None;
-        for class in read.classes.iter().filter(|c| !c.is_base_class) {
+        // **Lane MU (ADR-0173, past `palw_audit_1004_v1`): a seat proves every root a class has in force that it holds** — the
+        // registered root as always, and each other root (a line's current version, a preview, a superseded root inside its grace)
+        // as a duty of its own, so an R2 claim finds its seats and an R1 claim keeps them through the grace. The target is the
+        // class's read with `artifact_root` set to the root; everything below (capacity, conformance, the backend resolved by the
+        // digest, the proof) is per `(class, root)`.
+        let root_keyed = self.consensus_config.params.palw_audit_1004_active_at(current_daa);
+        let targets = crate::palw_root_fetch::palw_readiness_targets_v1(&read, root_keyed);
+        // ADR-0173 §4: the roots this tick found no bundle for — the fetch hook's wants.
+        let mut missing: Vec<crate::palw_root_fetch::PalwRootWantV1> = Vec::new();
+        for (class, extra_root) in targets.iter().map(|(class, extra)| (class, *extra)) {
+            let slot = if extra_root {
+                crate::palw_readiness_escalation::palw_readiness_slot_v1(&class.class_id, &class.artifact_root)
+            } else {
+                class.class_id
+            };
             // **Node-local capacity, never consensus** (the operator's rule): a host without the
             // memory to replay this class proves nothing for it — the standing proof expires by
             // itself and the class counts one seat fewer. The chain judges the proof; the budget
@@ -4685,8 +4709,15 @@ impl PalwPanelService {
                 }
                 Some(PalwSeatConformanceV1::Passed(_)) | Some(PalwSeatConformanceV1::NotApplicable) | None => {}
             }
-            let row = read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == class.class_id).map(|r| r.row);
-            let last = self.readiness_submitted.lock().unwrap().get(&class.class_id).copied();
+            let row = if extra_root {
+                read.root_readiness
+                    .iter()
+                    .find(|r| r.bond == bond_key && r.class_id == class.class_id && r.root == class.artifact_root)
+                    .map(|r| r.row)
+            } else {
+                read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == class.class_id).map(|r| r.row)
+            };
+            let last = self.readiness_submitted.lock().unwrap().get(&slot).copied();
             // M1: how urgently this span's proof escalates — the tip's row lapsing, past R-core+.
             let readiness_v2 = self.consensus_config.params.palw_readiness_v2_at(current_daa);
             let urgency = crate::palw_readiness_escalation::palw_readiness_duty_urgency_v1(
@@ -4724,9 +4755,10 @@ impl PalwPanelService {
             // and M1's urgency.
             let candidate = crate::palw_candidate_proof_timing::palw_candidate_proof_plan_v1(
                 crate::palw_candidate_proof_timing::palw_candidate_proof_timing_armed_v1(&self.consensus_config.params, current_daa),
-                class.row.as_ref().is_some_and(|lifecycle| {
-                    matches!(lifecycle.state, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Candidate)
-                }),
+                !extra_root
+                    && class.row.as_ref().is_some_and(|lifecycle| {
+                        matches!(lifecycle.state, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Candidate)
+                    }),
                 row.as_ref(),
                 readiness_v2,
                 span_now,
@@ -4781,6 +4813,28 @@ impl PalwPanelService {
             let backend = match self.resolve_backend(session, class.class_id, class.artifact_root) {
                 Ok(backend) => backend,
                 Err(e) => {
+                    if extra_root || class.row.as_ref().is_some_and(|l| matches!(l.state, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Candidate)) {
+                        missing.push(crate::palw_root_fetch::PalwRootWantV1 {
+                            class_id: class.class_id,
+                            root: class.artifact_root,
+                            kind: if extra_root {
+                                crate::palw_root_fetch::PalwRootWantKindV1::InForceRoot
+                            } else {
+                                crate::palw_root_fetch::PalwRootWantKindV1::Candidate
+                            },
+                        });
+                    }
+                    if extra_root {
+                        self.readiness_note(
+                            class.class_id,
+                            format!(
+                                "no proof — ROOT_BUNDLE_MISSING: class {} has root {} in force and this node holds no bundle for it ({e}); \
+                                 not a seat for that root until the bundle is fetched",
+                                class.class_id, class.artifact_root
+                            ),
+                        );
+                        continue;
+                    }
                     self.readiness_note(
                         class.class_id,
                         format!(
@@ -4863,7 +4917,7 @@ impl PalwPanelService {
                 };
                 // Built once per (class, span): the draw is a function of (class, bond, span), so the
                 // proof is too, and a tick that could not submit it must not pay for it again.
-                let cached = self.readiness_built.lock().unwrap().get(&class.class_id).filter(|(span, _)| *span == span_now).map(|(_, p)| p.clone());
+                let cached = self.readiness_built.lock().unwrap().get(&slot).filter(|(span, _)| *span == span_now).map(|(_, p)| p.clone());
                 let proof = match cached {
                     Some(proof) => proof,
                     None => {
@@ -4977,7 +5031,7 @@ impl PalwPanelService {
                             proof.opened.len(),
                             proof.siblings.len()
                         );
-                        self.readiness_built.lock().unwrap().insert(class.class_id, (span_now, proof.clone()));
+                        self.readiness_built.lock().unwrap().insert(slot, (span_now, proof.clone()));
                         proof
                     }
                 };
@@ -5001,6 +5055,7 @@ impl PalwPanelService {
                         signature,
                     },
                     urgency,
+                    slot,
                 });
                 continue;
             }
@@ -5058,8 +5113,10 @@ impl PalwPanelService {
                     signature,
                 },
                 urgency,
+                slot,
             });
         }
+        self.root_fetch_hook_v1(&missing);
         // P3: a Candidate's proofs take the Own site behind every other proof, in their rank's order —
         // save a hand-off its row needs, behind every proof M1 hurries (`palw_candidate_own_order_v1`).
         crate::palw_candidate_proof_timing::palw_candidate_own_order_v1(
@@ -5072,6 +5129,53 @@ impl PalwPanelService {
     /// **This tick's possession proofs** ([`Self::readiness_duties`]): a proof left waiting last tick
     /// is asked for again at once (the thirty-second read throttle would otherwise hand the freed slot
     /// to a receipt).
+    /// **ADR-0173 §4: the root-fetch hook** — reap and start fetch commands for the roots this tick found no bundle for, and take a
+    /// bundle that arrived in the drop directory into the holdings (the next tick proves it). Node policy only: a failure is a log line.
+    fn root_fetch_hook_v1(&self, missing: &[crate::palw_root_fetch::PalwRootWantV1]) {
+        use crate::palw_root_fetch::PalwRootFetchEventV1 as Ev;
+        let mut state = self.root_fetch.lock().unwrap();
+        let events = state.tick(self.config.root_fetch_cmd.as_deref(), self.config.root_drop_dir.as_deref(), missing, std::time::Instant::now());
+        let mut scan = false;
+        for event in events {
+            match event {
+                Ev::Started(w) => info!("[{PALW_PANEL}] root fetch started for class {} root {}", w.class_id, w.root),
+                Ev::Finished(w) => {
+                    info!("[{PALW_PANEL}] root fetch finished for class {} root {}", w.class_id, w.root);
+                    scan = true;
+                }
+                Ev::Failed(w, why) => warn!(
+                    "[{PALW_PANEL}] ROOT_BUNDLE_MISSING: the fetch for class {} root {} failed ({why}); not a seat for it (no penalty follows)",
+                    w.class_id, w.root
+                ),
+            }
+        }
+        // A bundle may also be dropped by hand: scan whenever something is wanted.
+        let Some(dir) = self.config.root_drop_dir.as_deref() else { return };
+        if missing.is_empty() && !scan {
+            return;
+        }
+        let backends = self.backends();
+        let sdk = backends.sdk();
+        let taken = state.ingest(dir, missing, &mut |path| {
+            let loaded = crate::palw_backends::load_class_holdings_v1("root-fetch", sdk, std::slice::from_ref(&path.to_path_buf()), 0, misaka_palw_sdk::PalwWeightResidencyV1::PageCache);
+            loaded
+                .into_iter()
+                .flat_map(|holding| {
+                    misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&holding))
+                        .into_iter()
+                        .map(|entry| (entry.class_id(), entry.artifact_root))
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .map(move |(class, root)| (class, root, holding.clone()))
+                })
+                .collect()
+        });
+        for holding in taken {
+            info!("[{PALW_PANEL}] root fetch: took a bundle into the holdings — the seat proves it next tick");
+            self.improve_holdings.lock().expect("the prefetched holdings are never poisoned").push(holding);
+        }
+    }
+
     async fn readiness_duties_for_tick(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -5211,7 +5315,7 @@ impl PalwPanelService {
                             if duty.escalates() { " — escalated: its row is lapsing or lapsed" } else { "" },
                             if lane { " — on the readiness lane (V07)" } else { "" }
                         );
-                        self.readiness_submitted.lock().unwrap().insert(class_id, span);
+                        self.readiness_submitted.lock().unwrap().insert(duty.slot, span);
                         let next = TransactionOutpoint::new(txid, 0);
                         if !lane {
                             self.persist_fee_outpoint(next);
@@ -5362,7 +5466,7 @@ impl PalwPanelService {
                     replaced.id(),
                     if duty.escalates() { ", escalated: its row is lapsing or lapsed" } else { "" }
                 );
-                self.readiness_submitted.lock().unwrap().insert(class_id, span);
+                self.readiness_submitted.lock().unwrap().insert(duty.slot, span);
                 let next = TransactionOutpoint::new(txid, 0);
                 self.persist_fee_outpoint(next);
                 *funding = Some((
@@ -17517,12 +17621,62 @@ impl PalwPanelService {
         true
     }
 
+    /// **RFC-0009 stage B: the material from ANY evidence provider, root-checked before it is handed on.**
+    ///
+    /// The claim's roots are the CHAIN's (`trace_root`, `output_root`, `execution_root`, the chunk count and the retention it obliges): a
+    /// provider's manifest that disagrees with them is another execution's evidence, whoever signed for it. Each chunk is checked against the
+    /// manifest; the reassembled bytes are then injected into the same inbox a peer's answer enters, so the seat's own `verify_material` and
+    /// re-execution still judge them. A miss costs nothing: the producer pull that follows is unchanged. Provider silence is never evidence of
+    /// anything (no slash rests on it — see `misaka_palw_remote::evidence::evidence_responsibility_v1`).
+    async fn pull_material_from_evidence_providers(&self, network_domain: Hash64, claim: Hash64) {
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some((state, _, _)) = session.palw_derived_artifacts_v1(claim) else { return };
+        let roots = misaka_palw_remote::evidence::ClaimRoots {
+            network_domain,
+            trace_root: state.trace_root,
+            output_root: state.output_root,
+            execution_root: state.execution_root,
+            trace_chunk_count: state.trace_chunk_count,
+            retention_deadline: state.trace_retention_daa,
+        };
+        let dirs = self.config.evidence_provider_dirs.clone();
+        let claim_hex = claim.to_string();
+        let fetched = tokio::task::spawn_blocking(move || {
+            misaka_palw_remote::evidence::fs::fetch_claim_material(
+                &dirs,
+                &claim_hex,
+                &roots,
+                &misaka_palw_remote::evidence::ManifestLimits::default(),
+                claim,
+            )
+        })
+        .await;
+        match fetched {
+            Ok(Ok((bytes, report))) => {
+                let admitted = self.flow_context.palw_gossip().inject_local_material(claim, &bytes);
+                info!(
+                    "[{PALW_PANEL}] claim {claim}: {} byte(s) of material from evidence provider(s) {:?} ({admitted:?}); {} failed attempt(s) on the way",
+                    bytes.len(),
+                    report.served_by,
+                    report.failures.len()
+                );
+            }
+            // No provider offered an admissible manifest, or a chunk would not verify: say so once per pull, and fall through to the producer.
+            Ok(Err(why)) => info!("[{PALW_PANEL}] claim {claim}: no evidence-provider material ({why})"),
+            Err(join) => warn!("[{PALW_PANEL}] claim {claim}: the evidence-provider fetch did not finish ({join})"),
+        }
+    }
+
     /// **The signed whole-capture pull** (ADR-0077 SA-2's last sentence). The attempt lane keeps
     /// the whole-capture transport — Decision 8 retires it on the FREE-PROMPT lane only — so the
     /// pull stays, with a bond in front of it. Falls back to the unsigned form for a node with no
     /// key, which is a node that files no receipts either.
     pub async fn request_material_signed(&self, network_domain: Hash64, claim: Hash64, requested_daa: u64) {
         self.flow_context.palw_gossip().note_pull_request(claim);
+        // RFC-0009 stage B: a provider may already hold the material — ask the directories too, before and beside the producer pull.
+        if !self.config.evidence_provider_dirs.is_empty() {
+            self.pull_material_from_evidence_providers(network_domain, claim).await;
+        }
         let signed = self.keypair.as_ref().and_then(|kp| {
             crate::palw_fp_seat::palw_fp_sign_opening_request_v1(&kp.signing_key, network_domain, claim, None, requested_daa)
                 .map(|signature| (kp.verification_key.as_ref().to_vec(), signature))
@@ -19244,6 +19398,7 @@ mod seat_r_tests {
             final_work_share_100_permille: 0,
             class_id,
             artifact_root: h(3),
+            roots_in_force: Vec::new(),
             is_base_class: false,
             row,
             ready_seats_now: 0,

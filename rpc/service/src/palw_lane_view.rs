@@ -5,12 +5,28 @@ use kaspa_consensus_core::palw_exec_view_v1::{
     PalwBlockLaneV1, PalwExecutionRowV1, PalwRoundBlockRecordV1, PalwRoundLaneHealthV1, PalwRoundOutcomeV1,
     palw_round_lane_telemetry_v1,
 };
-use kaspa_rpc_core::{
-    RpcPalwExecBlock, RpcPalwExecutionRow, RpcPalwRefusalCount, RpcPalwRoundLaneHealth, RpcPalwRoundMark,
-};
+use kaspa_rpc_core::{RpcPalwExecBlock, RpcPalwExecutionRow, RpcPalwRefusalCount, RpcPalwRoundLaneHealth, RpcPalwRoundMark};
 
 /// The most executions one `getPalwRoundLane` answers.
 pub const MAX_EXECUTIONS_V1: usize = 256;
+
+/// ADR-0125 semantic amendment: a complete header-derived view, never a guess from a missing header or a verdict.
+pub fn palw_merge_view_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    ghostdag: &kaspa_consensus_core::trusted::ExternalGhostdagData,
+) -> Option<kaspa_rpc_core::RpcPalwMergeView> {
+    let classified = ghostdag
+        .try_classify_palw_mergeset_v1(|member| {
+            consensus
+                .get_header(member)
+                .map(|header| header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1)
+        })
+        .ok()?;
+    Some(kaspa_rpc_core::RpcPalwMergeView {
+        round_blocks: classified.rounds().to_vec(),
+        genuine_red_blocks: classified.genuine_reds().to_vec(),
+    })
+}
 
 fn bond_string(bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2) -> String {
     format!("{}:{}", bond.0.transaction_id, bond.0.index)
@@ -82,13 +98,8 @@ pub fn execution_row_v1(row: &PalwExecutionRowV1) -> RpcPalwExecutionRow {
 /// A block's `laneClass` and, for a round block, its lineage.
 pub fn block_lane_to_rpc_v1(lane: &PalwBlockLaneV1) -> (String, Option<RpcPalwExecBlock>) {
     let exec = lane.envelope.map(|(round, permit_index, bond)| {
-        let mut block = RpcPalwExecBlock {
-            round,
-            permit_index,
-            bond: bond_string(&bond),
-            verdict: "unknown".to_string(),
-            ..Default::default()
-        };
+        let mut block =
+            RpcPalwExecBlock { round, permit_index, bond: bond_string(&bond), verdict: "unknown".to_string(), ..Default::default() };
         match lane.record.map(|r| r.outcome) {
             Some(PalwRoundOutcomeV1::Exec(lineage)) => {
                 block.verdict = "granted".to_string();
@@ -120,6 +131,40 @@ mod tests {
 
     fn h(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
+    }
+
+    #[test]
+    fn adr0125_semantic_merge_view_uses_headers_and_missing_headers_make_it_unavailable() {
+        use kaspa_consensus_core::api::ConsensusApi;
+        use kaspa_consensus_core::errors::consensus::{ConsensusError, ConsensusResult};
+        use kaspa_consensus_core::{BlockHash, header::Header, trusted::ExternalGhostdagData};
+        use std::sync::Arc;
+        struct Headers {
+            missing: bool,
+        }
+        impl ConsensusApi for Headers {
+            fn get_header(&self, hash: BlockHash) -> ConsensusResult<Arc<Header>> {
+                if self.missing && hash == h(3) {
+                    return Err(ConsensusError::HeaderNotFound(hash));
+                }
+                let mut header = Header::from_precomputed_hash(hash, vec![]);
+                header.pow_algo_id = if hash == h(3) { 10 } else { 6 };
+                Ok(Arc::new(header))
+            }
+        }
+        let raw = ExternalGhostdagData {
+            blue_score: 7,
+            blue_work: Default::default(),
+            selected_parent: h(1),
+            mergeset_blues: vec![h(1)],
+            mergeset_reds: vec![h(2), h(3), h(4)],
+            blues_anticone_sizes: Default::default(),
+        };
+        let view = palw_merge_view_v1(&Headers { missing: false }, &raw).unwrap();
+        assert_eq!(view.round_blocks, [h(3)]);
+        assert_eq!(view.genuine_red_blocks, [h(2), h(4)]);
+        assert_eq!(raw.mergeset_reds, [h(2), h(3), h(4)]);
+        assert!(palw_merge_view_v1(&Headers { missing: true }, &raw).is_none());
     }
     fn bond(v: u64) -> PalwBondKeyV2 {
         PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(v), index: 2 })
@@ -171,13 +216,13 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_round_block_is_red_and_names_its_reason() {
+    fn a_refused_round_block_is_round_and_names_its_reason() {
         let mut record = granted(1, 1_000);
         record.outcome = PalwRoundOutcomeV1::Refused(PalwRoundRefusalV1::PermitAlreadyUsed);
-        let lane = PalwBlockLaneV1 { class: PalwBlockClassV1::Red, envelope: Some((9, 0, bond(1))), record: Some(record) };
+        let lane = PalwBlockLaneV1 { class: PalwBlockClassV1::Round, envelope: Some((9, 0, bond(1))), record: Some(record) };
         let (class, exec) = block_lane_to_rpc_v1(&lane);
         let exec = exec.unwrap();
-        assert_eq!(class, "RED");
+        assert_eq!(class, "ROUND");
         assert_eq!((exec.verdict.as_str(), exec.refusal.as_deref()), ("refused", Some("permit_already_used")));
         assert!(exec.claim_id.is_none());
     }

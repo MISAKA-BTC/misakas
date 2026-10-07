@@ -361,6 +361,7 @@ fn gate_prices(
         u64::MAX,
         u64::MAX,
         PALW_GEN_CLOSE_SIZING_WORK_CAP_V1,
+        kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1::Element,
     )
     .unwrap_or_else(|e| panic!("the close sizing refuses the class: {e}"));
     let mut by_point = BTreeMap::new();
@@ -388,6 +389,7 @@ fn checkpoint_prices(c: &Sd3Class) -> BTreeMap<(u8, u16), u64> {
         u64::MAX,
         u64::MAX,
         PALW_GEN_CLOSE_SIZING_WORK_CAP_V1,
+        kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1::Element,
     )
     .expect("the sizing");
     bounds

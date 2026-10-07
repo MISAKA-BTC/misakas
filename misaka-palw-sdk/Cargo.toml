@@ -19,6 +19,8 @@ kaspa-hashes.workspace = true
 misaka-palw-base0.workspace = true
 # RFC-0002 Phase F: IR artifacts (the PALWTIR1 container) and their manifest.
 misaka-palw-tir.workspace = true
+# ADR-0172: the K2-TIR-v1 reference kernel's static route of a lowered program (reported by the preflight and the census).
+misaka-palw-kernel.workspace = true
 # RFC-0003: a generative class's output header (declaring a pipeline class).
 misaka-palw-gen.workspace = true
 misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact" }
@@ -46,6 +48,8 @@ serde_json.workspace = true
 sha2.workspace = true
 misaka-palw-tir-ref2 = { path = "../misaka-palw-tir-ref2" }
 serde = { workspace = true }
+# The Hugging Face census (`census`) reads its header store gzip-compressed.
+flate2.workspace = true
 
 [[bin]]
 name = "palw-class"
@@ -56,6 +60,7 @@ name = "palw-tir-equiv"
 path = "src/bin/palw-tir-equiv.rs"
 
 [dev-dependencies]
+misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }
 # The IR registration test signs and verifies under a bond's ML-DSA-87 key, as the node does.
 libcrux-ml-dsa.workspace = true
 # The streamed-root test converts on pools of one and of seven threads.

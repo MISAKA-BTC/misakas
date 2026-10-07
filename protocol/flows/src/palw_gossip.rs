@@ -43,6 +43,17 @@ use tokio::sync::mpsc;
 /// quorum, block after block. A transport cap must never be able to overrule an admission the
 /// consensus already accepted — so it is sized ~1.7× over the largest class this build ships.
 pub const PALW_MATERIAL_MAX_BYTES: usize = 16 << 20;
+
+/// **Lane PA, B-F2: the most a pruning point's PALW carriage (and its class declarations) may weigh on the wire** — one number for both
+/// ends. The requester refused anything over 64 MiB while the live carriage already weighed ≈ 57 MB and grows with every bond, class and
+/// claim, and the server had no cap at all (it served whatever it materialised and the requester dropped it after the transfer, so a
+/// grown state was a deterministic IBD failure). 384 MiB is a sixth of the transport's 1 GiB message limit and leaves ≈ 6.7× headroom over
+/// today's state; the single-message transport itself is a design limit, written up in
+/// `docs/design/palw/pruned-ibd-palw-state-chunked-transport.md` (chunked, back-pressured, resumable), not raised further here.
+pub const PALW_PRUNING_STATE_MAX_BYTES: usize = 384 << 20;
+
+/// Lane PA, B-F2: the size at which a serving node says, loudly, that the single-message transport is nearing its cap (half of it).
+pub const PALW_PRUNING_STATE_WARN_BYTES: usize = PALW_PRUNING_STATE_MAX_BYTES / 2;
 /// Hard cap on one receipt broadcast — an ML-DSA-87 signature is 4,627 bytes and the rest of the
 /// receipt is under a hundred.
 pub const PALW_RECEIPT_MAX_BYTES: usize = 16 << 10;
@@ -770,6 +781,24 @@ impl PalwGossipCenter {
         let verdict = self.admit_digest(digest, Some((peer, claim)), solicited);
         // No permit means no consumer, which is most nodes: they relay and deduplicate for the
         // network without keeping a copy.
+        if verdict == PalwGossipAdmit::Fresh
+            && let Some(permit) = permit
+        {
+            permit.send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
+        }
+        verdict
+    }
+
+    /// **RFC-0009 stage B: admit a material a LOCAL source produced** — an evidence provider's chunks, already checked against a manifest that
+    /// agrees with the claim's own on-chain roots. It enters the inbox exactly as a peer's answer does (so the duty loop's `verify_material`
+    /// and re-execution still judge it), is deduplicated by the same digest, is never relayed, and spends no peer's budget: there is no peer.
+    pub fn inject_local_material(&self, claim: Hash64, bytes: &[u8]) -> PalwGossipAdmit {
+        if bytes.len() > PALW_MATERIAL_MAX_BYTES {
+            return PalwGossipAdmit::TooBig;
+        }
+        let Ok(permit) = self.inbox_permit() else { return PalwGossipAdmit::Duplicate };
+        let digest = self.digest(1, Some(&claim), bytes);
+        let verdict = self.admit_digest(digest, None, true);
         if verdict == PalwGossipAdmit::Fresh
             && let Some(permit) = permit
         {

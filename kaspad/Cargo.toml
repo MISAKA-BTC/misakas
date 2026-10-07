@@ -43,6 +43,8 @@ kaspa-p2p-mining.workspace = true
 kaspa-perf-monitor.workspace = true
 kaspa-pq-validator-core.workspace = true
 misaka-palw-base0.workspace = true
+# RFC-0009 stage B: any-provider evidence fetch (a directory provider), the manifest and its checks.
+misaka-palw-remote.workspace = true
 misaka-palw-sdk.workspace = true
 # RFC-0007 Part II: the seat-local algebraic checker, its mirror check beside the replay, and the IR it reads.
 misaka-palw-tir.workspace = true

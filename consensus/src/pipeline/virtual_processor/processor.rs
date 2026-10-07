@@ -425,6 +425,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_execution_lane: Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1>,
     /// ADR-0126: `Params::palw_overlay_carve_fence` — the height from which the overlay's full split
     /// pays validators a fifth and a claim escrows the tenth they gave up.
+    pub(super) palw_native_ruleset_id: kaspa_consensus_core::Hash,
+    pub(super) palw_dns_retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
     pub(super) palw_overlay_carve: Option<kaspa_consensus_core::config::params::PalwOverlayCarveV1>,
     /// ADR-0130: `Params::palw_panel_exposure_floor_fence` — the seat exposure floor's height and
     /// reward multiple. Resolved at the claim's ANCHOR for the draw and at the BLOCK's DAA for the
@@ -613,6 +615,9 @@ pub struct VirtualStateProcessor {
     /// The 2026-09-23 economic audit's fence, resolved once in [`Self::palw_audit_2026_09_23_at`];
     /// the fold's extras and the registration gate read it there.
     pub(super) palw_audit_2026_09_23: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0009: `Params::palw_receipt_spend_v4`**, resolved off a `ConsensusV2` ruleset. `None` on every shipped preset — a `PFS4` header is
+    /// then refused by name and no coinbase is ever split.
+    pub(super) palw_receipt_spend_v4: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0152 v2 F2: `Params::palw_offence_attribution` (`Some(0)` on testnet-12 alone), resolved
     /// once in [`Self::palw_offence_attribution_at`]; the `ObjectiveOffence` gate and the fold's
     /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
@@ -1125,6 +1130,8 @@ impl VirtualStateProcessor {
             palw_work_priced_reward: params.palw_work_priced_reward_fence(),
             palw_execution_lane: params.palw_execution_lane_fence(),
             palw_overlay_carve: params.palw_overlay_carve_fence(),
+            palw_dns_retirement: params.palw_dns_retirement,
+            palw_native_ruleset_id: params.consensus_params_id(),
             palw_panel_exposure_floor: params.palw_panel_exposure_floor_fence(),
             palw_compute_overlay_retired: params.palw_compute_overlay_retired,
             palw_model_registry: params.palw_model_registry,
@@ -1181,6 +1188,7 @@ impl VirtualStateProcessor {
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
+            palw_receipt_spend_v4: params.palw_receipt_spend_v4_fence(),
             palw_offence_attribution: params.palw_offence_attribution_fence(),
             palw_activation_pool: params.palw_activation_pool_fence(),
             palw_rcore_plus: params.palw_rcore_plus_fence(),
@@ -1234,7 +1242,12 @@ impl VirtualStateProcessor {
     /// keeping up with `sink`? Measured in blue score beyond the anchor's healthy distance — see
     /// [`dns_finality_fresh_for_bridge`] — and read the same way the deposit-claim RPC reads it,
     /// so the RPC never accepts a claim the template would then leave out, or the reverse.
+    pub(super) fn dns_retired_at(&self, daa: u64) -> bool {
+        self.palw_dns_retirement.is_some_and(|r| r.activation.is_active(daa))
+    }
+
     fn bridge_finality_is_fresh(&self, sink: BlockHash) -> bool {
+        if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.dns_retired_at(daa)) { return true; }
         let Some(dns_params) = self.dns_params.as_ref() else {
             return false;
         };
@@ -2214,7 +2227,7 @@ impl VirtualStateProcessor {
                     // ADR-0042 Decision 10: and what the selected parent's own claim already
                     // spent of its worker reward, so this coinbase does not pay it twice.
                     ctx.palw_v2_escrow_withheld =
-                        palw_state.as_ref().map(|s| self.palw_v2_escrow_withheld_at(s, selected_parent)).unwrap_or(0);
+                        palw_state.as_ref().map(|s| self.palw_v2_escrow_withheld_at(s, selected_parent, pov_daa_score)).unwrap_or(0);
                     // Launch blockers §8: and which of the OTHER merged blues this block may not
                     // pay at all, from the same parent state and for the same reason.
                     ctx.palw_v2_unentitled_blues = palw_state
@@ -2238,6 +2251,19 @@ impl VirtualStateProcessor {
                                 subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
                             };
                             self.palw_v2_unentitled_blues(s, &ctx.ghostdag_data, &non_daa, &point)
+                        })
+                        .unwrap_or_default();
+                    // RFC-0009: and how each merged V4 receipt block is split — the same state, mergeset and non-DAA set. Empty (and
+                    // unread) while `palw_receipt_spend_v4` is dormant.
+                    ctx.palw_v2_receipt_v4_payouts = palw_state
+                        .as_ref()
+                        .map(|s| {
+                            use crate::model::stores::daa::DaaStoreReader;
+                            let non_daa = self
+                                .daa_excluded_store
+                                .get_mergeset_non_daa(current)
+                                .expect("the DAA window is written before the UTXO walk reaches this block");
+                            self.palw_v2_receipt_v4_payouts(s, &ctx.ghostdag_data, &non_daa, &ctx.palw_v2_unentitled_blues)
                         })
                         .unwrap_or_default();
                     // B-1 (deep fence): and how much of each OTHER merged block's carve is withheld
@@ -2601,9 +2627,13 @@ impl VirtualStateProcessor {
                                         }
                                         // ADR-0152 v3.1 J-1: the anchor this block's own attempt answers.
                                         extras.own_job_anchor = own_job_anchor;
-                                        // **ADR-0165: the reds of this block's mergeset** — the floor state machine reads a merged
+                                        // **ADR-0165 / ADR-0125 semantic amendment: the genuine reds of this block's mergeset** — the floor state machine reads a merged
                                         // attempt's colour from them (a RED REAL attempt never extends a Probe or Normal).
-                                        extras.merged_reds = ctx.ghostdag_data.mergeset_reds.iter().copied().collect();
+                                        extras.merged_reds = ctx.ghostdag_data
+                                            .classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member))
+                                            .genuine_reds().iter().copied().collect();
+                                        // **Lane PA (`palw_audit_1004_v1`, RF-3 / P-F5): the beacon** a draw reads in place of this block's own hash.
+                                        extras.audit_1004_draw_seed_source = self.palw_audit_1004_draw_seed_source(ctx.ghostdag_data.selected_parent, point.daa_score);
                                         extras
                                     },
                                 ) {
@@ -3204,11 +3234,240 @@ impl VirtualStateProcessor {
     /// previous finalized. The blue-work-depth `safe` + DNS-confirmed-anchor
     /// `finalized` selection lands with the RPC phase that first exposes the
     /// tags. Inert (one u64 compare) on every current network.
+    /// RFC-0012: derive one crash-safe snapshot from the same candidate state as fork choice.
+    pub(super) fn native_evm_settlement_snapshot(
+        &self,
+        sink: BlockHash,
+    ) -> kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1 {
+        use crate::model::stores::evm::EvmHeaderStoreReader;
+        use kaspa_consensus_core::palw_native_settlement_v1::*;
+        use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2};
+        let retirement = self.palw_dns_retirement.expect("called only after the retirement fence");
+        let sink_daa = self.headers_store.get_daa_score(sink).unwrap_or(0);
+        let pruning = self.pruning_point_store.read().pruning_point().unwrap();
+        let mut result = NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: self.palw_native_ruleset_id,
+            policy_id: retirement.settlement.id(),
+            generation: sink,
+            retirement_daa: retirement.activation.daa_score(),
+            frontier: None,
+            latest: None,
+            safe: None,
+            finalized: None,
+            depth: 0,
+            unique_work: "0".into(),
+            stop: Some(SettlementStopV1::MissingHistory),
+        };
+        let previous = match self.evm_heads_store.read().native_snapshot() {
+            Ok(Some(s))
+                if s.version == 1 && s.policy_id == retirement.settlement.id() && s.ruleset_id == self.palw_native_ruleset_id =>
+            {
+                Some(s)
+            }
+            Ok(None) | Err(StoreError::KeyNotFound(_)) => None,
+            _ => return result, // Corrupt or incompatible evidence is never silently forgotten.
+        };
+        // A below-finalized conflict remains an alarm until a validated resync/import clears it.
+        // Publishing absent heads once must not let the next block forget the conflict.
+        if previous.as_ref().is_some_and(|s| s.stop == Some(SettlementStopV1::FinalizedConflict)) {
+            result.stop = Some(SettlementStopV1::FinalizedConflict);
+            return result;
+        }
+        if let Some(previous_finalized) = previous.and_then(|s| s.finalized) {
+            match self.reachability_service.try_is_chain_ancestor_of(previous_finalized, sink) {
+                Ok(false) => {
+                    error!("[native-settlement] FINALIZED CONFLICT: {sink} abandons {previous_finalized}; resync required");
+                    result.stop = Some(SettlementStopV1::FinalizedConflict);
+                    return result;
+                }
+                Err(_) => return result,
+                Ok(true) => {}
+            }
+        }
+        // Explicit parent reads: a gap never gets skipped to manufacture a connected prefix.
+        let mut chain = Vec::new();
+        let mut cursor = sink;
+        loop {
+            let Ok(header) = self.headers_store.get_header(cursor) else {
+                return result;
+            };
+            let executed = match self.evm_header_store.get(cursor) {
+                Ok(execution) if execution.commitment_root() == header.evm_commitment_root => true,
+                Ok(_) => return result,
+                Err(StoreError::KeyNotFound(_)) => false,
+                Err(_) => return result,
+            };
+            if executed {
+                if result.latest.is_none() {
+                    result.latest = Some(cursor);
+                }
+                chain.push((cursor, header.daa_score, header.blue_score));
+            } else if result.latest.is_some() && header.daa_score >= self.evm_activation_daa_score {
+                // An execution gap inside a supposedly connected result chain is not a safe prefix.
+                return result;
+            }
+            if cursor == pruning || header.daa_score < self.evm_activation_daa_score {
+                break;
+            }
+            let Ok(parent) = self.ghostdag_store.get_selected_parent(cursor) else {
+                return result;
+            };
+            if parent == cursor || parent == kaspa_consensus_core::blockhash::ORIGIN {
+                return result;
+            }
+            cursor = parent;
+        }
+        if chain.is_empty() {
+            result.stop = Some(SettlementStopV1::Unexecuted);
+            return result;
+        }
+        let Some(state) = self.palw_candidate_state_v2(sink) else {
+            return result;
+        };
+        let Some(params) = self.palw_state_params_v2.as_ref() else {
+            return result;
+        };
+        let (frontier_blue, frontier) = state.safe_frontier();
+        result.frontier = (frontier != BlockHash::default()).then_some(frontier);
+        let frontier_on_branch =
+            frontier != BlockHash::default() && self.reachability_service.try_is_dag_ancestor_of(frontier, sink).unwrap_or(false);
+        let mut facts = Vec::new();
+        for (_, claim) in state.claims_iter() {
+            let PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
+                continue;
+            };
+            if !matches!(claim.source, PalwClaimSourceV2::Attempt)
+                || claim.class_id == params.base_class_id()
+                || claim.trace_retention_daa > sink_daa
+            {
+                continue;
+            }
+            let Some(identity) = claim.work_id else {
+                continue;
+            };
+            let Some(work) = state.palw_claim_canonical_weight_v1(claim, self.palw_canonical_work_daa) else {
+                continue;
+            };
+            let Some(bond) = state.bond(&claim.bond) else {
+                continue;
+            };
+            if !self.reachability_service.try_is_dag_ancestor_of(claim.accepted_block, sink).unwrap_or(false) {
+                return result;
+            }
+            facts.push(MatureUsefulWorkV1 {
+                identity,
+                anchor: claim.accepted_block,
+                operator: bond.operator_id,
+                class: claim.class_id,
+                anchor_blue: claim.accepted_blue_score,
+                accepted_blue: claim.accepted_blue_score,
+                anchor_daa: claim.accepted_daa,
+                accepted_daa: claim.accepted_daa,
+                matured_daa: final_daa,
+                work,
+            });
+        }
+        let pricing = kaspa_consensus_core::palw_state_v2::PalwFpPricingV1::of(params, self.palw_canonical_work_daa);
+        for (index, (block, daa, blue)) in chain.iter().enumerate() {
+            if *block == pruning {
+                continue;
+            } // checkpoint contributions are never guessed
+            let Ok((root, delta)) = self.palw_state_v2_store.read().delta_of(*block) else {
+                return result;
+            };
+            // The child commits its parent's PALW state, just as it carries its parent's EVM
+            // execution result. The sink's root is verified by the reconstructed candidate state.
+            let expected_root = if index == 0 {
+                state.state_root()
+            } else {
+                let Ok(child) = self.headers_store.get_header(chain[index - 1].0) else {
+                    return result;
+                };
+                child.palw_state_root
+            };
+            if root != expected_root {
+                return result;
+            }
+            facts.extend(mature_fp_slices_in_delta_v1(
+                &state,
+                &delta,
+                *daa,
+                *blue,
+                sink_daa,
+                self.palw_exec_quantum_maturity_daa,
+                &pricing,
+            ));
+        }
+        // Oldest to newest: certify a contiguous prefix, never jump an uncertified effect.
+        result.stop = None;
+        for (block, daa, blue) in chain.iter().rev() {
+            let closed = state.claims_iter().all(|(_, c)| {
+                c.accepted_blue_score > *blue
+                    || (matches!(c.phase, PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. })
+                        && (matches!(c.phase, PalwClaimPhaseV2::Voided { .. }) || c.trace_retention_daa <= sink_daa))
+            }) && state
+                .da_sessions_iter()
+                .all(|((claim, _), _)| state.claim(claim).is_some_and(|c| c.accepted_blue_score > *blue));
+            match certify_native_effect_v1(
+                retirement.settlement,
+                (*daa, *blue),
+                sink_daa,
+                true,
+                frontier_on_branch && frontier_blue >= *blue,
+                closed,
+                true,
+                &facts,
+            ) {
+                Ok(e) => {
+                    result.safe = Some(*block);
+                    result.depth = e.depth;
+                    result.unique_work = e.work.to_string();
+                }
+                Err(stop) => {
+                    result.stop = Some(stop);
+                    break;
+                }
+            }
+        }
+        // Pruning is a checkpoint safety condition, not a replacement for the PALW certificate.
+        if result.safe.is_some_and(|safe| self.reachability_service.try_is_chain_ancestor_of(pruning, safe).unwrap_or(false))
+            && self.evm_header_store.has(pruning).unwrap_or(false)
+        {
+            result.finalized = Some(pruning);
+        }
+        result
+    }
+
     pub(super) fn update_evm_canonical_heads(&self, batch: &mut WriteBatch, sink: BlockHash) {
         use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader};
         if self.evm_activation_daa_score == u64::MAX {
             return;
         }
+        if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.dns_retired_at(daa)) {
+            let policy = self.palw_dns_retirement.expect("retirement is active").settlement.id();
+            match self.evm_heads_store.read().native_snapshot() {
+                Ok(Some(s)) if s.version != 1 || s.policy_id != policy || s.ruleset_id != self.palw_native_ruleset_id => {
+                    error!("[native-settlement] incompatible persisted evidence; preserving it for resync");
+                    return;
+                }
+                Err(StoreError::KeyNotFound(_)) | Ok(_) => {}
+                Err(e) => {
+                    error!("[native-settlement] unreadable persisted evidence: {e}; preserving it for resync");
+                    return;
+                }
+            }
+            let snapshot = self.native_evm_settlement_snapshot(sink);
+            let heads = kaspa_consensus_core::evm::CanonicalEvmHeads {
+                latest: snapshot.latest.unwrap_or_default(), safe: snapshot.safe.unwrap_or_default(), finalized: snapshot.finalized.unwrap_or_default(),
+            };
+            let mut store = self.evm_heads_store.write();
+            store.set_native_batch(batch, Some(snapshot)).unwrap();
+            store.set_batch(batch, heads).unwrap();
+            return;
+        }
+        // A legal rollback across the fence restores the legacy derivation, without stale V1 labels.
+        self.evm_heads_store.write().set_native_batch(batch, None).unwrap();
         // The sink carries an EVM result iff the lane is live for it (it may
         // predate activation right after the fork).
         if !self.evm_header_store.has(sink).unwrap_or(false) {
@@ -5824,6 +6083,39 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, &class_id, candidate_daa)
                 .err()
                 .map(|refusal| refusal.to_string());
+        // **Lane PA, C-F2: what each rider of this lead is demanded** — at the rider's share of the lead's subsidy, as the fold admits it.
+        // Past the canonical-work height and where riders are armed only; otherwise the producer keeps the lead's pwu as before.
+        if state_params.capacity_riders_active_at(candidate_daa)
+            && budget_fences.canonical_work_daa.is_some_and(|height| candidate_daa >= height)
+        {
+            let lead_escrow = kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+                state_params,
+                self.coinbase_manager.calc_block_subsidy(candidate_daa),
+                budget_fences.escrow_carve,
+            );
+            let state_work = state.work_target().map(|target| target.work).unwrap_or(0);
+            for n in 1..=kaspa_consensus_core::palw_capacity_s567_v1::PALW_RIDERS_MAX_V1 {
+                let Some(subsidy) =
+                    kaspa_consensus_core::palw_state_v2::palw_rider_floor_subsidy_v1(state_params, lead_escrow, n, budget_fences.escrow_carve)
+                else {
+                    break;
+                };
+                // The floor the fold hands the admission for a rider (`TransitionBuilder::work_target_floor` at the share's subsidy).
+                let floor = self
+                    .palw_work_target_floor_for(candidate_daa, subsidy)
+                    .map(|floor| if budget_fences.single_lottery { floor.max(state_work) } else { floor });
+                let fences = kaspa_consensus_core::palw_admission_v2::PalwEpochBudgetFencesV1 {
+                    work_target_floor: floor,
+                    canonical_work_daa: budget_fences.canonical_work_daa,
+                    base_known_draw: budget_fences.base_known_draw,
+                    ..Default::default()
+                };
+                match kaspa_consensus_core::palw_admission_v2::palw_attempt_canonical_pwu_v1(&state, state_params, &class_id, candidate_daa, fences) {
+                    Ok(pwu) => facts.rider_pwu.push(pwu),
+                    Err(_) => break,
+                }
+            }
+        }
         // **RFC-0002 Part II Proposal A (`palw_class_seating`): and the class is seated for the named bond**, the fold's
         // seating door asked before an inference is spent (`Ok` below the fence).
         if facts.class_admission_refusal.is_none()
@@ -6327,6 +6619,7 @@ impl VirtualStateProcessor {
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         block: BlockHash,
+        paying_daa: u64,
     ) -> u64 {
         let recorded = state
             .claims_iter()
@@ -6341,7 +6634,7 @@ impl VirtualStateProcessor {
             recorded == 0 || skipped == 0,
             "block {block}: an attempt's carve is withheld from its claim or as skipped, not both"
         );
-        recorded.saturating_add(skipped)
+        self.native_base_withheld_at(block, paying_daa, recorded.saturating_add(skipped))
     }
 
     /// The carve of `block`'s own attempt where the fold skipped it — see
@@ -6371,7 +6664,7 @@ impl VirtualStateProcessor {
         }
         state_params.worker_carve_at(
             self.coinbase_manager.calc_block_subsidy(header.daa_score),
-            self.palw_escrow_carve_at(header.daa_score, header.daa_score),
+            self.palw_escrow_for_carrier_at(block, header.daa_score, header.daa_score),
         )
     }
 
@@ -6422,7 +6715,7 @@ impl VirtualStateProcessor {
         let (works, _skips) = self.palw_v2_merged_works(ghostdag_data, state, state_params, mergeset_non_daa, point);
         for work in &works {
             if let PalwMergedOwnedWorkV1::Attempt(blue, _, subsidy, carve, _) = work {
-                withheld.insert(*blue, state_params.worker_carve_at(*subsidy, *carve));
+                withheld.insert(*blue, self.native_base_withheld_at(*blue, point.daa_score, state_params.worker_carve_at(*subsidy, *carve)));
             }
         }
         withheld
@@ -6581,8 +6874,8 @@ impl VirtualStateProcessor {
         // A red is not a chain block, so the selected-parent exemption below cannot apply to one,
         // and the same entitlement question is the right question for both colours: did this chain
         // accept work from that block.
-        let mergeset_daa =
-            ghostdag_data.mergeset_blues.iter().chain(ghostdag_data.mergeset_reds.iter()).filter(|h| !mergeset_non_daa.contains(h));
+        let classified = ghostdag_data.classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member));
+        let mergeset_daa = classified.blues().iter().chain(classified.genuine_reds()).filter(|h| !mergeset_non_daa.contains(h));
         for blue in mergeset_daa {
             // The selected parent went through the full admission on its way to becoming a chain
             // block, and its reward is escrowed rather than paid. Re-deciding it here could only
@@ -6681,6 +6974,55 @@ impl VirtualStateProcessor {
             }
         }
         unentitled
+    }
+
+    /// **RFC-0009: how each merged V4 receipt block is paid** — `{ block → (the executor bond's payout script, the authorization's fee
+    /// bps) }` for every entitled in-DAA-window blue or red (the selected parent included) whose header carries a valid `PFS4` spend.
+    ///
+    /// Read from headers and the SAME selected-parent `state` the entitlement and the escrow read, so the template and every validating
+    /// node compute one map. The miner leg goes to `bond.payout_payload` of the CLAIM's executor bond (the admission proved the spend names
+    /// it), derived to a script exactly as every PALW payout is. A block whose claim or bond the state no longer holds gets no entry and is
+    /// paid in full to its own script as before — deterministic on both paths, never an extra mint (the split only moves value between two
+    /// payees of one block). Empty (and nothing read) while `palw_receipt_spend_v4` is dormant, which is every shipped preset.
+    pub(super) fn palw_v2_receipt_v4_payouts(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        ghostdag_data: &GhostdagData,
+        mergeset_non_daa: &BlockHashSet,
+        unentitled: &BlockHashSet,
+    ) -> BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout> {
+        use kaspa_consensus_core::palw_receipt_v4::{
+            PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS, PalwReceiptSpendEnvelopeV4, PalwReceiptV4Payout, palw_receipt_v4_carriage_is_v4,
+            palw_receipt_v4_miner_script,
+        };
+        let mut payouts = BlockHashMap::default();
+        let Some(fence) = self.palw_receipt_spend_v4 else {
+            return payouts;
+        };
+        let classified = ghostdag_data.classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member));
+        for block in classified.blues().iter().chain(classified.genuine_reds()) {
+            if mergeset_non_daa.contains(block) || unentitled.contains(block) {
+                continue;
+            }
+            let Ok(header) = self.headers_store.get_header(*block) else { continue };
+            if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3
+                || !fence.is_active(header.daa_score)
+                || !palw_receipt_v4_carriage_is_v4(&header.palw_commitment)
+            {
+                continue;
+            }
+            let Ok(envelope) = PalwReceiptSpendEnvelopeV4::decode(&header.palw_commitment) else { continue };
+            let Some(claim) = state.claim(&envelope.spend.claim_id) else { continue };
+            let Some(bond) = state.bond(&claim.bond) else { continue };
+            payouts.insert(
+                *block,
+                PalwReceiptV4Payout {
+                    miner_script: palw_receipt_v4_miner_script(&bond.payout_payload),
+                    fee_bps: envelope.spend.authorization.builder_fee_bps.min(PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS),
+                },
+            );
+        }
+        payouts
     }
 
     /// **Audit C-08's third part: what a RELEASED bond's collateral still owes the burn.**
@@ -7620,8 +7962,12 @@ impl VirtualStateProcessor {
                 info!("Block {block}: an audit mesh move was dropped by name below palw_audit_mesh_v1, and the block stands (RFC-0007)");
                 continue;
             }
+            // **Lane PA, G-3 (`palw_audit_1004_v1`)**: past the fence a generative registration is sized like an IR one and takes the
+            // same one place a block.
             if tir_registration_gated
-                && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
+                && (matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
+                    || (state_params.audit_1004_active_at(point.daa_score)
+                        && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredGenV1 { .. })))
             {
                 info!(
                     "Block {block}: a second IR class registration was dropped by name, and the block stands: one a block reaches \
@@ -8039,6 +8385,18 @@ impl VirtualStateProcessor {
                     );
                     continue;
                 }
+                // **Lane PA, G-3 (`palw_audit_1004_v1`): the per-block cap is asked BEFORE the rehearsal fold** — a registration the
+                // cap drops anyway is not folded first (each fold of a pipeline class is the expensive step).
+                if state_params.audit_1004_active_at(point.daa_score)
+                    && class_registrations_charged >= kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1
+                {
+                    info!(
+                        "Block {block}: a class registration was dropped, and the block stands: the block already carries {} \
+                         (PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1)",
+                        kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1
+                    );
+                    continue;
+                }
                 if audit_active {
                     match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
                         &folded,
@@ -8144,7 +8502,10 @@ impl VirtualStateProcessor {
             // admission v10. One the slot accounting above did not see (a network without the
             // 2026-09-23 audit, or the genesis registrant named) is first put to the gate's own two
             // O(1) refusals, so a copy nobody signed never takes the place.
-            if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }) {
+            if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
+                || (state_params.audit_1004_active_at(point.daa_score)
+                    && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredGenV1 { .. }))
+            {
                 if bought_registration.is_none() {
                     if let Err(why) = self.palw_v2_class_registration_starts_at_the_chains_target(&folded, &object) {
                         info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
@@ -9487,7 +9848,9 @@ impl VirtualStateProcessor {
                         return Err(kaspa_consensus_core::palw_mesh_v1::PalwMeshErrorV1::Dormant("palw_audit_mesh_v1").to_string());
                     }
                     kaspa_consensus_core::palw_mesh_v1::palw_trap_revealed_shape_v1(reveal).map_err(|e| e.to_string())?;
-                    state.mesh_trap_revealed_admissible_v1(reveal, point.daa_score).map_err(|e| e.to_string())?;
+                    state
+                        .mesh_trap_revealed_admissible_v2(reveal, point.daa_score, state_params.audit_1004_active_at(point.daa_score))
+                        .map_err(|e| e.to_string())?;
                     kaspa_consensus_core::palw_mesh_v1::palw_trap_revealed_verify_v1(
                         state,
                         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
@@ -9506,8 +9869,13 @@ impl VirtualStateProcessor {
                     if !state_params.vertex_active_at(point.daa_score) {
                         return Err(kaspa_consensus_core::palw_vertex_v1::PalwVertexErrorV1::Dormant.to_string());
                     }
-                    kaspa_consensus_core::palw_vertex_v1::palw_vertex_equivocation_admissible_v1(state, evidence, point.daa_score)
-                        .map_err(|e| e.to_string())?;
+                    kaspa_consensus_core::palw_vertex_v1::palw_vertex_equivocation_admissible_v2(
+                        state,
+                        evidence,
+                        point.daa_score,
+                        state_params.audit_1004_active_at(point.daa_score),
+                    )
+                    .map_err(|e| e.to_string())?;
                     let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
                         self.network_id_bytes.as_slice(),
                         Some(self.genesis.hash),
@@ -11455,6 +11823,21 @@ impl VirtualStateProcessor {
                         self.network_id_bytes.as_slice(),
                         Some(self.genesis.hash),
                     );
+                    // **Lane PA, C-F1 / B-F6 (`palw_audit_1004_v1`)**: the cheap state tests come before any ML-DSA verification (up to 64 of
+                    // them) and before the fold's full-state checkpoint: the riders are of one registered bond, and each carries that
+                    // bond's key (the fold's admission would refuse a stranger's key after the checkpoint and the verifications).
+                    if state_params.audit_1004_active_at(point.daa_score) {
+                        let bond = riders[0].attempt.executor_bond;
+                        if riders.iter().any(|rider| rider.attempt.executor_bond != bond) {
+                            return Err(format!("riders of {lead}: a batch is of one bond"));
+                        }
+                        let Some(record) = state.bond(&kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond)) else {
+                            return Err(format!("riders of {lead}: the executor bond is not registered"));
+                        };
+                        if riders.iter().any(|rider| rider.attempt.executor_pubkey != record.pubkey) {
+                            return Err(format!("riders of {lead}: a rider is not signed by its bond's registered key"));
+                        }
+                    }
                     for (index, envelope) in riders.iter().enumerate() {
                         envelope.validate_shape_v2_at_version(PALW_ATTEMPT_V2_VERSION).map_err(|e| format!("rider {index} of {lead}: {e}"))?;
                         if envelope.attempt.network_domain != network_domain
@@ -12428,6 +12811,12 @@ impl VirtualStateProcessor {
                         held_close_chunks: self.palw_held_close_chunks_at(point.daa_score),
                         // The block's box-demand rules, as the IR arm reads them (the fold's mirror).
                         demand: kaspa_consensus_core::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(&bundle.state, point.daa_score),
+                        // The close-sizing twin, read off the bundle's mirror (`palw_gen_range_twin_v1`).
+                        twin: if bundle.state.gen_range_twin_active_at(point.daa_score) {
+                            kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1::Range
+                        } else {
+                            kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1::Element
+                        },
                     };
                     kaspa_consensus_core::palw_gen_admission_v1::verify_gen_class_admission_v1(bundle, &rules, object)
                         .map_err(|e| format!("generative class {class_id} is not admissible: {e}"))?;
@@ -13095,7 +13484,8 @@ impl VirtualStateProcessor {
             attempts.push((header.daa_score, block));
         }
         let data = self.ghostdag_store.get_data(block).ok()?;
-        for merged in data.mergeset_blues.iter().chain(data.mergeset_reds.iter()).filter(|hash| **hash != data.selected_parent) {
+        let classified = data.classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member));
+        for merged in classified.blues().iter().chain(classified.genuine_reds()).filter(|hash| **hash != data.selected_parent) {
             let merged_header = self.headers_store.get_header(*merged).ok()?;
             if rule.operator_of_v1(&merged_header).is_some() {
                 attempts.push((merged_header.daa_score, *merged));
@@ -13462,12 +13852,127 @@ impl VirtualStateProcessor {
     /// (SA-3). `None` where no overlay runs or below its activation; past `palw_overlay_carve`, where
     /// the full split is in force, the validator share is the fence's and the worker base takes the
     /// remainder.
+    /// Model attempts grow their escrow; recovery floor claims retain their old bounded carve.
+    /// Coinbases withhold the entire new base and burn any unallocated difference.
+    fn palw_escrow_for_carrier_at(
+        &self,
+        carrier: BlockHash,
+        earning_daa: u64,
+        paying_daa: u64,
+    ) -> Option<kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2> {
+        if self.dns_retired_at(earning_daa.min(paying_daa)) {
+            let is_floor = self
+                .headers_store
+                .get_header(carrier)
+                .ok()
+                .and_then(|h| kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&h.palw_commitment).ok())
+                .is_some_and(|e| self.palw_state_params_v2.as_ref().is_some_and(|p| e.attempt.class_id == p.base_class_id()));
+            if is_floor {
+                return kaspa_consensus_core::config::params::palw_overlay_escrow_carve_at_v1(
+                    self.palw_overlay_carve,
+                    earning_daa,
+                    paying_daa,
+                );
+            }
+        }
+        self.palw_escrow_carve_at(earning_daa, paying_daa)
+    }
+
+    fn native_base_withheld_at(&self, carrier: BlockHash, paying_daa: u64, recorded: u64) -> u64 {
+        if !self.dns_retired_at(paying_daa) {
+            return recorded;
+        }
+        let Ok(header) = self.headers_store.get_header(carrier) else {
+            return recorded;
+        };
+        if !kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id) {
+            return recorded;
+        }
+        // Also covers an old 72% earning paid after the fence: no retrospective escrow growth,
+        // and no immediate 20% miner windfall. The difference is explicitly never minted.
+        let full_base = kaspa_consensus_core::palw_native_settlement_v1::native_worker_base_v1(
+            self.coinbase_manager.calc_block_subsidy(header.daa_score),
+        );
+        recorded.max(full_base)
+    }
+
+    /// The 8% inclusion pool is earned by actual useful PALW carriage, never by DNS signatures.
+    pub(super) fn native_inclusion_ratio(
+        &self,
+        ghostdag: &GhostdagData,
+        non_daa: &BlockHashSet,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> (u128, u128) {
+        let Some((_, state)) = self.palw_v2_state_at(ghostdag.selected_parent) else {
+            return (0, 0);
+        };
+        let unentitled = self.palw_v2_unentitled_blues(&state, ghostdag, non_daa, point);
+        let mut eligible = 0u128;
+        let mut total = 0u128;
+        let Some(params) = self.palw_state_params_v2.as_ref() else {
+            return (0, 0);
+        };
+        let pricing = kaspa_consensus_core::palw_state_v2::PalwFpPricingV1::of(params, self.palw_canonical_work_daa);
+        let classified = ghostdag.classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member));
+        for member in classified.blues().iter().chain(classified.genuine_reds()) {
+            if non_daa.contains(member) {
+                continue;
+            }
+            let Ok(header) = self.headers_store.get_header(*member) else {
+                continue;
+            };
+            // Heartbeat and execution Round have no subsidy to allocate.
+            if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 {
+                continue;
+            }
+            let subsidy = self.coinbase_manager.calc_block_subsidy(header.daa_score) as u128;
+            total = total.saturating_add(subsidy);
+            if unentitled.contains(member) {
+                continue;
+            }
+            let attempt = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
+                .ok()
+                .is_some_and(|e| e.attempt.class_id != params.base_class_id());
+            let receipt = if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3 {
+                let envelope = if kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(&header.palw_commitment) {
+                    kaspa_consensus_core::palw_receipt_v4::PalwReceiptSpendEnvelopeV4::decode(&header.palw_commitment)
+                        .ok()
+                        .map(|e| e.to_fold_envelope())
+                } else {
+                    kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).ok()
+                };
+                envelope
+                    .and_then(|e| state.claim(&e.spend.claim_id))
+                    .is_some_and(|c| c.class_id != params.base_class_id() && pricing.prices_in_compute(c))
+            } else {
+                false
+            };
+            if attempt || receipt {
+                eligible = eligible.saturating_add(subsidy);
+            }
+        }
+        (eligible, total)
+    }
+
     pub(super) fn fee_split_at(&self, daa_score: u64) -> Option<kaspa_consensus_core::dns_finality::FeeSplitParams> {
-        kaspa_consensus_core::config::params::palw_overlay_fee_split_at_v1(
+        let mut split = kaspa_consensus_core::config::params::palw_overlay_fee_split_at_v1(
             self.dns_params.as_ref()?,
             self.palw_overlay_carve,
             daa_score,
-        )
+        )?;
+        if self.dns_retired_at(daa_score) {
+            split.subsidy_worker_base_bps = 9200;
+            split.subsidy_worker_inclusion_bps = 800;
+            split.subsidy_validator_bps = 0;
+            split.subsidy_service_bps = 0;
+            split.normal_fee_worker_bps = 10000;
+            split.normal_fee_validator_bps = 0;
+            split.normal_fee_service_bps = 0;
+            split.finality_fee_worker_bps = 10000;
+            split.finality_fee_validator_bps = 0;
+            split.finality_fee_service_bps = 0;
+        }
+        Some(split)
     }
 
     /// **ADR-0126 Decision 3: the carve a claim escrows** for an attempt carried at
@@ -13481,6 +13986,9 @@ impl VirtualStateProcessor {
         attempt_daa_score: u64,
         paying_daa_score: u64,
     ) -> Option<kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2> {
+        if self.dns_retired_at(attempt_daa_score.min(paying_daa_score)) {
+            return Some(kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2::new(920).expect("92% fits the fixed schedule"));
+        }
         kaspa_consensus_core::config::params::palw_overlay_escrow_carve_at_v1(
             self.palw_overlay_carve,
             attempt_daa_score,
@@ -13525,7 +14033,7 @@ impl VirtualStateProcessor {
         self.palw_execution_lane.filter(|lane| lane.activation.is_active(daa_score))
     }
 
-    /// **ADR-0125: the round blocks of a mergeset** — its reds carrying the round lane's id where the
+    /// **ADR-0125 / ADR-0125 semantic amendment: the round blocks of a mergeset** — members carrying the round lane's id where the
     /// lane is open at their own DAA score. Headers only, so the template (which holds no verdicts)
     /// and the validating walk compute the same set; nothing is read where the lane is not configured.
     pub(super) fn palw_round_blocks_of(&self, ghostdag_data: &GhostdagData) -> BlockHashSet {
@@ -13533,11 +14041,9 @@ impl VirtualStateProcessor {
             return BlockHashSet::default();
         };
         ghostdag_data
-            .mergeset_reds
-            .iter()
-            .copied()
-            .filter(|red| {
-                self.headers_store.get_header(*red).is_ok_and(|header| {
+            .unordered_mergeset_without_selected_parent()
+            .filter(|member| {
+                self.headers_store.get_header(*member).is_ok_and(|header| {
                     header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
                         && lane.activation.is_active(header.daa_score)
                 })
@@ -13837,6 +14343,7 @@ impl VirtualStateProcessor {
             // data, set where it is folded — `extras.merged_reds`); every other reading of the fences (a rehearsal, the
             // pre-object base) merges no work, so nothing in it is red.
             merged_reds: Default::default(),
+            audit_1004_draw_seed_source: None,
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),
@@ -13904,7 +14411,7 @@ impl VirtualStateProcessor {
             // carried it is this one, and the block that pays it is its selected-chain child, always
             // later, so the lower score is this one's. Explicit for the reason every line above
             // gives: it decides how much of the subsidy a claim holds.
-            escrow_carve: self.palw_escrow_carve_at(daa_score, daa_score),
+            escrow_carve: self.palw_escrow_for_carrier_at(point.block, daa_score, daa_score),
             model_registry: self.palw_model_registry_fold_at(daa_score),
             // ADR-0132 Upgrade C: the rate, the shares, the ceiling and this block's `bits`. The
             // same reading at every site that folds this block, because it is derived from the
@@ -14377,6 +14884,21 @@ impl VirtualStateProcessor {
 
     /// **RFC-0007 Part I's verification vertex, read off the bundle's mirror**
     /// (`vertex_from_daa`, which `validate_palw_v2` holds equal to `Params::palw_verification_vertex_v1`).
+    /// **Lane PA, the beacon of `palw_audit_1004_v1`**: the hash of the selected-chain block
+    /// [`kaspa_consensus_core::palw_audit_1004_v1::PALW_AUDIT_1004_BEACON_DEPTH_V1`] below (and including) `selected_parent` — fixed by the
+    /// parents the accepting block builds on, so its producer cannot grind it. `None` below the fence and when the chain is shorter
+    /// than the depth (the first blocks after genesis keep the seed they had).
+    fn palw_audit_1004_draw_seed_source(&self, selected_parent: BlockHash, daa_score: u64) -> Option<kaspa_hashes::Hash64> {
+        if !self.palw_state_params_v2.as_ref().is_some_and(|params| params.audit_1004_active_at(daa_score)) {
+            return None;
+        }
+        let mut current = selected_parent;
+        for _ in 1..kaspa_consensus_core::palw_audit_1004_v1::PALW_AUDIT_1004_BEACON_DEPTH_V1 {
+            current = self.ghostdag_store.get_selected_parent(current).ok()?;
+        }
+        Some(current)
+    }
+
     fn palw_vertex_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.vertex_active_at(daa_score))
     }
@@ -14888,12 +15410,16 @@ impl VirtualStateProcessor {
         // the draw is consensus (the panel a claim is bound to). Below it (testnet-11) the old rule
         // stands byte for byte: any row, the V1 age.
         let readiness_v2 = self.palw_audit_2026_09_23_at(anchor_daa) && self.palw_readiness_v2_at(anchor_daa);
-        Some(kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1::at(
-            &fold,
-            anchor_daa,
-            state.base_class_id(),
-            readiness_v2,
-        ))
+        Some(
+            kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1::at(
+                &fold,
+                anchor_daa,
+                state.base_class_id(),
+                readiness_v2,
+            )
+            // Lane MU (ADR-0173): past `palw_audit_1004_v1` the draw reads possession of the root the claim named.
+            .with_root_keyed(state.audit_1004_active_at(anchor_daa)),
+        )
     }
 
     /// **ADR-0075 SA-1/SA-2, resolved in exactly one place.** `false` on every shipped preset.
@@ -15324,7 +15850,7 @@ impl VirtualStateProcessor {
     ) -> (Vec<PalwMergedOwnedWorkV1>, Vec<(BlockHash, String)>) {
         let mut works = Vec::new();
         let mut skips = Vec::new();
-        if ghostdag_data.mergeset_blues.len() <= 1 && ghostdag_data.mergeset_reds.is_empty() {
+        if ghostdag_data.unordered_mergeset_without_selected_parent().next().is_none() {
             return (works, skips);
         }
         let non_daa = mergeset_non_daa;
@@ -15351,7 +15877,7 @@ impl VirtualStateProcessor {
                     self.coinbase_manager.calc_block_subsidy(header.daa_score),
                     // ADR-0126: and the carve, at the lower of the attempt block's score and the
                     // accepting block's — the block whose coinbase pays and withholds it.
-                    self.palw_escrow_carve_at(header.daa_score, point.daa_score),
+                    self.palw_escrow_for_carrier_at(*blue, header.daa_score, point.daa_score),
                     // ADR-0132 Upgrade C: the merged block's own `bits`, the lottery its forward faced.
                     header.bits,
                 )),
@@ -15380,7 +15906,24 @@ impl VirtualStateProcessor {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
             return Err("a receipt-lane block on a network with no free-prompt bundle".to_string());
         };
-        let envelope = PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).map_err(|e| e.to_string())?;
+        // **RFC-0009: which receipt carriage is this?** The magic says. A `PFS4` header is a V4 (public redemption) spend and is valid
+        // only past `palw_receipt_spend_v4`; a `PFS3` one is the V3 spend exactly as it always was. Both reach the fold through the
+        // same V3-shaped view (`(claim, quantum, executor bond)` is all the fold reads), so everything downstream is shared.
+        let v4 = if kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(&header.palw_commitment) {
+            if !self.palw_receipt_spend_v4.is_some_and(|fence| fence.is_active(header.daa_score)) {
+                return Err(kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Error::BelowFence.to_string());
+            }
+            Some(
+                kaspa_consensus_core::palw_receipt_v4::PalwReceiptSpendEnvelopeV4::decode(&header.palw_commitment)
+                    .map_err(|e| e.to_string())?,
+            )
+        } else {
+            None
+        };
+        let envelope = match &v4 {
+            Some(v4) => v4.to_fold_envelope(),
+            None => PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).map_err(|e| e.to_string())?,
+        };
         let claim = state
             .claim(&envelope.spend.claim_id)
             .ok_or_else(|| format!("claim {} does not exist at this chain point", envelope.spend.claim_id))?;
@@ -15429,6 +15972,25 @@ impl VirtualStateProcessor {
         // hold and spend that producer's certified quantum. `_full_v3` — documented as "the composed
         // admission a wiring layer should call" and covered by three tests — had no non-test caller.
         let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        if let Some(v4) = &v4 {
+            kaspa_consensus_core::palw_receipt_v4::check_palw_receipt_spend_admission_full_v5(
+                state,
+                point,
+                network_domain,
+                pre_pow_hash,
+                header.timestamp,
+                header.nonce,
+                freeprompt.receipt_maturity_daa(),
+                freeprompt.receipt_use_window_daa(),
+                &beacon,
+                v4,
+                |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
+                self.palw_fp_pricing().as_ref(),
+            )
+            .map_err(|e| e.to_string())?;
+            let _ = state_params;
+            return Ok(Some(envelope));
+        }
         kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v4(
             state,
             point,
@@ -16257,6 +16819,8 @@ impl VirtualStateProcessor {
     /// `ATTESTATION_MLDSA87_CONTEXT`, gate by `is_bond_active_at`, then feed the
     /// pure aggregation core. No new store; recompute is reorg-safe.
     fn update_dns_state(&self, batch: &mut WriteBatch, sink: BlockHash) {
+        // Preserve historical anchors for replay; no new live DNS confirmations after retirement.
+        if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.dns_retired_at(daa)) { return; }
         let Some(dns_params) = self.dns_params.as_ref() else {
             return;
         };
@@ -16478,7 +17042,7 @@ impl VirtualStateProcessor {
         // ADR-0128 Decision 5: past the BFT fence (at the sink) the confirmed anchor is the newest
         // DNS-final one instead of the depth rule's; every other field above is kept as computed.
         // Below the fence, and wherever the fence is unset, the depth rule's state is written as is.
-        let new_state = match self.dns_bft_gate.filter(|gate| gate.activation.is_active(sink_daa)) {
+        let new_state = match self.dns_bft_gate.filter(|gate| gate.activation.is_active(sink_daa) && !self.dns_retired_at(sink_daa)) {
             Some(gate) => self.dns_bft_confirmed_state(depth_state, prev_dns_state.as_ref(), sink, &bonds, dns_params, &gate),
             None => depth_state,
         };
@@ -17071,7 +17635,12 @@ impl VirtualStateProcessor {
         // which is what the early return below used to skip for a reorg. A candidate this does not
         // refuse (it contains the anchor, the anchor is stale on this node's own chain, or nothing
         // is confirmed) goes on exactly as it does without the fence. See `dns_bft_gate_refusal`.
-        if let Some(refusal) = self.dns_bft_gate_refusal(candidate, prev_sink) {
+        let incumbent_daa = match self.headers_store.get_daa_score(prev_sink) {
+            Ok(daa) => daa,
+            Err(_) => return DnsReorgOutcome::DominanceViolation,
+        };
+        let dns_retired = self.dns_retired_at(incumbent_daa);
+        if !dns_retired && let Some(refusal) = self.dns_bft_gate_refusal(candidate, prev_sink) {
             return refusal;
         }
         // **Unit D, site 4: on a V2 network the deep-reorg gate IS the one comparator.**
@@ -17163,6 +17732,10 @@ impl VirtualStateProcessor {
                     DnsReorgOutcome::DominanceViolation
                 }
             };
+        }
+        if dns_retired {
+            // The only remaining case is an extension. Never fall back to Work/Stake here.
+            return if self.palw_candidate_order_v2(candidate).is_some() { DnsReorgOutcome::GateInactive } else { DnsReorgOutcome::DominanceViolation };
         }
         let Some(dns_params) = self.dns_params.as_ref() else {
             return DnsReorgOutcome::GateInactive;
@@ -17515,6 +18088,8 @@ impl VirtualStateProcessor {
     /// note on the reorg gate (§5-5) does not apply: this path is entered only in the dead-anchor
     /// state, which the cheap staleness check settles first on every healthy resolve.
     fn dns_stake_preferred_tip(&self, prev_sink: BlockHash, tips: &[BlockHash], finality_point: BlockHash) -> Option<BlockHash> {
+        // Authority is selected by the incumbent, never by a candidate branch.
+        if self.headers_store.get_daa_score(prev_sink).ok().is_none_or(|daa| self.dns_retired_at(daa)) { return None; }
         let dns_params = self.dns_params.as_ref()?;
         let mult = dns_params.stake_preference_max_work_deficit_multiplier;
         if mult == 0 || tips.len() < 2 {
@@ -17980,11 +18555,11 @@ impl VirtualStateProcessor {
             let ghostdag = self.ghostdag_manager.ghostdag(&tentative);
             let mut members = Vec::new();
             let mut malformed = false;
-            for red in ghostdag.mergeset_reds.iter().copied() {
-                if !self.ghostdag_manager.is_round_block(red) {
+            for member in ghostdag.unordered_mergeset_without_selected_parent() {
+                if !self.ghostdag_manager.is_round_block(member) {
                     continue;
                 }
-                match envelope_of(red) {
+                match envelope_of(member) {
                     Some(envelope) => members.push((envelope.round, envelope.permit_index, envelope.bond)),
                     None => malformed = true,
                 }
@@ -18834,10 +19409,9 @@ impl VirtualStateProcessor {
                 continue;
             }
             let members: Option<Vec<_>> = ghostdag
-                .mergeset_reds
-                .iter()
-                .filter(|red| self.ghostdag_manager.is_round_block(**red))
-                .map(|red| envelope_of(*red).map(|envelope| (envelope.round, envelope.permit_index, envelope.bond)))
+                .unordered_mergeset_without_selected_parent()
+                .filter(|member| self.ghostdag_manager.is_round_block(*member))
+                .map(|member| envelope_of(member).map(|envelope| (envelope.round, envelope.permit_index, envelope.bond)))
                 .collect();
             let Some(members) = members else { continue };
             // **A tip the validator would refuse to merge is not a parent** (the 2026-10-03 execution-lane wedge): a round
@@ -19090,7 +19664,7 @@ impl VirtualStateProcessor {
                         // Below-fence-only (audit #4 relocated); counted with malformed — the
                         // shard is intrinsically unusable as-is, same hygiene class.
                         AttestationDropReason::NonZeroValidatorSetCommitment => *dropped_malformed += 1,
-                        AttestationDropReason::MalformedPayload => *dropped_malformed += 1,
+                        AttestationDropReason::DnsRetired | AttestationDropReason::MalformedPayload => *dropped_malformed += 1,
                     }
                     dropped_attestation_shards.push(kaspa_consensus_core::block::AttestationTemplateDrop {
                         tx_id: tx.id(),
@@ -19430,6 +20004,9 @@ impl VirtualStateProcessor {
                 virtual_state.ghostdag_data.selected_parent,
                 validator_pool,
             );
+        let (newly_included_stake, expected_stake) = if self.dns_retired_at(virtual_state.daa_score) {
+            self.native_inclusion_ratio(&virtual_state.ghostdag_data, &virtual_state.mergeset_non_daa, &self.palw_v2_template_point(&virtual_state))
+        } else { (newly_included_stake, expected_stake) };
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): append the reserve-drip outputs so a block
         // mined from this template reproduces the validated coinbase byte-for-byte. Reads the sink's
         // committed reserve balance (= the template's selected parent). Inert below the v2 fence.
@@ -19457,7 +20034,7 @@ impl VirtualStateProcessor {
         // being built on, so its escrow is the one the validating walk will withhold. Computed from
         // the same state the payouts came from, so the two halves cannot disagree.
         let palw_escrow_withheld =
-            palw_at_selected_parent.as_ref().map(|(block, state)| self.palw_v2_escrow_withheld_at(state, *block)).unwrap_or(0);
+            palw_at_selected_parent.as_ref().map(|(block, state)| self.palw_v2_escrow_withheld_at(state, *block, virtual_state.daa_score)).unwrap_or(0);
         // Launch blockers §8, construction side: the merged blues this template may not pay. Same
         // state, same question, same answer as the validating walk — a template that disagreed
         // would mine blocks its own node rejects.
@@ -19476,6 +20053,13 @@ impl VirtualStateProcessor {
         // Same selected-parent state, same virtual ghostdag/non-DAA and same template point as the
         // validating walk resolves for the block this template becomes — so the withheld map, and
         // thus the coinbase, are byte-identical on both paths. Empty below the fence.
+        // RFC-0009, construction side: how each merged V4 receipt block is split — same state, same virtual mergeset, same entitlement.
+        let palw_receipt_v4_payouts = palw_at_selected_parent
+            .as_ref()
+            .map(|(_, state)| {
+                self.palw_v2_receipt_v4_payouts(state, &virtual_state.ghostdag_data, &virtual_state.mergeset_non_daa, &palw_unentitled_blues)
+            })
+            .unwrap_or_default();
         let palw_merged_escrow_withheld = palw_at_selected_parent
             .as_ref()
             .map(|(_, state)| {
@@ -19508,6 +20092,8 @@ impl VirtualStateProcessor {
                 &palw_merged_escrow_withheld,
                 // ADR-0125: the merged round blocks, whose fees go to their payouts.
                 &self.palw_round_blocks_of(&virtual_state.ghostdag_data),
+                // RFC-0009: the merged V4 receipt blocks' split payouts.
+                &palw_receipt_v4_payouts,
             )
             .unwrap();
         // **The coinbase is fixed HERE, before `evm_template_fields` commits the lane** (phase2-plan
@@ -19899,7 +20485,11 @@ impl VirtualStateProcessor {
             let prev = heads_write.get().ok();
             let latest = prev.as_ref().map(|h| h.latest).unwrap_or(pruning_point);
             let safe = prev.as_ref().map(|h| h.safe).unwrap_or(pruning_point);
-            let heads = kaspa_consensus_core::evm::CanonicalEvmHeads { latest, safe, finalized: pruning_point };
+            let retired = self.headers_store.get_daa_score(pruning_point).is_ok_and(|daa| self.dns_retired_at(daa));
+            let heads = if retired {
+                kaspa_consensus_core::evm::CanonicalEvmHeads { latest: pruning_point, safe: BlockHash::default(), finalized: BlockHash::default() }
+            } else { kaspa_consensus_core::evm::CanonicalEvmHeads { latest, safe, finalized: pruning_point } };
+            heads_write.set_native_batch(&mut batch, None).unwrap();
             heads_write.set_batch(&mut batch, heads).unwrap();
         }
         self.db.write(batch).unwrap();

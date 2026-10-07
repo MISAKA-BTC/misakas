@@ -299,6 +299,93 @@ impl TestConsensus {
         PalwReceiptSpendEnvelopeV3 { spend, signature }.encode()
     }
 
+    /// **RFC-0009: a `PFS4` (V4 public-redemption) receipt carriage for `header`**, with the harness identity as BOTH the executor and the
+    /// builder (genesis-registry row 0). `signed: false` writes junk signatures of the right length — what the stateless shape check accepts
+    /// and only the signature check refuses. The header stage is all this is for: the claim named does not exist on the chain.
+    #[allow(dead_code)]
+    pub(crate) fn palw_v4_test_receipt_carriage(&self, header: &Header, signed: bool) -> Vec<u8> {
+        self.palw_v4_test_receipt_carriage_for(
+            header,
+            signed,
+            kaspa_hashes::Hash64::from_u64_word(0xFC),
+            0,
+            kaspa_hashes::Hash64::from_u64_word(0xBEAC),
+            500,
+        )
+    }
+
+    /// [`Self::palw_v4_test_receipt_carriage`] for a claim, quantum, beacon and builder fee a TEST supplies — the V4 twin of
+    /// `palw_v3_test_receipt_carriage_for`, so a `PFS4` block can name a claim the chain actually holds.
+    #[allow(dead_code)]
+    pub(crate) fn palw_v4_test_receipt_carriage_for(
+        &self,
+        header: &Header,
+        signed: bool,
+        claim_id: kaspa_hashes::Hash64,
+        quantum_index: u32,
+        beacon_block: kaspa_hashes::Hash64,
+        builder_fee_bps: u16,
+    ) -> Vec<u8> {
+        use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
+        use kaspa_consensus_core::palw_receipt_v4::{
+            PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT, PALW_RECEIPT_V4_BEACON_RULE_SLOT, PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT,
+            PALW_RECEIPT_V4_VERSION, PalwReceiptSpendEnvelopeV4, PalwReceiptSpendUnsignedV4, PalwRedemptionAuthV4, fp_spend_id_v4,
+            redeem_auth_id_v4, spend_challenge_v4,
+        };
+        let network_id = self.params.net.to_string();
+        let network_domain = palw_network_domain_v2_for(network_id.as_bytes(), Some(self.params.genesis.hash));
+        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        let kp = Self::palw_v2_harness_keypair();
+        let sign = |message: &[u8], context: &[u8]| -> Vec<u8> {
+            if signed {
+                libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0u8; 32]).expect("the harness signs").as_ref().to_vec()
+            } else {
+                vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]
+            }
+        };
+        let executor_bond =
+            kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0), 0);
+        let builder_bond =
+            kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0), 0);
+        let authorization = PalwRedemptionAuthV4 {
+            version: PALW_RECEIPT_V4_VERSION,
+            network_domain,
+            claim_id,
+            executor_bond,
+            quantum_lo: 0,
+            quantum_hi: 4,
+            beacon_rule: PALW_RECEIPT_V4_BEACON_RULE_SLOT,
+            builder_fee_bps,
+            expiry_daa: u64::MAX,
+        };
+        let authorization_signature = sign(redeem_auth_id_v4(&authorization).as_byte_slice(), PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT);
+        let spend = PalwReceiptSpendUnsignedV4 {
+            version: PALW_RECEIPT_V4_VERSION,
+            network_domain,
+            challenge: spend_challenge_v4(
+                network_domain,
+                pre_pow,
+                header.timestamp,
+                header.nonce,
+                claim_id,
+                quantum_index,
+                &executor_bond,
+                &builder_bond,
+            ),
+            claim_id,
+            quantum_index,
+            beacon_block,
+            executor_bond,
+            builder_bond,
+            builder_pubkey: Self::palw_v2_harness_pubkey(),
+            authorization,
+            executor_pubkey: Self::palw_v2_harness_pubkey(),
+            authorization_signature,
+        };
+        let builder_signature = sign(fp_spend_id_v4(&spend).as_byte_slice(), PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT);
+        PalwReceiptSpendEnvelopeV4 { spend, builder_signature }.encode()
+    }
+
     pub(crate) fn palw_v2_test_carriage(&self, header: &Header) -> Vec<u8> {
         use kaspa_consensus_core::palw_attempt_v2::{
             PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2, palw_network_domain_v2_for,

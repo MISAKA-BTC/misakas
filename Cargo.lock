@@ -4066,6 +4066,7 @@ dependencies = [
  "protoc-bin-vendored",
  "rand 0.8.6",
  "regex",
+ "serde_json",
  "thiserror 1.0.64",
  "tokio",
  "tokio-stream",
@@ -5283,6 +5284,7 @@ dependencies = [
  "misaka-palw",
  "misaka-palw-base0",
  "misaka-palw-pow-driver",
+ "misaka-palw-remote",
  "misaka-palw-sdk",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
@@ -5892,6 +5894,7 @@ dependencies = [
  "misaka-palw-derive",
  "misaka-palw-extension",
  "misaka-palw-pow-driver",
+ "misaka-palw-remote",
  "misaka-palw-sdk",
  "misaka-palw-tir-lower",
  "serde",
@@ -5978,8 +5981,8 @@ dependencies = [
  "faster-hex 0.9.0",
  "kaspa-consensus-core",
  "kaspa-hashes",
- "libc",
  "log",
+ "misaka-palw-host-security",
  "serde",
  "serde_json",
  "tempfile",
@@ -6012,9 +6015,9 @@ dependencies = [
  "kaspa-pq-validator-core",
  "kaspa-txscript",
  "libc",
- "misaka-palw",
  "misaka-palw-constraint",
  "misaka-palw-gen",
+ "misaka-palw-host-security",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
  "rayon",
@@ -6116,6 +6119,7 @@ dependencies = [
  "misaka-palw-derive",
  "misaka-palw-fp-submit",
  "misaka-palw-gen",
+ "misaka-palw-remote",
  "misaka-palw-tir",
  "rand 0.8.6",
  "serde",
@@ -6132,6 +6136,13 @@ dependencies = [
  "borsh",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "misaka-palw-host-security"
+version = "1.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -6155,6 +6166,18 @@ dependencies = [
  "kaspa-math",
  "misaka-palw-base0",
  "serde_json",
+]
+
+[[package]]
+name = "misaka-palw-kernel"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "misaka-palw-gen",
+ "misaka-palw-tir",
+ "misaka-palw-tir-sketch",
+ "thiserror 1.0.64",
 ]
 
 [[package]]
@@ -6201,11 +6224,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-remote"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-txscript",
+ "libcrux-ml-dsa",
+ "thiserror 1.0.64",
+]
+
+[[package]]
 name = "misaka-palw-sdk"
 version = "1.1.0"
 dependencies = [
  "blake2b_simd",
  "borsh",
+ "flate2",
  "kaspa-consensus-core",
  "kaspa-hashes",
  "kaspa-pq-validator-core",
@@ -6213,11 +6250,13 @@ dependencies = [
  "libcrux-ml-dsa",
  "misaka-palw-base0",
  "misaka-palw-gen",
+ "misaka-palw-kernel",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
  "misaka-palw-tir-exec",
  "misaka-palw-tir-lower",
  "misaka-palw-tir-ref2",
+ "misaka-palw-tir-sketch",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rayon",

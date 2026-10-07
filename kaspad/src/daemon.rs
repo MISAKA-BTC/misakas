@@ -1570,6 +1570,8 @@ Do you confirm? (y/n)";
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
                         attempt_retention: std::time::Duration::from_secs(args.palw_attempt_retention_minutes.saturating_mul(60)),
                         riders: args.palw_riders,
+                        // RFC-0009: builder mode's authorization directory (unread while `palw_receipt_spend_v4` is dormant).
+                        redemption_auth_dir: args.palw_redemption_auth_dir.clone().map(std::path::PathBuf::from),
                         // A fresh network's genesis is always "too old" for the sync rule; the
                         // operator's flag is the only thing that can say "start anyway".
                         enable_unsynced_mining: args.enable_unsynced_mining,
@@ -2006,6 +2008,8 @@ Do you confirm? (y/n)";
                         tir_shard_run_leaves: args.palw_tir_shard_run_leaves.unwrap_or(0),
                         tir_shard_shadow: args.palw_tir_shard_shadow,
                         improve_artifact_dir: args.palw_improve_artifact_dir.as_ref().map(std::path::PathBuf::from),
+                        root_fetch_cmd: args.palw_root_fetch_cmd.clone(),
+                        root_drop_dir: args.palw_root_drop_dir.as_ref().or(args.palw_improve_artifact_dir.as_ref()).map(std::path::PathBuf::from),
                         improve_capture_dir: args.palw_improve_capture_dir.as_ref().map(std::path::PathBuf::from),
                         improve_tamper: match args.palw_drill_tamper_eval.as_deref() {
                             None => None,
@@ -2058,6 +2062,12 @@ Do you confirm? (y/n)";
                         // The same directory the producer writes to, so a node that produces can
                         // answer a court about its own work after its gossip pool has moved on.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
+                        // RFC-0009 stage B: the directories a material pull is also answered from (empty: as before).
+                        evidence_provider_dirs: args
+                            .palw_evidence_provider_dir
+                            .as_deref()
+                            .map(|dirs| dirs.split(',').map(str::trim).filter(|d| !d.is_empty()).map(std::path::PathBuf::from).collect())
+                            .unwrap_or_default(),
                         drill_answer_only: {
                             let drill = palw_private_drill;
                             if (args.palw_drill_answer_only || args.palw_drill_refuse_leaf_evidence) && !drill {

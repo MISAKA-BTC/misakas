@@ -82,6 +82,8 @@ pub struct PalwProducerConfig {
     pub attempt_retention: std::time::Duration,
     /// **ADR-0164 F-M1: riders per lead** (`--palw-riders`): 0 builds none.
     pub riders: u32,
+    /// **RFC-0009: builder mode** (`--palw-redemption-auth-dir`) — see [`PalwProducerService::produce_redemption`].
+    pub redemption_auth_dir: Option<std::path::PathBuf>,
     /// **The operator's `--enable-unsynced-mining`, threaded to the producer** — the same escape
     /// the RPC mining path honours (`rpc/service`: `!enable_unsynced_mining && !is_synced` ⇒
     /// refuse). Without it a PALW network cannot be BORN: `should_mine` requires the sink to be
@@ -1087,7 +1089,34 @@ impl PalwProducerService {
                         last_receipt_err = None;
                         continue;
                     }
-                    Ok(None) => {} // No winning quantum right now; fall through to an attempt.
+                    Ok(None) => {
+                        // No winning quantum of this bond's own. **RFC-0009 builder mode**: a quantum another miner authorized the public to
+                        // redeem. Past `palw_receipt_spend_v4` only; the directory is unread while the fence is dormant.
+                        if let Some(dir) = self.config.redemption_auth_dir.clone() {
+                            match self.produce_redemption(&session, network_domain, bond, miner_data.clone(), &dir).await {
+                                Ok(Some(hash)) => {
+                                    produced += 1;
+                                    last_progress_at = std::time::Instant::now();
+                                    info!("[{PALW_PRODUCER}] produced REDEMPTION receipt block #{produced} {hash} (another miner's authorized quantum, mined)");
+                                    self.flow_context.update_palw_runtime(|r| {
+                                        r.receipt_blocks += 1;
+                                        r.last_block = hash.to_string();
+                                        r.last_block_unix = kaspa_p2p_flows::flow_context::unix_now_secs();
+                                    });
+                                    continue;
+                                }
+                                Ok(None) => {}
+                                Err(err) => {
+                                    let stale = last_receipt_err_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                                    if last_receipt_err.as_deref() != Some(err.as_str()) || stale {
+                                        warn!("[{PALW_PRODUCER}] redemption: {err}");
+                                        last_receipt_err = Some(err);
+                                        last_receipt_err_at = Some(std::time::Instant::now());
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Err(err) => {
                         let stale = last_receipt_err_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                         if last_receipt_err.as_deref() != Some(err.as_str()) || stale {
@@ -1276,13 +1305,23 @@ impl PalwProducerService {
                             if self.exiting() {
                                 break;
                             }
+                            // **Lane PA, C-F2**: a rider's pwu is what the fold derives at ITS share of the lead's subsidy for a batch of
+                            // `self.config.riders` — not the lead's `facts.pwu`, which a model class whose floor at the share prices it
+                            // otherwise has refused `PwuClaimNotDerived` (the batch never landed).
+                            let rider_facts = rider_facts_v1(&facts, self.config.riders as usize);
                             if let Err(e) = self
-                                .produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor, Some((claim, index, retention)), &mut built)
+                                .produce_one(&session, &rider_facts, network_domain, bond, miner_data.clone(), &mut cursor, Some((claim, index, retention)), &mut built)
                                 .await
                             {
                                 warn!("[{PALW_PRODUCER}] rider {index} of {claim} not built: {e}");
                                 break;
                             }
+                        }
+                        // **Lane PA, C-F2**: where the fold's per-share pwu is known, a batch short of its size was derived for a share it
+                        // will not have — queue only a whole batch (the lead keeps its carve whole otherwise).
+                        if !built.is_empty() && built.len() < self.config.riders as usize && !facts.rider_pwu.is_empty() {
+                            warn!("[{PALW_PRODUCER}] only {} of {} riders of lead {claim} were built: not queued (their pwu is derived for the whole batch)", built.len(), self.config.riders);
+                            built.clear();
                         }
                         if !built.is_empty() {
                             info!("[{PALW_PRODUCER}] queues {} rider(s) of lead {claim} (ADR-0164 F-M1, tag 95)", built.len());
@@ -1400,6 +1439,92 @@ impl PalwProducerService {
             .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: receipt block {hash} was not submitted"))?
             .map_err(|e| format!("the chain refused a receipt block this node produced: {e}"))?;
         Ok(Some(hash))
+    }
+
+    /// **RFC-0009 stage C, builder mode: spend ANOTHER miner's authorized winning quantum into a block of this node's own bond.**
+    ///
+    /// Reads the `RDA4` bundles in `dir`, and for the first whose network is ours, whose authorization has not expired, whose claim holds a
+    /// WINNING quantum inside the authorized range and its use window, builds a receipt block carrying a V4 spend: the executor's
+    /// authorization and signature whole, and this node's bond and key as the builder. The chain admits it only past
+    /// `palw_receipt_spend_v4` (so this does nothing on every shipped preset), pays the miner leg to the executor bond's registered payout and
+    /// the authorization's fee — plus this block's own transaction fees — to this node's pay address.
+    ///
+    /// `Ok(None)` when nothing is redeemable now (the fence is dormant, no bundle applies, no quantum wins): the normal case.
+    async fn produce_redemption(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        network_domain: Hash64,
+        builder_bond: TransactionOutpoint,
+        miner_data: MinerData,
+        dir: &std::path::Path,
+    ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
+        let next_daa = session.get_virtual_daa_score();
+        if !self.consensus_config.params.palw_receipt_spend_v4_active_at(next_daa) {
+            return Ok(None);
+        }
+        let seed = self.key_seed.ok_or("no signing key")?;
+        let entries = std::fs::read_dir(dir).map_err(|e| format!("cannot read the redemption directory {}: {e}", dir.display()))?;
+        let mut names: Vec<std::path::PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        names.sort();
+        for path in names {
+            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Ok(bundle) = kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4::decode(&bytes) else { continue };
+            // A bundle that fails its own checks is skipped, never believed: the chain would refuse the block anyway.
+            if bundle
+                .validate_v4(network_domain, |key, message, sig, context| {
+                    kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                })
+                .is_err()
+            {
+                continue;
+            }
+            let auth = &bundle.authorization;
+            if next_daa > auth.expiry_daa {
+                continue;
+            }
+            let spendable = session.palw_fp_spendable_v3(auth.executor_bond);
+            let Some(win) = spendable.into_iter().find(|q| {
+                q.claim_id == auth.claim_id
+                    && q.wins
+                    && next_daa <= q.spend_deadline_daa
+                    && q.quantum_index >= auth.quantum_lo
+                    && q.quantum_index < auth.quantum_hi
+            }) else {
+                continue;
+            };
+            let mut template = self
+                .mining_manager
+                .clone()
+                .get_block_template(session, miner_data.clone())
+                .await
+                .map_err(|e| format!("no block template: {e}"))?;
+            template.block.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+            let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&template.block.header);
+            let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+            let envelope = key.build_fp_receipt_spend_envelope_v4(
+                network_domain,
+                pre_pow,
+                template.block.header.timestamp,
+                template.block.header.nonce,
+                auth.claim_id,
+                win.quantum_index,
+                win.beacon.beacon_block,
+                builder_bond,
+                auth.clone(),
+                bundle.executor_pubkey.clone(),
+                bundle.signature.clone(),
+            );
+            template.block.header.palw_commitment = envelope.encode();
+            template.block.header.finalize();
+            let block: kaspa_consensus_core::block::Block = template.block.clone().to_immutable();
+            let hash = block.hash();
+            palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
+                .await
+                .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: redemption block {hash} was not submitted"))?
+                .map_err(|e| format!("the chain refused a redemption block this node produced: {e}"))?;
+            return Ok(Some(hash));
+        }
+        Ok(None)
     }
 
     /// One template, one inference, one draw (ADR-0072).
@@ -1694,46 +1819,32 @@ impl PalwProducerService {
         // `facts`', and the challenge binds the position — this template, this timestamp, this
         // nonce — and moves neither lottery. The draw was made the moment the inference finished.
         let timestamp = template.block.header.timestamp;
-        let mut attempt = PalwAttemptUnsignedV2 {
-            // **The current version, on both ids this producer can build for** (ADR-0072 SA-3).
-            //
-            // `PalwAttemptLaneV1::attempt_version` is the current version on `Unfenced` (every
-            // shipped preset) and on `ExecutionArm` (algo-9, past an armed fence), so a template
-            // declaring either id wants exactly this number. The third arm — `LegacyArm`, an armed
-            // network BELOW its fence — wants the pre-ADR-0072 version, and this producer cannot
-            // build for it: the pre-ADR-0072 lottery arithmetic those blocks were mined under was
-            // deleted at Relaunch 5's re-genesis, so a legacy envelope could not pass PoW here
-            // whatever version it declared. That is the honest limit of §3 option (b), and it is
-            // why arming this fence is safe at genesis (`ForkActivation::always()`, where
-            // `LegacyArm` is unreachable) and not safe at a future height on a chain with real
-            // pre-ADR-0072 history.
-            version: PALW_ATTEMPT_V2_VERSION,
+        // RFC-0009: one assembly, shared with a remote miner (`palw_attempt_from_execution_v1`) — the version, the challenge, the roots, the chain's
+        // pins (witness chunks, retention) are spelled there once. The pre-ADR-0072 legacy version is not built (the honest limit of SA-3 option b).
+        let mut attempt = kaspa_consensus_core::palw_attempt_v2::palw_attempt_from_execution_v1(
             network_domain,
-            challenge: challenge_v2(network_domain, pre_pow, timestamp, nonce, facts.class_id, &bond),
-            class_id: facts.class_id,
-            executor_bond: bond,
-            executor_pubkey: self.verification_key(),
-            operator_id: facts.bond.as_ref().ok_or("the bond vanished between the pre-flight and the build")?.operator_id,
-            artifact_root: facts.artifact_root,
-            trace_root: run.trace_root,
-            output_root: run.output_root,
-            execution_root: run.execution_root,
-            pwu: facts.pwu,
-            // **RFC-0007 Part II**: a class with a witness profile commits `1 + chunks` trace chunks under the v2 manifest root — the
-            // chain's pin (`check_palw_attempt_witness_pin_v1`), derived from the facts and the trace root, never chosen. A class
-            // without one keeps the backend's own count and root, byte for byte.
-            trace_manifest_root: if facts.witness_chunks > 0 {
-                kaspa_consensus_core::palw_mesh_v1::palw_attempt_trace_manifest_root_v2(run.trace_root, 1 + facts.witness_chunks)
-            } else {
-                run.trace_manifest_root
+            pre_pow,
+            timestamp,
+            nonce,
+            bond,
+            self.verification_key(),
+            &kaspa_consensus_core::palw_attempt_v2::PalwAttemptChainFactsV1 {
+                class_id: facts.class_id,
+                artifact_root: facts.artifact_root,
+                pwu: facts.pwu,
+                min_trace_retention_daa: facts.min_trace_retention_daa,
+                witness_chunks: facts.witness_chunks,
+                operator_id: facts.bond.as_ref().ok_or("the bond vanished between the pre-flight and the build")?.operator_id,
             },
-            trace_chunk_count: if facts.witness_chunks > 0 { 1 + facts.witness_chunks } else { run.trace_chunk_count },
-            // The retention window a producer promises to keep the trace for. The material is in
-            // hand (`run.material`, encoded by the backend), which is what makes the promise one
-            // it can keep. Derived, not chosen, and PINNED by admission (ADR-0072 Decision 8):
-            // this header's own DAA score plus the network's lattice windows.
-            trace_retention_daa: template.block.header.daa_score.saturating_add(facts.min_trace_retention_daa),
-        };
+            &kaspa_consensus_core::palw_attempt_v2::PalwAttemptExecutionV1 {
+                trace_root: run.trace_root,
+                output_root: run.output_root,
+                execution_root: run.execution_root,
+                trace_manifest_root: run.trace_manifest_root,
+                trace_chunk_count: run.trace_chunk_count,
+            },
+            template.block.header.daa_score,
+        );
         // **A rider is done here**: no lottery (it has no position), the challenge and the retention its lead's, signed once, the
         // material retained as any attempt's.
         if let Some((lead, index, retention)) = rider {
@@ -2062,6 +2173,17 @@ pub(crate) fn palw_dissection_refusal_v1(
 /// that only knows algo-6 stops producing everywhere at the same height, with no configuration that
 /// could bring it back (`PalwRulesetV2::validate` pins the bundle's `algorithm_id` at 6, so
 /// `palw_required_algo_id` is never 9).
+/// **Lane PA, C-F2: the facts a rider of a batch of `riders` is built under** — the lead's facts with `pwu` the chain's demand of a rider at
+/// its share (`PalwProducerFactsV2::rider_pwu`, derived by the one function the fold's admission uses). Without the table (riders not
+/// armed, below the canonical-work height) the lead's `pwu` stands, as before.
+fn rider_facts_v1(facts: &PalwProducerFactsV2, riders: usize) -> PalwProducerFactsV2 {
+    let mut out = facts.clone();
+    if let Some(pwu) = riders.checked_sub(1).and_then(|index| facts.rider_pwu.get(index)) {
+        out.pwu = *pwu;
+    }
+    out
+}
+
 fn template_declares_an_attempt_lane(pow_algo_id: u8) -> bool {
     kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(pow_algo_id)
 }

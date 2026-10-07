@@ -152,6 +152,27 @@ fn h_tile_bound_refusal(why: &str) -> bool {
 /// first layout admitted is returned, at the widest logits tile, history tile and interval that admit;
 /// if none is, the first refusal (the widest logits tile and history tile, at the court's interval),
 /// the one an operator acts on.
+thread_local! {
+    /// The instant the current thread's layout search must stop by (`None`: no budget). Set only by a caller that judges many classes
+    /// in a row (the Hugging Face census), through [`tir_with_search_deadline_v1`]; every other caller is unaffected.
+    static SEARCH_DEADLINE: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The refusal a layout search returns when its time budget is spent (the census records it as a gate not run, never as a verdict).
+pub const TIR_SEARCH_BUDGET_SPENT_V1: &str = "the layout search's time budget is spent";
+
+/// Run `f` with the current thread's layout searches bounded by `deadline` (restored afterwards).
+pub fn tir_with_search_deadline_v1<T>(deadline: Option<std::time::Instant>, f: impl FnOnce() -> T) -> T {
+    let before = SEARCH_DEADLINE.with(|d| d.replace(deadline));
+    let out = f();
+    SEARCH_DEADLINE.with(|d| d.set(before));
+    out
+}
+
+fn search_budget_spent() -> bool {
+    SEARCH_DEADLINE.with(|d| d.get().is_some_and(|t| std::time::Instant::now() >= t))
+}
+
 fn tir_declare_search_v1(
     layout_for: &mut dyn FnMut(Option<u32>, u32) -> Result<PalwTirLayoutV1, String>,
     interval: &mut dyn FnMut(&PalwTirLayoutV1) -> Result<u32, String>,
@@ -164,6 +185,9 @@ fn tir_declare_search_v1(
     for &logits_tile in logits_tiles {
         let mut h_tile = h_chunk.max(1);
         loop {
+            if search_budget_spent() {
+                return Err(TIR_SEARCH_BUDGET_SPENT_V1.into());
+            }
             let mut layout = layout_for(logits_tile, h_tile)?;
             let mut admission = match interval(&layout) {
                 Ok(c) => {
@@ -172,10 +196,22 @@ fn tir_declare_search_v1(
                 }
                 Err(why) => Err(why),
             };
+            if std::env::var_os("PALW_LAYOUT_TRACE").is_some() {
+                eprintln!(
+                    "layout-trace: logits_tile {:?} h_tile {} interval {} -> {:?}",
+                    logits_tile,
+                    layout.h_tile,
+                    layout.checkpoint_interval,
+                    admission.as_ref().err().map(|e| e.chars().take(300).collect::<String>())
+                );
+            }
             let at_bound = (layout.clone(), admission.clone());
             while let Err(why) = &admission {
                 if !recurrent || !interval_bound_refusal(why) || layout.checkpoint_interval <= 1 {
                     break;
+                }
+                if search_budget_spent() {
+                    return Err(TIR_SEARCH_BUDGET_SPENT_V1.into());
                 }
                 layout.checkpoint_interval /= 2;
                 admission = admit(&layout);
@@ -390,7 +426,14 @@ pub fn tir_da_answer_leaf_cap_v1(params: &Params) -> Option<u64> {
 /// class whose producers could only default (a larger `--tile-len` or a shorter `--max-context`
 /// commits fewer leaves).
 pub fn tir_canonical_job_answerable_v1(params: &Params, class: &PalwTirClassV1) -> Result<(), String> {
-    let Some(cap) = tir_da_answer_leaf_cap_v1(params) else { return Ok(()) };
+    let gate = TirOfflineGateV1::of(params);
+    tir_canonical_job_answerable_at_v1(&gate.params, class, gate.daa)
+}
+
+/// [`tir_canonical_job_answerable_v1`] under the rules at `daa` (the preflight's judged height).
+pub fn tir_canonical_job_answerable_at_v1(params: &Params, class: &PalwTirClassV1, daa: u64) -> Result<(), String> {
+    let cap = (!params.palw_tir_fence2_active_at(daa)).then_some(kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
+    let Some(cap) = cap else { return Ok(()) };
     let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(class)
         .ok_or_else(|| format!("a context of {} positions is too narrow for a canonical job", class.layout.max_context))?;
     let class_id = class.class_id(&Hash64::from_bytes([0; 64]));
@@ -599,7 +642,14 @@ pub fn tir_choose_layout_judged_v1(
         &mut |layout| tir_court_checkpoint_interval_v1(params, bundle, program, layout),
         &mut |layout| {
             // The gate this declaration is judged by: the registration's, or the composite's.
-            judge(&class_of(layout))?;
+            let judged = judge(&class_of(layout));
+            if let Err(why) = &judged
+                && why.contains("IR close sizing work")
+                && std::env::var("PALW_LAYOUT_TRACE").is_ok_and(|v| v == "sizing")
+            {
+                tir_sizing_work_probe_v1(&class_of(layout), program);
+            }
+            judged?;
             // The registration gate's twin: a canonical job the court could not answer is no class. A composite is
             // judged by the composite admission alone (its work and carriage rules).
             if composite { Ok(()) } else { tir_canonical_job_answerable_v1(params, &class_of(layout)) }
@@ -609,6 +659,37 @@ pub fn tir_choose_layout_judged_v1(
         recurrent,
     )?;
     Ok(TirChosenLayoutV1 { layout, admission })
+}
+
+/// **Diagnostics only** (`PALW_LAYOUT_TRACE=sizing`): the work both close-sizing twins need for a class, uncapped, on stderr.
+fn tir_sizing_work_probe_v1(class: &PalwTirClassV1, program: &TirProgramV1) {
+    static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_canonical_of_v1, palw_tir_job_context_v1};
+    use kaspa_consensus_core::palw_tir_close_size_v1 as z;
+    let Ok(space) = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(class) else { return };
+    let Some(inventory) = kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1::new(program) else { return };
+    let facts = PalwTirJobFactsV1::of(class, program, Hash64::default());
+    let Some(formula) = palw_tir_attempt_canonical_of_v1(class.layout.max_context) else { return };
+    let expected = palw_tir_job_context_v1(&facts, formula);
+    let deepest = kaspa_consensus_core::palw_v2::PalwJobContextV2 {
+        declared_prefill_tokens: 1,
+        exact_decode_tokens: class.layout.max_context,
+        max_context_tokens: u32::MAX,
+        ..expected
+    };
+    let sizing = z::PalwTirCloseSizingV1 { form: z::PalwTirParamFormV1::Multiproof, court: true, cap: u64::MAX / 4, stop_above: None };
+    let t = std::time::Instant::now();
+    let range =
+        kaspa_consensus_core::palw_tir_close_range_v1::palw_tir_worst_closes_range_work_v1(&space, &inventory, &deepest, &sizing);
+    eprintln!(
+        "sizing-probe: range twin work {:?} in {:?}; worst close {:?}",
+        range.as_ref().map(|(_, w)| *w),
+        t.elapsed(),
+        range.as_ref().map(|(b, _)| b.iter().map(|x| (x.close_bytes, x.root_claim_bytes)).max())
+    );
 }
 
 /// **Write `input`'s program and tensors to `output` as a class** — under the logits scheme `choice`

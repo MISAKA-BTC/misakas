@@ -226,8 +226,10 @@ preflight() {
         for s in "improve eval" "improve <policy" "composite" "declare-layout"; do grep -q "palw-class $s" <<<"$U" && ok "palw-class $s" || bad "palw-class lacks $s"; done
         grep -q -- "--parent <the parent's declared" <<<"$U" && ok "palw-class declare-layout --parent (a composite's class, RFC-0004 §6.3)" || bad "palw-class declare-layout has no --parent"
     fi
-    if WORK_DIR=${TMPDIR:-/tmp}/dm-selftest-$$ python3 "$A/dmdrive.py" selftest >/dev/null 2>&1 \
-       && WORK_DIR=${TMPDIR:-/tmp}/dm-selftest-$$ python3 "$A/dmdrive.py" selftest-drive >/dev/null 2>&1; then
+    # the self-tests are synthetic runs of the DEFAULT layout (rho 25 / 100 windows, the liars, the D-M5 line): the combined drill's environment (INT12, CAP_AT, DM_NO_LIARS, ...) is taken away from them
+    local CLEAN=(env -u INT12 -u DM_NO_LIARS -u CAP_AT -u CAP_RHOS -u CAP_WINDOW_DAA -u CAP_SETTLE_DAA -u XB_ORDER -u REGISTER_LATE -u CAP2_AT -u CAP3_AT -u XB_FROM_DAA -u OUTSIDER -u LOGLEVEL)
+    if "${CLEAN[@]}" WORK_DIR=${TMPDIR:-/tmp}/dm-selftest-$$ python3 "$A/dmdrive.py" selftest >/dev/null 2>&1 \
+       && "${CLEAN[@]}" WORK_DIR=${TMPDIR:-/tmp}/dm-selftest-$$ python3 "$A/dmdrive.py" selftest-drive >/dev/null 2>&1; then
         ok "the driver's self-tests pass (the verdict logic; the whole actor against a scripted chain: every step fires in its state)"
     else bad "the driver's self-tests fail: python3 audit-improve/dmdrive.py selftest-drive"; fi
     rm -rf "${TMPDIR:-/tmp}/dm-selftest-$$"

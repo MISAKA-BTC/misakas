@@ -800,11 +800,21 @@ pub trait EvmCanonicalHeadsStore: EvmCanonicalHeadsStoreReader {
 pub struct DbEvmCanonicalHeadsStore {
     db: Arc<DB>,
     access: CachedDbItem<CanonicalEvmHeads>,
+    native: CachedDbItem<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>>,
 }
 
 impl DbEvmCanonicalHeadsStore {
     pub fn new(db: Arc<DB>) -> Self {
-        Self { db: Arc::clone(&db), access: CachedDbItem::new(db, DatabaseStorePrefixes::EvmCanonicalHeads.into()) }
+        let mut native_key: Vec<u8> = DatabaseStorePrefixes::EvmCanonicalHeads.into();
+        native_key.extend_from_slice(b"/native/v1");
+        Self { db: Arc::clone(&db), access: CachedDbItem::new(db.clone(), DatabaseStorePrefixes::EvmCanonicalHeads.into()), native: CachedDbItem::new(db, native_key) }
+    }
+
+    pub fn native_snapshot(&self) -> StoreResult<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
+        self.native.read()
+    }
+    pub fn set_native_batch(&mut self, batch: &mut WriteBatch, snapshot: Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>) -> StoreResult<()> {
+        self.native.write(BatchDbWriter::new(batch), &snapshot)
     }
 
     pub fn set_batch(&mut self, batch: &mut WriteBatch, heads: CanonicalEvmHeads) -> StoreResult<()> {
@@ -831,6 +841,33 @@ mod tests {
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::ConnBuilder;
     use kaspa_hashes::{EvmH256, Hash64};
+
+
+    #[test]
+    fn rfc0012_heads_and_native_evidence_persist_in_one_batch_and_restart_without_aliases() {
+        use kaspa_consensus_core::palw_native_settlement_v1::{NativeSettlementSnapshotV1, SettlementStopV1};
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut writer = DbEvmCanonicalHeadsStore::new(db.clone());
+        let legacy = CanonicalEvmHeads { latest: bh(1), safe: bh(1), finalized: bh(1) };
+        writer.set(legacy).unwrap();
+        assert_eq!(borsh::to_vec(&legacy).unwrap(), [bh(1).as_bytes(), bh(1).as_bytes(), bh(1).as_bytes()].concat(), "old singleton codec stays exactly three hashes");
+        let snapshot = NativeSettlementSnapshotV1 { version: 1, ruleset_id: Default::default(), policy_id: bh(8),
+            generation: bh(3), retirement_daa: 5, frontier: Some(bh(2)), latest: Some(bh(3)), safe: None,
+            finalized: None, depth: 0, unique_work: "0".into(), stop: Some(SettlementStopV1::InsufficientWork) };
+        let next = CanonicalEvmHeads { latest: bh(3), safe: Default::default(), finalized: Default::default() };
+        let mut batch = WriteBatch::default();
+        writer.set_batch(&mut batch, next).unwrap();
+        writer.set_native_batch(&mut batch, Some(snapshot.clone())).unwrap();
+        let before = DbEvmCanonicalHeadsStore::new(db.clone());
+        assert_eq!(before.get().unwrap(), legacy);
+        assert!(before.native_snapshot().is_err(), "an uncommitted batch survives neither restart nor import");
+        db.write(batch).unwrap();
+        let restarted = DbEvmCanonicalHeadsStore::new(db.clone());
+        assert_eq!(restarted.get().unwrap(), next);
+        assert_eq!(restarted.native_snapshot().unwrap(), Some(snapshot));
+        assert_eq!(next.safe_head(), None);
+        assert_eq!(next.finalized_head(), None);
+    }
 
     fn bh(b: u8) -> BlockHash {
         Hash64::from_bytes([b; 64])

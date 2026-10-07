@@ -973,6 +973,129 @@ impl ValidatorKey {
         PalwReceiptSpendEnvelopeV3 { spend, signature }
     }
 
+    /// **RFC-0009: the executor's redemption authorization** — signed ONCE, position-free, so any eligible builder may spend the
+    /// claim's winning quanta while the miner's PC is off. Returns the authorization and its signature
+    /// ([`kaspa_consensus_core::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT`] over `redeem_auth_id_v4`).
+    ///
+    /// The authorization signs the beacon RULE (the ADR-0044 slot rule) and a half-open quantum range, never a beacon value: the draw does
+    /// not exist until after `Final + maturity`. `builder_fee_bps` is what the miner pays the builder, at most the chain's cap — refused
+    /// here before it is signed, as the chain would refuse it after.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_redemption_authorization_v4(
+        &self,
+        network_domain: Hash64,
+        claim_id: Hash64,
+        executor_bond: TransactionOutpoint,
+        quantum_lo: u32,
+        quantum_hi: u32,
+        builder_fee_bps: u16,
+        expiry_daa: u64,
+    ) -> Result<(kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthV4, Vec<u8>), String> {
+        use kaspa_consensus_core::palw_receipt_v4::{
+            PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT, PALW_RECEIPT_V4_BEACON_RULE_SLOT, PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS,
+            PALW_RECEIPT_V4_VERSION, PalwRedemptionAuthV4, redeem_auth_id_v4,
+        };
+        if quantum_lo >= quantum_hi {
+            return Err(format!("the quantum range [{quantum_lo}, {quantum_hi}) is empty"));
+        }
+        if builder_fee_bps > PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS {
+            return Err(format!("builder fee {builder_fee_bps} bps is above the chain's {PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS} bps cap"));
+        }
+        let auth = PalwRedemptionAuthV4 {
+            version: PALW_RECEIPT_V4_VERSION,
+            network_domain,
+            claim_id,
+            executor_bond,
+            quantum_lo,
+            quantum_hi,
+            beacon_rule: PALW_RECEIPT_V4_BEACON_RULE_SLOT,
+            builder_fee_bps,
+            expiry_daa,
+        };
+        let signature = self.sign_with_context(redeem_auth_id_v4(&auth).as_bytes().as_slice(), PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT).to_vec();
+        Ok((auth, signature))
+    }
+
+    /// **RFC-0009: the executor's authorization as the one self-checking bundle a miner hands to builders** (`RDA4`). Signs once; the
+    /// miner's PC can then be off.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_redemption_bundle_v4(
+        &self,
+        network_domain: Hash64,
+        claim_id: Hash64,
+        executor_bond: TransactionOutpoint,
+        quantum_lo: u32,
+        quantum_hi: u32,
+        builder_fee_bps: u16,
+        expiry_daa: u64,
+    ) -> Result<kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4, String> {
+        let (authorization, signature) = self.build_redemption_authorization_v4(
+            network_domain,
+            claim_id,
+            executor_bond,
+            quantum_lo,
+            quantum_hi,
+            builder_fee_bps,
+            expiry_daa,
+        )?;
+        Ok(kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4 {
+            authorization,
+            executor_pubkey: self.public_key().to_vec(),
+            signature,
+        })
+    }
+
+    /// **RFC-0009: the BUILDER's receipt envelope** — this key is the builder's, bound to the header position it builds at, carrying the
+    /// executor's authorization and its signature whole. The builder signs [`fp_spend_id_v4`], which is total over the authorization, so a
+    /// relay cannot swap it. Producer and verifier share `kaspa_consensus_core::palw_receipt_v4`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_fp_receipt_spend_envelope_v4(
+        &self,
+        network_domain: Hash64,
+        pre_pow_hash: Hash64,
+        timestamp: u64,
+        nonce: u64,
+        claim_id: Hash64,
+        quantum_index: u32,
+        beacon_block: Hash64,
+        builder_bond: TransactionOutpoint,
+        authorization: kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthV4,
+        executor_pubkey: Vec<u8>,
+        authorization_signature: Vec<u8>,
+    ) -> kaspa_consensus_core::palw_receipt_v4::PalwReceiptSpendEnvelopeV4 {
+        use kaspa_consensus_core::palw_receipt_v4::{
+            PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT, PALW_RECEIPT_V4_VERSION, PalwReceiptSpendEnvelopeV4, PalwReceiptSpendUnsignedV4,
+            fp_spend_id_v4, spend_challenge_v4,
+        };
+        let executor_bond = authorization.executor_bond;
+        let spend = PalwReceiptSpendUnsignedV4 {
+            version: PALW_RECEIPT_V4_VERSION,
+            network_domain,
+            challenge: spend_challenge_v4(
+                network_domain,
+                pre_pow_hash,
+                timestamp,
+                nonce,
+                claim_id,
+                quantum_index,
+                &executor_bond,
+                &builder_bond,
+            ),
+            claim_id,
+            quantum_index,
+            beacon_block,
+            executor_bond,
+            builder_bond,
+            builder_pubkey: self.public_key().to_vec(),
+            authorization,
+            executor_pubkey,
+            authorization_signature,
+        };
+        let builder_signature =
+            self.sign_with_context(fp_spend_id_v4(&spend).as_bytes().as_slice(), PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT).to_vec();
+        PalwReceiptSpendEnvelopeV4 { spend, builder_signature }
+    }
+
     /// Build a fee-funded, signed NATIVE transfer that SPLITS one funding UTXO into
     /// `num_outputs` change outputs back to this key's own P2PKH-ML-DSA script — a generic
     /// value-moving transaction used for load generation (each output becomes a fresh
@@ -3072,5 +3195,199 @@ mod validator_seed_writer_tests {
         let path = dir.join("no-such-subdir").join("key.hex");
         let err = write_validator_seed(path.to_str().unwrap(), &[1u8; VALIDATOR_SEED_LEN]).expect_err("must fail");
         assert!(err.contains("cannot create key file"), "the message should name the file: {err}");
+    }
+}
+
+/// **RFC-0009 Stage A: the sighash audit for a node-less miner's carrier.**
+///
+/// A miner without `kaspad` signs the COMPLETE carrier locally and hands raw bytes to any node. The one thing that makes that safe
+/// is that a relay cannot change the fee, the change output, the funding input or the payload without breaking the funding
+/// signature. These tests pin that coverage field by field, against the real verifier, and pin the converse a relay needs: the
+/// transaction id does not depend on the signature script, so re-encoding or re-sending cannot mint a second identity.
+#[cfg(test)]
+mod rfc9_sighash_audit {
+    use super::*;
+    use kaspa_consensus_core::tx::ScriptPublicKey;
+
+    fn key() -> ValidatorKey {
+        ValidatorKey::from_seed([0x77u8; VALIDATOR_SEED_LEN])
+    }
+
+    fn funding(k: &ValidatorKey) -> (TransactionOutpoint, UtxoEntry) {
+        let spk = pay_to_address_script(&k.funding_address(Prefix::Testnet));
+        (TransactionOutpoint::new(Hash64::from_bytes([0xA1; 64]), 3), UtxoEntry::new(5_000_000, spk, 10, false))
+    }
+
+    /// The two pushes the builder wrote: `<sig ‖ hashtype>` then `<pubkey>` (both above 75 bytes, so OP_PUSHDATA2).
+    fn pushes(script: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        assert_eq!(script[0], 0x4d, "OP_PUSHDATA2");
+        let n = u16::from_le_bytes([script[1], script[2]]) as usize;
+        let sig = script[3..3 + n].to_vec();
+        let rest = &script[3 + n..];
+        assert_eq!(rest[0], 0x4d, "OP_PUSHDATA2");
+        let m = u16::from_le_bytes([rest[1], rest[2]]) as usize;
+        (sig, rest[3..3 + m].to_vec())
+    }
+
+    fn sighash(tx: &Transaction, entry: &UtxoEntry) -> Hash64 {
+        let mtx = MutableTransaction::with_entries(tx.clone(), vec![entry.clone()]);
+        calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &Mldsa87SigHashReusedValuesUnsync::new())
+    }
+
+    fn verifies(tx: &Transaction, entry: &UtxoEntry) -> bool {
+        let (sig_ht, pubkey) = pushes(&tx.inputs[0].signature_script);
+        let (sig, hash_type) = sig_ht.split_at(sig_ht.len() - 1);
+        assert_eq!(hash_type, &[SIG_HASH_ALL.to_u8()]);
+        let h = sighash(tx, entry);
+        kaspa_txscript::verify_mldsa87_with_context(&pubkey, h.as_bytes().as_slice(), sig, MLDSA87_TX_CONTEXT).unwrap_or(false)
+    }
+
+    fn fresh_id(tx: &Transaction) -> Hash64 {
+        let mut c = tx.clone();
+        c.finalize();
+        c.id()
+    }
+
+    fn built() -> (Transaction, UtxoEntry, ValidatorKey) {
+        let k = key();
+        let (op, entry) = funding(&k);
+        let tx = k
+            .build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, vec![7u8; 300], op, &entry, 1_234, false)
+            .expect("builds");
+        (tx, entry, k)
+    }
+
+    #[test]
+    fn the_funding_signature_verifies_over_the_whole_carrier_as_built() {
+        let (tx, entry, _) = built();
+        assert!(verifies(&tx, &entry));
+        // The fee is implicit: input amount minus outputs. It is whatever the signed outputs leave.
+        assert_eq!(entry.amount - tx.outputs.iter().map(|o| o.value).sum::<u64>(), 1_234);
+    }
+
+    #[test]
+    fn a_relay_cannot_change_the_fee_the_change_the_funding_or_the_payload() {
+        let (tx, entry, k) = built();
+        let base = sighash(&tx, &entry);
+        let mut variants: Vec<(&str, Transaction, UtxoEntry)> = Vec::new();
+        let mut t = tx.clone();
+        t.outputs[0].value -= 1; // fee up by one sompi
+        variants.push(("change value (fee)", t, entry.clone()));
+        let mut t = tx.clone();
+        t.outputs.push(TransactionOutput::new(1, ScriptPublicKey::default())); // skim an output
+        variants.push(("extra output", t, entry.clone()));
+        let mut t = tx.clone();
+        t.outputs[0].script_public_key = ScriptPublicKey::new(0, vec![0x51].into()); // redirect the change
+        variants.push(("change script", t, entry.clone()));
+        let mut t = tx.clone();
+        t.inputs[0].previous_outpoint.index += 1; // another funding input
+        variants.push(("funding outpoint", t, entry.clone()));
+        let mut e = entry.clone();
+        e.amount += 1; // lie about the funding amount (re-prices the fee)
+        variants.push(("funding amount", tx.clone(), e));
+        let mut t = tx.clone();
+        t.payload[0] ^= 1; // the claim bytes
+        variants.push(("payload", t, entry.clone()));
+        let mut t = tx.clone();
+        t.subnetwork_id = SUBNETWORK_ID_NATIVE;
+        variants.push(("subnetwork", t, entry.clone()));
+        let mut t = tx.clone();
+        t.lock_time = 1;
+        variants.push(("lock time", t, entry.clone()));
+        let mut t = tx.clone();
+        t.inputs[0].sequence ^= 1;
+        variants.push(("sequence", t, entry.clone()));
+        let mut t = tx.clone();
+        t.version ^= 1;
+        variants.push(("version", t, entry.clone()));
+        let mut t = tx.clone();
+        t.gas = 1;
+        variants.push(("gas", t, entry.clone()));
+        for (what, tampered, e) in variants {
+            assert_ne!(sighash(&tampered, &e), base, "{what} is covered by the sighash");
+            assert!(!verifies(&tampered, &e), "{what}: the funding signature must not verify after the change");
+        }
+        // The signer is the key that owns the funding script: sanity that the positive path above was not vacuous.
+        assert_eq!(pushes(&tx.inputs[0].signature_script).1, k.public_key());
+    }
+
+    /// RFC-0009 stage C, with REAL ML-DSA-87: the executor authorizes once (offline), a different key builds and signs the block's
+    /// position, and the chain's own stateless rules and signature checks accept the pair — and reject every swap.
+    #[test]
+    fn rfc9_an_executor_authorization_and_a_builders_envelope_verify_with_real_signatures() {
+        use kaspa_consensus_core::palw_receipt_v4::{PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS, PalwReceiptV4Error};
+        let executor = key();
+        let builder = ValidatorKey::from_seed([0x42u8; VALIDATOR_SEED_LEN]);
+        let domain = Hash64::from_bytes([0xD0; 64]);
+        let claim = Hash64::from_bytes([0xC1; 64]);
+        let bond = TransactionOutpoint::new(Hash64::from_bytes([0xB1; 64]), 0);
+        let builder_bond = TransactionOutpoint::new(Hash64::from_bytes([0xB2; 64]), 0);
+        // The cap and an empty range are refused before anything is signed.
+        assert!(executor.build_redemption_authorization_v4(domain, claim, bond, 0, 4, PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS + 1, u64::MAX).is_err());
+        assert!(executor.build_redemption_authorization_v4(domain, claim, bond, 2, 2, 100, u64::MAX).is_err());
+        let (auth, auth_sig) = executor.build_redemption_authorization_v4(domain, claim, bond, 0, 4, 750, u64::MAX).unwrap();
+        let (pph, ts, nonce) = (Hash64::from_bytes([0xE5; 64]), 1_700_000u64, 77u64);
+        let env = builder.build_fp_receipt_spend_envelope_v4(
+            domain,
+            pph,
+            ts,
+            nonce,
+            claim,
+            2,
+            Hash64::from_bytes([0xBE; 64]),
+            builder_bond,
+            auth,
+            executor.public_key().to_vec(),
+            auth_sig,
+        );
+        let verify = |k: &[u8], m: &[u8], s: &[u8], c: &[u8]| kaspa_txscript::verify_mldsa87_with_context(k, m, s, c).unwrap_or(false);
+        // The same authorization as the stand-alone bundle a miner hands out: self-checking with the real verifier.
+        let bundle = executor.build_redemption_bundle_v4(domain, claim, bond, 0, 4, 750, u64::MAX).unwrap();
+        bundle.validate_v4(domain, |k, m, s, c| kaspa_txscript::verify_mldsa87_with_context(k, m, s, c).unwrap_or(false)).expect("bundle");
+        let decoded = kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4::decode(&bundle.encode()).unwrap();
+        assert_eq!(decoded, bundle);
+        env.validate_stateless_v4(domain, pph, ts, nonce).expect("stateless");
+        env.validate_signatures_v4(verify).expect("both real signatures verify");
+        assert_eq!(env.spend.executor_pubkey, executor.public_key());
+        assert_eq!(env.spend.builder_pubkey, builder.public_key());
+        // The carriage fits the V4 cap, and does not fit V3's: that is why the cap is raised for PFS4 alone.
+        let wire = env.encode();
+        assert!(wire.len() <= kaspa_consensus_core::palw_receipt_v4::PALW_COMMITMENT_MAX_BYTES_V4);
+        assert!(wire.len() > kaspa_consensus_core::pow_layer0::PALW_COMMITMENT_MAX_BYTES);
+        // Swapping the builder (a relay re-signing under its own key) breaks the spend id the executor's authorization is inside.
+        let mut forged = env.clone();
+        forged.spend.builder_pubkey = executor.public_key().to_vec();
+        assert_eq!(forged.validate_signatures_v4(verify), Err(PalwReceiptV4Error::SignatureInvalid));
+        // Changing the authorized fee after the executor signed breaks the executor's signature.
+        let mut greedy = env.clone();
+        greedy.spend.authorization.builder_fee_bps = 1_000;
+        assert_eq!(greedy.validate_signatures_v4(verify), Err(PalwReceiptV4Error::SignatureInvalid));
+        // Moving the block position (nonce) breaks the challenge.
+        assert_eq!(env.validate_stateless_v4(domain, pph, ts, nonce + 1), Err(PalwReceiptV4Error::ChallengeMismatch));
+    }
+
+    #[test]
+    fn the_transaction_id_does_not_depend_on_the_signature_script_so_resending_is_idempotent() {
+        let (tx, entry, k) = built();
+        let id = fresh_id(&tx);
+        // A different (equally valid) signature over the same sighash: ML-DSA signing is hedged, so the bytes differ.
+        let h = sighash(&tx, &entry);
+        let mut other_sig = k.sign_with_context(h.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
+        other_sig.push(SIG_HASH_ALL.to_u8());
+        let mut resigned = tx.clone();
+        resigned.inputs[0].signature_script = ScriptBuilder::new()
+            .add_data(&other_sig)
+            .unwrap()
+            .add_data(k.public_key())
+            .unwrap()
+            .drain();
+        assert_ne!(resigned.inputs[0].signature_script, tx.inputs[0].signature_script);
+        assert!(verifies(&resigned, &entry));
+        assert_eq!(fresh_id(&resigned), id, "the id is the same: a relay re-signing or re-encoding cannot mint another identity");
+        // And what a relay CAN change without touching the signed fields — the script bytes — is exactly what the id ignores.
+        let mut garbage = tx.clone();
+        garbage.inputs[0].signature_script[10] ^= 0xFF;
+        assert_eq!(fresh_id(&garbage), id);
+        assert!(!verifies(&garbage, &entry), "…but a corrupted script does not validate, so it is a refusal, not a second tx");
     }
 }

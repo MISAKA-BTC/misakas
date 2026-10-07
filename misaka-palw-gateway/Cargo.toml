@@ -30,6 +30,8 @@ kaspa-hashes.workspace = true
 kaspa-pq-validator-core.workspace = true
 # ADR-0078: the derivation step — registered grammars and content-named transformers.
 misaka-palw-derive.workspace = true
+# RFC-0009 stage A: `--relay` (idempotent multi-node relay of the locally signed carrier).
+misaka-palw-remote.workspace = true
 # ADR-0077 Decision 6: the chat template a lane renders, and the rule that picks it from the
 # model's own declared tokens. Already in this binary's tree via `misaka-palw-derive`, so this
 # names a coupling that existed rather than adding one — and it buys the property that the gateway

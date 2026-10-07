@@ -273,6 +273,14 @@ pub struct Args {
     /// submitted, the producer executes `N` further jobs of its own bond under the riders' derived anchors and queues one
     /// `AttemptRidersV1` object (tag 95) for the panel's carrier lane to file. Inert below `palw_capacity_multi_claim`.
     pub palw_riders: u32,
+    /// **RFC-0009 stage C: BUILDER mode** (`--palw-redemption-auth-dir=<dir>`). A directory of `RDA4` redemption authorizations miners
+    /// published (`misaka-palw-fp-rail --redeem-auth-out`): past `palw_receipt_spend_v4` this producer spends a winning quantum of any
+    /// authorized claim into a receipt block of its OWN bond and keeps the authorization's builder fee; the miner leg is paid by the chain to
+    /// the executor bond's registered payout. Inert (and the directory unread) while the fence is dormant — every shipped preset.
+    pub palw_redemption_auth_dir: Option<String>,
+    /// **RFC-0009 stage B: evidence provider directories** (`--palw-evidence-provider-dir=<dir>[,<dir>...]`). The panel also answers a material pull from
+    /// these (a manifest that agrees with the claim's on-chain roots, every chunk checked against it); the producer pull stays the fallback.
+    pub palw_evidence_provider_dir: Option<String>,
     /// **Register the class of this node's converted artifact on the running chain, once.**
     ///
     /// A network is born with the classes its ruleset id commits to; every later one arrives as a
@@ -562,6 +570,10 @@ pub struct Args {
     /// prefetches a composite candidate's adapter section (`PALWTIRS`, written by
     /// `palw-class composite --section-out`) from this directory when an epoch's candidate names it.
     pub palw_improve_artifact_dir: Option<String>,
+    /// **ADR-0173 §4**: the external command that fetches a bundle for a root the node holds none of (`--palw-root-fetch-cmd`).
+    pub palw_root_fetch_cmd: Option<String>,
+    /// **ADR-0173 §4**: where a fetched bundle is dropped (`--palw-root-drop-dir`; default `--palw-improve-artifact-dir`).
+    pub palw_root_drop_dir: Option<String>,
     /// **RFC-0004 (D-M3): where evaluation captures are retained and read** — the executor writes the capture of
     /// every evaluation claim it carries here, a challenger (`--palw-challenge`) reads the accused's from here.
     /// The evidence transport of a drill on one machine; default beside the node's other retention.
@@ -848,6 +860,8 @@ impl Default for Args {
             palw_class_resident_bytes: None,
             palw_attempt_retention_minutes: 60,
             palw_riders: 0,
+            palw_redemption_auth_dir: None,
+            palw_evidence_provider_dir: None,
             palw_register_class: None,
             palw_register_bond: false,
             palw_dump_classes: false,
@@ -907,6 +921,8 @@ impl Default for Args {
             palw_tir_shard_gpu_mirror: false,
             palw_tir_shard_shadow: false,
             palw_improve_artifact_dir: None,
+            palw_root_fetch_cmd: None,
+            palw_root_drop_dir: None,
             palw_improve_capture_dir: None,
             palw_drill_tamper_eval: None,
             palw_tir_fused_kernels: false,
@@ -2398,6 +2414,25 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-root-fetch-cmd")
+                .long("palw-root-fetch-cmd")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW (ADR-0173): a command run (not through a shell) when a class has a root in force, or is a Candidate, that this \
+                     node holds no bundle for. It gets `<class_id> <root>`, then `btv2_infohash=<hex>` and `bundle_commitment=<hex>` when \
+                     declared, then `drop_dir=<path>`; on exit 0 the drop directory is scanned and a bundle for the wanted root is held and \
+                     proved. A failure is a ROOT_BUNDLE_MISSING log line, never a ground for any penalty.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-root-drop-dir")
+                .long("palw-root-drop-dir")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("PALW (ADR-0173): where `--palw-root-fetch-cmd` drops bundles (default: --palw-improve-artifact-dir)."),
+        )
+        .arg(
             Arg::new("palw-improve-artifact-dir")
                 .long("palw-improve-artifact-dir")
                 .require_equals(true)
@@ -2611,6 +2646,26 @@ pub fn cli() -> Command {
                      decides (the behaviour before ADR-0112). A STATED budget below the class's floor -- its always-set \
                      plus one token's experts (for an IR class, plus one admission in flight) -- is refused at startup by \
                      name.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-evidence-provider-dir")
+                .long("palw-evidence-provider-dir")
+                .value_name("dirs")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "MISAKA PALW (RFC-0009 stage B): comma-separated evidence provider directories. A panel seat's material pull is also answered                      from these: a manifest any directory holds for the claim that agrees with the claim's on-chain roots, every chunk checked against                      it, then handed to the same verification and re-execution a peer's copy goes through. The producer pull stays the fallback.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-redemption-auth-dir")
+                .long("palw-redemption-auth-dir")
+                .value_name("dir")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "MISAKA PALW (RFC-0009, DORMANT): builder mode — a directory of RDA4 redemption authorizations that miners published. Past                      palw_receipt_spend_v4 this producer spends a winning quantum of any authorized free-prompt claim into a receipt block of its own                      bond and keeps the authorization's builder fee (at most 10% of the subsidy-derived worker share); the chain pays the rest to the                      executor bond's registered payout. Unread while the fence is dormant.",
                 ),
         )
         .arg(
@@ -3529,6 +3584,8 @@ impl Args {
             palw_class_cache_bytes: m.get_one::<u64>("palw-class-cache-bytes").copied().unwrap_or(defaults.palw_class_cache_bytes),
             palw_class_resident_bytes: m.get_one::<u64>("palw-class-resident-bytes").copied().or(defaults.palw_class_resident_bytes),
             palw_riders: m.get_one::<u32>("palw-riders").copied().unwrap_or(defaults.palw_riders),
+            palw_redemption_auth_dir: m.get_one::<String>("palw-redemption-auth-dir").cloned().or(defaults.palw_redemption_auth_dir),
+            palw_evidence_provider_dir: m.get_one::<String>("palw-evidence-provider-dir").cloned().or(defaults.palw_evidence_provider_dir),
             palw_attempt_retention_minutes: m
                 .get_one::<u64>("palw-attempt-retention-minutes")
                 .copied()
@@ -3604,6 +3661,8 @@ impl Args {
             palw_tir_shard_shadow: m.get_one::<bool>("palw-tir-shard-shadow").copied().unwrap_or(false),
             palw_improve_evaluate: m.get_one::<bool>("palw-improve-evaluate").copied().unwrap_or(defaults.palw_improve_evaluate),
             palw_improve_artifact_dir: m.get_one::<String>("palw-improve-artifact-dir").cloned(),
+            palw_root_fetch_cmd: m.get_one::<String>("palw-root-fetch-cmd").cloned(),
+            palw_root_drop_dir: m.get_one::<String>("palw-root-drop-dir").cloned(),
             palw_improve_capture_dir: m.get_one::<String>("palw-improve-capture-dir").cloned(),
             palw_drill_tamper_eval: m.get_one::<String>("palw-drill-tamper-eval").cloned(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),

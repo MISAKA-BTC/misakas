@@ -496,7 +496,7 @@ impl Minting {
         //     an attempt parent, read off the coinbase: the attempt's miner is paid its worker base
         //     less exactly the carve (outside the queue's rendered rows, which may pay it too), plus
         //     the worker's share of the fees its own transactions paid, which rides the same output.
-        let withheld = vp.palw_v2_escrow_withheld_at(parent, parent_hash);
+        let withheld = vp.palw_v2_escrow_withheld_at(parent, parent_hash, self.chain.daa_of(self.chain.sink()));
         self.books.withheld += withheld as u128;
         let fee_worker = std::mem::take(&mut self.last_attempt_fee_worker);
         if let Some((attempt, card)) = self.last_attempt

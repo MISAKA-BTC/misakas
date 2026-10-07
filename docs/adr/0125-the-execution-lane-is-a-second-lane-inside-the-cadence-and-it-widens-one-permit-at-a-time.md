@@ -357,3 +357,67 @@ to minutes and the line is rare. Left as is.
 * 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
 
 本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。
+
+
+## Semantic mergeset amendment - 2026-10-07
+
+**Accepted and implemented on `pre`.** This is a classification-layer amendment to ADR-0125, not adoption or withdrawal of ADR-0168's separate canonical-execution proposal. Algo-10 rounds remain raw GHOSTDAG reds, never selected parents, and contribute no additional blue score, blue work or DAA. Permit acceptance and fee payouts keep their existing rules. BASE-0 and heartbeat remain separate under the revised ADR-0165; `rcore/consensus-accounting-v2` remains excluded. No consensus fence, colouring change, emission change, anchor trailer or new rooted accounting is introduced.
+
+Raw `mergeset_reds` mixes execution rounds and genuine GHOSTDAG reds. PALW consumers must separate their meaning through a common header-derived classifier, independently of a round's permit verdict. A refused round remains an execution round.
+
+**Merge depth remains a raw consensus rule:** it still checks rounds as well as ordinary raw reds. Valid extra rounds do not move the score-derived merge-depth root; stale rounds can still violate the existing bound. Pruning, IBD, anticone counting and serialized consensus data retain their current rules.
+
+### Common semantic classifier
+
+`consensus/core/src/palw_mergeset_v1.rs` supplies `ClassifiedMergesetV1` with private partitions and the accessors:
+
+```text
+blues()         ordinary raw blues, including the selected parent
+rounds()        execution rounds, regardless of permit verdict
+genuine_reds() ordinary raw reds, excluding every execution round
+```
+
+`classify_palw_mergeset_v1` resolves these partitions through a header-derived round predicate. `try_classify_palw_mergeset_v1` propagates missing-header errors. A round predicate reads algo 10 from immutable headers, or uses the round set already resolved by the existing lane acceptance processor under its configured activation. It must never use an acceptance verdict: a refused round is still a round.
+
+The classifier reads the whole mergeset, preserves the relative input order of each partition, and does not mutate, sort or serialize consensus data. Classification of blues is defensive; valid configured GHOSTDAG data never colours a round blue. Both internal `GhostdagData` and externally exposed `ExternalGhostdagData` provide wrappers over this same core classifier.
+
+### Consumers
+
+* **Round discovery:** header post-PoW validation and round template discovery scan `unordered_mergeset_without_selected_parent()`, identify the round header id, and retain the existing activation, envelope, permit-width and anchor rules. Finding rounds does not mean finding reds.
+* **Coinbase:** normal red rewards and the validator pool use `genuine_reds()`. Round fees use `rounds()` and retain their existing full-fee payout aggregation. Ordinary blue outputs, entitled-red/V4 outputs, the red lump, round payout outputs, validator outputs and the inclusion bounty keep their prior ordering and amounts. The round payout order remains first appearance in the raw mergeset. Refused permits still accept no transaction and earn no fee.
+* **PALW state inputs:** `PalwTransitionExtrasV1.merged_reds` contains genuine reds only. Its attempt-colour decisions are unchanged because execution rounds never carry an attempt. Entitlement, receipt payout and operator-anchor consumers use classified ordinary members.
+* **Lane watch:** the shared classifier supplies round counts separately from merged attempt work. Execution rounds still do not clear the dead-attempt-lane alarm. Missing member headers stop the observation rather than being guessed to represent ordinary reds.
+* **Node block view:** accepted rounds keep `laneClass=EXEC`; refused rounds and rounds without a retained verdict use `laneClass=ROUND`. `exec.verdict` and `exec.refusal` carry acceptance separately. `laneClass=RED` is reserved for ordinary GHOSTDAG reds.
+
+Raw mergeset access remains valid inside GHOSTDAG/store code, reachability, pruning/IBD, merge-depth validation, and legacy RPC field conversion. PALW semantic consumers must use the common classifier or a complete, colour-independent discovery iterator. Use `member`/`header` while a member can be a round; use `red` only after genuine-red classification. Tests may inspect raw reds to pin the unchanged representation.
+
+`python3 scripts/check-palw-mergeset-access.py` audits the PALW semantic consumer files for direct raw-red access. Consensus/store and legacy RPC compatibility accesses remain outside this semantic-only check.
+
+### RPC and explorer
+
+`mergeSetBluesHashes` and `mergeSetRedsHashes` retain their existing raw meaning, including rounds in the latter. Verbose block data additionally exposes:
+
+```json
+{
+  "palwMergeView": {
+    "roundBlocks": ["<round block hash>"],
+    "genuineRedBlocks": ["<ordinary red hash>"]
+  }
+}
+```
+
+The view is derived from member headers, independent of local permit telemetry. It is absent when any necessary header is unavailable, so clients never mistake an incomplete empty list for a complete classification. JSON clients tolerate the additive field; gRPC uses a new optional message at field 21 and retains all existing field numbers. The existing wRPC binary serializer is unchanged; binary-decoded or older values have no derived view. Clients that need the view use JSON or the updated gRPC schema. Never infer “genuine red” from a raw-red list alone when the derived view is absent.
+
+The explorer shows execution rounds as **E / ROUND**, with `accepted`, `permit refused` or `verdict unknown` separately. An older node's `laneClass=RED` cannot turn an algo-10 block into a RED row. Ordinary chain/blue blocks show **C-BLUE**, while **HEARTBEAT** and **BASE-0** retain distinct lane names. **RED** means a confirmed non-round GHOSTDAG red; off-chain blocks without a classification remain **unclassified**. Block details show the derived round and genuine-red counts, or an explicit unavailable value on older/pruned nodes. No structural E-BLUE display is introduced.
+
+### Validation
+
+Regression coverage uses mixed genuine-red / round fixtures, not round-only assertions:
+
+1. Actual GHOSTDAG still puts rounds in raw reds and never selects one as parent.
+2. Classification places rounds exclusively in `rounds()` and ordinary reds exclusively in `genuine_reds()`, preserving order.
+3. Mixed coinbases keep normal red rewards and validator-pool amounts separate from round fee payouts, including zero-fee/refused rounds.
+4. Increasing valid rounds leaves DAA, blue score/work and the merge-depth root unchanged. The existing merge-depth check still applies to raw members.
+5. Normal red payout processing grows only when ordinary reds are added; extra rounds only affect their own fee outputs.
+6. RPC round-trips retain raw hashes and semantic partitions, older/binary values remain decodable, and missing headers produce no misleading view.
+7. Explorer regression cases keep refused rounds out of the RED filter and keep heartbeat and BASE-0 distinct.

@@ -261,6 +261,9 @@ pub struct StateLayer0 {
     pub(crate) palw_attempt_v2: Option<PalwAttemptEnvelopeV2>,
     /// ADR-0044 Decision 6 (Unit B): the free-prompt spend envelope on an algo-7 header.
     pub(crate) palw_spend_v3: Option<kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3>,
+    /// RFC-0009: the V4 (public redemption) spend on an algo-7 header whose carriage is `PFS4`. Exactly one of this and
+    /// `palw_spend_v3` is ever `Some`; whether a V4 header is VALID at this height is the header processor's fence check, not the tag's.
+    pub(crate) palw_spend_v4: Option<kaspa_consensus_core::palw_receipt_v4::PalwReceiptSpendEnvelopeV4>,
     /// PRE_POW_HASH || TIME || 32 zero byte padding; without NONCE.
     /// Seeded with the derived `l1_seed32` (not the 64-byte pre-PoW
     /// hash) so the kHeavyHash interface stays 32-byte-input. `Some` only for
@@ -344,9 +347,14 @@ impl StateLayer0 {
             palw_attempt_v2: kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
                 .then(|| PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).ok())
                 .flatten(),
-            palw_spend_v3: (header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3)
-                .then(|| kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).ok())
-                .flatten(),
+            palw_spend_v3: (header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
+                && !kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(&header.palw_commitment))
+            .then(|| kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).ok())
+            .flatten(),
+            palw_spend_v4: (header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
+                && kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(&header.palw_commitment))
+            .then(|| kaspa_consensus_core::palw_receipt_v4::PalwReceiptSpendEnvelopeV4::decode(&header.palw_commitment).ok())
+            .flatten(),
             pre_pow_hash_64,
             network_id: network_id.to_vec(),
             timestamp: header.timestamp,
@@ -477,6 +485,13 @@ impl StateLayer0 {
             // binding, not a lottery — see `check_pow_layer0`, which is where the difference is
             // load-bearing.
             POW_ALGO_ID_PALW_RECEIPT_V3 => {
+                // RFC-0009: a `PFS4` carriage expands its own spend id under its own domain; a `PFS3` one is exactly as it was.
+                if let Some(envelope) = self.palw_spend_v4.as_ref() {
+                    let id = kaspa_consensus_core::palw_receipt_v4::fp_spend_id_v4(&envelope.spend);
+                    let tag = kaspa_consensus_core::palw_receipt_v4::fp_spend_l1_tag_v4(id);
+                    buf[..tag.len()].copy_from_slice(&tag);
+                    return Ok(tag.len());
+                }
                 let envelope = self.palw_spend_v3.as_ref().ok_or(PowLayer0Error::PalwCarriageMissing(self.pow_algo_id))?;
                 let id = kaspa_consensus_core::palw_freeprompt_v3::fp_spend_id_v3(&envelope.spend);
                 let tag = kaspa_consensus_core::palw_freeprompt_v3::fp_spend_l1_tag_v3(id);

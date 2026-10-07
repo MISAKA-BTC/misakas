@@ -29,11 +29,14 @@ members = [
     "misaka-cli",
     "misaka-endpoints",
     "misaka-palw",
+    "misaka-palw-host-security",
     "misaka-palw-shadow",
     "misaka-palw-pow-driver",
     "misaka-palw-agent",
     "misaka-palw-gateway",
     "misaka-palw-fp-submit",
+    "misaka-palw-remote",
+    "misaka-palw-kernel",
     "misaka-palw-constraint",
     "misaka-palw-worker",
     "misaka-palw-base0",
@@ -149,11 +152,14 @@ default-members = [
     "misaka-cli",
     "misaka-endpoints",
     "misaka-palw",
+    "misaka-palw-host-security",
     "misaka-palw-shadow",
     "misaka-palw-pow-driver",
     "misaka-palw-agent",
     "misaka-palw-gateway",
     "misaka-palw-fp-submit",
+    "misaka-palw-remote",
+    "misaka-palw-kernel",
     "misaka-palw-constraint",
     "misaka-palw-base0",
     "misaka-palw-base0-ref2",
@@ -307,12 +313,15 @@ misaka-palw-sdk = { version = "1.1.0", path = "misaka-palw-sdk" }
 misaka-palw-derive = { version = "1.1.0", path = "misaka-palw-derive" }
 misaka-palw-extension = { version = "1.1.0", path = "misaka-palw-extension" }
 misaka-palw-fp-submit = { version = "1.1.0", path = "misaka-palw-fp-submit" }
+misaka-palw-remote = { version = "1.1.0", path = "misaka-palw-remote" }
+misaka-palw-kernel = { version = "1.1.0", path = "misaka-palw-kernel" }
 misaka-palw-constraint = { version = "1.1.0", path = "misaka-palw-constraint" }
 misaka-palw-tir = { path = "misaka-palw-tir" }
 misaka-palw-gen = { path = "misaka-palw-gen" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka-palw" }
+misaka-palw-host-security = { version = "1.1.0", path = "misaka-palw-host-security" }
 misaka-palw-shadow = { version = "1.1.0", path = "misaka-palw-shadow" }
 misaka-palw-pow-driver = { version = "1.1.0", path = "misaka-palw-pow-driver" }
 

@@ -18,7 +18,9 @@ use std::collections::BTreeSet;
 pub const GLOBAL_INERT: &[&str] = &[
     // bookkeeping
     "_name_or_path",
+    "_name_or_path ",
     "_commit_hash",
+    "is_llama_config",
     "architectures",
     "model_type",
     "transformers_version",
@@ -118,6 +120,20 @@ pub const GLOBAL_INERT: &[&str] = &[
     "summary_activation",
     "summary_proj_to_labels",
     "summary_first_dropout",
+    // Bookkeeping a training tool or an old transformers wrote into `config.json` and no transformers class reads (RFC-0002 §II.10.4,
+    // the 2026-10-04 Hub census's largest CONFIG_KEY_UNREAD bucket: `unsloth_fixed`/`unsloth_version` stopped ~54k repositories, an
+    // estimated 1.7 % of D_all). Each is metadata about how the file was produced, or a deprecated alias of a key already inert here.
+    "unsloth_fixed",
+    "unsloth_version",
+    "_num_labels",
+    "output_past",
+    "model_name",
+    "author",
+    "directionality",
+    "eos_token_ids",
+    "is_model_parallel",
+    "num_shards",
+    "keys_to_ignore_at_inference",
 ];
 
 pub struct Cfg<'a> {
@@ -397,6 +413,18 @@ mod tests {
         }
         assert!(c.forbid("d", "test").is_err());
         assert!(c.forbid("e", "test").is_err());
+    }
+
+    #[test]
+    fn a_training_tools_bookkeeping_is_inert_and_a_math_key_is_still_refused() {
+        // An Unsloth fine-tune's config.json: the two bookkeeping keys no transformers class reads are inert; a key that can change
+        // the rotary math (`partial_rotary_factor`) is still refused unless a reader models it.
+        let v = json!({"unsloth_fixed": true, "unsloth_version": "2025.3.1", "_num_labels": 2, "model_name": "x"});
+        let c = Cfg::new("X", v.as_object().unwrap(), "");
+        c.finish().unwrap();
+        let v = json!({"unsloth_version": "2025.3.1", "partial_rotary_factor": 0.5});
+        let c = Cfg::new("X", v.as_object().unwrap(), "");
+        assert!(c.finish().is_err(), "a key that can change the math is never inert");
     }
 
     #[test]

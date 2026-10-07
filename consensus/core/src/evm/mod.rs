@@ -1522,6 +1522,13 @@ pub struct CanonicalEvmHeads {
     pub finalized: Hash64,
 }
 
+impl CanonicalEvmHeads {
+    /// Zero is the legacy row's absent-pointer encoding; the RFC-0012 snapshot exposes Option.
+    pub fn safe_head(self) -> Option<Hash64> { (self.safe != Hash64::default()).then_some(self.safe) }
+    pub fn finalized_head(self) -> Option<Hash64> { (self.finalized != Hash64::default()).then_some(self.finalized) }
+    pub fn latest_head(self) -> Option<Hash64> { (self.latest != Hash64::default()).then_some(self.latest) }
+}
+
 impl MemSizeEstimator for CanonicalEvmHeads {
     fn estimate_mem_bytes(&self) -> usize {
         size_of::<Self>()

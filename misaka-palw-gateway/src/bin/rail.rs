@@ -137,6 +137,26 @@ fn main() {
     let mut bond_flag: Option<String> = None;
     // ADR-0077 Decision 4: the handoff continues through `misaka-palw-fp-submit`.
     let mut submit = false;
+    // RFC-0009 stage A: relay the locally signed carrier through several nodes (no staging, no kaspad of our own).
+    let mut relay_endpoints: Vec<String> = Vec::new();
+    let mut relay_min_accept: usize = 2;
+    // RFC-0009 stage A/D phase 1: the checkpoint a `--relay` view is pinned to (`<daa>:<128hex block hash>`), and the network it is for. With it the
+    // relay first asks the nodes for a QUORUM view (distinct nodes, all on the checkpoint, same network and pruning point, clocks within a skew)
+    // and stops on any disagreement; without it the relay still works and says plainly that no view was checked.
+    let mut view_checkpoint: Option<String> = None;
+    // RFC-0009 stage A: `--track <claim-id> --bond <txid:index> [--tx-id <hex>] (--relay a,b | --rpc a) [--finality-depth N]` polls each node once and
+    // reports where the claim stands (built → relayed → included → licensed → final/void), per node, and whether the nodes agree.
+    // RFC-0009 stage B: `--evidence-out <dir>` places the claim's material in an evidence-provider directory (an `EvidenceManifestV1` and its chunks) so a panel
+    // seat can fetch it from any provider with this PC off. Needs `--capture`; the producer pull is unchanged and stays the fallback.
+    let mut evidence_out: Option<PathBuf> = None;
+    let mut track_claim: Option<String> = None;
+    let mut track_tx_id: Option<String> = None;
+    let mut finality_depth: u64 = 60;
+    // RFC-0009 stage C: the executor's redemption authorization, signed once at claim time so any builder may spend the claim's winning
+    // quanta while this PC is off (`palw_receipt_spend_v4`, dormant until its fence opens).
+    let mut redeem_auth_out: Option<PathBuf> = None;
+    let mut redeem_fee_bps: u16 = 500;
+    let mut redeem_expiry_daa: u64 = u64::MAX;
     let mut rpc_endpoint: Option<String> = None;
     let mut retention_dir: Option<PathBuf> = None;
     let mut capture_path: Option<PathBuf> = None;
@@ -167,6 +187,22 @@ fn main() {
             "--bond" => bond_flag = Some(value("--bond")),
             "--print-claim" => print_claim = true,
             "--submit" => submit = true,
+            "--relay" => {
+                relay_endpoints = value("--relay").split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect()
+            }
+            "--redeem-auth-out" => redeem_auth_out = Some(PathBuf::from(value("--redeem-auth-out"))),
+            "--redeem-fee-bps" => redeem_fee_bps = value("--redeem-fee-bps").parse().unwrap_or_else(|e| die(format!("--redeem-fee-bps: {e}"))),
+            "--redeem-expiry-daa" => {
+                redeem_expiry_daa = value("--redeem-expiry-daa").parse().unwrap_or_else(|e| die(format!("--redeem-expiry-daa: {e}")))
+            }
+            "--checkpoint" => view_checkpoint = Some(value("--checkpoint")),
+            "--evidence-out" => evidence_out = Some(PathBuf::from(value("--evidence-out"))),
+            "--track" => track_claim = Some(value("--track")),
+            "--tx-id" => track_tx_id = Some(value("--tx-id")),
+            "--finality-depth" => finality_depth = value("--finality-depth").parse().unwrap_or_else(|e| die(format!("--finality-depth: {e}"))),
+            "--relay-min-accept" => {
+                relay_min_accept = value("--relay-min-accept").parse().unwrap_or_else(|e| die(format!("--relay-min-accept: {e}")))
+            }
             "--rpc" => rpc_endpoint = Some(value("--rpc")),
             "--retention-dir" => retention_dir = Some(PathBuf::from(value("--retention-dir"))),
             "--capture" => capture_path = Some(PathBuf::from(value("--capture"))),
@@ -189,7 +225,9 @@ fn main() {
                  [--bond-key-seed <file> [--print-bond-pubkey] --funding-outpoint <txid:index> --funding-amount <sompi> \
                  [--fee <sompi>]] [--class-id <128hex>] [--class-leaves <u64>] \
                  [--submit --rpc <host:port> [--retention-dir <dir>] [--capture <material.bin>] [--dsl <fpd1>] \
-                 [--anchor-ttl-daa <n>]]\n       misaka-palw-fp-rail --watch <outbox> --bond-key-seed <file> --rpc <host:port> \
+                 [--anchor-ttl-daa <n>]]\n       misaka-palw-fp-rail --artifact <stem> --bond-key-seed <file> --funding-outpoint <txid:index> \
+                 --funding-amount <sompi> --relay <host:port,host:port,...> [--relay-min-accept <n>] [--fee <sompi>] \
+                 (RFC-0009: sign here, relay raw bytes through several nodes, stage nothing — the claim's material is still yours to serve)\n       misaka-palw-fp-rail --watch <outbox> --bond-key-seed <file> --rpc <host:port> \
                  [--funding-outpoint <txid:index> --funding-amount <sompi>] [--coinbase-funding-only] [--interval <secs>] [--max-attempts <n>] [--once] \
                  [--fee <sompi>] [--class-leaves <u64>] [--retention-dir <dir>] [--anchor-ttl-daa <n>]\
                  \n       misaka-palw-fp-rail --print-identity --bond-key-seed <file> --rpc <host:port> --class-id <128hex> \
@@ -197,6 +235,16 @@ fn main() {
                  \n       misaka-palw-fp-rail --derive-artifact <outbox/fp-job-XXXX> (--bond-key-seed <file> | --print-derived-message)"
             )),
         }
+    }
+    if let Some(claim_hex) = track_claim {
+        let endpoints: Vec<String> = if relay_endpoints.is_empty() {
+            vec![rpc_endpoint.clone().unwrap_or_else(|| die("--track needs --relay <a,b,...> or --rpc <host:port>".into()))]
+        } else {
+            relay_endpoints.clone()
+        };
+        let bond = parse_outpoint(bond_flag.as_deref().unwrap_or_else(|| die("--track needs --bond <txid:index> (the executor bond)".into())));
+        track_once(&endpoints, &claim_hex, track_tx_id.as_deref(), bond, finality_depth);
+        return;
     }
     // **The gateway's identity, from the node and the key** — five fields an operator used to
     // gather from five places, one of which (`operator_id`) no command printed at all, and any of
@@ -488,6 +536,14 @@ fn main() {
     // the one library; not two commands an operator has to remember to run in order, and not a
     // shell-out. Every refusal below is named by `FpSubmitError`, including the SA-1(b) one that
     // fires when the node's DAA has passed this commitment's anchor deadline.
+    if submit && !relay_endpoints.is_empty() {
+        die("--submit (one node, stages the material beside it) and --relay (many nodes, stages nothing) are different handoffs: pick one".into());
+    }
+    let relayed = if relay_endpoints.is_empty() {
+        None
+    } else {
+        Some(relay_through_many(&relay_endpoints, &tx, &funding_entry, relay_min_accept, view_checkpoint.as_deref()))
+    };
     let submitted = if submit {
         let endpoint = rpc_endpoint.unwrap_or_else(|| die("--submit needs --rpc <host:port>".into()));
         let capture = capture_path.as_ref().map(|path| {
@@ -524,6 +580,67 @@ fn main() {
             .derive_quanta_and_pwu(commitment.work_leaves, class_canonical_leaves)
             .expect("the builder already refused a sub-quantum job"),
     };
+    // **RFC-0009 stage B: the evidence, placed with a provider** — the SAME bytes the node would serve (`encode_claim_material`), split into chunks and
+    // named by a manifest whose roots are the claim's own. Written chunks first and the manifest last, so a reader never sees a manifest without its chunks.
+    let evidenced = evidence_out.as_ref().map(|dir| {
+        let capture_bytes = capture_path.as_ref().map(|path| {
+            std::fs::read(path).unwrap_or_else(|e| die(format!("cannot read the capture at {}: {e}", path.display())))
+        });
+        let (payload, _) = misaka_palw_fp_submit::decode_commitment_payload(&tx).unwrap_or_else(|e| die(e.to_string()));
+        let prompt_ids = misaka_palw_fp_submit::staged_prompt_ids(&payload, Some(&result.prompt_token_ids)).unwrap_or_else(|e| die(e.to_string()));
+        let material = misaka_palw_fp_submit::encode_claim_material(&payload, prompt_ids, capture_bytes.as_deref())
+            .unwrap_or_else(|e| die(e.to_string()));
+        let chunks = misaka_palw_remote::evidence::fs::chunk_material(&material, 1 << 20);
+        let manifest = misaka_palw_remote::evidence::EvidenceManifestV1::build(
+            commitment.job.network_domain,
+            &commitment.job.executor_bond,
+            &commitment.job.job_nonce,
+            commitment.trace_root,
+            commitment.output_root,
+            commitment.execution_root,
+            commitment.trace_chunk_count,
+            commitment.trace_retention_daa,
+            &chunks,
+        );
+        manifest
+            .validate_shape(&misaka_palw_remote::evidence::ManifestLimits::default())
+            .unwrap_or_else(|e| die(format!("the evidence manifest is not admissible: {e}")));
+        misaka_palw_remote::evidence::fs::publish(dir, &claim_id.to_string(), &manifest, &chunks)
+            .unwrap_or_else(|e| die(format!("cannot write the evidence to {}: {e}", dir.display())));
+        serde_json::json!({
+            "dir": dir.display().to_string(),
+            "claim_id": hex(claim_id),
+            "manifest_id": misaka_palw_remote::evidence::manifest_id_v1(&manifest).to_string(),
+            "chunks": chunks.len(),
+            "material_bytes": material.len(),
+            "note": "a promise by this directory's operator, not proof of availability: the producer (you) stays accountable until a provider court is armed",
+        })
+    });
+    // **RFC-0009: the redemption authorization**, signed once, for every quantum of this claim (`[0, quanta)`). A builder holding the file
+    // can spend a winning quantum into its own block once `palw_receipt_spend_v4` is armed; the miner's PC need not be on. The file is not
+    // secret and grants nothing beyond what it says (the range, the beacon rule, the fee in basis points, the expiry).
+    let redeemed = redeem_auth_out.as_ref().map(|path| {
+        let bundle = key
+            .build_redemption_bundle_v4(
+                commitment.job.network_domain,
+                claim_id,
+                commitment.job.executor_bond,
+                0,
+                quanta,
+                redeem_fee_bps,
+                redeem_expiry_daa,
+            )
+            .unwrap_or_else(|e| die(format!("cannot sign the redemption authorization: {e}")));
+        std::fs::write(path, bundle.encode()).unwrap_or_else(|e| die(format!("cannot write {}: {e}", path.display())));
+        serde_json::json!({
+            "file": path.display().to_string(),
+            "claim_id": hex(claim_id),
+            "quantum_range": [0, quanta],
+            "builder_fee_bps": redeem_fee_bps,
+            "expiry_daa": if redeem_expiry_daa == u64::MAX { serde_json::Value::Null } else { serde_json::json!(redeem_expiry_daa) },
+            "note": "dormant: no network accepts a V4 receipt until palw_receipt_spend_v4 is armed; hand this file to a block builder",
+        })
+    });
     // **What this carrier leaves behind for the next one.** The commitment spends the one funding
     // input and pays its change back to the same script, so the change is a spendable outpoint the
     // moment the node accepts the transaction — the mempool resolves a child against its pending
@@ -552,6 +669,13 @@ fn main() {
         "trace_retention_daa": commitment.trace_retention_daa,
         "tx_file": tx_path.display().to_string(),
         "submitted": submitted.as_ref().map(|s| s.txid.clone()),
+        // RFC-0009: the per-node outcome of a `--relay`. An accept is NOT inclusion — track the claim (misaka-palw-remote's
+        // ClaimTracker) and keep serving the material until stage B moves it.
+        "relayed": relayed,
+        // RFC-0009 stage C: the authorization file a builder redeems with (None unless `--redeem-auth-out`).
+        "redemption_authorization": redeemed,
+        // RFC-0009 stage B: where the evidence was placed (None unless `--evidence-out`).
+        "evidence": evidenced,
         // The change output, spendable by the next submission once this one is accepted: pass it
         // as `--funding-outpoint`/`--funding-amount`. Null when the carrier left no change.
         "next_funding": next_funding,
@@ -656,6 +780,238 @@ fn submit_through_the_one_path(
             retention_source,
         }
     })
+}
+
+/// One wRPC node as a [`misaka_palw_remote::relay::RelayNode`].
+struct WrpcRelayNode<'a> {
+    endpoint: String,
+    runtime: &'a tokio::runtime::Runtime,
+    client: kaspa_wrpc_client::KaspaRpcClient,
+}
+
+impl misaka_palw_remote::relay::RelayNode for WrpcRelayNode<'_> {
+    fn node_id(&self) -> &str {
+        &self.endpoint
+    }
+    fn submit_raw_tx(&self, tx: &kaspa_consensus_core::tx::Transaction) -> misaka_palw_remote::relay::Reply {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        use misaka_palw_remote::relay::Reply;
+        let expected = misaka_palw_remote::relay::tx_id_of_bytes(tx);
+        match self.runtime.block_on(self.client.submit_transaction(kaspa_rpc_core::RpcTransaction::from(tx), false)) {
+            Ok(id) => Reply::Accepted(id),
+            // A node answers "already known" as an error naming the id. Believed only when it names OUR id: a node cannot make us
+            // count a success for bytes it did not hold by saying a sentence.
+            Err(e) => {
+                let text = e.to_string();
+                if text.to_lowercase().contains("already") && text.contains(&expected.to_string()) {
+                    Reply::AlreadyKnown(expected)
+                } else {
+                    Reply::Refused(text)
+                }
+            }
+        }
+    }
+}
+
+/// **RFC-0009 stage A: where does this claim stand, according to each node?** One poll per node, folded through
+/// [`misaka_palw_remote::track::ClaimTracker`]. Tx id, claim id, inclusion and phase are separate facts; `Final`/void are reported settled only
+/// `finality_depth` DAA deep; and a claim row naming another executor bond is `Misattributed`, never ours. The nodes are compared, and a
+/// disagreement is printed as one rather than averaged away.
+fn track_once(endpoints: &[String], claim_hex: &str, tx_id_hex: Option<&str>, our_bond: TransactionOutpoint, finality_depth: u64) {
+    use kaspa_rpc_core::api::rpc::RpcApi;
+    use misaka_palw_remote::track::{ChainObservation, ClaimObs, ClaimPhaseObs, ClaimTracker};
+    let parse_hash = |what: &str, text: &str| -> Hash64 {
+        let mut out = [0u8; 64];
+        if text.len() != 128 || faster_hex::hex_decode(text.as_bytes(), &mut out).is_err() {
+            die(format!("{what} is not 128 hex chars"));
+        }
+        Hash64::from_bytes(out)
+    };
+    let claim_id = parse_hash("--track", claim_hex);
+    let tx_id = tx_id_hex.map(|t| parse_hash("--tx-id", t));
+    let runtime = rpc_runtime();
+    let mut per_node = Vec::new();
+    let mut states = Vec::new();
+    for endpoint in endpoints {
+        let client = match try_rpc_connect(&runtime, endpoint) {
+            Ok(c) => c,
+            Err(e) => {
+                per_node.push(serde_json::json!({ "node": endpoint, "error": e }));
+                continue;
+            }
+        };
+        let observation = runtime.block_on(async {
+            let info = client.get_block_dag_info().await.map_err(|e| e.to_string())?;
+            let tx_in_mempool = match tx_id {
+                Some(id) => client.get_mempool_entry(id, true, true).await.is_ok(),
+                None => false,
+            };
+            let claim = client.get_palw_free_prompt_claim(claim_hex.to_string()).await.map_err(|e| e.to_string())?;
+            let claim_obs = if !claim.found {
+                None
+            } else {
+                let (txid, index) = claim.executor_bond.split_once(':').ok_or("the node's executor_bond is not txid:index")?;
+                let mut raw = [0u8; 64];
+                if txid.len() != 128 || faster_hex::hex_decode(txid.as_bytes(), &mut raw).is_err() {
+                    return Err("the node's executor_bond is not a 128-hex id".to_string());
+                }
+                let bond = TransactionOutpoint::new(Hash64::from_bytes(raw), index.parse::<u32>().map_err(|e| e.to_string())?);
+                let phase = match claim.phase.as_str() {
+                    "provisional" => ClaimPhaseObs::Provisional,
+                    "panel_bound" => ClaimPhaseObs::PanelBound,
+                    "receipt_licensed" => ClaimPhaseObs::ReceiptLicensed { licensed_daa: claim.phase_daa },
+                    "final" => ClaimPhaseObs::Final { final_daa: claim.phase_daa },
+                    "voided" => ClaimPhaseObs::Voided { voided_daa: claim.phase_daa },
+                    other => return Err(format!("the node reports a claim phase this client does not know: {other:?}")),
+                };
+                let mut accepted = [0u8; 64];
+                let accepted_block = if claim.accepted_block.len() == 128 && faster_hex::hex_decode(claim.accepted_block.as_bytes(), &mut accepted).is_ok() {
+                    Hash64::from_bytes(accepted)
+                } else {
+                    Hash64::default()
+                };
+                Some(ClaimObs { executor_bond: bond, accepted_block, accepted_daa: claim.accepted_daa, phase })
+            };
+            Ok::<_, String>(ChainObservation { sink: info.sink, virtual_daa: info.virtual_daa_score, tx_in_mempool, claim: claim_obs })
+        });
+        let _ = runtime.block_on(client.disconnect());
+        match observation {
+            Ok(obs) => {
+                let mut tracker = ClaimTracker::new(tx_id.unwrap_or_default(), claim_id, our_bond, finality_depth);
+                let state = tracker.observe(&obs).clone();
+                per_node.push(serde_json::json!({ "node": endpoint, "virtual_daa": obs.virtual_daa, "sink": obs.sink.to_string(), "state": format!("{state:?}") }));
+                states.push(state);
+            }
+            Err(e) => per_node.push(serde_json::json!({ "node": endpoint, "error": e })),
+        }
+    }
+    let agree = !states.is_empty() && states.windows(2).all(|w| w[0] == w[1]);
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema": "misaka.palw.fp-rail-track.v1",
+            "claim_id": claim_hex,
+            "per_node": per_node,
+            "nodes_answered": states.len(),
+            "agree": agree,
+            "state": if agree { Some(format!("{:?}", states[0])) } else { None },
+            "settled": agree && states[0].is_settled(),
+            "note": "a relay accept is not inclusion; Final/void are settled only finality_depth DAA deep; a disagreement is a disagreement, not an average",
+        })
+    );
+}
+
+/// A wRPC node as a [`misaka_palw_remote::view::ChainView`] — `getBlockDagInfo` for its facts, `getBlock` for a checkpoint's standing.
+struct WrpcViewNode<'a> {
+    node: &'a WrpcRelayNode<'a>,
+}
+
+impl misaka_palw_remote::view::ChainView for WrpcViewNode<'_> {
+    fn node_id(&self) -> &str {
+        &self.node.endpoint
+    }
+    fn facts(&self) -> Result<misaka_palw_remote::view::NodeFacts, misaka_palw_remote::view::ViewError> {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        let info = self
+            .node
+            .runtime
+            .block_on(self.node.client.get_block_dag_info())
+            .map_err(|e| misaka_palw_remote::view::ViewError(e.to_string()))?;
+        Ok(misaka_palw_remote::view::NodeFacts {
+            network_id: info.network.to_string(),
+            sink: info.sink,
+            virtual_daa: info.virtual_daa_score,
+            pruning_point: info.pruning_point_hash,
+        })
+    }
+    fn checkpoint_status(
+        &self,
+        checkpoint: &misaka_palw_remote::checkpoint::Checkpoint,
+    ) -> Result<misaka_palw_remote::view::CheckpointStatus, misaka_palw_remote::view::ViewError> {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        use misaka_palw_remote::view::CheckpointStatus;
+        match self.node.runtime.block_on(self.node.client.get_block(checkpoint.block_hash, false)) {
+            // The node knows the block. A selected-chain block is the pin; one it holds OFF its selected chain is a fork against it.
+            Ok(block) => Ok(match block.verbose_data {
+                Some(v) if v.is_chain_block => CheckpointStatus::OnChain,
+                Some(_) => CheckpointStatus::Conflicts,
+                None => CheckpointStatus::Unknown,
+            }),
+            // Not found: this node has not synced that far (or the checkpoint is not its block) — silence, not a vote.
+            Err(_) => Ok(CheckpointStatus::Unknown),
+        }
+    }
+}
+
+/// **RFC-0009 stage A: relay a locally signed carrier through several nodes.** The funding signature is verified first (the same
+/// check the script engine will make), the id is recomputed from the bytes, and each node's reply is judged against it.
+fn relay_through_many(
+    endpoints: &[String],
+    tx: &kaspa_consensus_core::tx::Transaction,
+    funding: &UtxoEntry,
+    min_accept: usize,
+    checkpoint: Option<&str>,
+) -> serde_json::Value {
+    let runtime = rpc_runtime();
+    let mut nodes: Vec<WrpcRelayNode<'_>> = Vec::new();
+    let mut unreachable: Vec<String> = Vec::new();
+    for endpoint in endpoints {
+        match try_rpc_connect(&runtime, endpoint) {
+            Ok(client) => nodes.push(WrpcRelayNode { endpoint: endpoint.clone(), runtime: &runtime, client }),
+            Err(e) => unreachable.push(format!("{endpoint}: {e}")),
+        }
+    }
+    // **The view, before the bytes leave** (stage D phase 1). Pinned to a checkpoint the miner supplied; every node must agree or nothing is sent.
+    let view = match checkpoint {
+        None => serde_json::json!("not checked: no --checkpoint <daa>:<hash> was given, so these nodes were taken at their word"),
+        Some(spec) => {
+            let (daa, hash) = spec.split_once(':').unwrap_or_else(|| die("--checkpoint is <daa>:<128hex block hash>".into()));
+            let daa: u64 = daa.parse().unwrap_or_else(|e| die(format!("--checkpoint daa: {e}")));
+            let mut out = [0u8; 64];
+            if hash.len() != 128 || faster_hex::hex_decode(hash.as_bytes(), &mut out).is_err() {
+                die("--checkpoint hash is not 128 hex chars".into());
+            }
+            let views: Vec<WrpcViewNode<'_>> = nodes.iter().map(|n| WrpcViewNode { node: n }).collect();
+            let view_refs: Vec<&dyn misaka_palw_remote::view::ChainView> =
+                views.iter().map(|v| v as &dyn misaka_palw_remote::view::ChainView).collect();
+            // The network the nodes report is the network the checkpoint is for: the pin is only meaningful against it.
+            let network = views
+                .first()
+                .and_then(|v| misaka_palw_remote::view::ChainView::facts(v).ok())
+                .map(|f| f.network_id)
+                .unwrap_or_else(|| die("no node answered getBlockDagInfo: there is no view to check".into()));
+            let policy = misaka_palw_remote::view::QuorumPolicy::new(misaka_palw_remote::checkpoint::Checkpoint {
+                network_id: network,
+                daa_score: daa,
+                block_hash: Hash64::from_bytes(out),
+            });
+            match misaka_palw_remote::view::agree(&view_refs, &policy) {
+                Ok(agreed) => serde_json::json!({
+                    "agreed": true, "nodes": agreed.nodes, "virtual_daa": agreed.virtual_daa, "network": agreed.network_id,
+                    "pruning_point": agreed.pruning_point.to_string(),
+                }),
+                Err(halt) => die(format!("the nodes do not agree, nothing was sent: {halt}")),
+            }
+        }
+    };
+    let refs: Vec<&dyn misaka_palw_remote::relay::RelayNode> = nodes.iter().map(|n| n as &dyn misaka_palw_remote::relay::RelayNode).collect();
+    let verdict = misaka_palw_remote::relay::broadcast_signed_tx(tx, Some(funding), &refs, min_accept);
+    for node in &nodes {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        let _ = runtime.block_on(node.client.disconnect());
+    }
+    match verdict {
+        Ok(report) => serde_json::json!({
+            "tx_id": report.id.to_string(),
+            "accepted_by": report.successes,
+            "per_node": report.per_node.iter().map(|(n, o)| format!("{n}: {o:?}")).collect::<Vec<_>>(),
+            "tampered": report.tampered(),
+            "unreachable": unreachable,
+            "view": view,
+            "note": "accepted is not included; track it, and keep serving the claim's material (stage B moves that)",
+        }),
+        Err(e) => die(format!("the carrier was not relayed: {e} (unreachable: {unreachable:?})")),
+    }
 }
 
 /// What `--submit` produced, for the summary: the transaction, and where the node will serve

@@ -571,7 +571,7 @@ async fn t12_bind_deadlock_f1_past_the_fence_an_at_ceiling_attempt_binds_the_cla
     }
     assert!(parent.claim(&binder_attempt).is_none() && state.claim(&binder_attempt).is_none(), "the binder's attempt carries no claim");
     assert_eq!(f.committed(7), committed_at_ceiling, "card 7's commitment does not move: the binder reserved nothing");
-    let withheld = f.chain.vp().palw_v2_escrow_withheld_at(&state, binder);
+    let withheld = f.chain.vp().palw_v2_escrow_withheld_at(&state, binder, daa);
     let vp = f.chain.vp();
     let carve = f.chain.bundle.state.worker_carve_at(vp.coinbase_manager.calc_block_subsidy(daa), vp.palw_escrow_carve_at(daa, daa));
     println!("[f1] the binder's worker carve withheld: {:.4} MSK (carve {:.4})", withheld as f64 / MSK, carve as f64 / MSK);

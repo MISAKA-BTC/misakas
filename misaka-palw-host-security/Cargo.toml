@@ -1,0 +1,19 @@
+[package]
+name = "misaka-palw-host-security"
+description = "ADR-0079 host-side confinement for every process that executes a PALW class (environment allowlist, working directory, memory ceiling, seccomp/Landlock backend). Runs no model and spawns no worker, so crates that define validity may depend on it (ADR-0042 Decision 4)."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# geteuid for the per-user scratch directory name, sysconf(_SC_PAGESIZE) for the /proc statm fallback, and the Linux
+# backend's seccomp/Landlock calls. Unix-gated so the Windows build of `kaspad` does not grow a dependency it has no use for.
+libc = { workspace = true }
+
+[lints]
+workspace = true

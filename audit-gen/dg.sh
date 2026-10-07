@@ -171,6 +171,10 @@ dg2() {
     local id; id=$(gen_claim "$EMBED_EXEC" toy-embed "$(seat_field "$s" bond_outpoint)" "$KR/bond-$s.seed" "$(seat_field "$s" operator_id)" dg2-early)
     at_daa $((FPV5_AT + 6))
     grep -qh "GenClassNotReady" "$WORK_DIR"/new*/kaspad.out 2>/dev/null && ok "refused: GenClassNotReady" || bad "no GenClassNotReady in the nodes' logs (the claim $id)"
+    if [ -n "${GEN_PARTIAL_CLASS:-}" ]; then
+        say "DG-2: the class is held by ${GEN_PARTIAL_HOLDERS:-?} only; starting the other IR holders with it"
+        for n in $(ir_holders); do grep -qw "$n" <<<"$GEN_PARTIAL_HOLDERS" || { env -u GEN_PARTIAL_CLASS bash "$A/nodes.sh" stop "$n"; env -u GEN_PARTIAL_CLASS bash "$A/nodes.sh" start "$n"; }; done
+    fi
     say "DG-2: ready operators accumulate; a claim is taken once five distinct operators hold the class"
     local deadline=$((FPV5_AT + 60))
     while [ "$(dgw tip)" -lt "$deadline" ]; do

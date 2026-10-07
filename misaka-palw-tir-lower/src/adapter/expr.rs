@@ -35,7 +35,6 @@ pub const MAX_DEPTH: usize = 96;
 pub const MAX_LIST: usize = 1 << 20;
 pub const MAX_LAYERS: usize = 4096;
 
-
 /// The configuration scope in force: the decoder's, or a nested object's inside a `$sub`.
 pub enum CfgRef<'a> {
     Base(&'a Cfg<'a>),
@@ -471,7 +470,9 @@ impl<'a> Env<'a> {
                 Ok(Value::Bool(match self.tensors {
                     Some(t) => t.has(name),
                     None => {
-                        self.assumed.borrow_mut().insert(format!("tensor `{name}` assumed {}", if default { "present" } else { "absent" }));
+                        self.assumed
+                            .borrow_mut()
+                            .insert(format!("tensor `{name}` assumed {}", if default { "present" } else { "absent" }));
                         default
                     }
                 }))
@@ -590,7 +591,9 @@ impl<'a> Env<'a> {
             "$min" | "$max" => {
                 let mut a = self.args(arg, d)?;
                 // `{"$max": <expression that is a list>}`: the elements are the operands.
-                if a.len() == 1 && let Value::Array(l) = &a[0] {
+                if a.len() == 1
+                    && let Value::Array(l) = &a[0]
+                {
                     a = l.clone();
                 }
                 if a.is_empty() {
@@ -663,7 +666,8 @@ impl<'a> Env<'a> {
                 if as_bool(&self.ev(&a[0], d)?, op)? { self.ev(&a[1], d) } else { self.ev(&a[2], d) }
             }
             "$switch" => {
-                let a = arg.as_array().filter(|a| a.len() == 3).ok_or_else(|| bad("`$switch` takes [value, {case: result}, default]"))?;
+                let a =
+                    arg.as_array().filter(|a| a.len() == 3).ok_or_else(|| bad("`$switch` takes [value, {case: result}, default]"))?;
                 let v = self.ev(&a[0], d)?;
                 let key = match &v {
                     Value::String(s) => s.clone(),
@@ -727,7 +731,9 @@ impl<'a> Env<'a> {
                 let v = self.ev(arg, d)?;
                 let mut items = v.as_array().ok_or_else(|| bad("`$sort` wants a list"))?.clone();
                 if items.iter().all(|x| num(x).is_some()) {
-                    items.sort_by(|a, b| num(a).map(|x| x.f()).partial_cmp(&num(b).map(|x| x.f())).unwrap_or(std::cmp::Ordering::Equal));
+                    items.sort_by(|a, b| {
+                        num(a).map(|x| x.f()).partial_cmp(&num(b).map(|x| x.f())).unwrap_or(std::cmp::Ordering::Equal)
+                    });
                 } else if items.iter().all(Value::is_string) {
                     items.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
                 } else {
@@ -946,20 +952,30 @@ impl<'a> Env<'a> {
                 let slopes = match kind.as_str() {
                     "bloom" => crate::rope::alibi_slopes_bloom(heads),
                     "mpt" => {
-                        let m = num(&self.ev(o.get("bias_max").ok_or_else(|| bad("`$alibi`: bias_max"))?, d)?).ok_or_else(|| bad("bias_max"))?.f();
+                        let m = num(&self.ev(o.get("bias_max").ok_or_else(|| bad("`$alibi`: bias_max"))?, d)?)
+                            .ok_or_else(|| bad("bias_max"))?
+                            .f();
                         crate::rope::alibi_slopes_mpt(heads, m)
                     }
                     other => return Err(bad(format!("`$alibi`: unknown slope kind `{other}`"))),
                 };
-                let flag = |k: &str| -> Result<bool> { o.get(k).map(|e| self.ev(e, d).and_then(|v| as_bool(&v, op))).transpose().map(|b| b.unwrap_or(false)) };
-                let spec = crate::rope::AlibiSpec { slopes, scaled_by_softmax_scale: flag("scaled_by_softmax_scale")?, bf16_bias: flag("bf16_bias")? };
+                let flag = |k: &str| -> Result<bool> {
+                    o.get(k).map(|e| self.ev(e, d).and_then(|v| as_bool(&v, op))).transpose().map(|b| b.unwrap_or(false))
+                };
+                let spec = crate::rope::AlibiSpec {
+                    slopes,
+                    scaled_by_softmax_scale: flag("scaled_by_softmax_scale")?,
+                    bf16_bias: flag("bf16_bias")?,
+                };
                 serde_json::to_value(&spec).map_err(|e| bad(e.to_string()))
             }
             "$rope_plain" => {
                 // A rope with the default frequencies at a given base, reading no rope key.
                 let o = arg.as_object().ok_or_else(|| bad("`$rope_plain` takes {dim, theta, style?}"))?;
                 let dim = as_usize(&self.ev(o.get("dim").ok_or_else(|| bad("`$rope_plain`: dim"))?, d)?, op)?;
-                let theta = num(&self.ev(o.get("theta").ok_or_else(|| bad("`$rope_plain`: theta"))?, d)?).ok_or_else(|| bad("rope theta"))?.f();
+                let theta = num(&self.ev(o.get("theta").ok_or_else(|| bad("`$rope_plain`: theta"))?, d)?)
+                    .ok_or_else(|| bad("rope theta"))?
+                    .f();
                 let style = match o.get("style").map(|e| self.ev(e, d)).transpose()? {
                     Some(Value::String(s)) if s == "Interleaved" => crate::rope::RopeStyle::Interleaved,
                     _ => crate::rope::RopeStyle::Half,
@@ -968,9 +984,14 @@ impl<'a> Env<'a> {
                     return Err(bad(format!("{}: rotary dim {dim} must be even and positive", self.arch)));
                 }
                 if dim > crate::rope::MAX_ROTARY_DIM {
-                    return Err(bad(format!("{}: rotary dim {dim} is past the {} a program rotates", self.arch, crate::rope::MAX_ROTARY_DIM)));
+                    return Err(bad(format!(
+                        "{}: rotary dim {dim} is past the {} a program rotates",
+                        self.arch,
+                        crate::rope::MAX_ROTARY_DIM
+                    )));
                 }
-                let spec = crate::rope::RopeSpec { rotary_dim: dim, offset: 0, style, freqs: crate::rope::RopeFreqs::plain(theta, dim) };
+                let spec =
+                    crate::rope::RopeSpec { rotary_dim: dim, offset: 0, style, freqs: crate::rope::RopeFreqs::plain(theta, dim) };
                 serde_json::to_value(&spec).map_err(|e| bad(e.to_string()))
             }
             "$per_layer" => {
@@ -984,7 +1005,11 @@ impl<'a> Env<'a> {
                     return Err(bad("`$per_layer`: too many layers"));
                 }
                 let allowed: Vec<String> = match o.get("allowed") {
-                    Some(e) => self.ev(e, d)?.as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+                    Some(e) => self
+                        .ev(e, d)?
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                        .unwrap_or_default(),
                     None => Vec::new(),
                 };
                 let obj = self.ev(o.get("object").ok_or_else(|| bad("`$per_layer`: object"))?, d)?;
@@ -1010,7 +1035,13 @@ impl<'a> Env<'a> {
                 // theta, params} (the keys are read, so they count as used). For a rule that depends on
                 // them (DeepSeek's `mscale_all_dim` on the attention scale).
                 let o = arg.as_object().ok_or_else(|| bad("`$rope_config` takes {theta?, layer_type?}"))?;
-                let theta = o.get("theta").map(|e| self.ev(e, d)).transpose()?.filter(|v| !v.is_null()).map(|v| num(&v).map(N::f).ok_or_else(|| bad("rope theta"))).transpose()?;
+                let theta = o
+                    .get("theta")
+                    .map(|e| self.ev(e, d))
+                    .transpose()?
+                    .filter(|v| !v.is_null())
+                    .map(|v| num(&v).map(N::f).ok_or_else(|| bad("rope theta")))
+                    .transpose()?;
                 let layer_type = o.get("layer_type").map(|e| self.ev(e, d)).transpose()?.and_then(|v| v.as_str().map(str::to_string));
                 let rc = crate::rope::read_rope_config(&self.cur(), theta, layer_type.as_deref())?;
                 Ok(serde_json::json!({"rope_type": rc.rope_type, "theta": rc.theta, "params": rc.params}))
@@ -1020,27 +1051,49 @@ impl<'a> Env<'a> {
                 // (transformers 5), else the first of the legacy keys present, else the default.
                 let o = arg.as_object().ok_or_else(|| bad("`$partial_rotary` takes {legacy, default}"))?;
                 let legacy: Vec<String> = match o.get("legacy") {
-                    Some(e) => self.ev(e, d)?.as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+                    Some(e) => self
+                        .ev(e, d)?
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                        .unwrap_or_default(),
                     None => Vec::new(),
                 };
-                let default = num(&self.ev(o.get("default").ok_or_else(|| bad("`$partial_rotary`: default"))?, d)?).ok_or_else(|| bad("partial default"))?.f();
-                let rp_factor = self.cur().opt_obj("rope_parameters")?.and_then(|rp| rp.get("partial_rotary_factor").and_then(Value::as_f64));
+                let default = num(&self.ev(o.get("default").ok_or_else(|| bad("`$partial_rotary`: default"))?, d)?)
+                    .ok_or_else(|| bad("partial default"))?
+                    .f();
+                let rp_factor =
+                    self.cur().opt_obj("rope_parameters")?.and_then(|rp| rp.get("partial_rotary_factor").and_then(Value::as_f64));
                 if let Some(v) = rp_factor {
                     for k in &legacy {
                         if let Some(x) = self.cur().opt_f64(k)?
                             && (x - v).abs() > 1e-12
                         {
-                            return Err(LowerError::not_lowerable(format!("{}: `{k}`={x} disagrees with rope_parameters' {v}", self.arch)));
+                            return Err(LowerError::not_lowerable(format!(
+                                "{}: `{k}`={x} disagrees with rope_parameters' {v}",
+                                self.arch
+                            )));
                         }
                     }
                     return N::F(v).value();
                 }
+                // Every legacy key present is read, and they must agree (transformers 5 writes `partial_rotary_factor` beside
+                // GPT-NeoX's `rotary_pct`): the first present is the factor.
+                let mut found: Option<(String, f64)> = None;
                 for k in &legacy {
                     if let Some(x) = self.cur().opt_f64(k)? {
-                        return N::F(x).value();
+                        match &found {
+                            None => found = Some((k.clone(), x)),
+                            Some((k0, x0)) if (x - x0).abs() > 1e-12 => {
+                                return Err(LowerError::not_lowerable(format!("{}: `{k}`={x} disagrees with `{k0}`={x0}", self.arch)));
+                            }
+                            Some(_) => {}
+                        }
                     }
                 }
-                N::F(default).value()
+                match found {
+                    Some((_, x)) => N::F(x).value(),
+                    None => N::F(default).value(),
+                }
             }
             "$rope" | "$rope_temp" => self.rope(op, arg, d),
             "$layers" => {
@@ -1119,12 +1172,24 @@ impl<'a> Env<'a> {
             Some(Value::String(s)) if s == "short_only" => true,
             Some(other) => return Err(bad(format!("`{op}`: longrope mode {other}"))),
         };
-        if short_only && op == "$rope" && let Some(mut spec) = crate::rope::longrope_short_only_spec(&self.cur(), rotary_dim, theta)? {
+        if short_only
+            && op == "$rope"
+            && let Some(mut spec) = crate::rope::longrope_short_only_spec(&self.cur(), rotary_dim, theta)?
+        {
             spec.offset = offset;
             return serde_json::to_value(&spec).map_err(|e| bad(e.to_string()));
         }
-        let (mut spec, temp) =
-            crate::rope::rope_spec_from_config(&self.cur(), rotary_dim, style, theta, layer_type.as_deref(), partial, max_pos, top_orig, q_scaled)?;
+        let (mut spec, temp) = crate::rope::rope_spec_from_config(
+            &self.cur(),
+            rotary_dim,
+            style,
+            theta,
+            layer_type.as_deref(),
+            partial,
+            max_pos,
+            top_orig,
+            q_scaled,
+        )?;
         spec.offset = offset;
         if reverse {
             spec.freqs = spec.freqs.reverse()?;
