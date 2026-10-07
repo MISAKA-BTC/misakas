@@ -23,6 +23,8 @@ thiserror.workspace = true
 # The tiny dense + MoE + history classes RFC-0007 Part II's prototype tests on: real TIR programs
 # with every MatMul kind, TopK routing, Gather and Hist state.
 misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }
+# RFC-0003's R for the TIR v2 pipeline fixtures (the IR's own `tests/v2common`).
+misaka-palw-gen.workspace = true
 
 [lints]
 workspace = true

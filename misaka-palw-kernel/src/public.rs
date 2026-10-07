@@ -21,8 +21,8 @@
 use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use misaka_palw_tir::program::TirProgramV1;
 use misaka_palw_tir::Tensor;
+use misaka_palw_tir::program::TirProgramV1;
 
 use crate::challenge::ChallengeBindingV1;
 use crate::descriptor::KernelDescriptorV1;
@@ -124,7 +124,7 @@ impl FreshVerifierV1 {
         if params.root() != header.artifact_root || params.by_instance.len() != record.param_commitments.len() {
             return Err("the published param commitments are not the class's artifact".into());
         }
-        let trace = EvidenceV1 { commitments: record.trace_commitments.clone() };
+        let trace = EvidenceV1::new(record.trace_commitments.clone());
         Ok(Self { record, descriptor, program, trace, params, header })
     }
 
@@ -146,6 +146,7 @@ impl FreshVerifierV1 {
                 evidence_root: self.record.evidence.root(),
                 beacon: self.record.beacon,
             },
+            stage: None,
         }
     }
 

@@ -182,6 +182,28 @@ pub fn k2_tir_v2_descriptor() -> KernelDescriptorV1 {
     d
 }
 
+pub const K2_TIR_V3_SEMANTICS: &[u8] = b"misaka-palw-kernel K2-TIR-v3: K2-TIR-v2 semantics, plus the media-pipeline family: \
+RFC-0003 pipelines of TIR v2 programs (spec 04b section 15), each stage checked over its version-1 view with its input tensors \
+committed per position and its post writes wired to the next position; every stage input recomputed exactly from its binding \
+(job scalars, token templates and counts, canonical u8 RGB images, earlier stages' committed rows and final values with zero pad, \
+RFC-0003 R) inside its declared interval; edge court recomputes one input at one position";
+
+/// **K2-TIR-v3**: K2-TIR-v2 with the media-pipeline family (RFC-0005 §K.3's "media and pipelines" row), so RFC-0003 pipeline
+/// classes (text encoders, denoisers, decoders, vision encoders, decode stages, evaluation pipelines) are expressible.
+pub fn k2_tir_v3_descriptor() -> KernelDescriptorV1 {
+    let mut d = k2_tir_v2_descriptor();
+    d.version = 3;
+    d.semantics_digest = crate::hash::id(KERNEL_DESCRIPTOR_DOMAIN_V1, K2_TIR_V3_SEMANTICS);
+    d.constraint_set_id = 3;
+    d.court_suite_id = 3;
+    d.families.push(FamilySupportV1 {
+        family: ConstraintFamilyV1::MediaPipeline,
+        checker: CheckerIdV1::EdgeRecompute,
+        court: CourtIdV1::EdgeRecompute,
+    });
+    d
+}
+
 /// Where a descriptor stands in the release sequence (ADR-0172 §3: proposal → reference + independent
 /// implementation → vectors/review → shadow → LOCKED_IN → ACTIVE). These are release states, not a ballot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -237,11 +259,12 @@ impl KernelScheduleV1 {
     }
 }
 
-/// **The shipped schedule: K2-TIR-v1 and K2-TIR-v2 are implemented and not active** — no network arms either.
+/// **The shipped schedule: K2-TIR-v1, v2 and v3 are implemented and not active** — no network arms any.
 pub fn builtin_schedule_v1() -> KernelScheduleV1 {
     KernelScheduleV1::default()
         .with(k2_tir_v1_descriptor().digest(), KernelStatusV1::Implemented)
         .with(k2_tir_v2_descriptor().digest(), KernelStatusV1::Implemented)
+        .with(k2_tir_v3_descriptor().digest(), KernelStatusV1::Implemented)
 }
 
 /// What a bound class commits beside its program/artifact (RFC-0011 §16.3(4)).

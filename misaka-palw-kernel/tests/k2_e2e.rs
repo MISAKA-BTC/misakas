@@ -249,6 +249,7 @@ fn a_challenge_drawn_before_the_evidence_was_bound_is_refused() {
             evidence_root: [0; 64],
             beacon: [1; 64],
         },
+        stage: None,
     };
     let v = verify_scope_v1(&ctx, &TraceMaterialV1 { trace: &c.trace, params: &c.params }, &ScopeV1::WholeClaim);
     assert!(matches!(v, ClaimVerdictV1::EvidenceMalformed { .. }), "{v:?}");

@@ -111,6 +111,7 @@ impl Claim {
             params: &self.pc,
             tokens: &TOKENS,
             binding,
+            stage: None,
         };
         let verdict = verify_scope_v1(&ctx, material, scope);
         // The court, as a fresh party holding only the public material (the evidence object, the trace commitments, the param
@@ -127,6 +128,7 @@ impl Claim {
                 params: &pc,
                 tokens: &TOKENS,
                 binding,
+                stage: None,
             };
             verify_fault_proof_v1(&ctx, proof)
         };

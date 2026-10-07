@@ -67,6 +67,7 @@ pub mod hash;
 pub mod improve;
 pub mod lifecycle;
 pub mod outcome;
+pub mod pipeline;
 pub mod plan;
 pub mod public;
 pub mod receipt;
@@ -76,7 +77,7 @@ pub mod verify;
 pub use check::{PlanAcceptanceV1, check_plan_v1};
 pub use descriptor::{
     KernelDescriptorV1, KernelScheduleV1, KernelStatusV1, ModelKernelBindingV1, builtin_schedule_v1, k2_tir_v1_descriptor,
-    k2_tir_v2_descriptor,
+    k2_tir_v2_descriptor, k2_tir_v3_descriptor,
 };
 pub use evidence::{VerificationEvidenceV1, build_evidence_v1};
 pub use family::{CheckerIdV1, ConstraintFamilyV1, CourtIdV1};

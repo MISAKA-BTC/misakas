@@ -27,7 +27,7 @@ pub enum ConstraintFamilyV1 {
     /// StateWrite, HistAppend: recurrent and history state, authenticated across positions.
     RecurrentState = 6,
     /// Canonical media inputs/outputs and cross-stage pipeline commitments (RFC-0003). No TIR v1
-    /// primitive is in it; a v2 pipeline class needs it, and no descriptor here implements it.
+    /// primitive is in it; a v2 pipeline class needs it ([`crate::pipeline`]), and K2-TIR-v3 implements it.
     MediaPipeline = 7,
 }
 
@@ -91,6 +91,10 @@ pub enum CheckerIdV1 {
     /// A nonzero integer error below the product is nonzero modulo one of them (CRT), so per repetition a false product passes
     /// with probability at most `1/(2^89 − 1)`.
     FreivaldsCrtV2 = 4,
+    /// **A media-pipeline edge** (K2-TIR-v3): a stage's committed input is recomputed exactly from its binding — a job value
+    /// (scalars, token templates, counts, a canonical image), an earlier stage's committed output rows or final value (authenticated
+    /// copy and zero pad), or RFC-0003's `R` — and must lie in the input's declared interval. No error term.
+    EdgeRecompute = 5,
 }
 
 impl CheckerIdV1 {
@@ -104,7 +108,7 @@ impl CheckerIdV1 {
         match self {
             Self::FreivaldsM127 => crate::field::FIELD_BITS,
             Self::FreivaldsCrtV2 => crate::field::mersenne_bits(crate::field::MODULI_V2[crate::field::MODULI_V2.len() - 1]),
-            Self::ExactRecompute | Self::StateContinuity => 0,
+            Self::ExactRecompute | Self::StateContinuity | Self::EdgeRecompute => 0,
         }
     }
 }
@@ -118,6 +122,8 @@ pub enum CourtIdV1 {
     InstanceRecompute = 1,
     /// One scalar of a product: the dot product of one row and one column, `k` multiply-adds.
     MatMulScalar = 2,
+    /// One stage input at one position: its binding recomputed from public job facts and the authenticated upstream values.
+    EdgeRecompute = 3,
 }
 
 #[cfg(test)]

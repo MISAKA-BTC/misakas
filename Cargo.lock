@@ -6166,6 +6166,7 @@ version = "1.1.0"
 dependencies = [
  "blake2b_simd",
  "borsh",
+ "misaka-palw-gen",
  "misaka-palw-tir",
  "misaka-palw-tir-sketch",
  "thiserror 1.0.64",

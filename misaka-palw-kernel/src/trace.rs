@@ -10,7 +10,11 @@
 //! * a `Fixed` state → the committed `StateWrite` output of the previous position, or zeros at
 //!   position 0 (initialization), so continuity is not a separate claim the producer could fabricate;
 //! * a `Hist` window's prior rows → the committed appended rows of the earlier positions, in order;
-//! * the token and position inputs → the job's public input.
+//! * the token and position inputs → the job's public input;
+//! * a pipeline stage's input tensor (a TIR v2 program's `Input(2 + k)`, a param of its version-1 view) → the stage's committed
+//!   input at that position, whose binding (a job value, an earlier stage's committed output, `R`) is the media-pipeline
+//!   family's relation ([`crate::pipeline`]);
+//! * a v2 `post` write → the next position's state read, like a `StateWrite`.
 //!
 //! A verifier therefore never trusts an "entry state" the producer states for a segment: it opens the
 //! predecessor's committed exit (RFC-0011 §15.2's boundary row).
@@ -68,13 +72,19 @@ impl ParamCommitmentsV1 {
     }
 }
 
-/// A claim's evidence: `commitments[position][occurrence][node]`.
+/// A claim's evidence: `commitments[position][occurrence][node]`, and for a pipeline stage `inputs[position][k]` (empty for a
+/// single-program claim).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EvidenceV1 {
     pub commitments: Vec<Vec<Vec<Digest>>>,
+    pub inputs: Vec<Vec<Digest>>,
 }
 
 impl EvidenceV1 {
+    pub fn new(commitments: Vec<Vec<Vec<Digest>>>) -> Self {
+        Self { commitments, inputs: Vec::new() }
+    }
+
     pub fn root(&self) -> Digest {
         let mut s = keyed(EVIDENCE_ROOT_DOMAIN_V1);
         s.update(&(self.commitments.len() as u64).to_le_bytes());
@@ -87,7 +97,21 @@ impl EvidenceV1 {
                 }
             }
         }
+        // A stage's inputs extend the root; a single-program claim's root is unchanged.
+        if !self.inputs.is_empty() {
+            s.update(b"inputs").update(&(self.inputs.len() as u64).to_le_bytes());
+            for pos in &self.inputs {
+                s.update(&(pos.len() as u64).to_le_bytes());
+                for d in pos {
+                    s.update(d);
+                }
+            }
+        }
         finish(s)
+    }
+
+    pub fn input_at(&self, p: u32, k: u16) -> Option<&Digest> {
+        self.inputs.get(p as usize)?.get(k as usize)
     }
 
     pub fn at(&self, p: u32, s: u16, n: u16) -> Option<&Digest> {
@@ -108,17 +132,23 @@ impl EvidenceV1 {
     }
 }
 
-/// Every node value: `values[position][occurrence][node]`.
+/// Every node value: `values[position][occurrence][node]`; a pipeline stage's input tensors `inputs[position][k]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TraceV1 {
     pub values: Vec<Vec<Vec<Tensor>>>,
+    pub inputs: Vec<Vec<Tensor>>,
 }
 
 impl TraceV1 {
     pub fn evidence(&self) -> EvidenceV1 {
         EvidenceV1 {
             commitments: self.values.iter().map(|p| p.iter().map(|o| o.iter().map(tensor_commitment).collect()).collect()).collect(),
+            inputs: self.inputs.iter().map(|p| p.iter().map(tensor_commitment).collect()).collect(),
         }
+    }
+
+    pub fn input(&self, p: u32, k: u16) -> Option<&Tensor> {
+        self.inputs.get(p as usize)?.get(k as usize)
     }
 
     pub fn value(&self, p: u32, s: u16, n: u16) -> Option<&Tensor> {
@@ -147,6 +177,23 @@ pub enum SourceV1 {
     },
     /// A public job input (`idx` scalar).
     Public(u32),
+    /// A pipeline stage's committed input tensor `k` at a position.
+    Input {
+        k: u16,
+        position: u32,
+    },
+}
+
+/// What makes a TIR v2 stage's version-1 view a stage: where its input params start, and which `post` nodes are state writes
+/// (the view's committed `Clamp`s) that the next position reads.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StageBindingV1 {
+    /// View params at or past this index are the stage's inputs (`k = index − first_input`).
+    pub first_input: u16,
+    /// `(state, occurrence, node)`: a `post` write of a global `Fixed` state.
+    pub post_writers: Vec<(u16, u16, u16)>,
+    /// The number of input tensors.
+    pub inputs: u16,
 }
 
 /// The program's wiring, precomputed once.
@@ -158,6 +205,8 @@ pub struct WiringV1<'p> {
     writers: BTreeMap<(u16, Option<u16>), (u16, u16)>,
     /// `(state, layer) → (occurrence, node)` of its `HistAppend`.
     appenders: BTreeMap<(u16, Option<u16>), (u16, u16)>,
+    /// The stage's inputs start here (`u16::MAX`: none).
+    first_input: u16,
 }
 
 fn malformed(msg: impl Into<String>) -> TirError {
@@ -183,7 +232,22 @@ impl<'p> WiringV1<'p> {
                 }
             }
         }
-        Ok(Self { program, info, occurrences, writers, appenders })
+        Ok(Self { program, info, occurrences, writers, appenders, first_input: u16::MAX })
+    }
+
+    /// The wiring of a pipeline stage's version-1 view: its input params resolve to the stage's committed inputs, and its `post`
+    /// writes feed the next position's state reads.
+    pub fn for_stage(program: &'p TirProgramV1, stage: Option<&StageBindingV1>) -> TirResult<Self> {
+        let mut w = Self::new(program)?;
+        if let Some(st) = stage {
+            w.first_input = st.first_input;
+            for (state, occ, node) in &st.post_writers {
+                if w.writers.insert((*state, None), (*occ, *node)).is_some() {
+                    return Err(malformed("a state written twice"));
+                }
+            }
+        }
+        Ok(w)
     }
 
     /// `H` at a position for an occurrence's block.
@@ -211,6 +275,7 @@ impl<'p> WiringV1<'p> {
                 let out = *self.program.blocks[prev].carry_out.get(k as usize).ok_or_else(|| malformed("no such carry-out"))?;
                 SourceV1::Node { position: p, occurrence: s - 1, node: out }
             }
+            Ref::Param(j) if j >= self.first_input => SourceV1::Input { k: j - self.first_input, position: p },
             Ref::Param(j) => {
                 let per_layer = self.program.params[j as usize].per_layer;
                 SourceV1::Param { index: j, layer: if per_layer { layer } else { None } }
@@ -260,6 +325,7 @@ impl WiringV1<'_> {
             SourceV1::Node { position, occurrence, node } => evidence.at(*position, *occurrence, *node).copied(),
             SourceV1::Zeros { dtype, shape } => Some(tensor_commitment(&Tensor::zeros(*dtype, shape))),
             SourceV1::Public(v) => Tensor::scalar(DType::Idx, *v as i128).ok().map(|t| tensor_commitment(&t)),
+            SourceV1::Input { k, position } => evidence.input_at(*position, *k).copied(),
             SourceV1::Param { .. } | SourceV1::Const(_) => None,
         }
     }
@@ -335,7 +401,29 @@ pub fn eval_node(
 
 /// **An honest producer's trace**: every node value, position by position.
 pub fn trace_v1(program: &TirProgramV1, params: &dyn ParamSource, tokens: &[u32]) -> TirResult<TraceV1> {
-    let w = WiringV1::new(program)?;
+    trace_stage_v1(program, None, params, tokens, &|_, _| None)
+}
+
+/// A pipeline stage's trace: `inputs(k, position)` is input `k`'s value at the position (recorded in the trace).
+pub fn trace_stage_v1(
+    program: &TirProgramV1,
+    stage: Option<&StageBindingV1>,
+    params: &dyn ParamSource,
+    tokens: &[u32],
+    inputs: &dyn Fn(u16, u32) -> Option<Tensor>,
+) -> TirResult<TraceV1> {
+    let w = WiringV1::for_stage(program, stage)?;
+    let n_inputs = stage.map(|s| s.inputs).unwrap_or(0);
+    let mut stage_inputs: Vec<Vec<Tensor>> = Vec::with_capacity(if n_inputs > 0 { tokens.len() } else { 0 });
+    for p in 0..tokens.len() as u32 {
+        if n_inputs > 0 {
+            stage_inputs.push(
+                (0..n_inputs)
+                    .map(|k| inputs(k, p).ok_or_else(|| TirError::new(misaka_palw_tir::TirErrorKind::Missing, format!("input {k}"))))
+                    .collect::<TirResult<_>>()?,
+            );
+        }
+    }
     let mut values: Vec<Vec<Vec<Tensor>>> = Vec::with_capacity(tokens.len());
     for p in 0..tokens.len() as u32 {
         let mut pos_vals: Vec<Vec<Tensor>> = Vec::with_capacity(w.occurrences.len());
@@ -360,6 +448,11 @@ pub fn trace_v1(program: &TirProgramV1, params: &dyn ParamSource, tokens: &[u32]
                         SourceV1::Const(j) => const_tensor(program, j),
                         SourceV1::Zeros { dtype, shape } => Ok(Tensor::zeros(dtype, &shape)),
                         SourceV1::Public(v) => Tensor::scalar(DType::Idx, v as i128),
+                        SourceV1::Input { k, position } => stage_inputs
+                            .get(position as usize)
+                            .and_then(|r| r.get(k as usize))
+                            .cloned()
+                            .ok_or_else(|| TirError::new(misaka_palw_tir::TirErrorKind::Missing, format!("input {k}"))),
                     }
                 };
                 let node = w.node(s, n);
@@ -377,5 +470,5 @@ pub fn trace_v1(program: &TirProgramV1, params: &dyn ParamSource, tokens: &[u32]
         }
         values.push(pos_vals);
     }
-    Ok(TraceV1 { values })
+    Ok(TraceV1 { values, inputs: stage_inputs })
 }

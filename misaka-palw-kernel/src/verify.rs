@@ -34,7 +34,7 @@ use crate::family::CheckerIdV1;
 use crate::field::{F89, F107, FieldElemV1, Fp, MODULI_V2};
 use crate::hash::{Digest, finish, keyed};
 use crate::plan::{PlanRelationV1, VerificationPlanV1, derived_error_bits, relation_moduli};
-use crate::trace::{EvidenceV1, ParamCommitmentsV1, SourceV1, WiringV1, const_tensor, eval_node, tensor_commitment};
+use crate::trace::{EvidenceV1, ParamCommitmentsV1, SourceV1, StageBindingV1, WiringV1, const_tensor, eval_node, tensor_commitment};
 
 pub const SCOPE_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/scope/v1";
 
@@ -42,6 +42,10 @@ pub const SCOPE_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/scope/v1";
 pub trait MaterialV1 {
     fn node_value(&self, position: u32, occurrence: u16, node: u16) -> Option<Tensor>;
     fn param(&self, index: u16, layer: Option<u16>) -> Option<Tensor>;
+    /// A pipeline stage's input `k` at a position (none for a single-program claim).
+    fn stage_input(&self, _k: u16, _position: u32) -> Option<Tensor> {
+        None
+    }
 }
 
 /// The material of an honest trace and its artifact (tests, drills, a producer serving itself).
@@ -56,6 +60,9 @@ impl MaterialV1 for TraceMaterialV1<'_> {
     }
     fn param(&self, index: u16, layer: Option<u16>) -> Option<Tensor> {
         self.params.tensors.get(&(index, layer)).cloned()
+    }
+    fn stage_input(&self, k: u16, position: u32) -> Option<Tensor> {
+        self.trace.input(position, k).cloned()
     }
 }
 
@@ -74,6 +81,8 @@ pub struct ClaimContextV1<'a> {
     pub tokens: &'a [u32],
     /// The challenge binding; its evidence root must be `evidence.root()`.
     pub binding: ChallengeBindingV1,
+    /// A pipeline stage's binding (its inputs and `post` writes); `None` for a single-program claim.
+    pub stage: Option<&'a StageBindingV1>,
 }
 
 /// What a check covers (RFC-0007 §V.6 `scope_kind`).
@@ -269,11 +278,12 @@ impl Ctx<'_> {
             SourceV1::Const(j) => const_tensor(self.c.program, *j).ok(),
             SourceV1::Zeros { dtype, shape } => Some(Tensor::zeros(*dtype, shape)),
             SourceV1::Public(v) => Tensor::scalar(DType::Idx, *v as i128).ok(),
+            SourceV1::Input { k, position } => m.stage_input(*k, *position),
         }
         .ok_or_else(|| ScopeVerdictV1::Unavailable { what: format!("{src:?} was not served") })?;
         match self.authentic(src, &t) {
             Ok(true) => {
-                if matches!(src, SourceV1::Node { .. } | SourceV1::Param { .. }) {
+                if matches!(src, SourceV1::Node { .. } | SourceV1::Param { .. } | SourceV1::Input { .. }) {
                     self.cost.borrow_mut().opened_bytes += (t.len() * t.dtype.width()) as u128;
                 }
                 if let SourceV1::Param { index, layer } = src {
@@ -522,7 +532,7 @@ type BatchProjections = BTreeMap<(u16, u16, u8), (Vec<u128>, Vec<u128>, Digest)>
 
 /// **Verify one scope of a claim.**
 pub fn verify_scope_v1(c: &ClaimContextV1<'_>, material: &dyn MaterialV1, scope: &ScopeV1) -> ScopeVerdictV1 {
-    let w = match WiringV1::new(c.program) {
+    let w = match WiringV1::for_stage(c.program, c.stage) {
         Ok(w) => w,
         Err(e) => return ScopeVerdictV1::EvidenceMalformed { why: format!("the program does not validate: {e}") },
     };
@@ -597,6 +607,11 @@ fn shape_and_binding(ctx: &Ctx<'_>) -> Result<(), String> {
                 return Err(format!("position {p} occurrence {s}: node count"));
             }
         }
+    }
+    let want = c.stage.map(|st| st.inputs as usize).unwrap_or(0);
+    let rows = if want == 0 { 0 } else { c.tokens.len() };
+    if c.trace.inputs.len() != rows || c.trace.inputs.iter().any(|r| r.len() != want) {
+        return Err(format!("the stage input commitments are not {rows} positions × {want} inputs"));
     }
     check_evidence_v1(&ctx.w, c.trace, c.tokens, c.evidence, c.descriptor, &c.header)
 }
@@ -695,6 +710,9 @@ fn check_instance(
                 }
             }
         }
+        CheckerIdV1::EdgeRecompute => {
+            Err(ScopeVerdictV1::Inconsistent { why: "a media-pipeline edge relation on a program node".into() })
+        }
         CheckerIdV1::ExactRecompute | CheckerIdV1::StateContinuity => {
             ctx.cost.borrow_mut().exact_elements += (output.len() + inputs.iter().map(Tensor::len).sum::<usize>()) as u128;
             match eval_node(ctx.c.program, node, &inputs, &prior, ctx.w.h(s, p)) {
@@ -707,7 +725,8 @@ fn check_instance(
 
 /// **The terminal court**: re-authenticate the proof's openings from public material and recompute.
 pub fn verify_fault_proof_v1(c: &ClaimContextV1<'_>, proof: &KernelFaultProofV1) -> Result<ConvictionV1, DismissalV1> {
-    let w = WiringV1::new(c.program).map_err(|e| DismissalV1::NotAuthentic(format!("the program does not validate: {e}")))?;
+    let w = WiringV1::for_stage(c.program, c.stage)
+        .map_err(|e| DismissalV1::NotAuthentic(format!("the program does not validate: {e}")))?;
     let ctx = Ctx { c, w, param_cache: RefCell::new(BTreeMap::new()), cost: RefCell::new(CheckCostV1::default()) };
     shape_and_binding(&ctx).map_err(DismissalV1::NotAuthentic)?;
     let (p, s, n) = (proof.position, proof.occurrence, proof.node);

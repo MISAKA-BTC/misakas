@@ -49,6 +49,29 @@ pub fn check_plan_v1(
     plan: &VerificationPlanV1,
     daa: u64,
 ) -> Result<PlanAcceptanceV1, O> {
+    check_plan_with_v1(schedule, descriptor, program, program_root, plan, daa, RangeRuleV1::TirV1)
+}
+
+/// Which range analysis proves the exact-result rule for the program checked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RangeRuleV1 {
+    /// PALW-TIR v1's analysis over the program itself.
+    TirV1,
+    /// The program is a TIR v2 stage's version-1 view whose ranges the caller proved with the v2 analysis (its inputs carry
+    /// declared intervals the view's params do not).
+    ProvenByV2,
+}
+
+/// [`check_plan_v1`], with the range rule named.
+pub fn check_plan_with_v1(
+    schedule: &KernelScheduleV1,
+    descriptor: &KernelDescriptorV1,
+    program: &TirProgramV1,
+    program_root: Digest,
+    plan: &VerificationPlanV1,
+    daa: u64,
+    ranges: RangeRuleV1,
+) -> Result<PlanAcceptanceV1, O> {
     // 1. The descriptor and its standing.
     let digest = descriptor.digest();
     if plan.descriptor_digest != digest {
@@ -85,9 +108,11 @@ pub fn check_plan_v1(
     // The exact-result rule (RFC-0002 spec 04b §7): every partial sum of every exact primitive must provably fit its type. A
     // probabilistic check compares a claimed output with the mathematical integer result; it cannot see a partial-sum overflow the
     // reference semantics refuses, so a program whose ranges are not proven is the frontend's to narrow, never a kernel success.
-    misaka_palw_tir::interval::analyze_ranges(program).map_err(|e| O::FrontendRequired {
-        reason: format!("the program's ranges are not proven (an exact primitive can overflow): {e}"),
-    })?;
+    if ranges == RangeRuleV1::TirV1 {
+        misaka_palw_tir::interval::analyze_ranges(program).map_err(|e| O::FrontendRequired {
+            reason: format!("the program's ranges are not proven (an exact primitive can overflow): {e}"),
+        })?;
+    }
     if plan.program_root != program_root {
         return Err(O::PlanForged { why: "the plan is about another program".into() });
     }
