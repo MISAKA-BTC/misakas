@@ -44,6 +44,60 @@ pub struct TemplateObservation {
     pub facts: ProducerFactsSummary,
 }
 
+/// The wire spellings `getPalwProducerFacts` answers in, parsed: 128-hex ids, a decimal `u128` target, a hex public key.
+#[allow(clippy::too_many_arguments)]
+pub fn producer_facts_from_wire_v1(
+    chain_point: &str,
+    class_id: &str,
+    artifact_root: &str,
+    class_target: &str,
+    pwu: u64,
+    min_trace_retention_daa: u64,
+    bond_registered_pubkey_hex: &str,
+    not_ready_reason: &str,
+) -> Result<ProducerFactsSummary, String> {
+    let hash = |what: &str, s: &str| s.trim().parse::<Hash64>().map_err(|_| format!("{what} '{s}' is not a 128-hex id"));
+    let mut pubkey = vec![0u8; bond_registered_pubkey_hex.len() / 2];
+    if bond_registered_pubkey_hex.len() % 2 != 0
+        || (0..pubkey.len())
+            .any(|i| u8::from_str_radix(&bond_registered_pubkey_hex[2 * i..2 * i + 2], 16).map(|b| pubkey[i] = b).is_err())
+    {
+        return Err("the bond's registered key is not hex".into());
+    }
+    Ok(ProducerFactsSummary {
+        chain_point: hash("chain point", chain_point)?,
+        class_id: hash("class id", class_id)?,
+        artifact_root: hash("artifact root", artifact_root)?,
+        class_target: class_target.trim().parse().map_err(|_| format!("class target '{class_target}' is not a u128"))?,
+        pwu,
+        min_trace_retention_daa,
+        bond_pubkey: pubkey,
+        not_ready_reason: not_ready_reason.to_string(),
+    })
+}
+
+/// **One node's template as an observation** — the header `getBlockTemplate` returned (converted to a consensus header) and that
+/// node's producer facts. Parents are the header's direct parents.
+pub fn template_observation_v1(
+    node: &str,
+    network_id: &str,
+    header: &kaspa_consensus_core::header::Header,
+    facts: ProducerFactsSummary,
+) -> TemplateObservation {
+    TemplateObservation {
+        node: node.to_string(),
+        network_id: network_id.to_string(),
+        pruning_point: header.pruning_point,
+        version: header.version,
+        pow_algo_id: header.pow_algo_id,
+        bits: header.bits,
+        daa_score: header.daa_score,
+        palw_state_root: header.palw_state_root,
+        parents: header.direct_parents().to_vec(),
+        facts,
+    }
+}
+
 /// What the nodes must agree on. Excludes the timestamp, nonce, transactions, coinbase and merkle roots, which legitimately differ
 /// per node and per moment; includes the parents (the attempt's challenge binds `pre_pow_hash`, which commits to them) and every
 /// chain fact the attempt is priced against.
@@ -248,6 +302,26 @@ mod tests {
     }
 
     #[test]
+    fn wire_facts_parse_strictly_and_a_header_becomes_the_observation_it_digests_as() {
+        let hex = |b: u8| Hash64::from_bytes([b; 64]).to_string();
+        let f =
+            producer_facts_from_wire_v1(&hex(5), &hex(6), &hex(7), "1267650600228229401496703205376", 7_708, 100, "0aff", "").unwrap();
+        assert_eq!(f.class_target, 1u128 << 100);
+        assert_eq!(f.bond_pubkey, vec![0x0a, 0xff]);
+        assert!(producer_facts_from_wire_v1("zz", &hex(6), &hex(7), "1", 1, 1, "", "").is_err());
+        assert!(producer_facts_from_wire_v1(&hex(5), &hex(6), &hex(7), "-1", 1, 1, "", "").is_err());
+        assert!(producer_facts_from_wire_v1(&hex(5), &hex(6), &hex(7), "1", 1, 1, "abc", "").is_err());
+        let header = kaspa_consensus_core::header::Header::from_precomputed_hash(h(9), vec![h(4), h(3)]);
+        let o = template_observation_v1("a", "testnet-12", &header, f.clone());
+        assert_eq!(o.parents, vec![h(4), h(3)]);
+        assert_eq!(
+            template_digest_v1(&o),
+            template_digest_v1(&template_observation_v1("b", "testnet-12", &header, f)),
+            "the node name is not in the digest"
+        );
+    }
+
+    #[test]
     fn the_digest_ignores_parent_order_and_what_legitimately_differs_per_node_but_not_chain_facts() {
         let a = obs("a", 100);
         let mut b = obs("b", 100);
@@ -278,7 +352,10 @@ mod tests {
 
     #[test]
     fn a_stale_template_is_refused_at_start_and_again_before_submission() {
-        assert_eq!(check_templates(&[obs("a", 100), obs("b", 100)], &policy(), 131).unwrap_err(), TemplateRefusal::Stale { age: 31, max: 30 });
+        assert_eq!(
+            check_templates(&[obs("a", 100), obs("b", 100)], &policy(), 131).unwrap_err(),
+            TemplateRefusal::Stale { age: 31, max: 30 }
+        );
         let accepted = check_templates(&[obs("a", 100), obs("b", 100)], &policy(), 110).unwrap();
         // The inference took 40 DAA: the same agreeing quorum no longer makes the template fresh.
         assert!(matches!(
@@ -298,7 +375,10 @@ mod tests {
     fn one_dissenting_node_stops_the_miner_even_when_two_agree() {
         let mut liar = obs("liar", 100);
         liar.facts.class_target = 1 << 120; // an easier target: the miner would mount an attempt that cannot win
-        assert!(matches!(check_templates(&[obs("a", 100), obs("b", 100), liar], &policy(), 105), Err(TemplateRefusal::Disagreement { .. })));
+        assert!(matches!(
+            check_templates(&[obs("a", 100), obs("b", 100), liar], &policy(), 105),
+            Err(TemplateRefusal::Disagreement { .. })
+        ));
         assert!(matches!(check_templates(&[obs("a", 100)], &policy(), 105), Err(TemplateRefusal::NoQuorum { got: 1, .. })));
     }
 
