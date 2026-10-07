@@ -1,5 +1,7 @@
 # ADR-0165 - Useful work carries the clock: BASE-0 remains the idle-only bonded floor (A″), REAL attempts can carry slot ticks (B), and heartbeat remains an independent emergency lane
 
+> **RFC8 scope correction — 2026-10-08:** [Revised RFC-0008](../rfc/0008-palw-claim-backed-consensus-blocks.md) preserves current main's active REAL/heartbeat/BASE-0/clock/anchor-duty structure. The earlier handoff to RF8 for class-aware floor colouring/merge exclusion (§10.3) is historical and is not part of the EXEC-slice design. EXEC slices never tick the clock or suppress heartbeat/BASE-0. This correction neither activates nor removes this ADR's existing rules or other independent proposals.
+
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
 
 

@@ -148,7 +148,7 @@ The implementation specification must name exact wire objects, signature domains
 
 The new rule applies to claims whose **acceptance/seal** is at or after its fence. A claim already accepted under lane A keeps the eight-operator rule until it reaches `Final` or void; an anchor that happens after the fence does not silently change its seed or responsibility. The release must document the maximum old-claim drain time. Only after that drain can the fleet be removed as a liveness requirement for *all* outstanding claims.
 
-Versioned signatures and hash domains prevent replay across networks and old/new claim forms. Upgraded and unupgraded nodes must split at the stated fork boundary with an explicit fingerprint/schedule change. Mainnet remains unlaunched and receives no implied activation from a testnet RFC. RFC-0008's proposed chain-eligible work-slice block needs its own compatibility review before it can act as a binder or beacon contributor.
+Versioned signatures and hash domains prevent replay across networks and old/new claim forms. Upgraded and unupgraded nodes must split at the stated fork boundary with an explicit fingerprint/schedule change. Mainnet remains unlaunched and receives no implied activation from a testnet RFC. Revised RFC-0008 places work slices in the existing EXEC class: they are not chain-eligible and do not become binders, beacon contributors or clock sources. The REAL root follows the chain's existing qualification rules; EXEC payload/root compatibility needs its own versioned review.
 
 ## 8. Failure cases the design must settle
 

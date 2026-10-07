@@ -90,6 +90,8 @@ this RFC. All live dependencies above must disappear together; historical reader
 5. RFC08 multiple blocks per claim must bind `(claim, slice, work budget)` and prevent replay,
    duplicated weight or multiple rewards for the same work. More carrier blocks do not imply
    more independent verified work, independent challenges or settlement confidence.
+   Under revised RFC08, both EXEC_TX and EXEC_SLICE have zero fork-choice/DAA contribution;
+   slice work settles once at root Final and cannot count as extra chain confirmations.
 6. Heartbeat/floor are bounded recovery facilities under their active validity rules. They may
    carry state transitions where permitted and advance timeout machinery, but are not substitutes
    for useful-work evidence in the bridge confirmation policy below. This RFC does not silently

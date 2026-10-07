@@ -1,149 +1,193 @@
-# RFC-0008: Claim-backed PALW consensus blocks — LLM work as the chain, not a side lane
+# RFC-0008: PALW EXEC lane — claim-backed work slices and transaction execution
 
-> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+Status: Revised Draft, 2026-10-08 — design only; no runtime change, activation height, fingerprint or testnet rule change
 
+Original proposal: 2026-10-03. Stable filename retained for existing links.
 
-Status: Draft (design only; no activation height, consensus fingerprint, or testnet rule change)
+> **設計の優先規則:** heartbeat・BASE-0を弱めず、現行mainのliveness構造を正とする。claim-backed sliceは既存ROUND/EXEC laneへ統合する。[ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)の公開prosecution要件も維持する。文書の改定は実装・activationを意味しない。
 
-Date: 2026-10-03
+## 0. 要旨と旧提案の置換
 
-## 0. 要旨
+**既存EXEC laneを、Final済みclaimから得たtransaction permitだけでなく、進行中claimのauthenticated work sliceも運べるPALW execution laneへ拡張する。** block classは増やさず、REAL / EXEC / HEARTBEAT / BASE-0の4役とする。同じlaneを使っても、round creditとslice work creditは別の意味・別の台帳を持つ。
 
-目標は「LLM 実行の件数が多い Explorer」ではなく、**検証可能で重複しない LLM 計算を含むブロックが、通常時の selected chain と BLUE の主な担い手になること**である。1 つの bounded job/session を claim で開き、その計算を PALW-TIR の決定的な境界で複数の work slice に分け、各 slice の microclaim を持つブロックを合意候補にする。heartbeat と PALW-BASE-0 は停止時の復旧用とし、通常時には有効な LLM ブロックの着色・報酬・時計を奪わない。ただし liveness のための heartbeat を無条件に無効化しない。
+旧RFC8の「sliceを新しいalgo-11のselected-parent / consensus BLUE / DAA候補にする」「sliceでchain clockを進める」「floorのmerge admissionを変更してモデルBLUE shareを上げる」という方針は撤回する。本改定はheartbeatの条件・重み・頻度、BASE-0の資格・fallback・anchor duty、120秒chain cadence、現行mainのclock cursor・REAL tick・GHOSTDAGを変更しない。slice到着数や実行中sessionの存在を、heartbeatやBASE-0を止める根拠にしない。
 
-これは現在の algo-10 model-execution round block を BLUE に変更する提案ではない。現行の round block は既に Final になった claim の credit を使った fee-only の実行レーンであり、常に RED、非 selected-parent、DAA 非進行である（[ADR-0125](../adr/0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md)）。新たに main に入った [ADR-0168](../adr/0168-an-execution-block-is-a-third-class-and-the-chain-reaches-it-through-an-anchor.md) は将来の fence で canonical な E-BLUE を提案するが、round はなお selected parent にならず、blue score/DAA を進めず、weight も元の claim の予算内で分配する。したがって E-BLUE 化だけでは新しい LLM 計算 block によるチェーンは生まれない。本 RFC は**別の、chain-eligible な work-slice block 種別**を提案する。既存の execution lane は高速な取引実行の役割を保つ。
+旧algo-11設計本文は削除し、試験結果・未実施項目だけを[v0試験記録](../design/palw/rfc-0008-v0-test-record.md)に残す。[ADR-0169](../adr/0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md)は新設計への参照に置き換える。新しい実装対象は[EXEC統合仕様v1](../design/palw/rfc-0008-implementation-spec.md)である。旧試験結果をEXEC sliceの合格実績として引き継がない。
 
-提案は安全性と供給能力の未解決条件を含む。RFC-0008 を merge しても規則は有効にならない。実装・fork choice・時計・経済・裁定の仕様と実測に基づく、別々の fence が必要である。
+## 1. mainを基準とする4役
 
-## 1. 現状と問題の切り分け
+本改定のコード確認基点は`MISAKA-BTC/misakas` main `282355ba9`。現行roundのalgo idは10で、[ADR-0125](../adr/0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md)と`palw_execution_lane_v1`のFinal credit / schedule / permitによるfee-only laneである。新しいEXECという呼称だけで、[ADR-0168](../adr/0168-an-execution-block-is-a-third-class-and-the-chain-reaches-it-through-an-anchor.md)の未導入のanchor trailerや着色方式を実装済みと扱わない。
 
-現行 T12 の通常 block は bonded PALW attempt、BASE-0、heartbeat を含む。attempt の合意参加と状態更新は別経路であり、モデルを登録し panel を ready にしても、その model attempt が BLUE になるとは限らない。`ghostdag_k=1` の着色と floor との競合、推論時間、producer の hold が BLUE 率を決める。さらに、[ADR-0142](../adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md) の時計では、実モデル attempt と heartbeat は同じ clock advancement の代替にはなっていない。
-
-運用側が報告した P2 観測（本 RFC の checkout からは再実測していない）では、DAA 300 の窓で 8k attempt 72 本のうち BLUE 1、RED 71 で、RED の競合相手は全て floor だった。8k の到着は 0.19 本/120 秒 slot、間隔 p95 は 17.3 slot だった。floor を排除しても、その供給量なら空 slot の大半を heartbeat が埋める。よって問題は少なくとも二つある。
-
-1. **適格な LLM work の BLUE 化**: floor が通常時に DAG の着色を妨げないこと。報酬 fold で floor を無視するだけでは不十分で、無効なら GHOSTDAG 前に拒否しなければならない。
-2. **LLM work の供給密度**: 実モデルの work block が slot を十分埋めること。floor を止めても、producer/panel/検証の能力が 0.19 本/slot のままなら「LLM 主体」にはならない。
-
-「recent blocks に E block が多い」は解決の証拠ではない。現行の E block は selected chain、consensus BLUE、DAA に参加しない。ADR-0168 の E-BLUE が将来有効になっても、その BLUE は consensus blue score と selected-parent 資格を意味しない。以下で **share** と言うと、別記しない限り合意対象 block の selected-chain/consensus BLUE share を指す。
-
-## 2. 目的と非目的
-
-### 目的
-
-- 通常時は、各 chain-eligible block に新規の、重複しない PALW 計算 slice を対応させ、実モデル block が selected chain と BLUE の過半数、供給が足りる運用では 90% 以上を占められる設計にする。
-- 1 bounded claim/session から複数の有用な LLM 計算 block を生成する。ただし「1 回の推論を N 回の仕事として支払う」ことはしない。
-- 模型停止、panel 停止、ネットワーク分断の際は、heartbeat と必要な場合の floor でチェーンの進行を継続する。
-- 既存の 120 秒 slot と `ghostdag_k=1` を初期案では維持し、変更が必要なら別の安全性評価を要求する。
-- BLUE、Finalized/licensed work、報酬、DAA を別々に計測し、見かけ上の block 数で成功としない。
-
-### 非目的
-
-- 任意の一般的な LLM API 呼び出しを、既存の再現性・裁定要件を満たさず合意 work として扱うこと。
-- heartbeat を永久停止すること、または未検証の header class だけで floor/heartbeat を抑止すること。
-- Final claim の permit や既に得た credit を複数の BLUE block に複製すること。
-- [ADR-0141](../adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md) の「推論そのものを ticket にするか」という未決問題を本 RFC で決着させること。初期案は既存の work-ticket lottery を前提とする。
-
-## 3. 提案する合意単位
-
-### 3.1 Root claim は「全計算の報酬」ではなく、bounded session の約束
-
-producer は、承認済み class、canonical job 入力、最大 decode 長/計算量、PALW-TIR graph と重み、slice 境界計画、初期状態 commitment、data-availability commitment、bond、対象 clock window を含む root claim を出す。root は全推論の実行済み証明として扱わず、全量の PWU/CCU・報酬・fork-choice weight を一括で与えない。境界は IR の position/layer/checkpoint に対応し、producer が任意に極小化したり、成功した出力を見てから引き直したりできない。
-
-root に結び付いた各 work-slice block は、少なくとも `(root_id, slice_index, predecessor_boundary_root, result_boundary_root, canonical_range, class_id, job_id, DA_root, proof_or_challenge_commitment, producer_authorization, bond_reference)` を確定する。次 slice は直前の canonical boundary からのみ進む。同じ `(root_id, slice_index)` の work credit は一つの履歴で一回だけ使える。分岐上の再使用と private-fork grinding については §7 の gate を満たすこと。
-
-slice は実際の tensor 計算の**非重複の区間**である。費用は [RFC-0002](0002-palw-tensor-ir.md) の canonical IR cost に基づく。`total_credited_CCU <= canonical_job_CCU`、各区間の credited range は互いに非重複、root と slice と既存 round block の間で同じ CCU に二重の PWU/発行/票を与えない。標準 slice は固定 work target `W` 相当を目指し、端数の許容範囲と区間数上限は class ごとのコスト上限・DoS 予算から決める。正確な `W` と slice 数は実測前に固定しない。[ADR-0137](../adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md) の「1 block が買う work unit」の経済を維持する。
-
-「1 claim から複数 block」とは、1 session の中で**それぞれ異なる区間を計算・開示・検証する**という意味である。同じ全 trace を複数 header に分割表示するだけでは、有用な新規計算も物理的な実行時刻も証明できない。決定的推論が本当にその秒に計算されたことは、trace commitment 単独からは証明できない。この限界を spec と UI に明記する。
-
-### 3.2 新しい work-slice lane
-
-新 block 種別は既存 algo-10 execution round block とは別の識別子と domain separation を持ち、選択親、BLUE、DAA の候補になる。既存の attempt / round の wire format や解釈を黙って変えない。parent/job/ticket の binding、per-slice 対象 class と署名の検証、header/body commitment、最大サイズ、重複禁止は versioned consensus rules とする。
-
-chain-eligible であっても header の外見だけで Final work と同じ fork-choice weight を与えない。[ADR-0069](../adr/0069-e2e-adjudicability-is-the-price-of-weight.md) に従い、DA、検証、裁定可能性、Final の各段階に応じて安全な frontier/weight を定義する。既存の `safe_frontier` と header blue-work hint の二重意味を混同しない。検証前に連鎖できる子の数、未決算 work の合計、裁定期限、reorg で巻き戻る範囲に上限を置く。
-
-slice の正しさは optimistic に licence → challenge → Final と進めるか、早い verification certificate を必須にするかを実装仕様で選ぶ。いずれの場合も、依存する後続 slice は先行 slice の不正で同時に無効化され、Final とした state/発行を後から巻き戻す状況を許さない。実装上、検証能力が追いつかない状態で BLUE/DAA のみを大量に増やすことを禁止する。
-
-### 3.3 裁定・検証の処理能力
-
-複数 slice は panel、licence、court、DA の負荷を増やす。[RFC-0006](0006-palw-layer-sharded-panels.md) の layer/position sharding と [RFC-0007](0007-palw-verification-certificates-and-algebraic-checks.md) の batched receipts/代数的チェックは候補となるが、両 RFC は Draft である。採用しない場合も同等の throughput、安全性、censorship 耐性を実測で示す。単に producer を増やして verification backlog を後ろに押す案は認めない。
-
-### 3.4 Kernelと確率的検査の境界（2026-10-06）
-
-新しいslice profileの通常検証は[RFC07 Part V](0007-palw-verification-certificates-and-algebraic-checks.md)・
-[RFC11 §15](0011-permissionless-model-and-long-context-onboarding.md)の小さいencoded/algebraic constraint検査とする。
-slice全体の再実行を通常経路に要求せず、異常時だけ有界exact courtへ局所化する。
-[ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)のactive Kernel・plan・suiteを
-root/slice/receiptにbindし、未対応演算はKernel更新まで拒否する。VM代替経路は設けない。
-各sliceの初期・終端stateとpredecessorを被覆し、session全体の誤受理確率を合成する。同じ証拠やchallengeを
-複数blockに載せても独立な検査回数とは数えない。正のreceipt、DA、challenge window、§7の未確定weight上限を
-維持し、軽量化を根拠に無検証のBLUE/rewardを増やさない。
-
-## 4. BLUE・floor・heartbeat の役割
-
-### 4.1 通常時の floor 排除は GHOSTDAG より前
-
-通常時に floor block を報酬 fold だけで skip すると、block は DAG に残って実モデルを RED にし得る。floor を reserve とする規則を有効化するなら、header admission の**GHOSTDAG 着色より前**に、当該 branch の過去に基づく決定的な有効性判定を置く。必要なのは class 文字列だけでなく、bond、資格、ticket、claim/slice の一意性と必要な証拠を含む**認証済みの productive-work 事実**である。無資格な RED header を撒いて floor を長時間止める経路を作らない。
-
-この判定は現在の virtual tip や node-local mempool/producer 観測に依存できない。selected parent と mergeset（BLUE/RED の両方）の扱い、競合する分岐、IBD、pruning proof、並行 header 到着順について同じ結果になる必要がある。現行実装の full stateful attempt admission は header 着色後にあるため、判定を前に移すには必要な state witness/commitment または二段階の DAG 受け入れ仕様が要る。これを解かずに「header class を見て floor を拒否」は採用しない。
-
-floor の Idle/Probe/Normal や timeout の定数は別途仕様化する。RED の productive attempt を観測するだけで通常状態を無期限に延長せず、BLUE または検証済み work の進行でのみ延長する。Probe、cooldown、復旧時間は adversarial な RED spam と遅い正当な producer の双方で検証する。この RFC はその実装済みを主張しない。
-
-### 4.2 心拍は空 slot の安全網
-
-[ADR-0140](../adr/0140-the-heartbeat-is-the-emergency-generator.md) の heartbeat は誰も仕事を出さない場合の permissionless な liveness path として残す。モデルの意図・wall-clock の「無活動」は合意可能な証拠ではないので、合意が単純に「モデルが活動中なら heartbeat は無効」と判断してはならない。通常時の producer policy、適切な fee/reward、相競合する model block の安全な選択によって heartbeat が空 slot だけを埋めるようにする。heartbeat が有効であることと、BLUE の大半を占めることを同一視しない。
-
-### 4.3 model-backed clock
-
-時計を model work で運ぶなら、**認証済みで安全な work-slice block が 120 秒 slot を一回進める**ことを新たに定義する。heartbeat は運用上は空 slot の fallback とするが、後からモデルが到着したという未来の事実で heartbeat を遡及的に無効にしてはならない。一つの slot を model と heartbeat が二重に進めたり、遅れて到着した slice で過去の空 slot を一気に埋めたりしない。timestamp、future bound、selected-parent/mergeset 間の tie-break、reorg、difficulty/DAA window を数式と例で規定する。[ADR-0142](../adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md) の clock semantics を変更するため、単なる producer 設定ではなく独立した合意 fence と test vector が必要である。
-
-floor の拒否と model-backed clock は分離して段階導入する。前者だけでは heartbeat 比率は下がらず、後者だけでは floor による RED 化は直らない。heartbeat に比べて LLM work を安全な BLUE に選ぶ fork-choice/着色の一般化が必要なら、`ghostdag_k` を不用意に上げるのではなく、攻撃模型と [ADR-0058](../adr/0058-palw-merged-work-is-counted.md) に整合する別仕様として検証する。
-
-## 5. 供給能力は合意定数では作れない
-
-たとえば平均 0.19 本/slot の実モデル work しか生成できなければ、競合が無くなっても約 0.81 の slot はモデルに埋められない（到着の burst/hold があるので実測値はさらに異なる）。「モデル 90%」は floor/heartbeat の重みを変えるだけでは達成できない。複数 producer、複数 session の並列化、短い work slice、温まったモデル、panel の同時検証、backpressure の低減を同時に進める。1 session を複数 slice にしても、**同じ一台が逐次計算するだけでは計算能力は増えない**。
-
-容量計画は平均件数よりも `P(slot に少なくとも 1 有効 slice が届く)`、連続空 slot 長、推論・検証・licence の p50/p95/p99、panel queue、work の Final 化率で行う。比較する分母は raw DAG block、selected chain、BLUE、Finalized productive work でそれぞれ明示する。UX 上の 1 秒更新は別問題であり、120 秒の合意 slot を 1 秒に短縮したことにはしない。
-
-## 6. 変更が必要なコード境界（設計対象）
-
-| 境界 | 現状の責務 | RFC-0008 の変更 |
+| 役割 | payloadと資格 | chainでの責務 |
 | --- | --- | --- |
-| `consensus/core/src/pow_layer0.rs` | attempt、heartbeat、round の種別と header work | versioned work-slice block・domain・work 上限を追加。algo-10 round は維持 |
-| `consensus/src/pipeline/header_processor/pre_ghostdag_validation.rs` と `processor.rs` | 基本的な header/parent/PoW 検査の後に GHOSTDAG 計算 | branch-local な productive/floor 資格と slice の最小証拠を着色前に検証。stateful 証拠の運び方を仕様化 |
-| `consensus/src/processes/ghostdag/protocol.rs` | round を RED/非 selected-parent に固定し、通常 block を着色 | 新種別だけを chain-eligible にする。k=1 で競合・同時到着・reorg を test vector で固定 |
-| `consensus/src/processes/difficulty.rs`、`consensus/core/src/palw_clock_cursor_v1.rs` | clock cursor / DAA advancement と work window | 二重 tick しない model-backed slot + heartbeat fallback の導入 |
-| `consensus/core/src/palw_fork_choice.rs`、`consensus/core/src/palw_work_target_v1.rs` | safe frontier / work target | slice ごとの検証済み非重複 work のみを重み・経済に算入。仮証拠による private-fork 増幅を防止 |
-| `consensus/src/pipeline/virtual_processor/processor.rs` | stateful admission / licence / fold | root と slice の one-use 台帳、依存関係、失格・裁定・報酬 conservation を追加 |
-| `kaspad/src/palw_producer.rs` | 親に bind した job template と attempt 生産 | session/slice scheduler、複数 model producer、stale/reorg の再計算・破棄、hold の計測 |
+| REAL | 新しいordinary PALW useful work。短い推論のcomplete claim、または長いclaimを開くroot useful work | 現行の資格・weight・clock規則でchain consensusを担う |
+| EXEC | `EXEC_TX`: Final済みcredit由来のTxPermit。`EXEC_SLICE`: 進行中root claimの非重複work | chainにanchorされる高速execution lane。selected parentにならず、weight 0、DAA 0 |
+| HEARTBEAT | 現行mainのheartbeat | 現行のclock/livenessを継続する |
+| BASE-0 | 現行mainのemergency fallbackと必要なanchor duty | 長期的なREAL不在など、現行条件で復旧を担う |
 
-上表は変更を提案する境界であり、関数・行番号まで凍結する実装指示ではない。既存の合意規則と versioned hash/fingerprint、P2P/RPC の相互運用性を監査して、別の実装仕様に落とす。
+EXECの全subtypeについて、raw blue work、PALW `safe_weight` / `immature_weight`、consensus blue score、DAA tick / retarget contribution、pruning hierarchy contributionを**追加しない**。EXECのFinal work accountingからfork-choice weightへ戻す経路も作らない。REAL root自身の現行規則で認められたworkだけがREALのweightになる。
 
-## 7. 安全性を満たすまで未解決の項目
+EXECのcanonical acceptanceとconsensus BLUEは別の事実である。legacy roundがREDとして格納されることと、将来のRPCでEXEC classを表示することを混同しない。EXECの大量発行が通常blockのk anticone budgetを消費したりREALをREDにしたりしないことを、共通lane実装の受入条件にする。表示を変えるだけではこの条件を満たさない。
 
-1. **precomputation と fork reuse**: deterministic な LLM 出力を別 parent/header に署名し直すだけで多数の chain block を作れるなら、物理的な新規仕事は増えない。branch/slot binding と再利用禁止をどう両立し、ユーザー向け出力の意味を壊さないかを定義する。既存の ticket lottery と safe frontier を残しても、cheap private-fork・header flooding・long-range sync を simulation で棄却すること。
-2. **header 時点の資格**: 遅い stateful admission より先に GHOSTDAG を動かす現在の経路で、虚偽の class/root/slice が floor 抑止や着色に影響しない証拠を作る。pruned node と IBD node も同じ判定をすること。
-3. **optimistic Finality**: slice 失格時に依存子、取引、発行、DAA をどこまで無効化するか。未検証の深さ・価値・期間の上限と challenge/court の throughput を確定する。
-4. **経済と Sybil**: 一つの job を分割・複製・複数 identity に移しても同じ CCU から追加の報酬、share、重みを得られないこと。単一 session/運営者が slot を囲い込まず、異なるモデルも参加できること。
-5. **liveness**: producer と panel が同時に止まっても heartbeat（必要なら floor）が clock を進めること。悪意ある RED spam だけで reserve を止められないこと。
+## 2. 同じEXEC class、独立した2つのpayload
 
-これらは「実装時に何とかする」項目ではなく、合意 fence を armed にする**前提条件**である。一つでも未証明なら pilot を shadow mode に留める。
+将来の共通envelopeは概念的に次の形とする。型名は設計名であり、現在のRust APIではない。
 
-## 8. 段階導入と合格基準
+```rust
+PalwExecV2 {
+    version,
+    network,
+    anchor,
+    subtype,
+    tx_permit: Option<RoundPermitV1>,
+    work_slice: Option<ClaimSliceV1>,
+    payload_root,
+    executor_bond,
+    signature,
+}
+```
 
-1. **観測**: 実際の block 色、RED の競合原因、モデル別 accepted/BLUE/Final 件数、空 slot、遅延、queue、外部 floor 比率を chain data から再現可能にする。P2 の数値は再測定する。
-2. **shadow replay**: 本番の規則を変えず、過去の DAG と遅延注入した producer で floor gate、slice、clock、fork choice を再生する。モデル停止・再開・reorg・pruning・IBD の結果を全 node で一致させる。
-3. **isolated pilot**: 新しい work-slice fence のみを testnet/drill で有効にし、最初は小さく固定した slice 数と outstanding depth に制限する。旧 node との切替、invalid block、duplicate slice、裁定、panel 不在を試す。
-4. **reserve と clock の独立した pilot**: floor の header-stage admission と model-backed clock をそれぞれ別の fence/test vector/fingerprint で導入し、組み合わせも試す。活性化高さは readiness と replay に基づき別途決める。
-5. **拡大**: 供給/検証能力が確認されてから複数 producer、複数 model、slice 数を増やす。target は「通常時の selected-chain model BLUE share 90% 以上」だが、平均でなく長い窓・低供給時間帯も公表する。異常時の停止後復旧時間、誤 BLUE/重複 reward ゼロ、Final backlog の有界性も同時に合格条件とする。
+**初期releaseは`EXEC_TX` / `EXEC_SLICE`の排他的subtypeを採用する。** `EXEC_TX`にはTxPermitとtransaction batchを、`EXEC_SLICE`にはWorkSliceとwork material commitmentを載せる。どちらも同じEXEC class・chain非進行laneであり、第5のclaim-backed block classを作らない。
 
-必要な property test には、同じ root/slice の再利用、境界の飛越し・重複、別 branch での replay、外部 floor miner の旧ソフト、RED-only 攻撃、panel が停止したままの producer 連射、遅い正当な producer、clock の二重 tick/逆行、failure 後の selected-chain/Final 整合性を含める。
+初期releaseでは両fieldが存在するenvelope、両fieldが欠けたenvelope、subtypeとfieldが一致しないenvelopeを拒否する。`EXEC_SLICE`はユーザーtransaction batchを運ばず、WorkSliceの資格だけでtransaction fee収入や取引枠を得ない。fee/bondの資金確保は、chainで受理済みのroot claimまたは既存の資金経路から行う。
 
-## 9. 判断
+将来、1 EXEC blockに両payloadを載せる拡張は可能だが、別のversioned仕様と受入試験を必要とする。両条件を独立に検証した上でblock全体をatomicに受理/拒否する。consensusの「block部分受理」は初期版に入れない。
 
-本 RFC は **「claim を中心にした bounded session → 複数の検証可能な microclaim/work-slice block → model-backed selected chain」**を次の設計方向として提案する。同時に、見かけだけの algo-10 BLUE 化、full claim credit の N 倍配布、heartbeat の停止、header class の自己申告による floor 拒否は採用しない。§7 の安全性と §8 の供給能力を実証するまでは Draft のままにする。
+### 2.1 EXEC_TX: 過去のFinal creditによる高速取引
 
-## Mission alignment amendment — 2026-10-07
+```text
+過去のclaimがFinal → 既存credit / schedule → round permit
+→ EXEC_TXでtransaction batch → chainで受理 → fee収入
+```
 
-session/sliceごとに、公開のinitial/final state、disjoint work identity、constraint/evidenceを拘束し、slice間の最初の不整合も外部public bondが裁定できる必要がある。早期block/clock/weight、ridersや集約でclaimの検証・責任期間を短絡しない。pending exposure、証拠保持とFinal後の回収を整合させる。Panel=0をsliceの高速化条件として先行有効化しない。
+既存permitのspan、round、index、operator/domain、bond、payout、one-use、quota、parity、gas budgetを維持する。WorkSliceがあることをTxPermitの代わりにしない。TxPermit消費は新しいLLM計算・claim reward・work weightを生成しない。
 
-本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
+### 2.2 EXEC_SLICE: 現在のclaimに属する新しいwork
+
+```rust
+ClaimSliceV1 {
+    root_claim_id,
+    slice_index,
+    class_id,
+    canonical_job_id,
+    kernel_version,
+    plan_root,
+    canonical_range,
+    predecessor_state_root,
+    result_state_root,
+    evidence_root,
+    da_root,
+    executor_bond,
+    signature,
+}
+```
+
+active root claim、認められたexecutor bond、canonical plan/range、直前state、証拠・DA、署名を検査する。rangeはPALW-TIR/kernelの決定的な境界で導出し、credited workはcanonical IR costから計算する。自己申告CCU/PWU、任意の極小slice、slice数、header数からcreditを算出しない。
+
+署名はnetwork/version/subtype、anchor、block payload commitment、root、index、range、前後state、evidence/DA、bondを拘束する。root/plan/class/kernelへのbindingが不完全なsliceを受理しない。rootはchainで受理済みのcanonical claimであり、未受理のroot宣言だけではsliceを発行できない。
+
+## 3. REAL rootと長い推論
+
+```text
+短い推論: REAL → complete claim → 現行の検証/challenge → Final
+
+長い推論: REAL (root claim / session open)
+           ├─ EXEC_SLICE 0
+           ├─ EXEC_SLICE 1
+           ├─ EXEC_SLICE 2 ... N
+           └─ claim complete → 検証/challenge/DA条件成立 → root claim Final
+```
+
+REALはchain-level claim anchor、EXECはそのclaimの内部計算を運ぶlaneとする。rootはclass/job/input、bounded total work、slice plan、初期state、DA、executor authorization、bond/exposure、expiryをcommitする。
+
+**sessionを開く宣言自体を、実行済みuseful workとして扱わない。** root REALは現行REALのticket、実計算、admissionを満たす必要がある。rootに実計算prefixを含める場合、そのrangeを共通work台帳に登録し、後続sliceで再度creditしない。未実行の全session予算からrootのweightや即時rewardを得ない。root-openを現行REALにどう適合させるかは実装gateであり、任意のtx-carried session objectをREALに昇格させる抜け道を設けない。
+
+初期版ではsliceの検証結果をroot claimへ集約し、**root claimがFinalになって初めて、そのclaimのslice work rewardを確定する**。各sliceが独立claimとしてFinal、permit、reward、weightを獲得する旧v0の方式は採用しない。completeは全canonical rangeと最終stateが揃った事実であり、Finalと同義ではない。
+
+## 4. Accounting: permitとworkを分離する
+
+| 台帳 | キー・意味 | 何を発生させるか |
+| --- | --- | --- |
+| TxPermitUse | 既存`(span, round, permit_index)`。Final creditに基づく取引資格のone-use | 有効transactionの受理とfee。新規work reward/weightは0 |
+| WorkSliceUse | `(root_claim_id, slice_index)`とcanonical range。pending / verified / final / voided work | root Final時の一度だけのwork reward。取引permit消費・weight・clockは0 |
+| RootWorkBudget | job/rootのcanonical total、root prefix、pending/final ranges、escrow、settlement marker | rootとsliceの重複禁止、claim単位の一回の精算 |
+
+全historyで次のconservationを満たす。
+
+```text
+root_credited_work + Σ credited_slice_work <= canonical_claim_work
+credited ranges are pairwise disjoint
+Σ settled_work_reward <= the claim's funded reward allocation
+EXEC fork-choice weight = 0
+EXEC DAA contribution = 0
+```
+
+rootとsliceに同じworkのrewardを二重払いしない。既存のclaim allocation・per-DAA発行上限・escrow資金制約を維持し、slice blockごとのcoinbase subsidyを追加しない。slice数を増やしてもclaim allocationは増えない。Tx feeは既存の取引会計に属し、work rewardとは別である。
+
+sliceの受理・positive verification・complete・Final・報酬解放を分ける。Final済みcanonical workが将来の既存scheduleへ入る場合も、**root全体の一つのaggregate Final creditから一回だけ**導出し、既存のeligibility / quota / capを維持する。rootと各sliceを別々のFinalとしてsnapshotに投入しない。EXEC_TXが消費したpermitを再生成しない。
+
+root expiry、missing DA、verification backlogではpending workをtimeout/voidの規則で処理し、検証の沈黙をFinalにしない。rootやsliceのfraudは該当するstate依存の後続sliceを無効化する。証拠・義務に基づくconvictionのみでslashし、verifier不在やlocal timeoutをproducer arithmetic fraudにしない。
+
+## 5. Anchor、reorg、livenessの分離
+
+EXECは既存laneと同じchainへのattachmentを持つ。sliceは**root claimのanchor**と**carrierのchain anchor**を別々に拘束し、canonical branch上のactive rootのみを対象とする。reorgでroot/anchorが外れたsliceは新しいbranchのworkとして自動採用しない。再attachmentはversioned再検査を必要とし、同じworkを二度settleしない。
+
+共通EXEC acceptanceは、chainのparent stateから決定的にcovered set・順序・資格を検証してfoldする。v2のanchor closureはconsensus-parent walkから分離し、stale headやslice burstがchain template・merge depthを塞がないようにする。既存v1のmergeset経路と、将来のanchor closureを混ぜず、具体的なwire commitmentと互換性は実装仕様で固定する。
+
+不正なEXEC blockは拒否し、laneで資格を失ったcarrierはそのlaneの受理対象から外す。producerが勝手に送った不正sliceだけでchain blockやrootを無効にしない。chain blockが宣言したanchor commitment自体が不正なら、既存のblock commitment検査に従う。slice fraudはworkの検証・精算を止めるが、独立したEXEC_TXのpermitや確定済み取引をsliceの結果に依存させない。
+
+heartbeatとBASE-0はsliceのpending数、検証結果、header種別、node-local producer観測を読まない。court、DA、verifier、長い推論の全てが停止しても、現行mainと同じ規則でchainとdeadline machineryが進む。bounded queues、reserved chain-validation資源、EXEC_SLICE独立quotaを設け、slice floodでheartbeat、BASE-0、REAL、EXEC_TXをstarveさせない。
+
+例: 20分のsessionから2分ごとに10 slicesを運べる。それは**DAA +10、10倍fork-choice power、10倍rewardを意味しない**。clockは現行REAL/heartbeat等のactive規則で進み、EXECの進行は0のままである。
+
+## 6. 公開検証・裁定・証拠保持
+
+[RFC07 Part V](0007-palw-verification-certificates-and-algebraic-checks.md)、[RFC11 §15](0011-permissionless-model-and-long-context-onboarding.md)、[ADR-0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)に従い、active Kernel/plan/suiteをroot・slice・receiptにbindする。通常検証は指定されたencoded/algebraic constraint検査、異常時は有界exact courtへのlocalizationとする。未対応演算にVM代替経路を設けない。
+
+各sliceのinitial/final state、predecessor、非重複range、証拠とboundary間の最初の不整合を、普通の非Panel public bondがproducer秘密状態なしに検証・訴追できる必要がある。[RFC14](0014-panel-independent-fraud-prosecution.md)のdispute、model/material availability、liability、retention gatesを保ち、多数派receiptで有効fraud proofを無効にしない。[RFC15](0015-panel-free-permissionless-verification.md)のPanel=0は別の全gate成立前に有効化しない。
+
+whole-claim誤受理確率はslice/boundaryの検査を合成する。同じ証拠やchallengeの複数carrierを独立検査と数えない。reorg/pruning/IBD後もpublic prosecutionとFinal後の回収に必要なmaterialを保持する。EXECのweightが0でもpending reward、collateral、DA、courtのexposureは0ではない。
+
+deterministic traceのcommitmentだけで物理的な計算時刻を証明できるとは主張しない。precomputation、fork reuse、root/jobの複製、Sybilによる計算credit再利用をwork identityと台帳で防ぎ、その限界を仕様とUIに表示する。
+
+## 7. 実装境界とactivation gates
+
+| 境界 | 新しい実装対象 |
+| --- | --- |
+| `palw_execution_lane_v1`とversioned EXEC envelope | 同じlaneのTX/SLICE subtype、domain-separated payloadと独立資格 |
+| root claim / PALW state / fold | canonical plan、one-use range、root aggregate Final、escrowと一回のsettlement |
+| header / GHOSTDAG / difficulty / sync | 全EXEC subtypeがselected-parent/weight/DAAに入らないこと。consensus anticoneからの隔離 |
+| chain template / execution acceptance | bounded anchor closure、parent-state verdict、stale-head recovery、atomic carrier acceptance |
+| producer / relay / RPC / explorer | root REALとslice scheduler、独立quota、class/subtype/lifecycleの明示 |
+| verification / DA / court | public material、boundary checks、positive verificationとobjective conviction |
+
+この表は設計対象であり、現行コードをこの文書だけで変更する指示ではない。新しいversioned EXEC fenceとroot lifecycle/accountingが必要だが、slice clock fence、BASE-0を排除するmerge-admission fence、新しいalgo-11 chain classは導入しない。既存wire v1・schedule・fingerprint・active network presetsはこの改定で変更しない。
+
+activation前に、少なくとも以下を独立に実証する。
+
+1. **共通lane隔離:** TX/SLICEとそのburstがselected parent、blue score/work、PALW weight、DAA/retarget、k anticone、pruning hierarchyを増やさない。
+2. **liveness同値:** producer/verifier/DA/courtの停止、RED spam、slice flood、遅い推論でもheartbeat・BASE-0の資格、clock、anchor duty、復旧が基点mainと一致する。
+3. **work/reward保存:** prefixとsliceの重複、skip、別root/job/branch replay、duplicate Final、再起動、reorgで二重credit・二重reward・二重permitが起きない。
+4. **資格独立:** invalid WorkSliceが有効TxPermitを変えず、invalid TxPermitがwork creditにならない。初期版のmixed payloadをatomicに拒否する。
+5. **public prosecution:** slice/boundaryの各不正、DA default、false Validを有界materialから区別し、公開bondで裁定できる。未解決disputeのままFinalにしない。
+6. **資源・移行:** pending depth/work/bytes、open roots、closure walk、retention、queuesをboundedにし、activation境界、旧node、IBD、pruning、同時到着順で同じ結果を示す。
+
+旧v0のalgo-11、slice-clock、floor排除の試験はこの受入を証明しない。未解決gateは実装未完了として列挙し、placeholderでactivationを許可しない。供給/検証能力は実測で判断する。
+
+## 8. 観測と段階導入
+
+まずmainのliveness・EXEC_TX基準値を固定し、root/slice accountingとlane隔離をshadow replayする。次にisolated drillでroot REAL → EXEC_SLICE → positive verification → root Final → 一回の精算を実行する。migration、fraud、DA停止、reorg、restart、pruned join、floodを確認した後に、別途readinessに基づくactivationを審査する。このRFCのmergeでlive規則は変わらない。
+
+観測はREAL / EXEC_TX / EXEC_SLICE / HEARTBEAT / BASE-0別のcarrier数、accepted/pending/verified/final/voided work、rootのcanonical/credited work、Tx fee、work reward、clock進行、空slot、queue、DA/court latencyを分ける。EXEC carrier数をselected-chain shareやconsensus BLUE shareへ足さない。
+
+旧proposalのP2観測（8k attempt 72本中BLUE 1、0.19本/120秒slot等）は過去の運用報告であり、本改定で再測定した値ではない。slice化は計算を細かく運べるが、同じ一台の計算能力を増やさない。本RFCの合格条件を「model BLUE share 90%」から、**非重複workを安全に運び、現行livenessと取引laneを維持し、一つのclaim予算内でFinal/報酬を完結すること**へ変更する。
+
+## 9. 関連設計との優先関係
+
+- ADR-0125のFinal credit / round permit / fee-only transaction経路を維持して一般化する。
+- ADR-0168のchain非進行、parent hygiene、anchorの方向は参照する。ただし§10.3のroundへの`safe_weight`配分は本RFCのEXECには適用しない。TX/SLICEともweight 0で、rootのweightをEXECへ再配分しない。
+- 旧algo-11設計、per-slice Final/weight/reward、slice clock、floor排除の設計本文は削除する。ADR-0169は置換の案内とし、過去の試験結果だけを独立記録に残す。
+- ADR-0140/0142/0165のmain上のactive heartbeat・clock・BASE-0構造を維持する。旧RFC8のfuture slice-clock/class-aware floor変更を、この改定の前提にしない。
+- ADR-0173 / RFC14の公開prosecutionと、RFC15のdeferred activationは維持する。
+
+本RFCと[EXEC統合仕様v1](../design/palw/rfc-0008-implementation-spec.md)が2026-10-08以降のRFC8実装対象である。既存の実測・旧分岐実装の記録を、現行mainの実装状態や新設計の合格実績として扱わない。
