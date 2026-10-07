@@ -92,7 +92,11 @@ here (an external gate: review, measurement, real-chain drill, activation).
 | Receipts/quorum are not arithmetic truth; Freivalds failure becomes a bounded terminal proof | ✔ | tally only licenses; every failure localizes to one instance/scalar/edge |
 | No new reward until the G14 criteria are evidenced for the profile with public material | ✔ | `ProsecutionGateV1`, `reward_eligible_v1`, `improvement_reward_gate_v1` |
 | Coverage, `ε_check`, source fidelity and the gate are separate metrics | ✔ | `ReleaseMetricsV1` |
-| G14 on a real chain (RPC → fee → inclusion → fold → slash → blocked Final) | ✖ | RFC-0014/0015 drills |
+| Job, input and output binding; decode court (programs and pipelines) | ✔ | `job.rs`, `pipeline_public.rs` (`R` bound to the job's public seed) |
+| DA response classes; per-position demands; availability default never the fraud slash | ✔ | `public.rs` `classify_position_response_v1`, `ledger.rs` |
+| `PUBLIC_PROSECUTION_COMPLETE` derived from code, with per-path bounds | ✔ | `gate.rs` (programs and pipelines) |
+| Consensus properties on an in-process chain: collusion, pre-emption, Final race, liability, reorg/IBD, collateral | ✔ | `ledger.rs`; audit: [`kernel-public-prosecution-audit.md`](kernel-public-prosecution-audit.md) |
+| G14 on a real chain (RPC → fee → inclusion → fold → slash → blocked Final) | ✖ | EXTERNAL_GATE_PENDING (RFC-0014/0015 drills) |
 
 ## 3. Tests (`cargo test -p misaka-palw-kernel`)
 
@@ -103,6 +107,11 @@ here (an external gate: review, measurement, real-chain drill, activation).
 * `k2_adversarial` — permuted history, swapped expert, uncommitted weight, cheap unsound suites, unknown checker ids, reorg-stale
   receipts, verdict agreement across runs, scopes and a byte-only verifier.
 * `k2_public` — fresh public bond from bytes, byte-level court, withholding → default, reward gates (inference and evaluation).
+* `k2_ledger` — the in-process chain: full-Panel collusion before and after Final, self-consistent garbage, borrowed traces and
+  substituted outputs, withheld positions demanded in one round, DA classes and defaults, pre-emption, the Final race, reorg /
+  restart / IBD, collateral. Every outsider replays the chain and reads only public DA bytes, with its own salt.
+* `k2_ledger_pipeline` — the same for pipelines: stage, edge and `R` lies, `R` from another seed, a vision-language decode
+  substitution, a withheld vision stage demanded and served on chain.
 * `k2_pipeline` — K2-TIR-v3 on the IR's own v2 fixtures (text-to-image, vision, VLM, encoder–decoder, exact-match and log-likelihood
   evaluations), stage/edge/`R` lies, withheld upstream, job and `R` binding, RFC-0004 evaluation → Final → promotion.
 * Unit tests: Mersenne fields against double-and-add, challenge streams, beacon/anchor, descriptors, lifecycle, receipts, improve.
@@ -126,5 +135,5 @@ here (an external gate: review, measurement, real-chain drill, activation).
 2. Review of the beacon as unbiased under withholding; a transcript construction if a GKR family is ever proposed (§15.3).
 3. Cost on real models: producer, verifier, DA, court and dispute load for 9B-8k, validated long context and Kimi K3 (§15.6–15.7).
 4. Node values carry row/column Merkle commitments (`merkle.rs`): a `MatMul` scalar court opens one row of X, one column of W and one row of Y (O(k + n) bytes). Other courts open the one instance they recompute; Merkle tiling of those (e.g. a long `ReduceSum`) is a further suite extension if measurements call for it.
-5. Authenticated public availability (who serves, retention, demand/default on chain) is RFC-0009 stage B / RFC-0014's DA path.
+5. Authenticated public availability on the real chain (who serves, retention) is RFC-0009 stage B / RFC-0014's DA path; the demand/default rules themselves are implemented and tested in `ledger.rs`.
 6. Shadow comparison, the G14 drill on a real chain, audits, soak, and only then a proposal to give the fence a height.
