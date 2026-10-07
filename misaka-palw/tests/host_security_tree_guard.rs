@@ -91,12 +91,28 @@ fn no_digest_cache_by_name() {
         "cached_sha",
         "cached_artifact_root",
     ];
+    /// Reviewed exemptions: `(file, banned name, why it is not the defect)`. Each must still match, so the list cannot
+    /// outlive the line it names.
+    const ALLOWED: &[(&str, &str, &str)] = &[(
+        "misaka-palw-base0/src/inventory.rs",
+        "digest_cache",
+        "ADR-0077 SA-6 shape: `a16_inventory_digest_cache_v1` keys a DERIVED inventory by `(artifact_digest_memoised, \
+         profile id)` — the full-byte content digest of the artifact allocation it was computed from (memoised only \
+         while that allocation is alive) — holds it in process memory only and never persists it. No path, size, \
+         mtime or name enters the key; the bytes are the key.",
+    )];
     let mut findings = Vec::new();
+    let mut matched: Vec<(String, &str)> = Vec::new();
     for (path, source) in rust_sources() {
+        let rel = relative(&path);
         let lowered = source.to_lowercase();
         for banned in BANNED {
             if lowered.contains(banned) {
-                findings.push(format!("{}: `{banned}`", relative(&path)));
+                if ALLOWED.iter().any(|(f, b, _)| *f == rel && b == banned) {
+                    matched.push((rel.clone(), banned));
+                } else {
+                    findings.push(format!("{rel}: `{banned}`"));
+                }
             }
         }
     }
@@ -106,6 +122,12 @@ fn no_digest_cache_by_name() {
          not the bytes. Found:\n  {}",
         findings.join("\n  ")
     );
+    for (file, banned, _) in ALLOWED {
+        assert!(
+            matched.iter().any(|(f, b)| f == file && b == banned),
+            "the exemption {file} / `{banned}` matches nothing any more — delete it rather than leave it standing"
+        );
+    }
 }
 
 /// **S8, the shape half.** A struct that carries a path AND a size AND a modification time is the
