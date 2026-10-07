@@ -151,6 +151,18 @@ impl ClaimLifecycleV1 {
                 S::Disputed { open: 1, resume: Box::new(self.state.clone()) }
             }
             (S::Disputed { open, resume }, E::DisputeFiled { .. }) => S::Disputed { open: open + 1, resume: resume.clone() },
+            // The Panel's coverage may land while a dispute is open: it moves the state the dispute resumes to (the pass and its
+            // window start now), and Final stays blocked until the dispute's verdict.
+            (S::Disputed { open, resume }, E::Tally { daa, state: TallyStateV1::Covered }) => match &**resume {
+                S::Checking { deadline_daa, .. } if daa <= deadline_daa => S::Disputed {
+                    open: *open,
+                    resume: Box::new(S::ProbabilisticPass {
+                        passed_daa: *daa,
+                        window_end_daa: daa + self.policy.challenge_window_daa,
+                    }),
+                },
+                _ => self.state.clone(),
+            },
             (S::Disputed { .. }, E::CourtVerdict { daa, convicted: true }) => S::Convicted { daa: *daa },
             (S::Disputed { open, resume }, E::CourtVerdict { convicted: false, .. }) => {
                 if *open > 1 {
@@ -354,6 +366,27 @@ mod tests {
         .unwrap();
         l.apply(ClaimEventV1::CourtVerdict { daa: 21, convicted: true }).unwrap();
         assert_eq!(l.state, ClaimStateV1::Convicted { daa: 21 });
+    }
+
+    #[test]
+    fn coverage_during_a_dispute_starts_the_window_and_final_waits_for_the_verdict() {
+        let mut l = checking();
+        l.apply(ClaimEventV1::DisputeFiled { daa: 15 }).unwrap();
+        l.apply(ClaimEventV1::Tally { daa: 20, state: TallyStateV1::Covered }).unwrap();
+        l.apply(ClaimEventV1::RetentionMet).unwrap();
+        l.apply(ClaimEventV1::Tick { daa: 300 }).unwrap();
+        assert!(matches!(l.state, ClaimStateV1::Disputed { open: 1, .. }), "no Final under an open dispute");
+        l.apply(ClaimEventV1::CourtVerdict { daa: 301, convicted: false }).unwrap();
+        assert_eq!(l.state, ClaimStateV1::ProbabilisticPass { passed_daa: 20, window_end_daa: 70 });
+        l.apply(ClaimEventV1::Tick { daa: 302 }).unwrap();
+        assert!(matches!(l.state, ClaimStateV1::Final { .. }));
+        // Late coverage under a dispute changes nothing: the dismissal returns to Checking, which then times out.
+        let mut l = checking();
+        l.apply(ClaimEventV1::DisputeFiled { daa: 15 }).unwrap();
+        l.apply(ClaimEventV1::Tally { daa: 111, state: TallyStateV1::Covered }).unwrap();
+        l.apply(ClaimEventV1::CourtVerdict { daa: 112, convicted: false }).unwrap();
+        l.apply(ClaimEventV1::Tick { daa: 113 }).unwrap();
+        assert_eq!(l.state, ClaimStateV1::TimedOut { daa: 113 });
     }
 
     #[test]

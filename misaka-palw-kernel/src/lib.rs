@@ -74,6 +74,7 @@ pub mod gate;
 pub mod hash;
 pub mod improve;
 pub mod job;
+pub mod ledger;
 pub mod lifecycle;
 pub mod merkle;
 pub mod outcome;
