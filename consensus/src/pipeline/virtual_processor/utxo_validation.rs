@@ -1003,6 +1003,11 @@ impl VirtualStateProcessor {
         // committee beacon, the credit walk, the audit fee, the challenge slash) is gone, and no
         // shipped chain carried one of these transactions (ADR-0134 §2).
         self.check_compute_overlay_retired(&txs, header.daa_score)?;
+        if self.dns_retired_at(header.daa_score) {
+            if let Some(tx) = txs.iter().find(|tx| kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id)) {
+                return Err(kaspa_consensus_core::errors::block::RuleError::DnsParticipationRetired(tx.id()));
+            }
+        }
 
         // kaspa-pq Phase 10/11 + Phase 13 (ADR-0009 Addendum B §B.5 / ADR-0018
         // §F+§E): the validator reward outputs the coinbase must carry. The §F
@@ -1035,6 +1040,9 @@ impl VirtualStateProcessor {
             ctx.selected_parent(),
             validator_pool,
         );
+        let (newly_included_stake, expected_stake) = if self.dns_retired_at(header.daa_score) {
+            self.native_inclusion_ratio(&ctx.ghostdag_data, &mergeset_non_daa, &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: header.hash, daa_score: header.daa_score, blue_score: header.blue_score, subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score) })
+        } else { (newly_included_stake, expected_stake) };
         ctx.validator_rewarded_keys = rewarded_keys;
 
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): stash this block's validator
@@ -1280,6 +1288,10 @@ impl VirtualStateProcessor {
         };
         if daa_score < dns_params.dns_activation_daa_score {
             return (Vec::new(), Vec::new(), 0, 0);
+        }
+        if self.dns_retired_at(daa_score) {
+            // Historical quality liabilities are paid once at their original finalization crossing.
+            return (self.deferred_quality_bonus_outputs(dns_params, daa_score, selected_parent, bond_view), Vec::new(), 0, 0);
         }
         let window = dns_params.reward_uniqueness_window_blocks;
 
@@ -1530,6 +1542,9 @@ impl VirtualStateProcessor {
         bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> AttestationShardDecision {
+        if self.dns_retired_at(daa_score) && kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id) {
+            return AttestationShardDecision::Drop { reason: AttestationDropReason::DnsRetired, bond: TransactionOutpoint::new(tx.id(), 0), epoch: 0 };
+        }
         let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
         classify_attestation_shard_for_template(tx, bond_view, self.genesis.hash, activated)
     }
@@ -2022,6 +2037,7 @@ impl VirtualStateProcessor {
 /// unchanged). Each variant mirrors exactly one branch of [`classify_one_attestation`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AttestationDropReason {
+    DnsRetired,
     /// The referenced bond does not resolve to `Active` at the attestation's
     /// `target_daa_score` in the as-of-selected-parent bond view (branch a).
     BondNotActiveAtTarget,
@@ -2054,7 +2070,8 @@ impl AttestationDropReason {
     pub(crate) fn template_drop_kind(self) -> kaspa_consensus_core::block::AttestationTemplateDropKind {
         use kaspa_consensus_core::block::AttestationTemplateDropKind;
         match self {
-            AttestationDropReason::MalformedPayload
+            AttestationDropReason::DnsRetired
+            | AttestationDropReason::MalformedPayload
             | AttestationDropReason::ValidatorIdMismatch
             | AttestationDropReason::NonZeroValidatorSetCommitment
             | AttestationDropReason::BadSignature => AttestationTemplateDropKind::Terminal,

@@ -737,6 +737,10 @@ impl ConsensusSessionOwned {
     }
 
     /// ADR-0127 Decision 3: the settlement read at `daa_score`, off the async runtime.
+    pub async fn async_get_native_settlement_snapshot(&self) -> ConsensusResult<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
+        self.clone().spawn_blocking(|c| c.get_native_settlement_snapshot()).await
+    }
+
     pub async fn async_palw_settlement_v1(
         &self,
         daa_score: u64,

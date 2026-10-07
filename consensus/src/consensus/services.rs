@@ -207,6 +207,7 @@ impl ConsensusServices {
         .with_model_sink_bound_fence(params.palw_model_sink_bound_fence())
         // RFC-0001 §A.4 (FP Job V4): the V4 job's two doors, where the ruleset carries the decode-rules
         // fence. `None` on every shipped preset, which keeps each network's transaction validity as is.
+        .with_dns_retirement(params.palw_dns_retirement)
         .with_fp_decode_rules_fence(params.palw_fp_decode_rules_fence())
         // RFC-0003 §I.4.4 (the tensor claim, FP job version 10): its two doors, where the ruleset carries
         // `palw_fp_job_v5`. `None` on every shipped preset.

@@ -292,10 +292,12 @@ impl UtxoProcessor {
         }
         let Some(rpc) = self.try_rpc_api() else { return };
         self.inner.dns_anchor_polled_at_daa.store(current_daa_score, Ordering::Relaxed);
-        if let Ok(confirmation) = rpc.get_dns_confirmation().await
-            && confirmation.available
-        {
-            params.set_dns_confirmed_anchor_daa(confirmation.last_dns_confirmed_anchor_daa_score);
+        if let Ok(confirmation) = rpc.get_dns_confirmation().await {
+            // Retirement/unavailability must clear a cached DNS shortcut. The long maturity
+            // fallback remains available without a validator observation.
+            params.set_dns_confirmed_anchor_daa(if confirmation.available {
+                confirmation.last_dns_confirmed_anchor_daa_score
+            } else { 0 });
         }
     }
 

@@ -1889,7 +1889,23 @@ declare! {
      *
      * @category Node RPC
      */
+    export interface INativeSettlementSnapshotV1 {
+        version: number;
+        rulesetId: string;
+        policyId: string;
+        generation: string;
+        retirementDaa: bigint;
+        frontier: string | null;
+        latest: string | null;
+        safe: string | null;
+        finalized: string | null;
+        depth: bigint;
+        uniqueWork: string;
+        stop: string | null;
+    }
     export interface IGetPalwSettlementResponse {
+        dnsRetiredAt?: bigint;
+        nativeSettlement?: INativeSettlementSnapshotV1;
         available: boolean;
         sinkDaa: bigint;
         daaScore: bigint;

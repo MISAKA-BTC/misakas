@@ -921,6 +921,9 @@ from!(item: &kaspa_rpc_core::GetPalwSettlementRequest, protowire::GetPalwSettlem
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwSettlementResponse>, protowire::GetPalwSettlementResponseMessage, {
     Self {
+        dns_retired_at: item.dns_retired_at,
+        native_settlement_json: item.native_settlement.as_ref().map(|s| serde_json::to_string(s).expect("settlement snapshot has JSON-safe fields")),
+
         available: item.available,
         sink_daa: item.sink_daa,
         daa_score: item.daa_score,
@@ -946,6 +949,8 @@ from!(item: &kaspa_rpc_core::RpcPrecommitDue, protowire::RpcPrecommitDue, {
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPrecommitDutyResponse>, protowire::GetPrecommitDutyResponseMessage, {
     Self {
+        retired_at: item.retired_at,
+
         available: item.available,
         round_active: item.round_active,
         sink_daa_score: item.sink_daa_score,
@@ -3104,6 +3109,9 @@ try_from!(item: &protowire::GetPalwSettlementRequestMessage, kaspa_rpc_core::Get
 });
 try_from!(item: &protowire::GetPalwSettlementResponseMessage, RpcResult<kaspa_rpc_core::GetPalwSettlementResponse>, {
     Self {
+        dns_retired_at: item.dns_retired_at,
+        native_settlement: item.native_settlement_json.as_ref().map(|s| serde_json::from_str(s)).transpose().map_err(|e| kaspa_rpc_core::RpcError::General(format!("invalid native settlement snapshot: {e}")))?,
+
         available: item.available,
         sink_daa: item.sink_daa,
         daa_score: item.daa_score,
@@ -3128,6 +3136,8 @@ try_from!(item: &protowire::RpcPrecommitDue, kaspa_rpc_core::RpcPrecommitDue, {
 });
 try_from!(item: &protowire::GetPrecommitDutyResponseMessage, RpcResult<kaspa_rpc_core::GetPrecommitDutyResponse>, {
     Self {
+        retired_at: item.retired_at,
+
         available: item.available,
         round_active: item.round_active,
         sink_daa_score: item.sink_daa_score,
@@ -4970,5 +4980,33 @@ mod palw_capacity_shadow_grpc_tests {
         assert!(wire.error.is_none());
         let back: RpcResult<GetPalwCapacityShadowResponse> = (&wire).try_into();
         assert_eq!(back.unwrap(), response);
+    }
+}
+
+#[cfg(test)]
+mod native_settlement_tests {
+    use kaspa_rpc_core::{GetPalwSettlementResponse, GetPrecommitDutyResponse, RpcResult};
+    use crate::protowire;
+    use kaspa_consensus_core::palw_native_settlement_v1::{NativeSettlementSnapshotV1, SettlementStopV1};
+
+    #[test]
+    fn rfc0012_grpc_keeps_legacy_absence_and_roundtrips_native_evidence() {
+        let old = protowire::GetPalwSettlementResponseMessage::default();
+        let decoded: GetPalwSettlementResponse = (&old).try_into().unwrap();
+        assert!(decoded.dns_retired_at.is_none() && decoded.native_settlement.is_none());
+        let native = NativeSettlementSnapshotV1 { version: 1, ruleset_id: Default::default(), policy_id: Default::default(),
+            generation: Default::default(), retirement_daa: 5, frontier: None, latest: None, safe: None, finalized: None,
+            depth: 0, unique_work: "0".into(), stop: Some(SettlementStopV1::MissingHistory) };
+        let response = GetPalwSettlementResponse { dns_retired_at: Some(5), native_settlement: Some(native.clone()), ..Default::default() };
+        let wire: protowire::GetPalwSettlementResponseMessage = RpcResult::Ok(&response).into();
+        let decoded: GetPalwSettlementResponse = (&wire).try_into().unwrap();
+        assert_eq!(decoded.native_settlement, Some(native));
+        assert_eq!(decoded.dns_retired_at, Some(5));
+        assert!(!decoded.settled);
+        let corrupt = protowire::GetPalwSettlementResponseMessage { native_settlement_json: Some("not JSON".into()), ..wire };
+        assert!(GetPalwSettlementResponse::try_from(&corrupt).is_err());
+        let duty = GetPrecommitDutyResponse { retired_at: Some(5), ..Default::default() };
+        let wire: protowire::GetPrecommitDutyResponseMessage = RpcResult::Ok(&duty).into();
+        assert_eq!(GetPrecommitDutyResponse::try_from(&wire).unwrap().retired_at, Some(5));
     }
 }

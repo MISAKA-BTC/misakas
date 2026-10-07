@@ -3085,7 +3085,7 @@ async fn palw_v2_the_escrow_is_carved_out_of_the_block_that_earned_it() {
     let sp_worker_share = split_block_subsidy(sp_subsidy, &fee_split).worker_base_sompi;
     let (_, sp_state) =
         vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().filter(|(b, _)| *b == tip).expect("the walk's tip is the sink");
-    let escrow = vp.palw_v2_escrow_withheld_at(&sp_state, selected_parent);
+    let escrow = vp.palw_v2_escrow_withheld_at(&sp_state, selected_parent, vp.headers_store.get_daa_score(selected_parent).unwrap());
     assert!(escrow > 0, "an attempt-lane block escrows its worker carve — otherwise this proves nothing");
     // Measured: 370,468,345 subsidy → 229,690,375 worker share → 229,690,373 escrow. The carve
     // permille (620) and `subsidy_worker_base_bps` (6200) are the same number expressed twice, so
@@ -16401,7 +16401,7 @@ async fn adr0126_a_palw_chain_crosses_the_overlay_carve() {
             let subsidy = vp.coinbase_manager.calc_block_subsidy(merged_daa) as u128;
             assert_eq!(*carve as u128, subsidy * carve_permille_at(merged_daa) / 1_000, "merged block at DAA {merged_daa}");
             assert_eq!(
-                vp.palw_v2_escrow_withheld_at(&state_after, *merged),
+                vp.palw_v2_escrow_withheld_at(&state_after, *merged, header.daa_score),
                 *carve,
                 "the carve withheld for the merged block at DAA {merged_daa} is the carve its claim escrowed"
             );
@@ -16421,7 +16421,7 @@ async fn adr0126_a_palw_chain_crosses_the_overlay_carve() {
             assert_eq!(parts.validator_sompi as u128, subsidy as u128 * validator_bps_at(header.daa_score) / 10_000);
             let escrow = if *merged == ghostdag.selected_parent {
                 // The selected parent's claim, from the state its own transition wrote.
-                let escrow = vp.palw_v2_escrow_withheld_at(&state_before, *merged);
+                let escrow = vp.palw_v2_escrow_withheld_at(&state_before, *merged, header.daa_score);
                 assert_eq!(
                     escrow as u128,
                     subsidy as u128 * carve_permille_at(merged_daa) / 1_000,
@@ -17329,4 +17329,158 @@ async fn the_round_templates_merge_depth_predicate_names_the_stale_tip_the_valid
     consensus.add_header_only_block_with_parents(102.into(), kosherized).await.expect("the validator accepts what the predicate passes");
 
     consensus.shutdown(wait_handles);
+}
+
+
+/// Private fixture only: the production presets intentionally assign no retirement fence.
+#[tokio::test]
+async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
+    use crate::model::stores::dns_state::DnsStateStore;
+    use kaspa_consensus_core::{
+        config::params::{DnsBftGateV1, ForkActivation},
+        dns_finality::{ActiveBondView, DnsHealth, DnsReorgOutcome, DnsRolloutStage, DnsState, StakeScore},
+        palw_mode_v2::PalwConsensusMode,
+        palw_native_settlement_v1::{PalwDnsRetirementV1, PalwSettlementPolicyV1},
+    };
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+            p.dns_params.as_mut().unwrap().full_reward_split_daa_score = 0;
+            p.dns_bft_gate = Some(DnsBftGateV1 {
+                activation: ForkActivation::new(1),
+                t_leak_daa: 50,
+                reentry_final_depth_daa: 10,
+                min_retained_validators: 4,
+            });
+            p.palw_dns_retirement = Some(PalwDnsRetirementV1 {
+                activation: ForkActivation::new(5),
+                settlement: PalwSettlementPolicyV1 {
+                    settled_anchor_depth: 2,
+                    unique_mature_work: 20,
+                    max_operator_permille: 1000,
+                    max_class_permille: 1000,
+                },
+                legacy_evidence_horizon_daa: 10,
+            });
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..16 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor();
+    let sink = ctx.consensus.get_sink();
+    let chain: Vec<_> = vp
+        .reachability_service
+        .default_backward_chain_iterator(sink)
+        .map(|h| (h, vp.headers_store.get_daa_score(h).unwrap()))
+        .collect();
+    let below = chain.iter().find(|(_, d)| *d < 5 && *d >= 1).unwrap().0;
+    let candidate = chain.last().unwrap().0;
+    let anchor = chain[1];
+    let write = |confirmed, daa| {
+        vp.dns_state_store
+            .write()
+            .set(DnsState {
+                selected_chain_anchor: sink,
+                anchor_daa_score: daa,
+                work_depth: Default::default(),
+                stake_depth: StakeScore(0),
+                last_dns_confirmed_anchor: confirmed,
+                last_dns_confirmed_anchor_daa_score: anchor.1,
+                rollout_stage: DnsRolloutStage::Active,
+                validator_set_commitment: Default::default(),
+                health: DnsHealth::Active,
+            })
+            .unwrap()
+    };
+    write(Default::default(), chain[0].1);
+    let baseline = vp.dns_reorg_outcome(candidate, sink, &ActiveBondView::default());
+    write(anchor.0, chain[0].1);
+    assert_eq!(vp.dns_bft_gate_refusal(candidate, sink), None);
+    assert_eq!(vp.dns_reorg_outcome(candidate, sink, &ActiveBondView::default()), baseline);
+    assert_ne!(baseline, DnsReorgOutcome::HardCheckpointReject);
+    assert!(vp.dns_reorg_outcome(sink, sink, &ActiveBondView::default()).is_accept());
+    // A below-fence incumbent still applies its historical BFT rule, even if its candidate is above it.
+    assert_eq!(vp.dns_bft_gate_refusal(candidate, below), Some(DnsReorgOutcome::HardCheckpointReject));
+    let split = vp.fee_split_at(5).unwrap();
+    assert_eq!((split.subsidy_worker_base_bps, split.subsidy_worker_inclusion_bps, split.subsidy_validator_bps), (9200, 800, 0));
+    assert_eq!((split.normal_fee_worker_bps, split.finality_fee_worker_bps), (10000, 10000));
+    assert_eq!(vp.palw_escrow_carve_at(5, 5).unwrap().worker_carve_permille(), 920);
+    assert_eq!(vp.palw_escrow_carve_at(4, 5), vp.palw_escrow_carve_at(4, 4), "no retrospective increase of an old earning");
+    let state = vp.palw_candidate_state_v2(sink).unwrap();
+    let subsidy = vp.coinbase_manager.calc_block_subsidy(chain[0].1);
+    assert_eq!(
+        vp.palw_v2_escrow_withheld_at(&state, sink, chain[0].1),
+        kaspa_consensus_core::palw_native_settlement_v1::native_worker_base_v1(subsidy),
+        "the removed validator allocation cannot become an immediate miner windfall"
+    );
+    // Persisted DNS-safe pointers must never become native-safe by reopening an old store.
+    use crate::model::stores::evm::EvmCanonicalHeadsStore;
+    use kaspa_consensus_core::{
+        api::ConsensusApi,
+        evm::CanonicalEvmHeads,
+        palw_native_settlement_v1::{NativeSettlementSnapshotV1, SettlementStopV1},
+    };
+    let consensus = ctx.consensus.consensus_clone();
+    let zero = BlockHash::default();
+    consensus.storage.evm_heads_store.write().set(CanonicalEvmHeads { latest: zero, safe: sink, finalized: sink }).unwrap();
+    let cleared = consensus.get_evm_canonical_heads().unwrap().unwrap();
+    assert!(cleared.safe_head().is_none() && cleared.finalized_head().is_none());
+    let mut status = NativeSettlementSnapshotV1 {
+        version: 1,
+        ruleset_id: config.params.consensus_params_id(),
+        policy_id: config.params.palw_dns_retirement.unwrap().settlement.id(),
+        generation: sink,
+        retirement_daa: 5,
+        frontier: None,
+        latest: None,
+        safe: None,
+        finalized: None,
+        depth: 0,
+        unique_work: "0".into(),
+        stop: Some(SettlementStopV1::MissingHistory),
+    };
+    let publish = |s| {
+        let mut batch = rocksdb::WriteBatch::default();
+        consensus.storage.evm_heads_store.write().set_native_batch(&mut batch, Some(s)).unwrap();
+        vp.db.write(batch).unwrap();
+    };
+    publish(status.clone());
+    assert_eq!(consensus.get_native_settlement_snapshot().unwrap(), Some(status.clone()));
+    status.stop = Some(SettlementStopV1::FinalizedConflict);
+    publish(status.clone());
+    let conflict = vp.native_evm_settlement_snapshot(sink);
+    assert_eq!(conflict.stop, Some(SettlementStopV1::FinalizedConflict));
+    publish(conflict);
+    assert_eq!(
+        vp.native_evm_settlement_snapshot(sink).stop,
+        Some(SettlementStopV1::FinalizedConflict),
+        "an absent safe/finalized publication cannot erase a prior conflict on the next commit"
+    );
+    status.stop = Some(SettlementStopV1::MissingHistory);
+    status.generation = candidate;
+    publish(status);
+    assert!(consensus.get_native_settlement_snapshot().is_err(), "a reorg/restart never reuses another generation's evidence");
+    let validator = &vp.transaction_validator;
+    use kaspa_consensus_core::{errors::tx::TxRuleError, subnets::*, tx::Transaction};
+    for id in [SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_PRECOMMIT] {
+        let tx = Transaction::new(0, vec![], vec![], 0, id.clone(), 0, vec![]);
+        assert!(validator.check_dns_retirement(&tx, 4).is_ok());
+        assert!(matches!(validator.check_dns_retirement(&tx, 5), Err(TxRuleError::DnsParticipationRetired(_))));
+        assert!(matches!(
+            vp.classify_attestation_shard_for_template(&tx, &ActiveBondView::default(), 5),
+            super::utxo_validation::AttestationShardDecision::Drop {
+                reason: super::utxo_validation::AttestationDropReason::DnsRetired,
+                ..
+            }
+        ));
+    }
+    for id in [SUBNETWORK_ID_STAKE_UNBOND, SUBNETWORK_ID_PALW_COMMITMENT, SUBNETWORK_ID_PALW_RECEIPT] {
+        assert!(validator.check_dns_retirement(&Transaction::new(0, vec![], vec![], 0, id.clone(), 0, vec![]), 5).is_ok());
+    }
 }

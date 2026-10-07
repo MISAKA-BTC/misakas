@@ -4066,6 +4066,7 @@ dependencies = [
  "protoc-bin-vendored",
  "rand 0.8.6",
  "regex",
+ "serde_json",
  "thiserror 1.0.64",
  "tokio",
  "tokio-stream",

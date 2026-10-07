@@ -227,7 +227,7 @@ impl EthProvider for NodeEthProvider {
 
     async fn account_at(&self, address: [u8; 20], block: BlockId) -> EthResult<Option<kaspa_consensus_core::evm::EvmAccountSnapshot>> {
         // Resolve the selector → L1 block hash → that block's EVM snapshot (H-04).
-        // safe/finalized read the canonical heads (a non-reorgable height); a
+        // safe/finalized read certified canonical prefix heads; a
         // numeric/earliest tag reads the historical block. Fail CLOSED if the
         // resolved block has no snapshot (pruned / pre-activation) so a caller
         // never silently gets latest state for a historical query.
@@ -239,9 +239,9 @@ impl EthProvider for NodeEthProvider {
                     BlockId::Number(n) => c.get_evm_block_by_number(*n).ok().flatten().map(|b| b.l1_hash),
                     BlockId::Tag(t) => match t.as_str() {
                         "earliest" => c.get_evm_block_by_number(0).ok().flatten().map(|b| b.l1_hash),
-                        "safe" => c.get_evm_canonical_heads().ok().flatten().map(|h| h.safe),
-                        "finalized" => c.get_evm_canonical_heads().ok().flatten().map(|h| h.finalized),
-                        _ => Some(c.get_sink()), // latest / pending
+                        "safe" => resolve_executed_tag(c, "safe")?,
+                        "finalized" => resolve_executed_tag(c, "finalized")?,
+                        _ => resolve_executed_tag(c, "latest")?, // latest / pending
                     },
                     // EIP-1898 by hash: resolve the 32-byte eth id → its L1 block. With
                     // requireCanonical, a side-branch (non-chain) block is an explicit
@@ -262,7 +262,12 @@ impl EthProvider for NodeEthProvider {
                     }
                 };
                 // Selector did not resolve to a known block (e.g. a future number) ⇒ no account.
-                let Some(l1) = l1 else { return Ok(None) };
+                let Some(l1) = l1 else {
+                    if matches!(&block, BlockId::Tag(t) if matches!(t.as_str(), "safe" | "finalized" | "latest" | "pending")) {
+                        return Err(EthRpcError::server("requested executed EVM head unavailable"));
+                    }
+                    return Ok(None);
+                };
                 // C-01 S7 (audit H-03): when the resolved block IS the canonical head, answer from
                 // the O(1) flat point-lookup instead of materializing the full state. `Stale` (flat
                 // store not at the head) falls through to the authoritative path below.
@@ -622,28 +627,27 @@ impl EthProvider for NodeEthProvider {
         let session = self.consensus_manager.consensus().session().await;
         let tag = tag.to_string();
         // Resolve each tag to its real L1 block (audit H-04): latest/pending = the
-        // sink; safe/finalized = the canonical heads (finalized lags = the pruning
-        // point, NOT the sink, so a "finalized" query is non-reorgable); earliest =
-        // number 0. safe/finalized fall back to the sink only if heads are unset.
+        // latest fully executed canonical result; safe/finalized = certified prefix
+        // pointers or explicit absence; earliest = number 0. Missing heads never alias the sink.
         let (resp, parent) = session
             .spawn_blocking(move |c| {
-                let heads = c.get_evm_canonical_heads().ok().flatten();
+                let heads = c.get_evm_canonical_heads().map_err(|e| EthRpcError::server(format!("canonical EVM heads: {e}")))?;
                 let resp = match tag.as_str() {
                     "earliest" => c.get_evm_block_by_number(0),
                     "safe" => match heads {
-                        Some(hd) => c.get_evm_block_by_l1_hash(hd.safe),
-                        None => c.get_evm_block_by_l1_hash(c.get_sink()),
+                        Some(hd) => match hd.safe_head() { Some(h) => c.get_evm_block_by_l1_hash(h), None => Ok(None) },
+                        None => Ok(None),
                     },
                     "finalized" => match heads {
-                        Some(hd) => c.get_evm_block_by_l1_hash(hd.finalized),
-                        None => c.get_evm_block_by_l1_hash(c.get_sink()),
+                        Some(hd) => match hd.finalized_head() { Some(h) => c.get_evm_block_by_l1_hash(h), None => Ok(None) },
+                        None => Ok(None),
                     },
-                    _ => c.get_evm_block_by_l1_hash(c.get_sink()), // latest / pending
+                    _ => match heads.and_then(|h| h.latest_head()) { Some(h) => c.get_evm_block_by_l1_hash(h), None => Ok(None) }, // latest / pending
                 };
                 let parent = parent_l1_hash32(c, &resp);
-                (resp, parent)
+                Ok((resp, parent))
             })
-            .await;
+            .await?;
         let resp = resp.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
         Ok(resp.map(|r| to_eth_block(r, parent)))
     }
@@ -829,15 +833,19 @@ impl NodeEthProvider {
         let session = self.consensus_manager.consensus().session().await;
         let (snap, header, head_daa, fences, market) = session
             .spawn_blocking(|c| {
-                let sink = c.get_sink();
+                let heads = c.get_evm_canonical_heads().map_err(|e| EthRpcError::server(format!("canonical EVM heads: {e}")))?;
+                let sink = match heads {
+                    Some(heads) => heads.latest_head().ok_or_else(|| EthRpcError::server("latest executed EVM head unavailable"))?,
+                    None => return Err(EthRpcError::server("canonical EVM heads unavailable")),
+                };
                 // The canonical HEAD L1 block's DAA score is the activation-fence
                 // selector the executor would use for a block built on this head
                 // (`B.header.daa_score`). `Err` if the sink header is briefly
                 // unavailable ⇒ treat as 0 (fence-inert ⇒ F003 off, fail-safe).
                 let head_daa = c.get_header(sink).map(|h| h.daa_score).unwrap_or(0);
-                (c.get_evm_state_snapshot_of(sink), c.get_evm_head_header(), head_daa, c.evm_activation_fences(), c.palw_evm_view_v1())
+                Ok((c.get_evm_state_snapshot_of(sink), c.get_evm_header_of(sink), head_daa, c.evm_activation_fences(), c.palw_evm_view_v1()))
             })
-            .await;
+            .await?;
         let snap = snap.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
         let header = header.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
         // PREA P0-1: the F003 `MLDSA87_VERIFY` precompile is active iff this block's
@@ -849,18 +857,10 @@ impl NodeEthProvider {
         // once a finite F003 score is deployed (no code change needed for parity).
         let (.., f003_mldsa_verify_fence) = fences;
         let f003_active = head_daa >= f003_mldsa_verify_fence;
-        // Fail CLOSED on a missing snapshot (audit H-03): only a true pre-activation
-        // genesis (no head header at all) may legitimately have empty state. A head
-        // that exists but whose snapshot is absent means the state is unavailable —
-        // simulating against an empty (default) snapshot would return a bogus
-        // "success on empty chain" for eth_call / eth_estimateGas.
-        let snap = match (snap, header.as_ref()) {
-            (Some(s), _) => s,
-            (None, None) => Default::default(),
-            (None, Some(_)) => {
-                return Err(EthRpcError::server("EVM state snapshot unavailable for head; refusing to simulate against empty state"));
-            }
-        };
+        // A latest tag requires a persisted execution header and its state. Missing history is
+        // unavailable, never a successful simulation against an invented empty chain.
+        if header.is_none() { return Err(EthRpcError::server("latest executed EVM header unavailable")); }
+        let snap = snap.ok_or_else(|| EthRpcError::server("EVM state snapshot unavailable for head; refusing to simulate against empty state"))?;
         let env = kaspa_evm::sim::EthCallEnv {
             chain_id: EVM_CHAIN_ID,
             number: header.as_ref().map(|h| h.evm_number).unwrap_or(0),
@@ -904,9 +904,9 @@ impl NodeEthProvider {
                     BlockId::Number(n) => c.get_evm_block_by_number(*n).ok().flatten().map(|b| b.l1_hash),
                     BlockId::Tag(t) => match t.as_str() {
                         "earliest" => c.get_evm_block_by_number(0).ok().flatten().map(|b| b.l1_hash),
-                        "safe" => c.get_evm_canonical_heads().ok().flatten().map(|h| h.safe),
-                        "finalized" => c.get_evm_canonical_heads().ok().flatten().map(|h| h.finalized),
-                        _ => Some(c.get_sink()),
+                        "safe" => resolve_executed_tag(c, "safe")?,
+                        "finalized" => resolve_executed_tag(c, "finalized")?,
+                        _ => resolve_executed_tag(c, "latest")?,
                     },
                     BlockId::Hash { hash, require_canonical } => {
                         let rpc_hash = kaspa_hashes::EvmH256::from_bytes(*hash);
@@ -1021,6 +1021,12 @@ fn convert_struct_log(l: &kaspa_evm::trace::StructLog) -> EthStructLog {
 /// The eth-rpc 32-byte parentHash of an EVM block: the first 32 bytes of the
 /// `evm_number − 1` block's L1 hash (audit H-04). Zero for EVM block 0 or when
 /// the parent cannot be read (a non-fatal best-effort field).
+/// Errors in canonical evidence are surfaced; an absent safe/finalized tag stays absent.
+fn resolve_executed_tag(c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized), tag: &str) -> EthResult<Option<kaspa_consensus_core::BlockHash>> {
+    let heads = c.get_evm_canonical_heads().map_err(|e| EthRpcError::server(format!("canonical EVM heads: {e}")))?;
+    Ok(heads.and_then(|h| match tag { "safe" => h.safe_head(), "finalized" => h.finalized_head(), _ => h.latest_head() }))
+}
+
 fn parent_l1_hash32(
     c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
     resp: &kaspa_consensus_core::errors::consensus::ConsensusResult<Option<kaspa_consensus_core::evm::EvmBlockResponse>>,

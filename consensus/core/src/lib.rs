@@ -9,6 +9,7 @@ extern crate core;
 extern crate self as consensus_core;
 
 pub mod palw_mergeset_v1;
+pub mod palw_native_settlement_v1;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};

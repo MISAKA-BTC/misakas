@@ -2368,6 +2368,9 @@ pub struct Params {
     /// `None` on every shipped preset.
     pub palw_overlay_carve: Option<PalwOverlayCarveV1>,
 
+    /// RFC-0012 coordinated retirement and settlement policy. Unassigned on every shipped network.
+    pub palw_dns_retirement: Option<crate::palw_native_settlement_v1::PalwDnsRetirementV1>,
+
     /// **ADR-0130: the seat exposure floor** — see [`PalwPanelExposureFloorV1`]. Resolved at the
     /// claim's anchor for the draw and at the binding block's DAA for the reservation, which the
     /// duty row stores. `None` on every shipped preset and on every card.
@@ -4823,6 +4826,23 @@ impl Params {
                 ));
             }
         }
+        if let Some(retirement) = self.palw_dns_retirement {
+            if self.dns_params.as_ref().is_some_and(|dns| retirement.activation.daa_score() < dns.full_reward_split_daa_score
+                || retirement.activation.daa_score() < dns.dns_activation_daa_score) {
+                return Err(PalwModeV2Error::Invalid("RFC-0012 retirement must follow DNS activation and its full subsidy split"));
+            }
+            if self.palw_overlay_carve.is_some_and(|c| c.worker_carve_permille > 920)
+                || matches!(&self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(b) if b.state.worker_carve_permille() > 920) {
+                return Err(PalwModeV2Error::Invalid("RFC-0012 recovery escrow must fit inside the 92% worker base"));
+            }
+            if !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_))
+                || self.dns_params.is_none()
+                || !retirement.settlement.valid()
+                || retirement.legacy_evidence_horizon_daa == 0
+            {
+                return Err(PalwModeV2Error::Invalid("RFC-0012 requires ConsensusV2, historical DNS rules, a complete settlement policy and a finite evidence horizon"));
+            }
+        }
         // **ADR-0126 Decision 4: the overlay carve lowers a split this network runs, and the escrow it
         // grows must fit the worker base that lower split leaves** — the invariant the bundle's own
         // carve is refused on below, at the fence's numbers. A fence that hashes and cannot fire, or
@@ -6622,6 +6642,9 @@ impl Params {
         }
         // ADR-0126, the lane's shape again: the whole option collapses, so the two numbers beside a
         // scheduled height leave the identity with it (the schedule id reports them).
+        if self.palw_dns_retirement.is_some_and(|r| r.activation == ForkActivation::never()) {
+            self.palw_dns_retirement = None;
+        }
         if self.palw_overlay_carve.is_some_and(|carve| carve.activation == ForkActivation::never()) {
             self.palw_overlay_carve = None;
         }
@@ -9356,6 +9379,12 @@ impl Params {
         }
     }
 
+    /// RFC-0012: evaluated at the authoritative context (incumbent for fork choice,
+    /// accepting block for transactions/rewards, canonical sink for service duties).
+    pub fn palw_dns_retired_at(&self, daa_score: u64) -> bool {
+        self.palw_dns_retirement.is_some_and(|r| r.activation.is_active(daa_score))
+    }
+
     /// ADR-0130: the seat exposure floor, meaningful only on a `ConsensusV2` network (the seats it
     /// floors are a V2 panel's) — what the processors store.
     pub fn palw_panel_exposure_floor_fence(&self) -> Option<PalwPanelExposureFloorV1> {
@@ -10066,6 +10095,7 @@ impl Params {
             palw_work_priced_reward,
             palw_execution_lane,
             palw_overlay_carve,
+            palw_dns_retirement,
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_model_market,
@@ -10330,6 +10360,7 @@ impl Params {
                 palw_execution_lane.and_then(|lane| lane.short_span.is_used().then_some(lane.short_span.activation)),
             ),
             ("palw_overlay_carve", palw_overlay_carve.map(|carve| carve.activation)),
+            ("palw_dns_retirement_v1", palw_dns_retirement.map(|r| r.activation)),
             ("palw_panel_exposure_floor", palw_panel_exposure_floor.map(|floor| floor.activation)),
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
             ("palw_model_market", *palw_model_market),
@@ -11011,6 +11042,10 @@ impl Params {
         }
         // ADR-0126: the height, and beside it the two numbers it moves. Some-only, like its siblings;
         // reported here and never gated, for the SA-4 reason the lane's shape is.
+        if let Some(r) = self.palw_dns_retirement {
+            h.write(b"palw_dns_retirement_v1");
+            h.write(r.commitment_bytes());
+        }
         if let Some(carve) = self.palw_overlay_carve {
             h.write(b"palw_overlay_carve");
             h.write(carve.activation.daa_score().to_le_bytes());
@@ -11364,6 +11399,7 @@ impl Params {
             palw_work_priced_reward,
             palw_execution_lane,
             palw_overlay_carve,
+            palw_dns_retirement,
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
@@ -12220,6 +12256,9 @@ impl Params {
             }
         }
         // ADR-0126: the height only — the validator share and the escrow carve are values beside it.
+        if let Some(r) = palw_dns_retirement.as_mut() {
+            fork(&mut r.activation, visit);
+        }
         if let Some(carve) = palw_overlay_carve.as_mut() {
             fork(&mut carve.activation, visit);
         }
@@ -12623,6 +12662,7 @@ impl Params {
             palw_work_priced_reward,
             palw_execution_lane,
             palw_overlay_carve,
+            palw_dns_retirement,
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
@@ -13644,6 +13684,10 @@ impl Params {
         }
         // ADR-0126: Some-only, so every preset that leaves the carve unset fingerprints exactly as a
         // build without the field; the two numbers ride with the height.
+        if let Some(r) = palw_dns_retirement {
+            h.write(b"palw_dns_retirement_v1");
+            h.write(r.commitment_bytes());
+        }
         if let Some(carve) = palw_overlay_carve {
             h.write(b"palw_overlay_carve/v1");
             h.write(carve.activation.daa_score().to_le_bytes());
@@ -14197,6 +14241,7 @@ impl Params {
             palw_work_priced_reward: self.palw_work_priced_reward,
             palw_execution_lane: self.palw_execution_lane,
             palw_overlay_carve: self.palw_overlay_carve,
+            palw_dns_retirement: self.palw_dns_retirement,
             palw_panel_exposure_floor: self.palw_panel_exposure_floor,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
@@ -15285,6 +15330,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_work_priced_reward: None,
     palw_execution_lane: None,
     palw_overlay_carve: None,
+    palw_dns_retirement: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
@@ -15570,6 +15616,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_work_priced_reward: None,
     palw_execution_lane: None,
     palw_overlay_carve: None,
+    palw_dns_retirement: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
@@ -15837,6 +15884,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_work_priced_reward: None,
     palw_execution_lane: None,
     palw_overlay_carve: None,
+    palw_dns_retirement: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
@@ -23364,6 +23412,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_work_priced_reward: None,
     palw_execution_lane: None,
     palw_overlay_carve: None,
+    palw_dns_retirement: None,
     palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).

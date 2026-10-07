@@ -2017,6 +2017,8 @@ message GetPalwSettlementResponseMessage {
   bool depthIsLowerBound = 7;
   uint64 safeFrontierBlueScore = 8;
   uint64 safeFrontierDaa = 9;
+  optional uint64 dnsRetiredAt = 10;
+  optional string nativeSettlementJson = 11;
   RPCError error = 1000;
 }
 
@@ -2041,6 +2043,7 @@ message GetPrecommitDutyResponseMessage {
   uint64 heldEpoch = 4;
   string heldAnchor = 5;
   repeated RpcPrecommitDue due = 6;
+  optional uint64 retiredAt = 7;
   RPCError error = 1000;
 }
 

@@ -3,7 +3,8 @@
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 
-* Status: **Draft, 2026-10-06 — direction requested; not implemented or activated.**
+* Status: **Draft — dormant implementation; no activation or production settlement parameters assigned.**
+* Implementation record: [unactivated fence, native heads, monetary transition and remaining release gates](0012-dormant-implementation.md).
 * Source baseline: `3b09a814ed4b2a2f90009c05c1219efc9be46b5f` on `misakas/main`.
 * Requested direction: remove DNS validators, DNS finality, DNS attestations, precommits,
   DNS-final and the DNS/stake reorg veto; let PALW block production and settlement carry the EVM bridge.

@@ -415,6 +415,10 @@ impl ValidatorService {
             let my_id = self.key.as_ref().map(|k| k.validator_id);
             let session = self.consensus_manager.consensus().session().await;
             let sink = session.async_get_sink_daa_score_timestamp().await;
+            if let Some(retirement) = self.flow_context.config.params.palw_dns_retirement.filter(|r| r.activation.is_active(sink.daa_score)) {
+                info!("[{VALIDATOR}] status=Retired fence={} reason=palw_dns_retirement_v1; historical bonds and PALW duties remain available", retirement.activation.daa_score());
+                continue;
+            }
             let dns = session.async_get_dns_confirmation().await;
             // The overlay reads return None on non-overlay networks too, so skip the
             // lookups there to avoid misleading status lines.

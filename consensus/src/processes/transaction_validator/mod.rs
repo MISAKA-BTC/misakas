@@ -14,6 +14,7 @@ use kaspa_txscript::ScriptPolicy;
 
 #[derive(Clone)]
 pub struct TransactionValidator {
+    palw_dns_retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
     max_tx_inputs: usize,
     max_tx_outputs: usize,
     max_signature_script_len: usize,
@@ -186,6 +187,7 @@ impl TransactionValidator {
         palw_held_context_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Self {
         Self {
+            palw_dns_retirement: None,
             max_tx_inputs,
             max_tx_outputs,
             max_signature_script_len,
@@ -222,6 +224,22 @@ impl TransactionValidator {
     /// ADR-0082 D10/D11 + RFC-0001 §A.4: declare the decode-rules fence
     /// (`Params::palw_fp_decode_rules_fence()`), which admits the V4 job's shape at isolation and
     /// splits V3 from V4 by the containing block's height in the header context.
+    pub fn with_dns_retirement(mut self, retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>) -> Self {
+        self.palw_dns_retirement = retirement;
+        self
+    }
+
+    pub(crate) fn check_dns_retirement(&self, tx: &kaspa_consensus_core::tx::Transaction, daa: u64) -> errors::TxResult<()> {
+        if self.palw_dns_retirement.is_some_and(|r| r.activation.is_active(daa))
+            && kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id) {
+            return Err(errors::TxRuleError::DnsParticipationRetired(tx.subnetwork_id.clone()));
+        }
+        if self.palw_dns_retirement.is_some_and(|r| !kaspa_consensus_core::palw_native_settlement_v1::legacy_dns_evidence_allowed_v1(r, tx, daa)) {
+            return Err(errors::TxRuleError::DnsLegacyEvidenceOutsideWindow);
+        }
+        Ok(())
+    }
+
     pub fn with_fp_decode_rules_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
         self.palw_fp_decode_rules_fence =
             fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
@@ -316,6 +334,7 @@ impl TransactionValidator {
         counters: Arc<TxScriptCacheCounters>,
     ) -> Self {
         Self {
+            palw_dns_retirement: None,
             max_tx_inputs,
             max_tx_outputs,
             max_signature_script_len,

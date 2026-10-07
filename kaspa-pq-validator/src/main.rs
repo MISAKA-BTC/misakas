@@ -670,6 +670,9 @@ async fn status(args: StatusArgs) -> Result<(), String> {
 async fn bond(args: BondArgs) -> Result<(), String> {
     let key = ValidatorKey::from_seed(load_validator_seed(&args.validator_key)?);
     let client = connect(&resolve_node_rpc(&args.network, &args.node_rpc)).await?;
+    if let Some(fence) = client.get_palw_settlement(0).await.map_err(|e| format!("retirement status unavailable: {e}"))?.dns_retired_at {
+        return Err(format!("DNS validator onboarding retired at DAA {fence}; historical bond exits and PALW roles remain available"));
+    }
     let server = client.get_server_info().await.map_err(|e| format!("getServerInfo failed: {e}"))?;
     let node_network = server.network_id.to_string();
     if let Some(expected) = args.network.as_deref()
@@ -1198,6 +1201,7 @@ struct PrecommitPlan {
 /// over the due list sorted by epoch (the transport's order is not relied on). A hash the node sent
 /// that does not parse is an error: nothing is signed over a value this process could not read.
 fn plan_precommit(duty: &GetPrecommitDutyResponse) -> Result<Option<PrecommitPlan>, String> {
+    if duty.retired_at.is_some() { return Ok(None); }
     if !duty.available || !duty.round_active {
         return Ok(None);
     }
@@ -1901,6 +1905,19 @@ async fn run_loop(client: &KaspaRpcClient, args: &RunArgs, mut attestor: Option<
             );
         }
 
+        match client.get_palw_settlement(0).await {
+            Ok(status) if status.dns_retired_at.is_some() => {
+                info!("[{VALIDATOR}] status=Retired fence={} reason=palw_dns_retirement_v1", status.dns_retired_at.unwrap());
+                sleep_secs(30).await;
+                continue;
+            }
+            Err(e) => {
+                warn!("[{VALIDATOR}] retirement status unavailable: {e}; not signing");
+                sleep_secs(5).await;
+                continue;
+            }
+            _ => {}
+        }
         // 2. Bond configured?
         let Some(bond) = args.stake_bond.as_deref() else {
             info!("[{VALIDATOR}] status=Idle (no --stake-bond configured; observing only)");
@@ -2157,6 +2174,7 @@ mod tests {
             snapshot_commitment: h(0x5c).to_string(),
         };
         let duty = |epochs: &[u64]| GetPrecommitDutyResponse {
+            retired_at: None,
             available: true,
             round_active: true,
             sink_daa_score: 7_100,
@@ -2167,6 +2185,7 @@ mod tests {
 
         assert_eq!(plan_precommit(&GetPrecommitDutyResponse::default()), Ok(None), "an old or overlay-less node has no view");
         assert_eq!(plan_precommit(&GetPrecommitDutyResponse { round_active: false, ..duty(&[10]) }), Ok(None), "below the fence");
+        assert_eq!(plan_precommit(&GetPrecommitDutyResponse { retired_at: Some(5), ..duty(&[10]) }), Ok(None), "retirement wins over a stale active duty");
         assert_eq!(plan_precommit(&duty(&[])), Ok(None), "nothing due");
 
         let plan = plan_precommit(&duty(&[12, 10, 11])).unwrap().expect("due");

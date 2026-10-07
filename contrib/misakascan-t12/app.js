@@ -1448,6 +1448,7 @@ async function refreshHomeInner(){
   // coin supply needs --utxoindex; treat as best-effort so it never blanks the page
   let supply = null;
   try { supply = await rpc("getCoinSupply"); } catch { supply = null; }
+  const nativeSettlement = await readNativeSettlement();
   // DNS-finality overlay status (kaspa-pq) — cheap, best-effort
   let dns = null;
   try { dns = await rpc("getDnsConfirmation"); } catch { dns = null; }
@@ -1486,9 +1487,9 @@ async function refreshHomeInner(){
   document.getElementById("footNet").textContent = dag.network || "—";
   const supplyVal = supply ? coin(supply.circulatingSompi)+" "+SYMBOL : "n/a";
   const supplySub = supply ? "max "+coin(supply.maxSompi)+" "+SYMBOL : "needs --utxoindex";
-  const dnsVal = dns ? (dns.dnsConfirmed ? "DNS confirmed" : (dns.powConfirmed ? "PoW confirmed" : "pending"))
+  const dnsVal = nativeSettlement && nativeSettlement.dnsRetiredAt != null ? "PALW native settlement" : dns ? (dns.dnsConfirmed ? "DNS confirmed" : (dns.powConfirmed ? "PoW confirmed" : "pending"))
                      : "n/a";
-  const dnsSub = dns ? `${ROLLOUT_STAGES[dns.rolloutStage]||("stage "+dns.rolloutStage)} · ${DNS_HEALTH[dns.health]||("health "+dns.health)}`
+  const dnsSub = nativeSettlement && nativeSettlement.dnsRetiredAt != null ? "DNS validator role retired" : dns ? `${ROLLOUT_STAGES[dns.rolloutStage]||("stage "+dns.rolloutStage)} · ${DNS_HEALTH[dns.health]||("health "+dns.health)}`
                        + bridgeFreshNote(dns, sbs)
                      : "overlay";
   // ONE uniform grid: headline metrics + chain/overlay/economics detail, every box the same size
@@ -1551,7 +1552,7 @@ async function refreshHomeInner(){
 
     { sec:"Network", k:"Network", v: esc(dag.network||"—"), s:"v"+esc(info.serverVersion||"?"), cls:"acc" },
     { sec:"Network", k:"Nodes", v: peersVal, s: peersSub, href:"#/peers", cls:"ov" },
-    { sec:"Network", k:"DNS finality", v: dnsVal, s: dnsSub, href:"#/overlay", cls:"ov" },
+    { sec:"Network", k: nativeSettlement && nativeSettlement.dnsRetiredAt != null ? "PALW settlement" : "DNS finality", v: dnsVal, s: dnsSub, href:"#/overlay", cls:"ov" },
     { sec:"Network", k:"Validators", v: num(overlayStats.activeValidators),
       s: overlayStats.bonds.length ? overlayStats.bonds.length+" active bond"+(overlayStats.bonds.length>1?"s":"") : (overlayStats.rolloutActive?"overlay active":"0 bonds"), href:"#/overlay", cls:"ov" },
     { sec:"Network", k:"Staked", v: overlayStats.bonds.length ? coin(overlayStats.totalStaked)+" "+SYMBOL : (overlayStats.rolloutActive?"syncing…":"—"),
@@ -1925,7 +1926,10 @@ async function renderBlock(hash){
                               : (_anchorHash && /[1-9a-f]/.test(_anchorHash) && _anchorHash === String(hd.hash).toLowerCase());
   const _dnsFinal   = _hasSrv ? !!bdns.blockIsDnsFinal
                               : (bdns && bdns.dnsConfirmed && _anchorDaa > 0 && vd.isChainBlock && _bDaa <= _anchorDaa);
-  const _dnsCell = _isAnchor
+  const blockNativeStatus = await readNativeSettlement();
+  const _dnsCell = blockNativeStatus && blockNativeStatus.dnsRetiredAt != null
+    ? `<span class="pill">DNS role retired</span> · <a href="#/finality">native settlement heads</a>`
+    : _isAnchor
     ? '<span class="pill chain">stake-confirmed anchor</span>'
     : _dnsFinal
       ? `<span class="pill chain">DNS-final</span> <span class="dim">(≤ confirmed anchor @ DAA ${num(_anchorDaa)})</span>`
@@ -1958,7 +1962,7 @@ async function renderBlock(hash){
     ["Timestamp", `${esc(dt(hd.timestamp))} <span class="dim">(${ago(hd.timestamp)})</span>`],
     ["DAA score", num(hd.daaScore)],
     ["Blue score", num(hd.blueScore)],
-    ["DNS finality", _dnsCell],
+    [blockNativeStatus && blockNativeStatus.dnsRetiredAt != null ? "PALW settlement" : "DNS finality", _dnsCell],
     ["DNS score", _scoreCell],
     ["Blue work", `<span class="hash">${esc(hd.blueWork)}</span>`],
     ["Difficulty", Number(vd.difficulty||0).toLocaleString("en-US",{maximumFractionDigits:0})],
@@ -2510,7 +2514,40 @@ async function scanOverlay(anchor){
   overlayStats.attShards = attShards;
 }
 
+async function readNativeSettlement() {
+  try { return await rpc("getPalwSettlement", {daaScore: 0}); } catch { return null; }
+}
+function nativeSettlementView(status) {
+  const s = status && status.nativeSettlement;
+  return `<div class="note">DNS validator role retired at DAA ${esc(String(status.dnsRetiredAt))}. Consensus and native UTXO ↔ EVM settlement use PALW. Historical bonds and evidence remain readable.</div>` +
+    (s ? `<div class="cards">${["latest", "safe", "finalized"].map(k => `<div class="card"><div class="k">${k}</div><div class="v sm">${s[k] ? linkBlock(s[k]) : "unavailable"}</div></div>`).join("")}</div><div class="note">Settled anchors: ${esc(String(s.depth))}; unique matured work: ${esc(s.uniqueWork)}${s.stop ? ` · ${esc(s.stop)}` : ""}</div>` : `<div class="note">Native settlement snapshot unavailable; safe/finalized are not inferred from the tip.</div>`);
+}
+
+function showNativeSettlement(status, generation) {
+  viewFor(generation).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › PALW settlement</div><h1 class="page">PALW settlement</h1>${nativeSettlementView(status)}`;
+}
+async function refreshNativeSettlement(generation) {
+  const status = await readNativeSettlement();
+  if (generation !== routeGen) return;
+  if (status && status.dnsRetiredAt != null) { showNativeSettlement(status, generation); return; }
+  viewFor(generation).innerHTML = `<h1 class="page">PALW settlement</h1><div class="note">${status ? "Native settlement is inactive in the current view." : "Native settlement status unavailable; refresh when the node is reachable."}</div>`;
+}
+function armNativeSettlementRefresh(generation) {
+  const refresh = () => refreshNativeSettlement(generation);
+  armPoll(refresh, 20000);
+  onBlockAdded(refresh);
+}
+
 async function renderOverlay(){
+  const generation = routeGen;
+  const status = await readNativeSettlement();
+  if (generation !== routeGen) return;
+  if (status && status.dnsRetiredAt != null) {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    showNativeSettlement(status, generation);
+    armNativeSettlementRefresh(generation);
+    return;
+  }
   const __g = routeGen;   // claude-route-guard-v1: the generation this render belongs to
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   viewFor(__g).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › Overlay</div>
@@ -2627,6 +2664,15 @@ async function walkChainBack(fromHash, stopAt, limit){
 }
 
 async function renderFinality(){
+  const generation = routeGen;
+  const status = await readNativeSettlement();
+  if (generation !== routeGen) return;
+  if (status && status.dnsRetiredAt != null) {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    showNativeSettlement(status, generation);
+    armNativeSettlementRefresh(generation);
+    return;
+  }
   const __g = routeGen;   // claude-route-guard-v1: the generation this render belongs to
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   finalFeed = []; finalKnown = new Set(); finalAnchor = null;
@@ -2766,6 +2812,8 @@ async function renderEvmLane(){
   viewFor(__g).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › EVM Lane</div>
     <h1 class="page">EVM lane <span class="dim" style="font-size:14px">(ADR-0020 — selected-parent EVM execution on L1)</span></h1>
     <div class="loading">Loading EVM lane state…</div>`;
+  const nativeStatus = await readNativeSettlement();
+  if (__g !== routeGen) return;
   let dag=null, sinkBlk=null;
   try { dag = await rpc("getBlockDagInfo"); } catch {}
   if (dag && dag.sink){ try { sinkBlk = await rpc("getBlock", { hash: dag.sink, includeTransactions:false }); } catch {} }
@@ -2852,18 +2900,19 @@ async function renderEvmLane(){
         <td class="right dim" title="${esc(dt(t.ts))}">${ago(t.ts)}</td></tr>`).join("")
     }</tbody></table>${evmBlocks.length?`<div class="note" style="margin-top:8px">${num(recentTxs.length)} EVM transaction(s) across ${num(evmBlocks.length)} payload block(s) in the recent window.</div>`:""}`
       : `<div class="note">No EVM transactions in the recent block window. Blocks carry EVM transactions only while accounts are transacting — submit one (or use the lookup above) and it appears here. On testnet-12 the lane is active from genesis: every block commits to its (possibly empty) payload hash.${(typeof keccak256!=="function")?" <b>Note:</b> the keccak library did not load, so tx hashes can't be derived in-browser.":""}</div>`}
+    ${nativeStatus && nativeStatus.dnsRetiredAt != null ? nativeSettlementView(nativeStatus) : ""}
     <h2 class="sec">Recent bridge deposit-claims <span class="dim" style="font-size:13px">(UTXO→EVM credits · §9.2 system ops in payloads)</span></h2>
-    ${recentClaims.length ? `<table class="tbl"><thead><tr><th>EVM address (credited)</th><th class="num">Amount (MSK)</th><th class="num">Tip</th><th>Lock outpoint</th><th>In block</th><th>Executed</th><th class="right">Age</th></tr></thead><tbody>${
+    ${recentClaims.length ? `<table class="tbl"><thead><tr><th>EVM address (credited)</th><th class="num">Amount (MSK)</th><th class="num">Tip</th><th>Lock outpoint</th><th>In block</th><th>${nativeStatus && nativeStatus.dnsRetiredAt != null ? "Carrier status" : "Executed"}</th><th class="right">Age</th></tr></thead><tbody>${
       recentClaims.slice(0,40).map(c=>`<tr>
         <td><span class="mono">${esc(c.evmAddress)}</span></td>
         <td class="num">${coin(c.amountSompi)}</td>
         <td class="num dim">${coin(c.tipSompi)}</td>
         <td><span class="hash" title="${esc(c.outpoint)}">${esc(c.outpoint.slice(0,12))}…:${esc(c.outpoint.split(":")[1]||"0")}</span></td>
         <td>${linkBlock(c.block)}</td>
-        <td>${c.chain ? `<span class="pill chain">credited</span>` : `<span class="pill" title="Only a chain block's payload executes; this block is not on the selected chain, so this copy of the claim credits nothing.">not executed · off the selected chain</span>`}</td>
+        <td>${c.chain ? (nativeStatus && nativeStatus.dnsRetiredAt != null ? `<span class="pill chain" title="Canonical inclusion is not proof that the child execution result has credited this claim.">canonical carrier · verify execution result</span>` : `<span class="pill chain">credited</span>`) : `<span class="pill" title="Only a chain block's payload executes; this block is not on the selected chain, so this copy of the claim credits nothing.">not executed · off the selected chain</span>`}</td>
         <td class="right dim" title="${esc(dt(c.ts))}">${ago(c.ts)}</td></tr>`).join("")
-    }</tbody></table><div class="note" style="margin-top:8px">${num(recentClaims.length)} deposit-claim(s) in the recent window, ${num(recentClaims.filter(c=>c.chain).length)} executed by a chain block — a claim two producers both carried shows twice, and only the chain block's copy credits. Claims are §9.2 bridge system ops (UTXO→EVM credits), not Ethereum transactions, so they carry no 0x tx hash.</div>`
-      : `<div class="note">No bridge deposit-claims in the recent block window. A claim appears here when a deposit-lock is claimed on a mining node (credits the destination EVM address). Producers carry a claim only while DNS finality is confirmed and keeping up with the tip; on testnet-12 DNS finality is in Bootstrap until its validators are funded, so deposit claims wait until then.</div>`}
+    }</tbody></table><div class="note" style="margin-top:8px">${num(recentClaims.length)} deposit-claim(s) in the recent window, ${nativeStatus && nativeStatus.dnsRetiredAt != null ? `${num(recentClaims.filter(c=>c.chain).length)} canonical carriers. Verify the accepting child's execution result before reporting a credit; carrier inclusion alone is not execution or settlement.` : `${num(recentClaims.filter(c=>c.chain).length)} executed by a chain block — a claim two producers both carried shows twice, and only the chain block's copy credits.`} Claims are §9.2 bridge system ops (UTXO→EVM credits), not Ethereum transactions, so they carry no 0x tx hash.</div>`
+      : `<div class="note">No bridge deposit-claims in the recent block window. A claim appears here when a deposit-lock is claimed on a mining node (credits the destination EVM address). ${nativeStatus && nativeStatus.dnsRetiredAt != null ? "Native claims follow canonical acceptance and timeout rules. Settlement confidence is shown above; an absent safe head is unavailable." : "Producers carry a claim only while DNS finality is confirmed and keeping up with the tip; on testnet-12 DNS finality is in Bootstrap until its validators are funded, so deposit claims wait until then."}</div>`}
     <div class="note" style="margin-top:12px"><b>Bridge:</b> UTXO→EVM via a deposit-lock output claimed on a mining node (credits the EVM address); EVM→UTXO via the <span class="mono">0x…F002</span> withdraw precompile, which materializes a synthetic UTXO at the destination. Native <b>MSK</b> is the EVM gas + value token (18 decimals).</div>
     ${evmLaneExtraSections()}`;
   const f = document.getElementById("evmLookup");
@@ -4455,7 +4504,10 @@ function censusRemedy(r){
 // could never hold: the newest confirmable anchor sits at least 3 blue (10–12 DAA) below the tip.
 const BRIDGE_MAX_ANCHOR_DISTANCE_BLUE = 14;
 let bridgeAnchor = { hash: null, blue: null };
+let bridgeNativeSettlement = null;
 async function refreshBridgeAnchorBlue(dns){
+  bridgeNativeSettlement = await readNativeSettlement();
+  if (bridgeNativeSettlement && bridgeNativeSettlement.dnsRetiredAt != null) { bridgeAnchor = { hash: null, blue: null }; return; }
   const hash = dns && dns.lastDnsConfirmedAnchor ? String(dns.lastDnsConfirmedAnchor).toLowerCase() : null;
   if (!hash) { bridgeAnchor = { hash: null, blue: null }; return; }
   if (hash === bridgeAnchor.hash && bridgeAnchor.blue != null) return;   // one header read per anchor
@@ -4466,6 +4518,10 @@ async function refreshBridgeAnchorBlue(dns){
   } catch { bridgeAnchor = { hash, blue: null }; }
 }
 function bridgeFreshNote(dns, sbs){
+  if (bridgeNativeSettlement && bridgeNativeSettlement.dnsRetiredAt != null) {
+    const s = bridgeNativeSettlement.nativeSettlement;
+    return s && s.safe ? " · native settlement safe prefix available" : " · native settlement safe head unavailable";
+  }
   const anchorDaa = Number(dns.lastDnsConfirmedAnchorDaaScore) || 0;
   if (!dns.dnsConfirmed)
     return ` · <b>EVM bridge paused</b> — DNS not confirmed` + (anchorDaa ? ` (last anchor DAA ${num(anchorDaa)})` : "");

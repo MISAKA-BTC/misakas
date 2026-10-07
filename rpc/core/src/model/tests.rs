@@ -1710,6 +1710,7 @@ mod mockery {
     impl Mock for GetPalwSettlementResponse {
         fn mock() -> Self {
             GetPalwSettlementResponse {
+                dns_retired_at: None, native_settlement: None,
                 available: mock(),
                 sink_daa: mock(),
                 daa_score: mock(),
@@ -1744,6 +1745,7 @@ mod mockery {
     impl Mock for GetPrecommitDutyResponse {
         fn mock() -> Self {
             GetPrecommitDutyResponse {
+                retired_at: None,
                 available: mock(),
                 round_active: mock(),
                 sink_daa_score: mock(),
@@ -2947,5 +2949,73 @@ mod mockery {
     #[test]
     fn test_misalignment() {
         test::<Misalign>("Misalign");
+    }
+}
+
+#[cfg(test)]
+mod native_settlement_wire_tests {
+    use crate::model::{GetPalwSettlementResponse, GetPrecommitDutyResponse};
+    use kaspa_consensus_core::palw_native_settlement_v1::{NativeSettlementSnapshotV1, SettlementStopV1};
+    use workflow_serializer::prelude::*;
+
+    #[test]
+    fn rfc0012_legacy_v1_wire_and_json_remain_readable_without_native_fields() {
+        let value = GetPalwSettlementResponse { available: true, sink_daa: 8, daa_score: 3, depth: 2, ..Default::default() };
+        let mut actual = Vec::new();
+        Serializer::serialize(&value, &mut actual).unwrap();
+        let mut original = Vec::new();
+        store!(u16, &1, &mut original).unwrap();
+        store!(bool, &true, &mut original).unwrap();
+        store!(u64, &8, &mut original).unwrap();
+        store!(u64, &3, &mut original).unwrap();
+        store!(bool, &false, &mut original).unwrap();
+        store!(u64, &2, &mut original).unwrap();
+        store!(u64, &0, &mut original).unwrap();
+        store!(bool, &false, &mut original).unwrap();
+        store!(u64, &0, &mut original).unwrap();
+        store!(u64, &0, &mut original).unwrap();
+        assert_eq!(actual, original);
+        let decoded = <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &actual[..]).unwrap();
+        assert!(decoded.native_settlement.is_none() && decoded.dns_retired_at.is_none());
+        let json = serde_json::to_value(&value).unwrap();
+        assert!(json.get("nativeSettlement").is_none() && json.get("dnsRetiredAt").is_none());
+        let decoded: GetPalwSettlementResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.sink_daa, 8);
+        let mut duty = Vec::new();
+        Serializer::serialize(&GetPrecommitDutyResponse::default(), &mut duty).unwrap();
+        assert_eq!(&duty[..2], &[1, 0]);
+        assert!(<GetPrecommitDutyResponse as Deserializer>::deserialize(&mut &duty[..]).unwrap().retired_at.is_none());
+    }
+
+    #[test]
+    fn rfc0012_v2_wire_preserves_explicit_absent_heads_and_stop_reason() {
+        let native = NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: Default::default(),
+            policy_id: Default::default(),
+            generation: kaspa_hashes::Hash64::from_u64_word(7),
+            retirement_daa: 5,
+            frontier: None,
+            latest: Some(kaspa_hashes::Hash64::from_u64_word(7)),
+            safe: None,
+            finalized: None,
+            depth: 0,
+            unique_work: "0".into(),
+            stop: Some(SettlementStopV1::MissingHistory),
+        };
+        let value =
+            GetPalwSettlementResponse { dns_retired_at: Some(5), native_settlement: Some(native.clone()), ..Default::default() };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&value, &mut bytes).unwrap();
+        assert_eq!(&bytes[..2], &[2, 0]);
+        let decoded = <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap();
+        assert_eq!(decoded.native_settlement, Some(native));
+        assert_eq!(decoded.dns_retired_at, Some(5));
+        assert!(!decoded.settled);
+        bytes[0] = 3;
+        assert!(<GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).is_err());
+        let mut duty = Vec::new();
+        Serializer::serialize(&GetPrecommitDutyResponse { retired_at: Some(5), ..Default::default() }, &mut duty).unwrap();
+        assert_eq!(<GetPrecommitDutyResponse as Deserializer>::deserialize(&mut &duty[..]).unwrap().retired_at, Some(5));
     }
 }

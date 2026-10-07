@@ -48,6 +48,7 @@ impl TransactionValidator {
         lock_time_arg: LockTimeArg,
         ctx_daa_score: u64,
     ) -> TxResult<()> {
+        self.check_dns_retirement(tx, ctx_daa_score)?;
         self.check_tx_is_finalized(tx, lock_time_arg)?;
         self.check_model_sink_outputs_in_context(tx, ctx_daa_score)?;
         self.check_model_sink_binding_in_context(tx, ctx_daa_score)?;
