@@ -731,3 +731,34 @@ fn the_slot_terms_are_linear_in_units_at_every_rho() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Lane PA (`palw_audit_1004_v1`): C-F1.
+// ---------------------------------------------------------------------------------------------
+
+/// **C-F1**: a riders batch is refused on its cheap tests before the full-state checkpoint — and a batch whose riders carry a key that is not
+/// their bond's is refused by name before any rider is admitted (the same skip, no clone); a good batch is taken either way.
+#[test]
+fn audit_1004_a_batch_with_a_strangers_key_is_refused_before_the_checkpoint() {
+    for on in [false, true] {
+        let mut p = tier_params(Class::Floor, 250);
+        if on {
+            (kaspa_consensus_core::palw_audit_1004_v1::PALW_T12_AUDIT_1004_ENTRY.set)(&mut p, Some(ForkActivation::new(H)));
+            p.validate_palw_v2().expect("the audit fence validates on the capacity package");
+        }
+        let mut sim = Sim::new(p, Class::Floor, &[(90, 1_000_000)]);
+        let lead = sim.claim(90, 0xA000).expect("lead");
+        let whole = sim.c.claim(&lead);
+        let mut stranger = rider_of(&sim, &lead, 0, 90, 0xA100);
+        stranger.attempt.executor_pubkey = vec![0x5A; stranger.attempt.executor_pubkey.len()];
+        sim.step(vec![PalwConsensusObjectV2::AttemptRidersV1 { lead, riders: vec![stranger] }]);
+        assert_eq!(skipped(&sim, "riders refused"), 1, "fence {on}: the batch is a skip: {:?}", sim.skips);
+        assert_eq!(skipped(&sim, "registered key"), usize::from(on), "fence {on}: refused by name on the cheap test only past the fence: {:?}", sim.skips);
+        assert_eq!(sim.c.claim(&lead), whole, "the lead is whole");
+        assert!(sim.c.s.rider_mark_of_v1(&lead).is_none());
+        // A good batch is taken.
+        let good = riders_object(&sim, lead, 90, 2, 0xA200);
+        sim.step(vec![good]);
+        assert!(sim.c.s.rider_mark_of_v1(&lead).is_some(), "fence {on}: the honest batch lands");
+    }
+}

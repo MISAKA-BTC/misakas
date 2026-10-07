@@ -2626,6 +2626,8 @@ impl VirtualStateProcessor {
                                         extras.merged_reds = ctx.ghostdag_data.mergeset_reds.iter().copied().collect();
                                         // **ADR-0172: the FALLBACK blocks this block carries or merges** (own header first, then the mergeset, blues then reds, the selected parent excluded).
                                         extras.fallback_facts = self.palw_fallback_facts_v1(current, &ctx.ghostdag_data);
+                                        // **Lane PA (`palw_audit_1004_v1`, RF-3 / P-F5): the beacon** a draw reads in place of this block's own hash.
+                                        extras.audit_1004_draw_seed_source = self.palw_audit_1004_draw_seed_source(ctx.ghostdag_data.selected_parent, point.daa_score);
                                         extras
                                     },
                                 ) {
@@ -5846,6 +5848,39 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, &class_id, candidate_daa)
                 .err()
                 .map(|refusal| refusal.to_string());
+        // **Lane PA, C-F2: what each rider of this lead is demanded** — at the rider's share of the lead's subsidy, as the fold admits it.
+        // Past the canonical-work height and where riders are armed only; otherwise the producer keeps the lead's pwu as before.
+        if state_params.capacity_riders_active_at(candidate_daa)
+            && budget_fences.canonical_work_daa.is_some_and(|height| candidate_daa >= height)
+        {
+            let lead_escrow = kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+                state_params,
+                self.coinbase_manager.calc_block_subsidy(candidate_daa),
+                budget_fences.escrow_carve,
+            );
+            let state_work = state.work_target().map(|target| target.work).unwrap_or(0);
+            for n in 1..=kaspa_consensus_core::palw_capacity_s567_v1::PALW_RIDERS_MAX_V1 {
+                let Some(subsidy) =
+                    kaspa_consensus_core::palw_state_v2::palw_rider_floor_subsidy_v1(state_params, lead_escrow, n, budget_fences.escrow_carve)
+                else {
+                    break;
+                };
+                // The floor the fold hands the admission for a rider (`TransitionBuilder::work_target_floor` at the share's subsidy).
+                let floor = self
+                    .palw_work_target_floor_for(candidate_daa, subsidy)
+                    .map(|floor| if budget_fences.single_lottery { floor.max(state_work) } else { floor });
+                let fences = kaspa_consensus_core::palw_admission_v2::PalwEpochBudgetFencesV1 {
+                    work_target_floor: floor,
+                    canonical_work_daa: budget_fences.canonical_work_daa,
+                    base_known_draw: budget_fences.base_known_draw,
+                    ..Default::default()
+                };
+                match kaspa_consensus_core::palw_admission_v2::palw_attempt_canonical_pwu_v1(&state, state_params, &class_id, candidate_daa, fences) {
+                    Ok(pwu) => facts.rider_pwu.push(pwu),
+                    Err(_) => break,
+                }
+            }
+        }
         // **RFC-0002 Part II Proposal A (`palw_class_seating`): and the class is seated for the named bond**, the fold's
         // seating door asked before an inference is spent (`Ok` below the fence).
         if facts.class_admission_refusal.is_none()
@@ -7690,8 +7725,12 @@ impl VirtualStateProcessor {
                 info!("Block {block}: an audit mesh move was dropped by name below palw_audit_mesh_v1, and the block stands (RFC-0007)");
                 continue;
             }
+            // **Lane PA, G-3 (`palw_audit_1004_v1`)**: past the fence a generative registration is sized like an IR one and takes the
+            // same one place a block.
             if tir_registration_gated
-                && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
+                && (matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
+                    || (state_params.audit_1004_active_at(point.daa_score)
+                        && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredGenV1 { .. })))
             {
                 info!(
                     "Block {block}: a second IR class registration was dropped by name, and the block stands: one a block reaches \
@@ -8109,6 +8148,18 @@ impl VirtualStateProcessor {
                     );
                     continue;
                 }
+                // **Lane PA, G-3 (`palw_audit_1004_v1`): the per-block cap is asked BEFORE the rehearsal fold** — a registration the
+                // cap drops anyway is not folded first (each fold of a pipeline class is the expensive step).
+                if state_params.audit_1004_active_at(point.daa_score)
+                    && class_registrations_charged >= kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1
+                {
+                    info!(
+                        "Block {block}: a class registration was dropped, and the block stands: the block already carries {} \
+                         (PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1)",
+                        kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1
+                    );
+                    continue;
+                }
                 if audit_active {
                     match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
                         &folded,
@@ -8214,7 +8265,10 @@ impl VirtualStateProcessor {
             // admission v10. One the slot accounting above did not see (a network without the
             // 2026-09-23 audit, or the genesis registrant named) is first put to the gate's own two
             // O(1) refusals, so a copy nobody signed never takes the place.
-            if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }) {
+            if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
+                || (state_params.audit_1004_active_at(point.daa_score)
+                    && matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredGenV1 { .. }))
+            {
                 if bought_registration.is_none() {
                     if let Err(why) = self.palw_v2_class_registration_starts_at_the_chains_target(&folded, &object) {
                         info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
@@ -9557,7 +9611,9 @@ impl VirtualStateProcessor {
                         return Err(kaspa_consensus_core::palw_mesh_v1::PalwMeshErrorV1::Dormant("palw_audit_mesh_v1").to_string());
                     }
                     kaspa_consensus_core::palw_mesh_v1::palw_trap_revealed_shape_v1(reveal).map_err(|e| e.to_string())?;
-                    state.mesh_trap_revealed_admissible_v1(reveal, point.daa_score).map_err(|e| e.to_string())?;
+                    state
+                        .mesh_trap_revealed_admissible_v2(reveal, point.daa_score, state_params.audit_1004_active_at(point.daa_score))
+                        .map_err(|e| e.to_string())?;
                     kaspa_consensus_core::palw_mesh_v1::palw_trap_revealed_verify_v1(
                         state,
                         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
@@ -9576,8 +9632,13 @@ impl VirtualStateProcessor {
                     if !state_params.vertex_active_at(point.daa_score) {
                         return Err(kaspa_consensus_core::palw_vertex_v1::PalwVertexErrorV1::Dormant.to_string());
                     }
-                    kaspa_consensus_core::palw_vertex_v1::palw_vertex_equivocation_admissible_v1(state, evidence, point.daa_score)
-                        .map_err(|e| e.to_string())?;
+                    kaspa_consensus_core::palw_vertex_v1::palw_vertex_equivocation_admissible_v2(
+                        state,
+                        evidence,
+                        point.daa_score,
+                        state_params.audit_1004_active_at(point.daa_score),
+                    )
+                    .map_err(|e| e.to_string())?;
                     let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
                         self.network_id_bytes.as_slice(),
                         Some(self.genesis.hash),
@@ -11525,6 +11586,21 @@ impl VirtualStateProcessor {
                         self.network_id_bytes.as_slice(),
                         Some(self.genesis.hash),
                     );
+                    // **Lane PA, C-F1 / B-F6 (`palw_audit_1004_v1`)**: the cheap state tests come before any ML-DSA verification (up to 64 of
+                    // them) and before the fold's full-state checkpoint: the riders are of one registered bond, and each carries that
+                    // bond's key (the fold's admission would refuse a stranger's key after the checkpoint and the verifications).
+                    if state_params.audit_1004_active_at(point.daa_score) {
+                        let bond = riders[0].attempt.executor_bond;
+                        if riders.iter().any(|rider| rider.attempt.executor_bond != bond) {
+                            return Err(format!("riders of {lead}: a batch is of one bond"));
+                        }
+                        let Some(record) = state.bond(&kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond)) else {
+                            return Err(format!("riders of {lead}: the executor bond is not registered"));
+                        };
+                        if riders.iter().any(|rider| rider.attempt.executor_pubkey != record.pubkey) {
+                            return Err(format!("riders of {lead}: a rider is not signed by its bond's registered key"));
+                        }
+                    }
                     for (index, envelope) in riders.iter().enumerate() {
                         envelope.validate_shape_v2_at_version(PALW_ATTEMPT_V2_VERSION).map_err(|e| format!("rider {index} of {lead}: {e}"))?;
                         if envelope.attempt.network_domain != network_domain
@@ -13949,6 +14025,7 @@ impl VirtualStateProcessor {
             // pre-object base) merges no work, so nothing in it is red.
             merged_reds: Default::default(),
             fallback_facts: Default::default(),
+            audit_1004_draw_seed_source: None,
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),
@@ -14489,6 +14566,21 @@ impl VirtualStateProcessor {
 
     /// **RFC-0007 Part I's verification vertex, read off the bundle's mirror**
     /// (`vertex_from_daa`, which `validate_palw_v2` holds equal to `Params::palw_verification_vertex_v1`).
+    /// **Lane PA, the beacon of `palw_audit_1004_v1`**: the hash of the selected-chain block
+    /// [`kaspa_consensus_core::palw_audit_1004_v1::PALW_AUDIT_1004_BEACON_DEPTH_V1`] below (and including) `selected_parent` — fixed by the
+    /// parents the accepting block builds on, so its producer cannot grind it. `None` below the fence and when the chain is shorter
+    /// than the depth (the first blocks after genesis keep the seed they had).
+    fn palw_audit_1004_draw_seed_source(&self, selected_parent: BlockHash, daa_score: u64) -> Option<kaspa_hashes::Hash64> {
+        if !self.palw_state_params_v2.as_ref().is_some_and(|params| params.audit_1004_active_at(daa_score)) {
+            return None;
+        }
+        let mut current = selected_parent;
+        for _ in 1..kaspa_consensus_core::palw_audit_1004_v1::PALW_AUDIT_1004_BEACON_DEPTH_V1 {
+            current = self.ghostdag_store.get_selected_parent(current).ok()?;
+        }
+        Some(current)
+    }
+
     fn palw_vertex_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.vertex_active_at(daa_score))
     }
@@ -15000,12 +15092,16 @@ impl VirtualStateProcessor {
         // the draw is consensus (the panel a claim is bound to). Below it (testnet-11) the old rule
         // stands byte for byte: any row, the V1 age.
         let readiness_v2 = self.palw_audit_2026_09_23_at(anchor_daa) && self.palw_readiness_v2_at(anchor_daa);
-        Some(kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1::at(
-            &fold,
-            anchor_daa,
-            state.base_class_id(),
-            readiness_v2,
-        ))
+        Some(
+            kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1::at(
+                &fold,
+                anchor_daa,
+                state.base_class_id(),
+                readiness_v2,
+            )
+            // Lane MU (ADR-0173): past `palw_audit_1004_v1` the draw reads possession of the root the claim named.
+            .with_root_keyed(state.audit_1004_active_at(anchor_daa)),
+        )
     }
 
     /// **ADR-0075 SA-1/SA-2, resolved in exactly one place.** `false` on every shipped preset.

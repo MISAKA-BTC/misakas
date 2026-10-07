@@ -394,6 +394,37 @@ pub fn check_palw_attempt_admission_v2(
     check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, None, budget_fences)
 }
 
+/// **The pwu the chain demands of an attempt of `class_id` at `daa_score` past the canonical-work fence** — item 6's derivation, as
+/// one function so the admission and a PRODUCER read one spelling: the class's effective target under `budget_fences`' floor, and the
+/// derived work of one draw. A rider is admitted at the share of its lead's subsidy (the fold's `attach_riders_v1` hands the
+/// admission a floor derived from the rider's own carve), so a producer building a rider must ask THIS with that floor — the
+/// lead's pwu is not the rider's whenever the two floors price the class differently (lane PA, C-F2).
+pub fn palw_attempt_canonical_pwu_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    daa_score: u64,
+    budget_fences: PalwEpochBudgetFencesV1,
+) -> Result<u64, PalwAdmissionV2Error> {
+    let target = palw_effective_class_target_v1(
+        state,
+        state_params,
+        class_id,
+        palw_work_lottery_floor_v1(state, budget_fences.work_target_floor, budget_fences.single_lottery),
+    )?;
+    // ADR-0149 §5: the floor is priced before its row exists, on the draw the row will carry.
+    let per_draw = state
+        .palw_attempt_per_draw_v1(
+            &state_params.base_class_id(),
+            class_id,
+            daa_score,
+            budget_fences.canonical_work_daa,
+            budget_fences.base_known_draw,
+        )
+        .ok_or(PalwAdmissionV2Error::PwuUnderivable { class: *class_id })?;
+    Ok(palw_attempt_derived_pwu_v1(target, per_draw))
+}
+
 /// **ADR-0149: the ONE pwu an attempt may carry past the canonical-work fence** —
 /// `palw_pwu_v1(class target, the derived work of one draw)`, the expected attempts a win costs at
 /// the target times what one attempt executes. Pure, and the single spelling every reader uses: the
@@ -484,23 +515,7 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     //    the weight reads it directly. Checked here, at the attempt's own point, like the rule it
     //    replaces — the fold applies merged attempts at later points whose targets may have moved.
     if budget_fences.canonical_work_daa.is_some_and(|height| ctx.daa_score >= height) {
-        let target = palw_effective_class_target_v1(
-            state,
-            state_params,
-            &attempt.class_id,
-            palw_work_lottery_floor_v1(state, budget_fences.work_target_floor, budget_fences.single_lottery),
-        )?;
-        // ADR-0149 §5: the floor is priced before its row exists, on the draw the row will carry.
-        let per_draw = state
-            .palw_attempt_per_draw_v1(
-                &state_params.base_class_id(),
-                &attempt.class_id,
-                ctx.daa_score,
-                budget_fences.canonical_work_daa,
-                budget_fences.base_known_draw,
-            )
-            .ok_or(PalwAdmissionV2Error::PwuUnderivable { class: attempt.class_id })?;
-        let derived = palw_attempt_derived_pwu_v1(target, per_draw);
+        let derived = palw_attempt_canonical_pwu_v1(state, state_params, &attempt.class_id, ctx.daa_score, budget_fences)?;
         if attempt.pwu != derived {
             return Err(PalwAdmissionV2Error::PwuClaimNotDerived { claimed: attempt.pwu, derived });
         }
@@ -1908,6 +1923,41 @@ mod tests {
                 "no row, no price — and the floor's known draw is the floor's, never another class's"
             );
         }
+    }
+
+    /// **Lane PA, C-F2: a rider's pwu is derived at ITS floor, which the fold hands the admission from the rider's share of the lead's
+    /// subsidy.** For a model class whose counted work is at or over the rider's floor (W ≤ W₀) the class's ticket target is the whole
+    /// space — one expected attempt — while the lead's larger floor priced it at half: the lead's pwu is then NOT the rider's and a rider
+    /// carrying it is refused `PwuClaimNotDerived`. [`palw_attempt_canonical_pwu_v1`] is the one spelling both the admission and the
+    /// producer read, so the rider built with it is the rider the fold takes.
+    #[test]
+    fn audit_1004_a_riders_pwu_is_derived_at_its_own_floor_not_its_leads() {
+        let target = u128::MAX / 2;
+        let c = ctx(4, 1_002, 4);
+        let mut state = state_with_derived_class(target);
+        state.set_model_lifecycle_for_tests(h64(2), row_with_draw(9));
+        let class = h64(2);
+        let params = state_params();
+        // The lead's floor prices the class at half the space (W = 18 over CCU 9); the rider's share's floor is under the class's work.
+        let lead = PalwEpochBudgetFencesV1 { canonical_work_daa: Some(1_000), work_target_floor: Some(18), ..Default::default() };
+        let rider = PalwEpochBudgetFencesV1 { canonical_work_daa: Some(1_000), work_target_floor: Some(5), ..Default::default() };
+        let lead_pwu = palw_attempt_canonical_pwu_v1(&state, &params, &class, c.daa_score, lead).expect("the lead's");
+        let rider_pwu = palw_attempt_canonical_pwu_v1(&state, &params, &class, c.daa_score, rider).expect("the rider's");
+        assert_eq!(lead_pwu, palw_attempt_derived_pwu_v1(u128::MAX / 2, 9), "two expected attempts at the half target");
+        assert_eq!(rider_pwu, palw_attempt_derived_pwu_v1(u128::MAX, 9), "one expected attempt where W ≤ W0");
+        assert_ne!(lead_pwu, rider_pwu, "or this proves nothing");
+        // The function IS the admission's: the rider carrying its own pwu admits at the rider's floor, the lead's pwu is refused there.
+        check_fenced(&state, &c, &derived_class_attempt_admitting(rider_pwu, target), rider).expect("the producer-derived rider is taken");
+        assert_eq!(
+            check_fenced(&state, &c, &derived_class_attempt(lead_pwu, 7), rider).unwrap_err(),
+            PalwAdmissionV2Error::PwuClaimNotDerived { claimed: lead_pwu, derived: rider_pwu },
+            "a rider built with its lead's pwu never lands"
+        );
+        // And the same pwu at the LEAD's floor is the lead's refusal the other way round.
+        assert_eq!(
+            check_fenced(&state, &c, &derived_class_attempt(rider_pwu, 8), lead).unwrap_err(),
+            PalwAdmissionV2Error::PwuClaimNotDerived { claimed: rider_pwu, derived: lead_pwu }
+        );
     }
 
     // ---- the remaining items, one refusal each ----

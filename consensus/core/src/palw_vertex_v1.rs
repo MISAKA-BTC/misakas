@@ -594,10 +594,25 @@ pub fn palw_vertex_equivocation_admissible_v1(
     evidence: &PalwVertexEquivocationV1,
     daa_score: u64,
 ) -> Result<(), PalwVertexErrorV1> {
+    palw_vertex_equivocation_admissible_v2(state, evidence, daa_score, false)
+}
+
+/// [`palw_vertex_equivocation_admissible_v1`] with lane PA's **B-F4** (`palw_audit_1004_v1`) when `audit_1004`: a header signed past the
+/// block that carries the evidence is refused, as a plain vertex's is (before, a future-dated pair passed the window test
+/// through `saturating_sub` and wrote a round row nothing swept).
+pub fn palw_vertex_equivocation_admissible_v2(
+    state: &PalwChainStateV2,
+    evidence: &PalwVertexEquivocationV1,
+    daa_score: u64,
+    audit_1004: bool,
+) -> Result<(), PalwVertexErrorV1> {
     use PalwVertexErrorV1 as E;
     palw_vertex_equivocation_shape_v1(evidence)?;
     let (a, b) = (&evidence.a, &evidence.b);
     for header in [a, b] {
+        if audit_1004 && header.signed_daa > daa_score {
+            return Err(E::SignedInTheFuture { signed_daa: header.signed_daa, at: daa_score });
+        }
         if daa_score.saturating_sub(header.signed_daa) > PALW_VERTEX_EVIDENCE_WINDOW_DAA_V1 {
             return Err(E::EvidenceTooOld { signed_daa: header.signed_daa, at: daa_score });
         }
@@ -767,6 +782,11 @@ pub fn palw_vertex_leaf_fate_v1(
     }
     if state.class_shard_plan(&claim.class_id).is_some() {
         return Ignored("the claim's class licenses by shard parts");
+    }
+    // **Lane PA, B-F3 (`palw_audit_1004_v1`)**: and neither does a claim drawn per RFC-0006 layer shard — its licence is the shard
+    // parts' (`LicensedByParts` refuses the whole-claim path, and a refusal here drops the whole vertex).
+    if params.audit_1004_active_at(daa_score) && state.tir_shard_claim(claim_id).is_some() {
+        return Ignored("the claim is drawn per layer shard: it licenses by shard parts");
     }
     let Ok(Some(deadline)) = crate::palw_state_v2::palw_claim_receipt_deadline_v1(state, params, claim_id, claim) else {
         return Ignored("the claim has no receipt deadline");

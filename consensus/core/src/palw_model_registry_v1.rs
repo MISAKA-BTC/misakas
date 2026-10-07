@@ -1113,6 +1113,9 @@ pub struct PalwReadinessPolicyV1 {
     /// network without the audit fence (testnet-11) the draw keeps its old rule byte for byte: any
     /// row, for `max_age_daa` (the V1 age).
     pub readiness_v2: bool,
+    /// **Lane MU (ADR-0173, `palw_audit_1004_v1`): the draw reads a seat's possession of the claim's own ROOT** (`claim_roots`, the
+    /// founding root when absent) instead of its row for the class. `false` below the fence, which is the draw before it existed.
+    pub root_keyed: bool,
 }
 
 impl PalwReadinessPolicyV1 {
@@ -1124,7 +1127,14 @@ impl PalwReadinessPolicyV1 {
             max_age_daa: palw_readiness_max_age_daa_v1(fold.span_daa, &fold.globals, readiness_v2),
             base_class_id,
             readiness_v2,
+            root_keyed: false,
         }
+    }
+
+    /// Lane MU (ADR-0173): the same policy, root-keyed where `palw_audit_1004_v1` is in force at the anchor.
+    pub fn with_root_keyed(mut self, root_keyed: bool) -> Self {
+        self.root_keyed = root_keyed;
+        self
     }
 
     /// May a seat whose row for the class is `row` judge it under this policy? Below the V2 rule,
@@ -1500,6 +1510,8 @@ pub struct PalwModelRegistryReadV1 {
     pub readiness_max_age_daa: u64,
     pub classes: Vec<PalwModelRegistryClassReadV1>,
     pub readiness: Vec<PalwSeatReadinessReadV1>,
+    /// **Lane MU (ADR-0173): the possession rows of the roots a class holds besides its registered one** — empty below the fence.
+    pub root_readiness: Vec<PalwSeatRootReadinessReadV1>,
     pub bonds: Vec<PalwRegistryBondReadV1>,
     /// Rowed classes by state: (active, active_limited, probation, prefetching, registered, held).
     pub counts: [u32; 6],
@@ -1623,6 +1635,10 @@ pub struct PalwModelRegistryClassReadV1 {
     pub final_work_share_100_permille: u16,
     pub class_id: Hash64,
     pub artifact_root: Hash64,
+    /// **Lane MU (ADR-0173, `palw_audit_1004_v1`): the roots the class has in force NOW** (registered root, line versions in force,
+    /// previews, superseded roots inside their grace) — empty below the fence, where possession is per class. A seat proves
+    /// possession of each root it holds.
+    pub roots_in_force: Vec<Hash64>,
     pub is_base_class: bool,
     pub row: Option<PalwModelLifecycleRowV1>,
     /// Ready seats and claims in flight read NOW (the row keeps the last boundary's reading).
@@ -1651,6 +1667,16 @@ pub struct PalwRegistryBondReadV1 {
     pub above_floor: bool,
     pub free_collateral_sompi: u128,
     pub needed_collateral_sompi: u128,
+}
+
+/// **Lane MU (ADR-0173): a seat's possession row of one non-founding root.**
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwSeatRootReadinessReadV1 {
+    pub bond: crate::palw_state_v2::PalwBondKeyV2,
+    pub class_id: Hash64,
+    pub root: Hash64,
+    pub row: PalwSeatReadinessRowV1,
+    pub fresh: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1855,7 +1881,7 @@ pub fn palw_model_registry_ready_seats_v1(
 ) -> u32 {
     let mut ready = 0u32;
     for (bond_key, _) in state.bonds_iter() {
-        let Some(row) = state.seat_readiness(bond_key, class_id) else { continue };
+        let Some(row) = state.seat_readiness_class_v1(params, bond_key, class_id, now_daa) else { continue };
         if palw_seat_class_not_ready_reason_v1(state, params, bond_key, class_id, row, now_daa, fold).is_none() {
             ready = ready.saturating_add(1);
         }
@@ -1879,7 +1905,7 @@ pub fn palw_model_registry_room_ready_v1(
     let ready = state
         .bonds_iter()
         .filter(|(bond_key, _)| {
-            state.seat_readiness(bond_key, class_id).is_some_and(|row| {
+            state.seat_readiness_class_v1(params, bond_key, class_id, now_daa).is_some_and(|row| {
                 palw_seat_class_not_ready_reason_v1(state, params, bond_key, class_id, row, now_daa, fold).is_none()
             })
         })
@@ -2038,6 +2064,7 @@ pub fn palw_model_registry_read_v2(
             expected_forwards_q32: shadow.map(|t| wt::palw_expected_forwards_q32_v1(ccu_of(class_id), t.work)).unwrap_or(0),
             work_ticket_target: shadow.map(|t| wt::palw_work_ticket_target_v1(ccu_of(class_id), t.work)).unwrap_or(0),
             class_target: state.class_target(class_id).map(|t| t.target).unwrap_or(0),
+            roots_in_force: if params.audit_1004_active_at(tip_daa) { state.class_roots_in_force(class_id, tip_daa) } else { Vec::new() },
             panel_room: if *class_id == base {
                 0
             } else {
@@ -2142,6 +2169,20 @@ pub fn palw_model_registry_read_v2(
                 .to_string(),
         })
         .collect();
+    let root_readiness = if params.audit_1004_active_at(tip_daa) {
+        state
+            .seat_root_readiness_iter()
+            .map(|((bond, class_id, root), row)| PalwSeatRootReadinessReadV1 {
+                bond: *bond,
+                class_id: *class_id,
+                root: *root,
+                row: *row,
+                fresh: fold.is_some_and(|f| f.readiness_row_is_fresh(row, tip_daa)),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let bonds = fold
         .map(|f| {
             let floor = params.min_collateral_sompi();
@@ -2202,6 +2243,7 @@ pub fn palw_model_registry_read_v2(
         readiness_max_age_daa: fold.map(|f| f.readiness_max_age_daa()).unwrap_or(0),
         classes,
         readiness,
+        root_readiness,
         bonds,
         counts,
         panel_room_enforced,
@@ -2839,7 +2881,7 @@ mod tests {
         let base = Hash64::from_u64_word(1);
         for fold_v2 in [false, true] {
             let old = PalwReadinessPolicyV1::at(&fold(fold_v2), now, base, false);
-            assert_eq!(old, PalwReadinessPolicyV1 { now_daa: now, max_age_daa: v1_age, base_class_id: base, readiness_v2: false });
+            assert_eq!(old, PalwReadinessPolicyV1 { now_daa: now, max_age_daa: v1_age, base_class_id: base, readiness_v2: false, root_keyed: false });
             for (proved, version) in [(now, 1), (now - v2_age - 1, 1), (now - v1_age, 1), (now - v1_age - 1, 1), (now - v2_age - 1, 2)]
             {
                 assert_eq!(

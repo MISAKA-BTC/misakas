@@ -150,7 +150,24 @@ pub fn palw_class_seating_v1(
     terms: PalwClassSeatingTermsV1,
     activation_pool: bool,
 ) -> Option<PalwClassSeatingV1> {
-    let ready = class_ready_operators_v1(state, params, fold, class_id, executor, daa)?;
+    palw_class_seating_root_v1(state, params, fold, class_id, None, executor, daa, terms, activation_pool)
+}
+
+/// **[`palw_class_seating_v1`] for the seats that hold ONE ROOT of the class** (lane MU, ADR-0173): `root = None` is the
+/// registered (founding) root, whose rows are the legacy table's; any other root reads its own `(bond, class, root)` rows.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_class_seating_root_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    fold: &PalwModelRegistryFoldV1,
+    class_id: &Hash64,
+    root: Option<&Hash64>,
+    executor: Option<&PalwBondKeyV2>,
+    daa: u64,
+    terms: PalwClassSeatingTermsV1,
+    activation_pool: bool,
+) -> Option<PalwClassSeatingV1> {
+    let ready = class_ready_operators_v1(state, params, fold, class_id, root, executor, daa)?;
     let base =
         palw_base_population_v1(state, params, fold, class_id, daa, crate::palw_execution_lane_v1::palw_execution_span_v1(daa, fold.span_daa), activation_pool);
     let in_base: std::collections::BTreeSet<&PalwBondKeyV2> = base.iter().map(|(key, _)| *key).collect();
@@ -182,6 +199,7 @@ fn class_ready_operators_v1(
     params: &PalwStateParamsV2,
     fold: &PalwModelRegistryFoldV1,
     class_id: &Hash64,
+    root: Option<&Hash64>,
     executor: Option<&PalwBondKeyV2>,
     now_daa: u64,
 ) -> Option<BTreeMap<Hash64, Vec<PalwBondKeyV2>>> {
@@ -194,7 +212,7 @@ fn class_ready_operators_v1(
         if executor == Some(key) || executor_operator == Some(bond.operator_id) {
             continue;
         }
-        let Some(row) = state.seat_readiness.get(&(*key, *class_id)) else { continue };
+        let Some(row) = state.seat_readiness_for_root(key, class_id, root) else { continue };
         let not_ready = crate::palw_model_registry_v1::palw_seat_class_not_ready_reason_v1(state, params, key, class_id, row, now_daa, fold);
         if not_ready.is_none() {
             ready.entry(bond.operator_id).or_default().push(*key);
@@ -214,6 +232,79 @@ impl PalwFoldReadV1<'_> {
         executor: &PalwBondKeyV2,
         daa: u64,
     ) -> Result<(), PalwStateV2Error> {
+        self.check_class_seated_root_v1(class_id, None, executor, daa)
+    }
+
+    /// **Lane MU (ADR-0173, past `palw_audit_1004_v1`): the root's possession floor** — a claim naming a root other than the
+    /// class's registered one is refused until `|Ready(root) \ {operator(executor)}| ≥ seat_count`, the rule
+    /// [`palw_class_seating_v1`] asks of the founding root, over the `(bond, class, root)` rows. `Ok` below the fence, for the
+    /// registered root and without a registry.
+    pub(super) fn check_root_possession_v1(
+        &self,
+        class_id: &Hash64,
+        root: &Hash64,
+        executor: Option<&PalwBondKeyV2>,
+        daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.params.audit_1004_active_at(daa) || self.state.classes.get(class_id).is_none_or(|class| class.artifact_root == *root) {
+            return Ok(());
+        }
+        let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
+        let ready = class_ready_operators_v1(self.state, self.params, fold, class_id, Some(root), executor, daa)
+            .ok_or_else(|| PalwStateV2Error::MissingBond(*executor.expect("only a named executor can be missing")))?;
+        let (have, need) = (ready.len().min(u32::MAX as usize) as u32, u32::from(fold.globals.seat_count));
+        if have < need {
+            return Err(PalwStateV2Error::RootNotSeated { class: *class_id, root: *root, have, need });
+        }
+        Ok(())
+    }
+
+    /// **Lane MU (ADR-0173, RFC-0004 §17.4.1's head switch): may a governed line's head move to `class_id` now?** Past
+    /// `palw_audit_1004_v1` the class must be `Active` in the registry's lifecycle AND seated (possession floor with no executor
+    /// excluded, and — where `palw_class_seating` is armed — the independence floor too). `true` below the fence and where no
+    /// registry runs (the rule is not asked).
+    pub(super) fn class_ready_for_head_v1(&self, class_id: &Hash64, daa: u64) -> bool {
+        if !self.params.audit_1004_active_at(daa) {
+            return true;
+        }
+        let Some(fold) = self.extras.model_registry.as_ref() else { return true };
+        let active = self
+            .state
+            .model_lifecycle(class_id)
+            .is_some_and(|row| matches!(row.state, crate::palw_model_registry_v1::PalwModelLifecycleV1::Active));
+        if !active {
+            return false;
+        }
+        let Some(ready) = class_ready_operators_v1(self.state, self.params, fold, class_id, None, None, daa) else { return false };
+        if ready.len() < usize::from(fold.globals.seat_count) {
+            return false;
+        }
+        match self.params.class_seating_terms_at(daa) {
+            None => true,
+            Some(terms) => palw_class_seating_root_v1(
+                self.state,
+                self.params,
+                fold,
+                class_id,
+                None,
+                None,
+                daa,
+                terms,
+                self.extras.activation_pool.is_some(),
+            )
+            .is_some_and(|seating| seating.verdict().is_ok()),
+        }
+    }
+
+    /// [`Self::check_class_seated_v1`] over the seats that hold `root` (`None`: the registered root).
+    pub(super) fn check_class_seated_root_v1(
+        &self,
+        class_id: &Hash64,
+        root: Option<&Hash64>,
+        executor: &PalwBondKeyV2,
+        daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let root = root.filter(|_| self.params.audit_1004_active_at(daa));
         let Some(terms) = self.params.class_seating_terms_at(daa) else { return Ok(()) };
         if *class_id == self.params.base_class_id() {
             return Ok(());
@@ -222,11 +313,12 @@ impl PalwFoldReadV1<'_> {
         if !self.state.model_lifecycles.contains_key(class_id) && !self.state.gen_classes.contains_key(class_id) {
             return Ok(());
         }
-        let seating = palw_class_seating_v1(
+        let seating = palw_class_seating_root_v1(
             self.state,
             self.params,
             fold,
             class_id,
+            root,
             Some(executor),
             daa,
             terms,
@@ -255,7 +347,7 @@ impl PalwFoldReadV1<'_> {
         now_daa: u64,
         fold: &PalwModelRegistryFoldV1,
     ) -> Option<(u32, u32)> {
-        let ready = class_ready_operators_v1(self.state, self.params, fold, class_id, Some(executor), now_daa)?;
+        let ready = class_ready_operators_v1(self.state, self.params, fold, class_id, None, Some(executor), now_daa)?;
         Some((ready.len().min(u32::MAX as usize) as u32, u32::from(fold.globals.seat_count)))
     }
 }

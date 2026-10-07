@@ -157,6 +157,9 @@ pub(super) fn apply_gen_tensor_commitment_v1(
     }
     // 4. The work: the chain's count of the job's step space (the court's own count), never the executor's
     // word. Refused, not corrected.
+    if builder.params.audit_1004_active_at(daa) {
+        crate::palw_gen_claim_v1::palw_gen_job_bound_v1(&row, &accepted).map_err(|e: PalwGenClaimErrorV1| refused(e.to_string()))?;
+    }
     let leaves = palw_gen_job_step_leaves_v1(&row, &accepted).map_err(|e: PalwGenClaimErrorV1| refused(e.to_string()))?;
     if leaves != c.work_leaves {
         return Err(refused("the claim's work_leaves are not the chain's count of its job's step space"));

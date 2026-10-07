@@ -638,6 +638,7 @@ fn the_draw_seats_each_shard_from_the_bonds_that_proved_it_with_an_outsider_per_
             max_age_daa: 1_000,
             base_class_id: h64(1),
             readiness_v2: true,
+            root_keyed: false,
         }),
         independence: Some(PalwPanelIndependenceV1 { from_daa: 0, base_class_id: h64(1), anchor_daa: 40 }),
         valid_lock: None,

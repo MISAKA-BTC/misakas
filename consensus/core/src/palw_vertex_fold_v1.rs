@@ -21,7 +21,7 @@ use crate::palw_vertex_v1::{
     PALW_VERTEX_HELD_MAX_PER_CLAIM_V1, PALW_VERTEX_ROUND_DAA_V1, PALW_VERTEX_SWEEP_PER_BLOCK_V1, PalwClaimRefV1,
     PalwVerificationVertexV1, PalwVertexCountedV1, PalwVertexEquivocationV1, PalwVertexErrorV1, PalwVertexHeldRowV1,
     PalwVertexLeafFateV1, PalwVertexLeafV1, PalwVertexRoundRowV1, PalwVertexTallyV1, palw_vertex_admissible_v1,
-    palw_vertex_equivocation_admissible_v1, palw_vertex_leaf_fate_v1, palw_vertex_permille_of_v1, palw_vertex_receipts_of_v1,
+    palw_vertex_leaf_fate_v1, palw_vertex_permille_of_v1, palw_vertex_receipts_of_v1,
     palw_vertex_resolve_claim_v1,
 };
 
@@ -209,7 +209,13 @@ pub(super) fn apply_vertex_equivocation_v1(
     if !builder.params.vertex_active_at(daa) {
         return Err(refused(PalwVertexErrorV1::Dormant.to_string()));
     }
-    palw_vertex_equivocation_admissible_v1(&builder.state, evidence, daa).map_err(|e| refused(e.to_string()))?;
+    crate::palw_vertex_v1::palw_vertex_equivocation_admissible_v2(
+        &builder.state,
+        evidence,
+        daa,
+        builder.params.audit_1004_active_at(daa),
+    )
+    .map_err(|e| refused(e.to_string()))?;
     let (seat, round) = (evidence.a.seat_bond, evidence.a.round);
     let record = builder.state.bonds.get(&seat).ok_or(PalwStateV2Error::MissingBond(seat))?.clone();
 

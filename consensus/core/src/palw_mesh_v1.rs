@@ -318,6 +318,18 @@ pub fn palw_mesh_audit_seed_v1(claim_id: &Hash64, accepted_block: &Hash64, execu
     finish(state)
 }
 
+/// **The audit draw's seed past `palw_audit_1004_v1` (P-F5)**: the carrying block's own hash is its producer's to grind, so the draw
+/// reads the beacon (a selected-chain block below it, fixed by the parents the producer builds on) in its place.
+pub fn palw_mesh_audit_seed_beacon_v1(claim_id: &Hash64, beacon: &Hash64, execution_root: &Hash64, drawn_daa: u64) -> Hash64 {
+    let mut state = keyed(PALW_MESH_AUDIT_DRAW_DOMAIN_V1);
+    state.update(b"seed/beacon");
+    state.update(claim_id.as_byte_slice());
+    state.update(beacon.as_byte_slice());
+    state.update(execution_root.as_byte_slice());
+    state.update(&drawn_daa.to_le_bytes());
+    finish(state)
+}
+
 /// A candidate auditor: its bond, its operator (one seat per operator), and its stake weight in whole MSK.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwAuditCandidateV1 {
@@ -530,6 +542,8 @@ pub enum PalwMeshErrorV1 {
     TrapAlreadyRevealed,
     #[error("a trap over {tiles} tiles with planted tile {fault_leaf}: tiles are 1..={PALW_TRAP_MAX_TILES_V1} and the tile is below the count")]
     TrapTilesInvalid { tiles: u64, fault_leaf: u64 },
+    #[error("a trap committed at DAA {committed}, not before the audit draw at {drawn} it is revealed against (palw_audit_1004_v1)")]
+    TrapCommittedAfterTheDraw { committed: u64, drawn: u64 },
     #[error("claim {0} is not a claim this chain holds an audit row for")]
     TrapClaimNotAudited(Hash64),
     #[error("claim {0} is not the setter's own claim: a trap is a claim its setter produced")]

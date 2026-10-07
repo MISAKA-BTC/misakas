@@ -267,6 +267,13 @@ pub struct PalwProducerFactsV2 {
     /// [`PALW_NOT_READY_EXPOSURE_FULL_V2`] mines exactly then, so a fleet at its ceilings still binds.
     /// Filled by the caller that holds the fences (`false` from [`palw_producer_facts_v4`]).
     pub binder_due: bool,
+    /// **Lane PA, C-F2: the pwu the chain demands of each rider, by batch size** — entry `n − 1` is the pwu of a rider when the lead's batch
+    /// holds `n` riders (`1 ..= PALW_RIDERS_MAX_V1`), derived exactly as the fold admits it: at the rider's SHARE of the lead's subsidy
+    /// (`palw_rider_floor_subsidy_v1`), through [`crate::palw_admission_v2::palw_attempt_canonical_pwu_v1`]. The lead's own `pwu` is the
+    /// rider's only where the two floors price the class alike; for a model class whose work floor at the rider's share is at or under
+    /// the class's own work it is not, and a rider carrying the lead's `pwu` is refused `PwuClaimNotDerived`. Empty where riders are not
+    /// armed, below the canonical-work height, or where the caller that holds the fences did not fill it.
+    pub rider_pwu: Vec<u64>,
 }
 
 impl PalwProducerFactsV2 {
@@ -631,6 +638,7 @@ pub fn palw_producer_facts_v4(
         bond_class_share: None,
         // Lane bind-deadlock: the caller that holds `Params::palw_anchor_at_ceiling` fills it.
         binder_due: false,
+        rider_pwu: Vec::new(),
         is_base_class: class_id == state_params.base_class_id(),
         fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(&class_id))
             || state.fp_lane_certification(&class_id).is_some(),
