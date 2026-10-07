@@ -34,7 +34,7 @@ use crate::preflight::chain::PreflightNetwork;
 /// The image slot when the configuration declares none (a census convention, recorded): 448×448, then 224×224 and 196×196 (the smallest
 /// slot a registrant would declare) when the larger is refused.
 pub const VLM_PROBE_IMAGE_SIZE_V1: (u32, u32) = (448, 448);
-pub const VLM_PROBE_IMAGE_SIZES_V1: [(u32, u32); 3] = [(448, 448), (224, 224), (196, 196)];
+pub const VLM_PROBE_IMAGE_SIZES_V1: [(u32, u32); 4] = [(448, 448), (224, 224), (196, 196), (192, 192)];
 
 /// The two programs and the pipeline of a vision-chat model's `Text` class at `max_context` positions.
 pub struct VlmStagesV1 {
@@ -198,7 +198,7 @@ pub fn vlm_text_class_admission_v1(config: &Value, net: &PreflightNetwork, heigh
                     Ok(v) => return Ok(v),
                     Err(e) => refusals.push(format!("{ctx}@{}x{}: {}", size.0, size.1, e.chars().take(160).collect::<String>())),
                 }
-                if refusals.last().is_some_and(|r| r.contains("tower:") || r.contains("text spec") || r.contains("placeholder")) {
+                if refusals.last().is_some_and(|r| r.contains("is not a vision tower") || r.contains("config key(s)") || r.contains("text spec") || r.contains("placeholder")) {
                     return Err(refusals.join(" | "));
                 }
             }
@@ -211,7 +211,7 @@ pub fn vlm_text_class_admission_v1(config: &Value, net: &PreflightNetwork, heigh
         Err(_) => json!({"ok": false, "error": "the probe panicked"}),
     };
     v["gate"] = json!(format!(
-        "palw_gen_v1 (testnet12_v1 ceilings) armed hypothetically, judged at DAA {height}; FP Job V5 dormant; shape-only (image 448x448, 224x224, 196x196 when the config declares none, unit 1.0, placeholder root)"
+        "palw_gen_v1 (testnet12_v1 ceilings) armed hypothetically, judged at DAA {height}; FP Job V5 dormant; shape-only (image 448, 224, 196 or 192 px square when the config declares none, unit 1.0, placeholder root)"
     ));
     v["max_context"] = json!(max_context);
     v["range_twin"] = json!(range_twin);
@@ -284,7 +284,7 @@ fn admit_at_size(
             None
         };
         let layouts: Vec<(u32, Option<u32>, u32, u32)> = if fitted.is_some() {
-            vec![(64, Some(256), 16, 64), (64, Some(256), 8, 64), (64, Some(1024), 16, 8)]
+            vec![(64, Some(256), 16, 64), (64, Some(256), 8, 64), (64, Some(256), 4, 64), (64, Some(256), 2, 64), (64, Some(1024), 16, 8)]
         } else {
             LAYOUTS.to_vec()
         };
