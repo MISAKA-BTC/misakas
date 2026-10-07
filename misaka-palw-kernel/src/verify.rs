@@ -648,6 +648,15 @@ pub fn verify_claim_v1(c: &ClaimContextV1<'_>, material: &dyn MaterialV1) -> Sco
     verify_scope_v1(c, material, &ScopeV1::WholeClaim)
 }
 
+/// **The structural checks every court runs before any relation** — bindings, commitment shapes and every derivable field of the
+/// evidence object. A chain refuses at inclusion exactly what fails here, so no committed claim is ever "malformed" to a court
+/// (malformed is unconvictable; refused is never accepted).
+pub fn claim_structure_v1(c: &ClaimContextV1<'_>) -> Result<(), String> {
+    let w = WiringV1::for_stage(c.program, c.stage).map_err(|e| format!("the program does not validate: {e}"))?;
+    let ctx = Ctx { c, w, param_cache: RefCell::new(BTreeMap::new()), cost: RefCell::new(CheckCostV1::default()) };
+    shape_and_binding(&ctx)
+}
+
 fn shape_and_binding(ctx: &Ctx<'_>) -> Result<(), String> {
     let c = ctx.c;
     let b = &c.binding;

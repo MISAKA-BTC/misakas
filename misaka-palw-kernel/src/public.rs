@@ -155,6 +155,11 @@ impl FreshVerifierV1 {
         verify_scope_v1(&self.ctx(), served, scope)
     }
 
+    /// The structural checks every court runs first ([`crate::verify::claim_structure_v1`]): what a chain refuses at inclusion.
+    pub fn structure(&self) -> Result<(), String> {
+        crate::verify::claim_structure_v1(&self.ctx())
+    }
+
     /// **The court**, from the proof's bytes.
     pub fn try_proof(&self, proof_bytes: &[u8]) -> Result<ConvictionV1, DismissalV1> {
         let wire: FaultProofWireV1 =

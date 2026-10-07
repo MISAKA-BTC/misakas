@@ -399,6 +399,31 @@ fn a_borrowed_trace_is_refused_at_inclusion_and_a_substituted_output_is_convicte
             "the carried trace commitments are not the evidence's trace root"
         ]
     );
+    // Evidence a court could only call malformed is never committed: a fabricated segment boundary, misshapen commitments.
+    let mut fabricated = evidence.clone();
+    fabricated.segments[0].exit_state_root = [1; 64];
+    let mut short = commitments.clone();
+    short[0][0].pop();
+    let mut short_ev = evidence.clone();
+    short_ev.trace_root = misaka_palw_kernel::trace::EvidenceV1::new(short.clone()).root();
+    let ev = w.block(
+        6,
+        vec![
+            T::CommitClaim {
+                claim: KernelClaimV1 { evidence_root: fabricated.root(), ..h1.claim.clone() },
+                evidence: fabricated,
+                commitments: commitments.clone(),
+            },
+            T::CommitClaim {
+                claim: KernelClaimV1 { evidence_root: short_ev.root(), ..h1.claim.clone() },
+                evidence: short_ev,
+                commitments: short,
+            },
+        ],
+    );
+    let why: Vec<_> = ev.iter().filter_map(|e| if let E::Refused { why, .. } = e { Some(why.clone()) } else { None }).collect();
+    assert_eq!(why.len(), 2, "{ev:?}");
+    assert!(why.iter().all(|w| w.starts_with("malformed evidence")), "{why:?}");
     assert!(w.l.claims.is_empty(), "nothing was committed, nothing reserved");
     assert_eq!(w.l.bonds[&PRODUCER].reserved, 0);
 

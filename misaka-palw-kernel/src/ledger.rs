@@ -466,6 +466,21 @@ impl KernelLedgerV1 {
         if self.claims.contains_key(&id) {
             return Err("an exact duplicate claim".into());
         }
+        // Everything a court checks before any relation, checked now: a claim is never committed in a shape a court could only
+        // call malformed (fabricated segment boundaries, another suite, a wrong output or state root, misshapen commitments).
+        let record = PublicClaimRecordV1 {
+            claim_id: id,
+            program_bytes: class.program_bytes.clone(),
+            plan: class.plan.clone(),
+            evidence: evidence.clone(),
+            trace_commitments: commitments.to_vec(),
+            param_commitments: class.param_commitments.by_instance.iter().map(|((j, l), d)| (*j, *l, *d)).collect(),
+            tokens: claim.stream(job),
+            beacon: [0; 64],
+        };
+        FreshVerifierV1::from_public_bytes(&record.to_bytes(), &self.known, class.header(job.class_binding_id))
+            .and_then(|v| v.structure())
+            .map_err(|why| format!("malformed evidence: {why}"))?;
         let need = self.policy.claim_collateral;
         let bond = self.bonds.get_mut(&claim.producer_bond).ok_or("the producer bond is not registered")?;
         if bond.exit_requested.is_some() {
