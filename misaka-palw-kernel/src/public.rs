@@ -252,14 +252,71 @@ pub struct MaterialDemandV1 {
     pub deadline_daa: u64,
 }
 
+/// What a producer may answer a demand with: the whole value, or (for a partial demand) one Merkle row/column opening.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum MaterialResponseV1 {
+    Whole(TensorWireV1),
+    Part(crate::merkle::TensorOpeningV1),
+}
+
+/// **How a response is classified** (each is an availability fact; none is an arithmetic verdict).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResponseClassV1 {
+    /// The committed value (or a valid opening of it). Prosecution continues from it; that it opens says nothing about
+    /// whether the arithmetic it records is right.
+    Served(MaterialResponseV1),
+    /// Bytes that are not a response at all, or a tensor that does not decode.
+    Malformed,
+    /// A whole, well-formed tensor whose commitment is not the committed one.
+    WrongBytes,
+    /// A well-formed opening of some OTHER committed value (its path recomputes another commitment).
+    WrongRoot,
+    /// An opening whose leaf, path or index fits no tree (a forged path).
+    FakeOpening,
+}
+
+impl ResponseClassV1 {
+    pub fn is_served(&self) -> bool {
+        matches!(self, Self::Served(_))
+    }
+
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Served(_) => "served",
+            Self::Malformed => "malformed",
+            Self::WrongBytes => "wrong_bytes",
+            Self::WrongRoot => "wrong_root",
+            Self::FakeOpening => "fake_opening",
+        }
+    }
+}
+
+/// **Classify response bytes** against the committed value they must be.
+pub fn classify_response_v1(committed: &Digest, bytes: &[u8]) -> ResponseClassV1 {
+    let Ok(r) = borsh::from_slice::<MaterialResponseV1>(bytes) else { return ResponseClassV1::Malformed };
+    match &r {
+        MaterialResponseV1::Whole(w) => match w.decode() {
+            Ok(t) if tensor_commitment(&t) == *committed => ResponseClassV1::Served(r),
+            Ok(_) => ResponseClassV1::WrongBytes,
+            Err(_) => ResponseClassV1::Malformed,
+        },
+        MaterialResponseV1::Part(o) => match o.recomputed_commitment() {
+            Some(c) if c == *committed => ResponseClassV1::Served(r),
+            Some(_) => ResponseClassV1::WrongRoot,
+            None => ResponseClassV1::FakeOpening,
+        },
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DemandOutcomeV1 {
     /// Served, and it is the committed value: prosecution continues from it.
     Served(Tensor),
-    /// Before the deadline, nothing valid served yet.
-    Pending,
+    /// Before the deadline, nothing valid served yet; `last` classifies the latest response, if any.
+    Pending { last: Option<&'static str> },
     /// The deadline passed with nothing valid served: the producer's availability default (never an arithmetic conviction).
-    ProducerDefault,
+    /// `last` is what (if anything) it served instead: absent, malformed, wrong bytes, wrong root or a fake opening.
+    ProducerDefault { last: Option<&'static str> },
     /// The demand names no value of this claim (dismissed; the demander's filing was wrong).
     NoSuchValue,
 }
@@ -272,16 +329,29 @@ pub fn settle_demand_v1(
     response: Option<&TensorWireV1>,
     now_daa: u64,
 ) -> DemandOutcomeV1 {
+    let bytes = response.map(|w| borsh::to_vec(&MaterialResponseV1::Whole(w.clone())).expect("in-memory borsh"));
+    settle_demand_bytes_v1(v, demand, bytes.as_deref(), now_daa)
+}
+
+/// [`settle_demand_v1`] over raw response bytes (a whole value or a partial opening).
+pub fn settle_demand_bytes_v1(
+    v: &FreshVerifierV1,
+    demand: &MaterialDemandV1,
+    response: Option<&[u8]>,
+    now_daa: u64,
+) -> DemandOutcomeV1 {
     let Some(committed) = v.commitment_of(&demand.key) else { return DemandOutcomeV1::NoSuchValue };
     if demand.claim_id != v.record.claim_id {
         return DemandOutcomeV1::NoSuchValue;
     }
-    if let Some(t) = response.and_then(|w| w.decode().ok())
-        && tensor_commitment(&t) == committed
+    let class = response.map(|b| classify_response_v1(&committed, b));
+    if let Some(ResponseClassV1::Served(MaterialResponseV1::Whole(w))) = &class
+        && let Ok(t) = w.decode()
     {
         return DemandOutcomeV1::Served(t);
     }
-    if now_daa >= demand.deadline_daa { DemandOutcomeV1::ProducerDefault } else { DemandOutcomeV1::Pending }
+    let last = class.as_ref().map(ResponseClassV1::name);
+    if now_daa >= demand.deadline_daa { DemandOutcomeV1::ProducerDefault { last } } else { DemandOutcomeV1::Pending { last } }
 }
 
 /// RFC-0015 §1.1 (G14): each criterion a release drill must evidence for a profile.
@@ -385,14 +455,19 @@ pub enum RewardBlockV1 {
     Incomplete(Vec<ProsecutionCriterionV1>),
     #[error("the profile needs material a public bond cannot obtain (private weights/input/state, a FOLD prefix or a fused preimage)")]
     PrivateMaterial,
+    #[error("the code-derived PUBLIC_PROSECUTION_COMPLETE gate fails: {0:?}")]
+    NotPubliclyProsecutable(Vec<crate::gate::ProsecutionGapV1>),
 }
 
-/// **May a new reward be enabled for this profile?** Static eligibility on an active kernel is necessary and never sufficient: the
-/// G14 drill must be complete for exactly this profile, and every byte a prosecutor needs must be public.
+/// **May a new reward be enabled for this profile?** Static eligibility on an active kernel is necessary and never sufficient:
+/// the code-derived `PUBLIC_PROSECUTION_COMPLETE` gate ([`crate::gate::public_prosecution_complete_v1`]) must hold, every byte a
+/// prosecutor needs must be public, and the G14 drill (an EXTERNAL gate: a real-chain run by an outside bond) must be recorded
+/// complete for exactly this profile.
 pub fn reward_eligible_v1(
     profile: &Digest,
     outcome: &RegistrationOutcomeV1,
     material: &ProfileMaterialV1,
+    code_gate: &Result<crate::gate::ProsecutionBoundsV1, Vec<crate::gate::ProsecutionGapV1>>,
     gate: Option<&ProsecutionGateV1>,
 ) -> Result<(), RewardBlockV1> {
     if !outcome.is_eligible() {
@@ -400,6 +475,9 @@ pub fn reward_eligible_v1(
     }
     if !material.is_public() {
         return Err(RewardBlockV1::PrivateMaterial);
+    }
+    if let Err(gaps) = code_gate {
+        return Err(RewardBlockV1::NotPubliclyProsecutable(gaps.clone()));
     }
     let gate = gate.ok_or(RewardBlockV1::NoDrill)?;
     if gate.profile != *profile {

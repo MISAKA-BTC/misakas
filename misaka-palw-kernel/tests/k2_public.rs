@@ -11,6 +11,7 @@ use common::*;
 use misaka_palw_kernel::assurance::AssuranceModeV1;
 use misaka_palw_kernel::check::registration_outcome_v1;
 use misaka_palw_kernel::descriptor::{k2_tir_v1_descriptor, k2_tir_v2_descriptor};
+use misaka_palw_kernel::gate::{ProsecutionGapV1, ProsecutionPolicyV1, public_prosecution_complete_v1};
 use misaka_palw_kernel::improve::{
     EpochKernelPolicyV1, EvaluationCompositionV1, EvaluationProsecutabilityV1, EvaluationResultV1, ImprovementRewardBlockV1,
     PromotionRuleV1, SubjectV1, improvement_reward_gate_v1, promotion_decision_v1,
@@ -127,11 +128,11 @@ fn withheld_material_ends_in_an_objective_producer_default_never_a_conviction() 
 
     let key = MaterialKeyV1::Node { position: at.0, occurrence: at.1, node: at.2 };
     let demand = MaterialDemandV1 { claim_id: [8; 64], key, demander_bond: [0xB0; 64], filed_daa: 100, deadline_daa: 150 };
-    assert_eq!(settle_demand_v1(&v, &demand, None, 120), DemandOutcomeV1::Pending);
+    assert_eq!(settle_demand_v1(&v, &demand, None, 120), DemandOutcomeV1::Pending { last: None });
     // Serving a different (e.g. the honest) value is not serving the committed one.
     let other = TensorWireV1::of(&c.trace.values[at.0 as usize][at.1 as usize][at.2 as usize]);
-    assert_eq!(settle_demand_v1(&v, &demand, Some(&other), 149), DemandOutcomeV1::Pending);
-    assert_eq!(settle_demand_v1(&v, &demand, Some(&other), 150), DemandOutcomeV1::ProducerDefault);
+    assert_eq!(settle_demand_v1(&v, &demand, Some(&other), 149), DemandOutcomeV1::Pending { last: Some("wrong_bytes") });
+    assert_eq!(settle_demand_v1(&v, &demand, Some(&other), 150), DemandOutcomeV1::ProducerDefault { last: Some("wrong_bytes") });
     let ghost = MaterialDemandV1 { key: MaterialKeyV1::Node { position: 99, occurrence: 0, node: 0 }, ..demand };
     assert_eq!(settle_demand_v1(&v, &ghost, None, 150), DemandOutcomeV1::NoSuchValue);
 
@@ -148,6 +149,14 @@ fn withheld_material_ends_in_an_objective_producer_default_never_a_conviction() 
     let ScopeVerdictV1::Fault(proof) = v.check(&BytePeer::serving(&c, &lying, &[]), &ScopeV1::WholeClaim) else { panic!() };
     v.try_proof(&FaultProofWireV1::of(&proof).to_bytes()).unwrap();
 }
+
+const POLICY: ProsecutionPolicyV1 = ProsecutionPolicyV1 {
+    court_deadline_daa: 100,
+    max_open_demands_per_claim: 8,
+    max_public_bytes: 1 << 40,
+    max_verifier_ram: 1 << 36,
+    max_retained_state: 1 << 32,
+};
 
 fn complete_gate(profile: [u8; 64]) -> ProsecutionGateV1 {
     ProsecutionGateV1 {
@@ -166,28 +175,51 @@ fn no_reward_opens_without_a_complete_public_prosecution_of_exactly_that_profile
     let armed = registration_outcome_v1(&active(), &d, &c.program, root_of(&c.program), MAX_POSITIONS, 0);
     let profile = c.header().class_binding_id;
     let public = ProfileMaterialV1::kernel_route(true);
-    assert_eq!(reward_eligible_v1(&profile, &armed, &public, None), Err(RewardBlockV1::NoDrill));
+    let nodes: u64 = c.trace.values[0].iter().map(|o| o.len() as u64).sum();
+    let gate = |m: &ProfileMaterialV1| public_prosecution_complete_v1(&d, &c.plan, nodes, m, &POLICY);
+    let code = gate(&public);
+    let bounds = code.as_ref().expect("every relation of this plan has a public court and finite bounds");
+    assert!(bounds.max_opening_bytes > 0 && bounds.max_localization_rounds == 2 && bounds.deadline_daa == POLICY.court_deadline_daa);
+    assert_eq!(reward_eligible_v1(&profile, &armed, &public, &code, None), Err(RewardBlockV1::NoDrill));
     let mut seat = complete_gate(profile);
     seat.prosecutor_was_seat_or_operator = true;
     assert!(matches!(
-        reward_eligible_v1(&profile, &armed, &public, Some(&seat)),
+        reward_eligible_v1(&profile, &armed, &public, &code, Some(&seat)),
         Err(RewardBlockV1::Incomplete(m)) if m == vec![ProsecutionCriterionV1::OrdinaryPublicEntry]
     ));
     let mut injected = complete_gate(profile);
     injected.used_private_material = true;
-    assert!(matches!(reward_eligible_v1(&profile, &armed, &public, Some(&injected)), Err(RewardBlockV1::Incomplete(_))));
+    assert!(matches!(reward_eligible_v1(&profile, &armed, &public, &code, Some(&injected)), Err(RewardBlockV1::Incomplete(_))));
     let mut no_chain = complete_gate(profile);
     no_chain.met = ProsecutionCriterionV1::ALL[..6].iter().copied().collect::<BTreeSet<_>>();
-    assert!(matches!(reward_eligible_v1(&profile, &armed, &public, Some(&no_chain)), Err(RewardBlockV1::Incomplete(_))));
-    assert_eq!(reward_eligible_v1(&profile, &armed, &public, Some(&complete_gate([0; 64]))), Err(RewardBlockV1::OtherProfile));
+    assert!(matches!(reward_eligible_v1(&profile, &armed, &public, &code, Some(&no_chain)), Err(RewardBlockV1::Incomplete(_))));
+    assert_eq!(reward_eligible_v1(&profile, &armed, &public, &code, Some(&complete_gate([0; 64]))), Err(RewardBlockV1::OtherProfile));
     let private = ProfileMaterialV1 { needs_fold_prefix: true, ..public };
-    assert_eq!(reward_eligible_v1(&profile, &armed, &private, Some(&complete_gate(profile))), Err(RewardBlockV1::PrivateMaterial));
+    assert_eq!(
+        reward_eligible_v1(&profile, &armed, &private, &gate(&private), Some(&complete_gate(profile))),
+        Err(RewardBlockV1::PrivateMaterial)
+    );
     let shipped = registration_outcome_v1(&misaka_palw_kernel::builtin_schedule_v1(), &d, &c.program, root_of(&c.program), 64, 0);
     assert!(matches!(
-        reward_eligible_v1(&profile, &shipped, &public, Some(&complete_gate(profile))),
+        reward_eligible_v1(&profile, &shipped, &public, &code, Some(&complete_gate(profile))),
         Err(RewardBlockV1::NotEligible(_))
     ));
-    reward_eligible_v1(&profile, &armed, &public, Some(&complete_gate(profile))).unwrap();
+    reward_eligible_v1(&profile, &armed, &public, &code, Some(&complete_gate(profile))).unwrap();
+    // A held/fused profile (a fused preimage only its holder has) is not publicly prosecutable, whatever the drill record says.
+    let fused = ProfileMaterialV1 { needs_fused_preimage: true, ..public };
+    assert!(matches!(gate(&fused), Err(g) if g.contains(&ProsecutionGapV1::PrivateMaterial)));
+    // A plan whose court budget passes the ceiling is not either: no unbounded hidden fallback.
+    let tight = ProsecutionPolicyV1 { max_public_bytes: 1, ..POLICY };
+    let r = public_prosecution_complete_v1(&d, &c.plan, nodes, &public, &tight);
+    assert!(matches!(r, Err(g) if g.iter().any(|x| matches!(x, ProsecutionGapV1::Unbounded { what: "public bytes", .. }))));
+    // A relation whose court is not one this code implements fails the gate (the plan claims coverage it cannot prosecute).
+    let mut forged = c.plan.clone();
+    forged.relations[0].court = misaka_palw_kernel::family::CourtIdV1::EdgeRecompute;
+    assert!(public_prosecution_complete_v1(&d, &forged, nodes, &public, &POLICY).is_err());
+    assert!(matches!(
+        reward_eligible_v1(&profile, &armed, &public, &gate(&fused), Some(&complete_gate(profile))),
+        Err(RewardBlockV1::NotPubliclyProsecutable(_))
+    ));
 
     // The metrics stay apart: eligibility with ≥ 128 bits is not coverage, and coverage is not the gate.
     let m = ReleaseMetricsV1::of(

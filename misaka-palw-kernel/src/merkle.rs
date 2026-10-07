@@ -217,20 +217,26 @@ impl TensorOpeningV1 {
     /// **Does this opening belong to `commitment`?** Recomputes the opened tree's root from the leaf and the path, then the
     /// commitment from both roots. Every element must lie in the dtype.
     pub fn authenticates(&self, commitment: &Digest) -> bool {
-        let (Some(dtype), Some(shape)) = (self.dtype(), self.shape_usize()) else { return false };
+        self.recomputed_commitment().is_some_and(|c| c == *commitment)
+    }
+
+    /// The commitment this opening is of, if it is a well-formed opening of SOME tensor (`None`: a malformed or fake opening —
+    /// unknown dtype, wrong length, an element outside the dtype, an index or path that fits no tree).
+    pub fn recomputed_commitment(&self) -> Option<Digest> {
+        let (dtype, shape) = (self.dtype()?, self.shape_usize()?);
         let l = LayoutV1::of(&shape);
         let (count, len) = match self.axis {
             AXIS_ROW => (l.rows, l.row_len),
             AXIS_COL => (l.cols, l.col_len),
-            _ => return false,
+            _ => return None,
         };
         if self.values.len() as u64 != len || self.values.iter().any(|v| !dtype.contains(*v)) {
-            return false;
+            return None;
         }
         let leaf = leaf_hash(dtype, self.axis, self.index, &self.values);
-        let Some(root) = root_from_path(leaf, self.index, count, &self.siblings) else { return false };
+        let root = root_from_path(leaf, self.index, count, &self.siblings)?;
         let (r, c) = if self.axis == AXIS_ROW { (root, self.other_root) } else { (self.other_root, root) };
-        commit(dtype, &shape, &r, &c) == *commitment
+        Some(commit(dtype, &shape, &r, &c))
     }
 
     /// Bytes this opening puts in a court (elements at their width, path and the other root).
