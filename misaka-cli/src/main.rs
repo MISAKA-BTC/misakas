@@ -595,6 +595,20 @@ enum ModelCmd {
         /// A catalog model has no pack: the gate does not apply to it.
         #[command(flatten)]
         pack_gate: pack_gate::PackGateFlags,
+        /// RFC-0009 A0: print what the registration costs, by payer (carrier fee from the wallet; burn and exposure from
+        /// the bond), read from the chain — then stop. Nothing is signed or sent.
+        #[arg(long)]
+        quote: bool,
+        /// RFC-0009 A0: relay the locally signed carrier through these nodes (host:port, comma-separated) instead of the
+        /// one --rpc names; no node of your own is needed. A state is believed when --relay-min of them report it.
+        #[arg(long, value_delimiter = ',', value_name = "HOST:PORT,...")]
+        relay: Vec<String>,
+        /// How many relay nodes must accept the carrier and agree on its fate (default: a majority).
+        #[arg(long, value_name = "N")]
+        relay_min: Option<usize>,
+        /// The most the wallet may pay for this registration, in sompi (default: exactly the quoted fee and filings).
+        #[arg(long, value_name = "SOMPI")]
+        max_fee_sompi: Option<u64>,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -2705,6 +2719,10 @@ async fn main() -> std::process::ExitCode {
             no_wait,
             sponsor,
             pack_gate,
+            quote,
+            relay,
+            relay_min,
+            max_fee_sompi,
             profile: args,
         }) => match (profile(&args), sponsor.resolve()) {
             (Ok(p), Ok(sponsor)) => {
@@ -2718,6 +2736,12 @@ async fn main() -> std::process::ExitCode {
                     no_wait,
                     sponsor,
                     pack_gate,
+                    remote: operator::model_remote::RemoteArgs {
+                        quote_only: quote,
+                        relay,
+                        relay_min,
+                        max_wallet_sompi: max_fee_sompi,
+                    },
                 };
                 operator::model_add::run(&ctx, p, a).await
             }

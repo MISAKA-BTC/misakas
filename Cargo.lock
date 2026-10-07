@@ -5893,6 +5893,7 @@ dependencies = [
  "misaka-palw-derive",
  "misaka-palw-extension",
  "misaka-palw-pow-driver",
+ "misaka-palw-remote",
  "misaka-palw-sdk",
  "misaka-palw-tir-lower",
  "serde",

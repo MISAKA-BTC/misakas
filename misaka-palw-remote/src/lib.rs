@@ -15,6 +15,8 @@
 //!   relays the finished block, and never sees the inference, the key, or a signature made before the draw is won.
 //! * An accepted relay is **not** inclusion: [`track::ClaimTracker`] follows tx id, claim id, block, licence, challenge window and
 //!   `Final`/void separately and walks backwards on a reorg.
+//! * Stage A0's [`register`] adds a model without a node: a quote that names every cost by its payer, a gate that stops
+//!   signing when anything moved, and a tracker that keeps relay ACK, inclusion and the registry's accepted row apart.
 //! * Stage B's [`evidence`] gives the Panel somewhere other than the miner's PC to read from; a storage receipt is a promise, not a
 //!   proof of future availability, and nothing here moves a slash.
 //!
@@ -24,6 +26,7 @@ pub mod attempt;
 pub mod checkpoint;
 pub mod evidence;
 pub mod proof;
+pub mod register;
 pub mod relay;
 pub mod template;
 pub mod track;
