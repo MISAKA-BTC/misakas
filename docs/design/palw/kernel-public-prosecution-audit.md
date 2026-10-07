@@ -93,6 +93,9 @@ None of these is a repository-level gap; each needs something outside this repos
 2. Review of the beacon as unbiased under withholding (§15.3). (Outsiders do not depend on it: they check with their own salt.)
 3. Real-hardware measurement of producer, verifier, DA, court and dispute load for 9B-8k, validated long context and Kimi K3
    (§15.6–15.7) — the bounds above are finite and enforced, their real values are measured there.
+   Windows are derived (never served), but attention score rows are computed values of `O(history · heads)` per position, so a
+   long-context claim's public bytes still grow with `positions × history`: finite and gate-checked, and whether a given
+   long-context class fits a network's policy is what that measurement decides.
 4. The real-chain G14 drill (RPC → fee → inclusion → fold → slash → blocked Final), censorship and mempool behaviour (RFC-0014 /
    RFC-0015), with the ledger rules above wired into the node.
 5. Shadow comparison against the Panel route, audits, soak — and only then a proposal to give the fence a height.
