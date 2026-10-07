@@ -56,6 +56,7 @@ members = [
     "misaka-palw-tir-lower",
     "misaka-palw-tir-sketch",
     "misaka-palw-gen",
+    "misaka-palw-panel",
     "simpa",
     "wasm",
     "wasm/core",
@@ -318,6 +319,7 @@ misaka-palw-kernel = { version = "1.1.0", path = "misaka-palw-kernel" }
 misaka-palw-constraint = { version = "1.1.0", path = "misaka-palw-constraint" }
 misaka-palw-tir = { path = "misaka-palw-tir" }
 misaka-palw-gen = { path = "misaka-palw-gen" }
+misaka-palw-panel = { path = "misaka-palw-panel" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka-palw" }

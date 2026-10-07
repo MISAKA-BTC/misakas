@@ -11,6 +11,8 @@
 
 ## 0. Decision proposed
 
+**Dormant implementation — 2026-10-08:** the reference transition engine, public-chain adapters and guarded `palw_permissionless_panel_v1` policy are implemented on `pre`. All networks remain `None`; attempted activation is refused. The production beacon, virtual-state/receipt/court handoff, live RPC and independent end-to-end release gates remain unimplemented/unmet. See [exact reference encoding, tests and release blockers](0010-dormant-implementation.md). This does not assign a network wire version or remove the historical lane-A rule.
+
 **A claim's Panel MUST be selected by public consensus rules without naming a genesis bond, an operator fleet, or another privileged identity.** The claim, the eligible Panel population, and the randomness commitment must be fixed in that order. A binding block only records the result; its producer, hash, signature, timestamp, execution commitment, lane, and arrival order MUST NOT change the Panel seed or the eligible population. Any valid selected-chain block that reaches the prescribed binding point may complete that transition, including a heartbeat if the new rule admits it.
 
 The shortest safe implementation is therefore **permissionless binding with no separate anchor-producer election**. Producer bonds remain the public qualification for claim production; Panel-seat bonds and their collateral remain the public qualification for verification. The binding block needs no third bond kind or extra privileged role. If a later design elects a particular bonded binder, it must additionally satisfy §4; election is not a prerequisite of this RFC.
