@@ -318,30 +318,47 @@ pub fn classify_material_v1(committed: &Digest, r: MaterialResponseV1) -> Respon
     }
 }
 
-/// **A position demand's response**: every committed node value of one position, `[occurrence][node]`, each whole.
-pub type PositionResponseV1 = Vec<Vec<MaterialResponseV1>>;
+/// **A position demand's response**: every committed node value of one position, `[occurrence][node]`, and every committed stage
+/// input of it (a pipeline stage's; none for a single program), each whole.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PositionResponseV1 {
+    pub values: Vec<Vec<MaterialResponseV1>>,
+    pub inputs: Vec<MaterialResponseV1>,
+}
 
-/// **Classify a position demand's response** against the position's committed values: the values, or the first failure's class
-/// (`malformed` for undecodable bytes or the wrong count, then per value `wrong_bytes`, `wrong_root`, `fake_opening`, and
-/// `partial` for an authentic row or column where the whole value is owed).
-pub fn classify_position_response_v1(committed: &[Vec<Digest>], bytes: &[u8]) -> Result<Vec<Vec<TensorWireV1>>, &'static str> {
+/// A position served on chain: public from then on.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ServedPositionV1 {
+    pub values: Vec<Vec<TensorWireV1>>,
+    pub inputs: Vec<TensorWireV1>,
+}
+
+/// **Classify a position demand's response** against the position's committed values and inputs: the values, or the first
+/// failure's class (`malformed` for undecodable bytes or the wrong count, then per value `wrong_bytes`, `wrong_root`,
+/// `fake_opening`, and `partial` for an authentic row or column where the whole value is owed).
+pub fn classify_position_response_v1(
+    committed: &[Vec<Digest>],
+    committed_inputs: &[Digest],
+    bytes: &[u8],
+) -> Result<ServedPositionV1, &'static str> {
     let r = borsh::from_slice::<PositionResponseV1>(bytes).map_err(|_| "malformed")?;
-    if r.len() != committed.len() || r.iter().zip(committed).any(|(a, b)| a.len() != b.len()) {
+    if r.values.len() != committed.len()
+        || r.values.iter().zip(committed).any(|(a, b)| a.len() != b.len())
+        || r.inputs.len() != committed_inputs.len()
+    {
         return Err("malformed");
     }
-    let mut out = Vec::with_capacity(r.len());
-    for (values, commitments) in r.into_iter().zip(committed) {
-        let mut occ = Vec::with_capacity(values.len());
-        for (v, c) in values.into_iter().zip(commitments) {
-            match classify_material_v1(c, v) {
-                ResponseClassV1::Served(MaterialResponseV1::Whole(w)) => occ.push(w),
-                ResponseClassV1::Served(MaterialResponseV1::Part(_)) => return Err("partial"),
-                other => return Err(other.name()),
-            }
-        }
-        out.push(occ);
+    let one = |c: &Digest, v: MaterialResponseV1| match classify_material_v1(c, v) {
+        ResponseClassV1::Served(MaterialResponseV1::Whole(w)) => Ok(w),
+        ResponseClassV1::Served(MaterialResponseV1::Part(_)) => Err("partial"),
+        other => Err(other.name()),
+    };
+    let mut values = Vec::with_capacity(r.values.len());
+    for (occ, commitments) in r.values.into_iter().zip(committed) {
+        values.push(occ.into_iter().zip(commitments).map(|(v, c)| one(c, v)).collect::<Result<Vec<_>, _>>()?);
     }
-    Ok(out)
+    let inputs = r.inputs.into_iter().zip(committed_inputs).map(|(v, c)| one(c, v)).collect::<Result<Vec<_>, _>>()?;
+    Ok(ServedPositionV1 { values, inputs })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

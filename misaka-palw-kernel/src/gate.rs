@@ -71,6 +71,10 @@ pub enum ProsecutionGapV1 {
     Unbounded { what: &'static str, required: u128, limit: u128 },
     /// The plan names another descriptor.
     WrongDescriptor,
+    /// A pipeline edge without the edge court (its checker or court is not `EdgeRecompute`).
+    NoEdgeCourt { stage: u8, input: u16 },
+    /// A pipeline stage's own gaps.
+    Stage { stage: u8, gaps: Vec<ProsecutionGapV1> },
 }
 
 /// A tensor's wire header (dtype, shape at rank ≤ 12, lengths, the response variant), an upper bound.
@@ -163,4 +167,91 @@ pub fn public_prosecution_complete_v1(
         gaps.push(G::Unbounded { what: "deadline or sessions (zero: nobody can prosecute)", required: 1, limit: 0 });
     }
     if gaps.is_empty() { Ok(bounds) } else { Err(gaps) }
+}
+
+/// **The gate for a pipeline plan** (K2-TIR-v3): every stage's plan through [`public_prosecution_complete_v1`], every edge on the
+/// public edge court, and the bounds of the whole claim — public bytes, RAM and retained state summed over stages, one demand
+/// session per stage position, the largest opening, filing (an edge filing opens every upstream output) and response.
+pub fn public_pipeline_prosecution_complete_v1(
+    descriptor: &KernelDescriptorV1,
+    plan: &crate::pipeline::PipelinePlanV1,
+    pipeline: &misaka_palw_tir::pipeline::TirPipelineV1,
+    programs: &[misaka_palw_tir::program_v2::TirProgramV2],
+    material: &ProfileMaterialV1,
+    policy: &ProsecutionPolicyV1,
+) -> Result<ProsecutionBoundsV1, Vec<ProsecutionGapV1>> {
+    use ProsecutionGapV1 as G;
+    let mut gaps = Vec::new();
+    if plan.descriptor_digest != descriptor.digest() || plan.stages.len() != pipeline.stages.len() {
+        gaps.push(G::WrongDescriptor);
+    }
+    // Per stage, against ceilings that never bind: the whole claim's bounds are checked against the policy below.
+    let open = ProsecutionPolicyV1 {
+        court_deadline_daa: policy.court_deadline_daa,
+        max_sessions_per_claim: u32::MAX,
+        max_public_bytes: u128::MAX / 4,
+        max_verifier_ram: u128::MAX / 4,
+        max_retained_state: u128::MAX / 4,
+    };
+    let mut total = ProsecutionBoundsV1 {
+        max_public_bytes: 0,
+        max_opening_bytes: 0,
+        max_filing_bytes: 0,
+        max_response_bytes: 0,
+        max_localization_rounds: 2,
+        max_court_work: 0,
+        max_verifier_ram: 0,
+        max_retained_state: 0,
+        max_concurrent_sessions: 0,
+        deadline_daa: policy.court_deadline_daa,
+    };
+    let mut upstream_bytes: Vec<u128> = Vec::new();
+    for (si, (st, sp)) in pipeline.stages.iter().zip(&plan.stages).enumerate() {
+        let Some(prog) = programs.get(st.program as usize) else {
+            gaps.push(G::WrongDescriptor);
+            continue;
+        };
+        let v = crate::pipeline::stage_view_v1(prog);
+        let nodes: u64 = v.view.occurrences().iter().map(|(b, _)| v.view.blocks[*b as usize].nodes.len() as u64).sum();
+        match public_prosecution_complete_v1(descriptor, sp, nodes, material, &open) {
+            Err(g) => gaps.push(G::Stage { stage: si as u8, gaps: g }),
+            Ok(b) => {
+                // A stage position's response carries its stage inputs too.
+                let inputs: u128 = plan
+                    .edges
+                    .iter()
+                    .filter(|e| e.stage as usize == si)
+                    .map(|e| (e.elements as u128).saturating_mul(16).saturating_add(WIRE_HEADER_BYTES_V1 as u128))
+                    .sum();
+                total.max_public_bytes = total.max_public_bytes.saturating_add(b.max_public_bytes);
+                total.max_opening_bytes = total.max_opening_bytes.max(b.max_opening_bytes);
+                total.max_filing_bytes = total.max_filing_bytes.max(b.max_filing_bytes);
+                total.max_response_bytes = total.max_response_bytes.max(b.max_response_bytes.saturating_add(inputs));
+                total.max_court_work = total.max_court_work.max(b.max_court_work);
+                total.max_verifier_ram = total.max_verifier_ram.saturating_add(b.max_verifier_ram);
+                total.max_retained_state = total.max_retained_state.saturating_add(b.max_retained_state);
+                total.max_concurrent_sessions = total.max_concurrent_sessions.saturating_add(b.max_concurrent_sessions);
+            }
+        }
+        // Every output value of the stage, as an edge filing opens it: at most a position's bytes per position.
+        upstream_bytes.push(sp.budgets.evidence_bytes_per_position.saturating_mul(sp.max_positions as u128));
+    }
+    for e in &plan.edges {
+        if e.checker != crate::family::CheckerIdV1::EdgeRecompute || e.court != CourtIdV1::EdgeRecompute {
+            gaps.push(G::NoEdgeCourt { stage: e.stage, input: e.input });
+        }
+    }
+    let edge_filing = upstream_bytes.iter().copied().max().unwrap_or(0).saturating_add(FILING_HEADER_BYTES_V1 as u128);
+    total.max_filing_bytes = total.max_filing_bytes.max(edge_filing.min(u64::MAX as u128) as u64);
+    for (what, required, limit) in [
+        ("public bytes", total.max_public_bytes, policy.max_public_bytes),
+        ("verifier RAM", total.max_verifier_ram, policy.max_verifier_ram),
+        ("retained state", total.max_retained_state, policy.max_retained_state),
+        ("concurrent sessions", total.max_concurrent_sessions as u128, policy.max_sessions_per_claim as u128),
+    ] {
+        if required >= u128::MAX / 2 || required > limit {
+            gaps.push(G::Unbounded { what, required, limit });
+        }
+    }
+    if gaps.is_empty() { Ok(total) } else { Err(gaps) }
 }

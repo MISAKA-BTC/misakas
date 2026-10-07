@@ -452,7 +452,7 @@ pub fn pipeline_job_root_v1(job: &PipelineJob) -> Digest {
 }
 
 /// **The pipeline's evidence object**: everything bound before the challenge.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PipelineEvidenceV1 {
     pub network_domain: Digest,
     pub ruleset_digest: Digest,
@@ -700,6 +700,18 @@ impl PipelineContextV1<'_> {
             })
             .collect()
     }
+}
+
+/// **The structural checks every pipeline court runs first** (the evidence object's roots, job, `R` binding and output, then every
+/// stage's bindings, commitment shapes and derivable fields): a chain refuses at inclusion exactly what fails here.
+pub fn pipeline_structure_v1(c: &PipelineContextV1<'_>) -> Result<(), String> {
+    let facts = c.check_evidence()?;
+    for (si, f) in facts.iter().enumerate() {
+        let v = c.view(si);
+        let tokens = run_tokens(f);
+        crate::verify::claim_structure_v1(&c.stage_ctx(si, &v, &tokens)).map_err(|e| format!("stage {si}: {e}"))?;
+    }
+    Ok(())
 }
 
 /// **Verify a pipeline claim**: every stage's edges, then its relations, in stage order. `materials[s]` serves stage `s`.

@@ -79,6 +79,7 @@ pub mod lifecycle;
 pub mod merkle;
 pub mod outcome;
 pub mod pipeline;
+pub mod pipeline_public;
 pub mod plan;
 pub mod public;
 pub mod receipt;
