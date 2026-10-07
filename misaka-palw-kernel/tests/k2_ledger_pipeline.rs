@@ -232,7 +232,7 @@ impl World {
 fn outsider(w: &World, claim: Digest, da: &Da) -> OutsiderFindingV1 {
     let fresh = KernelLedgerV1::replay(&w.genesis, &w.blocks);
     assert_eq!(fresh.root(), w.l.root());
-    OutsiderV1 { ledger: &fresh, claim, material: da }.check().unwrap()
+    OutsiderV1 { ledger: &fresh, claim, material: da, salt: [0x5A; 64] }.check().unwrap()
 }
 
 fn convicted(ev: &[E]) -> Option<bool> {

@@ -302,6 +302,10 @@ impl FreshPipelineVerifierV1 {
     }
 
     fn ctx(&self) -> PipelineContextV1<'_> {
+        self.ctx_with(self.record.beacon)
+    }
+
+    fn ctx_with(&self, beacon: Digest) -> PipelineContextV1<'_> {
         PipelineContextV1 {
             descriptor: &self.descriptor,
             pipeline: &self.pipeline,
@@ -315,7 +319,7 @@ impl FreshPipelineVerifierV1 {
             random: &self.random,
             random_binding: self.random.binding(),
             claim_id: self.record.claim_id,
-            beacon: self.record.beacon,
+            beacon,
         }
     }
 
@@ -335,6 +339,12 @@ impl FreshPipelineVerifierV1 {
     /// **Check the claim**: the decode of every delivered id, then every stage's edges and relations. `materials[s]` serves stage
     /// `s` (each value authenticated against its commitment).
     pub fn check(&self, materials: &[&dyn MaterialV1]) -> PipelineFindingV1 {
+        self.check_salted(materials, self.record.beacon)
+    }
+
+    /// [`Self::check`] with the checker's OWN randomness (`salt` replaces the public beacon in every stage's challenge): grinding
+    /// the beacon gains a producer nothing against such a checker, and the courts never read the vectors.
+    pub fn check_salted(&self, materials: &[&dyn MaterialV1], salt: Digest) -> PipelineFindingV1 {
         if let Err(why) = self.structure() {
             return PipelineFindingV1::Malformed(why);
         }
@@ -355,7 +365,7 @@ impl FreshPipelineVerifierV1 {
                 }
             }
         }
-        match verify_pipeline_v1(&self.ctx(), materials) {
+        match verify_pipeline_v1(&self.ctx_with(salt), materials) {
             PipelineVerdictV1::Pass { .. } => PipelineFindingV1::Pass,
             PipelineVerdictV1::StageFault { stage, proof } => {
                 PipelineFindingV1::Fault(PipelineFaultWireV1::Stage { stage, proof: FaultProofWireV1::of(&proof) })

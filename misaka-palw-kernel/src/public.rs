@@ -155,6 +155,16 @@ impl FreshVerifierV1 {
         verify_scope_v1(&self.ctx(), served, scope)
     }
 
+    /// **Check with the checker's OWN randomness**: the challenge vectors drawn from `salt` (a value only the checker knows)
+    /// instead of the claim's public beacon. A producer that predicted or ground the beacon gains nothing against a checker that
+    /// does this, and every fault found is convictable: the courts never read the vectors (a scalar or an instance is
+    /// recomputed exactly).
+    pub fn check_salted(&self, served: &dyn MaterialV1, scope: &ScopeV1, salt: Digest) -> ScopeVerdictV1 {
+        let mut ctx = self.ctx();
+        ctx.binding.beacon = salt;
+        verify_scope_v1(&ctx, served, scope)
+    }
+
     /// The structural checks every court runs first ([`crate::verify::claim_structure_v1`]): what a chain refuses at inclusion.
     pub fn structure(&self) -> Result<(), String> {
         crate::verify::claim_structure_v1(&self.ctx())

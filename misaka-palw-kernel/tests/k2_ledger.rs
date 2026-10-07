@@ -93,7 +93,7 @@ impl PublicSourceV1 for Da {
 fn outsider(w: &World, claim: Digest, da: &Da) -> OutsiderFindingV1 {
     let fresh = KernelLedgerV1::replay(&w.genesis, &w.blocks);
     assert_eq!(fresh.root(), w.l.root(), "a fresh node reaches the same state");
-    OutsiderV1 { ledger: &fresh, claim, material: da }.check().unwrap()
+    OutsiderV1 { ledger: &fresh, claim, material: da, salt: [0x5A; 64] }.check().unwrap()
 }
 
 /// A producer's claim (its private objects: the test drops them before an outsider looks).

@@ -1178,6 +1178,9 @@ pub struct OutsiderV1<'a> {
     pub ledger: &'a KernelLedgerV1,
     pub claim: Digest,
     pub material: &'a dyn PublicSourceV1,
+    /// The outsider's own randomness for its probabilistic checks (never the claim's public beacon, which a producer may have
+    /// predicted): the faults it finds are convictable whatever vectors found them.
+    pub salt: Digest,
 }
 
 /// What an outsider concludes.
@@ -1279,7 +1282,8 @@ impl OutsiderV1<'_> {
             }
         }
         // Then every relation the plan covers.
-        Ok(match fresh.check(&StageMaterial { o: self, stage: 0, params: &class.params }, &ScopeV1::WholeClaim) {
+        let material = StageMaterial { o: self, stage: 0, params: &class.params };
+        Ok(match fresh.check_salted(&material, &ScopeV1::WholeClaim, self.salt) {
             ScopeVerdictV1::Pass { .. } => OutsiderFindingV1::Clean,
             ScopeVerdictV1::Fault(p) => {
                 OutsiderFindingV1::Prosecute(ProsecutionV1::Kernel(crate::public::FaultProofWireV1::of(&p).to_bytes()))
@@ -1303,7 +1307,7 @@ impl OutsiderV1<'_> {
             .map(|(si, st)| StageMaterial { o: self, stage: si as u8, params: &class.params[st.program as usize] })
             .collect();
         let refs: Vec<&dyn MaterialV1> = mats.iter().map(|m| m as &dyn MaterialV1).collect();
-        match fresh.check(&refs) {
+        match fresh.check_salted(&refs, self.salt) {
             PipelineFindingV1::Pass => Ok(OutsiderFindingV1::Clean),
             PipelineFindingV1::Fault(w) => Ok(OutsiderFindingV1::Prosecute(ProsecutionV1::Pipeline(w.to_bytes()))),
             PipelineFindingV1::Unavailable(what) => Err(format!("unavailable with every value in hand: {what}")),

@@ -284,3 +284,21 @@ fn a_promotion_opens_a_reward_only_when_every_evaluation_claim_is_publicly_prose
         Err(ImprovementRewardBlockV1::NotProsecutable(..))
     ));
 }
+
+#[test]
+fn a_checkers_own_randomness_finds_the_lie_and_the_court_convicts_whatever_vectors_found_it() {
+    let c = Claim::honest();
+    let (at, lying) = lie(&c);
+    let record = c.publish(&lying);
+    let v = FreshVerifierV1::from_public_bytes(&record, &known(), c.header()).unwrap();
+    let peer = BytePeer::serving(&c, &lying, &[]);
+    for salt in [[1u8; 64], [2; 64], [0xFE; 64]] {
+        let ScopeVerdictV1::Fault(proof) = v.check_salted(&peer, &ScopeV1::WholeClaim, salt) else { panic!("salt {salt:?}") };
+        assert_eq!((proof.position, proof.occurrence, proof.node), at);
+        // The court reads the claim's public beacon, never the checker's salt.
+        v.try_proof(&FaultProofWireV1::of(&proof).to_bytes()).unwrap();
+    }
+    let honest = FreshVerifierV1::from_public_bytes(&c.publish(&c.trace), &known(), c.header()).unwrap();
+    let peer = BytePeer::serving(&c, &c.trace, &[]);
+    assert!(matches!(honest.check_salted(&peer, &ScopeV1::WholeClaim, [7; 64]), ScopeVerdictV1::Pass { .. }));
+}
