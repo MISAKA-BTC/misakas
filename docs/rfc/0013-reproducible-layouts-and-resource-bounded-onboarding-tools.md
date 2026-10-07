@@ -1,5 +1,8 @@
 # RFC-0013: Reproducible layouts and resource-bounded model onboarding tools
 
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
+
 * Status: Draft, 2026-10-06. Tooling remediation and release criteria; **no consensus activation or ceiling increase**.
 * Source baseline: `808baa6b9adcb029e64fffe51fcd84027f82e7c0`; the working-tree fixes accompanying this RFC are not yet a released binary or a main deployment.
 * Validation record: [0013-onboarding-tool-validation.json](evidence/0013-onboarding-tool-validation.json). Real-run stage status is explicit; a test result does not certify registration or source fidelity.
@@ -242,3 +245,9 @@ They do not implement all of §§4–7: explicit target-snapshot/offline parity,
 durable per-position resume, complete calibration provenance, registration/certification and broad
 coverage remain distinct acceptance work. Test/real-run results belong in the evidence report;
 neither this text nor a passing build proves those unfinished outcomes.
+
+## Mission alignment amendment — 2026-10-07
+
+historical/live gate分離、exact layout、独立streamed conformanceは維持する。registration/PASS/Finalのrelease reportに、その実際のprofileで外部public bondが証拠を公開取得しlocalizeしてconvictできるかを別項目で報告する。preloaded producer captureや既知fault indexを渡すfixtureは独立prosecutionの成功証拠にしない。toolのメモリ削減で裁定の最大bytes/workを隠さない。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。

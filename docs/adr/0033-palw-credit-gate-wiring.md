@@ -1,5 +1,8 @@
 # ADR-0033: The credit gate, wired — how `credit(C)` becomes a consensus fact
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 Status: **Accepted (design; activates nothing, and cannot be activated until its stated
 preconditions are met).** ADR-0028 §1 defined `credit(C)` as a predicate. This ADR decides
 **where it is evaluated, what state it reads, how it survives reorgs, and what happens the
@@ -105,3 +108,9 @@ special case. The emergency rollback is therefore *inside* this gate, not bolted
 * Because the gate is where the ceiling and the freeze are read, §12's rollback exercise and
   B15's leverage remedy both land here — which is why neither may be deferred past this ADR's
   implementation.
+
+## Mission alignment amendment — 2026-10-07
+
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

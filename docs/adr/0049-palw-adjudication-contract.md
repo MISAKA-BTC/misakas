@@ -1,5 +1,8 @@
 # ADR-0049: The adjudication contract — what a court opens, and the bound that makes it model-size-independent
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 Status: **Proposed.** Activates nothing, registers no class, and changes no proof-of-work. It
 specifies what a refutation may ask for, what the court may open to answer it, and the admission
 gate that makes both bounded by a class's own geometry rather than by its model's size.
@@ -416,3 +419,11 @@ can tell the court what the class computes.
   bounds, which is an ADR of its own. This one is a precondition for it: a new op set is not worth
   specifying against an adjudication contract that does not close.
 * **Performance.** Nothing here is a throughput decision, and no bound below may be relaxed for one.
+
+## Mission alignment amendment — 2026-10-07
+
+adjudication contractはcourt kernel・material manifestだけでなく、普通のpublic bondが公開取得・局所化・terminal filingを完結できるcontractへ強める。契約したmaterialのhashだけを、証拠が取得できることの証明としない。
+
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

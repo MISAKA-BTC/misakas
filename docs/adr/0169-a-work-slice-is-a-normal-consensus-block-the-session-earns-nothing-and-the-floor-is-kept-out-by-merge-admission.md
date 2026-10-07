@@ -1,5 +1,8 @@
 # ADR-0169 — A work slice is a normal consensus block; the session that defines the job earns nothing, and the floor is kept out of the chain by merge admission, not by colouring
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: **IMPLEMENTED 2026-10-03/04 on `rfc8/claim-backed-blocks` (lane RF8), DORMANT.** The three fences — `palw_work_slice_v1`,
   `palw_ws_clock_v1`, `palw_merge_admission_v1` — are `None` on every shipped preset, in no flag-day list, with no activation height
   chosen; `Params::validate_palw_work_slice_v1` refuses to arm them while a part of the lane is unbuilt (`PALW_WS_UNBUILT_V1`) and,
@@ -114,3 +117,11 @@ one needs a court-admitted IR class); a mutation check of S1.
   nothing acts on it.
 * **A re-mine on a timer ("one block per index per 30 s"):** shorter than a slot, it minted a duplicate while the first block was merely
   unmerged (S7 amendment, D8).
+
+## Mission alignment amendment — 2026-10-07
+
+work-sliceの既存core ledger再利用は維持するが、各sliceとそのboundaryの公開prosecutionを受入に含める。session無報酬やslice clockでclaimのmaturity・liability・証拠保持を短絡しない。
+
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

@@ -1,5 +1,8 @@
 # ADR-0097 — A model's fit is a lookup, and the entrance says its limits before the first token
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: PROPOSED 2026-09-10; **IMPLEMENTED the same day, consensus-inert** (§9). No fence, no
   field of `Params`, no object, no fingerprint moves: Decision 1 is a report over predicates the
   chain already runs, Decision 2 is two JSON objects on the gateway, and Decisions 3–5 are what
@@ -442,3 +445,9 @@ not replay (ADR-0082 D11), a cache across jobs (ADR-0096 D5), a silently shorten
 missing and is now here**: the limits (D2) and the fit (D1). **What it asks for that is named and
 not built**: an Anthropic-shaped surface, a `/v1/tokenize` route, and the sharded seat that a
 K3-class network would stand on (D5).
+
+## Mission alignment amendment — 2026-10-07
+
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

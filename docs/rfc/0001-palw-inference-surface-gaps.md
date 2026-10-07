@@ -1,5 +1,8 @@
 # RFC-0001: PALW 推論サーフェスの欠落機能 — 決定論的な生成制御・サービング・入力拡張の設計
 
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
+
 | 項目 | 値 |
 |---|---|
 | Status | **§A(FP Job V4 リリース)= Implementation Frozen**(2026-09-27、G0)。§0〜§7 の P1〜P3 は Draft(次リリース以降) |
@@ -400,3 +403,9 @@ claim の形(1 推論 = 1 claim)は変わらない。各リクエストが自分
 - **token table の自動読み込み**:seat は class artifact の隣の `<artifact>.palwtokens`(`palw-a16-fp-worker --emit-token-table` の出力)を起動時に登録する。table は自分の bytes から導いた root で登録され、制約付き claim は job が commit した `table_root` で table を選ぶので、root の合わない sidecar はその claim には使われない(seat は `Unverifiable` で棄権)。`--palw-token-table` は上書き・追加として残る。
 - **drill 用 producer**:`misaka-palw-rfc1-drill-claim`(floor class 上で constraint / constraint2 / prefix / inherit の claim を実走して outbox に書く)+ `scripts/misaka-palw-rfc1-drill-claims.sh`(rail で署名・submit)。adapter 一覧の producer は composite class が要るため floor 版はない。
 - **残(最適化・凍結後)**:executor の計算削減、seat 側の prefix-leaf cache。
+
+## Mission alignment amendment — 2026-10-07
+
+§Aと§2のdecode、artifact、KV reuse、adapter、multimodal拡張は、それぞれ公開の入力・state境界・version・outputと裁定証拠を拘束する。ローカルChatの非claim機能や将来profileのsource fidelityは、公開訴追可能性の代わりにならない。新しい報酬profileの受入にRFC14の外部public-bond試験を追加する。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。

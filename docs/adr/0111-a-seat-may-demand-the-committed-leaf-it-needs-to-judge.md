@@ -1,5 +1,8 @@
 # ADR-0111 — A seat may demand the committed leaf it needs to judge
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: PROPOSED 2026-09-11 on `feat/adr-0103-held-context` (continuing ADR-0103 at `36f115c4`),
   written from the operator's decision on ADR-0103 §10.5; **IMPLEMENTED the same day (§8), both
   paths drilled to a slash on a live devnet**. Nothing is armed: the new unit rides the held regime
@@ -286,3 +289,13 @@ capture's close at the same leaf needs no block and is `FalseAccusation`. Also p
 `the_close_from_served_intervals_holds_and_asks_for_the_disputed_leafs_block` (the node). The honest
 X1 pin (`a_close_from_served_intervals_is_the_close_from_the_capture_and_the_annex_changes_no_verdict`)
 is unchanged and green.
+
+## Mission alignment amendment — 2026-10-07
+
+将来のleaf demandは、bound seatだけでなく公開bond条件を満たす非seatにも提供する。committed fused leafとそのdissection/close materialまで認証し、単にleaf番号を特定できたことを訴追完了としない。
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+* 不正の発見と、その後の客観的局所化・裁定の成立を分ける。honest seatの存在、raw sampling、選出outsider、quorumだけで全不正の検出を保証しない。ADR-0171の全constraint検査とresidual error、ADR-0172のversioned Kernel境界を維持し、巨大な無界replayやVM/TEE/BFT authorityを代替条件にしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

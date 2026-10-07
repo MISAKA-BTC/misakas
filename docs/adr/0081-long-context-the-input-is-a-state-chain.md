@@ -1,5 +1,8 @@
 # ADR-0081: Long context — the input is a state chain
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 **Status: SUPERSEDED IN PART by [ADR-0082](0082-the-close-is-flat-in-the-context.md), 2026-09-03,
 later the same day.** §3 — the prompt as a chain of prefill segments — is withdrawn and is not to be
 implemented, with one exception: Decision 3, the prompt ids as a tiled Merkle root, which is
@@ -350,3 +353,12 @@ carries the one tile the disputed gather read, verified against the job context'
 id is read; `check_close_speaks_the_networks_prompt_form` admits exactly one spelling per network.
 Armed on a carded mainnet from genesis; testnet-11 keeps trace format 3. Design record:
 `docs/palw-private-prompts-design-2026-09-05.md`.
+
+## Mission alignment amendment — 2026-10-07
+
+state-chainの各境界がrootにcommitされることに加え、その不正境界を検証者が公開取得してcourt証拠へ変換できる必要がある。繋がったrootだけを公開materialの代わりにしない。
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

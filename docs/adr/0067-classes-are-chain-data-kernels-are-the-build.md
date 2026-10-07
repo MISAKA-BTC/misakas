@@ -1,5 +1,8 @@
 # ADR-0067 — Classes are chain data; only kernels are the build
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 Status: **Decisions 1–3 and 5 LANDED for the dense (A16) container (2026-08-31), fenced and
 dormant; Decision 4 needed no code; Decision 6 including its cache bound LANDED (2026-09-01), as did
 the pruning-point sidecar and the cross-architecture clause. The mmap (Qwen3.6) interpreter's blocker —
@@ -708,3 +711,12 @@ The Qwen3.6 geometry disposition this section left open was overtaken: the class
 re-registered as graph-v3 with a profile that describes the engine (id `5bd9ae3d…`), which is the
 disposition the paragraph above said it could still adopt. Nothing remains to build under this
 heading.
+
+## Mission alignment amendment — 2026-10-07
+
+classesはchain data、approved kernelsはbuildという境界を維持する。chain-resolve/fuzz成功やproducerとseatの実行一致とは別に、外部public bondの公開opening/terminal proof生成を受入条件へ追加する。
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

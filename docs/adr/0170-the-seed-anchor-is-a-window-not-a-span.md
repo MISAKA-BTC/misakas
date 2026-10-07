@@ -1,5 +1,8 @@
 # ADR-0170 — The seed anchor is a window, not a span: a merged attempt anchors, the anchor survives span boundaries, and the admission jury and the schedule seeding read the latest anchor of `S − 24 … S − 1`
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 **Status:** PROPOSED 2026-10-03 on `anchor/window` (lane P2), for the DAA-5,300 flag day, the user's decision of the same evening
 (variant "M1 + M2 + M3, W = 24"). Consensus change behind ONE fence, **dormant on every shipped preset**:
 `Params::palw_anchor_window_v1`, a bare height whose companion values (`W`, `M1`) are hashed with it. Amends **ADR-0130** (what a seed
@@ -124,3 +127,12 @@ and fingerprint byte for byte as before.
   the same traffic leaves no seed anchor at either audit (spans 130 and 230) and the class stays `Candidate` through both — the int-11
   drill's skipped audit, reproduced and closed. (The harness runs no panel, so a REAL claim never resolves and the panel's replay room, five
   claims of the class, bounds the traffic; the live chain's supply of anchors is far denser.)
+
+## Mission alignment amendment — 2026-10-07
+
+seed windowはassignment/admission randomnessの規則であり、public proofの提出資格や算術真実の承認ではない。anchorがない場合の通常処理と、独立した外部courtの受理を混同しない。
+
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

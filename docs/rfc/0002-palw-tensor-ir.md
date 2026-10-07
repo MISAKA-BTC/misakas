@@ -1,5 +1,8 @@
 # RFC-0002: PALW Canonical Tensor IR v1 (PALW-TIR) — a bounded, deterministic integer tensor program as the consensus meaning of a class, with a reference evaluator and optional fused kernels
 
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
+
 | Field | Value |
 | --- | --- |
 | Status | Draft — implementation in progress: Phases A–C passed Gate 1 on 2026-09-28 (see *Implementation status*) |
@@ -1439,9 +1442,7 @@ panel room and the registry RPC.
 - **Registration is existence.** `Registered`, `Candidate` and `Prefetching` admit no claim. The claim gate
   (`class_lifecycle_refusal`) refuses a claim to a class whose state does not admit claims, the model market follows the same
   gate, and the producer asks it before it spends an inference. A class nobody serves earns nothing and carries no weight.
-- **Adjudicability is settled at registration.** Admission v10 proves types, ranges, costs and court cones statically (Part I §5),
-  so a registered IR class can be tried; its weight further needs a certified family covering the program's primitives
-  (`NotEndToEndCertified`; `palw_uncertified_weightless`).
+- **Static court feasibility is checked at registration.** Admission v10 checks types, ranges, costs and court cones (Part I §5); existing weight rules also require a certified family covering the program's primitives (`NotEndToEndCertified`; `palw_uncertified_weightless`). These are the existing gate's scope, not proof that a fresh public bond can acquire evidence and prosecute every admitted profile. Future reward/weight admission additionally requires RFC14's public-verifier dispute-completeness gates under ADR173.
 - **Independence, once.** A bought class passes a jury of operators the network drew (ADR-0147), at one audit per period, so a
   registrant is admitted alone only with the probability that its share of the operator lottery wins a majority of the jury.
 - **Possession.** Ready seats hold fresh possession proofs with collateral behind them.
@@ -1683,10 +1684,7 @@ that the registry reports the licensable share) and SEAT-10; the generative vari
 **Decided: go.** To be built by this lane after the preflight (§II.2), node-only, no fence. A seat, before it first proves readiness
 for a class, runs the class's canonical self-test on its own executor against the reference evaluator — a few positions, or one tile
 of each primitive kind for a large class (§II.9 L2: sampled conformance) — and posts a possession proof only if they agree. When it
-does not, it writes why, and `getPalwNodeStatus` (what this node is doing) shows it. A dishonest seat can skip the test, but it harms
-only itself: the court convicts it on its first wrong tile. This puts "the executor is certified" where it can be enforced, on each
-seat, and does not need the chain to verify an execution (which it cannot do without re-executing it). The chain still sees only ready
-seats; the registry cannot tell which seats tested.
+does not, it writes why, and `getPalwNodeStatus` (what this node is doing) shows it. A dishonest seat can skip the self-test and sign a false assertion; readiness alone does not prevent harm or establish detection. Responsibility follows only when authenticated evidence objectively refutes the assertion within its signed scope. Future admission must therefore also pass independent public-bond evidence acquisition, localization and conviction under RFC14/ADR173. The registry cannot tell from a readiness declaration alone which seats actually tested.
 
 #### Proposal C — what probation pays (C1 decided)
 
@@ -2065,3 +2063,9 @@ A8 closes with published `L_listed`/`L_files`, ≥90 % active-kernel success mee
 real-checkpoint `Final` references, sustained panel evidence and a complete residual table. This is not 100 %
 coverage: remaining kernel/resource/source/rights failures prevent an unrestricted coverage claim. RFC11's
 broader all-HF target retains `D_all`; neither target implies the other.
+
+## Mission alignment amendment — 2026-10-07
+
+§5、§II.7、§II.10–II.12のadmissionにpublic-verifier dispute completenessを追加する。静的cone/cost検査、kernel catalog、conformance、readyな独立seat、admission jury、FamilyCertifiedだけでは報酬・weightを有効にしない。boundary/history/checkpoint、fused reductionのdissectionとcloseも、fresh non-seat verifierが公開取得した証拠から作れる必要がある。「登録時にadjudicabilityが確定する」はこの追加gateを含む場合に限る。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。

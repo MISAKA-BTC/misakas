@@ -1,5 +1,8 @@
 # RFC-0004: PALW Model Improvement Protocol — self-improvement and distillation over PALW-TIR
 
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
+
 | Field | Value |
 | --- | --- |
 | Status | Revised Draft, 2026-10-06 — improvement remains independent of a VM. ADR-0172 withdraws the later BVM/GVM programme; model extension uses versioned kernels, with RFC07/RFC11 probabilistic verification (§0) |
@@ -1042,3 +1045,9 @@ without the A-2 tolerance.
 - Follow RFC05's current kernel-only design for new model semantics; do not start its withdrawn
   BVM/GVM implementation programme. Existing Phase A engineering estimates do not include the new
   probabilistic kernel's prover/checker work and must be re-estimated before scheduling that route.
+
+## Mission alignment amendment — 2026-10-07
+
+candidate/evaluation/promotionの各claimにも、外部public bondによる証拠取得とobjective courtを適用する。admission/evaluationのjury多数決は計算の真偽を決めない。draw前のholdout secrecyは保てるが、評価claimの検査と裁定に必要な入力が公開に認証・取得できないまま新しい報酬を有効にしない。品質比較と計算の一致は別の主張である。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。

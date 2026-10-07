@@ -1,5 +1,8 @@
 # ADR-0037: PALW off the block-critical path — an asynchronous, budgeted job state machine over a permanent hash floor
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 Status: **Superseded in part by ADR-0038 (same day).** Decision 1 (hash-PoW as the primary
 consensus work; PALW never block-critical) is **reversed** by ADR-0038 — it secured the chain by
 making the chain's thesis optional. Decisions 2–9 (state machine, binding, panels, court seating,
@@ -370,3 +373,10 @@ The near-term engineering decision is therefore **not** to improve algo-4 but to
 block-critical path and move PALW into the budgeted asynchronous machine above. Polishing the
 arithmetic first would perfect a precision instrument and then detonate it with a HashMap and an
 unbounded coinbase append.
+
+## Mission alignment amendment — 2026-10-07
+
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

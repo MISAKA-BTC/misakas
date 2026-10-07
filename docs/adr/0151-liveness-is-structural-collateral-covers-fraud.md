@@ -1,5 +1,8 @@
 # ADR-0151 — Liveness is structural; collateral covers fraud
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: **D2, D3, D4 and D5 in force on testnet-12 from genesis; D1's genesis half landed, its
   runtime half open; D6 partially.** D4 and D5 were drafted as OPEN from a description of the defect
   and turned out to be already built — that correction is recorded in their sections rather than
@@ -348,3 +351,13 @@ checkpoint (prefill position 15). A hybrid row is a registration transaction onc
 corrected. Collateral and rows move the premine, so the genesis block moves with them — and so does
 genesis card 7, re-keyed for testnet-12 because its key is on no fleet host: testnet-12's genesis is
 `f6cc9576…` (utxo commitment `11669bc6…`); the deployment record carries the fingerprint.
+
+## Mission alignment amendment — 2026-10-07
+
+capacity ledgerとfraud liability ledgerの分離を維持する。Finalでcapacityを戻しても、外部public verifierのproof期間と証拠保持が終わる前に回収可能なliabilityを消さない。nominal slashと実際に回収できる額を区別する。
+
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+* 不正の発見と、その後の客観的局所化・裁定の成立を分ける。honest seatの存在、raw sampling、選出outsider、quorumだけで全不正の検出を保証しない。ADR-0171の全constraint検査とresidual error、ADR-0172のversioned Kernel境界を維持し、巨大な無界replayやVM/TEE/BFT authorityを代替条件にしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

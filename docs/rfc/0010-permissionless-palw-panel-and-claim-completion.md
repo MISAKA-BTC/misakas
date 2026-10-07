@@ -1,5 +1,8 @@
 # RFC-0010: Permissionless PALW Panel binding and claim completion
 
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
+
 * Status: Draft, 2026-10-04 — design and implementation plan only. No activation height, wire version, randomness primitive, or consensus fingerprint is assigned.
 * Scope: testnet-12 PALW claims, their Panel binding, verification and reward completion. An RFC merge does not change the live rules.
 * Related: [RFC-0009](0009-palw-remote-miner.md), [RFC-0007](0007-palw-verification-certificates-and-algebraic-checks.md), [RFC-0008](0008-palw-claim-backed-consensus-blocks.md), [ADR-0141](../adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md), and the [testnet-12 Panel-seed incident and lane A](../t12-panel-seed-2026-09-25.md).
@@ -166,3 +169,9 @@ Versioned signatures and hash domains prevent replay across networks and old/new
 ## 10. Decision boundary
 
 This RFC proposes replacing **operator identity as the Panel seed's trust anchor** with a fixed claim, frozen public Panel population, independently established entropy and binder-independent state transition. It deliberately leaves the new entropy primitive and numeric economics unset until §9. The eight-genesis rule is removed only at a fence where the replacement's safety and liveness have been demonstrated. This separates a permissionless consensus qualification from the measured availability of the people and machines that actually run it.
+
+## Mission alignment amendment — 2026-10-07
+
+public bindingとgenesis-anchor特権の廃止は維持するが、binding成功だけでpermissionless prosecutionの完成としない。非Panelのpublic bondによる証拠取得、accusation、terminal proof、licensed claimのconvictionも完成条件に加える。現在のoperator-anchorは移行対象であり安全性の永続前提ではない。Panel=0はRFC14完成前に有効化せず、現在のbinding方式を恒久必須ともしない。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。

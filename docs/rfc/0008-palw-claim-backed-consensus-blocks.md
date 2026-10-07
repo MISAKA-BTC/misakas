@@ -1,5 +1,8 @@
 # RFC-0008: Claim-backed PALW consensus blocks — LLM work as the chain, not a side lane
 
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
+
 Status: Draft (design only; no activation height, consensus fingerprint, or testnet rule change)
 
 Date: 2026-10-03
@@ -138,3 +141,9 @@ floor の拒否と model-backed clock は分離して段階導入する。前者
 ## 9. 判断
 
 本 RFC は **「claim を中心にした bounded session → 複数の検証可能な microclaim/work-slice block → model-backed selected chain」**を次の設計方向として提案する。同時に、見かけだけの algo-10 BLUE 化、full claim credit の N 倍配布、heartbeat の停止、header class の自己申告による floor 拒否は採用しない。§7 の安全性と §8 の供給能力を実証するまでは Draft のままにする。
+
+## Mission alignment amendment — 2026-10-07
+
+session/sliceごとに、公開のinitial/final state、disjoint work identity、constraint/evidenceを拘束し、slice間の最初の不整合も外部public bondが裁定できる必要がある。早期block/clock/weight、ridersや集約でclaimの検証・責任期間を短絡しない。pending exposure、証拠保持とFinal後の回収を整合させる。Panel=0をsliceの高速化条件として先行有効化しない。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。

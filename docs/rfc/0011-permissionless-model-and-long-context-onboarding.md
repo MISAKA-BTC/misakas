@@ -1,5 +1,8 @@
 # RFC-0011: Permissionless model onboarding with probabilistic constraint verification and court on dispute
 
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
+
 * Status: Draft, revised 2026-10-06 at the operator's request. **Sampling-first / court-on-dispute is the selected design direction**, recorded in [ADR-0171](../adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md). Design and acceptance criteria only; no testnet-12 rule, activation height, or fingerprint changes by merging this text.
 * Source audit: repository commit `27670cd2b` (includes the DAA 5,300 release). Source-proven limits below describe this commit, not a fresh measurement of every deployed node. Prior 9B run results, current code facts, and proposed fixes are labelled separately; no successful 9B registration or 2M run is claimed.
 * Scope: PALW-TIR model conversion, class admission, long-context claims, probabilistic constraint checks, data availability, court, and readiness. The primary coverage target is **at least 90% of all public Hugging Face model repositories at a pinned snapshot, registered as their complete advertised task and context**. Registration must be independent of the registrant's VPS size. Execution semantics and terminal adjudication remain exact; normal verification accepts a quantified, nonzero soundness error.
@@ -552,3 +555,9 @@ registration plus Final/court/DA results. Report actual proof preparation and sm
 Any reference replay used during development must be labelled conformance work rather than a
 hidden prerequisite on every ordinary claim. No arbitrary soft-fork, universal-model support or
 performance claim follows from choosing the kernel-only implementation strategy.
+
+## Mission alignment amendment — 2026-10-07
+
+§13、§15、§16のVerificationPlan/kernel admission、9B-8k/long-context/全taskのcoverageに、fresh non-seat public-bond prosecutionの実測を追加する。kernel-only certificateや正直なFinalだけを成功と数えない。非公開weights/input/state、FOLD prefixやfused preimageが必要なprofileは、公開取得または承認済み公開証明経路が完結するまで新しい報酬対象にしない。HF coverage、ε_check、source fidelityとこのgateは別の指標である。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。

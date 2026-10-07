@@ -1,4 +1,7 @@
-# RFC-0006: PALW layer-sharded panels — a seat verifies a layer range of an IR claim, crossed with a position segment, from the committed boundary rows and only those layers' weights; licences by parts with an outsider per shard and a recount over cells; a lie is detected by the shard that holds it and convicted by the one-move court that exists
+# RFC-0006: PALW layer-sharded panels — bounded cell verification from authenticated boundaries, with independent public-verifier localization and exact court on dispute
+
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
 
 | Field | Value |
 | --- | --- |
@@ -45,9 +48,8 @@ replay claims keep their old rules; a new receipt/coverage profile needs a separ
   これらを step root に対して開き、cell 内のすべての commit point を再計算して照合する。
 - **検出の補題。** honest な実行と最初に食い違う commit 値 `v` を考える。`v` の cone の入力はすべて `v` より前にあるので
   honest な値であり、再計算すると honest な値が出て、commit された `v` と食い違う。つまり **嘘は、`v` を含む cell を
-  担当する seat に必ず見える**。境界行に嘘を置いて下流を「つじつま合わせ」しても、上流の cell が捕まえる。
-  捕まえた嘘は **既に t12 で稼働している** IR one-move court(`TirShardCourtAccused`、tag 62)で有罪にでき、H 縮約の
-  leaf は F7 の dissection で裁く。新しい court は不要。
+  全対象commit pointを検査する verifier に見える**。この補題は、必要な認証materialを実際に取得して全対象を照合した場合に限る。honest seatの存在だけで検出を保証しない。境界の不正も、その境界を生成したcellの検査で扱う。
+  既存IR one-move court(`TirShardCourtAccused`、tag 62)とH縮約のdissectionは裁定の土台である。ただし、普通の非Panel public bondが公開openingから証拠を生成して提出できるかは別gateであり、取得・局所化・terminal filingに不足があれば追加実装が必要である。
 - **panel。** 既存の S1(segment・full seat + partial seat・segment ごとに 2 attest・mask 付き receipt)を
   **層 shard ごとに** 回す。cell = (層 shard, S1 segment)。
 - **legacy の shard 設計(ADR-0099/0100、休眠)を t12 で止めていた二つの blocker を解く。**
@@ -82,9 +84,7 @@ layers' history rows before the segment, their state checkpoint at the segment's
 layers' weights**. It recomputes every commit point inside the cell, as one batched pass per layer over
 the segment's positions.
 
-A **detection lemma** (§2) shows that a lie anywhere in a claim is visible to the seat holding the cell
-where it is computed. The **IR one-move court that t12 already runs** (`TirShardCourtAccused`) convicts
-it.
+The **first-divergence lemma** (§2) applies when a verifier obtains authenticated material and checks every relevant commit point in the cell. It does not guarantee detection merely because an honest seat exists. Existing `TirShardCourtAccused` and dissection kernels provide a terminal-court baseline; an ordinary non-Panel public bond must also be able to acquire evidence, localize and file a bounded exact proof. Missing acquisition or prover capability requires additional work under RFC14.
 
 The panel is ADR-0100's stratified panel, with three additions:
 
@@ -868,3 +868,9 @@ decides.
 ## Decision
 
 <Open.>
+
+## Mission alignment amendment — 2026-10-07
+
+§2のfirst-divergence lemmaは、必要な認証境界と全対象commit pointを取得・検査した場合の局所化の補題である。honest seatが存在するだけの検出保証でも、公開証拠の取得やcourt proof生成の完成証明でもない。cell/shardのopening・重み・stateと有界dissection/closeを、選出されていない普通のpublic bondにも提供する。outsiderの選出やcell quorumを、そのbondの訴追権の条件にしない。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。

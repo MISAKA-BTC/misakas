@@ -1,5 +1,8 @@
 # ADR-0167 — The ×1000 capacity package: a fixed per-DAA PALW reward budget, riders, a lower-only breaker, and the ρ = 250 / ρ = 1000 steps
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 Status: implemented on `rcore/cap-1000` (testnet-12 only, int-11 release, H = 5,300). Supersedes nothing; completes stages 5, 6 and 7 of
 ADR-0160 v3 (§8, §9, §11.4–11.6). Directive: the user, 2026-10-03 10:50 JST ("the claim ×1000 capacity change ships in the DAA-5,300
 flag day release").
@@ -150,3 +153,13 @@ duty is unchanged and reads `k_aud` from the claim's own ρ.
 * The first step at ρ = 250 is a flag day for the audit pool: `k_aud` = 2 doubles the operator replays per credited claim.
 * K3/K4 count every expiry as the network's, including a single producer's own silence; with lane PL's rule that producer is not charged,
   and a lone silent bond cannot reach the 20-claim floor of a ratio metric.
+
+## Mission alignment amendment — 2026-10-07
+
+capacity倍率、rider数、per-DAA報酬budgetの増加は、外部public prosecutionのbytes/work/deadline/aggregate exposureが収まることも受入対象にする。Panel supplyやbreakerの数字だけでこのgateを代替しない。
+
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

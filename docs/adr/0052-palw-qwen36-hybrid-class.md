@@ -1,5 +1,8 @@
 # ADR-0052: `PALW-QWEN36` — the integer arithmetic for Qwen3.6's hybrid graph
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 Status: **Proposed.** Registers no class and activates nothing. Specifies the ops a Qwen3.6
 implementation must reproduce bit-for-bit, records what has been measured about them, and states
 what is still missing before the class could carry weight.
@@ -238,3 +241,9 @@ nothing — a draw read 12.8 GiB through three million page faults and took twen
 replaces it: residency is the artifact's, the always-set is read once through the file descriptor
 and pinned, routed experts are read as the router chooses them and held under a budget the
 operator states, a fifth of the artifact by default.
+
+## Mission alignment amendment — 2026-10-07
+
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

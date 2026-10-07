@@ -1,5 +1,8 @@
 # ADR-0098 — The panel's coverage is a number, and a seat that found a lie files nothing else
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: PROPOSED 2026-09-10. **Decisions 1–3 IMPLEMENTED the same day** (§9): Decision 1 is a
   report over the draw the seats run; Decisions 2 and 3 change what a seat FILES, which is the
   seat's own duty — no consensus object, acceptance rule, fence, parameter or fingerprint moves,
@@ -302,3 +305,13 @@ claimant renumbers the later writer. **The next free number is 0099.**
   kaspad's whole suite ran green, as did the targeted consensus-core and base0 suites. The
   mainnet card and testnet-11 behave as before except that a finder files nothing. On devnet the
   finder is no longer charged.
+
+## Mission alignment amendment — 2026-10-07
+
+seatが嘘を発見したらそのclaimについてValidを出さない原則とsampling実測は保持する。旧「files nothing / fault ledgerだけ」の動作を将来の上限にしない。非seatもfaultを局所化し、RFC14の認証demand・bounded court・terminal proofを提出できる設計へ進める。発見済みのfault ledgerだけをconviction完了と呼ばない。
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+* 不正の発見と、その後の客観的局所化・裁定の成立を分ける。honest seatの存在、raw sampling、選出outsider、quorumだけで全不正の検出を保証しない。ADR-0171の全constraint検査とresidual error、ADR-0172のversioned Kernel境界を維持し、巨大な無界replayやVM/TEE/BFT authorityを代替条件にしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

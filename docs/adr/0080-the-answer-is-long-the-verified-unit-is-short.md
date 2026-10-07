@@ -1,5 +1,8 @@
 # ADR-0080: The answer is long; the verified unit is short
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 **Status: SUPERSEDED IN PART by [ADR-0082](0082-the-close-is-flat-in-the-context.md), 2026-09-03,
 later the same day.** §3 — one job as N verification segments — is withdrawn in full and is not to
 be implemented; the refutation below is the reason and it stands. Three things here survive and are
@@ -314,3 +317,12 @@ earned as one segment. Until U-01's latency number exists, nothing below it is w
 
 This is ADR-0080; ADR-0079 is the last committed. A concurrent claimant renumbers the later writer,
 per ADR-0036 Decision 5.
+
+## Mission alignment amendment — 2026-10-07
+
+旧verification-segment案の撤回は維持する。後続のslice/context設計でも、segment間stateの一致と最初の異なる境界を外部bondが証明できることを確認する。
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

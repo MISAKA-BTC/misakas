@@ -1,5 +1,8 @@
 # ADR-0030: The PALW step function, pinned at tile granularity — shape profile v3
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 Status: **Accepted (schema frozen; every class-specific value is registration-measured).**
 Activates nothing. This ADR pins the *step function* of ADR-0027's one-step refutation: which
 operator, which tile shape, which reduction order `shape_profile_id` binds. It is the
@@ -305,3 +308,9 @@ attention row.
   the new objects (ADR-0029's rails carry them when Stage 1 lands), no economic change. The
   §12 gate and ADR-0028's stage ladder are unmoved: this ADR converts "cannot even in
   principle" into "implementable and measurable", nothing more.
+
+## Mission alignment amendment — 2026-10-07
+
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

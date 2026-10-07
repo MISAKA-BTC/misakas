@@ -1,0 +1,924 @@
+{
+  "date": "2026-10-07",
+  "status": "PASS",
+  "base_commit": "43f0bcb362d37cba79414940f3fdd368d40d3377",
+  "scope": "Latest-main publication of authored RFC/ADR changes only; historical workspace audit snapshots preserved as labelled records.",
+  "checks": {
+    "authored_document_paths": 112,
+    "total_document_paths_including_this_receipt": 113,
+    "new_local_link_occurrences_checked": 540,
+    "existing_upstream_adr_bodies_preserved": 90,
+    "existing_upstream_rfc_bodies_preserved_except_recorded_prospective_corrections": 13,
+    "latest_upstream_rfc9_preserved": true,
+    "only_rfc_adr_docs_changed": true,
+    "markdown_fences_and_added_references_valid": true,
+    "rfc14_transport_extension_present": true,
+    "rfc_numbering_1_through_15_next_16": true,
+    "git_diff_check_passed": true
+  },
+  "runtime_implementation_changed": false,
+  "runtime_tests_run_for_this_publication": false,
+  "transport_code_imported": false,
+  "network_activation_performed": false,
+  "rfc14_completion_established": false,
+  "panel_zero_activation_authorized": false,
+  "errors": [],
+  "documents": [
+    {
+      "path": "docs/adr/0026-current-palw-testnet11-architecture.md",
+      "before_on_main": {
+        "exists": false,
+        "sha256": null
+      },
+      "published_sha256": "4e897b0a6f532be96858b820a803712e35f345b73401fbb7b23068e2fc0c11a4"
+    },
+    {
+      "path": "docs/adr/0026-palw-v2-runtime-separated-verification.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "9b9e8b34cbc4bca852861627e95e2c64f3c750937c84ba217ba8f83fb09f6092"
+      },
+      "published_sha256": "0e3d2b4540d81b125164d120f5685ca18b9d97f0d3f37f80b51a7cf97c3f1bd0"
+    },
+    {
+      "path": "docs/adr/0027-palw-slash-unilateral-fraud-proofs.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "6a1a5d12336d038acb37fda63cc664f97192b734dbc04736f0a68d0ab979f32c"
+      },
+      "published_sha256": "4cb4839a371ec0ac9e8cad143f5dc5b70ac75290c35f8dcea174490b48f7fe47"
+    },
+    {
+      "path": "docs/adr/0028-palw-challenge-sampling-protocol.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "61d97dfd6e7cce6a077b87ea2e9562cfd9227775d81a099fef5bd274c70fa635"
+      },
+      "published_sha256": "02c7ae2eeeccef5ee8d3fb507f4b1343e1fcc50be713169231a3e9f5a395b561"
+    },
+    {
+      "path": "docs/adr/0029-palw-chain-carriage.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "beb24d28824b5ed0a47e1246b7026e006cb17c1a5c0155c8ba3f722ed19b4c50"
+      },
+      "published_sha256": "ddf833a50921f1880b4ead7f15dd13870023a784762b8d3504468f544a95a243"
+    },
+    {
+      "path": "docs/adr/0030-palw-step-function-shape-profile.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "7a25f2bb44b4820f5ceafc12e5b394052c37c9bdff096fef1e87aaf0b98edfce"
+      },
+      "published_sha256": "f12da03d24e67e4f08fa1cb2eb6473bb02433f3abb0304cdacdd7f106e3cafcd"
+    },
+    {
+      "path": "docs/adr/0032-palw-fee-bond-escrow.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "3eb1044c9bbd1e5b09563cad4ac766d66e2d1e4a21ee10fa73a0d68388a52bd5"
+      },
+      "published_sha256": "fe9d07cf5d130d731081f8b1bb0105f701f2efbb1412406dbb5bd4b89af73eda"
+    },
+    {
+      "path": "docs/adr/0033-palw-credit-gate-wiring.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "885ae5ee6e9418d18b0d51df529fb453c65e4a3865458c98774bd2a1a8fb446d"
+      },
+      "published_sha256": "88727903dab4e082d1907aa6de6e6b319024fbcb3c4482f3da9f96fdead20e75"
+    },
+    {
+      "path": "docs/adr/0034-palw-execution-class-model-band-routing.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "e262198b9480624a96863f5cabb94e38f3d5aeecdb495064e755a90638abdc0c"
+      },
+      "published_sha256": "b65e28578ea9bf45057603aa8336534bc87692b63476b81ab5986503c9aa085e"
+    },
+    {
+      "path": "docs/adr/0036-palw-mainnet-activation-model.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "a082e936bd81c2fa3e4762094e18677bf8c84d7fe00df1aa404c0e4b8d066128"
+      },
+      "published_sha256": "c6fba80f13e961b0c2a20f43528872b63dd87011bccd4c99078ab6d478d903b8"
+    },
+    {
+      "path": "docs/adr/0037-palw-async-job-state-machine.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "e2e9635e00ecce454ae60af789544aad28f810ac7648581d5246c57548bd269d"
+      },
+      "published_sha256": "5685a52b2b4736999a258d47defddc6bcb4c3a9bd55426851b8b9ba8ceb0d92a"
+    },
+    {
+      "path": "docs/adr/0038-palw-is-the-consensus-work.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "1d6856dba0849be155b192c3523bee9b57e044a579c405c2d5703efe80670978"
+      },
+      "published_sha256": "b26f8d11736a3ac296da8a9f8e169766cb66af31fd649a867d1ae187251b208d"
+    },
+    {
+      "path": "docs/adr/0039-palw-only-block-production.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "62be25e11087cebd334ba5f8e4b82399aa46072c4bded405a79807051e50657f"
+      },
+      "published_sha256": "1d3904d6042a36142eed320e8848fe04ea260108ac43fd71fda07e3e955953c6"
+    },
+    {
+      "path": "docs/adr/0042-palw-mainnet-candidate-ruleset.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "f699de459e83e7dcd68a8bccd164a291e628f0cd54c423e92f9559f482e90d55"
+      },
+      "published_sha256": "539fa80a7b081a6593b14826d4188da645f70151b5ab99c635f0b695bf290f2b"
+    },
+    {
+      "path": "docs/adr/0044-palw-free-prompt-receipts.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "648f65162925de52fad922927689943d8e7d31815e64adb4b7efc08c363fef80"
+      },
+      "published_sha256": "2eba4a33170eecb765b9f30e3179b7f8bfed2bedf65f7897d9729762cc5bd0fa"
+    },
+    {
+      "path": "docs/adr/0049-palw-adjudication-contract.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "23c8a3b78f69c647c19dd01d79b12b00372a30dcc759fa13b4aad56045aae510"
+      },
+      "published_sha256": "9ea86620442da7888ee02c2af696b9a1cad9c70997265ccc8485849995e7de05"
+    },
+    {
+      "path": "docs/adr/0051-palw-metal-gguf-execution-family.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "ecacfa7efb75e9b3a0a73b1907af2e69ac5e182b625f6a90038ec63fbaea78c7"
+      },
+      "published_sha256": "2a13283a54d3a47634a26d8d0dd08ce207902d0fee21aefdce3cc0ec199f9b84"
+    },
+    {
+      "path": "docs/adr/0052-palw-qwen36-hybrid-class.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "903cbd31f41541f3def2698f155bea9734dc4f53af06e25cec1b14604be86394"
+      },
+      "published_sha256": "f246ab1f2887d3127e403a10ac2726b42f60f7beba6baecae2ffa66177bc5cff"
+    },
+    {
+      "path": "docs/adr/0053-palw-one-execution-family.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "4328836c324555b31b21266e5e620ce9658ca772c94e8d556d6e81909c84b8e8"
+      },
+      "published_sha256": "706fe4df8e122bc4b9ae3fa9c1fa61c8f36074b43c7c1c2af4d49ed672ac1339"
+    },
+    {
+      "path": "docs/adr/0055-palw-position-is-earned-not-declared.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "d55e7fcb9728a7c077ce7bccf3f2b171705f843e6347a40b0fe4fa18e4614e8e"
+      },
+      "published_sha256": "ee5ea7635aa91ed3bb2198e157799a6fdc6d69bbeb608eb2cfabd89209d659f8"
+    },
+    {
+      "path": "docs/adr/0056-palw-permissionless-class-admission-and-share-economy.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "bcee5315fabad6e73b9e41e88947366db5a4ef826c7a442798686926e79d503e"
+      },
+      "published_sha256": "285b68f807a9a3372441b7b4833dc53bc816305bc855562e167bb3777fd37918"
+    },
+    {
+      "path": "docs/adr/0058-palw-merged-work-is-counted.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "934fe22d77fa722bf78fbadf5a4f743f93abd5f9cec25426e6044ed3aeb4f793"
+      },
+      "published_sha256": "93d981f6da6cb390e87b5b331270f02094d09c2323404fb3e197507350681198"
+    },
+    {
+      "path": "docs/adr/0060-the-liveness-doctrine.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "bbc9365ee3a8dc5df749b99c42b7adb6d354fa69da56c0ab217a8dd9c2820b2a"
+      },
+      "published_sha256": "a71a820ae08c918abfe3674036062ed4dcb43f0cf914c1cd22b20e4720be14c4"
+    },
+    {
+      "path": "docs/adr/0061-zero-seat-genesis-and-right-sized-collateral.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "e8e0a2fdf238106c86740e2993e6e629de57823e97f0ebb36881d67a6a0b65e7"
+      },
+      "published_sha256": "43fb9a0c4f82d85c562ff2342680551701cae37aec11f8ce79031152dc614da3"
+    },
+    {
+      "path": "docs/adr/0062-data-availability-court.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "026af24ea864ec61c51cc89f97ec3327418e078adcbcdb5d3421ed80f25ba82c"
+      },
+      "published_sha256": "7f631782f057861d43fb7960382623277358834cd7a0a18024c590d3fd363ba2"
+    },
+    {
+      "path": "docs/adr/0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "fc2c16aa3dde9490e965949ea0fd5ca9e75f87ef88868a59286e5cee55ec140a"
+      },
+      "published_sha256": "f30df2869147cb9a489ecb00709f73ee5e6316675d6a1f0692a5c27d38b02712"
+    },
+    {
+      "path": "docs/adr/0067-classes-are-chain-data-kernels-are-the-build.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "9f2560171187639aac1f2fa871c73e274d293abe9678cba2f0df54b068154210"
+      },
+      "published_sha256": "51899f6f3c00170e9c21d08ea59e1e7b1e2769a3af0d25153c4d24271441a34e"
+    },
+    {
+      "path": "docs/adr/0068-the-llm-primary-economy-and-the-floors-minimum.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "3518519168b9037a0439951a07c14afd8c8d1eff576eb9b9b58e7635cdf6832d"
+      },
+      "published_sha256": "0f76fade9237ce79c106162f1b277ba53aae71ce4c6cf37902b2290fe4e4c0e8"
+    },
+    {
+      "path": "docs/adr/0069-e2e-adjudicability-is-the-price-of-weight.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "24d873f22eb2cadeedf0ff219d6368e8c670e3861e03d91972e81018f2562bc5"
+      },
+      "published_sha256": "c647aea1c9af4aac2a5f7eebf666cef586428f85bf22c5043a78b4a19a835408"
+    },
+    {
+      "path": "docs/adr/0070-the-model-tiers-step-spaces-are-adjudicable.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "a58fdd9f440d5a3c5f0ccd34c57ef1854edbaaff8b9817a1b661e5a2dbe80261"
+      },
+      "published_sha256": "29b0965fd7c2615bf3b1a2420fe019a3d044fb4eafb7e0911a4964daf4a320a7"
+    },
+    {
+      "path": "docs/adr/0071-the-attempt-lanes-price-and-the-tickets-bound.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "4df801887fcbf7c94e2219720cb0e99c5e4c2e33be984c65102cba62cc81f7d1"
+      },
+      "published_sha256": "f3cda3683d5b64755bcf75d5de5a2531a329e377073033550acd192dc9e43f70"
+    },
+    {
+      "path": "docs/adr/0072-the-ticket-is-the-execution.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "5640e648fc3017787c2f49095d1bbcc3f709ec9d032b9cb100a30813b0442f8d"
+      },
+      "published_sha256": "45a1604980e1486a015df2a9269172b0bf9cf02650566001162fcb2af5ab9712"
+    },
+    {
+      "path": "docs/adr/0073-real-demand-work-bears-the-weight.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "9f81bcacb87744c2d668617cccaad56ab5954920502021bafb42a9b531eb7603"
+      },
+      "published_sha256": "4bb7a1a8f7cf0e05c1afaaf7fb3cda95e4e69c272e3603410859c76491c7f834"
+    },
+    {
+      "path": "docs/adr/0074-the-attempt-is-a-claim-drawn-by-the-chain.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "7f70223a94cbee73fb8cbd1789fd698039d9ef483aa25e8946abaa164c75dc89"
+      },
+      "published_sha256": "c69a7206178d02cfdde5ca0aa588509d538a7355d0e6f08ef4ac44b7c4d4288f"
+    },
+    {
+      "path": "docs/adr/0075-certification-is-a-consensus-object.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "fae37cb4b470094f7172397f44d4662af5b95ea26ba1d472d491a83a36c2fdf2"
+      },
+      "published_sha256": "63eb01e59390c9e6b0d67033c05e0247b959a703b8c7b8d67b05510cdecc30ca"
+    },
+    {
+      "path": "docs/adr/0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "d58208b7da38f583ccdcc3b6c2042ef87a2d14e9fe944119e2c71afedb0b2f14"
+      },
+      "published_sha256": "6326b9774100e415b441fe96619c2cb5153cb6506175a4c010bfaa4c92aa081e"
+    },
+    {
+      "path": "docs/adr/0078-what-was-made-from-it-is-committed-the-thing-never-rides.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "59e3ffe3cb982b5fd53ec0db91d0ada8fd1524cce69fcb2eb2e8367073babeb9"
+      },
+      "published_sha256": "1a523d9427deaeabf5940633ab6e19d3eaa6af1259f45fa113e5c865bb43acb5"
+    },
+    {
+      "path": "docs/adr/0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "7a9ca5c484995da75f14e69a7d19e563abce25b2c1fa025eefbc7342b034f7ae"
+      },
+      "published_sha256": "f1b60d8a23f2418953277d1e151071f8b3b76294ee289f918b249906c21f9bd5"
+    },
+    {
+      "path": "docs/adr/0080-the-answer-is-long-the-verified-unit-is-short.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "86b00bfa5f39574cd06179a493041f1f536efa83ab1c3630795118a78ab1b436"
+      },
+      "published_sha256": "bc56b7a8a6fd83672034ea495c698d585d717c7c31b82cfe35c2d747309e57d6"
+    },
+    {
+      "path": "docs/adr/0081-long-context-the-input-is-a-state-chain.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "6de30259402bf418044f35386767825f14c7fc65eb16d4a0a8513bd358d2e51c"
+      },
+      "published_sha256": "4df5ecd3250055b7848d1eea93d7e04e69aa0703f826343786412e9e0d70af01"
+    },
+    {
+      "path": "docs/adr/0082-the-close-is-flat-in-the-context.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "603572e2566ccc2cfed5801ac402cb3511e588ab16037f212f7ac0d7232dced4"
+      },
+      "published_sha256": "7a130860158d33f36c684b01c97529e356a8e8a5481c0bf2429f8e03e0755818"
+    },
+    {
+      "path": "docs/adr/0084-the-ids-ride-the-capture-stays-home.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "814f835ba0393fbab74031005f9849b1e5421641e517ef62a377a69d6e972582"
+      },
+      "published_sha256": "ba2b44786f97883ccd8d66fff3e6b9a7369c829791c12db2e9c8285832200131"
+    },
+    {
+      "path": "docs/adr/0085-the-close-is-assembled-from-what-was-served.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "7e4510f1de30443f41a6453836fd304f272baeef091f412563215513f0336531"
+      },
+      "published_sha256": "bf789aa64abbc7f20dff8782a6c5feb449035f9ea1db74aa08bafda5e5329a4e"
+    },
+    {
+      "path": "docs/adr/0086-the-opening-carries-the-fold-not-the-leaves.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "b102b7ba1823557b9824265ade180a618ed16c4c61828b84daa0948de0bf2bab"
+      },
+      "published_sha256": "bf7121b5363d541eb82435590eaa898cfd9d6a64a1051bb59a5b265e9bfaf3a9"
+    },
+    {
+      "path": "docs/adr/0092-the-ladder-is-minted-once-and-the-clock-is-what-binds.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "a43b9ba09cb21f429e957bf80c84ca8e9dc2a70d63e7ab71017545d1151730ea"
+      },
+      "published_sha256": "37717a97951fac5e1f27371fe3d58a1473b9bb993253d081596dd383b4c58d8b"
+    },
+    {
+      "path": "docs/adr/0093-the-court-can-try-a-fused-row-and-the-responder-is-what-is-missing.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "678c297818709c9dba983a27fdd6ea89a29f8fe5704d7e207f3dc45253666cee"
+      },
+      "published_sha256": "233dd8a046ea9c00cbc7e6c35c160ebda3091c469a513d2c567375ed0a9bef7a"
+    },
+    {
+      "path": "docs/adr/0096-the-app-you-already-use-is-the-entrance-and-the-shape-of-the-answer-is-committed.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "4046acb1e2e91783e489927384b0189e239a9d30e757dd87b0d6187c694c7eb3"
+      },
+      "published_sha256": "3db3cd10db1c8cca43b6e9e785143b1ab3472ac010076cb14c0d4a57682de8d6"
+    },
+    {
+      "path": "docs/adr/0097-a-models-fit-is-a-lookup-and-the-entrance-says-its-limits-before-the-first-token.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "1df61837ba7f0bda86292061680ed1fcdc1a6f4d94f901d213539070d157cf08"
+      },
+      "published_sha256": "119f1c3691403d3b2a60c2b8947278b7cd0cbf26e422a33eb1717cd7d2642cd6"
+    },
+    {
+      "path": "docs/adr/0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "acfca4da669d7e11a24970a3d09ee7251dc88dc6046685e8b8e74d6b2ff9408c"
+      },
+      "published_sha256": "4c7a9a59461c6ca74d75648d4ac9d7b228654c98bb923216f4709e2027b103e2"
+    },
+    {
+      "path": "docs/adr/0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "560fe80649b7065c59868a2ae5d608e073e7006e60bd9857129fb819a5999a56"
+      },
+      "published_sha256": "ea744b716729a4c2360b38ce835f0a7b3b255d0ceebc915ac9a983121000aced"
+    },
+    {
+      "path": "docs/adr/0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "d40e894d4266ab9995bac6349ac889c3170404b0e03603ef48abdf197abbe5cb"
+      },
+      "published_sha256": "4d5a192237b77fcb74687e25d075492db21962e4151d8bbb54dbd991b700f968"
+    },
+    {
+      "path": "docs/adr/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "17e1379c368ef39c56a7e22b21c3a12fe7f7678e71692956f2d47f4a0925f0e3"
+      },
+      "published_sha256": "424a91e34a062869014bd851b0d8670069b358fbbecb16b75dd2fd4e548b0d50"
+    },
+    {
+      "path": "docs/adr/0106-an-inventory-is-a-stream-of-leaves-not-a-copy-of-the-model.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "0999f42222a7d63e281453de846c72ca2f28c1a113112a9a5c1b8ed31c7a9a78"
+      },
+      "published_sha256": "defde8d2bacb13bc91167333eb70b7004a311e237e9f33ac4e27247a3ff33d4c"
+    },
+    {
+      "path": "docs/adr/0107-a-share-grows-on-work-that-reached-final.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "14258366c87aefc5594d64983a1e12f1bf8a92dcf72fbd3f76f17e0f007d20ba"
+      },
+      "published_sha256": "f6adc54ee913220a89b5c403498e70b8a416d7a1cc5cebb3ae74b55bb5f8f0de"
+    },
+    {
+      "path": "docs/adr/0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "eca1d65b566071c1019448f5e29428b768ff85d0875e984f295c7d757de92a56"
+      },
+      "published_sha256": "1cef86174772161b2347d642a2b3f86b3bb4374637a6779c39a24a00a3417ab2"
+    },
+    {
+      "path": "docs/adr/0109-a-lock-is-its-own-claim-and-finality-is-a-label-not-a-pause.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "27503c3254771cddd9ff1207e32656238a67f7f9f3ac9c910b4a81744c499208"
+      },
+      "published_sha256": "b250f3cef3b6947f5be27e11cdff2efffa26669fab3e2556aebce153d1af3b0c"
+    },
+    {
+      "path": "docs/adr/0110-a-context-limit-is-activated-from-reproducible-public-vectors-not-the-maintainers-workstation.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "70d3c47640facac9ace2b358d6e633fc3d99c1071b8d60b0b59d3f06d7b36517"
+      },
+      "published_sha256": "99ca7a60d18e7f79fe6096c6a7e9d4178ec2113517374afb3237b118b162b706"
+    },
+    {
+      "path": "docs/adr/0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "91f885381627963c29ca1087a03e84a5bc06f9d4965f45537c398587dd9fa57d"
+      },
+      "published_sha256": "2d4312e72a102c9945796ec7136e9ff89c052d543ddbb9e3979c44d5d5bf6cc6"
+    },
+    {
+      "path": "docs/adr/0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "76f9ce03e24e497f82a3ec987b41518fe922dc60b66ac8cb661557f288d6d095"
+      },
+      "published_sha256": "36fb4c1fa51528a90b9a0a56e3b675eded0407a886056afbd588166261535682"
+    },
+    {
+      "path": "docs/adr/0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "192d2fb4153a9b39dc7610a201d658afceba1de90a1189e21017d690f210d561"
+      },
+      "published_sha256": "3eb4a0293aaa174f682aeaa65d10f075968a4592fadccfcf9fa808d55d35b8d7"
+    },
+    {
+      "path": "docs/adr/0117-a-draw-is-one-forward.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "0d3b5641890f19ff935cbb402e374439ea0ce22106669344410d681bc85b484e"
+      },
+      "published_sha256": "b605f0317be93606ae55d6eb19bb504ebbd5588bede2137cd02976ef18e8de6a"
+    },
+    {
+      "path": "docs/adr/0118-the-held-regime-arrives-at-a-height-and-a-held-class-carries-its-own-prompt-form.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "b061a0e9dd64ea993ecb7afbdbdca43c735d00edffc043e01f656631e4ef320c"
+      },
+      "published_sha256": "3402eacbe893a335e7a5ac1624dd8664ec4c3e9fb2f3f8a9a7206ebf22e91159"
+    },
+    {
+      "path": "docs/adr/0119-a-held-class-is-walked-at-the-regimes-ladder-and-the-chain-records-which-classes-those-are.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "85236a23e4eea0a45bd2681bbb1098be5bc31046078f5f4cb2f24cbbe012fe55"
+      },
+      "published_sha256": "0a2fdccc74d4f0d61f49aee69aebb3ebcb65b90e8105d3bc90888c728211bd95"
+    },
+    {
+      "path": "docs/adr/0121-a-held-capture-is-served-from-its-fold-as-the-replay-streams-and-a-node-holds-two-ladders.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "5e71012cc595ca95b48fe2e5dcbbfb0f838379b4686edea51d63332b73e69803"
+      },
+      "published_sha256": "596a3789e0f268703bf7f66facfd13ab3045c108e7437952cf76cb515753f726"
+    },
+    {
+      "path": "docs/adr/0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "de5039c055c993bffc1eba1f302abc3be1bbeb219f92387ba1223ba7d5c86f81"
+      },
+      "published_sha256": "97568ab3a09cc14832b2a9becf020003aa0b16d820cae059da662592fa3cca37"
+    },
+    {
+      "path": "docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "c48a58d5a7265c524ec300202e41fefced59fcb1d3d5cadfc2856994b5f64247"
+      },
+      "published_sha256": "133a067be490421d3ec6531330bc8fbf1d3e4da054c1fd86eb715ffd7f396a53"
+    },
+    {
+      "path": "docs/adr/0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "51803c84f8f5f5ccc07fce32d673eae6b8cfdb83ba835f0c9f9b84cda6bda5e7"
+      },
+      "published_sha256": "77c67d05204f601c179d3f33aaff14a3fea99e78d8ba501f7af5c98fd5b9a161"
+    },
+    {
+      "path": "docs/adr/0126-the-validator-carve-drops-to-a-fifth-and-the-stake-reorg-gate-stays.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "010b3f4b46036f2198326a05bfe82ce957b1a7d3f309fbd0b5df1f57363bad0f"
+      },
+      "published_sha256": "ebd6883689a0c1669df03985b25c98d08bd0148e1002959645ef4d6dbf3b6a3d"
+    },
+    {
+      "path": "docs/adr/0127-palw-settles-on-its-own-and-its-terms-are-not-dns-terms.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "ab80ad6f0eef317b84655510ad72dc2378e02e6e899a4b1bf5dc0b5cc0a525c3"
+      },
+      "published_sha256": "1d6624afd38f49a5038d4bd05ff8ed61620bce0c4072a3eaee21eba627f6e025"
+    },
+    {
+      "path": "docs/adr/0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "b06e3370ebdec56fb2339905340a85d108302d77e56bbcd0be0f64473a9e468d"
+      },
+      "published_sha256": "cff2ae066384ff101901af4ce818e4c5305dd554ad57cbaabb370f736499a619"
+    },
+    {
+      "path": "docs/adr/0130-bps1-is-hardened-before-it-is-widened.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "ecebfa347e51d9c26490ddcb9fb1a88677e601ea95dbaefce27e504e57ac6cfc"
+      },
+      "published_sha256": "cbb3af1a5f0bedf94d292718a5d60f300efb5fa0410d0b68d359c6e8bda96fca"
+    },
+    {
+      "path": "docs/adr/0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "8e5a961a739065b3e16dfa6e301a0f0064bad2c25f15ef15a925907469f0a96c"
+      },
+      "published_sha256": "39407acfa48f1a9c29ac48a5c64507291981840becdf993c931a670fd058aa1b"
+    },
+    {
+      "path": "docs/adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "13f2a02d8679ab31840f570b9679a6a3002cd5f688f74a73424e5b399a5964b8"
+      },
+      "published_sha256": "5ecc91b3718a1f71d86d2d1daf81296a1cfea81d0fe34b82f5a4b6e45052a6fe"
+    },
+    {
+      "path": "docs/adr/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "a4eb291c6f3787575b65e3b7db90d4614d8f8185fb66960c436e5b37091bb2a6"
+      },
+      "published_sha256": "075104a2971b792b89b54c4c708a552eb67034edd1a9c8562de58a09e4d23348"
+    },
+    {
+      "path": "docs/adr/0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "09a680a7bc71c5f3f75e07d3b809403a39ffa54ae75a6f8f949e65390963db2c"
+      },
+      "published_sha256": "65e1c675f8db69da37252b79505cfcf4e47b171317bc3f26960f9c1a1f331e14"
+    },
+    {
+      "path": "docs/adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "9d62dba99a8d5529f165c8de95e786264e71f22414ee69d31b58ea97ca3d0e73"
+      },
+      "published_sha256": "c9b5a6887be44a45e7080f8efbd7142b0d4982d27cc02653a9e2a6203b33f67c"
+    },
+    {
+      "path": "docs/adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "9eec9673568e567cb856bf32dc27251ae983b5833e113659b76920caa0fb9807"
+      },
+      "published_sha256": "3c22a362c861ad9d1168c9b785c3ffdc5cd6cedf83927dc3ea9e06fda2e0ca15"
+    },
+    {
+      "path": "docs/adr/0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "76717a2a078d9e2d1fdf4d09408686604d7a597bd3e3571a468f9344f853f2f5"
+      },
+      "published_sha256": "0f1c4f67b1ad6bea4f672430381ca8f829606f510d3cd7ffb22b735bb16b5c81"
+    },
+    {
+      "path": "docs/adr/0145-canonical-work-is-derived-and-admission-is-earned.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "ad1619efb72ad6a6e23bed84890d7497940b12db009d1d8b38ec94b777155f6e"
+      },
+      "published_sha256": "b784c3f809fc9e7498c50f116bfc328d85c9b99638d08c65b630c340fb82b555"
+    },
+    {
+      "path": "docs/adr/0147-independence-is-drawn-not-declared.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "6890ff956b713bcfc0b0d32d8e2319f4e7378ae86663ffea1d40c37008453c7f"
+      },
+      "published_sha256": "5d45ac8dd0a2c72e23c661d7b73c4b743b11a8eab16e3613ce490aed0b3c7bdd"
+    },
+    {
+      "path": "docs/adr/0148-the-free-prompt-lane-prices-compute.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "31fb29af0f81c54b2af4de9bc594efb894bfcba13f399ef72c3fd9441acd41ab"
+      },
+      "published_sha256": "8843dd6252e606ed15957d4474cf9ae08c09831d4cfc789b8395e7434171ddac"
+    },
+    {
+      "path": "docs/adr/0149-an-attempts-pwu-is-the-derivation.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "cd417610fa0a3793e0c2d08d9fd83a9d92be6eb615dac2953b0e7cc94bff91be"
+      },
+      "published_sha256": "a6988c1e6c638e6535c71837989e64a910549dff83d865a1ad67abafd817c9ef"
+    },
+    {
+      "path": "docs/adr/0151-liveness-is-structural-collateral-covers-fraud.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "6488b4097c433b987e0d38f3c4e0a2457bfba046077083ab7f1646a8d78a395a"
+      },
+      "published_sha256": "dc90161133222103ad5acfaa021e25902e2ae47144bad36768c8c9882f0ed613"
+    },
+    {
+      "path": "docs/adr/0163-an-adapter-class-is-its-parent-plus-an-adapter-and-is-listed.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "3857ef8c58856eeb3768cd44f85ecabc46b00a4b0a96e383cc9429513b3c80b6"
+      },
+      "published_sha256": "b6dcb1e9a0b451f9e37ccaa0ea97f80cf51ff6a93d3bdb3cad51c7249e48eb19"
+    },
+    {
+      "path": "docs/adr/0165-the-floor-is-a-reserve-and-the-work-carries-the-clock.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "996f791c144d3da1abd46cc6c24f04a54829042c9e9e6fc2f49038e2a44c2990"
+      },
+      "published_sha256": "0f14c59c34d0850729b8a3878d0def591b1a0f56eeafeccdca96acc8b1393be5"
+    },
+    {
+      "path": "docs/adr/0166-verifier-unavailability-is-not-producer-fraud.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "9d8d513aeae11cfcfcb82da3be83cb596706627b6d1bf87637dc4c3a12435ec9"
+      },
+      "published_sha256": "6e55e0ddabe8272e4c78ff419205c1f3535abe787e9d475bf28a4e2334f594c1"
+    },
+    {
+      "path": "docs/adr/0167-the-x1000-capacity-package-a-fixed-per-daa-reward-budget-riders-and-a-lower-only-breaker.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "47607dab5e3d2fc9e61b4c80037e94f73bc5c1b1bac7b6e21bdbfd22be5577af"
+      },
+      "published_sha256": "0cc6950433d774b0e09e30a552357347b4332fae034e754c087a5d0af0aa7d0d"
+    },
+    {
+      "path": "docs/adr/0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "63af3b778593c48d909e7385681da46ef45cd5576811e3e9c1d08272f3d23ac8"
+      },
+      "published_sha256": "148e439ae3595571e3d947bc805033f818037b19a1f5a60ff128d14408e69d76"
+    },
+    {
+      "path": "docs/adr/0170-the-seed-anchor-is-a-window-not-a-span.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "3b487e519828c4983f169fd82373a6acf763bece63ff78871727cf62abc6d91e"
+      },
+      "published_sha256": "e9a323e0af18d561907fcd161129408bb42b99db4871e39c2c348b9f7a759cdc"
+    },
+    {
+      "path": "docs/adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "2f105c6822c2734dfee31407b49e069212c40e2992bac1f180e5a62463905cca"
+      },
+      "published_sha256": "97b3bd511cd633e34848d4a85d4055f58a728014042fe0b3c550389f908d373f"
+    },
+    {
+      "path": "docs/adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "3094a94f256c19ebc32c72a66a6079b508a33cc7f796c589070bda4ca6cc80dc"
+      },
+      "published_sha256": "f0b544513482b7a4ead2b1df62db795064819a594639d318a6830989c4d8a288"
+    },
+    {
+      "path": "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md",
+      "before_on_main": {
+        "exists": false,
+        "sha256": null
+      },
+      "published_sha256": "62668e07b2329b5bbdf76aaf584dc7fe654e1e21bc52d8fb739c68b67ee6a8a3"
+    },
+    {
+      "path": "docs/adr/README.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "fae3dc3b9559e495ebc0a58ca77e6b7bf488b75d619fe46aaf899beba3d1940f"
+      },
+      "published_sha256": "3e34b375366143fe84b83de7708d05c42b5f8e80e5123f784a9cf5b5bdd473a9"
+    },
+    {
+      "path": "docs/adr/evidence/0173-mission-alignment-audit-2026-10-07.md",
+      "before_on_main": {
+        "exists": false,
+        "sha256": null
+      },
+      "published_sha256": "b894c6d8feff9c6c196ffcc55dc25c0e8b1ecc8c94633fe3e12acfd1248d2d05"
+    },
+    {
+      "path": "docs/adr/evidence/0173-mission-alignment-inventory-2026-10-07.json",
+      "before_on_main": {
+        "exists": false,
+        "sha256": null
+      },
+      "published_sha256": "33e8422267f4d1b1423f8ba60bf9779847732cc5b4a7d006f3009e19dd172ef1"
+    },
+    {
+      "path": "docs/adr/evidence/0173-mission-alignment-validation-2026-10-07.json",
+      "before_on_main": {
+        "exists": false,
+        "sha256": null
+      },
+      "published_sha256": "6f385002bd387cd2930e0d32dade6735ab3adb514a3aa72b093ac356e84fa4cc"
+    },
+    {
+      "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "7b890f6f5bb2ad0a929f4259d3ccdcbab7aa2a8b2c2960d2f8a1bcbd078a6434"
+      },
+      "published_sha256": "f5e8fa88d16fc1e6e3b5e764c8901caf84c5f6a816bcf9e532a29229b0b43fb5"
+    },
+    {
+      "path": "docs/rfc/0002-palw-tensor-ir.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "5c17568916abf3c715595ca9bdc475a2a8c29d447644e77a252aacf97ff6ea12"
+      },
+      "published_sha256": "850c207809268f79c69f3a163231037b5d1a8c1135d73c6257cebb185a05f983"
+    },
+    {
+      "path": "docs/rfc/0003-palw-generative-model-classes.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "72a340995277152e29b30c847c5aae0752f3709ce3faa2563bdd6008e2785356"
+      },
+      "published_sha256": "cbdc06991b1af32a26ff730e088ea355cb271c8838c8bf5d731ba064fbf0eea3"
+    },
+    {
+      "path": "docs/rfc/0004-palw-model-improvement.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "0d7e2e15385f65460f32368b08a8bf01d703141fbb1d239b0809540f3f57d72d"
+      },
+      "published_sha256": "ad16d200eeb30c3d124e12c281d94fb59d1d3334d3d32fd5683881b3402420e6"
+    },
+    {
+      "path": "docs/rfc/0005-palw-ml-vm.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "f4c6152930ad471de3e0be6acb9392f34b7374134b47b7dda03eba5f34281a2b"
+      },
+      "published_sha256": "6ea3d3e0994063b49a90225226035038d1d43b0d4b3b842ec9a92f0da06ac8f0"
+    },
+    {
+      "path": "docs/rfc/0006-palw-layer-sharded-panels.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "e3887cec79657c496a24293cd9d65a7c3dbc519b81046380dc8784bb9e55e3c6"
+      },
+      "published_sha256": "c28d35125a287aa4ba2c5a0dd42760dfb3afc4e91e9ae7d1371e38152e604b8f"
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "1f7ce3e9e35d5852016139f59186821267bc99f75679eda382e90dfd7643d973"
+      },
+      "published_sha256": "83edc5d4801f9254cfd1d31d7df926625d722a465df1ebf7165db47232e2adb3"
+    },
+    {
+      "path": "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "e3c47eb0c455068ee9d1b71a0ec5df8d8060c5bf4cf424f24b9d61c64c32ada8"
+      },
+      "published_sha256": "c1651832417c263fdfbeef4a68d7716c981be258906c0ec386fa8872dad62459"
+    },
+    {
+      "path": "docs/rfc/0009-palw-remote-miner.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "2f50b38f3d07453c751afd0416d5bd55c70d2eee9c7195a22ff1ba4eec67af01"
+      },
+      "published_sha256": "66596d63a894cffde97b17d57012d2f38f5a32c2896c3af57ed0e8c49e3b1b0c"
+    },
+    {
+      "path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "f5e13c114d732759e8192971fbada9deedf486f26814302488fb9e7010e658a2"
+      },
+      "published_sha256": "28550fb810c1f56afbec2b96f228971d18d17e27e1a0403992a1df399db08be1"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "f7d4d4a1a621c03c142cfe91e1b3901fa2072df30f0f71a892200f82cf04c978"
+      },
+      "published_sha256": "6aa2ed82b3cd24fbaead7f67865a98218e4a902a7688fccae58130220b4f2e5e"
+    },
+    {
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "8ee34567c52423f0b6616cd29a8cd6318a3d81e85c664179d6f25915d0cd0854"
+      },
+      "published_sha256": "93cffc2e0ada56fd5a7ff5e114f8d9fa78773201b166cd0080b0f35814dfd054"
+    },
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "9eeb64d2ab7de60c578f7ac84c6b4bd58a8b51a71d5c62b28b0724d613c0a128"
+      },
+      "published_sha256": "ea399db3acfde8a175a2c1e7d284b1113edc771328f841617c54c39538fed769"
+    },
+    {
+      "path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "before_on_main": {
+        "exists": false,
+        "sha256": null
+      },
+      "published_sha256": "064670cb293914d72ee452046d2062ee19981d45ec6c5e9e2e0f7f596f2b0791"
+    },
+    {
+      "path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "before_on_main": {
+        "exists": false,
+        "sha256": null
+      },
+      "published_sha256": "c62137493499ccf54782e80aea8cf94d20d55f8ebfdb4580d995fc276e210053"
+    },
+    {
+      "path": "docs/rfc/README.md",
+      "before_on_main": {
+        "exists": true,
+        "sha256": "98ed3f997464c2a70c56916cb7e99d359adf0b6751c77308a3b0298a897a169b"
+      },
+      "published_sha256": "6bd8442b1bd99b81b69c67afbaabc4ccc2cc060b44d5ebb0bcba5ffcffb24093"
+    }
+  ]
+}

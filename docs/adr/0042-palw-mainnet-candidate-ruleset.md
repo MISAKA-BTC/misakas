@@ -1,5 +1,8 @@
 # ADR-0042: The PALW mainnet-candidate ruleset — one atomic activation, one fork choice, one fingerprint
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 Status: **Proposed.** Activates nothing, moves no fence, changes no shipped preset. It is the
 engineering spec the `palw-v2` branch implements before any public PALW-RC or mainnet activation.
 
@@ -654,3 +657,13 @@ was, which is what every attempt-only fixture runs at.
 This is ADR-0042; 0041 is the last committed. ADR-0036 records a same-day 0035/0036 collision from
 two parallel sessions; if a concurrent branch also claims 0042, the tie is broken by keeping this
 file's content and renumbering the later writer, per ADR-0036 Decision 5.
+
+## Mission alignment amendment — 2026-10-07
+
+atomic ruleset/fingerprintの規則は維持する。新しいpublic access、court受理、dispute-completeness gateは、それぞれ旧claimのreplayと明示的なversioned移行を必要とし、この文書で旧高さを付け替えない。
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

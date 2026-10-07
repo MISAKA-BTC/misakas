@@ -1,5 +1,8 @@
 # ADR-0148 — The free-prompt lane prices compute, and prices it the same for every class
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 **Status:** IMPLEMENTED behind the ADR-0145 economic bundle: `Params::palw_canonical_work` sets the
 UNIT (a free-prompt claim accepted at or past it is priced in compute), `Params::palw_fp_derived_work`
 the DERIVATION the price reads. The bundle rule arms them at one height, and a commitment that meets
@@ -193,3 +196,10 @@ ADR-0146's search reports 1.000000× — P4 does not forbid this fence. It stays
 shipped preset. Choosing a height is a different commit (0144 item 0). The free-prompt lane's
 prefix-STATE object family (0145 §6) is now how `KvReused` is derived; the V3 payload still
 names genesis.
+
+## Mission alignment amendment — 2026-10-07
+
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

@@ -1,5 +1,8 @@
 # ADR-0070: The model tiers' step spaces are adjudicable — end to end, and proven by sweeping them
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 Status: ACCEPTED (implementation on `palw-step-space-e2e`; arming is a deployment decision, §7)
 Date: 2026-09-01 (numbered 0070 on merge: ADR-0069 was taken by the
 launch audit's `e2e-adjudicability-is-the-price-of-weight`, which the consensus
@@ -183,3 +186,12 @@ family's own projection kernel — it was firing on the hybrid's like-named seam
   covered, which is why they are written here.
 * The hybrid's checkpoint-anchored recurrence, as above; and the `MulElem` cost arm's 9-byte
   triple pricing (A16 triples are 17), an under-pricing the already-admitted dense class shares.
+
+## Mission alignment amendment — 2026-10-07
+
+既存step-space sweepは、そのfixtureのkernel裁定能力を示す。canonical profile、公開transportとfresh verifierによるlocalization/convictionを含まない限り、全profileで外部訴追が完了したという意味へ拡張しない。
+
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+* 不正の発見と、その後の客観的局所化・裁定の成立を分ける。honest seatの存在、raw sampling、選出outsider、quorumだけで全不正の検出を保証しない。ADR-0171の全constraint検査とresidual error、ADR-0172のversioned Kernel境界を維持し、巨大な無界replayやVM/TEE/BFT authorityを代替条件にしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

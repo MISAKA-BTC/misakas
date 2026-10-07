@@ -1,5 +1,8 @@
 # ADR-0163 — An adapter class is its parent plus an adapter, and is listed
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: PROPOSED 2026-10-03 (RFC-0001 §2.10, lane U); **IMPLEMENTED the same day on `rfc1/serve`**, behind its own
   dormant fence `Params::palw_adapter_class_v1` — `None` on every preset and in no testnet-12 flag-day list, so no network's
   fingerprint, schedule or fold moves.
@@ -64,3 +67,12 @@ through the delta), `consensus/core/tests/palw_rfc1_fences.rs` (dormancy, Some-o
 in no t12 list), and `t12_an_adapter_class_listing_is_gated_by_its_fence_its_signature_and_its_acceptance` at the processor (below the fence
 dropped by name; armed, a stranger's signature refused, a signed listing of an unregistered class refused by the acceptance half). The
 composite admission itself is RFC-0004's, exercised on real PEFT fixtures in `misaka-palw-sdk/tests/improve_composite_lora.rs`.
+
+## Mission alignment amendment — 2026-10-07
+
+adapter classはparentに加えadapter weights/versionを公開認証し、adapterによる誤計算も外部bondがlocalize/convictできるprofileを必要とする。parent certificateだけでadapter部分の新gateを免除しない。
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

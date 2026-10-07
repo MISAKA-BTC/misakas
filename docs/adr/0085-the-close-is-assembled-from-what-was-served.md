@@ -1,5 +1,8 @@
 # ADR-0085: The close is assembled from what the executor served — a disputed tile, not a capture
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 **Status:** PROPOSED (2026-09-04). §6 items 1–3 LANDED 2026-09-04 (see §7); items 4–5 are being built under the 2026-09-05 goal, with ADR-0086 Decision 6's transport (the block-leaves annex) riding the same lane. Consensus-inert
 by construction: the refutation object (`PalwExecutionStepRefutationV1`), the adjudicator
 (`check_execution_step_refutation_v1`) and every court object are unchanged; what changes is how a
@@ -192,3 +195,12 @@ convicts.
 
 This is ADR-0085; ADR-0084 is the last on this branch. A concurrent claimant renumbers the later
 writer, per ADR-0036 Decision 5.
+
+## Mission alignment amendment — 2026-10-07
+
+close assembled from served materialという原則を普通の非Panel bondまで適用する。close annexの取得をseatだけに限定したり、court前に必要なmaterialが取れない循環を残したりしない。served valuesはproducerのcommitmentに認証する。
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* 不正の発見と、その後の客観的局所化・裁定の成立を分ける。honest seatの存在、raw sampling、選出outsider、quorumだけで全不正の検出を保証しない。ADR-0171の全constraint検査とresidual error、ADR-0172のversioned Kernel境界を維持し、巨大な無界replayやVM/TEE/BFT authorityを代替条件にしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

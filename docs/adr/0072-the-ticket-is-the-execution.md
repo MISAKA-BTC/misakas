@@ -1,5 +1,8 @@
 # ADR-0072 — The ticket is the execution: both lotteries priced in inferences
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 Status: **IMPLEMENTED (2026-09-02); Decision 7's rollout DECIDED the same day — see §3.** Reviewed the same day
 by a second session, whose finding became Decision 8 and the invariant in §4. Builds on ADR-0042 (Decision 3a: the algo-6 tag is an
 expansion, never an inference), ADR-0044 (Decision 4: the receipt lane's quantum ticket is a
@@ -346,3 +349,9 @@ at genesis. The `LegacyArm` residuals of the second pass are unchanged: the stat
 (`palw_admission_v2`) still validates at the compiled-in envelope version — correct for `Unfenced`
 and `ExecutionArm`, wrong for `LegacyArm` — and the pre-ADR-0072 lottery arithmetic those blocks were
 mined under is still deleted.
+
+## Mission alignment amendment — 2026-10-07
+
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

@@ -1,5 +1,8 @@
 # ADR-0124 — The panel is paid out of the claim's reward, a seat holds exposure, and a claim is paid for the compute it certifies
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: PROPOSED and IMPLEMENTED 2026-09-17 on `feat/adr-0124-panel-reward-and-compute-weight`
   (from `main` at `6fdf6ba7`), at the operator's request ("現在 PANEL に報酬がないのと小さいモデルと大きい
   モデルで同じ 1 claim 1 ブロックだと圧倒的に小さいモデルが有利な点を改善する … ADR を作成し実装を行なって";
@@ -424,3 +427,13 @@ both floors). Mainnet has not launched, so its ruleset id may move.
 0124 was the next free number on `main` at `6fdf6ba7` (README: "the next free number is 0123", and
 0123 is resident). No other branch head carried a `docs/adr/0124-*` file when this was written. The
 execution-lane roadmap from the same request is ADR-0125, written on the same branch.
+
+## Mission alignment amendment — 2026-10-07
+
+producer liability、false Valid liability、receipt scope、claim rewardを区別する。多数派と食い違うことだけを新しいseat有罪の条件にせず、署名した主張の偽りを客観的に証明する。Final時のcapacity解放をliability/evidenceの消滅にしない。
+
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+* 不正の発見と、その後の客観的局所化・裁定の成立を分ける。honest seatの存在、raw sampling、選出outsider、quorumだけで全不正の検出を保証しない。ADR-0171の全constraint検査とresidual error、ADR-0172のversioned Kernel境界を維持し、巨大な無界replayやVM/TEE/BFT authorityを代替条件にしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

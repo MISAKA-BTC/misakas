@@ -1,5 +1,8 @@
 # RFC-0012 — PALW-only consensus and native EVM settlement: retire DNS validators and their reorg veto
 
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
+
 * Status: **Draft, 2026-10-06 — direction requested; not implemented or activated.**
 * Source baseline: `3b09a814ed4b2a2f90009c05c1219efc9be46b5f` on `misakas/main`.
 * Requested direction: remove DNS validators, DNS finality, DNS attestations, precommits,
@@ -37,9 +40,7 @@ Block inclusion and optimistic EVM execution can precede claim settlement; the a
 require a producer to wait for `Final` before carrying an EVM payload. Safe settlement is the
 later reader-visible condition. No separate validator certificate is required at either stage.
 
-“Remove validators” means **remove the DNS finality-validator role**, not remove deterministic
-full-node validation, PALW producers, PALW Panel seats, signed computation receipts, courts,
-producer/seat bonds or slashing for computation misconduct. DNS here is the finality overlay,
+“Remove validators” means **remove the DNS finality-validator role**. Deterministic full-node validation, PALW producers, signed computation evidence, courts, public bonds and objective slashing remain. PALW Panel seats remain in the transitional mode; their honest majority is not the arithmetic trust root. A later Panel-free mode is separately deferred under RFC15 until RFC14 and that mode's own gates pass. DNS here is the finality overlay,
 not domain-name resolution or DNS peer discovery. Those unrelated facilities remain.
 
 The bridge in this RFC is the **native MISAKA UTXO ↔ MISAKA EVM accounting transition on the
@@ -299,3 +300,9 @@ This document does not prove PALW common-prefix security, set confirmation param
 need for independent computation verification, make arbitrary external bridges trustless, or promise
 safe finality while useful work is absent. Those limits are not grounds to restore DNS secretly;
 they are measurable security and liveness conditions that must be addressed before activation.
+
+## Mission alignment amendment — 2026-10-07
+
+DNS authorityの撤廃とPALW computation accountabilityは維持する。PALW Panelを残す記述は移行中の通常処理を指し、正直な多数派を安全性前提にしたり永久の固定Panelを義務づけたりしない。計算の客観的裁定はDNS vote、Panel vote、EVM executionで代替しない。RFC14全gateとRFC15固有のsettlement/monitoring/migration条件が揃うまではPanel=0を有効化しない。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。

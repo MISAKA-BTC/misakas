@@ -1,5 +1,8 @@
 # RFC-0005: PALW model extensibility through versioned kernels — no BVM/GVM implementation
 
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
+
 **Current status (2026-10-06):** Revised design direction under
 [ADR-0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md).
 The VM implementation programme is **withdrawn**, not postponed until RFC04 completes.
@@ -2679,3 +2682,9 @@ RFC-0004 (Phase A) is the baseline under all three columns: it needs no VM.
   `TIR_CALL`. Every departure from those sources is in §II.2.4's register, and code is reused only after
   a licence check.
 - **Never both Part I and rung B.** If the workflow case is proven, rung B subsumes the bounded layer.
+
+## Mission alignment amendment — 2026-10-07
+
+現行§K.0–K.8のversioned KernelとVerificationPlan admissionに、外部public verifierのlocalization/conviction/withholding経路を追加する。terminal kernelやconeの存在だけをadjudicabilityの完成としない。拡張の受入は全profileの公開証拠と最悪時資源で確認する。旧BVM/GVM・ISA・one-step VMの撤回を維持し、外部訴追のためという理由でVM、TEE、BFT運営者を復活させない。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。

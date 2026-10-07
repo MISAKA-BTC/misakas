@@ -1,5 +1,8 @@
 # ADR-0086 — the opening carries the fold, not the leaves
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 **Status:** PROPOSED 2026-09-05, implemented consensus-inert on `palw-adr0084-served-answer`
 (no fence; the fingerprint does not move). Supersedes the wire form of ADR-0077 Decision 8's
 interval opening (V1–V3) for SERVING; the consensus root rule those openings walk
@@ -283,3 +286,12 @@ the next cut, not this one.
 
 This is ADR-0086. The README's next free number was 0086 after 0085's row; it becomes 0087
 with this row.
+
+## Mission alignment amendment — 2026-10-07
+
+fold openingの小ささは取得可能性・局所化可能性の代わりにならない。悪意あるFOLD prefix/stateをfresh verifierが認証された境界から反証でき、必要なleaf preimageを公開取得または客観的非開示裁定できることを追加する。
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* 不正の発見と、その後の客観的局所化・裁定の成立を分ける。honest seatの存在、raw sampling、選出outsider、quorumだけで全不正の検出を保証しない。ADR-0171の全constraint検査とresidual error、ADR-0172のversioned Kernel境界を維持し、巨大な無界replayやVM/TEE/BFT authorityを代替条件にしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

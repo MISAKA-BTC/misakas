@@ -1,5 +1,8 @@
 # ADR-0135 — A model is data: the permissionless registry derives its profile, proves its panel, and walks its lifecycle
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: **PROPOSED 2026-09-17; the rule set built in shadow the same day, and Protocol Upgrade A built behind a
   dormant fence the same evening** (`palw_model_registry_v1.rs`, `palw_state_v2.rs`; §7). No shipped preset arms
   it: no parameter or fingerprint moves until the operator schedules `palw_model_registry` at a height.
@@ -414,3 +417,13 @@ node) carries no lane and no registry.
 ## 8. Number hygiene
 
 0135 was free when written; the next free number is 0136.
+
+## Mission alignment amendment — 2026-10-07
+
+registry lifecycle/admission jury/readinessの公開化は維持する。承認されたKernel内でも公開訴追不能なprofileを新しいmineable/weight-bearing状態へ昇格させない。public registrationとpublic prosecutionを別々に完成させる。
+
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+* 不正の発見と、その後の客観的局所化・裁定の成立を分ける。honest seatの存在、raw sampling、選出outsider、quorumだけで全不正の検出を保証しない。ADR-0171の全constraint検査とresidual error、ADR-0172のversioned Kernel境界を維持し、巨大な無界replayやVM/TEE/BFT authorityを代替条件にしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

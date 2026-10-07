@@ -1,5 +1,8 @@
 # ADR-0060: The liveness doctrine — time is permissionless, weight is bonded, finality is an overlay
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 - Status: Accepted as doctrine; **implemented 2026-08-30, SHIPPED OFF the same day, and
   RE-IMPLEMENTED 2026-08-31 per ADR-0066** — the mainnet audit
   (`docs/palw-mainnet-audit-2026-08-30.md`) found four structural defects in Decisions 1–2 and one
@@ -315,3 +318,10 @@ zero-seat network can be minted and cannot make its first block.
 **What a correct heartbeat lane needs:** its price out of `header.bits` (the receipt lane's ticket
 is the existing pattern), a work basis that is not the shared blue-work scale, DAG-wide slot
 evidence, and a depth bound tied to `pruning_depth`.
+
+## Mission alignment amendment — 2026-10-07
+
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

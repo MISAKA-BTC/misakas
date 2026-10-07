@@ -1,5 +1,8 @@
 # ADR-0131 — A claim is paid for the compute it cost, in economic compute, not leaves
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: **PROPOSED 2026-09-17; Decisions 1 and 2 IMPLEMENTED the same day, in shadow** on
   `feat/palw-exec-lane-and-validator-retirement` (§7). No consensus rule, parameter or fingerprint
   moves: everything here is node-local measurement until Decision 3 gets a height.
@@ -199,3 +202,9 @@ is the experiment that would justify coefficients; it has not been run.
   consensus input, the rate, and a new model's shadow-then-price path wait on ADR-0146. Arming
   them first would freeze the arithmetic 0144/0145 already disqualified. The 2026-09-17 "operator's,
   after the shadow has run" schedule is withdrawn as a sufficient condition.
+
+## Mission alignment amendment — 2026-10-07
+
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

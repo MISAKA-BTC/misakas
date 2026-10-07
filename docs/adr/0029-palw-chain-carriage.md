@@ -1,5 +1,8 @@
 # ADR-0029: PALW chain carriage — the objects ride the rails the fork already built
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 Status: **Proposed (draft for review).** Activates nothing. This ADR decides how ADR-0028's
 objects — job commitments, attestations, opening calls and answers, refutations — become
 on-chain facts, in two stages whose first requires **zero node changes** and realizes the
@@ -253,3 +256,9 @@ transaction alone; fetching evidence at validation time is not consensus-safe). 
   fit the chain. Registration guidance: new classes should register the composite form.
 * **The version trap is now a stated rule** — the next person who wants to "just add a
   version" to a deployed validator has a sentence to collide with.
+
+## Mission alignment amendment — 2026-10-07
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

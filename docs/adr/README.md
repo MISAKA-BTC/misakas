@@ -1,5 +1,19 @@
 # ADR index — what governs, and what was reversed
 
+## Governing purpose — 2026-10-07
+
+**MISAKAの中核目標:** 普通の非Panel public bondが、producerの秘密状態を使わず、public authenticated materialだけから不正をlocalizeしobjective convictionまで進めることを完全に成立させる。
+
+| Decision | Authority and scope |
+| --- | --- |
+| [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) | Accepted design mandate. Future prosecution/admission/settlement directions that conflict are amended; historical implementation and activation records stay historical. |
+| [RFC-0014](../rfc/0014-panel-independent-fraud-prosecution.md) | Main implementation design and full completion gates; not a claim that these gates already pass. |
+| [RFC-0015](../rfc/0015-panel-free-permissionless-verification.md) | Panel=0 remains deferred until all RFC14 gates and its own verification/economics/migration gates pass; explicit activation still required. |
+
+[全RFC/ADRの確認記録](evidence/0173-mission-alignment-audit-2026-10-07.md)に各文書の版・改定・整合性判断を記載する。以下の旧indexの「today」「still governing」「what to build next」は各節に書かれた過去の日付の記録であり、2026-10-07のruntime auditまたは本目標の完成宣言ではない。将来の実装順序はRFC14の未完了gateを優先し、ADR144の有用なローカル推論、ADR171の確率的検査とexact court、ADR172のKernel-only拡張を維持する。
+
+この文書群は公開mainの未配置文書を取り込み、workspaceにあった文書は保持したreview snapshotである。runtimeのHEADやコードは更新しない。ADR0152/0160等、参照されてもsourceに実体のない文書は推測で作らない。
+
 > **Looking for how MISAKA works today?** Start with the
 > [architecture overview](../architecture/overview.md): it maps each part of the protocol to the
 > ADRs that govern it now. This index is the decision history, and its tables below stop at

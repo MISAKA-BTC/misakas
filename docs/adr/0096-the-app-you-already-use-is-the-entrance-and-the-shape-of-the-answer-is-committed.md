@@ -1,5 +1,8 @@
 # ADR-0096 — The app you already use is the entrance, and the shape of the answer is committed
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: PROPOSED 2026-09-10. Part A (the entrance) and Part C (distribution, settings, the
   model-request intake) are host-side and land on `feat/adr-0096-everyday-lane` in both
   repositories (misakas and MISAKA-Studio) as they are built — §9 records what has. Part B (the
@@ -664,3 +667,10 @@ mapping is written down.
   `3f8fc5066bafae28…` to `Misakachain/Qwen2.5-1.5B-PALW-A16-runtime` and moving the pin is one
   upload and one line, after which the fallback has no user; it is an outward-facing act, so it
   waits for the operator.
+
+## Mission alignment amendment — 2026-10-07
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* 不正の発見と、その後の客観的局所化・裁定の成立を分ける。honest seatの存在、raw sampling、選出outsider、quorumだけで全不正の検出を保証しない。ADR-0171の全constraint検査とresidual error、ADR-0172のversioned Kernel境界を維持し、巨大な無界replayやVM/TEE/BFT authorityを代替条件にしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

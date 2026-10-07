@@ -1,5 +1,8 @@
 # ADR-0106 — An inventory is a stream of leaves, not a copy of the model
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: PROPOSED 2026-09-11 on `feat/adr-0099-sharded-seat`; **W1–W7 IMPLEMENTED the same day,
   consensus-inert** (§9): the leaf, its preimage, the tree, the layout rules and every opening are
   the ones the court already verifies — what changed is how a node BUILDS them, and every root,
@@ -226,3 +229,9 @@ renumbers the LATER writer). What the branches held when this was written:
     `adr0106_cases` record and tests.
   * `misaka-palw-sdk` — `palw-class measure`/`verify` through `qwen36_inventory_measure_v1`;
     `registered_root_of` through `qwen36_inventory_summary_v1`.
+
+## Mission alignment amendment — 2026-10-07
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

@@ -1,5 +1,7 @@
 # RFC-0009: PALW Remote Client — node を持たないモデル登録・claim・非保管型の報酬回収
 
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
 * Status: Draft, 2026-10-04 — design only; activation height、fingerprint、wire format は未決定。
 * 改訂: 2026-10-06 — node-less モデル登録と登録者の GAS 負担を追加。仕様の追記であり、実装・有効化済みという意味ではない。
 * 対象: 現行 `testnet-12` のモデル/class 登録と PALW attempt / free-prompt claim。将来の [RFC-0008](0008-palw-claim-backed-consensus-blocks.md) の work-slice block は別途適合性を審査する。
@@ -174,3 +176,9 @@ node-less は「chain を検証しない」を意味しない。miner が必要�
 - remote client の proof に必要な state commitment、checkpoint の配布/更新、検証資源。
 - RFC-0008 の work-slice block が実装された場合の同一 work の二重 credit と public redemption の扱い。
 - remote registration の quote/unsigned-object/署名/状態照会の API 境界、offline wallet が費用・identity を検証できる schema、複数 relay の retry と fee-change 承認。現行 burn・担保規則を変えずに実装できる部分と、新しい authority/fence が必要な部分の切り分け。
+
+## Mission alignment amendment — 2026-10-07
+
+node-less producerとrelayの分離は維持する。証拠の配布先をPanelだけに限定せず、普通のpublic bondがproducerの停止後も認証されたmaterialを取得して局所化・court提出できる責任と保持期間を定義する。複数RPCの一致は算術証明ではない。relayのHTTP失敗やmaterial未到達を自動slashの根拠にせず、規範的demand/disclosure/defaultで扱う。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。

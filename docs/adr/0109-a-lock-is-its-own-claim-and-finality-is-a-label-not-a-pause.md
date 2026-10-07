@@ -1,5 +1,8 @@
 # ADR-0109 — A lock is its own claim, and finality is a label, not a pause
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: PROPOSED 2026-09-11, at the operator's request ("今の EVM ブリッジや送金がスムーズに liveness
   に行かない根本的原因を分析して liveness を優先にする設計に修正を行なって"). **Decisions 1–5
   IMPLEMENTED the same day** (§9), consensus-inert: no block-validity rule, no `Params` field, no
@@ -267,3 +270,9 @@ because nothing else had asked; it now names genesis. The pre-existing queue-pat
 itself on first start, and old-build peers validate every block a new build makes); the index's
 rebuild over a large UTXO set (testnet-11's is small; on a mainnet-sized set it is one pass at the first
 start); a live claim made by the index on testnet-11 (it needs the rollout).
+
+## Mission alignment amendment — 2026-10-07
+
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

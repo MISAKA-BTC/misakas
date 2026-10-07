@@ -1,5 +1,8 @@
 # ADR-0056: Permissionless class admission, and the share economy that survives it
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 **Status:** Accepted and **implemented** (2026-08-27). Decisions 1, 2 and 7 were already the
 shipped design; Decisions 3 and 5 landed with the state version 8 → 9 this ADR predicted, and
 Decision 6 is a policy the gate keeps by not deduplicating. **Decision 4 is withdrawn** in favour
@@ -283,3 +286,11 @@ consensus, and a benchmark is an oracle.
 * Nothing in this ADR adds an authority. The list of things that can move a permille after it
   lands: a signed registration (in), the epoch clock (up, down, back). Every one is validated by
   recomputation.
+
+## Mission alignment amendment — 2026-10-07
+
+permissionless registrationとreward-bearing admissionを区別する。誰でも登録できることを、公開に訴追できないclaimがweightを得てよい根拠にしない。
+
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

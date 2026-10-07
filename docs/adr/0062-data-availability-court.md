@@ -1,5 +1,8 @@
 # ADR-0062 — The data-availability court: stop a vote from taking a bond
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 > Renumbered 0059 → 0062 at the 2026-08-30 branch merge: 0059 was taken the same day by the
 > 10B premine cap on the parallel line (0060 the liveness doctrine, 0061 zero-seat genesis),
 > and this document was the cheaper of the two to move — one file, no code references. The
@@ -598,3 +601,13 @@ One node on the old build is deliberately untouched: `/root/misakas-user/target/
 on .113 (`--appdir=/root/palw-user/appdir`, `--palw-register-class=Qwen/Qwen3.8-27B/`), the manual
 node from the Qwen3.8-27B add-model walk. It is the operator's experiment, and restarting it is
 theirs to time.
+
+## Mission alignment amendment — 2026-10-07
+
+客観的demand/disclosure/deadlineによるDA courtを維持する。materialが開示された自己整合的な偽traceはDAだけで算術有罪にならないため、公開localizationとexact courtへの次経路を必要とする。非開示有罪とComputationMismatchを同一視しない。
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

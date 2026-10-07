@@ -1,5 +1,8 @@
 # ADR-0084: The ids ride, the capture stays home — a model-class claim serves its answer, never its history
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 **Status:** PROPOSED (2026-09-04), implemented on `palw-adr0084-served-answer` (see §7 for what
 landed and what did not). **Consensus-inert**: no fence, no state field, no object variant; the
 fingerprint does not move. Ships by a rolling rebuild of the seats and of every node that answers
@@ -447,3 +450,12 @@ node-scoped bound is a rule about one caller in a protocol that has many.
 This is ADR-0084. The README's index records 0080–0083 as resident (0083 on
 `palw-daa-bits-priced-rows`); its "next free number" line still said 0080 and is corrected with
 this row. A concurrent claimant renumbers the later writer, per ADR-0036 Decision 5.
+
+## Mission alignment amendment — 2026-10-07
+
+capture stays homeはtransport/storage最適化として維持できる。envelopeとbounded openingsだけで外部verifierの局所化・closeが成立し、開示拒否も客観的に裁定できることを必須条件にする。
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* 不正の発見と、その後の客観的局所化・裁定の成立を分ける。honest seatの存在、raw sampling、選出outsider、quorumだけで全不正の検出を保証しない。ADR-0171の全constraint検査とresidual error、ADR-0172のversioned Kernel境界を維持し、巨大な無界replayやVM/TEE/BFT authorityを代替条件にしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

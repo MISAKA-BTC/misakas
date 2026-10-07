@@ -1,5 +1,8 @@
 # ADR-0032: PALW fee-bond escrow — pricing calls and paying challengers without new covenants
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 Status: **Accepted (design; activates nothing).** This decides HOW opening-call fees and
 challenger bounties work — the piece ADR-0029 §7 deferred "needs the bond-UTXO covenant
 discipline". The decision is that Stage 1 needs **no new covenant machinery at all**, and
@@ -79,3 +82,9 @@ fixes the mechanisms and the flow of value; B15's simulation fixes the values.
   same rails as every bond change (ADR-0016 lineage), with its own drills.
 * Bounty value flows are auditable on-chain by construction: burned remainder, credited slot,
   `slash_id` — no off-chain settlement anywhere.
+
+## Mission alignment amendment — 2026-10-07
+
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

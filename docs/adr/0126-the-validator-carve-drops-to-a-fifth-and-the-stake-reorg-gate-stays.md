@@ -1,5 +1,8 @@
 # ADR-0126 — The validator carve drops to a fifth, and the stake reorg gate stays
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: **REVISED and IMPLEMENTED 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement`.
   testnet-11 schedules it at DAA 6,001 (§6). The first version of this ADR (same day, never armed anywhere)
   retired the whole validator overlay at a height; the operator reversed that before any network
@@ -161,3 +164,9 @@ and the validator pool at 20 %.
   integration review found nothing enforcing that, and the resolution became the lower of the two scores
   before any network armed the fence. The same review found admission's escrow-backing gate reading the
   bundle's carve; it is inert at zero and now refused beside the fence (Decision 4).
+
+## Mission alignment amendment — 2026-10-07
+
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

@@ -1,5 +1,8 @@
 # ADR-0147 — Independence is drawn, not declared
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 **Status:** IMPLEMENTED behind `Params::palw_admission_independence`, which is one of the three
 fences of the ADR-0145 economic bundle (`validate_palw_v2` arms them at one height or not at all).
 Dormant on every preset. Supersedes the identity test that shipped under the same fence on
@@ -202,3 +205,13 @@ registration can be refused and its fee lost — named, not closed.
 
 ADR-0146's search reports 1.000000× — P4 does not forbid this fence. It stays `None` on every
 shipped preset. Choosing a height is a different commit (0144 item 0).
+
+## Mission alignment amendment — 2026-10-07
+
+drawn outsiderは通常検査の供給を増やす仕組みとして維持するが、outsiderが選ばれることや一人のhonest seatの存在を全不正の検出保証にしない。選ばれていない普通のpublic bondの訴追権は独立に必要である。
+
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+* 不正の発見と、その後の客観的局所化・裁定の成立を分ける。honest seatの存在、raw sampling、選出outsider、quorumだけで全不正の検出を保証しない。ADR-0171の全constraint検査とresidual error、ADR-0172のversioned Kernel境界を維持し、巨大な無界replayやVM/TEE/BFT authorityを代替条件にしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

@@ -1,5 +1,8 @@
 # RFC-0003: PALW Generative Model Classes — one job, determinism and output layer, and the class profiles on top of it
 
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
+
 | Field | Value |
 | --- | --- |
 | Status | Draft, 2026-09-28 — open questions 1–12 decided by the user on 2026-09-28 (see *Decision*); implementation of Part I and program version 2 started on `rfc3/impl` |
@@ -2573,3 +2576,9 @@ naming R's domain 0. Steps 1–8 take about 4–5 calendar months with two or th
 | 22 | closes larger than one carrier under the held regime | **approved 2026-10-01, generic (IR and pipelines) (G24, §I.4.7)**: the held leaf challenge — object tag 90, fence `palw_held_close_chunks_v1` — opens a `Terminal` session at the named leaf and rides the court's own close group (keyed to claim and accuser by construction) up to the carried cap; the accuser bears the clock and the deposit, an abandoned close forfeits the deposit and leaves the claim unaffected, challenges are capped per claim, network and block; tag 62's live semantics are unchanged, PALW-GEN-21 refuses a pipeline class whose close exceeds one carrier until the fence is armed, and the live IR classes' limitation is recorded |
 
 The rest of the RFC (Parts I and II, the program surface, the activation order) stands as written.
+
+## Mission alignment amendment — 2026-10-07
+
+モデル種別、image/audio/video、MoE、recurrence、prompt/state/outputごとに、公開入力から局所化・terminal conviction・非開示裁定まで完結するprofileを必要とする。正直な実行のFinal、再現性や決定論的R、class-ready seatsだけでこのgateを代替しない。producer内部のheld captureを使う成功例や小さいfixtureを、大規模profileの公開訴追成功に外挿しない。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。

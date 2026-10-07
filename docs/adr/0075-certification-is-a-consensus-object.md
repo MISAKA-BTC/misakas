@@ -1,5 +1,8 @@
 # ADR-0075: Certification is a consensus object
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 **Status:** PROPOSED (2026-09-02), implemented on branch `palw-adr0073-fp-weight` for the
 Relaunch 5e re-genesis (the state version and the genesis free-prompt set move, so the fingerprint
 moves). Written against the goal "the public testnet accepts free-prompt claims on the real
@@ -351,3 +354,11 @@ localhost `/v1` surface [ADR-0144](0144-palw-pays-for-the-inference-you-were-goi
 P1 puts in scope (and ADR-0077 Decision 3 already required). It is not a GPU marketplace and it
 does not wait on ADR-0101. The SDK half is already closed.
 
+## Mission alignment amendment — 2026-10-07
+
+certificateのchain object化は維持する。新profileのcertificate受入にはpublic prosecutionのcoverage/evidenceを追加し、registrant自身が正直なcaptureから組み立てたrefutationの存在だけで新gateをPASSにしない。
+
+* 将来の報酬・mineability・consensus weightのgateには、対象profileのfresh non-seat public verifierが公開証拠からlocalizeしてobjective convictionまで完結する証拠を追加する。static cost、kernel catalog、family certificate、seat readiness、正直なFinalだけでは代替できない。未対応profileはこの新gateを閉じたままとする。
+* 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

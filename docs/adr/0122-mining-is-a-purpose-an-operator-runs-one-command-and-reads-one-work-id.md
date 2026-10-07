@@ -1,5 +1,8 @@
 # ADR-0122 — Mining is a purpose: an operator runs one command and reads one work id
 
+> **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
+
+
 * Status: PROPOSED 2026-09-12 on `feat/adr-0122-operator-ux`, at the operator's request: turn PALW
   mining from a set of components into a product ("マイニング 検証を立てる やモデル追加 モデルポジション
   などの使いやすさをこのように引き上げて"). The request came with a proposed shape (purpose-level
@@ -965,3 +968,12 @@ What the implementation settled that the decisions above left open, and where it
   * Mine runs `mining setup`, Verify runs `verifier setup`, and Validate runs `validator setup`.
   * Add a model and Hold positions print the commands that make up those purposes: `model add`,
     `model market open`, and the `position` commands.
+
+## Mission alignment amendment — 2026-10-07
+
+one-command operator UXは維持するが、genesis operator identityを訴追APIの永続的な前提にしない。ordinary public-bond verifierにも証拠取得・fault localization・court filing・status/回収結果の操作を用意する。
+
+* 必要なinput/weights/state/trace/openingは、選出されていない普通のpublic bondがclaim commitmentに対して認証・取得できなければならない。producerだけのcapture、FOLD prefix、tile preimageや内部proverを前提にしない。ローカル保管・off-chain配布は可能だが、開示または有界の客観的非開示裁定を最後まで持つ。
+* Panel/jury/validatorの選出やquorumは担当割当・既存処理の条件であり、算術的真実や外部訴追の権限を決めない。有効なobjective proofは多数派のlicense後も独立に処理する。新たな訴追をgenesis operator、owner承認、bound-seat専用の権限に依存させない。
+
+本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。

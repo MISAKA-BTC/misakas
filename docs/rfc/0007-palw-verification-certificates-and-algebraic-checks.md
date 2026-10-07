@@ -1,5 +1,8 @@
 # RFC-0007: PALW constraint verification — batched Freivalds/GKR Panel checks, evidence-bound receipts, and exact court on dispute
 
+> **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+
+
 | Field | Value |
 | --- | --- |
 | Status | Revised design, 2026-10-06: **Part V is the selected new Panel verification direction**, aligned with RFC11/ADR-0171; unimplemented and unactivated. Parts I–IV retain the 2026-10-01 design/prototype record; several components have since landed (see current spec 18 and §V.1), so their old implementation/activation claims are historical, not live status. |
@@ -136,7 +139,7 @@ convicts.
 - G4. Derive the whole-claim conditional error bound from coverage, fields, repetition, aggregation, binding and adaptive-query assumptions, following RFC11's proposed `2^-128` check target. A per-product `1/p` is not the claim's bound. (Part V)
 - G5. Bind an approved verification suite, profile, scope and evidence to new signed receipts. Kernel selection is seat-local; coverage and security obligations are protocol-defined. The terminal court remains exact. (Part V)
 - G6. Preserve permissionless exact disputes and explicitly account for compromised or inactive Panel members. Full constraint coverage can be algebraic; quorum alone does not prove arithmetic truth. (Parts III/V)
-- G7. Every bonded seat can audit every class from openings alone, and silence is never a verdict. (Part IV.1)
+- G7. Every ordinary public bond, including one outside the Panel, can obtain authenticated public openings, localize a detected fault and reach objective conviction without producer-private state. Silence is never a verdict. Completion requires RFC14's end-to-end gates. (Part IV.1; ADR-0173)
 - G8. Large classes become feasible with qualified constraint verifiers and bounded DA/court resources; Part IV.2's separate capped experiment never replaces the new route's soundness and coverage gates. (Part V)
 
 **Non-goals.** A probabilistic court: the court stays exact. Weight from cluster agreement ("the largest compatible cluster is
@@ -1033,3 +1036,9 @@ These were the original draft's questions. Spec 18 §§18.0/18.20 records subseq
 **Selected 2026-10-06:** adopt Part V's constraint-based Panel verification as the new large-model direction. Begin with batched Freivalds on a real TIR MatMul, extend to complete segment constraints and scope-bound receipts, then aggregate compatible relations with GKR/IOP where measurements justify it. Preserve exact bounded court on dispute and RFC11's whole-claim security target.
 
 Before implementation is eligible for activation, settle the exact suite/transcript and opening construction, canonical receipt encoding/tag allocation, assignment/coverage policy, derived parameter limits, total localization bound, evidence retention and measured capacity. §V.8 is the delivery order and §V.9 the migration contract. No deployment, benchmark success, Kimi compatibility or change to existing claim semantics is established by this decision.
+
+## Mission alignment amendment — 2026-10-07
+
+G7およびPart IV/Vの外部監査主体を、Panelに選ばれたseatから普通のpublic bond全体へ拡張する。private sketches/preprocessingは通常検査の最適化に限り、それを持たない外部verifierにも独立した公開localization/conviction経路を用意する。scope-bound receiptsの集約やquorumは算術真実の根拠ではない。Freivalds/GKRの失敗をそのままslashせず、認証されたbounded terminal proofへ落とす。raw cell samplingと未検出確率は別途扱う。
+
+本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
