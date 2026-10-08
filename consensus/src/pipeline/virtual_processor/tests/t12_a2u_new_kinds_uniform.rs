@@ -123,6 +123,7 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                     });
                 params.sync_palw_permissionless_panel_v1();
             }
+            PalwLifecycleKindFenceV1::ProviderCourtV1 => params.palw_provider_court_v1 = Some(at),
         }
     }
     for form in PalwHeaderFormFenceV1::ALL {
@@ -130,12 +131,13 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             PalwHeaderFormFenceV1::ReceiptSpendV4 => params.palw_receipt_spend_v4 = Some(at),
         }
     }
-    for fence in [PalwKernelInnerFenceV1::PanelFreeV1] {
+    for fence in PalwKernelInnerFenceV1::ALL {
         match fence {
             PalwKernelInnerFenceV1::PanelFreeV1 => {
                 params.palw_panel_free_v1 =
                     Some(kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1::interim_v1(at, Vec::new()));
             }
+            PalwKernelInnerFenceV1::TypedRootsV1 => params.palw_typed_roots_v1 = Some(at),
         }
     }
 }
@@ -346,6 +348,18 @@ fn malformed(bond: PalwBondKeyV2) -> Vec<Obj> {
 /// **A live-build kind carrying a value the live build re-reads**: a generative class registration (tag 68, armed on testnet-12)
 /// whose hand-read profile byte is HFX's `Head = 6`. The live build decodes it and judges it with its own rules; below
 /// `palw_task_heads_v1` every build must give that verdict (`PalwInt12WireChangeV1::CarriedReread`).
+/// **A provider's answer (tag 152, lane DA16), signed** — the near-zero kind with a signature present, so its may-ride arm passes and
+/// only the fence decides. Below `palw_provider_court_v1` a group of `ObjectChunk`s assembling to it is the live build's undecodable
+/// bytes at the completing chunk: no gate judges it, the certification cap counts it as int-12 does, the fold refuses it in int-12's
+/// words.
+fn provider_answer() -> Obj {
+    let mut answer = zero_filled_kind(152);
+    let Obj::ProviderAnswerV1 { signature, .. } = &mut answer else { unreachable!("tag 152") };
+    *signature = vec![1; 64];
+    assert_eq!(palw_lifecycle_object_may_ride_v2(&answer), Ok(()));
+    answer
+}
+
 fn reread_probes() -> Vec<Obj> {
     let mut class = zero_filled_kind(68);
     let Obj::ClassRegisteredGenV1 { admission, .. } = &mut class else { unreachable!("tag 68") };
@@ -584,7 +598,7 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         payloads.push(("a live-build kind carrying a re-read value (tag 68, profile 6)".into(), payload_of(&probe)));
     }
     let route = Obj::KernelRouteV1 { bytes: vec![5; 512], signer: bond, signature: vec![1; 64] };
-    let one_chunk: Vec<Obj> = [route.clone(), well_formed(bond)[1].clone(), well_formed(bond)[5].clone()]
+    let one_chunk: Vec<Obj> = [route.clone(), well_formed(bond)[1].clone(), well_formed(bond)[5].clone(), provider_answer()]
         .iter()
         .map(|inner| chunks_of(inner, 1).remove(0))
         .collect();
@@ -592,8 +606,11 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         payloads.push(("a one-chunk group of a new kind".into(), payload_of(chunk)));
     }
     let two_chunks = chunks_of(&Obj::KernelRouteV1 { bytes: vec![7; 2048], signer: bond, signature: vec![1; 64] }, 2);
+    let answer_chunks = chunks_of(&provider_answer(), 2);
     payloads.insert(0, ("a two-chunk group's opening part".into(), payload_of(&two_chunks[0])));
+    payloads.insert(1, ("a chunked provider answer's opening part (tag 152)".into(), payload_of(&answer_chunks[0])));
     payloads.push(("a two-chunk group's completing part".into(), payload_of(&two_chunks[1])));
+    payloads.push(("a chunked provider answer's completing part (tag 152)".into(), payload_of(&answer_chunks[1])));
     for (kind_tag, _, _) in PALW_LIFECYCLE_NEW_KINDS_V1 {
         assert!(
             payloads.iter().any(|(_, p)| p.get(2) == Some(kind_tag)),
@@ -613,6 +630,7 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         ("a Panel V3 proof".into(), payload_of(&well_formed(bond)[8])),
         ("the reference".into(), reference),
         ("a zero-filled kernel receipt".into(), payload_of(&zero_filled_kind(111))),
+        ("a signed provider answer (tag 152)".into(), payload_of(&provider_answer())),
     ];
     assert_eq!(carry(&mut a, &mut wallet, &config, &mixed).await, 1, "the mixed carriers ride ONE block");
     let (_, state) = a.tip_state();
@@ -633,8 +651,10 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     }
     // The two-chunk group: its opening part is an ordinary `ObjectChunk` the live build accepts too (it opens the group where the
     // slot's rent is paid); its completing part assembles bytes that build cannot decode, so it is refused and the group stays open.
-    if let Some(pending) = state.pending_chunk_group(&group_of(&two_chunks[0])) {
-        assert_eq!(pending.parts.keys().copied().collect::<Vec<_>>(), vec![0], "the completing part was refused, as undecodable");
+    for opening in [&two_chunks[0], &answer_chunks[0]] {
+        if let Some(pending) = state.pending_chunk_group(&group_of(opening)) {
+            assert_eq!(pending.parts.keys().copied().collect::<Vec<_>>(), vec![0], "the completing part was refused, as undecodable");
+        }
     }
     // The walk's chunk reader — the certification cap's input — answers "undecodable" below the fence and the kind past it.
     let daa = a.daa_of(a.sink());

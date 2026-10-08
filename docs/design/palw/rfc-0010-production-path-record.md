@@ -189,13 +189,14 @@ connection of its own. `misaka palw panel-v3 [--claim ID]… [--limit N] [--json
 | Panel-independent Final path (RFC-0014 public window lapse / RFC-0015) | EXTERNAL_GATE_PENDING (A) |
 | G14-complete profile set linked into consensus | EXTERNAL_GATE_PENDING |
 | Objective L1 seal/finality rule (seal depth is not a finality primitive) | DESIGN_GAP |
-| Per-shard V3 draw: a claim of a class with a shard plan ends `PermissionlessNoCapablePanel` (a flat panel cannot license by parts) | DESIGN_GAP (RFC-0006) |
+| Per-shard V3 draw: a claim of a class with a shard plan ends `PermissionlessNoCapablePanel` (a flat panel cannot license by parts) | IMPLEMENTED_AND_TESTED at the fold, dormant (agent SHARD, `shard-rfc6-10.md` §1: the engine's strata, the per-shard record written by the V3 bind; `rfc0010_shard_v3.rs`); the beacon gate is every V3 draw's |
 | State growth: terminal engine records and retained work ids are never compacted (`max_tracked_claims` fills for good) | DESIGN_GAP |
 | Drain bound for lane-A claims (their original timeout / court / DA liability) | DESIGN_GAP (time) |
 | `receipt_window_daa`, `max_retries`, `seal_wait_daa` are policy numbers with no network default | EXTERNAL_GATE_PENDING |
 | `PanelUnavailable` obligation hold for V3 (re-roll cost) | policy decision |
 | Real-node IBD / non-genesis cohort drill (a mature bonded cohort that is not the genesis operators, on a multi-node network) | EXTERNAL_GATE_PENDING |
-| Sharded-IR classes under V3: the flat V3 draw cannot license by parts, so the claim ends `PermissionlessNoCapablePanel` at admission | DESIGN_GAP (RFC-0006 V3 per-shard draw; needs the beacon) |
+| Sharded-IR classes under V3 | IMPLEMENTED_AND_TESTED at the fold, dormant (the per-shard V3 draw above); needs the beacon |
+| G14 pre-emption by a V3 non-fraud end (S2 expiry, pre-bind seal/beacon end) | IMPLEMENTED_AND_TESTED at the fold, dormant (agent SHARD, `shard-rfc6-10.md` §2: `palw_accusation_pending_v1`, the deferred end, DL-1's G14 row; `rfc0010_g14_guard.rs`); lane PL part C (`palw_panel_unavailable_expiry`) on a V2 claim keeps V3S-08 — a fence decision for the full-activation release |
 | Processor-level `PanelUnavailable` / `NoCapablePanel` and exhausted-alternates cases | fold-level only (`rfc0010_production_fold.rs`); the processor tests cover bind, IBD, reorg, legacy drain, the fence drop |
 | An RPC typed protobuf tree for the observation (explorers) | not built; the JSON document is versioned |
 
@@ -210,7 +211,9 @@ connection of its own. `misaka palw panel-v3 [--claim ID]… [--limit N] [--json
   EXTERNAL_GATE_PENDING.
 * **Stale "dormant" wording — DONE** (RFC-0006 status note, `palw_tir_shard_v1.rs`, `palw_tir_shard_fold_v1.rs`, `config/params.rs`):
   `palw_tir_shard_v1` is armed on testnet-12 at DAA 5,300.
-* **Per-segment resource pricing — PROPOSAL ONLY, nothing changed.** The armed rules already price a cell's *work*: the plan's cell
+* **Per-segment resource pricing — DECLARED DORMANT by agent SHARD** (`palw_tir_shard_segment_v2`, refused when armed; `shard-rfc6-10.md`
+  §4: `max(work, resident)` for the lock and the pay, keyed on the claim's acceptance; readiness = the shard's heaviest cell, no on-chain
+  tier). The original proposal, kept for the record: The armed rules already price a cell's *work*: the plan's cell
   shares come from `palw_tir_shard_cell_permille_v1` (`work_cell_v1(layers, positions)`, so attention work grows with the
   segment's positions) and a signer's lock is `full_lock × share(mask)`. What they do not price is *residency*: readiness is one
   possession proof per **shard** (`palw_tir_shard_ready_class_v1`), while a partial seat's minimum state is the whole K/V prefix up
@@ -222,8 +225,9 @@ connection of its own. `misaka palw panel-v3 [--claim ID]… [--limit N] [--json
   restricted to seats whose tier covers the cell; and the lock share `max(work share, resident share)`. The armed fence at 5,300
   keeps its rules. Needs a decision on the tier granularity and on whether a seat that over-declares a tier is slashable (open; not checked against
   the shard readiness court rules in this lane).
-* **Non-seat public cell watcher — GAP.** `TirShardCourtAccused` is already open to any Active bond, but nothing in the tree plays
+* **Non-seat public cell watcher — IMPLEMENTED by agent SHARD** (`--palw-tir-shard-watch`; `palw_tir_shard_watch_v1` targets,
+  `kaspad/src/palw_panel/tir_shard_watch.rs`; `shard-rfc6-10.md` §3). The original gap, for the record: `TirShardCourtAccused` is already open to any Active bond, but nothing in the tree plays
   a non-seat watcher: it needs the public material read for outsiders (matrix row "A row 16": carry-in tiles, history rows,
   checkpoints) and A's fresh-verifier engine to replay one cell. No code in this lane.
-* **V3 per-shard draw — DESIGN_GAP.** Blocked on the beacon (BEACON_UNAVAILABLE) as the matrix says; until then a sharded class
+* **V3 per-shard draw — IMPLEMENTED at the fold by agent SHARD** (dormant with the fence; `shard-rfc6-10.md` §1). The original gap: Blocked on the beacon (BEACON_UNAVAILABLE) as the matrix says; until then a sharded class
   never reaches a Panel under V3.

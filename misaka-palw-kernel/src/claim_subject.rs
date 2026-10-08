@@ -91,6 +91,20 @@ impl KernelLedgerV1 {
                     claim_commitment_root_v1(claim, &evidence.root()),
                 ))
             }
+            // RFC-0004 Part II: kernel = K2-TR-v1, plan = the class id (the specification is the constraint set), input = the job.
+            ClaimBodyV1::Spec(b) => {
+                let class = self.typed.classes.get(&row.class_binding_id)?;
+                let (program, artifact, state) = crate::spec::subject_roots_v1(class, b);
+                Some(base(
+                    crate::spec::k2_tr_v1_descriptor().digest(),
+                    row.class_binding_id,
+                    program,
+                    artifact,
+                    row.job_id,
+                    state.map_or(RootV1::Absent, |s| RootV1::Present(object_id(CLAIM_SUBJECT_STATE_DOMAIN_V1, &s))),
+                    claim_commitment_root_v1(claim, &b.execution_root()),
+                ))
+            }
         }
     }
 }

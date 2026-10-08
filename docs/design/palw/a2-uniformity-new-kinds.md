@@ -153,7 +153,17 @@ the object, the block standing. So an inner kind added later is read the same wa
   from a zero-filled body.
 
 Inner kinds added before tag 110's fence is first armed on a live network ride with it (`None`): G14-R4's 15 and K2S's 16–18 are
-such. Once tag 110 is live, every later inner kind needs a fence of its own. G14R's inner 20 `CommitClaimSalted` (the salted claim
+such. Once tag 110 is live, every later inner kind needs a fence of its own. R4X's inner 19 `Spec` and its typed-root proof
+(`ProsecutionV1::Spec` inside a `FileProof`, by a guarded arm) are `palw_typed_roots_v1`'s (`PalwKernelInnerFenceV1::TypedRootsV1`);
+the hand-written arm R4X put in the gate is replaced by the table's.
+
+**DA16 (tags 150–153) and the completing chunk.** On integration a `ProviderAnswerV1` (152) assembled from `ObjectChunk`s was judged at
+the completing chunk by the gate below `palw_provider_court_v1` (refused for the fence, as lane D's 105/109), and the walk's chunk
+reader excluded the chunk from the certification cap — a reading int-12 does not share: to int-12 those bytes are undecodable, the
+chunk counts against the cap and the fold refuses it as `ChunkedObjectUndecodable`. With 150–153 owned by `ProviderCourtV1`, below the
+fence `palw_kernel_chunk_inner` answers `None` (no gate judges it, the cap counts it as int-12 does) and the fold's
+`palw_fold_kind_in_force_v1` refuses it in int-12's words; isolation tolerates 150–153 at every height (their may-ride arm, unsigned →
+refused, runs only past the fence). The pin test carries a signed 152 directly, as a one-chunk group and as a two-chunk group. G14R's inner 20 `CommitClaimSalted` (the salted claim
 seal v2) is `palw_panel_free_v1`'s, beside the OPV registrations: below that fence the kernel refuses it and the gate drops it through
 the table (`PalwKernelInnerFenceV1::PanelFreeV1`), never through a hand-written arm. Inner kinds 21 and 22 are not allocated.
 
@@ -206,15 +216,15 @@ has no row, so a kind landing there fails the table test until the Lead allocate
 | object tag 113 | `KernelRouteChunkV1` (the route's own chunk lane) | `palw_probabilistic_constraints_v1` | G14-R4 | no |
 | object tag 120 | `PanelBeaconProofV3` | `palw_permissionless_panel_v1` | RFC-0010 | yes |
 | object tags 130–139 | 130 `ExecWorkRootOpenedV2` | `palw_exec_payload_v2` | X8R | no |
-| object tags 150–153 | lease, challenge, answer, transfer | `palw_provider_court_v1` | DA16 | no |
+| object tags 150–153 | `ProviderLeaseV1`, `ProviderChallengeV1`, `ProviderAnswerV1`, `DaTransferV1` | `palw_provider_court_v1` (in force only where the kernel route's fence is too) | DA16 | yes (merged with integration `648a9f481`) |
 | inner kinds 1–12 | the kernel route | `palw_probabilistic_constraints_v1` (tag 110's own) | G14 lane D | yes |
 | inner kinds 13–14 | OPV registrations | `palw_panel_free_v1` | RFC-0015 | yes |
 | inner kind 15 | `SealProof` | tag 110's own | G14-R4 | no |
 | inner kinds 16–18 | segmented claim, tiled job, prompt tile | tag 110's own | K2S | no |
-| inner kind 19 | `Spec` | `palw_typed_roots_v1` | R4X | no |
+| inner kind 19 | `Spec` | `palw_typed_roots_v1` | R4X | yes |
 | inner kind 20 | `CommitClaimSalted` (salted claim seal v2) | `palw_panel_free_v1` | G14R | no |
 | nested in inner kinds | `ProsecutionV1::Segmented` (3), `ClaimBodyV1::Segmented` (2) | tag 110's own | K2S | no |
-| nested in inner kinds | `ProsecutionV1::Spec` (4), `ClaimBodyV1::Spec` (3) | `palw_typed_roots_v1` | R4X | no |
+| nested in inner kinds | `ProsecutionV1::Spec` (4) inside `FileProof` (inner 7); `ClaimBodyV1::Spec` (3) is ledger state, never carried | `palw_typed_roots_v1` | R4X | yes (guarded arm) |
 | header form algo 7 `PFS4` | V4 receipt carriage | `palw_receipt_spend_v4` | RFC-0009 | yes |
 | header form algo 10 `PXE2` | EXEC envelope | `palw_exec_payload_v2` | X8R | no |
 | coinbase trailer `PXA2` | EXEC anchor | `palw_exec_payload_v2` | X8R | no |

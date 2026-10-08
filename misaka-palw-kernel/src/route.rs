@@ -49,6 +49,8 @@ pub const TAG_SEAL_CLAIM_V1: u8 = 12;
 /// RFC-0015: a class registration that carries its verification mode (a non-legacy mode; the mode is bound into the class id).
 pub const TAG_REGISTER_CLASS_V2: u8 = 13;
 pub const TAG_REGISTER_PIPELINE_CLASS_V2: u8 = 14;
+/// RFC-0004 Part II: a typed-root object (registration, job, claim — versioned inside [`crate::spec::SpecObjectV1`]).
+pub const TAG_SPEC_V1: u8 = 19;
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -66,6 +68,9 @@ pub const MAX_WITHDRAW_BYTES_V1: usize = 256;
 pub const MAX_SEAL_CLAIM_BYTES_V1: usize = 256;
 pub const MAX_REGISTER_CLASS_V2_BYTES_V1: usize = MAX_REGISTER_CLASS_BYTES_V1;
 pub const MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1: usize = MAX_REGISTER_PIPELINE_CLASS_BYTES_V1;
+/// The `Spec` object's one ceiling: its largest sub-object's ([`crate::spec::MAX_SPEC_CLAIM_BYTES_V1`]); each sub-object's own is
+/// checked by the ledger.
+pub const MAX_SPEC_BYTES_V1: usize = MAX_COMMIT_CLAIM_BYTES_V1;
 
 /// **Who signed an object**: the bond whose key the consumer verified. The ledger checks it names the actor the object names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
@@ -84,6 +89,9 @@ pub enum ProsecutionV1 {
     Decode(DecodeFaultV1) = 1,
     /// A pipeline fault's canonical bytes ([`crate::pipeline_public::PipelineFaultWireV1`]: stage, edge or decode).
     Pipeline(Vec<u8>) = 2,
+    /// RFC-0004 Part II: a typed claim's fault (borsh [`crate::spec::SpecFaultV1`]: a memory step, a retrieval item, a composite stage
+    /// or edge).
+    Spec(Vec<u8>) = 4,
 }
 
 /// **The public objects of the kernel route.** Every one is signed by a bond (see [`AuthV1`]); none mints or moves money by
@@ -182,6 +190,11 @@ pub enum KernelRouteObjectV1 {
         param_commitments: Vec<ParamCommitmentsV1>,
         decode: Option<DecodeRuleV1>,
     } = 14,
+    /// **RFC-0004 Part II**: a typed-root object. Accepted only while the ledger's schedule has the typed-roots extension `K2-TR-v1`
+    /// Active (the consumer's `palw_typed_roots_v1` fence); a claim is signed by its producer.
+    Spec {
+        object: crate::spec::SpecObjectV1,
+    } = 19,
 }
 
 /// The seal of a claim: `H("misaka-palw/kernel/claim-seal/v1"; claim id)` (the claim id binds the producer, job, output and evidence).
@@ -263,6 +276,7 @@ impl KernelRouteObjectV1 {
             Self::SealClaim { .. } => TAG_SEAL_CLAIM_V1,
             Self::RegisterClassV2 { .. } => TAG_REGISTER_CLASS_V2,
             Self::RegisterPipelineClassV2 { .. } => TAG_REGISTER_PIPELINE_CLASS_V2,
+            Self::Spec { .. } => TAG_SPEC_V1,
         }
     }
 
@@ -335,6 +349,7 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_SEAL_CLAIM_V1 => "SealClaim",
         TAG_REGISTER_CLASS_V2 => "RegisterClassV2",
         TAG_REGISTER_PIPELINE_CLASS_V2 => "RegisterPipelineClassV2",
+        TAG_SPEC_V1 => "Spec",
         _ => "Unknown",
     }
 }
@@ -356,6 +371,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_SEAL_CLAIM_V1 => MAX_SEAL_CLAIM_BYTES_V1,
         TAG_REGISTER_CLASS_V2 => MAX_REGISTER_CLASS_V2_BYTES_V1,
         TAG_REGISTER_PIPELINE_CLASS_V2 => MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1,
+        TAG_SPEC_V1 => MAX_SPEC_BYTES_V1,
         _ => return None,
     })
 }
@@ -411,6 +427,7 @@ mod tests {
         let tags: Vec<u8> = (1..=14).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none() && max_encoded_bytes_of_tag(15).is_none());
+        assert!(max_encoded_bytes_of_tag(TAG_SPEC_V1).is_some() && name_of_tag(TAG_SPEC_V1) == "Spec", "RFC-0004 Part II's tag 19");
     }
 
     #[test]

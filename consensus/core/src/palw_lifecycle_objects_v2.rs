@@ -359,6 +359,20 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::KernelBoundV1 { .. }
         | PalwConsensusObjectV2::ConformanceCommittedV1 { .. }
         | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. } => Ok(()),
+        // DA16 (tags 150–153): provider-court objects ride at every height (A-2) and carry their signer's signature; the fence, the
+        // bonds, the rows and the units are the acceptance layer's and the fold's.
+        PalwConsensusObjectV2::ProviderLeaseV1 { signature, .. }
+        | PalwConsensusObjectV2::ProviderChallengeV1 { signature, .. }
+        | PalwConsensusObjectV2::ProviderAnswerV1 { signature, .. }
+        | PalwConsensusObjectV2::DaTransferV1 { signature, .. }
+            if signature.is_empty() =>
+        {
+            Err("a provider-court object must carry its signer's signature")
+        }
+        PalwConsensusObjectV2::ProviderLeaseV1 { .. }
+        | PalwConsensusObjectV2::ProviderChallengeV1 { .. }
+        | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
+        | PalwConsensusObjectV2::DaTransferV1 { .. } => Ok(()),
         PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
             if signature.is_empty() {
                 Err("a signed registration envelope must carry its signer's signature")
@@ -1052,11 +1066,15 @@ pub enum PalwLifecycleKindFenceV1 {
     SignedRegistrationV1 = 1,
     /// `Params::palw_permissionless_panel_v1` — RFC-0010's certified Panel epoch output (tag 120).
     PermissionlessPanelV1 = 2,
+    /// `Params::palw_provider_court_v1` — lane DA16's provider court (tags 150–153). In force only where the kernel route's fence is
+    /// too (the court's rows are the route's), as the processor's `palw_provider_court_at` reads it.
+    ProviderCourtV1 = 3,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 3] = [Self::ProbabilisticConstraintsV1, Self::SignedRegistrationV1, Self::PermissionlessPanelV1];
+    pub const ALL: [Self; 4] =
+        [Self::ProbabilisticConstraintsV1, Self::SignedRegistrationV1, Self::PermissionlessPanelV1, Self::ProviderCourtV1];
 
     /// The `Params` field the fence is resolved from.
     pub const fn params_field(self) -> &'static str {
@@ -1064,6 +1082,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::ProbabilisticConstraintsV1 => "palw_probabilistic_constraints_v1",
             Self::SignedRegistrationV1 => "palw_signed_registration_v1",
             Self::PermissionlessPanelV1 => "palw_permissionless_panel_v1",
+            Self::ProviderCourtV1 => "palw_provider_court_v1",
         }
     }
 }
@@ -1197,6 +1216,10 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::SignedRegistrationV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::SignedRegistrationV1),
         // RFC-0010: the certified Panel epoch output (120).
         O::PanelBeaconProofV3 { .. } => PalwLifecycleKindOwnerV1::Fence(F::PermissionlessPanelV1),
+        // Lane DA16: the provider court — lease, challenge, answer, DA transfer (150–153).
+        O::ProviderLeaseV1 { .. } | O::ProviderChallengeV1 { .. } | O::ProviderAnswerV1 { .. } | O::DaTransferV1 { .. } => {
+            PalwLifecycleKindOwnerV1::Fence(F::ProviderCourtV1)
+        }
     }
 }
 
@@ -1318,6 +1341,10 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (110, "KernelRouteV1", PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1),
     (111, "KernelConstraintReceiptV1", PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1),
     (120, "PanelBeaconProofV3", PalwLifecycleKindFenceV1::PermissionlessPanelV1),
+    (150, "ProviderLeaseV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
+    (151, "ProviderChallengeV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
+    (152, "ProviderAnswerV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
+    (153, "DaTransferV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
 ];
 
 /// **The owning fences' activations, resolved once from `Params`** (`Params::palw_lifecycle_kind_fences_v1`) and asked by every site
@@ -1373,6 +1400,16 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1 => self.palw_probabilistic_constraints_v1,
                     PalwLifecycleKindFenceV1::SignedRegistrationV1 => self.palw_signed_registration_v1,
                     PalwLifecycleKindFenceV1::PermissionlessPanelV1 => self.palw_permissionless_panel_v1.map(|rule| rule.activation),
+                    // In force where BOTH the court's and the kernel route's fences are (the processor's `palw_provider_court_at`).
+                    PalwLifecycleKindFenceV1::ProviderCourtV1 => {
+                        let never = crate::config::params::ForkActivation::never();
+                        match (self.palw_provider_court_v1, self.palw_probabilistic_constraints_v1) {
+                            (Some(court), Some(route)) if court != never && route != never => {
+                                Some(crate::config::params::ForkActivation::new(court.daa_score().max(route.daa_score())))
+                            }
+                            _ => None,
+                        }
+                    }
                 },
             )
         })
@@ -1441,13 +1478,20 @@ pub fn validate_palw_lifecycle_tx_in_context_v1(
 pub enum PalwKernelInnerFenceV1 {
     /// `Params::palw_panel_free_v1` (RFC-0015): a registration under a verification mode (inner 13, 14).
     PanelFreeV1,
+    /// `Params::palw_typed_roots_v1` (RFC-0004 Part II, R4X): a typed-root object (inner 19) and a typed-root proof
+    /// (`ProsecutionV1::Spec` inside a filing, inner 7).
+    TypedRootsV1,
 }
 
 impl PalwKernelInnerFenceV1 {
+    /// Every inner-kind fence.
+    pub const ALL: [Self; 2] = [Self::PanelFreeV1, Self::TypedRootsV1];
+
     /// The `Params` field the fence is resolved from.
     pub const fn params_field(self) -> &'static str {
         match self {
             Self::PanelFreeV1 => "palw_panel_free_v1",
+            Self::TypedRootsV1 => "palw_typed_roots_v1",
         }
     }
 }
@@ -1458,6 +1502,9 @@ impl PalwKernelInnerFenceV1 {
 pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::KernelRouteObjectV1) -> Option<PalwKernelInnerFenceV1> {
     use misaka_palw_kernel::route::KernelRouteObjectV1 as K;
     match object {
+        // Guarded arms first: a variant appended INSIDE an inner kind is owned by its fence, so a build without the variant (whose
+        // kernel decode fails on it) and this one read the object the same way below that fence. R4X's typed-root proof rides a filing.
+        K::FileProof { proof: misaka_palw_kernel::route::ProsecutionV1::Spec(_), .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
         K::RegisterClass { .. }
         | K::RegisterPipelineClass { .. }
         | K::PostJob { .. }
@@ -1471,6 +1518,7 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         | K::Withdraw { .. }
         | K::SealClaim { .. } => None,
         K::RegisterClassV2 { .. } | K::RegisterPipelineClassV2 { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
+        K::Spec { .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
     }
 }
 
@@ -1490,6 +1538,7 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (12, "SealClaim", None),
     (13, "RegisterClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (14, "RegisterPipelineClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (19, "Spec", Some(PalwKernelInnerFenceV1::TypedRootsV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -1640,7 +1689,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // 130 `ExecWorkRootOpenedV2` (X8R, `rfc8/x8r-review`).
     a2_row(PalwA2SlotV1::ObjectTags { lo: 130, hi: 139 }, "palw_exec_payload_v2", "X8R RFC-0008 v2", false),
     // DA16: lease, challenge, answer, transfer.
-    a2_row(PalwA2SlotV1::ObjectTags { lo: 150, hi: 153 }, "palw_provider_court_v1", "DA16 provider court", false),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 150, hi: 153 }, "palw_provider_court_v1", "DA16 provider court", true),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 13, hi: 14 }, "palw_panel_free_v1", "RFC-0015 OPV registrations", true),
@@ -1651,7 +1700,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "K2S segmented / tiled / prompt tile",
         false,
     ),
-    a2_row(PalwA2SlotV1::KernelInner { lo: 19, hi: 19 }, "palw_typed_roots_v1", "R4X Spec (RFC-0004 Part II)", false),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 19, hi: 19 }, "palw_typed_roots_v1", "R4X Spec (RFC-0004 Part II)", true),
     // G14R's salted claim seal v2, beside the OPV registrations (the Lead, 2026-10-09): below `palw_panel_free_v1` the kernel refuses
     // it and the gate drops it through this table. Inner kinds 21 and 22 are not allocated.
     a2_row(PalwA2SlotV1::KernelInner { lo: 20, hi: 20 }, "palw_panel_free_v1", "G14R CommitClaimSalted (salted claim seal v2)", false),
@@ -1661,7 +1710,13 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "K2S",
         false,
     ),
-    a2_row(PalwA2SlotV1::KernelNested { what: "ProsecutionV1::Spec (4), ClaimBodyV1::Spec (3)" }, "palw_typed_roots_v1", "R4X", false),
+    // `ClaimBodyV1::Spec` (3) is the kernel ledger's state, never carried; the carried form is the filing's proof.
+    a2_row(
+        PalwA2SlotV1::KernelNested { what: "ProsecutionV1::Spec (4) inside FileProof (inner 7)" },
+        "palw_typed_roots_v1",
+        "R4X",
+        true,
+    ),
     // ---- header carriage forms and coinbase trailers ----
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 7, magic: *b"PFS4" }, "palw_receipt_spend_v4", "RFC-0009 V4 receipt carriage", true),
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 10, magic: *b"PXE2" }, "palw_exec_payload_v2", "X8R EXEC envelope", false),
@@ -3241,12 +3296,15 @@ pub(crate) mod tests {
                 );
             }
             for (tag, name, fence) in PALW_KERNEL_ROUTE_INNER_KINDS_V1 {
-                let mut bytes = vec![*tag];
-                bytes.extend_from_slice(&[0u8; 16_384]);
-                let object = <misaka_palw_kernel::route::KernelRouteObjectV1 as borsh::BorshDeserialize>::deserialize(&mut &bytes[..])
-                    .unwrap_or_else(|e| panic!("inner {tag} ({name}) decodes from a zero-filled body: {e}"));
+                let object: misaka_palw_kernel::route::KernelRouteObjectV1 =
+                    minimal_decode(&[*tag]).unwrap_or_else(|| panic!("inner {tag} ({name}) decodes from a near-zero body"));
                 assert_eq!(palw_kernel_route_inner_fence_v1(&object), *fence, "inner {tag} ({name})");
             }
+            // A variant appended INSIDE an inner kind is owned by its fence through a guarded arm: R4X's typed-root proof in a filing.
+            use misaka_palw_kernel::route::{KernelRouteObjectV1 as K, ProsecutionV1 as P};
+            let filing = |proof| K::FileProof { accuser: [1; 64], claim: [2; 64], proof };
+            assert_eq!(palw_kernel_route_inner_fence_v1(&filing(P::Spec(vec![9]))), Some(PalwKernelInnerFenceV1::TypedRootsV1));
+            assert_eq!(palw_kernel_route_inner_fence_v1(&filing(P::Kernel(vec![9]))), None, "a filing of a kind tag 110 knows");
         }
 
         /// The source directories whose types a payload can carry: consensus-core and every crate it decodes with (the PALW crates

@@ -2949,6 +2949,13 @@ pub struct Params {
     /// ([`Self::validate_palw_probabilistic_constraints_v1`]) — the RFC assigns none, and shadow comparison precedes any proposal.
     pub palw_probabilistic_constraints_v1: Option<ForkActivation>,
 
+    /// **RFC-0004 Part II: typed-root computation specifications on the kernel route** ([`crate::palw_typed_roots_v1`]): the separately
+    /// named fence under which the route's ledger schedules the typed-roots extension `K2-TR-v1` (Memory, Retrieval, Composite classes;
+    /// `misaka-palw-kernel::spec`). **Dormant with no activation height**: `None` on every preset and in no flag-day list, hashed
+    /// Some-only in both fingerprints, collapsed from `Some(never())`, and refused when armed ([`Self::validate_palw_typed_roots_v1`])
+    /// until the single full-activation release names a height for it with the others.
+    pub palw_typed_roots_v1: Option<ForkActivation>,
+
     /// **RFC-0015: Panel=0 (`OptimisticPublicVerification`) on the kernel route** ([`crate::palw_panel_free_v1`]): the separately named
     /// fence under which a network admits classes registered under the Panel-free verification mode (a fixed public challenge window,
     /// objective fraud proofs, producer reservations; `misaka-palw-kernel`'s `OpvPolicyV1`). **Dormant with no activation height**: `None`
@@ -2964,6 +2971,21 @@ pub struct Params {
     /// hashed Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed
     /// ([`Self::validate_palw_signed_registration_v1`]) with the kernel route it ships beside.
     pub palw_signed_registration_v1: Option<ForkActivation>,
+    /// **RFC-0006 per-segment pricing** (agent SHARD, [`crate::palw_tir_shard_segment_v2`], `docs/design/palw/shard-rfc6-10.md` §4):
+    /// past this height a claim drawn per shard prices each seat's lock and pay by `max(work share, resident share)` of its cells
+    /// (the resident share counts the K/V history up to the segment's end), keyed on the claim's panel bind. **Dormant, with no
+    /// activation height**: `None` on every preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from
+    /// `Some(never())`, refused when armed ([`Self::validate_palw_tir_shard_segment_v2`]) until the full-activation release names
+    /// its height; needs `palw_tir_shard_v1` in force at or below it.
+    pub palw_tir_shard_segment_v2: Option<ForkActivation>,
+
+    /// **Lane DA16 (RFC-0009 §4.2, RFC-0014 §16): the provider court** ([`crate::palw_provider_court_v1`]). Past this height bonded
+    /// providers lease a subject's public material (an artifact under both roots of its binding, a kernel claim's positions), anyone
+    /// challenges one unit on chain, an unanswered challenge slashes the provider, and a claim's producer may move its DA responsibility
+    /// to its leases (tags 150–153; rows in the kernel route's aux tables 43–45). **Dormant, with no activation height**: `None` on every
+    /// preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed
+    /// ([`Self::validate_palw_provider_court_v1`]) with the kernel route it ships beside.
+    pub palw_provider_court_v1: Option<ForkActivation>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
@@ -4156,9 +4178,14 @@ impl Params {
         self.validate_palw_gen_range_twin_v1()?;
         // **RFC-0011 §15.7's dormant fence** (`crate::palw_probabilistic_constraints_v1`): refused when armed.
         self.validate_palw_probabilistic_constraints_v1()?;
+        // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
+        self.validate_palw_typed_roots_v1()?;
         // **RFC-0015's dormant fence** (`crate::palw_panel_free_v1`): refused when armed.
         self.validate_palw_panel_free_v1()?;
         self.validate_palw_signed_registration_v1()?;
+        // **RFC-0006 per-segment pricing** (`crate::palw_tir_shard_segment_v2`): refused when armed.
+        self.validate_palw_tir_shard_segment_v2()?;
+        self.validate_palw_provider_court_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **A-2 uniformity** (`crate::palw_lifecycle_objects_v2`): every lifecycle kind's owning fence needs the audit fence declared.
         self.validate_palw_lifecycle_kind_fences_v1()?;
@@ -6505,6 +6532,10 @@ impl Params {
         if self.palw_probabilistic_constraints_v1 == Some(ForkActivation::never()) {
             self.palw_probabilistic_constraints_v1 = None;
         }
+        // The typed-roots fence, likewise.
+        if self.palw_typed_roots_v1 == Some(ForkActivation::never()) {
+            self.palw_typed_roots_v1 = None;
+        }
         // The Panel-free fence, likewise.
         if self.palw_panel_free_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_panel_free_v1 = None;
@@ -6512,6 +6543,14 @@ impl Params {
         // The signed-registration envelope's fence, likewise.
         if self.palw_signed_registration_v1 == Some(ForkActivation::never()) {
             self.palw_signed_registration_v1 = None;
+        }
+        // RFC-0006 per-segment pricing's fence, likewise.
+        if self.palw_tir_shard_segment_v2 == Some(ForkActivation::never()) {
+            self.palw_tir_shard_segment_v2 = None;
+        }
+        // The provider court's fence (DA16), likewise.
+        if self.palw_provider_court_v1 == Some(ForkActivation::never()) {
+            self.palw_provider_court_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -10187,8 +10226,11 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_typed_roots_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
+            palw_tir_shard_segment_v2,
+            palw_provider_court_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -10457,8 +10499,11 @@ impl Params {
             ("palw_fp_job_v5", *palw_fp_job_v5),
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
+            ("palw_typed_roots_v1", *palw_typed_roots_v1),
             ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
+            ("palw_tir_shard_segment_v2", *palw_tir_shard_segment_v2),
+            ("palw_provider_court_v1", *palw_provider_court_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -10742,6 +10787,11 @@ impl Params {
             h.write(b"palw_probabilistic_constraints_v1");
             h.write(at.daa_score().to_le_bytes());
         }
+        // The typed-roots fence, NAMED likewise.
+        if let Some(at) = self.palw_typed_roots_v1 {
+            h.write(b"palw_typed_roots_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
         // The Panel-free fence, NAMED likewise.
         if let Some(fence) = &self.palw_panel_free_v1 {
             h.write(b"palw_panel_free_v1");
@@ -10751,6 +10801,16 @@ impl Params {
         // The signed-registration envelope's fence, NAMED likewise.
         if let Some(at) = self.palw_signed_registration_v1 {
             h.write(b"palw_signed_registration_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // RFC-0006 per-segment pricing's fence, NAMED likewise (Some-only: every preset leaves it None).
+        if let Some(at) = self.palw_tir_shard_segment_v2 {
+            h.write(b"palw_tir_shard_segment_v2");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // The provider court's fence (DA16), NAMED likewise.
+        if let Some(at) = self.palw_provider_court_v1 {
+            h.write(b"palw_provider_court_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
@@ -11428,8 +11488,11 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_typed_roots_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
+            palw_tir_shard_segment_v2,
+            palw_provider_court_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -12177,12 +12240,24 @@ impl Params {
         if let Some(activation) = palw_probabilistic_constraints_v1.as_mut() {
             fork(activation, visit);
         }
+        // The typed-roots fence. Some-only.
+        if let Some(activation) = palw_typed_roots_v1.as_mut() {
+            fork(activation, visit);
+        }
         // The Panel-free fence. Some-only.
         if let Some(fence) = palw_panel_free_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
         // The signed-registration envelope's fence. Some-only.
         if let Some(activation) = palw_signed_registration_v1.as_mut() {
+            fork(activation, visit);
+        }
+        // RFC-0006 per-segment pricing's fence. Some-only.
+        if let Some(activation) = palw_tir_shard_segment_v2.as_mut() {
+            fork(activation, visit);
+        }
+        // The provider court's fence (DA16). Some-only.
+        if let Some(activation) = palw_provider_court_v1.as_mut() {
             fork(activation, visit);
         }
         // palw_fp_prefix_inherit. Some-only.
@@ -12715,8 +12790,11 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_typed_roots_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
+            palw_tir_shard_segment_v2,
+            palw_provider_court_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -13516,6 +13594,11 @@ impl Params {
             h.write(b"palw_probabilistic_constraints_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The typed-roots fence, Some-only for the same reason.
+        if let Some(activation) = palw_typed_roots_v1 {
+            h.write(b"palw_typed_roots_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // The Panel-free fence, Some-only for the same reason.
         if let Some(fence) = palw_panel_free_v1 {
             h.write(b"palw_panel_free_v1");
@@ -13525,6 +13608,16 @@ impl Params {
         // The signed-registration envelope's fence, Some-only for the same reason.
         if let Some(activation) = palw_signed_registration_v1 {
             h.write(b"palw_signed_registration_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0006 per-segment pricing's fence, Some-only for the same reason.
+        if let Some(activation) = palw_tir_shard_segment_v2 {
+            h.write(b"palw_tir_shard_segment_v2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // The provider court's fence (DA16), Some-only for the same reason.
+        if let Some(activation) = palw_provider_court_v1 {
+            h.write(b"palw_provider_court_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, Some-only for the same reason.
@@ -14316,8 +14409,11 @@ impl Params {
             palw_fp_job_v5: self.palw_fp_job_v5,
             palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
+            palw_typed_roots_v1: self.palw_typed_roots_v1,
             palw_panel_free_v1: self.palw_panel_free_v1.clone(),
             palw_signed_registration_v1: self.palw_signed_registration_v1,
+            palw_tir_shard_segment_v2: self.palw_tir_shard_segment_v2,
+            palw_provider_court_v1: self.palw_provider_court_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -15410,8 +15506,11 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_typed_roots_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
+    palw_tir_shard_segment_v2: None,
+    palw_provider_court_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15700,8 +15799,11 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_typed_roots_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
+    palw_tir_shard_segment_v2: None,
+    palw_provider_court_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15972,8 +16074,11 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_typed_roots_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
+    palw_tir_shard_segment_v2: None,
+    palw_provider_court_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -23325,6 +23430,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_capped_onboarding_v1();
     // RFC-0006's layer-sharded panels, likewise.
     params.sync_palw_tir_shard_v1();
+    // RFC-0006's per-segment pricing, likewise.
+    params.sync_palw_tir_shard_segment_v2();
     // RFC-0001 §2.10's adapter class listing, likewise.
     params.sync_palw_adapter_class_v1();
     // ADR-0096's decode constraint, likewise.
@@ -23596,8 +23703,11 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_typed_roots_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
+    palw_tir_shard_segment_v2: None,
+    palw_provider_court_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,

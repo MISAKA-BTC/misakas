@@ -14,6 +14,12 @@
 //! * [`apply_readiness_v1`] — `TirSeatReadinessProved` (tag 93): a possession proof over ONE shard's rows, recorded under
 //!   the shard's readiness class — what makes a bond a candidate of the shard's draw and counts in its `ready_eff`;
 //! * [`final_legs_v1`] — the pay at `Final`: the panel's pool divided by the drawn seats' shares (decision 6).
+//! * [`bind_record_stratified_v1`] — the same record for a claim the permissionless Panel (RFC-0010) drew per shard (agent SHARD).
+//!
+//! **Per-segment pricing** (`palw_tir_shard_segment_v2`, dormant, agent SHARD): for a claim accepted at or past the fence, the
+//! drawn seats' shares and a counted signer's lock scale by `max(work, resident)` of the seat's cells
+//! ([`crate::palw_tir_shard_segment_v2`]); below it — every claim on every shipped network — the armed work-only rules, byte for
+//! byte. Keyed on the claim's acceptance (immutable), so its bind and every part agree.
 
 use super::*;
 use crate::palw_tir_shard_v1 as rules;
@@ -80,6 +86,44 @@ pub(super) fn apply_plan_declared_v1(
     Ok(())
 }
 
+/// **The plan's resident table** past `palw_tir_shard_segment_v2` for a claim accepted at `accepted_daa`; `None` below the fence
+/// (the armed work-only prices).
+fn resident_permille_v2(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    plan: &rules::PalwTirShardPlanV1,
+    accepted_daa: u64,
+) -> Result<Option<Vec<u16>>, PalwStateV2Error> {
+    if !params.tir_shard_segment_active_at(accepted_daa) {
+        return Ok(None);
+    }
+    let refused = |why: String| PalwStateV2Error::TirShardRefused(why);
+    let record = state.tir_classes.get(class_id).ok_or_else(|| refused(format!("class {class_id} is not an IR class")))?;
+    let program =
+        misaka_palw_tir::TirProgramV1::decode_canonical(&record.program).map_err(|e| refused(format!("the class's program: {e}")))?;
+    crate::palw_tir_shard_segment_v2::palw_tir_shard_cell_resident_permille_v2(&program, record.facts.max_context, plan.s_l, plan.s_p)
+        .map(Some)
+        .map_err(|e| refused(e.to_string()))
+}
+
+/// Each stored seat's pay weight, fixed at the bind: the work share (the armed rule), or past per-segment pricing the price share.
+fn drawn_weights_v1(
+    builder: &TransitionBuilder<'_>,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    plan: &rules::PalwTirShardPlanV1,
+    anchor: &Hash64,
+    outsider: bool,
+) -> Result<Vec<u32>, PalwStateV2Error> {
+    Ok(match resident_permille_v2(&builder.state, builder.params, &claim.class_id, plan, claim.accepted_daa)? {
+        Some(resident) => {
+            crate::palw_tir_shard_segment_v2::palw_tir_shard_drawn_price_permille_v2(plan, &resident, anchor, claim_id, outsider)
+        }
+        None => rules::palw_tir_shard_drawn_permille_v1(plan, anchor, claim_id, outsider),
+    })
+}
+
 /// **Which claims license by parts**: those whose panel bound with a per-shard record. Answers `false` on every network
 /// that never armed the fence — no record exists there — so the whole-object doors are byte-identical.
 pub(super) fn claim_licenses_tir_parts_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> bool {
@@ -113,7 +157,33 @@ pub(super) fn bind_record_v1(
     if seats.len() != usize::from(plan.s_l) * usize::from(rules::palw_tir_panel_stride_v1(outsider)) {
         return Ok(());
     }
-    let drawn = rules::palw_tir_shard_drawn_permille_v1(&plan, anchor, claim_id, outsider);
+    let drawn = drawn_weights_v1(builder, claim_id, claim, &plan, anchor, outsider)?;
+    let record = rules::PalwTirShardClaimV1::bound(plan.s_l, plan.s_p, outsider, drawn)
+        .ok_or(PalwStateV2Error::TirShardRefused("a plan of no shards".into()))?;
+    builder.write_tir_shard_claim(*claim_id, Some(record));
+    Ok(())
+}
+
+/// **The per-shard record of a claim the permissionless Panel drew per shard** (RFC-0006 × RFC-0010, agent SHARD): what
+/// [`bind_record_v1`] writes for a lane-A bind, from the engine's strata (`s_l` strata, the outsider flag frozen at admission)
+/// rather than re-derived from the panel's length — the engine drew exactly `s_l × stride` seats, shard-major. The class's plan
+/// is immutable once declared and the fence monotone, so a stratified claim always finds it; one that did not would be a broken
+/// invariant, refused by name.
+pub(super) fn bind_record_stratified_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: &Hash64,
+    class_id: &Hash64,
+    anchor: &Hash64,
+    s_l: u16,
+    outsider: bool,
+) -> Result<(), PalwStateV2Error> {
+    let plan = plan_of_class_v1(&builder.state, builder.params, class_id, ctx.daa_score)
+        .filter(|plan| plan.s_l == s_l)
+        .cloned()
+        .ok_or_else(|| PalwStateV2Error::TirShardRefused(format!("claim {claim_id} was drawn in {s_l} strata but its class holds no such plan")))?;
+    let claim = builder.state.claims.get(claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(*claim_id))?;
+    let drawn = drawn_weights_v1(builder, claim_id, &claim, &plan, anchor, outsider)?;
     let record = rules::PalwTirShardClaimV1::bound(plan.s_l, plan.s_p, outsider, drawn)
         .ok_or(PalwStateV2Error::TirShardRefused("a plan of no shards".into()))?;
     builder.write_tir_shard_claim(*claim_id, Some(record));
@@ -199,9 +269,19 @@ pub(super) fn apply_part_v1(
         step,
     );
     let plan_cells = builder.state.tir_shard_plans.get(&claim.class_id).map(|p| p.cell_permille.clone()).unwrap_or_default();
+    // Per-segment pricing (dormant): past the fence a cell is priced by what it must hold as well as what it computes.
+    let resident = match builder.state.tir_shard_plans.get(&claim.class_id).cloned() {
+        Some(plan) => resident_permille_v2(&builder.state, builder.params, &claim.class_id, &plan, claim.accepted_daa)?,
+        None => None,
+    };
     let price_of = |bond: &PalwBondKeyV2, mask: crate::palw_verification_v2::PalwSegmentMaskV2| -> u128 {
         // The seat's share of the work: the class seats by their assigned cells, the outsider by the whole shard.
-        let share = rules::palw_tir_cells_share_permille_v1(&plan_cells, record.s_p, shard, mask);
+        let share = match &resident {
+            Some(resident) => {
+                crate::palw_tir_shard_segment_v2::palw_tir_shard_price_share_v2(&plan_cells, resident, record.s_p, shard, mask)
+            }
+            None => rules::palw_tir_cells_share_permille_v1(&plan_cells, record.s_p, shard, mask),
+        };
         let _ = bond;
         rules::palw_tir_shard_lock_v1(full_lock, share)
     };

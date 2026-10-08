@@ -16839,6 +16839,9 @@ mod t12_tir_registration_cap;
 mod g14_registration_e2e;
 // G14 lane D phase 2: the kernel route folded into PalwChainStateV2 -- a covered lie convicted by a fresh outsider through the real node path.
 mod g14_kernel_route_e2e;
+// RFC-0004 Part II: computation specifications with typed roots on the real node -- Weights byte for byte, Memory, Retrieval,
+// Composite, each lie convicted by an outsider and each withholding a default.
+mod r4x_typed_roots_e2e;
 // RFC-0002 Phase F's second IR fence: the IR step-leaf DA demand at the gate.
 mod t12_tir_da_step_gate;
 // RFC-0004 A4/A5: the material objects' and the candidate's signatures at the gate, and a licence

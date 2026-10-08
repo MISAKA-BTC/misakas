@@ -136,6 +136,9 @@ mod palw_kernel_route_fold_v1;
 // G14 lane D phase 3: the onboarding objects' fold arms (artifact binding and refutation, kernel binding, conformance commitment).
 #[path = "palw_onboarding_fold_v1.rs"]
 mod palw_onboarding_fold_v1;
+// Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
+#[path = "palw_provider_court_fold_v1.rs"]
+mod palw_provider_court_fold_v1;
 // RFC-0001 §2.10 (ADR-0163): the adapter class listing's fold arm — a child module for the same reason.
 #[path = "palw_adapter_class_fold_v1.rs"]
 mod palw_adapter_class_fold_v1;
@@ -1702,6 +1705,10 @@ pub struct PalwStateParamsV2 {
     /// `tir_fence2_from_daa`'s reason (the fold's shard objects read it). `None` on every shipped preset.
     #[borsh(skip)]
     tir_shard_from_daa: Option<u64>,
+    /// **RFC-0006 per-segment pricing: `Params::palw_tir_shard_segment_v2`'s height** (agent SHARD), mirrored by
+    /// `Params::sync_palw_tir_shard_segment_v2` (the shard fold's bind and part prices read it). `None` on every preset.
+    #[borsh(skip)]
+    tir_shard_segment_from_daa: Option<u64>,
     /// **RFC-0001 §2.10 (ADR-0163): `Params::palw_adapter_class_v1`'s height**, mirrored by
     /// `Params::sync_palw_adapter_class_v1` for the same reason (the fold's adapter listing arm reads it).
     /// `None` on every shipped preset.
@@ -1966,6 +1973,7 @@ impl PalwStateParamsV2 {
             audit_mesh_from_daa: None,
             capped_from_daa: None,
             tir_shard_from_daa: None,
+            tir_shard_segment_from_daa: None,
             adapter_class_from_daa: None,
             fp_decode_constraint_from_daa: None,
             class_seating: None,
@@ -2228,6 +2236,23 @@ impl PalwStateParamsV2 {
     /// **Are layer-sharded panels in force at `daa_score`?** `false` on every shipped preset.
     pub fn tir_shard_active_at(&self, daa_score: u64) -> bool {
         self.tir_shard_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0006 per-segment pricing's mirror** — written by `Params::sync_palw_tir_shard_segment_v2` and by nothing else (and
+    /// by fixtures); `None` where the fence is not armed.
+    pub fn with_tir_shard_segment_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.tir_shard_segment_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_tir_shard_segment_v2`'s height, if the network arms it (the mirror).
+    pub fn tir_shard_segment_from_daa(&self) -> Option<u64> {
+        self.tir_shard_segment_from_daa
+    }
+
+    /// **Is per-segment pricing in force for a panel bound at `bound_daa`?** `false` on every shipped preset.
+    pub fn tir_shard_segment_active_at(&self, bound_daa: u64) -> bool {
+        self.tir_shard_segment_from_daa.is_some_and(|from| bound_daa >= from)
     }
 
     /// `Params::palw_tir_fence2`'s height, if the network arms it (the mirror).
@@ -3790,7 +3815,11 @@ pub fn palw_anchor_ring_prune_count_v1(ring: &[u64], now_daa: u64, horizon_daa: 
 /// delay elapsed while that lock was still live: up to a whole seat's collateral of liability
 /// that nothing could recover (`dos_l1_q4b`).
 pub fn palw_bond_backs_live_duty_v1(state: &PalwChainStateV2, key: &PalwBondKeyV2, now_daa: u64, depth: Option<u64>) -> bool {
-    if state.reserved_exposure(key) > 0 || state.kernel_reserved(key) > 0 || state.onboarding_reserved(key) > 0 {
+    if state.reserved_exposure(key) > 0
+        || state.kernel_reserved(key) > 0
+        || state.onboarding_reserved(key) > 0
+        || state.provider_court_reserved(key) > 0
+    {
         return true;
     }
     let settled_now = state.settled_attempt_finals;
@@ -3827,7 +3856,11 @@ pub fn palw_bond_backs_live_duty_v2(
     depth: Option<u64>,
     window_court: u64,
 ) -> bool {
-    if state.reserved_exposure(key) > 0 || state.kernel_reserved(key) > 0 || state.onboarding_reserved(key) > 0 {
+    if state.reserved_exposure(key) > 0
+        || state.kernel_reserved(key) > 0
+        || state.onboarding_reserved(key) > 0
+        || state.provider_court_reserved(key) > 0
+    {
         return true;
     }
     let settled_now = state.settled_attempt_finals;
@@ -4092,6 +4125,8 @@ pub fn palw_bond_committed_v1(
         // G14 lane D: what the kernel route has reserved against the bond (a claim's collateral, a demand bond); 0 with no route.
         .saturating_add(state.kernel_reserved(bond))
         .saturating_add(state.onboarding_reserved(bond))
+        // DA16: the provider court's leases and challenge bonds.
+        .saturating_add(state.provider_court_reserved(bond))
 }
 
 /// **[`palw_bond_committed_v1`]'s per-lock term: does `lock` on `claim_id` still hold its seat's
@@ -5275,6 +5310,9 @@ pub fn palw_rcore_deadline_v1(
                 .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?,
         ),
         PalwClaimPhaseV2::ReceiptLicensed { .. } if open_courts > 0 => None,
+        // **RFC-0010 × G14 (SHARD): a V3 S2 licence owes no deadline while an accusation is pending** — its gate is an uncharged
+        // expiry that would close the accusation neutrally. Dormant: no engine exists on any shipped chain.
+        PalwClaimPhaseV2::ReceiptLicensed { .. } if state.palw_v3_s2_licence_held_v1(claim_id, claim) => None,
         PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
             // §4-quater V4: the one licensed Final floor, `max(L + wc, H)` past the fence.
             let mut floor = palw_claim_final_floor_v1(state, params, claim_id, claim, licensed_daa)?;
@@ -8471,6 +8509,41 @@ pub enum PalwConsensusObjectV2 {
         signer: PalwBondKeyV2,
         signature: Vec<u8>,
     } = 109,
+    // Tags 150–153 are lane DA16's provider court (RFC-0009's reservation; the lead's allocation of 2026-10-09). Dropped by name below
+    // `palw_provider_court_v1`; rows in the kernel route's aux tables 43–45. Every signature: the signer's ML-DSA-87 over
+    // [`crate::palw_provider_court_v1::palw_provider_court_message_v1`] (kind = the tag, payload = the Borsh of the other fields).
+    /// **(tag 150): a provider's bonded lease** of a subject's public material until `serve_until_daa`, reserving `reserved` of its
+    /// free collateral. **Tag 150.**
+    ProviderLeaseV1 {
+        subject: crate::palw_provider_court_v1::ProviderSubjectV1,
+        reserved: u64,
+        serve_until_daa: u64,
+        provider: PalwBondKeyV2,
+        signature: Vec<u8>,
+    } = 150,
+    /// **(tag 151): a challenge of ONE unit of ONE lease**, filed on chain by a bond of another operator; a challenge bond, a
+    /// deadline. The challenger signs `valid_until_daa` (at most one response window past the block that carries it): a replay of
+    /// the signed object never re-opens a closed challenge. **Tag 151.**
+    ProviderChallengeV1 {
+        subject: crate::palw_provider_court_v1::ProviderSubjectV1,
+        provider: PalwBondKeyV2,
+        unit: crate::palw_public_material_v1::PublicUnitV1,
+        valid_until_daa: u64,
+        challenger: PalwBondKeyV2,
+        signature: Vec<u8>,
+    } = 151,
+    /// **(tag 152): the provider's answer** — the unit, verified against the chain's own root. Large answers ride `ObjectChunk`s.
+    /// **Tag 152.**
+    ProviderAnswerV1 {
+        subject: crate::palw_provider_court_v1::ProviderSubjectV1,
+        provider: PalwBondKeyV2,
+        unit: crate::palw_public_material_v1::PublicUnitV1,
+        answer: Box<crate::palw_public_material_v1::PublicUnitAnswerV1>,
+        signature: Vec<u8>,
+    } = 152,
+    /// **(tag 153): a kernel claim's producer moves the claim's DA responsibility to its leases** (irreversible; see
+    /// [`crate::palw_provider_court_v1`]). **Tag 153.**
+    DaTransferV1 { claim: Hash64, producer: PalwBondKeyV2, signature: Vec<u8> } = 153,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -8483,6 +8556,19 @@ pub fn palw_object_is_onboarding_v1(object: &PalwConsensusObjectV2) -> bool {
             | PalwConsensusObjectV2::KernelBoundV1 { .. }
             | PalwConsensusObjectV2::ConformanceCommittedV1 { .. }
             | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. }
+    )
+}
+
+/// **Is this object a provider-court object (tags 150–153, lane DA16)** — a variant an older build cannot decode and skips (A-2)? Below
+/// `Params::palw_provider_court_v1` the acceptance walk drops it by name before any slot, rent or budget is charged for it; the fold
+/// refuses it as the second lock.
+pub fn palw_object_is_provider_court_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(
+        object,
+        PalwConsensusObjectV2::ProviderLeaseV1 { .. }
+            | PalwConsensusObjectV2::ProviderChallengeV1 { .. }
+            | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
+            | PalwConsensusObjectV2::DaTransferV1 { .. }
     )
 }
 
@@ -9331,6 +9417,8 @@ pub fn palw_chunked_object_kind_admitted_v1(object: &PalwConsensusObjectV2) -> b
             | PalwConsensusObjectV2::KernelRouteV1 { .. }
             | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. }
             | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. }
+            // DA16: a provider's answer may carry a run of row-tree nodes and the commitments map — judged on the whole, likewise.
+            | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
     )
 }
 
@@ -12991,6 +13079,11 @@ impl PalwChainStateV2 {
         self.tir_shard_plans.iter()
     }
 
+    /// Every live claim drawn per shard, with its per-shard record (the non-seat cell watcher's targets read it, agent SHARD).
+    pub fn tir_shard_claims_iter(&self) -> impl Iterator<Item = (&Hash64, &crate::palw_tir_shard_v1::PalwTirShardClaimV1)> {
+        self.tir_shard_claims.iter()
+    }
+
     /// **The finite court window a class committed when it registered past `palw_model_court_window`**,
     /// `None` for every other class — every class registered below the fence, and every class past it that
     /// the rule does not reach (a graph class with no fused attention site, an IR class with no dissected
@@ -13080,9 +13173,42 @@ impl PalwChainStateV2 {
 
     /// **Does the permissionless Panel's engine clock this claim?** `true` for a claim the engine tracks and has not ended: its
     /// seal, entropy, assignment and receipt-window timers are the engine's, so V2's bind and receipt deadlines do not apply to it
-    /// while it is `Provisional` or `PanelBound`.
+    /// while it is `Provisional` or `PanelBound`. **And for a claim whose engine end is DEFERRED** (the G14 guard,
+    /// [`Self::palw_accusation_pending_v1`]): the engine decided a non-fraud end while an accusation was pending, the V2 claim
+    /// still waits, and it is still the engine's — no V2 bind or receipt deadline, never offered to the lane-A binder — until the
+    /// deferred end is applied or a conviction ends it first. `false` on every chain with no engine.
     pub fn panel_v3_clocks_claim_v1(&self, claim_id: &Hash64) -> bool {
-        self.panel_v3.as_ref().and_then(|engine| engine.claim_rows().get(claim_id)).is_some_and(|record| !record.phase.terminal())
+        self.panel_v3.as_ref().and_then(|engine| engine.claim_rows().get(claim_id)).is_some_and(|record| match record.phase {
+            misaka_palw_panel::ClaimPhaseV3::Voided { .. } => matches!(
+                self.claims.get(claim_id).map(|claim| &claim.phase),
+                Some(PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::DefaultDisputed { .. })
+            ),
+            ref phase => !phase.terminal(),
+        })
+    }
+
+    /// **RFC-0010 × G14 — is an accusation pending on this claim?** (agent SHARD, `docs/design/palw/shard-rfc6-10.md` §2.) A
+    /// data-availability session (a seat's or a non-seat's) is open on it, a court session (bisection or dissection) is open on
+    /// it, or it is `DefaultDisputed`. THE one predicate every V3 non-fraud end reads: while it holds, no expiry, redraw or
+    /// seal/beacon absence closes the claim — the engine's receipt clock pauses, the engine's own end is deferred (the V2 void
+    /// waits), and a V3 S2 licence holds no deadline — so an accusation always reaches its verdict or its own backstop and is
+    /// never closed neutrally by a non-fraud void. Bounded: three non-seat DA sessions at once and sixteen over a claim's life,
+    /// four per seat, each at most `W_disclose`; court sessions by the court's own capacity and backstop.
+    pub fn palw_accusation_pending_v1(&self, claim_id: &Hash64) -> bool {
+        self.da_claims.get(claim_id).is_some_and(|record| record.open_sessions() > 0)
+            || self.open_courts_by_claim.get(claim_id).is_some_and(|open| *open > 0)
+            || matches!(self.claims.get(claim_id).map(|claim| &claim.phase), Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
+    }
+
+    /// **A V3 claim's S2 licence held by a pending accusation** (DL-1's G14 row): the engine bound it (its record exists, released
+    /// at the licence), it is an S2 licence not yet raised to a replay-backed one, and an accusation is pending — it owes no
+    /// deadline, so the S2 expiry (`PanelUnavailable`, uncharged, which closes every session neutrally) cannot pre-empt it; the
+    /// close of the last accusation re-derives the deadline. `false` on every chain with no engine.
+    pub fn palw_v3_s2_licence_held_v1(&self, claim_id: &Hash64, claim: &PalwClaimStateV2) -> bool {
+        matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
+            && palw_rcore_licence_awaits_replay_v1(claim)
+            && self.panel_v3.as_ref().is_some_and(|engine| engine.claim_rows().contains_key(claim_id))
+            && self.palw_accusation_pending_v1(claim_id)
     }
 
     pub fn vertex_counts_v1(&self) -> (usize, usize, usize) {
@@ -15040,6 +15166,10 @@ impl PalwChainStateV2 {
             if matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
                 && matches!(crate::palw_audit_door_v1::palw_capacity_audit_gate_v1(params, claim, self.audit_receipts.get(id)), Some(None))
             {
+                continue;
+            }
+            // RFC-0010 × G14 (SHARD): a V3 S2 licence a pending accusation holds owes none (DL-1's G14 row).
+            if self.palw_v3_s2_licence_held_v1(id, claim) {
                 continue;
             }
             if let Some(deadline) = expected_deadline(claim, self.open_courts_by_claim.get(id).copied().unwrap_or(0)) {
@@ -21290,6 +21420,14 @@ impl<'a> TransitionBuilder<'a> {
                 // §4-quater V6: a long-D claim's pause moves `H` too — before the re-arm reads it.
                 self.credit_verify_pause_v6(claim_id, since, now_daa);
             }
+            self.rearm_claim_deadline_dl1_v1(claim_id, now_daa)?;
+        } else if open_left == 0
+            && matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
+            && palw_rcore_licence_awaits_replay_v1(&claim)
+            && self.state.panel_v3.as_ref().is_some_and(|engine| engine.claim_rows().contains_key(&claim_id))
+        {
+            // RFC-0010 × G14 (SHARD): the last session on a V3 S2 licence closed — DL-1 re-derives its deadline (none while a court
+            // is still open). Dormant: no engine exists on any shipped chain.
             self.rearm_claim_deadline_dl1_v1(claim_id, now_daa)?;
         }
         Ok(())
@@ -30340,6 +30478,11 @@ fn open_da_session_rcore_v1(
     if claim.phase.is_terminal() || pauses {
         builder.disarm_deadline(claim_id);
     }
+    // RFC-0010 × G14 (SHARD): any session on a V3 S2 licence holds it — DL-1 gives it no deadline while one is open (the close of
+    // the last re-derives it, `da_close_session_v1`). Dormant: no engine exists on any shipped chain.
+    if builder.state.palw_v3_s2_licence_held_v1(&claim_id, &claim) {
+        builder.disarm_deadline(claim_id);
+    }
     let until = admission.deadline_daa.saturating_add(builder.params.window_challenge_at(ctx.daa_score));
     builder.da_rekey_v1(claim_id, until, ctx.daa_score);
     Ok(())
@@ -33417,6 +33560,12 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                     // **RFC-0010: a claim the permissionless Panel bound is not redrawn by V2's binder** (there is none for it): an
                     // S2 licence no supplementary set raised to a replay-backed one EXPIRES, uncharged, like a second panel that
                     // did not show up (`PanelUnavailable`: no slash, no strike, the reservation returned).
+                    //
+                    // **G14 (SHARD): never while an accusation is pending** — the expiry closes every session neutrally. DL-1 arms
+                    // no deadline then (unreachable by the derivation); skipped consistently with it, the close re-arms.
+                    if builder.state.palw_accusation_pending_v1(&claim_id) {
+                        continue;
+                    }
                     builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::PanelUnavailable)?;
                 } else if claim.rebound_daa.is_none() {
                     builder.redraw_unreplayed_licence_v1(claim_id, &claim, ctx.daa_score)?;
@@ -34106,6 +34255,8 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::ProbabilisticConstraintsV1) => builder.extras.kernel_route.is_some(),
         K::Fence(F::PermissionlessPanelV1) => builder.params.panel_v3().is_some_and(|mirror| ctx.daa_score >= mirror.from_daa),
         K::Fence(F::SignedRegistrationV1) => false,
+        // Lane DA16: the route's extras carry the court's activation exactly where `palw_provider_court_v1` is in force here.
+        K::Fence(F::ProviderCourtV1) => builder.extras.kernel_route.as_ref().is_some_and(|route| route.provider_court.is_some()),
     }
 }
 
@@ -34595,6 +34746,19 @@ fn apply_object(
         // **Onboarding P0 (tag 109): conformance evidence** — posted or refuted; tables 39 and 40 (`palw_onboarding_fold_v1`).
         PalwConsensusObjectV2::ConformanceEvidenceV1 { v2_class, action, signer, signature: _ } => {
             palw_onboarding_fold_v1::apply_conformance_evidence_v1(builder, ctx, v2_class, action, signer)?;
+        }
+        // **Lane DA16 (tags 150–153): the provider court** — rows in the route's aux tables 43–45 (`palw_provider_court_fold_v1`).
+        PalwConsensusObjectV2::ProviderLeaseV1 { subject, reserved, serve_until_daa, provider, signature: _ } => {
+            palw_provider_court_fold_v1::apply_provider_lease_v1(builder, ctx, subject, *reserved, *serve_until_daa, provider)?;
+        }
+        PalwConsensusObjectV2::ProviderChallengeV1 { subject, provider, unit, valid_until_daa, challenger, signature: _ } => {
+            palw_provider_court_fold_v1::apply_provider_challenge_v1(builder, ctx, subject, provider, unit, *valid_until_daa, challenger)?;
+        }
+        PalwConsensusObjectV2::ProviderAnswerV1 { subject, provider, unit, answer, signature: _ } => {
+            palw_provider_court_fold_v1::apply_provider_answer_v1(builder, ctx, subject, provider, unit, answer)?;
+        }
+        PalwConsensusObjectV2::DaTransferV1 { claim, producer, signature: _ } => {
+            palw_provider_court_fold_v1::apply_da_transfer_v1(builder, ctx, claim, producer)?;
         }
         // (tag 108): the acceptance walk replaces the envelope by the registration it wraps, so the fold never meets one.
         PalwConsensusObjectV2::SignedRegistrationV1 { .. } => {
