@@ -779,7 +779,7 @@ fn a_bond_that_copies_a_published_claim_is_refused_and_a_failed_holder_frees_the
     // Another bond re-signs the same evidence and commitments for the same job.
     let copy = KernelClaimV1 { producer_bond: SPAM1, ..honest.claim.clone() };
     let ev = w.block(11, vec![T::CommitClaim { claim: copy.clone(), evidence: evidence.clone(), commitments: commitments.clone() }]);
-    assert_eq!(refused(&ev).as_deref(), Some("the job already has a live or Final claim (one claim per job)"), "{ev:?}");
+    assert_eq!(refused(&ev).as_deref(), Some("another claim already holds the job (one claim per job)"), "{ev:?}");
     // After Final the job stays taken: one computation, one reward.
     w.block(200, vec![]);
     assert!(matches!(w.state(&id), ClaimStateV1::Final { .. }));
@@ -799,4 +799,29 @@ fn a_bond_that_copies_a_published_claim_is_refused_and_a_failed_holder_frees_the
     let redo = w.produce(&job, OUTSIDER, w.greedy(&w.params.clone(), &job.prompt, 3), &w.params.clone(), |_| {});
     let ev = w.block(213, vec![redo.tx]);
     assert!(ev.contains(&E::ClaimCommitted { claim: redo.claim.id() }), "{ev:?}");
+}
+
+#[test]
+fn an_uncovered_claim_never_locks_its_job_and_the_first_covered_claim_holds_it() {
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    // A squatter commits a claim nobody covers (here a lie; junk of the right shape behaves the same).
+    let (_, squat) = w.lying(&job, 3);
+    let squat_id = squat.claim.id();
+    let ev = w.block(10, vec![squat.tx]);
+    assert!(ev.contains(&E::ClaimCommitted { claim: squat_id }), "{ev:?}");
+    // The honest producer's claim for the same job is still accepted, and its coverage takes the job.
+    let honest = w.produce(&job, OUTSIDER, w.greedy(&w.params.clone(), &job.prompt, 3), &w.params.clone(), |_| {});
+    let id = honest.claim.id();
+    let ev = w.block(12, vec![honest.tx, T::PanelCovered { claim: id }]);
+    assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
+    assert_eq!(w.l.job_claims.get(&job.id()), Some(&id));
+    // The squatter's coverage is refused now: it is never paid, and it times out with its collateral returned.
+    let ev = w.block(13, vec![T::PanelCovered { claim: squat_id }]);
+    assert_eq!(refused(&ev).as_deref(), Some("another claim already holds the job (one claim per job)"), "{ev:?}");
+    w.block(300, vec![]);
+    assert!(matches!(w.state(&id), ClaimStateV1::Final { .. }));
+    assert!(matches!(w.state(&squat_id), ClaimStateV1::TimedOut { .. }));
+    assert_eq!(w.l.claims.values().filter(|r| r.rewarded).count(), 1);
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, 0, "the squatter's reservation came back, it earned nothing");
 }

@@ -543,8 +543,9 @@ pub struct KernelLedgerV1 {
     pub served: BTreeMap<DemandKeyV1, ServedPositionV1>,
     /// Artifact roots the consumer attested public (see [`LedgerTxV1::AttestArtifact`]).
     pub attested_artifacts: BTreeSet<Digest>,
-    /// **One claim per job**: the claim holding each job. A job is computed (and paid) once; another bond re-signing a published
-    /// claim's evidence for the same job is refused. A holder that fails (convicted, unavailable, timed out) frees the job.
+    /// **One claim per job**: the claim holding each job — the first the Panel covered. A job is paid once; a claim committed while
+    /// another holds the job is refused, and a second claim's coverage is refused. A holder that fails (convicted, unavailable,
+    /// timed out) frees the job.
     pub job_claims: BTreeMap<Digest, Digest>,
     /// Unrevealed seals, keyed `(job, producer)` (see [`KernelRouteObjectV1::SealClaim`]).
     pub seals: BTreeMap<(Digest, Digest), SealRowV1>,
@@ -614,9 +615,22 @@ impl KernelLedgerV1 {
     /// nothing (silence and partial coverage never pass).
     pub fn apply_panel_tally(&mut self, claim: &Digest, covered: bool) -> Result<Vec<LedgerEventV1>, KernelRefusalV1> {
         let daa = self.daa;
-        let Some(row) = self.claims.get_mut(claim) else { return Err(KernelRefusalV1::rule("PanelTally", "no such claim")) };
-        if covered {
-            let _ = row.life.apply(ClaimEventV1::Tally { daa, state: TallyStateV1::Covered });
+        let Some(job) = self.claims.get(claim).map(|r| r.job_id) else {
+            return Err(KernelRefusalV1::rule("PanelTally", "no such claim"));
+        };
+        if !covered {
+            return Ok(Vec::new());
+        }
+        // **One claim per job, decided by the first pass**: a claim holds its job from the Panel's coverage, not from its commit, so
+        // an unbacked claim nobody covers never locks a job against the honest producer (C4 F-C4-09). Once another claim holds
+        // the job, a second claim's coverage is refused: it is never paid, and it times out with its collateral returned.
+        if self.job_claims.get(&job).is_some_and(|h| h != claim && self.claims.get(h).is_some_and(ClaimRowV1::holds_job)) {
+            return Err(KernelRefusalV1::rule("PanelTally", "another claim already holds the job (one claim per job)"));
+        }
+        let row = self.claims.get_mut(claim).expect("checked");
+        let _ = row.life.apply(ClaimEventV1::Tally { daa, state: TallyStateV1::Covered });
+        if row.holds_job() {
+            self.job_claims.insert(job, *claim);
         }
         Ok(Vec::new())
     }
@@ -721,7 +735,7 @@ impl KernelLedgerV1 {
                     Some(_) => {}
                 }
                 if self.job_claims.get(job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job) {
-                    return Err(KernelRefusalV1::rule(name, "the job already has a live or Final claim"));
+                    return Err(KernelRefusalV1::rule(name, "another claim already holds the job"));
                 }
                 // A producer may re-seal (another output): the latest seal replaces the earlier and its clock restarts.
                 self.seals.insert((*job, *producer), SealRowV1 { seal: *seal, daa: self.daa });
@@ -1098,7 +1112,7 @@ impl KernelLedgerV1 {
         if let Some(holder) = self.job_claims.get(&claim.job_id).and_then(|c| self.claims.get(c))
             && holder.holds_job()
         {
-            return Err(rule("the job already has a live or Final claim (one claim per job)".into()));
+            return Err(rule("another claim already holds the job (one claim per job)".into()));
         }
         match self.bonds.get(&claim.producer_bond) {
             None => return Err(rule("the producer bond is not registered".into())),
@@ -1117,7 +1131,6 @@ impl KernelLedgerV1 {
         }
         self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)?;
         self.seals.remove(&key);
-        self.job_claims.insert(claim.job_id, id);
         Ok(())
     }
 
@@ -1204,7 +1217,7 @@ impl KernelLedgerV1 {
         if let Some(holder) = self.job_claims.get(&claim.job_id).and_then(|c| self.claims.get(c))
             && holder.holds_job()
         {
-            return Err(rule("the job already has a live or Final claim (one claim per job)".into()));
+            return Err(rule("another claim already holds the job (one claim per job)".into()));
         }
         match self.bonds.get(&claim.producer_bond) {
             None => return Err(rule("the producer bond is not registered".into())),
@@ -1223,7 +1236,6 @@ impl KernelLedgerV1 {
         }
         self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)?;
         self.seals.remove(&key);
-        self.job_claims.insert(claim.job_id, id);
         Ok(())
     }
 
