@@ -13478,17 +13478,32 @@ impl VirtualStateProcessor {
             return Err("a kernel route object carries a signature its bond's key does not verify".to_string());
         }
         let object = misaka_palw_kernel::route::KernelRouteObjectV1::decode(bytes).map_err(|refusal| format!("{refusal}"))?;
-        // **RFC-0015: a registration under a non-legacy mode (tags 13 / 14) is dropped unless `palw_panel_free_v1` is in force.** The
-        // network declares the OPV policy or it does not; the ledger refuses the rest (admission, economics, carriers).
-        if matches!(
-            object,
-            misaka_palw_kernel::route::KernelRouteObjectV1::RegisterClassV2 { .. }
-                | misaka_palw_kernel::route::KernelRouteObjectV1::RegisterPipelineClassV2 { .. }
-        ) && !self.palw_kernel_opv_at(daa_score)
+        // **A-2 uniformity one level down (`PALW_KERNEL_ROUTE_INNER_KINDS_V1`): an inner kind owned by a fence beyond tag 110's is dropped
+        // unless that fence is in force** — below it a build without the kind refuses it at the kernel's decode, the block standing.
+        // RFC-0015's registrations under a verification mode (inner 13 / 14) are `palw_panel_free_v1`'s: the network declares the OPV
+        // policy or it does not; the ledger refuses the rest (admission, economics, carriers).
+        if let Some(fence) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_kernel_route_inner_fence_v1(&object)
+            && !self.palw_kernel_inner_fence_at(fence, daa_score)
         {
-            return Err("a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)".to_string());
+            return Err(match fence {
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => {
+                    "a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)"
+                        .to_string()
+                }
+            });
         }
         Ok(())
+    }
+
+    /// Is a kernel-route inner kind's own fence (`PalwKernelInnerFenceV1`) in force at `daa_score`?
+    fn palw_kernel_inner_fence_at(
+        &self,
+        fence: kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1,
+        daa_score: u64,
+    ) -> bool {
+        match fence {
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => self.palw_kernel_opv_at(daa_score),
+        }
     }
 
     fn verify_mldsa87_with_context_bool(key: &[u8], message: &[u8], sig: &[u8], context: &[u8]) -> bool {

@@ -163,7 +163,13 @@ fn well_formed(bond: PalwBondKeyV2) -> Vec<Obj> {
         Obj::ConformanceEvidenceV1 { v2_class: h, action: Box::new(zeros()), signer: bond, signature: vec![1; 64] },
         Obj::KernelRouteV1 { bytes: vec![5; 256], signer: bond, signature: vec![1; 64] },
         Obj::KernelConstraintReceiptV1 { receipt: Box::new(zeros()), signature: vec![1; 64] },
-        Obj::PanelBeaconProofV3 { proof: Box::new(misaka_palw_panel::BeaconProofV1 { epoch: 1, output: h, proof: vec![6; 32] }) },
+        Obj::PanelBeaconProofV3 {
+            proof: Box::new(kaspa_consensus_core::palw_permissionless_panel_v1::BeaconProofV1 {
+                epoch: 1,
+                output: h,
+                proof: vec![6; 32],
+            }),
+        },
     ]
 }
 
@@ -192,10 +198,10 @@ fn malformed(bond: PalwBondKeyV2) -> Vec<Obj> {
         .collect();
     out.push(Obj::KernelRouteV1 { bytes: Vec::new(), signer: bond, signature: vec![1; 64] });
     out.push(Obj::PanelBeaconProofV3 {
-        proof: Box::new(misaka_palw_panel::BeaconProofV1 {
+        proof: Box::new(kaspa_consensus_core::palw_permissionless_panel_v1::BeaconProofV1 {
             epoch: 1,
             output: h,
-            proof: vec![6; misaka_palw_panel::MAX_BEACON_PROOF_BYTES_V1 as usize + 1],
+            proof: vec![6; kaspa_consensus_core::palw_permissionless_panel_v1::MAX_BEACON_PROOF_BYTES_V1 as usize + 1],
         }),
     });
     out.push(Obj::SignedRegistrationV1 {

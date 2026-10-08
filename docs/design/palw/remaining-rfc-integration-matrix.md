@@ -92,6 +92,14 @@ wire/fence impact · test · real-node result · status.
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the
 skeleton first; lanes build on that commit.
 
+**A-2 uniformity rule (A2U, 2026-10-08; `a2-uniformity-new-kinds.md`).** Every new object kind needs a kind→fence entry: a row in
+`PALW_LIFECYCLE_NEW_KINDS_V1` and an arm in `palw_lifecycle_kind_owner_v1`. The compiler demands the arm, and the test
+`every_kind_in_the_enum_has_exactly_one_owner` demands the row. Every new header carriage form or coinbase trailer needs a
+`PalwHeaderFormFenceV1` variant. **Below its owning fence a kind or form rides unjudged**: it is read exactly as the live testnet-12
+build reads its bytes, as undecodable. That means the same verdict and the same skip, with nothing charged, counted or written.
+Never refuse it at isolation. Its own rule (may-ride, shape, size) is asked only past the fence, in the header context, the acceptance
+walk and the fold. The live build's kind list (`PALW_LIFECYCLE_INT12_KINDS_V1`) is frozen.
+
 ## 3. Waves
 
 0. Scope/contracts — this matrix; `fcde1e3dc` (Panel-assignment subject + circularity rule).

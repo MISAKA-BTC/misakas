@@ -1414,6 +1414,112 @@ pub fn validate_palw_lifecycle_tx_in_context_v1(
     }
 }
 
+// ---- One level down: the kernel route's inner kinds (inside tag 110) ---------------------------------------------------------------
+//
+// Tag 110's bytes are a `misaka_palw_kernel::route::KernelRouteObjectV1`. Below `palw_probabilistic_constraints_v1` all of them are the
+// live build's undecodable payload (the table above). Past it, a build that does not know an inner kind refuses it at the kernel's
+// decode — the gate drops the object and the block stands — so an inner kind added later is read the same way below ITS fence, by the
+// one gate rule [`palw_kernel_route_inner_fence_v1`] feeds (the processor's `palw_kernel_route_object_is_signed`).
+
+/// **The fences that own kernel-route inner kinds beyond tag 110's own.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PalwKernelInnerFenceV1 {
+    /// `Params::palw_panel_free_v1` (RFC-0015): a registration under a verification mode (inner 13, 14).
+    PanelFreeV1,
+}
+
+impl PalwKernelInnerFenceV1 {
+    /// The `Params` field the fence is resolved from.
+    pub const fn params_field(self) -> &'static str {
+        match self {
+            Self::PanelFreeV1 => "palw_panel_free_v1",
+        }
+    }
+}
+
+/// **The inner-kind → fence table** (`None`: tag 110's own fence is the whole rule). Exhaustive and wildcard-free: an inner kind
+/// added to `KernelRouteObjectV1` does not compile until it names its fence, and `every_kernel_inner_kind_has_exactly_one_row`
+/// reconciles [`PALW_KERNEL_ROUTE_INNER_KINDS_V1`] with the enum's source.
+pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::KernelRouteObjectV1) -> Option<PalwKernelInnerFenceV1> {
+    use misaka_palw_kernel::route::KernelRouteObjectV1 as K;
+    match object {
+        K::RegisterClass { .. }
+        | K::RegisterPipelineClass { .. }
+        | K::PostJob { .. }
+        | K::PostPipelineJob { .. }
+        | K::CommitClaim { .. }
+        | K::CommitPipelineClaim { .. }
+        | K::FileProof { .. }
+        | K::FileDemand { .. }
+        | K::Respond { .. }
+        | K::RequestExit { .. }
+        | K::Withdraw { .. }
+        | K::SealClaim { .. } => None,
+        K::RegisterClassV2 { .. } | K::RegisterPipelineClassV2 { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
+    }
+}
+
+/// Every kernel-route inner kind as `(inner tag, variant, fence beyond tag 110's)`.
+pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerFenceV1>)] = &[
+    (1, "RegisterClass", None),
+    (2, "RegisterPipelineClass", None),
+    (3, "PostJob", None),
+    (4, "PostPipelineJob", None),
+    (5, "CommitClaim", None),
+    (6, "CommitPipelineClaim", None),
+    (7, "FileProof", None),
+    (8, "FileDemand", None),
+    (9, "Respond", None),
+    (10, "RequestExit", None),
+    (11, "Withdraw", None),
+    (12, "SealClaim", None),
+    (13, "RegisterClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (14, "RegisterPipelineClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+];
+
+// ---- Inside the live build's own kinds: its wire types are frozen ------------------------------------------------------------------
+//
+// A kind the live build DOES decode can still carry bytes it cannot: a variant appended to a nested enum, or a field appended to a
+// nested struct (an "appended Borsh variant inside tag 68" is the shape the HFX lane carries). The live build fails the whole payload's
+// decode there and tolerates it; a newer build that decodes it must read it the same way below its fence. So every Borsh wire type the
+// live build compiled is frozen (`palw_lifecycle_objects_v2/int12_borsh_manifest.tsv`, a digest per type, read off `0b1c11b87`'s
+// source), and `every_int12_wire_type_is_unchanged_or_classified` refuses any change not classified here — a CARRIED change also needs
+// a guarded arm in [`palw_lifecycle_kind_owner_v1`] (before the `Int12` arm) naming the fence that owns objects carrying the new form.
+
+/// How a change to one of the live build's Borsh wire types is accounted for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwInt12WireChangeV1 {
+    /// `PalwConsensusObjectV2` itself: its added variants are [`PALW_LIFECYCLE_NEW_KINDS_V1`]'s.
+    ObjectEnum,
+    /// State, delta or parameter encoding — never inside a block's carriage (why).
+    NotCarried(&'static str),
+    /// Inside a carried kind: every object carrying the new form is owned by this fence ([`palw_lifecycle_kind_owner_v1`]'s guarded
+    /// arm), and the type's current digest is pinned so a further change is classified again.
+    Carried { fence: PalwLifecycleKindFenceV1, digest: u64 },
+}
+
+/// **Every live-build wire type that has changed since `0b1c11b87`, keyed `"<path>::<item>"`** — reconciled exactly (no missing,
+/// no stale row) by `every_int12_wire_type_is_unchanged_or_classified`.
+pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
+    ("consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2", PalwInt12WireChangeV1::ObjectEnum),
+    (
+        "consensus/core/src/palw_state_v2.rs::PalwDeltaEntryV2",
+        PalwInt12WireChangeV1::NotCarried("the fold's journal (stored deltas), never a block's carriage"),
+    ),
+    (
+        "consensus/core/src/palw_state_v2.rs::PalwVoidReasonV2",
+        PalwInt12WireChangeV1::NotCarried("a claim row's terminal reason, written by the fold; no carried object names one"),
+    ),
+    (
+        "consensus/core/src/palw_state_v2.rs::PalwStateParamsV2",
+        PalwInt12WireChangeV1::NotCarried("the ruleset's parameters (the V2 bundle), never carried"),
+    ),
+    (
+        "consensus/core/src/palw_improve_state_v1.rs::PalwNoChangeReasonV1",
+        PalwInt12WireChangeV1::NotCarried("an improvement epoch row's outcome, written by the fold"),
+    ),
+];
+
 #[cfg(test)]
 pub(crate) mod tests {
     /// **…except no registrant can build one, and the test above did not notice.**
@@ -2510,8 +2616,13 @@ pub(crate) mod tests {
         /// `(variant, tag)` of every variant of `PalwConsensusObjectV2`, read from its SOURCE — declaration order, Rust's discriminant
         /// rule (explicit `= N`, else the previous plus one).
         fn enum_kinds_from_source() -> Vec<(String, u8)> {
-            let src = include_str!("palw_state_v2.rs");
-            let start = src.find("pub enum PalwConsensusObjectV2 {").expect("the enum") + "pub enum PalwConsensusObjectV2 {".len();
+            enum_variants_from_source(include_str!("palw_state_v2.rs"), "PalwConsensusObjectV2")
+        }
+
+        /// `(variant, discriminant)` of `pub enum <name>` in `src`, by Rust's rule (explicit `= N`, else the previous plus one).
+        fn enum_variants_from_source(src: &str, name: &str) -> Vec<(String, u8)> {
+            let head = format!("pub enum {name} {{");
+            let start = src.find(&head).expect("the enum") + head.len();
             let bytes = src.as_bytes();
             let (mut i, mut depth) = (start, 0usize);
             let mut out: Vec<(String, u8)> = Vec::new();
@@ -2720,6 +2831,303 @@ pub(crate) mod tests {
             p.validate_palw_lifecycle_kind_fences_v1().expect("declared");
             p.palw_audit_2026_09_11 = None;
             assert!(p.validate_palw_lifecycle_kind_fences_v1().is_err(), "an owning fence without A-2 is refused");
+        }
+
+        fn repo_root() -> std::path::PathBuf {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+        }
+
+        /// **The table test one level down: every kernel-route inner kind has exactly one row**, read from `KernelRouteObjectV1`'s
+        /// source; and each row's fence is what [`palw_kernel_route_inner_fence_v1`] answers for that kind (a zero-filled body).
+        #[test]
+        fn every_kernel_inner_kind_has_exactly_one_row() {
+            let src = std::fs::read_to_string(repo_root().join("misaka-palw-kernel/src/route.rs")).expect("the kernel route's source");
+            let kinds = enum_variants_from_source(&src, "KernelRouteObjectV1");
+            assert_eq!(kinds.len(), PALW_KERNEL_ROUTE_INNER_KINDS_V1.len(), "{kinds:?}");
+            for (name, tag) in &kinds {
+                assert_eq!(
+                    PALW_KERNEL_ROUTE_INNER_KINDS_V1.iter().filter(|(t, n, _)| t == tag && n == name).count(),
+                    1,
+                    "KernelRouteObjectV1::{name} (inner {tag}) needs exactly one row in PALW_KERNEL_ROUTE_INNER_KINDS_V1, naming the \
+                     fence below which it is read as undecodable (A-2 uniformity)"
+                );
+            }
+            for (tag, name, fence) in PALW_KERNEL_ROUTE_INNER_KINDS_V1 {
+                let mut bytes = vec![*tag];
+                bytes.extend_from_slice(&[0u8; 16_384]);
+                let object = <misaka_palw_kernel::route::KernelRouteObjectV1 as borsh::BorshDeserialize>::deserialize(&mut &bytes[..])
+                    .unwrap_or_else(|e| panic!("inner {tag} ({name}) decodes from a zero-filled body: {e}"));
+                assert_eq!(palw_kernel_route_inner_fence_v1(&object), *fence, "inner {tag} ({name})");
+            }
+        }
+
+        /// The source directories whose Borsh types a lifecycle payload can carry (consensus-core and the crates it decodes with).
+        const WIRE_DIRS: [&str; 8] = [
+            "consensus/core/src",
+            "crypto/hashes/src",
+            "misaka-palw-tir/src",
+            "misaka-palw-gen/src",
+            "misaka-palw-panel/src",
+            "misaka-palw-challenge/src",
+            "misaka-palw-kernel/src",
+            "misaka-palw-tir-sketch/src",
+        ];
+
+        fn fnv64(bytes: &[u8]) -> u64 {
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in bytes {
+                h ^= u64::from(*b);
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            h
+        }
+
+        /// `src` without `//` and `/* */` comments (string and char literals kept whole).
+        fn strip_comments(src: &str) -> String {
+            let b = src.as_bytes();
+            let mut out = Vec::with_capacity(b.len());
+            let mut i = 0;
+            while i < b.len() {
+                if b[i..].starts_with(b"//") {
+                    while i < b.len() && b[i] != b'\n' {
+                        i += 1;
+                    }
+                } else if b[i..].starts_with(b"/*") {
+                    i += 2;
+                    while i < b.len() && !b[i..].starts_with(b"*/") {
+                        i += 1;
+                    }
+                    i += 2;
+                } else if b[i] == b'"' {
+                    out.push(b[i]);
+                    i += 1;
+                    while i < b.len() && b[i] != b'"' {
+                        if b[i] == b'\\' {
+                            out.push(b[i]);
+                            i += 1;
+                        }
+                        if i < b.len() {
+                            out.push(b[i]);
+                            i += 1;
+                        }
+                    }
+                    if i < b.len() {
+                        out.push(b[i]);
+                        i += 1;
+                    }
+                } else if b[i..].starts_with(b"'\"'") {
+                    out.extend_from_slice(b"'\"'");
+                    i += 3;
+                } else {
+                    out.push(b[i]);
+                    i += 1;
+                }
+            }
+            String::from_utf8_lossy(&out).into_owned()
+        }
+
+        /// The end (exclusive) of the bracketed group opening at `open`.
+        fn group_end(b: &[u8], open: usize) -> usize {
+            let (o, c) = match b[open] {
+                b'{' => (b'{', b'}'),
+                b'(' => (b'(', b')'),
+                b'[' => (b'[', b']'),
+                _ => (b'<', b'>'),
+            };
+            let mut depth = 0usize;
+            let mut i = open;
+            while i < b.len() {
+                if b[i] == o {
+                    depth += 1;
+                } else if b[i] == c && !(c == b'>' && i > 0 && b[i - 1] == b'-') {
+                    depth -= 1;
+                    if depth == 0 {
+                        return i + 1;
+                    }
+                }
+                i += 1;
+            }
+            b.len()
+        }
+
+        /// **Every Borsh wire type under `root`'s [`WIRE_DIRS`]** — each derived `struct`/`enum` and each hand-written
+        /// `impl BorshDeserialize for …`, keyed `"<path>::<item>"`, valued by an FNV-1a of its declaration with comments and
+        /// whitespace removed. Test modules (`#[cfg(test)]` onward, `tests/`) are not wire types.
+        fn wire_types_of(root: &std::path::Path) -> std::collections::BTreeMap<String, u64> {
+            fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+                let Ok(entries) = std::fs::read_dir(dir) else { return };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if path.file_name().is_some_and(|n| n != "tests" && n != "benches") {
+                            walk(&path, out);
+                        }
+                    } else if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "tests.rs") {
+                        out.push(path);
+                    }
+                }
+            }
+            let mut files = Vec::new();
+            for dir in WIRE_DIRS {
+                walk(&root.join(dir), &mut files);
+            }
+            files.sort();
+            let mut out = std::collections::BTreeMap::new();
+            for file in files {
+                let rel = file.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                let raw = std::fs::read_to_string(&file).unwrap();
+                let production = raw.split("\n#[cfg(test)]").next().unwrap();
+                let text = strip_comments(production);
+                let b = text.as_bytes();
+                let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+                let mut insert = |name: String, decl: String| {
+                    let mut key = format!("{rel}::{name}");
+                    let mut n = 2;
+                    while out.contains_key(&key) {
+                        key = format!("{rel}::{name}#{n}");
+                        n += 1;
+                    }
+                    out.insert(key, fnv64(decl.as_bytes()));
+                };
+                let mut i = 0;
+                while let Some(at) = text[i..].find("#[derive(").map(|k| k + i) {
+                    let attr_end = group_end(b, at + 1);
+                    i = attr_end;
+                    if !text[at..attr_end].contains("Borsh") {
+                        continue;
+                    }
+                    // Further attributes (the borsh and repr ones are part of the wire form), then the visibility.
+                    let mut j = attr_end;
+                    let mut attrs = String::new();
+                    loop {
+                        while j < b.len() && b[j].is_ascii_whitespace() {
+                            j += 1;
+                        }
+                        if j < b.len() && b[j] == b'#' {
+                            let end = group_end(b, j + 1);
+                            let a = &text[j..end];
+                            if a.starts_with("#[borsh") || a.starts_with("#[repr") {
+                                attrs.push_str(a);
+                            }
+                            j = end;
+                        } else {
+                            break;
+                        }
+                    }
+                    if text[j..].starts_with("pub(") {
+                        j = group_end(b, j + 3);
+                    } else if text[j..].starts_with("pub ") {
+                        j += 4;
+                    }
+                    while j < b.len() && b[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    let kind = if text[j..].starts_with("struct ") {
+                        "struct"
+                    } else if text[j..].starts_with("enum ") {
+                        "enum"
+                    } else {
+                        continue;
+                    };
+                    let name_at = j + kind.len() + 1;
+                    let name: String = text[name_at..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+                    let mut k = name_at + name.len();
+                    while k < b.len() && !matches!(b[k], b'{' | b'(' | b';') {
+                        if b[k] == b'<' {
+                            k = group_end(b, k);
+                        } else {
+                            k += 1;
+                        }
+                    }
+                    let end = match b.get(k) {
+                        Some(b';') => k + 1,
+                        Some(b'(') => {
+                            let close = group_end(b, k);
+                            close + text[close..].find(';').map_or(0, |s| s + 1)
+                        }
+                        Some(_) => group_end(b, k),
+                        None => b.len(),
+                    };
+                    insert(name, squash(&format!("{attrs}{}", &text[j..end])));
+                    i = end;
+                }
+                // Hand-written decoders.
+                let mut i = 0;
+                while let Some(at) = text[i..].find("BorshDeserialize for ").map(|k| k + i) {
+                    let name_at = at + "BorshDeserialize for ".len();
+                    let name: String = text[name_at..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+                    let open = text[name_at..].find('{').map(|k| k + name_at).unwrap_or(b.len() - 1);
+                    let end = group_end(b, open);
+                    let start = text[..at].rfind("impl").unwrap_or(at);
+                    insert(format!("impl BorshDeserialize for {name}"), squash(&text[start..end]));
+                    i = end;
+                }
+            }
+            out
+        }
+
+        fn int12_manifest() -> std::collections::BTreeMap<String, u64> {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/palw_lifecycle_objects_v2/int12_borsh_manifest.tsv");
+            std::fs::read_to_string(&path)
+                .expect("the frozen manifest of the live build's wire types")
+                .lines()
+                .filter(|l| !l.starts_with('#') && !l.is_empty())
+                .map(|l| {
+                    let (key, digest) = l.split_once('\t').expect("key<TAB>digest");
+                    (key.to_string(), u64::from_str_radix(digest, 16).expect("a hex digest"))
+                })
+                .collect()
+        }
+
+        /// **The live build's wire types are frozen: each is unchanged, or its change is classified** in
+        /// [`PALW_INT12_WIRE_CHANGES_V1`] — the object enum (whose new variants the kind table owns), a type never carried, or a carried
+        /// type whose new form a fence owns (its digest pinned). An appended variant or field inside a kind the live build decodes
+        /// fails here until it is classified. No row may be stale.
+        ///
+        /// `A2U_WIRE_MANIFEST_OF=<tree>` prints `<tree>`'s manifest instead (how the frozen one was made, from a worktree at
+        /// `0b1c11b87`).
+        #[test]
+        fn every_int12_wire_type_is_unchanged_or_classified() {
+            if let Ok(tree) = std::env::var("A2U_WIRE_MANIFEST_OF") {
+                let manifest = wire_types_of(std::path::Path::new(&tree));
+                println!(
+                    "# The live testnet-12 build's Borsh wire types (int-12, `rcore/int-12` @ 0b1c11b87): `<path>::<item>`<TAB>FNV-1a of"
+                );
+                println!(
+                    "# its declaration without comments and whitespace (`wire_types_of`). Frozen; never regenerated against a newer tree."
+                );
+                for (key, digest) in &manifest {
+                    println!("{key}\t{digest:016x}");
+                }
+                return;
+            }
+            let frozen = int12_manifest();
+            assert!(frozen.len() > 500, "the frozen manifest is the live build's ({} types)", frozen.len());
+            assert!(frozen.contains_key("consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2"));
+            let now = wire_types_of(&repo_root());
+            let mut unclassified = Vec::new();
+            let mut changed = std::collections::BTreeSet::new();
+            for (key, digest) in &frozen {
+                if now.get(key) == Some(digest) {
+                    continue;
+                }
+                changed.insert(key.as_str());
+                match PALW_INT12_WIRE_CHANGES_V1.iter().find(|(k, _)| k == key) {
+                    None => unclassified.push(format!("{key} ({})", if now.contains_key(key) { "changed" } else { "gone" })),
+                    Some((_, PalwInt12WireChangeV1::Carried { digest: pinned, .. })) if now.get(key) != Some(pinned) => {
+                        unclassified.push(format!("{key} (changed again: now {:016x?})", now.get(key)))
+                    }
+                    Some(_) => {}
+                }
+            }
+            assert!(
+                unclassified.is_empty(),
+                "the live build's wire types changed without a classification in PALW_INT12_WIRE_CHANGES_V1 — a change inside a kind it \
+                 decodes is bytes it cannot decode, and below its fence must be read so (A-2 uniformity): {unclassified:#?}"
+            );
+            for (key, _) in PALW_INT12_WIRE_CHANGES_V1 {
+                assert!(changed.contains(key), "a stale row: {key} is the live build's again (or never was one)");
+            }
         }
     }
 }
