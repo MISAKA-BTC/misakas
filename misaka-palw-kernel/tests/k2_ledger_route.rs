@@ -148,8 +148,9 @@ fn the_state_root_is_versioned_canonical_and_pinned_by_a_golden_vector() {
 /// The first 8 bytes of each collection's root, for `small_state()`: header, bonds, classes, pipeline classes, jobs, pipeline jobs,
 /// claims, demands, served, attested artifacts.
 const GOLDEN_PARTS: [&str; 10] = [
-    // The header moved with the G14-R4 fix of GAP-5 (`LedgerPolicyV1::job_fee`, `job_escrow_ttl_daa`).
-    "226943b135d64d82",
+    // The header moved with the G14-R4 fixes of GAP-5 (`LedgerPolicyV1::job_fee`, `job_escrow_ttl_daa`) and F-C4R3-05
+    // (`prosecution_reserve_permille`).
+    "474c87b841e9f3cd",
     "801771b3f093df1f",
     "365486291ac886c2",
     "589b62088e37616b",
@@ -160,10 +161,10 @@ const GOLDEN_PARTS: [&str; 10] = [
     "c46a4586dcf73c2d",
     "b7a5cb38db702693",
 ];
-/// The root moved with the G14-R4 fixes of GAP-R7 and GAP-5 (the accusers' proof seals and the posters' job escrows joined the root
+/// The root moved with the G14-R4 fixes of GAP-R7, GAP-5 and F-C4R3-05 (the accusers' proof seals and the posters' job escrows joined the root
 /// as their own collections, and the policy in the header gained the job fee and the escrow TTL).
 const GOLDEN_ROOT: &str =
-    "d283cb8da2b862294e690a98dcb90e79b723b7729d650509fe4bceb8538ac1f1e1045e659082aa04f8b338ef525183b0117d27fd0c51ee74e1ab05ad913c92c1";
+    "c7e909f6b331057ddc8c1619d0886b3338bdd76ada4022e62a2ec60b720c20d559ee9cbc9c2e064c257cd864efb039bdea23dcd027c1dd49ab2b67eea45e9a85";
 
 #[test]
 fn each_collection_has_its_own_root_and_the_root_covers_the_state_and_nothing_else() {

@@ -55,6 +55,7 @@ pub fn policy() -> LedgerPolicyV1 {
         job_fee: 2,
         job_escrow_ttl_daa: 300,
         max_adjudications_per_block: 64,
+        prosecution_reserve_permille: 500,
         max_court_work_per_block: u64::MAX,
         claim_seal_delay_daa: 1,
         seal_ttl_daa: 100,

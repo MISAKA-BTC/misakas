@@ -194,6 +194,8 @@ pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash6
         job_fee: SOMPI_PER_KASPA,
         job_escrow_ttl_daa: 300,
         max_adjudications_per_block: 64,
+        // C4 F-C4R3-05 (round 2): half of every block's court runs only a proof may spend.
+        prosecution_reserve_permille: 500,
         max_court_work_per_block: 1 << 30,
         // Seal, then reveal: a claim commits over its producer's seal at least one block old; an unrevealed seal lives one check window.
         claim_seal_delay_daa: 1,

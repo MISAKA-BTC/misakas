@@ -149,6 +149,10 @@ pub struct LedgerPolicyV1 {
     pub job_escrow_ttl_daa: u64,
     /// The most court / classification / inclusion-check runs one block may trigger; an object past it is refused (dropped).
     pub max_adjudications_per_block: u32,
+    /// **Prosecution room that is always there** (C4 F-C4R3-05, round 2): this share (permille) of every block's
+    /// `max_adjudications_per_block` only a `FileProof` may spend — admissions (claims, registrations, pipeline jobs) and responses use
+    /// the rest — so no flood of claims can leave an outsider without a court run in the block that carries its proof. Below 1000.
+    pub prosecution_reserve_permille: u16,
     /// The most court work (the class's declared worst court work, summed over the block's filed proofs) one block may trigger.
     pub max_court_work_per_block: u64,
     /// A claim commits only over its producer's seal at least this old (≥ 1: a seal in the same block as the reveal proves nothing).
@@ -159,10 +163,15 @@ pub struct LedgerPolicyV1 {
 }
 
 impl LedgerPolicyV1 {
+    /// The court runs of every block only a `FileProof` may spend (C4 F-C4R3-05, round 2).
+    pub const fn prosecution_reserved_runs(&self) -> u32 {
+        (self.max_adjudications_per_block as u64 * self.prosecution_reserve_permille as u64 / 1000) as u32
+    }
+
     /// The relations among the timings and amounts every rule below relies on.
     pub fn validate(&self) -> Result<(), String> {
         let p = self;
-        let checks: [(bool, &str); 16] = [
+        let checks: [(bool, &str); 17] = [
             (p.court_deadline_daa == p.prosecution.court_deadline_daa, "the ledger's court deadline is the gate's"),
             (p.court_deadline_daa > 0 && p.challenge_window_daa > 0 && p.check_window_daa > 0, "every window is non-empty"),
             (p.proof_grace_daa > 0, "a served demand leaves a non-empty grace to file the proof it enables"),
@@ -190,6 +199,7 @@ impl LedgerPolicyV1 {
             (p.accuser_reward_permille < 1000, "the accuser's share is a share, and part of every slash and default is burned"),
             (p.claim_collateral > 0, "a claim reserves collateral"),
             (p.max_adjudications_per_block > 0, "a block may adjudicate"),
+            (p.prosecution_reserve_permille < 1000, "the prosecution reserve leaves admissions a share of the block"),
             (p.max_court_work_per_block > 0, "a block may run a court"),
             (p.claim_seal_delay_daa > 0, "a seal precedes its reveal by at least one block"),
             (p.seal_ttl_daa >= p.claim_seal_delay_daa, "a seal lives long enough to be revealed"),
@@ -1095,13 +1105,22 @@ impl KernelLedgerV1 {
     /// Charge one adjudication (and `court_work`) to the block, or refuse the object as over budget. Nothing is charged on a refusal.
     fn charge(&mut self, name: &'static str, court_work: u64) -> Result<(), KernelRefusalV1> {
         let b = self.budget;
-        if b.adjudications >= self.policy.max_adjudications_per_block
-            || b.court_work.saturating_add(court_work) > self.policy.max_court_work_per_block
-        {
+        // C4 F-C4R3-05 (round 2): a share of the block is reserved for proofs; everything else stops short of it.
+        let runs = if name == "FileProof" {
+            self.policy.max_adjudications_per_block
+        } else {
+            self.policy.max_adjudications_per_block - self.policy.prosecution_reserved_runs()
+        };
+        if b.adjudications >= runs || b.court_work.saturating_add(court_work) > self.policy.max_court_work_per_block {
             return Err(KernelRefusalV1::new(
                 name,
                 RefusalKindV1::OverBudget,
-                format!("the block's adjudication budget is spent ({} runs, {} court work)", b.adjudications, b.court_work),
+                format!(
+                    "the block's adjudication budget is spent ({} runs, {} court work; {} runs are reserved for proofs)",
+                    b.adjudications,
+                    b.court_work,
+                    self.policy.prosecution_reserved_runs()
+                ),
             ));
         }
         self.budget = BlockBudgetV1 { adjudications: b.adjudications + 1, court_work: b.court_work.saturating_add(court_work) };

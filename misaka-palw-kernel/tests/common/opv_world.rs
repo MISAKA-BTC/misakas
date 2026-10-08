@@ -47,6 +47,7 @@ pub fn opv_example() -> OpvPolicyV1 {
             assumed_detection_permille: 500,
             max_live_claims_per_producer: 3,
             max_live_claims_total: 5,
+            fresh_producer_slots: 2,
             default_burn_permille: 100,
             admission_fee: 3,
         },

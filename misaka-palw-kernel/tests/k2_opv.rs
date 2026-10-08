@@ -217,19 +217,19 @@ fn the_network_policy_admits_a_class_for_the_optimistic_mode_a_registrant_never_
 
 #[test]
 fn a_class_whose_prosecution_could_be_censored_for_less_than_it_pays_is_not_admitted() {
-    // A court that runs one filing per block and charges 1 per dismissed filing: saturating it through the window (50) and the
-    // liability horizon (200) costs 250. A class whose claims can gain more than that is refused — its producer could buy the
-    // silence of every prosecutor.
+    // A court that runs two filings per block (one reserved for proofs, C4 F-C4R3-05) and charges 1 per dismissed filing: saturating it
+    // through the window (50) and the liability horizon (200) costs 2 × 250 = 500. A class whose claims can gain more than that is
+    // refused — its producer could buy the silence of every prosecutor.
     let mut narrow = policy();
-    narrow.max_adjudications_per_block = 1;
+    narrow.max_adjudications_per_block = 2;
     narrow.dismissed_proof_fee = 1;
     let mut opv = opv_example();
     opv.economics.external_gain_bound = 80;
     let w = World::with_opv(narrow, opv);
-    assert_ne!(w.class, [0; 64], "a gain of 100 < 250 registers: {:?}", w.events);
+    assert_ne!(w.class, [0; 64], "a gain of 100 < 500 registers: {:?}", w.events);
     let mut rich = opv_example();
-    rich.economics.external_gain_bound = 400; // gain 420; reservation must follow: max(520, 840) after a self-recouped half (GAP-R7)
-    rich.economics.reservation_per_claim = 1680;
+    rich.economics.external_gain_bound = 500; // gain 520; reservation must follow: max(620, 1040) after a self-recouped half (GAP-R7)
+    rich.economics.reservation_per_claim = 2080;
     let w = World::with_opv(narrow, rich);
     assert_eq!(w.class, [0; 64]);
     assert!(refused(&w.events).unwrap().contains("could be censored"), "{:?}", w.events);
@@ -775,6 +775,92 @@ fn a_collateral_another_subsystem_took_is_not_a_bounty_source_and_fake_fraud_and
     assert!(!w.l.claims[&id].rewarded);
 }
 
+// ── F-C4R3-05 (round 2): what N cheap Sybil bonds pay to hold the OPV lane ──────────────────────────────────────────────
+
+/// **C4 F-C4R3-05, round 2 (the user's requirement: Sybil splitting must not defeat the cap).** A per-bond cap alone is defeated by
+/// splitting across bonds, so the lane's capacity is built from four things together: a reservation per live claim (held through the
+/// window AND the liability horizon), a non-refundable admission fee, slots that only PRE-FINAL claims hold, and a hard ceiling
+/// (`max_live_claims_total + fresh_producer_slots`) the window's reserved proof runs bound — with every block's prosecution share
+/// reserved for proofs. Here N = hard = 7 cheap Sybil bonds, each holding exactly one reservation + one fee, fill the whole lane: only
+/// then is an honest new producer refused, and that cost them 7 fees burned and 7 reservations locked for window + liability. At Final
+/// the slots free but the reservations stay locked, so the same cheap bonds cannot refill — the honest producer is admitted — and
+/// holding the lane continuously costs `hard × reservation × (window + liability) / window` of locked collateral plus `hard × fee` per
+/// window, however it is split across bonds.
+#[test]
+fn n_cheap_sybil_bonds_pay_for_every_slot_and_cannot_hold_the_opv_lane_past_one_window() {
+    let p = opv_example();
+    let e = p.economics;
+    let hard = (e.max_live_claims_total + e.fresh_producer_slots) as usize;
+    let mut w = World::new_opv();
+    let sybils: Vec<Digest> = (0..hard).map(|i| [0xD0 + i as u8; 64]).collect();
+    let cheap = e.reservation_per_claim + e.admission_fee; // exactly one claim's worth
+    w.block(2, sybils.iter().map(|b| T::RegisterBond { bond: *b, collateral: cheap }).collect());
+    let place = |w: &mut World, nonce: u8, bond: Digest| -> Vec<E> {
+        let t = w.l.daa + 1;
+        let job = w.post_job(t, &[3, 17, 9], 3, nonce);
+        let c = w.honest_by(&job, bond, 3);
+        w.block(t + 1, vec![c.tx])
+    };
+    let burned = w.l.burned;
+    for (i, b) in sybils.iter().enumerate() {
+        let ev = place(&mut w, i as u8, *b);
+        assert!(refused(&ev).is_none(), "Sybil {i}: {ev:?}");
+    }
+    assert_eq!(w.l.opv_open_counts(&HONEST), (0, hard as u32), "the whole lane, total and fresh slots alike");
+    // Only now is a new producer shut out — and the attacker paid for every slot.
+    let ev = place(&mut w, 100, HONEST);
+    assert!(refused(&ev).unwrap().contains("hard ceiling"), "{ev:?}");
+    let fees = w.l.burned - burned - (hard as u64 + 1) * w.l.policy.job_fee; // (the jobs' own posting fees aside)
+    let locked: u64 = sybils.iter().map(|b| w.l.bonds[b].reserved).sum();
+    assert_eq!((fees, locked), (hard as u64 * e.admission_fee, hard as u64 * e.reservation_per_claim));
+    // Bounded release: at Final the slots free, the reservations stay locked through the liability horizon — the cheap bonds cannot
+    // refill, and the honest producer is admitted.
+    let window_end = w.l.opv.claims.values().map(|o| o.window_end_daa).max().unwrap();
+    w.block(window_end + 1, vec![]);
+    assert_eq!(w.l.opv_open_counts(&HONEST), (0, 0), "no pre-Final claim holds a slot");
+    assert_eq!(sybils.iter().map(|b| w.l.bonds[b].reserved).sum::<u64>(), locked, "but every reservation is still locked");
+    let ev = place(&mut w, 101, sybils[0]);
+    assert!(refused(&ev).unwrap().contains("free collateral"), "a cheap Sybil cannot refill: {ev:?}");
+    let ev = place(&mut w, 102, HONEST);
+    assert!(refused(&ev).is_none(), "the honest producer is admitted: {ev:?}");
+    // The steady-state price of holding the lane, whoever and however many the bonds: (W + L) / W windows of reservations locked at
+    // once, and a fee per slot per window.
+    let (window, liability) = (p.window_daa(), w.l.policy.liability_daa);
+    let steady_locked = hard as u64 * e.reservation_per_claim * (window + liability) / window;
+    eprintln!(
+        "[F-C4R3-05 Sybil] hard ceiling {hard}: {fees} burned and {locked} locked to hold one window; continuously: {steady_locked} \
+         locked + {} burned per {window} DAA",
+        hard as u64 * e.admission_fee
+    );
+    assert_eq!(steady_locked, 7 * 1000 * 5);
+}
+
+/// **C4 F-C4R3-05, round 2: prosecution room is always there.** With a four-run block, two runs are reserved for proofs: a flood of
+/// claims in the same block takes only its share (the third claim is refused over budget), and the outsider's proof carried in the
+/// same block is still adjudicated and convicts.
+#[test]
+fn a_flood_of_claims_never_takes_the_runs_reserved_for_proofs() {
+    let mut narrow = policy();
+    narrow.max_adjudications_per_block = 4;
+    let mut w = World::with_opv(narrow, opv_example());
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let (_, lie) = w.lying(&job, 3);
+    let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[]));
+    w.block(10, vec![lie.tx]);
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!() };
+    let mut txs = Vec::new();
+    for (nonce, bond) in [(2u8, HONEST), (3, SQUATTER), (4, SPAM1)] {
+        let job = w.post_job(10 + nonce as u64, &[3, 17, 9], 3, nonce);
+        txs.push(w.honest_by(&job, bond, 3).tx);
+    }
+    w.block(20, vec![T::RegisterBond { bond: SPAM1, collateral: 3000 }]);
+    txs.push(T::FileProof { accuser: OUTSIDER, claim: id, proof });
+    let ev = w.block(21, txs);
+    assert_eq!(ev.iter().filter(|e| matches!(e, E::ClaimCommitted { .. })).count(), 2, "the admissions' share: two runs: {ev:?}");
+    assert!(refused(&ev).unwrap().contains("reserved for proofs"), "{ev:?}");
+    assert_eq!(convicted(&ev), Some((1000, 500, false)), "the proof found its reserved run: {ev:?}");
+}
+
 // ── F-C4R3-02 on an OPV claim: a self-inflicted default never erases a provable fraud ─────────────────────────────────────
 
 /// **C4 round 3, F-C4R3-02 (OPV, reference level)**: the producer's own bond demands at once and the producer stays silent; the
@@ -1026,9 +1112,9 @@ fn the_optimistic_state_root_form_is_versioned_and_pinned_by_a_golden_vector() {
     assert_ne!(small(Some(other)).root(), opv.root());
 }
 
-/// The policy part moved with the G14-R4 fix of F-C4R3-05 (`OpvEconomicsV1::admission_fee`).
-const GOLDEN_OPV_PARTS: [&str; 4] = ["ab038a45fd92a4a9", "557931bf322541c3", "b018a938b23ad4fb", "3fbfb5902dada353"];
+/// The policy part moved with the G14-R4 fix of F-C4R3-05 (`OpvEconomicsV1::admission_fee`, `fresh_producer_slots`).
+const GOLDEN_OPV_PARTS: [&str; 4] = ["c80c0cd94e6c9465", "557931bf322541c3", "b018a938b23ad4fb", "3fbfb5902dada353"];
 /// Moved with the G14-R4 fixes: GAP-R7 and GAP-5 (the historical root inside it gained the proof-seal and job-escrow collections and
 /// its policy the job fee and escrow TTL) and F-C4R3-05 (the OPV policy's admission fee).
 const GOLDEN_OPV_ROOT: &str =
-    "bbb9dca1029c232081329cb2551d43ef5c64e4f7cb3319b844a49b5497d89686949e88e32a93e0f7ae36ee77a374135979c043a86b2310a40b585107e7851558";
+    "1188daafa429cc2cc91d6b720bd5db6a6c79e0ba1f93b14939878b0ef4df4d47c3089de78859ac5d8f9162d0c765df0c2708b12967cedca0a05b71c92694f83e";

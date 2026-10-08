@@ -1467,7 +1467,8 @@ async fn g14_kernel_route_the_block_adjudication_budget_bounds_the_block_not_eac
     let blue_before = w.net.chain.tip_state().1.kernel_route().map(|k| k.aux.len());
     w.net.send(items).await;
     let (blue, adjudications, work) = budget(&w).expect("the spent budget is recorded");
-    assert_eq!((adjudications, work), (4, 0), "four charged, the fifth found the block's budget spent");
+    // C4 F-C4R3-05 (round 2): two of the block's four runs are reserved for proofs, so registrations take only the other two.
+    assert_eq!((adjudications, work), (2, 0), "two charged; the rest found the admissions' share spent (two runs reserved for proofs)");
     assert_eq!(w.net.ledger().classes.len(), classes, "and none of the junk registered");
     assert!(blue_before.is_some());
     // The next chain block starts a fresh budget: one more junk object is charged once, from zero.

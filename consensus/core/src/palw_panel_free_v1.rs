@@ -73,6 +73,9 @@ impl PalwPanelFreeFenceV1 {
                 assumed_detection_permille: 500,
                 max_live_claims_per_producer: 3,
                 max_live_claims_total: 32,
+                // C4 F-C4R3-05 (round 2): a new producer is shut out only once these too are bought (hard ceiling 48 ≤ the window's
+                // reserved proof runs: 64 × 500‰ × 50, and 4 × 500‰ × 50 = 100 on the test node).
+                fresh_producer_slots: 16,
                 default_burn_permille: 100,
                 // C4 F-C4R3-05: a refilled lane costs its occupiers (non-refundable, burned).
                 admission_fee: SOMPI_PER_KASPA,
