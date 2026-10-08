@@ -128,6 +128,8 @@ pub fn panel_beacon_context_v1(
         challenge_epoch: request.epoch,
         eligible_profiles,
         excluded_profiles: BTreeSet::new(),
+        // A Panel draw has no candidate profile: its circularity guard is the source rule (Panel-independent Finals only).
+        candidate_profile_id: misaka_palw_challenge::RootV1::Absent,
     }
 }
 
@@ -168,6 +170,7 @@ pub fn verify_panel_beacon_v1(
     }
     let ctx = panel_beacon_context_v1(request, policy, history.eligible_profiles());
     verify_work_beacon_v1(&ctx, &presented, &candidate_free_events(history, request.epoch), history.tip_position())
+        .map(|_| ())
         .map_err(PanelBeaconRefusalV1::Evidence)
 }
 
