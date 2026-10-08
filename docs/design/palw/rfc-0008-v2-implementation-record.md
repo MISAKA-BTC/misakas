@@ -172,28 +172,37 @@ The code gates of this fence are closed except one (section 12, item 1). In orde
 
 ## 8. Tests and how to run them
 
+One invocation (X8R's milestone run, `x8r-m4`, 2026-10-09, all green; run through `buildslot.sh`):
+
 ```text
-cargo test --offline -p kaspa-consensus-core --lib palw_exec          # envelope, anchor (module tests)
-cargo test --offline -p kaspa-consensus-core --lib palw_work_slice_v2
-cargo test --offline -p kaspa-consensus-core --lib exec_v2_fold_v1    # fold: declaration, admission, settlement, void, expiry, branches
-cargo test --offline -p kaspa-consensus-core --test palw_exec_payload_v2_fence
-cargo test --offline -p kaspa-consensus --lib t12_exec_v2             # 10 pipeline tests (P1..P10)
-cargo test --offline -p kaspa-p2p-flows --lib orphans
-cargo test --offline -p misaka-palw-sdk --test exec_v2_work_slice_subject
+cargo test --offline -j 4 --no-fail-fast -p kaspa-consensus-core -p kaspa-consensus -p kaspa-p2p-flows -p kaspad -p kaspa-rpc-core \
+  -p kaspa-grpc-core -p kaspa-rpc-service --lib --test palw_exec_payload_v2_fence -- exec_v2 the_v22_void_reasons_are_pinned \
+  palw_lifecycle_objects_v2:: pow_layer0:: fork_id_v1:: the_gates_are_open every_ruleset_leaves_it_dormant never_is_the_dormant_spelling \
+  a_set_height_is_fingerprinted every_real_height_is_refused a_mirror_without_the_field a_salted_drill t12_round_lane_e2e \
+  lane_accept_parents_first ibd_parents_first processes::coinbase:: orphans palw_exec_slice_producer palw_round_producer op_240
 ```
 
-Regression sets run green with this lane in: `t12_round_lane_e2e` (5), `lane_accept_parents_first` (5), `ibd_parents_first` (1),
-`kaspa-consensus-core --lib` (all but the two pre-existing fork-id probe failures above).
+| target | passed | what it holds |
+| --- | --- | --- |
+| `kaspa-consensus` lib | 32 / 0 failed | P1–P11 (11), `t12_round_lane_e2e` (5), `lane_accept_parents_first` (5), `ibd_parents_first` (1), `processes::coinbase` (10) |
+| `kaspa-consensus-core` lib | 126 / 0 failed | the envelope, anchor, work-slice and verify modules; `exec_v2_fold_v1` incl. `amendment_1::*` (8) and the tag-130 admission test; the void-reason pins; `palw_lifecycle_objects_v2`, `pow_layer0`, `fork_id_v1` |
+| `palw_exec_payload_v2_fence` | 7 / 0 failed | the fence's dormancy, ids, refusals and the drill path |
+| `kaspa-p2p-flows` lib | 6 / 0 failed | the orphan pool (incl. the fence-off test) and the v2 relay memory |
+| `kaspad` lib | 7 / 0 failed | the `EXEC_SLICE` producer's decision table and intents, the round producer's PXR1/PXE2 signing |
+| `kaspa-grpc-core` lib | 1 / 0 failed | op 240 on the gRPC wire |
 
 Pipeline tests: P1 `slices_are_carried_anchored_credited_and_weightless` - P2 `header_and_body_gates_refuse_each_hostile_lane_block_by_name` -
 P3 `a_chain_block_names_no_lane_block_and_a_lying_trailer_is_disqualified_while_a_heartbeat_anchors` -
 P4 `an_unauthorised_a_skipping_and_a_borrowed_slice_are_anchored_and_credited_nothing` -
-P5 `below_the_fence_a_pxe2_header_is_refused_and_a_root_declaration_is_dropped` -
+P5 `below_the_fence_a_pxe2_header_is_refused_and_a_root_declaration_is_dropped` (the pre-X8 shape refusal, byte for byte) -
 P6 `a_permitted_tx_block_is_anchored_its_fee_paid_once_and_a_duplicate_permit_or_an_ungranted_round_is_refused` -
 P7 `lane_state_survives_a_restart_and_a_replaying_node_agrees_whatever_the_arrival_order` -
 P8 `ibd_carries_the_anchored_lane_blocks_through_both_sync_lists` -
 P9 `a_burst_of_competing_slice_blocks_is_anchored_once_credited_once_and_weightless` -
-P10 `a_reorg_unanchors_the_lane_and_the_winning_branch_anchors_and_credits_it_once`.
+P10 `a_reorg_unanchors_the_lane_and_the_winning_branch_anchors_and_credits_it_once` -
+P11 `fence_off_every_lane_object_is_judged_as_before_and_an_armed_node_agrees`.
+
+Not compiled in this run: `testing/integration` (its op-240 arm mirrors op 220's) and the `misaka-palw-sdk` subject test (unchanged).
 
 ## 10. X8R review of every pipeline path the fence does not guard (2026-10-08)
 
