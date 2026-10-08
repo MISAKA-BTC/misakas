@@ -717,6 +717,11 @@ fn a_reorg_is_a_different_challenge_the_old_evidence_is_retained_and_invalidated
     assert!(matches!(&v, Ok(Verdict::Fail { code: "BEACON_MISMATCH" | "STALE_OR_FORGED_SEED", .. })), "{v:?}");
     assert!(verify_with(&state, s, &root, &old, &facts_a, true).unwrap().is_pass());
     assert!(verify_with(&state, s, &root, &dir_b.join("evidence.borsh"), &facts_b, true).unwrap().is_pass());
+    // The reorg is undone: the first history is canonical again, its retained evidence is reused and unmarked, the other is marked.
+    let (ev_a2, dir_a2) = run_ok(&state, s, &root, &facts_a);
+    assert_eq!((ev_a2, dir_a2.clone()), (ev_a.clone(), dir_a.clone()));
+    assert!(!dir_a.join("INVALIDATED").exists() && dir_b.join("INVALIDATED").exists());
+    assert!(std::fs::read_to_string(ledger_path(&state)).unwrap().contains("REVALIDATED"));
     // A reorg that removes the sources before the lock: the evidence cannot be judged at all on that branch.
     let mut thin = facts_a.clone();
     thin.events.truncate(1);

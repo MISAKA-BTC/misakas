@@ -1191,6 +1191,18 @@ pub fn run_conformance(inp: &RunInput<'_>, log: &dyn Fn(String)) -> Result<RunOu
     }
     let fresh = !seed_dir.exists();
     std::fs::create_dir_all(seed_dir.join("checks")).map_err(|e| io(e.to_string()))?;
+    // The branch came back (a reorg undone): this seed is canonical again. Its evidence was never deleted; only the advisory mark goes.
+    if seed_dir.join("INVALIDATED").exists() {
+        std::fs::remove_file(seed_dir.join("INVALIDATED")).map_err(|e| io(e.to_string()))?;
+        ledger_append(
+            inp.state_dir,
+            &root,
+            &cand,
+            "REVALIDATED",
+            json!({ "seed_dir": seed_name, "reason": "the canonical beacon is this seed's again" }),
+        )
+        .map_err(io)?;
+    }
     if fresh {
         ledger_append(
             inp.state_dir,
