@@ -27,7 +27,6 @@ use crate::consensus::test_consensus::TestConsensus;
 use crate::model::stores::dns_state::DnsStateStore;
 use crate::model::stores::dns_state::DnsStateStoreReader;
 use crate::model::stores::ghostdag::GhostdagStoreReader;
-use crate::model::stores::headers::HeaderStoreReader;
 use crate::model::stores::pruning::PruningStore;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::ConsensusApi;
@@ -50,7 +49,7 @@ use kaspa_consensus_core::palw_native_settlement_v1::{
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
 use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_hashes::Hash64;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// The first DAA at which the retirement is in force in these tests. A TEST value: the harness clock reaches DAA 1 and stops.
 const FENCE: u64 = 1;
@@ -1968,7 +1967,7 @@ async fn rfc12_x16_conflicting_dns_finality_on_both_branches_changes_neither_the
                     selected_chain_anchor: x1.header.hash,
                     anchor_daa_score: x1.header.daa_score,
                     work_depth: Default::default(),
-                    stake_depth: kaspa_consensus_core::dns_finality::StakeScore(u64::MAX),
+                    stake_depth: kaspa_consensus_core::dns_finality::StakeScore(u64::MAX as u128),
                     last_dns_confirmed_anchor: x1.header.hash,
                     last_dns_confirmed_anchor_daa_score: x1.header.daa_score,
                     rollout_stage: stage,
@@ -2054,10 +2053,10 @@ async fn rfc12_x16_conflicting_dns_finality_on_both_branches_changes_neither_the
 }
 
 // =====================================================================================================================
-// MATRIX 12 — RFC-0012 C3: a market order FILLS across the fence, and the combined ledger still conserves
+// MATRIX 12 — RFC-0012 C3: market orders cross the fence with ADR-0162 armed, and the combined ledger still conserves
 // =====================================================================================================================
 
-/// What the deposit locks in C3: 80 MSK, so the account can pay a 50 MSK buy. (`DEPOSIT` locks 1 MSK, which cannot buy a position.)
+/// What the deposit locks in C3: 80 MSK, so the account could pay a 50 MSK buy. (`DEPOSIT` locks 1 MSK, which cannot buy a position.)
 const C3_DEPOSIT: u64 = 8_000_000_000;
 /// The buy's value: 50 MSK = 5 x 10^9 sompi = 5 x 10^19 wei.
 const C3_BUY_SOMPI: u64 = 5_000_000_000;
@@ -2128,19 +2127,31 @@ fn c3_orders(line: &Hash64) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// **EXPECTED (C3).** x1 left market orders as `Refused MARKET_MISSING`, because the line has no seeded market and a seed costs 100,000
-/// MSK. ADR-0162 (`palw_model_virtual_v1`, dormant on every preset, armed here in a TEST copy of the params at DAA 0) opens every
-/// line's market on a virtual reserve, so a real order can be filled with an ordinary deposit. The scripted run is x1's with an 80 MSK
-/// lock, a 50 MSK buy and two one-unit sells riding the same payload:
-/// * the buy settles `Filled` with at least one unit for the account's holder id, and each sell `Filled` for one unit with a positive
-///   net below its gross; the account's position ends where the arithmetic says;
+/// **EXPECTED (C3), restated after the first run (2026-10-09).** x1 left market orders as `Refused MARKET_MISSING`, because the line
+/// has no seeded market and a seed costs 100,000 MSK. ADR-0162 (`palw_model_virtual_v1`, dormant on every preset, armed here in a TEST
+/// copy of the params at DAA 0) opens every line's market on a virtual reserve - but its Decision 5 opens TRADING only at the class's
+/// approval: status `Active` and, where the registry is in force (testnet-12: from genesis), a lifecycle row at exactly `Active`. No
+/// testnet-12 model class is approved at genesis, and this harness cannot walk a class's lifecycle to `Active` (it produces floor
+/// claims only), so **a fill is not reachable here** (the first run, written to expect fills, measured exactly this: the buy produced
+/// no settlement and both sells settled `Refused { EXCEEDS_POSITION }`). What the run shows instead, with an 80 MSK lock, a 50 MSK
+/// buy and two one-unit sells riding one payload across the fence:
+/// * the precondition, asserted so the test fails by name if testnet-12's genesis ever approves a class: the line's class is not
+///   approved;
+/// * the buy is refused AT THE CALL (`ClassNotEligible`, the EVM lane's copy of the fold's gate): its receipt failed, the 50 MSK
+///   never left the account (the balance is the lock less at most three transactions' gas), and it queues no settlement;
+/// * the market EXISTS now (x1's `MARKET_MISSING` is gone): both sells reach the fold and settle `Refused { EXCEEDS_POSITION }` with
+///   nothing escrowed, and the account holds no position;
 /// * every block is the UTXO-valid sink of the node that built it, before and after the fence, and the combined ledger (`utxo x scale +
-///   EVM balances + wei burned`) moves, on EVERY block, by exactly `(coinbase outputs - L1 fees) x scale` - so the market's money
-///   (the buy's escrow leaving the EVM, the net leg joining the reserve, the sells' proceeds returning) is conserved to the wei;
+///   EVM balances + wei burned`) moves, on EVERY block, by exactly `(coinbase outputs - L1 fees) x scale` - the reverted buy's and the
+///   sells' gas included;
 /// * the native snapshot is there from the fence on, as in x1.
+///
+/// **The fill itself stays a GAP at this level**; its arithmetic is the fold's (a buy on an `Active` row, palw_state_v2.rs tests) and the
+/// writer's (kaspa-evm `model_market` tests). Reaching it end to end needs an approved class on a harness chain.
 #[tokio::test]
-async fn rfc12_c3_a_market_order_fills_across_the_fence_and_the_ledger_conserves() {
+async fn rfc12_c3_a_market_orders_cross_the_fence_with_the_virtual_market_armed_and_the_ledger_conserves() {
     use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1;
     let p = parts_custom(Some(FENCE), false, |params| {
         params.palw_model_virtual_v1 = Some(ForkActivation::new(0));
     });
@@ -2151,6 +2162,15 @@ async fn rfc12_c3_a_market_order_fills_across_the_fence_and_the_ledger_conserves
         let base = rig.chain.bundle.base_class_id;
         *genesis.classes_iter().map(|(id, _)| id).find(|id| **id != base).expect("testnet-12 registers a model class at genesis")
     };
+    {
+        let (_, genesis) = rig.chain.tip_state();
+        let row = genesis.model_lifecycle(&line).map(|r| r.state);
+        eprintln!("[c3] the line's class at genesis: status {:?}, lifecycle {row:?}", genesis.class(&line).map(|c| &c.status));
+        assert!(
+            !matches!(row, Some(PalwModelLifecycleV1::Active)),
+            "the precondition: testnet-12's genesis approves no model class (if it now does, this test must expect fills)"
+        );
+    }
     let raws = c3_orders(&line);
     let b0 = rig.beat();
     rig.take(b0, "b0-beat").await;
@@ -2185,40 +2205,45 @@ async fn rfc12_c3_a_market_order_fills_across_the_fence_and_the_ledger_conserves
         })
         .collect();
     eprintln!("[c3] settlements carried by e4: {settles:?}");
-    assert_eq!(settles.len(), 3, "all three orders reach their settlement, carried by the next block");
-    let mut units_held: i128 = 0;
+    assert_eq!(settles.len(), 2, "the two sells reach their settlement, carried by the next block; the refused buy queued none");
     for (i, s) in settles.iter().enumerate() {
         assert_eq!((s.seq, s.account, s.line_id), (i as u32, EvmAddress::from_bytes(ACCOUNT), line));
-        let PalwEvmSettlementOutcomeV1::Filled { units, gross_sompi, net_sompi, .. } = s.outcome else {
-            panic!("order {i} must FILL, not {:?}", s.outcome)
-        };
-        if i == 0 {
-            assert_eq!(s.action, kaspa_consensus_core::evm::model_market::PALW_EVM_ACTION_BUY);
-            assert!(units >= 1, "the buy bought at least one whole position");
-            assert_eq!(gross_sompi, C3_BUY_SOMPI, "the whole value was the gross");
-            assert!(net_sompi < gross_sompi, "the fee is taken");
-            units_held += units as i128;
-        } else {
-            assert_eq!(s.action, PALW_EVM_ACTION_SELL);
-            assert_eq!(units, 1, "a one-unit sell");
-            assert!(net_sompi > 0 && net_sompi < gross_sompi, "sold for something, net of the fee");
-            units_held -= units as i128;
-        }
+        assert_eq!(s.action, PALW_EVM_ACTION_SELL, "settlement {i} is a sell");
+        assert_eq!(s.escrow_sompi, 0, "a sell escrows nothing");
+        assert_eq!(
+            s.outcome,
+            PalwEvmSettlementOutcomeV1::Refused { reason: refusal::EXCEEDS_POSITION },
+            "the market exists (no MARKET_MISSING); the account holds nothing to sell"
+        );
     }
-    assert!(units_held >= 0, "the sells were covered by the buy");
     rig.take(e4, "e4-settle").await;
     let e5 = rig.attempt(5, Vec::new(), no_evm());
     rig.take(e5, "e5").await;
 
-    // The account's position, read from the node's own PALW state.
+    // The buy: refused at the call, its value never left the account.
+    let receipt = |raw: &[u8]| {
+        rig.api()
+            .get_evm_tx_receipt(kaspa_evm::tx::tx_hash(raw))
+            .expect("a receipt read")
+            .expect("the order was executed on the selected chain")
+            .receipt
+    };
+    assert!(!receipt(&raws[0]).succeeded, "the buy reverted at the call (ClassNotEligible: the class is not approved)");
+    assert!(receipt(&raws[1]).succeeded && receipt(&raws[2]).succeeded, "both sells queued (the fold refused them)");
+    let scale = EVM_NATIVE_SCALE as u128;
+    let balance = balance_of(&rig, ACCOUNT);
+    let spent = C3_DEPOSIT as u128 * scale - balance;
+    eprintln!("[c3] the account holds {balance} wei: {spent} wei of gas spent on three transactions");
+    assert!(
+        spent > 0 && spent <= 3 * GAS_LIMIT as u128 * MAX_FEE,
+        "the lock less gas only: the 50 MSK never left ({spent} wei spent)"
+    );
     let holder = kaspa_consensus_core::evm::model_market::evm_holder_v1(EVM_CHAIN_ID, &EvmAddress::from_bytes(ACCOUNT));
     let (_, state) = rig.chain.tip_state();
-    assert_eq!(state.model_position(&line, &holder) as i128, units_held, "the position is what the three orders left");
-    let market = state.model_market(&line);
-    eprintln!("[c3] position {units_held}, market {market:?}");
+    assert_eq!(state.model_position(&line, &holder), 0, "no position");
+    eprintln!("[c3] market {:?}", state.model_market(&line));
 
     // The ledger, on every block.
-    let scale = EVM_NATIVE_SCALE as u128;
     let mut previous = genesis_supply.wei();
     for s in &rig.log {
         let want = previous as i128 + (s.minted as i128 - s.fees as i128) * scale as i128;

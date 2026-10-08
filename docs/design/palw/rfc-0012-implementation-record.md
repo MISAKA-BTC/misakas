@@ -173,33 +173,73 @@ EVM state), C3 (market fills), C4 (re-measure D1 with 0008 / 0010 / 0011-K2 / 00
 See the commands at the end of policy proposal §10.3 (10.3.6). Pre-existing and unrelated: `misaka-cli`'s `cli_surface_tests::palw_settlement_parses_and_says_the_depth_is_anchors`
 needs `RUST_MIN_STACK=33554432` (§4).
 
-## 7. Wave 2 - the code items C1-C11 (lane X12c, branch `rfc12/x12-c-items`, 2026-10-08)
+## 7. Wave 2 - the code items C1-C11 (lane X12c, branch `rfc12/x12-c-items`, 2026-10-08; built and run by X12N, 2026-10-09)
 
-Policy proposal section 12 is the narrative; this is requirement -> code -> test -> status. **All of it is written and none of it has been compiled or run: the Lead put every
-cargo build on hold (disk and RAM pressure) after the code was written.** The statuses below say `WRITTEN - NOT RUN` until the one batched invocation is made; nothing is claimed
-that a run has not shown. No params / schedule / identity id moves.
+Policy proposal section 12 is the narrative; this is requirement -> code -> test -> status. The code was written by X12c with every cargo build on hold; X12N
+built it, fixed what the build and the run found (7.2), and ran it (7.3). **Every status below is what a run showed**; nothing is claimed that a run has not
+shown. No params / schedule / identity id moves, and `palw_dns_retirement_v1` is still `None` on every preset and in no flag-day list.
 
 | # | Requirement | Code | Test | Status |
 |---|---|---|---|---|
-| C1 | A claim reaches `Final` through the processor with the EVM lane on | `VirtualStateProcessor::template_clock` / `template_now` (`cfg(test)`); `T12Chain::arm_clock`; `stamp_harness_time` checks instead of re-stamping on an EVM-active network; `native_relabel_class` (`cfg(test)`) | `rfc12_c1_a` (floor claim; the node reads its delta: `skipped.baseClass == 1`), `rfc12_c1_b` (read as REAL: one pending fact, the exact instant and countdown), `rfc12_c1_c` (`#[ignore]`, ~5,400 DAA: `safe` flips at the v1 instant) | WRITTEN - NOT RUN |
-| C2 | A pruned join with EVM state | none new (the import functions are the node's own) | `rfc12_c2` | WRITTEN - NOT RUN; partial: UTXO set, overlay snapshot and P2P not exercised |
-| C3 | Market fills | none | `rfc12_c3` (80 MSK deposit, 50 MSK buy, two one-unit sells; ADR-0162 armed in a TEST copy) | WRITTEN - NOT RUN |
-| C4 | Re-measure D1 with the other lanes armed | fixture: `ExtrasEdit`, `live_life_with`, `try_step_with`, `try_step_for` | `d1_g` (tripwire) | WRITTEN - NOT RUN; OPV / permissionless panel / kernel route / RFC-0008 slices / K2 classes are not armable in the fixture: **redo at integration** |
+| C1 | A claim reaches `Final` through the processor with the EVM lane on | `VirtualStateProcessor::template_clock` / `template_now` (`cfg(test)`; the template builder AND the lead-cap parent policy read it); `T12Chain::arm_clock`; `stamp_harness_time` checks instead of re-stamping on an EVM-active network; `native_relabel_class` (`cfg(test)`) | `rfc12_c1_a` (floor claim; the node reads its delta: `skipped.baseClass == 1`), `rfc12_c1_b` (read as REAL: one pending fact, the exact instant and countdown), `rfc12_c1_c` (`#[ignore]`, ~5,400 DAA: `safe` flips at the v1 instant) | **PASS** (`c1_a`, `c1_b`); `c1_c` NOT RUN (release candidate, by design) |
+| C2 | A pruned join with EVM state | none new (the import functions are the node's own) | `rfc12_c2_a` | **PASS**; partial by construction: UTXO set, overlay snapshot and P2P not exercised |
+| C3 | Market orders across the fence with ADR-0162 armed (a TEST copy) | none | `rfc12_c3_a` (80 MSK lock, 50 MSK buy, two one-unit sells) | **PASS as restated (7.2)**: the buy is refused at the call, the sells settle `Refused EXCEEDS_POSITION`, the ledger conserves on every block. **A FILL is a GAP**: ADR-0162 trades only an approved class, and no t12 genesis class is approved (status `Active`, lifecycle `Prefetching`) |
+| C4 | Re-measure D1 with the other lanes armed | fixture: `ExtrasEdit`, `live_life_with`, `try_step_with`, `try_step_for` | `d1_g` (tripwire) | **PASS** against the merged tree (baseline and `palw_model_court_window` armed: F_off 123, the last reversing conviction and the last DA accusation at `Final + claim_retirement`, the latest default `W_disclose + 1` later). OPV / permissionless panel / kernel route / RFC-0008 slices / K2 classes are not armable in the fixture: **redo at integration** |
 | C5 | The maturity rule v2 | - | - | SKIPPED (no D1 other than v1 chosen) |
-| C6 | A class's own court window extends retention | `palw_native_settlement_v1.rs`: `live_retention` in `native_facts_and_skips_v1` | `d1_h` | WRITTEN - NOT RUN |
+| C6 | A class's own court window extends retention | `palw_native_settlement_v1.rs`: `live_retention` in `native_facts_and_skips_v1` | `d1_h` | **PASS** |
 | C7 | Preset and release wiring; **requires `palw_fork_choice_rule_e_v1` (ADR-0175) armed at or below** the retirement height (Lead, 2026-10-09) | none (checklist only) | - | READY-TO-APPLY CHECKLIST (policy proposal 12.8, step 3) |
 | C8 | Explorer renders `nativeReadiness` | `contrib/misakascan-t12/app.js` | `tests/native-settlement.cjs` | **PASS** |
-| C9 | Release-build cost at 100k+ blocks | none | `rfc0012_c9_release_cost.rs` (two `#[ignore]`d tests) | DESIGNED, NOT RUN (by order) |
-| C10 | DNS all-equivocating case | none | `rfc12_x16` | WRITTEN - NOT RUN |
-| C11 | May a published `finalized` retreat | `note_finalized_withdrawal`, `FinalizedReadinessV1::withdrawn_from`, CLI, explorer, TypeScript | `rfc12_r5` (extended), core/rpc/gRPC/CLI/explorer fixtures | DECIDED (policy proposal 12.7), WRITTEN - NOT RUN |
+| C9 | Release-build cost at 100k+ blocks | none | `rfc0012_c9_release_cost.rs` (two `#[ignore]`d tests) | DESIGNED; compiles; NOT RUN (by order: fleet-class hardware, release profile) |
+| C10 | DNS all-equivocating case | none | `rfc12_x16` | **PASS** |
+| C11 | May a published `finalized` retreat | `note_finalized_withdrawal`, `FinalizedReadinessV1::withdrawn_from`, CLI, explorer, TypeScript | `rfc12_r5` (extended), core/rpc/gRPC/CLI/explorer fixtures | DECIDED (policy proposal 12.7); **PASS** |
 
-### 7.1 The one batched invocation (to run on the Lead's go)
+### 7.1 What was run (2026-10-09, debug profile, line-tables-only, this Mac under a shared build load)
 
 ```
 cd /Users/wata/Downloads/MISAKA-wt-b/wc-x12c && export CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432
-cargo test --offline -p kaspa-consensus-core -p kaspa-consensus -p kaspa-rpc-core -p kaspa-grpc-core -p misaka-cli --features kaspa-consensus/evm \
+# m1 (the batched invocation; --no-fail-fast so one failure does not hide the other binaries)
+cargo test --offline --no-fail-fast -p kaspa-consensus-core -p kaspa-consensus -p kaspa-rpc-core -p kaspa-grpc-core -p misaka-cli --features kaspa-consensus/evm \
   --lib --bins --test rfc0012_safe_maturity_attacks --test rfc0012_native_evidence_fold --test rfc0012_c9_release_cost \
-  -- --test-threads=2 rfc0012 rfc12_ palw_settlement GetPalwSettlement            > target/x12c-batch.log 2>&1
+  --test rfc0012_evidence_window --test rfc0012_fork_id_and_cost -- --test-threads=2 rfc0012 rfc12_ palw_settlement GetPalwSettlement
+# m2 (the restated C3 only)
+cargo test --offline -p kaspa-consensus --features evm --lib -- rfc12_c3 --nocapture
 node contrib/misakascan-t12/tests/native-settlement.cjs
 # once, on the release candidate:  cargo test ... rfc12_c1_c --ignored   (~5,400 DAA)   and the C9 measurement (release profile, idle fleet-class machine)
 ```
+
+### 7.2 What the build and the run found, and what X12N changed
+
+1. **Fixtures that arm the retirement build their `Config` directly.** The release's validation will refuse `palw_dns_retirement_v1` without
+   `palw_fork_choice_rule_e_v1` armed at or below it (ADR-0175), a fence these fixtures do not arm. The matrix's `parts_custom` (used by x0-x16, r1-r5,
+   c1-c3) and `rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor` now validate everything else with `validate_palw_v2` and set the
+   retirement afterwards (a TEST value, never a preset). Behaviour-neutral: the same `Params` reach the processor.
+2. **Compile:** one error (`StakeScore` holds a `u128`, x16) and two unused imports in the matrix; fixed.
+3. **The lead-cap parent policy reads the builder's clock** (`palw_lead_cap_virtual_parents`: `unix_now()` -> `template_now()`), so the policy leaves out
+   exactly what the builder would refuse when a test simulates the clock (C1). Outside a test `template_now()` is `unix_now()`: production unchanged.
+4. **C3's premise was wrong, and the test is restated.** Written to expect three fills, the first run measured: the buy produced no settlement and both
+   sells settled `Refused { EXCEEDS_POSITION }`. ADR-0162 Decision 5 opens TRADING only at the class's approval (status `Active` and, where the registry is
+   in force - testnet-12, from genesis - a lifecycle row at exactly `Active`); the t12 genesis class reads status `Active`, lifecycle `Prefetching`, so the
+   EVM writer reverts the buy at the call (the code path is `ClassNotEligible`; a receipt carries no revert selector) and the fold refuses the sells (no
+   position). The restated `rfc12_c3_a` asserts that
+   precondition by name, the reverted buy's receipt, the 50 MSK kept by the account (it spent 83,975,268,837,816 wei of gas on three transactions), the two
+   refused sells, no position, and the combined ledger on every block across the fence. **A fill end to end needs an approved class on a harness chain,
+   which the floor-only harness cannot walk the registry to: GAP.** Its arithmetic is covered by the fold's and the writer's own tests.
+
+### 7.3 Results
+
+| Binary | Result |
+|---|---|
+| `kaspa-consensus` lib (`rfc0012` / `rfc12_` filter) | m1: 27 passed, 1 failed (`rfc12_c3`, diagnosed in 7.2.4), 1 ignored (`rfc12_c1_c`); m2: the restated `rfc12_c3_a` passed. Every wave-1 test (x0-x15, r1-r5) still passes |
+| `kaspa-consensus-core` lib (`rfc0012` / `palw_settlement`) | 30 passed |
+| `--test rfc0012_safe_maturity_attacks` | 8 passed (`d1_a` - `d1_h`) |
+| `--test rfc0012_native_evidence_fold` | 6 passed |
+| `--test rfc0012_evidence_window` | 1 passed |
+| `--test rfc0012_fork_id_and_cost` | 1 passed, 1 ignored (the wall-clock scaling measurement) |
+| `--test rfc0012_c9_release_cost` | compiles; 2 ignored (by design) |
+| `kaspa-rpc-core` lib | 8 passed (wRPC v1/v2/v3, JSON) |
+| `kaspa-grpc-core` lib | 2 passed |
+| `misaka-cli` (bin) | 6 passed, including the withdrawn-label alarm line |
+| explorer `tests/native-settlement.cjs` (node) | passed |
+
+**Still open for this lane's items:** the C3 fill (GAP above); `rfc12_c1_c` and the C9 measurement (once, on the release candidate); C4 again at
+integration with the in-flight lanes' fences armed; C2's UTXO-set / overlay / P2P halves (the multi-node drill on the shipped binary); C7 (release only).

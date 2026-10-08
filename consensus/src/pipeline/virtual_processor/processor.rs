@@ -19541,7 +19541,8 @@ impl VirtualStateProcessor {
         if merged_beats.is_empty() && !is_beat(sink) {
             return (virtual_parents, virtual_ghostdag_data);
         }
-        let now = unix_now();
+        // The builder's clock (the wall clock outside a test), so the policy leaves out exactly what the builder would refuse.
+        let now = self.template_now();
         if !self.palw_virtual_steps_past_lead_cap(&virtual_ghostdag_data, now) {
             return (virtual_parents, virtual_ghostdag_data);
         }
