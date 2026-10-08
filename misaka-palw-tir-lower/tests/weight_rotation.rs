@@ -136,3 +136,62 @@ fn a_rotation_the_reader_cannot_apply_exactly_is_refused_by_name() {
         }
     }
 }
+
+/// **The real file** (Mitsuba-ComfyUI-27B v1.18 PTQ1_0, H1's sha256-verified download; the repository has answered 401 to anonymous
+/// requests since 2026-10-08 ~18:20 — this local copy is the evidence): its first `MITSUBA_PREFIX` layers (default 4: three GDN layers
+/// and one full-attention layer), the final norm and the 248,320-row head, read with the declared rotation (401 weights, the
+/// embedding restored) and type 143 decoded by data; the integer program (streamed float reference, lazy large params) against its
+/// float reference. A prefix is a staged check of the frontend, quantisation and transform, never a class. Ignored: needs the 6 GB
+/// file. Run it under `/usr/bin/time -l` for the peak resident set.
+#[test]
+#[ignore]
+fn mitsuba_first_layers_integer_follows_float_with_the_rotation() {
+    use misaka_palw_tir_lower::float_ref::stream::Streamed;
+    let path = std::env::var("MITSUBA_PTQ1_0").expect("MITSUBA_PTQ1_0 names the local GGUF");
+    let n: usize = std::env::var("MITSUBA_PREFIX").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+    let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin();
+    let t0 = std::time::Instant::now();
+    let model = GgufModel::open_with(Path::new(&path), reg)
+        .expect("the file reads: qwen35 mapped, MTP dropped, rotation modelled, type 143 described");
+    let r = model.rotation().expect("prism.hadamard").clone();
+    assert_eq!((r.block, r.weights.len(), r.gdn_v_grouped), (1024, 401, true));
+    assert_eq!(model.dropped().iter().filter(|t| t.starts_with("blk.64.")).count(), 15, "the MTP block, dropped by name");
+    let model = model.with_prefix_layers(n).expect("a prefix");
+    let prep = model.prepare(&LowerOpts { max_window: Some(64), ..LowerOpts::default() }).expect("prepared");
+    let roles: Vec<&String> = prep.spec.hf.input_rotations.keys().collect();
+    eprintln!(
+        "[mitsuba] prefix {n}: {} rotated roles {roles:?}; embed rotation {:?}; program {} B ({:?})",
+        roles.len(),
+        prep.spec.hf.embed_rotation,
+        prep.lowered.program.encode().len(),
+        t0.elapsed()
+    );
+    misaka_palw_tir::interval::analyze_ranges(&prep.lowered.program).expect("the range analysis proves the program");
+    let loader = Streamed::new(&prep.hl, &prep.binding, &model).with_lazy(1 << 24, 1 << 30);
+    let quiet = |_: usize, _: usize| {};
+    let calib = fidelity::random_sequences(248_320, 4, 16, 7);
+    let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).expect("calibrated");
+    eprintln!("[mitsuba] calibrated {} sites ({:?})", stats.len(), t0.elapsed());
+    let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).expect("materialised");
+    eprintln!("[mitsuba] materialised {:.1} MiB ({:?})", mat.params.bytes() as f64 / (1 << 20) as f64, t0.elapsed());
+    let eval = fidelity::random_sequences(248_320, 2, 12, 99);
+    let float = fidelity::float_logits(&prep.hl, &loader, &eval, &quiet).expect("float");
+    let int: Vec<Vec<Vec<f64>>> = eval
+        .iter()
+        .map(|s| fidelity::int_logits_exec(&prep.lowered.program, &mat.params, s, mat.logits_scale, &|_| {}))
+        .collect::<Result<_, _>>()
+        .expect("int");
+    let m = fidelity::compare(&float, &int, &eval);
+    eprintln!(
+        "[mitsuba] prefix {n}: integer vs float — top-1 {:.3}, KL {:.5} (max {:.4}), {} positions ({:?})",
+        m.top1_agreement,
+        m.kl_mean,
+        m.kl_max,
+        m.positions,
+        t0.elapsed()
+    );
+    if let Ok(out) = std::process::Command::new("ps").args(["-o", "rss=", "-p", &std::process::id().to_string()]).output() {
+        eprintln!("[mitsuba] resident at the end: {} KiB", String::from_utf8_lossy(&out.stdout).trim());
+    }
+    assert!(m.top1_agreement >= 0.9 && m.kl_mean <= 0.05, "top-1 {} KL {}", m.top1_agreement, m.kl_mean);
+}

@@ -1682,6 +1682,39 @@ impl GgufModel {
         self.rotation.as_ref()
     }
 
+    /// **The model's first `n` decoder layers, then its final norm and head** — a staged verification of a large file (its
+    /// frontend, quantisation and transforms checked end to end on a prefix that fits a test's memory) and never a class: the
+    /// prefix is another function than the model. Every tensor of a later block is dropped by name.
+    pub fn with_prefix_layers(mut self, n: usize) -> Result<Self> {
+        let layers = self.config["num_hidden_layers"].as_u64().unwrap_or(0) as usize;
+        if n == 0 || n > layers {
+            return Err(LowerError::bad(format!("a prefix of {n} of {layers} layers")));
+        }
+        self.config["num_hidden_layers"] = json!(n);
+        if let Some(t) = self.config.get_mut("layer_types").and_then(Value::as_array_mut) {
+            t.truncate(n);
+        }
+        let later = |g: &str| {
+            g.strip_prefix("blk.").and_then(|r| r.split('.').next()).and_then(|i| i.parse::<usize>().ok()).is_some_and(|i| i >= n)
+        };
+        let gone: Vec<String> = self.map.iter().filter(|(_, s)| later(&s.gguf)).map(|(hf, _)| hf.clone()).collect();
+        for hf in gone {
+            if let Some(s) = self.map.remove(&hf) {
+                self.consumed.remove(&s.gguf);
+            }
+        }
+        let names: Vec<String> = self.file.tensors.keys().filter(|g| later(g)).cloned().collect();
+        for g in names {
+            if !self.dropped.contains(&g) {
+                self.dropped.push(g);
+            }
+        }
+        if let Some(r) = self.rotation.as_mut() {
+            r.weights.retain(|g| !later(g));
+        }
+        Ok(self)
+    }
+
     /// **`WEIGHT_ROTATION_HADAMARD_V1` onto the spec**: the HL projections whose weights the file stores rotated, found by the
     /// binding itself (the spec built without rotations, its program and its binding: a `Linear`'s weight param reads a rotated
     /// tensor), each with its input width — never by a table of role names. A role rotated in some layers and not others, a rotated
