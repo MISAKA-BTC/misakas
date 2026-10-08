@@ -255,11 +255,9 @@ impl Cw {
             let generated = greedy(fx, &ledger, &class, &job.prompt, job.max_new_tokens as usize);
             let produced = produce(fx, &ledger, &class, job, self.net.kid(producer), generated, |_| {});
             let id = produced.claim.id();
-            seals.push((
-                producer,
-                self.net.route(producer, &K::SealClaim { producer: self.net.kid(producer), job: job.id(), seal: claim_seal_v1(&id) }),
-            ));
-            reveals.push((producer, produced.object));
+            let (seal, reveal) = seal_and_reveal(&ledger, self.net.kid(producer), &produced.object);
+            seals.push((producer, self.net.route(producer, &seal)));
+            reveals.push((producer, reveal));
             ids.push(id);
         }
         self.net.send(seals).await;

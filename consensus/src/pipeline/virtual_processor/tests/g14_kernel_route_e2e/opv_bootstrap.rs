@@ -344,11 +344,10 @@ async fn claims(net: &mut Net, fx: &Fixture, class: Digest, jobs: &[KernelJobV1]
         let generated = greedy(fx, &ledger, &class, &job.prompt, job.max_new_tokens as usize);
         let produced = produce(fx, &ledger, &class, job, net.kid(*producer), generated, |_| {});
         let id = produced.claim.id();
-        seals.push((
-            *producer,
-            net.route(*producer, &K::SealClaim { producer: net.kid(*producer), job: job.id(), seal: claim_seal_v1(&id) }),
-        ));
-        reveals.push((*producer, produced.object));
+        // Past `palw_panel_free_v1` a claim opens only its SALTED seal (G14-R4's claim seal v2, inner kind 20).
+        let (seal, reveal) = seal_and_reveal(&ledger, net.kid(*producer), &produced.object);
+        seals.push((*producer, net.route(*producer, &seal)));
+        reveals.push((*producer, reveal));
         ids.push(id);
     }
     net.send(seals).await;

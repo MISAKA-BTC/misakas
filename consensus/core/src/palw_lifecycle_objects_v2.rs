@@ -340,6 +340,21 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
                 Ok(())
             }
         }
+        // (tag 113, C4 F-C4R3-03): a chunk of the route's own lane carries its opener's signature and one carrier's worth of a part.
+        PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, signature } => {
+            if signature.is_empty() {
+                Err("a kernel route chunk must carry its opener's signature — unsigned, anyone could open a group as any bond")
+            } else if chunk.count == 0
+                || chunk.count > crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT
+                || chunk.index >= chunk.count
+                || chunk.bytes.is_empty()
+                || chunk.bytes.len() > crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES
+            {
+                Err("a kernel route chunk's index, count or part is out of range")
+            } else {
+                Ok(())
+            }
+        }
         // (tag 111): a seat's receipt carries its signature; everything else is the kernel's structural admission.
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. } => Err("a kernel constraint receipt must carry the seat's signature"),
