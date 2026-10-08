@@ -43,14 +43,17 @@ superseded by this matrix.
 | 15 | Held / fused terminal | profile material must be public | — | gate | — | `PrivateMaterial` gap | class never registers / never rewards | — | `k2_public` fused gap | PASS (fail-closed) | GAP | 8k held real-hardware (RFC-0014 P1/P2) |
 | 16 | Public DA withholding | demand per stage position | on-chain `Respond` | `FileDemand` (one round, all positions) | position | served → court; silence → default | `ProducerDefault` (availability, not fraud), claim `Unavailable` | `max_concurrent_sessions` | `k2_ledger` D, G | PASS | GAP (no public DA fetch RPC either) | DA provider/transport drill |
 | 17 | Court pre-emption | direct proofs | — | `FileProof` | — | adjudicated in-block whatever is open | open demands moot, bonds refunded | — | `k2_ledger` E | PASS | GAP | — |
-| 18 | Challenge / Final race | window + court deadline | — | `FileDemand` / `FileProof` | — | — | Final ≤ window end + deadline; proof at window end blocks Final; post-Final liability | `liability_daa > court_deadline_daa` | `k2_ledger` F | **GAP-R1** (below) | GAP | inclusion/censorship drill |
-| 19 | Reorg / restart / IBD / duplicate proof | pure fold | block sequence | replay | — | `Duplicate` | convicted once; replay root equality | — | `k2_ledger` H, every `outsider()` | PASS (but **GAP-R2**: `Debug` root) | GAP | — |
-| 20 | Collateral / exit / double reservation | free collateral reservation | bonds | — | — | — | no double use; exit delay; withdraw with nothing reserved | — | `k2_ledger` H | PASS (but **GAP-R3**: self-declared bonds) | GAP | economics review |
+| 18 | Challenge / Final race | window + court deadline | — | `FileDemand` / `FileProof` | — | — | Final ≤ window end + deadline; proof at window end blocks Final; post-Final liability | `liability_daa > court_deadline_daa + proof_grace_daa` | `k2_ledger` F, `k2_ledger_route` | PASS (R1 fixed `9e0cce365`) | GAP | inclusion/censorship drill |
+| 19 | Reorg / restart / IBD / duplicate proof | pure fold | block sequence | replay | — | `Duplicate` | convicted once; replay root equality | — | `k2_ledger` H, every `outsider()` | PASS (R2 canonical root `c6a7b5a48`, golden vector) | GAP | — |
+| 20 | Collateral / exit / double reservation | free collateral reservation | bonds | — | — | — | no double use; exit delay; withdraw with nothing reserved | — | `k2_ledger` H | PASS reference (R3: consumer-synced bonds + settlement instructions `c6a7b5a48`) | GAP (map onto V2 exposure ledger) | economics review |
 
 EXEC work slices (directive Agent 4): **GAP** at every level — no RFC-0008 v2 code on HEAD; the v0 algo-11 branch
 `rfc8/claim-backed-blocks` must not be reused. Ordered after the real-node carrier/fold (priority 6 of 8).
 
 ## 2. Reference-level gaps found in this revision
+
+Status 2026-10-08 (lane B, integrated `9e0cce365..0211b2cad`, 109 kernel tests green): **R1–R5 and the default design note are fixed at reference level.** Lane B also found and fixed a pre-existing bug: `RegisterClass` overwrote an existing class row, letting anyone re-register a class id under another network/ruleset and break every court reading it. API frozen (additive changes only): `KernelRouteObjectV1` v1 tags 1–11, `AuthV1`, `KernelRefusalV1`, `SettlementInstructionV1` kinds 1–12, `sync_bond` / `attest_artifact` / `apply_panel_tally`, `begin_block` / `apply_object` / `tick`. Open for the real node: artifact availability is a consumer attestation (`attest_artifact`); `CommitClaim` carries O(positions × nodes × 64 B) inline (chunked carriage/pruning needed for real classes); the per-block adjudication budget's inclusion order is the block producer's choice (bounded by fee × budget).
+
 
 * **GAP-R1 (Final race after service).** A demand served in a block whose tick also closes the window lets the claim finalize
   in that same block (and the producer's reward is credited) before the demander can file the proof the served values enable.
@@ -90,6 +93,8 @@ Independent soundness review (composition, alias bounds, CRT); beacon bias/withh
 activation height.
 
 ## 5. Change log
+
+* 2026-10-08 — lane B R1–R5 integrated; RFC-0010 circularity rule in the contract (`fcde1e3dc`); tag registry in `remaining-rfc-integration-matrix.md` §2 (kernel route: tags 110–119, deltas 160–169, tail 0xEC).
 
 * 2026-10-08 — matrix created; shared challenge contract `misaka-palw-challenge` landed (policy, PALW Work Beacon, seed,
   samplers, transcripts, lifecycle, conformance records; dormant).
