@@ -206,12 +206,52 @@ pool が job を選ぶ場合の検閲能力は、miner が job を自分で選�
 
 light client（§7 段階 D）が完成するまで、node-less を full-node 相当と宣伝しない。
 
+**検証の 3 層と fork-choice gate**
+
+MISAKA の canonical chain は header の累積 blue work 最大の chain ではない。
+`consensus/core/src/palw_fork_choice.rs` の `compare_palw_candidates_v1` は次の順で候補を比べる。
+
+1. `safe_frontier_blue_score`
+2. `safe_weight`
+3. `live_total`
+4. candidate hash
+
+この 3 つの値は受理済み transaction と PALW state から決まり、header processor は計算できない。
+header 側の blue work 順はダウンロード順の補助であり、chain 選択の権限ではない。
+したがって、本物の header と本物の Merkle proof を持つ chain A が、PALW の順序では chain B に負けていることがある。
+state proof が示すのは「この行はこの state root に属する」ことであり、「その root を持つ chain が fork choice で勝っている」ことではない。
+
+| 層 | 検証内容 | 単独で得られる表示 |
+| --- | --- | --- |
+| L1 Header/DAG | PoW/proof、parents、header から可能な範囲の GHOSTDAG、DAA、target、ruleset/fence、checkpoint からの継続性、鮮度 | `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED` |
+| L2 PALW fork-choice | safe frontier・safe weight・live total と競合候補の比較。同じ versioned 規則（`compare_palw_candidates_v1`）を検証済みの入力に適用する | L1+L2+L3 で `VERIFIED_REMOTE` |
+| L3 Claim state | bond・class・ruleset・funding・job・challenge に必要な state を、選択候補の state root に対する証明で | — |
+
+規則:
+
+- L1 だけ、または複数 RPC の一致だけでは `VERIFIED_REMOTE` と表示しない。
+- RPC が返す safe frontier・safe weight・live total の数値を信用しない。認証済みの state root への結び付けに加えて、そこへ至る state transition の正当性を確立する。手段は独立検証、信頼済み checkpoint、健全な証明方式のいずれかとする。
+- 独自の fork-choice 算法を作らず、full node と同じ comparator を使う。
+- 競合 tip を隠す RPC は完全な状態証明でも防げない。複数の独立 peer から新しい DAG 情報を取り、矛盾・遅延・reorg では停止または表示の降格を行う。
+- L2 が完成するまで、client は署名前と高価な推論の開始前に未検証リスクを表示し、安全な停止経路を持つ。
+- L2 が未完成であることを理由に node-less を廃止したり pool を必須にしたりしない。
+
+必須の攻撃試験(L2):
+
+- raw blue work では勝つが PALW の経済順序では負ける fork
+- 正しい Merkle proof を持つ非 canonical state
+- 競合 tip を隠す RPC
+- stale checkpoint・stale target・reorg 直後の job
+- 再起動後に別 peer が同じ DAG/state を提供する場合の再検証
+
+L2 を健全にするために必要な DAG 履歴と state transition の量は、別途設計と実測が要る。
+
 **安全条件と現状**（状態語は `docs/design/palw/remaining-rfc-integration-matrix.md` と同じ）
 
 | 条件 | 欠けた場合 | 現状 |
 | --- | --- | --- |
 | Local signing / full-tx sighash | relay による改変・資金流出 | 登録の分離署名・rail の signer socket は IMPLEMENTED_AND_TESTED。V4 authorization の sidecar 署名用 `SigningPurpose` は CODE_GAP |
-| Verified chain state / stale detection | 無効 job への計算浪費・無効 claim への署名 | collection 単位の state proof（op 202）と pin は IMPLEMENTED_AND_TESTED。header chain・target・fence の検証は CODE_GAP |
+| Verified chain state / stale detection | 無効 job への計算浪費・無効 claim への署名 | collection 単位の state proof（op 202）と pin は IMPLEMENTED_AND_TESTED。header chain・target・fence の検証（L1）は CODE_GAP。PALW fork-choice の検証（L2）は DESIGN_GAP |
 | Canonical job/input/output binding | 計算の流用・job 差し替え | FP Job V4 は凍結済み（DORMANT_NOT_INTEGRATED）。claim 署名は commitment に bind |
 | Public authenticated DA | miner 停止後に検証不能 | manifest・複数 provider・共通 fetch は IMPLEMENTED_AND_TESTED（local）。discovery は DESIGN_GAP |
 | Objective DA/default | 通信障害で誤 slash | kernel route の demand/default は実ノード E2E あり（fence 未武装）。provider への責任移転（provider court）は DESIGN_GAP |
