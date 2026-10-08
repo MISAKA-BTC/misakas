@@ -225,21 +225,23 @@ pub fn collect_sealed_work_beacon_v3(
     }
     let close = reveal_window_end_v3(ctx);
     // A reveal exists on this branch only once accepted by the tip, and counts only inside the reveal window.
-    let in_time = |s: &SealedSourceV3| s.reveal.as_ref().filter(|r| r.reveal_position < close && r.reveal_position <= tip_position);
+    let in_time = |s: &SealedSourceV3| -> Option<SealRevealV3> {
+        s.reveal.as_ref().filter(|r| r.reveal_position < close && r.reveal_position <= tip_position).cloned()
+    };
     if tip_position < close {
         let revealed = mixed.iter().filter(|s| in_time(s).is_some()).count() as u32;
         return Ok(SealedBeaconStateV3::Revealing { mixed: n, revealed });
     }
-    let (mut withheld, mut failed, mut finals) = (0u32, 0u32, Vec::new());
-    let mut live = 0u32;
+    let (mut withheld, mut failed, mut live) = (0u32, 0u32, 0u32);
+    let mut finals: Vec<(&SealedSourceV3, SealRevealV3, WorkFinalEventV1)> = Vec::new();
     for s in &mixed {
         let Some(r) = in_time(s) else {
             withheld += 1;
             continue;
         };
-        match &r.fate {
+        match r.fate.clone() {
             SourceFateV3::Final(ev) if ev.settlement_position <= tip_position => {
-                if final_qualifies_v3(ctx, s, r, ev) {
+                if final_qualifies_v3(ctx, s, &r, &ev) {
                     finals.push((*s, r, ev));
                 } else {
                     failed += 1;
