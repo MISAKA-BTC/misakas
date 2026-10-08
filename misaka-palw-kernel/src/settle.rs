@@ -70,13 +70,25 @@ pub enum SettlementKindV1 {
     PayJobEscrow = 16,
     /// GAP-5: posting a job's non-refundable fee, from the poster's free collateral (burned).
     JobFee = 17,
+    /// A claim seal's deposit, reserved from its producer's free collateral until the seal is revealed.
+    ReserveSealDeposit = 18,
+    /// The deposit back: the seal was revealed (or the part a forfeit could not take).
+    ReleaseSealDeposit = 19,
+    /// An unrevealed seal expired: its deposit is forfeited (routed by the burn after it).
+    ForfeitSealDeposit = 20,
 }
 
 impl SettlementKindV1 {
     pub const fn is_slash(self) -> bool {
         matches!(
             self,
-            Self::SlashFraud | Self::SlashDefault | Self::SlashFiling | Self::AdmissionFee | Self::JobFee | Self::PayJobEscrow
+            Self::SlashFraud
+                | Self::SlashDefault
+                | Self::SlashFiling
+                | Self::AdmissionFee
+                | Self::JobFee
+                | Self::PayJobEscrow
+                | Self::ForfeitSealDeposit
         )
     }
 
@@ -129,19 +141,19 @@ impl SettlementBookV1 {
         let c = self.collateral.get(&b).copied().unwrap_or(0);
         let r = self.reserved.get(&b).copied().unwrap_or(0);
         match s.kind {
-            K::ReserveClaim | K::ReserveDemand | K::ReserveJobEscrow => {
+            K::ReserveClaim | K::ReserveDemand | K::ReserveJobEscrow | K::ReserveSealDeposit => {
                 if a > c.saturating_sub(r) {
                     return Err(format!("reserve {a} past the free collateral {}", c.saturating_sub(r)));
                 }
                 self.reserved.insert(b, r + a);
             }
-            K::ReleaseClaim | K::ReleaseDemand | K::ReleaseJobEscrow => {
+            K::ReleaseClaim | K::ReleaseDemand | K::ReleaseJobEscrow | K::ReleaseSealDeposit => {
                 if a > r {
                     return Err(format!("release {a} of a {r} reservation"));
                 }
                 self.reserved.insert(b, r - a);
             }
-            K::SlashFraud | K::SlashDefault | K::PayJobEscrow => {
+            K::SlashFraud | K::SlashDefault | K::PayJobEscrow | K::ForfeitSealDeposit => {
                 if a > r || a > c {
                     return Err(format!("slash {a} of a {r} reservation / {c} collateral"));
                 }

@@ -200,6 +200,8 @@ pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash6
         // Seal, then reveal: a claim commits over its producer's seal at least one block old; an unrevealed seal lives one check window.
         claim_seal_delay_daa: 1,
         seal_ttl_daa: 100,
+        // OPV-BOOT's sealed-source beacon (v3): a claim seal holds 1 BILI until revealed, forfeited if it expires unrevealed.
+        seal_deposit: SOMPI_PER_KASPA,
         prosecution: ProsecutionPolicyV1 {
             court_deadline_daa: 20,
             max_sessions_per_claim: 1 << 10,

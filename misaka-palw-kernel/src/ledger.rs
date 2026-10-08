@@ -159,6 +159,9 @@ pub struct LedgerPolicyV1 {
     pub claim_seal_delay_daa: u64,
     /// An unrevealed seal is dropped after this long (bounds the state junk seals can occupy).
     pub seal_ttl_daa: u64,
+    /// **What a claim seal holds of its producer's free collateral until it is revealed** (OPV-BOOT's sealed-source beacon v3): returned
+    /// when the claim commits over it, FORFEITED (slashed, burned) when it expires unrevealed — withholding a seal is never free.
+    pub seal_deposit: u64,
     pub prosecution: ProsecutionPolicyV1,
 }
 
@@ -171,7 +174,7 @@ impl LedgerPolicyV1 {
     /// The relations among the timings and amounts every rule below relies on.
     pub fn validate(&self) -> Result<(), String> {
         let p = self;
-        let checks: [(bool, &str); 17] = [
+        let checks: [(bool, &str); 18] = [
             (p.court_deadline_daa == p.prosecution.court_deadline_daa, "the ledger's court deadline is the gate's"),
             (p.court_deadline_daa > 0 && p.challenge_window_daa > 0 && p.check_window_daa > 0, "every window is non-empty"),
             (p.proof_grace_daa > 0, "a served demand leaves a non-empty grace to file the proof it enables"),
@@ -203,6 +206,7 @@ impl LedgerPolicyV1 {
             (p.max_court_work_per_block > 0, "a block may run a court"),
             (p.claim_seal_delay_daa > 0, "a seal precedes its reveal by at least one block"),
             (p.seal_ttl_daa >= p.claim_seal_delay_daa, "a seal lives long enough to be revealed"),
+            (p.seal_deposit > 0, "a claim seal is bonded (withholding a sealed reveal costs a forfeit)"),
         ];
         match checks.iter().find(|(ok, _)| !ok) {
             Some((_, why)) => Err(format!("ledger policy: {why}")),
@@ -325,6 +329,8 @@ pub struct ClaimRowV1 {
     pub liability_until: Option<u64>,
     pub convicted: bool,
     pub rewarded: bool,
+    /// The DAA of the seal this claim was revealed over (kept on the row: the sealed-source beacon orders sources by it).
+    pub sealed_daa: u64,
 }
 
 /// **GAP-5: a job's escrow** — what its poster reserved to fund the job's Final reward.
@@ -340,6 +346,8 @@ pub struct JobEscrowRowV1 {
 pub struct SealRowV1 {
     pub seal: Digest,
     pub daa: u64,
+    /// What the seal holds of its sealer's free collateral (a claim seal: `seal_deposit`; a proof seal: 0).
+    pub deposit: u64,
 }
 
 impl ClaimRowV1 {
@@ -508,6 +516,12 @@ pub enum LedgerEventV1 {
         poster: Digest,
         amount: u64,
     } = 22,
+    /// A claim seal expired unrevealed: its deposit was forfeited (burned).
+    SealForfeited {
+        job: Digest,
+        producer: Digest,
+        forfeited: u64,
+    } = 23,
 }
 
 /// One block.
@@ -913,8 +927,20 @@ impl KernelLedgerV1 {
                 if self.job_claims.get(job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job) {
                     return Err(KernelRefusalV1::rule(name, "another claim already holds the job"));
                 }
-                // A producer may re-seal (another output): the latest seal replaces the earlier and its clock restarts.
-                self.seals.insert((*job, *producer), SealRowV1 { seal: *seal, daa: self.daa });
+                // A seal is bonded: `seal_deposit` of the producer's free collateral until it is revealed (forfeited if it expires). A
+                // producer may re-seal (another output): the latest seal replaces the earlier, keeps its deposit, and its clock restarts.
+                let held = self.seals.get(&(*job, *producer)).map(|r| r.deposit);
+                let deposit = self.policy.seal_deposit;
+                if held.is_none() {
+                    let b = self.bonds.get_mut(producer).expect("checked");
+                    if b.free() < deposit {
+                        return Err(KernelRefusalV1::rule(name, "the producer's free collateral does not cover the seal deposit"));
+                    }
+                    b.reserved += deposit;
+                    settle(&mut out, *producer, deposit, SettlementKindV1::ReserveSealDeposit, None);
+                }
+                let deposit = held.unwrap_or(deposit);
+                self.seals.insert((*job, *producer), SealRowV1 { seal: *seal, daa: self.daa, deposit });
                 out.push(LedgerEventV1::ClaimSealed { job: *job, producer: *producer });
             }
             KernelRouteObjectV1::SealProof { accuser, claim, seal } => {
@@ -935,7 +961,7 @@ impl KernelLedgerV1 {
                 }
                 self.proof_open(row).map_err(|why| KernelRefusalV1::rule(NAME, why))?;
                 // One seal per (claim, accuser): a re-seal (another proof) replaces the earlier one and its clock restarts.
-                self.proof_seals.insert((*claim, *accuser), SealRowV1 { seal: *seal, daa: self.daa });
+                self.proof_seals.insert((*claim, *accuser), SealRowV1 { seal: *seal, daa: self.daa, deposit: 0 });
                 out.push(LedgerEventV1::ProofSealed { claim: *claim, accuser: *accuser });
             }
             KernelRouteObjectV1::Withdraw { bond } => {
@@ -1367,17 +1393,20 @@ impl KernelLedgerV1 {
         let need = opv_row.map_or(self.policy.claim_collateral, |(need, _)| need);
         // C4 F-C4R3-05: an OPV claim's admission fee, non-refundable, from free collateral beside the reservation.
         let fee = if opv_row.is_some() { self.opv.policy.map_or(0, |p| p.economics.admission_fee) } else { 0 };
-        let bond = self.bonds.get_mut(&producer).ok_or("the producer bond is not registered")?;
-        if bond.exit_requested.is_some() {
+        if self.bonds.get(&producer).ok_or("the producer bond is not registered")?.exit_requested.is_some() {
             return Err("the producer bond is exiting".into());
         }
-        if bond.free() < need.saturating_add(fee) {
+        // The seal's deposit is released by this very reveal: it counts as free here.
+        let (seal_credit, sealed_daa) = self.seals.get(&(job, producer)).map_or((0, self.daa), |r| (r.deposit, r.daa));
+        let bond = self.bonds.get_mut(&producer).expect("checked");
+        if bond.free().saturating_add(seal_credit) < need.saturating_add(fee) {
             return Err(format!(
                 "{} free collateral, the claim needs {need} and its admission fee {fee} (no double use)",
                 bond.free()
             ));
         }
-        bond.reserved += need;
+        // The seal is spent by its reveal: its deposit returns (OPV-BOOT's sealed-source beacon reads `sealed_daa` from the row).
+        bond.reserved = bond.reserved - seal_credit + need;
         bond.collateral -= fee;
         self.burned += fee;
         let daa = self.daa;
@@ -1410,6 +1439,7 @@ impl KernelLedgerV1 {
                 liability_until: None,
                 convicted: false,
                 rewarded: false,
+                sealed_daa,
             },
         );
         if let Some((_, row)) = opv_row {
@@ -1419,6 +1449,7 @@ impl KernelLedgerV1 {
             self.opv.live.insert((producer, id));
             self.job_claims.insert(job, id);
         }
+        settle(out, producer, seal_credit, SettlementKindV1::ReleaseSealDeposit, Some(id));
         settle(out, producer, need, SettlementKindV1::ReserveClaim, Some(id));
         settle(out, producer, fee, SettlementKindV1::AdmissionFee, Some(id));
         settle(out, producer, fee, SettlementKindV1::Burn, Some(id));
@@ -1427,14 +1458,15 @@ impl KernelLedgerV1 {
 
     /// A claim of an OPV class needs its producer's live-claim caps and free collateral to allow it: decided before the adjudication
     /// budget is spent and before any evidence is verified (a producer at its cap cannot make the ledger verify claims it must refuse).
-    fn opv_claim_capacity(&self, class: &Digest, producer: &Digest) -> Result<(), String> {
+    fn opv_claim_capacity(&self, class: &Digest, producer: &Digest, job: &Digest) -> Result<(), String> {
         if !self.opv.classes.contains(class) {
             return Ok(());
         }
         let (need, _) = self.opv_admission(producer)?;
         let fee = self.opv.policy.map_or(0, |p| p.economics.admission_fee);
+        let credit = self.seals.get(&(*job, *producer)).map_or(0, |r| r.deposit);
         match self.bonds.get(producer) {
-            Some(b) if b.free() < need.saturating_add(fee) => {
+            Some(b) if b.free().saturating_add(credit) < need.saturating_add(fee) => {
                 Err(format!("{} free collateral, the claim needs {need} and its admission fee {fee} (no double use)", b.free()))
             }
             _ => Ok(()),
@@ -1499,7 +1531,7 @@ impl KernelLedgerV1 {
         }
         // Cheap objective checks first: an unsealed or unready reveal never spends the block's adjudication budget (C4 O-C4-14).
         self.reveal_ready(&claim.job_id, &claim.producer_bond, &id).map_err(rule)?;
-        self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond).map_err(rule)?;
+        self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
         self.charge(NAME, 0)?;
         let job = self.jobs.get(&claim.job_id).expect("checked");
         let class = self.classes.get(&job.class_binding_id).expect("checked");
@@ -1585,7 +1617,7 @@ impl KernelLedgerV1 {
         }
         // Cheap objective checks first: an unsealed or unready reveal never spends the block's adjudication budget (C4 O-C4-14).
         self.reveal_ready(&claim.job_id, &claim.producer_bond, &id).map_err(rule)?;
-        self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond).map_err(rule)?;
+        self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
         self.charge(NAME, 0)?;
         let job = self.pipeline_jobs.get(&claim.job_id).expect("checked");
         let class = self.pipeline_classes.get(&job.class_binding_id).expect("checked");
@@ -2004,7 +2036,26 @@ impl KernelLedgerV1 {
         let daa = self.daa;
         // Unrevealed seals expire (a junk seal holds nothing and lives a bounded time).
         let ttl = self.policy.seal_ttl_daa;
-        self.seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
+        // An unrevealed claim seal expires and FORFEITS its deposit (slashed, burned): withholding a sealed reveal is never free.
+        let expired: Vec<((Digest, Digest), u64)> =
+            self.seals.iter().filter(|(_, row)| daa > row.daa.saturating_add(ttl)).map(|(k, row)| (*k, row.deposit)).collect();
+        for ((job, producer), deposit) in expired {
+            self.seals.remove(&(job, producer));
+            if deposit == 0 {
+                continue;
+            }
+            let collateral = self.bonds.get(&producer).map_or(0, |b| b.collateral);
+            let taken = deposit.min(collateral);
+            if let Some(b) = self.bonds.get_mut(&producer) {
+                b.reserved = b.reserved.saturating_sub(deposit);
+                b.collateral -= taken;
+            }
+            self.burned += taken;
+            settle(out, producer, taken, SettlementKindV1::ForfeitSealDeposit, None);
+            settle(out, producer, deposit - taken, SettlementKindV1::ReleaseSealDeposit, None);
+            settle(out, producer, taken, SettlementKindV1::Burn, None);
+            out.push(LedgerEventV1::SealForfeited { job, producer, forfeited: taken });
+        }
         self.proof_seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
         // GAP-5: escrows no claim can still use go back to their posters.
         self.release_idle_job_escrows(out);

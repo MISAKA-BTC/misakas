@@ -668,13 +668,15 @@ fn the_reservation_is_the_policys_not_a_panel_lock_and_concurrent_claims_never_r
     let ev = w.block(30, txs);
     assert_eq!(ev.iter().filter(|e| matches!(e, E::ClaimCommitted { .. })).count(), 2, "{ev:?}");
     assert!(refused(&ev).unwrap().contains("no double use"), "{ev:?}");
-    assert_eq!(w.l.bonds[&PRODUCER].reserved, 1000 + 1500 * 2);
+    // (and the refused third claim's seal deposit, held until its seal is revealed or expires: bonded seals)
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, 1000 + 1500 * 2 + 1);
     assert_eq!(w.l.claims[&ids[0]].reserved, 1500);
     assert_eq!(w.l.opv.claims[&ids[0]].reservation, 1500);
     assert!(!w.l.claims.contains_key(&ids[2]), "the refused claim left nothing behind");
     // The Panel claim, with no tally, times out and returns its reservation; the OPV claims are untouched by it.
     w.block(111, vec![]);
-    assert_eq!(w.l.bonds[&PRODUCER].reserved, 1500 * 2, "{:?}", w.l.bonds[&PRODUCER]);
+    // (the refused third claim's seal deposit is still held: that seal has not expired yet)
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, 1500 * 2 + 1, "{:?}", w.l.bonds[&PRODUCER]);
 }
 
 #[test]
@@ -729,7 +731,8 @@ fn live_claim_caps_and_the_aggregate_gain_bound_a_producers_unsettled_exposure()
     w.block(400, vec![]);
     assert_eq!(w.l.opv_live_counts(&PRODUCER), (0, 0));
     assert_eq!(w.l.opv_unsettled_gain(&PRODUCER), 0);
-    assert_eq!(w.l.bonds[&PRODUCER].collateral, producer0 - 4 * 3);
+    // (and the refused fourth claim's seal, never revealed, forfeited its deposit: bonded seals)
+    assert_eq!(w.l.bonds[&PRODUCER].collateral, producer0 - 4 * 3 - 1);
 }
 
 #[test]
@@ -820,7 +823,9 @@ fn n_cheap_sybil_bonds_pay_for_every_slot_and_cannot_hold_the_opv_lane_past_one_
     assert_eq!(w.l.opv_open_counts(&HONEST), (0, 0), "no pre-Final claim holds a slot");
     assert_eq!(sybils.iter().map(|b| w.l.bonds[b].reserved).sum::<u64>(), locked, "but every reservation is still locked");
     let ev = place(&mut w, 101, sybils[0]);
-    assert!(refused(&ev).unwrap().contains("free collateral"), "a cheap Sybil cannot refill: {ev:?}");
+    // (its bonded seal is refused for want of free collateral, so its reveal has no seal to stand on)
+    assert!(refused(&ev).unwrap().contains("no seal of this claim"), "a cheap Sybil cannot refill: {ev:?}");
+    assert_eq!(w.l.bonds[&sybils[0]].reserved, e.reservation_per_claim, "nothing more is reserved for it");
     let ev = place(&mut w, 102, HONEST);
     assert!(refused(&ev).is_none(), "the honest producer is admitted: {ev:?}");
     // The steady-state price of holding the lane, whoever and however many the bonds: (W + L) / W windows of reservations locked at
@@ -1117,4 +1122,4 @@ const GOLDEN_OPV_PARTS: [&str; 4] = ["c80c0cd94e6c9465", "557931bf322541c3", "b0
 /// Moved with the G14-R4 fixes: GAP-R7 and GAP-5 (the historical root inside it gained the proof-seal and job-escrow collections and
 /// its policy the job fee and escrow TTL) and F-C4R3-05 (the OPV policy's admission fee).
 const GOLDEN_OPV_ROOT: &str =
-    "1188daafa429cc2cc91d6b720bd5db6a6c79e0ba1f93b14939878b0ef4df4d47c3089de78859ac5d8f9162d0c765df0c2708b12967cedca0a05b71c92694f83e";
+    "0a86f5a86c73c7b842531879ce9a8bf1ec3d8f791de2ced391e53343c9af26eb5a4668876a0931d0ee3bff1fc257df3398abd175acb259698b79f722fef9d1da";

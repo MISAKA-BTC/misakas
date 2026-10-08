@@ -198,7 +198,8 @@ fn a_borrowed_trace_is_refused_at_inclusion_and_a_substituted_output_is_convicte
     assert_eq!(why.len(), 2, "{ev:?}");
     assert!(why.iter().all(|w| w.starts_with("malformed evidence")), "{why:?}");
     assert!(w.l.claims.is_empty(), "nothing was committed, nothing reserved");
-    assert_eq!(w.l.bonds[&PRODUCER].reserved, 0);
+    // (only the two refused claims' seal deposits, held until their seals are revealed or expire: bonded seals)
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, 2);
 
     // The last delivered token substituted (it is never fed back, so the trace is the honest one): the decode court convicts.
     let mut last = h1.claim.generated.clone();
@@ -809,7 +810,7 @@ fn the_state_is_a_pure_fold_so_restart_ibd_and_reorg_agree_and_collateral_is_nev
     let (id1, id2) = (c1.claim.id(), c2.claim.id());
     let ev = w.block(10, vec![c1.tx, c2.tx.clone(), T::PanelCovered { claim: c1.claim.id() }]);
     assert!(refused(&ev).unwrap().contains("no double use"), "{ev:?}");
-    assert_eq!(w.l.bonds[&[0xC0; 64]].reserved, 1000);
+    assert_eq!(w.l.bonds[&[0xC0; 64]].reserved, 1000 + 1, "(and the refused claim's seal deposit: bonded seals)");
 
     // The exit: nothing new is backed, and nothing is withdrawn while reserved or inside the delay.
     w.block(11, vec![T::RequestExit { bond: [0xC0; 64] }]);
@@ -822,7 +823,8 @@ fn the_state_is_a_pure_fold_so_restart_ibd_and_reorg_agree_and_collateral_is_nev
     let ev = w.block(262, vec![c2.tx.clone()]);
     assert_eq!(refused(&ev).as_deref(), Some("the producer bond is exiting"));
     let ev = w.block(263, vec![T::Withdraw { bond: [0xC0; 64] }]);
-    assert_eq!(ev, vec![E::Withdrawn { bond: [0xC0; 64], amount: 1500 }], "the collateral; the 7 reward was paid out at Final");
+    // (1500 less the refused second claim's seal deposit, forfeited when that seal expired unrevealed: bonded seals)
+    assert_eq!(ev, vec![E::Withdrawn { bond: [0xC0; 64], amount: 1499 }], "the collateral; the 7 reward was paid out at Final");
 
     // The second claim, by the main producer; convicted once; a second proof is a duplicate.
     let c2 = w.produce(&job2, PRODUCER, c2.claim.generated.clone(), &params, |t| {

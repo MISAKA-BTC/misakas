@@ -59,6 +59,7 @@ pub fn policy() -> LedgerPolicyV1 {
         max_court_work_per_block: u64::MAX,
         claim_seal_delay_daa: 1,
         seal_ttl_daa: 100,
+        seal_deposit: 1,
         prosecution: PROSECUTION,
     }
 }
