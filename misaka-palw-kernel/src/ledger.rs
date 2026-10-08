@@ -1544,6 +1544,34 @@ impl KernelLedgerV1 {
     }
 }
 
+/// The wire overhead around the payload of a `FileProof` (version, tag, accuser, claim, proof variant, length), of a `Respond`
+/// (version, tag, claim, stage, position, length) and of the evidence object a `CommitClaim` carries beside the commitments.
+const FILE_PROOF_OVERHEAD_V1: u128 = 1 + 1 + 64 + 64 + 1 + 4;
+const RESPOND_OVERHEAD_V1: u128 = 1 + 1 + 64 + 1 + 4 + 4;
+const COMMIT_OVERHEAD_V1: u128 = 1 << 16;
+
+/// **A class is prosecutable only if its worst filing, its largest response and its commitments fit the carriers** — the encoded-size
+/// ceilings of the objects that carry them. A court that cannot be carried by a `FileProof`, a response that cannot be carried by a
+/// `Respond` (so every demand would default) or commitments that cannot be carried by a `CommitClaim` would make a class the gate
+/// calls complete impossible to prosecute, serve or even commit.
+///
+/// **Not called by the ledger's registration**: the carrier's real size is the consumer's (its transaction mass limit), and this
+/// crate's own ceilings are far below the gate's worst-case envelope even for the toy fixtures (a declared worst case at the history
+/// bound: tens of MB per opening, ~190 MB per position response). The consumer calls it with its real caps when it accepts a class.
+pub fn carrier_fit_v1(b: &ProsecutionBoundsV1, filing_cap: usize, response_cap: usize, commit_cap: usize) -> Result<(), String> {
+    let filing = (b.max_filing_bytes as u128).max(b.max_response_bytes) + FILE_PROOF_OVERHEAD_V1;
+    if filing > filing_cap as u128 {
+        return Err(format!("a worst-case filing of {filing} bytes does not fit a FileProof ({filing_cap})"));
+    }
+    if b.max_response_bytes + RESPOND_OVERHEAD_V1 > response_cap as u128 {
+        return Err(format!("a position response of {} bytes does not fit a Respond ({response_cap})", b.max_response_bytes));
+    }
+    if b.max_retained_state + COMMIT_OVERHEAD_V1 > commit_cap as u128 {
+        return Err(format!("{} bytes of commitments do not fit a claim commitment ({commit_cap})", b.max_retained_state));
+    }
+    Ok(())
+}
+
 /// Why a filing is past the class's envelope, if it is (checked before any court runs).
 fn oversized(proof: &ProsecutionV1, b: &ProsecutionBoundsV1) -> Option<String> {
     let (len, limit) = match proof {
@@ -1765,5 +1793,28 @@ mod tests {
         let logits = |n: usize| TensorWireV1 { dtype: 0, shape: vec![n as u64], bytes: vec![0; n] };
         assert!(oversized(&ProsecutionV1::Decode(DecodeFaultV1 { index: 0, logits: logits(50) }), &b).is_none());
         assert!(oversized(&ProsecutionV1::Decode(DecodeFaultV1 { index: 0, logits: logits(51) }), &b).is_some());
+    }
+
+    #[test]
+    fn a_class_must_fit_its_filing_response_and_commitments_in_the_route_objects() {
+        let b = ProsecutionBoundsV1 {
+            max_public_bytes: 0,
+            max_opening_bytes: 10,
+            max_filing_bytes: 1000,
+            max_response_bytes: 2000,
+            max_localization_rounds: 2,
+            max_court_work: 0,
+            max_verifier_ram: 0,
+            max_retained_state: 5000,
+            max_concurrent_sessions: 1,
+            deadline_daa: 1,
+        };
+        let roomy = 1 << 20;
+        carrier_fit_v1(&b, roomy, roomy, roomy).unwrap();
+        // A decode filing carries one logits tensor (up to a response's size): the larger of the two sizes the filing cap.
+        assert!(carrier_fit_v1(&b, 2000, roomy, roomy).is_err(), "the filing envelope is the larger of a court and a logits row");
+        assert!(carrier_fit_v1(&b, 2200, roomy, roomy).is_ok());
+        assert!(carrier_fit_v1(&b, roomy, 2000, roomy).is_err(), "a response that cannot be carried is a demand that always defaults");
+        assert!(carrier_fit_v1(&b, roomy, roomy, 5000).is_err(), "commitments that cannot be carried: no claim can be committed");
     }
 }
