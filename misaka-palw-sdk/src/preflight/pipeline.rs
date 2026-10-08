@@ -24,10 +24,10 @@ use super::model::RoutedClass;
 use super::{Blocker, Condition, Options, Stage};
 use crate::gen_class::{GenLayoutChoiceV1, gen_default_layouts_v1};
 use kaspa_consensus_core::config::params::{ForkActivation, Params};
-use kaspa_consensus_core::palw_class_admission_v2::PalwClassAdmissionError;
 use kaspa_consensus_core::palw_gen_admission_v1::{palw_gen_post_genesis_registration_v1, palw_gen_registration_preflight_at_v1};
 use kaspa_consensus_core::palw_gen_class_v1::{
-    PALW_GEN_CLASS_VERSION_V1, PalwGenClassV1, PalwGenOffersV1, PalwGenProfileOffersV1, palw_gen_class_preflight_v1,
+    PALW_GEN_CLASS_VERSION_V1, PalwGenClassErrorV1, PalwGenClassV1, PalwGenOffersV1, PalwGenProfileOffersV1,
+    palw_gen_class_preflight_v1,
 };
 use kaspa_consensus_core::palw_gen_v1::{PalwGenFenceV1, PalwGenProfileV1};
 use kaspa_hashes::Hash64;
@@ -187,6 +187,30 @@ fn seat_of(
     (info, blocker, note)
 }
 
+/// A structural refusal of the class (`palw_gen_class_preflight_v1`), by its typed name: a ceiling is a resource blocker with the
+/// numbers, a malformed declaration (offers, layouts, output) is the declaring tool's. The chain's code for all of them is
+/// `GEN_CLASS_REFUSED` (`PalwClassAdmissionError::GenClass`).
+fn class_error_blocker(e: &PalwGenClassErrorV1) -> (Blocker, String) {
+    let on_chain = "GEN_CLASS_REFUSED";
+    let b = match e {
+        PalwGenClassErrorV1::AdmissionExceeds { limit, at, value, cap } => Blocker::new(
+            Stage::Register,
+            if limit.contains("close") { "CLOSE_SIZE_OVER_CAP" } else { "ADMISSION_EXCEEDS" },
+            format!("{limit} at {at}: {value} against a cap of {cap}"),
+        )
+        .arg(*limit)
+        .numbers(*value, *cap, "units"),
+        PalwGenClassErrorV1::Exceeds { what, value, cap } => {
+            Blocker::new(Stage::Register, "ADMISSION_EXCEEDS", format!("{what}: {value} against the profile's ceiling {cap}"))
+                .arg(*what)
+                .numbers(*value, *cap, "units")
+        }
+        other => Blocker::new(Stage::Register, "ADMISSION_REFUSED", format!("the pipeline admission refuses the class: {other}"))
+            .arg(on_chain),
+    };
+    (b.evidence([format!("on-chain code {on_chain}")]), on_chain.to_string())
+}
+
 fn bond_key() -> kaspa_consensus_core::palw_state_v2::PalwBondKeyV2 {
     kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
         kaspa_consensus_core::tx::TransactionId::from_bytes([0; 64]),
@@ -319,17 +343,10 @@ pub fn judge_pipeline(net: &PreflightNetwork, opts: &Options, routed: &RoutedCla
             admission.program_bytes = programs.iter().map(|p| p.encode().len()).sum();
             admission.blocks = programs.iter().map(|p| p.blocks.len()).sum();
             admission.nodes = programs.iter().map(|p| p.blocks.iter().map(|b| b.nodes.len()).sum::<usize>()).sum();
-            // The source's price floor is derived by admission (`⌈encoder work / per-token work⌉`): ask once with a floor no honest class
-            // declares to read it back, then declare it.
             let fence = armed_params.palw_gen_v1_fence().expect("armed above");
-            let probe = encdec_class(st, &pipeline, &programs, suffix.len() as u32, &GenLayoutChoiceV1::default(), u32::MAX);
-            let floor = match palw_gen_class_preflight_v1(&probe, &fence) {
-                Ok(r) => r.source_token_floor.max(1),
-                Err(_) => 1,
-            };
             let artifact_root = Hash64::from_bytes([0; 64]);
-            let mut first: Option<PalwClassAdmissionError> = None;
-            let mut first_text: Option<String> = None;
+            // The first refusal (in the order the layouts are tried), as the blocker it becomes, the chain's code and its text.
+            let mut first: Option<(Blocker, String, String)> = None;
             let mut admitted = None;
             let mut first_class: Option<PalwGenClassV1> = None;
             let mut admitted_class: Option<PalwGenClassV1> = None;
@@ -346,6 +363,30 @@ pub fn judge_pipeline(net: &PreflightNetwork, opts: &Options, routed: &RoutedCla
             };
             for (tile_len, output_tile, h_chunk, checkpoint) in layouts {
                 let choice = GenLayoutChoiceV1 { tile_len, output_tile, h_chunk, checkpoint_interval: checkpoint };
+                let tag = format!("layout ({tile_len},{output_tile:?},{h_chunk},{checkpoint})");
+                let mut refuse = |blocker: Blocker, code: String, text: String| {
+                    if std::env::var_os("PALW_PIPELINE_TRACE").is_some() {
+                        eprintln!("pipeline-trace: {tag}: {text}");
+                    }
+                    if first.is_none() {
+                        first = Some((blocker, code, format!("{tag}: {text}")));
+                    }
+                };
+                // The source's price floor is admission's (`⌈encoder work / per-token work⌉`), a function of the layout: ask the
+                // structure with a floor no honest class declares to read it back — and to meet a structural refusal by its own
+                // typed name — then declare it.
+                let probe = encdec_class(st, &pipeline, &programs, suffix.len() as u32, &choice, u32::MAX);
+                let floor = match palw_gen_class_preflight_v1(&probe, &fence) {
+                    Ok(r) => r.source_token_floor.max(1),
+                    Err(e) => {
+                        let (b, code) = class_error_blocker(&e);
+                        refuse(b, code, e.to_string());
+                        if first_class.is_none() {
+                            first_class = Some(probe);
+                        }
+                        continue;
+                    }
+                };
                 let class = encdec_class(st, &pipeline, &programs, suffix.len() as u32, &choice, floor);
                 if first_class.is_none() {
                     first_class = Some(class.clone());
@@ -362,9 +403,7 @@ pub fn judge_pipeline(net: &PreflightNetwork, opts: &Options, routed: &RoutedCla
                 ) {
                     Ok(o) => o,
                     Err(e) => {
-                        if first.is_none() {
-                            first = Some(e);
-                        }
+                        refuse(gate_blocker(&e, &[]), e.code().to_string(), e.to_string());
                         continue;
                     }
                 };
@@ -373,17 +412,7 @@ pub fn judge_pipeline(net: &PreflightNetwork, opts: &Options, routed: &RoutedCla
                         admitted = Some((class, choice, a));
                         break;
                     }
-                    Err(e) => {
-                        if std::env::var_os("PALW_PIPELINE_TRACE").is_some() {
-                            eprintln!("pipeline-trace: layout ({tile_len},{output_tile:?},{h_chunk},{checkpoint}): {e}");
-                        }
-                        if first_text.is_none() {
-                            first_text = Some(format!("layout ({tile_len},{output_tile:?},{h_chunk},{checkpoint}): {e}"));
-                        }
-                        if first.is_none() {
-                            first = Some(e);
-                        }
-                    }
+                    Err(e) => refuse(gate_blocker(&e, &[]), e.code().to_string(), e.to_string()),
                 }
             }
             let carriable = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&bundle.court);
@@ -456,12 +485,11 @@ pub fn judge_pipeline(net: &PreflightNetwork, opts: &Options, routed: &RoutedCla
                     seat = Some(info);
                 }
                 None => {
-                    let e = first.expect("a layout was tried");
-                    admission.gate = e.code().to_string();
-                    admission.gate_detail = first_text.or_else(|| Some(e.to_string()));
+                    let (mut b, code, text) = first.expect("a layout was tried");
+                    admission.gate = code;
+                    admission.gate_detail = Some(text);
                     // `palw_gen_v1` not in force is already its own blocker above; a gate refusal that is only the fence is not repeated.
-                    if !matches!(e, PalwClassAdmissionError::GenNeedsItsFence) {
-                        let mut b = gate_blocker(&e, &[]);
+                    if !(b.code == "FENCE_NOT_ARMED" && register.iter().any(|x| x.code == "FENCE_NOT_ARMED")) {
                         b.evidence.push(format!("the first layout of {} tried; its refusal is the widest tile's", LAYOUTS.len()));
                         register.push(b);
                     }
@@ -510,7 +538,8 @@ pub fn judge_pipeline(net: &PreflightNetwork, opts: &Options, routed: &RoutedCla
                             checkpoint_interval: l.checkpoint_interval,
                         })
                         .collect(),
-                    source_token_floor: floor,
+                    // `u32::MAX` is the floor of a probe a structural refusal stopped: admission never derived one
+                    source_token_floor: if class.offers.source_token_floor == u32::MAX { 0 } else { class.offers.source_token_floor },
                     admitted: admitted_class.is_some(),
                     conventions: ENCDEC_CONVENTIONS_V1.iter().map(|s| s.to_string()).collect(),
                 });
@@ -570,4 +599,39 @@ fn finish(
     out.seat = seat;
     out.pipeline = pipeline;
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A ceiling the pipeline admission names is a resource blocker with its numbers, not a declaration the tool got wrong.** (A BART
+    /// encoder is one position of 206 G MACs against 2^37: `ADMISSION_EXCEEDS(max_position_macs)`, never `ADMISSION_REFUSED`.)
+    #[test]
+    fn a_ceiling_is_a_resource_blocker_and_a_malformed_declaration_is_the_tools() {
+        let (b, code) = class_error_blocker(&PalwGenClassErrorV1::AdmissionExceeds {
+            limit: "max_position_macs",
+            at: "stage 0 (encoder): the position".into(),
+            value: 206_158_430_208,
+            cap: 137_438_953_472,
+        });
+        assert_eq!(
+            (b.code.as_str(), b.arg.as_deref(), b.have, b.need),
+            ("ADMISSION_EXCEEDS", Some("max_position_macs"), Some(206_158_430_208), Some(137_438_953_472))
+        );
+        assert_eq!(code, "GEN_CLASS_REFUSED");
+        assert!(b.evidence.iter().any(|e| e == "on-chain code GEN_CLASS_REFUSED"));
+        let (b, _) = class_error_blocker(&PalwGenClassErrorV1::AdmissionExceeds {
+            limit: "generative close bytes as carried",
+            at: "x".into(),
+            value: 2,
+            cap: 1,
+        });
+        assert_eq!(b.code, "CLOSE_SIZE_OVER_CAP");
+        let (b, _) = class_error_blocker(&PalwGenClassErrorV1::Exceeds { what: "stages", value: 9, cap: 4 });
+        assert_eq!((b.code.as_str(), b.arg.as_deref()), ("ADMISSION_EXCEEDS", Some("stages")));
+        let (b, _) = class_error_blocker(&PalwGenClassErrorV1::Offers("a rule reads the source and no source is offered".into()));
+        assert_eq!((b.code.as_str(), b.arg.as_deref()), ("ADMISSION_REFUSED", Some("GEN_CLASS_REFUSED")));
+        assert!(b.have.is_none(), "a malformed declaration has no numbers");
+    }
 }
