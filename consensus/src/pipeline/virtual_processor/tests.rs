@@ -16898,6 +16898,8 @@ mod t46_false_valid_real_claim;
 mod t12_capacity_shadow;
 // RFC-0009 stage D (lane C1): the node proves the PALW state its header commits, a client checks it against the block it pinned.
 mod t12_state_proof;
+// RFC-0009 stage C (lane C1): public receipt redemption (V4) with the miner and the builder different bonds, on the processor's own methods.
+mod rfc9_redemption_v4;
 // ADR-0152 Phase 2, P2-1: B-3's vesting term at every UTXO site (T23 processor half, T05 bond half).
 mod p2_b3_vesting_payee_gate;
 // ADR-0152 Phase 2, P2-2: the mint path on real testnet-12 blocks (T58, T03, T47, T25, T05, T29).
