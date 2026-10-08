@@ -1747,6 +1747,7 @@ Do you confirm? (y/n)";
                     genesis_hash: config.params.genesis.hash,
                     genesis_timestamp_ms: config.params.genesis.timestamp,
                     last_signed_round_path: palw_panel_state_dir(&app_dir, network).join("palw-round-last-signed"),
+                    exec_v2_fence: config.params.palw_exec_payload_v2_fence(),
                 },
                 consensus_manager.clone(),
                 mining_manager.clone(),

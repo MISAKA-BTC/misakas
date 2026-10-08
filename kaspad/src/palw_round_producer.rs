@@ -73,6 +73,10 @@ pub struct PalwRoundProducerConfig {
     /// Where the last round this producer signed for survives a restart (ADR-0125 §7.3): a permit is
     /// one block, and a node restarted inside a round must not sign a second block for it.
     pub last_signed_round_path: std::path::PathBuf,
+    /// **RFC-0008 v2**: the chain's `palw_exec_payload_v2` fence (`Params::palw_exec_payload_v2_fence`), `None` on every shipped
+    /// ruleset. From it a round block carries a `PXE2` `EXEC_TX` envelope — the `PXR1` one is refused by name past the fence — so a
+    /// producer that kept signing `PXR1` would stop the permit lane at the fence.
+    pub exec_v2_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 pub struct PalwRoundProducerService {
@@ -163,7 +167,8 @@ impl PalwRoundProducerService {
             polled_round = now_round;
             // The current round always; where permits are tickets, every earlier ticket of this bond
             // the anchor span's schedule shows (route-matrix re-audit #1) — oldest first.
-            let rounds = rounds_to_sign_v1(status.tickets_only.then_some(status.schedule.as_ref()).flatten(), &bond, last_round, now_round);
+            let rounds =
+                rounds_to_sign_v1(status.tickets_only.then_some(status.schedule.as_ref()).flatten(), &bond, last_round, now_round);
             for round in rounds {
                 let view = if round == now_round {
                     status.view.clone()
@@ -239,20 +244,27 @@ impl PalwRoundProducerService {
         // ADR-0125 §7.3: the round is recorded BEFORE it is signed. A crash between the two costs this
         // round's permit; the other order could sign one permit twice across a restart.
         record_signed_round(&self.config.last_signed_round_path, round)?;
+        // The anchor a v2 envelope signs is the chain block the round block hangs from: the template's own selected parent.
+        let anchor = adapted.selected_parent_hash;
         let header = &mut adapted.block.header;
         header.nonce = nonce;
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
-        let message = palw_exec_signing_message_v1(network_domain, pre_pow, header.timestamp, nonce, round, permit_index, &bond);
-        let envelope = PalwExecEnvelopeV1 {
-            version: PALW_EXEC_ENVELOPE_VERSION_V1,
+        let exec_v2 = self.config.exec_v2_fence.is_some_and(|fence| fence.is_active(header.daa_score));
+        header.palw_commitment = signed_round_commitment(
+            key,
             network_domain,
-            round,
-            permit_index,
             bond,
-            pubkey: key.public_key().to_vec(),
-            signature: key.sign_with_context(message.as_byte_slice(), PALW_EXEC_MLDSA87_CONTEXT).to_vec(),
-        };
-        header.palw_commitment = envelope.encode();
+            RoundHeaderFacts {
+                round,
+                permit_index,
+                pre_pow,
+                timestamp: header.timestamp,
+                nonce,
+                hash_merkle_root: header.hash_merkle_root,
+                anchor,
+            },
+            exec_v2,
+        );
         header.finalize();
         // A round ends a second after it starts; a block solved past it still carries its round's
         // timestamp and stays valid while the chain can merge it, so it is submitted either way.
@@ -269,6 +281,61 @@ impl PalwRoundProducerService {
         }
         Ok(hash)
     }
+}
+
+/// What a round block's envelope signs over besides the producer's own key and bond.
+struct RoundHeaderFacts {
+    round: u64,
+    permit_index: u16,
+    pre_pow: kaspa_hashes::Hash64,
+    timestamp: u64,
+    nonce: u64,
+    hash_merkle_root: kaspa_hashes::Hash64,
+    anchor: kaspa_consensus_core::BlockHash,
+}
+
+/// **The signed `palw_commitment` of a round block**: a `PXR1` envelope below `palw_exec_payload_v2` (byte for byte what this producer
+/// has always signed), and from it a `PXE2` `EXEC_TX` envelope — the permit, the anchor the block hangs from, the header's own
+/// transaction merkle root as the payload commitment, signed in the TX domain and ML-DSA context. Pure, so both are testable.
+fn signed_round_commitment(
+    key: &kaspa_pq_validator_core::ValidatorKey,
+    network_domain: kaspa_hashes::Hash64,
+    bond: PalwBondKeyV2,
+    facts: RoundHeaderFacts,
+    exec_v2: bool,
+) -> Vec<u8> {
+    let RoundHeaderFacts { round, permit_index, pre_pow, timestamp, nonce, hash_merkle_root, anchor } = facts;
+    if exec_v2 {
+        use kaspa_consensus_core::palw_exec_v2::{
+            PALW_EXEC_V2_WIRE_VERSION, PalwExecSubtypeV2, PalwExecTxPermitV2, PalwExecV2Envelope,
+        };
+        let mut envelope = PalwExecV2Envelope {
+            version: PALW_EXEC_V2_WIRE_VERSION,
+            network_domain,
+            anchor,
+            subtype: PalwExecSubtypeV2::Tx,
+            tx_permit: Some(PalwExecTxPermitV2 { round, permit_index }),
+            work_slice: None,
+            payload_root: hash_merkle_root,
+            executor_bond: bond,
+            pubkey: key.public_key().to_vec(),
+            signature: vec![0; kaspa_consensus_core::palw_execution_lane_v1::PALW_EXEC_MLDSA87_SIGNATURE_LEN],
+        };
+        let message = envelope.signing_message(pre_pow, timestamp, nonce).expect("a permit envelope has a message to sign");
+        envelope.signature = key.sign_with_context(message.as_byte_slice(), envelope.mldsa87_context()).to_vec();
+        return envelope.encode();
+    }
+    let message = palw_exec_signing_message_v1(network_domain, pre_pow, timestamp, nonce, round, permit_index, &bond);
+    PalwExecEnvelopeV1 {
+        version: PALW_EXEC_ENVELOPE_VERSION_V1,
+        network_domain,
+        round,
+        permit_index,
+        bond,
+        pubkey: key.public_key().to_vec(),
+        signature: key.sign_with_context(message.as_byte_slice(), PALW_EXEC_MLDSA87_CONTEXT).to_vec(),
+    }
+    .encode()
 }
 
 /// **The rounds to try now, oldest first**: this bond's tickets in `schedule` on rounds after
@@ -336,6 +403,71 @@ impl AsyncService for PalwRoundProducerService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn facts_at(genesis_ms: u64, round: u64) -> RoundHeaderFacts {
+        RoundHeaderFacts {
+            round,
+            permit_index: 2,
+            pre_pow: kaspa_hashes::Hash64::from_u64_word(11),
+            timestamp: genesis_ms + round * PALW_EXEC_ROUND_MS,
+            nonce: 99,
+            hash_merkle_root: kaspa_hashes::Hash64::from_u64_word(12),
+            anchor: kaspa_hashes::Hash64::from_u64_word(13),
+        }
+    }
+
+    /// **The producer's envelope follows the fence** (RFC-0008 v2). Below `palw_exec_payload_v2` it signs the `PXR1` envelope it
+    /// always did; from it, a `PXE2` `EXEC_TX` envelope — the permit, the anchor, the header's own transaction root as the payload,
+    /// the bond — that the header stage's stateless check accepts, and the `PXR1` decoder does not. A producer that kept signing
+    /// `PXR1` past the fence would stop the permit lane.
+    #[test]
+    fn the_round_commitment_is_pxr1_below_the_fence_and_a_valid_pxe2_exec_tx_from_it() {
+        use kaspa_consensus_core::palw_exec_v2::{PalwExecSubtypeV2, PalwExecV2Envelope};
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed([7u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]);
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(5), 0));
+        let domain = kaspa_hashes::Hash64::from_u64_word(1);
+        let genesis_ms = 1_700_000_000_000;
+
+        let v1 = signed_round_commitment(&key, domain, bond, facts_at(genesis_ms, 40), false);
+        assert!(!PalwExecV2Envelope::is_v2_carriage(&v1));
+        let old = PalwExecEnvelopeV1::decode(&v1).expect("below the fence: the PXR1 envelope");
+        assert_eq!((old.round, old.permit_index, old.bond), (40, 2, bond));
+
+        let v2 = signed_round_commitment(&key, domain, bond, facts_at(genesis_ms, 40), true);
+        assert!(PalwExecV2Envelope::is_v2_carriage(&v2));
+        assert!(PalwExecEnvelopeV1::decode(&v2).is_err(), "the v1 decoder does not take a PXE2 envelope");
+        let envelope = PalwExecV2Envelope::decode(&v2).expect("from the fence: a PXE2 envelope");
+        let facts = facts_at(genesis_ms, 40);
+        assert_eq!(envelope.subtype, PalwExecSubtypeV2::Tx);
+        assert_eq!(envelope.tx_permit.map(|permit| (permit.round, permit.permit_index)), Some((40, 2)));
+        assert_eq!((envelope.anchor, envelope.payload_root, envelope.executor_bond), (facts.anchor, facts.hash_merkle_root, bond));
+        envelope
+            .validate_stateless(
+                domain,
+                facts.pre_pow,
+                facts.hash_merkle_root,
+                facts.timestamp,
+                facts.nonce,
+                genesis_ms,
+                |pk, msg, sig, ctx| kaspa_txscript::verify_mldsa87_with_context(pk, msg, sig, ctx).unwrap_or(false),
+            )
+            .expect("the header stage's stateless check accepts what the producer signs");
+        // Signed over the position it was solved at: a different nonce does not verify.
+        assert!(
+            envelope
+                .validate_stateless(
+                    domain,
+                    facts.pre_pow,
+                    facts.hash_merkle_root,
+                    facts.timestamp,
+                    facts.nonce + 1,
+                    genesis_ms,
+                    |pk, msg, sig, ctx| { kaspa_txscript::verify_mldsa87_with_context(pk, msg, sig, ctx).unwrap_or(false) }
+                )
+                .is_err()
+        );
+    }
 
     /// **ADR-0125 §7.3: a restart resumes after the last round it recorded**, so a producer never
     /// signs a second block for a permit it already signed — and a round it cannot record is a

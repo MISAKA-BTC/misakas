@@ -8,6 +8,11 @@ This document implements the direction of [revised RFC-0008](../../rfc/0008-palw
 The former algo-11 design body has been deleted. Only its [v0 test results and unrun cases](rfc-0008-v0-test-record.md)
 are preserved; they are not v1 requirements or v1 validation evidence. Main's active heartbeat, BASE-0, clock, REAL admission and transaction-permit rules are the baseline.
 
+Implementation record (2026-10-08, branch `rfc8/x8-exec-v2`): dormant code for this spec exists behind the unarmable fence
+`palw_exec_payload_v2`. What is built, what proves it and which gates remain open are in
+[rfc-0008-v2-implementation-record.md](rfc-0008-v2-implementation-record.md). This spec stays normative and every gate in section 9 is
+still open.
+
 ## 1. Invariants and rollout boundary
 
 One EXEC class contains `EXEC_TX` and `EXEC_SLICE`. Extend the existing algo-10 execution lane under a new

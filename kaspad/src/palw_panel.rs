@@ -235,6 +235,8 @@ pub(crate) fn own_claim_events_at_v1(
                     // ADR-0160 lane liab (AG-2): voided by its bond's aggregate forfeiture.
                     R::AggregateForfeit => "aggregate_forfeit",
                     R::PanelUnavailable => "panel_unavailable",
+                    // RFC-0008 v2: a work session not ready by its expiry voids its claim, uncharged.
+                    R::WorkRootExpired => "work_root_expired",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }
@@ -14261,6 +14263,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ReporterRevealed { .. } => "ReporterRevealed",
         PalwConsensusObjectV2::MaterialDisclosedV2 { .. } => "MaterialDisclosedV2",
         PalwConsensusObjectV2::PanelUnavailableQuorum { .. } => "PanelUnavailableQuorum",
+        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } => "ExecWorkRootOpenedV2",
         PalwConsensusObjectV2::SeatReadinessProvedV2 { .. } => "SeatReadinessProvedV2",
         PalwConsensusObjectV2::ModelLineBenefitsDeclared { .. } => "ModelLineBenefitsDeclared",
         PalwConsensusObjectV2::ModelBuy { .. } => "ModelBuy",
