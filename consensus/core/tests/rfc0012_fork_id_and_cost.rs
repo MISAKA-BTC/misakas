@@ -34,28 +34,30 @@ fn rfc0012_the_unassigned_fence_leaves_every_identity_and_fork_id_alone_and_an_a
     for at in [0, 750, 9_000, 12_000] {
         assert_eq!(fork_id_v1(&p, at), fork_id_v1(&never, at), "a never-leave fence is invisible to the fork id (DAA {at})");
     }
-    let armed = fenced(9_000);
+    // 9,137, not 9,000: DAA 9,000 is testnet-12's int-13 flag day, and a fence at an already-scheduled height is invisible to the
+    // fork id (it fires with the others).
+    let armed = fenced(9_137);
     assert_ne!(p.consensus_params_id(), armed.consensus_params_id());
     assert_ne!(p.consensus_schedule_id(), armed.consensus_schedule_id());
     // The armed node and the unupgraded node agree until the height, and the armed one refuses the other from it.
-    let unupgraded_before = fork_id_v1(&p, 8_999);
-    let armed_before = fork_id_v1(&armed, 8_999);
+    let unupgraded_before = fork_id_v1(&p, 9_136);
+    let armed_before = fork_id_v1(&armed, 9_136);
     assert!(
-        !evaluate_fork_id_v1(&armed, 8_999, &unupgraded_before.fired.as_bytes(), unupgraded_before.next).refuses(),
+        !evaluate_fork_id_v1(&armed, 9_136, &unupgraded_before.fired.as_bytes(), unupgraded_before.next).refuses(),
         "before the fence: peers"
     );
     assert!(
-        !evaluate_fork_id_v1(&p, 8_999, &armed_before.fired.as_bytes(), armed_before.next).refuses(),
+        !evaluate_fork_id_v1(&p, 9_136, &armed_before.fired.as_bytes(), armed_before.next).refuses(),
         "and the unupgraded node keeps the armed one"
     );
-    let unupgraded_at = fork_id_v1(&p, 9_000);
-    let verdict = evaluate_fork_id_v1(&armed, 9_000, &unupgraded_at.fired.as_bytes(), unupgraded_at.next);
+    let unupgraded_at = fork_id_v1(&p, 9_137);
+    let verdict = evaluate_fork_id_v1(&armed, 9_137, &unupgraded_at.fired.as_bytes(), unupgraded_at.next);
     assert!(verdict.refuses(), "from the fence: {verdict:?}");
     // A peer that scheduled a DIFFERENT retirement height is refused past the earlier one.
-    let other = fenced(9_500);
-    let other_at = fork_id_v1(&other, 9_200);
+    let other = fenced(9_637);
+    let other_at = fork_id_v1(&other, 9_400);
     assert!(
-        evaluate_fork_id_v1(&armed, 9_200, &other_at.fired.as_bytes(), other_at.next).refuses(),
+        evaluate_fork_id_v1(&armed, 9_400, &other_at.fired.as_bytes(), other_at.next).refuses(),
         "a different height is a different network"
     );
     // A different policy value is a different network too (the values are committed).
@@ -104,9 +106,14 @@ fn rfc0012_the_sweep_scales_near_linearly_and_the_per_effect_reference_does_not(
     let mut timings = Vec::new();
     for n in [10_000u64, 40_000, 160_000] {
         let (effects, facts) = workload(n);
-        let start = Instant::now();
-        let out = certify_native_prefix_v1(policy, &effects, u64::MAX, &facts);
-        let took = start.elapsed();
+        // The fastest of three runs: a wall-clock ratio on a loaded machine (parallel builds) is otherwise noise, not scaling.
+        let mut took = std::time::Duration::MAX;
+        let mut out = certify_native_prefix_v1(policy, &effects, u64::MAX, &facts);
+        for _ in 0..3 {
+            let start = Instant::now();
+            out = certify_native_prefix_v1(policy, &effects, u64::MAX, &facts);
+            took = took.min(start.elapsed());
+        }
         eprintln!("[rfc0012-cost] sweep: {n} effects, {} facts: {:?} (safe {:?}, stop {:?})", facts.len(), took, out.safe, out.stop);
         timings.push((n, took));
     }

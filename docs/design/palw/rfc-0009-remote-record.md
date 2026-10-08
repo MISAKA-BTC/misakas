@@ -232,3 +232,174 @@ the chain's — the node's admission checks it again. A provider keeps one bundl
 * **`SigningPurpose` for the V4 redemption authorization** (`consensus-core::dns_finality`) so a sidecar-custodied miner can issue authorizations.
 * **kaspad `--palw-evidence-provider-dir` URL providers** (5 lines in `palw_panel.rs`, `ProviderSpecV1`).
 * **Tree-shaped PALW state commitment** (state-root version bump) if light-client proofs are to become cheap.
+
+---
+
+## Round 2 — 2026-10-08 (agent C1r2, branch `rfc9/c1r2-verified-remote` from `183a761bf`)
+
+The user's ruling of 2026-10-08 stands throughout: node-less mining stays, a pool is never required, and "not running a full node" is
+not "trusting what a node says". Statuses use the matrix vocabulary. **Nothing below ran against a live node or network.**
+
+### Commits
+
+| Commit | What |
+|---|---|
+| `e93fdff2d` | consensus test `rfc9_v4_chain_e2e` — mandatory test 4 at chain-block level (P1) |
+| `4c5fa5f93` | `audit-combined/rfc9-v4-leg.sh` (the drill's fence-4 leg) + `misaka-palw-rfc1-drill-claim --kind plain / fp-certification --prompt-form`, rail `--watch` pass-through of `--evidence-out` / `--redeem-auth-out` |
+| `e4655dfbe` | `palw submit-object`: DUPLICATE_CLASS / CLASS_CONFLICT / DUPLICATE_CHECK_UNAVAILABLE before any fee (`--allow-duplicate`) |
+| `da3964d30` | `misaka-palw-remote::verify` — L1 / L3 / L2 status, the four mode labels, the signing gate |
+| `404491f42` | `palw-remote-miner`: L1/L3 over wRPC (`--verify-headers`, `--checkpoint-trust own-node\|pinned`, `--own-node`, `--accept-unverified-state`), gate before inference and again before the signature |
+| `f70120960` | mode label + gate in `misaka model add/sign/submit` and `misaka-palw-fp-rail` |
+| `4c6fa1f57` | `misaka bond register-export / register-sign / register-submit` (`misaka-palw-remote::bondreg`) — node-less bond registration |
+| `04e446a28` | `track`: an ACK no observer confirms within a bound → rebroadcast the same bytes through another relay |
+| `43efde0d9` | remote miner: a pool is only a job service; a template paying anyone but the miner is refused (non-custodial by default) |
+| `e65f6998a`, `8239d4572` | `model add --artifact <.palwtir>` (IR class) through quote / export / detached sign / submit; the detached bundle is kind-aware (Class \| TirClass) with ONE marked arm for OB-P0's tag-108; `palw tir-registration` gated (mode + DUPLICATE_CLASS) |
+
+### P1 — mandatory test 4 at chain-block level (fence 4 of `PALW_T12_INT13_FENCES_V1`)
+
+`cargo test --offline -p kaspa-consensus --lib rfc9_v4_chain_e2e` → **1 passed** (~14 min: one ~700-block chain + three replays). Ruleset:
+`t12_int13_flag_day_crossing`'s compressed testnet-12 release with the int-13 list (all four fences) at H = 80. Every block is the node's own
+template through `validate_and_insert_block`; every PALW object rides a funded carrier; nothing is planted in state.
+
+| Requirement | Shown | Status |
+|---|---|---|
+| executor's FP claim reaches Final, then the executor is gone | floor FP lane certified on chain (FamilyCertified as 6 ObjectChunks + ClassLaneCertified); claim on a funded 0x4a carrier at DAA 5; material + RDA4 filed with a dir provider and the 127.0.0.1 reference server (read back verified); key/node/process unused afterwards except two marked adversarial/counterfactual probes; Final at DAA 147 | IMPLEMENTED_AND_TESTED |
+| panel verification from providers only | each seat `fetch_claim_material_any` against the claim's on-chain roots, `verify_material` with the chain's roots, output root and job pin, then signs; node's assembler; funded 0x4b carrier | IMPLEMENTED_AND_TESTED |
+| another bonded builder's PFS4 + RDA4 block accepted | builder mirrors RDA4 from providers (`sync_redemptions_v1`), kaspad builder mode reproduced step for step (`palw_fp_spendable_v3`), node template + algo 7 + PFS4 (> 8,192 B); the receipt block takes the tip (its own fold applies the spend) | IMPLEMENTED_AND_TESTED |
+| coinbase: executor's registered payout + builder fee within cap | leg 304,080,417,576 to the executor bond's payout, fee 16,004,232,504 to builder A = exactly 500 bps of the worker reward 320,084,650,080 | IMPLEMENTED_AND_TESTED |
+| supply / weight / Panel legs unchanged but the fee | V3 counterfactual twin node (executor spends the same quantum at the same position): totals equal, every other output equal, same safe weight, same claim row | IMPLEMENTED_AND_TESTED |
+| second spend refused (V3 or V4, same or sibling block) | late sibling PFS4: one fee and one leg on the selected chain whichever branch the PALW order keeps; V3 re-spend: `StatusDisqualifiedFromChain`, paid nothing; same-mergeset race on the reorg branch: exactly one builder paid | IMPLEMENTED_AND_TESTED |
+| reorg reverts the spend, quantum spendable again | a LONGER spend-less branch is refused (PALW order, not blue work); a heavier branch (two other quanta) reverts A's spend and the quantum is spent again exactly once; a replaying node agrees | IMPLEMENTED_AND_TESTED |
+| PFS4 below the fence refused by name | `a V4 receipt spend is not valid below palw_receipt_spend_v4` at the header stage; a PFS3 header above 8,192 B still refused past the fence | IMPLEMENTED_AND_TESTED |
+| multi-node drill | `audit-combined/rfc9-v4-leg.sh` (plan/dry/prepare/certify/claim/sync/status/verdict) — `dry` smoke-run only | EXTERNAL_GATE_PENDING (lead schedules) |
+
+Findings for the go/no-go: (1) the leg needs **~19.5 h of chain** at ~125 s/DAA (claim DAA 5 → Final 147 → slot 547: the 400-DAA receipt
+maturity is not in the plan's ~12 h); (2) on public testnet-12 FP commitments on the floor are skipped until FamilyCertified +
+ClassLaneCertified (FreePrompt) are filed — V4 is unreachable there until someone files them; (3) a receipt block is a chain block.
+The sidecar `SigningPurpose` for RDA4 was not needed and not added (CODE_GAP unchanged).
+
+### P2 — mandatory test 1: verified chain state, three layers
+
+`misaka-palw-remote::verify` (`da3964d30`), wired into `palw-remote-miner` (`404491f42`) and the CLI/rail labels (`f70120960`).
+
+* **L1 header/DAG** (`verify_header_chain_v1`): from a checkpoint trusted before any node is asked — recomputed header hashes, each
+  header naming the previous as a parent, blue work / blue score strictly rising, DAA never falling, no future timestamp, a fresh tip, every
+  PALW carriage well-formed and signed (an attempt's challenge recomputed from the header's own position; V3/V4 receipt envelopes), walk
+  bounded. Views compared by **containment only** (`merge_views_v1`): conflicting views STOP the client whatever their blue work.
+  Templates refused off the verified tip (stale parent, job after a reorg) or with a target outside ×2 of the tip's. Ruleset: network,
+  genesis, `consensus_params_id`, `consensus_schedule_id` must be this build's.
+* **L3 claim state**: bond / class rows proven (op 202) only against a header ON the L1 chain; a node's job facts contradicting the proof
+  stop everything before inference.
+* **L2 PALW fork choice**: established only when the facts are proven at a trusted checkpoint (own node, or a verified signed checkpoint)
+  that is the decision point. Otherwise `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED`.
+* **Labels** `FULL_NODE` / `VERIFIED_REMOTE` / `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED` / `UNVERIFIED_REMOTE` on every output of
+  `palw-remote-miner` (each step), `misaka model add/sign/submit`, `misaka bond register-*`, `misaka-palw-fp-rail` (summary, `--track`,
+  `--relay-signed`), `palw tir-registration`. Below VERIFIED_REMOTE nothing is executed or signed without `--accept-unverified-state <LABEL>`
+  (the named class or a weaker one); the miner re-verifies right before the signature. A loopback `--rpc` is taken as the user's own full
+  node. No text claims full-node equivalence below FULL_NODE (tested).
+
+| Attack test | Test | Status |
+|---|---|---|
+| fake class row / fake bond eligibility | `verify::…l3_refuses_fake_rows…`, `miner::…a_lying_class_row…` | IMPLEMENTED_AND_TESTED |
+| wrong target, stale parent, job right after a reorg | `verify::…a_template_off_the_verified_tip_or_with_a_wrong_target…`, `miner::…a_reorg_between_the_gate_and_the_signature…` | IMPLEMENTED_AND_TESTED |
+| wrong ruleset / fence schedule | `verify::…another_ruleset_or_fence_schedule…`, `miner::…a_wrong_schedule…` | IMPLEMENTED_AND_TESTED |
+| forked view with less (or more) blue work; RPC hiding a competing tip, revealed by a second peer | `verify::conflicting_views_stop_the_client_whatever_their_blue_work` (heavier-blue-work branch alone → HEADER_VERIFIED, gate refuses; both → STOP) | IMPLEMENTED_AND_TESTED |
+| proof against an unlinked header; forged rows | `verify::l1_refuses…`, `verify::l3_refuses…` | IMPLEMENTED_AND_TESTED |
+| non-canonical state with a correct Merkle proof | proven past the checkpoint → never VERIFIED_REMOTE (`verify::l3_…`) | IMPLEMENTED_AND_TESTED |
+| stale checkpoint / stale tip | `checkpoint::verify_signed_checkpoint` (Stale); `StaleTip` | IMPLEMENTED_AND_TESTED |
+| restart, another peer: same verdict, no carried trust | `verify::a_restarted_client_re_verifies_from_scratch_whoever_serves` | IMPLEMENTED_AND_TESTED |
+| no opt-in → no inference, no signature | `miner::an_unverified_quorum_neither_executes_nor_signs_without_the_opt_in`, `model_bundle::model_sign_refuses_to_sign_unverified_state…`, `bond_remote::register_sign_needs_the_class_named…` | IMPLEMENTED_AND_TESTED |
+| the wRPC adapters (`header_chain` via getVirtualChainFromBlock + getBlock, `state_proof` op 202, `ruleset` getPalwNodeStatus) | build; never run against a node | IMPLEMENTED_REFERENCE_ONLY |
+
+**What a header-only client cannot prove on this DAG — DESIGN_GAP, stated:** GHOSTDAG's selected-parent choice and heaviest-chain
+selection (the other parents' headers / mergesets are not served); `bits` against the DAA window (the window's mergesets); heartbeat PoW
+(kaspa-pow is not linked into the light path); and, decisively, the **PALW fork choice** (safe frontier, safe weight, live total come from
+accepted transactions and the PALW fold — a header cannot carry them; a state proof shows a row under a root, not that the chain carrying
+the root wins).
+
+**L2 — DESIGN_GAP, candidate design and the cost of each step** (not measured):
+1. *Checkpoint*: a fresh trusted checkpoint (own node, or a signed checkpoint from issuers the user chose). Cost: key distribution and a
+   freshness SLA; a stale checkpoint is refused (exists).
+2. *DAG/header proof from it*: the selected chain's headers (implemented) plus each chain block's mergeset headers for GHOSTDAG and the DAA
+   window. Cost: an attempt header carries ~8 KB of PALW carriage; at ~29 DAA/h a day is ~5–6 MB of chain headers before mergesets.
+3. *PALW state commitment*: today a flat preimage — a proof is O(rows) (a bond table with 2.6 KB keys is megabytes), and the fork-choice
+   scalars (safe frontier, safe weight, bounded immature) are not an addressable opening (`safe_weight` sits mid-preimage behind Some-only
+   blocks). Needs a versioned tree-shaped commitment with a fork-choice opening: a state-root version bump (consensus change, a fence).
+4. *Verified state transition to that root*: without re-executing the PALW fold over block bodies (a pruned full node's PALW work) or a
+   succinct proof of it, a root on a valid-header branch is not shown to be the canonical PALW state. Cost: block bodies + the fold, or
+   research-grade proofs.
+5. *Candidate-order check*: `palw_fork_choice::compare_palw_candidates_v1` on the verified inputs — cheap once 3–4 hold; never re-implemented.
+6. *Fresh multi-peer observation*: ≥ 2 independent peers, any conflict STOPs (implemented: `merge_views_v1`).
+
+Until 1–5 exist the honest state for a remote miner past its checkpoint is `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED`, with the risk shown
+before inference and before signing and a stop path — node-less mining stays (rule 7).
+
+### P3 — mandatory test 2: malicious relay (modify / steal / obstruct)
+
+| Object | Modify | Steal (re-attribute work or payout) | Obstruct |
+|---|---|---|---|
+| class registration (catalog and IR) | refused from the signed bytes (`bundle::…alters_the_signed_bytes…`, IR: `bundle::an_ir_class_registration_rides…`) and by the node | owner signature binds registrant bond, class, root; payer signature the carrier | resend idempotent (`bundle::resend_is_idempotent…`); DUPLICATE_CLASS before a second fee |
+| bond registration (new) | `bondreg::a_relay_cannot_redirect…` (byte flip) | owner signature binds payout + collateral; the chain binds output 0 to the payout's script — a relay moving the payout is refused | `register-submit` re-run sends the same bytes; follows `<carrier>:0` |
+| attempt block | a node answering another hash never counts (`miner::…another_hash…`) | the attempt is signed by the executor key and its challenge binds the header position | `BlockTracker`: Lost → the SAME bytes re-sent |
+| FP carrier | `relay::…refuses_one_that_cannot_stand` | claim signature binds the executor bond; funding signature | **new** `track::a_relay_that_swallows_the_carrier_is_routed_around_with_the_same_bytes`: ACK with no observer within the bound → rebroadcast through another relay, same tx id, no second fee, one claim |
+| V4 authorization / receipt | altered after signing refused at the header stage (`rfc9_c2`, chain E2E) | the miner leg is the chain's bond record, the builder only ever gets the fee (chain E2E, twin) | any bonded builder redeems the published bundle; the first builder gone → another redeems (`rfc9_c1`, chain E2E race) |
+
+Status: modify / steal IMPLEMENTED_AND_TESTED for all five; obstruct IMPLEMENTED_AND_TESTED in the library. The rail's `--track` is
+stateless, so automatic re-submission through another relay is not wired into `misaka-palw-fp-rail` (CODE_GAP, small).
+
+### P4 — mode C (pool) without privilege
+
+No consensus code mentions a pool; a claim is valid with no pool anywhere (every test above). A pool is a job service, relay, provider or
+builder: `miner::a_pool_is_only_a_job_service_it_gets_no_trust_and_no_custody` — two "pool" endpoints land the miner in the same class two
+nodes would, a pool lying about the class row is stopped the same way, and a template whose coinbase pays the pool is refused before any
+work (`MinerHalt::Custodial`; `palw-remote-miner` sets `pay_to` to `--pay-address`). Reward pooling stays an off-consensus contract.
+Status: IMPLEMENTED_AND_TESTED (driver). A custodial-pool opt-in does not exist (by design: non-custodial by default).
+
+### Routed items from H1 (2026-10-08)
+
+* **NODELESS_BOND_REGISTRATION_ABSENT** — `misaka bond register-export | register-sign | register-submit` (`4c6fa1f57`): export with no key
+  (≥ 2 nodes on this build's ruleset agreeing on the funding output; the floor from this build's own ruleset; fee priced on a body with a
+  signature script of the real length, refused past the relay storage-mass limit), offline sign (owner + optional different payer; refused
+  on a moved payout / collateral / change / fee / network / expired quote; gate), submit (verify the bytes, relay, follow `<carrier>:0`).
+  Tests: bondreg 3 + CLI 1. IMPLEMENTED_AND_TESTED (library + files); no live node.
+* **REGISTRATION_QUOTE_INVALID** — DUPLICATE_CLASS before any fee in `palw submit-object` (`e4655dfbe`), `palw tir-registration` and the
+  new IR route (`e65f6998a`): `model add --artifact <.palwtir>` → pack gate → class/root → DUPLICATE_CLASS → bond → `--quote` (≥ 2 nodes)
+  or `--export-bundle` → `model sign` → `model submit` (the detached bundle carries `ClassRegisteredTirV1`; the one arm for OB-P0's
+  tag-108 envelope is marked in `bundle::parts_of`). `hf://repo@rev` explains the conversion it needs. In-process IR signing inside
+  `model add` is not built (the route points to `palw tir-registration` + `submit-object`, both gated); `model_onboard.rs` is left to OB-P0.
+  IMPLEMENTED_AND_TESTED (bundle 14, CLI operator 82) for the library and the gate; the IR route's node reads are IMPLEMENTED_REFERENCE_ONLY.
+
+### The 8 safety conditions after round 2
+
+| Condition | Status |
+|---|---|
+| Local signing / full-tx sighash | IMPLEMENTED_AND_TESTED (class + IR + bond registration detached; rail signer socket). V4 authorization `SigningPurpose`: CODE_GAP |
+| Verified chain state / stale detection | L1 + L3 + labels + gate IMPLEMENTED_AND_TESTED (fixtures, fake nodes); wRPC adapters IMPLEMENTED_REFERENCE_ONLY; **L2 DESIGN_GAP** |
+| Canonical job/input/output binding | unchanged (FP Job V4 DORMANT_NOT_INTEGRATED) |
+| Public authenticated DA | IMPLEMENTED_AND_TESTED (local; now on the chain E2E's panel path); discovery DESIGN_GAP |
+| Objective DA/default | unchanged; provider court DESIGN_GAP (out of this lane) |
+| Miner-bound payout / V4 redemption | **chain-block E2E IMPLEMENTED_AND_TESTED**; multi-node drill EXTERNAL_GATE_PENDING (scripted) |
+| Multi-relay / censorship fallback | IMPLEMENTED_AND_TESTED (library, incl. obstruction); rail auto-resubmit CODE_GAP (small) |
+| Fresh outsider G14 prosecution | C4r3's (mandatory test 3) |
+
+### Tests (targeted)
+
+```
+cargo test --offline -p kaspa-consensus --lib rfc9_v4_chain_e2e                 # 1 passed (~14 min)
+cargo test --offline -p misaka-palw-remote                                      # 89 lib + 2 CLI end-to-end
+cargo test --offline -p misaka-cli --bin misaka -- operator:: palw_fp::         # 85
+cargo build --offline -p misaka-palw-remote --features rpc --bin palw-remote-miner
+cargo build --offline -p misaka-palw-gateway --bin misaka-palw-fp-rail --bin misaka-palw-rfc1-drill-claim
+```
+
+### Allocations and ids
+
+No RPC op (203–209 unused), object tag, enum discriminant, delta, tail or `SigningPurpose` was taken; RFC-0009's reserved 150–153 /
+140–141 / 0xE9 stay unused. No params id, schedule id or fork id moved (test, client and tooling changes only). New dev-dependency:
+`kaspa-consensus` → `misaka-palw-remote` (library only).
+
+### Open gaps
+
+L2 (above); the multi-node V4 drill (~19.5 h, the lead's); the RDA4 `SigningPurpose`; rail auto-resubmit; signed-checkpoint files in the
+miner binary (`--checkpoint-trust signed` not taken until a file format and key distribution exist); in-process IR signing inside
+`model add` and HF conversion (OB-P0 / H1); provider court (separate lane); every wRPC path is unexercised against a live node.

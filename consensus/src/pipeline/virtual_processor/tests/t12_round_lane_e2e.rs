@@ -307,12 +307,18 @@ impl T12Chain {
     /// **A heartbeat (algo 8)**, `step_ms` after the simulated clock — the lane testnet-12's clock
     /// runs on: past `palw_anchor_clock` no other lane moves the DAA score.
     pub(super) async fn heartbeat(&mut self, step_ms: u64, txs: Vec<Transaction>) -> Block {
+        self.heartbeat_paying(new_miner_data(), step_ms, txs).await
+    }
+
+    /// [`Self::heartbeat`] whose coinbase pays `miner` — so two nodes' heartbeats at one position can be compared output for output
+    /// (`rfc9_v4_chain_e2e`'s V3 counterfactual twin).
+    pub(super) async fn heartbeat_paying(&mut self, miner: MinerData, step_ms: u64, txs: Vec<Transaction>) -> Block {
         self.ctx.simulated_time += step_ms;
         self.nonce += 1;
         let mut t = self
             .ctx
             .consensus
-            .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard)
+            .build_block_template(miner, Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard)
             .expect("a template");
         stamp_harness_time(&self.config.params, &mut t.block.header, self.ctx.simulated_time);
         t.block.header.nonce = self.nonce;

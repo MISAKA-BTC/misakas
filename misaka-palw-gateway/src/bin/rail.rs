@@ -54,7 +54,8 @@ use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
 use kaspa_pq_validator_core::{
-    ATTESTATION_TX_FEE_FLOOR_SOMPI, FpCommitmentPriceV1, MessageSigner, VALIDATOR_SEED_LEN, ValidatorKey, build_fp_commitment_tx_with, estimate_overlay_fee_with,
+    ATTESTATION_TX_FEE_FLOOR_SOMPI, FpCommitmentPriceV1, MessageSigner, VALIDATOR_SEED_LEN, ValidatorKey, build_fp_commitment_tx_with,
+    estimate_overlay_fee_with,
 };
 use kaspa_txscript::{pay_to_address_script, script_class::ScriptClass};
 
@@ -65,6 +66,18 @@ fn die(msg: String) -> ! {
 
 fn hex(h: Hash64) -> String {
     faster_hex::hex_string(h.as_byte_slice())
+}
+
+/// The class the rail signs a claim in: the user's own node on this machine is `FULL_NODE`; another node, or any relay, `UNVERIFIED_REMOTE`;
+/// no node at all (an offline signature over a job someone else assembled) `UNVERIFIED_REMOTE` too.
+fn rail_mode_v1(rpc: Option<&str>, relaying: bool) -> misaka_palw_remote::verify::ModeLabelV1 {
+    use misaka_palw_remote::verify::ModeLabelV1;
+    let own = rpc.is_some_and(|r| {
+        let host = r.trim_start_matches("ws://").trim_start_matches("wss://");
+        let host = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host).trim_start_matches('[').trim_end_matches(']');
+        matches!(host, "127.0.0.1" | "localhost" | "::1")
+    });
+    if own && !relaying { ModeLabelV1::FullNode } else { ModeLabelV1::UnverifiedRemote }
 }
 
 fn read_borsh<T: borsh::BorshDeserialize>(path: &Path, what: &str) -> T {
@@ -159,6 +172,8 @@ fn main() {
     // RFC-0009 stage C: the executor's redemption authorization, signed once at claim time so any builder may spend the claim's winning
     // quanta while this PC is off (`palw_receipt_spend_v4`, dormant until its fence opens).
     let mut redeem_auth_out: Option<PathBuf> = None;
+    // RFC-0009 operating modes (2026-10-08): the class the user accepts signing in below VERIFIED_REMOTE.
+    let mut accept_unverified: Option<misaka_palw_remote::verify::ModeLabelV1> = None;
     // RFC-0009 stage A: the bond key stays in a `kaspa-pq-signer` sidecar. `--signer-socket <path> --bond-pubkey <hex>` builds the carrier
     // through it (two typed requests: the claim id, the funding sighash) and the rail never holds the seed.
     let mut signer_socket: Option<PathBuf> = None;
@@ -204,7 +219,17 @@ fn main() {
             "--bond-pubkey" => bond_pubkey_hex = Some(value("--bond-pubkey")),
             "--relay-signed" => relay_signed = Some(PathBuf::from(value("--relay-signed"))),
             "--redeem-auth-out" => redeem_auth_out = Some(PathBuf::from(value("--redeem-auth-out"))),
-            "--redeem-fee-bps" => redeem_fee_bps = value("--redeem-fee-bps").parse().unwrap_or_else(|e| die(format!("--redeem-fee-bps: {e}"))),
+            "--accept-unverified-state" => {
+                let v = value("--accept-unverified-state");
+                accept_unverified = Some(misaka_palw_remote::verify::ModeLabelV1::parse(&v).unwrap_or_else(|| {
+                    die(format!(
+                        "--accept-unverified-state {v:?}: name the class (HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED or UNVERIFIED_REMOTE)"
+                    ))
+                }))
+            }
+            "--redeem-fee-bps" => {
+                redeem_fee_bps = value("--redeem-fee-bps").parse().unwrap_or_else(|e| die(format!("--redeem-fee-bps: {e}")))
+            }
             "--redeem-expiry-daa" => {
                 redeem_expiry_daa = value("--redeem-expiry-daa").parse().unwrap_or_else(|e| die(format!("--redeem-expiry-daa: {e}")))
             }
@@ -213,7 +238,9 @@ fn main() {
             "--evidence-panel-only" => evidence_panel_only = true,
             "--track" => track_claim = Some(value("--track")),
             "--tx-id" => track_tx_id = Some(value("--tx-id")),
-            "--finality-depth" => finality_depth = value("--finality-depth").parse().unwrap_or_else(|e| die(format!("--finality-depth: {e}"))),
+            "--finality-depth" => {
+                finality_depth = value("--finality-depth").parse().unwrap_or_else(|e| die(format!("--finality-depth: {e}")))
+            }
             "--relay-min-accept" => {
                 relay_min_accept = value("--relay-min-accept").parse().unwrap_or_else(|e| die(format!("--relay-min-accept: {e}")))
             }
@@ -262,7 +289,9 @@ fn main() {
         } else {
             relay_endpoints.clone()
         };
-        let bond = parse_outpoint(bond_flag.as_deref().unwrap_or_else(|| die("--track needs --bond <txid:index> (the executor bond)".into())));
+        let bond = parse_outpoint(
+            bond_flag.as_deref().unwrap_or_else(|| die("--track needs --bond <txid:index> (the executor bond)".into())),
+        );
         track_once(&endpoints, &claim_hex, track_tx_id.as_deref(), bond, finality_depth);
         return;
     }
@@ -308,6 +337,19 @@ fn main() {
             pass_through.extend(["--retention-dir".to_string(), dir.display().to_string()]);
         }
         pass_through.extend(["--anchor-ttl-daa".to_string(), anchor_ttl_daa.to_string()]);
+        // RFC-0009: the one-shot run of a watched job also files the claim's evidence and its V4 redemption authorization (the drill's
+        // fence-4 leg, `audit-combined/rfc9-v4-leg.sh`, runs the rail this way with `--once`: one job, one authorization file).
+        if let Some(dir) = &evidence_out {
+            pass_through.extend(["--evidence-out".to_string(), dir.display().to_string()]);
+        }
+        if let Some(label) = accept_unverified {
+            pass_through.extend(["--accept-unverified-state".to_string(), label.as_str().to_string()]);
+        }
+        if let Some(path) = &redeem_auth_out {
+            pass_through.extend(["--redeem-auth-out".to_string(), path.display().to_string()]);
+            pass_through.extend(["--redeem-fee-bps".to_string(), redeem_fee_bps.to_string()]);
+            pass_through.extend(["--redeem-expiry-daa".to_string(), redeem_expiry_daa.to_string()]);
+        }
         watch::run(watch::WatchConfig {
             outbox,
             seed_path: seed,
@@ -441,7 +483,9 @@ fn main() {
         (Some(_), Some(_)) => die("--bond-key-seed and --signer-socket are two custodies of one key: pick one".into()),
         (Some(path), None) => BondSigner::Seed(ValidatorKey::from_seed(read_seed(&path))),
         (None, Some(socket)) => {
-            let hex_text = bond_pubkey_hex.unwrap_or_else(|| die("--signer-socket needs --bond-pubkey <hex>: the public key the sidecar's validator holds".into()));
+            let hex_text = bond_pubkey_hex.unwrap_or_else(|| {
+                die("--signer-socket needs --bond-pubkey <hex>: the public key the sidecar's validator holds".into())
+            });
             let mut pubkey = vec![0u8; hex_text.len() / 2];
             if hex_text.len() % 2 != 0 || faster_hex::hex_decode(hex_text.as_bytes(), &mut pubkey).is_err() {
                 die("--bond-pubkey is not hex".into());
@@ -451,7 +495,10 @@ fn main() {
                 .unwrap_or_else(|e| die(format!("cannot reach the signer sidecar at {}: {e}", socket.display())));
             BondSigner::Sidecar(sidecar)
         }
-        (None, None) => die("--bond-key-seed <file>, or --signer-socket <path> with --bond-pubkey <hex>, is required to sign (or use --print-claim)".into()),
+        (None, None) => die(
+            "--bond-key-seed <file>, or --signer-socket <path> with --bond-pubkey <hex>, is required to sign (or use --print-claim)"
+                .into(),
+        ),
     };
     let signer: &dyn MessageSigner = bond.signer();
     if signer.public_key() != commitment.job.executor_pubkey.as_slice() {
@@ -533,6 +580,14 @@ fn main() {
         Some(answer) => FpCommitmentPriceV1::Chain { quanta: answer.quanta, pwu: answer.pwu },
         None => FpCommitmentPriceV1::Leaves { freeprompt: &bundle.freeprompt, class_canonical_leaves: class_leaves },
     };
+    // **The class this claim is signed in, and the gate** (RFC-0009, 2026-10-08): the job's anchor and the chain's price came from the
+    // node(s) named; a node on this machine is the user's own (FULL_NODE), any other — and every --relay — is their word
+    // (UNVERIFIED_REMOTE), and the claim is signed only when the user named that class.
+    let mode = rail_mode_v1(rpc_endpoint.as_deref(), !relay_endpoints.is_empty());
+    eprintln!("[misaka-palw-fp-rail] {}", mode.line());
+    if let Err(g) = misaka_palw_remote::verify::signing_gate_v1(mode, accept_unverified) {
+        die(format!("nothing was signed: {g}"));
+    }
     let build = |fee: u64| {
         build_fp_commitment_tx_with(
             signer,
@@ -716,6 +771,7 @@ fn main() {
         "trace_retention_daa": commitment.trace_retention_daa,
         "tx_file": tx_path.display().to_string(),
         "submitted": submitted.as_ref().map(|s| s.txid.clone()),
+        "mode": mode.as_str(),
         // RFC-0009: the per-node outcome of a `--relay`. An accept is NOT inclusion — track the claim (misaka-palw-remote's
         // ClaimTracker) and keep serving the material until stage B moves it.
         "relayed": relayed,
@@ -912,7 +968,9 @@ fn track_once(endpoints: &[String], claim_hex: &str, tx_id_hex: Option<&str>, ou
                     other => return Err(format!("the node reports a claim phase this client does not know: {other:?}")),
                 };
                 let mut accepted = [0u8; 64];
-                let accepted_block = if claim.accepted_block.len() == 128 && faster_hex::hex_decode(claim.accepted_block.as_bytes(), &mut accepted).is_ok() {
+                let accepted_block = if claim.accepted_block.len() == 128
+                    && faster_hex::hex_decode(claim.accepted_block.as_bytes(), &mut accepted).is_ok()
+                {
                     Hash64::from_bytes(accepted)
                 } else {
                     Hash64::default()
@@ -945,6 +1003,7 @@ fn track_once(endpoints: &[String], claim_hex: &str, tx_id_hex: Option<&str>, ou
             "settled": agree && states[0].is_settled(),
             // Nodes agreeing is not a proof: no header or state proof stands behind any of this (RFC-0009 §6).
             "provenance": misaka_palw_remote::trust::UNVERIFIED_REMOTE_STATE,
+            "mode": misaka_palw_remote::verify::ModeLabelV1::UnverifiedRemote.as_str(),
             "note": "a relay accept is not inclusion; Final/void are settled only finality_depth DAA deep; a disagreement is a disagreement, not an average",
         })
     );
@@ -1027,7 +1086,8 @@ fn relay_signed_carrier(path: &Path, funding_amount: u64, endpoints: &[String], 
     let tx: kaspa_consensus_core::tx::Transaction = read_borsh(path, "signed carrier");
     let checked = misaka_palw_remote::relay::check_fp_carrier_v1(&tx).unwrap_or_else(|e| die(format!("nothing is relayed: {e}")));
     let claim = checked.claim_id;
-    let funding = UtxoEntry::new(funding_amount, misaka_palw_remote::bundle::funding_spk_of_pubkey_v1(&checked.funding_pubkey), 0, false);
+    let funding =
+        UtxoEntry::new(funding_amount, misaka_palw_remote::bundle::funding_spk_of_pubkey_v1(&checked.funding_pubkey), 0, false);
     let relayed = relay_through_many(endpoints, &tx, &funding, min_accept, checkpoint);
     println!(
         "{}",
@@ -1036,11 +1096,12 @@ fn relay_signed_carrier(path: &Path, funding_amount: u64, endpoints: &[String], 
             "fp_claim_id": hex(claim),
             "tx_id": tx.id().to_string(),
             "relayed": relayed,
+            // Relaying signs nothing; what the relays report is their word.
+            "mode": misaka_palw_remote::verify::ModeLabelV1::UnverifiedRemote.as_str(),
             "note": "this process held no key and has no authority over the claim; an accept is not inclusion; the claim's material is still the executor's (or a provider's) to serve",
         })
     );
 }
-
 
 /// **RFC-0009 stage A: relay a locally signed carrier through several nodes.** The funding signature is verified first (the same
 /// check the script engine will make), the id is recomputed from the bytes, and each node's reply is judged against it.
@@ -1094,7 +1155,8 @@ fn relay_through_many(
             }
         }
     };
-    let refs: Vec<&dyn misaka_palw_remote::relay::RelayNode> = nodes.iter().map(|n| n as &dyn misaka_palw_remote::relay::RelayNode).collect();
+    let refs: Vec<&dyn misaka_palw_remote::relay::RelayNode> =
+        nodes.iter().map(|n| n as &dyn misaka_palw_remote::relay::RelayNode).collect();
     let verdict = misaka_palw_remote::relay::broadcast_signed_tx(tx, Some(funding), &refs, min_accept);
     for node in &nodes {
         use kaspa_rpc_core::api::rpc::RpcApi;

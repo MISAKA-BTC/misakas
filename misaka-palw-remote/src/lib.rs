@@ -23,6 +23,7 @@
 //! Domain strings are `misaka-palw/remote/...`; none of them is a consensus rule.
 
 pub mod attempt;
+pub mod bondreg;
 pub mod bundle;
 pub mod checkpoint;
 pub mod evidence;
@@ -34,6 +35,7 @@ pub mod template;
 pub mod track;
 pub mod transport;
 pub mod trust;
+pub mod verify;
 pub mod view;
 
 use kaspa_hashes::Hash64;

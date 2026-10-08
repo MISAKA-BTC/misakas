@@ -16,11 +16,19 @@ use kaspa_hashes::Hash64;
 pub enum ClaimPhaseObs {
     Provisional,
     PanelBound,
-    ReceiptLicensed { licensed_daa: u64 },
+    ReceiptLicensed {
+        licensed_daa: u64,
+    },
     /// The challenge window is open and ends at `ends_daa` (derived from the chain's params by the adapter).
-    Challengeable { ends_daa: u64 },
-    Final { final_daa: u64 },
-    Voided { voided_daa: u64 },
+    Challengeable {
+        ends_daa: u64,
+    },
+    Final {
+        final_daa: u64,
+    },
+    Voided {
+        voided_daa: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,16 +58,33 @@ pub enum TrackState {
     Relayed,
     /// Neither mempool nor chain after having been seen: it was dropped, or reorged out — re-broadcast the same bytes.
     NeedsRebroadcast,
-    Included { block: Hash64, daa: u64 },
-    Licensed { licensed_daa: u64 },
-    ChallengeWindow { ends_daa: u64 },
+    Included {
+        block: Hash64,
+        daa: u64,
+    },
+    Licensed {
+        licensed_daa: u64,
+    },
+    ChallengeWindow {
+        ends_daa: u64,
+    },
     /// `Final` at the sink but shallower than the finality depth: still reversible.
-    FinalPending { final_daa: u64 },
-    Final { final_daa: u64 },
-    VoidPending { voided_daa: u64 },
-    Void { voided_daa: u64 },
+    FinalPending {
+        final_daa: u64,
+    },
+    Final {
+        final_daa: u64,
+    },
+    VoidPending {
+        voided_daa: u64,
+    },
+    Void {
+        voided_daa: u64,
+    },
     /// The chain's claim row names a different executor bond. Terminal and loud; never "ours".
-    Misattributed { chain_bond: TransactionOutpoint },
+    Misattributed {
+        chain_bond: TransactionOutpoint,
+    },
 }
 
 impl TrackState {
@@ -85,11 +110,29 @@ pub struct ClaimTracker {
     state: TrackState,
     ever_seen: bool,
     history: Vec<Transition>,
+    /// `(DAA the relay ACKed at, bound)`: an ACK no observer ever confirms within the bound is a swallowed carrier (RFC-0009 mandatory test
+    /// 2, "obstruct"), and the SAME bytes go out through another relay.
+    relayed: Option<(u64, u64)>,
 }
 
 impl ClaimTracker {
     pub fn new(tx_id: Hash64, claim_id: Hash64, our_bond: TransactionOutpoint, finality_depth: u64) -> Self {
-        Self { tx_id, claim_id, our_bond, finality_depth, state: TrackState::Built, ever_seen: false, history: Vec::new() }
+        Self {
+            tx_id,
+            claim_id,
+            our_bond,
+            finality_depth,
+            state: TrackState::Built,
+            ever_seen: false,
+            history: Vec::new(),
+            relayed: None,
+        }
+    }
+
+    /// **A relay ACKed at `at_daa`.** An ACK is the relay's word: if within `bound_daa` no observer (a node other than the one that ACKed)
+    /// shows the carrier in its mempool or the claim on chain, the tracker asks for the same bytes again — through ANOTHER relay.
+    pub fn relayed_at(&mut self, at_daa: u64, bound_daa: u64) {
+        self.relayed = Some((at_daa, bound_daa));
     }
 
     pub fn state(&self) -> &TrackState {
@@ -135,6 +178,9 @@ impl ClaimTracker {
                 self.ever_seen = true;
                 TrackState::Relayed
             } else if self.ever_seen {
+                TrackState::NeedsRebroadcast
+            } else if self.relayed.is_some_and(|(at, bound)| obs.virtual_daa >= at.saturating_add(bound)) {
+                // ACKed, and nobody has seen it since: the relay swallowed it.
                 TrackState::NeedsRebroadcast
             } else {
                 TrackState::Built
@@ -188,11 +234,23 @@ mod tests {
         assert_eq!(t.observe(&obs(1, 90, false, None)), &TrackState::Built);
         assert_eq!(t.observe(&obs(2, 95, true, None)), &TrackState::Relayed);
         assert!(matches!(t.observe(&obs(3, 101, false, claim(10, ClaimPhaseObs::Provisional))), TrackState::Included { .. }));
-        assert!(matches!(t.observe(&obs(4, 150, false, claim(10, ClaimPhaseObs::ReceiptLicensed { licensed_daa: 140 }))), TrackState::Licensed { .. }));
-        assert!(matches!(t.observe(&obs(5, 200, false, claim(10, ClaimPhaseObs::Challengeable { ends_daa: 260 }))), TrackState::ChallengeWindow { .. }));
-        assert_eq!(t.observe(&obs(6, 270, false, claim(10, ClaimPhaseObs::Final { final_daa: 265 }))), &TrackState::FinalPending { final_daa: 265 });
+        assert!(matches!(
+            t.observe(&obs(4, 150, false, claim(10, ClaimPhaseObs::ReceiptLicensed { licensed_daa: 140 }))),
+            TrackState::Licensed { .. }
+        ));
+        assert!(matches!(
+            t.observe(&obs(5, 200, false, claim(10, ClaimPhaseObs::Challengeable { ends_daa: 260 }))),
+            TrackState::ChallengeWindow { .. }
+        ));
+        assert_eq!(
+            t.observe(&obs(6, 270, false, claim(10, ClaimPhaseObs::Final { final_daa: 265 }))),
+            &TrackState::FinalPending { final_daa: 265 }
+        );
         assert!(!t.state().is_settled());
-        assert_eq!(t.observe(&obs(7, 330, false, claim(10, ClaimPhaseObs::Final { final_daa: 265 }))), &TrackState::Final { final_daa: 265 });
+        assert_eq!(
+            t.observe(&obs(7, 330, false, claim(10, ClaimPhaseObs::Final { final_daa: 265 }))),
+            &TrackState::Final { final_daa: 265 }
+        );
         assert!(t.state().is_settled());
         assert_eq!(t.reorgs_seen(), 0);
     }
@@ -236,5 +294,49 @@ mod tests {
         let mut t = tracker();
         assert_eq!(t.observe(&obs(1, 90, false, None)), &TrackState::Built);
         assert!(!t.needs_rebroadcast());
+    }
+
+    /// **RFC-0009 mandatory test 2, "obstruct": a relay that ACKs and never forwards.** The tracker sees nothing within the bound, asks for
+    /// the same bytes again, and they go out through ANOTHER relay: the same tx id (so no second fee is charged — the first relay never
+    /// forwarded the first copy, and an honest node that did hold it answers "already known"), the same claim id (the claim is a function of
+    /// the signed bytes), one claim on the chain.
+    #[test]
+    fn a_relay_that_swallows_the_carrier_is_routed_around_with_the_same_bytes() {
+        use crate::relay::fake::{FakeRelay, Mode};
+        use crate::relay::{RelayNode, Reply, broadcast_signed_tx, tx_id_of_bytes};
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
+        use kaspa_consensus_core::tx::Transaction;
+        let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![7, 7, 7]);
+        // The obstructing relay: it ACKs with the right id and forwards nothing.
+        struct Swallow(std::cell::RefCell<u32>);
+        impl RelayNode for Swallow {
+            fn node_id(&self) -> &str {
+                "swallow"
+            }
+            fn submit_raw_tx(&self, tx: &Transaction) -> Reply {
+                *self.0.borrow_mut() += 1;
+                Reply::Accepted(tx.id())
+            }
+        }
+        let swallow = Swallow(std::cell::RefCell::new(0));
+        let first = broadcast_signed_tx(&tx, None, &[&swallow as &dyn RelayNode], 1).expect("the ACK looks like success");
+        assert_eq!(first.successes, 1);
+        let mut t = ClaimTracker::new(tx_id_of_bytes(&tx), h(2), bond(10), 60);
+        t.relayed_at(100, 10);
+        // Observers (other nodes) never see it: inside the bound it is merely not yet seen; past it, swallowed.
+        assert_eq!(t.observe(&obs(1, 105, false, None)), &TrackState::Built);
+        assert_eq!(t.observe(&obs(1, 110, false, None)), &TrackState::NeedsRebroadcast);
+        assert!(t.needs_rebroadcast());
+        // The same bytes through another relay; an honest node that already held them would answer "already known" — never a new claim.
+        let other = FakeRelay::new("other", Mode::Honest);
+        let again = broadcast_signed_tx(&tx, None, &[&other as &dyn RelayNode], 1).unwrap();
+        assert_eq!(again.successes, 1);
+        assert_eq!(other.sent.borrow()[0].id(), tx.id(), "the SAME transaction, not a re-signed one: no second fee, no second claim");
+        let twice = broadcast_signed_tx(&tx, None, &[&other as &dyn RelayNode], 1).unwrap();
+        assert!(matches!(twice.per_node[0].1, crate::relay::NodeOutcome::AlreadyKnown), "a resend is idempotent");
+        t.relayed_at(110, 10);
+        assert_eq!(t.observe(&obs(2, 112, true, None)), &TrackState::Relayed);
+        assert!(matches!(t.observe(&obs(3, 115, false, claim(10, ClaimPhaseObs::Provisional))), TrackState::Included { .. }));
+        assert_eq!(*swallow.0.borrow(), 1, "the obstructing relay is not asked again");
     }
 }

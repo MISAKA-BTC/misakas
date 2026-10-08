@@ -21,6 +21,7 @@
 //! things sign and spend, each only after showing the move and asking: setup (a bond's collateral,
 //! a capability declaration, a self-send), and `position buy` / `position sell`.
 
+pub(crate) mod bond_remote;
 pub(crate) mod catalog;
 pub(crate) mod dashboard;
 pub(crate) mod doctor;

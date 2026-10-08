@@ -467,6 +467,11 @@ pub struct VirtualStateProcessor {
     /// ADR-0126: `Params::palw_overlay_carve_fence` — the height from which the overlay's full split
     /// pays validators a fifth and a claim escrows the tenth they gave up.
     pub(super) palw_native_ruleset_id: kaspa_consensus_core::Hash,
+    /// **C4 round 3, F-C4R3-01: the kernel route's ruleset digest is the network's IDENTITY**, never `consensus_params_id`, which moves
+    /// with every SCHEDULED fence: a stored route header binding it made the first node to take the next release disqualify every block
+    /// with a live claim ("folded under another policy") while un-upgraded nodes accepted it — a split at the binary swap. Two builds
+    /// that differ only in future fences share the identity, exactly as the handshake requires.
+    pub(super) palw_kernel_route_ruleset_id: kaspa_consensus_core::Hash,
     pub(super) palw_dns_retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
     /// RFC-0012: the per-block rows of the native settlement walk. Memory only and rebuildable; see `native_settlement`.
     pub(super) native_rows: parking_lot::Mutex<super::native_settlement::NativeRowCache>,
@@ -1195,6 +1200,7 @@ impl VirtualStateProcessor {
             #[cfg(test)]
             native_fact_override: Default::default(),
             palw_native_ruleset_id: params.consensus_params_id(),
+            palw_kernel_route_ruleset_id: params.consensus_identity_id(),
             palw_panel_exposure_floor: params.palw_panel_exposure_floor_fence(),
             palw_compute_overlay_retired: params.palw_compute_overlay_retired,
             palw_model_registry: params.palw_model_registry,
@@ -14783,7 +14789,7 @@ impl VirtualStateProcessor {
     fn palw_kernel_route_extras_at(&self, daa_score: u64) -> Option<kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteExtrasV1> {
         self.palw_kernel_route_at(daa_score).then(|| {
             let mut ruleset = [0u8; 64];
-            ruleset[..32].copy_from_slice(&self.palw_native_ruleset_id.as_bytes());
+            ruleset[..32].copy_from_slice(&self.palw_kernel_route_ruleset_id.as_bytes());
             kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
                 network_domain: self.palw_network_domain_v2(),
                 ruleset_digest: kaspa_hashes::Hash64::from_bytes(ruleset),
