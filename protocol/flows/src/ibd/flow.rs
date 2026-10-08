@@ -398,7 +398,7 @@ impl IbdFlow {
                         // lease, per-peer failure count.
                         // A node-side checkpoint violation IS misbehaviour (the peer is already banned),
                         // so it never keeps the connection.
-                        if !matches!(e, ProtocolError::MisbehavingPeer(_)) && !self.ctx.is_consensus_participation_allowed() {
+                        if !matches!(e, ProtocolError::MisbehavingPeer(_)) && !self.ctx.is_chain_settled() {
                             info!(
                                 "Keeping the connection to {} despite the failed IBD: this node is still reviewing its chain, and \
                                  a peer offering a different one is evidence rather than an offence.",
@@ -792,7 +792,7 @@ impl IbdFlow {
     /// this reads it. `verify_challenger` re-checks the state and the source, so a candidate another
     /// flow is already serving is skipped rather than fetched twice.
     async fn serve_pending_nomination(&mut self) {
-        if self.ctx.is_consensus_participation_allowed() {
+        if self.ctx.is_chain_settled() {
             return;
         }
         let me = self.router.key();
@@ -810,7 +810,7 @@ impl IbdFlow {
     /// Cheap and idempotent: it returns immediately unless participation is withheld and the latch
     /// is free, and `consider_post_ibd_switch` re-applies every condition itself.
     async fn reconsider_validated_candidates(&self) {
-        if self.ctx.is_consensus_participation_allowed() || self.ctx.is_ibd_running() {
+        if self.ctx.is_chain_settled() || self.ctx.is_ibd_running() {
             return;
         }
         // Before anything else: a reservation that has stopped making progress is holding the latch
@@ -855,7 +855,7 @@ impl IbdFlow {
     /// candidate, and the review hold must be released or the node never participates again.
     #[must_use = "the caller releases the review hold unless an adoption was reserved"]
     async fn consider_post_ibd_switch(&self, id: CandidateId, verified_blue_work: BlueWorkType) -> bool {
-        if self.ctx.is_consensus_participation_allowed() || self.ctx.is_ibd_running() {
+        if self.ctx.is_chain_settled() || self.ctx.is_ibd_running() {
             record_stage(
                 RecoveryStage::Rejected,
                 None,
