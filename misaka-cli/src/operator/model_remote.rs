@@ -220,8 +220,16 @@ pub(crate) async fn read_facts(
     probe: &PalwConsensusObjectV2,
     sponsor: Option<u64>,
 ) -> Result<(RegistrationFactsV1, Funding), Halt> {
-    let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. } = unsigned else {
-        return Err(blocked("E-MODEL-REGISTRATION", "Not a registration", "the object is not ClassRegistered"));
+    let (class_id, artifact_root) = match unsigned {
+        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. }
+        | PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, artifact_root, .. } => (class_id, artifact_root),
+        _ => {
+            return Err(blocked(
+                "E-MODEL-REGISTRATION",
+                "Not a registration",
+                "the object is neither ClassRegistered nor ClassRegisteredTirV1",
+            ));
+        }
     };
     let dag = node
         .client()

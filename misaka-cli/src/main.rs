@@ -1316,6 +1316,12 @@ enum PalwCmd {
         /// A registration needs a runtime pack that verifies against the artifact (`--pack`), unless `--skip-pack-verify`.
         #[command(flatten)]
         pack_gate: pack_gate::PackGateFlags,
+        /// Sign below VERIFIED_REMOTE (the terms are the node's word; a node on this machine is your own full node): name the class.
+        #[arg(long, value_name = "LABEL")]
+        accept_unverified_state: Option<String>,
+        /// Write the object even though the node's class rows already hold this class (DUPLICATE_CLASS).
+        #[arg(long)]
+        allow_duplicate: bool,
     },
     /// **Write a signed generative class registration** (RFC-0003: `ClassRegisteredGenV1`) for a PALWTIR2
     /// artifact (`palw-class declare-layout`'s container for a pipeline class), at the connected chain's live
@@ -3111,8 +3117,18 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::SubmitObject { key, object, yes, allow_duplicate }) => {
             palw_fp::submit_objects_v2(&ctx, &key.source(), &object, yes, allow_duplicate).await.map(|_| ())
         }
-        Command::Palw(PalwCmd::TirRegistration { key, artifact, parent, bond, out, model_id, pack_gate }) => {
-            palw_model_ops::tir_registration_object(
+        Command::Palw(PalwCmd::TirRegistration {
+            key,
+            artifact,
+            parent,
+            bond,
+            out,
+            model_id,
+            pack_gate,
+            accept_unverified_state,
+            allow_duplicate,
+        }) => {
+            palw_model_ops::tir_registration_object_gated(
                 &ctx,
                 &key.source(),
                 &artifact,
@@ -3121,6 +3137,8 @@ async fn main() -> std::process::ExitCode {
                 &out,
                 model_id.as_deref(),
                 &pack_gate,
+                accept_unverified_state.as_deref(),
+                allow_duplicate,
             )
             .await
         }

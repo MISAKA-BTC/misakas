@@ -22,13 +22,13 @@ pub(crate) fn print_pipeline(reg: &RpcPalwModelRegistration) {
     println!(
         "submitted  {}{}",
         tick(reg.submitted),
-        if reg.transaction_id.is_empty() { String::new() } else { format!("  tx {}", &reg.transaction_id[..reg.transaction_id.len().min(16)]) }
+        if reg.transaction_id.is_empty() {
+            String::new()
+        } else {
+            format!("  tx {}", &reg.transaction_id[..reg.transaction_id.len().min(16)])
+        }
     );
-    let accepted_note = if !reg.accepted && !reg.reject_code.is_empty() {
-        format!("  {}", reg.reject_code)
-    } else {
-        String::new()
-    };
+    let accepted_note = if !reg.accepted && !reg.reject_code.is_empty() { format!("  {}", reg.reject_code) } else { String::new() };
     println!("accepted   {}{accepted_note}", tick(reg.accepted));
     let included_note = if reg.included {
         format!("  DAA {}", reg.included_daa)
@@ -58,7 +58,8 @@ fn tick(ok: bool) -> &'static str {
 }
 
 pub(crate) async fn inspect(ctx: &Ctx, profile: Profile, artifact: PathBuf) -> CliResult {
-    let net = profile.network.parse::<kaspa_consensus_core::network::NetworkId>().map_err(|e| CliError::new(exit::CONFIG, e.to_string()))?;
+    let net =
+        profile.network.parse::<kaspa_consensus_core::network::NetworkId>().map_err(|e| CliError::new(exit::CONFIG, e.to_string()))?;
     let params = kaspa_consensus_core::config::params::Params::from(net);
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else {
         return Err(CliError::new(exit::CONFIG, format!("{net} has no PALW classes")));
@@ -84,7 +85,10 @@ pub(crate) async fn inspect(ctx: &Ctx, profile: Profile, artifact: PathBuf) -> C
                 })
             })
             .collect();
-        println!("{}", serde_json::json!({ "schema": "misaka.model.inspect.v1", "summary": loaded.summary, "lineage": loaded.lineage_id, "pairings": pairings }));
+        println!(
+            "{}",
+            serde_json::json!({ "schema": "misaka.model.inspect.v1", "summary": loaded.summary, "lineage": loaded.lineage_id, "pairings": pairings })
+        );
         return Ok(());
     }
     println!("{}", loaded.summary);
@@ -97,10 +101,20 @@ pub(crate) async fn inspect(ctx: &Ctx, profile: Profile, artifact: PathBuf) -> C
                 let canonical = sdk.registration_canonical_v1(&entry).unwrap_or_else(|_| entry.canonical_context());
                 let shape = palw_admission_shape_at_v1(&params, &bundle, &entry.profile, 0).ok();
                 let fit = shape.map(|s| {
-                    palw_model_fit_v2(&entry.profile, &bundle, s.court, params.palw_prompt_ids_form_at(0), palw_fit_regime_for_v1(s.held, &entry.profile))
+                    palw_model_fit_v2(
+                        &entry.profile,
+                        &bundle,
+                        s.court,
+                        params.palw_prompt_ids_form_at(0),
+                        palw_fit_regime_for_v1(s.held, &entry.profile),
+                    )
                 });
-                let court = fit.as_ref().and_then(|f| f.rows.iter().find(|r| r.wall == kaspa_consensus_core::palw_model_fit_v1::PalwFitWallV1::CourtWindow));
-                let geom = fit.as_ref().and_then(|f| f.rows.iter().find(|r| r.wall == kaspa_consensus_core::palw_model_fit_v1::PalwFitWallV1::GeometryCeiling));
+                let court = fit.as_ref().and_then(|f| {
+                    f.rows.iter().find(|r| r.wall == kaspa_consensus_core::palw_model_fit_v1::PalwFitWallV1::CourtWindow)
+                });
+                let geom = fit.as_ref().and_then(|f| {
+                    f.rows.iter().find(|r| r.wall == kaspa_consensus_core::palw_model_fit_v1::PalwFitWallV1::GeometryCeiling)
+                });
                 // The gate AND the attribution checks the processor asks beside it, through the SDK's
                 // one probe (testnet-12 lifecycle audit T12-030: this said ADMISSION_OK for a row the
                 // processor drops). Offline, so at the network's genesis rules (DAA 0).
@@ -129,7 +143,14 @@ pub(crate) async fn inspect(ctx: &Ctx, profile: Profile, artifact: PathBuf) -> C
                     );
                 }
                 if let Some(row) = geom {
-                    println!("FitsGlobalWindow {}", if row.verdict == kaspa_consensus_core::palw_model_fit_v1::PalwFitVerdictV1::Admitted { "✅" } else { "❌ GLOBAL_WINDOW_EXCEEDED" });
+                    println!(
+                        "FitsGlobalWindow {}",
+                        if row.verdict == kaspa_consensus_core::palw_model_fit_v1::PalwFitVerdictV1::Admitted {
+                            "✅"
+                        } else {
+                            "❌ GLOBAL_WINDOW_EXCEEDED"
+                        }
+                    );
                 }
                 match &admission {
                     Ok(()) => println!("admission result ADMISSION_OK"),
@@ -165,7 +186,9 @@ fn inspect_tir(
         .collect();
     // What the artifact says of itself: its feature scope (what the class does not compute), the adapter and
     // quant descriptors it was read with, the math and calibration it was built under.
-    let provenance_of = |entry: &misaka_palw_sdk::PalwTirClassEntryV1| misaka_palw_sdk::runtime_pack::provenance::provenance_of(&entry.artifact.container().header.meta);
+    let provenance_of = |entry: &misaka_palw_sdk::PalwTirClassEntryV1| {
+        misaka_palw_sdk::runtime_pack::provenance::provenance_of(&entry.artifact.container().header.meta)
+    };
     if ctx.output == OutputFormat::Json {
         let classes: Vec<_> = rows
             .iter()
@@ -236,6 +259,56 @@ fn inspect_tir(
 /// `palw_tir_class_registration_message_v1` under the chain's domain (`NodeView::params`, a drill's
 /// genesis with the salt), written to `out`. The gate is not asked: the object may be for a height
 /// the IR fence does not cover yet.
+/// [`tir_registration_object`] behind the two client gates (H1's routed item 2 and the RFC-0009 modes): the class this object is signed in
+/// (a node on this machine is the user's own full node; any other node's terms are its word) and DUPLICATE_CLASS before the object is made.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn tir_registration_object_gated(
+    ctx: &Ctx,
+    key: &crate::keys::KeySource,
+    artifact: &Path,
+    parent: Option<&Path>,
+    bond: &str,
+    out: &Path,
+    model_id: Option<&str>,
+    pack_gate: &crate::pack_gate::PackGateFlags,
+    accept_unverified_state: Option<&str>,
+    allow_duplicate: bool,
+) -> CliResult {
+    use misaka_palw_remote::verify::{ModeLabelV1, signing_gate_v1};
+    let mode = crate::operator::model_remote::add_mode_v1(ctx.rpc.as_deref().unwrap_or("127.0.0.1"));
+    eprintln!("{}", mode.line());
+    let accepted = accept_unverified_state
+        .map(|t| {
+            ModeLabelV1::parse(t)
+                .ok_or_else(|| CliError::new(exit::GENERIC, format!("--accept-unverified-state {t:?} names no class")))
+        })
+        .transpose()?;
+    signing_gate_v1(mode, accepted)
+        .map_err(|g| CliError::new(exit::NOT_READY, format!("E-MODE-UNVERIFIED: nothing was signed — {g}")))?;
+    // DUPLICATE_CLASS, before anything is signed: the class and root this artifact registers, against the node's class rows.
+    let entry = misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(artifact).map_err(|e| CliError::new(exit::MODEL, e))?;
+    if parent.is_none() {
+        let nv = connect(ctx).await?;
+        let rows: Option<Vec<misaka_palw_remote::register::RegistryRowV1>> = nv.client.get_palw_classes().await.ok().map(|t| {
+            t.classes
+                .into_iter()
+                .map(|c| misaka_palw_remote::register::RegistryRowV1 {
+                    class_id: c.class_id.parse().unwrap_or_default(),
+                    artifact_root: c.artifact_root.parse().unwrap_or_default(),
+                    registrant_bond: None,
+                    lifecycle: c.status,
+                })
+                .collect()
+        });
+        if let Some(note) =
+            crate::palw_fp::duplicate_registration_gate_v1(entry.class_id(), entry.artifact_root, rows.as_deref(), allow_duplicate)?
+        {
+            eprintln!("warning: {note}");
+        }
+    }
+    tir_registration_object(ctx, key, artifact, parent, bond, out, model_id, pack_gate).await
+}
+
 pub(crate) async fn tir_registration_object(
     ctx: &Ctx,
     key: &crate::keys::KeySource,
@@ -386,7 +459,8 @@ pub(crate) async fn preflight(ctx: &Ctx, profile: Profile, artifact: PathBuf) ->
 }
 
 async fn local_registration_object(ctx: &Ctx, profile: &Profile, artifact: &Path) -> Result<PalwConsensusObjectV2, CliError> {
-    let net = profile.network.parse::<kaspa_consensus_core::network::NetworkId>().map_err(|e| CliError::new(exit::CONFIG, e.to_string()))?;
+    let net =
+        profile.network.parse::<kaspa_consensus_core::network::NetworkId>().map_err(|e| CliError::new(exit::CONFIG, e.to_string()))?;
     let params = kaspa_consensus_core::config::params::Params::from(net);
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else {
         return Err(CliError::new(exit::CONFIG, format!("{net} has no PALW classes")));
@@ -420,9 +494,14 @@ async fn local_registration_object(ctx: &Ctx, profile: &Profile, artifact: &Path
         .map_err(|e| CliError::new(exit::MODEL, format!("{}: {} ({e})", entry.model_id, e.code())));
     }
     let pairings: Vec<_> = sdk.pairings(&loaded).into_iter().filter_map(|(e, p)| p.ok().map(|root| (e, root))).collect();
-    let (entry, root) = pairings.into_iter().next().ok_or_else(|| CliError::new(exit::MODEL, "this artifact pairs with no class this build knows"))?;
+    let (entry, root) =
+        pairings.into_iter().next().ok_or_else(|| CliError::new(exit::MODEL, "this artifact pairs with no class this build knows"))?;
     let nv = connect(ctx).await?;
-    let terms_resp = nv.client.get_palw_registration_terms().await.map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwRegistrationTerms: {e}")))?;
+    let terms_resp = nv
+        .client
+        .get_palw_registration_terms()
+        .await
+        .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwRegistrationTerms: {e}")))?;
     let (terms, _) = crate::operator::model_add::decode_terms(&terms_resp).map_err(|e| CliError::new(exit::GENERIC, e))?;
     let daa = nv.virtual_daa;
     let shape = palw_admission_shape_at_v1(&params, &bundle, &entry.profile, daa).map_err(|e| CliError::new(exit::MODEL, e))?;
@@ -539,7 +618,10 @@ pub(crate) async fn status(ctx: &Ctx, profile: Profile, class_id: String) -> Cli
         return Ok(());
     }
     if !resp.found {
-        return Err(CliError::new(exit::MODEL, format!("class {class_id} is not on the class table — misaka model registration {class_id}")));
+        return Err(CliError::new(
+            exit::MODEL,
+            format!("class {class_id} is not on the class table — misaka model registration {class_id}"),
+        ));
     }
     println!("class_id              {}", resp.class_id);
     println!("model                 {}  ctx {}", resp.model_name, resp.n_ctx);
@@ -575,13 +657,20 @@ pub(crate) async fn status(ctx: &Ctx, profile: Profile, class_id: String) -> Cli
                 println!("                      {}", b.what);
                 println!("next                  {}", b.next);
             }
-            None => println!("stage                 nothing blocks this class (the registry reads it as admitted, or has no row for it)"),
+            None => {
+                println!("stage                 nothing blocks this class (the registry reads it as admitted, or has no row for it)")
+            }
         }
         // Proposal A (`palw_class_seating`): the class's seating and the share of its claims a producer can license.
         if let Some(s) = registry.seating.iter().find(|s| s.class_id.eq_ignore_ascii_case(&resp.class_id)) {
             println!(
                 "seating               {} / {} ready operators · {} / {} independent · licensable share {} ‰ ({} base operators)",
-                s.ready_operators, s.needed_operators, s.independent_operators, s.needed_independent, s.licensable_share_permille, s.base_operators
+                s.ready_operators,
+                s.needed_operators,
+                s.independent_operators,
+                s.needed_independent,
+                s.licensable_share_permille,
+                s.base_operators
             );
         }
     }
@@ -628,7 +717,10 @@ pub(crate) async fn certify(ctx: &Ctx, profile: Profile, class_id: String, yes: 
         .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwModelCertification: {e}")))?;
     if cert.end_to_end_certified {
         if ctx.output == OutputFormat::Json {
-            println!("{}", serde_json::json!({"ok": true, "already_certified": true, "class_id": class_id, "families": cert.families}));
+            println!(
+                "{}",
+                serde_json::json!({"ok": true, "already_certified": true, "class_id": class_id, "families": cert.families})
+            );
         } else {
             println!("already covered by a chain family — this is not activation or a fence");
             for f in &cert.families {
@@ -637,7 +729,8 @@ pub(crate) async fn certify(ctx: &Ctx, profile: Profile, class_id: String, yes: 
         }
         return Ok(());
     }
-    let net = profile.network.parse::<kaspa_consensus_core::network::NetworkId>().map_err(|e| CliError::new(exit::CONFIG, e.to_string()))?;
+    let net =
+        profile.network.parse::<kaspa_consensus_core::network::NetworkId>().map_err(|e| CliError::new(exit::CONFIG, e.to_string()))?;
     let params = kaspa_consensus_core::config::params::Params::from(net);
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else {
         return Err(CliError::new(exit::CONFIG, format!("{net} has no PALW classes")));
@@ -647,10 +740,16 @@ pub(crate) async fn certify(ctx: &Ctx, profile: Profile, class_id: String, yes: 
     let entry = sdk.ledger().into_iter().find(|e| e.class_id() == class).ok_or_else(|| {
         CliError::new(exit::MODEL, "this class is not in this build's catalog — file a FamilyCertified with palw-certify")
     })?;
-    let family = misaka_palw_base0::e2e_drill::covering_rc_family_v1(&entry.profile, kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt)
-        .ok_or_else(|| CliError::new(exit::MODEL, "no family this build drills covers the class"))?;
-    let evidence = misaka_palw_base0::e2e_drill::rc_attempt_evidence_v1(family).map_err(|e| CliError::new(exit::MODEL, format!("{e:?}")))?;
-    let object = PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(kaspa_consensus_core::palw_state_v2::PalwCertificationEvidenceV1::Attempt(evidence)) };
+    let family = misaka_palw_base0::e2e_drill::covering_rc_family_v1(
+        &entry.profile,
+        kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt,
+    )
+    .ok_or_else(|| CliError::new(exit::MODEL, "no family this build drills covers the class"))?;
+    let evidence =
+        misaka_palw_base0::e2e_drill::rc_attempt_evidence_v1(family).map_err(|e| CliError::new(exit::MODEL, format!("{e:?}")))?;
+    let object = PalwConsensusObjectV2::FamilyCertified {
+        evidence: Box::new(kaspa_consensus_core::palw_state_v2::PalwCertificationEvidenceV1::Attempt(evidence)),
+    };
     let workdir = dirs::home_dir().unwrap_or_default().join(".misaka").join(&profile.network).join("model-certify");
     std::fs::create_dir_all(&workdir).map_err(|e| CliError::new(exit::HOST, e.to_string()))?;
     let path = workdir.join("family-certified.obj");
@@ -661,10 +760,7 @@ pub(crate) async fn certify(ctx: &Ctx, profile: Profile, class_id: String, yes: 
         println!("re-run with --yes to submit");
         return Ok(());
     }
-    let ks = crate::keys::KeySource {
-        key_file: profile.key_path.as_ref().map(|p| p.display().to_string()),
-        key_stdin: false,
-    };
+    let ks = crate::keys::KeySource { key_file: profile.key_path.as_ref().map(|p| p.display().to_string()), key_stdin: false };
     crate::palw_fp::submit_objects(ctx, &ks, &[path], true).await?;
     Ok(())
 }
