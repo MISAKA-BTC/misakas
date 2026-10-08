@@ -135,6 +135,18 @@ pub fn sampled_family_millibits_v1(draws: u64, fault_ppm: u32) -> u64 {
     (draws as u128 * fault_ppm as u128 * 14_426 / 10_000_000).min(u64::MAX as u128) as u64
 }
 
+/// **The works that can compete for one beacon window** (C4 F-C4R4-08): a live slot refills as soon as its work reaches Final (G14-R4's
+/// admission fix), so over a window of `window_slots` each of the `live_cap` slots can carry `⌈window / refill⌉` works, where
+/// `refill_daa` is the shortest commit-to-Final time (the OPV window). Interim: `32 × ⌈120 / 50⌉ = 96`, not 32. Saturating; a zero
+/// refill time is unbounded.
+pub fn competing_works_bound_v1(live_cap: u32, window_slots: u64, refill_daa: u64) -> u32 {
+    if refill_daa == 0 {
+        return u32::MAX;
+    }
+    let turns = window_slots.div_ceil(refill_daa).max(1);
+    (live_cap as u64).saturating_mul(turns).min(u32::MAX as u64) as u32
+}
+
 /// **The grinding choices a beacon of `k` sources offers when every work that can enter its window is one of at most `live_cap`
 /// concurrently live works** (the OPV ledger-wide live-claim cap, with `beacon_window_slots ≤` the OPV window + liability), the
 /// sources' contents are fixed when they are committed, and `fork_alternatives` branches can each lock their own beacon:

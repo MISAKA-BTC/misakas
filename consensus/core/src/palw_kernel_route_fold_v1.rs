@@ -539,10 +539,15 @@ fn persist_budget(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2,
 /// **Charge one adjudication (and `court_work`) of THIS block's budget to an onboarding object** (tag 109's judgement): the same
 /// budget, row and caps the kernel's own objects spend (`load_ledger` restores it for the next kernel object of the block), so the
 /// block is bounded across both. `Ok(false)`: the budget is spent and nothing is charged (the object is dismissed, the block stands).
+///
+/// `may_spend_reserve` (C4 F-C4R4-10 / -11): every onboarding object stops short of the runs the kernel reserves for proofs
+/// (`prosecution_reserved_runs`, as every kernel object but a `FileProof` does) — except a conformance REFUTATION, which is a proof:
+/// it may spend them, and one that proves nothing pays `dismissed_proof_fee`, as a dismissed `FileProof` does.
 pub(super) fn charge_route_budget_v1(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     court_work: u64,
+    may_spend_reserve: bool,
 ) -> Result<bool, PalwStateV2Error> {
     let (policy, _, _) = route_policies(builder)?;
     let (adjudications, work) = match builder
@@ -554,7 +559,12 @@ pub(super) fn charge_route_budget_v1(
         Some((blue_score, a, w)) if blue_score == ctx.blue_score => (a, w),
         _ => (0, 0),
     };
-    if adjudications >= policy.max_adjudications_per_block || work.saturating_add(court_work) > policy.max_court_work_per_block {
+    let runs = if may_spend_reserve {
+        policy.max_adjudications_per_block
+    } else {
+        policy.max_adjudications_per_block.saturating_sub(policy.prosecution_reserved_runs())
+    };
+    if adjudications >= runs || work.saturating_add(court_work) > policy.max_court_work_per_block {
         return Ok(false);
     }
     builder.write_kernel_row(
@@ -563,6 +573,11 @@ pub(super) fn charge_route_budget_v1(
         Some(borsh::to_vec(&(ctx.blue_score, adjudications + 1, work.saturating_add(court_work))).expect("a budget serializes")),
     );
     Ok(true)
+}
+
+/// The route's ledger policy at this block (the fee a dismissed proof pays, for an onboarding refutation).
+pub(super) fn route_ledger_policy_v1(builder: &TransitionBuilder<'_>) -> Result<misaka_palw_kernel::ledger::LedgerPolicyV1, PalwStateV2Error> {
+    Ok(route_policies(builder)?.0)
 }
 
 /// **Tag 111: a seat's constraint receipt.** Its signature verified at acceptance; the fold admits it structurally against the claim's

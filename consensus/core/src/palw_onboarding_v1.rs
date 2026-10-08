@@ -280,6 +280,11 @@ pub struct ConformanceAttemptRowV1 {
     pub evidence: Option<PostedEvidenceRowV1>,
     /// How the last closed attempt ended, and at which DAA.
     pub last_end: Option<(ConformanceAttemptEndV1, u64)>,
+    /// **C4 F-C4R4-11: the refuter bonds already judged against this attempt's evidence** (sorted, unique). One judged refutation
+    /// per (attempt, refuter bond) per evidence window — a repeat is refused before the charge, at no cost — so junk from a set of
+    /// bonds can hold a valid refutation off for at most `|bonds| / runs` blocks, each of them paying `dismissed_proof_fee`. At most
+    /// the block's runs × the window's blocks entries (each spent a run).
+    pub refuters_judged: Vec<PalwBondKeyV2>,
 }
 
 impl ConformanceAttemptRowV1 {

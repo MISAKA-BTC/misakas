@@ -35,6 +35,8 @@ use misaka_palw_sdk::onboarding_chain::{
 
 const REGISTRANT: usize = 1;
 const OUTSIDER: usize = 3;
+/// A bond that refutes wrongly first (C4 F-C4R4-11: it is judged once per window, so the convicting refutation is another bond's).
+const JUNK_REFUTER: usize = 5;
 /// Producers of the source class's OPV claims (and of the outsider's kernel claim), rotated: a producer holds at most three live OPV
 /// claims, and a claim's reservation lives to Final + liability.
 const PRODUCERS: [usize; 6] = [0, 2, 4, 5, 6, 7];
@@ -469,6 +471,11 @@ impl Fixture {
     }
 }
 
+/// An attempt row without its judged-refuter set (C4 F-C4R4-11): what a dismissed refutation leaves unchanged.
+fn decided(a: &ConformanceAttemptRowV1) -> ConformanceAttemptRowV1 {
+    ConformanceAttemptRowV1 { refuters_judged: Vec::new(), ..a.clone() }
+}
+
 fn state(cw: &Cw) -> (S, Option<F>, u32) {
     let a = cw.attempt();
     (a.record.state, a.record.last_failure, a.record.attempts())
@@ -693,8 +700,12 @@ async fn g14_conformance_forged_evidence_is_refuted_withheld_evidence_defaults_a
     assert_eq!(fresh.leaf_faults, vec![2], "the fresh verifier finds the forged leaf (check 2 = the first leaf)");
     let honest_leaf = cw.leaf_fault(&selection, 1);
     let attempt = cw.attempt();
-    cw.refute(OUTSIDER, honest_leaf).await;
-    assert_eq!(cw.attempt(), attempt, "the true leaf proves nothing");
+    // (C4 F-C4R4-11: one judged refutation per bond per window — the mistaken refuter is another bond than the one that convicts.)
+    cw.refute(JUNK_REFUTER, honest_leaf).await;
+    assert_eq!(decided(&cw.attempt()), decided(&attempt), "the true leaf proves nothing");
+    let rows = cw.net.api().unwrap().aux.clone();
+    cw.refute(JUNK_REFUTER, cw.leaf_fault(&selection, 0)).await;
+    assert_eq!(cw.net.api().unwrap().aux, rows, "a bond's second refutation of the same evidence is refused before any charge");
     cw.refute(OUTSIDER, cw.leaf_fault(&selection, 0)).await;
     assert_eq!(state(&cw), (S::RegisteredDormant, Some(F::ConformanceFailed), 1));
     assert!(matches!(cw.attempt().last_end, Some((ConformanceAttemptEndV1::Refuted, _))));
@@ -737,8 +748,8 @@ async fn g14_conformance_forged_evidence_is_refuted_withheld_evidence_defaults_a
     let claim = cw.claims_of(&cand, cw.kernel_class, std::slice::from_ref(&job)).await[0];
     // a refutation naming the claim before it is Final proves nothing
     let attempt = cw.attempt();
-    cw.refute(OUTSIDER, ConformanceFaultV1::VectorTokens { check: 0, kernel_claim: Hash64::from_bytes(claim) }).await;
-    assert_eq!(cw.attempt(), attempt, "an unfinalized claim states nothing");
+    cw.refute(JUNK_REFUTER, ConformanceFaultV1::VectorTokens { check: 0, kernel_claim: Hash64::from_bytes(claim) }).await;
+    assert_eq!(decided(&cw.attempt()), decided(&attempt), "an unfinalized claim states nothing");
     let ttpb = cw.net.ttpb();
     while !matches!(cw.net.claim_state(&claim), ClaimStateV1::Final { .. }) {
         assert!(cw.net.daa() < posted.window_end_daa, "the kernel claim must reach Final inside the evidence's window");
@@ -811,11 +822,28 @@ async fn g14_conformance_hostile_evidence_is_dismissed_or_failed_spends_budget_a
         let card = [OUTSIDER, 0, 2, 4, 5][junk.len()];
         junk.push((card, cw.evidence_object(card, ConformanceEvidenceActionV1::Refute { evidence_id, fault: Box::new(fault) })));
     }
+    let fee = cw.net.api().unwrap().header.policy.dismissed_proof_fee;
+    // What left each bond as a slash or burn (rewards and releases move `collateral` too; `slashed` only rises by a slash or a burn).
+    let slashed = |cw: &Cw, card: usize| cw.net.chain.tip_state().1.bond(&cw.net.bond(card)).expect("the bond").slashed;
+    let before: Vec<u64> = junk.iter().map(|(card, _)| slashed(&cw, *card)).collect();
+    let cards: Vec<usize> = junk.iter().map(|(card, _)| *card).collect();
     cw.net.send(junk).await;
-    assert_eq!(cw.attempt(), posted, "every junk refutation is dismissed");
+    assert_eq!(decided(&cw.attempt()), decided(&posted), "every junk refutation is dismissed");
     let (blue, adjudications, _work): (u64, u32, u64) =
         borsh::from_slice(&cw.budget_row().expect("the budget row")).expect("a budget row decodes");
+    // A refutation is a proof: it may spend the runs reserved for proofs (C4 F-C4R4-11) — and one that proves nothing pays for it.
     assert_eq!(adjudications, 4, "four junk refutations spent the four-adjudication block; the fifth found it spent");
+    let judged = cw.attempt().refuters_judged;
+    assert_eq!(judged.len(), 4, "four judged, each once for its bond");
+    for (i, card) in cards.iter().enumerate() {
+        let paid = slashed(&cw, *card) - before[i];
+        let was_judged = judged.contains(&cw.net.bond(*card));
+        assert_eq!(
+            paid,
+            if was_judged { fee } else { 0 },
+            "card {card}: a dismissed refutation pays dismissed_proof_fee; an unjudged one nothing"
+        );
+    }
     assert!(blue > 0);
     cw.net.beat_to(posted.evidence.unwrap().window_end_daa + 1).await;
     assert_eq!(state(&cw).0, S::G14Eligible, "the honest evidence passed through the junk");
@@ -1113,3 +1141,6 @@ async fn g14_rewards_grandfathering_live_panel_route_classes_is_a_fence_paramete
         }
     }
 }
+
+// C4 round 4 (independent adversarial review): the onboarding court's share of the block's adjudication budget.
+mod c4r4;

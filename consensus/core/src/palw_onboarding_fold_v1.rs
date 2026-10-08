@@ -8,7 +8,7 @@
 //! Tag 109's judgement spends the block's adjudication budget first; a refusal after that is a DISMISSAL (`Ok`, only the charge
 //! written), so junk evidence is never judged for free.
 
-use super::palw_kernel_route_fold_v1::{charge_route_budget_v1, ensure_route_header};
+use super::palw_kernel_route_fold_v1::{charge_route_budget_v1, ensure_route_header, route_ledger_policy_v1};
 use super::*;
 use crate::palw_conformance_evidence_v1::{
     ConformanceEvidenceActionV1, ConformanceFaultV1, PALW_CONFORMANCE_CHALLENGE_WINDOW_DAA_V1,
@@ -329,6 +329,7 @@ pub(super) fn apply_conformance_committed_v1(
         excluded_profiles: excluded,
         evidence: None,
         last_end: prior.and_then(|a| a.last_end),
+        refuters_judged: Vec::new(),
     };
     let artifact_root = state.artifact_root;
     builder.write_kernel_row(
@@ -419,12 +420,28 @@ pub(super) fn apply_conformance_evidence_v1(
             if registrant.and_then(|r| builder.state.bonds.get(&r)).is_some_and(|b| b.operator_id == refuter_operator) {
                 return Err(refused("evidence is refuted by an operator other than the registrant's"));
             }
+            // C4 F-C4R4-11: one judged refutation per (attempt, refuter bond) per window — a repeat is refused here, free.
+            if attempt.refuters_judged.contains(signer) {
+                return Err(refused("this bond's refutation of the evidence was already judged (one per bond per window)"));
+            }
+            // The fee a refutation that proves nothing pays, in free collateral (checked free, before any charge).
+            let fee = route_ledger_policy_v1(builder)?.dismissed_proof_fee as u128;
+            let collateral = refuter.collateral as u128;
+            if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < fee {
+                return Err(refused("the refuter's free collateral does not cover the dismissed-refutation fee"));
+            }
         }
     }
     // ---- the judgement spends the block's adjudication budget first (an over-budget object is dismissed, nothing charged) ----
     let work = borsh::to_vec(action).map(|b| b.len() as u64).unwrap_or(u64::MAX);
-    if !charge_route_budget_v1(builder, ctx, work)? {
+    let refutation = matches!(action, ConformanceEvidenceActionV1::Refute { .. });
+    if !charge_route_budget_v1(builder, ctx, work, refutation)? {
         return Ok(());
+    }
+    // C4 F-C4R4-11: a charged refutation is judged once for its bond, and pays `dismissed_proof_fee` unless it proves the fault —
+    // on EVERY path from here (a refutation of evidence with no program, post or selection to judge against proves nothing).
+    if refutation {
+        return judge_refutation_v1(builder, ctx, v2_class, attempt, action, signer);
     }
     let policy = palw_onboarding_challenge_policy_v1();
     let route = route_of(builder)?;
@@ -435,7 +452,6 @@ pub(super) fn apply_conformance_evidence_v1(
     else {
         return Ok(()); // dismissed: no program to judge against
     };
-    let artifact_root = builder.state.classes.get(v2_class).map(|c| c.artifact_root).unwrap_or_default();
     let mut attempt = attempt;
     match action {
         ConformanceEvidenceActionV1::PostComplete(_) => return Ok(()),
@@ -470,31 +486,60 @@ pub(super) fn apply_conformance_evidence_v1(
                 Some(borsh::to_vec(post.as_ref()).expect("a post serializes")),
             );
         }
-        ConformanceEvidenceActionV1::Refute { fault, .. } => {
-            let posted = attempt.evidence.expect("checked above");
-            let Some(post) = route.conformance_evidence_post_v1(v2_class) else { return Ok(()) };
-            let Ok(selection) = derive_selection_v1(&posted.seed.as_bytes(), &policy, &post.scope, &program) else { return Ok(()) };
-            let proven = match fault.as_ref() {
-                ConformanceFaultV1::LeafDecode { check, opening } => match selected_check_v1(&selection, &post, *check) {
-                    Some(SelectedCheckV1::Leaf(leaf, outcome)) => {
-                        judge_leaf_fault_v1(&program, artifact_root, leaf, outcome, opening).is_ok()
-                    }
-                    _ => false,
-                },
-                ConformanceFaultV1::VectorTokens { check, kernel_claim } => match selected_check_v1(&selection, &post, *check) {
-                    Some(SelectedCheckV1::Vector(vector, outcome)) => {
-                        vector_fault_proven(route, v2_class, kernel_claim, vector, outcome)
-                    }
-                    _ => false,
-                },
-            };
-            if !proven {
-                return Ok(()); // dismissed: the refutation proves nothing (it spent the block's budget)
-            }
-            end_attempt(&mut attempt, ConformanceAttemptEndV1::Refuted, ctx.daa_score);
-            write_attempt(builder, v2_class, &attempt);
-        }
+        // (Judged by `judge_refutation_v1` above.)
+        ConformanceEvidenceActionV1::Refute { .. } => {}
     }
+    Ok(())
+}
+
+/// **A charged conformance refutation** (C4 F-C4R4-11): judged against the posted evidence's own selection; the refuter's bond joins
+/// the attempt's judged set whatever the verdict (one judgement per bond per window); a refutation that proves the fault ends the
+/// attempt REFUTED, one that proves nothing — for any reason — burns `dismissed_proof_fee` from the refuter's bond.
+fn judge_refutation_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    v2_class: &Hash64,
+    mut attempt: ConformanceAttemptRowV1,
+    action: &ConformanceEvidenceActionV1,
+    signer: &PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    let ConformanceEvidenceActionV1::Refute { fault, .. } = action else { return Err(refused("not a refutation")) };
+    let fee = route_ledger_policy_v1(builder)?.dismissed_proof_fee as u128;
+    let policy = palw_onboarding_challenge_policy_v1();
+    let route = route_of(builder)?;
+    let artifact_root = builder.state.classes.get(v2_class).map(|c| c.artifact_root).unwrap_or_default();
+    let program = builder
+        .state
+        .tir_class_v1(v2_class)
+        .and_then(|tir| misaka_palw_tir::TirProgramV1::decode_canonical(tir.program.as_slice()).ok());
+    let proven = (|| {
+        let program = program.as_ref()?;
+        let posted = attempt.evidence?;
+        let post = route.conformance_evidence_post_v1(v2_class)?;
+        let selection = derive_selection_v1(&posted.seed.as_bytes(), &policy, &post.scope, program).ok()?;
+        Some(match fault.as_ref() {
+            ConformanceFaultV1::LeafDecode { check, opening } => match selected_check_v1(&selection, &post, *check) {
+                Some(SelectedCheckV1::Leaf(leaf, outcome)) => {
+                    judge_leaf_fault_v1(program, artifact_root, leaf, outcome, opening).is_ok()
+                }
+                _ => false,
+            },
+            ConformanceFaultV1::VectorTokens { check, kernel_claim } => match selected_check_v1(&selection, &post, *check) {
+                Some(SelectedCheckV1::Vector(vector, outcome)) => vector_fault_proven(route, v2_class, kernel_claim, vector, outcome),
+                _ => false,
+            },
+        })
+    })()
+    .unwrap_or(false);
+    if let Err(at) = attempt.refuters_judged.binary_search(signer) {
+        attempt.refuters_judged.insert(at, *signer);
+    }
+    if proven {
+        end_attempt(&mut attempt, ConformanceAttemptEndV1::Refuted, ctx.daa_score);
+    } else {
+        builder.slash_bond(*signer, fee)?;
+    }
+    write_attempt(builder, v2_class, &attempt);
     Ok(())
 }
 
@@ -550,7 +595,7 @@ fn apply_complete_check_v1(
         return Ok(());
     }
     // ---- 3. the work, charged before anything is read ----
-    if !charge_route_budget_v1(builder, ctx, domain.work)? {
+    if !charge_route_budget_v1(builder, ctx, domain.work, false)? {
         return Ok(());
     }
     // ---- 4. the fee ----

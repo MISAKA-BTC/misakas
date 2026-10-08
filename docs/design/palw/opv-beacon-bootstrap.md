@@ -208,12 +208,14 @@ the consumer clause is a no-op until then — GAP-B2). The plain collector refus
 
 ### 6.2 The levers, in bits
 
-Interim terms: `k = 2`, `C = 32`, `R = 2`, `F = 1`. "Bits" is what the lever subtracts from a sampled conformance's effective bound.
+Interim terms: `k = 2`, `R = 2`, `F = 1`, and `C = 96` competing works per window. The live cap is 32, but a slot refills at Final
+(G14-R4's admission fix), so a 120-DAA window against the 50-DAA OPV window carries `32 × 3 = 96` works (`competing_works_bound_v1`,
+C4 F-C4R4-08). "Bits" is what the lever subtracts from a sampled conformance's effective bound.
 
 | Lever | Plain rule | Distinct rule (interim) | Sealed-source beacon v3 (§6.3; needs salted seals) | Bounded by |
 | --- | --- | --- | --- | --- |
 | **Last contributor** — after `k − 1` sources are public (an OPV claim's execution commitment is public at commitment, 50 DAA before it settles), post ONE job and grind its nonce offline (`canonical_work_id = H(class, job)`; a few hashes per try), then let it settle `k`-th | `h` bits (all offline work; unbounded by any on-chain count) | `h` bits — one work needs one bond and one payer | 0: every mixed contribution is sealed, with a secret salt, before any mixed salt is public | v3: the seal window; today nothing |
-| Output selection among works whose inputs are fixed | `⌈log2 P(C, k)⌉ = 10` | 10 (and `k` distinct bonds) | 0: every qualifying seal of the window is mixed (no selection exists) | `work_count_k`, `anchor_delay_slots` (nothing committed before the subject counts), `beacon_window_slots` with the live cap |
+| Output selection among works whose inputs are fixed | `⌈log2 P(C, k)⌉ = 14` (`P(96, 2) = 9,120`) | 14 (and `k` distinct bonds; bonds are not parties, F-C4R4-01) | 0: every qualifying seal of the window is mixed (no selection exists) | `work_count_k`, `anchor_delay_slots` (nothing committed before the subject counts), `beacon_window_slots` with the live cap |
 | Withholding / withdrawing a Final | before the lock: inside the selection count; after: a veto ending the attempt `BEACON_CHANGED` | same | a veto (`BEACON_VETOED`, a counted retry): a withheld seal or an abandoned source is never dropped | `retry_limit` (counted), `settlement_depth_d`, `abort_policy_id`; a default penalty or a reservation per veto |
 | Final timing | ordering, inside the selection count | same | 0: the mix is in seal order, fixed before any reveal | canonical order, `beacon_window_slots` |
 | Fork choice | `⌈log2 F⌉`; `F = 1` under the settlement assumption | same | same | `settlement_depth_d`, `reorg_policy_id` |
@@ -222,7 +224,7 @@ Interim terms: `k = 2`, `C = 32`, `R = 2`, `F = 1`. "Bits" is what the lever sub
 | Adaptive statements (Sybil classes of one model) | `⌈log2 Q⌉` | same | same | registration price, binding reservation |
 
 **Effective bits of the interim conformance** (two families of 2.885 bits, one repetition): `2 − 1 − 2 − h → 0` under every rule — and
-`0` even with `G = 992` (no last contributor). The interim policy is a drill. `misaka-palw-challenge/tests/grinding.rs` demonstrates the
+`0` even with `G = 9,120` (no last contributor). The interim policy is a drill. `misaka-palw-challenge/tests/grinding.rs` demonstrates the
 last contributor: with one honest source settled, 4,096 offline nonces of ONE attacker job give 4,096 distinct beacons (an 8-bit target
 is hit), under the distinct rule — far past the live-cap bound of 32.
 
@@ -493,3 +495,48 @@ share admit it (`class_admission_refusal = None`), and `ready_to_produce` is `Ok
 | A class that never began onboarding never activates (`NOT_ONBOARDED`) | `g14_rewards_a_class_that_never_began_onboarding_never_activates` |
 | Grandfathering: a pre-fence Active class is refused by default and exempt with the parameter | `g14_rewards_grandfathering_live_panel_route_classes_is_a_fence_parameter_default_off` |
 | The graph: `V2Rewardable` reachable only through the bootstrap | `palw_opv_bootstrap_v1::tests` |
+
+## 13. C4 round 4 (C4R4b) findings in this lane
+
+**F-C4R4-11 (P1 where armed): fixed.** Free junk refutations exhausted an attempt's per-block runs through the evidence window, so
+forged evidence passed unrefuted. Through §12's reward gate, a class could then reach OPV eligibility, with an unbounded payoff. The fix
+(`palw_onboarding_fold_v1::apply_conformance_evidence_v1` / `judge_refutation_v1`) has three parts:
+
+1. `charge_route_budget_v1(…, may_spend_reserve)`. A conformance refutation is a proof, so it may spend the runs the kernel reserves
+   for proofs (`prosecution_reserved_runs`). A `Post` and a `PostComplete` stop short of them; that is C4R4's F-C4R4-10 rule.
+2. One judged refutation per (attempt, refuter bond) per evidence window. The attempt row keeps `refuters_judged` (sorted). It holds at
+   most the block's runs × the window's blocks entries, each of which spent a run. A repeat is refused before the charge, at no cost.
+3. A charged refutation that proves nothing, on every path, burns `dismissed_proof_fee` from the refuter's bond, which must hold it in
+   free collateral at filing.
+
+Junk from `B` bonds can therefore hold a valid refutation off for at most `⌈B / runs⌉` blocks, and pays `B` fees. Carrying forged
+evidence through an 80-DAA window at 4 runs a block costs about `320 · dismissed_proof_fee` and 320 bonds. That is a price, not a
+bound.
+
+- **Follow-up (not done):** a bounded window extension when valid-looking refutations were crowded out.
+- **Restated test:** C4R4's F-C4R4-10 PoC now asserts that every reserved run a junk refutation took was paid for, and that a repeat
+  is refused free. Its round-4 assertion (junk stops short of the reserve) contradicts (1).
+- **Pinned by:** `g14_c4r4_free_junk_refutations_must_not_carry_forged_evidence_through_its_window` (un-ignored),
+  `g14_c4r4_junk_conformance_refutations_must_not_spend_the_runs_reserved_for_proofs`, and the hostile-evidence and forged-evidence
+  conformance tests.
+- **Row and reads:** `ConformanceAttemptRowV1` gained a field. Op 231 serves the row raw, and the SDK decodes it with the same type.
+
+**F-C4R4-01 (P2, design): recorded.** The distinct source rules tell BONDS apart, not parties. Two Sybil producer bonds and two
+Sybil posters own every v2 source position and grind all of them offline (`misaka-palw-challenge/tests/c4r4_grinding.rs` on
+`adv/c4r4`).
+
+- No bound in this lane credits distinctness. v2's onboarding accounting already states `G = 2^128`
+  (`palw_onboarding_grinding_choices_v1`), as if every position were one party's.
+- v3's `G = F` assumes nothing about who holds the positions. It rests on one honest seal's salt staying secret until the seal
+  window closes (`ε_src`, §6.3).
+- The distinct rules are a cost to an attacker, never a bit.
+
+**F-C4R4-08 (P2, with G14R): re-derived, and the poster agreed.**
+
+- **The bound.** A slot refills at Final, so the competing works per window are `live_cap × ⌈W / OPV window⌉`: 96, not 32. Output
+  selection is therefore 14 bits, not 10 (§6.2, `competing_works_bound_v1`, golden vector).
+- **The poster.** Once a job's escrow is spent, no ledger state recorded its poster, so the consumer clause never bound. G14R and OPVB
+  agreed kernel ledger table 18 `job_posters` (job → poster bond), written past `palw_panel_free_v1` and permanent like job rows, with
+  `KernelLedgerV1::job_poster` and `ClaimBeaconSealV1::poster`.
+- **Once it lands (GAP-B2):** op 212's attribution and v3's seals carry `consumer = Present(poster)` for post-fence jobs.
+- **GAP-B16:** a typed `Spec` claim (R4X) passes `opv_gate_v1`. Its class's eligibility path is RFC-0004 Part II's.

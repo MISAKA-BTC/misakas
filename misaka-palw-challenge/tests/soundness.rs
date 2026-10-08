@@ -45,6 +45,13 @@ fn the_grinding_bound_golden() {
     assert_eq!(beacon_grinding_choices_bound_v1(5, 3, 1), 6, "more positions than works: every ordering of the three");
     assert_eq!(beacon_grinding_choices_bound_v1(2, 32, 4), 3_968, "four branches that can each lock");
     assert_eq!(beacon_grinding_choices_bound_v1(40, u32::MAX, 1), u128::MAX, "saturates");
+    // C4 F-C4R4-08: slots refill at Final, so the interim window (120 DAA) against the OPV window (50) carries 3 turns of the
+    // 32-slot live cap: 96 competing works, P(96, 2) = 9,120 lists, 14 bits — not 32 works and 10 bits.
+    assert_eq!(competing_works_bound_v1(32, 120, 50), 96);
+    assert_eq!(competing_works_bound_v1(32, 50, 50), 32, "one turn when the window is no longer than the refill time");
+    assert_eq!(competing_works_bound_v1(32, 120, 0), u32::MAX, "a slot that refills instantly bounds nothing");
+    let g = beacon_grinding_choices_bound_v1(2, competing_works_bound_v1(32, 120, 50), 1);
+    assert_eq!((g, ceil_log2_v1(g)), (9_120, 14));
 }
 
 /// **The golden vectors of the effective bound.**

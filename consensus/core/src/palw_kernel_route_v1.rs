@@ -821,13 +821,11 @@ pub fn palw_kernel_chunk_inner_matches_target_v1(
     }
 }
 
-/// **OPV-BOOT #1's deadline, until OPV-BOOT's own lands**: the agreed `palw_conformance_chunk_target_v1(route, v2_class, daa) ->
-/// Option<u64>` (the last DAA a part may arrive; `None`: no attempt open) is OPV-BOOT's to implement over its attempt rows. Until it
-/// is wired here this answers `None`, so every conformance group is refused at its first chunk — the lane adds no acceptance before
-/// the rule that bounds it exists. (The integrator replaces this body with the call.)
+/// **OPV-BOOT #1's deadline**: the agreed `palw_conformance_chunk_target_v1(route, v2_class, daa) -> Option<u64>` (the last DAA a part
+/// may arrive; `None`: no attempt can take one — a complete check never needs the lane), implemented over the attempt rows in
+/// [`crate::palw_onboarding_v1::palw_conformance_chunk_target_v1`] and wired here (OPVB).
 pub fn palw_conformance_chunk_target_pending_v1(route: &PalwKernelRouteStateV1, v2_class: &Hash64, daa: u64) -> Option<u64> {
-    let _ = (route, v2_class, daa);
-    None
+    crate::palw_onboarding_v1::palw_conformance_chunk_target_v1(route, v2_class, daa)
 }
 
 /// **The last DAA a proof against (or a response on) a claim in `state` could still matter** — an upper bound read from the claim
