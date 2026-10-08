@@ -152,7 +152,7 @@ const GOLDEN_PARTS: [&str; 10] = [
     "b7a5cb38db702693",
 ];
 const GOLDEN_ROOT: &str =
-    "f11245fc95d9bb94e16f0cde5696e1d2d97632666b634195c5548cf930142ee5b33d00cfd82cde192add1c188e1b13941c9d339b218a3cbcc617a25704e5bd4b";
+    "7298bd0df6a05d0cda62382a46531039f0c6c71aa48f1ded002aa86b3f456d5746fc1aaa0bb5d3eb31434f6eefa303f262e2bf45952b15486bce3c4c1f7a27fd";
 
 #[test]
 fn each_collection_has_its_own_root_and_the_root_covers_the_state_and_nothing_else() {

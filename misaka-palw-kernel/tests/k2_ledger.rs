@@ -544,8 +544,9 @@ fn a_post_final_default_forfeits_the_whole_reservation_and_is_never_a_conviction
     assert!(matches!(w.state(&id), ClaimStateV1::Final { .. }), "the claim stays Final");
     assert_eq!(w.l.bonds[&PRODUCER].collateral, collateral - 1000, "the whole reservation, not default_penalty");
     assert_eq!(w.l.bonds[&PRODUCER].reserved, 0);
-    assert_eq!(w.consumer.paid(&OUTSIDER), 500, "the demander's share of the forfeit");
-    assert_eq!(w.l.burned, burned + 500);
+    // Burned whole: a post-Final demander may be the producer's own Sybil (C4 F-C4-02), so nobody is paid from the forfeit.
+    assert_eq!(w.consumer.paid(&OUTSIDER), 0, "no demander share after Final");
+    assert_eq!(w.l.burned, burned + 1000);
     assert_eq!(w.l.bonds[&OUTSIDER].reserved, 0, "the demand bond returns");
 
     // Before Final the same default costs only `default_penalty` and the claim earns no reward.
@@ -762,4 +763,40 @@ fn a_history_window_is_never_served_and_a_misderived_window_is_convicted_from_th
     assert_eq!(ev, vec![E::ResponseRejected { claim: id, stage: 0, position: 3, class: "malformed" }]);
     let ev = w.block(24, vec![T::Respond { claim: id, stage: 0, position: 3, bytes: position(&trace2, 3, |_| {}) }]);
     assert_eq!(ev, vec![E::Served { claim: id, stage: 0, position: 3 }]);
+}
+
+// ── one claim per job (C4 F-C4-03): a copied claim is never paid twice ────────────────────────────────────────────────────
+
+#[test]
+fn a_bond_that_copies_a_published_claim_is_refused_and_a_failed_holder_frees_the_job() {
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let honest = w.honest(&job, 3);
+    let id = honest.claim.id();
+    let T::CommitClaim { evidence, commitments, .. } = honest.tx.clone() else { unreachable!() };
+    let ev = w.block(10, vec![honest.tx.clone(), T::PanelCovered { claim: id }]);
+    assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
+    // Another bond re-signs the same evidence and commitments for the same job.
+    let copy = KernelClaimV1 { producer_bond: SPAM1, ..honest.claim.clone() };
+    let ev = w.block(11, vec![T::CommitClaim { claim: copy.clone(), evidence: evidence.clone(), commitments: commitments.clone() }]);
+    assert_eq!(refused(&ev).as_deref(), Some("the job already has a live or Final claim (one claim per job)"), "{ev:?}");
+    // After Final the job stays taken: one computation, one reward.
+    w.block(200, vec![]);
+    assert!(matches!(w.state(&id), ClaimStateV1::Final { .. }));
+    let ev = w.block(201, vec![T::CommitClaim { claim: copy, evidence, commitments }]);
+    assert!(refused(&ev).is_some(), "{ev:?}");
+    assert_eq!(w.l.claims.values().filter(|r| r.rewarded).count(), 1, "paid once for the job");
+
+    // A convicted holder frees its job for an honest claim.
+    let job = w.post_job(210, &[3, 17, 9], 3, 2);
+    let (_, lie) = w.lying(&job, 3);
+    let lie_id = lie.claim.id();
+    let da = Da::publishing(&lie.trace, &[]);
+    w.block(211, vec![lie.tx, T::PanelCovered { claim: lie_id }]);
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, lie_id, &da) else { panic!() };
+    let ev = w.block(212, vec![T::FileProof { accuser: OUTSIDER, claim: lie_id, proof }]);
+    assert!(convicted(&ev).is_some(), "{ev:?}");
+    let redo = w.produce(&job, OUTSIDER, w.greedy(&w.params.clone(), &job.prompt, 3), &w.params.clone(), |_| {});
+    let ev = w.block(213, vec![redo.tx]);
+    assert!(ev.contains(&E::ClaimCommitted { claim: redo.claim.id() }), "{ev:?}");
 }

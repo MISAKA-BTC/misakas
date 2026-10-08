@@ -269,6 +269,11 @@ impl ClaimRowV1 {
     fn terminal_for_demands(&self) -> bool {
         self.convicted || matches!(self.life.state, ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. })
     }
+
+    /// Whether this claim still holds its job (live or Final): only a failed claim frees the job for another.
+    fn holds_job(&self) -> bool {
+        !self.terminal_for_demands()
+    }
 }
 
 /// The response classes a rejected response can have, as stored codes (`1 + index`).
@@ -521,6 +526,9 @@ pub struct KernelLedgerV1 {
     pub served: BTreeMap<DemandKeyV1, ServedPositionV1>,
     /// Artifact roots the consumer attested public (see [`LedgerTxV1::AttestArtifact`]).
     pub attested_artifacts: BTreeSet<Digest>,
+    /// **One claim per job**: the claim holding each job. A job is computed (and paid) once; another bond re-signing a published
+    /// claim's evidence for the same job is refused. A holder that fails (convicted, unavailable, timed out) frees the job.
+    pub job_claims: BTreeMap<Digest, Digest>,
     /// Cumulative amount burned (derived from the settlement instructions; kept as a checksum).
     pub burned: u64,
     budget: BlockBudgetV1,
@@ -549,6 +557,7 @@ impl KernelLedgerV1 {
             demands: BTreeMap::new(),
             served: BTreeMap::new(),
             attested_artifacts: BTreeSet::new(),
+            job_claims: BTreeMap::new(),
             burned: 0,
             budget: BlockBudgetV1::default(),
         })
@@ -1049,7 +1058,14 @@ impl KernelLedgerV1 {
             .map_err(|why| rule(format!("malformed evidence: {why}")))?;
         let body = ClaimBodyV1::Program { claim: claim.clone(), evidence: evidence.clone(), commitments: commitments.to_vec() };
         let class_id = job.class_binding_id;
-        self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)
+        if let Some(holder) = self.job_claims.get(&claim.job_id).and_then(|c| self.claims.get(c))
+            && holder.holds_job()
+        {
+            return Err(rule("the job already has a live or Final claim (one claim per job)".into()));
+        }
+        self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)?;
+        self.job_claims.insert(claim.job_id, id);
+        Ok(())
     }
 
     fn commit_pipeline_claim(
@@ -1132,7 +1148,14 @@ impl KernelLedgerV1 {
             .map_err(|why| rule(format!("malformed evidence: {why}")))?;
         let body = ClaimBodyV1::Pipeline { claim: claim.clone(), evidence: evidence.clone(), stages: stages.to_vec() };
         let class_id = job.class_binding_id;
-        self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)
+        if let Some(holder) = self.job_claims.get(&claim.job_id).and_then(|c| self.claims.get(c))
+            && holder.holds_job()
+        {
+            return Err(rule("the job already has a live or Final claim (one claim per job)".into()));
+        }
+        self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)?;
+        self.job_claims.insert(claim.job_id, id);
+        Ok(())
     }
 
     /// The public record of a single-program claim, assembled from ledger state only (what a court and a fresh verifier read).
@@ -1248,7 +1271,9 @@ impl KernelLedgerV1 {
         let bounds = self.bounds_of(&row.class_binding_id);
         let cheap = if is_final && row.liability_until.is_none_or(|until| self.daa > until) {
             Some("past the liability horizon".to_string())
-        } else if row.reserved == 0 {
+        } else if row.reserved == 0 && !is_final {
+            // Before Final nothing reserved means the claim already ended (timed out, unavailable). After Final inside the horizon a
+            // valid proof still convicts — a post-Final default may have forfeited the reservation, but it never erases the liability.
             Some("nothing is reserved any more".to_string())
         } else {
             bounds.and_then(|b| oversized(proof, &b))
@@ -1277,8 +1302,11 @@ impl KernelLedgerV1 {
 
     fn convict(&mut self, claim: &Digest, accuser: &Digest, post_final: bool, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
+        let producer_collateral = self.claims.get(claim).and_then(|r| self.bonds.get(&r.producer)).map_or(0, |b| b.collateral);
         let row = self.claims.get_mut(claim).expect("checked");
-        let slashed = row.reserved;
+        // Never instruct more than the bond holds (another subsystem may have slashed it since the claim reserved).
+        let reserved = row.reserved;
+        let slashed = reserved.min(producer_collateral);
         row.reserved = 0;
         row.convicted = true;
         if !post_final {
@@ -1293,13 +1321,15 @@ impl KernelLedgerV1 {
         }
         let producer = row.producer;
         if let Some(b) = self.bonds.get_mut(&producer) {
-            b.reserved = b.reserved.saturating_sub(slashed);
+            b.reserved = b.reserved.saturating_sub(reserved);
             b.collateral = b.collateral.saturating_sub(slashed);
         }
         let reward = slashed * self.policy.accuser_reward_permille as u64 / 1000;
         self.burned += slashed - reward;
         out.push(LedgerEventV1::Convicted { claim: *claim, accuser: *accuser, slashed, accuser_reward: reward, post_final });
         settle(out, producer, slashed, SettlementKindV1::SlashFraud, Some(*claim));
+        // What the bond no longer holds was not slashed: the rest of the reservation is released, so the consumer's mirror matches.
+        settle(out, producer, reserved - slashed, SettlementKindV1::ReleaseClaim, Some(*claim));
         settle(out, *accuser, reward, SettlementKindV1::AccuserReward, Some(*claim));
         settle(out, producer, slashed - reward, SettlementKindV1::Burn, Some(*claim));
         self.settle_demands_moot(claim, out);
@@ -1461,26 +1491,29 @@ impl KernelLedgerV1 {
             // Before Final a default costs the fixed penalty (the claim is Unavailable and earns no reward). After Final the reward
             // was already paid, so a default forfeits the WHOLE remaining reservation: withholding is never cheaper than a
             // conviction would be for the reward it kept.
-            let penalty = self
+            let collateral = self.claims.get(&claim).and_then(|r| self.bonds.get(&r.producer)).map_or(0, |b| b.collateral);
+            let taken = self
                 .claims
                 .get(&claim)
                 .map(|r| if post_final { r.reserved } else { r.reserved.min(self.policy.default_penalty) })
                 .unwrap_or(0);
-            // The demanders share the penalty equally (after Final, the accuser's share of a slash; the rest is burned); their
-            // bonds return.
-            let paid = if post_final { penalty * self.policy.accuser_reward_permille as u64 / 1000 } else { penalty };
+            // Never instruct more than the bond holds.
+            let penalty = taken.min(collateral);
+            // Before Final the demanders share the penalty equally. After Final the forfeit is burned whole: a demander may be the
+            // producer's own Sybil, and paying it would let the colluders recoup part of their forfeit. Their bonds return either way.
+            let paid = if post_final { 0 } else { penalty };
             let share = if d.demanders.is_empty() { 0 } else { paid / d.demanders.len() as u64 };
             let burn = penalty - share * d.demanders.len() as u64;
             self.burned += burn;
             let producer = self.claims.get(&claim).map(|r| r.producer);
             if let Some(row) = self.claims.get_mut(&claim) {
                 let was_final = matches!(row.life.state, ClaimStateV1::Final { .. });
-                row.reserved -= penalty;
+                row.reserved -= taken;
                 if !was_final {
                     let _ = row.life.apply(ClaimEventV1::MaterialUnavailable { daa, producer_defaulted: true });
                 }
                 if let Some(b) = self.bonds.get_mut(&row.producer) {
-                    b.reserved = b.reserved.saturating_sub(penalty);
+                    b.reserved = b.reserved.saturating_sub(taken);
                     b.collateral = b.collateral.saturating_sub(penalty);
                 }
             }
@@ -1491,6 +1524,7 @@ impl KernelLedgerV1 {
             });
             if let Some(producer) = producer {
                 settle(out, producer, penalty, SettlementKindV1::SlashDefault, Some(claim));
+                settle(out, producer, taken - penalty, SettlementKindV1::ReleaseClaim, Some(claim));
                 for (bond, _) in &d.demanders {
                     settle(out, *bond, share, SettlementKindV1::DemanderShare, Some(claim));
                 }
