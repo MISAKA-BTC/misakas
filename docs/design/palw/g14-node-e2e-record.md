@@ -301,8 +301,21 @@ a kernel claim (its liability horizon, or the latest Final its clock allows plus
 `final_daa`); the assembled object must be a `FileProof` / `Respond` naming the target claim or a refutation of the target binding,
 and its own signature is checked at the completing chunk. The certification lane (`ObjectChunk`) is unchanged.
 
-**OPV admission (F-C4R3-05).** Only pre-Final claims hold admission slots; a bond with no pre-Final OPV claim is always admitted past
-the total; each admission burns `admission_fee` (interim 1 KAS).
+**OPV admission (F-C4R3-05, two rounds).** Only pre-Final claims hold admission slots; a producer is capped; past
+`max_live_claims_total` only a producer holding no pre-Final claim is admitted, up to the HARD ceiling `total + fresh_producer_slots`
+(interim 32 + 16), which `OpvPolicyV1::validate` bounds by the window's reserved proof runs (`max_adjudications × prosecution_reserve‰ ×
+window` = 64 × 500‰ × 50); every admission burns `admission_fee` (interim 1 BILI); and every block reserves `prosecution_reserve_permille`
+of its court runs for `FileProof`s alone, so no flood of claims leaves an outsider without a run. Because a Final claim's reservation
+stays locked through its liability horizon, holding the whole lane continuously costs `hard × reservation × (window + liability) /
+window` of locked collateral plus `hard × fee` per window — 240,000 BILI locked and 48 BILI per 50 DAA at the interim terms — however it
+is split across bonds (the Sybil test measures it on the example policy: 35,000 locked + 21 per window).
+
+**Bonded claim seals (OPV-BOOT #2).** A claim seal reserves `seal_deposit` (interim 1 BILI) until it is revealed and forfeits it if it
+expires unrevealed; the claim row keeps `sealed_daa` (the seal's DAA) for OPV-BOOT's sealed-source beacon v3.
+
+**Served demands (K2S's DA griefing).** A served position's demand bonds stay reserved: refunded the moment the claim is convicted,
+defaults or times out; burned only when its liability horizon ends with no conviction — a true demand that leads to a conviction (even
+long after the grace) is never penalised.
 
 **Accuser seals (GAP-R7).** `SealProof` (kernel tag 15) commits `H(claim ‖ accuser ‖ H(proof))`; the bounty of a conviction goes to the
 earliest seal of the convicting bytes at least `claim_seal_delay_daa` old, whoever files them. Self-recoup (the colluders' own first
@@ -347,3 +360,57 @@ BILI, ADR-0174; `SOMPI_PER_KASPA` is the legacy name of 1 BILI.)
 
 *Not covered.* RFC-0015's `work_credit_per_claim` (nothing releases it; it must come from the same escrow before it does); the price
 level (escrow = `claim_reward`) is a policy value.
+
+### What still refuses arming `palw_probabilistic_constraints_v1` / `palw_panel_free_v1` (end of G14-R4, 2026-10-08)
+
+The validators (`validate_palw_probabilistic_constraints_v1`, `validate_palw_panel_free_v1`, `validate_palw_signed_registration_v1`)
+refuse any armed height unconditionally. What has to be true before they can be replaced by real conditions:
+
+*Code a lane can write.*
+1. The validators themselves: replace the blanket refusal by the fence relations (OPV ≥ route height, the envelope fence, a validated
+   ledger policy) — the last step, after everything below.
+2. A home for the ledger policy in `Params` (today `palw_kernel_route_policy_v1` is a code constant marked INTERIM), Some-only hashed like
+   OPV's fence value, so a release chooses and pins it.
+3. Panel-licensed mode: the interim seat draw is grindable (claim-id seeded). Arm OPV-only, or wire RFC-0010's beacon-assigned Panel
+   (no beacon scheme is approved: `approved_beacons` is empty).
+4. Real-class carriage: a held / long-context class's worst response (~190 MB) far exceeds the route's 1.6 MB object (16 chunks); such
+   classes are refused at registration by design until K2S's segmented commitments (`k2/real-scale`) land.
+5. Pipeline claims on the node have no Panel / receipt path and no header wire form (§6.6); OPV pipeline classes need none.
+6. The per-object fold rebuilds the ledger from its rows (§6.8): a cached per-block ledger, and the DoS figure measured.
+7. The mempool does not run the acceptance gate for `0x4b` objects (§6.10); RPC through a running service (§6.12); verdict events not
+   stored (§6.9).
+8. Node-level cases for families 2–13 and 15 (the route E2E class is single-layer).
+9. `Respond` is signed by any bond and a rejected response spends a court run for free (O-C4R3-respond): a fee or a producer-only rule.
+10. RFC-0015's `work_credit_per_claim` is released by nothing; it must come from the job escrow (GAP-5) before it is.
+11. OPV-BOOT #1: wire `palw_conformance_chunk_target_v1` into the chunk lane (the placeholder refuses every conformance group); OPV-BOOT's
+    beacon v3 over the bonded seals.
+12. The FileProof-over-budget gap (accepted by the lead, bounded here): a proof refused over budget is not "accepted", so Final can pass
+    and post-Final liability convicts. Junk FileProofs can fill every run of a block (the prosecution reserve is theirs too), each
+    dismissed at `dismissed_proof_fee`: holding ONE valid proof out costs `max_adjudications × fee` per block = 64 × 0.1 = 6.4 BILI per
+    block at the interim terms; keeping it out through the window and the whole liability horizon (50 + 200 DAA) costs ≈ 1,600 BILI —
+    more than the 1,000 BILI reservation it would save, and the OPV relation `censorship_cost > max gain` holds by registration. The block
+    producer also chooses the order of a block's objects, so a colluding miner pays this only on the blocks it does not mine.
+
+*Policy values the user must choose* (every number below is INTERIM, chosen for no network): the ledger policy (claim collateral 1,000
+BILI, demand bond 1, check / challenge / court / grace / liability 100 / 50 / 20 / 10 / 200 DAA, exit delay 30, dismissed fee 0.1, accuser
+share 500‰, default penalty 100, Final reward = job escrow 5, job fee 1, escrow TTL 300, 64 runs a block with 500‰ reserved for proofs,
+court work 2^30, seal delay 1 / TTL 100 / deposit 1); the OPV terms (the 50-DAA window and 37-DAA budgets — to come from a measured
+`T_challenge ≥ T_beacon + T_fetch + T_check + T_localize + T_file + T_margin`, of which the validated relations cover fetch + check + file +
+reorg margin for the first step and localize + court + file inside the grace, but no `T_beacon` term — reservation 1,000, work credit 5,
+external gain 10, detection 500‰, caps 3 / 32 + 16 fresh, default burn 10% (≥ 50% effective), admission fee 1, carriers); the chunk lane
+(2 groups a bond, TTL 64, 1 BILI a part); onboarding (binding reservation 100, window 40, liability 200, challenger 500‰); the admitted
+OPV class list; the demand-bond size against a position's carriage cost; and the one coordinated activation height with RFC-0010 / 0012
+/ 0008.
+
+*External gates*: an independent soundness review (Freivalds / CRT / alias composition, exact court terminals); RFC-0011 §15.7's
+activation tests (adaptive adversary, beacon bias and withholding, reference vectors) and real-scale reports (9B-8k, 2M, Kimi K3);
+measured OPV budgets and their DAA conversion, court / localization bandwidth, the worst dispute deadline and the fold's cost on real
+hardware; RFC-0015 §13.3's panel-free collateral, accounting and monitoring-economics review and the inclusion / censorship assumption;
+artifact availability (RFC-0014 §16 — a binding is bonded and refutable, not proven); an independent adversarial node E2E with recovery
+and migration, a shadow period, a public drill, audit and soak.
+
+**Final halting (checked).** A valid `FileProof` accepted in a block is adjudicated in that same block (the court is a single exact step),
+so it always settles before any Final. A demand accepted in the window disputes the claim and holds Final until it is served (then
+`proof_grace_daa` more) or defaults — accept only while the window is open, each demand bounded by `court_deadline_daa`, the grace
+bounded, Final ≤ window end + court deadline + grace (validated, and the OPV hard deadline reported). The only path to Final past a valid
+prosecution is one that was never accepted (item 12), which post-Final liability still convicts.

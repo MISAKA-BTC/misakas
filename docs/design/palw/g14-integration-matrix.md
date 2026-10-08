@@ -109,6 +109,11 @@ activation height.
 
 ## 5. Change log
 
+* 2026-10-08 (later) — **G14-R4, continued**: the user's rulings — GAP-5 user-pays escrow (`6035931bd`), F-C4R3-05 round 2 Sybil-robust
+  lane (`70069988c`); queued items landed — bonded claim seals for OPV-BOOT's beacon v3 (`00b2491cc`), K2S's served-demand bond fate,
+  the chunk lane's conformance target (plumbing); the integration line merged (F-C4R3-01(b) fixed there). The end-of-lane list of what
+  still refuses arming is `g14-node-e2e-record.md` §8.
+
 * 2026-10-08 — **G14-R4 (branch `g14/r4-fixes`, base `4d3baa0c5`)**: the round-3 findings fixed at both levels, dormant —
   F-C4R3-02 a self-inflicted default keeps the claim liable (`7da2d9ee2`); F-C4R3-03 the route's own chunk lane, consensus tag 113 +
   aux table 41 (`a09c6119d`); GAP-R7 accuser seal (kernel tag 15 inside tag 110) with self-recoup priced (`1445dcbc5`); GAP-11 the
