@@ -113,15 +113,24 @@ pub(super) fn t12_with_harness_cards()
 pub(super) fn t12_with_harness_cards_and_evm(
     keep_evm: bool,
 ) -> (Config, PalwConsensusParamsV2, Vec<(TransactionOutpoint, UtxoEntry)>, Vec<(TransactionOutpoint, UtxoEntry)>) {
-    use kaspa_consensus_core::config::params::PALW_T12_GENESIS_BONDS;
-    use kaspa_consensus_core::config::premine::{PALW_RC_BOND_FEE_FLOAT_SOMPI, genesis_premine_utxos_for, premine_outpoint_for};
-    assert!(!keep_evm || cfg!(feature = "evm"), "a build without the `evm` feature cannot build a template for an active EVM lane");
     // testnet-12 as LAUNCHED: the shipped ruleset with the post-launch release's list
     // (`PALW_T12_POST_LAUNCH_FENCES_V1`, armed at DAA 750 since int-4) set back to dormant — byte for
     // byte what `Params::from(testnet-12)` was at launch. Every suite on this harness was written
     // against it (and each post-launch lane arms its own fence over it); the release's twelve fences
     // together are `t12_post_launch_fences_combined`'s crossing.
-    let shipped = kaspa_consensus_core::config::params::palw_t12_launch_params_v1();
+    t12_with_harness_cards_over(kaspa_consensus_core::config::params::palw_t12_launch_params_v1(), keep_evm)
+}
+
+/// [`t12_with_harness_cards_and_evm`] over any testnet-12 ruleset (`shipped`: the launch one, or
+/// `palw_t12_shipped_params()` with every release fence on its shipped height) — the harness cards, the premine and
+/// the inert EVM lane are applied the same way.
+pub(super) fn t12_with_harness_cards_over(
+    shipped: Params,
+    keep_evm: bool,
+) -> (Config, PalwConsensusParamsV2, Vec<(TransactionOutpoint, UtxoEntry)>, Vec<(TransactionOutpoint, UtxoEntry)>) {
+    use kaspa_consensus_core::config::params::PALW_T12_GENESIS_BONDS;
+    use kaspa_consensus_core::config::premine::{PALW_RC_BOND_FEE_FLOAT_SOMPI, genesis_premine_utxos_for, premine_outpoint_for};
+    assert!(!keep_evm || cfg!(feature = "evm"), "a build without the `evm` feature cannot build a template for an active EVM lane");
     debug_assert_eq!(
         shipped.genesis.hash,
         Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12)).genesis.hash,

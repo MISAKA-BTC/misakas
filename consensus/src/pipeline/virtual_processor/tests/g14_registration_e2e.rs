@@ -99,6 +99,11 @@ struct Case {
 /// Every golden corpus program as a class at 64 positions, under the tiled logits scheme, with the
 /// inventory root its tensors derive.
 fn corpus() -> Vec<Case> {
+    corpus_at(64)
+}
+
+/// [`corpus`] declared at `positions` of context.
+fn corpus_at(positions: u32) -> Vec<Case> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../consensus-vectors/tir-v1/programs");
     let mut files: Vec<PathBuf> =
         std::fs::read_dir(dir).expect("vectors").map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
@@ -112,7 +117,7 @@ fn corpus() -> Vec<Case> {
                 program: unhex(v["program_borsh_hex"].as_str().unwrap()),
                 layout: PalwTirLayoutV1 {
                     version: PALW_TIR_LAYOUT_VERSION_V1,
-                    max_context: 64,
+                    max_context: positions,
                     checkpoint_interval: 2,
                     h_tile: 2,
                     commit_tiles: Vec::new(),
@@ -123,7 +128,7 @@ fn corpus() -> Vec<Case> {
             let mut program = class.decode_program().expect("canonical");
             program.logits_scheme_id.copy_from_slice(tiled_logits_scheme_id_v1().as_byte_slice());
             class.program = program.encode();
-            class.layout = layout_of(&class, 64);
+            class.layout = layout_of(&class, positions);
             let mut tensors = BTreeMap::new();
             for p in v["params"].as_array().unwrap() {
                 let j = p["param"].as_u64().unwrap() as u16;
@@ -171,7 +176,10 @@ fn t12_tir_config(tir_at: u64) -> (Config, PalwConsensusParamsV2, Premine, Premi
 
 impl Env {
     fn new(tir_at: u64) -> Env {
-        let (config, bundle, premine, floats) = t12_tir_config(tir_at);
+        Env::over(t12_tir_config(tir_at))
+    }
+
+    fn over((config, bundle, premine, floats): (Config, PalwConsensusParamsV2, Premine, Premine)) -> Env {
         let chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             config.params.net.to_string().as_bytes(),
@@ -1239,5 +1247,66 @@ async fn g14_refused_registrations_cost_a_fee_and_write_nothing() {
         }
         eprintln!("[g14] mined+dropped {name:<32} mempool=Ok block stands, class absent, gate re-diagnosis={:?}", rediagnosed.map(|_| ()).map_err(|e| e.code()));
         funding = change_of(&tx, 5);
+    }
+}
+
+// ---- the whole release schedule ---------------------------------------------------------------------------
+
+/// **The gate and the chain, at every height the shipped testnet-12 schedule changes a rule.** Every fence of
+/// `palw_t12_shipped_params()` (the harness cards on top) is crossed: for each height `h` of the schedule the
+/// corpus classes are judged at `h - 1`, `h` and `h + 1` by `palw_tir_registration_preflight_at_v1` and by the
+/// processor's arm (rules resolved by the PROCESSOR at that height: the court, the held context, the demand rules, the
+/// model court window). On the genesis state, with the registration signed for the height, the chain's only open
+/// questions are the gate's — so they must agree everywhere.
+#[tokio::test]
+async fn g14_gate_and_chain_agree_across_the_shipped_fence_schedule() {
+    use super::t12_round_lane_e2e::t12_with_harness_cards_over;
+    let over = t12_with_harness_cards_over(kaspa_consensus_core::config::params::palw_t12_shipped_params(), false);
+    let env = Env::over(over);
+    let (block, state) = env.chain.tip_state();
+    let schedule = env.config.params.fence_schedule_v1();
+    let mut heights: Vec<u64> = vec![0, 1];
+    for h in &schedule {
+        heights.extend([h.saturating_sub(1), *h, h + 1]);
+    }
+    heights.push(schedule.last().copied().unwrap_or(0) + 1_000);
+    heights.sort_unstable();
+    heights.dedup();
+    let tir_at = env.config.params.palw_tir_v1_fence().map(|f| f.activation.daa_score());
+    eprintln!("[g14] shipped schedule: {} fence heights {:?}; palw_tir_v1 at {:?}; judging at {} heights", schedule.len(), schedule, tir_at, heights.len());
+    // Wider contexts bite the court's window, the ladder and the dissection fences; they are the classes whose verdict can
+    // move with the height.
+    let corpus: Vec<Case> = [64, 512, 4_096, 32_000].into_iter().flat_map(corpus_at).collect();
+    let mut bad = Vec::new();
+    let mut verdicts: BTreeMap<u64, (u32, u32)> = BTreeMap::new();
+    let mut moved: BTreeMap<String, Vec<(u64, bool)>> = BTreeMap::new();
+    for &daa in &heights {
+        for (i, c) in corpus.iter().enumerate() {
+            let o = signed(&env, &state, &spec_of(c, 1 + i % 6, daa));
+            let j = judge(&env, &state, block, daa, &o);
+            let entry = verdicts.entry(daa).or_default();
+            moved.entry(format!("{}@{}", c.name, c.class.layout.max_context)).or_default().push((daa, j.preflight.is_ok()));
+            match (&j.preflight, &j.validate) {
+                (Ok(()), Ok(())) if j.fold.as_ref().is_some_and(|f| f.is_ok()) && j.accepted => entry.0 += 1,
+                (Err(e), Err(why)) if why.contains(&e.to_string()) || (matches!(e, E::TirNeedsItsFence) && why.contains("palw_tir_v1 is not in force")) => {
+                    entry.1 += 1
+                }
+                _ => bad.push(format!("daa {daa} {}: {j:?}", c.name)),
+            }
+        }
+    }
+    eprintln!("[g14] (admitted by both, refused by both) per height: {verdicts:?}");
+    for (name, history) in &moved {
+        let flips: Vec<_> = history.windows(2).filter(|w| w[0].1 != w[1].1).map(|w| (w[0].0, w[1].0, w[1].1)).collect();
+        if !flips.is_empty() {
+            eprintln!("[g14] verdict of {name} flips (from daa, to daa, admitted): {flips:?}");
+        }
+    }
+    assert!(bad.is_empty(), "the gate and the chain disagree at a fence height:\n{}", bad.join("\n"));
+    if let Some(at) = tir_at {
+        if at > 0 {
+            assert!(verdicts.get(&(at - 1)).is_some_and(|v| v.0 == 0), "nothing registers below palw_tir_v1");
+        }
+        assert!(verdicts.get(&at).is_some_and(|v| v.0 >= 5), "at palw_tir_v1 the admissible corpus classes register");
     }
 }
