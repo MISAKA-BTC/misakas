@@ -218,35 +218,40 @@ fn the_fixture_maps_as_it_is() {
 }
 
 #[test]
-fn a_weight_space_rotation_is_refused_by_name_never_ignored() {
+fn a_weight_space_rotation_is_never_ignored() {
+    // A declaration the reader cannot apply as the producer would (here: explicit signs with no sign values) is refused by name —
+    // never lowered as if the stored weights were the model's. (A complete one is applied: `tests/weight_rotation.rs`.)
     let mut g = base();
     for (k, (ty, raw)) in [
         ("prism.hadamard.version", u(1)),
-        ("prism.hadamard.block_size", u(1024)),
+        ("prism.hadamard.block_size", u(32)),
         ("prism.hadamard.transform", s("normalized-sylvester-walsh-hadamard")),
         ("prism.hadamard.axis", s("input-last-dimension")),
         ("prism.hadamard.sign_mode", s("explicit")),
-        ("prism.hadamard.weight_names", arr_str(&["output.weight", "blk.0.attn_qkv.weight"])),
+        ("prism.hadamard.weight_names", arr_str(&["blk.0.attn_qkv.weight"])),
         ("prism.hadamard.sign_widths", arr_u32(&[64, 128])),
         ("prism.hadamard.inverse_weight_names", arr_str(&["token_embd.weight"])),
         ("prism.hadamard.gdn_v_grouped", (7, vec![1])),
     ] {
         g.set(k, ty, raw);
     }
-    let Err(LowerError::NotLowerable(msg)) = g.model() else { panic!("a rotated checkpoint is never mapped as the model") };
-    for needle in [
-        "prism.hadamard",
-        "weight-space rotation",
-        "normalized-sylvester-walsh-hadamard",
-        "block 1024",
-        "input-last-dimension",
-        "2 rotated weights",
-        "token_embd.weight",
-        "WEIGHT_ROTATION_HADAMARD not modelled",
-        "never ignored",
-    ] {
+    let Err(LowerError::NotLowerable(msg)) = g.model() else { panic!("an incomplete rotation is never mapped as the model") };
+    for needle in ["prism.hadamard", "sign width", "WEIGHT_ROTATION_HADAMARD_V1"] {
         assert!(msg.contains(needle), "`{needle}` not in: {msg}");
     }
+    // Another key of the producer's namespace, without the declaration it belongs to, is refused as unmodelled.
+    let mut g = base();
+    let (ty, raw) = s("x");
+    g.set("prism.something_else", ty, raw);
+    let Err(LowerError::NotLowerable(msg)) = g.model() else { panic!("refused") };
+    assert!(msg.contains("prism.something_else"), "{msg}");
+    // A key of a later version of the declaration is refused, not skipped.
+    let mut g = base();
+    for (k, (ty, raw)) in [("prism.hadamard.version", u(2))] {
+        g.set(k, ty, raw);
+    }
+    let Err(LowerError::NotLowerable(msg)) = g.model() else { panic!("refused") };
+    assert!(msg.contains("version"), "{msg}");
 }
 
 #[test]

@@ -332,8 +332,12 @@ fn mhc_take(bk: &mut Bk, at: &mut usize, len: usize, site: Option<&str>) -> Ref 
 }
 
 /// A block under construction.
+#[derive(Default)]
 struct Bk {
     nodes: Vec<Node>,
+    /// `WEIGHT_ROTATION_HADAMARD_V1`: the rotated activations already built in this block — `(input, param, rotated)` — so the
+    /// projections that read one activation share its rotation (q, k and v; gate and up), as the producer's graph does.
+    rot: Vec<(Ref, String, Ref)>,
 }
 
 impl Bk {
@@ -424,6 +428,7 @@ impl Builder<'_> {
         site: &str,
     ) -> Result<Ref> {
         let weight_per_layer = per_layer && !self.sharing;
+        let x = self.rotated_input(bk, x, name, inp)?;
         let w = self.param(&format!("{name}.w"), vec![out, inp], weight_per_layer, Init::Normal(W_STD))?;
         let mut ins = vec![x, w];
         if bias {
@@ -449,6 +454,28 @@ impl Builder<'_> {
             _ => None,
         };
         Ok(bk.f(Op::Linear { bias, lora }, ins, out, site))
+    }
+
+    /// **`WEIGHT_ROTATION_HADAMARD_V1`**: the activation a projection of role `role` reads — `x` itself, or, where the checkpoint
+    /// stores that projection's weights in a rotated basis ([`crate::spec::HfStorage::input_rotations`]), `R·x` (`Op::BlockLinear`
+    /// over the param that holds `R`'s blocks), built once per activation in the block.
+    fn rotated_input(&mut self, bk: &mut Bk, x: Ref, role: &str, width: usize) -> Result<Ref> {
+        let Some(r) = self.s.hf.input_rotations.get(role).copied() else { return Ok(x) };
+        if r.width != width || r.block == 0 || width % r.block != 0 {
+            return Err(LowerError::not_lowerable(format!(
+                "a rotation of block {} over width {} on `{role}`, which reads {width} values",
+                r.block, r.width
+            )));
+        }
+        let name = r.fwd_param();
+        if let Some((_, _, y)) = bk.rot.iter().find(|(a, p, _)| *a == x && *p == name) {
+            return Ok(*y);
+        }
+        let p = self.param(&name, vec![width, r.block], false, Init::Normal(W_STD))?;
+        let site = format!("{role}.rotated");
+        let y = bk.f(Op::BlockLinear { block: r.block }, vec![x, p], width, &site);
+        bk.rot.push((x, name, y));
+        Ok(y)
     }
 
     /// A norm under role `name` over `n` values in `groups` groups, gain shaped `gain_shape`
@@ -487,9 +514,17 @@ impl Builder<'_> {
         let s = self.s;
         let e = &s.embedding;
         let d = s.hidden_size;
-        let mut bk = Bk { nodes: vec![] };
+        let mut bk = Bk::default();
         let table = self.param("embed.table", vec![s.vocab_size, e.dim], false, Init::Normal(0.5))?;
         let mut x = bk.f(Op::Embedding, vec![Ref::Token, table], e.dim, "embed");
+        // `WEIGHT_ROTATION_HADAMARD_V1`: a table stored in the rotated basis — the looked-up row restored, `h = R⁻¹·z`.
+        if let Some(r) = self.s.hf.embed_rotation {
+            if r.width != e.dim || r.block == 0 || e.dim % r.block != 0 {
+                return Err(LowerError::not_lowerable(format!("an embedding rotation of block {} over width {} on a {}-wide table", r.block, r.width, e.dim)));
+            }
+            let p = self.param(&r.inv_param(), vec![e.dim, r.block], false, Init::Normal(W_STD))?;
+            x = bk.f(Op::BlockLinear { block: r.block }, vec![x, p], e.dim, "embed.unrotated");
+        }
         // The width positions, token types and the embedding norm act at: the hidden width, or the table's when the
         // projection comes after the norm (ALBERT).
         let dw = if e.proj_in && e.proj_after_norm { e.dim } else { d };
@@ -583,7 +618,7 @@ impl Builder<'_> {
         let s = self.s;
         let h = &s.head;
         let d = s.hidden_size;
-        let mut bk = Bk { nodes: vec![] };
+        let mut bk = Bk::default();
         let mut x = Ref::Carry(0);
         // Hyper-connections: one more gated mix brings the streams down to the hidden width (its norm
         // stands where the final norm would).
@@ -673,6 +708,7 @@ impl Builder<'_> {
         } else {
             self.param("head.w", vec![s.vocab_size, width], false, Init::Normal(W_STD))?
         };
+        let x = self.rotated_input(&mut bk, x, "head", width)?;
         let mut ins = vec![x, w];
         if h.bias {
             ins.push(self.param("head.b", vec![s.vocab_size], false, Init::Uniform(-0.1, 0.1))?);
@@ -702,7 +738,7 @@ impl Builder<'_> {
         }
         if let Residual::Sandwich { pre_mixer, post_mixer, .. } = &ls.residual {
             let d = self.s.hidden_size;
-            let mut bk = Bk { nodes: vec![] };
+            let mut bk = Bk::default();
             let x = Ref::Carry(0);
             let n1 = self.full_norm(&mut bk, x, *pre_mixer, "norm.mix", d, true)?;
             let m = self.mixer(&mut bk, &ls.mixer, n1)?;
@@ -724,7 +760,7 @@ impl Builder<'_> {
         {
             let d = self.s.hidden_size;
             let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
-            let mut bk = Bk { nodes: vec![] };
+            let mut bk = Bk::default();
             let x = Ref::Carry(0);
             let n1 = match pre_mixer {
                 Some(n) => self.full_norm(&mut bk, x, *n, "norm.mix", d, true)?,
@@ -741,7 +777,7 @@ impl Builder<'_> {
             let outputs = self.layer_outputs(h);
             self.blocks.push(Block { name: format!("{name}.mix"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
             let a = self.blocks.len() - 1;
-            let mut bk = Bk { nodes: vec![] };
+            let mut bk = Bk::default();
             let h = Ref::Carry(0);
             let n2 = match pre_ffn {
                 Some(n) => self.full_norm(&mut bk, h, *n, "norm.ffn", d, true)?,
@@ -769,13 +805,13 @@ impl Builder<'_> {
             let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
             let mut blocks = Vec::new();
             if let Some(p) = ple {
-                let mut bk = Bk { nodes: vec![] };
+                let mut bk = Bk::default();
                 let h = self.ple_ngram(&mut bk, p, Ref::Carry(0))?;
                 let outputs = self.layer_outputs(h);
                 self.blocks.push(Block { name: format!("{name}.ple"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
                 blocks.push(self.blocks.len() - 1);
             }
-            let mut bk = Bk { nodes: vec![] };
+            let mut bk = Bk::default();
             let x = Ref::Carry(0);
             let (mixed, inj) = self.hc_mix(&mut bk, x, "mix", true, true)?;
             let o = self.mixer(&mut bk, &ls.mixer, mixed)?;
@@ -817,7 +853,7 @@ impl Builder<'_> {
         let n = k * d;
         let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
         // ── the mixer half ──
-        let mut bk = Bk { nodes: vec![] };
+        let mut bk = Bk::default();
         let c0 = Ref::Carry(0);
         let h0 = bk.st(Op::Slice { start: 0, len: d }, vec![c0], d);
         let m = self.altup_router(&mut bk, h0, *router_norm, "altup.pred")?;
@@ -851,7 +887,7 @@ impl Builder<'_> {
         self.blocks.push(Block { name: format!("{name}.mix"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
         let first = self.blocks.len() - 1;
         // ── the FFN half ──
-        let mut bk = Bk { nodes: vec![] };
+        let mut bk = Bk::default();
         let c0 = Ref::Carry(0);
         let pred = bk.st(Op::Slice { start: 0, len: n }, vec![c0], n);
         let p0 = bk.st(Op::Slice { start: 0, len: d }, vec![c0], d);
@@ -994,7 +1030,7 @@ impl Builder<'_> {
         let (heads, hd, lat) = (a.heads, a.head_dim, a.q_rank);
         let name = format!("{}{}", block_name(ls), if kind_index > 0 { format!("#{kind_index}") } else { String::new() });
         // ── block 1: the mixer site's weights, the collapse, the query ──
-        let mut bk = Bk { nodes: vec![] };
+        let mut bk = Bk::default();
         let h = bk.st(Op::Slice { start: 0, len: n }, vec![Ref::Carry(0)], n);
         let (post, comb, xn) = self.mhc_site(&mut bk, h, "attn", *pre_mixer, "norm.mix")?;
         let qa = self.linear(&mut bk, xn, "attn.wq_a", lat, d, false, true, "attn.q_a")?;
@@ -1015,7 +1051,7 @@ impl Builder<'_> {
         // ── block 2 (compressed layers): the compressors and the indexer's query — the states they write and the rows they hand on ──
         let mut blocks_out = vec![first];
         let comp_in = if let Some(c) = &a.compressed {
-            let mut bk = Bk { nodes: vec![] };
+            let mut bk = Bk::default();
             let mut at = 0usize;
             let h = mhc_take(&mut bk, &mut at, n, None);
             let post = mhc_take(&mut bk, &mut at, hc, Some("carry.post"));
@@ -1043,7 +1079,7 @@ impl Builder<'_> {
             false
         };
         // ── block 3: the attention proper ──
-        let mut bk = Bk { nodes: vec![] };
+        let mut bk = Bk::default();
         let mut at = 0usize;
         let h = mhc_take(&mut bk, &mut at, n, None);
         // What a value was before it was packed keeps its own calibration: a sited identity (no node in the integer program) says which
@@ -1077,7 +1113,7 @@ impl Builder<'_> {
         self.blocks.push(Block { name: format!("{name}.attn"), role: BlockRole::Layer, nodes: bk.nodes, outputs });
         blocks_out.push(self.blocks.len() - 1);
         // ── block 3: the FFN site ──
-        let mut bk = Bk { nodes: vec![] };
+        let mut bk = Bk::default();
         let h = bk.st(Op::Slice { start: 0, len: n }, vec![Ref::Carry(0)], n);
         let (post, comb, xn) = self.mhc_site(&mut bk, h, "ffn", *pre_ffn, "norm.ffn")?;
         let f = self.ffn(&mut bk, &ls.ffn, xn)?;
@@ -1285,7 +1321,7 @@ impl Builder<'_> {
         if matches!(ls.ffn, Ffn::MlpShortcut(_)) && !matches!(ls.residual, Residual::Sequential { .. }) {
             return Err(LowerError::not_lowerable("FFN_SHORTCUT_MOE_V1 is lowered under a sequential pre-norm residual only"));
         }
-        let mut bk = Bk { nodes: vec![] };
+        let mut bk = Bk::default();
         let x = Ref::Carry(0);
         let mut h = match &ls.residual {
             Residual::Sequential { pre_mixer, post_mixer, pre_ffn, post_ffn, multiplier } => {

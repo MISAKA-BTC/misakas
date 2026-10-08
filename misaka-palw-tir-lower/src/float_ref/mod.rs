@@ -564,6 +564,23 @@ impl<'a> Session<'a> {
                 }
                 one(y)
             }
+            Op::BlockLinear { block } => {
+                // `y[k·B + i] = Σ_j P[k·B + i, j] · x[k·B + j]`, each row summed in f64 in one order (as `linear_raw`).
+                let p = self.param(ins[1], layer)?;
+                let xv = x(0)?;
+                let (n, bsz) = (xv.len(), *block);
+                if bsz == 0 || n % bsz != 0 || p.data.len() != n * bsz {
+                    return Err(LowerError::eval(format!("a block linear of block {bsz} over {n} values with a param of {}", p.data.len())));
+                }
+                let y: Vec<f32> = (0..n)
+                    .map(|r| {
+                        let k = r / bsz;
+                        let row = &p.data[r * bsz..(r + 1) * bsz];
+                        row.iter().zip(&xv[k * bsz..(k + 1) * bsz]).map(|(a, b)| *a as f64 * *b as f64).sum::<f64>() as f32
+                    })
+                    .collect();
+                one(y)
+            }
             Op::Add | Op::Sub | Op::Mul => {
                 let a = self.operand_any(ins[0], vals, carries, layer)?;
                 let b = self.operand_any(ins[1], vals, carries, layer)?;
