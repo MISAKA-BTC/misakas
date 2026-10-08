@@ -1,0 +1,150 @@
+{
+ "schema": "misaka.h1.preflight.v1",
+ "command": "misaka --network testnet-12 --output json model preflight hf://REPO@REV --depth shape [--max-context N]",
+ "header_only": true,
+ "widest": {
+  "exit": 34,
+  "file": "widest.json",
+  "readable": true,
+  "input": "Mitsuba-ComfyUI-27B-v1.18-PTQ1_0.gguf",
+  "bytes_read": 11122070,
+  "depth": {
+   "requested": "shape",
+   "reached": "headers",
+   "stopped_at": "no program to judge: the convert stage is blocked"
+  },
+  "network_daa": null,
+  "model_type": null,
+  "architectures": null,
+  "frontend_level": null,
+  "adapter": null,
+  "features_used": 0,
+  "features_not_supported": [],
+  "scope": null,
+  "storage": [
+   "F32",
+   "type143"
+  ],
+  "weights_bytes": 5986504704,
+  "missing_shards": [],
+  "artifact_estimate_bytes": null,
+  "kernel": null,
+  "admission_verdict": null,
+  "admission_gate": null,
+  "admission_gate_detail": null,
+  "layout": null,
+  "seat_needed_bytes": null,
+  "verdict": {
+   "convert": "blocked",
+   "register": "unknown",
+   "mine": "unknown"
+  },
+  "unknown_because": {
+   "register": "no program to judge: the convert stage is blocked",
+   "mine": "no program to judge: the convert stage is blocked"
+  },
+  "blockers": [
+   {
+    "stage": "convert",
+    "code": "ARCH_REFUSED",
+    "arg": null,
+    "what": "the GGUF's architecture has no mapping to a Hugging Face configuration",
+    "have": null,
+    "need": null,
+    "unit": null,
+    "safe_paths": [
+     "convert the model's original Hugging Face checkpoint instead",
+     "supply a data adapter (--adapter) when the architecture is a combination of known features"
+    ]
+   },
+   {
+    "stage": "convert",
+    "code": "QUANT_NO_DESCRIPTOR",
+    "arg": "ggml/143",
+    "what": "GGUF tensor type 143 (general.file_type=143) has no quant-format descriptor: 506 tensor(s) need it",
+    "have": null,
+    "need": null,
+    "unit": null,
+    "safe_paths": [
+     "the model's original safetensors checkpoint, converted by this tool",
+     "re-quantise it to a described type (F32, F16, BF16, F64, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS, TQ1_0, TQ2_0, MXFP4, NVFP4, Q1_0, Q2_0, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ1_S, IQ1_M, GPTQ, AWQ, FP8_BLOCK, CT_PACK_QUANTIZED, CT_FP8_CHANNEL, CT_INT8_CHANNEL, MXFP4_HF, BNB_NF4, BNB_FP4, BNB_INT8)",
+     "a descriptor file for the type (--quant-format <file.json>) once its layout is specified: a data change, no code"
+    ]
+   }
+  ],
+  "notes": []
+ },
+ "declared": {
+  "exit": 34,
+  "max_context": 512,
+  "file": "declared.json",
+  "readable": true,
+  "input": "Mitsuba-ComfyUI-27B-v1.18-PTQ1_0.gguf",
+  "bytes_read": 11122070,
+  "depth": {
+   "requested": "shape",
+   "reached": "headers",
+   "stopped_at": "no program to judge: the convert stage is blocked"
+  },
+  "network_daa": null,
+  "model_type": null,
+  "architectures": null,
+  "frontend_level": null,
+  "adapter": null,
+  "features_used": 0,
+  "features_not_supported": [],
+  "scope": null,
+  "storage": [
+   "F32",
+   "type143"
+  ],
+  "weights_bytes": 5986504704,
+  "missing_shards": [],
+  "artifact_estimate_bytes": null,
+  "kernel": null,
+  "admission_verdict": null,
+  "admission_gate": null,
+  "admission_gate_detail": null,
+  "layout": null,
+  "seat_needed_bytes": null,
+  "verdict": {
+   "convert": "blocked",
+   "register": "unknown",
+   "mine": "unknown"
+  },
+  "unknown_because": {
+   "register": "no program to judge: the convert stage is blocked",
+   "mine": "no program to judge: the convert stage is blocked"
+  },
+  "blockers": [
+   {
+    "stage": "convert",
+    "code": "ARCH_REFUSED",
+    "arg": null,
+    "what": "the GGUF's architecture has no mapping to a Hugging Face configuration",
+    "have": null,
+    "need": null,
+    "unit": null,
+    "safe_paths": [
+     "convert the model's original Hugging Face checkpoint instead",
+     "supply a data adapter (--adapter) when the architecture is a combination of known features"
+    ]
+   },
+   {
+    "stage": "convert",
+    "code": "QUANT_NO_DESCRIPTOR",
+    "arg": "ggml/143",
+    "what": "GGUF tensor type 143 (general.file_type=143) has no quant-format descriptor: 506 tensor(s) need it",
+    "have": null,
+    "need": null,
+    "unit": null,
+    "safe_paths": [
+     "the model's original safetensors checkpoint, converted by this tool",
+     "re-quantise it to a described type (F32, F16, BF16, F64, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS, TQ1_0, TQ2_0, MXFP4, NVFP4, Q1_0, Q2_0, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ1_S, IQ1_M, GPTQ, AWQ, FP8_BLOCK, CT_PACK_QUANTIZED, CT_FP8_CHANNEL, CT_INT8_CHANNEL, MXFP4_HF, BNB_NF4, BNB_FP4, BNB_INT8)",
+     "a descriptor file for the type (--quant-format <file.json>) once its layout is specified: a data change, no code"
+    ]
+   }
+  ],
+  "notes": []
+ }
+}

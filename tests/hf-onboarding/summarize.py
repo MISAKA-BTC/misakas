@@ -39,7 +39,8 @@ fails = rd("failures.json") or []
 src = model.get("source") or {}
 
 lv = {}
-lv["L0"] = bool(src) and src.get("resolved_sha") == model.get("revision") and (not model.get("local") or (src.get("local") or {}).get("verdict") == "MATCH")
+fixture = (src.get("local") or {}).get("verdict") == "FIXTURE"
+lv["L0"] = bool(src) and (fixture or (src.get("resolved_sha") == model.get("revision") and (not model.get("local") or str(model.get("full", "")).startswith("header-only") or (src.get("local") or {}).get("verdict") == "MATCH")))
 dec = (pf.get("declared") or {}).get("verdict") or {}
 lv["L1"] = lv["L0"] and dec.get("convert") == "ok" and dec.get("register") == "ok"
 lv["L2"] = lv["L1"] and pv.get("exit") == 0 and pv.get("verified") is True and not pv.get("skipped") and not pv.get("failed")
@@ -88,6 +89,7 @@ lines = [
     f"* beacon conformance: {bc.get('label', 'NOT_RUN')} (facts SYNTHETIC; policy UNAPPROVED)",
     f"* registration: class `{(reg.get('class_id') or '')[:16]}…`, root `{(reg.get('artifact_root') or '')[:16]}…`, owner `{(reg.get('owner_bond') or '')[:20]}…`, carrier `{(reg.get('carrier_txid') or '')[:16]}…`, U spent {(reg.get('u_balance_sompi') or {}).get('spent')} sompi",
     f"* consensus state: all agree {cs.get('all_agree')}, checks {checks}",
+    f"* reorg (registration mined on an isolated minority branch, then the majority): {(cs.get('reorg') or {}).get('verdict', 'not run for this model')}",
     "",
     "## Blockers / failures (failures.json)",
 ] + ([f"* {b}" for b in blockers] or ["* none recorded"]) + [""]

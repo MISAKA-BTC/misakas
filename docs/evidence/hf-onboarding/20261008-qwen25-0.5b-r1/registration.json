@@ -118,6 +118,23 @@
    "before": 199999999104851,
    "after": 199999998629639,
    "spent": 475212
+  },
+  "second_carrier_txid": "df087a71bb3d5a96142fa0491077670283b0ba2ed9385d397b4b2abce325b4dcfa57892ff526e57549100fa9ed8c676c1eb49931965e51d40b7add76a59a174a",
+  "observed_at_daa_38": {
+   "carrier_mined_at_daa": 34,
+   "evidence": "its change output df087a71\u2026:0 (196,880,852,643,079 sompi) is in the UTXO set at blockDaaScore 34",
+   "class_row": "unchanged (registeredDaa 30, status Active share 0)",
+   "bond_slashed_sompi": 100000000,
+   "bond_collateral_sompi": 3119045986560,
+   "verdict": "no second write, no second burn; one more carrier fee (475,212 sompi) paid for a registration the fold drops as a duplicate",
+   "status_reader": "getPalwModelRegistrationStatus(transactionId=second carrier) answers submissionState=submitted, included=false for a carrier that was mined and dropped",
+   "client": "misaka palw submit-object neither warned nor refused (the registration was already on the chain)"
   }
+ },
+ "owner_bond_creation": {
+  "method": "WORKAROUND: transient registrar \u2014 U ran kaspad --palw-register-bond once with its own datadir and key (keyring bond 8), stopped after the bond printed; NOT node-less (NODELESS_BOND_REGISTRATION_ABSENT, routed to C1r2)",
+  "bond": "f768798deb6e59acec3b1b8e826bee99d7de2406b4f28c4e3721d90f12f29eafb6391ea71d127e9d46bdadf51d9e5d766e8f6789ebde33be3d7efe5c1a840cb0:0",
+  "collateral_sompi": 3119145986560,
+  "registered_by_daa": 5
  }
 }

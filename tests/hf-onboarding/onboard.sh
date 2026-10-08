@@ -57,7 +57,21 @@ env_json() {
 
 do_source() {
     local rc=0
-    python3 "$H1/source_hash.py" "$REPO" "$REV" ${LOCAL:+--local "$LOCAL"} --out "$SCR/source.json" > "$SCR/source.out" 2>&1 || rc=$?
+    if [ -z "$REPO" ]; then   # an in-repo fixture: its files at the tested SHA are the source
+        python3 - "$LOCAL" "$SCR/source.json" "$SHA" <<'PY'
+import hashlib, json, os, sys
+d, out, sha = sys.argv[1:]
+files = [{"path": f, "size": os.path.getsize(os.path.join(d, f)), "sha256": hashlib.sha256(open(os.path.join(d, f), "rb").read()).hexdigest()} for f in sorted(os.listdir(d))]
+json.dump({"schema": "misaka.h1.source.v1", "repo": None, "revision": None, "resolved_sha": None, "fixture_dir": d, "integration_sha": sha,
+           "note": "an in-repo synthetic fixture: no Hub revision exists; its bytes at the tested SHA are the source", "files": files,
+           "local": {"dir": d, "verdict": "FIXTURE"}}, open(out, "w"), indent=1)
+PY
+        model_json; say "$MID source: in-repo fixture"; return 0
+    fi
+    local file; file=$(mf file); local ldir=$LOCAL
+    [ -n "$file" ] && [ -n "$LOCAL" ] && ldir=${LOCAL%/$file}
+    if [ -n "$file" ] && [ ! -s "$LOCAL" ]; then ldir=""; fi                # not downloaded yet: metadata only
+    python3 "$H1/source_hash.py" "$REPO" "$REV" ${ldir:+--local "$ldir"} ${file:+--require "$file"} --out "$SCR/source.json" > "$SCR/source.out" 2>&1 || rc=$?
     model_json
     case $rc in
         0) say "$MID source: $(cat "$SCR/source.out")" ;;
@@ -69,8 +83,12 @@ do_source() {
 
 do_preflight() {
     local out=$SCR/preflight; mkdir -p "$out"; local rcw=0 rcd=0
-    HOME=$OPHOME "$CLI_BIN" --network testnet-12 --output json model preflight "hf://$REPO@$REV" --depth shape > "$out/widest.json" 2> "$out/widest.err" || rcw=$?
-    HOME=$OPHOME "$CLI_BIN" --network testnet-12 --output json model preflight "hf://$REPO@$REV" --depth shape --max-context "$CTX" > "$out/declared.json" 2> "$out/declared.err" || rcd=$?
+    local input="hf://$REPO@$REV"; local file; file=$(mf file)
+    if [ -z "$REPO" ]; then input=$LOCAL                                     # an in-repo fixture
+    elif [ -n "$file" ]; then if [ -s "$LOCAL" ]; then input=$LOCAL; else input="https://huggingface.co/$REPO/resolve/$REV/$file"; fi; fi
+    echo "$input" > "$out/input.txt"
+    HOME=$OPHOME "$CLI_BIN" --network testnet-12 --output json model preflight "$input" --depth shape > "$out/widest.json" 2> "$out/widest.err" || rcw=$?
+    HOME=$OPHOME "$CLI_BIN" --network testnet-12 --output json model preflight "$input" --depth shape --max-context "$CTX" > "$out/declared.json" 2> "$out/declared.err" || rcd=$?
     python3 - "$out" "$EV/preflight.json" "$rcw" "$rcd" "$CTX" "$H1" <<'PY'
 import json, sys
 out, dst, rcw, rcd, ctx, h1 = sys.argv[1:]
@@ -89,22 +107,37 @@ import json, sys
 d = json.load(open(sys.argv[1]))["declared"]
 for b in d.get("blockers") or []:
     print(f"{b.get('code')} [{b.get('stage')}] {b.get('arg') or ''} — {b.get('what')}")
-for k, why in (d.get("unknown_because") or {}).items():
-    print(f"UNKNOWN [{k}] {why}")
+if not d.get("blockers"):   # a stage left unknown with no blocker is itself the finding; with blockers it is their consequence
+    for k, why in (d.get("unknown_because") or {}).items():
+        print(f"UNKNOWN [{k}] {why}")
 for n in d.get("notes") or []:
     if "pipeline class" in n:
         print(f"NOT_RUN_PIPELINE_ADMISSION — {n}")
 PY
     local reg_ok; reg_ok=$(python3 -c "import json;v=json.load(open('$EV/preflight.json'))['declared'].get('verdict') or {};print(1 if v.get('convert')=='ok' and v.get('register')=='ok' else 0)")
-    if [ "$rcd" != 0 ] || [ "$reg_ok" != 1 ]; then fail preflight auto "" "misaka model preflight hf://$REPO@$REV --depth shape --max-context $CTX" \
-        "convert/register/mine ok at the declared context" "$out/declared.blockers.txt"; fi
+    if [ "$rcd" != 0 ] || [ "$reg_ok" != 1 ]; then
+        # One record per blocker line (a model can stop on a frontend gap AND a resource bound at once).
+        local i=0 line
+        while IFS= read -r line; do
+            i=$((i + 1)); printf '%s\n' "$line" > "$out/blocker-$i.txt"
+            fail preflight auto "" "misaka model preflight $(cat "$out/input.txt") --depth shape --max-context $CTX" \
+                "convert/register/mine ok at the declared context" "$out/blocker-$i.txt"
+        done < "$out/declared.blockers.txt"
+        [ "$i" -gt 0 ] || fail preflight TEST_INFRASTRUCTURE_FAILED NO_VERDICT "misaka model preflight" "a verdict" "$out/declared.err"
+    fi
 }
 
 # The artifact cache key: what the conversion reads (revision, converter binary, options). A changed key is a new conversion.
 artifact_key() { printf '%s|%s|%s|%s|%s' "$REPO@$REV" "$(shasum -a 256 "$PALW_CLASS_BIN" | cut -c1-64)" "$CTX" "${CALIB_SPEC}" "${BUILD_OPTS}" | shasum -a 256 | cut -c1-16; }
-CALIB_DOCS=${CALIB_DOCS:-"docs/archival.md docs/crescendo-guide.md CONTRIBUTING.md SECURITY.md"}
-CALIB_SPEC="len512x1:$CALIB_DOCS"
+# Per-model calibration / layout / reference options (models.json: calib_len, calib_chunks, calib_docs, declare, hfref_streamed).
+CALIB_LEN=$(mf calib_len); CALIB_LEN=${CALIB_LEN:-512}
+CALIB_CHUNKS=$(mf calib_chunks); CALIB_CHUNKS=${CALIB_CHUNKS:-1}
+CALIB_DOCS=$(mf calib_docs); CALIB_DOCS=${CALIB_DOCS:-"docs/archival.md docs/crescendo-guide.md CONTRIBUTING.md SECURITY.md"}
+DECLARE_EXTRA=$(mf declare); DECLARE_EXTRA=${DECLARE_EXTRA:-":logits-tile=$CTX"}
+HFREF_STREAMED=$(mf hfref_streamed)
+CALIB_SPEC="len${CALIB_LEN}x${CALIB_CHUNKS}:$CALIB_DOCS"
 BUILD_OPTS=${BUILD_OPTS:-"--prompts 1 --prefill 2 --decode 1 --stream"}
+CHUNK_STORE=${CHUNK_STORE:-}      # a transient chunk store (deleted after the build) for a large conversion
 
 do_artifact() {
     [ -n "$LOCAL" ] && [ -d "$LOCAL" ] || { fail artifact HF_ACCESS_FAILED "WEIGHTS_NOT_LOCAL" "pack build --model <checkpoint>" \
@@ -114,14 +147,15 @@ do_artifact() {
     if [ "${CACHE:-1}" = 0 ]; then say "$MID: CACHE=0 — clean-source build into a fresh dir"; A=$SCR/clean-$key; rm -rf "$A"; mkdir -p "$A"; fi
     local t0=$SECONDS
     if [ ! -s "$A/calib.json" ]; then
-        ( cd "$WT"; HF_HUB_OFFLINE=1 "$VENV_PY" -I "$TOOLS/tokenize_docs.py" --tokenizer "$LOCAL/tokenizer.json" --len 512 --chunks 1 --out "$A/calib.json" $CALIB_DOCS ) >> "$log" 2>&1 \
+        ( cd "$WT"; HF_HUB_OFFLINE=1 "$VENV_PY" -I "$TOOLS/tokenize_docs.py" --tokenizer "$LOCAL/tokenizer.json" --len "$CALIB_LEN" --chunks "$CALIB_CHUNKS" --out "$A/calib.json" $CALIB_DOCS ) >> "$log" 2>&1 \
             || { fail artifact TEST_INFRASTRUCTURE_FAILED CALIB_TOKENS "tokenize_docs.py" "calibration tokens" "$log"; return 1; }
         ( cd "$WT"; HF_HUB_OFFLINE=1 "$VENV_PY" -I "$TOOLS/tokenize_docs.py" --tokenizer "$LOCAL/tokenizer.json" --len 16 --chunks 2 --out "$A/eval.json" README.md ) >> "$log" 2>&1 \
             || { fail artifact TEST_INFRASTRUCTURE_FAILED EVAL_TOKENS "tokenize_docs.py" "evaluation tokens" "$log"; return 1; }
     fi
     if [ ! -s "$A/hfref/hf-reference.json" ]; then
         mkdir -p "$A/hfref"
-        /usr/bin/time -l env HF_HUB_OFFLINE=1 "$VENV_PY" -I "$TOOLS/hf_reference.py" "$LOCAL" "$A/hfref" --tokens "$A/eval.json" >> "$log" 2>&1 \
+        local refpy=$TOOLS/hf_reference.py; [ "$HFREF_STREAMED" = True ] || [ "$HFREF_STREAMED" = true ] && refpy=$H1/hf_reference_streamed.py
+        /usr/bin/time -l env HF_HUB_OFFLINE=1 "$VENV_PY" -I "$refpy" "$LOCAL" "$A/hfref" --tokens "$A/eval.json" >> "$log" 2>&1 \
             || { fail artifact auto "" "hf_reference.py $LOCAL" "the transformers float32 reference logits" "$log"; return 1; }
     fi
     local build_rc=0
@@ -129,7 +163,8 @@ do_artifact() {
         rm -rf "$A/pack" "$A/class.palwtir"
         /usr/bin/time -l "$PALW_CLASS_BIN" pack build --model "$LOCAL" --out "$A/class.palwtir" --pack "$A/pack" --calib "$A/calib.json" \
             --context "$CTX" --name "$MID" --repo "$REPO" --revision "$REV" --hf-reference "$A/hfref" \
-            --declare "testnet-12:max-context=$CTX:logits-tile=$CTX" $BUILD_OPTS > "$A/build.out" 2> "$A/build.err" || build_rc=$?
+            --declare "testnet-12:max-context=$CTX$DECLARE_EXTRA" ${CHUNK_STORE:+--chunk-store "$CHUNK_STORE"} $BUILD_OPTS > "$A/build.out" 2> "$A/build.err" || build_rc=$?
+        [ -n "$CHUNK_STORE" ] && rm -rf "$CHUNK_STORE"
         cat "$A/build.err" >> "$log"
         if [ "$build_rc" = 0 ]; then date +%s > "$A/BUILT"; fi
     fi
@@ -241,6 +276,7 @@ reg = {"schema": "misaka.h1.registration.v1", "party": "client U (no node, no se
        "one_command_ux": {"model add hf://": {"json": txt("model-add-hf.json"), "stderr": txt("model-add-hf.err")},
                           "model add --artifact": {"json": txt("model-add-artifact.json"), "stderr": txt("model-add-artifact.err")}},
        "path_used": "detached: misaka palw tir-registration (pack gate on) + misaka palw submit-object",
+       "owner_bond_creation": {"method": "WORKAROUND: transient registrar — U ran kaspad --palw-register-bond once with its own datadir and key, stopped after the bond printed; NOT node-less (NODELESS_BOND_REGISTRATION_ABSENT, C1r2)"},
        "class_id": cid, "artifact_root": root, "owner_bond": bond, "payer_address": addr, "carrier_txid": txid,
        "tir_registration": rd("tir-registration.json"), "live_gate_preflight": rd("live-preflight.json"),
        "status_at_fold": rd("registration-status.json"),
@@ -310,6 +346,7 @@ do_observe() {
     local out=$SCR/observe; mkdir -p "$out"; local A; A=$(cat "$SCR/artifact.dir")
     local rc=0; python3 "$H1/observe.py" --class "$cid" --nodes "$(nodes_arg A B C)" --out "$EV/consensus-state.json" || rc=$?
     [ "$rc" = 0 ] || fail observe REGISTRY_STATE_MISMATCH "A_B_C_DISAGREE_rc$rc" "observe.py --nodes A,B,C" "A, B and C agree on the class row, the registry and the state proof at one block" "$EV/consensus-state.json"
+    [ -s "$SCR/reorg/reorg.json" ] && python3 "$H1/report.py" merge "$EV/consensus-state.json" "reorg=$SCR/reorg/reorg.json" >/dev/null
     local pin; pin=$(python3 -c "import json;print(json.load(open('$EV/consensus-state.json'))['pin'])")
     # U's own reads (no node of its own: B's RPC), and a proof of the registration against the pinned block (RFC-0009 stage D).
     ucli --output json model status "$cid" > "$out/u-status.json" 2> "$out/u-status.err" || true
@@ -372,6 +409,76 @@ print(json.dumps({"row_unchanged": before == after, "spent": int(b0) - int(b1), 
 PY
 }
 
+
+# L5/L6 probe: give the Panel seats (8 distinct genesis operators, none the registrant) the declared artifact and one producer for the
+# class, then watch what the shipped lifecycle does. This build's lifecycle consults seats/readiness/panel only (GAP-6): a
+# KERNEL_NOT_ACTIVE / G14-incomplete class reaching Probation/Active here is a fail-closed violation to route, never an L5/L6 PASS.
+LC_SEATS=${LC_SEATS:-"A B D1 D2 D3 D4 D5 D6"}
+LC_PRODUCER=${LC_PRODUCER:-D6}
+do_lifecycle() {
+    local cid A decl; cid=$(cat "$SCR/class.id"); A=$(cat "$SCR/artifact.dir"); decl=$(cat "$A/DECLARED")
+    local n f
+    for n in $LC_SEATS; do
+        f=$WORK_DIR/$n/extra-args; touch "$f"
+        grep -qxF -- "--palw-class-artifact=$decl" "$f" || echo "--palw-class-artifact=$decl" >> "$f"
+        if [ "$n" = "$LC_PRODUCER" ]; then
+            grep -qxF -- "--palw-produce" "$f" || echo "--palw-produce" >> "$f"
+            grep -qxF -- "--palw-producer-class=$cid" "$f" || echo "--palw-producer-class=$cid" >> "$f"
+        fi
+        stop_node "$n"; start_node "$n" || fail lifecycle TEST_INFRASTRUCTURE_FAILED "NODE_${n}_DID_NOT_RESTART" "devnet restart $n with the artifact" "the node up" "$WORK_DIR/$n/kaspad.out"
+        sleep 20
+    done
+    say "lifecycle: $LC_SEATS hold $(basename "$decl"); $LC_PRODUCER produces class ${cid:0:16}…; watcher started"
+    nohup python3 "$H1/lifecycle_watch.py" --class "$cid" --port "$(jport C)" --out "$SCR/lifecycle" --every "${LC_EVERY:-180}" --hours "${LC_HOURS:-14}" \
+        > "$SCR/lifecycle-watch.log" 2>&1 &
+    echo $! > "$SCR/lifecycle-watch.pid"
+}
+
+
+# Registration mined on a MINORITY branch, then a reorg onto the majority: B (U's RPC) is isolated (shifted P2P port, dials nobody), U
+# registers through it, B folds it on its own branch; the majority (A, the floor producer and five seats) keeps extending; B rejoins.
+# Afterwards A, B and C must agree, the class must be registered at most once and U charged once.
+REORG_MAJORITY_DAA=${REORG_MAJORITY_DAA:-4}
+REORG_MINORITY=${REORG_MINORITY:-"B D6"}   # B = U's RPC and a heartbeat clock; D6 its peer
+do_reorg_register() {
+    local out=$SCR/reorg; mkdir -p "$out"
+    local m; for m in $REORG_MINORITY; do echo "$REORG_MINORITY" > "$WORK_DIR/$m/ISOLATED"; done
+    for m in $REORG_MINORITY; do stop_node "$m"; done; for m in $REORG_MINORITY; do start_node "$m"; done
+    say "reorg: {$REORG_MINORITY} isolated on shifted P2P ports, peering only with each other; registering through B"
+    local rc=0; do_register || rc=$?
+    local cid; cid=$(cat "$SCR/class.id" 2>/dev/null || true)
+    local snapB snapA
+    snapB=$(rpc B getPalwClasses '{}' | python3 -c "import json,sys; print(json.dumps([c for c in json.load(sys.stdin)['classes'] if c['classId']=='$cid']))")
+    snapA=$(rpc A getPalwClasses '{}' | python3 -c "import json,sys; print(json.dumps([c for c in json.load(sys.stdin)['classes'] if c['classId']=='$cid']))")
+    local dagB dagA; dagB=$(rpc B getBlockDagInfo '{}'); dagA=$(rpc A getBlockDagInfo '{}')
+    local a0; a0=$(tip A); while [ "$(tip A)" -lt $((a0 + REORG_MAJORITY_DAA)) ] 2>/dev/null; do sleep 20; done
+    local dagA2; dagA2=$(rpc A getBlockDagInfo '{}'); local dagB2; dagB2=$(rpc B getBlockDagInfo '{}')
+    for m in $REORG_MINORITY; do rm -f "$WORK_DIR/$m/ISOLATED"; stop_node "$m"; start_node "$m"; done
+    local t0=$SECONDS sa sb
+    while :; do sa=$(rpc A getBlockDagInfo '{}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["sink"])'); sb=$(rpc B getBlockDagInfo '{}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["sink"])' 2>/dev/null || true)
+        [ -n "$sb" ] && [ "$sa" = "$sb" ] && break; [ $((SECONDS - t0)) -lt 1800 ] || break; sleep 10; done
+    local d1; d1=$(tip C); while [ "$(tip C)" -lt $((d1 + 2)) ] 2>/dev/null; do sleep 20; done   # let a merge re-fold, if it does
+    local afterA afterB; afterA=$(rpc A getPalwClasses '{}' | python3 -c "import json,sys; print(json.dumps([c for c in json.load(sys.stdin)['classes'] if c['classId']=='$cid']))")
+    afterB=$(rpc B getPalwClasses '{}' | python3 -c "import json,sys; print(json.dumps([c for c in json.load(sys.stdin)['classes'] if c['classId']=='$cid']))")
+    local txid; txid=$(cat "$SCR/carrier.txid" 2>/dev/null || true)
+    local stA; stA=$(rpc A getPalwModelRegistrationStatus "{\"classId\":\"\",\"objectId\":\"\",\"transactionId\":\"$txid\"}" 2>/dev/null || echo '{}')
+    python3 - "$out/reorg.json" "$rc" "$snapB" "$snapA" "$dagB" "$dagA" "$dagA2" "$dagB2" "$afterA" "$afterB" "$stA" "$((SECONDS - t0))" <<'PY'
+import json, sys
+o, rc, sB, sA, dB, dA, dA2, dB2, aA, aB, stA, secs = sys.argv[1:]
+J = lambda x: json.loads(x) if x else None
+dag = lambda x: {k: (J(x) or {}).get(k) for k in ("virtualDaaScore", "sink", "blockCount")}
+r = {"register_exit": int(rc), "while_isolated": {"B_class_row": J(sB), "A_class_row": J(sA), "B_dag": dag(dB), "A_dag": dag(dA)},
+     "majority_extended_to": dag(dA2), "minority_tip_before_rejoin": dag(dB2), "after_rejoin": {"A_class_row": J(aA), "B_class_row": J(aB), "seconds_to_A_sink": int(secs)},
+     "carrier_status_on_A_after": (J(stA) or {}).get("registration")}
+a, b = r["after_rejoin"]["A_class_row"], r["after_rejoin"]["B_class_row"]
+r["verdict"] = {"B_had_it_alone_while_isolated": bool(r["while_isolated"]["B_class_row"]) and not r["while_isolated"]["A_class_row"],
+                "A_equals_B_after": a == b, "registered_once_after": len(a or []) <= 1,
+                "registered_daa_moved": bool(a) and bool(r["while_isolated"]["B_class_row"]) and a[0].get("registeredDaa") != r["while_isolated"]["B_class_row"][0].get("registeredDaa")}
+json.dump(r, open(o, "w"), indent=1)
+print(json.dumps(r["verdict"]))
+PY
+}
+
 case $stage in
     source) do_source ;;
     preflight) env_json; do_preflight ;;
@@ -380,6 +487,8 @@ case $stage in
     register) do_register ;;
     conformance) do_conformance ;;
     observe) do_observe ;;
+    lifecycle) do_lifecycle ;;
+    reorg-register) do_reorg_register ;;
     reregister) do_reregister ;;
     summary) python3 "$H1/summarize.py" "$EV" "$RUN" "$MID" ;;
     *) sed -n '2,20p' "$0"; exit 2 ;;

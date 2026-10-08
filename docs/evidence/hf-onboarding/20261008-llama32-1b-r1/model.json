@@ -1,0 +1,135 @@
+{
+ "order": 2,
+ "id": "llama32-1b",
+ "family": "llama (Meta lineage, Llama-3.2)",
+ "repo": "unsloth/Llama-3.2-1B-Instruct",
+ "revision": "5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+ "task": "text-generation",
+ "context": 512,
+ "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/unsloth/Llama-3.2-1B-Instruct",
+ "full": "downloaded (approved 2026-10-08 ~18:20, hash-verified)",
+ "source": {
+  "schema": "misaka.h1.source.v1",
+  "repo": "unsloth/Llama-3.2-1B-Instruct",
+  "revision": "5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+  "resolved_sha": "5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+  "gated": false,
+  "private": false,
+  "architectures": [
+   "LlamaForCausalLM"
+  ],
+  "model_type": "llama",
+  "pipeline_tag": "text-generation",
+  "files": [
+   {
+    "path": ".gitattributes",
+    "size": 1570,
+    "git_oid": "52373fe24473b1aa44333d318f578ae6bf04b49b",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "README.md",
+    "size": 5743,
+    "git_oid": "0d01bf250f2f0ee855c4a1df6a1581ff937f81fa",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "chat_template.jinja",
+    "size": 3827,
+    "git_oid": "1bad6a0f648dccdbec523ca79ba90fbcfc806af0",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "config.json",
+    "size": 894,
+    "git_oid": "efa30582955bb5e3a626981b1b74c6ebb107c02c",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "generation_config.json",
+    "size": 239,
+    "git_oid": "d3af262e14cd9f678b04201e6a04ca36ba4ebb48",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "model.safetensors",
+    "size": 2471645608,
+    "git_oid": "5daf23edd80cedb879a4a18e6049a19b2417a3f7",
+    "sha256": "1ff795ff6a07e6a68085d206fb84417da2f083f68391c2843cd2b8ac6df8538f",
+    "lfs": true
+   },
+   {
+    "path": "special_tokens_map.json",
+    "size": 454,
+    "git_oid": "3c1d04911c269b925af977a3151c9704e990e4d0",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "tokenizer.json",
+    "size": 17209920,
+    "git_oid": "1c1d8d5c9024994f1d3b00f9662b8dd89ca13cf2",
+    "sha256": "6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b",
+    "lfs": true
+   },
+   {
+    "path": "tokenizer_config.json",
+    "size": 54669,
+    "git_oid": "3dc1faa6025cdb195c0889dd8d3d13ca26af9225",
+    "sha256": null,
+    "lfs": false
+   }
+  ],
+  "weights_bytes": 2471645608,
+  "local": {
+   "dir": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/unsloth/Llama-3.2-1B-Instruct",
+   "checks": [
+    {
+     "path": "chat_template.jinja",
+     "status": "MATCH",
+     "git_oid": "1bad6a0f648dccdbec523ca79ba90fbcfc806af0"
+    },
+    {
+     "path": "config.json",
+     "status": "MATCH",
+     "git_oid": "efa30582955bb5e3a626981b1b74c6ebb107c02c"
+    },
+    {
+     "path": "generation_config.json",
+     "status": "MATCH",
+     "git_oid": "d3af262e14cd9f678b04201e6a04ca36ba4ebb48"
+    },
+    {
+     "path": "model.safetensors",
+     "status": "MATCH",
+     "sha256": "1ff795ff6a07e6a68085d206fb84417da2f083f68391c2843cd2b8ac6df8538f"
+    },
+    {
+     "path": "special_tokens_map.json",
+     "status": "MATCH",
+     "git_oid": "3c1d04911c269b925af977a3151c9704e990e4d0"
+    },
+    {
+     "path": "tokenizer.json",
+     "status": "MATCH",
+     "sha256": "6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "status": "MATCH",
+     "git_oid": "3dc1faa6025cdb195c0889dd8d3d13ca26af9225"
+    }
+   ],
+   "required": [
+    "model.safetensors",
+    "config.json"
+   ],
+   "verdict": "MATCH"
+  }
+ }
+}

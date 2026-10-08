@@ -120,8 +120,12 @@ node_args() {
     [ "$hb" = 1 ] && a+=("--palw-heartbeat-miner-address=$(manifest "m['heartbeat'][$k]['address']")" --enable-unsynced-mining)
     # ISOLATED (a file in the node's dir): listen on a shifted P2P port and dial nobody — the others' --addpeer names the old port, so
     # the node mines its own branch until it is restarted without the mark (the reorg check).
+    # The file names the isolated group (space-separated nodes); the group's members peer only with each other's shifted ports. A
+    # heartbeat clock holds without peers (palw_heartbeat_miner: `has_peers()`), so a minority branch needs two nodes, one a clock.
     if [ -e "$d/ISOLATED" ]; then
         local i; for i in "${!a[@]}"; do [[ "${a[$i]}" == --listen=* ]] && a[$i]="--listen=127.0.0.1:$((P2P_BASE + 500 + k))"; done
+        local g peers=0; for g in $(cat "$d/ISOLATED"); do [ "$g" = "$n" ] && continue; a+=("--addpeer=127.0.0.1:$((P2P_BASE + 500 + $(kof "$g")))"); peers=1; done
+        [ "$peers" = 1 ] || a+=("--addpeer=127.0.0.1:$((P2P_BASE + 999))")   # a salted node must name peers; nothing listens there
     else
         local m; for m in $(steady_nodes); do [ "$m" = "$n" ] || a+=("--addpeer=127.0.0.1:$(p2p "$m")"); done
     fi

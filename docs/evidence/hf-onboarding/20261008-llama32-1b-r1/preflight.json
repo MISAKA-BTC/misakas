@@ -1,0 +1,140 @@
+{
+ "schema": "misaka.h1.preflight.v1",
+ "command": "misaka --network testnet-12 --output json model preflight hf://REPO@REV --depth shape [--max-context N]",
+ "header_only": true,
+ "widest": {
+  "exit": 0,
+  "file": "widest.json",
+  "readable": true,
+  "input": "https://huggingface.co/unsloth/Llama-3.2-1B-Instruct/resolve/5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+  "bytes_read": 17702,
+  "depth": {
+   "requested": "shape",
+   "reached": "shape",
+   "stopped_at": null
+  },
+  "network_daa": 5585,
+  "model_type": "llama",
+  "architectures": [
+   "LlamaForCausalLM"
+  ],
+  "frontend_level": "B",
+  "adapter": "llama",
+  "features_used": 9,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": false,
+   "excluded": []
+  },
+  "storage": [
+   "BF16"
+  ],
+  "weights_bytes": 2471628800,
+  "missing_shards": [],
+  "artifact_estimate_bytes": 1550337773,
+  "kernel": {
+   "kernel": "K2-TIR-v1 5b8156b3b85ac734",
+   "shipped": "KERNEL_NOT_ACTIVE",
+   "hypothetical": "ELIGIBLE_AT",
+   "detail": "ELIGIBLE_AT daa 5585: kernel 5b8156b3b85ac734\u2026, plan f15917a4763047bf\u2026, \u03b5_check \u2264 2^-227 (static admission only)",
+   "bucket": "kernel_extension_gap",
+   "max_positions": 32783
+  },
+  "admission_verdict": "ADMISSIBLE_GENERIC (estimated slowdown 1.02x on generic kernels: Div x243 (740608 element-ops); Mul x227 (740096 element-ops); Clamp x195 (739072 element-ops); Concat x32 (40960 element-ops); Slice x64 (40960 element-ops); HistAppend x32 (16384 element-ops))",
+  "admission_gate": "admitted",
+  "admission_gate_detail": null,
+  "layout": {
+   "max_context": 32783,
+   "checkpoint_interval": 65536,
+   "h_tile": 64,
+   "commit_tiles": 17,
+   "logits_tile": 256,
+   "searched": true,
+   "widest_context": 262144
+  },
+  "seat_needed_bytes": 4318613481,
+  "verdict": {
+   "convert": "ok",
+   "register": "ok",
+   "mine": "ok"
+  },
+  "unknown_because": {},
+  "blockers": [],
+  "notes": [
+   "the declared context is 32,783 positions: the widest at which admission v10 admits the class (the program reads up to 262,144; --max-context N declares another)",
+   "court window: under palw_model_court_window (dormant on this network) the class would be given its own window of 3,000 DAA (the network's is 3,000 DAA)",
+   "only ibm/.113 seats (MemoryMax 16-20 GiB) can hold the class; 5.104 seats (MemoryMax 9 GiB) cannot, so those seats never become ready for it (RFC-0002 \u00a7II.7.3 F4)"
+  ]
+ },
+ "declared": {
+  "exit": 0,
+  "max_context": 512,
+  "file": "declared.json",
+  "readable": true,
+  "input": "https://huggingface.co/unsloth/Llama-3.2-1B-Instruct/resolve/5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+  "bytes_read": 17702,
+  "depth": {
+   "requested": "shape",
+   "reached": "shape",
+   "stopped_at": null
+  },
+  "network_daa": 5585,
+  "model_type": "llama",
+  "architectures": [
+   "LlamaForCausalLM"
+  ],
+  "frontend_level": "B",
+  "adapter": "llama",
+  "features_used": 9,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": false,
+   "excluded": []
+  },
+  "storage": [
+   "BF16"
+  ],
+  "weights_bytes": 2471628800,
+  "missing_shards": [],
+  "artifact_estimate_bytes": 1550337773,
+  "kernel": {
+   "kernel": "K2-TIR-v1 5b8156b3b85ac734",
+   "shipped": "KERNEL_NOT_ACTIVE",
+   "hypothetical": "ELIGIBLE_AT",
+   "detail": "ELIGIBLE_AT daa 5585: kernel 5b8156b3b85ac734\u2026, plan 35d838c243a367f7\u2026, \u03b5_check \u2264 2^-233 (static admission only)",
+   "bucket": "kernel_extension_gap",
+   "max_positions": 512
+  },
+  "admission_verdict": "ADMISSIBLE_GENERIC (estimated slowdown 1.02x on generic kernels: Div x243 (740608 element-ops); Mul x227 (740096 element-ops); Clamp x195 (739072 element-ops); Concat x32 (40960 element-ops); Slice x64 (40960 element-ops); HistAppend x32 (16384 element-ops))",
+  "admission_gate": "admitted",
+  "admission_gate_detail": null,
+  "layout": {
+   "max_context": 512,
+   "checkpoint_interval": 65536,
+   "h_tile": 64,
+   "commit_tiles": 17,
+   "logits_tile": 256,
+   "searched": false,
+   "widest_context": 262144
+  },
+  "seat_needed_bytes": 1556161513,
+  "verdict": {
+   "convert": "ok",
+   "register": "ok",
+   "mine": "ok"
+  },
+  "unknown_because": {},
+  "blockers": [],
+  "notes": [
+   "court window: under palw_model_court_window (dormant on this network) the class would be given its own window of 3,000 DAA (the network's is 3,000 DAA)"
+  ]
+ }
+}

@@ -1,6 +1,6 @@
 {
  "schema": "misaka.h1.hf-onboarding.models.v1",
- "note": "Fixed revision, context and task per model. `local` names a checkpoint already on disk (no download); `full` says whether the weight-backed stages (L2+) run on this checkpoint. Header/shape runs of big models are never extrapolated to weight-backed results.",
+ "note": "Order per the Lead's 2026-10-08 ~18:00 directive (Coverage Closure): 1 Qwen, 2 Llama, 3 Huihui-Qwen3.5-9B (Qwen3.5-0.8B first), 4 Mitsuba (text decoder only), 5 GLM, 6 Qwen4/DeepSeek (header-only); 7-8 extra families. `local` names a checkpoint on disk; `full` says whether weight-backed stages run.",
  "models": [
   {
    "order": 1,
@@ -28,6 +28,28 @@
   },
   {
    "order": 2,
+   "id": "llama32-1b",
+   "family": "llama (Meta lineage, Llama-3.2)",
+   "repo": "unsloth/Llama-3.2-1B-Instruct",
+   "revision": "5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+   "task": "text-generation",
+   "context": 512,
+   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/unsloth/Llama-3.2-1B-Instruct",
+   "full": "downloaded (approved 2026-10-08 ~18:20, hash-verified)"
+  },
+  {
+   "order": 2,
+   "id": "tinyllama-1.1b",
+   "family": "llama",
+   "repo": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+   "revision": "fe8a4ea1ffedaf415f4da2f062534de366a451e6",
+   "task": "text-generation",
+   "context": 512,
+   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+   "full": "downloaded (approved 2026-10-08 ~18:20, hash-verified)"
+  },
+  {
+   "order": 2,
    "id": "smollm2-1.7b",
    "family": "llama",
    "repo": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
@@ -39,6 +61,47 @@
   },
   {
    "order": 3,
+   "id": "qwen35-0.8b",
+   "family": "qwen3.5-gdn-hybrid",
+   "repo": "Qwen/Qwen3.5-0.8B",
+   "revision": "2fc06364715b967f1860aea9cf38778875588b17",
+   "task": "text-generation",
+   "context": 512,
+   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/Qwen/Qwen3.5-0.8B",
+   "full": "local",
+   "note": "Qwen3.5 hybrid (GDN) at small scale \u2014 run before the 9B (Lead 2026-10-08)"
+  },
+  {
+   "order": 3,
+   "id": "huihui-qwen35-9b",
+   "family": "qwen3.5-gdn-hybrid (VLM wrapper, text decoder)",
+   "repo": "huihui-ai/Huihui-Qwen3.5-9B-abliterated",
+   "revision": "05b9e7c9b978ba29bdb8f50a49c30e4b91183339",
+   "task": "text-generation",
+   "context": 8192,
+   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/huihui-ai/Huihui-Qwen3.5-9B-abliterated",
+   "full": "downloaded (Lead GO 2026-10-08 ~18:35, 19,306,310,880 B, hash-verified)",
+   "calib_len": 8192,
+   "calib_chunks": 1,
+   "calib_docs": "docs/misaka-prea-design-v1.1.md",
+   "declare": ":tile=64:h-chunk=32:logits-tile=256",
+   "hfref_streamed": true,
+   "note": "text decoder only (vision tower 456M and MTP head 243M not converted); layout tile 64 / logits 256 / h_tile 32 / C 298 (COV-P1P2 a0f914b27 pin)"
+  },
+  {
+   "order": 4,
+   "id": "mitsuba-27b-ptq1",
+   "family": "gemma3? (GGUF PTQ1_0 custom quant; text decoder only)",
+   "repo": "isichan-ai/Mitsuba_and_HiMitsuba-27B-GGUF",
+   "revision": "33e63d450993500144243989b6d3f1bbb240e4d0",
+   "task": "text-generation",
+   "context": 512,
+   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/isichan-ai/Mitsuba_and_HiMitsuba-27B-GGUF/Mitsuba-ComfyUI-27B/Model-v1.18/Mitsuba-ComfyUI-27B-v1.18-PTQ1_0.gguf",
+   "full": "downloaded only the PTQ1_0 GGUF (approved, >=30 GB free)",
+   "file": "Mitsuba-ComfyUI-27B/Model-v1.18/Mitsuba-ComfyUI-27B-v1.18-PTQ1_0.gguf"
+  },
+  {
+   "order": 5,
    "id": "glm-edge-1.5b",
    "family": "glm",
    "repo": "zai-org/glm-edge-1.5b-chat",
@@ -50,7 +113,7 @@
    "bytes": 3186882328
   },
   {
-   "order": 4,
+   "order": 6,
    "id": "deepseek-v2-lite",
    "family": "deepseek-native-moe",
    "repo": "deepseek-ai/DeepSeek-V2-Lite-Chat",
@@ -62,40 +125,7 @@
    "bytes": 31413626576
   },
   {
-   "order": 4,
-   "id": "r1-distill-qwen-1.5b",
-   "family": "qwen2-dense (DeepSeek-R1 distill: a Qwen backbone)",
-   "repo": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-   "revision": "ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562",
-   "task": "text-generation",
-   "context": 512,
-   "local": null,
-   "full": "header-only"
-  },
-  {
-   "order": 5,
-   "id": "qwen35-0.8b",
-   "family": "qwen3.5-gdn-hybrid",
-   "repo": "Qwen/Qwen3.5-0.8B",
-   "revision": "2fc06364715b967f1860aea9cf38778875588b17",
-   "task": "text-generation",
-   "context": 512,
-   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/Qwen/Qwen3.5-0.8B",
-   "full": "local"
-  },
-  {
-   "order": 5,
-   "id": "granite-1b-a400m",
-   "family": "granite-moe",
-   "repo": "ibm-granite/granite-3.1-1b-a400m-instruct",
-   "revision": "0da7a48b0276d500ce5922fd2b33944091fc6c09",
-   "task": "text-generation",
-   "context": 512,
-   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/ibm-granite/granite-3.1-1b-a400m-instruct",
-   "full": "local"
-  },
-  {
-   "order": 5,
+   "order": 6,
    "id": "qwen15-moe-a2.7b",
    "family": "qwen2-moe",
    "repo": "Qwen/Qwen1.5-MoE-A2.7B-Chat",
@@ -108,27 +138,49 @@
   },
   {
    "order": 6,
-   "id": "smolvlm-256m",
-   "family": "idefics3-vlm",
-   "repo": "HuggingFaceTB/SmolVLM-256M-Instruct",
-   "revision": "7e3e67edbbed1bf9888184d9df282b700a323964",
-   "task": "image-text-to-text",
+   "id": "r1-distill-qwen-1.5b",
+   "family": "qwen2-dense (DeepSeek-R1 distill: a Qwen backbone)",
+   "repo": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+   "revision": "ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562",
+   "task": "text-generation",
    "context": 512,
    "local": null,
-   "full": "header-only",
-   "bytes": 513028808
+   "full": "header-only"
   },
   {
    "order": 6,
-   "id": "flan-t5-small",
-   "family": "t5-encoder-decoder",
-   "repo": "google/flan-t5-small",
-   "revision": "0fc9ddf78a1e988dac52e2dac162b0ede4fd74ab",
-   "task": "text2text-generation",
+   "id": "qwen4-exp-fixture",
+   "family": "qwen4-exp adapter (in-repo synthetic fixture)",
+   "repo": null,
+   "revision": null,
+   "task": "text-generation",
    "context": 512,
-   "local": null,
-   "full": "header-only",
-   "bytes": 307867048
+   "local": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/fixtures/qwen4_exp",
+   "full": "in-repo fixture (synthetic weights)",
+   "note": "copy of misaka-palw-tir-lower/tests/fixtures/hf/qwen4_exp + a SYNTHETIC 64-id WordLevel tokenizer.json made by H1 (the fixture has none; vocab 64)"
+  },
+  {
+   "order": 6,
+   "id": "deepseek-v4-fixture",
+   "family": "deepseek_v4 (in-repo synthetic fixture)",
+   "repo": null,
+   "revision": null,
+   "task": "text-generation",
+   "context": 512,
+   "local": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/fixtures/deepseek_v4",
+   "full": "in-repo fixture (synthetic weights)",
+   "note": "copy of misaka-palw-tir-lower/tests/fixtures/dsv4/deepseek_v4 + a SYNTHETIC 64-id WordLevel tokenizer.json made by H1 (the fixture has none; vocab 64)"
+  },
+  {
+   "order": 7,
+   "id": "granite-1b-a400m",
+   "family": "granite-moe",
+   "repo": "ibm-granite/granite-3.1-1b-a400m-instruct",
+   "revision": "0da7a48b0276d500ce5922fd2b33944091fc6c09",
+   "task": "text-generation",
+   "context": 512,
+   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/ibm-granite/granite-3.1-1b-a400m-instruct",
+   "full": "local"
   },
   {
    "order": 7,
@@ -162,6 +214,31 @@
    "context": 512,
    "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/ai21labs/Jamba-tiny-dev",
    "full": "local"
+  },
+  {
+   "order": 8,
+   "id": "smolvlm-256m",
+   "family": "idefics3-vlm",
+   "repo": "HuggingFaceTB/SmolVLM-256M-Instruct",
+   "revision": "7e3e67edbbed1bf9888184d9df282b700a323964",
+   "task": "image-text-to-text",
+   "context": 512,
+   "local": null,
+   "full": "header-only",
+   "bytes": 513028808
+  },
+  {
+   "order": 8,
+   "id": "flan-t5-small",
+   "family": "t5-encoder-decoder",
+   "repo": "google/flan-t5-small",
+   "revision": "0fc9ddf78a1e988dac52e2dac162b0ede4fd74ab",
+   "task": "text2text-generation",
+   "context": 512,
+   "local": null,
+   "full": "header-only",
+   "bytes": 307867048,
+   "note": "register/mine UNTESTED (preflight gives no verdict for a pipeline class; routed to P4)"
   }
  ]
 }

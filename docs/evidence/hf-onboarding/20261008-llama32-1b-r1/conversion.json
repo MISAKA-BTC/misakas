@@ -1,0 +1,331 @@
+{
+ "schema": "misaka.h1.conversion.v1",
+ "build_real_seconds": 1815.64,
+ "hf_fit_at_build": "slope 1.0023, corr 0.99817, top-1 0.938, KL 0.01024, max |\u0394| 2.968",
+ "cache_key": "6b1f330612afb4f1",
+ "cache_dir": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/llama32-1b/6b1f330612afb4f1",
+ "clean_source": false,
+ "build_exit": 0,
+ "wall_seconds_this_invocation": 2075,
+ "artifact_file": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/llama32-1b/6b1f330612afb4f1/class.palwtir.testnet-12.palwtir",
+ "lowered_file": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/llama32-1b/6b1f330612afb4f1/class.palwtir",
+ "lowered_bytes": 1533096192,
+ "artifact_bytes": 1533096320,
+ "artifact_sha256": "8d63d1eedb204317bcd719420f12bd217f0234fb970b87d3634103ab1aa90b1d",
+ "max_rss_bytes_seen": [
+  6664142848
+ ],
+ "pack_digest": "540d1b35ebb3427245e0a7b64a830b368acc69bb6e75605dd2568ecc7ddc086b",
+ "pack": {
+  "name": "llama32-1b",
+  "model": {
+   "architectures": [
+    "LlamaForCausalLM"
+   ],
+   "config_digest": "9f52790ecbc5bd3c1e14e6b9a714f3fd27f49abfda65995396f88720883ba8c8",
+   "files": [
+    {
+     "bytes": 894,
+     "path": "config.json",
+     "sha256": "dfb67fd8afe73a1c75245824ef9d64a6ba8983025447e3bf76aa1ea57ee46152"
+    },
+    {
+     "bytes": 2471645608,
+     "path": "model.safetensors",
+     "sha256": "1ff795ff6a07e6a68085d206fb84417da2f083f68391c2843cd2b8ac6df8538f"
+    },
+    {
+     "bytes": 17209920,
+     "path": "tokenizer.json",
+     "sha256": "6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b"
+    }
+   ],
+   "format": "safetensors",
+   "label": "unsloth/Llama-3.2-1B-Instruct",
+   "model_type": "llama",
+   "revision": "5a8abab4a5d6f164389b1079fb721cfab8d7126c"
+  },
+  "frontend": {
+   "adapter": {
+    "hash": "72f42bf13844d406d06c03526b29f6a076488c77bb65ded41f2bb7b604a8a9a1b8369064ba26f59cbb9c27f7e93502f6cefbfb55cd5ff4589a14ceeba3fec861",
+    "id": "llama",
+    "kind": "built-in"
+   },
+   "assumed_defaults": [],
+   "builtin_pack_hash": "20437c8e4a8e759f21715b1b993ce5fea032e9f79f00410b859f12f2b871664a01d2489577e40d38794efbe65eefbc4753b06a6601a556668292f974a091aafb",
+   "level": "B",
+   "spec_digest": "60e91c3b59dd83eb33fb0854b155f285d4c2df108e5fd2a6839d425e19d86e27"
+  },
+  "features": {
+   "registry_digest": "cb891cf3dbe05fcd93a81a1fa468022d9d9ab192ac1f720f3f468e372eb28f78",
+   "scope": {
+    "excluded": [],
+    "input": "token ids",
+    "output": "next-token logits",
+    "schema": "misaka.palw.feature-scope.v1",
+    "task": "text-generation",
+    "text_only": false
+   },
+   "used": [
+    {
+     "detail": "32q/8kv \u00d7 64 (group 4)",
+     "id": "ATTN_GQA_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+     ]
+    },
+    {
+     "detail": "128256 \u00d7 2048",
+     "id": "EMBED_TOKEN_V1",
+     "layers": []
+    },
+    {
+     "detail": "",
+     "id": "HEAD_TIED_V1",
+     "layers": []
+    },
+    {
+     "detail": "8192",
+     "id": "MLP_DENSE_GATED_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+     ]
+    },
+    {
+     "detail": "",
+     "id": "NORM_RMS_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+     ]
+    },
+    {
+     "detail": "",
+     "id": "OUTPUT_LOGITS_V1",
+     "layers": []
+    },
+    {
+     "detail": "",
+     "id": "RESIDUAL_PRE_NORM_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+     ]
+    },
+    {
+     "detail": "",
+     "id": "ROPE_DEFAULT_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+     ]
+    },
+    {
+     "detail": "",
+     "id": "ROPE_LLAMA3_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+     ]
+    }
+   ]
+  },
+  "quant": {
+   "descriptors": []
+  },
+  "profile": {
+   "calibration": {
+    "schema": "misaka.palw.calib-stats.v1",
+    "sequences_file": "calib-tokens.json",
+    "sites": 308,
+    "source": {
+     "files": [
+      {
+       "chunks": 1,
+       "file": "docs/archival.md",
+       "sha256": "71c3c4e1386b8eaa8def15c0640277008a0a77b0691a387f3e340f23c1609909",
+       "tokens": 3309
+      },
+      {
+       "chunks": 1,
+       "file": "docs/crescendo-guide.md",
+       "sha256": "e7f4ab8be58c9715f1aff83832a80889f772ff1c5e8c75b1b7e81bbe903d9965",
+       "tokens": 1166
+      },
+      {
+       "chunks": 1,
+       "file": "CONTRIBUTING.md",
+       "sha256": "1f11326094038a50e4823bc73ff0a6e96cbf5502ab78ec737c5d969eb3ada651",
+       "tokens": 1181
+      },
+      {
+       "chunks": 1,
+       "file": "SECURITY.md",
+       "sha256": "1a4219d71ba1a6f705f502b64da01539afffa59183b4cb786dd90a6cc175a6f8",
+       "tokens": 3994
+      }
+     ],
+     "len": 512,
+     "tokenizer": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/unsloth/Llama-3.2-1B-Instruct/tokenizer.json"
+    },
+    "stats_digest": "d0c54945ea432c941a842afb2f2ca58abe8368618610bb2bd42a82a7c4e62442",
+    "stats_file": "stats.json"
+   },
+   "context": 512,
+   "policy": {
+    "headroom16": "4000000000000000",
+    "headroom32": "4010000000000000",
+    "headroom_resid": "4010000000000000"
+   }
+  },
+  "converter": {
+   "crate_version": "1.1.0",
+   "lowering": "misaka.palw.lowering.v1",
+   "math": {
+    "mode": "libm-v1"
+   },
+   "name": "palw-tir-convert"
+  },
+  "declared": [
+   {
+    "checkpoint_interval": 65536,
+    "class_id": "534d21bd1ac1e1e260e8dab085195778a14ec5e6ff5cf2e1a8d63aa1c86c315ee17d006645d874d72ee606fe614afa605f2ac474aad8763b6c82c09ff2f18ce6",
+    "exact_layout": {
+     "commit_tiles": [
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      512
+     ],
+     "logits_scheme_id": "e0532a21545ebcdee3e6bc9c65b963ba123667fe60b4aaf5e56a0f4378f3ca1fc58e58937e9863341a67dcbb0f000af1d77333f8dfd48135e0ebf95e71d5f5a1",
+     "state_tiles": [
+      64,
+      64
+     ],
+     "version": 1
+    },
+    "file_digest": "12c443e80562ee948781803fb7790a1d20c88bd7ee645c409fe5254ddcc5e95fd64dc9c974401c69521878dbb2e975ad0739c68aa331539e9f04ba85202b3303",
+    "h_tile": 64,
+    "layout_digest": "ab74303999ff006ed1517d9aa25379847de070782b6198fa19fd81f62c416c36a769116b56fc53325f35ff78d315f2e4ea8bb665532f913c0c6761eb8e955efc",
+    "max_context": 512,
+    "network": "testnet-12"
+   }
+  ],
+  "conformance": {
+   "vectors": [
+    {
+     "commits_digest": "401f445a4714191fe9bfaffc57dcf592d2a1f2713f0ab4d5665f8cb1fbc24f64",
+     "decode": 1,
+     "label": "random 0 (1+1)",
+     "logits_digest": "a483e58e1c9ab797466699cc99d33057936b6de58ba3dcd8cc2d6a747ff6302b",
+     "positions": 2,
+     "prompt": [
+      49030
+     ],
+     "tokens": [
+      315
+     ]
+    }
+   ]
+  }
+ }
+}

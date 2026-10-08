@@ -49,6 +49,7 @@ def main():
     ap.add_argument("--local")
     ap.add_argument("--out")
     ap.add_argument("--endpoint", default="https://huggingface.co")
+    ap.add_argument("--require", action="append", default=[], help="a file that must be present and match (a GGUF in a subdirectory); replaces the default weight rule")
     a = ap.parse_args()
     try:
         info = fetch(f"{a.endpoint}/api/models/{a.repo}/revision/{a.revision}")
@@ -98,8 +99,11 @@ def main():
         top = [c for c in checks if "/" not in c["path"]]
         weights = [c for c in top if c["path"].endswith(".safetensors")] or [c for c in top if c["path"].startswith("pytorch_model") and c["path"].endswith(".bin")]
         required = weights + [c for c in top if c["path"] == "config.json"]
+        if a.require:
+            weights = [c for c in checks if c["path"] in a.require]
+            required = weights if len(weights) == len(a.require) else []
         out["local"]["required"] = [c["path"] for c in required]
-        if any(c["status"] == "MISMATCH" for c in checks) or any(c["status"] != "MATCH" for c in required) or not weights:
+        if any(c["status"] == "MISMATCH" for c in checks) or any(c["status"] != "MATCH" for c in required) or not weights or not required:
             rc = 3
         out["local"]["verdict"] = "MATCH" if rc == 0 else "MISMATCH_OR_ABSENT"
     js = json.dumps(out, indent=1)

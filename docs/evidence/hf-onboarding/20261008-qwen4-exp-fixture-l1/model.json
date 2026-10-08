@@ -1,0 +1,57 @@
+{
+ "order": 6,
+ "id": "qwen4-exp-fixture",
+ "family": "qwen4-exp adapter (in-repo synthetic fixture)",
+ "repo": null,
+ "revision": null,
+ "task": "text-generation",
+ "context": 512,
+ "local": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/fixtures/qwen4_exp",
+ "full": "in-repo fixture (synthetic weights)",
+ "note": "copy of misaka-palw-tir-lower/tests/fixtures/hf/qwen4_exp + a SYNTHETIC 64-id WordLevel tokenizer.json made by H1 (the fixture has none; vocab 64)",
+ "source": {
+  "schema": "misaka.h1.source.v1",
+  "repo": null,
+  "revision": null,
+  "resolved_sha": null,
+  "fixture_dir": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/fixtures/qwen4_exp",
+  "integration_sha": "ea402c1a898688712bc12e2b1d3b5e5553ef8e69",
+  "note": "an in-repo synthetic fixture: no Hub revision exists; its bytes at the tested SHA are the source",
+  "files": [
+   {
+    "path": "config.json",
+    "size": 1644,
+    "sha256": "09756eb4f27fc46fce5865aec02785e586016c5b4d7238dc391069bb6404408e"
+   },
+   {
+    "path": "logits.json",
+    "size": 37998,
+    "sha256": "eed61fa79c123f8caf3fafbb5dacf787a90d5d1d5cddc111dc09f042fa0672c6"
+   },
+   {
+    "path": "model.safetensors",
+    "size": 248504,
+    "sha256": "51c1767f587a936d6505a69fd42c8dfbaaafe0286dfc65ab2272942451cb35f0"
+   },
+   {
+    "path": "ngram_ids.json",
+    "size": 683,
+    "sha256": "d20155632ac79a8717b54b7174b77dbad1da8f76fcb699131acd2810bea5457a"
+   },
+   {
+    "path": "qsa_selected.json",
+    "size": 305,
+    "sha256": "f2363307e69648cb6c4b1b13c63d6b0ba0801cff628eef36321f8ec2a22ad8a7"
+   },
+   {
+    "path": "tokenizer.json",
+    "size": 1487,
+    "sha256": "078e3137f41fbf8040359333dbb43c0f399ace94a4b3b9fff0e205cc49644c0d"
+   }
+  ],
+  "local": {
+   "dir": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/fixtures/qwen4_exp",
+   "verdict": "FIXTURE"
+  }
+ }
+}
