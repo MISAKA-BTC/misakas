@@ -156,6 +156,8 @@ pub fn classify_census_code_v1(gate: Gate, code: &str, arg: Option<&str>, eviden
         codes::HEADER_TOO_LARGE => ResourceRefused,
 
         // ---- lower: the task ------------------------------------------------------------------------------------------------------
+        // No configuration names a model class: not a repository the frontend can be asked to read (the source's, not the importer's).
+        codes::TASK_UNKNOWN if arg == Some(codes::TASK_UNKNOWN_NO_CONFIG) => ExternalBlocker,
         codes::TASK_UNKNOWN | "TASK_MISMATCH" => FrontendRequired,
         codes::MODALITY_PROFILE_MISSING | codes::PARTIAL_TASK_ONLY => ProfileRequired,
 
@@ -282,6 +284,16 @@ mod tests {
                 assert!(!k.is_semantic_gap());
             }
         }
+    }
+
+    /// A repository that carries no configuration is not a frontend gap: 91 % of the Hub's `TASK_UNKNOWN` has none.
+    #[test]
+    fn an_undeclared_task_is_the_frontends_only_when_a_configuration_names_a_model_class() {
+        assert_eq!(
+            classify_census_code_v1(Gate::Lower, codes::TASK_UNKNOWN, Some(codes::TASK_UNKNOWN_NO_CONFIG), &[]),
+            GapClassV1::ExternalBlocker
+        );
+        assert_eq!(classify_census_code_v1(Gate::Lower, codes::TASK_UNKNOWN, None, &[]), GapClassV1::FrontendRequired);
     }
 
     #[test]

@@ -470,10 +470,20 @@ fn source_listing(l: &ListingV1, sel: &SelectedV1) -> Vec<Found> {
 fn lower_listing(l: &ListingV1, task: &TaskV1, sel: &SelectedV1) -> Vec<Found> {
     let mut f = Vec::new();
     if task.task == "unknown" {
+        // A repository whose configuration names no model class is not one the frontend can read; one that does is a task the
+        // inference could not place (`listing::task_of_architecture_class`).
+        let described = l
+            .config
+            .as_object()
+            .is_some_and(|o| o.contains_key("architectures") || o.contains_key("model_type") || o.contains_key("peft"));
         f.push(found(
             codes::TASK_UNKNOWN,
-            None,
-            vec!["no pipeline_tag, and the configuration does not name a causal language model".into()],
+            (!described).then(|| codes::TASK_UNKNOWN_NO_CONFIG.to_string()),
+            vec![if described {
+                "no pipeline_tag, and the configuration does not name a causal language model".into()
+            } else {
+                "no pipeline_tag, and the repository carries no configuration that names a model class".into()
+            }],
         ));
     } else if task.profile == Profile::None {
         f.push(found(
@@ -1189,6 +1199,21 @@ mod tests {
     /// (`weights::torchzip`); the census has fetched safetensors headers only, so the lower gate of such a repository is NOT_RUN
     /// (not a verdict, not a gap of any kind) with its own code — and a pytorch file that is not a transformers checkpoint, or a task
     /// with no profile, keeps its own, earlier answer.
+    /// `TASK_UNKNOWN` says why: a configuration that names a model class (the frontend could place the task) or none at all.
+    #[test]
+    fn an_undeclared_task_says_whether_a_configuration_names_a_model_class() {
+        let mut l = listing(None, &["README.md", "model.bin"]);
+        let r = evaluate(&l, None, &ctx());
+        let lo = gate(&r.technical, Gate::Lower);
+        assert_eq!((lo.blocking.as_deref(), lo.arg.as_deref()), (Some(codes::TASK_UNKNOWN), Some(codes::TASK_UNKNOWN_NO_CONFIG)));
+        assert_eq!(lo.class, Some(GapClassV1::ExternalBlocker));
+        l.config = serde_json::json!({"architectures": ["CustomResearchModel"], "model_type": "custom"});
+        let r = evaluate(&l, None, &ctx());
+        let lo = gate(&r.technical, Gate::Lower);
+        assert_eq!((lo.blocking.as_deref(), lo.arg.as_deref()), (Some(codes::TASK_UNKNOWN), None));
+        assert_eq!(lo.class, Some(GapClassV1::FrontendRequired));
+    }
+
     #[test]
     fn a_pytorch_checkpoint_is_not_run_never_an_unsupported_format() {
         for sib in [

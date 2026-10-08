@@ -107,6 +107,9 @@ pub const RIGHTS_UNCONFIRMED: &str = "RIGHTS_UNCONFIRMED";
 
 /// The repository declares no task and none follows from its configuration.
 pub const TASK_UNKNOWN: &str = "TASK_UNKNOWN";
+/// The `arg` of a `TASK_UNKNOWN` whose repository carries no configuration naming a model class (no `architectures`, `model_type` or
+/// PEFT block): not a transformers / diffusers / PEFT repository at all, so nothing in the frontend can be asked to read it.
+pub const TASK_UNKNOWN_NO_CONFIG: &str = "no-config";
 /// The declared task has no canonical job profile (inputs, output, court path, artifact) in any RFC this build carries.
 pub const MODALITY_PROFILE_MISSING: &str = "MODALITY_PROFILE_MISSING";
 /// The declared task needs parts the class this build produces does not compute (a VLM's vision stage): the text class is a
