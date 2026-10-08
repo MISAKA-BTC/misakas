@@ -29,7 +29,7 @@ use kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2;
 use kaspa_consensus_core::palw_fork_choice_rule_e_v1::{
     PALW_RULE_E_MAX_EXTRA_CANDIDATES_V1, PALW_RULE_E_PARTICIPATION_DEPTH_DAA_V1 as W_P, palw_rule_e_ibd_commit_v1,
 };
-use kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2;
+use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwClaimSourceV2};
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -202,6 +202,13 @@ async fn finx_e_v1_the_lighter_branch_more_bonds_worked_on_is_weighed_and_taken(
         assert_eq!((pair.a.economic(), pair.b.economic()), ((0, 0, 0), (0, 0, 0)), "{tag}: an economic tie");
         if armed {
             assert_eq!((n.heavy.sink(), n.light.sink()), (lt, lt), "{tag}: both nodes on the lighter branch more bonds worked on");
+            // LIVE-R1 N2's consensus half reads rule E: the light node's refusal of the heavier tip is a weighed refusal (rule E
+            // weighed the pair and the refused tip does not outrank its sink); the heavy node, which moved, records none.
+            assert!(
+                n.light.vp().palw_partition_refusal_v1().is_some_and(|r| r.refused == ht),
+                "{tag}: the light node's refusal is weighed"
+            );
+            assert_eq!(n.heavy.vp().palw_partition_refusal_v1(), None, "{tag}: the heavy node moved and refuses nothing");
         } else {
             assert_eq!((n.heavy.sink(), n.light.sink()), (ht, lt), "{tag}: the status quo — split (V1)");
             assert_eq!(n.heavy.vp().palw_rule_e_searches.load(Relaxed), 0, "{tag}: no continuation runs unarmed");
@@ -736,6 +743,346 @@ async fn finx_e_dos_a_flood_of_light_tips_costs_a_bounded_search() {
             );
         } else {
             assert_eq!(vp.palw_rule_e_searches.load(Relaxed), 0, "{tag}: no continuation runs unarmed");
+        }
+    }
+}
+
+// =====================================================================================================
+// Combined: partition rejoin under rule E (the user's P0 item, 2026-10-09)
+// =====================================================================================================
+
+/// The blocks one side made in each slot, in order.
+type Slots = Vec<Vec<Block>>;
+
+fn flat(slots: &Slots) -> Vec<Block> {
+    slots.iter().flatten().cloned().collect()
+}
+
+/// Feed `a` and `b` slot by slot, alternating — a node syncing from a peer on each side.
+async fn feed_interleaved(to: &mut T12Chain, a: &Slots, b: &Slots) {
+    for i in 0..a.len().max(b.len()) {
+        if let Some(s) = a.get(i) {
+            feed(to, s).await;
+        }
+        if let Some(s) = b.get(i) {
+            feed(to, s).await;
+        }
+    }
+}
+
+/// **A partition longer than the finality depth, then the reconnect: how the minority rejoins under rule E.** Depth 60 (the
+/// harness's seal scale; testnet-12's 600 is the same shape, longer), devnet r1's shape: a claim bound before the fork, its licence
+/// carried on the minority's side only; the majority's cards 2 and 3 attempt (two bonds), the minority's card 4 (one bond). Forty
+/// slots — both sides' finality points pass the fork.
+///
+/// * The relay cannot rejoin anyone: both nodes are sealed against the other branch, armed or not — rule E does not cross
+///   finality (ADR-0175 residual b). Asserted, so the residual is pinned rather than assumed.
+/// * The minority's old datadir: rule E's IBD commit (the claim-set difference of the two states, as the flow runs it) COMMITS the
+///   majority's chain, and the majority's keeps its own — the minority's way back over IBD agrees with the rule.
+/// * A verified resync (an empty datadir that hears both sides slot by slot, as it would from one peer on each): armed, it lands on
+///   the majority — the side the bonds worked on; the licence of the shared claim decides nothing. The same resync unarmed is
+///   measured and printed (the status quo follows the licence).
+#[tokio::test]
+async fn finx_e_rejoin_a_partition_longer_than_finality_rejoins_the_minority_over_ibd_and_resync() {
+    kaspa_core::log::try_init_logger("warn");
+    const DEPTH: u64 = 60;
+    const LONG: usize = 40;
+    let tag = "E rejoin past the seal";
+    let mut n = net_ruled(Some(DEPTH), true);
+    shared_prefix(&mut n).await;
+    let c = bind_claims(&mut n.heavy, 1).await[0];
+    let shared = blocks_in_topological_order(&n.heavy);
+    feed(&mut n.light, &shared).await;
+    let fork = n.heavy.sink();
+    let carrier = licence_carrier(&n.light, &n.floats, 0, c);
+    let (mut hs, mut ls): (Slots, Slots) = (Vec::new(), Vec::new());
+    for slot in 0..LONG {
+        let mut h = free_slot(&mut n.heavy, &mut n.nonce, 2, Vec::new()).await;
+        if slot == 0 {
+            for card in [2usize, 3] {
+                h.push(free_attempt(&mut n.heavy, card).await.0);
+            }
+        }
+        hs.push(h);
+        let mut l = free_slot(&mut n.light, &mut n.nonce, 1, if slot == 0 { vec![carrier.clone()] } else { Vec::new() }).await;
+        if slot == 0 {
+            l.push(free_attempt(&mut n.light, 4).await.0);
+        }
+        ls.push(l);
+    }
+    let (ht, lt) = (n.heavy.sink(), n.light.sink());
+    let (wh, wl) =
+        (n.heavy.ctx.consensus.get_palw_rule_e_weighing_v1().unwrap(), n.light.ctx.consensus.get_palw_rule_e_weighing_v1().unwrap());
+    assert!(sealed_past(&n.heavy, fork) && sealed_past(&n.light, fork), "{tag}: both sides sealed past the fork");
+    feed(&mut n.light, &flat(&hs)).await;
+    feed(&mut n.heavy, &flat(&ls)).await;
+    eprintln!(
+        "[finx {tag}] {LONG} slots, depth {DEPTH}: after the reconnect heavy node on {}, light node on {} (sealed both)",
+        if n.heavy.sink() == ht { "its own" } else { "the other" },
+        if n.light.sink() == lt { "its own" } else { "the other" }
+    );
+    assert_eq!((n.heavy.sink(), n.light.sink()), (ht, lt), "{tag}: the relay cannot cross finality, armed or not (residual b)");
+
+    let (minority_ibd, pair) = palw_rule_e_ibd_commit_v1(&n.config.params, &wl, &wh).expect("weighable");
+    let (majority_ibd, _) = palw_rule_e_ibd_commit_v1(&n.config.params, &wh, &wl).expect("weighable");
+    eprintln!(
+        "[finx {tag}] IBD under rule E: the minority's datadir staging the majority: {minority_ibd:?} (participation {} vs {}); the majority's staging the minority: {majority_ibd:?}",
+        pair.a.participation, pair.b.participation
+    );
+    assert_eq!((minority_ibd, majority_ibd), (PalwIbdCommitV2::Commit, PalwIbdCommitV2::KeepIncumbent));
+
+    // The verified resync: an empty datadir hearing both sides slot by slot, minority first in each slot.
+    let mut resync = n.fresh_node();
+    feed(&mut resync, &shared).await;
+    feed_interleaved(&mut resync, &ls, &hs).await;
+    let (config_sq, bundle_sq, premine_sq, floats_sq) = parts_ruled(Some(DEPTH), false);
+    let mut resync_sq = t12_genesis_chain(&config_sq, &bundle_sq, &premine_sq, &floats_sq);
+    feed(&mut resync_sq, &shared).await;
+    feed_interleaved(&mut resync_sq, &ls, &hs).await;
+    eprintln!(
+        "[finx {tag}] verified resync hearing both sides: armed on {}, status quo on {}",
+        if on_chain(&resync, ht) { "the MAJORITY" } else { "the minority" },
+        if on_chain(&resync_sq, ht) { "the majority" } else { "the MINORITY" }
+    );
+    assert!(on_chain(&resync, ht), "{tag}: armed, the resync rejoins the side the bonds worked on");
+}
+
+/// The bond registration a node's `--palw-register-bond` carries (`t12_seat_maturity_fence`'s carrier, generalized): harness key
+/// row `key` registers a bond whose collateral is output 1 of the carrier, funded from `funding`, which card row `spender` holds;
+/// the change (output 0) goes back to `key`'s address, so it funds the next registration.
+fn registration_carrier(
+    config: &Config,
+    bundle: &PalwConsensusParamsV2,
+    funding: &(TransactionOutpoint, UtxoEntry),
+    key: usize,
+    spender: usize,
+) -> Transaction {
+    use kaspa_consensus_core::palw_state_v2::{
+        PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT, PALW_OPERATOR_POSSESSION_MLDSA87_CONTEXT, PalwBondKeyV2,
+        PalwConsensusObjectV2 as Obj, palw_bond_registration_message_v2, palw_operator_possession_message_v1,
+    };
+    let keypair = TestConsensus::palw_v2_registry_keypair(key as u64);
+    let pubkey = keypair.verification_key.as_ref().to_vec();
+    let payout = Hash64::from_bytes(kaspa_hashes::blake2b_512_address_payload(&pubkey).as_bytes());
+    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        config.params.net.to_string().as_bytes(),
+        Some(config.params.genesis.hash),
+    );
+    let signed = PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 1));
+    let collateral = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
+    let classes = std::collections::BTreeSet::from([bundle.base_class_id]);
+    let sign = |message: &[u8], context: &[u8]| {
+        libcrux_ml_dsa::ml_dsa_87::sign(&keypair.signing_key, message, context, [0x5Eu8; 32]).expect("sign").as_ref().to_vec()
+    };
+    let message = palw_bond_registration_message_v2(domain, &signed, &pubkey, &pubkey, collateral, &payout, &classes);
+    let possession = palw_operator_possession_message_v1(domain, &signed, &pubkey, &pubkey);
+    let mut signature = sign(message.as_byte_slice(), PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT);
+    signature.extend(sign(possession.as_byte_slice(), PALW_OPERATOR_POSSESSION_MLDSA87_CONTEXT));
+    let object = Obj::BondRegistered {
+        bond: signed,
+        pubkey: pubkey.clone(),
+        operator_pubkey: pubkey,
+        collateral,
+        payout_payload: payout,
+        capable_classes: classes,
+        signature,
+    };
+    use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+    let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).expect("serializes");
+    let (outpoint, entry) = funding.clone();
+    let fee = 1_000_000_000;
+    let mut tx = Transaction::new(
+        crate::constants::TX_VERSION,
+        vec![TransactionInput::new(outpoint, vec![], 0, 1)],
+        vec![
+            TransactionOutput::new(entry.amount - collateral - fee, card_payout_spk(key)),
+            TransactionOutput::new(collateral, kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(payout.as_byte_slice())),
+        ],
+        0,
+        kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        payload,
+    );
+    sign_spend(&mut tx, entry, spender, config.params.storage_mass_parameter);
+    tx
+}
+
+/// [`parts_ruled`] with testnet-12's main premine output re-addressed to harness key row 8 (the genesis commitment recomputed,
+/// as `t12_seat_maturity_fence` does), so new bonds can be registered. Returns that output as the funding.
+fn parts_funded(rule_e: bool) -> (Config, PalwConsensusParamsV2, Utxos, Utxos, (TransactionOutpoint, UtxoEntry)) {
+    use kaspa_consensus_core::config::premine::{MAIN_PREMINE_INDEX, premine_outpoint_for};
+    use kaspa_consensus_core::muhash::MuHashExtensions;
+    let (config, _, mut premine, floats) = t12_with_harness_cards();
+    let mut params: Params = config.params.clone();
+    let main = premine_outpoint_for(params.net, MAIN_PREMINE_INDEX);
+    let funding = {
+        let (outpoint, entry) = premine.iter_mut().find(|(o, _)| *o == main).expect("testnet-12 mints a main premine output");
+        entry.script_public_key = card_payout_spk(8);
+        (*outpoint, entry.clone())
+    };
+    let mut multiset = kaspa_muhash::MuHash::new();
+    for (outpoint, entry) in &premine {
+        multiset.add_utxo(outpoint, entry);
+    }
+    params.genesis.utxo_commitment = multiset.finalize();
+    params.genesis.hash = kaspa_consensus_core::header::Header::from(&params.genesis).hash;
+    params.palw_reorg_strict_economic_win = Some(ForkActivation::new(1));
+    for name in ["palw_panel_seed_execution", "palw_operator_anchor"] {
+        (post_launch_entry(name).set)(&mut params, Some(ForkActivation::new(1)));
+    }
+    params.palw_capacity_weight_cap = Some(ForkActivation::new(1));
+    params.sync_palw_capacity_weight_cap();
+    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    config.params.validate_palw_v2().expect("a runnable testnet-12 ruleset");
+    let config = if rule_e { armed_rule_e(config) } else { config };
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
+        unreachable!("ConsensusV2")
+    };
+    let bundle = bundle.clone();
+    (config, bundle, premine, floats, funding)
+}
+
+/// **A partition where one side's participation is Sybil bonds.** After the fork the heavy side registers two NEW bonds (harness
+/// rows 8 and 9, real collateral) and they attempt twice each — four attempt blocks, the heavier branch, two distinct bonds; the
+/// light side's only bond is card 2, once. Both tips past `W_p`.
+///
+/// * Armed: participation counts bonds of the fork's registry only, so the two new bonds count for nothing: zero against one —
+///   both nodes on the light side. (A bond the other side never saw registered is not the common past's.)
+/// * Unarmed: the status quo — the heavy node never weighs the lighter branch, the light node keeps its own on a deep economic tie.
+#[tokio::test]
+async fn finx_e_sybil_bonds_registered_after_the_fork_count_for_nothing() {
+    kaspa_core::log::try_init_logger("warn");
+    for armed in ARMS {
+        let tag = format!("E Sybil bonds {}", arm(armed));
+        let (config, bundle, premine, floats, funding) = parts_funded(armed);
+        let heavy = t12_genesis_chain(&config, &bundle, &premine, &floats);
+        let light = t12_genesis_chain(&config, &bundle, &premine, &floats);
+        let (x, y) = (pay(&config, &floats, card_payout_spk(5)), pay(&config, &floats, card_payout_spk(6)));
+        let mut n = Net { config: config.clone(), bundle: bundle.clone(), premine, floats, heavy, light, nonce: 1 << 40, x, y };
+        let fork = shared_prefix(&mut n).await;
+        // The heavy side registers two new bonds above the fork.
+        let first = registration_carrier(&config, &bundle, &funding, 8, 8);
+        let change = (
+            TransactionOutpoint::new(first.id(), 0),
+            UtxoEntry::new(first.outputs[0].value, first.outputs[0].script_public_key.clone(), 0, false),
+        );
+        let second = registration_carrier(&config, &bundle, &change, 9, 8);
+        let mut hb = free_slot(&mut n.heavy, &mut n.nonce, 2, vec![first.clone()]).await;
+        hb.extend(free_slot(&mut n.heavy, &mut n.nonce, 2, vec![second.clone()]).await);
+        hb.extend(free_slot(&mut n.heavy, &mut n.nonce, 2, Vec::new()).await);
+        let sybils = [PalwBondKeyV2(TransactionOutpoint::new(first.id(), 1)), PalwBondKeyV2(TransactionOutpoint::new(second.id(), 1))];
+        {
+            let (_, state) = n.heavy.tip_state();
+            for s in &sybils {
+                assert!(state.bond(s).is_some(), "{tag}: the heavy side registered {s:?}");
+            }
+        }
+        n.heavy.bonds.extend(sybils);
+        let mut lb = Vec::new();
+        for slot in 0..SPLIT {
+            hb.extend(free_slot(&mut n.heavy, &mut n.nonce, 2, Vec::new()).await);
+            if slot == 1 || slot == 8 {
+                for row in [8usize, 9] {
+                    hb.push(free_attempt(&mut n.heavy, row).await.0);
+                }
+            }
+            lb.extend(free_slot(&mut n.light, &mut n.nonce, 1, Vec::new()).await);
+            if slot == 1 {
+                lb.push(free_attempt(&mut n.light, 2).await.0);
+            }
+        }
+        let (ht, lt) = (n.heavy.sink(), n.light.sink());
+        feed(&mut n.light, &hb).await;
+        feed(&mut n.heavy, &lb).await;
+        assert!(bw(&n.light, ht) > bw(&n.light, lt), "{tag}: the Sybil side is the heavier");
+        let pair = node_pair(&n.light, ht, lt);
+        assert_eq!(client_pair(&n.light, ht, lt), pair, "{tag}: leaf v2 gives a client the node's pair");
+        eprintln!(
+            "[finx {tag}] fork {fork}: participation Sybil side {} (two new bonds, four attempts) vs honest {}; sinks heavy node {} light node {}",
+            pair.a.participation,
+            pair.b.participation,
+            if n.heavy.sink() == ht { "Sybil" } else { "HONEST" },
+            if n.light.sink() == lt { "honest" } else { "SYBIL" },
+        );
+        assert_eq!((pair.a.participation, pair.b.participation), (0, 1), "{tag}: bonds registered after the fork count for nothing");
+        if armed {
+            assert_eq!((n.heavy.sink(), n.light.sink()), (lt, lt), "{tag}: both nodes on the honest side");
+        } else {
+            assert_eq!((n.heavy.sink(), n.light.sink()), (ht, lt), "{tag}: the status quo — split");
+        }
+    }
+}
+
+/// **A partition that heals while a private branch is released.** Three branches from one fork: honest A (cards 2 and 3 attempt;
+/// X pays the merchant there), honest B (card 4), and an attacker P — one bond (card 5) attempting five times, the heaviest branch
+/// — that carries Y and, first, the public licence of a claim all three hold (the stale-incumbent carrier). At the heal every
+/// node receives the other two branches at once. Armed: P's licence decides nothing and its one bond loses to A's two; B's one
+/// bond loses to A's two; both honest nodes end on A, X stands, Y is absent. Unarmed: measured and printed.
+#[tokio::test]
+async fn finx_e_a_partition_heals_while_a_private_branch_is_released() {
+    kaspa_core::log::try_init_logger("warn");
+    for armed in ARMS {
+        let tag = format!("E heal + release {}", arm(armed));
+        let mut n = net_ruled(None, armed);
+        shared_prefix(&mut n).await;
+        let c = bind_claims(&mut n.heavy, 1).await[0];
+        let shared = blocks_in_topological_order(&n.heavy);
+        feed(&mut n.light, &shared).await;
+        let mut b = n.fresh_node();
+        feed(&mut b, &shared).await;
+        let (x, y) = (n.x.clone(), n.y.clone());
+        // P = `heavy` (the attacker), A = `light`, B = `b`.
+        let carrier = licence_carrier(&n.heavy, &n.floats, 0, c);
+        let mut p = free_slot(&mut n.heavy, &mut n.nonce, 2, vec![y.clone()]).await;
+        p.extend(free_slot(&mut n.heavy, &mut n.nonce, 2, vec![carrier]).await);
+        let mut a = free_slot(&mut n.light, &mut n.nonce, 1, vec![x.clone()]).await;
+        let mut bb = Vec::new();
+        for slot in 0..SPLIT {
+            p.extend(free_slot(&mut n.heavy, &mut n.nonce, 2, Vec::new()).await);
+            if slot % 5 == 0 {
+                p.push(free_attempt(&mut n.heavy, 5).await.0);
+            }
+            a.extend(free_slot(&mut n.light, &mut n.nonce, 1, Vec::new()).await);
+            if slot == 1 {
+                for card in [2usize, 3] {
+                    a.push(free_attempt(&mut n.light, card).await.0);
+                }
+            }
+            bb.extend(free_slot(&mut b, &mut n.nonce, 1, Vec::new()).await);
+            if slot == 1 {
+                bb.push(free_attempt(&mut b, 4).await.0);
+            }
+        }
+        let (pt, at, bt) = (n.heavy.sink(), n.light.sink(), b.sink());
+        feed(&mut n.light, &bb).await;
+        feed(&mut n.light, &p).await;
+        feed(&mut b, &a).await;
+        feed(&mut b, &p).await;
+        assert!(bw(&n.light, pt) > bw(&n.light, at) && bw(&n.light, at) > bw(&n.light, bt), "{tag}: P heaviest, then A, then B");
+        let (x_out, y_out) = (TransactionOutpoint::new(x.id(), 0), TransactionOutpoint::new(y.id(), 0));
+        let place = |node: &T12Chain| {
+            if on_chain(node, at) {
+                "A"
+            } else if on_chain(node, pt) {
+                "P"
+            } else {
+                "B"
+            }
+        };
+        eprintln!(
+            "[finx {tag}] healed with P released: node A on {} (X {} Y {}), node B on {} (X {} Y {})",
+            place(&n.light),
+            if has_utxo(&n.light, x_out) { "present" } else { "gone" },
+            if has_utxo(&n.light, y_out) { "PRESENT" } else { "absent" },
+            place(&b),
+            if has_utxo(&b, x_out) { "present" } else { "gone" },
+            if has_utxo(&b, y_out) { "PRESENT" } else { "absent" },
+        );
+        if armed {
+            assert!(on_chain(&n.light, at) && on_chain(&b, at), "{tag}: both honest nodes on A");
+            for node in [&n.light, &b] {
+                assert!(has_utxo(node, x_out) && !has_utxo(node, y_out), "{tag}: X stands, Y absent");
+            }
         }
     }
 }

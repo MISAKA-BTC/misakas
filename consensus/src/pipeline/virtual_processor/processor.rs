@@ -6738,8 +6738,11 @@ impl VirtualStateProcessor {
     }
 
     /// Record (or clear) the streak at the point a sink search settles on `sink`. `refused` is the
-    /// heaviest candidate the gate refused in that search, if any.
-    fn note_palw_refusal_streak(&self, sink: BlockHash, refused: Option<(BlockHash, DnsReorgOutcome)>) {
+    /// heaviest candidate the gate refused in that search, if any. Past rule E (`rule_e`) a refusal is
+    /// weighed when rule E weighed the pair over the two exclusive pasts and the refused tip does not
+    /// outrank `sink` (ADR-0175); below it, when both absolute orders were read and the refused one is not
+    /// strictly ahead.
+    fn note_palw_refusal_streak(&self, sink: BlockHash, refused: Option<(BlockHash, DnsReorgOutcome)>, rule_e: bool) {
         use kaspa_consensus_core::api::PalwPartitionRefusalV1;
         let weighed = refused.and_then(|(refused, reason)| {
             (reason == DnsReorgOutcome::DominanceViolation
@@ -6747,6 +6750,13 @@ impl VirtualStateProcessor {
                 && !matches!(self.reachability_service.try_is_chain_ancestor_of(sink, refused), Ok(true)))
             .then_some(refused)
             .and_then(|refused| {
+                if rule_e {
+                    let mut states = super::palw_rule_e::PalwRuleEStatesV1::default();
+                    let (pair, counts) = self.palw_rule_e_pair_v1(&mut states, refused, sink)?;
+                    return (kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_order_v1(&pair.a, &pair.b, counts)
+                        != std::cmp::Ordering::Greater)
+                        .then_some(refused);
+                }
                 let (incumbent, challenger) = (self.palw_candidate_order_v2(sink)?, self.palw_candidate_order_v2(refused)?);
                 let economic = |o: &kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1| {
                     (o.safe_frontier_blue_score, o.safe_weight, o.live_total)
@@ -18822,7 +18832,14 @@ impl VirtualStateProcessor {
                         // only way to notice was comparing DAA against a peer by hand. Emitting
                         // this at the point virtual settles — once per search, not per candidate —
                         // keeps a healthy node quiet while making a wedged one impossible to miss.
-                        self.note_palw_refusal_streak(candidate, gate_rejected.map(|(rejected, reason, _)| (rejected, reason)));
+                        let rule_e = self.palw_rule_e_active_at(self.headers_store.get_daa_score(prev_sink).unwrap_or(0));
+                        if !rule_e {
+                            self.note_palw_refusal_streak(
+                                candidate,
+                                gate_rejected.map(|(rejected, reason, _)| (rejected, reason)),
+                                false,
+                            );
+                        }
                         if let Some((rejected, reason, rejected_work)) = gate_rejected {
                             warn!(
                                 "DNS reorg gate: virtual settled on sink {} (blue_work {}) after refusing the heavier candidate {} (blue_work {}, reason {:?}{}). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.",
@@ -18843,7 +18860,9 @@ impl VirtualStateProcessor {
                         // **ADR-0175: past rule E's fence (at the incumbent's DAA) the search goes on** for a bounded number of
                         // lighter candidates and keeps the best over the exclusive pasts (`palw_rule_e_finish_search_v1`); where the
                         // first stays best its answer is this one.
-                        if self.palw_rule_e_active_at(self.headers_store.get_daa_score(prev_sink).unwrap_or(0)) {
+                        // LIVE-R1 N2's record is then taken at the sink rule E settles on, and a refusal counts as weighed when
+                        // rule E weighed the pair and the refused tip does not outrank it.
+                        if rule_e {
                             let (sink, parents, _) = self.palw_rule_e_finish_search_v1(
                                 stores,
                                 diff,
@@ -18854,6 +18873,7 @@ impl VirtualStateProcessor {
                                 diff_point,
                                 finality_point,
                             );
+                            self.note_palw_refusal_streak(sink, gate_rejected.map(|(rejected, reason, _)| (rejected, reason)), true);
                             return (sink, parents);
                         }
                         // The heap is GHOSTDAG's own order, so the sink is the maximum of every
