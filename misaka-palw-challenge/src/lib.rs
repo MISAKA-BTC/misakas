@@ -23,7 +23,7 @@ pub mod seed;
 pub mod subject;
 
 pub use beacon::{
-    BeaconContextV1, BeaconSourceV1, IneligibleV1, WorkBeaconStateV1, WorkBeaconV1, WorkFinalEventV1, WorkSourceKindV1,
+    BeaconContextV1, BeaconSourceV1, FinalPathV1, IneligibleV1, WorkBeaconStateV1, WorkBeaconV1, WorkFinalEventV1, WorkSourceKindV1,
     collect_work_beacon_v1, verify_work_beacon_v1,
 };
 pub use conformance::{BeaconConformanceEvidenceV1, ConformanceCommitmentV1, ConformanceStatusV1, verify_conformance_evidence_v1};

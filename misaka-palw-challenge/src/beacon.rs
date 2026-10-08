@@ -62,6 +62,24 @@ pub struct WorkFinalEventV1 {
     pub validity_independent: bool,
     /// Profiles whose semantics this work depends on (pipeline stages, adapters): a candidate here makes it ineligible.
     pub depends_on_profiles: Vec<Digest>,
+    /// How the work reached Final: through a Panel licence (and which Panel draw), or with no Panel in its path.
+    pub final_path: FinalPathV1,
+}
+
+/// **How a source work reached Final** — the fact that decides whether it may seed a Panel draw.
+///
+/// A Panel-licensed Final is a function of a Panel assignment (its seats can include, delay or void the work), so feeding it into
+/// the entropy of a Panel assignment closes the loop `work validity → Panel assignment → Final → beacon → Panel assignment`.
+/// [`SubjectKindV1::PanelAssignment`] therefore accepts only [`FinalPathV1::PanelIndependent`] sources; until a Panel-independent
+/// Final exists (RFC-0014 public window lapse / RFC-0015), a Panel-assignment beacon stays `BEACON_UNAVAILABLE` and RFC-0010 stays
+/// dormant. Other subjects may use Panel-licensed sources; the veto/delay bias a captured Panel has over them is part of the
+/// reviewed bias budget (RFC-0007 §VI.8 item 2), not a property this code proves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, BorshSerialize, BorshDeserialize)]
+pub enum FinalPathV1 {
+    /// Licensed by a Panel quorum or by parts; the licensing Panel was drawn from `panel_seed_id` at `panel_epoch`.
+    PanelLicensed { panel_seed_id: Digest, panel_epoch: u64 },
+    /// Final with no Panel licence anywhere in its path.
+    PanelIndependent,
 }
 
 /// The subject side of a beacon: fixed when the subject's commitment is accepted.
@@ -112,6 +130,8 @@ pub enum IneligibleV1 {
     DaUnsatisfied,
     #[error("its validity depends on the challenge consuming it")]
     NotIndependent,
+    #[error("a Panel-licensed Final cannot seed a Panel assignment (circular: Panel → Final → beacon → Panel)")]
+    PanelDependentFinal,
 }
 
 pub fn eligibility_v1(ctx: &BeaconContextV1, ev: &WorkFinalEventV1) -> Result<(), IneligibleV1> {
@@ -141,6 +161,9 @@ pub fn eligibility_v1(ctx: &BeaconContextV1, ev: &WorkFinalEventV1) -> Result<()
     }
     if !ev.validity_independent {
         return Err(I::NotIndependent);
+    }
+    if ctx.subject_kind == SubjectKindV1::PanelAssignment && ev.final_path != FinalPathV1::PanelIndependent {
+        return Err(I::PanelDependentFinal);
     }
     Ok(())
 }

@@ -19,11 +19,19 @@ pub enum SubjectKindV1 {
     /// Only explicitly committed supplemental checks: never a favorable reroll of a claim's own checks, and never a prerequisite
     /// for filing an already authenticated exact fraud proof.
     PublicProsecution = 5,
+    /// RFC-0010 Panel binding entropy. Its sources must be Panel-independent Finals ([`crate::beacon::FinalPathV1`]).
+    PanelAssignment = 6,
 }
 
 impl SubjectKindV1 {
-    pub const ALL: [Self; 5] =
-        [Self::KernelConformance, Self::ModelConformance, Self::ClaimVerification, Self::WorkSlice, Self::PublicProsecution];
+    pub const ALL: [Self; 6] = [
+        Self::KernelConformance,
+        Self::ModelConformance,
+        Self::ClaimVerification,
+        Self::WorkSlice,
+        Self::PublicProsecution,
+        Self::PanelAssignment,
+    ];
 
     pub const fn code(self) -> &'static str {
         match self {
@@ -32,6 +40,7 @@ impl SubjectKindV1 {
             Self::ClaimVerification => "CLAIM_VERIFICATION",
             Self::WorkSlice => "WORK_SLICE",
             Self::PublicProsecution => "PUBLIC_PROSECUTION",
+            Self::PanelAssignment => "PANEL_ASSIGNMENT",
         }
     }
 }

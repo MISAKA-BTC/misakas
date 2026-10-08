@@ -48,6 +48,7 @@ fn work(n: u8, profile: Digest, accepted: u64, settled: u64) -> WorkFinalEventV1
         da_satisfied: true,
         validity_independent: true,
         depends_on_profiles: vec![],
+        final_path: FinalPathV1::PanelLicensed { panel_seed_id: [0x5E; 64], panel_epoch: 1 },
     }
 }
 
@@ -157,6 +158,20 @@ fn only_fresh_final_da_satisfied_useful_work_of_active_g14_profiles_is_a_source(
 }
 
 #[test]
+fn a_panel_assignment_beacon_refuses_panel_licensed_finals_so_the_draw_never_seeds_itself() {
+    let c = ctx(SubjectKindV1::PanelAssignment);
+    let licensed = work(9, ACTIVE_A, 103, 110);
+    assert_eq!(eligibility_v1(&c, &licensed), Err(IneligibleV1::PanelDependentFinal), "Panel → Final → beacon → Panel");
+    let mut independent = licensed.clone();
+    independent.final_path = FinalPathV1::PanelIndependent;
+    eligibility_v1(&c, &independent).unwrap();
+    // Today every Final is Panel-licensed: a Panel-assignment beacon is unavailable, never a fallback.
+    assert_eq!(collect_work_beacon_v1(&c, &three_good(), 142).unwrap(), WorkBeaconStateV1::Unavailable { have: 0, need: 3 });
+    // Other subjects may use Panel-licensed sources (their veto bias is a reviewed budget, not a proof).
+    eligibility_v1(&ctx(SubjectKindV1::ModelConformance), &licensed).unwrap();
+}
+
+#[test]
 fn the_beacon_is_canonical_order_dedup_lock_at_depth_and_unavailable_never_falls_back() {
     let c = ctx(SubjectKindV1::ModelConformance);
     let events = three_good();
@@ -252,7 +267,11 @@ fn every_subject_kind_and_every_bound_root_has_its_own_seed_and_a_mismatched_sub
     let mut seeds = BTreeSet::new();
     for kind in SubjectKindV1::ALL {
         let c = ctx(kind);
-        let b = locked(&c, &three_good(), 117);
+        let mut events = three_good();
+        if kind == SubjectKindV1::PanelAssignment {
+            events.iter_mut().for_each(|e| e.final_path = FinalPathV1::PanelIndependent);
+        }
+        let b = locked(&c, &events, 117);
         assert!(seeds.insert(challenge_seed_v1(&c, &subject(&c), &b).unwrap()), "{kind:?} shares a seed");
     }
     let c = ctx(SubjectKindV1::ModelConformance);
