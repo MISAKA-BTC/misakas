@@ -179,6 +179,56 @@ node-less は「chain を検証しない」を意味しない。miner が必要�
 - RFC-0008 の work-slice block が実装された場合の同一 work の二重 credit と public redemption の扱い。
 - remote registration の quote/unsigned-object/署名/状態照会の API 境界、offline wallet が費用・identity を検証できる schema、複数 relay の retry と fee-change 承認。現行 burn・担保規則を変えずに実装できる部分と、新しい authority/fence が必要な部分の切り分け。
 
+## 運用モードと安全分類 — 2026-10-08
+
+node-less 方式は維持し、BTC 型 pool を唯一の採掘方式にしない。claim の受理に pool の署名・登録・報酬経由を要求する規則は置かない。
+「full node を動かさない」ことと「node の伝える状態を無条件に信用する」ことは別であり、後者を安全と表示しない。
+
+**運用モード（すべて第一級）**
+
+| モード | 内容 | 位置づけ |
+| --- | --- | --- |
+| A. Solo full-node miner | miner 自身の full node が chain state・job・claim を検証して直接提出 | 自主検証性が最も高い |
+| B. Verified remote solo miner | full node を持たず、独立 node から状態と証明を取得し、自分で実行・検証・署名し、任意 relay から提出。報酬は bond の payout へ直接 | **推奨既定** |
+| C. Optional pool / mining service | job 配信・証拠配信・共同計算・運用支援を提供。非保管型を基本とし、報酬の平準化のための共同受領・再分配は合意外の別契約・別リスク | 任意。consensus 上の特権なし |
+
+pool は relay・DA provider・builder・job service の役割の組み合わせにすぎず、claim の有効性規則は A/B と同一である。
+pool が job を選ぶ場合の検閲能力は、miner が job を自分で選べる B と、relay の切替で抑える。
+
+**安全分類（client はどれで動いているかを常に表示する）**
+
+| 分類 | 条件 | 主張してよいこと |
+| --- | --- | --- |
+| Full-node solo | 自前 full node | 最高の自主検証性 |
+| Verified remote solo | §6 の状態（selected chain・DAA・class・bond・target・fence・必要な state commitment）を checkpoint から証明で検証済み | 同じ consensus 規則で安全に claim できる。通信・検閲・可用性のリスクは残る |
+| Unverified remote solo | 証明が欠ける。複数 RPC の一致のみ | **full-node 相当の安全性はない**（`UNVERIFIED_REMOTE_STATE`） |
+| Custodial pool | pool が job 選択と報酬を保管 | 利用は簡単だが、job と報酬を pool に依存する |
+
+light client（§7 段階 D）が完成するまで、node-less を full-node 相当と宣伝しない。
+
+**安全条件と現状**（状態語は `docs/design/palw/remaining-rfc-integration-matrix.md` と同じ）
+
+| 条件 | 欠けた場合 | 現状 |
+| --- | --- | --- |
+| Local signing / full-tx sighash | relay による改変・資金流出 | 登録の分離署名・rail の signer socket は IMPLEMENTED_AND_TESTED。V4 authorization の sidecar 署名用 `SigningPurpose` は CODE_GAP |
+| Verified chain state / stale detection | 無効 job への計算浪費・無効 claim への署名 | collection 単位の state proof（op 202）と pin は IMPLEMENTED_AND_TESTED。header chain・target・fence の検証は CODE_GAP |
+| Canonical job/input/output binding | 計算の流用・job 差し替え | FP Job V4 は凍結済み（DORMANT_NOT_INTEGRATED）。claim 署名は commitment に bind |
+| Public authenticated DA | miner 停止後に検証不能 | manifest・複数 provider・共通 fetch は IMPLEMENTED_AND_TESTED（local）。discovery は DESIGN_GAP |
+| Objective DA/default | 通信障害で誤 slash | kernel route の demand/default は実ノード E2E あり（fence 未武装）。provider への責任移転（provider court）は DESIGN_GAP |
+| Miner-bound payout / V4 redemption | builder による横取り・報酬消失 | processor 水準の試験あり、DORMANT_NOT_INTEGRATED。chain-block 水準の E2E は CODE_GAP |
+| Multi-relay / censorship fallback | 少数 node への依存 | 登録・carrier の fan-out と改変拒否はあり。妨害時の再提出試験は CODE_GAP |
+| Fresh outsider G14 prosecution | pool/Panel 共謀時の不正承認 | 実ノード G14 E2E あり（fence 未武装、`g14-integration-matrix.md`） |
+
+**必須の敵対試験**
+
+1. 悪意ある remote node が偽の class・bond・target を示す → client が拒否する（署名も計算もしない）。
+2. 悪意ある relay が claim を改変・横取り・提出妨害する → 改変は拒否され、別 relay から再提出される。
+3. miner と Panel 全員が共謀して虚偽 claim を出す → Panel 外の bonded verifier が公開 material だけで独立に訴追する。
+4. miner が offline になる → 公開 material は取得可能なまま、正当な claim は Final、別 builder が redemption し、報酬は miner の payout に入る。
+
+完成すべきは node-less の廃止ではなく、remote state verification と客観的な DA 責任移転である。
+provider court は consensus 変更なので独立 fence とし、§4.2 の条件（provider bond、chunk challenge、共通障害時は fraud slash と区別して claim 失効）を満たすまで miner の配信責任を移さない。
+
 ## 共通post-commit challengeとremote status — 2026-10-08
 
 新しいKernel/model onboarding、claim/EXEC slice検査は[RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)だけを使う。remote clientもclass/policy、canonical commitment、qualifying future workとFinal/settlement provenanceからseed・queries・GKR transcriptを検証し、remote worker/operatorのseedを信頼しない。既存receipt quantum/ticketのbeacon規則とは別のversioned契約であり、今回の文書で再解釈しない。
