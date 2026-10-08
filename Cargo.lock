@@ -6256,12 +6256,17 @@ dependencies = [
  "kaspa-addresses",
  "kaspa-consensus-core",
  "kaspa-hashes",
+ "kaspa-pow",
+ "kaspa-pq-validator-core",
+ "kaspa-rpc-core",
  "kaspa-txscript",
+ "kaspa-wrpc-client",
  "libcrux-ml-dsa",
  "misaka-palw-challenge",
  "serde",
  "serde_json",
  "thiserror 1.0.64",
+ "tokio",
 ]
 
 [[package]]

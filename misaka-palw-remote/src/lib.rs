@@ -26,6 +26,7 @@ pub mod attempt;
 pub mod bundle;
 pub mod checkpoint;
 pub mod evidence;
+pub mod miner;
 pub mod proof;
 pub mod register;
 pub mod relay;

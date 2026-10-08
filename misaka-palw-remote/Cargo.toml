@@ -25,5 +25,21 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 
+# The `palw-remote-miner` binary (feature `rpc`): a wRPC client, the miner's key and the PoW state for the network draw. The library above
+# stays free of all of it.
+kaspa-wrpc-client = { workspace = true, optional = true }
+kaspa-rpc-core = { workspace = true, optional = true }
+kaspa-pow = { workspace = true, optional = true }
+kaspa-pq-validator-core = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "time"], optional = true }
+
+[features]
+rpc = ["dep:kaspa-wrpc-client", "dep:kaspa-rpc-core", "dep:kaspa-pow", "dep:kaspa-pq-validator-core", "dep:tokio"]
+
+[[bin]]
+name = "palw-remote-miner"
+path = "src/bin/palw-remote-miner.rs"
+required-features = ["rpc"]
+
 [lints]
 workspace = true

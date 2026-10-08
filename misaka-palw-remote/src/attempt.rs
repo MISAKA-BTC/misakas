@@ -48,6 +48,12 @@ pub trait AttemptExecutor {
 pub trait AttemptSigner {
     fn public_key(&self) -> Vec<u8>;
     fn sign_attempt_id(&self, attempt_id: &Hash64) -> Result<Vec<u8>, String>;
+    /// The call [`mount_attempt`] makes: the attempt itself rides along so a signer can keep the equivocation journal the node's producer keeps
+    /// (one challenge, one attempt id). The default signs the id.
+    fn sign_attempt(&self, attempt: &PalwAttemptUnsignedV2, attempt_id: &Hash64) -> Result<Vec<u8>, String> {
+        let _ = attempt;
+        self.sign_attempt_id(attempt_id)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -148,7 +154,7 @@ pub fn mount_attempt(
     }
     // Both won: sign the attempt id ONCE.
     let attempt_id = attempt_id_v2(&attempt);
-    let signature = signer.sign_attempt_id(&attempt_id).map_err(AttemptError::Signer)?;
+    let signature = signer.sign_attempt(&attempt, &attempt_id).map_err(AttemptError::Signer)?;
     let mut header = template_header.clone();
     header.nonce = nonce;
     header.palw_commitment = PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire();
