@@ -45,6 +45,8 @@ pub const TABLE_SERVED_V1: u8 = 8;
 pub const TABLE_ATTESTED_V1: u8 = 9;
 /// `job → the claim holding it` (one claim per job; in the state root since the C4 fix F-C4-03).
 pub const TABLE_JOB_CLAIMS_V1: u8 = 10;
+/// `(job, producer) → the producer's unrevealed claim seal` (seal-then-reveal; in the state root since the C4 fix F-C4-06).
+pub const TABLE_SEALS_V1: u8 = 11;
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -72,6 +74,7 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_DEMANDS_V1 => "demands",
         TABLE_SERVED_V1 => "served",
         TABLE_JOB_CLAIMS_V1 => "job-claims",
+        TABLE_SEALS_V1 => "seals",
         _ => "attested-artifacts",
     };
     format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes()
@@ -115,6 +118,9 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.job_claims {
             rows.insert((TABLE_JOB_CLAIMS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.seals {
+            rows.insert((TABLE_SEALS_V1, bytes_of(k)), bytes_of(v));
         }
         rows
     }
@@ -162,6 +168,9 @@ impl KernelLedgerV1 {
                 }
                 TABLE_JOB_CLAIMS_V1 => {
                     l.job_claims.insert(dec(key, "job id")?, dec(row, "job claim")?);
+                }
+                TABLE_SEALS_V1 => {
+                    l.seals.insert(dec(key, "seal key")?, dec(row, "seal")?);
                 }
                 other => return Err(format!("a stored row names no table ({other})")),
             }
@@ -294,6 +303,7 @@ pub fn root_of_rows(policy: &LedgerPolicyV1, config_root: Digest, scalars: Ledge
         served: coll(TABLE_SERVED_V1),
         attested_artifacts: coll(TABLE_ATTESTED_V1),
         job_claims: coll(TABLE_JOB_CLAIMS_V1),
+        seals: coll(TABLE_SEALS_V1),
     };
     let _ = LEDGER_ROOT_DOMAIN_V1;
     parts.root()

@@ -8209,6 +8209,11 @@ impl VirtualStateProcessor {
                 }
                 _ => false,
             };
+            // **G14 lane D: a chunk group that carries a kernel route object is not a certification.** The grading cap and its work
+            // budget are the family court's; the kernel route's own bounds are its fold's (and the carrier's fee).
+            let completes_a_group = completes_a_group
+                && !Self::palw_kernel_chunk_inner(&folded, &object)
+                    .is_some_and(|inner| kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(&inner));
             let is_certification =
                 matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
                     || completes_a_group;
@@ -13006,7 +13011,16 @@ impl VirtualStateProcessor {
                 // ADR-0075: both certification objects are judged entirely by the transition —
                 // the evidence by the court's grader, the class binding by the class's own profile
                 // hash and kernel coverage — and neither needs a signature, a bundle or a store.
-                Obj::FamilyCertified { .. } | Obj::ClassLaneCertified { .. } | Obj::ObjectChunk { .. } => {}
+                Obj::FamilyCertified { .. } | Obj::ClassLaneCertified { .. } => {}
+                // **G14 lane D: a chunk that COMPLETES a group carrying a kernel route object** is where that object's signature is
+                // checked (the fold trusts the acceptance layer for it, as it does for every directly carried one): the assembled
+                // inner is judged exactly as the direct `KernelRouteV1` arm judges it, and an inner the fence or the signature
+                // refuses drops the completing chunk. Every other chunk is the transition's.
+                Obj::ObjectChunk { .. } => {
+                    if let Some(Obj::KernelRouteV1 { bytes, signer, signature }) = Self::palw_kernel_chunk_inner(state, object) {
+                        self.palw_kernel_route_object_is_signed(state, point.daa_score, &bytes, &signer, &signature)?;
+                    }
+                }
                 // RFC-0002 Phase F (tag 63): judged by the transition like the legacy lane object;
                 // below `palw_tir_v1` dropped by name (the acceptance walk drops it first).
                 Obj::ClassLaneCertifiedTirV1 { class_id, .. } => {
@@ -13489,6 +13503,40 @@ impl VirtualStateProcessor {
             return Err(format!("{what} carries a signature the attributed bond's key does not verify"));
         }
         Ok(())
+    }
+
+    /// **The object an `ObjectChunk` completes, when it completes a group** (G14 lane D): every part present (the pending ones plus
+    /// this chunk), the assembled bytes hashing to the declared group id, and a borsh decode that consumes them. `None` for a chunk
+    /// that completes nothing, for a group the transition would refuse on its face, and for bytes no object decodes from — the
+    /// transition refuses those itself. Bounded by `PALW_OBJECT_CHUNK_MAX_BYTES × PALW_OBJECT_CHUNK_MAX_COUNT`.
+    fn palw_kernel_chunk_inner(
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2 as Obj, palw_object_chunk_group_id_v1};
+        let Obj::ObjectChunk { group, index, count, bytes } = object else { return None };
+        if *count == 0 || *index >= *count || bytes.is_empty() {
+            return None;
+        }
+        let mut parts: std::collections::BTreeMap<u8, &[u8]> = Default::default();
+        if let Some(pending) = state.pending_chunk_group(group) {
+            if pending.count != *count || pending.parts.contains_key(index) {
+                return None;
+            }
+            parts.extend(pending.parts.iter().map(|(i, part)| (*i, part.as_slice())));
+        }
+        parts.insert(*index, bytes.as_slice());
+        if parts.len() != *count as usize {
+            return None;
+        }
+        let mut whole = Vec::with_capacity(parts.values().map(|p| p.len()).sum());
+        for i in 0..*count {
+            whole.extend_from_slice(parts.get(&i)?);
+        }
+        if palw_object_chunk_group_id_v1(&whole) != *group {
+            return None;
+        }
+        borsh::from_slice::<Obj>(&whole).ok()
     }
 
     /// **G14 lane D (tag 110): is this kernel route object signed by the bond it names, and is the kernel willing to decode it?**

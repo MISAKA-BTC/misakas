@@ -1007,7 +1007,7 @@ use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::block::Block;
 
 /// Every selected-chain block of `chain` from genesis (exclusive) to `upto`, oldest first.
-fn chain_blocks(chain: &T12Chain, upto: BlockHash) -> Vec<Block> {
+pub(super) fn chain_blocks(chain: &T12Chain, upto: BlockHash) -> Vec<Block> {
     let vp = chain.vp();
     let genesis = chain.config.params.genesis.hash;
     let mut hashes = Vec::new();
@@ -1021,7 +1021,7 @@ fn chain_blocks(chain: &T12Chain, upto: BlockHash) -> Vec<Block> {
 }
 
 /// `block` arrives at `chain` as a peer's block does.
-async fn arrive(chain: &T12Chain, block: Block, what: &str) {
+pub(super) async fn arrive(chain: &T12Chain, block: Block, what: &str) {
     let hash = block.header.hash;
     chain
         .ctx
@@ -1036,7 +1036,7 @@ fn fresh_node(m: &Mined) -> T12Chain {
     t12_genesis_chain(&m.env.config, &m.env.bundle, &m.env.premine, &m.env.floats)
 }
 
-fn root_at(chain: &T12Chain, block: BlockHash) -> Hash64 {
+pub(super) fn root_at(chain: &T12Chain, block: BlockHash) -> Hash64 {
     chain.vp().palw_state_v2_store.read().state_root_of(block).expect("a delta row")
 }
 

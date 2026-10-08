@@ -145,6 +145,9 @@ pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash6
         claim_reward: 5 * SOMPI_PER_KASPA,
         max_adjudications_per_block: 64,
         max_court_work_per_block: 1 << 30,
+        // Seal, then reveal: a claim commits over its producer's seal at least one block old; an unrevealed seal lives one check window.
+        claim_seal_delay_daa: 1,
+        seal_ttl_daa: 100,
         prosecution: ProsecutionPolicyV1 {
             court_deadline_daa: 20,
             max_sessions_per_claim: 1 << 10,
