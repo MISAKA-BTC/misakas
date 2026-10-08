@@ -29,11 +29,11 @@ mod evm_send;
 mod forward;
 mod key_roles;
 mod keys;
+/// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
+mod model_preflight;
 mod node;
 /// ADR-0122: `mining`, `doctor`, `work` — the operator surface over the components.
 mod operator;
-/// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
-mod model_preflight;
 mod pack_gate;
 mod palw_activation_pool;
 mod palw_capacity_shadow;
@@ -41,8 +41,6 @@ mod palw_claim;
 mod palw_court;
 mod palw_da;
 mod palw_derived;
-/// RFC-0010: `palw panel-v3` — the permissionless Panel's observation of a claim (op 220).
-mod palw_panel_v3;
 /// ADR-0127 Decision 3: `palw settlement` — settled, and how deep in settled PALW anchors.
 mod palw_economics;
 /// ADR-0108: `palw extension inspect|verify|preflight|submit|receipt-verify`.
@@ -54,6 +52,8 @@ mod palw_line;
 mod palw_model;
 mod palw_model_ops;
 mod palw_panel;
+/// RFC-0010: `palw panel-v3` — the permissionless Panel's observation of a claim (op 220).
+mod palw_panel_v3;
 mod palw_registry;
 mod palw_service;
 mod palw_settlement;
@@ -633,6 +633,10 @@ enum ModelCmd {
         /// that block commits and the proof travels in the bundle, so an offline signer with the same --pin checks it too.
         #[arg(long, value_name = "BLOCK_HASH")]
         pin: Option<String>,
+        /// Sign below VERIFIED_REMOTE: name the class you accept (HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED or UNVERIFIED_REMOTE). A node on
+        /// this machine (loopback --rpc) is taken as your own full node (FULL_NODE) and needs no opt-in.
+        #[arg(long, value_name = "LABEL")]
+        accept_unverified_state: Option<String>,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -674,6 +678,13 @@ enum ModelCmd {
         /// the signer checks it offline (without --pin the key is shown as UNVERIFIED_REMOTE_STATE).
         #[arg(long, value_name = "BLOCK_HASH")]
         pin: Option<String>,
+        /// The --pin came from your OWN full node (then a pinned proof is VERIFIED_REMOTE; a pin from elsewhere is
+        /// HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED).
+        #[arg(long, requires = "pin")]
+        pin_from_own_node: bool,
+        /// Sign below VERIFIED_REMOTE: name the class you accept (HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED or UNVERIFIED_REMOTE).
+        #[arg(long, value_name = "LABEL")]
+        accept_unverified_state: Option<String>,
         /// Where to write the result (default: next to the bundle).
         #[arg(long, value_name = "FILE")]
         out: Option<std::path::PathBuf>,
@@ -2857,6 +2868,7 @@ async fn main() -> std::process::ExitCode {
             quote_rpc,
             allow_single_rpc,
             pin,
+            accept_unverified_state,
             profile: args,
         }) => match (profile(&args), sponsor.resolve()) {
             (Ok(p), Ok(sponsor)) => {
@@ -2881,6 +2893,7 @@ async fn main() -> std::process::ExitCode {
                         quote_rpc,
                         single_rpc: allow_single_rpc,
                         pin,
+                        accept_unverified_state,
                     },
                 };
                 operator::model_add::run(&ctx, p, a).await
@@ -2899,6 +2912,8 @@ async fn main() -> std::process::ExitCode {
             expect_owner,
             max_fee_sompi,
             pin,
+            pin_from_own_node,
+            accept_unverified_state,
             out,
             yes,
         }) => {
@@ -2914,6 +2929,8 @@ async fn main() -> std::process::ExitCode {
                     expect: operator::model_bundle::ExpectArgs { class: expect_class, root: expect_root, owner: expect_owner },
                     max_fee_sompi,
                     pin,
+                    pin_from_own_node,
+                    accept_unverified_state,
                     out,
                     yes,
                 },
@@ -3026,7 +3043,7 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Readiness(PalwPanelReadinessCmd::Prove { class, bond }))) => {
             palw_panel::readiness_prove(&ctx, &class, &bond).await
-        },
+        }
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
@@ -3073,7 +3090,8 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Preflight { manifest, json })) => {
             palw_extension::preflight(&ctx, &manifest, json).await
         }
-        Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json, sponsor })) => match sponsor.resolve() {
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json, sponsor })) => match sponsor.resolve()
+        {
             Ok(sponsor) => palw_extension::submit(&ctx, &manifest, &key.source(), bond.as_deref(), yes, json, sponsor).await,
             Err(e) => Err(e),
         },

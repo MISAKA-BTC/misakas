@@ -920,6 +920,11 @@ async fn register(
             crate::palw_model::msk(kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1)
         ));
     }
+    crate::operator::model_remote::mode_gate_v1(
+        flow,
+        crate::operator::model_remote::add_mode_v1(&walk.node.url),
+        walk.args.remote.accept_unverified_state.as_deref(),
+    )?;
     flow.ask("Register it?", false, "the class was not registered").await?;
     let object_bytes = borsh::to_vec(&object).unwrap_or_default();
     let object_id = kaspa_consensus_core::palw_model_registration_v1::palw_registration_object_id_v1(&object_bytes).to_string();
@@ -1072,6 +1077,12 @@ async fn register_remote(
     if remote_args.quote_only {
         return Err(Halt::Declined("--quote: the quote above was read from the chain; nothing was signed or sent".into()));
     }
+    // The relayed path quotes from nodes: the terms, the funding and the fork choice are their word (the class says so).
+    crate::operator::model_remote::mode_gate_v1(
+        flow,
+        misaka_palw_remote::verify::ModeLabelV1::UnverifiedRemote,
+        remote_args.accept_unverified_state.as_deref(),
+    )?;
     flow.ask("Sign this registration and relay it?", false, "the class was not registered").await?;
     // Re-read just before the key signs: anything that moved since the quote stops here.
     let fresh = read().await?;
@@ -1265,9 +1276,9 @@ async fn register_export(
         None => None,
         Some(text) => {
             let pin = crate::operator::remote_proof::parse_pin(text)?;
-            let (header, fact) = crate::operator::remote_proof::fetch_state_proof(&walk.node, pin, "bonds").await.map_err(|e| {
-                blocked("E-PROOF-UNAVAILABLE", "The node could not prove the bond table at your pin", e)
-            })?;
+            let (header, fact) = crate::operator::remote_proof::fetch_state_proof(&walk.node, pin, "bonds")
+                .await
+                .map_err(|e| blocked("E-PROOF-UNAVAILABLE", "The node could not prove the bond table at your pin", e))?;
             let proven = misaka_palw_remote::proof::bond_at_pin_v1(
                 &header,
                 pin,
@@ -1290,7 +1301,11 @@ async fn register_export(
                 ));
             }
             if matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }) {
-                return Err(blocked("E-IDENT-BOND-NOT-REGISTRANT", "The bond is retiring in the pinned state", proven.provenance.label()));
+                return Err(blocked(
+                    "E-IDENT-BOND-NOT-REGISTRANT",
+                    "The bond is retiring in the pinned state",
+                    proven.provenance.label(),
+                ));
             }
             flow.row(Severity::Ok, "owner key", proven.provenance.label());
             Some(crate::operator::remote_proof::embeddable(pin, &header, &fact))
