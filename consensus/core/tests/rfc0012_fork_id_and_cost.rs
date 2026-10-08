@@ -96,6 +96,7 @@ fn workload(n: u64) -> (Vec<NativeEffectV1>, Vec<MatureUsefulWorkV1>) {
 }
 
 #[test]
+#[ignore = "a wall-clock scaling measurement: run it alone on an idle machine (`--ignored`); under a parallel build load the ratio is noise"]
 fn rfc0012_the_sweep_scales_near_linearly_and_the_per_effect_reference_does_not() {
     let policy = PalwSettlementPolicyV1 {
         settled_anchor_depth: 1,
