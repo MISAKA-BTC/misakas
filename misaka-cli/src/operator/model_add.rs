@@ -306,6 +306,9 @@ struct Walk<'a> {
     /// The root a `--manifest` pins. `None` for a catalog model, whose root is computed from its
     /// artifact file by the lineage that pairs it.
     manifest_root: Option<Hash64>,
+    /// RFC-0009 A0 (detached signing): the file an unsigned bundle was exported to. Set only by `--export-bundle`, which ends the
+    /// run there: nothing was signed, funded or sent.
+    exported: std::cell::RefCell<Option<PathBuf>>,
 }
 
 impl Walk<'_> {
@@ -417,7 +420,12 @@ pub(crate) async fn run(ctx: &crate::node::Ctx, profile: Profile, args: ModelAdd
         (None, Some(path)) => format!("misaka model add --manifest {}", path.display()),
         (None, None) => "misaka model add <model>".to_string(),
     };
-    let done = done_line(doc.get("registry_state").and_then(|v| v.as_str()));
+    let done = match doc.get("export_bundle").and_then(|v| v.as_str()) {
+        Some(path) => format!(
+            "EXPORTED — an unsigned registration bundle is in {path}; nothing was signed, funded or sent, and the class is NOT registered"
+        ),
+        None => done_line(doc.get("registry_state").and_then(|v| v.as_str())),
+    };
     flow.finish(result, "misaka.model.add.v1", &done, &resume, doc)
 }
 
@@ -637,6 +645,7 @@ async fn walk(
         params: params.clone(),
         node,
         manifest_root,
+        exported: std::cell::RefCell::new(None),
     };
 
     // REGISTERED.
@@ -647,6 +656,12 @@ async fn walk(
         }
         None => {
             register(&walk, flow, &bundle, &sdk, &entry, &terms).await?;
+            // `--export-bundle` ends here: an unsigned bundle is written, and nothing is signed, funded or sent.
+            if let Some(path) = walk.exported.borrow().clone() {
+                doc.insert("export_bundle".into(), path.display().to_string().into());
+                doc.insert("state".into(), "exported-unsigned".into());
+                return Ok(());
+            }
             class_row(&walk.node, &class_hex)
                 .await?
                 .ok_or_else(|| Halt::Waiting("the registration to appear in the class table".into(), exit::NOT_READY))?
@@ -796,6 +811,22 @@ async fn register(
                 .fix("misaka mining setup (registers one), or --bond <txid>:<index>"),
         )
     })?;
+    let bond_op =
+        crate::bond::parse_outpoint(&bond).map_err(|e| Halt::Blocked(Finding::error("E-SETUP-BOND", exit::IDENTITY, e.msg)))?;
+    let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(
+        &walk.params,
+        bundle,
+        &entry.profile,
+        walk.node.daa(),
+    )
+    .map_err(|e| {
+        Halt::Blocked(Finding::error("E-MODEL-SHAPE", exit::MODEL, "The chain would not admit this class's shape").current(e))
+    })?;
+    let candidate = misaka_palw_sdk::PalwRegistrationCandidateV1 { entry: entry.clone(), artifact_root };
+    // **Detached signing (RFC-0009 A0): no key is read on this path.** The builder writes an unsigned bundle for a signer elsewhere.
+    if walk.args.remote.export_bundle.is_some() {
+        return register_export(walk, flow, bundle, sdk, &candidate, terms, &shape, &bond, bond_op).await;
+    }
     let ks = walk.key_source()?;
     let key = ks.load_key().map_err(|e| {
         Halt::Blocked(catalog::key_unreadable(&walk.profile.key_path.clone().unwrap_or_default().display().to_string(), &e.msg))
@@ -820,18 +851,6 @@ async fn register(
                 .required("an Active bond registered to this key"),
         ));
     }
-    let bond_op =
-        crate::bond::parse_outpoint(&bond).map_err(|e| Halt::Blocked(Finding::error("E-SETUP-BOND", exit::IDENTITY, e.msg)))?;
-    let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(
-        &walk.params,
-        bundle,
-        &entry.profile,
-        walk.node.daa(),
-    )
-    .map_err(|e| {
-        Halt::Blocked(Finding::error("E-MODEL-SHAPE", exit::MODEL, "The chain would not admit this class's shape").current(e))
-    })?;
-    let candidate = misaka_palw_sdk::PalwRegistrationCandidateV1 { entry: entry.clone(), artifact_root };
     if walk.args.remote.active() {
         return register_remote(walk, flow, bundle, sdk, &candidate, terms, &shape, &bond, bond_op, &ks, &key).await;
     }
@@ -1031,7 +1050,12 @@ async fn register_remote(
     let unsigned = build(Vec::new()).map_err(refuse)?;
     let probe = build(vec![0u8; remote::MLDSA87_SIGNATURE_LEN]).map_err(refuse)?;
     let sponsor = walk.args.sponsor.filter(|_| walk.params.palw_activation_pool_at(walk.node.daa()).is_some());
-    let read = || remote::read_facts(&walk.node, &walk.params, bundle, key, bond, bond_op, &unsigned, &probe, sponsor);
+    let payer = key.funding_address(walk.params.prefix());
+    let read = || async {
+        remote::read_facts(&walk.node, &walk.params, bundle, key.public_key(), &payer, bond, bond_op, &unsigned, &probe, sponsor)
+            .await
+            .map(|(facts, _)| facts)
+    };
     let facts = read().await?;
     let cap = remote_args.max_wallet_sompi.unwrap_or_else(|| {
         facts.carrier_fee_sompi.saturating_add(facts.filings.iter().filter(|f| f.from_wallet).map(|f| f.sompi).sum::<u64>())
@@ -1132,9 +1156,226 @@ async fn register_remote(
     flow.ui.sub(&paint::dim(
         "registration accepted is not Panel readiness, a first Final claim, reward eligibility, block production or a market — `misaka model status` reads each",
     ));
+    let native = walk
+        .node
+        .client()
+        .get_palw_classes()
+        .await
+        .ok()
+        .and_then(|t| t.classes.into_iter().find(|c| c.class_id == class_hex).map(|c| c.status));
+    crate::operator::model_bundle::print_onboarding(flow, native.as_deref());
     if let Some(amount) = sponsor {
         file_sponsor(walk, flow, ks, candidate.entry.class_id(), amount).await;
     }
+    Ok(())
+}
+
+/// **RFC-0009 A0, detached signing — step 1, the builder** (`--export-bundle FILE`). Reads the chain through SEVERAL nodes
+/// (`--rpc` plus `--quote-rpc`), refuses on any disagreement about the terms, the bond or the funding, builds the UNSIGNED object
+/// and the unsigned carrier plan, and writes them as a [`misaka_palw_remote::bundle::RegistrationBundleV1`]. **No key is read, none
+/// is needed**: the owner's public key (`--owner-pubkey`, or the nodes' report of the bond's key) and the payer's address
+/// (`--payer-address`, which may belong to another key than the bond's) are enough. Nothing is signed, funded or sent; everything
+/// the nodes said is `UNVERIFIED_REMOTE_STATE`, and the signer re-derives what it signs.
+#[allow(clippy::too_many_arguments)]
+async fn register_export(
+    walk: &Walk<'_>,
+    flow: &mut Flow,
+    bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    sdk: &misaka_palw_sdk::PalwClassSdk,
+    candidate: &misaka_palw_sdk::PalwRegistrationCandidateV1,
+    terms: &PalwRegistrationTermsV2,
+    shape: &kaspa_consensus_core::palw_class_admission_v2::PalwAdmissionShapeV1,
+    bond: &str,
+    bond_op: kaspa_consensus_core::tx::TransactionOutpoint,
+) -> Step {
+    use crate::operator::model_remote as remote;
+    use misaka_palw_remote::bundle as detached;
+    use misaka_palw_remote::register::quote_registration_v1;
+    let args = &walk.args.remote;
+    let out_path = args.export_bundle.clone().expect("routed on --export-bundle");
+    let blocked = |code: &'static str, what: &str, why: String| {
+        Halt::Blocked(Finding::error(code, exit::IDENTITY, what.to_string()).current(why))
+    };
+    // The fee payer: an address — and it may belong to another key than the bond's.
+    let payer_text = args.payer_address.as_deref().ok_or_else(|| {
+        Halt::Blocked(
+            Finding::error("E-EXPORT-PAYER", exit::IDENTITY, "No fee payer named")
+                .reason("the carrier is funded by an address the signer controls; the builder holds no key to derive it from")
+                .fix("--payer-address <address>   (the bond key's own funding address, or any other key's)"),
+        )
+    })?;
+    let payer = kaspa_addresses::Address::try_from(payer_text)
+        .map_err(|e| blocked("E-EXPORT-PAYER", "The payer address does not parse", format!("{payer_text}: {e}")))?;
+    if payer.prefix != walk.params.prefix() || payer.version != kaspa_addresses::Version::PubKeyHashMlDsa87 {
+        return Err(blocked(
+            "E-EXPORT-PAYER",
+            "The payer address is not a funding address of this network",
+            format!("{payer_text}: a P2PKH-ML-DSA-87 address with prefix {:?} is required", walk.params.prefix()),
+        ));
+    }
+    let build = |signature: Vec<u8>| {
+        sdk.build_post_genesis_registration(
+            bundle,
+            candidate,
+            terms,
+            0,
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond_op),
+            signature,
+            shape,
+        )
+    };
+    let refuse = |e: String| {
+        Halt::Blocked(Finding::error("E-MODEL-REGISTRATION", exit::MODEL, "The registration could not be built").current(e))
+    };
+    let unsigned = build(Vec::new()).map_err(refuse)?;
+    let probe = build(vec![0u8; remote::MLDSA87_SIGNATURE_LEN]).map_err(refuse)?;
+    // The owner's key: the operator's own public key if given, else what the nodes report for the bond (UNVERIFIED_REMOTE_STATE).
+    let reported = walk
+        .node
+        .client()
+        .get_palw_claims(bond.to_string(), "seat".into(), false, 1)
+        .await
+        .map_err(|e| blocked("E-SETUP-BOND-UNREAD", "The bond could not be read", e.to_string()))?;
+    if !reported.bond_known {
+        return Err(blocked(
+            "E-IDENT-BOND-NOT-REGISTRANT",
+            "The bond cannot register a class",
+            format!("{bond}: the registry holds no bond there"),
+        ));
+    }
+    let owner_pubkey_hex = match args.owner_pubkey.as_deref() {
+        Some(given) => {
+            if !given.eq_ignore_ascii_case(&reported.bond_pubkey) {
+                return Err(blocked(
+                    "E-IDENT-BOND-NOT-REGISTRANT",
+                    "The bond is registered to another key than --owner-pubkey",
+                    format!("the node reports {}…", &reported.bond_pubkey[..32.min(reported.bond_pubkey.len())]),
+                ));
+            }
+            given.to_ascii_lowercase()
+        }
+        None => reported.bond_pubkey.to_ascii_lowercase(),
+    };
+    let mut owner_pubkey = vec![0u8; owner_pubkey_hex.len() / 2];
+    faster_hex::hex_decode(owner_pubkey_hex.as_bytes(), &mut owner_pubkey)
+        .map_err(|e| blocked("E-EXPORT-OWNER", "The owner key is not hex", e.to_string()))?;
+    let sponsor = walk.args.sponsor.filter(|_| walk.params.palw_activation_pool_at(walk.node.daa()).is_some());
+    let mut silent = Vec::new();
+    let (answers, fund, reports) = remote::read_facts_many(
+        walk.ctx,
+        &walk.node,
+        &args.quote_rpc,
+        &walk.params,
+        bundle,
+        &owner_pubkey,
+        &payer,
+        bond,
+        bond_op,
+        &unsigned,
+        &probe,
+        sponsor,
+        &mut silent,
+    )
+    .await?;
+    for s in &silent {
+        flow.row(Severity::Warning, "quote node", format!("{s} — silent, not counted"));
+    }
+    let agreed = if answers.len() == 1 && args.single_rpc {
+        flow.row(
+            Severity::Warning,
+            "quote",
+            "ONE node only (--allow-single-rpc): its answers are UNVERIFIED_REMOTE_STATE and nothing cross-checks them",
+        );
+        let (node, facts) = answers[0].clone();
+        detached::AgreedQuoteV1 {
+            sources: vec![detached::QuoteSourceV1 { node, tip_hash: facts.tip_hash, tip_daa: facts.tip_daa }],
+            facts,
+        }
+    } else {
+        detached::agree_quote_facts_v1(&answers, 2, 24).map_err(|e| {
+            Halt::Blocked(
+                Finding::error("E-QUOTE-DISAGREE", exit::NOT_READY, "The nodes do not agree on this registration's terms")
+                    .current(e.to_string())
+                    .reason("nothing is exported when independent nodes quote different terms")
+                    .fix("name at least two independent nodes (--quote-rpc a,b), wait for them to converge, or --allow-single-rpc for a node you run yourself"),
+            )
+        })?
+    };
+    flow.row(
+        Severity::Ok,
+        "quote nodes",
+        format!("{} node(s) agree on the terms — UNVERIFIED_REMOTE_STATE (agreement is not a proof)", agreed.sources.len()),
+    );
+    for r in &reports {
+        if !r.consensus_params_id.is_empty() {
+            flow.ui.sub(&paint::dim(&format!(
+                "{} runs ruleset {}…",
+                r.node,
+                &r.consensus_params_id[..16.min(r.consensus_params_id.len())]
+            )));
+        }
+    }
+    let cap = args.max_wallet_sompi.unwrap_or_else(|| {
+        agreed
+            .facts
+            .carrier_fee_sompi
+            .saturating_add(agreed.facts.filings.iter().filter(|f| f.from_wallet).map(|f| f.sompi).sum::<u64>())
+    });
+    let quote = quote_registration_v1(agreed.facts, remote::QUOTE_VALIDITY_DAA, cap).map_err(|e| {
+        Halt::Blocked(
+            Finding::error("E-MODEL-NEEDS-GAS-OR-BOND", exit::FUNDS, "This registration cannot be paid for as things stand")
+                .current(e.to_string())
+                .reason("registration is not free: the carrier fee comes from the payer, the burn and the exposure from the bond")
+                .fix("top up the payer address (gas) or the bond's collateral (bond), then export again — nothing was signed or sent"),
+        )
+    })?;
+    remote::show(flow, &quote);
+    let payer_spk = kaspa_txscript::pay_to_address_script(&payer);
+    let b = detached::build_bundle_v1(detached::BundleInputsV1 {
+        network: walk.params.net.to_string(),
+        network_domain: kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            walk.params.net.to_string().as_bytes(),
+            Some(walk.params.genesis.hash),
+        ),
+        ruleset_id: walk.params.consensus_params_id().to_string(),
+        unsigned_object: unsigned,
+        owner_pubkey,
+        payer_address: payer.to_string(),
+        payer_spk,
+        funding_outpoint: fund.outpoint,
+        funding_entry: fund.entry,
+        quote,
+        sources: agreed.sources,
+    })
+    .map_err(|e| {
+        Halt::Blocked(Finding::error("E-EXPORT-BUILD", exit::GENERIC, "The bundle could not be built").current(e.to_string()))
+    })?;
+    if let Some(dir) = out_path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&out_path).map_err(|e| {
+            Halt::Blocked(
+                Finding::error("E-EXPORT-WRITE", exit::HOST, format!("{}: {e}", out_path.display()))
+                    .fix("choose a file that does not exist: an exported bundle is never overwritten"),
+            )
+        })?;
+        f.write_all(b.to_json().as_bytes())
+            .map_err(|e| Halt::Blocked(Finding::error("E-EXPORT-WRITE", exit::HOST, format!("{}: {e}", out_path.display()))))?;
+    }
+    flow.row(Severity::Ok, "exported", format!("{} — UNSIGNED; no key was read", host::tilde(&out_path)));
+    flow.ui.sub(&paint::dim("next, where the key is (offline is fine):"));
+    flow.ui.sub(&format!(
+        "misaka --network {} model sign {} --key-file <owner seed>{} --expect-class {} --expect-root {} --expect-owner {bond}",
+        walk.profile.network,
+        host::tilde(&out_path),
+        if args.payer_address.is_some() { " [--payer-key-file <payer seed>]" } else { "" },
+        b.class_id,
+        b.artifact_root,
+    ));
+    flow.ui.sub(&paint::dim("then:  misaka model submit <bundle>.signed.json --relay <node>,<node>,…"));
+    *walk.exported.borrow_mut() = Some(out_path);
     Ok(())
 }
 

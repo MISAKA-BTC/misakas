@@ -609,8 +609,99 @@ enum ModelCmd {
         /// The most the wallet may pay for this registration, in sompi (default: exactly the quoted fee and filings).
         #[arg(long, value_name = "SOMPI")]
         max_fee_sompi: Option<u64>,
+        /// RFC-0009 A0, detached signing, step 1: build the registration here and write it UNSIGNED to FILE, then stop. No
+        /// key is read and nothing is funded or sent; sign it where the key is (`misaka model sign`), then `misaka model submit`.
+        /// Needs --payer-address and at least two nodes (--rpc plus --quote-rpc) that agree on the terms.
+        #[arg(long, value_name = "FILE")]
+        export_bundle: Option<std::path::PathBuf>,
+        /// The bond's public key, hex. Checked against the nodes' report; the nodes' report is used (and labelled
+        /// UNVERIFIED_REMOTE_STATE) when absent.
+        #[arg(long, value_name = "HEX")]
+        owner_pubkey: Option<String>,
+        /// The address that pays the carrier's fee. It may belong to another key than the bond's.
+        #[arg(long, value_name = "ADDRESS")]
+        payer_address: Option<String>,
+        /// More nodes to quote from, beside --rpc (host:port, comma-separated): the terms must agree on all of them.
+        #[arg(long, value_delimiter = ',', value_name = "HOST:PORT,...")]
+        quote_rpc: Vec<String>,
+        /// Quote from a single node. Only for a node you run yourself: nothing cross-checks it.
+        #[arg(long)]
+        allow_single_rpc: bool,
         #[command(flatten)]
         profile: ProfileArgs,
+    },
+    /// RFC-0009 A0, detached signing, step 2: re-check an exported registration bundle against YOUR expectations and this
+    /// build's own network parameters, then sign it — the bond key signs the registration, the payer key signs the carrier's
+    /// funding input (one key or two). Reads no node unless --rpc is given (for the quote's expiry). The seed is read from a
+    /// file or stdin only.
+    Sign {
+        /// The bundle `model add --export-bundle` wrote (or, with --carrier-only, the owner-signed one).
+        bundle: std::path::PathBuf,
+        /// The bond key's seed file (also the payer's, unless --payer-key-file).
+        #[arg(long, value_name = "FILE")]
+        key_file: Option<String>,
+        /// Read the seed from stdin.
+        #[arg(long)]
+        key_stdin: bool,
+        /// The fee payer's seed file, when the payer is not the bond key.
+        #[arg(long, value_name = "FILE")]
+        payer_key_file: Option<String>,
+        /// Sign only the registration object (the bond key) and write the owner-signed bundle.
+        #[arg(long, conflicts_with = "carrier_only")]
+        owner_only: bool,
+        /// Sign only the carrier's funding input (the payer key) of an owner-signed bundle.
+        #[arg(long)]
+        carrier_only: bool,
+        /// The class you mean to register (128 hex). Required with --yes; otherwise confirmed at the prompt.
+        #[arg(long, value_name = "CLASS_ID")]
+        expect_class: Option<String>,
+        /// The artifact root you mean to register (128 hex).
+        #[arg(long, value_name = "ROOT")]
+        expect_root: Option<String>,
+        /// The owner bond, <txid>:<index>.
+        #[arg(long, value_name = "OUTPOINT")]
+        expect_owner: Option<String>,
+        /// The most the payer may pay, in sompi (default: exactly the bundle's quoted total).
+        #[arg(long, value_name = "SOMPI")]
+        max_fee_sompi: Option<u64>,
+        /// Where to write the result (default: next to the bundle).
+        #[arg(long, value_name = "FILE")]
+        out: Option<std::path::PathBuf>,
+        /// Answer yes to the signing question (needs --expect-class, --expect-root and --expect-owner).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// RFC-0009 A0, detached signing, step 3: verify a signed registration from its bytes alone and relay it through several
+    /// nodes. Sending the same bytes again is idempotent; a second, different carrier for the same class is refused. An ACK is
+    /// not inclusion, and an accepted registration is not Active.
+    Submit {
+        /// The signed file `model sign` wrote.
+        signed: std::path::PathBuf,
+        /// Relay nodes (host:port, comma-separated). A relay can only forward the bytes: it cannot alter them.
+        #[arg(long, value_delimiter = ',', value_name = "HOST:PORT,...", required = true)]
+        relay: Vec<String>,
+        /// How many relay nodes must accept the carrier and agree on its fate (default: a majority).
+        #[arg(long, value_name = "N")]
+        relay_min: Option<usize>,
+        #[arg(long, value_name = "CLASS_ID")]
+        expect_class: Option<String>,
+        #[arg(long, value_name = "ROOT")]
+        expect_root: Option<String>,
+        #[arg(long, value_name = "OUTPOINT")]
+        expect_owner: Option<String>,
+        /// The most the carrier may cost, in sompi (default: the fee the file declares).
+        #[arg(long, value_name = "SOMPI")]
+        max_fee_sompi: Option<u64>,
+        /// Send even though ANOTHER carrier for this class was sent from here before (a second fee for a registration the
+        /// chain refuses as a duplicate if the first folds).
+        #[arg(long)]
+        allow_duplicate: bool,
+        /// Do not wait for the registry: say what is pending and exit.
+        #[arg(long)]
+        no_wait: bool,
+        /// Answer yes to the relay question.
+        #[arg(long)]
+        yes: bool,
     },
     /// Local inspection of an artifact: class id, roots, graph, ctx, CanonicalWork, fit walls. No submit.
     Inspect {
@@ -2723,6 +2814,11 @@ async fn main() -> std::process::ExitCode {
             relay,
             relay_min,
             max_fee_sompi,
+            export_bundle,
+            owner_pubkey,
+            payer_address,
+            quote_rpc,
+            allow_single_rpc,
             profile: args,
         }) => match (profile(&args), sponsor.resolve()) {
             (Ok(p), Ok(sponsor)) => {
@@ -2741,12 +2837,75 @@ async fn main() -> std::process::ExitCode {
                         relay,
                         relay_min,
                         max_wallet_sompi: max_fee_sompi,
+                        export_bundle,
+                        owner_pubkey,
+                        payer_address,
+                        quote_rpc,
+                        single_rpc: allow_single_rpc,
                     },
                 };
                 operator::model_add::run(&ctx, p, a).await
             }
             (Err(e), _) | (_, Err(e)) => Err(e),
         },
+        Command::Model(ModelCmd::Sign {
+            bundle,
+            key_file,
+            key_stdin,
+            payer_key_file,
+            owner_only,
+            carrier_only,
+            expect_class,
+            expect_root,
+            expect_owner,
+            max_fee_sompi,
+            out,
+            yes,
+        }) => {
+            operator::model_bundle::sign(
+                &ctx,
+                operator::model_bundle::SignArgs {
+                    bundle,
+                    key_file,
+                    key_stdin,
+                    payer_key_file,
+                    owner_only,
+                    carrier_only,
+                    expect: operator::model_bundle::ExpectArgs { class: expect_class, root: expect_root, owner: expect_owner },
+                    max_fee_sompi,
+                    out,
+                    yes,
+                },
+            )
+            .await
+        }
+        Command::Model(ModelCmd::Submit {
+            signed,
+            relay,
+            relay_min,
+            expect_class,
+            expect_root,
+            expect_owner,
+            max_fee_sompi,
+            allow_duplicate,
+            no_wait,
+            yes,
+        }) => {
+            operator::model_bundle::submit(
+                &ctx,
+                operator::model_bundle::SubmitArgs {
+                    signed,
+                    relay,
+                    relay_min,
+                    expect: operator::model_bundle::ExpectArgs { class: expect_class, root: expect_root, owner: expect_owner },
+                    max_fee_sompi,
+                    allow_duplicate,
+                    no_wait,
+                    yes,
+                },
+            )
+            .await
+        }
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => match profile(&args) {
             Ok(p) => operator::market::market_open(&ctx, p, &model, line, seed, yes, no_wait).await,
             Err(e) => Err(e),

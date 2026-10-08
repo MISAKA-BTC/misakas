@@ -29,6 +29,7 @@ pub(crate) mod host;
 pub(crate) mod logs;
 pub(crate) mod market;
 pub(crate) mod model_add;
+pub(crate) mod model_bundle;
 pub(crate) mod model_remote;
 pub(crate) mod nodelog;
 pub(crate) mod procs;

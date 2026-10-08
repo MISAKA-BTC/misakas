@@ -38,11 +38,21 @@ pub(crate) struct RemoteArgs {
     pub(crate) relay_min: Option<usize>,
     /// The most the wallet may pay, in sompi (`--max-fee`); default: the quoted fee plus filings, exactly.
     pub(crate) max_wallet_sompi: Option<u64>,
+    /// RFC-0009 A0 detached signing: write the UNSIGNED registration bundle here and stop (`--export-bundle`). No key is read.
+    pub(crate) export_bundle: Option<std::path::PathBuf>,
+    /// The bond's public key, hex (`--owner-pubkey`); the nodes' report is used (and labelled unverified) when absent.
+    pub(crate) owner_pubkey: Option<String>,
+    /// The address that pays the carrier (`--payer-address`) — it may belong to another key than the bond's.
+    pub(crate) payer_address: Option<String>,
+    /// More nodes to quote from (`--quote-rpc a,b`), beside `--rpc`: the terms must agree on all of them.
+    pub(crate) quote_rpc: Vec<String>,
+    /// Quote from ONE node (`--allow-single-rpc`): only for a node the operator runs; nothing cross-checks it.
+    pub(crate) single_rpc: bool,
 }
 
 impl RemoteArgs {
     pub(crate) fn active(&self) -> bool {
-        self.quote_only || !self.relay.is_empty()
+        self.quote_only || !self.relay.is_empty() || self.export_bundle.is_some()
     }
 
     pub(crate) fn min_agree(&self) -> usize {
@@ -70,6 +80,11 @@ async fn terms_digest(node: &NodeRead) -> Result<Hash64, Halt> {
         .get_palw_registration_terms()
         .await
         .map_err(|e| blocked("E-NODE-TERMS", "The registration terms could not be read", e.to_string()))?;
+    // **Without `tip_daa`**: it is the node's clock, not a term. Hashed in, the digest moved with every block, so the pre-sign
+    // gate stopped on "terms changed" whenever a block arrived between the quote and the signature, and no two nodes at
+    // different tips could ever agree on a quote.
+    let mut r = r;
+    r.tip_daa = 0;
     let bytes = serde_json::to_vec(&r).unwrap_or_default();
     let mut s = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/remote/registration-terms/v1").to_state();
     s.update(&bytes);
@@ -86,8 +101,12 @@ pub(crate) struct Funding {
 }
 
 pub(crate) async fn funding(node: &NodeRead, key: &kaspa_pq_validator_core::ValidatorKey) -> Result<Funding, Halt> {
-    let addr = key.funding_address(node.nv.params.prefix());
-    let candidates = crate::palw_fp::lifecycle_candidates_v1(&node.nv, &addr)
+    funding_of(node, &key.funding_address(node.nv.params.prefix())).await
+}
+
+/// The funding of an ADDRESS: the payer's key is not needed to read it.
+pub(crate) async fn funding_of(node: &NodeRead, addr: &kaspa_addresses::Address) -> Result<Funding, Halt> {
+    let candidates = crate::palw_fp::lifecycle_candidates_v1(&node.nv, addr)
         .await
         .map_err(|e| blocked("E-FUNDS-UNREAD", "The funding wallet could not be read", e.msg))?;
     let spendable = candidates.iter().map(|(_, e)| e.amount).sum();
@@ -101,20 +120,56 @@ pub(crate) async fn funding(node: &NodeRead, key: &kaspa_pq_validator_core::Vali
     Ok(Funding { outpoint, entry, spendable })
 }
 
+/// **Price a carrier without a key**: the unsigned body plus a signature script of the real length. The same mass and fee as
+/// `palw_fp::build_carrier_priced_v1` (which signs to measure) — pinned by a test.
+pub(crate) fn price_carrier(
+    params: &kaspa_consensus_core::config::params::Params,
+    object: &PalwConsensusObjectV2,
+    funding_outpoint: kaspa_consensus_core::tx::TransactionOutpoint,
+    funding_entry: &UtxoEntry,
+) -> Result<(u64, u64), String> {
+    use kaspa_consensus_core::mass::MassCalculator;
+    let calc = MassCalculator::new(
+        params.mass_per_tx_byte,
+        params.mass_per_script_pub_key_byte,
+        params.mass_per_sig_op,
+        params.storage_mass_parameter,
+    );
+    let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
+    let probe = misaka_palw_remote::bundle::carrier_body_v1(
+        object,
+        funding_outpoint,
+        funding_entry.amount,
+        floor,
+        &funding_entry.script_public_key,
+        misaka_palw_remote::bundle::placeholder_funding_script_v1(),
+    )
+    .map_err(|e| format!("build the carrier: {e}"))?;
+    let compute_mass = calc.calc_non_contextual_masses(&probe).compute_mass;
+    let fee =
+        kaspa_pq_validator_core::relay_fee_for_compute_mass(compute_mass).max(floor).max(crate::palw_fp::carrier_rent_v1(object));
+    if funding_entry.amount <= fee {
+        return Err(format!("the funding holds {} sompi, under its {fee} sompi fee", funding_entry.amount));
+    }
+    Ok((compute_mass, fee))
+}
+
 /// **Read the facts a quote is made of**, from `node`, for `unsigned` (and `probe`, the same object with a signature of the
-/// real length, which prices the carrier).
+/// real length, which prices the carrier). **No key is needed**: the owner's PUBLIC key and the payer's ADDRESS are enough; what
+/// the chain reports about them is [`UNVERIFIED_REMOTE_STATE`](misaka_palw_remote::bundle::UNVERIFIED_REMOTE_STATE).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn read_facts(
     node: &NodeRead,
     params: &kaspa_consensus_core::config::params::Params,
     bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
-    key: &kaspa_pq_validator_core::ValidatorKey,
+    owner_pubkey: &[u8],
+    payer: &kaspa_addresses::Address,
     bond: &str,
     bond_op: kaspa_consensus_core::tx::TransactionOutpoint,
     unsigned: &PalwConsensusObjectV2,
     probe: &PalwConsensusObjectV2,
     sponsor: Option<u64>,
-) -> Result<RegistrationFactsV1, Halt> {
+) -> Result<(RegistrationFactsV1, Funding), Halt> {
     let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. } = unsigned else {
         return Err(blocked("E-MODEL-REGISTRATION", "Not a registration", "the object is not ClassRegistered"));
     };
@@ -137,11 +192,11 @@ pub(crate) async fn read_facts(
     // reserved one in its place), plus what the bond holds as an accuser.
     let backing =
         parse_u128(&facts.bond_committed).max(parse_u128(&facts.bond_reserved_exposure)) + parse_u128(&facts.bond_accuser_exposure);
-    let fund = funding(node, key).await?;
-    let (_, mass, fee) = crate::palw_fp::build_carrier_priced_v1(key, &node.nv, probe, fund.outpoint, &fund.entry)
+    let fund = funding_of(node, payer).await?;
+    let (mass, fee) = price_carrier(params, probe, fund.outpoint, &fund.entry)
         .map_err(|e| Halt::Blocked(Finding::error("E-FUNDS-SHORT", crate::exit::FUNDS, "The carrier cannot be funded").current(e)))?;
     let daa = dag.virtual_daa_score;
-    Ok(RegistrationFactsV1 {
+    let facts = RegistrationFactsV1 {
         network_domain: kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             params.net.to_string().as_bytes(),
             Some(params.genesis.hash),
@@ -161,7 +216,7 @@ pub(crate) async fn read_facts(
         bond: BondFactsV1 {
             outpoint: bond.to_string(),
             known: claims.bond_known,
-            key_matches: claims.bond_pubkey.eq_ignore_ascii_case(&faster_hex::hex_string(key.public_key())),
+            key_matches: claims.bond_pubkey.eq_ignore_ascii_case(&faster_hex::hex_string(owner_pubkey)),
             retiring: claims.bond_retiring_since_daa.is_some(),
             collateral_sompi: claims.bond_collateral,
             backing_sompi: backing,
@@ -179,7 +234,99 @@ pub(crate) async fn read_facts(
                 }]
             })
             .unwrap_or_default(),
-    })
+    };
+    Ok((facts, fund))
+}
+
+/// What the quoting nodes reported beyond the quote's figures: the ruleset each runs.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct NodeReport {
+    pub(crate) node: String,
+    pub(crate) consensus_params_id: String,
+}
+
+/// **The same quote from several independent nodes**, each checked against this build's genesis and ruleset. A node that cannot
+/// answer is silence (reported); the agreement itself is `agree_quote_facts_v1`'s. The chosen funding output must be the same on
+/// every node. Nothing here is proven against a header: the result is `UNVERIFIED_REMOTE_STATE`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn read_facts_many(
+    ctx: &crate::node::Ctx,
+    primary: &NodeRead,
+    extra_urls: &[String],
+    params: &kaspa_consensus_core::config::params::Params,
+    bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    owner_pubkey: &[u8],
+    payer: &kaspa_addresses::Address,
+    bond: &str,
+    bond_op: kaspa_consensus_core::tx::TransactionOutpoint,
+    unsigned: &PalwConsensusObjectV2,
+    probe: &PalwConsensusObjectV2,
+    sponsor: Option<u64>,
+    silent: &mut Vec<String>,
+) -> Result<(Vec<(String, RegistrationFactsV1)>, Funding, Vec<NodeReport>), Halt> {
+    let salt = ctx
+        .palw_drill_genesis_salt
+        .as_deref()
+        .map(kaspa_consensus_core::config::drill::PalwDrillSaltV1::from_hex)
+        .transpose()
+        .ok()
+        .flatten();
+    let timeout = Duration::from_secs(ctx.timeout_secs.clamp(2, 15));
+    let ours = params.consensus_params_id().to_string();
+    let mut answers = Vec::new();
+    let mut reports = Vec::new();
+    let mut chosen: Option<Funding> = None;
+    let mut others: Vec<NodeRead> = Vec::new();
+    for url in extra_urls {
+        match crate::operator::snapshot::connect_to(&ctx.network, Some(url), timeout).await {
+            Ok(n) if n.ops_0122 && n.url != primary.url => others.push(n),
+            Ok(n) if n.url == primary.url => {}
+            Ok(n) => silent.push(format!("{}: predates the registration reads", n.url)),
+            Err((u, e)) => silent.push(format!("{u}: {e}")),
+        }
+    }
+    for node in std::iter::once(primary).chain(others.iter()) {
+        // The genesis this tool signs for, and the ruleset this build derived: a node on another one is not a quote source.
+        if let Some(status) = &node.node_status {
+            if let Err(e) = crate::wallet::node_genesis_verdict(params, salt.as_ref(), status) {
+                return Err(blocked("E-NODE-GENESIS", format!("{} runs another genesis than this CLI signs for", node.url), e.msg));
+            }
+            if !status.consensus_params_id.is_empty() && status.consensus_params_id != ours {
+                return Err(blocked(
+                    "E-NODE-RULESET",
+                    format!("{} runs another ruleset than this build", node.url),
+                    format!("node {} · this build {}", status.consensus_params_id, ours),
+                ));
+            }
+        }
+        let (facts, fund) = read_facts(node, params, bundle, owner_pubkey, payer, bond, bond_op, unsigned, probe, sponsor).await?;
+        match &chosen {
+            None => chosen = Some(fund),
+            Some(first) if first.outpoint != fund.outpoint || first.entry.amount != fund.entry.amount => {
+                return Err(blocked(
+                    "E-QUOTE-DISAGREE",
+                    "The nodes disagree on the funding output",
+                    format!(
+                        "{} chose {}:{} ({} sompi), another node chose {}:{} ({} sompi)",
+                        node.url,
+                        fund.outpoint.transaction_id,
+                        fund.outpoint.index,
+                        fund.entry.amount,
+                        first.outpoint.transaction_id,
+                        first.outpoint.index,
+                        first.entry.amount
+                    ),
+                ));
+            }
+            Some(_) => {}
+        }
+        reports.push(NodeReport {
+            node: node.url.clone(),
+            consensus_params_id: node.node_status.as_ref().map(|s| s.consensus_params_id.clone()).unwrap_or_default(),
+        });
+        answers.push((node.url.clone(), facts));
+    }
+    Ok((answers, chosen.ok_or_else(|| blocked("E-FUNDS-NONE", "No node answered", "no funding output"))?, reports))
 }
 
 /// Print a quote.
