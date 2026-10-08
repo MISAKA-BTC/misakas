@@ -1593,6 +1593,12 @@ pub trait ConsensusApi: Send + Sync {
         Ok(None)
     }
 
+    /// RFC-0012 D1: why `safe` stands where it does, at the node's sink (`None` before the retirement fence, or when this
+    /// consensus keeps no native-settlement evaluation). Advisory: it decides nothing and is never persisted.
+    fn get_native_safe_readiness(&self) -> ConsensusResult<Option<crate::palw_native_readiness_v1::NativeSafeReadinessV1>> {
+        Ok(None)
+    }
+
     fn get_evm_canonical_heads(&self) -> ConsensusResult<Option<crate::evm::CanonicalEvmHeads>> {
         Ok(None)
     }

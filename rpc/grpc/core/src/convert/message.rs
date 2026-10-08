@@ -923,6 +923,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwSettlementResponse>, protowire::Ge
     Self {
         dns_retired_at: item.dns_retired_at,
         native_settlement_json: item.native_settlement.as_ref().map(|s| serde_json::to_string(s).expect("settlement snapshot has JSON-safe fields")),
+        native_readiness_json: item.native_readiness.as_ref().map(|s| serde_json::to_string(s).expect("settlement readiness has JSON-safe fields")),
 
         available: item.available,
         sink_daa: item.sink_daa,
@@ -3321,6 +3322,7 @@ try_from!(item: &protowire::GetPalwSettlementResponseMessage, RpcResult<kaspa_rp
     Self {
         dns_retired_at: item.dns_retired_at,
         native_settlement: item.native_settlement_json.as_ref().map(|s| serde_json::from_str(s)).transpose().map_err(|e| kaspa_rpc_core::RpcError::General(format!("invalid native settlement snapshot: {e}")))?,
+        native_readiness: item.native_readiness_json.as_ref().map(|s| serde_json::from_str(s)).transpose().map_err(|e| kaspa_rpc_core::RpcError::General(format!("invalid native settlement readiness: {e}")))?,
 
         available: item.available,
         sink_daa: item.sink_daa,
@@ -5422,6 +5424,32 @@ mod native_settlement_tests {
         let duty = GetPrecommitDutyResponse { retired_at: Some(5), ..Default::default() };
         let wire: protowire::GetPrecommitDutyResponseMessage = RpcResult::Ok(&duty).into();
         assert_eq!(GetPrecommitDutyResponse::try_from(&wire).unwrap().retired_at, Some(5));
+    }
+
+    /// RFC-0012 D1: the readiness explanation is the next optional JSON field (12); an older peer's message reads as "none".
+    #[test]
+    fn rfc0012_grpc_roundtrips_the_safe_readiness_and_rejects_a_corrupt_one() {
+        use kaspa_consensus_core::palw_native_readiness_v1::*;
+        use kaspa_consensus_core::palw_native_settlement_v1::{PalwSettlementPolicyV1, SkippedEvidenceV1};
+        let h = kaspa_consensus_core::Hash64::from_u64_word;
+        let readiness = native_stopped_readiness_v1(
+            h(9),
+            (100, 90),
+            PalwSettlementPolicyV1 { settled_anchor_depth: 2, unique_mature_work: 20, max_operator_permille: 600, max_class_permille: 600 },
+            native_maturity_report_v1(3_000, 120),
+            SafeWaitV1::Unexecuted,
+            FinalizedReadinessV1 { finalized: None, pruning_point: h(1), pruning_blue: None, wait: Some(FinalizedWaitV1::NoSafePrefix) },
+            SkippedEvidenceV1::default(),
+        );
+        let response = GetPalwSettlementResponse { native_readiness: Some(readiness.clone()), ..Default::default() };
+        let wire: protowire::GetPalwSettlementResponseMessage = RpcResult::Ok(&response).into();
+        assert!(wire.native_readiness_json.is_some());
+        let decoded: GetPalwSettlementResponse = (&wire).try_into().unwrap();
+        assert_eq!(decoded.native_readiness, Some(readiness));
+        let absent: protowire::GetPalwSettlementResponseMessage = RpcResult::Ok(&GetPalwSettlementResponse::default()).into();
+        assert!(absent.native_readiness_json.is_none());
+        let corrupt = protowire::GetPalwSettlementResponseMessage { native_readiness_json: Some("{\"version\":1}".into()), ..wire };
+        assert!(GetPalwSettlementResponse::try_from(&corrupt).is_err());
     }
 }
 
