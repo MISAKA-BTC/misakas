@@ -175,6 +175,18 @@ impl LedgerPolicyV1 {
         (self.max_adjudications_per_block as u64 * self.prosecution_reserve_permille as u64 / 1000) as u32
     }
 
+    /// **What a dismissed filing that ran a court forfeits** (C4 F-C4R4-05): `dismissed_proof_fee` for each
+    /// `1 / max_adjudications_per_block` share of the block's court work it was charged (its class's declared worst court), at least
+    /// one fee. Every class shares ONE per-block court budget, so a junk filing against the heaviest class must cost what the runs it
+    /// crowds out would have cost: saturating a block costs about `max_adjudications_per_block × dismissed_proof_fee` whichever classes
+    /// the junk names, never one fee. A true proof still pays nothing.
+    pub fn dismissal_fee_v1(&self, court_work: u64) -> u64 {
+        let shares = (court_work as u128 * self.max_adjudications_per_block as u128)
+            .div_ceil(self.max_court_work_per_block.max(1) as u128)
+            .max(1);
+        (self.dismissed_proof_fee as u128).saturating_mul(shares).min(u64::MAX as u128) as u64
+    }
+
     /// The relations among the timings and amounts every rule below relies on.
     pub fn validate(&self) -> Result<(), String> {
         let p = self;
@@ -2000,7 +2012,7 @@ impl KernelLedgerV1 {
     ) -> Result<(), KernelRefusalV1> {
         const NAME: &str = "FileProof";
         let rule = |why: &str| KernelRefusalV1::rule(NAME, why);
-        let fee = self.policy.dismissed_proof_fee;
+        let mut fee = self.policy.dismissed_proof_fee;
         match self.bonds.get(accuser) {
             None => return Err(rule("the accuser is not a registered bond")),
             Some(b) if b.free() < fee => return Err(rule("the accuser's free collateral does not cover the filing fee")),
@@ -2024,8 +2036,15 @@ impl KernelLedgerV1 {
         let verdict = match cheap {
             Some(why) => Err(why),
             None => {
+                // C4 F-C4R4-05: a filing that reserves a share of the block's court pays for that share if it is dismissed.
+                let work = bounds.map(|b| b.max_court_work).unwrap_or(0);
+                let scaled = self.policy.dismissal_fee_v1(work);
+                if self.bonds.get(accuser).is_none_or(|b| b.free() < scaled) {
+                    return Err(rule("the accuser's free collateral does not cover the filing fee"));
+                }
+                fee = scaled;
                 // The court is about to run: it spends the block's budget (a refusal here costs the accuser nothing).
-                self.charge(NAME, bounds.map(|b| b.max_court_work).unwrap_or(0))?;
+                self.charge(NAME, work)?;
                 self.adjudicate(claim, proof)
             }
         };
