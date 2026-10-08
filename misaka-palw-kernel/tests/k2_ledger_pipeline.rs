@@ -41,6 +41,7 @@ fn policy() -> LedgerPolicyV1 {
         check_window_daa: 100,
         challenge_window_daa: 50,
         court_deadline_daa: 20,
+        proof_grace_daa: 10,
         liability_daa: 200,
         exit_delay_daa: 30,
         dismissed_proof_fee: 5,

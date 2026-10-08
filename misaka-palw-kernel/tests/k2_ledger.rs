@@ -49,6 +49,7 @@ fn policy() -> LedgerPolicyV1 {
         check_window_daa: 100,
         challenge_window_daa: 50,
         court_deadline_daa: 20,
+        proof_grace_daa: 10,
         liability_daa: 200,
         exit_delay_daa: 30,
         dismissed_proof_fee: 5,
@@ -666,10 +667,15 @@ fn spam_cannot_hold_final_past_window_end_plus_court_deadline_and_a_proof_at_win
     let serve = |p: u32| T::Respond { claim: id, stage: 0, position: p, bytes: position(&trace, p, |_| {}) };
     w.block(78, vec![serve(0), serve(1)]);
     assert!(matches!(w.state(&id), ClaimStateV1::Disputed { .. }));
+    // The last service hands the claim no Final in its own block: the demander gets `proof_grace_daa` to use what it was served.
     let ev = w.block(78, vec![serve(2)]);
-    assert!(ev.contains(&E::Final { claim: id, reward: 7 }), "{ev:?}");
+    assert!(!ev.iter().any(|e| matches!(e, E::Final { .. })), "{ev:?}");
+    assert!(matches!(w.state(&id), ClaimStateV1::WindowClosed { .. }), "{:?}", w.state(&id));
+    assert!(w.block(87, vec![]).is_empty());
+    let ev = w.block(88, vec![]);
+    assert_eq!(ev, vec![E::Final { claim: id, reward: 7 }]);
     let ClaimStateV1::Final { final_daa } = w.state(&id) else { panic!() };
-    assert!(final_daa <= 60 + 20);
+    assert!(final_daa <= 60 + 20 + 10, "window end + court deadline + proof grace");
 
     // Demands filed while the claim is still checking hold it too, and the Panel's coverage meanwhile starts the window.
     let job = w.post_job(100, &[3, 17, 9], 3, 2);
@@ -694,7 +700,8 @@ fn spam_cannot_hold_final_past_window_end_plus_court_deadline_and_a_proof_at_win
     assert_eq!(convicted(&ev), Some((1000, 500, false)), "{ev:?}");
     assert!(!ev.iter().any(|e| matches!(e, E::Final { .. })));
 
-    // A demand in the window's last block, served at its deadline, still reaches a post-Final proof inside the liability horizon.
+    // A demand in the window's last block, served at its deadline: Final waits out the proof grace, so the proof the served values
+    // enable convicts BEFORE Final and the producer never earns the reward.
     let job = w.post_job(300, &[3, 17, 9], 3, 4);
     let (at, lie) = w.lying(&job, 3);
     let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[at]));
@@ -702,10 +709,97 @@ fn spam_cannot_hold_final_past_window_end_plus_court_deadline_and_a_proof_at_win
     w.block(301, vec![lie.tx, T::PanelCovered { claim: id }]); // window end 351
     w.block(350, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
     let ev = w.block(369, vec![T::Respond { claim: id, stage: 0, position: at.0, bytes: position(&trace, at.0, |_| {}) }]);
-    assert!(ev.contains(&E::Final { claim: id, reward: 7 }), "{ev:?}");
+    assert!(
+        !ev.iter().any(|e| matches!(e, E::Final { .. })),
+        "the claim must not finalize in the block that served the demand: {ev:?}"
+    );
     let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!() };
     let ev = w.block(370, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
-    assert_eq!(convicted(&ev), Some((1000, 500, true)));
+    assert_eq!(convicted(&ev), Some((1000, 500, false)), "a pre-Final conviction: {ev:?}");
+    w.block(500, vec![]);
+    assert!(!w.l.claims[&id].rewarded && matches!(w.state(&id), ClaimStateV1::Convicted { .. }));
+
+    // The same, but nobody files inside the grace: Final (and the reward) follow at `served + grace`, and a proof after the grace
+    // but inside the liability horizon still convicts, post-Final.
+    let job = w.post_job(600, &[3, 17, 9], 3, 5);
+    let (at, lie) = w.lying(&job, 3);
+    let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[at]));
+    let trace = lie.trace.clone();
+    w.block(601, vec![lie.tx, T::PanelCovered { claim: id }]); // window end 651
+    w.block(650, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
+    w.block(669, vec![T::Respond { claim: id, stage: 0, position: at.0, bytes: position(&trace, at.0, |_| {}) }]);
+    assert!(w.block(678, vec![]).is_empty());
+    assert_eq!(w.block(679, vec![]), vec![E::Final { claim: id, reward: 7 }]);
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!() };
+    let ev = w.block(680, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+    assert_eq!(convicted(&ev), Some((1000, 500, true)), "post-Final liability: {ev:?}");
+}
+
+#[test]
+fn spam_demands_and_joins_cannot_push_final_past_window_end_plus_court_deadline_plus_proof_grace() {
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let h = w.honest(&job, 3);
+    let (id, trace) = (h.claim.id(), h.trace.clone());
+    w.block(10, vec![h.tx, T::PanelCovered { claim: id }]); // window end 60
+    // Every position demanded in the window's last block by two bonds (the second one joins), then joins later in the window of
+    // service: none of it restarts a clock.
+    let demands: Vec<T> = (0..5)
+        .flat_map(|p| {
+            [
+                T::FileDemand { demander: SPAM1, claim: id, stage: 0, position: p },
+                T::FileDemand { demander: SPAM2, claim: id, stage: 0, position: p },
+            ]
+        })
+        .collect();
+    let ev = w.block(59, demands);
+    assert_eq!(ev.iter().filter(|e| matches!(e, E::DemandOpened { deadline: 79, .. })).count(), 5);
+    assert_eq!(ev.iter().filter(|e| matches!(e, E::DemandJoined { .. })).count(), 5);
+    let ev = w.block(70, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: 0 }]);
+    assert_eq!(refused(&ev).as_deref(), Some("the challenge window is closed"), "no demand opens or joins past the window");
+    // The producer serves every demand at its deadline; a position is served once and cannot be demanded (or served) again.
+    let serve: Vec<T> = (0..5).map(|p| T::Respond { claim: id, stage: 0, position: p, bytes: position(&trace, p, |_| {}) }).collect();
+    let ev = w.block(79, serve);
+    assert_eq!(ev.iter().filter(|e| matches!(e, E::Served { .. })).count(), 5, "{ev:?}");
+    let ev = w.block(80, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: 0 }]);
+    assert!(refused(&ev).is_some(), "a served position cannot be demanded again to restart the grace: {ev:?}");
+    assert!(!w.l.demands.contains_key(&(id, 0, 0)));
+    assert!(w.block(88, vec![]).is_empty(), "served at 79: Final waits until 89");
+    let ev = w.block(89, vec![]);
+    assert_eq!(ev, vec![E::Final { claim: id, reward: 7 }]);
+    let ClaimStateV1::Final { final_daa } = w.state(&id) else { panic!() };
+    assert_eq!(final_daa, 89);
+    assert!(final_daa <= 60 + 20 + 10, "the absolute bound: window end + court deadline + proof grace");
+}
+
+/// A lying claim the Panel covered at daa 10 (window end 60) and that finalized at 60: liability until 260.
+fn final_lying_claim(w: &mut World) -> (Digest, (u32, u16, u16), Da, TraceV1) {
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let (at, lie) = w.lying(&job, 3);
+    let (id, da, trace) = (lie.claim.id(), Da::publishing(&lie.trace, &[at]), lie.trace.clone());
+    w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
+    assert_eq!(w.block(60, vec![]), vec![E::Final { claim: id, reward: 7 }]);
+    assert_eq!(w.l.claims[&id].liability_until, Some(260));
+    (id, at, da, trace)
+}
+
+#[test]
+fn a_post_final_demand_must_fit_its_whole_path_in_the_liability_horizon() {
+    // A demand whose deadline + grace would pass the horizon is refused: what it served nobody could still prosecute with.
+    let mut w = World::new();
+    let (id, at, _, _) = final_lying_claim(&mut w);
+    let ev = w.block(231, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
+    assert_eq!(refused(&ev).as_deref(), Some("the challenge window is closed"), "231 + 20 + 10 > 260: {ev:?}");
+
+    // The last demand that fits (230 + 20 + 10 = 260): served at its deadline, the proof it enables is still filed inside the horizon.
+    let mut w = World::new();
+    let (id, at, da, trace) = final_lying_claim(&mut w);
+    let ev = w.block(230, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
+    assert_eq!(ev, vec![E::DemandOpened { claim: id, stage: 0, position: at.0, deadline: 250 }]);
+    w.block(250, vec![T::Respond { claim: id, stage: 0, position: at.0, bytes: position(&trace, at.0, |_| {}) }]);
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!() };
+    let ev = w.block(260, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+    assert_eq!(convicted(&ev), Some((1000, 500, true)), "{ev:?}");
 }
 
 // ── G: DA outcomes are classified, and none of them is the fraud slash ───────────────────────────────────────────────────

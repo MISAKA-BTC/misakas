@@ -92,6 +92,11 @@ pub enum ClaimEventV1 {
     Tick { daa: u64 },
     /// The retention/DA obligation for Final is met.
     RetentionMet,
+    /// Material was served for a demand at some `daa`: the claim may not reach Final before `until_daa` (`daa + proof grace`), so
+    /// the prosecution the served values enable can still be filed before Final. Holds only ever extend to the latest service, and a
+    /// service can only happen inside the bounded demand window, so the hold never moves Final past
+    /// `window end + court deadline + proof grace`.
+    ProofGrace { until_daa: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -106,11 +111,13 @@ pub struct ClaimLifecycleV1 {
     pub policy: LifecyclePolicyV1,
     pub state: ClaimStateV1,
     pub retention_met: bool,
+    /// The earliest DAA at which Final may be reached (the latest service + proof grace; `0`: no hold).
+    pub final_hold_until: u64,
 }
 
 impl ClaimLifecycleV1 {
     pub fn new(policy: LifecyclePolicyV1) -> Self {
-        Self { policy, state: ClaimStateV1::Committed, retention_met: false }
+        Self { policy, state: ClaimStateV1::Committed, retention_met: false, final_hold_until: 0 }
     }
 
     fn invalid(&self, e: &ClaimEventV1) -> LifecycleErrorV1 {
@@ -128,6 +135,10 @@ impl ClaimLifecycleV1 {
             (_, E::RetentionMet) => {
                 self.retention_met = true;
                 self.finalize_if_due(None)
+            }
+            (_, E::ProofGrace { until_daa }) => {
+                self.final_hold_until = self.final_hold_until.max(*until_daa);
+                self.state.clone()
             }
             (S::Committed, E::BindChallenge { anchor_daa }) => S::ChallengeBound { anchor_daa: *anchor_daa },
             (S::ChallengeBound { anchor_daa }, E::StartChecking { daa }) if daa >= anchor_daa => {
@@ -194,11 +205,13 @@ impl ClaimLifecycleV1 {
         }
     }
 
-    /// Final needs the closed window, the retention obligation and no open dispute (a `Disputed` state is never finalized here).
+    /// Final needs the closed window, the retention obligation, no open dispute (a `Disputed` state is never finalized here) and
+    /// the proof grace after the latest service to have elapsed (without a clock reading, `window_end` is the clock).
     fn finalize_if_due(&self, daa: Option<u64>) -> ClaimStateV1 {
         match (&self.state, daa) {
             (ClaimStateV1::WindowClosed { window_end_daa }, d) if self.retention_met => {
-                ClaimStateV1::Final { final_daa: d.unwrap_or(*window_end_daa).max(*window_end_daa) }
+                let at = d.unwrap_or(*window_end_daa).max(*window_end_daa);
+                if at >= self.final_hold_until { ClaimStateV1::Final { final_daa: at } } else { self.state.clone() }
             }
             _ => self.state.clone(),
         }
@@ -323,6 +336,21 @@ mod tests {
         l.apply(ClaimEventV1::RetentionMet).unwrap();
         assert!(matches!(l.state, ClaimStateV1::Final { .. }));
         assert!(l.apply(ClaimEventV1::DisputeFiled { daa: 80 }).is_err(), "terminal");
+    }
+
+    #[test]
+    fn a_service_holds_final_until_its_proof_grace_has_elapsed() {
+        let mut l = checking();
+        l.apply(ClaimEventV1::Tally { daa: 20, state: TallyStateV1::Covered }).unwrap(); // window end 70
+        l.apply(ClaimEventV1::ProofGrace { until_daa: 75 }).unwrap();
+        l.apply(ClaimEventV1::ProofGrace { until_daa: 72 }).unwrap(); // an earlier service never shortens the hold
+        l.apply(ClaimEventV1::Tick { daa: 70 }).unwrap();
+        assert_eq!(l.state, ClaimStateV1::WindowClosed { window_end_daa: 70 }, "the window closed but a service holds Final");
+        l.apply(ClaimEventV1::RetentionMet).unwrap();
+        l.apply(ClaimEventV1::Tick { daa: 74 }).unwrap();
+        assert!(matches!(l.state, ClaimStateV1::WindowClosed { .. }));
+        l.apply(ClaimEventV1::Tick { daa: 75 }).unwrap();
+        assert_eq!(l.state, ClaimStateV1::Final { final_daa: 75 });
     }
 
     #[test]

@@ -25,11 +25,15 @@
 //!   free collateral, not by a count.
 //! * **Filings are bounded and priced**: a filed proof must fit the class's filing envelope, and a dismissed one forfeits
 //!   `dismissed_proof_fee` (a convicting or duplicate one does not).
-//! * **Final** (category 17): a claim needs the Panel's covered tally, the closed window and no open demand. New demands are
+//! * **Final** (category 17): a claim needs the Panel's covered tally, the closed window, no open demand and — after a demand was
+//!   served — `proof_grace_daa` more, so the prosecution the served values enable can still be filed before Final (a service
+//!   in the window's last block must not hand the claim Final before the demander can use what it was served). New demands are
 //!   accepted only while the window is open and each lives `court_deadline_daa`, so no spam extends Final past
-//!   `window end + court deadline`. A dismissed direct proof changes nothing.
+//!   `window end + court deadline + proof grace`: demands open only inside the window, a join shares the open demand's
+//!   deadline, and a position is served once. A dismissed direct proof changes nothing.
 //! * **Liability** (category A): after Final the reservation is held for `liability_daa`; a proof convicting in that horizon
-//!   slashes it (post-Final liability), even if every Panel seat signed the claim covered.
+//!   slashes it (post-Final liability), even if every Panel seat signed the claim covered. A post-Final demand is accepted only
+//!   while its whole path (deadline, service, grace) still fits inside the horizon.
 //! * **Idempotence and replay** (category 18): a claim is convicted at most once (a second proof is `Duplicate`); the state is
 //!   a pure function of the block sequence, so a reorg is a replay of the new branch and a restart or IBD is a replay from
 //!   genesis ([`KernelLedgerV1::replay`]).
@@ -73,6 +77,8 @@ pub struct LedgerPolicyV1 {
     pub check_window_daa: u64,
     pub challenge_window_daa: u64,
     pub court_deadline_daa: u64,
+    /// After a demand is served, the claim may not reach Final for this long (the demander files the proof the served values enable).
+    pub proof_grace_daa: u64,
     pub liability_daa: u64,
     pub exit_delay_daa: u64,
     /// What a dismissed proof forfeits (burned): filings are not free court work.
@@ -90,12 +96,16 @@ impl LedgerPolicyV1 {
     /// The relations among the timings and amounts every rule below relies on.
     pub fn validate(&self) -> Result<(), String> {
         let p = self;
-        let checks: [(bool, &str); 7] = [
+        let checks: [(bool, &str); 8] = [
             (p.court_deadline_daa == p.prosecution.court_deadline_daa, "the ledger's court deadline is the gate's"),
             (p.court_deadline_daa > 0 && p.challenge_window_daa > 0 && p.check_window_daa > 0, "every window is non-empty"),
+            (p.proof_grace_daa > 0, "a served demand leaves a non-empty grace to file the proof it enables"),
             // A demand filed in the window's last block closes by `window end + court deadline`; the proof it enables must still
             // reach the claim, after Final if need be.
-            (p.liability_daa > p.court_deadline_daa, "the liability horizon outlasts a demand's deadline"),
+            (
+                p.liability_daa > p.court_deadline_daa.saturating_add(p.proof_grace_daa),
+                "the liability horizon outlasts a demand's deadline and the proof grace after it",
+            ),
             (p.default_penalty <= p.claim_collateral, "a default never takes more than the reservation"),
             (p.demand_bond > 0 && p.dismissed_proof_fee > 0, "demands and filings are not free"),
             (p.accuser_reward_permille <= 1000, "the accuser's share is a share"),
@@ -1001,8 +1011,11 @@ impl KernelLedgerV1 {
         let is_final = matches!(row.life.state, ClaimStateV1::Final { .. });
         // Before Final, only while the challenge window is open (so no demand extends Final past window + deadline); after Final,
         // within the liability horizon (material for a post-Final proof), without touching the lifecycle.
+        let path = self.policy.court_deadline_daa.saturating_add(self.policy.proof_grace_daa);
         let window_open = match &row.life.state {
-            ClaimStateV1::Final { .. } => row.liability_until.is_some_and(|u| daa <= u),
+            // The demand's whole path (its deadline, then the grace after a service) must fit in the horizon, or a late demand
+            // would serve material nobody could still prosecute with.
+            ClaimStateV1::Final { .. } => row.liability_until.is_some_and(|u| daa.saturating_add(path) <= u),
             s => demand_window_open(s, daa),
         };
         if !window_open {
@@ -1071,6 +1084,11 @@ impl KernelLedgerV1 {
         match verdict {
             Ok(served) => {
                 self.served.insert(k, served);
+                // The values are public from now on: the claim may not reach Final before a prosecution they enable can be filed.
+                let until = self.daa.saturating_add(self.policy.proof_grace_daa);
+                if let Some(row) = self.claims.get_mut(claim) {
+                    let _ = row.life.apply(ClaimEventV1::ProofGrace { until_daa: until });
+                }
                 self.close_demand(k);
                 self.log(LedgerEventV1::Served { claim: *claim, stage, position });
             }
