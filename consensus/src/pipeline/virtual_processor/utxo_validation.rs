@@ -528,6 +528,9 @@ impl VirtualStateProcessor {
                     ))
                     .objects
                     .first()
+                    // A-2 uniformity: a kind whose owning fence is not in force here is the live build's undecodable payload, and
+                    // undecodable bytes burn no rent there — so none here either, whatever a later kind's ceiling would say.
+                    .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, pov_daa_score))
                     // ADR-0152 v3.1 (the Phase 3 review): past `palw_offence_attribution` a whole-prompt
                     // `PromptNotAnchored` pays its prompt's carriage too; below it this is v1 exactly.
                     // ADR-0160 F-B: and below the batch fence a kind-3 whose receipt is `Windowed`
@@ -976,7 +979,7 @@ impl VirtualStateProcessor {
         let attempt_lane = kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::from_fence(
             self.palw_attempt_activation.map(|fence| fence.is_active(header.daa_score)),
         );
-        kaspa_pow::palw_admission::check_palw_block_admission_v1(
+        kaspa_pow::palw_admission::check_palw_block_admission_v2(
             header,
             selected_parent_bond_view,
             |class_id| self.palw_class_facts_for_block(class_id, header),
@@ -984,6 +987,8 @@ impl VirtualStateProcessor {
             self.genesis.hash.as_bytes().as_slice(),
             commitment_bound,
             attempt_lane,
+            // A-2 uniformity: a carriage form added after the live build, only where its fence is in force at this header.
+            self.palw_header_forms,
             // The curve only. Admission chooses the domain, so this cannot be handed the wrong one
             // — the repair shape audit P0-6 asks for, applied at the site P0-2 opened.
             |key, message, signature, context| {

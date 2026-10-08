@@ -34092,6 +34092,23 @@ fn apply_class_registration_v1(
     Ok(())
 }
 
+/// **A-2 uniformity in the fold: is the owning fence of `object`'s kind in force at this block**, read off what the fold is handed —
+/// the same answers `PalwLifecycleKindFencesV1` resolves from `Params` for the acceptance layer: the kernel route's extras exist exactly
+/// where `palw_probabilistic_constraints_v1` is in force (`palw_kernel_route_extras_at`), and the Panel mirror's height is
+/// `palw_permissionless_panel_v1`'s. The signed-expiry envelope (tag 108) is never folded — the acceptance walk unwraps it — so the fold
+/// reads it as never in force: a chunk group assembling to one is undecodable bytes here, and is refused either way.
+fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2, object: &PalwConsensusObjectV2) -> bool {
+    use crate::palw_lifecycle_objects_v2::{
+        PalwLifecycleKindFenceV1 as F, PalwLifecycleKindOwnerV1 as K, palw_lifecycle_kind_owner_v1,
+    };
+    match palw_lifecycle_kind_owner_v1(object) {
+        K::Int12 => true,
+        K::Fence(F::ProbabilisticConstraintsV1) => builder.extras.kernel_route.is_some(),
+        K::Fence(F::PermissionlessPanelV1) => builder.params.panel_v3().is_some_and(|mirror| ctx.daa_score >= mirror.from_daa),
+        K::Fence(F::SignedRegistrationV1) => false,
+    }
+}
+
 fn apply_object(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -35632,6 +35649,13 @@ fn apply_object(
                 }
                 let inner: PalwConsensusObjectV2 =
                     borsh::from_slice(&whole).map_err(|e| PalwStateV2Error::ChunkedObjectUndecodable(e.to_string()))?;
+                // **A-2 uniformity: an inner kind whose owning fence is not in force at this block is bytes the live build cannot
+                // decode** — refused exactly as it refuses them, in its words, before any kind rule reads it.
+                if !palw_fold_kind_in_force_v1(builder, ctx, &inner) {
+                    return Err(PalwStateV2Error::ChunkedObjectUndecodable(
+                        crate::palw_lifecycle_objects_v2::palw_lifecycle_unknown_tag_reason_v1(&whole),
+                    ));
+                }
                 if !palw_chunked_object_kind_admitted_v1(&inner) {
                     return Err(PalwStateV2Error::ChunkedObjectKindNotAllowed);
                 }
