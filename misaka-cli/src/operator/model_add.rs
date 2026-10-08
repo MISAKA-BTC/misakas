@@ -1259,6 +1259,43 @@ async fn register_export(
     let mut owner_pubkey = vec![0u8; owner_pubkey_hex.len() / 2];
     faster_hex::hex_decode(owner_pubkey_hex.as_bytes(), &mut owner_pubkey)
         .map_err(|e| blocked("E-EXPORT-OWNER", "The owner key is not hex", e.to_string()))?;
+    // **With `--pin`, the owner bond and its key are PROVEN** against the state that block commits, and the proof rides in the bundle for an
+    // offline signer holding the same pin. Without it they are what the nodes reported.
+    let owner_proof = match args.pin.as_deref() {
+        None => None,
+        Some(text) => {
+            let pin = crate::operator::remote_proof::parse_pin(text)?;
+            let (header, fact) = crate::operator::remote_proof::fetch_state_proof(&walk.node, pin, "bonds").await.map_err(|e| {
+                blocked("E-PROOF-UNAVAILABLE", "The node could not prove the bond table at your pin", e)
+            })?;
+            let proven = misaka_palw_remote::proof::bond_at_pin_v1(
+                &header,
+                pin,
+                &fact,
+                &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond_op),
+            )
+            .map_err(|e| blocked("E-PROOF-REFUSED", "The bond proof does not hold against your pin", e.to_string()))?;
+            let Some(record) = proven.value else {
+                return Err(blocked(
+                    "E-IDENT-BOND-NOT-REGISTRANT",
+                    "The bond is not in the state your pin commits",
+                    format!("{} — a bond registered after the pinned block needs a newer pin", proven.provenance.label()),
+                ));
+            };
+            if record.pubkey != owner_pubkey {
+                return Err(blocked(
+                    "E-IDENT-BOND-NOT-REGISTRANT",
+                    "The nodes report another key for the bond than the pinned state proves",
+                    "a node lied about the owner key, or --owner-pubkey is not the bond's".to_string(),
+                ));
+            }
+            if matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }) {
+                return Err(blocked("E-IDENT-BOND-NOT-REGISTRANT", "The bond is retiring in the pinned state", proven.provenance.label()));
+            }
+            flow.row(Severity::Ok, "owner key", proven.provenance.label());
+            Some(crate::operator::remote_proof::embeddable(pin, &header, &fact))
+        }
+    };
     let sponsor = walk.args.sponsor.filter(|_| walk.params.palw_activation_pool_at(walk.node.daa()).is_some());
     let mut silent = Vec::new();
     let (answers, fund, reports) = remote::read_facts_many(
@@ -1340,6 +1377,7 @@ async fn register_export(
         ruleset_id: walk.params.consensus_params_id().to_string(),
         unsigned_object: unsigned,
         owner_pubkey,
+        owner_proof,
         payer_address: payer.to_string(),
         payer_spk,
         funding_outpoint: fund.outpoint,

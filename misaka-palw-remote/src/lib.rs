@@ -31,6 +31,7 @@ pub mod register;
 pub mod relay;
 pub mod template;
 pub mod track;
+pub mod trust;
 pub mod view;
 
 use kaspa_hashes::Hash64;

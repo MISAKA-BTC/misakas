@@ -52,15 +52,15 @@ use kaspa_txscript::script_builder::ScriptBuilder;
 use kaspa_txscript::{MLDSA87_PK_LEN, MLDSA87_SIG_LEN, MLDSA87_TX_CONTEXT, verify_mldsa87_with_context};
 use serde::{Deserialize, Serialize};
 
+use crate::proof::{StateProofV1, verify_bond_against_pin};
 use crate::register::{DuplicateVerdictV1, RegistrationFactsV1, RegistrationQuoteV1};
 use crate::relay::{carrier_funding_signature_valid, parse_two_pushes, tx_id_of_bytes};
+use crate::trust::Provenance;
 
 pub const BUNDLE_SCHEMA_V1: &str = "misaka.palw.registration-bundle.v1";
 pub const SIGNED_SCHEMA_V1: &str = "misaka.palw.registration-signed.v1";
 
-/// The label of every fact read from a node and not proven against a header the client holds. Agreement of several nodes does
-/// not remove it (RFC-0009 §6).
-pub const UNVERIFIED_REMOTE_STATE: &str = "UNVERIFIED_REMOTE_STATE";
+pub use crate::trust::UNVERIFIED_REMOTE_STATE;
 
 /// A key that signs on the user's machine. The library never sees a seed: the CLI wraps its `ValidatorKey` (or, later, a sidecar
 /// that holds the key in another process) behind this.
@@ -164,6 +164,10 @@ pub struct RegistrationBundleV1 {
     /// The owner bond's registered key, hex. As reported by the quoting nodes ([`UNVERIFIED_REMOTE_STATE`]); the signer compares it
     /// with its own key and refuses on a difference.
     pub owner_pubkey: String,
+    /// A proof that the owner bond and its key are in the state a block commits, for a signer that pinned that block (`--pin`). Without it
+    /// the key is a node's report and the signer shows it as such.
+    #[serde(default)]
+    pub owner_proof: Option<StateProofV1>,
     /// `borsh(PalwConsensusObjectV2::ClassRegistered)` as of this stage.
     pub object_hex: String,
     /// `palw_registration_object_id_v1` of the UNSIGNED object: what the quote names.
@@ -258,6 +262,12 @@ pub enum BundleRefusalV1 {
     FundingSignature(String),
     #[error("the signer failed: {0}")]
     Signer(String),
+    #[error("you pinned a block but the bundle carries no proof of the owner bond (re-export with the same --pin)")]
+    PinWithoutProof,
+    #[error("the bundle's proof is for block {bundle}, not the block you pinned ({pinned})")]
+    PinMismatch { bundle: Hash64, pinned: Hash64 },
+    #[error("the owner bond's proof does not hold against your pin: {0}")]
+    OwnerProof(String),
 }
 
 /// What the USER expects, entered or confirmed by the user (never read back from a bundle).
@@ -284,6 +294,9 @@ pub struct SignerPolicyV1 {
     /// The chain's DAA when known (`--rpc` at sign time, or the relay's tip at submit time); `None` offline: the expiry is then not
     /// checked here and the output says so.
     pub now_daa: Option<u64>,
+    /// The block the signer pinned (`--pin`). With it the bundle MUST carry a proof, and the owner bond's key is checked against the state
+    /// that block commits; without it the key stays a node's report.
+    pub pin: Option<Hash64>,
 }
 
 /// A script's text form: hex of the version (big endian) followed by the script, as `ScriptPublicKey::from_str` reads it.
@@ -405,6 +418,7 @@ pub struct BundleInputsV1 {
     pub ruleset_id: String,
     pub unsigned_object: PalwConsensusObjectV2,
     pub owner_pubkey: Vec<u8>,
+    pub owner_proof: Option<StateProofV1>,
     pub payer_address: String,
     pub payer_spk: ScriptPublicKey,
     pub funding_outpoint: TransactionOutpoint,
@@ -438,6 +452,7 @@ pub fn build_bundle_v1(i: BundleInputsV1) -> Result<RegistrationBundleV1, Bundle
         artifact_root: p.artifact_root,
         owner_bond: bond_text(&p.carriage.registrant_bond),
         owner_pubkey: hex(&i.owner_pubkey),
+        owner_proof: i.owner_proof,
         object_hex: hex(&object_bytes(&unsigned)),
         object_digest: palw_registration_object_id_v1(&object_bytes(&unsigned)),
         owner_message: message,
@@ -487,6 +502,8 @@ pub struct CheckedBundleV1 {
     pub fee_sompi: u64,
     pub quote_digest: Hash64,
     pub expiry_daa: u64,
+    /// Where the owner bond's key comes from: proven against the signer's pin, or a node's report.
+    pub owner_key_provenance: Provenance,
 }
 
 impl CheckedBundleV1 {
@@ -495,11 +512,7 @@ impl CheckedBundleV1 {
         let mut out = vec![
             format!("network    {} (domain recomputed here)", b.network),
             format!("owner      bond {} — signs the registration, pays the burn, holds the exposure", b.owner_bond),
-            format!(
-                "owner key  {}…  [{}: the bond's registered key was reported by remote nodes]",
-                &b.owner_pubkey[..32.min(b.owner_pubkey.len())],
-                UNVERIFIED_REMOTE_STATE
-            ),
+            format!("owner key  {}…  [{}]", &b.owner_pubkey[..32.min(b.owner_pubkey.len())], self.owner_key_provenance.label()),
         ];
         out.extend(b.quote.lines());
         out.push(format!("quote      {}", self.quote_digest));
@@ -585,6 +598,20 @@ pub fn check_bundle_v1(
     if owner_pubkey.len() != MLDSA87_PK_LEN {
         return Err(BundleRefusalV1::Malformed("the owner key is not an ML-DSA-87 key".into()));
     }
+    // The owner bond's key: proven against the block the SIGNER pinned, or a node's report.
+    let owner_key_provenance = match policy.pin {
+        None => Provenance::UnverifiedRemoteState { agreeing: b.sources.len() },
+        Some(pin) => {
+            let proof = b.owner_proof.as_ref().ok_or(BundleRefusalV1::PinWithoutProof)?;
+            if proof.block != pin {
+                return Err(BundleRefusalV1::PinMismatch { bundle: proof.block, pinned: pin });
+            }
+            let (header, fact) = proof.open().map_err(BundleRefusalV1::OwnerProof)?;
+            verify_bond_against_pin(&header, pin, &fact, &p.carriage.registrant_bond, &owner_pubkey)
+                .map_err(|e| BundleRefusalV1::OwnerProof(e.to_string()))?;
+            Provenance::ProvenAtPin { pinned_block: pin, header_daa: header.daa_score }
+        }
+    };
 
     // The quote against the bundle.
     let q = &b.quote;
@@ -669,6 +696,7 @@ pub fn check_bundle_v1(
         fee_sompi: b.carrier.fee_sompi,
         quote_digest: q.digest(),
         expiry_daa: q.expiry_daa,
+        owner_key_provenance,
     })
 }
 
@@ -1252,6 +1280,7 @@ mod tests {
             ruleset_id: ruleset(),
             unsigned_object: object.clone(),
             owner_pubkey: owner.public_key(),
+            owner_proof: None,
             payer_address: "kaspatest:payer".into(),
             payer_spk: payer_spk.clone(),
             funding_outpoint: TransactionOutpoint::new(h(0x66), 0),
@@ -1268,6 +1297,7 @@ mod tests {
             expect: ExpectationsV1 { class_id: parts_of(&object).unwrap().class_id, artifact_root: root, owner_bond: bond_str() },
             max_wallet_sompi: 300_000,
             now_daa: Some(1_001),
+            pin: None,
         };
         Fixture { owner, payer, bundle, policy }
     }
@@ -1649,5 +1679,103 @@ mod tests {
             signed.transaction().unwrap().inputs[0].signature_script.len()
         };
         assert_eq!(placeholder_funding_script_v1().len(), real_len);
+    }
+
+    /// A bonds collection committed by a header, hand-built: (header, proof of the bonds table).
+    fn committed_bonds(
+        bonds: Vec<(PalwBondKeyV2, kaspa_consensus_core::palw_state_v2::PalwBondStateV2)>,
+    ) -> (kaspa_consensus_core::header::Header, crate::proof::StateProofV1) {
+        use kaspa_consensus_core::palw_state_v2::{palw_collection_root_of_entries_v1, palw_state_root_of_preimage_v1};
+        let rows: Vec<(Vec<u8>, Vec<u8>)> =
+            bonds.iter().map(|(k, v)| (borsh::to_vec(k).unwrap(), borsh::to_vec(v).unwrap())).collect();
+        let root = palw_collection_root_of_entries_v1(b"bonds", rows.len(), rows.iter().cloned());
+        let mut preimage = vec![0xAA; 7];
+        preimage.extend_from_slice(root.as_bytes().as_slice());
+        let state_root = palw_state_root_of_preimage_v1(&preimage);
+        let mut header = kaspa_consensus_core::header::Header::new_finalized(
+            1,
+            vec![vec![h(1)]].try_into().unwrap(),
+            h(2),
+            h(3),
+            h(4),
+            1,
+            0x1d00ffff,
+            0,
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
+            55,
+            0u64.into(),
+            0,
+            h(5),
+        )
+        .with_palw_state_root(state_root);
+        header.finalize();
+        let proof = kaspa_consensus_core::palw_state_proof_v1::PalwFactProofV1 {
+            state: kaspa_consensus_core::palw_state_proof_v1::PalwStateOpeningV1 { preimage },
+            collection: kaspa_consensus_core::palw_state_proof_v1::PalwCollectionOpeningV1 { label: b"bonds".to_vec(), rows },
+        };
+        let block = header.hash;
+        (header.clone(), crate::proof::StateProofV1::new(block, &header, &proof))
+    }
+
+    fn bond_record(pubkey: Vec<u8>) -> kaspa_consensus_core::palw_state_v2::PalwBondStateV2 {
+        kaspa_consensus_core::palw_state_v2::PalwBondStateV2 {
+            pubkey,
+            operator_id: h(1),
+            collateral: 100,
+            slashed: 0,
+            status: kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active,
+            registered_daa: 3,
+            payout_payload: h(2),
+            capable_classes: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_signer_that_pinned_a_block_checks_the_owner_key_against_it_offline() {
+        let fx = fixture();
+        let owner_pk = fx.owner.public_key();
+        let bond = PalwBondKeyV2(bond_outpoint());
+        // The proof is embedded by the builder; the signer's pin is what makes it count.
+        let (header, proof) = committed_bonds(vec![(bond, bond_record(owner_pk.clone()))]);
+        let mut with_proof = fx.bundle.clone();
+        with_proof.owner_proof = Some(proof.clone());
+        let mut pinned = fx.policy.clone();
+        pinned.pin = Some(header.hash);
+        let signed = owner_sign_v1(&with_proof, &pinned, &fx.owner).expect("the proven key signs");
+        assert_eq!(signed.stage, BundleStageV1::OwnerSigned);
+        let checked = check_bundle_v1(&with_proof, &pinned, BundleStageV1::Unsigned).unwrap();
+        assert!(matches!(checked.owner_key_provenance, Provenance::ProvenAtPin { .. }));
+        assert!(checked.review_lines(&with_proof).iter().any(|l| l.contains("PROVEN against pinned block")));
+        // Without a pin the same bundle is shown as a node's report.
+        let unpinned = check_bundle_v1(&with_proof, &fx.policy, BundleStageV1::Unsigned).unwrap();
+        assert!(matches!(unpinned.owner_key_provenance, Provenance::UnverifiedRemoteState { .. }));
+        assert!(unpinned.review_lines(&with_proof).iter().any(|l| l.contains(UNVERIFIED_REMOTE_STATE)));
+        // A pin with no proof in the bundle: refused, never silently downgraded.
+        assert_eq!(owner_sign_v1(&fx.bundle, &pinned, &fx.owner).unwrap_err(), BundleRefusalV1::PinWithoutProof);
+        // A proof for another block than the one pinned.
+        let mut other_pin = pinned.clone();
+        other_pin.pin = Some(h(0x42));
+        assert!(matches!(owner_sign_v1(&with_proof, &other_pin, &fx.owner), Err(BundleRefusalV1::PinMismatch { .. })));
+        // A bond registered to ANOTHER key than the signer's: the proof contradicts the bundle's claimed key.
+        let (header2, proof2) = committed_bonds(vec![(bond, bond_record(TestKey::new(9).public_key()))]);
+        let mut lying = fx.bundle.clone();
+        lying.owner_proof = Some(proof2);
+        let mut p2 = fx.policy.clone();
+        p2.pin = Some(header2.hash);
+        assert!(matches!(owner_sign_v1(&lying, &p2, &fx.owner), Err(BundleRefusalV1::OwnerProof(_))));
+        // The bond is not in the pinned state at all: proven absent is a refusal (pin a newer block).
+        let (header3, proof3) = committed_bonds(vec![]);
+        let mut absent = fx.bundle.clone();
+        absent.owner_proof = Some(proof3);
+        let mut p3 = fx.policy.clone();
+        p3.pin = Some(header3.hash);
+        assert!(matches!(owner_sign_v1(&absent, &p3, &fx.owner), Err(BundleRefusalV1::OwnerProof(_))));
+        // A tampered row set (a node swapping the key) fails the commitment.
+        let mut forged = with_proof.clone();
+        if let Some(pf) = forged.owner_proof.as_mut() {
+            let n = pf.rows[0].1.len();
+            pf.rows[0].1.replace_range(n - 4..n, "ffff");
+        }
+        assert!(matches!(owner_sign_v1(&forged, &pinned, &fx.owner), Err(BundleRefusalV1::OwnerProof(_))));
     }
 }

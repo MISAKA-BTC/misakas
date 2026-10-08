@@ -48,6 +48,8 @@ pub(crate) struct RemoteArgs {
     pub(crate) quote_rpc: Vec<String>,
     /// Quote from ONE node (`--allow-single-rpc`): only for a node the operator runs; nothing cross-checks it.
     pub(crate) single_rpc: bool,
+    /// A block hash the operator trusts (`--pin`): the owner bond and its key are proven against it and the proof rides in the bundle.
+    pub(crate) pin: Option<String>,
 }
 
 impl RemoteArgs {

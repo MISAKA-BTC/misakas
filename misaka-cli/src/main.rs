@@ -627,6 +627,10 @@ enum ModelCmd {
         /// Quote from a single node. Only for a node you run yourself: nothing cross-checks it.
         #[arg(long)]
         allow_single_rpc: bool,
+        /// A block hash you trust (a signed checkpoint, or your own node's): the owner bond and its key are then PROVEN against the state
+        /// that block commits and the proof travels in the bundle, so an offline signer with the same --pin checks it too.
+        #[arg(long, value_name = "BLOCK_HASH")]
+        pin: Option<String>,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -664,6 +668,10 @@ enum ModelCmd {
         /// The most the payer may pay, in sompi (default: exactly the bundle's quoted total).
         #[arg(long, value_name = "SOMPI")]
         max_fee_sompi: Option<u64>,
+        /// A block hash you trust: the bundle must carry a proof that the owner bond and its key are in the state that block commits, and
+        /// the signer checks it offline (without --pin the key is shown as UNVERIFIED_REMOTE_STATE).
+        #[arg(long, value_name = "BLOCK_HASH")]
+        pin: Option<String>,
         /// Where to write the result (default: next to the bundle).
         #[arg(long, value_name = "FILE")]
         out: Option<std::path::PathBuf>,
@@ -699,9 +707,28 @@ enum ModelCmd {
         /// Do not wait for the registry: say what is pending and exit.
         #[arg(long)]
         no_wait: bool,
+        /// A block hash you trust: once the relays report the registration, also prove it against the state that block commits (a block
+        /// before the registration proves absence only).
+        #[arg(long, value_name = "BLOCK_HASH")]
+        pin: Option<String>,
         /// Answer yes to the relay question.
         #[arg(long)]
         yes: bool,
+    },
+    /// RFC-0009 stage D: is this registration in the state a block YOU pinned commits? Asks --rpc for the class table's proof and checks it
+    /// against the pin; the node's word is not believed. Proven present, proven absent as of the pin, or proven misattributed.
+    Verify {
+        /// A signed file from `model sign` (or name the registration with --class, --root and --owner).
+        signed: Option<std::path::PathBuf>,
+        #[arg(long, value_name = "CLASS_ID")]
+        class: Option<String>,
+        #[arg(long, value_name = "ROOT")]
+        root: Option<String>,
+        #[arg(long, value_name = "OUTPOINT")]
+        owner: Option<String>,
+        /// The block hash you trust.
+        #[arg(long, value_name = "BLOCK_HASH")]
+        pin: String,
     },
     /// Local inspection of an artifact: class id, roots, graph, ctx, CanonicalWork, fit walls. No submit.
     Inspect {
@@ -2819,6 +2846,7 @@ async fn main() -> std::process::ExitCode {
             payer_address,
             quote_rpc,
             allow_single_rpc,
+            pin,
             profile: args,
         }) => match (profile(&args), sponsor.resolve()) {
             (Ok(p), Ok(sponsor)) => {
@@ -2842,6 +2870,7 @@ async fn main() -> std::process::ExitCode {
                         payer_address,
                         quote_rpc,
                         single_rpc: allow_single_rpc,
+                        pin,
                     },
                 };
                 operator::model_add::run(&ctx, p, a).await
@@ -2859,6 +2888,7 @@ async fn main() -> std::process::ExitCode {
             expect_root,
             expect_owner,
             max_fee_sompi,
+            pin,
             out,
             yes,
         }) => {
@@ -2873,6 +2903,7 @@ async fn main() -> std::process::ExitCode {
                     carrier_only,
                     expect: operator::model_bundle::ExpectArgs { class: expect_class, root: expect_root, owner: expect_owner },
                     max_fee_sompi,
+                    pin,
                     out,
                     yes,
                 },
@@ -2889,6 +2920,7 @@ async fn main() -> std::process::ExitCode {
             max_fee_sompi,
             allow_duplicate,
             no_wait,
+            pin,
             yes,
         }) => {
             operator::model_bundle::submit(
@@ -2901,10 +2933,14 @@ async fn main() -> std::process::ExitCode {
                     max_fee_sompi,
                     allow_duplicate,
                     no_wait,
+                    pin,
                     yes,
                 },
             )
             .await
+        }
+        Command::Model(ModelCmd::Verify { signed, class, root, owner, pin }) => {
+            operator::remote_proof::verify(&ctx, operator::remote_proof::VerifyArgs { signed, class, root, owner, pin }).await
         }
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => match profile(&args) {
             Ok(p) => operator::market::market_open(&ctx, p, &model, line, seed, yes, no_wait).await,

@@ -34,6 +34,7 @@ pub(crate) mod model_remote;
 pub(crate) mod nodelog;
 pub(crate) mod procs;
 pub(crate) mod profile;
+pub(crate) mod remote_proof;
 pub(crate) mod roles;
 pub(crate) mod snapshot;
 pub(crate) mod status;

@@ -50,6 +50,7 @@ pub(crate) struct SignArgs {
     pub(crate) carrier_only: bool,
     pub(crate) expect: ExpectArgs,
     pub(crate) max_fee_sompi: Option<u64>,
+    pub(crate) pin: Option<String>,
     pub(crate) out: Option<PathBuf>,
     pub(crate) yes: bool,
 }
@@ -63,6 +64,7 @@ pub(crate) struct SubmitArgs {
     pub(crate) max_fee_sompi: Option<u64>,
     pub(crate) allow_duplicate: bool,
     pub(crate) no_wait: bool,
+    pub(crate) pin: Option<String>,
     pub(crate) yes: bool,
 }
 
@@ -227,6 +229,7 @@ async fn sign_flow(
         }
         None => None,
     };
+    let pin = args.pin.as_deref().map(crate::operator::remote_proof::parse_pin).transpose()?;
     let policy = SignerPolicyV1 {
         network: chain.net.to_string(),
         network_domain: chain.domain,
@@ -235,6 +238,7 @@ async fn sign_flow(
         expect,
         max_wallet_sompi: args.max_fee_sompi.unwrap_or(b.quote.wallet_total_sompi),
         now_daa,
+        pin,
     };
     let checked = check_bundle_v1(&b, &policy, first).map_err(refused)?;
     flow.ui.say("");
@@ -399,6 +403,7 @@ async fn submit_flow(
         max_fee_sompi: args.max_fee_sompi.unwrap_or(s.fee_sompi),
         now_daa: Some(now),
     };
+    let pin = args.pin.as_deref().map(crate::operator::remote_proof::parse_pin).transpose()?;
     let verified = verify_signed_registration_v1(&s, &policy).map_err(refused)?;
     flow.row(
         Severity::Ok,
@@ -535,6 +540,31 @@ async fn submit_flow(
             RegistrationStateV1::RegistrationAccepted { .. } => {
                 let native = round.iter().find_map(|o| o.row.as_ref().map(|r| r.lifecycle.clone()));
                 flow.row(Severity::Ok, "registered", format!("class {}… accepted by a quorum of {min} node(s)", &class_hex[..16]));
+                // With a pin, also PROVE it: the class table's proof against the block the user pinned.
+                if let Some(pin) = pin {
+                    let bond = crate::bond::parse_outpoint(&s.owner_bond).map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2);
+                    match (bond, crate::operator::remote_proof::fetch_state_proof(&nodes[0], pin, "classes").await) {
+                        (Ok(owner), Ok((header, classes))) => {
+                            if let Err(e) = crate::operator::remote_proof::print_registration_standing(
+                                flow,
+                                &header,
+                                pin,
+                                &classes,
+                                &s.class_id,
+                                s.artifact_root,
+                                &owner,
+                            ) {
+                                flow.row(Severity::Warning, "proof", format!("does not hold against your pin: {e}"));
+                            }
+                        }
+                        (_, Err(e)) => flow.row(
+                            Severity::Warning,
+                            "proof",
+                            format!("unavailable ({e}); the registry row stays {UNVERIFIED_REMOTE_STATE}"),
+                        ),
+                        (Err(e), _) => flow.row(Severity::Warning, "proof", format!("the owner bond does not parse: {}", e.msg)),
+                    }
+                }
                 print_onboarding(flow, native.as_deref());
                 doc.insert("state".into(), "registration-accepted".into());
                 return Ok(());
@@ -718,6 +748,7 @@ mod tests {
             ruleset_id: params.consensus_params_id().to_string(),
             unsigned_object: unsigned.clone(),
             owner_pubkey: owner.public_key().to_vec(),
+            owner_proof: None,
             payer_address: payer.funding_address(params.prefix()).to_string(),
             payer_spk,
             funding_outpoint: outpoint,
@@ -734,6 +765,7 @@ mod tests {
             expect: ExpectationsV1 { class_id: *class_id, artifact_root: *artifact_root, owner_bond: bond_text },
             max_wallet_sompi: fee,
             now_daa: Some(1_001),
+            pin: None,
         };
         Fixture { params, owner_seed, payer_seed, bundle, policy, fee }
     }
@@ -812,6 +844,7 @@ mod tests {
                 owner: Some(fx.policy.expect.owner_bond.clone()),
             },
             max_fee_sompi: Some(fx.fee),
+            pin: None,
             out: None,
             yes: true,
         }
