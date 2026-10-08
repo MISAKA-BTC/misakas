@@ -788,6 +788,35 @@ mod tests {
                     legacy_evidence_horizon_daa: 1,
                 })
             }
+            // RFC-0010's permissionless Panel: refused when armed by `validate_palw_permissionless_panel_v1`, which the probe does not
+            // run; the height rides with a complete policy (its values only ride along, the probe asks the hashers and the schedule).
+            "palw_permissionless_panel_v1" => {
+                params.palw_permissionless_panel_v1 = Some(crate::palw_permissionless_panel_v1::PalwPermissionlessPanelV1 {
+                    activation: at,
+                    policy: crate::palw_permissionless_panel_v1::PanelPolicyV1 {
+                        seal_depth_blocks: 1,
+                        seal_wait_daa: 50,
+                        bond_maturity_daa: 1,
+                        beacon_period_daa: 100,
+                        beacon_wait_daa: 8,
+                        assignment_delay_daa: 1,
+                        receipt_window_daa: 3,
+                        seat_count: 5,
+                        outsider_seats: 0,
+                        max_retries: 1,
+                        min_collateral: 1,
+                        max_candidates: 64,
+                        max_pending: 64,
+                        max_pending_per_bond: 16,
+                        max_assignments_per_block: 8,
+                        max_admissions_per_block: 8,
+                        max_tracked_claims: 256,
+                        max_beacons_per_block: 2,
+                        max_beacon_proof_bytes: 4096,
+                        beacon_scheme: crate::Hash64::default(),
+                    },
+                })
+            }
             "palw_fp_prefix_inherit" => params.palw_fp_prefix_inherit = Some(at),
             "palw_fp_prefix_state" => params.palw_fp_prefix_state = Some(at),
             "palw_fp_tokenizer_match" => params.palw_fp_tokenizer_match = Some(at),
