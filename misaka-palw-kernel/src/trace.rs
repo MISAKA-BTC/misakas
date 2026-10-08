@@ -56,6 +56,11 @@ impl ParamCommitmentsV1 {
         Self { by_instance: params.tensors.iter().map(|(k, t)| (*k, tensor_commitment(t))).collect() }
     }
 
+    /// **K2-TIR-v4**: the tiled (v3) commitment of every param instance ([`crate::merkle3::tensor_commitment_v3`]).
+    pub fn of_v3(params: &misaka_palw_tir::MapParams) -> Self {
+        Self { by_instance: params.tensors.iter().map(|(k, t)| (*k, crate::merkle3::tensor_commitment_v3(t))).collect() }
+    }
+
     /// The root an artifact binding commits to.
     pub fn root(&self) -> Digest {
         let mut s = keyed(PARAM_ROOT_DOMAIN_V1);

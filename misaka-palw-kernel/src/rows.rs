@@ -22,11 +22,11 @@ use misaka_palw_tir::program::TirProgramV1;
 use misaka_palw_tir::program_v2::TirProgramV2;
 
 use crate::descriptor::{KernelDescriptorV1, KernelScheduleV1};
-use crate::gate::{public_pipeline_prosecution_complete_v1, public_prosecution_complete_v1};
+use crate::gate::public_pipeline_prosecution_complete_v1;
 use crate::hash::{Digest, finish, id, keyed, object_id};
-use crate::ledger::{ClaimRowV1, DemandKeyV1, DemandRowV1, KernelLedgerV1, LedgerPolicyV1, PipelineClassRowV1, ClassRowV1, BondRowV1};
-use crate::pipeline::{pipeline_root_v1};
+use crate::ledger::{BondRowV1, ClaimRowV1, ClassRowV1, DemandKeyV1, DemandRowV1, KernelLedgerV1, LedgerPolicyV1, PipelineClassRowV1};
 use crate::opv::{OPV_POLICY_DOMAIN_V1, OPV_STATE_VERSION_V2, OpvClaimRowV1, OpvPolicyV1, StateRootPartsV2};
+use crate::pipeline::pipeline_root_v1;
 use crate::pipeline_public::PipelineClassV1;
 use crate::public::{ProfileMaterialV1, ServedPositionV1};
 use crate::state::{
@@ -53,6 +53,13 @@ pub const TABLE_SEALS_V1: u8 = 11;
 pub const TABLE_OPV_ADMITTED_V1: u8 = 12;
 pub const TABLE_OPV_CLASSES_V1: u8 = 13;
 pub const TABLE_OPV_CLAIMS_V1: u8 = 14;
+// 15–19 are G14-R4's (escrow and the seals). 20–21: K2-TIR-v4 (lane K2S, allocated 2026-10-08), in the root only when non-empty.
+/// K2-TIR-v4: `tiled job id → TiledJobRowV1` (the job and its posted-tile bitmap).
+pub const TABLE_TILED_JOBS_V1: u8 = 20;
+/// K2-TIR-v4: `(claim, stage, position) → SegProgressV1` (a position demand's served parts; a served position).
+pub const TABLE_SEG_PROGRESS_V1: u8 = 21;
+/// The domain of the root extension the two K2-TIR-v4 tables add (absent while both are empty: every older root is unchanged).
+pub const SEG_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-seg-extension/v1";
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -84,6 +91,8 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_OPV_ADMITTED_V1 => "opv-admitted",
         TABLE_OPV_CLASSES_V1 => "opv-classes",
         TABLE_OPV_CLAIMS_V1 => "opv-claims",
+        TABLE_TILED_JOBS_V1 => "tiled-jobs",
+        TABLE_SEG_PROGRESS_V1 => "seg-progress",
         _ => "attested-artifacts",
     };
     format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes()
@@ -139,6 +148,12 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.opv.claims {
             rows.insert((TABLE_OPV_CLAIMS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.tiled_jobs {
+            rows.insert((TABLE_TILED_JOBS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.seg_progress {
+            rows.insert((TABLE_SEG_PROGRESS_V1, bytes_of(k)), bytes_of(v));
         }
         rows
     }
@@ -203,12 +218,35 @@ impl KernelLedgerV1 {
                 TABLE_OPV_CLAIMS_V1 => {
                     l.opv.claims.insert(dec(key, "opv claim key")?, dec::<OpvClaimRowV1>(row, "opv claim")?);
                 }
+                TABLE_TILED_JOBS_V1 => {
+                    l.tiled_jobs.insert(dec(key, "tiled job key")?, dec(row, "tiled job")?);
+                }
+                TABLE_SEG_PROGRESS_V1 => {
+                    l.seg_progress.insert(dec::<DemandKeyV1>(key, "progress key")?, dec(row, "demand progress")?);
+                }
                 other => return Err(format!("a stored row names no table ({other})")),
             }
         }
         // The live-claim index is derived (not committed): rebuilt from the rows, exactly as a restored ledger does.
         l.opv_rebuild_live();
         Ok(l)
+    }
+}
+
+impl KernelLedgerV1 {
+    /// **This ledger exactly as [`KernelLedgerV1::from_rows`] would rebuild it from `rows`** — the rows it was just flushed to. The
+    /// consumer-derived inputs a fold sets on every load and never writes (the attested artifacts, the admitted OPV classes) are read
+    /// back from the rows, the derived live-claim index is rebuilt and the block's scratch budget cleared. A consumer that caches the
+    /// ledger between objects (GAP 8) caches this, so a cached load and a rebuilt one are the same ledger (`to_rows` equal).
+    pub fn as_rebuilt_from_v1(mut self, rows: &LedgerRowsV1) -> Self {
+        fn dec<T: borsh::BorshDeserialize>(b: &[u8]) -> Option<T> {
+            borsh::from_slice(b).ok()
+        }
+        self.attested_artifacts = rows.keys().filter(|(t, _)| *t == TABLE_ATTESTED_V1).filter_map(|(_, k)| dec::<Digest>(k)).collect();
+        self.opv.admitted = rows.keys().filter(|(t, _)| *t == TABLE_OPV_ADMITTED_V1).filter_map(|(_, k)| dec::<Digest>(k)).collect();
+        self.opv_rebuild_live();
+        self.restore_budget(Default::default());
+        self
     }
 }
 
@@ -222,9 +260,9 @@ fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, Str
         .cloned()
         .ok_or_else(|| "a stored class names a kernel this binary does not implement".to_string())?;
     let program = TirProgramV1::decode_canonical(&r.program_bytes).map_err(|e| format!("a stored class's program: {e}"))?;
-    let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
-    let bounds = public_prosecution_complete_v1(&d, &r.plan, nodes, &ProfileMaterialV1::kernel_route(true), &l.policy.prosecution)
-        .map_err(|g| format!("a stored class is no longer publicly prosecutable: {g:?}"))?;
+    let bounds =
+        crate::gate::class_prosecution_bounds_v1(&d, &r.plan, &program, &ProfileMaterialV1::kernel_route(true), &l.policy.prosecution)
+            .map_err(|g| format!("a stored class is no longer publicly prosecutable: {g:?}"))?;
     Ok(ClassRowV1 {
         descriptor: d,
         program_bytes: r.program_bytes.clone(),
@@ -286,7 +324,7 @@ fn pipeline_class_row_of(l: &KernelLedgerV1, r: &PipelineClassRecordV1) -> Resul
 /// is not the order of the Borsh bytes (the position is little-endian). Every other table's key is a 64-byte digest, whose byte
 /// order is its order.
 fn sort_key(table: u8, key: &[u8]) -> (Vec<u8>, u8, u32) {
-    if matches!(table, TABLE_DEMANDS_V1 | TABLE_SERVED_V1) && key.len() == 64 + 1 + 4 {
+    if matches!(table, TABLE_DEMANDS_V1 | TABLE_SERVED_V1 | TABLE_SEG_PROGRESS_V1) && key.len() == 64 + 1 + 4 {
         let stage = key[64];
         let mut p = [0u8; 4];
         p.copy_from_slice(&key[65..69]);
@@ -322,13 +360,8 @@ pub fn root_of_rows(
         }
         finish(s)
     };
-    let header = LedgerHeaderV1 {
-        version: LEDGER_STATE_VERSION_V1,
-        policy: *policy,
-        config_root,
-        daa: scalars.daa,
-        burned: scalars.burned,
-    };
+    let header =
+        LedgerHeaderV1 { version: LEDGER_STATE_VERSION_V1, policy: *policy, config_root, daa: scalars.daa, burned: scalars.burned };
     let parts = StateRootPartsV1 {
         version: LEDGER_STATE_VERSION_V1,
         header: object_id(LEDGER_HEADER_DOMAIN_V1, &header),
@@ -347,7 +380,7 @@ pub fn root_of_rows(
     let _ = LEDGER_ROOT_DOMAIN_V1;
     let v1 = parts.root();
     // RFC-0015: with no OPV policy the root is the historical one, byte for byte; with one it is the OPV root form.
-    match opv {
+    let base = match opv {
         None => v1,
         Some(p) => StateRootPartsV2 {
             version: OPV_STATE_VERSION_V2,
@@ -358,7 +391,17 @@ pub fn root_of_rows(
             opv_claims: coll(TABLE_OPV_CLAIMS_V1),
         }
         .root(),
-    }
+    };
+    // K2-TIR-v4: the two tables extend the root only once either holds a row.
+    let seg = by_table.contains_key(&TABLE_TILED_JOBS_V1) || by_table.contains_key(&TABLE_SEG_PROGRESS_V1);
+    if seg { seg_root_extension_v1(&base, &coll(TABLE_TILED_JOBS_V1), &coll(TABLE_SEG_PROGRESS_V1)) } else { base }
+}
+
+/// `H(extension; base root ‖ tiled jobs ‖ demand progress)`.
+pub fn seg_root_extension_v1(base: &Digest, tiled: &Digest, progress: &Digest) -> Digest {
+    let mut s = keyed(SEG_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(tiled).update(progress);
+    finish(s)
 }
 
 /// One row's change between two row sets: `(key, old, new)`, in key order.

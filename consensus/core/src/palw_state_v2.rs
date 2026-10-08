@@ -40191,7 +40191,12 @@ fn apply_kernel_route_row_v1(
         return Err(PalwStateV2Error::DeltaMismatch("a kernel route row for a state with no kernel route"));
     };
     let (expected, install) = if revert { (new, old) } else { (old, new) };
-    let map = if table < crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 { &mut kernel.rows } else { &mut kernel.aux };
+    let ledger_table = table < crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1;
+    if ledger_table {
+        // GAP 8: a ledger row applied or reverted outside the fold — the cached ledger is no longer the rows'.
+        kernel.ledger_cache.clear();
+    }
+    let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
     let k = (table, key.to_vec());
     if map.get(&k) != expected.as_ref() {
         return Err(PalwStateV2Error::DeltaMismatch("a kernel route row does not match the delta's expectation"));
@@ -40542,13 +40547,12 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
                 return Err(PalwStateV2Error::DeltaMismatch("the kernel route header does not match the delta's expectation"));
             }
             match (install, state.kernel_route.as_mut()) {
-                (Some(header), Some(kernel)) => kernel.header = header.clone(),
+                (Some(header), Some(kernel)) => {
+                    kernel.header = header.clone();
+                    kernel.ledger_cache.clear();
+                }
                 (Some(header), None) => {
-                    state.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
-                        header: header.clone(),
-                        rows: Default::default(),
-                        aux: Default::default(),
-                    })
+                    state.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::with_header(header.clone()))
                 }
                 (None, Some(kernel)) => {
                     if !kernel.rows.is_empty() || !kernel.aux.is_empty() {

@@ -50,6 +50,10 @@
 //!   the `Challengeable` lifecycle with no Panel tally, the window / budget relations and the producer-reservation economics as
 //!   validated policy, job holding from the first reveal, Final receipts for RFC-0010's Panel-independent beacon sources, and a
 //!   state root that stays the historical one until an OPV policy is set.
+//! * [`merkle3`], [`seg`], [`element`], [`seg_da`], [`seg_ledger`] — **K2-TIR-v4, the real-scale suite**
+//!   (`docs/design/palw/k2-real-scale.md`): tiled dual-root commitments, position / segment / claim roots with only the segment roots on
+//!   chain, element courts bounded by the tile, per-position demands served in parts, prompts posted in tiles, and the per-prosecution
+//!   bounds of `PUBLIC_PROSECUTION_COMPLETE`.
 //! * [`ledger`], [`route`], [`settle`], [`state`], [`claim_subject`] — the consensus-embeddable shape of the route: signed
 //!   [`route::KernelRouteObjectV1`]s applied one at a time by a transactional ledger (a refusal leaves the state byte-identical,
 //!   a per-block adjudication budget), bonds and the Panel's coverage supplied by the consumer, every money decision an explicit
@@ -77,6 +81,7 @@ pub mod challenge;
 pub mod check;
 pub mod claim_subject;
 pub mod descriptor;
+pub mod element;
 pub mod evidence;
 pub mod family;
 pub mod field;
@@ -87,6 +92,7 @@ pub mod job;
 pub mod ledger;
 pub mod lifecycle;
 pub mod merkle;
+pub mod merkle3;
 pub mod mode;
 pub mod opv;
 pub mod outcome;
@@ -97,6 +103,9 @@ pub mod public;
 pub mod receipt;
 pub mod route;
 pub mod rows;
+pub mod seg;
+pub mod seg_da;
+pub mod seg_ledger;
 pub mod settle;
 pub mod state;
 pub mod trace;
@@ -105,7 +114,7 @@ pub mod verify;
 pub use check::{PlanAcceptanceV1, check_plan_v1};
 pub use descriptor::{
     KernelDescriptorV1, KernelScheduleV1, KernelStatusV1, ModelKernelBindingV1, builtin_schedule_v1, k2_tir_v1_descriptor,
-    k2_tir_v2_descriptor, k2_tir_v3_descriptor,
+    k2_tir_v2_descriptor, k2_tir_v3_descriptor, k2_tir_v4_descriptor,
 };
 pub use evidence::{VerificationEvidenceV1, build_evidence_v1};
 pub use family::{CheckerIdV1, ConstraintFamilyV1, CourtIdV1};

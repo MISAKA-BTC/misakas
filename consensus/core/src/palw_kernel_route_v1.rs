@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::descriptor::{
-    KernelScheduleV1, KernelStatusV1, k2_tir_v1_descriptor, k2_tir_v2_descriptor, k2_tir_v3_descriptor,
+    KernelScheduleV1, KernelStatusV1, k2_tir_v1_descriptor, k2_tir_v2_descriptor, k2_tir_v3_descriptor, k2_tir_v4_descriptor,
 };
 use misaka_palw_kernel::gate::ProsecutionPolicyV1;
 use misaka_palw_kernel::hash::Digest;
@@ -193,12 +193,16 @@ pub fn palw_kernel_route_template_opv_v1(policy: LedgerPolicyV1, opv: Option<Opv
 /// The ledger configuration the fold starts every block from (policy, the schedule that arms the K2 descriptors, the descriptors
 /// this binary implements). Rows are loaded over it.
 pub fn palw_kernel_route_template_v1(policy: LedgerPolicyV1) -> KernelLedgerV1 {
-    let (v1, v2, v3) = (k2_tir_v1_descriptor(), k2_tir_v2_descriptor(), k2_tir_v3_descriptor());
+    // K2-TIR-v4 (lane K2S, `docs/design/palw/k2-real-scale.md`): the real-scale suite — segmented claims, element courts, per-position
+    // DA, prompt tiles; its classes register only under OptimisticPublicVerification. Like v1–v3 it is armed here and nowhere else:
+    // the fence refuses every real height.
+    let (v1, v2, v3, v4) = (k2_tir_v1_descriptor(), k2_tir_v2_descriptor(), k2_tir_v3_descriptor(), k2_tir_v4_descriptor());
     let schedule = KernelScheduleV1::default()
         .with(v1.digest(), KernelStatusV1::Active { since_daa: 0 })
         .with(v2.digest(), KernelStatusV1::Active { since_daa: 0 })
-        .with(v3.digest(), KernelStatusV1::Active { since_daa: 0 });
-    KernelLedgerV1::genesis(policy, schedule, vec![v1, v2, v3]).expect("the interim kernel route policy validates")
+        .with(v3.digest(), KernelStatusV1::Active { since_daa: 0 })
+        .with(v4.digest(), KernelStatusV1::Active { since_daa: 0 });
+    KernelLedgerV1::genesis(policy, schedule, vec![v1, v2, v3, v4]).expect("the interim kernel route policy validates")
 }
 
 /// One seat of an interim assignment.
@@ -239,13 +243,70 @@ pub struct PalwKernelRouteStateV1 {
     pub header: PalwKernelRouteHeaderV1,
     pub rows: LedgerRowsV1,
     pub aux: BTreeMap<(u8, Vec<u8>), Vec<u8>>,
+    /// **GAP 8: the ledger the rows describe, cached** — never state: not hashed, not encoded, not in a delta, equal for every
+    /// comparison. Set by the fold's flush to exactly what [`KernelLedgerV1::from_rows`] would rebuild
+    /// ([`KernelLedgerV1::as_rebuilt_from_v1`]); cleared by every other write of a ledger row or of the header (a delta applied or
+    /// reverted, a row the fold writes outside its flush). A state decoded from a store, a snapshot or a carriage starts without it.
+    #[borsh(skip)]
+    pub ledger_cache: KernelLedgerCacheV1,
+}
+
+/// How many kernel ledger loads were served from the cache in this process (a diagnostic: the fold of a block loads the ledger once
+/// per object, and every load after the block's first is a hit — GAP 8's "a cached ledger per block").
+pub static PALW_KERNEL_LEDGER_CACHE_HITS_V1: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The cached ledger of a [`PalwKernelRouteStateV1`] (see its `ledger_cache`). Clones share the immutable ledger; a load clones it.
+#[derive(Clone, Default)]
+pub struct KernelLedgerCacheV1(Option<std::sync::Arc<KernelLedgerV1>>);
+
+impl KernelLedgerCacheV1 {
+    pub fn get(&self) -> Option<KernelLedgerV1> {
+        self.0.as_ref().map(|l| (**l).clone())
+    }
+
+    pub fn set(&mut self, ledger: KernelLedgerV1) {
+        self.0 = Some(std::sync::Arc::new(ledger));
+    }
+
+    pub fn clear(&mut self) {
+        self.0 = None;
+    }
+
+    pub fn is_set(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
+/// A cache is never part of what a state is: every two caches compare equal.
+impl PartialEq for KernelLedgerCacheV1 {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for KernelLedgerCacheV1 {}
+
+impl std::fmt::Debug for KernelLedgerCacheV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "KernelLedgerCacheV1(cached: {})", self.0.is_some())
+    }
 }
 
 impl PalwKernelRouteStateV1 {
     pub fn new(policy: LedgerPolicyV1, opv: Option<OpvPolicyV1>, scalars: LedgerScalarsV1) -> Self {
         let template = palw_kernel_route_template_opv_v1(policy, opv);
         let config_root = config_root_of(&template.schedule, &template.known);
-        Self { header: PalwKernelRouteHeaderV1 { policy, config_root, scalars, opv }, rows: LedgerRowsV1::new(), aux: BTreeMap::new() }
+        Self {
+            header: PalwKernelRouteHeaderV1 { policy, config_root, scalars, opv },
+            rows: LedgerRowsV1::new(),
+            aux: BTreeMap::new(),
+            ledger_cache: KernelLedgerCacheV1::default(),
+        }
+    }
+
+    /// A route state with nothing in it but its header (a delta that creates it).
+    pub fn with_header(header: PalwKernelRouteHeaderV1) -> Self {
+        Self { header, rows: LedgerRowsV1::new(), aux: BTreeMap::new(), ledger_cache: KernelLedgerCacheV1::default() }
     }
 
     /// The configuration the rows were folded under (policy, OPV policy, schedule, descriptors).
@@ -275,8 +336,18 @@ impl PalwKernelRouteStateV1 {
         Hash64::from_bytes(out)
     }
 
-    /// The kernel ledger these rows describe (over the state's own configuration).
+    /// The kernel ledger these rows describe (over the state's own configuration): the cached one when the fold left it (GAP 8: no
+    /// row decoded, no program decoded, no gate recomputed), else rebuilt from the rows. In a debug build the cache is checked against
+    /// the rows every time, so a write path that forgot to clear it fails the tests instead of a node.
     pub fn ledger(&self) -> Result<KernelLedgerV1, String> {
+        if let Some(cached) = self.ledger_cache.get() {
+            PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            debug_assert!(
+                cached.scalars() == self.header.scalars && cached.to_rows() == self.rows,
+                "the cached kernel ledger is not the ledger of the rows (a write did not clear the cache)"
+            );
+            return Ok(cached);
+        }
         KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &self.rows)
     }
 
@@ -509,16 +580,30 @@ impl PalwKernelRouteStateV1 {
                 ("program", record.to_bytes(), borsh::to_vec(&header).map_err(|e| e.to_string())?)
             }
             misaka_palw_kernel::ledger::ClaimBodyV1::Pipeline { .. } => {
-                let (record, _header, _binding) =
+                let (record, header, binding) =
                     ledger.pipeline_public_record(claim).ok_or("a stored pipeline claim has no public record")?;
-                // A pipeline header has no wire form of its own: a reader rebuilds it from the class record.
-                ("pipeline", record.to_bytes(), Vec::new())
+                // GAP 6 closed: the header a pipeline verifier is built with, with the class binding it checks the record against.
+                ("pipeline", record.to_bytes(), borsh::to_vec(&(header, binding)).map_err(|e| e.to_string())?)
+            }
+            // K2-TIR-v4: the segmented record (the class's program, plan and v3 commitments, the evidence, the segment roots, the job's
+            // prompt by length and root and the delivered ids); the header is the class's.
+            misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { .. } => {
+                let record = misaka_palw_kernel::seg_ledger::SegmentedClaimRecordV1::of(&ledger, claim)
+                    .ok_or("a stored segmented claim has no record")?;
+                let header = ledger.classes.get(&row.class_binding_id).map(|c| c.header(row.class_binding_id)).ok_or("no class")?;
+                ("segmented", record.to_bytes(), borsh::to_vec(&header).map_err(|e| e.to_string())?)
             }
         };
         let mut served = Vec::new();
         for ((c, stage, position), sp) in ledger.served.iter() {
             if c == claim {
                 served.push((*stage, *position, borsh::to_vec(sp).map_err(|e| e.to_string())?));
+            }
+        }
+        // A segmented claim keeps no served bytes: its served positions (and the progress of open demands) are borsh `SegProgressV1`.
+        for ((c, stage, position), progress) in ledger.seg_progress.iter() {
+            if c == claim {
+                served.push((*stage, *position, borsh::to_vec(progress).map_err(|e| e.to_string())?));
             }
         }
         let demands = ledger
@@ -601,11 +686,7 @@ impl PalwKernelRouteStateV1 {
         }
         // `next` is a resume point only if something follows it.
         if let Some(cursor) = &next {
-            let after_last = self
-                .rows
-                .range((Excluded(cursor.clone()), Unbounded))
-                .next()
-                .is_some()
+            let after_last = self.rows.range((Excluded(cursor.clone()), Unbounded)).next().is_some()
                 || self.aux.range((Excluded(cursor.clone()), Unbounded)).next().is_some();
             if !after_last {
                 next = None;
@@ -639,9 +720,50 @@ mod tests {
         small.max_adjudications_per_block = 4;
         opv.validate(&small).unwrap();
         let state = PalwKernelRouteStateV1::new(p, Some(opv), LedgerScalarsV1::default());
-        assert_eq!(state.ledger().unwrap().root(), state.ledger_root().as_bytes(), "an empty OPV state roots like an empty OPV ledger");
+        assert_eq!(
+            state.ledger().unwrap().root(),
+            state.ledger_root().as_bytes(),
+            "an empty OPV state roots like an empty OPV ledger"
+        );
         let plain = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
         assert_ne!(state.ledger_root(), plain.ledger_root(), "the OPV root form is not the historical one");
+    }
+
+    /// GAP 6: a pipeline claim's `record_header` is borsh `(PipelineHeaderV1, PipelineClassV1)` — the header a pipeline verifier is
+    /// built with and the class binding it checks the record against.
+    #[test]
+    fn a_pipeline_claims_record_header_has_a_wire_form() {
+        use misaka_palw_kernel::pipeline::PipelineHeaderV1;
+        use misaka_palw_kernel::pipeline_public::PipelineClassV1;
+        let header = PipelineHeaderV1 { network_domain: [1; 64], ruleset_digest: [2; 64], class_binding_id: [3; 64] };
+        let binding = PipelineClassV1 {
+            descriptor_digest: [4; 64],
+            pipeline_root: [5; 64],
+            plan_root: [6; 64],
+            artifact_roots: vec![[7; 64]],
+            decode: Some(misaka_palw_kernel::job::DecodeRuleV1::Greedy),
+        };
+        let bytes = borsh::to_vec(&(header, binding.clone())).unwrap();
+        let back: (PipelineHeaderV1, PipelineClassV1) = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, (header, binding));
+    }
+
+    /// K2-TIR-v4 is in the route's template (armed there only) and a fresh route state's ledger is the rows' ledger, cached or not.
+    #[test]
+    fn the_route_template_carries_k2_tir_v4_and_the_cache_is_never_state() {
+        let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let template = palw_kernel_route_template_v1(p);
+        let v4 = misaka_palw_kernel::descriptor::k2_tir_v4_descriptor();
+        assert!(template.known.iter().any(|d| d.digest() == v4.digest()));
+        let mut state = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
+        let plain = state.clone();
+        let rebuilt = state.ledger().unwrap().as_rebuilt_from_v1(&state.rows);
+        state.ledger_cache.set(rebuilt);
+        assert_eq!(state, plain, "a cache is not part of what a state is");
+        assert_eq!(borsh::to_vec(&state).unwrap(), borsh::to_vec(&plain).unwrap(), "and never encoded");
+        assert_eq!(state.ledger().unwrap().root(), plain.ledger().unwrap().root());
+        let decoded: PalwKernelRouteStateV1 = borsh::from_slice(&borsh::to_vec(&state).unwrap()).unwrap();
+        assert!(!decoded.ledger_cache.is_set(), "a decoded state starts without it");
     }
 
     #[test]

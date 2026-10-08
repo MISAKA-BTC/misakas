@@ -335,7 +335,7 @@ pub fn plan_for_tir_program_v1(
         }
     }
     let boundaries = expected_boundaries(program);
-    let budgets = derive_budgets(program, &relations);
+    let budgets = derive_budgets(program, &relations, max_positions);
     let instances = budgets.probabilistic_instances_per_position as u128 * max_positions as u128;
     Ok(VerificationPlanV1 {
         grammar: PLAN_GRAMMAR_V1,
@@ -349,7 +349,9 @@ pub fn plan_for_tir_program_v1(
     })
 }
 
-pub(crate) fn derive_budgets(program: &TirProgramV1, relations: &[PlanRelationV1]) -> PlanBudgetsV1 {
+/// `max_positions` prices K2-TIR-v4's element courts at the history the claim can actually have (`min(window, max_positions)`); the
+/// other courts keep their window-wide pricing.
+pub(crate) fn derive_budgets(program: &TirProgramV1, relations: &[PlanRelationV1], max_positions: u32) -> PlanBudgetsV1 {
     let mut b = PlanBudgetsV1 {
         artifact_bytes: program
             .params
@@ -360,6 +362,8 @@ pub(crate) fn derive_budgets(program: &TirProgramV1, relations: &[PlanRelationV1
     };
     // Derived values (a `Hist` window and its views) are rebuilt from committed rows, never served: they are no one's public bytes.
     let derived = crate::trace::derived_nodes_v1(program);
+    // K2-TIR-v4's element courts are priced from the program's shapes (`crate::element::element_court_cost_v1`).
+    let node_count: u64 = program.occurrences().iter().map(|(blk, _)| program.blocks[*blk as usize].nodes.len() as u64).sum();
     for rel in relations {
         let (window_rows, row_bytes) = match program.blocks[rel.block as usize].nodes[rel.node as usize].prim {
             Prim::HistAppend { state } => {
@@ -373,6 +377,11 @@ pub(crate) fn derive_budgets(program: &TirProgramV1, relations: &[PlanRelationV1
             _ => (0, 0),
         };
         let (work, bytes, cb, cw) = relation_costs(rel, window_rows, row_bytes);
+        let (cb, cw) = if rel.court == CourtIdV1::ElementRecompute {
+            crate::element::element_court_cost_v1(program, rel.block as usize, rel.node as usize, node_count, max_positions)
+        } else {
+            (cb, cw)
+        };
         b.verifier_work_per_position += work * rel.occurrences as u128;
         if !derived.contains(&(rel.block, rel.node)) {
             b.evidence_bytes_per_position += bytes * rel.occurrences as u128;

@@ -54,7 +54,12 @@ fn key_bytes(d: &misaka_palw_kernel::hash::Digest) -> Vec<u8> {
 /// signature has verified under the seat bond's registered key, so the kernel's structural admission is asked with this.
 struct SignatureAlreadyVerified;
 impl ReceiptSignatureVerifier for SignatureAlreadyVerified {
-    fn verify(&self, _seat_bond: &misaka_palw_kernel::hash::Digest, _message: &misaka_palw_kernel::hash::Digest, _signature: &[u8]) -> bool {
+    fn verify(
+        &self,
+        _seat_bond: &misaka_palw_kernel::hash::Digest,
+        _message: &misaka_palw_kernel::hash::Digest,
+        _signature: &[u8],
+    ) -> bool {
         true
     }
 }
@@ -76,7 +81,12 @@ impl TransitionBuilder<'_> {
     /// from 32). The route's header must exist.
     pub(super) fn write_kernel_row(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) {
         let Some(kernel) = self.state.kernel_route.as_mut() else { return };
-        let map = if table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 { &mut kernel.rows } else { &mut kernel.aux };
+        let ledger_table = table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1;
+        if ledger_table {
+            // A ledger row changes: the cached ledger is no longer the rows' (the flush sets it again once it has written them).
+            kernel.ledger_cache.clear();
+        }
+        let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
         let old = match &new {
             Some(bytes) => map.insert((table, key.clone()), bytes.clone()),
             None => map.remove(&(table, key.clone())),
@@ -93,11 +103,11 @@ impl TransitionBuilder<'_> {
             return;
         }
         match self.state.kernel_route.as_mut() {
-            Some(kernel) => kernel.header = new.clone(),
-            None => {
-                self.state.kernel_route =
-                    Some(PalwKernelRouteStateV1 { header: new.clone(), rows: LedgerRowsV1::new(), aux: Default::default() })
+            Some(kernel) => {
+                kernel.header = new.clone();
+                kernel.ledger_cache.clear();
             }
+            None => self.state.kernel_route = Some(PalwKernelRouteStateV1::with_header(new.clone())),
         }
         self.entries.push(PalwDeltaEntryV2::KernelRouteHeader { old, new: Some(new) });
     }
@@ -128,7 +138,11 @@ impl TransitionBuilder<'_> {
     /// Record that the route has seen `bond` (its kernel digest maps back to it).
     fn note_kernel_bond(&mut self, bond: &PalwBondKeyV2) -> misaka_palw_kernel::hash::Digest {
         let kid = palw_kernel_bond_id_v1(bond);
-        self.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, key_bytes(&kid), Some(borsh::to_vec(bond).expect("a bond key serializes")));
+        self.write_kernel_row(
+            PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1,
+            key_bytes(&kid),
+            Some(borsh::to_vec(bond).expect("a bond key serializes")),
+        );
         kid
     }
 }
@@ -160,8 +174,11 @@ pub(super) fn ensure_route_header(builder: &mut TransitionBuilder<'_>, ctx: &Pal
     let (policy, opv_policy) = route_policies(builder)?;
     match builder.state.kernel_route.as_ref() {
         None => {
-            let created =
-                PalwKernelRouteStateV1::new(policy, opv_policy, misaka_palw_kernel::rows::LedgerScalarsV1 { daa: ctx.daa_score, burned: 0 });
+            let created = PalwKernelRouteStateV1::new(
+                policy,
+                opv_policy,
+                misaka_palw_kernel::rows::LedgerScalarsV1 { daa: ctx.daa_score, burned: 0 },
+            );
             builder.write_kernel_header(created.header);
         }
         Some(kernel) if kernel.header.policy != policy || kernel.header.opv != opv_policy => {
@@ -188,11 +205,8 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
     let mut ledger = builder.state.kernel_route.as_ref().expect("created above").ledger().map_err(refused)?;
     ledger.begin_block(ctx.daa_score).map_err(|r| refused(r.to_string()))?;
     // The budget bounds the BLOCK: what the block's earlier objects already spent comes back (they were folded one at a time).
-    if let Some((blue_score, adjudications, court_work)) = builder
-        .state
-        .kernel_route
-        .as_ref()
-        .and_then(|k| k.aux_row::<(u64, u32, u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]))
+    if let Some((blue_score, adjudications, court_work)) =
+        builder.state.kernel_route.as_ref().and_then(|k| k.aux_row::<(u64, u32, u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]))
         && blue_score == ctx.blue_score
     {
         ledger.restore_budget(misaka_palw_kernel::ledger::BlockBudgetV1 { adjudications, court_work });
@@ -209,8 +223,26 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
     Ok(ledger)
 }
 
-/// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them.
-fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &LedgerRowsV1) {
+/// **The rows `load_ledger`'s ledger has, without serializing it** (GAP 8): the state's ledger rows with the two consumer-derived
+/// tables the load sets (the attested artifacts and the admitted OPV classes) replaced by the ledger's own — exactly
+/// `ledger.to_rows()` straight after `load_ledger`.
+fn loaded_rows(builder: &TransitionBuilder<'_>, ledger: &KernelLedgerV1) -> LedgerRowsV1 {
+    use misaka_palw_kernel::rows::{TABLE_ATTESTED_V1, TABLE_OPV_ADMITTED_V1};
+    let mut rows = builder.state.kernel_route.as_ref().map(|k| k.rows.clone()).unwrap_or_default();
+    rows.retain(|(table, _), _| *table != TABLE_ATTESTED_V1 && *table != TABLE_OPV_ADMITTED_V1);
+    for root in &ledger.attested_artifacts {
+        rows.insert((TABLE_ATTESTED_V1, key_bytes(root)), Vec::new());
+    }
+    for class in &ledger.opv.admitted {
+        rows.insert((TABLE_OPV_ADMITTED_V1, key_bytes(class)), Vec::new());
+    }
+    debug_assert!(rows == ledger.to_rows(), "the loaded rows are the loaded ledger's");
+    rows
+}
+
+/// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them. The ledger is then
+/// cached on the route state (GAP 8) as the rows' own ledger, so the next object of the chain loads it without rebuilding it.
+fn flush(builder: &mut TransitionBuilder<'_>, ledger: KernelLedgerV1, before: &LedgerRowsV1) {
     for ((table, key), old_new) in diff_rows(before, &ledger.to_rows()).into_iter().map(|(k, _old, new)| (k, new)) {
         builder.write_kernel_row(table, key, old_new);
     }
@@ -219,6 +251,9 @@ fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &
     if header.scalars != scalars {
         builder.write_kernel_header(PalwKernelRouteHeaderV1 { scalars, ..header });
     }
+    let kernel = builder.state.kernel_route.as_mut().expect("a route that flushes exists");
+    let cached = ledger.as_rebuilt_from_v1(&kernel.rows);
+    kernel.ledger_cache.set(cached);
 }
 
 /// **Apply a ledger's settlement instructions to the real bonds** (module doc).
@@ -336,13 +371,14 @@ pub(super) fn apply_kernel_route_object_v1(
         return Ok(());
     }
     let mut ledger = load_ledger(builder, ctx)?;
-    let before = ledger.to_rows();
+    let before = loaded_rows(builder, &ledger);
     let kid = palw_kernel_bond_id_v1(signer);
     ledger.sync_bond(kid, builder.kernel_synced_collateral(signer, ctx.daa_score));
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
     // an earlier object of this block (or another lane's slash) can never leave the ledger believing the bond holds more than it does.
-    if let KernelRouteObjectV1::FileProof { claim, .. } | KernelRouteObjectV1::FileDemand { claim, .. } | KernelRouteObjectV1::Respond { claim, .. } =
-        &object
+    if let KernelRouteObjectV1::FileProof { claim, .. }
+    | KernelRouteObjectV1::FileDemand { claim, .. }
+    | KernelRouteObjectV1::Respond { claim, .. } = &object
         && let Some(producer) = ledger.claims.get(claim).map(|row| row.producer)
         && let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&producer))
     {
@@ -399,7 +435,7 @@ pub(super) fn apply_kernel_route_object_v1(
     // slash survives; the sync above makes this unreachable.)
     apply_settlements(builder, &events, true)?;
     persist_budget(builder, ctx, &ledger);
-    flush(builder, &ledger, &before);
+    flush(builder, ledger, &before);
     Ok(())
 }
 
@@ -469,7 +505,7 @@ pub(super) fn apply_kernel_receipt_v1(
         return Ok(());
     }
     let mut ledger = load_ledger(builder, ctx)?;
-    let before = ledger.to_rows();
+    let before = loaded_rows(builder, &ledger);
     let Some(row) = ledger.claims.get(&claim) else { return Ok(()) };
     let ClaimBodyV1::Program { evidence, .. } = &row.body else { return Ok(()) };
     let Some(class) = ledger.classes.get(&row.class_binding_id) else { return Ok(()) };
@@ -509,7 +545,7 @@ pub(super) fn apply_kernel_receipt_v1(
             Some(borsh::to_vec(&receipts).expect("receipts serialize")),
         );
     }
-    flush(builder, &ledger, &before);
+    flush(builder, ledger, &before);
     Ok(())
 }
 
@@ -522,14 +558,15 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // The onboarding bindings whose refutation horizon ends release their reservation, whatever the ledger is doing.
     super::palw_onboarding_fold_v1::tick_onboarding_v1(builder, ctx);
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
-    let busy = kernel.rows.keys().any(|(table, _)| {
-        matches!(*table, misaka_palw_kernel::rows::TABLE_CLAIMS_V1 | misaka_palw_kernel::rows::TABLE_DEMANDS_V1)
-    });
+    let busy = kernel
+        .rows
+        .keys()
+        .any(|(table, _)| matches!(*table, misaka_palw_kernel::rows::TABLE_CLAIMS_V1 | misaka_palw_kernel::rows::TABLE_DEMANDS_V1));
     if !busy {
         return Ok(());
     }
     let mut ledger = load_ledger(builder, ctx)?;
-    let before = ledger.to_rows();
+    let before = loaded_rows(builder, &ledger);
     // Every bond the ledger holds is re-synced from the real chain before it is settled against.
     let held: Vec<misaka_palw_kernel::hash::Digest> = ledger.bonds.keys().copied().collect();
     for kid in held {
@@ -557,6 +594,6 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
         builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key_bytes(&claim), None);
         builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key_bytes(&claim), None);
     }
-    flush(builder, &ledger, &before);
+    flush(builder, ledger, &before);
     Ok(())
 }

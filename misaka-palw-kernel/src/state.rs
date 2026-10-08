@@ -182,6 +182,16 @@ impl KernelLedgerV1 {
     /// [`StateRootPartsV1::root`], byte for byte. Once an OPV policy is set the root is [`crate::opv::StateRootPartsV2`]: the
     /// historical root of the whole Panel-licensed route, the policy, the OPV classes and the OPV claim rows.
     pub fn root(&self) -> Digest {
-        if self.opv.is_dormant() { self.root_parts().root() } else { self.root_parts_v2().root() }
+        let base = if self.opv.is_dormant() { self.root_parts().root() } else { self.root_parts_v2().root() };
+        // K2-TIR-v4 (tables 20 and 21): an extension only once either holds a row, so every older root is unchanged.
+        if self.tiled_jobs.is_empty() && self.seg_progress.is_empty() {
+            return base;
+        }
+        let d = |name: &str| format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes();
+        crate::rows::seg_root_extension_v1(
+            &base,
+            &collection_root(&d("tiled-jobs"), self.tiled_jobs.len(), self.tiled_jobs.iter()),
+            &collection_root(&d("seg-progress"), self.seg_progress.len(), self.seg_progress.iter()),
+        )
     }
 }

@@ -49,6 +49,13 @@ pub const TAG_SEAL_CLAIM_V1: u8 = 12;
 /// RFC-0015: a class registration that carries its verification mode (a non-legacy mode; the mode is bound into the class id).
 pub const TAG_REGISTER_CLASS_V2: u8 = 13;
 pub const TAG_REGISTER_PIPELINE_CLASS_V2: u8 = 14;
+// 15 is G14-R4's (the accuser seal). 16–18: K2-TIR-v4 (lane K2S, allocated 2026-10-08); 19 is free.
+/// K2-TIR-v4: a segmented claim (`docs/design/palw/k2-real-scale.md`).
+pub const TAG_COMMIT_SEGMENTED_CLAIM_V1: u8 = 16;
+/// K2-TIR-v4: a job whose prompt is posted in tiles.
+pub const TAG_POST_TILED_JOB_V1: u8 = 17;
+/// K2-TIR-v4: one prompt tile of a tiled job.
+pub const TAG_POST_PROMPT_TILE_V1: u8 = 18;
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -66,6 +73,11 @@ pub const MAX_WITHDRAW_BYTES_V1: usize = 256;
 pub const MAX_SEAL_CLAIM_BYTES_V1: usize = 256;
 pub const MAX_REGISTER_CLASS_V2_BYTES_V1: usize = MAX_REGISTER_CLASS_BYTES_V1;
 pub const MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1: usize = MAX_REGISTER_PIPELINE_CLASS_BYTES_V1;
+/// A segmented claim: the claim, the evidence object and ≤ 2,048 segment roots (2^21 positions).
+pub const MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1: usize = 4 << 20;
+pub const MAX_POST_TILED_JOB_BYTES_V1: usize = 1024;
+/// One tile of 4,096 ids and its path.
+pub const MAX_POST_PROMPT_TILE_BYTES_V1: usize = 64 << 10;
 
 /// **Who signed an object**: the bond whose key the consumer verified. The ledger checks it names the actor the object names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
@@ -84,6 +96,8 @@ pub enum ProsecutionV1 {
     Decode(DecodeFaultV1) = 1,
     /// A pipeline fault's canonical bytes ([`crate::pipeline_public::PipelineFaultWireV1`]: stage, edge or decode).
     Pipeline(Vec<u8>) = 2,
+    /// K2-TIR-v4: a segmented fault's canonical bytes ([`crate::element::SegFaultV1`]: element, malformed or decode).
+    Segmented(Vec<u8>) = 3,
 }
 
 /// **The public objects of the kernel route.** Every one is signed by a bond (see [`AuthV1`]); none mints or moves money by
@@ -182,6 +196,22 @@ pub enum KernelRouteObjectV1 {
         param_commitments: Vec<ParamCommitmentsV1>,
         decode: Option<DecodeRuleV1>,
     } = 14,
+    /// **K2-TIR-v4**: commit a segmented claim (signed by `claim.producer_bond`): the evidence object and ONE ROOT PER SEGMENT of
+    /// 1,024 positions — never the node commitments, which are served material.
+    CommitSegmentedClaim {
+        claim: KernelClaimV1,
+        evidence: crate::seg::SegmentedEvidenceV2,
+        segment_roots: Vec<Digest>,
+    } = 16,
+    /// **K2-TIR-v4**: post a job whose prompt is committed by its tile root; its tiles follow as `PostPromptTile`s.
+    PostTiledJob {
+        job: crate::seg::TiledJobV1,
+    } = 17,
+    /// **K2-TIR-v4**: post one tile of a tiled job's prompt (any bond). A claim commits only once every tile is posted.
+    PostPromptTile {
+        job: Digest,
+        tile: crate::seg::PromptTileOpeningV1,
+    } = 18,
 }
 
 /// The seal of a claim: `H("misaka-palw/kernel/claim-seal/v1"; claim id)` (the claim id binds the producer, job, output and evidence).
@@ -263,6 +293,9 @@ impl KernelRouteObjectV1 {
             Self::SealClaim { .. } => TAG_SEAL_CLAIM_V1,
             Self::RegisterClassV2 { .. } => TAG_REGISTER_CLASS_V2,
             Self::RegisterPipelineClassV2 { .. } => TAG_REGISTER_PIPELINE_CLASS_V2,
+            Self::CommitSegmentedClaim { .. } => TAG_COMMIT_SEGMENTED_CLAIM_V1,
+            Self::PostTiledJob { .. } => TAG_POST_TILED_JOB_V1,
+            Self::PostPromptTile { .. } => TAG_POST_PROMPT_TILE_V1,
         }
     }
 
@@ -335,6 +368,9 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_SEAL_CLAIM_V1 => "SealClaim",
         TAG_REGISTER_CLASS_V2 => "RegisterClassV2",
         TAG_REGISTER_PIPELINE_CLASS_V2 => "RegisterPipelineClassV2",
+        TAG_COMMIT_SEGMENTED_CLAIM_V1 => "CommitSegmentedClaim",
+        TAG_POST_TILED_JOB_V1 => "PostTiledJob",
+        TAG_POST_PROMPT_TILE_V1 => "PostPromptTile",
         _ => "Unknown",
     }
 }
@@ -356,6 +392,9 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_SEAL_CLAIM_V1 => MAX_SEAL_CLAIM_BYTES_V1,
         TAG_REGISTER_CLASS_V2 => MAX_REGISTER_CLASS_V2_BYTES_V1,
         TAG_REGISTER_PIPELINE_CLASS_V2 => MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1,
+        TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
+        TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
+        TAG_POST_PROMPT_TILE_V1 => MAX_POST_PROMPT_TILE_BYTES_V1,
         _ => return None,
     })
 }
@@ -408,9 +447,9 @@ mod tests {
             assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
             assert_ne!(o.name(), "Unknown");
         }
-        let tags: Vec<u8> = (1..=14).collect();
+        let tags: Vec<u8> = (1..=14).chain(16..=18).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
-        assert!(max_encoded_bytes_of_tag(0).is_none() && max_encoded_bytes_of_tag(15).is_none());
+        assert!(max_encoded_bytes_of_tag(0).is_none() && max_encoded_bytes_of_tag(19).is_none());
     }
 
     #[test]
