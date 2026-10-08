@@ -185,7 +185,7 @@ fn proof_for(bundle: &PalwConsensusParamsV2, epoch: u64) -> BeaconProofV1 {
     let WorkBeaconStateV1::Locked(beacon) = collect_work_beacon_v1(&context, &events, release + 5).expect("a valid policy") else {
         panic!("the reference history locks epoch {epoch}");
     };
-    BeaconProofV1 { epoch, output: Hash64::from_bytes(beacon.output), proof: borsh::to_vec(&beacon).unwrap() }
+    BeaconProofV1 { epoch, output: Hash64::from_bytes(beacon.output), proof: borsh::to_vec(beacon.beacon()).unwrap() }
 }
 
 /// A lifecycle carrier bringing `object`, paid from card 0's fee float.

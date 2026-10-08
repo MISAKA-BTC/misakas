@@ -194,7 +194,7 @@ impl V3 {
         let WorkBeaconStateV1::Locked(beacon) = collect_work_beacon_v1(&context, &[event], release + 5).expect("a valid policy") else {
             panic!("the reference source locks a beacon");
         };
-        BeaconProofV1 { epoch, output: Hash64::from_bytes(beacon.output), proof: borsh::to_vec(&beacon).unwrap() }
+        BeaconProofV1 { epoch, output: Hash64::from_bytes(beacon.output), proof: borsh::to_vec(beacon.beacon()).unwrap() }
     }
 
     /// Drive a floor claim to `Bound`: accepted, sealed, certified, drawn. Returns the claim and the DAA it bound at.
