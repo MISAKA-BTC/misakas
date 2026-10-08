@@ -14,7 +14,7 @@ use misaka_palw_tir::{DType, Tensor};
 
 use crate::hash::Digest;
 use crate::merkle::AXIS_ROW;
-use crate::merkle3::{LayoutV3, RowRangeV3, TreesV3, tensor_commitment_v3};
+use crate::merkle3::{LayoutV3, RowRangeV3, TILE_V3, TreesV3, tensor_commitment_v3};
 use crate::seg::{NodeOpeningV1, SEG_LEN_V4, position_in_segment, position_node_opening_v1};
 use crate::trace::WiringV1;
 
@@ -65,13 +65,55 @@ fn declared_values(w: &WiringV1<'_>, p: u32) -> Vec<(u16, u16, DType, Vec<usize>
 /// **The parts position `p`'s material is served in** — a pure function of the program and `p` (the shapes at `H(p)`).
 pub fn position_parts_v1(program: &TirProgramV1, p: u32) -> Result<Vec<Vec<ChunkSpecV1>>, String> {
     let w = WiringV1::new(program).map_err(|e| e.to_string())?;
-    let values = declared_values(&w, p);
+    layout_parts(&declared_values(&w, p))
+}
+
+/// The bytes of row leaf `j` of a value of layout `l` at `width` bytes an element (every leaf of a row is a full tile but the row's last).
+fn row_leaf_bytes(l: &LayoutV3, width: u64, j: u64) -> u64 {
+    let tile = j % l.row_tiles;
+    (((tile + 1) * TILE_V3).min(l.row_len) - tile * TILE_V3) * width
+}
+
+/// **How many row leaves from leaf `from` fit `cap` bytes, and their bytes**: the greedy count, leaf by leaf to the end of the current
+/// row, then whole rows at once, then leaf by leaf again. The same answer as summing every leaf, without visiting them (a 9B-8k position
+/// has 10^5–10^6 leaves, and the layout runs at every demand and at every served part).
+fn row_leaves_fitting(l: &LayoutV3, width: u64, from: u64, total: u64, cap: u64) -> (u64, u64) {
+    let (mut i, mut left) = (from, cap);
+    while i < total && i % l.row_tiles != 0 {
+        let b = row_leaf_bytes(l, width, i);
+        if b > left {
+            return (i - from, cap - left);
+        }
+        left -= b;
+        i += 1;
+    }
+    let row_bytes = l.row_len * width;
+    if row_bytes > 0 {
+        let whole = (left / row_bytes).min((total - i) / l.row_tiles);
+        i += whole * l.row_tiles;
+        left -= whole * row_bytes;
+    }
+    while i < total {
+        let b = row_leaf_bytes(l, width, i);
+        if b > left {
+            break;
+        }
+        left -= b;
+        i += 1;
+    }
+    (i - from, cap - left)
+}
+
+/// **The deterministic greedy layout of a position's values into parts**: a value that fits the current part joins it, one that fits an
+/// empty part starts one, and a larger one is cut into contiguous row-leaf ranges, each as long as the part it lands in allows.
+fn layout_parts(values: &[(u16, u16, DType, Vec<usize>)]) -> Result<Vec<Vec<ChunkSpecV1>>, String> {
     let node_count = values.len() as u64;
     let budget = SEG_PART_BYTES_V4 - PART_HEADER_BOUND_V4;
     let mut parts: Vec<Vec<ChunkSpecV1>> = vec![Vec::new()];
     let mut room = budget;
     for (s, n, dtype, shape) in values {
-        let l = LayoutV3::of(&shape);
+        let (s, n) = (*s, *n);
+        let l = LayoutV3::of(shape);
         let width = dtype.width() as u64;
         let bytes = l.len * width;
         let oh = chunk_overhead(node_count, l.leaves(AXIS_ROW), shape.len());
@@ -87,23 +129,18 @@ pub fn position_parts_v1(program: &TirProgramV1, p: u32) -> Result<Vec<Vec<Chunk
         }
         // Larger than a part: contiguous row-leaf ranges.
         let total = l.leaves(AXIS_ROW);
-        let leaf_bytes = |i: u64| {
-            let (line, tile) = (i / l.row_tiles, i % l.row_tiles);
-            l.leaf_elements(AXIS_ROW, line, tile).map_or(0, |v| v.len() as u64) * width
-        };
         let mut i = 0u64;
         while i < total {
-            let mut used = oh;
-            let mut k = 0u64;
-            while i + k < total && used + leaf_bytes(i + k) <= room {
-                used += leaf_bytes(i + k);
-                k += 1;
-            }
+            let (k, leaf_bytes) = row_leaves_fitting(&l, width, i, total, room.saturating_sub(oh));
             if k == 0 {
+                if room == budget {
+                    return Err(format!("({s}, {n}): one row leaf and its overhead exceed a part"));
+                }
                 parts.push(Vec::new());
                 room = budget;
                 continue;
             }
+            let used = oh + leaf_bytes;
             parts.last_mut().expect("a part").push(ChunkSpecV1::Rows { occurrence: s, node: n, first_leaf: i, leaves: k });
             room -= used;
             i += k;
@@ -335,5 +372,77 @@ impl SegProgressV1 {
 
     pub fn all_served(&self) -> bool {
         (0..self.parts).all(|i| self.is_served(i))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The layout as first written: every row leaf's bytes counted from its element list (the reference the fast one must equal).
+    fn reference_layout(values: &[(u16, u16, DType, Vec<usize>)]) -> Vec<Vec<ChunkSpecV1>> {
+        let node_count = values.len() as u64;
+        let budget = SEG_PART_BYTES_V4 - PART_HEADER_BOUND_V4;
+        let mut parts: Vec<Vec<ChunkSpecV1>> = vec![Vec::new()];
+        let mut room = budget;
+        for (s, n, dtype, shape) in values {
+            let (s, n) = (*s, *n);
+            let l = LayoutV3::of(shape);
+            let width = dtype.width() as u64;
+            let bytes = l.len * width;
+            let oh = chunk_overhead(node_count, l.leaves(AXIS_ROW), shape.len());
+            if bytes + oh <= room {
+                parts.last_mut().unwrap().push(ChunkSpecV1::Whole { occurrence: s, node: n });
+                room -= bytes + oh;
+                continue;
+            }
+            if bytes + oh <= budget {
+                parts.push(vec![ChunkSpecV1::Whole { occurrence: s, node: n }]);
+                room = budget - bytes - oh;
+                continue;
+            }
+            let total = l.leaves(AXIS_ROW);
+            let leaf_bytes = |i: u64| {
+                let (line, tile) = (i / l.row_tiles, i % l.row_tiles);
+                l.leaf_elements(AXIS_ROW, line, tile).map_or(0, |v| v.len() as u64) * width
+            };
+            let mut i = 0u64;
+            while i < total {
+                let mut used = oh;
+                let mut k = 0u64;
+                while i + k < total && used + leaf_bytes(i + k) <= room {
+                    used += leaf_bytes(i + k);
+                    k += 1;
+                }
+                if k == 0 {
+                    parts.push(Vec::new());
+                    room = budget;
+                    continue;
+                }
+                parts.last_mut().unwrap().push(ChunkSpecV1::Rows { occurrence: s, node: n, first_leaf: i, leaves: k });
+                room -= used;
+                i += k;
+            }
+        }
+        parts
+    }
+
+    /// The arithmetic layout is the element-counting one, part for part, over values that fit, values that start a part, rows of one
+    /// tile and of many (a ragged last tile), flat values, and long runs of whole rows.
+    #[test]
+    fn the_fast_layout_is_the_reference_layout() {
+        let cases: Vec<Vec<(u16, u16, DType, Vec<usize>)>> = vec![
+            vec![(0, 0, DType::I32, vec![8]), (0, 1, DType::I8, vec![16, 8])],
+            vec![(0, 0, DType::I32, vec![40_000, 8]), (0, 1, DType::I64, vec![8])],
+            vec![(0, 0, DType::I8, vec![3, 5_000]), (0, 1, DType::I16, vec![4_096 * 300]), (1, 0, DType::I64, vec![2, 3, 70_001])],
+            vec![(0, 0, DType::I32, vec![8_192, 1_024]), (0, 1, DType::I32, vec![8_192, 1_024]), (0, 2, DType::I8, vec![248_320])],
+            vec![(0, 0, DType::I64, vec![17, 9_000]), (0, 1, DType::I8, vec![1]), (0, 2, DType::I32, vec![1_000, 4_097])],
+            (0..40u16).map(|n| (0, n, DType::I32, vec![1 + (n as usize * 7_919) % 9_000, 3 + n as usize * 13])).collect(),
+        ];
+        for (c, values) in cases.iter().enumerate() {
+            let fast = layout_parts(values).unwrap();
+            assert_eq!(fast, reference_layout(values), "case {c}");
+            assert!(fast.len() >= 1);
+        }
     }
 }

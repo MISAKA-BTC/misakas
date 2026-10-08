@@ -243,7 +243,7 @@ ledger row or of the header clears it (a delta applied or reverted, a row writte
 snapshot or a carriage starts without it. A load clones the cached ledger instead of rebuilding it: no row decode, no program decode, no
 gate per class. A debug build checks the cache against the rows on every hit, so a write path that forgets to clear it fails the tests
 (lane D's whole `g14_kernel_route_e2e` suite ran with it). What is left: the block's first load rebuilds from the rows (the fold starts
-every block from the decoded tip), and that is where a big class costs — a 9B-8k class row rebuilds in 1.7 ms (the program decode, 32,640 B) plus the v4 gate (§8.1); and every object still
+every block from the decoded tip), and that is where a big class costs — a 9B-8k class row rebuilds in 1.7 ms (the program decode, 32,640 B) plus 11.3 ms (the v4 gate), debug build (§8.1); and every object still
 clones the ledger, serializes it to rows and diffs them (O(rows) bytes, no decode). Removing those needs either a cache across blocks
 keyed by the route's rows root or dirty-row tracking in the kernel ledger. G14 does not need either; recorded as the residual.
 
@@ -278,7 +278,14 @@ Almost all of the 14.9 s was `seg_da::position_parts_v1`, the deterministic layo
 every row leaf's element list only to count its bytes, at 2.34 GB of position material. The layout does not run only at registration.
 It runs at every block's first ledger load (once per v4 class), at every `FileDemand` and at every `Respond` part (`classify_part_v1`
 recomputes it). A served 9B-8k position is 2,294 parts, so the fold would have spent seconds per part, against a per-block budget that
-charges a part zero work. Fixed in the next commit.
+charges a part zero work.
+
+**Fixed.** The layout now counts a row's leaves arithmetically: every leaf of a row is a full tile but its last, so whole rows are
+taken at once and only the ragged ends are visited (`row_leaves_fitting`). The layout is byte-for-byte the old one
+(`seg_da::tests::the_fast_layout_is_the_reference_layout` compares it, part for part, with the element-counting version). It also
+refuses, by name, a value whose single row leaf and overhead exceed a part, where the old loop would never end (unreachable while TIR
+caps the rank at 4, but no longer a hang). Re-measured on the 9B-8k fixture (debug): the v4 gate takes **11.3 ms** (was 14.9 s), with the
+same 2,294 parts and the same bounds.
 
 ## 9. What this does not do
 
