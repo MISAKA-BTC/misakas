@@ -225,6 +225,15 @@ refused at the handshake by every upgraded node, exactly as DAA 750 did).
 
 1. **Fence 4's evidence** (§1, §3.4): the plan can drive it end to end only if the V4 leg is scripted (rail + builder + a Final free-prompt
    claim). Decide by the freeze whether it ships on this evidence, with the leg as a gate, or is dropped.
+   **Update 2026-10-08 evening (C1r2):** the chain-block E2E exists and passes — `rfc9_v4_chain_e2e` (real templates, funded
+   carriers, the int-13 list armed at H=80): PFS4 refused by name below the fence; the executor offline after filing material + RDA4
+   with two providers; seats fetch from the providers only; Final at DAA 147; another bond redeems at slot 547 in builder mode; payout
+   to the executor's registered address, builder fee exactly 500 bps of the worker reward; a V3 counterfactual twin matches every other
+   output, safe weight and claim row; sibling PFS4 and a later V3 re-spend paid nothing; reorg reverts and the quantum is re-spent once;
+   replay from genesis reaches the same root. The leg is scripted: `audit-combined/rfc9-v4-leg.sh`. **Timing:** the 400-DAA receipt
+   maturity puts the leg at ≈19.5 h of drill chain (≈125 s/DAA), longer than the ~12 h budget of §2 — start the leg's claim in the
+   first DAA of the run. **Public t12:** V4 is reachable only after someone files `FamilyCertified` + `ClassLaneCertified` (FreePrompt)
+   on chain (genesis certifies only in params); the observation in §4 step 7 waits for that.
 2. **`palw_model_court_window` was "armed nowhere" by decision** (2026-10-01): this release arms it at 9,000 on the lead's instruction. The
    verdict-neutrality proof (`palw_t12_court_window_changes_no_admission.rs`) passes unchanged with the fence armed; the delta at position
    100 first appears on a public chain at 9,000.
