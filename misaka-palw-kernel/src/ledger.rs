@@ -644,6 +644,13 @@ impl KernelLedgerV1 {
         self.budget
     }
 
+    /// **Resume a block's budget** after [`Self::begin_block`]: a consumer that rebuilds the ledger for every object of one block (rows
+    /// in, rows out) hands back what the earlier objects of that same block already spent, so the budget bounds the BLOCK and not each
+    /// object. Meaningful only straight after `begin_block` of the same block.
+    pub fn restore_budget(&mut self, used: BlockBudgetV1) {
+        self.budget = used;
+    }
+
     // ── consumer-derived inputs ──────────────────────────────────────────────────────────────────────────────────────────
 
     /// **The consumer's real locked collateral of `bond`** (absolute, not a delta). Reservations and an exit request stay.

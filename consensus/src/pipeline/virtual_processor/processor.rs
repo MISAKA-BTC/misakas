@@ -14817,6 +14817,11 @@ impl VirtualStateProcessor {
                 attested_artifacts: kernel_route_test_attestations_v1(daa_score),
                 #[cfg(not(test))]
                 attested_artifacts: Vec::new(),
+                // Tests run with a four-adjudication block so the cross-object budget is reachable with a handful of carriers.
+                #[cfg(test)]
+                max_adjudications_per_block: Some(4),
+                #[cfg(not(test))]
+                max_adjudications_per_block: None,
             }
         })
     }

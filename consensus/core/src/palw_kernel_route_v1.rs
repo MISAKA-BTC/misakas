@@ -65,6 +65,9 @@ pub const PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1: u8 = 0xEC;
 pub const PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1: u8 = 32;
 pub const PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1: u8 = 33;
 pub const PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1: u8 = 34;
+/// The block's adjudication budget already spent by earlier objects of the SAME chain block: `[] → (blue score, adjudications, court work)`.
+/// Rewritten by each charged object so the budget bounds the block however the fold is split into single-object rehearsals.
+pub const PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1: u8 = 35;
 
 /// The most seats one claim's interim assignment draws, and the per-segment quorum the tally needs.
 pub const PALW_KERNEL_ROUTE_INTERIM_SEATS_V1: usize = 3;
@@ -114,6 +117,10 @@ pub struct PalwKernelRouteExtrasV1 {
     /// availability or conformance fact yet**, so this is empty in production and a test-only hook fills it in the E2E
     /// (`kernel_route_test_attest_artifact_v1` in the processor, `cfg(test)`): GAP — onboarding conformance + availability.
     pub attested_artifacts: Vec<Hash64>,
+    /// **Test seam, `None` in production**: a smaller per-block adjudication cap than the policy's (the processor sets it only under
+    /// `cfg(test)`, uniformly for every chain of a test process, so a header's policy never changes mid-chain). Lets a test exhaust the
+    /// block budget with a handful of carriers instead of sixty-five.
+    pub max_adjudications_per_block: Option<u32>,
 }
 
 /// **The INTERIM ledger policy.** Windows are short so a drill crosses them; the amounts are sompi. Values are consensus constants
@@ -330,6 +337,171 @@ pub fn palw_kernel_assignment_root_v1(seats: &[KernelSeatV1], quorum: u8) -> Dig
     out
 }
 
+// ---- the public read model (RPC ops 210/211) ------------------------------------------------------------------------------
+
+/// One open position demand, as a reader sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KernelDemandReadV1 {
+    pub stage: u8,
+    pub position: u32,
+    pub demanders: u32,
+    pub filed_daa: u64,
+    pub deadline_daa: u64,
+    /// The latest rejected response's class name (`malformed`, `wrong_root`, `fake_opening`, ...), if any.
+    pub last_rejection: Option<String>,
+}
+
+/// **Everything public about one claim** (nothing private exists in the route: every field is chain state): its lifecycle, the
+/// public record a fresh verifier is built from, the positions served on chain, the open demands, and the interim assignment while
+/// the Panel's receipts are being counted. `ledger_root` and `aux_root` anchor it to the committed state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KernelClaimReadV1 {
+    pub claim_id: Digest,
+    /// `program` or `pipeline`.
+    pub kind: &'static str,
+    /// The lifecycle state, spelled out (`Final { final_daa: 7 }`, `Convicted { daa: 9 }`, ...).
+    pub state: String,
+    pub final_daa: Option<u64>,
+    pub convicted: bool,
+    pub rewarded: bool,
+    pub reserved: u64,
+    pub committed_daa: u64,
+    pub liability_until: Option<u64>,
+    pub producer_bond: Digest,
+    pub job_id: Digest,
+    pub class_id: Digest,
+    /// `PublicClaimRecordV1::to_bytes` (program claims) or `PipelinePublicRecordV1::to_bytes`.
+    pub public_record: Vec<u8>,
+    /// Borsh of the class header (`EvidenceHeaderV1`) a program claim's verifier is built with (empty for a pipeline claim).
+    pub record_header: Vec<u8>,
+    /// `(stage, position, borsh ServedPositionV1)`.
+    pub served: Vec<(u8, u32, Vec<u8>)>,
+    pub demands: Vec<KernelDemandReadV1>,
+    /// The interim assignment (`None` once the claim is covered or ended).
+    pub seats: Vec<(PalwBondKeyV2, Digest)>,
+    pub quorum: u8,
+    pub assignment_deadline_daa: u64,
+    pub receipts_counted: u32,
+    pub ledger_root: Hash64,
+    pub aux_root: Hash64,
+}
+
+/// One page of the route's rows, in `(table, key)` order (ledger tables first, then the consensus tables).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KernelRowsPageV1 {
+    pub rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    /// The cursor to resume after (`None` at the end).
+    pub next: Option<(u8, Vec<u8>)>,
+    pub total_rows: u64,
+}
+
+impl PalwKernelRouteStateV1 {
+    /// **The public read of one claim** (see [`KernelClaimReadV1`]); `Ok(None)` for an unknown claim, `Err` only if the stored rows do
+    /// not rebuild (corruption, not an input).
+    pub fn claim_read_v1(&self, claim: &Digest) -> Result<Option<KernelClaimReadV1>, String> {
+        let ledger = self.ledger()?;
+        let Some(row) = ledger.claims.get(claim) else { return Ok(None) };
+        let (kind, public_record, record_header) = match &row.body {
+            misaka_palw_kernel::ledger::ClaimBodyV1::Program { .. } => {
+                let (record, header) = ledger.public_record(claim).ok_or("a stored program claim has no public record")?;
+                ("program", record.to_bytes(), borsh::to_vec(&header).map_err(|e| e.to_string())?)
+            }
+            misaka_palw_kernel::ledger::ClaimBodyV1::Pipeline { .. } => {
+                let (record, _header, _binding) =
+                    ledger.pipeline_public_record(claim).ok_or("a stored pipeline claim has no public record")?;
+                // A pipeline header has no wire form of its own: a reader rebuilds it from the class record.
+                ("pipeline", record.to_bytes(), Vec::new())
+            }
+        };
+        let mut served = Vec::new();
+        for ((c, stage, position), sp) in ledger.served.iter() {
+            if c == claim {
+                served.push((*stage, *position, borsh::to_vec(sp).map_err(|e| e.to_string())?));
+            }
+        }
+        let demands = ledger
+            .demands
+            .iter()
+            .filter(|((c, ..), _)| c == claim)
+            .map(|((_, stage, position), d)| KernelDemandReadV1 {
+                stage: *stage,
+                position: *position,
+                demanders: d.demanders.len() as u32,
+                filed_daa: d.filed_daa,
+                deadline_daa: d.deadline_daa,
+                last_rejection: d.last_class().map(str::to_string),
+            })
+            .collect();
+        let assignment = self.assignment_of(claim);
+        let final_daa = match row.life.state {
+            misaka_palw_kernel::lifecycle::ClaimStateV1::Final { final_daa } => Some(final_daa),
+            _ => None,
+        };
+        Ok(Some(KernelClaimReadV1 {
+            claim_id: *claim,
+            kind,
+            state: format!("{:?}", row.life.state),
+            final_daa,
+            convicted: row.convicted,
+            rewarded: row.rewarded,
+            reserved: row.reserved,
+            committed_daa: row.committed_daa,
+            liability_until: row.liability_until,
+            producer_bond: row.producer,
+            job_id: row.job_id,
+            class_id: row.class_binding_id,
+            public_record,
+            record_header,
+            served,
+            demands,
+            seats: assignment.as_ref().map(|a| a.seats.iter().map(|s| (s.bond, s.kernel_bond)).collect()).unwrap_or_default(),
+            quorum: assignment.as_ref().map(|a| a.quorum).unwrap_or(0),
+            assignment_deadline_daa: assignment.as_ref().map(|a| a.deadline_daa).unwrap_or(0),
+            receipts_counted: self.receipts_of(claim).len() as u32,
+            ledger_root: self.ledger_root(),
+            aux_root: self.aux_root(),
+        }))
+    }
+
+    /// **A page of rows**, `(table, key, row)` in order, starting after `after` (exclusive; `None` = the beginning) and stopping once
+    /// `max_bytes` of keys and rows are gathered (at least one row, so a page always makes progress). A reader that collects every page
+    /// and rebuilds a ledger from them must reach [`Self::ledger_root`].
+    pub fn rows_page_v1(&self, after: Option<(u8, Vec<u8>)>, max_bytes: usize) -> KernelRowsPageV1 {
+        use std::ops::Bound::{Excluded, Unbounded};
+        let total_rows = (self.rows.len() + self.aux.len()) as u64;
+        let start = match after {
+            Some(cursor) => Excluded(cursor),
+            None => Unbounded,
+        };
+        let mut rows = Vec::new();
+        let mut bytes = 0usize;
+        let mut next = None;
+        // The ledger tables are numbered below the consensus tables, so the two maps concatenate in key order.
+        let all = self.rows.range((start.clone(), Unbounded)).chain(self.aux.range((start, Unbounded)));
+        for ((table, key), row) in all {
+            if !rows.is_empty() && bytes + key.len() + row.len() > max_bytes {
+                break;
+            }
+            bytes += key.len() + row.len();
+            rows.push((*table, key.clone(), row.clone()));
+            next = Some((*table, key.clone()));
+        }
+        // `next` is a resume point only if something follows it.
+        if let Some(cursor) = &next {
+            let after_last = self
+                .rows
+                .range((Excluded(cursor.clone()), Unbounded))
+                .next()
+                .is_some()
+                || self.aux.range((Excluded(cursor.clone()), Unbounded)).next().is_some();
+            if !after_last {
+                next = None;
+            }
+        }
+        KernelRowsPageV1 { rows, next, total_rows }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,6 +523,7 @@ mod tests {
             (PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1),
             (32, 33, 34)
         );
+        assert_eq!(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, 35);
         assert!(PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 > 1_000_000);
     }
 }

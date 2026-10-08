@@ -139,7 +139,10 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
     let Some(extras) = builder.extras.kernel_route.as_ref() else {
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
     };
-    let policy = palw_kernel_route_policy_v1(extras.network_domain, extras.ruleset_digest);
+    let mut policy = palw_kernel_route_policy_v1(extras.network_domain, extras.ruleset_digest);
+    if let Some(cap) = extras.max_adjudications_per_block {
+        policy.max_adjudications_per_block = cap;
+    }
     let attested = extras.attested_artifacts.clone();
     match builder.state.kernel_route.as_ref() {
         None => {
@@ -153,6 +156,16 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
     }
     let mut ledger = builder.state.kernel_route.as_ref().expect("created above").ledger().map_err(refused)?;
     ledger.begin_block(ctx.daa_score).map_err(|r| refused(r.to_string()))?;
+    // The budget bounds the BLOCK: what the block's earlier objects already spent comes back (they were folded one at a time).
+    if let Some((blue_score, adjudications, court_work)) = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .and_then(|k| k.aux_row::<(u64, u32, u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]))
+        && blue_score == ctx.blue_score
+    {
+        ledger.restore_budget(misaka_palw_kernel::ledger::BlockBudgetV1 { adjudications, court_work });
+    }
     for root in attested {
         ledger.attest_artifact(root.as_bytes());
     }
@@ -172,22 +185,42 @@ fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &
 }
 
 /// **Apply a ledger's settlement instructions to the real bonds** (module doc).
-fn apply_settlements(builder: &mut TransitionBuilder<'_>, events: &[LedgerEventV1]) -> Result<(), PalwStateV2Error> {
+///
+/// `strict` (every object arm): a slash the real bond cannot pay in full refuses the object (it is dropped, the block stands). The closing
+/// tick is not strict: it runs after the rehearsal, so an error there would fail the whole block — and with every held bond re-synced
+/// just before it, the ledger's clamped instructions are always payable; if that ever failed, taking what the bond holds is the safe side.
+fn apply_settlements(builder: &mut TransitionBuilder<'_>, events: &[LedgerEventV1], strict: bool) -> Result<(), PalwStateV2Error> {
     for event in events {
         let LedgerEventV1::Settlement(s) = event else { continue };
         let key = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&s.bond));
         match s.kind {
             SettlementKindV1::SlashFraud | SettlementKindV1::SlashDefault | SettlementKindV1::SlashFiling => {
-                let key = key.ok_or_else(|| refused("a slash names a bond the route never saw"))?;
-                let debit = builder.slash_bond(key, s.amount as u128)?;
-                if debit != s.amount {
+                let Some(key) = key else {
+                    if strict {
+                        return Err(refused("a slash names a bond the route never saw"));
+                    }
+                    continue;
+                };
+                let debit = match builder.slash_bond(key, s.amount as u128) {
+                    Ok(debit) => debit,
+                    Err(e) if strict => return Err(e),
+                    Err(_) => continue,
+                };
+                if debit != s.amount && strict {
                     return Err(refused(format!("a slash of {} took {debit}: the synced collateral did not cover it", s.amount)));
                 }
             }
             SettlementKindV1::AccuserReward | SettlementKindV1::DemanderShare | SettlementKindV1::FinalReward => {
-                let key = key.ok_or_else(|| refused("a payout names a bond the route never saw"))?;
-                let payload = builder.state.bonds.get(&key).ok_or(PalwStateV2Error::MissingBond(key))?.payout_payload;
-                builder.add_kernel_payout(payload, s.amount)?;
+                let payee = key.and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
+                match payee {
+                    Some(payload) => match builder.add_kernel_payout(payload, s.amount) {
+                        Ok(()) => {}
+                        Err(e) if strict => return Err(e),
+                        Err(_) => {}
+                    },
+                    None if strict => return Err(refused("a payout names a bond the route never saw")),
+                    None => {}
+                }
             }
             // The reservation is the ledger's row (V2 reads it back), the burn is the slash that preceded it, and a withdrawal is
             // the route forgetting the bond.
@@ -269,9 +302,22 @@ pub(super) fn apply_kernel_route_object_v1(
     let before = ledger.to_rows();
     let kid = palw_kernel_bond_id_v1(signer);
     ledger.sync_bond(kid, builder.kernel_synced_collateral(signer, ctx.daa_score));
+    // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
+    // an earlier object of this block (or another lane's slash) can never leave the ledger believing the bond holds more than it does.
+    if let KernelRouteObjectV1::FileProof { claim, .. } | KernelRouteObjectV1::FileDemand { claim, .. } | KernelRouteObjectV1::Respond { claim, .. } =
+        &object
+        && let Some(producer) = ledger.claims.get(claim).map(|row| row.producer)
+        && let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&producer))
+    {
+        ledger.sync_bond(producer, builder.kernel_synced_collateral(&key, ctx.daa_score));
+    }
     let events = match ledger.apply_object(&object, &AuthV1 { signer_bond: kid }) {
         Ok(events) => events,
-        Err(_refusal) => return Ok(()),
+        Err(_refusal) => {
+            // A refusal that did court work still spent the block's budget (so junk cannot be tried for free); nothing else is kept.
+            persist_budget(builder, ctx, &ledger);
+            return Ok(());
+        }
     };
     // A class registers only if its worst filing, response and commitments can actually be carried (chunking counted).
     for event in &events {
@@ -287,6 +333,7 @@ pub(super) fn apply_kernel_route_object_v1(
                 .is_ok()
             });
             if !fits {
+                persist_budget(builder, ctx, &ledger);
                 return Ok(());
             }
         }
@@ -309,9 +356,24 @@ pub(super) fn apply_kernel_route_object_v1(
             }
         }
     }
-    apply_settlements(builder, &events)?;
+    // (A settlement the real bonds cannot honour fails the object — the walk's rehearsal drops it with its builder, so no half-applied
+    // slash survives; the sync above makes this unreachable.)
+    apply_settlements(builder, &events, true)?;
+    persist_budget(builder, ctx, &ledger);
     flush(builder, &ledger, &before);
     Ok(())
+}
+
+/// **Record what this block's objects have spent of its adjudication budget** (the next object of the same chain block restores it).
+fn persist_budget(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, ledger: &KernelLedgerV1) {
+    let spent = ledger.budget_used();
+    if spent != misaka_palw_kernel::ledger::BlockBudgetV1::default() {
+        builder.write_kernel_row(
+            PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,
+            Vec::new(),
+            Some(borsh::to_vec(&(ctx.blue_score, spent.adjudications, spent.court_work)).expect("a budget serializes")),
+        );
+    }
 }
 
 /// **Tag 111: a seat's constraint receipt.** Its signature verified at acceptance; the fold admits it structurally against the claim's
@@ -406,7 +468,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
         }
     }
     let events = ledger.tick();
-    apply_settlements(builder, &events)?;
+    apply_settlements(builder, &events, false)?;
     // Assignments and counted receipts of claims that can no longer be covered are dropped.
     let stale: Vec<misaka_palw_kernel::hash::Digest> = builder
         .state
