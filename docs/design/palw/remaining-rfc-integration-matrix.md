@@ -100,6 +100,14 @@ skeleton first; lanes build on that commit.
 
 ## 4. Change log
 
+* 2026-10-08 13:00 — **Correction (fence inventory of params.rs):** on testnet-12 the int-11 list ARMS at DAA 5,300 `palw_fp_decode_rules`
+  (FP Job V4 / RFC-0001 §A), `palw_gen_v1` + `palw_fp_job_v5` (RFC-0003), `palw_improvement_v1` (RFC-0004), `palw_tir_shard_v1`
+  (RFC-0006) and the RFC-0007 vertex/witness/mesh/capped fences. Rows above that call FP V4 / RFC-0003 "DORMANT (fence unarmed)"
+  described the mainnet/testnet presets, not testnet-12. Still unarmed on t12: `palw_receipt_spend_v4`, `palw_evidence_court_v1`,
+  `palw_audit_1004_v1`, `palw_gen_range_twin_v1`, `palw_dns_retirement_v1`; refused: `palw_probabilistic_constraints_v1`,
+  `palw_permissionless_panel_v1`; undeclared: `palw_exec_payload_v2` (X8), `palw_panel_free_v1` (X15). **User goal (10-08):** implement
+  RFC-0001…0015 and fence at DAA 9,000 — RFC-0004/0012/0015 are no longer deferred.
+
 * 2026-10-08 — **C3 final integrated** (10 commits, `rfc-0001-0003-delivery-record.md`; gateway 158 + rail 7 + drill 8 + DSL 3 +
   fp-submit 12 tests; no real node / real weights):
   * Binding audit generated from `binding::AUDIT`, one mutation test per field, destructuring without `..` (a new field fails to
