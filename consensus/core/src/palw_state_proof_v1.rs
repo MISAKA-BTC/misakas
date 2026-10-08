@@ -133,7 +133,12 @@ pub fn state_root_of_pinned_header_v1(header: &Header, pinned_block_hash: Hash64
     if crate::hashing::header::hash(header) != pinned_block_hash {
         return Err(PalwProofErrorV1::HeaderIsNotThePinnedBlock);
     }
-    if header.palw_state_root == Hash64::default() {
+    // The block hash binds `palw_state_root` only for the algos `hashing::header::hash` feeds it to (V2-lineage and heartbeat) and only
+    // when non-zero. Any other header's root is invisible to its hash: a hostile node could hand back the pinned block with ANY root
+    // and every proof would "verify" against it (C4 F-C4-10). Refused.
+    let hashes_root = crate::pow_layer0::is_palw_v2_algo_id(header.pow_algo_id)
+        || header.pow_algo_id == crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID;
+    if !hashes_root || header.palw_state_root == Hash64::default() {
         return Err(PalwProofErrorV1::HeaderCommitsNoState);
     }
     Ok(header.palw_state_root)
@@ -207,7 +212,11 @@ mod tests {
         let root = s.state_root();
         let bond = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h(7), 0));
         let proof = prove_bonds_v1(&s);
-        assert_eq!(verify_bond_v1(&proof, root, &bond), Err(PalwProofErrorV1::Absent), "absence is proven: the whole table is committed");
+        assert_eq!(
+            verify_bond_v1(&proof, root, &bond),
+            Err(PalwProofErrorV1::Absent),
+            "absence is proven: the whole table is committed"
+        );
         // A different state root is refused.
         assert_eq!(verify_bond_v1(&proof, h(1), &bond), Err(PalwProofErrorV1::OpeningDoesNotMatchRoot(h(1))));
         // A collection opened under another label is refused.
@@ -251,5 +260,20 @@ mod tests {
         let mut swapped = header.clone();
         swapped.palw_state_root = h(8);
         assert_eq!(state_root_of_pinned_header_v1(&swapped, header.hash), Err(PalwProofErrorV1::HeaderIsNotThePinnedBlock));
+
+        // A header of an algo whose hash does not bind the root (C4 F-C4-10): any claimed root keeps the hash, so none is proven.
+        for algo in [0u8, 1, 2, 5, 10, 200] {
+            let mut other = header.clone();
+            other.pow_algo_id = algo;
+            other.finalize();
+            let mut forged = other.clone();
+            forged.palw_state_root = h(8);
+            assert_eq!(crate::hashing::header::hash(&forged), other.hash, "algo {algo}: the root is invisible to the hash");
+            assert_eq!(
+                state_root_of_pinned_header_v1(&forged, other.hash),
+                Err(PalwProofErrorV1::HeaderCommitsNoState),
+                "algo {algo}"
+            );
+        }
     }
 }
