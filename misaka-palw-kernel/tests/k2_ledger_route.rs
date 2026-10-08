@@ -814,6 +814,7 @@ fn a_claims_challenge_subject_feeds_the_single_contracts_seed_and_the_ledger_sto
         da_satisfied: true,
         validity_independent: true,
         depends_on_profiles: vec![],
+        final_path: misaka_palw_challenge::FinalPathV1::PanelLicensed { panel_seed_id: [0x5E; 64], panel_epoch: 1 },
     };
     let events = [work(1, [0xA1; 64], 103, 110), work(2, [0xA2; 64], 104, 111), work(3, [0xA1; 64], 105, 112)];
     let locked = |c: &BeaconContextV1| match collect_work_beacon_v1(c, &events, 117).unwrap() {
