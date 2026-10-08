@@ -48,6 +48,7 @@ pub fn opv_example() -> OpvPolicyV1 {
             max_live_claims_per_producer: 3,
             max_live_claims_total: 5,
             default_burn_permille: 100,
+            admission_fee: 3,
         },
         carrier: CarrierCapsV1 { filing_cap: 1 << 26, response_cap: 1 << 27, commit_cap: 1 << 27 },
     }

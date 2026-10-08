@@ -1243,14 +1243,21 @@ impl KernelLedgerV1 {
         // collateral), subject to the producer's and the ledger's live-claim caps — all decided before the first mutation.
         let opv_row = if self.opv.classes.contains(&class) { Some(self.opv_admission(&producer)?) } else { None };
         let need = opv_row.map_or(self.policy.claim_collateral, |(need, _)| need);
+        // C4 F-C4R3-05: an OPV claim's admission fee, non-refundable, from free collateral beside the reservation.
+        let fee = if opv_row.is_some() { self.opv.policy.map_or(0, |p| p.economics.admission_fee) } else { 0 };
         let bond = self.bonds.get_mut(&producer).ok_or("the producer bond is not registered")?;
         if bond.exit_requested.is_some() {
             return Err("the producer bond is exiting".into());
         }
-        if bond.free() < need {
-            return Err(format!("{} free collateral, the claim needs {need} (no double use)", bond.free()));
+        if bond.free() < need.saturating_add(fee) {
+            return Err(format!(
+                "{} free collateral, the claim needs {need} and its admission fee {fee} (no double use)",
+                bond.free()
+            ));
         }
         bond.reserved += need;
+        bond.collateral -= fee;
+        self.burned += fee;
         let daa = self.daa;
         let mut life = ClaimLifecycleV1::new(LifecyclePolicyV1 {
             check_window_daa: self.policy.check_window_daa,
@@ -1291,6 +1298,8 @@ impl KernelLedgerV1 {
             self.job_claims.insert(job, id);
         }
         settle(out, producer, need, SettlementKindV1::ReserveClaim, Some(id));
+        settle(out, producer, fee, SettlementKindV1::AdmissionFee, Some(id));
+        settle(out, producer, fee, SettlementKindV1::Burn, Some(id));
         Ok(())
     }
 
@@ -1301,8 +1310,11 @@ impl KernelLedgerV1 {
             return Ok(());
         }
         let (need, _) = self.opv_admission(producer)?;
+        let fee = self.opv.policy.map_or(0, |p| p.economics.admission_fee);
         match self.bonds.get(producer) {
-            Some(b) if b.free() < need => Err(format!("{} free collateral, the claim needs {need} (no double use)", b.free())),
+            Some(b) if b.free() < need.saturating_add(fee) => {
+                Err(format!("{} free collateral, the claim needs {need} and its admission fee {fee} (no double use)", b.free()))
+            }
             _ => Ok(()),
         }
     }

@@ -152,7 +152,8 @@ async fn g14_c4r3_mandatory_3_opv_relayed_lies_are_convicted_before_and_after_fi
     w.relayed_proof(outsider, &b.id, proof).await;
     assert!(w.net.ledger().claims[&b.id].convicted, "b convicted inside its liability horizon");
     let r = policy.economics.reservation_per_claim;
-    assert_eq!(w.net.collateral(0), before - 2 * r, "both reservations slashed from the real bond");
+    let fee = policy.economics.admission_fee;
+    assert_eq!(w.net.collateral(0), before - 2 * r - 2 * fee, "both reservations slashed from the real bond (and two admission fees)");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }
@@ -362,14 +363,15 @@ async fn g14_c4r3_a_release_that_schedules_an_unrelated_fence_keeps_the_route_fo
 
 // ---- OPV: one global live-claim cap ---------------------------------------------------------------------------------------
 
-/// **F-C4R3-05 (P2 DoS, OPV lane capture).** RFC-0015's `max_live_claims_total` is ONE network-wide counter, a claim counts while its
-/// reservation is held — through the window AND the whole liability horizon (≈ 250 DAA at the interim terms) — and jobs are free.
-/// So `⌈total / per_producer⌉` bonds (11 at the interim 32 / 3) fill the lane with HONEST claims on jobs they posted themselves, and
-/// every other producer's OPV claim is refused for as long as they keep refilling; the occupiers are even paid the (unfunded)
-/// `claim_reward` at each Final. The harness has eight cards, so the cap is scaled (total 6, per producer 3: two occupying bonds);
-/// the relation is the same. SAFE property asserted: an honest producer outside the occupiers can still get an OPV claim admitted.
+/// **F-C4R3-05 (P2 DoS, OPV lane capture).** RFC-0015's `max_live_claims_total` was ONE network-wide counter, a claim counted while
+/// its reservation was held — through the window AND the whole liability horizon (≈ 250 DAA at the interim terms) — and admission was
+/// free. So `⌈total / per_producer⌉` bonds (11 at the interim 32 / 3) filled the lane with HONEST claims on jobs they posted
+/// themselves, and every other producer's OPV claim was refused for as long as they kept refilling. The harness has eight cards, so
+/// the cap is scaled (total 6, per producer 3: two occupying bonds); the relation is the same. **Fixed (G14-R4)**: only PRE-FINAL
+/// claims hold admission slots, a producer with no pre-Final claim is always admitted by the total (no set of bonds holds the lane
+/// against another; the per-producer cap still bounds each bond), and every admission burns a non-refundable fee. SAFE property
+/// asserted: an honest producer outside the occupiers can still get an OPV claim admitted.
 #[tokio::test]
-#[ignore = "FAIL F-C4R3-05: two bonds' self-posted honest claims hold the OPV lane's global cap; a third producer is refused"]
 async fn g14_c4r3_opv_two_bonds_must_not_be_able_to_hold_the_whole_opv_lane() {
     kaspa_core::log::try_init_logger("warn");
     let mut fence = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), opv_admitted());
@@ -396,6 +398,12 @@ async fn g14_c4r3_opv_two_bonds_must_not_be_able_to_hold_the_whole_opv_lane() {
         w.policy().liability_daa
     );
     assert!(admitted, "an honest producer outside two occupying bonds can still have an OPV claim admitted");
+    let ledger = w.net.ledger();
+    assert_eq!(ledger.opv_open_counts(&w.net.kid(4)), (1, 7), "past the total by exactly its first claim");
+    // Its second is refused while the occupiers hold the total; and an occupier at its per-producer cap is refused as before.
+    let job = w.job().await;
+    let second = w.claim_with(4, &job, false, Delivery::Direct).await;
+    assert!(!w.net.ledger().claims.contains_key(&second.id), "the total binds a producer that already holds a pre-Final claim");
 }
 
 /// **F-C4R3-01, second instance (G-RULESET, tag 108).** The envelope must name `Params::consensus_params_id`, which moves with every

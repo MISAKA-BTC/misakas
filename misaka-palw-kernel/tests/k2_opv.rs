@@ -325,9 +325,10 @@ fn a_lying_optimistic_claim_is_convicted_before_final_and_after_it_by_one_outsid
     let ev = w.block(30, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof: proof.clone() }]);
     assert_eq!(convicted(&ev), Some((1000, 500, false)), "{ev:?}");
     assert!(matches!(w.state(&id), ClaimStateV1::Convicted { .. }));
-    assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.bonds[&PRODUCER].reserved), (4000, 0));
+    // (5000 less the slashed reservation and the claim's non-refundable admission fee of 3, C4 F-C4R3-05.)
+    assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.bonds[&PRODUCER].reserved), (4000 - 3, 0));
     assert_eq!(w.consumer.paid(&OUTSIDER), 500, "the bounty is a share of the collected reservation");
-    assert_eq!(w.l.burned, 500);
+    assert_eq!(w.l.burned, 500 + 3, "the burned half of the slash and the admission fee");
     let ev = w.block(31, vec![T::FileProof { accuser: SPAM1, claim: id, proof }]);
     assert_eq!(ev, vec![E::Duplicate { claim: id }], "a claim is convicted once; a copied proof pays nobody");
     w.block(200, vec![]);
@@ -349,7 +350,7 @@ fn a_lying_optimistic_claim_is_convicted_before_final_and_after_it_by_one_outsid
     let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!() };
     let ev = w.block(400, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
     assert_eq!(convicted(&ev), Some((1000, 500, true)), "post-Final liability: {ev:?}");
-    assert_eq!(w.l.bonds[&PRODUCER].collateral, 3000);
+    assert_eq!(w.l.bonds[&PRODUCER].collateral, 3000 - 2 * 3, "two slashed reservations and two admission fees");
     let r = w.l.final_receipt(&id).unwrap();
     assert_eq!(r.standing, FinalStandingV1::ConvictedAfterFinal);
     assert!(!r.to_work_final_event(&ctx(None)).unwrap().claim_final, "a convicted work is no longer a Final source");
@@ -389,10 +390,10 @@ fn withheld_material_is_a_default_not_a_fraud_conviction_and_the_claim_never_fin
     // The penalty is split at least like a slash so a producer cannot cycle it through its own demander for nothing (the larger of
     // the policy's 100 permille and the 500 permille a slash burns, C4 F-C4R3-02), the rest to the demander. The rest of the
     // reservation is held through the default's liability horizon, then released (no valid proof ever arrived).
-    assert_eq!((w.consumer.paid(&OUTSIDER), w.l.burned), (50, 50));
-    assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.bonds[&PRODUCER].reserved), (4900, 900));
+    assert_eq!((w.consumer.paid(&OUTSIDER), w.l.burned), (50, 50 + 3), "(and the admission fee, C4 F-C4R3-05)");
+    assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.bonds[&PRODUCER].reserved), (4900 - 3, 900), "(and the admission fee)");
     assert_eq!(w.block(243, vec![]), vec![E::Released { claim: id }]);
-    assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.bonds[&PRODUCER].reserved), (4900, 0));
+    assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.bonds[&PRODUCER].reserved), (4900 - 3, 0));
     w.block(500, vec![]);
     assert!(!w.l.claims[&id].rewarded && w.l.final_receipt(&id).is_none());
 
@@ -574,7 +575,7 @@ fn a_junk_squatter_is_slashed_by_any_outsider_and_a_withholding_squatter_default
     let OutsiderFindingV1::Prosecute(proof) = outsider(&w, sid, &sda) else { panic!() };
     let ev = w.block(30, vec![T::FileProof { accuser: OUTSIDER, claim: sid, proof }]);
     assert_eq!(convicted(&ev), Some((1000, 500, false)), "{ev:?}");
-    assert_eq!(w.l.bonds[&SQUATTER].collateral, 3000 - 1000, "squatting cost the squatter its reservation");
+    assert_eq!(w.l.bonds[&SQUATTER].collateral, 3000 - 1000 - 3, "squatting cost the squatter its reservation and its admission fee");
     assert_eq!(w.consumer.paid(&OUTSIDER), 500);
     let ev = w.block(40, vec![honest.tx]);
     assert!(ev.contains(&E::ClaimCommitted { claim: honest.claim.id() }), "{ev:?}");
@@ -678,7 +679,8 @@ fn the_reservation_is_the_policys_not_a_panel_lock_and_concurrent_claims_never_r
 
 #[test]
 fn live_claim_caps_and_the_aggregate_gain_bound_a_producers_unsettled_exposure() {
-    let mut w = World::new_opv(); // 3 live claims per producer, 5 in total; reservation 1000, maximum gain 100
+    // 3 pre-Final claims per producer, 5 in total beyond each producer's first; reservation 1000, maximum gain 100, admission fee 3.
+    let mut w = World::new_opv();
     // Post a job one block after the ledger's clock and commit the bond's honest claim one block after that.
     let place = |w: &mut World, nonce: u8, bond: Digest| -> Vec<E> {
         let t = w.l.daa + 1;
@@ -686,34 +688,48 @@ fn live_claim_caps_and_the_aggregate_gain_bound_a_producers_unsettled_exposure()
         let c = w.honest_by(&job, bond, 3);
         w.block(t + 1, vec![c.tx])
     };
+    let producer0 = w.l.bonds[&PRODUCER].collateral;
     for nonce in 0..3 {
         let ev = place(&mut w, nonce, PRODUCER);
         assert!(refused(&ev).is_none(), "claim {nonce}: {ev:?}");
     }
     // A fourth claim of the same producer: refused by the cap although its collateral (5000) would allow it.
     let ev = place(&mut w, 3, PRODUCER);
-    assert!(refused(&ev).unwrap().contains("live claims"), "{ev:?}");
+    assert!(refused(&ev).unwrap().contains("pre-Final claims (cap 3)"), "{ev:?}");
     assert_eq!(w.l.opv_live_counts(&PRODUCER), (3, 3));
     assert_eq!(w.l.opv_unsettled_gain(&PRODUCER), 300, "the aggregate maximum gain: 3 claims of 100");
     assert!(w.l.opv_unsettled_gain(&PRODUCER) <= w.l.bonds[&PRODUCER].reserved as u128, "the gain is covered by what is reserved");
-    // Two more from another producer reach the ledger's total (5); a sixth, from anyone, is refused by the total cap.
+    // Every admission paid its non-refundable fee (C4 F-C4R3-05), burned.
+    assert_eq!(w.l.bonds[&PRODUCER].collateral, producer0 - 3 * 3);
+    // Two more from another producer reach the ledger's total (5). A producer with NO pre-Final claim is still admitted past it — no
+    // set of bonds can hold the whole lane against another (C4 F-C4R3-05) — but its second claim is refused by the total.
     for nonce in 4..6 {
         let ev = place(&mut w, nonce, HONEST);
         assert!(refused(&ev).is_none(), "{ev:?}");
     }
     let ev = place(&mut w, 6, SQUATTER);
-    assert!(refused(&ev).unwrap().contains("live claims in the ledger"), "{ev:?}");
+    assert!(refused(&ev).is_none(), "a fresh producer's first claim is admitted past the total: {ev:?}");
+    let ev = place(&mut w, 8, SQUATTER);
+    assert!(refused(&ev).unwrap().contains("pre-Final claims in the ledger"), "{ev:?}");
+    assert_eq!(w.l.opv_open_counts(&SQUATTER), (1, 6));
     // A collateral is never used twice: the reservation must come out of FREE collateral.
     w.block(70, vec![T::RegisterBond { bond: HONEST, collateral: 2500 }]);
     assert_eq!(w.l.bonds[&HONEST].free(), 500);
-    // Once claims settle (Final at 70, then the liability horizon 200 later) the exposure is gone and the caps free.
+    // Final (by 70) is not the end of the exposure — the reservations stay held through the liability horizon — but a Final claim
+    // holds no admission slot: the producer is admitted again at once, its exposure bounded by its collateral (C4 F-C4R3-05).
     w.block(100, vec![]);
-    assert_eq!(w.l.opv_live_counts(&PRODUCER), (3, 5), "Final is not the end of the exposure");
-    w.block(271, vec![]);
-    assert_eq!(w.l.opv_live_counts(&PRODUCER), (0, 0));
-    assert_eq!(w.l.opv_unsettled_gain(&PRODUCER), 0);
+    assert_eq!(w.l.opv_live_counts(&PRODUCER), (3, 6), "Final is not the end of the exposure");
+    assert_eq!(w.l.opv_open_counts(&PRODUCER), (0, 0), "but it is the end of the admission slot");
     let ev = place(&mut w, 7, PRODUCER);
     assert!(refused(&ev).is_none(), "{ev:?}");
+    assert_eq!(w.l.opv_live_counts(&PRODUCER).0, 4);
+    assert_eq!(w.l.opv_unsettled_gain(&PRODUCER), 400);
+    // Once every horizon ends the exposure is gone; the fees stay burned (never refunded, whatever the claim became).
+    w.block(160, vec![]); // the last claim's Final
+    w.block(400, vec![]);
+    assert_eq!(w.l.opv_live_counts(&PRODUCER), (0, 0));
+    assert_eq!(w.l.opv_unsettled_gain(&PRODUCER), 0);
+    assert_eq!(w.l.bonds[&PRODUCER].collateral, producer0 - 4 * 3);
 }
 
 #[test]
@@ -1010,7 +1026,9 @@ fn the_optimistic_state_root_form_is_versioned_and_pinned_by_a_golden_vector() {
     assert_ne!(small(Some(other)).root(), opv.root());
 }
 
-const GOLDEN_OPV_PARTS: [&str; 4] = ["4ba078148bb34125", "557931bf322541c3", "b018a938b23ad4fb", "3fbfb5902dada353"];
-/// Moved with the G14-R4 fix of GAP-R7: the historical root inside it gained the proof-seal collection (the OPV parts are unchanged).
+/// The policy part moved with the G14-R4 fix of F-C4R3-05 (`OpvEconomicsV1::admission_fee`).
+const GOLDEN_OPV_PARTS: [&str; 4] = ["ab038a45fd92a4a9", "557931bf322541c3", "b018a938b23ad4fb", "3fbfb5902dada353"];
+/// Moved with the G14-R4 fixes: GAP-R7 (the historical root inside it gained the proof-seal collection) and F-C4R3-05 (the policy's
+/// admission fee).
 const GOLDEN_OPV_ROOT: &str =
-    "de610a07e15d724905f46eb8e1effed894e12923c5947fb2b1c17e28fdbd65123fb9052a61fdd1d40db595300e42dfcd078c5ce1f73b23adf8c3d603e9df06fd";
+    "f98c54b2ebcaebb54d04bc67ecb64bdc109b78c62b97cc5f78a429bbf5c343b7c7e3a25acf8b96a32cfdd04b341764008ddafeebc8cb4abca9822878e74495d4";

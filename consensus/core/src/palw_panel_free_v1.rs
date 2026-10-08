@@ -74,6 +74,8 @@ impl PalwPanelFreeFenceV1 {
                 max_live_claims_per_producer: 3,
                 max_live_claims_total: 32,
                 default_burn_permille: 100,
+                // C4 F-C4R3-05: a refilled lane costs its occupiers (non-refundable, burned).
+                admission_fee: SOMPI_PER_KASPA,
             },
             carrier: CarrierCapsV1 {
                 filing_cap: carrier.min(MAX_FILE_PROOF_BYTES_V1 as u64),

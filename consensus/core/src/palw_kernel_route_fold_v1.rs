@@ -233,7 +233,10 @@ fn apply_settlements(builder: &mut TransitionBuilder<'_>, events: &[LedgerEventV
         let LedgerEventV1::Settlement(s) = event else { continue };
         let key = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&s.bond));
         match s.kind {
-            SettlementKindV1::SlashFraud | SettlementKindV1::SlashDefault | SettlementKindV1::SlashFiling => {
+            SettlementKindV1::SlashFraud
+            | SettlementKindV1::SlashDefault
+            | SettlementKindV1::SlashFiling
+            | SettlementKindV1::AdmissionFee => {
                 let Some(key) = key else {
                     if strict {
                         return Err(refused("a slash names a bond the route never saw"));

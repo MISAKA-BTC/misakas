@@ -1783,7 +1783,8 @@ async fn g14_opv_a_lying_claim_is_convicted_by_a_fresh_outsider_before_final() {
     assert!(w.net.ledger().claims[&lie.id].convicted);
     assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Convicted { .. }));
     let slashed = policy.economics.reservation_per_claim;
-    assert_eq!(w.net.collateral(0), before - slashed, "the real bond lost the whole OPV reservation");
+    let fee = policy.economics.admission_fee; // C4 F-C4R3-05: every OPV admission pays a non-refundable fee
+    assert_eq!(w.net.collateral(0), before - slashed - fee, "the real bond lost the whole OPV reservation (and the admission fee)");
     assert_eq!(w.net.owed(outsider), slashed * u64::from(w.policy().accuser_reward_permille) / 1000);
     assert_eq!(w.net.kernel_reserved(0), 0);
     w.net.beat_to(view.hard_deadline_daa + 2).await;
@@ -1816,7 +1817,7 @@ async fn g14_opv_a_lie_that_finalized_is_convicted_within_liability_and_its_fact
     w.proof(outsider, &lie.id, proof).await;
     assert!(w.net.ledger().claims[&lie.id].convicted, "convicted after Final");
     let slashed = policy.economics.reservation_per_claim;
-    assert_eq!(w.net.collateral(0), before - slashed);
+    assert_eq!(w.net.collateral(0), before - slashed - policy.economics.admission_fee);
     let f = w.net.api().unwrap().finals_read_v1().unwrap();
     assert_eq!(f[0].receipt.standing, FinalStandingV1::ConvictedAfterFinal);
     let event: WorkFinalEventV1 = borsh::from_slice(f[0].event.as_ref().unwrap()).unwrap();
@@ -1844,7 +1845,7 @@ async fn g14_opv_withheld_material_defaults_the_producer_burns_a_share_and_frees
     let (opv, _) = opv_view(&w, &lie.id);
     assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Unavailable { producer_defaulted: true, .. }));
     assert!(!w.net.ledger().claims[&lie.id].convicted);
-    assert_eq!(w.net.collateral(0), before - pol.default_penalty);
+    assert_eq!(w.net.collateral(0), before - pol.default_penalty - opv.economics.admission_fee, "the penalty and the admission fee");
     assert_eq!(w.net.owed(outsider), default_share(&pol, Some(&opv)), "the demander is paid what the default did not burn");
     // C4 F-C4R3-02: the rest of the reservation is held through the default's liability horizon.
     assert_eq!(w.net.kernel_reserved(0), u128::from(opv.economics.reservation_per_claim - pol.default_penalty));
@@ -1968,7 +1969,8 @@ async fn g14_opv_replay_and_reorg_reach_the_same_roots() {
     let outsider = w.outsiders(&lie, &[], 1)[0];
     let fork = w.net.chain.sink();
     let at_fork = w.net.api().expect("the route");
-    let collateral = w.net.collateral(0);
+    // (the claim's admission fee is already a slash at the fork: C4 F-C4R3-05)
+    let (collateral, slashed) = (w.net.collateral(0), w.net.slashed(0));
     let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x5A);
     w.proof(outsider, &lie.id, proof).await;
     assert!(w.net.ledger().claims[&lie.id].convicted);
@@ -1996,7 +1998,7 @@ async fn g14_opv_replay_and_reorg_reach_the_same_roots() {
     let on_b = zn.api().unwrap();
     assert_eq!((on_b.rows.clone(), on_b.aux.clone()), (at_fork.rows.clone(), at_fork.aux.clone()), "no OPV row, no trace of the conviction");
     assert!(!zn.ledger().claims[&lie.id].convicted && zn.ledger().opv_invariants().is_ok());
-    assert_eq!((zn.collateral(0), zn.slashed(0), zn.owed(outsider)), (collateral, 0, 0));
+    assert_eq!((zn.collateral(0), zn.slashed(0), zn.owed(outsider)), (collateral, slashed, 0));
     assert_eq!(zn.chain.ctx.consensus.palw_kernel_route_v1(), b.ctx.consensus.palw_kernel_route_v1());
 
     let old_len = chain_blocks(&w.net.chain, w.net.chain.sink()).len();

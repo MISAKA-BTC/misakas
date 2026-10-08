@@ -11,6 +11,7 @@
 //! | `ReleaseClaim`, `ReleaseDemand` | `R −= amount` | — |
 //! | `SlashFraud`, `SlashDefault` | `R −= amount`, `C −= amount` (the slashed reservation) | routed by the payouts and the burn that follow |
 //! | `SlashFiling` | `C −= amount` (free collateral: a dismissed filing's fee) | routed by the burn that follows |
+//! | `AdmissionFee` | `C −= amount` (free collateral: an OPV claim's non-refundable admission fee) | routed by the burn that follows |
 //! | `AccuserReward`, `DemanderShare` | paid out to the bond's owner | from the preceding slash |
 //! | `Burn` | destroyed | from the preceding slash (`bond` is the slashed bond) |
 //! | `FinalReward` | paid out to the bond's owner | newly issued by the consumer's reward path |
@@ -55,11 +56,13 @@ pub enum SettlementKindV1 {
     Burn = 11,
     /// The bond's collateral returns to its owner (it exited with nothing reserved).
     Withdraw = 12,
+    /// C4 F-C4R3-05: an OPV claim's non-refundable admission fee, taken from the producer's free collateral (burned).
+    AdmissionFee = 13,
 }
 
 impl SettlementKindV1 {
     pub const fn is_slash(self) -> bool {
-        matches!(self, Self::SlashFraud | Self::SlashDefault | Self::SlashFiling)
+        matches!(self, Self::SlashFraud | Self::SlashDefault | Self::SlashFiling | Self::AdmissionFee)
     }
 
     /// Paid out of a slash.
@@ -128,7 +131,7 @@ impl SettlementBookV1 {
                 self.collateral.insert(b, c - a);
                 self.slashed += a;
             }
-            K::SlashFiling => {
+            K::SlashFiling | K::AdmissionFee => {
                 if a > c.saturating_sub(r) {
                     return Err(format!("fee {a} past the free collateral {}", c.saturating_sub(r)));
                 }
