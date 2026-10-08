@@ -240,6 +240,14 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
             m.put("classifier.out.b", Src::t(suffixed(&name, ".bias")))?;
         }
     }
+    // Per-token logits: the classification layer (`cls_out`: `classifier` of a token classifier, `qa_outputs` of a span QA head).
+    if let OutputSpec::TokenLogits { bias, .. } = &spec.output {
+        let name = m.role("cls_out")?;
+        m.put("classifier.out.w", Src::t(suffixed(&name, ".weight")))?;
+        if *bias {
+            m.put("classifier.out.b", Src::t(suffixed(&name, ".bias")))?;
+        }
+    }
     let logits = matches!(spec.output, OutputSpec::Logits);
     if let OutputSpec::Embedding { proj: Some((_, bias)), .. } = spec.output {
         let w = m.w("embed_proj")?;

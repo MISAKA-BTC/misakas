@@ -159,6 +159,14 @@ pack!(
     "bert-seqcls",
     "roberta-seqcls",
     "distilbert-seqcls",
+    "mixin-tokcls-encoder",
+    "mixin-qa-encoder",
+    "bert-tokcls",
+    "bert-qa",
+    "roberta-tokcls",
+    "roberta-qa",
+    "distilbert-tokcls",
+    "distilbert-qa",
 );
 
 /// The text of a built-in adapter, by id.

@@ -1,0 +1,59 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "roberta-tokcls",
+  "doc": "RobertaForTokenClassification / XLMRobertaForTokenClassification: a token classifier (NER, POS): the encoder, then every row through `classifier` to num_labels logits per token (OUTPUT_TOKEN_LOGITS_V1). HFX 2026-10-08.",
+  "extends": [
+    "roberta",
+    "mixin-tokcls-encoder"
+  ],
+  "match": {
+    "architectures": [
+      "RobertaForTokenClassification",
+      "XLMRobertaForTokenClassification"
+    ],
+    "model_types": [
+      "roberta",
+      "xlm-roberta"
+    ]
+  },
+  "vars": [
+    {
+      "name": "names",
+      "value": {
+        "embed": "embeddings.word_embeddings",
+        "pos_embed": "embeddings.position_embeddings",
+        "type_embed": "embeddings.token_type_embeddings",
+        "embed_norm": "embeddings.LayerNorm",
+        "attn.q": "encoder.layer.{L}.attention.self.query",
+        "attn.k": "encoder.layer.{L}.attention.self.key",
+        "attn.v": "encoder.layer.{L}.attention.self.value",
+        "attn.o": "encoder.layer.{L}.attention.output.dense",
+        "norm.mix": "encoder.layer.{L}.attention.output.LayerNorm",
+        "mlp.up": "encoder.layer.{L}.intermediate.dense",
+        "mlp.down": "encoder.layer.{L}.output.dense",
+        "norm.ffn": "encoder.layer.{L}.output.LayerNorm",
+        "cls_out": "classifier"
+      }
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "cls.",
+        "lm_head.",
+        "vocab_transform.",
+        "vocab_layer_norm.",
+        "vocab_projector.",
+        "pooler."
+      ]
+    },
+    {
+      "name": "prefix_aliases",
+      "value": [
+        [
+          "",
+          "roberta."
+        ]
+      ]
+    }
+  ]
+}

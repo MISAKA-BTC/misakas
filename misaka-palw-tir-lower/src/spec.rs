@@ -1295,6 +1295,11 @@ pub enum OutputSpec {
     /// of an encoder) through an optional dense layer with an activation (`pre`: BERT's pooler, RoBERTa's `dense` + tanh,
     /// DistilBERT's `pre_classifier` + ReLU), then a linear layer to `labels` logits. The output is the `labels` logits, unnormalised.
     Classify { labels: usize, bias: bool, pre: Option<ClassifyPre> },
+    /// **Per-token logits** (`OUTPUT_TOKEN_LOGITS_V1`, HFX 2026-10-08): EVERY row of a bidirectional encoder through one linear layer
+    /// to `labels` logits, `[L, labels]` over the padded token axis — token classification (`…ForTokenClassification`'s
+    /// `classifier`) and extractive question answering (`…ForQuestionAnswering`'s `qa_outputs`, `labels` = 2: the start logit in
+    /// column 0, the end logit in column 1). Unnormalised; a pad row is computed like any other and is not a token of the input.
+    TokenLogits { labels: usize, bias: bool },
 }
 
 /// The dense layer and activation between the pooled row and the classification layer.

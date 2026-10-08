@@ -95,6 +95,8 @@ struct Arch {
     proj_in: Option<bool>,
     /// `OUTPUT_CLASSIFY_V1`: the pooled row `[CLS]` goes through an optional dense layer + activation and a linear layer to the labels.
     classify: Option<(bool, Option<crate::spec::ClassifyPre>)>,
+    /// `OUTPUT_TOKEN_LOGITS_V1`: every row goes through a linear layer (its bias) to the labels; no pooling.
+    token_logits: Option<bool>,
 }
 
 impl Arch {
@@ -230,6 +232,10 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
         dis: e.disentangled,
         classify: match &spec.output {
             crate::spec::OutputSpec::Classify { bias, pre, .. } => Some((*bias, *pre)),
+            _ => None,
+        },
+        token_logits: match &spec.output {
+            crate::spec::OutputSpec::TokenLogits { bias, .. } => Some(*bias),
             _ => None,
         },
     })
@@ -790,6 +796,31 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
                 }
                 None => x,
             };
+            // **Per-token logits** (`OUTPUT_TOKEN_LOGITS_V1`): every row through the classification layer, `[L, labels]` in one
+            // power-of-two unit; no pooling. A pad row is computed like any other.
+            if let Some(tbias) = a.token_logits {
+                if cfg.normalize {
+                    return Err(LowerError::not_lowerable("per-token logits read the encoder's rows, un-normalised"));
+                }
+                let h = codes_rows(&mut b, cx, &mut lb, &x)?;
+                let key = ScaleKey { base: Base::Pow2Site { names: vec!["tok.out".into()] }, factor: 1.0 };
+                let out = linear_rows(
+                    &mut b,
+                    cx,
+                    &mut lb,
+                    &h,
+                    "classifier.out.w",
+                    tbias.then_some("classifier.out.b"),
+                    "tok.out",
+                    &Want { dt: DType::I32, key },
+                )?;
+                let out = ensure_node(&mut b, &out);
+                let tir::Ref::Node(oi) = out.r else { unreachable!("ensure_node") };
+                b.commit(out.r);
+                note_site(cx, tb, &out);
+                cx.logits_key = Some(out.key.clone());
+                return Ok((b.finish(&[]), Some(oi)));
+            }
             let pooled = match cfg.pooling {
                 Pooling::Cls => b.slice(x.r, 0, 0, 1),
                 Pooling::Mean => {
@@ -1435,6 +1466,15 @@ pub fn float_forward(
     if let Some(n) = &a.final_norm {
         x = x.iter().map(|r| norm(r, n, "final_norm", None)).collect::<Result<_>>()?;
         observe("post.final_norm".into(), &x[..n_real]);
+    }
+    // Per-token logits: the real rows' logits, row-major `[count, labels]`.
+    if let Some(tbias) = a.token_logits {
+        let w = p("classifier.out.w", None)?;
+        let labels = hl.params[hl_param(hl, "classifier.out.w")? as usize].shape[0];
+        let bv = if tbias { Some(p("classifier.out.b", None)?) } else { None };
+        let rows: Vec<Vec<f64>> = x.iter().map(|r| lin(r, &w, bv.as_deref(), labels)).collect();
+        observe("post.tok.out".into(), &rows[..n_real]);
+        return Ok(rows[..n_real].concat());
     }
     let pooled: Vec<f64> = match cfg.pooling {
         Pooling::Cls => x[0].clone(),
