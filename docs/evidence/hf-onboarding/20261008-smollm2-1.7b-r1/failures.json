@@ -1,1 +1,41 @@
-[]
+[
+ {
+  "schema": "misaka.h1.failure.v1",
+  "recorded_at": "2026-10-08T20:07:52+0900",
+  "model": "smollm2-1.7b",
+  "stage": "reorg",
+  "category": "REGISTRY_STATE_MISMATCH",
+  "code": "MINORITY_WEDGED_DominanceViolation",
+  "command": "onboard.sh reorg-register (minority {B,D6} isolated 18:47-19:28; U registers through B; rejoin)",
+  "expected": "after the partition the minority converges to the heavier chain; the registration folded on the minority is reverted there (re-folded once only if its carrier is re-relayed); A/B/C agree",
+  "observed": "B refuses every heavier candidate (reason DominanceViolation, dns_retired PALW candidate-order path; dns-bft validators=0 attested=0), 67+ refusals by 20:05, wedged at DAA 87-88 vs A/C 97; A never takes B's branch ('cannot find header' for B's sink); class 585bbe2e registered on B at DAA 75, absent on A and C. D6 (minority) deadlocked: RPC timeout, 0% CPU since 19:35 after 'Chain participation held: reviewing the chain just adopted'.",
+  "model_revision": "31b70e2e869a7173562077fd711b654946d38674",
+  "integration_sha": "286225802dc24fce0d7995d271dc9f4974389a3a (devnet kaspad 89ffb1fb7)",
+  "failing_fixture": null,
+  "owner": "D (fork choice after a partition; node recovery deadlock) / Lead",
+  "security_consequence": "consensus liveness: a partition of ~18 DAA splits the network permanently; registry state diverges; a node deadlocks",
+  "reproduction": "RUN=<id> REORG_MINORITY='B D6' bash tests/hf-onboarding/onboard.sh reorg-register smollm2-1.7b",
+  "log": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261008-smollm2-1.7b-r1/reorg/B-wedge.log",
+  "interim_root_cause_LIVE_R1": "not the DNS-retired arm: the V2 deep-reorg comparator (palw_reorg_strict_economic_win_v1, armed on t12 at 750; moved to 6 on this devnet) orders by (safe_frontier, safe_weight, live_total). The minority had the higher live_total (bounded immature 92-93 against 67-69) and no Final on either side, so B refused the majority as a strict economic loss, while the majority orders by blue work and never weighs the minority's branch. D6's deadlock: under investigation (LIVE-R1).",
+  "captures": "wh-h1-run/runs/20261008-smollm2-1.7b-r1/reorg/ (samples, lsof, logs, cold datadirs B-datadir-cold / D6-datadir-cold, BINARY.md)",
+  "restore": "2026-10-08 20:32: D6 kill -9 (deadlocked), B SIGINT; cold copies taken; both consensus DBs wiped and re-synced by IBD to A's sink at DAA 107"
+ },
+ {
+  "schema": "misaka.h1.failure.v1",
+  "recorded_at": "2026-10-08T20:08:44+0900",
+  "model": "smollm2-1.7b",
+  "stage": "observe",
+  "category": "REGISTRY_STATE_MISMATCH",
+  "code": "REGISTRATION_LOST_AFTER_PARTITION",
+  "command": "observe.py --nodes A,B,C",
+  "expected": "A, B and C agree on the class row, the registry and the state proof at one block",
+  "observed": "observe after the rejoin (B restarted 20:08-20:11 by the runner): the class 585bbe2e is absent on A, B and C \u2014 the registration folded on the minority branch (DAA 75) was reverted on B and its carrier never reached the majority, so the class is registered nowhere although the client saw it folded; U was not charged on the majority. Consequence of the wedge record above, not a separate root cause.",
+  "model_revision": "31b70e2e869a7173562077fd711b654946d38674",
+  "integration_sha": "286225802dc24fce0d7995d271dc9f4974389a3a",
+  "failing_fixture": null,
+  "owner": "D",
+  "security_consequence": "",
+  "reproduction": "RUN=20261008-smollm2-1.7b-r1 bash tests/hf-onboarding/onboard.sh observe smollm2-1.7b",
+  "log": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1/docs/evidence/hf-onboarding/20261008-smollm2-1.7b-r1/consensus-state.json"
+ }
+]

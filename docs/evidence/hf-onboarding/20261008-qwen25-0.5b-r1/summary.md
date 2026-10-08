@@ -23,7 +23,12 @@
 * beacon conformance: SYNTHETIC_BEACON_CONFORMANCE_PASS (facts SYNTHETIC; policy UNAPPROVED)
 * registration: class `55b32ae12c8fa003…`, root `3c458f9988b7ae33…`, owner `f768798deb6e59acec3b…`, carrier `de0998b5632ff7f6…`, U spent 475212 sompi
 * consensus state: all agree True, checks {'u_proves_registration_at_pin': True, 'restart_B_agrees': True, 'fresh_Z_ibd_agrees': True, 'modified_artifact_refused': {'pack_verify_exit': 2, 'registration_gate_exit': 34, 'refused': True}}
+* reorg (registration mined on an isolated minority branch, then the majority): not run for this model
 
 ## Blockers / failures (failures.json)
 * REGISTRATION_QUOTE_INVALID E-MODEL-UNKNOWN (no one-command HF/IR registration) (register, owner A (HF source->artifact in model add) / C1 (quote, detached sign/submit for ClassRegisteredTirV1) / Lead (UX contract))
 * SIGNATURE_OR_RELAY_FAILED NODELESS_BOND_REGISTRATION_ABSENT (register, owner C1 (remote wallet: node-less bond registration))
+* CONSENSUS_REGISTRATION_REFUSED DUPLICATE_DROPPED_FEE_SPENT (status says submitted) (reregister, owner C1 (client duplicate check) / D (status reader for a mined-and-dropped IR carrier; mempool policy F2/F3))
+* TEST_INFRASTRUCTURE_FAILED NODE_D2_DID_NOT_RESTART (lifecycle, owner H1)
+* TEST_INFRASTRUCTURE_FAILED NODE_D4_DID_NOT_RESTART (lifecycle, owner H1)
+* TEST_INFRASTRUCTURE_FAILED NODE_D5_DID_NOT_RESTART (lifecycle, owner H1)

@@ -144,14 +144,14 @@ start_node() {
     ( cd "$d"; ulimit -n 10240; HOME="$d/home" nohup nice -n 10 "$KASPAD_BIN" "${A2[@]}" >> "$d/kaspad.out" 2>&1 & echo $! > "$d/kaspad.pid" )
     echo "$(date '+%F %T') START pid $(cat "$d/kaspad.pid") cursor $c bin $(shasum -a 256 "$KASPAD_BIN" | cut -c1-16)" >> "$d/events.log"
     local port; port=$(jport "$n")
-    for _ in $(seq 1 90); do
+    for _ in $(seq 1 ${START_WAIT_TICKS:-240}); do
         # Up = its JSON wRPC listens and answers getBlockDagInfo (the genesis is checked by the salt at start-up: a node on another genesis
         # refuses the drill's app dir and exits).
         if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && rpc "$n" getBlockDagInfo '{}' >/dev/null 2>&1; then say "$n: up (pid $(cat "$d/kaspad.pid"))"; return 0; fi
         ps -p "$(cat "$d/kaspad.pid")" >/dev/null 2>&1 || { say "$n: DIED — $(tail -c +$((c + 1)) "$d/kaspad.out" | tail -5)"; return 1; }
         sleep 2
     done
-    say "$n: its RPC did not answer in 180 s"; return 1
+    say "$n: its RPC did not answer in $((2 * ${START_WAIT_TICKS:-240})) s"; return 1
 }
 
 stop_node() {

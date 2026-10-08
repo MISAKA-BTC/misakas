@@ -378,5 +378,7 @@
     }
    ]
   }
- }
+ },
+ "build_real_seconds": 1067.37,
+ "hf_fit_at_build": "slope 0.9985, corr 0.99944, top-1 0.969, KL 0.00236, max |\u0394| 1.004"
 }

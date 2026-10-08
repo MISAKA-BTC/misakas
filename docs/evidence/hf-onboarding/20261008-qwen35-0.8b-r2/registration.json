@@ -1,0 +1,84 @@
+{
+ "schema": "misaka.h1.registration.v1",
+ "party": "client U (no node, no seat, own key/funds/bond)",
+ "rpc": "node B",
+ "one_command_ux": {
+  "model add hf://": {
+   "json": "{\n  \"finding\": {\n    \"code\": \"E-MODEL-UNKNOWN\",\n    \"current\": [],\n    \"docs\": null,\n    \"exit\": 34,\n    \"fix\": [\n      \"misaka model add   (lists this build's catalog), or --manifest <file> for a model it does not carry\"\n    ],\n    \"reason\": \"\",\n    \"required\": \"\",\n    \"severity\": \"error\",\n    \"title\": \"this build's catalog has no model matching 'hf://Qwen/Qwen3.5-0.8B@2fc06364715b967f1860aea9cf38778875588b17'\"\n  },\n  \"schema\": \"misaka.model.add.v1\",\n  \"state\": \"blocked\",\n  \"steps\": []\n}\n",
+   "stderr": "MISAKA model add \u00b7 testnet-12\n  Each step reads what the chain already holds, so running this again resumes where it stopped.\n\n  \u25d0 catalog       building this build's class table (it drills each family once, a few seconds)\u2026\n\n\u2717 this build's catalog has no model matching 'hf://Qwen/Qwen3.5-0.8B@2fc06364715b967f1860aea9cf38778875588b17'   [E-MODEL-UNKNOWN]\n  Fix       misaka model add   (lists this build's catalog), or --manifest <file> for a model it does not carry\n"
+  },
+  "model add --artifact": {
+   "json": "",
+   "stderr": "               qwen36-mmap-v1    cc3e5ce5\u2026   no        no \u2014 Qwen/Qwen3.5-2B's context (8 tokens) is too narrow for the canonical job\u2026\n  Qwen3.6-35B-A3B/graph-v3                                            qwen36-mmap-v1    5bd9ae3d\u2026   no        no \u2014 Qwen3.6-35B-A3B/graph-v3's context (8 tokens) is too narrow for the cano\u2026\n  huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated/graph-v3  qwen36-mmap-v1    a0df65b2\u2026   no        no \u2014 huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated/graph-v3's con\u2026\n  Qwen/Qwen3.5-2B/graph-v3                                            qwen36-mmap-v1    2e91c9d3\u2026   no        no \u2014 Qwen/Qwen3.5-2B/graph-v3's context (8 tokens) is too narrow for the cano\u2026\n  Qwen/Qwen3.8-27B/graph-v3                                           qwen36-mmap-v1    2705b8f6\u2026   no        no \u2014 Qwen/Qwen3.8-27B/graph-v3's context (8 tokens) is too narrow for the can\u2026\n  Qwen3.6-35B-A3B/graph-v7@512                                        qwen36-mmap-v1    e108e736\u2026   no        no \u2014 HELD_CLASS_UNANSWERABLE\n  Qwen3.6-35B-A3B/graph-v7@2097152                                    qwen36-mmap-v1    b4b891af\u2026   no        no \u2014 HELD_CLASS_UNATTRIBUTABLE\n  9 row(s) marked `no` would be refused or dropped by this chain's processor \u2014 `model add` refuses them before paying anything\n  misaka model add <model>   registers one and certifies its lanes; misaka model status <class> reads one\n  misaka model add --manifest <file>   a model this catalog does not carry \u2014 no new build needed\n"
+  }
+ },
+ "path_used": "detached: misaka palw tir-registration (pack gate on) + misaka palw submit-object",
+ "owner_bond_creation": {
+  "method": "WORKAROUND: transient registrar \u2014 U ran kaspad --palw-register-bond once with its own datadir and key, stopped after the bond printed; NOT node-less (NODELESS_BOND_REGISTRATION_ABSENT, C1r2)"
+ },
+ "class_id": "a9f20d1bdb45cc8491164306d1f669ce277dc75c0ccd713ef1f1a287b8086a9e619e036caf4ad99067ee9b1d3bb3d8e08a8d417becf3d9c7b4c64f3e73932092",
+ "artifact_root": "8f455fcf579cf93c2d37b2d5c9347a0fb955d5763a933cd8915355d117387dcaa7a76646a693834e31b228c53697f1bea8b54f97e6dc7bd771a4ba082be91eea",
+ "owner_bond": "f768798deb6e59acec3b1b8e826bee99d7de2406b4f28c4e3721d90f12f29eafb6391ea71d127e9d46bdadf51d9e5d766e8f6789ebde33be3d7efe5c1a840cb0:0",
+ "payer_address": "misakatest:qtggy5lrgr3x0dhaguh6az0w4ux5qa2c395jms43ynskda5qgqtn4uz2lp466jzsdvhwhujptk459hlzmxdre2pc0p9tz6kqfmtynkun0khhn66z",
+ "carrier_txid": "cb01e7f6e47656b9bd3a4dfdd694bec684016938117272c2b7fe3f2faea9c26cee530e210fd13f49153c89d1ae1eca1b1e1790c570592b4fa0ce6298dba965c6",
+ "tir_registration": {
+  "artifact_root": "8f455fcf579cf93c2d37b2d5c9347a0fb955d5763a933cd8915355d117387dcaa7a76646a693834e31b228c53697f1bea8b54f97e6dc7bd771a4ba082be91eea",
+  "bytes": 38203,
+  "class_id": "a9f20d1bdb45cc8491164306d1f669ce277dc75c0ccd713ef1f1a287b8086a9e619e036caf4ad99067ee9b1d3bb3d8e08a8d417becf3d9c7b4c64f3e73932092",
+  "model_id": "qwen35-0.8b",
+  "out": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261008-qwen35-0.8b-r2/register/registration.obj",
+  "pack": "verified",
+  "registrant_bond": "f768798deb6e59acec3b1b8e826bee99d7de2406b4f28c4e3721d90f12f29eafb6391ea71d127e9d46bdadf51d9e5d766e8f6789ebde33be3d7efe5c1a840cb0:0",
+  "schema": "misaka.palw.tir-registration.v1"
+ },
+ "live_gate_preflight": {
+  "available": true,
+  "tipDaa": 143,
+  "classId": "a9f20d1bdb45cc8491164306d1f669ce277dc75c0ccd713ef1f1a287b8086a9e619e036caf4ad99067ee9b1d3bb3d8e08a8d417becf3d9c7b4c64f3e73932092",
+  "artifactRoot": "8f455fcf579cf93c2d37b2d5c9347a0fb955d5763a933cd8915355d117387dcaa7a76646a693834e31b228c53697f1bea8b54f97e6dc7bd771a4ba082be91eea",
+  "nCtx": 512,
+  "layerCount": 24,
+  "admissible": true,
+  "processorVerdict": "ADMISSION_OK",
+  "rejectCode": "",
+  "checks": [
+   {
+    "code": "TIR_ADMISSION_V10",
+    "ok": true,
+    "message": "admission v10 admits the IR class at the tip"
+   }
+  ]
+ },
+ "status_at_fold": {
+  "available": true,
+  "tipDaa": 144,
+  "found": true,
+  "registration": {
+   "objectId": "a9f20d1bdb45cc8491164306d1f669ce277dc75c0ccd713ef1f1a287b8086a9e619e036caf4ad99067ee9b1d3bb3d8e08a8d417becf3d9c7b4c64f3e73932092",
+   "classId": "a9f20d1bdb45cc8491164306d1f669ce277dc75c0ccd713ef1f1a287b8086a9e619e036caf4ad99067ee9b1d3bb3d8e08a8d417becf3d9c7b4c64f3e73932092",
+   "constructed": true,
+   "submitted": true,
+   "accepted": true,
+   "included": true,
+   "folded": true,
+   "submissionState": "folded",
+   "processorVerdict": "ADMISSION_OK",
+   "rejectCode": "",
+   "mempoolAccepted": false,
+   "includedBlock": "",
+   "includedDaa": 144,
+   "registryState": "Candidate",
+   "transactionId": "a9f20d1bdb45cc8491164306d1f669ce277dc75c0ccd713ef1f1a287b8086a9e619e036caf4ad99067ee9b1d3bb3d8e08a8d417becf3d9c7b4c64f3e73932092",
+   "dropReason": ""
+  }
+ },
+ "u_balance_sompi": {
+  "before": 199999997685239,
+  "after": 199999996980164,
+  "spent": 705075
+ },
+ "daa": {
+  "submitted_after": 141,
+  "folded_by": 144
+ }
+}

@@ -336,6 +336,8 @@ PY
 }
 
 
+OBS_NODES=${OBS_NODES:-"A B C"}      # the nodes whose agreement is asserted (U's RPC among them)
+OBS_RESTART=${OBS_RESTART:-B}        # the node restarted over its own database
 nodes_arg() { local s="" n; for n in "$@"; do s="$s${s:+,}$n=$(jport "$n")"; done; echo "$s"; }
 check_set() { python3 "$H1/report.py" merge "$EV/consensus-state.json" "checks=$(python3 -c "
 import json,sys
@@ -344,7 +346,12 @@ p='$EV/consensus-state.json'; d=json.load(open(p)); c=d.get('checks') or {}; c['
 do_observe() {
     local cid root bond; cid=$(cat "$SCR/class.id"); root=$(cat "$SCR/artifact.root"); bond=$(u_bond)
     local out=$SCR/observe; mkdir -p "$out"; local A; A=$(cat "$SCR/artifact.dir")
-    local rc=0; python3 "$H1/observe.py" --class "$cid" --nodes "$(nodes_arg A B C)" --out "$EV/consensus-state.json" || rc=$?
+    # The pin must COMMIT the registration: a header commits the state as of its selected parent, so wait until the tip is two DAA
+    # past the registration's DAA and pin that sink (a pin taken right at the fold proves only absence).
+    local rdaa; rdaa=$(rpc C getPalwClasses '{}' | python3 -c "import json,sys; print(next((c['registeredDaa'] for c in json.load(sys.stdin)['classes'] if c['classId']=='$cid'), 0))")
+    local t0=$SECONDS; while [ "$(tip C)" -lt $((rdaa + 2)) ] 2>/dev/null; do [ $((SECONDS - t0)) -lt 3600 ] || break; sleep 20; done
+    local pin0; pin0=$(rpc C getBlockDagInfo '{}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["sink"])')
+    local rc=0; python3 "$H1/observe.py" --class "$cid" --pin "$pin0" --nodes "$(nodes_arg $OBS_NODES)" --out "$EV/consensus-state.json" || rc=$?
     [ "$rc" = 0 ] || fail observe REGISTRY_STATE_MISMATCH "A_B_C_DISAGREE_rc$rc" "observe.py --nodes A,B,C" "A, B and C agree on the class row, the registry and the state proof at one block" "$EV/consensus-state.json"
     [ -s "$SCR/reorg/reorg.json" ] && python3 "$H1/report.py" merge "$EV/consensus-state.json" "reorg=$SCR/reorg/reorg.json" >/dev/null
     local pin; pin=$(python3 -c "import json;print(json.load(open('$EV/consensus-state.json'))['pin'])")
@@ -353,13 +360,13 @@ do_observe() {
     ucli --output json model registration "$cid" > "$out/u-registration.json" 2> "$out/u-registration.err" || true
     ucli --output json model readiness "$cid" > "$out/u-readiness.json" 2> "$out/u-readiness.err" || true
     local vrc=0; ucli model verify --class "$cid" --root "$root" --owner "$bond" --pin "$pin" > "$out/u-verify-B.out" 2>&1 || vrc=$?
-    local vrcA=0; HOME=$UHOME "$CLI_BIN" --network testnet-12 --rpc "127.0.0.1:$(borsh A)" --palw-drill-genesis-salt="$(salt)" model verify --class "$cid" --root "$root" --owner "$bond" --pin "$pin" > "$out/u-verify-A.out" 2>&1 || vrcA=$?
+    local vrcA=0; HOME=$UHOME "$CLI_BIN" --network testnet-12 --rpc "127.0.0.1:$(borsh ${OBS_NODES%% *})" --palw-drill-genesis-salt="$(salt)" model verify --class "$cid" --root "$root" --owner "$bond" --pin "$pin" > "$out/u-verify-A.out" 2>&1 || vrcA=$?
     python3 "$H1/report.py" merge "$EV/consensus-state.json" "user_queries={\"status\":$(python3 -c "import json;print(json.dumps(open('$out/u-status.json').read()[-3000:]))"),\"registration\":$(python3 -c "import json;print(json.dumps(open('$out/u-registration.json').read()[-3000:]))"),\"readiness\":$(python3 -c "import json;print(json.dumps(open('$out/u-readiness.json').read()[-2000:] + open('$out/u-readiness.err').read()[-800:]))"),\"verify_against_pin_via_B\":{\"exit\":$vrc,\"out\":$(python3 -c "import json;print(json.dumps(open('$out/u-verify-B.out').read()[-1500:]))")},\"verify_against_pin_via_A\":{\"exit\":$vrcA,\"out\":$(python3 -c "import json;print(json.dumps(open('$out/u-verify-A.out').read()[-1500:]))")}}" >/dev/null
     check_set "u_proves_registration_at_pin" "$([ "$vrc" = 0 ] && [ "$vrcA" = 0 ] && echo true || echo false)"
-    # Restart B over its own database: the registration must come back from disk, equal.
-    stop_node B; start_node B
-    local t0=$SECONDS; while [ "$(tip B)" = "?" ] || [ "$(tip B)" -lt "$(tip A)" ] 2>/dev/null; do [ $((SECONDS - t0)) -lt 900 ] || break; sleep 10; done
-    rc=0; python3 "$H1/observe.py" --class "$cid" --nodes "$(nodes_arg A B)" --out "$out/after-restart-B.json" || rc=$?
+    # Restart one node over its own database (OBS_RESTART, default B): the registration must come back from disk, equal.
+    stop_node "$OBS_RESTART"; start_node "$OBS_RESTART" || { sleep 120; running "$OBS_RESTART" || start_node "$OBS_RESTART" || true; }
+    local t0=$SECONDS; while [ "$(tip "$OBS_RESTART")" = "?" ] || [ "$(tip "$OBS_RESTART")" -lt "$(tip A)" ] 2>/dev/null; do [ $((SECONDS - t0)) -lt 900 ] || break; sleep 10; done
+    rc=0; python3 "$H1/observe.py" --class "$cid" --nodes "$(nodes_arg A "$OBS_RESTART")" --out "$out/after-restart-B.json" || rc=$?
     check_set "restart_B_agrees" "$([ "$rc" = 0 ] && echo true || echo false)"
     [ "$rc" = 0 ] || fail observe REGISTRY_STATE_MISMATCH RESTART_REPLAY "restart B, observe A,B" "B equal to A after a restart" "$out/after-restart-B.json"
     # A fresh node joins by IBD (empty app dir) and must hold the same class state.

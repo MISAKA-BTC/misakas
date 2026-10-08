@@ -1,8 +1,8 @@
-# 20261008-qwen3-0.6b-l1 — Qwen/Qwen3-0.6B@c1899de289a0
+# 20261008-huihui-qwen35-9b-r1 — huihui-ai/Huihui-Qwen3.5-9B-abliterated@05b9e7c9b978
 
-* model: `Qwen/Qwen3-0.6B` revision `c1899de289a04d12100db370d81485cdf75e47ca`, family qwen3-dense, task text-generation, context 512
-* tested integration SHA: `89ffb1fb717166ccc9810464605939f95d8acc2f` (branch `onboard/h1-hf-closed-loop`, dirty=False)
-* binaries: kaspad `6e9b193643b8b215…`, misaka `211e708db7fe0ebd…`, palw-class `e0ff1c1b325bfded…`
+* model: `huihui-ai/Huihui-Qwen3.5-9B-abliterated` revision `05b9e7c9b978ba29bdb8f50a49c30e4b91183339`, family qwen3.5-gdn-hybrid (VLM wrapper, text decoder), task text-generation, context 8192
+* tested integration SHA: `be5808434752b3999135540cb29fd6b4c8f907f5` (branch `onboard/h1-hf-closed-loop`, dirty=True)
+* binaries: kaspad `6e9b193643b8b215…`, misaka `211e708db7fe0ebd…`, palw-class `e789d9c473c33639…`
 * devnet: salted testnet-12 drill genesis `76a7e10dc287ac79…`, params `f2da0947fc0cca31…`, fences {'fence_at': 6, 'fence2_at': 10, 'fence3_at': 14, 'tir_at': 16, 'tir2_at': 24, 'int11_at': 26, 'fence4_at': 'unmoved (5300 in the shipped schedule; int-11 carries palw_gdn_key_heads)'}
 
 | level | reached |
@@ -26,4 +26,5 @@
 * reorg (registration mined on an isolated minority branch, then the majority): not run for this model
 
 ## Blockers / failures (failures.json)
-* none recorded
+* LAYOUT_OR_RESOURCE_REFUSED SEAT_MEMORY_SHORT (preflight, owner C)
+* TEST_INFRASTRUCTURE_FAILED BUILD_STOPPED_BY_DISK_GUARD (artifact, owner H1 (disk headroom on the shared Mac))

@@ -16,5 +16,23 @@
   "security_consequence": "",
   "reproduction": "RUN=20261008-huihui-qwen35-9b-r1 bash tests/hf-onboarding/onboard.sh preflight huihui-qwen35-9b",
   "log": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261008-huihui-qwen35-9b-r1/preflight/blocker-1.txt"
+ },
+ {
+  "schema": "misaka.h1.failure.v1",
+  "recorded_at": "2026-10-08T22:07:11+0900",
+  "model": "huihui-qwen35-9b",
+  "stage": "artifact",
+  "category": "TEST_INFRASTRUCTURE_FAILED",
+  "code": "BUILD_STOPPED_BY_DISK_GUARD",
+  "command": "palw-class pack build --model /Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/huihui-ai/Huihui-Qwen3.5-9B-abliterated ... --declare testnet-12:max-context=8192",
+  "expected": "a built, declared artifact and its pack",
+  "observed": "palw-class pack build (calibrating 1 x 8,192 positions; RSS 4.5 GB, footprint 7.3 GB) ran 11,367 s without reaching layer 8/34 and was stopped at 22:07 by H1's disk guard: the shared disk fell to 14 -> 11 GB free (another lane), below the Lead's 15 GB stop line. Not a model or tool failure; restarted.",
+  "model_revision": "05b9e7c9b978ba29bdb8f50a49c30e4b91183339",
+  "integration_sha": "be5808434752b3999135540cb29fd6b4c8f907f5",
+  "failing_fixture": null,
+  "owner": "H1 (disk headroom on the shared Mac)",
+  "security_consequence": "",
+  "reproduction": "RUN=20261008-huihui-qwen35-9b-r1 bash tests/hf-onboarding/onboard.sh artifact huihui-qwen35-9b",
+  "log": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/huihui-qwen35-9b/28ae72de5098161c/build.err"
  }
 ]

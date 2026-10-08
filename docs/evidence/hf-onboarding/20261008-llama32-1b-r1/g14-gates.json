@@ -11,7 +11,7 @@
    "kernel": "K2-TIR-v1 5b8156b3b85ac734",
    "shipped": "KERNEL_NOT_ACTIVE",
    "hypothetical": "ELIGIBLE_AT",
-   "detail": "ELIGIBLE_AT daa 5585: kernel 5b8156b3b85ac734\u2026, plan 5fe2b394f131f2b6\u2026, \u03b5_check \u2264 2^-231 (static admission only)",
+   "detail": "ELIGIBLE_AT daa 5585: kernel 5b8156b3b85ac734\u2026, plan 35d838c243a367f7\u2026, \u03b5_check \u2264 2^-233 (static admission only)",
    "bucket": "kernel_extension_gap",
    "max_positions": 512
   },

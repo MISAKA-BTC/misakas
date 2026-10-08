@@ -52,7 +52,7 @@ def main():
             if row["state"] not in first:
                 first[row["state"]] = {"time": row["time"], "daa": row["daa"]}
             last = row
-        json.dump({"class_id": a.cid, "first_seen": first, "last": last, "reached_weight_bearing": any(s in first for s in WEIGHT_BEARING),
+        json.dump({"class_id": a.cid, "first_seen": first, "last": last, "reached_weight_bearing": any(str(s).startswith(WEIGHT_BEARING) for s in first),
                    "updated": time.strftime("%Y-%m-%dT%H:%M:%S")}, open(os.path.join(a.out, "lifecycle.json"), "w"), indent=1)
         if last and last.get("state") == a.until:
             break

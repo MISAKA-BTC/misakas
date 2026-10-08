@@ -23,6 +23,7 @@
 * beacon conformance: NOT_RUN (facts SYNTHETIC; policy UNAPPROVED)
 * registration: class `…`, root `…`, owner `…`, carrier `…`, U spent None sompi
 * consensus state: all agree None, checks {}
+* reorg (registration mined on an isolated minority branch, then the majority): not run for this model
 
 ## Blockers / failures (failures.json)
 * none recorded
