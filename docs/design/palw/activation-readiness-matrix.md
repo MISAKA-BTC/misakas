@@ -8,6 +8,13 @@ after every RFC implementation is complete.** Until then the integration tree's 
 Kinds of blocker: **CODE** (a lane can write it) · **DESIGN** (the rule is not decided in the RFC/ADR) · **POLICY** (a value or an
 economic choice the user decides) · **EXTERNAL** (review, measurement, drill, hardware). A fence is armable only with none left.
 
+**Status vocabulary (user, 2026-10-09).** Every row and every report uses exactly three levels and never conflates them:
+- **Implemented** — the code exists.
+- **Verified** — on the target branch it compiles, and its unit tests, real-node E2E and required attack tests pass.
+- **Armable** — verified, and the economic parameters, the external review and the activation conditions are also in place.
+
+Today **no fence is armable**. Integration continues; no new fence for rewards, consensus weight or Panel=0 is armed.
+
 ## 1. Fences
 
 | Fence (RFC) | Today | Blockers | Owner / next step |
@@ -93,6 +100,50 @@ no randomness).
 bootstrap path; (3) fresh-verifier time per class measured on real hardware → window and collateral recomputed; (4) C4: grinding,
 watcher absence, 32-slot capture, Final race, economic attacks; (5) the production challenge policy and the Panel=0 activation decided
 separately.
+
+## 3b. User rulings (2026-10-09): continue integrating; arm nothing for rewards, consensus weight or Panel=0
+
+The user's verdict: MISAKA has moved from RFC design and implementation to verifying whether activation is safe. Integration
+continues, but **no new fence for rewards, consensus weight or Panel=0 is armed** until PRINCIPLES (probabilistic detection, public
+localization, deterministic adjudication, economic deterrence) is fully closed. The release gate: **for every class and every
+Panel configuration, an outside verifier who found a fault can carry an objective adjudication to completion.** Economic problems
+(bounties, seal deposits, the beacon, Final rewards) block arming even when the code passes.
+
+**P0 / P1**
+
+| Pri | Problem | Ruling |
+| --- | --- | --- |
+| P0 | G14 verifier bounty capture | An unsolved economic-safety problem: rewards may not be enabled in production. Proposal A (pay only inside the watcher's salted range) falls to a producer who knows the fault and grinds salts or registers many bonds. Proposal B (equal split) falls to an attacker diluting the honest share with many verifier bonds. **Before choosing, prove that self-dealing does not pay when the producer and the verifier are one economic party (self-fraud, self-accusation, bounty receipt), and that an honest verifier recovers the cost of finding evidence, fetching DA and filing in court.** An attacker merely losing money does not show that honest watchers will participate. |
+| P0 | GAP-B12: class exhaustion by abandoned seals | The attack works even at the cost of collateral whenever stalling is worth more than the deposits. The attack cost needs a demonstration. |
+| P0 | Beacon grinding / Sybil resistance | Keep the 128-bit target; no approval until the effective soundness is audited. |
+| P0 | Fork-choice rule E and partition rejoin | Finish the attack tests; they are the prerequisite for retiring DNS and enabling RFC-0012. |
+| P0 | G14R and OPVB builds and real-node integration | Not complete until they compile, pass an independent E2E and pass Final/reorg verification. |
+| P1 | K2-TIR-v5 on real models | Prove the court's resource bounds on real encoders, 9B and the maximum geometry. |
+
+**The nine user decisions: recommended policy**
+
+1. **RFC-0012 D1 etc.** — no numbers approved until the safety analysis and the measurements exist; 5,400 DAA is also provisional.
+2. **OPV conditions** — only classes, plans and task/context where G14 fully holds; the 50-DAA interim value is not approved.
+3. **Beacon** — the effective 128-bit level is approved as the design target; the scheme itself is approved only after external review.
+   The 128 bits are the bound to prove over the mathematical check and the challenge manipulation; they are **not** a 128-bit
+   guarantee that an honest watcher exists.
+4. **Seal deposit / GAP-B12** — do not set the value first. Derive it from the maximum stall time that R+1 abandonments buy, the
+   attack cost and the damage value.
+5. **Existing Panel classes** — past legitimate rights are protected. Earning the new OPV rewards requires the new gate. If the old
+   Panel route remains, it keeps the old verification in full and stays clearly separated.
+6. **Memory line collateral** — derived from the maximum exposure, the DA retention period and the objective liability range;
+   unmeasured values are not armed.
+7. **q · P_run** — computed from real hardware, watcher participation and a grinding evaluation; no unfounded independence assumption.
+8. **Activation height** — stays unset; nothing is added at DAA 9,000.
+9. **Hotfix deployment** — an independent x86 build, regression tests and fingerprint confirmation first; then, depending on the
+   live failure risk, deployment is decided separately from the single release.
+
+**Further instructions**
+- When a new fee changes a test expectation (e.g. the 1 BILI non-refundable OPV admission fee), do not just move the expected
+  number: assert that the fee is actually collected and that escrow, burn and coinbase agree (conservation). This guards against a
+  GAP-5 recurrence.
+- HF coverage: D_complete's 37.23% is shape-ready, not the full-task registration rate. Keep reporting real registrations (0 today)
+  next to it.
 
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
