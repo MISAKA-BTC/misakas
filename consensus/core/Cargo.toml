@@ -70,6 +70,7 @@ misaka-palw-tir.workspace = true
 # court's derived inputs and output digests). A leaf crate (blake2b + borsh).
 misaka-palw-gen.workspace = true
 misaka-palw-panel.workspace = true
+misaka-palw-challenge.workspace = true
 wasm-bindgen.workspace = true
 workflow-core.workspace = true
 workflow-log.workspace = true

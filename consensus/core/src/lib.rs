@@ -10,6 +10,7 @@ extern crate self as consensus_core;
 
 pub mod palw_mergeset_v1;
 pub mod palw_native_settlement_v1;
+pub mod palw_panel_beacon_v1;
 pub mod palw_permissionless_panel_v1;
 
 use std::collections::{HashMap, HashSet};
