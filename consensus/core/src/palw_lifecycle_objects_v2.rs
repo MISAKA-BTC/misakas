@@ -364,6 +364,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { signature, .. }
         | PalwConsensusObjectV2::KernelBoundV1 { signature, .. }
         | PalwConsensusObjectV2::ConformanceCommittedV1 { signature, .. }
+        | PalwConsensusObjectV2::ConformanceEvidenceV1 { signature, .. }
             if signature.is_empty() =>
         {
             Err("an onboarding object must carry its signer's signature")
@@ -371,7 +372,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::ArtifactBoundV1 { .. }
         | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. }
         | PalwConsensusObjectV2::KernelBoundV1 { .. }
-        | PalwConsensusObjectV2::ConformanceCommittedV1 { .. } => Ok(()),
+        | PalwConsensusObjectV2::ConformanceCommittedV1 { .. }
+        | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. } => Ok(()),
         PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
             if signature.is_empty() {
                 Err("a signed registration envelope must carry its signer's signature")

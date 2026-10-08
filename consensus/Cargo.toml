@@ -82,6 +82,9 @@ misaka-palw-tir.workspace = true
 misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }
 # RFC-0015: the E2E decodes the Panel-independent beacon fact (WorkFinalEventV1) the route exports.
 misaka-palw-challenge.workspace = true
+# Onboarding P0: the real-node E2E signs the tag-108 envelope and the tag-109 objects with the SDK's builders and runs the SDK's
+# fresh verifier over the node's public reads (dev-only: a node's consensus never links the SDK).
+misaka-palw-sdk.workspace = true
 # RFC-0009 stage C's chain-block E2E (`rfc9_v4_chain_e2e`): the claim's material and the miner's `RDA4` authorization reach the Panel and the
 # builder through the independent DA providers (directory + the 127.0.0.1 reference server) — the miner is offline. Library only (no `rpc`).
 # C4 round 3: the node-less path of the user's mandatory test 3 relays the producer's signed carrier through RFC-0009's relay library.

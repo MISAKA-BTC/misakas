@@ -537,6 +537,19 @@ fn an_unknown_key_or_unimplemented_value_is_refused_not_ignored() {
     assert!(matches!(misaka_palw_tir_lower::parse_config(&v), Err(LowerError::NotLowerable(s)) if s.contains("mystery")));
 }
 
+/// DeepSeek-V3.2 as released (FP8): its `scale_fmt: ue8m0` is a key the FP8_BLOCK descriptor does not read, so the configuration is
+/// refused by name and never read as another format (the indexer side, in bf16, is `dsa_glm.rs`'s).
+#[test]
+fn deepseek_v3_2_fp8_scale_fmt_is_refused_by_name() {
+    let name = "deepseek-v3.2";
+    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/configs/real/{name}.json"))).expect("config");
+    let v: serde_json::Value = serde_json::from_str(&text).expect("json");
+    match misaka_palw_tir_lower::parse_config(&v) {
+        Err(LowerError::NotLowerable(m)) => assert!(m.contains("scale_fmt") && m.contains("FP8_BLOCK"), "{m}"),
+        other => panic!("DeepSeek-V3.2 FP8: {other:?}"),
+    }
+}
+
 #[test]
 fn every_real_config_has_a_named_expectation() {
     // A config dropped into tests/configs/real must be exercised by a test above.

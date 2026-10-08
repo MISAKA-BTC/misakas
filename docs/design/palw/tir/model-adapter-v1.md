@@ -86,7 +86,7 @@ array and scalar is a literal (objects and arrays are evaluated element-wise), s
 | group | operators |
 | --- | --- |
 | configuration | `$cfg` (`"key"` or `["key", default]`; class defaults from `config.defaults`), `$cfg?` (the configuration's own value or null), `$cfgn` (`usize_or_null`: absent → default, explicit `null` stays null), `$alias` (`[["k1","k2"], default]`), `$has`, `$root` (a VLM wrapper's key), `$forbid` (`["key", why]`), `$require_eq` (`["key", value, why]`), `$get` (`[object, "key", default?]`), `$scope` (`{key, inert, body}`: evaluate with the configuration narrowed to a nested object, with its own key tracking) |
-| tensors (when a tensor index is given) | `$has_tensor` (true / false / null if unknown), `$tensor_flag` (`[name, default]`: present?, else the default, recorded as assumed), `$tensor_shape`, `$tensor_prefix` (`{candidates, probe, default}`) |
+| tensors (when a tensor index is given) | `$has_tensor` (true / false / null if unknown), `$tensor_flag` (`[name, default]`: present?, else the default, recorded as assumed), `$tensor_shape`, `$tensor_prefix` (`{candidates, probe, default}`), `$tensor_prefix_scan` (`{probe, exclude?, default}`: the one prefix the index stores `probe` under; two is a refusal) |
 | variables | `$var`, `$let` (`["name", value, body]`) |
 | arithmetic | `$add $sub $mul $div $idiv $mod $neg $abs $min $max $pow $sqrt $ln $exp $floor $ceil $round $int $float` (integers stay integers; `$div` is a float division) |
 | logic | `$eq $ne $lt $le $gt $ge $and $or $not $if` (`[c, a, b]`) `$switch` (`[value, {case: result}, default]`) |

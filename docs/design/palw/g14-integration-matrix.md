@@ -114,7 +114,7 @@ activation height.
   aux table 41 (`a09c6119d`); GAP-R7 accuser seal (kernel tag 15 inside tag 110) with self-recoup priced (`1445dcbc5`); GAP-11 the
   registration reorg case under strict-win (`39e4ea441`); F-C4R3-05 OPV admission (pre-Final slots, a slot per bond, a fee)
   (`f05a672c5`); GAP-5 the Final reward paid out of the poster's escrow, once, with a non-refundable job fee (the user's ruling, user-pays
-  escrow; see `g14-node-e2e-record.md` §7). Every PoC of those items is
+  escrow; see `g14-node-e2e-record.md` §8). Every PoC of those items is
   un-ignored and passes; F-C4R3-01(b) (the G-RULESET envelope, OB-P0's code) stays ignored. Families 16–19 gain the cases above.
   Remaining external gates unchanged.
 

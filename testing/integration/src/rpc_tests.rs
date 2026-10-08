@@ -1239,6 +1239,26 @@ async fn sanity_test() {
                     assert!(!read.available && read.finals.is_empty() && read.total == 0);
                 })
             }
+            KaspadPayloadOps::GetPalwStateProof => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0009 remote verification (op 202): a collection the state does not name, and a malformed block hash, are errors
+                    // before any proof is built. Simnet has no PALW V2 bundle, so a well-formed request has no state to prove either.
+                    assert!(rpc_client
+                        .get_palw_state_proof_call(None, GetPalwStateProofRequest { block_hash: String::new(), collection: "nope".to_string() })
+                        .await
+                        .is_err());
+                    assert!(rpc_client
+                        .get_palw_state_proof_call(None, GetPalwStateProofRequest { block_hash: "zz".to_string(), collection: "bonds".to_string() })
+                        .await
+                        .is_err());
+                    let read = rpc_client
+                        .get_palw_state_proof_call(None, GetPalwStateProofRequest { block_hash: String::new(), collection: "classes".to_string() })
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.rows.is_empty());
+                })
+            }
             KaspadPayloadOps::GetPalwOnboarding => {
                 let rpc_client = client.clone();
                 tst!(op, {
@@ -1253,6 +1273,22 @@ async fn sanity_test() {
                         .await
                         .unwrap();
                     assert!(!read.found && read.artifact_bindings.is_empty() && !read.kernel_bound);
+                })
+            }
+            KaspadPayloadOps::GetPalwConformanceEvidence => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Onboarding P0 (op 231): a malformed class id is an error before any state is read; a well-formed read on a
+                    // network that holds no such class answers `found: false`, no rows.
+                    assert!(rpc_client
+                        .get_palw_conformance_evidence_call(None, GetPalwConformanceEvidenceRequest { class_id: "not-hex".to_string() })
+                        .await
+                        .is_err());
+                    let read = rpc_client
+                        .get_palw_conformance_evidence_call(None, GetPalwConformanceEvidenceRequest { class_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!read.found && read.attempt_row.is_empty() && read.evidence_row.is_empty());
                 })
             }
             KaspadPayloadOps::GetPalwFreePromptClaim => {

@@ -109,6 +109,12 @@ for mt in sorted(CONFIG_MAPPING.keys()):
 for mt, (cls, classes, keys) in list(all_info.items()):
     if set(classes) & want_classes:
         want_types.add(mt)
+# The generic text-decoder-in-a-wrapper route (`adapters/vlm-generic.json`) reads ANY `…ForConditionalGeneration` wrapper whose
+# configuration nests a `text_config`: every such wrapper's model type, so the reader can tell that the wrapper IS that transformers class
+# (its text decoder's keys are then judged against the decoder's own type, a sub-config added below).
+for mt, (cls, classes, keys) in list(all_info.items()):
+    if "text_config" in (getattr(cls, "sub_configs", {}) or {}) and any(c.endswith("ForConditionalGeneration") for c in classes):
+        want_types.add(mt)
 for mt in list(want_types):
     if mt in all_info:
         for name, sub in (getattr(all_info[mt][0], "sub_configs", {}) or {}).items():

@@ -297,6 +297,9 @@ pub enum RpcApiOps {
     /// refutation horizon), its kernel binding, its conformance commitment and the activation gate's verdict with the reason it holds.
     /// Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwOnboarding = 230,
+    /// Onboarding P0 (the lead's allocation): a V2 class's conformance record, current attempt and posted evidence (aux tables 39 and
+    /// 40, raw), the network's challenge policy and the beacon state the node derives. Appended at the tail.
+    GetPalwConformanceEvidence = 231,
 }
 
 impl RpcApiOps {

@@ -111,7 +111,7 @@ All dormant behind `palw_probabilistic_constraints_v1` (the envelope behind its 
 
 | Item | Value |
 |---|---|
-| Objects | **104** `ArtifactBoundV1`, **105** `ArtifactBindingChallengedV1`, **106** `KernelBoundV1`, **107** `ConformanceCommittedV1`, **108** `SignedRegistrationV1` (109 unallocated). Each signed by a V2 bond (ML-DSA-87 over `H(network ‖ kind ‖ signer ‖ payload)`, `palw_onboarding_message_v1`) |
+| Objects | **104** `ArtifactBoundV1`, **105** `ArtifactBindingChallengedV1`, **106** `KernelBoundV1`, **107** `ConformanceCommittedV1`, **108** `SignedRegistrationV1` (109: OB-P0's conformance evidence, §7). Each signed by a V2 bond (ML-DSA-87 over `H(network ‖ kind ‖ signer ‖ payload)`, `palw_onboarding_message_v1`) |
 | Rows | the route's aux tables **36** artifact bindings `(class, kernel root)`, **37** kernel bindings `class`, **38** conformance `(class, artifact root)`. They ride the route's existing `KernelRouteRow` deltas (160), tail `0xEC` and `kernel-route/v1` root block — **no new delta, tail or root block** (the allocated 190–199 / `0xEF` stay unused: the onboarding rows are the route's state, journaled by the one writer that already reverts, roots and carries them) |
 | Reservation | a binding holds `PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1` of the binder's FREE collateral until its liability horizon ends, mirrored into V2's committed-collateral ledger and both withdrawal gates (`onboarding_reserved`) |
 | Fence | `Params::palw_signed_registration_v1` (tag 108): dormant, `None` everywhere, Some-only hashed, `never()` collapsed, refused when armed |
@@ -138,10 +138,12 @@ Final (past the refutation horizon), and a conformance commitment is on chain (1
 the chain's own — genesis, ruleset, policy, artifact, program, plan, kernel descriptor — one per `(class, artifact root)`; a new artifact
 is a new class and needs a new statement). A class with no onboarding row follows the legacy path unchanged.
 
-**G-EXPIRY / G-RULESET (108).** The acceptance walk replaces the envelope by the registration it wraps, after: the fence, `daa ≤
-valid_until_daa`, the signer's `consensus_params_id` being this ruleset's, the wrapped object being a bought class registration of the
-signer's own bond, and the signature over `(network, ruleset, valid_until, signer, registration)`. The wrapped registration then meets every
-rule it would meet carried bare. **The SDK must sign the envelope** (a second signature beside the registration's own) — not done here.
+**G-EXPIRY / G-RULESET (108).** The acceptance walk replaces the envelope by the registration it wraps, after: the fence,
+`valid_from_daa ≤ daa ≤ valid_until_daa`, the fork-id fired digest at the block's DAA (and at `valid_from_daa`) being the one the signer
+named (F-C4R3-01(b), §7 — it was `consensus_params_id`, which a merely scheduled fence moves), the wrapped object being a bought class
+registration of the signer's own bond, and the signature over `(network, fork digest, valid_from, valid_until, signer, registration)`. The
+wrapped registration then meets every rule it would meet carried bare. The SDK signs the envelope (§7: `SignedRegistrationRequestV1`,
+detached signing through `misaka model onboard`).
 
 | Case | Test | Status |
 |---|---|---|
@@ -149,7 +151,7 @@ rule it would meet carried bare. **The SDK must sign the envelope** (a second si
 | A false binding refuted by two disagreeing openings; honest bindings are unrefutable; the binder cannot refute itself; the root is never attested; the class never leaves Registered; second refutation refused | `g14_onboarding_a_false_artifact_binding_is_refuted_by_two_disagreeing_openings` | PASS |
 | A binding over the wrong tensor set refuted by the instance-set proof alone | `g14_onboarding_a_binding_over_the_wrong_set_of_tensors_...` | PASS |
 | Refusals leave the rows untouched: non-registrant, unknown class, second root, wrong signer / kernel class / policy, early statement, second kernel binding, statements under another plan / policy / artifact / program / kernel / genesis / ruleset, duplicate statement | `g14_onboarding_refusals_leave_the_rows_untouched` | PASS |
-| Envelope: expired, another ruleset, wrong signer, forged signature, extended expiry all dropped; the good one registers; fence off => dropped by name | `g14_onboarding_a_signed_registration_envelope_...` | PASS |
+| Envelope: expired, not yet valid, another fork digest (another chain / a fence not fired), wrong signer, forged signature, extended expiry all dropped; the good one registers; fence off => dropped by name (F-C4R3-01(b), §7) | `g14_onboarding_a_signed_registration_envelope_...` | PASS |
 | Fence: dormant on every preset, hashed when set, refused when armed, the value's identity | `rfc0015_*`, `the_signed_registration_fence_...` (consensus-core) | PASS |
 | Object tags 104–108 pinned and round-tripped | `the_onboarding_object_tags_are_the_allocated_ones` | PASS |
 
@@ -157,17 +159,16 @@ rule it would meet carried bare. **The SDK must sign the envelope** (a second si
 
 1. **The artifact binding is bonded and refutable, not proven.** See §5: equality of the two roots needs the bytes. A binding nobody can
    challenge is a declaration; the fences stay dormant until RFC-0014 §16 availability closes that (and the interim terms are measured).
-2. **Conformance EVIDENCE is not on chain.** The commitment (pre-beacon) is; checking a run's evidence against the locked beacon is each
-   node's / client's job today (`verify_conformance_evidence_v1`), and the beacon needs FUTURE PALW work folded on chain
-   (`verify_work_beacon_v1` wired; lane C's `BeaconFactSource`). `getPalwKernelFinals` (op 212) is that source's read: an OPV Final is
-   `FinalPathV1::PanelIndependent`. The gate therefore requires the commitment, not a pass.
+2. ~~**Conformance EVIDENCE is not on chain.**~~ **Closed by OB-P0 (§7)**: the evidence is carried on chain (tag 109), the beacon is
+   derived in the fold from future Panel-independent Finals, and the gate requires CONFORMANCE_PASSED (verified in the fold, unrefuted
+   through a window), never the commitment alone. What stays open is listed in §7.5.
 3. **Unbound classes are unaffected** (a policy decision): only a class that has begun onboarding is gated. Requiring a kernel binding of
    every new class is one more condition in `activate_due_classes`, and needs the route to be armable first.
 4. **A kernel class registered over a root later refuted stays registered** (its claims continue under the kernel route); only the V2
    class cannot activate. Rewardability of kernel claims does not yet depend on the V2 class being Active (the `FinalReward` is unfunded
    anyway — GAP-3).
 5. ~~**The Final reward is unfunded.**~~ **Funded (G14-R4, user-pays escrow)**: the poster pre-funds an escrow at posting (plus a
-   non-refundable fee); the job's first Final pays the producer out of it, once (§7). RFC-0015's `work_credit_per_claim` is still not
+   non-refundable fee); the job's first Final pays the producer out of it, once (§8). RFC-0015's `work_credit_per_claim` is still not
    released by anything — it must come from the same escrow before it is.
 6. **Pipeline claims have no Panel on the real node** (legacy mode) and the pipeline header has no wire form: `getPalwKernelClaim` returns
    an empty `recordHeader` for it. OPV pipeline classes need no Panel.
@@ -180,7 +181,107 @@ rule it would meet carried bare. **The SDK must sign the envelope** (a second si
 12. `getPalwOnboarding` and the other new ops are exercised over the grpc conversion and the model round trips, not through a running RPC
     service (the integration crate compiles with them; the daemon test asserts the not-found / malformed paths).
 
-## 7. G14-R4 (2026-10-08): the round-3 fixes, and the Final reward's funding (GAP-5)
+## 7. Phase 4 — conformance evidence (onboarding P0, OB-P0)
+
+Branch `onboard/p0-conformance-carriage`. Everything still dormant behind `palw_probabilistic_constraints_v1` (refused at every real
+height); presets, `PALW_T12_INT13_FENCES_V1`, the t12 `public_consensus_params_id` and schedule id unchanged (no `Params` field added).
+
+```text
+SDK-signed 108 envelope → V2 class → 104 bind → kernel class → 106 kernel-bind (the NETWORK'S post-commit policy) → 107 commit = an ATTEMPT
+  → FUTURE OPV Finals of OTHER classes fold (FinalPathV1::PanelIndependent; the rows op 212 serves) → PalwWorkBeaconV1 locks → seed
+  → 109 Post (registrant; may ride ObjectChunks, judged on the assembled whole)
+      in fold, charged to the block's adjudication budget: bound to THIS attempt? (commitment, policy, the chain's own beacon and seed,
+      the committed scope) — no ⇒ dismissed;  rebuilt EXACTLY from its outcomes (selection from the seed, counts, status, result roots)
+      and a pass with the policy's bits? — no ⇒ CONFORMANCE_FAILED (counted)
+  → challenge window (80 DAA): 109 Refute by any other operator, from public material ⇒ CONFORMANCE_FAILED (counted)
+      LeafDecode: an opening of a selected leaf against the class's registered artifact root whose reference decode ≠ the posted outcome
+      VectorTokens: a Final, unconvicted claim of the BOUND kernel class on the selected prompt (greedy) whose tokens contradict the posted ones
+  → the window closes unrefuted and the beacon re-derives unchanged ⇒ CONFORMANCE_PASSED ⇒ (kernel class stands) G14_ELIGIBLE
+  → the gate (binding Final, kernel class, record ≥ G14_ELIGIBLE) ⇒ V2 Active ⇒ the record says ACTIVE_REWARDABLE
+  no lock by S + window ⇒ BEACON_UNAVAILABLE (counted, pending)   lock but no evidence by lock + 60 ⇒ withheld: a default (counted)
+  attempts = beacon_retries + conformance_failures ≤ retry_limit + 1 = 3, then a further 107 is refused (AttemptsExhausted)
+```
+
+### 7.1 Design: optimistic with a bounded in-fold admission — why
+
+`verify_conformance_evidence_v1` alone is cheap (O(k) hashes), but it judges bindings and accounting only: a forged result root passes it.
+So design (a) — in-fold verification alone — would admit evidence whose results nobody computed. What the fold CAN recompute it
+recomputes at posting (bounded by the chain's scope bound and charged to the block's adjudication budget): the seed, the selection, every
+count, the status, the three result roots and the material locator from the carried outcomes. What it cannot — a forward pass on three
+implementations, the artifact's bytes — an outsider proves from public material inside a window (design b): a leaf against the public
+artifact, a vector's tokens against a Final of the bound kernel class. The evidence is on chain (the material is table 40's row), so
+"available" is the carriage itself; evidence never posted is a default, never a pass.
+
+### 7.2 What was built
+
+| Item | Value |
+|---|---|
+| Object | tag **109** `ConformanceEvidenceV1 { v2_class, action: Post(evidence, scope, outcomes) \| Refute { evidence_id, fault }, signer, signature }` — `palw_onboarding_message_v1(network, 109, signer, borsh(class, action))`; admitted to the chunk lane (`palw_chunked_object_kind_admitted_v1`), its signature checked at the completing chunk; dropped by name below the route's fence |
+| Rows | aux **39** `ConformanceAttemptRowV1` per class (the contract's `OnboardingRecordV1`, the attempt's full commitment, `committed_daa`, `challenge_epoch` = attempt ordinal, eligible / excluded profiles frozen at the commitment, the posted evidence's summary, how the last attempt ended); aux **40** the posted `ConformanceEvidencePostV1` (the material). Both via `KernelRouteRow` (160), tail `0xEC`, `kernel-route/v1` root — no new delta, tail or root |
+| Beacon | `BeaconContextV1` from the attempt row; sources = the route's OPV classes registered at the commitment, minus the candidate and its bound kernel class; events = `PalwKernelRouteStateV1::beacon_events_v1()` (the Finals op 212 serves); nothing from heartbeat, BASE-0, EXEC, block hashes, DNS/BFT or validators |
+| Policy | `palw_onboarding_challenge_policy_v1()` — the contract's reference policy, k 2, delay 2, window 120, D 2, 1 repetition, **2 bits** (INTERIM, a drill number, not a security value), retry_limit 2. Tag 106 now binds THIS policy's id (it bound the ledger's interim per-claim policy id, which is no `PostCommitChallengePolicyV1` and could never seed a challenge) |
+| Evidence core | moved from the runtime pack to `consensus/core/src/palw_conformance_evidence_v1.rs` (scope, selection, outcomes, `assemble_evidence_v1`); the pack re-exports it, encodings unchanged (17/17 `runtime_pack_beacon` pass) |
+| Gate | `onboarding_gate_v1` → `conformance_gate_v1`: Ready only at G14_ELIGIBLE / ACTIVE_REWARDABLE; codes are the contract's (`BEACON_UNAVAILABLE` waiting for randomness, `CHALLENGE_PENDING` in the window, `CONFORMANCE_FAILED`, `PUBLIC_PROSECUTION_INCOMPLETE`) |
+| Read | `ConsensusApi::palw_conformance_evidence_v1`; RPC **231** `getPalwConformanceEvidence` (lifecycle, attempt, beacon state, posted evidence, gate, the raw rows of 39/40, the class's program) — rpc-core, proto (1276/1277), grpc, wrpc, service, integration arm |
+| SDK | `misaka-palw-sdk/src/onboarding_chain.rs`: `SignedRegistrationRequestV1` (one builder, detached JSON, `sign` through `EnvelopeSigner` — no seed in the library), `conformance_evidence_object_v1`, `fresh_verify_from_reads_v1` (public reads + the public artifact; checks the artifact's inventory root first) |
+| CLI | `misaka model onboard envelope-export \| envelope-sign \| status \| verify` (`misaka-cli/src/operator/model_onboard.rs`; file the envelope with `misaka palw submit-object`) |
+| F-C4R3-01(b) | the envelope names `fork_id_v1(params, valid_from_daa).fired` and a window `[valid_from, valid_until]`; accepted only where the digest at the block's DAA (and at `valid_from`) equals it. Builds differing only in an unfired fence agree; an envelope signed before a fence crosses expires across it. The SDK/CLI compute the digest from the client's compiled params, never from an RPC answer |
+
+### 7.3 Cases (real node: mempool → template → fold → persisted tip → `ConsensusApi`; `cargo test -p kaspa-consensus --lib g14_conformance`)
+
+| Case | Test | Status |
+|---|---|---|
+| Happy path: SDK-signed envelope registers the class; commit; waiting for randomness (no seed, no evidence possible); two OPV Finals of another class fold, the beacon locks; evidence in 1 KiB chunks judged on the whole; CHALLENGE_PENDING; second evidence refused; an honest-leaf "refutation" dismissed and charged; no self-refutation; fresh verifier (public reads + public artifact, SDK and core) agrees; window closes ⇒ G14_ELIGIBLE; AVAILABILITY_REQUIRED until the binding is Final; then Active + ACTIVE_REWARDABLE; replay same roots | `g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_class_activates` | PASS |
+| Commitment only: never passes — BEACON_UNAVAILABLE at the window's end, counted, the class stays Registered with the binding Final | `g14_onboarding_a_class_is_bound_attested_registered_and_released_by_the_gate` (updated) | PASS |
+| Wrong beacon / seed (context) / policy / scope / commitment (implementation set): dismissed, rows untouched; a failing run honestly reported ⇒ CONFORMANCE_FAILED counted; a new commitment (implementation changed): its own epoch and beacon, the old evidence stale and dismissed, its own evidence judged | `g14_conformance_evidence_against_another_beacon_policy_scope_or_commitment_is_refused_and_stale_evidence_is_invalid` | PASS |
+| Forged leaf ⇒ REFUTED by an opening of the public artifact (the fresh verifier finds it too); forged vector tokens ⇒ REFUTED by a Final OPV claim of the bound kernel class (not before it is Final); withheld ⇒ default at lock + 60; three attempts ⇒ a fourth commitment refused, never Active | `g14_conformance_forged_evidence_is_refuted_withheld_evidence_defaults_and_attempts_are_exhausted` | PASS |
+| Hostile refutations (absurd leaf count, ragged bytes, moved coordinates, no such check, unknown claim): dismissed, never a panic, each charged; five in a block: four judged, the fifth finds the budget spent; the honest evidence still passes | `g14_conformance_hostile_evidence_is_dismissed_or_failed_spends_budget_and_never_stops_the_chain` | PASS |
+| Forged outcome list (an outcome the seed never selected) ⇒ CONFORMANCE_FAILED | `g14_conformance_a_forged_outcome_list_fails_the_attempt` | PASS |
+| Fence off: dropped by name, the block stands, no route state | `g14_conformance_evidence_is_dropped_by_name_without_the_fence` | PASS |
+| Replay; reorg to a heavier branch (tables 39/40 exactly as at the fork) and back; real restart over the same database (passes the window after it); pruned import through tail 0xEC at a block inside the window, folds to every root | `g14_conformance_rows_survive_reorg_restart_and_pruned_import` | PASS |
+| F-C4R3-01(b) PoC: an envelope in flight does not split builds that differ only in a future fence | `g14_c4r3_an_envelope_in_flight_must_not_split_builds_...` (un-ignored) | PASS |
+| Interim policy and fork digest (consensus-core); envelope round trip through detached signing (SDK); op 231 wire (rpc-core, grpc) | `the_interim_onboarding_policy_...`, `the_envelope_names_the_fork_id_fired_digest_...`, `the_envelope_round_trips_through_detached_signing_...`, model / grpc round trips | PASS |
+
+### 7.4 The lifecycle as it now runs (codes are `misaka-palw-challenge`'s)
+
+`REGISTERED_DORMANT` (the 107 record is built from the chain's own facts: program, plan, class) → `CHALLENGE_PENDING` (an open attempt:
+waiting for randomness = gate code `BEACON_UNAVAILABLE`; evidence in its window = `CHALLENGE_PENDING`) → `CONFORMANCE_PASSED` →
+`G14_ELIGIBLE` (the bound kernel class stands: it registered only after `PUBLIC_PROSECUTION_COMPLETE`) → `ACTIVE_REWARDABLE` when the gate
+activates the V2 class (availability = the artifact binding past its refutation horizon). A failed / unavailable / withheld attempt returns
+to `REGISTERED_DORMANT` with its failure code and is counted.
+
+### 7.5 GAPs (P0's, honestly)
+
+1. **Beacon availability on a real network.** Sources are OPV Finals only (a Panel-licensed Final exports no event), and OPV needs a
+   class on the network's admission list; no network has one (the OPV fence is refused at every height). Until Panel-independent Finals
+   exist at the policy's rate, every attempt ends BEACON_UNAVAILABLE — correct, and fatal to activation. Bias / last-contributor /
+   withholding analysis of the accumulator remains RFC-0007 §VI.8's external gate.
+2. **Vector logits / commits digests have no court.** Only a vector's greedy tokens are refutable on chain (through a Final of the bound
+   kernel class, itself optimistic truth under the kernel route's own court and the OPV availability assumption); a forgery that keeps the
+   tokens and lies in the digests is caught only by a fresh off-chain re-execution (the runtime pack's `verify-conformance`). The vector
+   refutation also needs someone to post the prompt as a job and a producer to carry it to Final inside the 80-DAA window.
+3. **The authenticated openings root is the poster's claim** (no multiproof is carried); its leaves are refutable individually against the
+   public artifact, so it carries no security weight on chain.
+4. **Binding equality (GAP 1) still bounds everything**: the leaf refutation authenticates against the V2 inventory root, the kernel class
+   runs over the kernel root, and their equality is a bonded, refutable statement, not a proof.
+5. **FinalReward funding (GAP 5)**: ACTIVE_REWARDABLE means the V2 class earns under V2's funded economics; the kernel route's
+   `FinalReward` for its kernel class is still unfunded.
+6. **INTERIM numbers**: 2 bits, k = 2, windows of 120 / 60 / 80 DAA — chosen so a drill crosses them; an activation replaces them with an
+   approved tuple (RFC-0007 §VI.8). No refutation bounty: a refuter is paid nothing (a false refutation costs its carrier fee and the block's
+   budget); forging costs the registrant an attempt, not collateral.
+7. **The chunk lane is capturable (F-C4R3-03)**: large evidence rides `ObjectChunk`s, so eight junk groups can hold a Post (and a chunked
+   refutation) off the chain — the lane's fix is the Lead's.
+8. **A source Final convicted after the evidence is posted** ends the attempt BEACON_CHANGED at the window's close (counted as a beacon
+   retry) — safe, but it charges an honest registrant an attempt.
+9. **A VectorTokens refutation rests on a kernel Final, which is optimistic truth.** A griefer can post the selected prompt as a job,
+   carry a LYING claim of it to Final unchallenged inside the window, and burn an honest attempt (it loses its OPV reservation only if
+   someone convicts the claim within liability, and the attempt is not restored). Hardening (deciding at the claim's liability horizon,
+   or restoring the attempt on a later conviction) is not done. The LeafDecode refutation has no such residual (authenticated bytes,
+   deterministic decode).
+10. **The fresh verifier trusts op 231's frozen eligible/excluded sets** (chain state under the aux root, checkable through op 211's rows)
+   rather than re-deriving the route's OPV classes at the commitment's height.
+
+## 8. G14-R4 (2026-10-08): the round-3 fixes, and the Final reward's funding (GAP-5)
 
 Branch `g14/r4-fixes` (base `4d3baa0c5`). Per-finding detail, commits and tests: `adversarial-e2e-record.md`, "G14-R4 fixes". All of it
 is dormant behind `palw_probabilistic_constraints_v1` (OPV parts behind `palw_panel_free_v1`); no t12 identity moves.

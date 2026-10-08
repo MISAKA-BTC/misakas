@@ -1710,7 +1710,7 @@ mod mockery {
     impl Mock for GetPalwSettlementResponse {
         fn mock() -> Self {
             GetPalwSettlementResponse {
-                dns_retired_at: None, native_settlement: None,
+                dns_retired_at: None, native_settlement: None, native_readiness: None,
                 available: mock(),
                 sink_daa: mock(),
                 daa_score: mock(),
@@ -2880,6 +2880,52 @@ mod mockery {
     }
     test!(GetPalwOnboardingResponse);
 
+    impl Mock for GetPalwConformanceEvidenceRequest {
+        fn mock() -> Self {
+            GetPalwConformanceEvidenceRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwConformanceEvidenceRequest);
+
+    impl Mock for GetPalwConformanceEvidenceResponse {
+        fn mock() -> Self {
+            GetPalwConformanceEvidenceResponse {
+                available: mock(),
+                found: mock(),
+                tip_daa: mock(),
+                class_id: mock_hex(),
+                lifecycle_state: "CHALLENGE_PENDING".to_string(),
+                last_failure: "BEACON_UNAVAILABLE".to_string(),
+                attempt_end: "EVIDENCE_WITHHELD".to_string(),
+                attempts: mock(),
+                attempt_limit: mock(),
+                challenge_policy_id: mock_hex(),
+                challenge_policy: mock_hex(),
+                statement_root: mock_hex(),
+                committed_daa: mock(),
+                challenge_epoch: mock(),
+                beacon_state: "LOCKED".to_string(),
+                beacon_have: mock(),
+                beacon_need: mock(),
+                lock_position: mock(),
+                beacon_output: mock_hex(),
+                evidence_posted: mock(),
+                evidence_id: mock_hex(),
+                evidence_daa: mock(),
+                window_end_daa: mock(),
+                gate: "Held".to_string(),
+                gate_code: "CHALLENGE_PENDING".to_string(),
+                gate_reason: "the window is open".to_string(),
+                attempt_row: mock_hex(),
+                evidence_row: mock_hex(),
+                program: mock_hex(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwConformanceEvidenceResponse);
+
     // ADR-0152 P2-10: op 199 and its parts round-trip.
     impl Mock for GetPalwVestingRequest {
         fn mock() -> Self {
@@ -3326,10 +3372,78 @@ mod native_settlement_wire_tests {
         assert_eq!(decoded.native_settlement, Some(native));
         assert_eq!(decoded.dns_retired_at, Some(5));
         assert!(!decoded.settled);
+        bytes[0] = 4;
+        assert!(<GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).is_err(), "a version this build does not know");
         bytes[0] = 3;
-        assert!(<GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).is_err());
+        assert!(
+            <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).is_err(),
+            "version 3 without its readiness field is truncated, not a v2"
+        );
         let mut duty = Vec::new();
         Serializer::serialize(&GetPrecommitDutyResponse { retired_at: Some(5), ..Default::default() }, &mut duty).unwrap();
         assert_eq!(<GetPrecommitDutyResponse as Deserializer>::deserialize(&mut &duty[..]).unwrap().retired_at, Some(5));
+    }
+
+    fn readiness_fixture() -> kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1 {
+        use kaspa_consensus_core::palw_native_readiness_v1::*;
+        use kaspa_consensus_core::palw_native_settlement_v1::{PalwSettlementPolicyV1, SkippedEvidenceV1};
+        let h = kaspa_hashes::Hash64::from_u64_word;
+        native_stopped_readiness_v1(
+            h(9),
+            (100, 90),
+            PalwSettlementPolicyV1 { settled_anchor_depth: 2, unique_mature_work: 20, max_operator_permille: 600, max_class_permille: 600 },
+            native_maturity_report_v1(3_000, 120),
+            SafeWaitV1::MissingHistory { gap: HistoryGapV1::DeltaNotRetained, block: Some(h(4)) },
+            FinalizedReadinessV1 { finalized: None, pruning_point: h(1), pruning_blue: Some(0), wait: Some(FinalizedWaitV1::NoSafePrefix) },
+            SkippedEvidenceV1 { bond_not_held: 2, ..Default::default() },
+        )
+    }
+
+    /// RFC-0012 D1: the readiness rides wire v3 only when present; every older shape keeps its bytes, and v3 is a strict superset of v2.
+    #[test]
+    fn rfc0012_response_v3_carries_the_readiness_and_older_wire_is_byte_identical_without_it() {
+        let readiness = readiness_fixture();
+        let native = NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: Default::default(),
+            policy_id: Default::default(),
+            generation: readiness.generation,
+            retirement_daa: 5,
+            frontier: None,
+            latest: None,
+            safe: None,
+            finalized: None,
+            depth: 0,
+            unique_work: "0".into(),
+            stop: Some(SettlementStopV1::MissingHistory),
+        };
+        // Without the readiness: v1 / v2 exactly as before.
+        let v2 = GetPalwSettlementResponse { dns_retired_at: Some(5), native_settlement: Some(native.clone()), ..Default::default() };
+        let mut v2_bytes = Vec::new();
+        Serializer::serialize(&v2, &mut v2_bytes).unwrap();
+        assert_eq!(&v2_bytes[..2], &[2, 0]);
+        // With it: v3, the v2 body unchanged behind the version, then one optional JSON string.
+        let v3 = GetPalwSettlementResponse { native_readiness: Some(readiness.clone()), ..v2.clone() };
+        let mut v3_bytes = Vec::new();
+        Serializer::serialize(&v3, &mut v3_bytes).unwrap();
+        assert_eq!(&v3_bytes[..2], &[3, 0]);
+        assert_eq!(&v3_bytes[2..v2_bytes.len()], &v2_bytes[2..], "the v2 body is byte-identical inside v3");
+        let back = <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &v3_bytes[..]).unwrap();
+        assert_eq!(back.native_readiness, Some(readiness.clone()));
+        assert_eq!((back.native_settlement, back.dns_retired_at), (Some(native), Some(5)));
+        // The readiness alone selects v3 (a node can hold it without the snapshot never, but the encoding must not lose it).
+        let only = GetPalwSettlementResponse { native_readiness: Some(readiness.clone()), ..Default::default() };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&only, &mut bytes).unwrap();
+        assert_eq!(bytes[0], 3);
+        assert_eq!(<GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap().native_readiness, Some(readiness.clone()));
+        // JSON: the key is absent when there is no readiness and camelCase when there is.
+        let json = serde_json::to_value(&v2).unwrap();
+        assert!(json.get("nativeReadiness").is_none());
+        let json = serde_json::to_value(&v3).unwrap();
+        assert_eq!(json["nativeReadiness"]["stoppedEarly"]["gap"], "deltaNotRetained");
+        assert_eq!(json["nativeReadiness"]["skipped"]["bondNotHeld"], 2);
+        let again: GetPalwSettlementResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(again.native_readiness, Some(readiness));
     }
 }

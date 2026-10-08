@@ -132,6 +132,7 @@ impl Factory {
                 GetPalwKernelRows,
                 GetPalwKernelFinals,
                 GetPalwOnboarding,
+                GetPalwConformanceEvidence,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 NotifyBlockAdded,

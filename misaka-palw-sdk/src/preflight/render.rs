@@ -343,12 +343,41 @@ impl Report {
             }
             let _ = writeln!(
                 o,
-                "  gate          admission v10: {}{}",
+                "  gate          {}: {}{}",
+                if ad.verdict.starts_with("pipeline class") { "pipeline admission (palw_gen_v1)" } else { "admission v10" },
                 ad.gate,
                 ad.gate_detail.as_ref().map(|d| format!(" ({d})")).unwrap_or_default()
             );
             for x in &ad.not_asked {
                 let _ = writeln!(o, "  not asked     {x}");
+            }
+        }
+        if let Some(p) = &self.pipeline {
+            let _ = writeln!(o);
+            let _ = writeln!(
+                o,
+                "pipeline class  {} profile, route {} (adapter {}): source of up to {} ids, a target stream of {} positions; the source is priced at no less than {} prompt tokens",
+                p.profile,
+                p.kind,
+                p.adapter,
+                n(u64::from(p.source_len)),
+                n(u64::from(p.target_len)),
+                n(u64::from(p.source_token_floor))
+            );
+            for st in &p.stages {
+                let _ = writeln!(
+                    o,
+                    "  stage {:<9} {} nodes, trip {}, commit tile {}, history tile {}, checkpoint interval {}",
+                    st.name,
+                    n(st.nodes as u64),
+                    n(u64::from(st.max_trip)),
+                    st.commit_tile,
+                    st.h_tile,
+                    st.checkpoint_interval
+                );
+            }
+            for c in &p.conventions {
+                let _ = writeln!(o, "  shape-only    {c}");
             }
         }
         if !self.chain.is_empty() {

@@ -68,6 +68,18 @@ fn hex(h: Hash64) -> String {
     faster_hex::hex_string(h.as_byte_slice())
 }
 
+/// The class the rail signs a claim in: the user's own node on this machine is `FULL_NODE`; another node, or any relay, `UNVERIFIED_REMOTE`;
+/// no node at all (an offline signature over a job someone else assembled) `UNVERIFIED_REMOTE` too.
+fn rail_mode_v1(rpc: Option<&str>, relaying: bool) -> misaka_palw_remote::verify::ModeLabelV1 {
+    use misaka_palw_remote::verify::ModeLabelV1;
+    let own = rpc.is_some_and(|r| {
+        let host = r.trim_start_matches("ws://").trim_start_matches("wss://");
+        let host = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host).trim_start_matches('[').trim_end_matches(']');
+        matches!(host, "127.0.0.1" | "localhost" | "::1")
+    });
+    if own && !relaying { ModeLabelV1::FullNode } else { ModeLabelV1::UnverifiedRemote }
+}
+
 fn read_borsh<T: borsh::BorshDeserialize>(path: &Path, what: &str) -> T {
     let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("cannot read the {what} at {}: {e}", path.display())));
     borsh::from_slice(&bytes).unwrap_or_else(|e| die(format!("the {what} at {} does not decode: {e}", path.display())))
@@ -160,6 +172,8 @@ fn main() {
     // RFC-0009 stage C: the executor's redemption authorization, signed once at claim time so any builder may spend the claim's winning
     // quanta while this PC is off (`palw_receipt_spend_v4`, dormant until its fence opens).
     let mut redeem_auth_out: Option<PathBuf> = None;
+    // RFC-0009 operating modes (2026-10-08): the class the user accepts signing in below VERIFIED_REMOTE.
+    let mut accept_unverified: Option<misaka_palw_remote::verify::ModeLabelV1> = None;
     // RFC-0009 stage A: the bond key stays in a `kaspa-pq-signer` sidecar. `--signer-socket <path> --bond-pubkey <hex>` builds the carrier
     // through it (two typed requests: the claim id, the funding sighash) and the rail never holds the seed.
     let mut signer_socket: Option<PathBuf> = None;
@@ -205,6 +219,14 @@ fn main() {
             "--bond-pubkey" => bond_pubkey_hex = Some(value("--bond-pubkey")),
             "--relay-signed" => relay_signed = Some(PathBuf::from(value("--relay-signed"))),
             "--redeem-auth-out" => redeem_auth_out = Some(PathBuf::from(value("--redeem-auth-out"))),
+            "--accept-unverified-state" => {
+                let v = value("--accept-unverified-state");
+                accept_unverified = Some(misaka_palw_remote::verify::ModeLabelV1::parse(&v).unwrap_or_else(|| {
+                    die(format!(
+                        "--accept-unverified-state {v:?}: name the class (HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED or UNVERIFIED_REMOTE)"
+                    ))
+                }))
+            }
             "--redeem-fee-bps" => {
                 redeem_fee_bps = value("--redeem-fee-bps").parse().unwrap_or_else(|e| die(format!("--redeem-fee-bps: {e}")))
             }
@@ -319,6 +341,9 @@ fn main() {
         // fence-4 leg, `audit-combined/rfc9-v4-leg.sh`, runs the rail this way with `--once`: one job, one authorization file).
         if let Some(dir) = &evidence_out {
             pass_through.extend(["--evidence-out".to_string(), dir.display().to_string()]);
+        }
+        if let Some(label) = accept_unverified {
+            pass_through.extend(["--accept-unverified-state".to_string(), label.as_str().to_string()]);
         }
         if let Some(path) = &redeem_auth_out {
             pass_through.extend(["--redeem-auth-out".to_string(), path.display().to_string()]);
@@ -555,6 +580,14 @@ fn main() {
         Some(answer) => FpCommitmentPriceV1::Chain { quanta: answer.quanta, pwu: answer.pwu },
         None => FpCommitmentPriceV1::Leaves { freeprompt: &bundle.freeprompt, class_canonical_leaves: class_leaves },
     };
+    // **The class this claim is signed in, and the gate** (RFC-0009, 2026-10-08): the job's anchor and the chain's price came from the
+    // node(s) named; a node on this machine is the user's own (FULL_NODE), any other — and every --relay — is their word
+    // (UNVERIFIED_REMOTE), and the claim is signed only when the user named that class.
+    let mode = rail_mode_v1(rpc_endpoint.as_deref(), !relay_endpoints.is_empty());
+    eprintln!("[misaka-palw-fp-rail] {}", mode.line());
+    if let Err(g) = misaka_palw_remote::verify::signing_gate_v1(mode, accept_unverified) {
+        die(format!("nothing was signed: {g}"));
+    }
     let build = |fee: u64| {
         build_fp_commitment_tx_with(
             signer,
@@ -738,6 +771,7 @@ fn main() {
         "trace_retention_daa": commitment.trace_retention_daa,
         "tx_file": tx_path.display().to_string(),
         "submitted": submitted.as_ref().map(|s| s.txid.clone()),
+        "mode": mode.as_str(),
         // RFC-0009: the per-node outcome of a `--relay`. An accept is NOT inclusion — track the claim (misaka-palw-remote's
         // ClaimTracker) and keep serving the material until stage B moves it.
         "relayed": relayed,
@@ -969,6 +1003,7 @@ fn track_once(endpoints: &[String], claim_hex: &str, tx_id_hex: Option<&str>, ou
             "settled": agree && states[0].is_settled(),
             // Nodes agreeing is not a proof: no header or state proof stands behind any of this (RFC-0009 §6).
             "provenance": misaka_palw_remote::trust::UNVERIFIED_REMOTE_STATE,
+            "mode": misaka_palw_remote::verify::ModeLabelV1::UnverifiedRemote.as_str(),
             "note": "a relay accept is not inclusion; Final/void are settled only finality_depth DAA deep; a disagreement is a disagreement, not an average",
         })
     );
@@ -1061,6 +1096,8 @@ fn relay_signed_carrier(path: &Path, funding_amount: u64, endpoints: &[String], 
             "fp_claim_id": hex(claim),
             "tx_id": tx.id().to_string(),
             "relayed": relayed,
+            // Relaying signs nothing; what the relays report is their word.
+            "mode": misaka_palw_remote::verify::ModeLabelV1::UnverifiedRemote.as_str(),
             "note": "this process held no key and has no authority over the claim; an accept is not inclusion; the claim's material is still the executor's (or a provider's) to serve",
         })
     );

@@ -472,9 +472,16 @@ pub struct VirtualStateProcessor {
     /// with a live claim ("folded under another policy") while un-upgraded nodes accepted it — a split at the binary swap. Two builds
     /// that differ only in future fences share the identity, exactly as the handshake requires.
     pub(super) palw_kernel_route_ruleset_id: kaspa_consensus_core::Hash,
+    /// `Params::fence_schedule_v1()` (the fork id's schedule), once: a tag-108 envelope names the fork-id fired digest at a DAA, and
+    /// this node recomputes it at the inclusion block without cloning the params (F-C4R3-01(b)).
+    pub(super) palw_fence_schedule: Vec<u64>,
     pub(super) palw_dns_retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
     /// RFC-0012: the per-block rows of the native settlement walk. Memory only and rebuildable; see `native_settlement`.
     pub(super) native_rows: parking_lot::Mutex<super::native_settlement::NativeRowCache>,
+    /// RFC-0012 D1: the last `safe`-readiness explanation served, keyed by the sink it stands at (memory only, advisory). Bounds the
+    /// cost of the RPC to one evaluation per virtual change; see `native_settlement::native_safe_readiness`.
+    pub(super) native_readiness_memo:
+        parking_lot::Mutex<Option<(BlockHash, kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1)>>,
     /// Test-only: facts a test places at a chain block, as if its PALW delta had carried that work.
     #[cfg(test)]
     pub(super) native_fact_override:
@@ -1197,10 +1204,12 @@ impl VirtualStateProcessor {
             palw_overlay_carve: params.palw_overlay_carve_fence(),
             palw_dns_retirement: params.palw_dns_retirement,
             native_rows: Default::default(),
+            native_readiness_memo: Default::default(),
             #[cfg(test)]
             native_fact_override: Default::default(),
             palw_native_ruleset_id: params.consensus_params_id(),
             palw_kernel_route_ruleset_id: params.consensus_identity_id(),
+            palw_fence_schedule: params.fence_schedule_v1(),
             palw_panel_exposure_floor: params.palw_panel_exposure_floor_fence(),
             palw_compute_overlay_retired: params.palw_compute_overlay_retired,
             palw_model_registry: params.palw_model_registry,
@@ -12863,6 +12872,11 @@ impl VirtualStateProcessor {
                         let payload = borsh::to_vec(&(v2_class, kernel_param_root, proof.as_ref())).map_err(|e| e.to_string())?;
                         self.palw_onboarding_signature_ok(state, point.daa_score, 105, &challenger, &payload, &signature)?;
                     }
+                    // Onboarding P0: conformance evidence (or its refutation) delivered in chunks, judged on the assembled whole.
+                    Some(Obj::ConformanceEvidenceV1 { v2_class, action, signer, signature }) => {
+                        let payload = borsh::to_vec(&(v2_class, action.as_ref())).map_err(|e| e.to_string())?;
+                        self.palw_onboarding_signature_ok(state, point.daa_score, 109, &signer, &payload, &signature)?;
+                    }
                     _ => {}
                 },
                 // RFC-0002 Phase F (tag 63): judged by the transition like the legacy lane object;
@@ -13056,6 +13070,12 @@ impl VirtualStateProcessor {
                 Obj::ConformanceCommittedV1 { commitment, signer, signature } => {
                     let payload = borsh::to_vec(commitment.as_ref()).map_err(|e| e.to_string())?;
                     self.palw_onboarding_signature_ok(state, point.daa_score, 107, signer, &payload, signature)?;
+                }
+                // **Onboarding P0 (tag 109): conformance evidence** — the fence, an Active signer, its signature over `(class, action)`;
+                // whether it is the registrant's evidence or a refutation, and what it proves, are the fold's.
+                Obj::ConformanceEvidenceV1 { v2_class, action, signer, signature } => {
+                    let payload = borsh::to_vec(&(v2_class, action.as_ref())).map_err(|e| e.to_string())?;
+                    self.palw_onboarding_signature_ok(state, point.daa_score, 109, signer, &payload, signature)?;
                 }
                 // (tag 108): the acceptance walk replaces the envelope by its registration before this gate; one that reaches it was
                 // not unwrapped (a direct caller of the gate), and is refused.
@@ -14736,17 +14756,22 @@ impl VirtualStateProcessor {
     }
 
     /// **Unwrap a signed-registration envelope (tag 108)** into the class registration it wraps, or say why it is dropped: the fence in
-    /// force, the last-valid DAA not passed, the ruleset the signer named being this one, the wrapped object a BOUGHT class registration
-    /// of the signer's own bond, and the signer's ML-DSA-87 signature over `(network, ruleset, valid_until, signer, registration)`. The
-    /// wrapped registration then meets every rule it would meet carried bare — including its own signature.
+    /// force, the block inside the envelope's validity window, the fork-id fired digest at the block's DAA (and at the window's start)
+    /// being the one the signer named, the wrapped object a BOUGHT class registration of the signer's own bond, and the signer's
+    /// ML-DSA-87 signature over `(network, fork digest, valid_from, valid_until, signer, registration)`. The wrapped registration then
+    /// meets every rule it would meet carried bare — including its own signature.
+    ///
+    /// **F-C4R3-01(b)**: the digest is `fork_id_v1(params, daa).fired`, not `consensus_params_id` — two builds that differ only in a
+    /// fence not yet fired (a rollout) compute the same digest and agree on the envelope; a fence that fires inside the window expires it.
     fn palw_signed_registration_unwrap(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         daa_score: u64,
         envelope: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> Result<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2, String> {
+        use kaspa_consensus_core::palw_onboarding_v1::palw_envelope_fork_digest_v1;
         use kaspa_consensus_core::palw_state_v2::{PalwBondStatusV2, PalwConsensusObjectV2 as Obj, palw_class_registration_buyer_v1};
-        let Obj::SignedRegistrationV1 { registration, valid_until_daa, consensus_params_id, signer, signature } = envelope else {
+        let Obj::SignedRegistrationV1 { registration, valid_from_daa, valid_until_daa, fork_digest, signer, signature } = envelope else {
             return Err("not a signed registration envelope".to_string());
         };
         if !self.palw_signed_registration_at(daa_score) {
@@ -14755,8 +14780,15 @@ impl VirtualStateProcessor {
         if daa_score > *valid_until_daa {
             return Err(format!("expired: valid until DAA {valid_until_daa}, the block is at {daa_score} (G-EXPIRY)"));
         }
-        if *consensus_params_id != self.palw_native_ruleset_id {
-            return Err("signed for another ruleset (G-RULESET)".to_string());
+        if daa_score < *valid_from_daa {
+            return Err(format!("not yet valid: valid from DAA {valid_from_daa}, the block is at {daa_score}"));
+        }
+        let genesis = self.genesis.hash;
+        if palw_envelope_fork_digest_v1(genesis, &self.palw_fence_schedule, *valid_from_daa) != *fork_digest {
+            return Err("signed under another fork schedule than this chain's at its own DAA (G-RULESET)".to_string());
+        }
+        if palw_envelope_fork_digest_v1(genesis, &self.palw_fence_schedule, daa_score) != *fork_digest {
+            return Err("a fence fired since the envelope was signed: it expires across it (G-RULESET)".to_string());
         }
         if palw_class_registration_buyer_v1(registration) != Some(*signer) {
             return Err("the envelope wraps no bought class registration of its signer".to_string());
@@ -14768,7 +14800,8 @@ impl VirtualStateProcessor {
         let bytes = borsh::to_vec(registration.as_ref()).map_err(|e| e.to_string())?;
         let message = kaspa_consensus_core::palw_onboarding_v1::palw_signed_registration_message_v1(
             self.palw_network_domain_v2(),
-            *consensus_params_id,
+            *fork_digest,
+            *valid_from_daa,
             *valid_until_daa,
             signer,
             &bytes,
@@ -14784,7 +14817,7 @@ impl VirtualStateProcessor {
         Ok((**registration).clone())
     }
 
-    /// **An onboarding object's acceptance** (tags 104-107): the route's fence, an Active signer bond, and the signer's ML-DSA-87
+    /// **An onboarding object's acceptance** (tags 104-107, 109): the route's fence, an Active signer bond, and the signer's ML-DSA-87
     /// signature over `(network, kind, signer, payload)`.
     fn palw_onboarding_signature_ok(
         &self,
@@ -21466,6 +21499,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::KernelBoundV1 { .. } => "KernelBoundV1",
         O::ConformanceCommittedV1 { .. } => "ConformanceCommittedV1",
         O::SignedRegistrationV1 { .. } => "SignedRegistrationV1",
+        O::ConformanceEvidenceV1 { .. } => "ConformanceEvidenceV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

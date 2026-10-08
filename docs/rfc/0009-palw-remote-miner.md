@@ -250,14 +250,14 @@ L2 を健全にするために必要な DAG 履歴と state transition の量は
 
 | 条件 | 欠けた場合 | 現状 |
 | --- | --- | --- |
-| Local signing / full-tx sighash | relay による改変・資金流出 | 登録の分離署名・rail の signer socket は IMPLEMENTED_AND_TESTED。V4 authorization の sidecar 署名用 `SigningPurpose` は CODE_GAP |
-| Verified chain state / stale detection | 無効 job への計算浪費・無効 claim への署名 | collection 単位の state proof（op 202）と pin は IMPLEMENTED_AND_TESTED。header chain・target・fence の検証（L1）は CODE_GAP。PALW fork-choice の検証（L2）は DESIGN_GAP |
+| Local signing / full-tx sighash | relay による改変・資金流出 | 登録・IR 登録・bond 登録（node 不要）・carrier・V4 authorization の分離署名と改変拒否は IMPLEMENTED_AND_TESTED。V4 authorization の sidecar 署名用 `SigningPurpose` は CODE_GAP（現行経路では不要） |
+| Verified chain state / stale detection | 無効 job への計算浪費・無効 claim への署名 | L1（header/DAG）と L3（claim state）の検証、4 段階の表示、推論前・署名直前の gate は IMPLEMENTED_AND_TESTED。PALW fork-choice の検証（L2）は DESIGN_GAP で、その間は `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED` に留まり opt-in なしでは署名しない |
 | Canonical job/input/output binding | 計算の流用・job 差し替え | FP Job V4 は凍結済み（DORMANT_NOT_INTEGRATED）。claim 署名は commitment に bind |
 | Public authenticated DA | miner 停止後に検証不能 | manifest・複数 provider・共通 fetch は IMPLEMENTED_AND_TESTED（local）。discovery は DESIGN_GAP |
 | Objective DA/default | 通信障害で誤 slash | kernel route の demand/default は実ノード E2E あり（fence 未武装）。provider への責任移転（provider court）は DESIGN_GAP |
-| Miner-bound payout / V4 redemption | builder による横取り・報酬消失 | processor 水準の試験あり、DORMANT_NOT_INTEGRATED。chain-block 水準の E2E は CODE_GAP |
-| Multi-relay / censorship fallback | 少数 node への依存 | 登録・carrier の fan-out と改変拒否はあり。妨害時の再提出試験は CODE_GAP |
-| Fresh outsider G14 prosecution | pool/Panel 共謀時の不正承認 | 実ノード G14 E2E あり（fence 未武装、`g14-integration-matrix.md`） |
+| Miner-bound payout / V4 redemption | builder による横取り・報酬消失 | chain-block E2E（miner offline、別 builder が redemption、payout は miner、手数料 500 bps）は IMPLEMENTED_AND_TESTED。複数ノード drill は EXTERNAL_GATE_PENDING |
+| Multi-relay / censorship fallback | 少数 node への依存 | 改変・横取りの拒否と、妨害時の同一 bytes 別 relay 再送（library）は IMPLEMENTED_AND_TESTED。rail の自動再送は CODE_GAP |
+| Fresh outsider G14 prosecution | pool/Panel 共謀時の不正承認 | 必須試験 3 は実ノードで合格（Panel あり/Panel=0、node-less relay 経路、fence 未武装）。第 3 ラウンドの P1 2 件は修正中 |
 
 **必須の敵対試験**
 

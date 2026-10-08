@@ -2040,6 +2040,16 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
         let dns_retired_at = self.config.params.palw_dns_retirement.filter(|r| r.activation.is_active(sink_daa)).map(|r| r.activation.daa_score());
         let native_settlement = session.async_get_native_settlement_snapshot().await.map_err(|e| RpcError::General(e.to_string()))?;
+        // RFC-0012 D1: why `safe` stands where it does. Served only when it is about the SAME sink as the snapshot: a virtual change
+        // between the two reads would otherwise explain a certificate the response does not carry (the caller can simply ask again).
+        let native_readiness = match (&native_settlement, dns_retired_at) {
+            (Some(snapshot), Some(_)) => session
+                .async_get_native_safe_readiness()
+                .await
+                .map_err(|e| RpcError::General(e.to_string()))?
+                .filter(|r| r.generation == snapshot.generation),
+            _ => None,
+        };
         // DAA alone cannot identify the last effect within an equal-DAA group. Only a strictly
         // older DAA is certified through this compatibility API; exact heads are in native_settlement.
         let native_settled = if dns_retired_at.is_some() {
@@ -2050,11 +2060,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         } else { false };
         let Some(settlement) = session.async_palw_settlement_v1(request.daa_score).await else {
             let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
-            return Ok(GetPalwSettlementResponse { available: native_settlement.is_some(), settled: native_settled, depth: native_settlement.as_ref().map_or(0, |s| s.depth), sink_daa, daa_score: request.daa_score, dns_retired_at, native_settlement, ..Default::default() });
+            return Ok(GetPalwSettlementResponse { available: native_settlement.is_some(), settled: native_settled, depth: native_settlement.as_ref().map_or(0, |s| s.depth), sink_daa, daa_score: request.daa_score, dns_retired_at, native_settlement, native_readiness, ..Default::default() });
         };
         let depth = if dns_retired_at.is_some() { native_settlement.as_ref().map_or(0, |s| s.depth) } else { settlement.depth };
         Ok(GetPalwSettlementResponse {
-            dns_retired_at, native_settlement,
+            dns_retired_at, native_settlement, native_readiness,
             available: true,
             sink_daa: settlement.sink_daa,
             daa_score: request.daa_score,
@@ -3430,6 +3440,65 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             gate: gate.to_string(),
             gate_code: gate_code.to_string(),
             gate_reason: gate_reason.to_string(),
+            ledger_root: read.ledger_root.to_string(),
+            aux_root: read.aux_root.to_string(),
+        })
+    }
+
+    async fn get_palw_conformance_evidence_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwConformanceEvidenceRequest,
+    ) -> RpcResult<GetPalwConformanceEvidenceResponse> {
+        // A malformed class id is an error before any state is read, on every network.
+        let class = parse_hash64(request.class_id.trim(), "class id")?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwConformanceEvidenceResponse { class_id: class.to_string(), ..Default::default() });
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let tip_daa = session.get_virtual_daa_score();
+        let Some(read) = session.spawn_blocking(move |c| c.palw_conformance_evidence_v1(class)).await else {
+            return Ok(GetPalwConformanceEvidenceResponse { available: true, class_id: class.to_string(), tip_daa, ..Default::default() });
+        };
+        use kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1;
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        let (gate, gate_code, gate_reason) = match read.gate {
+            PalwOnboardingGateV1::NotKernelBound => ("NotKernelBound", "", ""),
+            PalwOnboardingGateV1::Ready => ("Ready", "", ""),
+            PalwOnboardingGateV1::Held { code, why } => ("Held", code, why),
+        };
+        let a = read.attempt.as_ref();
+        let posted = a.and_then(|a| a.evidence);
+        Ok(GetPalwConformanceEvidenceResponse {
+            available: true,
+            found: true,
+            tip_daa,
+            class_id: class.to_string(),
+            lifecycle_state: a.map(|a| a.record.state.code().to_string()).unwrap_or_default(),
+            last_failure: a.and_then(|a| a.record.last_failure).map(|f| f.code().to_string()).unwrap_or_default(),
+            attempt_end: a.and_then(|a| a.last_end).map(|(e, _)| e.name().to_string()).unwrap_or_default(),
+            attempts: a.map(|a| a.record.attempts()).unwrap_or(0),
+            attempt_limit: a.map(|a| a.record.attempt_limit).unwrap_or(read.policy.retry_limit.saturating_add(1)),
+            challenge_policy_id: hex(&read.policy.id()),
+            challenge_policy: hex(&borsh::to_vec(&read.policy).unwrap_or_default()),
+            statement_root: a.map(|a| hex(&a.commitment.statement_root())).unwrap_or_default(),
+            committed_daa: a.map(|a| a.committed_daa).unwrap_or(0),
+            challenge_epoch: a.map(|a| a.challenge_epoch).unwrap_or(0),
+            beacon_state: read.beacon.to_string(),
+            beacon_have: read.beacon_have,
+            beacon_need: read.beacon_need,
+            lock_position: read.lock_position.unwrap_or(0),
+            beacon_output: read.beacon_output.map(|o| o.to_string()).unwrap_or_default(),
+            evidence_posted: posted.is_some(),
+            evidence_id: posted.map(|e| e.evidence_id.to_string()).unwrap_or_default(),
+            evidence_daa: posted.map(|e| e.posted_daa).unwrap_or(0),
+            window_end_daa: posted.map(|e| e.window_end_daa).unwrap_or(0),
+            gate: gate.to_string(),
+            gate_code: gate_code.to_string(),
+            gate_reason: gate_reason.to_string(),
+            attempt_row: read.attempt_row.as_deref().map(hex).unwrap_or_default(),
+            evidence_row: read.evidence_row.as_deref().map(hex).unwrap_or_default(),
+            program: read.program.as_deref().map(hex).unwrap_or_default(),
             ledger_root: read.ledger_root.to_string(),
             aux_root: read.aux_root.to_string(),
         })

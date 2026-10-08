@@ -8429,7 +8429,7 @@ pub enum PalwConsensusObjectV2 {
     /// the route's aux table 41. Dropped by name below `palw_probabilistic_constraints_v1`. **Tag 113, declared explicitly** (the
     /// lead's allocation of 2026-10-08; 112 unallocated).
     KernelRouteChunkV1 { chunk: Box<crate::palw_kernel_route_v1::PalwKernelChunkV1>, signature: Vec<u8> } = 113,
-    // Tags 104–108 are lane D's onboarding objects (phase 3; the lead's allocation of 2026-10-08), 109 reserved. Dropped by name below
+    // Tags 104–108 are lane D's onboarding objects (phase 3; the lead's allocation of 2026-10-08), 109 P0's evidence. Dropped by name below
     // `palw_probabilistic_constraints_v1` (the envelope, 108, below `palw_signed_registration_v1`); rows in the route's aux tables.
     /// **G14 phase 3 (tag 104): the registrant of an existing V2 class states that its artifact has kernel root `kernel_param_root`**
     /// (`ParamCommitmentsV1::root`). Bonded (a slice of the signer's free collateral is reserved) and refutable by tag 105; the root is
@@ -8453,21 +8453,38 @@ pub enum PalwConsensusObjectV2 {
     /// select its checks. A new artifact root is a new class and needs a new commitment; `statement_root` excludes provenance.
     /// **Tag 107.**
     ConformanceCommittedV1 { commitment: Box<misaka_palw_challenge::ConformanceCommitmentV1>, signer: PalwBondKeyV2, signature: Vec<u8> } = 107,
-    /// **(tag 108): a class registration with a SIGNED expiry and ruleset** (RFC-0009 G-EXPIRY, G-RULESET). The owner's signature on a
-    /// registration covers neither a last-valid DAA nor the ruleset, so a leaked signed bundle stays valid until its funding input is
-    /// spent. This envelope signs both: it is accepted only at a block with `daa ≤ valid_until_daa` on the ruleset whose
-    /// `consensus_params_id` it names, and is then replaced by the registration it wraps — every rule of the wrapped object applies
-    /// unchanged. Dropped by name below `palw_signed_registration_v1`. **Tag 108.**
+    /// **(tag 108): a class registration with a SIGNED validity window and fork** (RFC-0009 G-EXPIRY, G-RULESET). The owner's
+    /// signature on a registration covers neither a last-valid DAA nor the rules, so a leaked signed bundle stays valid until its
+    /// funding input is spent. This envelope signs both: it is accepted only at a block with `valid_from_daa ≤ daa ≤ valid_until_daa`
+    /// whose fork-id fired digest (`fork_id_v1(params, daa).fired`: genesis and every fence crossed so far) equals `fork_digest`, the
+    /// digest the signer computed at `valid_from_daa` from its own compiled params — then it is replaced by the registration it wraps,
+    /// every rule of the wrapped object applying unchanged. **Not `consensus_params_id`** (F-C4R3-01(b)): that id moves when a release
+    /// merely SCHEDULES a fence, so an envelope in flight during a rollout split old and upgraded builds before any fence height; builds
+    /// that agree on every fence fired so far agree on the envelope, and one signed before a fence crosses expires across it.
+    /// Dropped by name below `palw_signed_registration_v1`. **Tag 108.**
     SignedRegistrationV1 {
         registration: Box<PalwConsensusObjectV2>,
+        valid_from_daa: u64,
         valid_until_daa: u64,
-        consensus_params_id: crate::Hash,
+        fork_digest: crate::Hash,
         signer: PalwBondKeyV2,
         signature: Vec<u8>,
     } = 108,
+    /// **(tag 109, onboarding P0): conformance evidence** — `Post` (the class's registrant: the evidence of its current attempt and
+    /// the material that rebuilds it, judged in the fold against the beacon THIS chain locked from future Panel-independent Finals) or
+    /// `Refute` (any other operator, inside the evidence's challenge window: an objective fault from public material). Rows in the
+    /// route's aux tables 39 and 40; large evidence rides `ObjectChunk`s and is judged on the assembled whole. `signature`: the
+    /// signer's ML-DSA-87 over [`crate::palw_onboarding_v1::palw_onboarding_message_v1`] (kind 109, payload `borsh(v2_class, action)`).
+    /// Dropped by name below `palw_probabilistic_constraints_v1`. **Tag 109.**
+    ConformanceEvidenceV1 {
+        v2_class: Hash64,
+        action: Box<crate::palw_conformance_evidence_v1::ConformanceEvidenceActionV1>,
+        signer: PalwBondKeyV2,
+        signature: Vec<u8>,
+    } = 109,
 }
 
-/// **Is this object an onboarding object (tags 104–107)** — a variant an older build cannot decode and skips (A-2)? Below
+/// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
 /// `Params::palw_probabilistic_constraints_v1` the acceptance walk drops it by name; the fold refuses it as the second lock.
 pub fn palw_object_is_onboarding_v1(object: &PalwConsensusObjectV2) -> bool {
     matches!(
@@ -8476,6 +8493,7 @@ pub fn palw_object_is_onboarding_v1(object: &PalwConsensusObjectV2) -> bool {
             | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. }
             | PalwConsensusObjectV2::KernelBoundV1 { .. }
             | PalwConsensusObjectV2::ConformanceCommittedV1 { .. }
+            | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. }
     )
 }
 
@@ -9321,11 +9339,14 @@ pub fn palw_chunked_object_kind_admitted_v1(object: &PalwConsensusObjectV2) -> b
     // G14 lane D: a kernel route object (a class registration, a claim's commitments, a response) may exceed one carrier; its
     // signature is checked on the assembled whole at the completing chunk (the acceptance walk).
     // G14 phase 3: a binding's refutation carries a whole commitment map and two openings — it may exceed one carrier too.
+    // Onboarding P0: conformance evidence carries every selected check's outcome (and a refutation an artifact opening) — judged on
+    // the assembled whole, its signature checked at the completing chunk, like the two above.
     matches!(
         object,
         PalwConsensusObjectV2::FamilyCertified { .. }
             | PalwConsensusObjectV2::KernelRouteV1 { .. }
             | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. }
+            | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. }
     )
 }
 
@@ -31690,9 +31711,10 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         .collect();
     for (class_id, share) in due {
         // **G14 lane D phase 3: a kernel-bound class leaves `Registered` only through the onboarding gate** — its artifact binding past the
-        // refutation horizon, the kernel class standing (registered only after PUBLIC_PROSECUTION_COMPLETE) and a conformance commitment
-        // on chain. A class with no kernel binding follows the legacy path unchanged. Held, it stays Registered and is asked again at
-        // every block; the gate's reason is readable (`getPalwOnboarding`).
+        // refutation horizon, the kernel class standing (registered only after PUBLIC_PROSECUTION_COMPLETE) and its conformance record
+        // past CONFORMANCE_PASSED (onboarding P0: verified, unrefuted evidence — a commitment alone never). A class with no kernel
+        // binding follows the legacy path unchanged. Held, it stays Registered and is asked again at every block; the gate's reason is
+        // readable (`getPalwOnboarding`, `getPalwConformanceEvidence`).
         if let Some(route) = builder.state.kernel_route.as_ref()
             && let Some(class) = builder.state.classes.get(&class_id)
             && let crate::palw_onboarding_v1::PalwOnboardingGateV1::Held { .. } =
@@ -31745,6 +31767,8 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         let mut record = builder.state.classes.get(&class_id).expect("just listed").clone();
         record.status = PalwClassStatusV2::Active;
         builder.write_class(class_id, Some(record));
+        // Onboarding P0: a gated class that activated is ACTIVE_REWARDABLE in its conformance record (a no-op for any other class).
+        palw_onboarding_fold_v1::note_class_activated_v1(builder, &class_id);
     }
     Ok(())
 }
@@ -34570,6 +34594,10 @@ fn apply_object(
         }
         PalwConsensusObjectV2::ConformanceCommittedV1 { commitment, signer, signature: _ } => {
             palw_onboarding_fold_v1::apply_conformance_committed_v1(builder, ctx, commitment, signer)?;
+        }
+        // **Onboarding P0 (tag 109): conformance evidence** — posted or refuted; tables 39 and 40 (`palw_onboarding_fold_v1`).
+        PalwConsensusObjectV2::ConformanceEvidenceV1 { v2_class, action, signer, signature: _ } => {
+            palw_onboarding_fold_v1::apply_conformance_evidence_v1(builder, ctx, v2_class, action, signer)?;
         }
         // (tag 108): the acceptance walk replaces the envelope by the registration it wraps, so the fold never meets one.
         PalwConsensusObjectV2::SignedRegistrationV1 { .. } => {

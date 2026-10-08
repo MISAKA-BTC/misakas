@@ -127,6 +127,7 @@ message KaspadRequest {
     GetPalwKernelRowsRequestMessage getPalwKernelRowsRequest = 1236;
     GetPalwKernelFinalsRequestMessage getPalwKernelFinalsRequest = 1238;
     GetPalwOnboardingRequestMessage getPalwOnboardingRequest = 1274;
+    GetPalwConformanceEvidenceRequestMessage getPalwConformanceEvidenceRequest = 1276;
   }
 }
 
@@ -253,6 +254,7 @@ message KaspadResponse {
     GetPalwKernelRowsResponseMessage getPalwKernelRowsResponse = 1237;
     GetPalwKernelFinalsResponseMessage getPalwKernelFinalsResponse = 1239;
     GetPalwOnboardingResponseMessage getPalwOnboardingResponse = 1275;
+    GetPalwConformanceEvidenceResponseMessage getPalwConformanceEvidenceResponse = 1277;
   }
 }
 

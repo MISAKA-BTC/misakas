@@ -923,6 +923,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwSettlementResponse>, protowire::Ge
     Self {
         dns_retired_at: item.dns_retired_at,
         native_settlement_json: item.native_settlement.as_ref().map(|s| serde_json::to_string(s).expect("settlement snapshot has JSON-safe fields")),
+        native_readiness_json: item.native_readiness.as_ref().map(|s| serde_json::to_string(s).expect("settlement readiness has JSON-safe fields")),
 
         available: item.available,
         sink_daa: item.sink_daa,
@@ -1609,6 +1610,45 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwOnboardingResponse>, protowire::Ge
         gate: item.gate.clone(),
         gate_code: item.gate_code.clone(),
         gate_reason: item.gate_reason.clone(),
+        ledger_root: item.ledger_root.clone(),
+        aux_root: item.aux_root.clone(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwConformanceEvidenceRequest, protowire::GetPalwConformanceEvidenceRequestMessage, {
+    Self { class_id: item.class_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwConformanceEvidenceResponse>, protowire::GetPalwConformanceEvidenceResponseMessage, {
+    Self {
+        available: item.available,
+        found: item.found,
+        tip_daa: item.tip_daa,
+        class_id: item.class_id.clone(),
+        lifecycle_state: item.lifecycle_state.clone(),
+        last_failure: item.last_failure.clone(),
+        attempt_end: item.attempt_end.clone(),
+        attempts: item.attempts,
+        attempt_limit: item.attempt_limit,
+        challenge_policy_id: item.challenge_policy_id.clone(),
+        challenge_policy: item.challenge_policy.clone(),
+        statement_root: item.statement_root.clone(),
+        committed_daa: item.committed_daa,
+        challenge_epoch: item.challenge_epoch,
+        beacon_state: item.beacon_state.clone(),
+        beacon_have: item.beacon_have,
+        beacon_need: item.beacon_need,
+        lock_position: item.lock_position,
+        beacon_output: item.beacon_output.clone(),
+        evidence_posted: item.evidence_posted,
+        evidence_id: item.evidence_id.clone(),
+        evidence_daa: item.evidence_daa,
+        window_end_daa: item.window_end_daa,
+        gate: item.gate.clone(),
+        gate_code: item.gate_code.clone(),
+        gate_reason: item.gate_reason.clone(),
+        attempt_row: item.attempt_row.clone(),
+        evidence_row: item.evidence_row.clone(),
+        program: item.program.clone(),
         ledger_root: item.ledger_root.clone(),
         aux_root: item.aux_root.clone(),
         error: None,
@@ -3282,6 +3322,7 @@ try_from!(item: &protowire::GetPalwSettlementResponseMessage, RpcResult<kaspa_rp
     Self {
         dns_retired_at: item.dns_retired_at,
         native_settlement: item.native_settlement_json.as_ref().map(|s| serde_json::from_str(s)).transpose().map_err(|e| kaspa_rpc_core::RpcError::General(format!("invalid native settlement snapshot: {e}")))?,
+        native_readiness: item.native_readiness_json.as_ref().map(|s| serde_json::from_str(s)).transpose().map_err(|e| kaspa_rpc_core::RpcError::General(format!("invalid native settlement readiness: {e}")))?,
 
         available: item.available,
         sink_daa: item.sink_daa,
@@ -3954,6 +3995,44 @@ try_from!(item: &protowire::GetPalwOnboardingResponseMessage, RpcResult<kaspa_rp
         gate: item.gate.clone(),
         gate_code: item.gate_code.clone(),
         gate_reason: item.gate_reason.clone(),
+        ledger_root: item.ledger_root.clone(),
+        aux_root: item.aux_root.clone(),
+    }
+});
+try_from!(item: &protowire::GetPalwConformanceEvidenceRequestMessage, kaspa_rpc_core::GetPalwConformanceEvidenceRequest, {
+    Self { class_id: item.class_id.clone() }
+});
+try_from!(item: &protowire::GetPalwConformanceEvidenceResponseMessage, RpcResult<kaspa_rpc_core::GetPalwConformanceEvidenceResponse>, {
+    Self {
+        available: item.available,
+        found: item.found,
+        tip_daa: item.tip_daa,
+        class_id: item.class_id.clone(),
+        lifecycle_state: item.lifecycle_state.clone(),
+        last_failure: item.last_failure.clone(),
+        attempt_end: item.attempt_end.clone(),
+        attempts: item.attempts,
+        attempt_limit: item.attempt_limit,
+        challenge_policy_id: item.challenge_policy_id.clone(),
+        challenge_policy: item.challenge_policy.clone(),
+        statement_root: item.statement_root.clone(),
+        committed_daa: item.committed_daa,
+        challenge_epoch: item.challenge_epoch,
+        beacon_state: item.beacon_state.clone(),
+        beacon_have: item.beacon_have,
+        beacon_need: item.beacon_need,
+        lock_position: item.lock_position,
+        beacon_output: item.beacon_output.clone(),
+        evidence_posted: item.evidence_posted,
+        evidence_id: item.evidence_id.clone(),
+        evidence_daa: item.evidence_daa,
+        window_end_daa: item.window_end_daa,
+        gate: item.gate.clone(),
+        gate_code: item.gate_code.clone(),
+        gate_reason: item.gate_reason.clone(),
+        attempt_row: item.attempt_row.clone(),
+        evidence_row: item.evidence_row.clone(),
+        program: item.program.clone(),
         ledger_root: item.ledger_root.clone(),
         aux_root: item.aux_root.clone(),
     }
@@ -5346,6 +5425,32 @@ mod native_settlement_tests {
         let wire: protowire::GetPrecommitDutyResponseMessage = RpcResult::Ok(&duty).into();
         assert_eq!(GetPrecommitDutyResponse::try_from(&wire).unwrap().retired_at, Some(5));
     }
+
+    /// RFC-0012 D1: the readiness explanation is the next optional JSON field (12); an older peer's message reads as "none".
+    #[test]
+    fn rfc0012_grpc_roundtrips_the_safe_readiness_and_rejects_a_corrupt_one() {
+        use kaspa_consensus_core::palw_native_readiness_v1::*;
+        use kaspa_consensus_core::palw_native_settlement_v1::{PalwSettlementPolicyV1, SkippedEvidenceV1};
+        let h = kaspa_consensus_core::Hash64::from_u64_word;
+        let readiness = native_stopped_readiness_v1(
+            h(9),
+            (100, 90),
+            PalwSettlementPolicyV1 { settled_anchor_depth: 2, unique_mature_work: 20, max_operator_permille: 600, max_class_permille: 600 },
+            native_maturity_report_v1(3_000, 120),
+            SafeWaitV1::Unexecuted,
+            FinalizedReadinessV1 { finalized: None, pruning_point: h(1), pruning_blue: None, wait: Some(FinalizedWaitV1::NoSafePrefix) },
+            SkippedEvidenceV1::default(),
+        );
+        let response = GetPalwSettlementResponse { native_readiness: Some(readiness.clone()), ..Default::default() };
+        let wire: protowire::GetPalwSettlementResponseMessage = RpcResult::Ok(&response).into();
+        assert!(wire.native_readiness_json.is_some());
+        let decoded: GetPalwSettlementResponse = (&wire).try_into().unwrap();
+        assert_eq!(decoded.native_readiness, Some(readiness));
+        let absent: protowire::GetPalwSettlementResponseMessage = RpcResult::Ok(&GetPalwSettlementResponse::default()).into();
+        assert!(absent.native_readiness_json.is_none());
+        let corrupt = protowire::GetPalwSettlementResponseMessage { native_readiness_json: Some("{\"version\":1}".into()), ..wire };
+        assert!(GetPalwSettlementResponse::try_from(&corrupt).is_err());
+    }
 }
 
 #[cfg(test)]
@@ -5493,6 +5598,47 @@ mod palw_kernel_route_grpc_tests {
         };
         let wire: protowire::GetPalwOnboardingResponseMessage = RpcResult::Ok(&response).into();
         let back: kaspa_rpc_core::GetPalwOnboardingResponse = (&wire).try_into().unwrap();
+        assert_eq!(back, response);
+
+        // Onboarding P0 (op 231): every field distinct, both ways.
+        let request = kaspa_rpc_core::GetPalwConformanceEvidenceRequest { class_id: "cd".repeat(64) };
+        let wire: protowire::GetPalwConformanceEvidenceRequestMessage = (&request).into();
+        assert_eq!(kaspa_rpc_core::GetPalwConformanceEvidenceRequest::try_from(&wire).unwrap().class_id, request.class_id);
+        let response = kaspa_rpc_core::GetPalwConformanceEvidenceResponse {
+            available: true,
+            found: true,
+            tip_daa: 300,
+            class_id: "01".repeat(64),
+            lifecycle_state: "CHALLENGE_PENDING".to_string(),
+            last_failure: "BEACON_UNAVAILABLE".to_string(),
+            attempt_end: "BEACON_UNAVAILABLE".to_string(),
+            attempts: 1,
+            attempt_limit: 3,
+            challenge_policy_id: "02".repeat(64),
+            challenge_policy: "0a0b".to_string(),
+            statement_root: "03".repeat(64),
+            committed_daa: 200,
+            challenge_epoch: 1,
+            beacon_state: "LOCKED".to_string(),
+            beacon_have: 2,
+            beacon_need: 2,
+            lock_position: 261,
+            beacon_output: "04".repeat(64),
+            evidence_posted: true,
+            evidence_id: "05".repeat(64),
+            evidence_daa: 270,
+            window_end_daa: 350,
+            gate: "Held".to_string(),
+            gate_code: "CHALLENGE_PENDING".to_string(),
+            gate_reason: "the window is open".to_string(),
+            attempt_row: "0c0d".to_string(),
+            evidence_row: "0e0f".to_string(),
+            program: "1011".to_string(),
+            ledger_root: "06".repeat(64),
+            aux_root: "07".repeat(64),
+        };
+        let wire: protowire::GetPalwConformanceEvidenceResponseMessage = RpcResult::Ok(&response).into();
+        let back: kaspa_rpc_core::GetPalwConformanceEvidenceResponse = (&wire).try_into().unwrap();
         assert_eq!(back, response);
     }
 }

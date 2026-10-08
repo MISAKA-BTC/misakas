@@ -1512,6 +1512,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 None => one(v),
             }
         }
+        Op::BlockLinear { block } => one(lower_block_linear(b, cx, lb, node.inputs[0], pidx(node.inputs[1])?, *block, &site, &want)?),
         Op::Add | Op::Sub => {
             let a = operand(lb, node.inputs[0])?;
             let c = operand(lb, node.inputs[1])?;
@@ -2537,6 +2538,60 @@ fn weight_codes(p: u32) -> FillFn {
 /// fixed channels (Qwen2.5's first-token MLP channels reach 1000× the others) costs those
 /// channels nothing and the rest keep their precision.
 #[allow(clippy::too_many_arguments)]
+/// **`WEIGHT_ROTATION_HADAMARD_V1`**: `y[k·B + i] = Σ_j P[k·B + i, j] · x[k·B + j]` — the param's `[n, B]` rows at per-row `i8`
+/// (the normalised Hadamard's entries are all `±2^-log2(B)/2`: every row has one scale and the codes are `±127`, exact), viewed as
+/// `[n/B, B, B]`, times the input's codes viewed as `[n/B, B, 1]` (a batched `MatMul` into `i64`: `127 · 2^15 · B` fits), narrowed once
+/// to the site's calibrated scale. No outlier split: the rotation spreads every outlier over its block, which is why it is there.
+#[allow(clippy::too_many_arguments)]
+fn lower_block_linear(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    input: hl::Ref,
+    w: u32,
+    block: usize,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    let x = operand(lb, input)?;
+    let x = codes(b, cx, lb, &x)?;
+    if x.key.split() != 0 {
+        return Err(LowerError::eval(format!("internal: the rotation `{site}` reads a split value")));
+    }
+    let hl = cx.hl;
+    let d = &hl.params[w as usize];
+    let (n, bs) = (d.shape[0], *d.shape.get(1).unwrap_or(&0));
+    if bs != block || bs == 0 || n % bs != 0 || (x.len != 0 && x.len != n) {
+        return Err(LowerError::eval(format!("internal: a block linear of block {block} over {} values with a param of {:?}", x.len, d.shape)));
+    }
+    let nb = n / bs;
+    let wt = decl_rows(b, cx, lb, &d.name, &[n, bs], d.per_layer, RowKind::W8, w)?;
+    let wt = b.reshape_fixed(wt, &[nb as u32, bs as u32, bs as u32]);
+    let xc = b.reshape_fixed(x.r, &[nb as u32, bs as u32, 1]);
+    let (kx, ky) = (x.key.clone(), want.key.clone());
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        site,
+        n,
+        Arc::new(move |c| {
+            let scales = c.row_scales(w, false)?;
+            let (sx, sy) = (c.scale(&kx)?, c.scale_vec(&ky, n)?);
+            Ok(scales.iter().zip(&sy).map(|(sw, sy)| sw * sx / sy).collect())
+        }),
+    )?;
+    let acc = b.matmul(wt, xc, DType::I64);
+    let acc = b.reshape_fixed(acc, &[n as u32]);
+    let r = narrow(b, acc, m, s, None, want.dt);
+    if want.dt == DType::I16 {
+        b.commit(r);
+    }
+    let v = Val { r, dt: want.dt, key: want.key.clone(), len: n, site: site.to_string() };
+    note_resid(cx, lb, &v);
+    Ok(v)
+}
+
 fn lower_linear(
     b: &mut BlockBuilder<'_>,
     cx: &mut Cx<'_>,

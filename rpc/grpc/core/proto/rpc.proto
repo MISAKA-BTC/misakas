@@ -2019,6 +2019,8 @@ message GetPalwSettlementResponseMessage {
   uint64 safeFrontierDaa = 9;
   optional uint64 dnsRetiredAt = 10;
   optional string nativeSettlementJson = 11;
+  // RFC-0012 D1: the `safe` readiness explanation (`NativeSafeReadinessV1`) as JSON; absent before the retirement fence.
+  optional string nativeReadinessJson = 12;
   RPCError error = 1000;
 }
 
@@ -3203,6 +3205,46 @@ message GetPalwOnboardingResponseMessage {
   string gateReason = 18;
   string ledgerRoot = 19;
   string auxRoot = 20;
+  RPCError error = 1000;
+}
+
+// Onboarding P0: a V2 class's conformance record, current attempt and posted evidence (op 231).
+message GetPalwConformanceEvidenceRequestMessage {
+  string classId = 1;
+}
+
+message GetPalwConformanceEvidenceResponseMessage {
+  bool available = 1;
+  bool found = 2;
+  uint64 tipDaa = 3;
+  string classId = 4;
+  string lifecycleState = 5;
+  string lastFailure = 6;
+  string attemptEnd = 7;
+  uint32 attempts = 8;
+  uint32 attemptLimit = 9;
+  string challengePolicyId = 10;
+  string challengePolicy = 11;
+  string statementRoot = 12;
+  uint64 committedDaa = 13;
+  uint64 challengeEpoch = 14;
+  string beaconState = 15;
+  uint32 beaconHave = 16;
+  uint32 beaconNeed = 17;
+  uint64 lockPosition = 18;
+  string beaconOutput = 19;
+  bool evidencePosted = 20;
+  string evidenceId = 21;
+  uint64 evidenceDaa = 22;
+  uint64 windowEndDaa = 23;
+  string gate = 24;
+  string gateCode = 25;
+  string gateReason = 26;
+  string attemptRow = 27;
+  string evidenceRow = 28;
+  string ledgerRoot = 29;
+  string auxRoot = 30;
+  string program = 31;
   RPCError error = 1000;
 }
 

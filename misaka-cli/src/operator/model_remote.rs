@@ -50,6 +50,54 @@ pub(crate) struct RemoteArgs {
     pub(crate) single_rpc: bool,
     /// A block hash the operator trusts (`--pin`): the owner bond and its key are proven against it and the proof rides in the bundle.
     pub(crate) pin: Option<String>,
+    /// `--accept-unverified-state <LABEL>`: the class the user accepts signing in below VERIFIED_REMOTE.
+    pub(crate) accept_unverified_state: Option<String>,
+}
+
+/// **The class `model add` signs in** (RFC-0009, 2026-10-08): a node on this machine is the user's own full node (`FULL_NODE`); a node
+/// elsewhere, or a quorum of them, is `UNVERIFIED_REMOTE` (the owner key proven against `--pin` does not verify the terms, the funding or the
+/// fork choice the registration is priced and folded on).
+pub(crate) fn add_mode_v1(rpc_url: &str) -> misaka_palw_remote::verify::ModeLabelV1 {
+    use misaka_palw_remote::verify::ModeLabelV1;
+    let host = rpc_url.trim_start_matches("ws://").trim_start_matches("wss://").trim_start_matches("grpc://");
+    let host = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host).trim_start_matches('[').trim_end_matches(']');
+    if matches!(host, "127.0.0.1" | "localhost" | "::1") { ModeLabelV1::FullNode } else { ModeLabelV1::UnverifiedRemote }
+}
+
+/// Print the class and apply the gate (before the yes, before any key is read).
+pub(crate) fn mode_gate_v1(
+    flow: &mut crate::operator::tty::Flow,
+    label: misaka_palw_remote::verify::ModeLabelV1,
+    accept: Option<&str>,
+) -> Result<(), crate::operator::tty::Halt> {
+    use crate::operator::finding::{Finding, Severity};
+    use misaka_palw_remote::verify::{ModeLabelV1, signing_gate_v1};
+    flow.row(
+        if label >= ModeLabelV1::VerifiedRemote { Severity::Ok } else { Severity::Warning },
+        "mode",
+        format!("{} — {}", label.as_str(), label.claim()),
+    );
+    let accepted = match accept {
+        Some(t) => Some(ModeLabelV1::parse(t).ok_or_else(|| {
+            crate::operator::tty::Halt::Blocked(
+                Finding::error("E-MODE-LABEL", crate::exit::GENERIC, "--accept-unverified-state names no class")
+                    .current(format!("{t:?}: HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED or UNVERIFIED_REMOTE")),
+            )
+        })?),
+        None => None,
+    };
+    signing_gate_v1(label, accepted).map_err(|g| {
+        crate::operator::tty::Halt::Blocked(
+            Finding::error(
+                "E-MODE-UNVERIFIED",
+                crate::exit::NOT_READY,
+                "Nothing was signed: the state behind this registration is not verified",
+            )
+            .current(g.to_string())
+            .reason("not running a full node is fine; trusting what a node says is not — the class is named so the choice is yours")
+            .fix(format!("run against your own node, or --accept-unverified-state {}", label.as_str())),
+        )
+    })
 }
 
 impl RemoteArgs {
@@ -172,8 +220,16 @@ pub(crate) async fn read_facts(
     probe: &PalwConsensusObjectV2,
     sponsor: Option<u64>,
 ) -> Result<(RegistrationFactsV1, Funding), Halt> {
-    let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. } = unsigned else {
-        return Err(blocked("E-MODEL-REGISTRATION", "Not a registration", "the object is not ClassRegistered"));
+    let (class_id, artifact_root) = match unsigned {
+        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. }
+        | PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, artifact_root, .. } => (class_id, artifact_root),
+        _ => {
+            return Err(blocked(
+                "E-MODEL-REGISTRATION",
+                "Not a registration",
+                "the object is neither ClassRegistered nor ClassRegisteredTirV1",
+            ));
+        }
     };
     let dag = node
         .client()
@@ -447,5 +503,13 @@ mod tests {
         assert_eq!(a(2, Some(0)), 1);
         assert!(!RemoteArgs::default().active());
         assert!(RemoteArgs { quote_only: true, ..Default::default() }.active());
+        // RFC-0009 modes: a node on this machine is the user's own full node; anything else is the nodes' word.
+        use misaka_palw_remote::verify::ModeLabelV1;
+        for own in ["127.0.0.1:16110", "ws://localhost:17110", "[::1]:16110"] {
+            assert_eq!(add_mode_v1(own), ModeLabelV1::FullNode, "{own}");
+        }
+        for remote in ["203.0.113.5:16110", "ws://node.example:17110", "10.0.0.2:16110"] {
+            assert_eq!(add_mode_v1(remote), ModeLabelV1::UnverifiedRemote, "{remote}");
+        }
     }
 }

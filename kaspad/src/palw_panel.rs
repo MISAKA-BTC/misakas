@@ -14245,6 +14245,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::KernelBoundV1 { .. } => "KernelBoundV1",
         PalwConsensusObjectV2::ConformanceCommittedV1 { .. } => "ConformanceCommittedV1",
         PalwConsensusObjectV2::SignedRegistrationV1 { .. } => "SignedRegistrationV1",
+        PalwConsensusObjectV2::ConformanceEvidenceV1 { .. } => "ConformanceEvidenceV1",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

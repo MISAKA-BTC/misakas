@@ -31,6 +31,21 @@ use crate::operator::model_remote as remote;
 use crate::operator::snapshot;
 use crate::operator::tty::{Flow, Halt, Step};
 use crate::{CliResult, exit};
+use misaka_palw_remote::verify::{ModeLabelV1, signing_gate_v1};
+
+/// **The class a detached signature is made in.** Offline, the only verified fact is the owner bond's key proven against `--pin` (checked by
+/// `check_bundle_v1`): from the user's own node that pin is a trusted checkpoint and the decision point for an append-only fact
+/// (`VERIFIED_REMOTE`); typed in from elsewhere it anchors the header only (`HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED`); without it every chain
+/// fact in the bundle is the builder's nodes' word (`UNVERIFIED_REMOTE`).
+pub(crate) fn sign_mode_v1(pinned_proof_checked: bool, pin_from_own_node: bool) -> ModeLabelV1 {
+    use misaka_palw_remote::verify::{L2StatusV1, mode_label_v1};
+    let l2 = if pin_from_own_node {
+        L2StatusV1::EstablishedAtTrustedCheckpoint
+    } else {
+        L2StatusV1::Unverified("a pin from elsewhere anchors the header, not the fork choice")
+    };
+    mode_label_v1(false, pinned_proof_checked, pinned_proof_checked, &l2)
+}
 
 /// `--expect-class`, `--expect-root`, `--expect-owner`.
 #[derive(Clone, Debug, Default)]
@@ -51,6 +66,10 @@ pub(crate) struct SignArgs {
     pub(crate) expect: ExpectArgs,
     pub(crate) max_fee_sompi: Option<u64>,
     pub(crate) pin: Option<String>,
+    /// The pin came from the user's own full node.
+    pub(crate) pin_from_own_node: bool,
+    /// `--accept-unverified-state <LABEL>`.
+    pub(crate) accept_unverified_state: Option<String>,
     pub(crate) out: Option<PathBuf>,
     pub(crate) yes: bool,
 }
@@ -261,6 +280,38 @@ async fn sign_flow(
     if from_file {
         flow.ui.sub(&paint::yellow("expect     taken from the file itself"));
     }
+    // **The security class this signature is made in** (RFC-0009, 2026-10-08), printed, and the gate: below VERIFIED_REMOTE nothing is
+    // signed without --accept-unverified-state naming the class. A pinned proof of the owner key was checked by `check_bundle_v1` above.
+    let label = sign_mode_v1(pin.is_some(), args.pin_from_own_node);
+    flow.row(
+        if label >= ModeLabelV1::VerifiedRemote { Severity::Ok } else { Severity::Warning },
+        "mode",
+        format!("{} — {}", label.as_str(), label.claim()),
+    );
+    doc.insert("mode".into(), label.as_str().into());
+    let accepted = match args.accept_unverified_state.as_deref() {
+        Some(t) => Some(ModeLabelV1::parse(t).ok_or_else(|| {
+            halt(
+                "E-MODE-LABEL",
+                exit::GENERIC,
+                "--accept-unverified-state names no class",
+                format!("{t:?}: HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED or UNVERIFIED_REMOTE"),
+            )
+        })?),
+        None => None,
+    };
+    signing_gate_v1(label, accepted).map_err(|g| {
+        Halt::Blocked(
+            Finding::error(
+                "E-MODE-UNVERIFIED",
+                exit::NOT_READY,
+                "Nothing was signed: the state behind this registration is not verified",
+            )
+            .current(g.to_string())
+            .reason("not running a full node is fine; trusting what a node says is not — the class is named so the choice is yours")
+            .fix(format!("--pin <a block from your own node> --pin-from-own-node, or --accept-unverified-state {}", label.as_str())),
+        )
+    })?;
     flow.ask("Sign this registration?", false, "nothing was signed").await?;
 
     let load = |file: Option<&String>, stdin: bool| -> Result<KeySigner, Halt> {
@@ -373,6 +424,17 @@ async fn submit_flow(
         .map_err(|e| halt("E-READ", exit::HOST, format!("{}: {e}", args.signed.display()), ""))?;
     let s = SignedRegistrationV1::from_json(&text).map_err(refused)?;
     flow.ui.say(&paint::bold(&format!("MISAKA model submit · {}", chain.net)));
+    // Relaying signs nothing (the bytes are already signed); the class of what the relays REPORT is printed all the same.
+    let mode = ModeLabelV1::UnverifiedRemote;
+    flow.row(
+        Severity::Warning,
+        "mode",
+        format!(
+            "{} — {} (a --pin proof of the registration is shown separately once the relays report it)",
+            mode.as_str(),
+            mode.claim()
+        ),
+    );
     let (expect, from_file) = expectations(&args.expect, (s.class_id, s.artifact_root, &s.owner_bond), args.yes, flow)?;
     if s.ruleset_id != chain.ruleset {
         return Err(halt(
@@ -845,6 +907,9 @@ mod tests {
             },
             max_fee_sompi: Some(fx.fee),
             pin: None,
+            pin_from_own_node: false,
+            // No pin in these fixtures: the chain facts are the builder's nodes' word, accepted explicitly.
+            accept_unverified_state: Some("UNVERIFIED_REMOTE".into()),
             out: None,
             yes: true,
         }
@@ -881,6 +946,24 @@ mod tests {
             RegistrationBundleV1::from_json(&std::fs::read_to_string(dir2.join("bundle.owner-signed.json")).unwrap()).unwrap();
         assert_eq!(owner_signed.stage, BundleStageV1::OwnerSigned);
         assert!(!dir2.join("bundle.signed.json").exists());
+    }
+
+    /// **The class the signature is made in** (RFC-0009, 2026-10-08): without a pinned proof the bundle's chain facts are the builder's
+    /// nodes' word, and `model sign` signs nothing until the user names that class; a pin from elsewhere is header-verified only; a pin
+    /// from the user's own node is VERIFIED_REMOTE. A wrong label name is refused too.
+    #[tokio::test]
+    async fn model_sign_refuses_to_sign_unverified_state_unless_the_class_is_named() {
+        assert_eq!(sign_mode_v1(false, false), ModeLabelV1::UnverifiedRemote);
+        assert_eq!(sign_mode_v1(true, false), ModeLabelV1::HeaderVerifiedForkChoiceUnverified);
+        assert_eq!(sign_mode_v1(true, true), ModeLabelV1::VerifiedRemote);
+        let fx = fixture();
+        for accept in [None, Some("HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED".to_string()), Some("FULLY_TRUSTED".to_string())] {
+            let dir = scratch("mode");
+            let mut args = sign_args(&dir, &fx, &fx.bundle);
+            args.accept_unverified_state = accept.clone();
+            assert!(sign(&ctx(), args).await.is_err(), "{accept:?} does not accept UNVERIFIED_REMOTE");
+            assert!(!dir.join("bundle.signed.json").exists() && !dir.join("bundle.owner-signed.json").exists(), "nothing signed");
+        }
     }
 
     /// A bundle altered by the builder is refused by `model sign`, and no file is written.
