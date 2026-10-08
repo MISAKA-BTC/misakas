@@ -1,5 +1,7 @@
 <h1>misakas — post-quantum (PQ-only) Kaspa</h1>
 
+> **MISAKAの設計前提(すべての ADR・RFC・Spec の上位): [不可侵原則](docs/PRINCIPLES.md)** — 確率的に検出し、公開証拠で局所化し、決定論的に裁き、経済的に不正を抑止する。 *Probabilistic Detection. Public Localization. Deterministic Adjudication. Economic Deterrence.*
+
 The native token is **Misaka**, ticker **BILI**. Native addresses keep the `misaka`
 prefix (with the existing network-specific variants); see [ADR-0174](docs/adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md).
 
