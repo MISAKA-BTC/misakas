@@ -25,7 +25,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::hash::{DOMAIN_CHALLENGE_ANCHOR, DOMAIN_WORK_BEACON, DOMAIN_WORK_BEACON_ITEM, DOMAIN_WORK_BEACON_MIX, Digest, object_id};
 use crate::policy::{PolicyRefusalV1, PostCommitChallengePolicyV1};
-use crate::subject::SubjectKindV1;
+use crate::subject::{RootV1, SubjectKindV1};
 
 /// What a Final event on the chain is. Only `RealUsefulWork` can be a source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, BorshSerialize, BorshDeserialize)]
@@ -97,6 +97,9 @@ pub struct BeaconContextV1 {
     pub eligible_profiles: BTreeSet<Digest>,
     /// The candidate under test and every profile depending on its proposed semantics.
     pub excluded_profiles: BTreeSet<Digest>,
+    /// The candidate under test itself, refused as a source by construction (whatever `excluded_profiles` says). Required
+    /// (`Present`) for model and kernel conformance.
+    pub candidate_profile_id: RootV1,
 }
 
 impl BeaconContextV1 {
@@ -139,8 +142,10 @@ pub fn eligibility_v1(ctx: &BeaconContextV1, ev: &WorkFinalEventV1) -> Result<()
     if ev.kind != WorkSourceKindV1::RealUsefulWork {
         return Err(I::NotUsefulWork(ev.kind));
     }
+    let is_candidate = |p: &Digest| ctx.candidate_profile_id == RootV1::Present(*p);
     if ctx.excluded_profiles.contains(&ev.source_profile_id)
-        || ev.depends_on_profiles.iter().any(|p| ctx.excluded_profiles.contains(p))
+        || is_candidate(&ev.source_profile_id)
+        || ev.depends_on_profiles.iter().any(|p| ctx.excluded_profiles.contains(p) || is_candidate(p))
     {
         return Err(I::SelfOrDependent);
     }
@@ -226,6 +231,12 @@ pub fn mix_v1(prev: &Digest, i: u32, source: &BeaconSourceV1) -> Digest {
     object_id(DOMAIN_WORK_BEACON_MIX, &(*prev, i, item_v1(source)))
 }
 
+/// **The lock evidence root**: what the RFC-0013 §9 evidence binds about the lock predicate — the lock position, every
+/// accumulator and the ordered sources (a fresh node recomputes it from its own locked beacon).
+pub fn lock_evidence_root_v1(beacon: &WorkBeaconV1) -> Digest {
+    object_id(crate::hash::DOMAIN_LOCK_EVIDENCE, &(beacon.lock_position, &beacon.accumulators, &beacon.sources))
+}
+
 /// The challenge anchor: policy, epoch, window and the ordered work identities.
 pub fn challenge_anchor_v1(ctx: &BeaconContextV1, sources: &[BeaconSourceV1]) -> Digest {
     let ids: Vec<Digest> = sources.iter().map(|s| s.canonical_work_id).collect();
@@ -271,6 +282,11 @@ pub fn collect_work_beacon_v1(
     tip_position: u64,
 ) -> Result<WorkBeaconStateV1, PolicyRefusalV1> {
     ctx.policy.validate()?;
+    if matches!(ctx.subject_kind, SubjectKindV1::ModelConformance | SubjectKindV1::KernelConformance)
+        && ctx.candidate_profile_id == RootV1::Absent
+    {
+        return Err(PolicyRefusalV1::Missing("candidate_profile_id"));
+    }
     let need = ctx.policy.work_count_k;
     // Only what has settled by the tip exists on this branch.
     let settled: Vec<WorkFinalEventV1> = events.iter().filter(|e| e.settlement_position <= tip_position).cloned().collect();

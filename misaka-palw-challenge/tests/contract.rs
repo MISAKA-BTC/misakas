@@ -32,6 +32,7 @@ fn ctx(kind: SubjectKindV1) -> BeaconContextV1 {
         challenge_epoch: 7,
         eligible_profiles: [ACTIVE_A, ACTIVE_B].into_iter().collect(),
         excluded_profiles: [CANDIDATE].into_iter().collect(),
+        candidate_profile_id: RootV1::Present(CANDIDATE),
     }
 }
 
@@ -148,6 +149,16 @@ fn only_fresh_final_da_satisfied_useful_work_of_active_g14_profiles_is_a_source(
         eligibility_v1(&c, &e)
     };
     assert_eq!(with(|e| e.source_profile_id = CANDIDATE), Err(IneligibleV1::SelfOrDependent), "no self-beacon");
+    // The candidate is refused by construction even if a consumer forgets to list it as excluded.
+    let mut forgetful = c.clone();
+    forgetful.excluded_profiles.clear();
+    forgetful.eligible_profiles.insert(CANDIDATE);
+    let mut own = ok.clone();
+    own.source_profile_id = CANDIDATE;
+    assert_eq!(eligibility_v1(&forgetful, &own), Err(IneligibleV1::SelfOrDependent));
+    let mut absent = c.clone();
+    absent.candidate_profile_id = RootV1::Absent;
+    assert_eq!(collect_work_beacon_v1(&absent, &[], 0), Err(PolicyRefusalV1::Missing("candidate_profile_id")));
     assert_eq!(with(|e| e.depends_on_profiles = vec![CANDIDATE]), Err(IneligibleV1::SelfOrDependent));
     assert_eq!(with(|e| e.source_profile_id = DORMANT), Err(IneligibleV1::ProfileNotEligible), "not Active+G14 at commitment");
     assert_eq!(with(|e| e.accepted_position = 101), Err(IneligibleV1::NotFresh), "committed before S, Final after it");
@@ -421,6 +432,7 @@ fn commitment(c: &BeaconContextV1) -> ConformanceCommitmentV1 {
         challenge_policy_id: c.policy.id(),
         artifact_root: [4; 64],
         program_root: [3; 64],
+        source_root: RootV1::Present([11; 64]),
         tokenizer_or_input_schema_root: RootV1::Absent,
         layout_root: [5; 64],
         verification_plan_root: [2; 64],
@@ -450,6 +462,7 @@ fn conformance_evidence_is_recomputed_and_skipped_missing_forged_or_substituted_
         |m| m.layout_root = [0x55; 64],
         |m| m.verification_plan_root = [0x22; 64],
         |m| m.implementation_set_root = [0x88; 64],
+        |m| m.source_root = RootV1::Present([0x12; 64]),
         |m| m.challenge_policy_id = [0x99; 64],
     ] {
         let mut m = com.clone();
@@ -465,6 +478,7 @@ fn conformance_evidence_is_recomputed_and_skipped_missing_forged_or_substituted_
         challenge_policy_id: com.challenge_policy_id,
         challenge_anchor: b.challenge_anchor,
         qualifying_source_evidence_root: [0; 64],
+        lock_evidence_root: lock_evidence_root_v1(&b),
         lock_position: b.lock_position,
         beacon_output: b.output,
         challenge_seed: seed,
@@ -481,6 +495,7 @@ fn conformance_evidence_is_recomputed_and_skipped_missing_forged_or_substituted_
         missing_checks: vec![],
         failures: vec![],
         scope_and_fault_model_id: [1; 64],
+        soundness_assumptions_root: [1; 64],
         derived_epsilon_bits: 40,
         status: ConformanceStatusV1::Passed,
         public_material_locator_root: [1; 64],
@@ -500,4 +515,6 @@ fn conformance_evidence_is_recomputed_and_skipped_missing_forged_or_substituted_
     assert_eq!(judge(|e| e.challenge_policy_id = [0x13; 64]), Err(ConformanceRefusalV1::Policy));
     assert_eq!(judge(|e| e.commitment_root = [0x13; 64]), Err(ConformanceRefusalV1::Commitment));
     assert_eq!(judge(|e| e.derived_epsilon_bits = 39), Err(ConformanceRefusalV1::WeakEpsilon));
+    assert_eq!(judge(|e| e.lock_evidence_root = [0x13; 64]), Err(ConformanceRefusalV1::Beacon), "a forged lock");
+    assert_eq!(judge(|e| e.soundness_assumptions_root = [0; 64]), Err(ConformanceRefusalV1::Assumptions));
 }

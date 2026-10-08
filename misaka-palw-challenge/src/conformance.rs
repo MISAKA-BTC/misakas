@@ -24,6 +24,8 @@ pub struct ConformanceCommitmentV1 {
     pub challenge_policy_id: Digest,
     pub artifact_root: Digest,
     pub program_root: Digest,
+    /// The source provenance (format, config, files and their hashes, frontend spec/adapter, quantization descriptors).
+    pub source_root: RootV1,
     pub tokenizer_or_input_schema_root: RootV1,
     pub layout_root: Digest,
     pub verification_plan_root: Digest,
@@ -51,6 +53,7 @@ struct StatementV1<'a> {
     challenge_policy_id: &'a Digest,
     artifact_root: &'a Digest,
     program_root: &'a Digest,
+    source_root: &'a RootV1,
     tokenizer_or_input_schema_root: &'a RootV1,
     layout_root: &'a Digest,
     verification_plan_root: &'a Digest,
@@ -77,6 +80,7 @@ impl ConformanceCommitmentV1 {
                 challenge_policy_id: &self.challenge_policy_id,
                 artifact_root: &self.artifact_root,
                 program_root: &self.program_root,
+                source_root: &self.source_root,
                 tokenizer_or_input_schema_root: &self.tokenizer_or_input_schema_root,
                 layout_root: &self.layout_root,
                 verification_plan_root: &self.verification_plan_root,
@@ -142,6 +146,8 @@ pub struct BeaconConformanceEvidenceV1 {
     pub challenge_anchor: Digest,
     /// Root over the beacon's source references (their eligibility/Final/settlement facts are recomputed, never trusted).
     pub qualifying_source_evidence_root: Digest,
+    /// [`crate::beacon::lock_evidence_root_v1`] of the locked beacon.
+    pub lock_evidence_root: Digest,
     pub lock_position: u64,
     pub beacon_output: Digest,
     pub challenge_seed: Digest,
@@ -158,6 +164,9 @@ pub struct BeaconConformanceEvidenceV1 {
     pub missing_checks: Vec<String>,
     pub failures: Vec<String>,
     pub scope_and_fault_model_id: Digest,
+    /// The soundness assumptions the derived epsilon rests on (fault model, field, independence of repetitions) — a record,
+    /// not a reviewed theorem.
+    pub soundness_assumptions_root: Digest,
     /// The declared conditional error bound, as `-log2 ε` (derived for the committed scope; a claim to check, not a theorem).
     pub derived_epsilon_bits: u16,
     pub status: ConformanceStatusV1,
@@ -180,6 +189,8 @@ pub enum ConformanceRefusalV1 {
     Policy,
     #[error("the beacon output/anchor/lock is not the one derived from canonical history")]
     Beacon,
+    #[error("the soundness assumptions are not recorded")]
+    Assumptions,
     #[error("the challenge seed is not the recomputed seed")]
     Seed,
     #[error("status {0:?} is not a pass")]
@@ -192,6 +203,9 @@ pub enum ConformanceRefusalV1 {
 
 /// **Recompute and judge conformance evidence**: `derived_seed` and `beacon` are what THIS node derived from canonical history
 /// for `commitment` (see [`crate::seed::challenge_seed_v1`]); the evidence's cached values are claims to compare.
+///
+/// This judges the evidence's bindings and accounting only. Forged result roots (a reference/independent/backend result that was
+/// never computed) are detectable only by re-executing the selected checks, which a verifier must do before trusting a pass.
 pub fn verify_conformance_evidence_v1(
     commitment: &ConformanceCommitmentV1,
     beacon: &crate::beacon::WorkBeaconV1,
@@ -209,9 +223,15 @@ pub fn verify_conformance_evidence_v1(
     if ev.challenge_policy_id != commitment.challenge_policy_id {
         return Err(R::Policy);
     }
-    if ev.beacon_output != beacon.output || ev.challenge_anchor != beacon.challenge_anchor || ev.lock_position != beacon.lock_position
+    if ev.beacon_output != beacon.output
+        || ev.challenge_anchor != beacon.challenge_anchor
+        || ev.lock_position != beacon.lock_position
+        || ev.lock_evidence_root != crate::beacon::lock_evidence_root_v1(beacon)
     {
         return Err(R::Beacon);
+    }
+    if ev.soundness_assumptions_root == [0u8; 64] {
+        return Err(R::Assumptions);
     }
     if ev.challenge_seed != *derived_seed {
         return Err(R::Seed);

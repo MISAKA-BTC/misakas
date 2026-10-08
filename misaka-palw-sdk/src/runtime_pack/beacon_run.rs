@@ -703,6 +703,7 @@ pub fn assemble_evidence(
         challenge_policy_id: policy.id(),
         challenge_anchor: beacon.challenge_anchor,
         qualifying_source_evidence_root: tool_root(DOMAIN_SOURCES, &beacon.sources),
+        lock_evidence_root: misaka_palw_challenge::lock_evidence_root_v1(beacon),
         lock_position: beacon.lock_position,
         beacon_output: beacon.output,
         challenge_seed: *seed,
@@ -719,6 +720,10 @@ pub fn assemble_evidence(
         missing_checks,
         failures,
         scope_and_fault_model_id: scope.scope_and_fault_model_id(policy.repetition_count),
+        soundness_assumptions_root: tool_root(
+            b"misaka.palw.runtime-pack.soundness-assumptions.v1",
+            &(policy.soundness_policy_id, policy.field_policy_id, scope.scope_and_fault_model_id(policy.repetition_count)),
+        ),
         derived_epsilon_bits: scope.derived_epsilon_bits(policy.repetition_count),
         status,
         public_material_locator_root: tool_root(
@@ -740,6 +745,7 @@ pub fn evidence_diff(a: &BeaconConformanceEvidenceV1, b: &BeaconConformanceEvide
         challenge_policy_id,
         challenge_anchor,
         qualifying_source_evidence_root,
+        lock_evidence_root,
         lock_position,
         beacon_output,
         challenge_seed,
@@ -756,6 +762,7 @@ pub fn evidence_diff(a: &BeaconConformanceEvidenceV1, b: &BeaconConformanceEvide
         missing_checks,
         failures,
         scope_and_fault_model_id,
+        soundness_assumptions_root,
         derived_epsilon_bits,
         status,
         public_material_locator_root

@@ -801,6 +801,7 @@ fn a_claims_challenge_subject_feeds_the_single_contracts_seed_and_the_ledger_sto
         challenge_epoch: 7,
         eligible_profiles: [[0xA1; 64], [0xA2; 64]].into_iter().collect(),
         excluded_profiles: [[0xCA; 64]].into_iter().collect(),
+        candidate_profile_id: misaka_palw_challenge::RootV1::Absent,
     };
     let work = |n: u8, profile: Digest, accepted: u64, settled: u64| WorkFinalEventV1 {
         kind: WorkSourceKindV1::RealUsefulWork,

@@ -147,6 +147,7 @@ pub fn resolve_facts(
         challenge_epoch: facts.challenge_epoch,
         eligible_profiles: facts.eligible_profiles.clone(),
         excluded_profiles: facts.excluded_profiles.clone(),
+        candidate_profile_id: misaka_palw_challenge::RootV1::Present(commitment.candidate_id),
     })
 }
 
