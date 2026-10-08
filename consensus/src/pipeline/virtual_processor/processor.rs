@@ -248,6 +248,31 @@ fn kernel_route_test_attestations_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64
     roots
 }
 
+/// **RFC-0008 v2 (X8R), TEST ONLY: the classes whose REAL attempts skip the model-registry, seating and per-bond-share gates** — the
+/// stand-in, in the composed EXEC-slice × G14 run (`g14_kernel_route_e2e::conformance::exec_slices`), for an onboarded class that can
+/// take REAL work. **Residual: an onboarded class admitting REAL work under its real budget = the G14-for-rewards gap** (assigned with
+/// derived eligibility; when it lands this seam goes). Named and shaped like [`kernel_route_test_attest_artifact_v1`]: height-gated and
+/// append-only, so every node of one test, replaying the same blocks, waives the same gates at the same block; empty in every build
+/// that is not a test (`PalwKernelRouteExtrasV1::test_admitted_classes`).
+#[cfg(test)]
+static EXEC_V2_TEST_ADMITTED_CLASSES_V1: std::sync::Mutex<Vec<(kaspa_hashes::Hash64, u64)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn exec_v2_test_admit_class_v1(class_id: kaspa_hashes::Hash64, from_daa: u64) {
+    let mut list = EXEC_V2_TEST_ADMITTED_CLASSES_V1.lock().unwrap();
+    if !list.iter().any(|(class, _)| *class == class_id) {
+        list.push((class_id, from_daa));
+    }
+}
+
+#[cfg(test)]
+fn exec_v2_test_admitted_classes_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64> {
+    let list = EXEC_V2_TEST_ADMITTED_CLASSES_V1.lock().unwrap();
+    let mut classes: Vec<_> = list.iter().filter(|(_, from)| *from <= daa_score).map(|(class, _)| *class).collect();
+    classes.sort();
+    classes
+}
+
 pub struct VirtualStateProcessor {
     // Channels
     receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
@@ -15099,6 +15124,11 @@ impl VirtualStateProcessor {
                 max_adjudications_per_block: Some(4),
                 #[cfg(not(test))]
                 max_adjudications_per_block: None,
+                // RFC-0008 v2 (X8R): the composed run's seam (`exec_v2_test_admit_class_v1`); nothing outside a test.
+                #[cfg(test)]
+                test_admitted_classes: exec_v2_test_admitted_classes_v1(daa_score),
+                #[cfg(not(test))]
+                test_admitted_classes: Vec::new(),
                 opv: self.palw_kernel_opv_fence().map(|fence| kaspa_consensus_core::palw_kernel_route_v1::PalwKernelOpvExtrasV1 {
                     policy: fence.opv_policy(),
                     admitted_classes: fence.admitted_classes.clone(),

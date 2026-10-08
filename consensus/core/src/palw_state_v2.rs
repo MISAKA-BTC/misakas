@@ -16608,6 +16608,15 @@ impl<'a> PalwFoldReadV1<'a> {
 }
 
 impl PalwFoldReadV1<'_> {
+    /// **RFC-0008 v2 (X8R), a TEST SEAM: is `class_id` one whose REAL attempts skip the registry, seating and share gates?** Only
+    /// where the processor's `cfg(test)` hook named it (`PalwKernelRouteExtrasV1::test_admitted_classes`, empty in every build that is
+    /// not a test, and absent wherever the kernel route is not in force) — the composed EXEC-slice × G14 run's stand-in for an
+    /// onboarded class that can take REAL work. **Residual: an onboarded class admitting REAL work under its real budget = the
+    /// G14-for-rewards gap.**
+    pub(super) fn test_admitted_class_v1(&self, class_id: &Hash64) -> bool {
+        self.extras.kernel_route.as_ref().is_some_and(|route| route.test_admitted_classes.contains(class_id))
+    }
+
     /// **ADR-0152 S-SPEC §2 `claim_g_v1`: a claim's gain terms for the action tiers, FROZEN** (the
     /// S-4 review) — [`palw_claim_g_v1`]: the liability row's copy, else the claim record's
     /// licence-time `G_res`, else (unlicensed) its acceptance records' `w + R`. `G = g_res +
@@ -17399,6 +17408,10 @@ impl PalwFoldReadV1<'_> {
     /// ([`crate::palw_work_target_v1::palw_panel_held_to_final_v1`]), the rule below the fence, and
     /// the cap before the registry governs count it as its whole claims.
     fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64, incoming: PalwGatedClaimV1) -> Result<(), PalwStateV2Error> {
+        // RFC-0008 v2 (X8R): the composed run's test seam — empty in production (`test_admitted_class_v1`).
+        if self.test_admitted_class_v1(class_id) {
+            return Ok(());
+        }
         // **ADR-0165 A″: the base floor is the idle-only bonded fallback.** First, before any lifecycle or room question:
         // the floor state advanced to `now_daa` must be Idle. (The fold advances it at the block's start and after every REAL
         // attempt it accepts, so a floor attempt reads the state at its place in the fold's order.)
@@ -18278,6 +18291,10 @@ impl PalwFoldReadV1<'_> {
     /// with the fence off) [`Self::bond_class_share_v1`] is `None` and this is `Ok` without
     /// reading anything.
     fn check_bond_class_share(&self, bond: &PalwBondKeyV2, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        // RFC-0008 v2 (X8R): the composed run's test seam — empty in production (`test_admitted_class_v1`).
+        if self.test_admitted_class_v1(class_id) {
+            return Ok(());
+        }
         // ADR-0160 F-R: past `palw_capacity_verify_room` the stake-proportional share replaces
         // T-2(a)'s `⌈c/2⌉` (`bond_class_share_for_v1`); below it this is T-2(a) byte for byte.
         // ADR-0160 stage 4 (F-N): past F-N a model class's room is divided by lane N's rule over the class's

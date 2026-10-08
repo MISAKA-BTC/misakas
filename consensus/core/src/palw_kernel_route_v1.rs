@@ -124,6 +124,12 @@ pub struct PalwKernelRouteExtrasV1 {
     /// `cfg(test)`, uniformly for every chain of a test process, so a header's policy never changes mid-chain). Lets a test exhaust the
     /// block budget with a handful of carriers instead of sixty-five.
     pub max_adjudications_per_block: Option<u32>,
+    /// **Test seam, empty in production** (RFC-0008 v2, X8R): classes whose REAL attempts skip the model-registry lifecycle and room,
+    /// the seating and the per-bond-share gates ([`crate::palw_state_v2`]'s `test_admitted_class_v1`). The processor fills it only
+    /// under `cfg(test)` (`exec_v2_test_admit_class_v1`, height-gated like the artifact attestations) for the composed EXEC-slice ×
+    /// G14 run, as the stand-in for an onboarded class that can take REAL work. **Residual: an onboarded class admitting REAL work
+    /// under its real budget = the G14-for-rewards gap.** Only a network with the kernel route can even carry it.
+    pub test_admitted_classes: Vec<Hash64>,
     /// **RFC-0015 OptimisticPublicVerification**: `Some` exactly where the network declares the OPV policy (a genesis constant — it is
     /// `Some` at every block of a chain or at none). The processor resolves it from `Params::palw_panel_free_v1`.
     pub opv: Option<PalwKernelOpvExtrasV1>,

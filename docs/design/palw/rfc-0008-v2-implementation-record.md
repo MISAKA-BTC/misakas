@@ -32,6 +32,9 @@ Statuses (the matrix vocabulary): **IMPLEMENTED_AND_TESTED** (real node path, re
 | `253e5a355` (X8R) | the review (section 10): every un-gated pipeline path gated on the fence at the block's DAA; tag 130 rides exactly as an undecodable payload; P11, the orphan fence-off test |
 | `966606811` (X8R) | amendment 1: the verification route through the G14 kernel route, suffix void (void reasons 131/132), leg cap, refusal record (delta note 181), RPC op 240, relay admission, the `EXEC_SLICE` producer, the drill-path armability, the kernel-route prerequisite |
 | `fd9a7f22e` (X8R) | merge of the integration line `35a9ae1c8` (UNSCHED: ids back to int-12's) |
+| `5a033f804` (X8R) | the record's test section: the one milestone invocation `x8r-m4` |
+| `bdaf1a050` (X8R round 2) | the leg cap fixed at verification and net of the route's reward; a post-Final forfeit defaults its slice (section 10b); spec 10.2/10.5 revised; section 13 |
+| (X8R round 2, next commit) | **the composed real-node run** (section 12, item 1): `g14_kernel_route_e2e::conformance::exec_slices`, two tests, and the `cfg(test)` seam `exec_v2_test_admit_class_v1` |
 
 ## 2. Allocation and wire facts
 
@@ -107,8 +110,8 @@ Pipeline tests are `consensus/src/pipeline/virtual_processor/tests/t12_exec_v2_c
 | 5 | template filters stale heads, resumes from the lane checkpoint; invalid carrier skipped by verdict, not by chain fault | `palw_exec_v2_pick_heads`, `palw_exec_v2_virtual`, `exec_v2_slice_adapt_block_template`, `heartbeat_adapt_block_template` keeps the trailer | P1, P9 (health view), P10 (stale head skipped, republished block anchored) | IMPLEMENTED_AND_TESTED |
 | 5 | sync, pruning-proof, IBD, template, orphan pool treat the lane alike | `services.rs` hooks, `SyncManager::with_exec_hooks`, `deps_manager.rs`, `orphans.rs::block_deps`, body-stage head dependency (`MissingParents`, retryable) | P8 (headers and bodies through both hooks; the un-hooked list lands every header and is refused the anchoring body by name), P7 (arrival order), `orphans::an_anchoring_block_waits_for_its_lane_heads_as_for_its_parents` | IMPLEMENTED_AND_TESTED |
 | 5 | legacy v1 coexistence defined; no double acceptance | v1 refused past the fence (section 3) | P2, P5 | IMPLEMENTED_AND_TESTED |
-| 6 | `WORK_SLICE` challenge under RFC-0007 Part VI; positive verification of the whole root | the slice's kernel-route claim is its verification (`palw_exec_v2_verify`, amendment 1 §10.1): admission binds it; `sync_slice_verification_v2` reads its Final after the route's tick; the root is ready only when every slice is verified; the `WORK_SLICE` subject binding stays on the slice | F `amendment_1::*` (binding refusals by name; Final verifies; Final at admission verifies at once); `palw_exec_v2_verify` module tests (token state, nonce) | IMPLEMENTED_AND_TESTED at fold level |
-| 6 | public-bond prosecution of a slice or boundary; exact court; DA default; false Valid; localization | the kernel route's own (G14): an outside bond files `FileProof` / `FileDemand` on the slice's kernel claim from public rows and DA; a conviction or default reaches the slice through the sync | the route's real-node G14 cases (`g14_kernel_route_*`, `g14_opv_*`: covered lie convicted by an outsider pre- and post-Final, withheld material defaulted); F `amendment_1::a_convicted_slice_voids_*`, `a_defaulted_slice_voids_*` | IMPLEMENTED_AND_TESTED per component; one composed real-node run (REAL root on a kernel-bound class → kernel-claimed slices → outsider conviction) not built: section 12 |
+| 6 | `WORK_SLICE` challenge under RFC-0007 Part VI; positive verification of the whole root | the slice's kernel-route claim is its verification (`palw_exec_v2_verify`, amendment 1 §10.1): admission binds it; `sync_slice_verification_v2` reads its Final after the route's tick; the root is ready only when every slice is verified; the `WORK_SLICE` subject binding stays on the slice | F `amendment_1::*` (binding refusals by name; Final verifies; Final at admission verifies at once); `palw_exec_v2_verify` module tests (token state, nonce); **real node: `exec_slices::x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready_on_the_real_node`** (the statement derived from public rows, OPV Finals with no Panel verify each slice, leg caps fixed, the root ready, the hold released) | IMPLEMENTED_AND_TESTED (fold and real node; the REAL root's class admitted through the seam) |
+| 6 | public-bond prosecution of a slice or boundary; exact court; DA default; false Valid; localization | the kernel route's own (G14): an outside bond files `FileProof` / `FileDemand` on the slice's kernel claim from public rows and DA; a conviction or default reaches the slice through the sync | the route's real-node G14 cases (`g14_kernel_route_*`, `g14_opv_*`: covered lie convicted by an outsider pre- and post-Final, withheld material defaulted); F `amendment_1::a_convicted_slice_voids_*`, `a_defaulted_slice_voids_*`; **composed on the real node: `exec_slices::x8_g14_an_outsider_convicts_a_slices_kernel_claim_and_its_suffix_and_root_void_on_the_real_node`** | IMPLEMENTED_AND_TESTED on the real node, with one named seam for the REAL root's class admission (section 12, item 1) |
 | 6 | a proved false predecessor voids the dependent suffix; no prefix payment | `void_suffix_v2` (amendment 1, §10.2); void reasons 131/132, uncharged at V2 | F `a_convicted_slice_voids_its_suffix_and_the_root_and_charges_the_root_nothing`, `a_defaulted_slice_voids_*_and_a_verified_one_convicted_later_still_voids_an_unsettled_root` | IMPLEMENTED_AND_TESTED (fold) |
 | 6 | EXEC_TX acceptance independent of a co-located session | verdicts are per member | P6 (a TX block is judged with no session state) | IMPLEMENTED_AND_TESTED |
 | 7 | per-root/bond/lane quotas, closure walk bound, independent slice queue; deterministic under every arrival order | constants in section 2; closure leaf bound = lane `max_per_mergeset`; heads 8; relay admission and the producer's one-carrier-per-slice rule (§10.3) | F quota test; anchor `a_lane_longer_than_the_bound_is_refused...`, `heads_are_bounded_and_a_diamond_is_covered_once`; P7, P9; `palw_exec_v2_relay` tests; `palw_exec_slice_producer` decision-table test | IMPLEMENTED_AND_TESTED (relay and production node-local) |
@@ -123,11 +126,11 @@ Pipeline tests are `consensus/src/pipeline/virtual_processor/tests/t12_exec_v2_c
 
 | gate | evidence now | open | status |
 | --- | --- | --- | --- |
-| Root lifecycle / REAL eligibility | root opens on a really admitted REAL claim through the pipeline (P1); prefix is the claim's canonical work; session open earns nothing; the hold, expiry void; **verification by kernel claims, root `Final` and the one capped settlement at fold level without a test door** (F `amendment_1::*`) | one composed real-node run (section 12, item 1) | CODE (one E2E) + EXTERNAL (drill) |
+| Root lifecycle / REAL eligibility | root opens on a really admitted REAL claim through the pipeline (P1); prefix is the claim's canonical work; session open earns nothing; the hold, expiry void; **verification by kernel claims, root `Final` and the one capped settlement at fold level without a test door** (F `amendment_1::*`) | the REAL root claim's own `Final` and the capped settlement on the real node (they need the root class's Panel, the G14-for-rewards gap; fold-tested) | EXTERNAL (drill) + the onboarding gap |
 | Wire / compatibility | golden vectors, domains, strict decode, fence below / at / above activation (P5, P2, **P11: unarmed and armed-far nodes agree byte for byte**), v1 refused past the fence, fingerprints unchanged, **registry re-audited at both integration merges** (section 11) | old-node behaviour against a v2 header across a real fence is a drill | IMPLEMENTED_AND_TESTED for the unit/pipeline part; drill EXTERNAL_GATE_PENDING |
 | Lane isolation | twin-chain numeric equality, mergeset absence, forged headers refused, 14-block burst (P1, P2, P3, P9) | burst at lane width (hundreds), paired baseline/v2 DAG runs | IMPLEMENTED_AND_TESTED for the cases listed; capacity EXTERNAL_GATE_PENDING |
 | Accounting | duplicate, overlap, skip, cross-root/job replay, checked overflow, repeated Final, prefix conservation, branch independence (F, module tests, P4, P9, P10); the leg cap; no schedule-credit raise (§10.4) | — | IMPLEMENTED_AND_TESTED |
-| Public verification | the kernel route's G14 cases (outsider conviction pre/post Final, DA default, OPV windows) carry over by the binding; suffix void and both void reasons at fold level | the composed real-node run (section 12, item 1); the kernel route's own external soundness review | CODE (one E2E) + EXTERNAL |
+| Public verification | the kernel route's G14 cases (outsider conviction pre/post Final, DA default, OPV windows) carry over by the binding; suffix void and both void reasons at fold level | the kernel route's own external soundness review | IMPLEMENTED_AND_TESTED on the real node (composed run, section 12) + EXTERNAL |
 | Liveness / capacity | relay admission and production backpressure built (node-local) | stopped producer / verifier / DA / court; no TX starvation under slice flood; identical heartbeat/BASE-0/clock/anchor-duty outcomes | EXTERNAL_GATE_PENDING |
 | Deterministic state / recovery | restart (P7), shuffled arrival and head-before-body (P7, orphans), IBD through both lists (P8), reorg (P10), fold branch independence, P11 replays | pruned import and archival-vs-fresh-vs-pruned comparison, property tests over event histories, stale head wedge drill | partly IMPLEMENTED_AND_TESTED; drills EXTERNAL_GATE_PENDING |
 
@@ -152,11 +155,13 @@ Pipeline tests are `consensus/src/pipeline/virtual_processor/tests/t12_exec_v2_c
 ## 7. What arming still needs
 
 There is no DAA-9,000 flag day (user, 2026-10-08): the fence rides the one full-activation release, after every RFC is implemented.
-The code gates of this fence are closed except one (section 12, item 1). In order:
+The code gates of this fence are closed. The composed run's one seam is named in section 12, item 1. In order:
 
-1. **Code:** the composed real-node E2E (section 12, item 1). **Owner dependency:** the kernel route (`palw_probabilistic_constraints_v1`)
-   is a prerequisite and is itself refused by its own validation; the fence can be armed — on a drill or a release — only together with
-   it.
+1. **Code:** none of this lane's. The composed real-node run is built (section 12, item 1). It still uses one test seam: the REAL
+   root's class is admitted by the seam, not by the onboarded class's real budget. That gap is the onboarding lanes'
+   G14-for-rewards item, and it applies to every onboarded class, not to slices alone. **Owner dependency:** the kernel route
+   (`palw_probabilistic_constraints_v1`) is a prerequisite and is itself refused by its own validation. The fence can therefore be armed,
+   on a drill or a release, only together with it.
 2. **Drill path (done here):** `palw_exec_payload_v2_armable_on` lifts the gates' refusal on a salted testnet-12 drill; every other refusal
    applies, so a drill arms it only together with the kernel route, the OPV / onboarding fences its classes use, and the five structural
    prerequisites.
@@ -209,6 +214,24 @@ Round 2 (`x8r-m5`, 2026-10-09): `cargo test -p kaspa-consensus-core --lib -- exe
 71 passed / 0 failed (it includes the three round-2 fold tests, section 10b). In the same invocation,
 `scripts/t12-repin.sh --shipping --drift-only` reported **no drift**: 361 ok, testnet-12 params id `5ee7fd8ee019968c…`, schedule id
 `1678e07359f6727e…` — the live int-12 ids.
+
+The composed run (`x8r-m6`, then `x8r-m7` after the lane-aware replay was added): `cargo test -p kaspa-consensus --lib -- x8_g14
+t12_exec_v2 g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_class_activates`. In `m6`, P1–P11 and the
+onboarding conformance test passed with the seam and the `Cw::over_with` refactor. In `m7`, both `x8_g14` tests passed (145 s).
+
+The lane's closing invocation (`x8r-m8`, 2026-10-09, all green): `cargo test -p kaspa-consensus-core -p kaspa-consensus -p misaka-palw-sdk
+--lib --test palw_exec_payload_v2_fence --test exec_v2_work_slice_subject -- exec_v2 x8_g14 palw_work_slice_v2
+the_v22_void_reasons_are_pinned <the fence test names> the_contract_names_the_kind no_field_of_a_slice the_pre_beacon_commitment_binds`.
+
+| target | passed | what it holds |
+| --- | --- | --- |
+| `kaspa-consensus` lib | 13 / 0 failed | P1–P11 and both composed real-node tests (316 s, most of it the onboarded class's lottery) |
+| `kaspa-consensus-core` lib | 71 / 0 failed | every `exec_v2` module and fold test, round 2 included; the void-reason pins |
+| `palw_exec_payload_v2_fence` | 7 / 0 failed | dormancy, ids, refusals, the drill path |
+| `misaka-palw-sdk` `exec_v2_work_slice_subject` | 3 / 0 failed | the `WORK_SLICE` subject against the shared contract crate |
+
+The seam adds no params, hash or schedule input: `PalwKernelRouteExtrasV1` is a fold input, and nothing hashes it. The round-2 repin
+(no drift) therefore stands for it.
 
 ## 10. X8R review of every pipeline path the fence does not guard (2026-10-08)
 
@@ -297,17 +320,40 @@ every node, so no node can diverge on it.
 
 ## 12. What remains (code), and the cross-lane finding
 
-1. **One composed real-node E2E**: a REAL root claim on a kernel-bound V2 class → its slices backed by kernel-route claims on the same
-   chain → an outside bond convicting one slice (and defaulting another) through the route → the suffix void and the root void, plus the
-   honest twin reaching `Final` and the capped settlement. Every link is tested — the route's G14 cases on the real node, the binding,
-   sync, suffix void and settlement at fold level, the carriage in P1–P11 — but not in one run. **Blocker (refined by X8R round 2):** the
-   root must be a REAL attempt on a kernel-bound class, so on a TIR registrant class (tag 106 requires the registrant's TIR class with the
-   kernel class's program). The real-node path to such a class exists: g14 `conformance.rs`'s world takes a TIR V2 class through
-   104 → 106 → 107/109 to `Active`. **No REAL attempt on it is admissible on the testnet-12 harness**, though. The class registers with
-   `share_permille` 0, so it has no epoch budget (`ready_to_produce`: `EPOCH_BUDGET`), and the model-registry lifecycle and room, the
-   class verify deadline, seating and the bond share all stand between an onboarded class and a REAL attempt. The only existing
-   pipeline precedent seeds the class row through the carriage (t47), not by blocks. This is the same harness gap as the readiness
-   matrix's "G14-for-rewards" (an onboarded class that can take real work), and it was routed to the Lead.
+1. **The composed real-node run — built (X8R round 2).** Module `consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/conformance/exec_slices.rs`,
+   a child of the onboarding conformance world. The run:
+   * A TIR V2 class goes through 104 → OPV kernel class → 106 → 107 → beacon → 109 → `Active`, all by blocks.
+   * A REAL attempt on that class is made by card 0 from the node's own template.
+   * A tag-130 session opens on that REAL claim under the binding's kernel plan.
+   * For each of the three slices: a kernel job carries the slice job nonce; the executor seals and reveals its OPV claim; the slice
+     statement is derived from public rows (`palw_exec_v2_slice_statement_v1_impl`); an `EXEC_SLICE` lane block is signed by the
+     executor; the next heartbeat anchors it; the fold admits it against its kernel claim.
+
+   Then two outcomes, one per test:
+   * **(a) conviction.** An outsider builds a fresh verifier from the read API plus the executor's published DA and nothing else,
+     and files the proof against slice 1's lying claim. The route convicts it and slashes the executor's real bond. In the same
+     block: slice 1 is proven false, slice 2 is void, the root is void, and the REAL claim is void (`WorkSliceProvenFalse`). The root
+     bond is not charged. Op 240 shows `Convicted`.
+   * **(b) the honest twin.** Every kernel claim finalizes after its public window with no Panel. Every slice verifies, and its leg
+     cap equals the claim's reservation less the route's reward. The root is ready and the REAL claim's `Final` hold is released.
+
+   **Both tests:** a second node replays the chain together with its lane blocks (each delivered under the chain block it was
+   inserted at) and agrees on the sink, the PALW root, the kernel route's rows and every block's delta root. Result `x8r-m7`
+   (2026-10-09): 2 passed.
+
+   **The one seam (named, not hidden):** the REAL root's class takes the attempt because the processor's `cfg(test)` hook
+   `exec_v2_test_admit_class_v1` waives four gates for that one class, and nothing else: the model-registry lifecycle and room
+   (`check_class_admits_claim`), the seating (`check_class_seated_root_v1`) and the per-bond share (`check_bond_class_share`). It
+   reaches consensus-core through `PalwKernelRouteExtrasV1::test_admitted_classes`, which is empty in every build that is not a test
+   and absent wherever the kernel route is not in force. It is shaped like `kernel_route_test_attest_artifact_v1`: height-gated and
+   append-only. **Residual: an onboarded class admitting REAL work under its real budget = the G14-for-rewards gap.** That gap is
+   assigned to OPVB with derived eligibility; when it lands, the seam is replaced by it.
+
+   **Not run on the real node:** the REAL root claim's own `Final` and the capped settlement. Both need the root class's Panel,
+   which is the same gap. They are pinned at fold level (`amendment_1::*`).
+
+   **Note:** under the work target, a cheap class's ticket is hard (≈ 23M draws expected). The test's lottery runs up to 400M
+   draws, and one run takes about 2.5 minutes.
 2. **Pipeline-class slices**: refused by name until the K2-at-scale lane defines a segment state for pipeline (K2-TIR-v3) claims.
 3. **The initial boundary** (`initial_state_root`) is the root bond's declaration; its link to the REAL claim's verified output is not
    checked (every slice after it is verified as a continuation of it).
@@ -328,7 +374,7 @@ as it stands for the leg:
 | 1 | verification coverage of every rewarded relation | Each slice's computation is one kernel-route program claim of the root class's bound kernel class (its plan is the root's `plan_root`). The binding pins executor, job (by the slice job nonce), prompt, run and evidence. Consecutive slices form one token stream (rule 4). | **The initial boundary** (slice 0's predecessor) is the root bond's declaration. "This session continues the REAL claim's job" is a relation no check covers (section 12, item 3). It moves no reward from a third party: legs only re-divide the root bond's own leg, and the root bond chose the boundary. Still, until it is covered, a session cannot be called the REAL job's continuation. DESIGN_GAP. |
 | 2 | approved probabilistic soundness and grinding resistance | Inherited from the kernel class's plan and the one post-commit challenge contract (seal before reveal, `claim_seal_delay_daa`). The slice adds no seed and no court. | The route's soundness bound and beacon review. EXTERNAL. |
 | 3 | public, authenticated material | The kernel claim's evidence. A withheld position defaults the claim before `Final`, and after `Final` forfeits its reservation, which now defaults the slice (R2-2). | DA transport at scale (DA16). EXTERNAL. |
-| 4 | one outside verifier localizes and adjudicates | The kernel route's G14 cases on the real node (outsider conviction before and after `Final`, DA default). A conviction reaches the slice through the sync. | The composed real-node run (section 12, item 1). CODE, blocked as stated there. |
+| 4 | one outside verifier localizes and adjudicates | The kernel route's G14 cases on the real node (outsider conviction before and after `Final`, DA default). A conviction reaches the slice through the sync. **Composed on the real node** (section 12, item 1): an outsider's proof from public material voids the slice's suffix and its root. | The REAL root's class is admitted through the named test seam (the G14-for-rewards gap). |
 | 5 | collectible collateral consistent with the maximum gain | Leg ≤ the claim's reservation at verification − the route's reward on it (R2-1). So the claim's total gain stays under what a conviction inside the horizon slashes. | Whether `reservation × detection probability` covers the gain is the route's calibration (MEAS: `opv-measurements.md`). EXTERNAL. |
 | 6 | resources and incentive for an honest verifier in time | The route's own (accuser share, demand bond, deadlines). The slice adds no deadline that is shorter than the route's. | MEAS. EXTERNAL. |
 | 7 | dispute, DA/default, `Final` and reorg consistency | The root claim's `Final` is held while any slice is unverified. A conviction or default before settlement voids the suffix and the root (pre- or post-`Final` of the slice's claim). Restart (P7), reorg (P10) and replay (P11) agree. After settlement a conviction slashes the kernel reservation; the leg is not clawed back, which is why it is capped (5). | The fork-choice rule E release prerequisite (not this lane's). |

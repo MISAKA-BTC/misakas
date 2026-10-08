@@ -103,13 +103,32 @@ impl Cw {
     }
 
     async fn over(make: impl FnOnce(&Config) -> TestConsensus) -> Cw {
+        Cw::over_with(11, |_| {}, make).await
+    }
+
+    /// [`Self::over`] with the candidate built from `onb_fixture(seed)` and the ruleset edited by `edit` after the onboarding fences are
+    /// armed (RFC-0008 v2's composed run, `exec_slices`, arms its payload fence here and uses its own candidate class).
+    async fn over_with(
+        seed: u64,
+        edit: impl FnOnce(&mut kaspa_consensus_core::config::params::Params),
+        make: impl FnOnce(&Config) -> TestConsensus,
+    ) -> Cw {
         use super::super::g14_registration_e2e::Tensors;
         use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_operands_v1;
         let src = fixture();
-        let f = onb_fixture(11);
+        let f = onb_fixture(seed);
         let src_class = opv_class_id(&src.program, &src.plan, &src.pc);
         let kernel_class = opv_class_id(&f.program, &f.plan, &f.pc);
-        let mut net = Net::over_cfg(conformance_config(vec![Hash64::from_bytes(src_class), Hash64::from_bytes(kernel_class)]), make);
+        let (config, bundle, premine, floats) =
+            conformance_config(vec![Hash64::from_bytes(src_class), Hash64::from_bytes(kernel_class)]);
+        let mut params = config.params.clone();
+        edit(&mut params);
+        // The fold reads the V2 bundle the params mirror (an edit may sync a fence into it): the node's and the harness's are one.
+        let bundle = match &params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(edited) => edited.clone(),
+            _ => bundle,
+        };
+        let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), make);
         net.beat_to(1).await;
         // ---- the beacon's source: a pre-existing OPV class (its artifact attested by the harness hook, §3) ----
         let d = k2_tir_v2_descriptor();
@@ -959,3 +978,6 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
     let z = cw.net.replay().await;
     cw.net.assert_same(&z, "a node replaying the whole chain");
 }
+
+// RFC-0008 v2 (X8R): the composed run — a REAL root on this world's kernel-bound class, its slices verified through the route.
+mod exec_slices;
