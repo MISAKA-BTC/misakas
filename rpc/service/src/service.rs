@@ -3160,6 +3160,35 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     }
 
     // ------------------------------------------------------------------------------------------
+    // RFC-0010 — the permissionless Panel's observation (op 220; read-only)
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_panel_v3_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwPanelV3StatusRequest,
+    ) -> RpcResult<GetPalwPanelV3StatusResponse> {
+        use kaspa_consensus_core::palw_permissionless_panel_v1::PANEL_V3_OBSERVATION_MAX_CLAIMS_V1;
+        // The request is parsed before a byte of chain state is read: a malformed id is an error, never an absence.
+        if request.claim_ids.len() > PANEL_V3_OBSERVATION_MAX_CLAIMS_V1 {
+            return Err(RpcError::General(format!(
+                "at most {PANEL_V3_OBSERVATION_MAX_CLAIMS_V1} claim ids per request (got {})",
+                request.claim_ids.len()
+            )));
+        }
+        let ids = request.claim_ids.iter().map(|id| parse_hash64(id, "claim id")).collect::<RpcResult<Vec<_>>>()?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwPanelV3StatusResponse::default());
+        }
+        let limit = request.limit as usize;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(observation) = session.spawn_blocking(move |c| c.palw_panel_v3_observation_v1(ids, limit)).await else {
+            return Ok(GetPalwPanelV3StatusResponse::default());
+        };
+        Ok(GetPalwPanelV3StatusResponse { available: true, observation_version: u32::from(observation.version), json: observation.to_json() })
+    }
+
+    // ------------------------------------------------------------------------------------------
     // ADR-0152 P2-10 — the vesting table (op 199)
     // ------------------------------------------------------------------------------------------
 

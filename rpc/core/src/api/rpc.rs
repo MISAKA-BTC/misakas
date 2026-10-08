@@ -1030,6 +1030,21 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwStateProofResponse::default())
     }
 
+    /// **RFC-0010: the permissionless Panel's observation** (op 220; read-only) — the engine's overview and the named claims'
+    /// seal, snapshot, beacon state, assignment, retries and terminal reason, as one versioned JSON document. A node built before
+    /// op 220 drops the WebSocket on it: ask it on a connection of its own.
+    async fn get_palw_panel_v3_status(&self, request: GetPalwPanelV3StatusRequest) -> RpcResult<GetPalwPanelV3StatusResponse> {
+        self.get_palw_panel_v3_status_call(None, request).await
+    }
+    async fn get_palw_panel_v3_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwPanelV3StatusRequest,
+    ) -> RpcResult<GetPalwPanelV3StatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwPanelV3StatusResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

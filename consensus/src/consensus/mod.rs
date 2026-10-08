@@ -2444,6 +2444,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_capacity_shadow_v1_impl(options)
     }
 
+    fn palw_panel_v3_observation_v1(
+        &self,
+        ids: Vec<kaspa_hashes::Hash64>,
+        limit: usize,
+    ) -> Option<kaspa_consensus_core::palw_permissionless_panel_v1::PanelV3ObservationV1> {
+        self.virtual_processor.palw_panel_v3_observation_v1_impl(ids, limit)
+    }
+
     fn palw_v2_class_table(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {
         self.virtual_processor.palw_v2_class_table_impl()
     }

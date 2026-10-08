@@ -2882,6 +2882,20 @@ message GetPalwActivationPoolResponseMessage {
   RPCError error = 1000;
 }
 
+// RFC-0010 (lane C2): the permissionless Panel's observation (op 220; read-only). `json` is the node's versioned
+// PanelV3ObservationV1 (camelCase); fields are only appended.
+message GetPalwPanelV3StatusRequestMessage {
+  repeated string claimIds = 1;
+  uint32 limit = 2;
+}
+
+message GetPalwPanelV3StatusResponseMessage {
+  bool available = 1;
+  uint32 observationVersion = 2;
+  string json = 3;
+  RPCError error = 1000;
+}
+
 // ADR-0160 §7.5 (lane shadow, node-only): the capacity shadow (op 201).
 message RpcPalwCapacityStep {
   uint64 fromDaa = 1;

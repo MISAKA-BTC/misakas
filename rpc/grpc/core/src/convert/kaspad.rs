@@ -104,6 +104,7 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(GetPalwActivationPool);
     impl_into_kaspad_request!(GetPalwCapacityShadow);
     impl_into_kaspad_request!(GetPalwStateProof);
+    impl_into_kaspad_request!(GetPalwPanelV3Status);
     impl_into_kaspad_request!(GetTokenSupply);
     impl_into_kaspad_request!(GetTokenEmissionInfo);
     impl_into_kaspad_request!(GetValidatorStatus);
@@ -293,6 +294,7 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(GetPalwActivationPool);
     impl_into_kaspad_response!(GetPalwCapacityShadow);
     impl_into_kaspad_response!(GetPalwStateProof);
+    impl_into_kaspad_response!(GetPalwPanelV3Status);
     impl_into_kaspad_response!(GetTokenSupply);
     impl_into_kaspad_response!(GetTokenEmissionInfo);
     impl_into_kaspad_response!(GetValidatorStatus);

@@ -41,6 +41,8 @@ mod palw_claim;
 mod palw_court;
 mod palw_da;
 mod palw_derived;
+/// RFC-0010: `palw panel-v3` — the permissionless Panel's observation of a claim (op 220).
+mod palw_panel_v3;
 /// ADR-0127 Decision 3: `palw settlement` — settled, and how deep in settled PALW anchors.
 mod palw_economics;
 /// ADR-0108: `palw extension inspect|verify|preflight|submit|receipt-verify`.
@@ -1239,6 +1241,10 @@ enum PalwCmd {
     /// claims, seat capacity, licence queue, attribution). Node-only, no rule reads it. Read-only
     /// (`getPalwCapacityShadow`, op 201: a node built before it drops the connection).
     CapacityShadow(palw_capacity_shadow::CapacityShadowArgs),
+    /// **RFC-0010: the permissionless Panel's observation** — a V3-rule claim's seal, snapshot, certified-beacon state,
+    /// assignment, retries and terminal reason, and the engine's overview. Read-only (`getPalwPanelV3Status`, op 220: a node
+    /// built before it drops the connection). On today's chain no beacon source is approved: `BEACON_UNAVAILABLE`.
+    PanelV3(palw_panel_v3::PanelV3Args),
     /// Submit a free-prompt commitment built by `misaka-palw-fp-rail` (dry-run unless --yes).
     FpSubmit {
         /// The rail's `*.commitment-tx.borsh`.
@@ -3002,6 +3008,7 @@ async fn main() -> std::process::ExitCode {
             palw_vesting::run(&ctx, bond, address, claim, limit, after, json).await
         }
         Command::Palw(PalwCmd::CapacityShadow(args)) => palw_capacity_shadow::run(&ctx, args).await,
+        Command::Palw(PalwCmd::PanelV3(args)) => palw_panel_v3::run(&ctx, args).await,
         Command::Palw(PalwCmd::Economics {}) => palw_economics::run(&ctx).await,
         Command::Palw(PalwCmd::Registry {}) => palw_registry::run(&ctx).await,
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Status { class })) => palw_panel::status(&ctx, class.as_deref()).await,

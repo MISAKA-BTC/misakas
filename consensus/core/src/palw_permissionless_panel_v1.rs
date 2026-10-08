@@ -546,3 +546,54 @@ pub fn panel_v3_overview_v1(state: &PalwChainStateV2) -> PanelV3OverviewV1 {
     }
     overview
 }
+
+/// The most claim records one observation returns, and the number it returns when none is named.
+pub const PANEL_V3_OBSERVATION_MAX_CLAIMS_V1: usize = 64;
+pub const PANEL_V3_OBSERVATION_DEFAULT_CLAIMS_V1: usize = 16;
+
+/// **What `getPalwPanelV3Status` (RPC op 220) answers**: the engine at a glance and the status of the claims asked for (or, when none
+/// is named, the first tracked claims in id order). A pure read of the tip state; no verdict reads it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelV3ObservationV1 {
+    pub version: u16,
+    pub overview: PanelV3OverviewV1,
+    pub claims: Vec<PanelV3ClaimStatusV1>,
+    /// Named claims the state does not hold (never a silent absence).
+    pub unknown: Vec<Hash64>,
+}
+
+impl PanelV3ObservationV1 {
+    /// The camelCase JSON document (`u128` amounts are decimal strings; keys are only ever appended).
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).expect("an observation is plain data and serializes")
+    }
+}
+
+/// `ids` empty: the first `limit` tracked claims (0 = the default, capped). `ids` named: those claims (at most the cap), each either a
+/// status or listed in `unknown`.
+pub fn panel_v3_observation_v1(
+    state: &PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    ids: &[Hash64],
+    limit: usize,
+) -> PanelV3ObservationV1 {
+    let cap = match limit {
+        0 => PANEL_V3_OBSERVATION_DEFAULT_CLAIMS_V1,
+        n => n.min(PANEL_V3_OBSERVATION_MAX_CLAIMS_V1),
+    };
+    let named: Vec<Hash64> = if ids.is_empty() {
+        state.panel_v3().map(|engine| engine.claim_rows().keys().take(cap).copied().collect()).unwrap_or_default()
+    } else {
+        ids.iter().take(PANEL_V3_OBSERVATION_MAX_CLAIMS_V1).copied().collect()
+    };
+    let mut claims = Vec::new();
+    let mut unknown = Vec::new();
+    for id in named {
+        match panel_v3_claim_status_v1(state, params, &id) {
+            Some(status) => claims.push(status),
+            None => unknown.push(id),
+        }
+    }
+    PanelV3ObservationV1 { version: PANEL_V3_OBSERVATION_VERSION_V1, overview: panel_v3_overview_v1(state), claims, unknown }
+}

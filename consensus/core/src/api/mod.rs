@@ -940,6 +940,16 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **RFC-0010: the permissionless Panel's observation at the tip** (`getPalwPanelV3Status`, op 220): the engine's overview and
+    /// the status of the named claims (or the first tracked ones). A read: no rule calls it. `None` off `ConsensusV2`.
+    fn palw_panel_v3_observation_v1(
+        &self,
+        _ids: Vec<crate::Hash64>,
+        _limit: usize,
+    ) -> Option<crate::palw_permissionless_panel_v1::PanelV3ObservationV1> {
+        None
+    }
+
     /// The court's half: open sessions this node holds a bond in.
     fn palw_court_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwCourtDutyV2> {
         Vec::new()

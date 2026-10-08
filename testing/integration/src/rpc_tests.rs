@@ -1167,6 +1167,25 @@ async fn sanity_test() {
                     assert!(!read.available && read.bonds.is_empty() && read.claims.is_empty() && read.steps.is_empty());
                 })
             }
+            KaspadPayloadOps::GetPalwPanelV3Status => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0010 (op 220): a malformed claim id is an error before any state is read; a well-formed read on a
+                    // network that is not ConsensusV2 answers `available: false` with no document.
+                    let bad = GetPalwPanelV3StatusRequest { claim_ids: vec!["x".to_string()], ..Default::default() };
+                    assert!(rpc_client.get_palw_panel_v3_status_call(None, bad).await.is_err());
+                    let too_many = GetPalwPanelV3StatusRequest { claim_ids: vec!["00".repeat(64); 65], ..Default::default() };
+                    assert!(rpc_client.get_palw_panel_v3_status_call(None, too_many).await.is_err());
+                    let read = rpc_client
+                        .get_palw_panel_v3_status_call(
+                            None,
+                            GetPalwPanelV3StatusRequest { claim_ids: vec!["00".repeat(64)], ..Default::default() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.json.is_empty());
+                })
+            }
             KaspadPayloadOps::GetPalwFreePromptClaim => {
                 let rpc_client = client.clone();
                 tst!(op, {

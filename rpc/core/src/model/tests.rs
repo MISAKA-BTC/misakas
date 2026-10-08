@@ -2665,6 +2665,21 @@ mod mockery {
     }
     test!(GetPalwStateProofResponse);
 
+    // RFC-0010 (lane C2): op 220 round-trips.
+    impl Mock for GetPalwPanelV3StatusRequest {
+        fn mock() -> Self {
+            GetPalwPanelV3StatusRequest { claim_ids: vec![mock_hex(), mock_hex()], limit: mock() }
+        }
+    }
+    test!(GetPalwPanelV3StatusRequest);
+
+    impl Mock for GetPalwPanelV3StatusResponse {
+        fn mock() -> Self {
+            GetPalwPanelV3StatusResponse { available: mock(), observation_version: mock(), json: format!("{{\"version\":{}}}", mock::<u32>()) }
+        }
+    }
+    test!(GetPalwPanelV3StatusResponse);
+
     // ADR-0152 P2-10: op 199 and its parts round-trip.
     impl Mock for GetPalwVestingRequest {
         fn mock() -> Self {

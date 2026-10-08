@@ -12663,6 +12663,62 @@ impl Deserializer for GetPalwStateProofResponse {
     }
 }
 
+/// **RFC-0010: `getPalwPanelV3Status` (op 220)** — the permissionless Panel's observation of the tip: the engine's overview and the
+/// status of the claims named (or, when none is, the first tracked claims in id order). Read-only: no rule reads it. **Op 220 is
+/// new: a node built before it drops the WebSocket on it**, so a client asks it on a connection of its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwPanelV3StatusRequest {
+    /// Claim ids, 128 hex each (at most 64). Empty: the first tracked claims.
+    pub claim_ids: Vec<String>,
+    /// At most this many tracked claims when none is named; 0 asks for the node's default (16); the node's cap is 64.
+    pub limit: u32,
+}
+
+impl Serializer for GetPalwPanelV3StatusRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(Vec<String>, &self.claim_ids, writer)?;
+        store!(u32, &self.limit, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwPanelV3StatusRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { claim_ids: load!(Vec<String>, reader)?, limit: load!(u32, reader)? })
+    }
+}
+
+/// **The `getPalwPanelV3Status` answer.** `json` is the camelCase serde form of the node's `PanelV3ObservationV1`
+/// (`overview`, `claims`, `unknown`), whose own `version` field is `observation_version`: fields are only ever appended, and a
+/// reader of version 1 ignores what it does not know. Empty (and `available` false) off `ConsensusV2` or before PALW state exists.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwPanelV3StatusResponse {
+    pub available: bool,
+    pub observation_version: u32,
+    pub json: String,
+}
+
+impl Serializer for GetPalwPanelV3StatusResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u32, &self.observation_version, writer)?;
+        store!(String, &self.json, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwPanelV3StatusResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { available: load!(bool, reader)?, observation_version: load!(u32, reader)?, json: load!(String, reader)? })
+    }
+}
+
 #[cfg(test)]
 mod palw_model_market_wire_tests {
     use super::*;

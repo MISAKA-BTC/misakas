@@ -706,6 +706,7 @@ impl RpcApi for KaspaRpcClient {
             GetPalwActivationPool,
             GetPalwCapacityShadow,
             GetPalwStateProof,
+            GetPalwPanelV3Status,
             GetTokenSupply,
             GetTokenEmissionInfo,
             GetStakeBond,

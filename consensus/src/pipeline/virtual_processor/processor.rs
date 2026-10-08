@@ -5856,6 +5856,18 @@ impl VirtualStateProcessor {
         ))
     }
 
+    /// **RFC-0010: `getPalwPanelV3Status` (op 220)** — the permissionless Panel's observation over the committed tip
+    /// (`load_tip_cached`, the read-side rule above). A read of the state as it stands: no clock, no draw, no rule calls it.
+    pub fn palw_panel_v3_observation_v1_impl(
+        &self,
+        ids: Vec<kaspa_hashes::Hash64>,
+        limit: usize,
+    ) -> Option<kaspa_consensus_core::palw_permissionless_panel_v1::PanelV3ObservationV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        Some(kaspa_consensus_core::palw_permissionless_panel_v1::panel_v3_observation_v1(&state, state_params, &ids, limit))
+    }
+
     /// **ADR-0160 §7.5: the capacity shadow** — `palw_capacity_shadow_with_v1` over the committed
     /// tip (`load_tip_cached`), at the next block's DAA with the RAW second-clock depth there, as
     /// the vesting read asks. A read for `getPalwCapacityShadow` and kaspad's interval log; no rule

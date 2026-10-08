@@ -343,6 +343,31 @@ async fn t12_a_v3_claim_binds_on_a_heartbeat_with_no_named_operator_while_lane_a
     let refused = vp.palw_v2_validate_objects(&state, &run.bundle.state, &point, std::slice::from_ref(&carried));
     assert!(refused.is_err());
 
+    // The node's read (what RPC op 220 serves) is the pure function of this tip's state: the V3 claim reads as bound with the
+    // binding's seed and seats, the legacy claim as lane A's, and an unknown id is named, not silently absent.
+    let observed = vp.palw_panel_v3_observation_v1_impl(vec![run.v3, run.legacy, Hash64::from_u64_word(77)], 0).expect("a V2 node answers");
+    assert_eq!(
+        observed,
+        kaspa_consensus_core::palw_permissionless_panel_v1::panel_v3_observation_v1(
+            &state,
+            &run.bundle.state,
+            &[run.v3, run.legacy, Hash64::from_u64_word(77)],
+            0
+        )
+    );
+    assert_eq!(observed.unknown, vec![Hash64::from_u64_word(77)]);
+    let (v3, legacy) = (&observed.claims[0], &observed.claims[1]);
+    assert_eq!((v3.rule, v3.engine_phase, v3.v2_phase.as_str()), ("permissionlessV3", Some("bound"), "panelBound"));
+    assert_eq!(v3.assignment.as_ref().unwrap().seed, binding.panel_seed_v3);
+    assert_eq!(v3.assignment.as_ref().unwrap().binding_block, run.bind_block.header.hash);
+    assert_eq!((legacy.rule, legacy.engine_phase), ("historicalLaneA", None));
+    assert!(observed.overview.active && observed.overview.bound == observed.overview.tracked_claims, "{:?}", observed.overview);
+    let listed = vp.palw_panel_v3_observation_v1_impl(Vec::new(), 0).unwrap();
+    assert_eq!(listed.claims.len() as u32, listed.overview.tracked_claims, "no id named: the tracked claims");
+    assert!(listed.claims.iter().all(|c| c.rule == "permissionlessV3" && c.claim_id != run.legacy), "the legacy claim is not the engine's");
+    assert!(listed.claims.iter().any(|c| c.claim_id == run.v3));
+    assert!(observed.to_json().contains("\"permissionlessV3\""));
+
     // The engine's state and the V2 tables agree, and the tip's carriage reloads under its root.
     state.assert_internal_consistency(&run.bundle.state).expect("consistent");
     state.assert_deadline_consistency(&run.bundle.state).expect("deadlines");

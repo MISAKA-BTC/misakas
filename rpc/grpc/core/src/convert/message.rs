@@ -1461,6 +1461,12 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwActivationPoolResponse>, protowire
         error: None,
     }
 });
+from!(item: &kaspa_rpc_core::GetPalwPanelV3StatusRequest, protowire::GetPalwPanelV3StatusRequestMessage, {
+    Self { claim_ids: item.claim_ids.clone(), limit: item.limit }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwPanelV3StatusResponse>, protowire::GetPalwPanelV3StatusResponseMessage, {
+    Self { available: item.available, observation_version: item.observation_version, json: item.json.clone(), error: None }
+});
 from!(item: &kaspa_rpc_core::RpcPalwCapacityStep, protowire::RpcPalwCapacityStep, {
     Self { from_daa: item.from_daa, rho: item.rho, q_credit_permille: item.q_credit_permille }
 });
@@ -3656,6 +3662,12 @@ try_from!(item: &protowire::GetPalwActivationPoolResponseMessage, RpcResult<kasp
         bonus_cap_sompi: item.bonus_cap_sompi,
     }
 });
+try_from!(item: &protowire::GetPalwPanelV3StatusRequestMessage, kaspa_rpc_core::GetPalwPanelV3StatusRequest, {
+    Self { claim_ids: item.claim_ids.clone(), limit: item.limit }
+});
+try_from!(item: &protowire::GetPalwPanelV3StatusResponseMessage, RpcResult<kaspa_rpc_core::GetPalwPanelV3StatusResponse>, {
+    Self { available: item.available, observation_version: item.observation_version, json: item.json.clone() }
+});
 try_from!(item: &protowire::RpcPalwCapacityStep, kaspa_rpc_core::RpcPalwCapacityStep, {
     Self { from_daa: item.from_daa, rho: item.rho, q_credit_permille: item.q_credit_permille }
 });
@@ -5043,6 +5055,25 @@ mod native_settlement_tests {
         let duty = GetPrecommitDutyResponse { retired_at: Some(5), ..Default::default() };
         let wire: protowire::GetPrecommitDutyResponseMessage = RpcResult::Ok(&duty).into();
         assert_eq!(GetPrecommitDutyResponse::try_from(&wire).unwrap().retired_at, Some(5));
+    }
+}
+
+#[cfg(test)]
+mod palw_panel_v3_status_grpc_tests {
+    use crate::protowire;
+    use kaspa_rpc_core::{GetPalwPanelV3StatusRequest, GetPalwPanelV3StatusResponse, RpcResult};
+
+    /// **`getPalwPanelV3Status` (op 220) survives the grpc wire, both ways**, each field distinct.
+    #[test]
+    fn op_220_round_trips_on_the_grpc_wire() {
+        let request = GetPalwPanelV3StatusRequest { claim_ids: vec!["ab".repeat(64), "cd".repeat(64)], limit: 7 };
+        let wire: protowire::GetPalwPanelV3StatusRequestMessage = (&request).into();
+        let back: GetPalwPanelV3StatusRequest = (&wire).try_into().unwrap();
+        assert_eq!(back, request);
+        let response = GetPalwPanelV3StatusResponse { available: true, observation_version: 3, json: "{\"version\":3}".into() };
+        let wire: protowire::GetPalwPanelV3StatusResponseMessage = RpcResult::Ok(&response).into();
+        let back: RpcResult<GetPalwPanelV3StatusResponse> = (&wire).try_into();
+        assert_eq!(back.unwrap(), response);
     }
 }
 
