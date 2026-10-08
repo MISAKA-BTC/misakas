@@ -136,7 +136,102 @@ fn size_both(class: &PalwTirClassV1, court: bool, cap: u64) {
             .map(|(cur, prev)| (cur.0, cur.1, cur.2 - prev.2))
             .max_by_key(|x| x.2)
         {
-            println!("      the costliest point: ({b}, {n}) at {w} steps");
+            let node = &program.blocks[b as usize].nodes[n as usize];
+            println!(
+                "      the costliest point: ({b}, {n}) at {w} steps — {} -> {:?}, h-reductions {}",
+                node.prim.name(),
+                node.out.shape,
+                kaspa_consensus_core::palw_tir_dissect_v1::palw_tir_cone_reductions_v1(&program.blocks[b as usize], n).len()
+            );
+            if let Some(last) = trace.last() {
+                // The commit point after the last one sized: where a sizing stopped at its cap, the one that crossed it.
+                let points: Vec<(u8, u16)> = program
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(bi, bl)| {
+                        bl.nodes.iter().enumerate().filter(|(_, x)| x.commit).map(move |(ni, _)| (bi as u8, ni as u16))
+                    })
+                    .collect();
+                if let Some(i) = points.iter().position(|p| *p == (last.0, last.1))
+                    && let Some(next) = points.get(i + 1)
+                {
+                    let nn = &program.blocks[next.0 as usize].nodes[next.1 as usize];
+                    println!("      after the last sized point: ({}, {}) — {} -> {:?}", next.0, next.1, nn.prim.name(), nn.out.shape);
+                }
+            }
+        }
+    }
+}
+
+/// **The kernel route** (ADR-0172, RFC-0011 §§13.1/15): the reference VerificationPlan of `program` at `positions`, checked under each K2
+/// descriptor ARMED (the node's template arms all three when `palw_probabilistic_constraints_v1` is active), then every registration gate
+/// the real node's fold applies after it — `public_prosecution_complete_v1` under the interim ledger policy, one block's court budget,
+/// and the carriers (`carrier_fit_v1` at `PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1`). Every gate is reported, not only the first.
+fn k2_route(program: &misaka_palw_tir::program::TirProgramV1, positions: u32) {
+    use misaka_palw_kernel::check::check_plan_v1;
+    use misaka_palw_kernel::descriptor::{KernelScheduleV1, KernelStatusV1, k2_tir_v1_descriptor, k2_tir_v2_descriptor};
+    use misaka_palw_kernel::gate::public_prosecution_complete_v1;
+    use misaka_palw_kernel::plan::plan_for_tir_program_v1;
+    use misaka_palw_kernel::public::ProfileMaterialV1;
+    let bytes = program.encode();
+    let root = misaka_palw_kernel::public::program_root_v1(&bytes);
+    let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
+    let policy = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default());
+    let carrier = kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1;
+    for (name, d) in [("K2-TIR-v1", k2_tir_v1_descriptor()), ("K2-TIR-v2", k2_tir_v2_descriptor())] {
+        let armed = KernelScheduleV1::default().with(d.digest(), KernelStatusV1::Active { since_daa: 0 });
+        let plan = match plan_for_tir_program_v1(&d, program, root, positions) {
+            Ok(p) => p,
+            Err((family, why)) => {
+                println!("    {name} @{positions}: KERNEL_EXTENSION_REQUIRED ({}: {why})", family.name());
+                continue;
+            }
+        };
+        let b = &plan.budgets;
+        println!(
+            "    {name} @{positions}: plan {} B, {} relations; per position: verifier work {}, evidence {} B, {} probabilistic instances; artifact {} B; worst court {} B / {} work",
+            plan.encoded_len(),
+            plan.relations.len(),
+            b.verifier_work_per_position,
+            b.evidence_bytes_per_position,
+            b.probabilistic_instances_per_position,
+            b.artifact_bytes,
+            b.worst_court_bytes,
+            b.worst_court_work
+        );
+        match check_plan_v1(&armed, &d, program, root, &plan, 0) {
+            Ok(a) => println!(
+                "      check_plan_v1 (armed): PASS — eps <= 2^-{}, claim verifier work {}, claim evidence {} B",
+                a.error_bits, a.claim_verifier_work, a.claim_evidence_bytes
+            ),
+            Err(o) => println!("      check_plan_v1 (armed): {} — {}", o.code(), o.to_string().chars().take(500).collect::<String>()),
+        }
+        match public_prosecution_complete_v1(&d, &plan, nodes, &ProfileMaterialV1::kernel_route(true), &policy.prosecution) {
+            Ok(g) => {
+                println!(
+                    "      public_prosecution_complete_v1: PASS — public {} B, opening {} B, filing {} B, response {} B, court work {}, verifier RAM {} B, retained {} B, sessions {}",
+                    g.max_public_bytes,
+                    g.max_opening_bytes,
+                    g.max_filing_bytes,
+                    g.max_response_bytes,
+                    g.max_court_work,
+                    g.max_verifier_ram,
+                    g.max_retained_state,
+                    g.max_concurrent_sessions
+                );
+                println!(
+                    "      block court budget: {} (court work {} vs {})",
+                    if g.max_court_work <= policy.max_court_work_per_block { "PASS" } else { "REFUSED" },
+                    g.max_court_work,
+                    policy.max_court_work_per_block
+                );
+                match misaka_palw_kernel::ledger::carrier_fit_v1(&g, carrier, carrier, carrier) {
+                    Ok(()) => println!("      carrier_fit_v1 ({carrier} B): PASS"),
+                    Err(e) => println!("      carrier_fit_v1 ({carrier} B): REFUSED — {e}"),
+                }
+            }
+            Err(gaps) => println!("      public_prosecution_complete_v1: REFUSED — {gaps:?}"),
         }
     }
 }
@@ -164,7 +259,8 @@ fn huihui_qwen35_9b_ir_route_from_headers() {
     let contexts: Vec<u32> = env_list("COV_P1_CONTEXTS", &[8_192, 512]);
     let heights: Vec<u64> = env_list("COV_P1_DAA", &[5_585, 9_000]);
     for &ctx in &contexts {
-        let opts = Options { max_context: Some(ctx), ..Options::default() };
+        let held = std::env::var("COV_P1_HELD").is_ok();
+        let opts = Options { max_context: Some(ctx), held, ..Options::default() };
         let analysis = model::analyze(&src, &opts, reg, None);
         println!("== context {ctx}");
         for b in &analysis.blockers {
@@ -194,13 +290,30 @@ fn huihui_qwen35_9b_ir_route_from_headers() {
             program.states.len(),
             program.history_bound
         );
+        if std::env::var("COV_P1_K2").is_ok() {
+            k2_route(&program, ctx);
+        }
+        if std::env::var("COV_P1_K2_ONLY").is_ok() {
+            continue;
+        }
         let leaves =
             analysis.artifact.as_ref().map(|a| a.inventory_leaves_estimate.min(u32::MAX as u64) as u32).unwrap_or(1 << 16).max(2);
         for &daa in &heights {
             println!("  -- DAA {daa}");
             // 1. The default layout: tile 64, history tile 64, logits tile 4,096, the court's interval.
             let choice = TirLayoutChoiceV1 { max_context: Some(ctx), ..Default::default() };
-            let mut layout = tir_layout_tiles_v1(&params, &program, &choice).expect("tiles");
+            // Past the network's context ceiling the SDK will not tile it: the same tiles at the widest context it does, the context
+            // then written as declared — so the GATE names the refusal, in its own order.
+            let mut layout = match tir_layout_tiles_v1(&params, &program, &choice) {
+                Ok(l) => l,
+                Err(why) => {
+                    println!("    tiles: {why} — judged at the declared context anyway");
+                    let narrower = TirLayoutChoiceV1 { max_context: Some(262_144), ..choice };
+                    let mut l = tir_layout_tiles_v1(&params, &program, &narrower).expect("tiles at the network ceiling");
+                    l.max_context = ctx;
+                    l
+                }
+            };
             match tir_court_checkpoint_interval_v1(&params, bundle, &program, &layout) {
                 Ok(c) => layout.checkpoint_interval = c,
                 Err(e) => println!("    default layout: no checkpoint interval: {e}"),
@@ -221,7 +334,28 @@ fn huihui_qwen35_9b_ir_route_from_headers() {
             // 2. The SDK's layout search, at this gate.
             let t = std::time::Instant::now();
             let judged = |c: &PalwTirClassV1| judge(&params, bundle, c, root, daa);
-            let chosen = tir_choose_layout_judged_v1(&params, bundle, &program, tokenizer_id, leaves, &choice, true, &judged);
+            // `COV_P1_FIXED=<logits tile>,<h_tile>,<interval>`: that layout, judged once (no search).
+            let fixed: Option<Vec<u32>> =
+                std::env::var("COV_P1_FIXED").ok().map(|v| v.split(',').map(|x| x.trim().parse().expect("a number")).collect());
+            let chosen = match &fixed {
+                Some(f) => {
+                    let mut l = tir_layout_tiles_v1(
+                        &params,
+                        &program,
+                        &TirLayoutChoiceV1 { logits_tile: Some(f[0]), h_chunk: f[1], ..choice },
+                    )
+                    .expect("tiles");
+                    l.checkpoint_interval = f[2];
+                    let class = PalwTirClassV1 {
+                        version: PALW_TIR_CLASS_VERSION_V1,
+                        program: program.encode(),
+                        layout: l.clone(),
+                        tokenizer_id,
+                    };
+                    Ok(misaka_palw_sdk::tir_layout::TirChosenLayoutV1 { layout: l, admission: judged(&class) })
+                }
+                None => tir_choose_layout_judged_v1(&params, bundle, &program, tokenizer_id, leaves, &choice, true, &judged),
+            };
             match &chosen {
                 Ok(c) => println!(
                     "    search ({:?}): logits tile {:?}, h_tile {}, interval {} -> {}",
