@@ -12,6 +12,7 @@
 pub mod bind;
 pub mod build;
 pub mod cli;
+pub mod commit;
 pub mod conformance;
 pub mod hfref;
 pub mod manifest;

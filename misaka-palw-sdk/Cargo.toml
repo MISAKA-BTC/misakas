@@ -47,9 +47,18 @@ serde_json.workspace = true
 # independent second implementation of the IR, one of the executors a pack's conformance runs.
 sha2.workspace = true
 misaka-palw-tir-ref2 = { path = "../misaka-palw-tir-ref2" }
+# RFC-0007 Part VI / RFC-0013 §9: the ONE post-commit challenge contract (policy, work beacon, seed, samplers, conformance
+# records). A pack's beacon conformance consumes it; this crate derives no beacon, seed or sampler of its own.
+misaka-palw-challenge.workspace = true
+# Peak RSS of a conformance run (getrusage), reported in the run record, never in the evidence.
+libc.workspace = true
 serde = { workspace = true }
 # The Hugging Face census (`census`) reads its header store gzip-compressed.
 flate2.workspace = true
+
+[build-dependencies]
+# build.rs: the source digests of the implementations a beacon-conformance commitment names.
+blake2b_simd.workspace = true
 
 [[bin]]
 name = "palw-class"
