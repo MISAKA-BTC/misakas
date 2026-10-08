@@ -100,6 +100,28 @@ skeleton first; lanes build on that commit.
 
 ## 4. Change log
 
+* 2026-10-08 — **C1 final integrated** (11 commits, `rfc-0009-remote-record.md`). Status by row (tests: remote 71 lib + 2 CLI e2e,
+  CLI 8, pq-validator-core 48, pq-signer 17, rpc op-202, real processor `t12_state_proof` 1 + `rfc9_redemption_v4` 5; nothing run
+  against a live node/network):
+  * Node-less registration (export/sign/submit on separate machines, bond key ≠ payer key, tamper refusal, ≥2-node quotes,
+    resend vs duplicate, shared lifecycle codes) — IMPLEMENTED_AND_TESTED (client) / consensus binding of expiry + ruleset
+    **DESIGN_GAP (G-EXPIRY, G-RULESET: signed `valid_until_daa` + ruleset in the registration object + fence; Lead)**.
+  * Remote verification: `getPalwStateProof` (op 202) proves one collection against the committing header; client verifies against a
+    pinned block hash; `UNVERIFIED_REMOTE_STATE` labelling; registrant bond read from the proven class record —
+    IMPLEMENTED_AND_TESTED; header-chain PoW verification CODE_GAP; O(rows) proofs (flat commitment) DESIGN_GAP.
+  * Remote attempt: `palw-remote-miner` (external `--executor-cmd`, signs once on a win, quorum recheck, reorg tracking) —
+    IMPLEMENTED_REFERENCE_ONLY (no live run); backend extraction from kaspad CODE_GAP.
+  * Remote FP claim: `rail --signer-socket` (seed never in the rail; `MessageSigner` refactor), `rail --relay-signed` —
+    IMPLEMENTED_AND_TESTED (unit/local); V4 authorization from a sidecar needs a new `SigningPurpose` variant in
+    `consensus-core::dns_finality` (Lead decision; recorded GAP).
+  * DA transport: HTTP/dir providers, read-back upload, availability, repair, retention monitor; one fetch shared by node, Panel and
+    public verifier (`evidence::fs::fetch_claim_material` delegates) — IMPLEMENTED_AND_TESTED (local); https untested; on-chain
+    provider discovery DESIGN_GAP; `misaka-model-transport` absent CODE_GAP; kaspad provider flag dirs-only.
+  * V4 redemption: authorizations on providers mirrored to the builder dir; fence test-armed: different bonds, miner offline, quantum
+    once, payout to the registered address, fee carved from the worker reward, revert undoes use, round permits untouched, V3
+    unchanged — DORMANT_NOT_INTEGRATED (fence None) with processor-level tests; full chain-block acceptance test CODE_GAP; arming
+    plan / T12 drill / fee-cap market EXTERNAL_GATE_PENDING.
+
 * 2026-10-08 — C2 milestone 1 (`rfc10/c2-panel` 5e294cdcc, d6f93e68b, 8f8410b0f; not yet integrated): V3 engine staged
   (advance / accept_beacon / admit); beacon adapter = borsh `WorkBeaconV1` verified by `verify_work_beacon_v1`; production fold —
   `PalwChainStateV2.panel_v3` Some-only root block `panel_v3/v1`, deltas 170–173, tail 0xED, tag 120 (bad proof dropped, block
