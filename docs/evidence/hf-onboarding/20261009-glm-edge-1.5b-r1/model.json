@@ -1,0 +1,143 @@
+{
+ "order": 5,
+ "id": "glm-edge-1.5b",
+ "family": "glm",
+ "repo": "zai-org/glm-edge-1.5b-chat",
+ "revision": "7b201d3c160c25beda4cf0d107617ad975cd1ca8",
+ "task": "text-generation",
+ "context": 512,
+ "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/zai-org/glm-edge-1.5b-chat",
+ "full": "downloaded (approved 2026-10-08, hash-verified)",
+ "bytes": 3186882328,
+ "source": {
+  "schema": "misaka.h1.source.v1",
+  "repo": "zai-org/glm-edge-1.5b-chat",
+  "revision": "7b201d3c160c25beda4cf0d107617ad975cd1ca8",
+  "resolved_sha": "7b201d3c160c25beda4cf0d107617ad975cd1ca8",
+  "gated": false,
+  "private": false,
+  "architectures": [
+   "GlmForCausalLM"
+  ],
+  "model_type": "glm",
+  "pipeline_tag": "text-generation",
+  "files": [
+   {
+    "path": ".gitattributes",
+    "size": 1519,
+    "git_oid": "a6344aac8c09253b3b630fb776ae94478aa0275b",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "LICENSE",
+    "size": 6564,
+    "git_oid": "d79d7bda35207b86aeff1bde7941c0d68934a9a9",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "README.md",
+    "size": 1271,
+    "git_oid": "e663bed14ebf60a0db3a85a5dd259976de6368cc",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "README_zh.md",
+    "size": 1020,
+    "git_oid": "69256c10897abb344a1d78c96f671c4dc16075c6",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "config.json",
+    "size": 680,
+    "git_oid": "a5a21313265c8a80417df4461f7db1ec8a66dbce",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "generation_config.json",
+    "size": 156,
+    "git_oid": "020f6f60237328166efca8d2b87cd32d31c2c5ad",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "model.safetensors",
+    "size": 3186882328,
+    "git_oid": "91d9a769081ceb3889139a0dd640c2c46ea76cc1",
+    "sha256": "b556690579356fbdec0e34c435b298f4ea9229dddffe7dac5832c7e5464b7799",
+    "lfs": true
+   },
+   {
+    "path": "special_tokens_map.json",
+    "size": 601,
+    "git_oid": "582da4ad333feaaa0c427b4678a3e48447ea932f",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "tokenizer.json",
+    "size": 6834426,
+    "git_oid": "71527109135b3319395aa68319eb2bff37fe2e09",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "tokenizer_config.json",
+    "size": 3501,
+    "git_oid": "ed5b6a0f94bf6cfcaa8c5f4250a364267baf58ef",
+    "sha256": null,
+    "lfs": false
+   }
+  ],
+  "weights_bytes": 3186882328,
+  "local": {
+   "dir": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/zai-org/glm-edge-1.5b-chat",
+   "checks": [
+    {
+     "path": "LICENSE",
+     "status": "MATCH",
+     "git_oid": "d79d7bda35207b86aeff1bde7941c0d68934a9a9"
+    },
+    {
+     "path": "config.json",
+     "status": "MATCH",
+     "git_oid": "a5a21313265c8a80417df4461f7db1ec8a66dbce"
+    },
+    {
+     "path": "generation_config.json",
+     "status": "MATCH",
+     "git_oid": "020f6f60237328166efca8d2b87cd32d31c2c5ad"
+    },
+    {
+     "path": "model.safetensors",
+     "status": "MATCH",
+     "sha256": "b556690579356fbdec0e34c435b298f4ea9229dddffe7dac5832c7e5464b7799"
+    },
+    {
+     "path": "special_tokens_map.json",
+     "status": "MATCH",
+     "git_oid": "582da4ad333feaaa0c427b4678a3e48447ea932f"
+    },
+    {
+     "path": "tokenizer.json",
+     "status": "MATCH",
+     "git_oid": "71527109135b3319395aa68319eb2bff37fe2e09"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "status": "MATCH",
+     "git_oid": "ed5b6a0f94bf6cfcaa8c5f4250a364267baf58ef"
+    }
+   ],
+   "required": [
+    "model.safetensors",
+    "config.json"
+   ],
+   "verdict": "MATCH"
+  }
+ }
+}
