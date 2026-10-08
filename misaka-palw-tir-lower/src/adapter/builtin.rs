@@ -179,28 +179,21 @@ pub fn by_id(id: &str) -> Option<&'static Adapter> {
 /// The built-in DECODER adapter claiming a configuration: by `architectures[0]`, else by `model_type`.
 /// (An adapter of kind `encdec` is found by [`find_encdec_for`]; the decoder reader never sees one.)
 pub fn find_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
-    let real =
-        || all().iter().filter(|a| a.kind() == "decoder" && (a.value.get("spec").is_some() || a.value.get("dispatch").is_some()));
-    real()
-        .find(|a| a.architectures().contains(&arch))
-        .or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
+    let real = || all().iter().filter(|a| a.kind() == "decoder" && (a.value.get("spec").is_some() || a.value.get("dispatch").is_some()));
+    real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
 }
 
 /// The built-in ENCODER-DECODER adapter (kind `encdec`) claiming a configuration, by `architectures[0]`, else by
 /// `model_type`.
 pub fn find_encdec_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
     let real = || all().iter().filter(|a| a.kind() == "encdec" && a.value.get("match").is_some());
-    real()
-        .find(|a| a.architectures().contains(&arch))
-        .or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
+    real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
 }
 
 /// The built-in VISION-TOWER adapter (kind `vision`) claiming a configuration, by `architectures[0]`, else by `model_type`.
 pub fn find_vision_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
     let real = || all().iter().filter(|a| a.kind() == "vision" && a.value.get("match").is_some());
-    real()
-        .find(|a| a.architectures().contains(&arch))
-        .or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
+    real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
 }
 
 /// The built-in VISION-TOWER adapter (kind `vision`) that reads the tower INSIDE a wrapper model (`match.tower_of`: a VLM's
@@ -279,10 +272,7 @@ pub fn refusal_for(arch: &str) -> Option<(Vec<String>, String)> {
         let archs = e.get("architectures")?.as_array()?;
         archs.iter().any(|x| x.as_str() == Some(arch)).then(|| {
             (
-                e.get("missing")
-                    .and_then(|m| m.as_array())
-                    .map(|m| m.iter().filter_map(|x| x.as_str()).map(str::to_string).collect())
-                    .unwrap_or_default(),
+                e.get("missing").and_then(|m| m.as_array()).map(|m| m.iter().filter_map(|x| x.as_str()).map(str::to_string).collect()).unwrap_or_default(),
                 e.get("why").and_then(|w| w.as_str()).unwrap_or("").to_string(),
             )
         })

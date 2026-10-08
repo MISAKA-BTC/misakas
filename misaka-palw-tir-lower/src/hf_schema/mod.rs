@@ -212,9 +212,7 @@ pub fn read_model_with(
         },
         _ => {
             return Err(fail(
-                LowerError::not_lowerable(
-                    "config has no `architectures`: the reference implementation cannot be identified (not a transformers config?)",
-                ),
+                LowerError::not_lowerable("config has no `architectures`: the reference implementation cannot be identified (not a transformers config?)"),
                 AdapterSource::None,
             ));
         }
@@ -257,9 +255,7 @@ pub fn read_model_with(
     }
     let route = match &opts.adapter {
         AdapterChoice::BuiltIn(id) => Route::Adapter(
-            builtin::by_id(id)
-                .cloned()
-                .ok_or_else(|| fail(LowerError::bad(format!("no built-in adapter `{id}`")), AdapterSource::None))?,
+            builtin::by_id(id).cloned().ok_or_else(|| fail(LowerError::bad(format!("no built-in adapter `{id}`")), AdapterSource::None))?,
         ),
         AdapterChoice::Text(t) => Route::Adapter(adapter::parse(t, Origin::User).map_err(|e| fail(e, AdapterSource::None))?),
         AdapterChoice::None => Route::Generic,
@@ -340,8 +336,7 @@ pub fn read_model_with(
                     }],
                 });
             }
-            let std = builtin::by_id("standard-decoder")
-                .ok_or_else(|| fail(LowerError::eval("internal: no standard-decoder adapter"), AdapterSource::None))?;
+            let std = builtin::by_id("standard-decoder").ok_or_else(|| fail(LowerError::eval("internal: no standard-decoder adapter"), AdapterSource::None))?;
             let mut r = read_with(std, &arch, config, tensors, reg)?;
             r.adapter = AdapterSource::None;
             r
@@ -380,24 +375,20 @@ pub fn read_encdec(config: &Value, opts: &ReadOptions) -> Result<EncDecRead, Rea
         Some(a) => a.to_string(),
         None => {
             return Err(fail(
-                LowerError::not_lowerable(
-                    "config has no `architectures`: the reference implementation cannot be identified (not a transformers config?)",
-                ),
+                LowerError::not_lowerable("config has no `architectures`: the reference implementation cannot be identified (not a transformers config?)"),
                 AdapterSource::None,
             ));
         }
     };
     let model_type = root.get("model_type").and_then(Value::as_str);
     let adapter: Adapter = match &opts.adapter {
-        AdapterChoice::BuiltIn(id) => builtin::by_id(id)
-            .cloned()
-            .ok_or_else(|| fail(LowerError::bad(format!("no built-in adapter `{id}`")), AdapterSource::None))?,
+        AdapterChoice::BuiltIn(id) => {
+            builtin::by_id(id).cloned().ok_or_else(|| fail(LowerError::bad(format!("no built-in adapter `{id}`")), AdapterSource::None))?
+        }
         AdapterChoice::Text(t) => adapter::parse(t, Origin::User).map_err(|e| fail(e, AdapterSource::None))?,
         AdapterChoice::None => {
             return Err(fail(
-                LowerError::not_lowerable(format!(
-                    "{arch}: an encoder–decoder has no standard template; it needs an adapter (kind `encdec`)"
-                )),
+                LowerError::not_lowerable(format!("{arch}: an encoder–decoder has no standard template; it needs an adapter (kind `encdec`)")),
                 AdapterSource::None,
             ));
         }
@@ -449,38 +440,24 @@ pub fn is_vision_tower(config: &Value) -> bool {
 /// config's own `image_size` (via the adapter) and the normalisation the adapter's default.
 pub fn read_vision(config: &Value, opts: &ReadOptions) -> Result<VisionRead, ReadFailure> {
     let root = config.as_object().ok_or_else(|| fail(LowerError::bad("config.json is not an object"), AdapterSource::None))?;
-    let arch =
-        root.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("").to_string();
+    let arch = root.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("").to_string();
     let model_type = root.get("model_type").and_then(Value::as_str);
     let adapter: Adapter = match &opts.adapter {
-        AdapterChoice::BuiltIn(id) => builtin::by_id(id)
-            .cloned()
-            .ok_or_else(|| fail(LowerError::bad(format!("no built-in adapter `{id}`")), AdapterSource::None))?,
+        AdapterChoice::BuiltIn(id) => builtin::by_id(id).cloned().ok_or_else(|| fail(LowerError::bad(format!("no built-in adapter `{id}`")), AdapterSource::None))?,
         AdapterChoice::Text(t) => adapter::parse(t, Origin::User).map_err(|e| fail(e, AdapterSource::None))?,
         AdapterChoice::None => {
-            return Err(fail(
-                LowerError::not_lowerable(format!(
-                    "{arch}: a vision tower has no standard template; it needs an adapter (kind `vision`)"
-                )),
-                AdapterSource::None,
-            ));
+            return Err(fail(LowerError::not_lowerable(format!("{arch}: a vision tower has no standard template; it needs an adapter (kind `vision`)")), AdapterSource::None));
         }
         AdapterChoice::Auto => match builtin::find_vision_for(&arch, model_type) {
             Some(a) => a.clone(),
             None => {
-                return Err(fail(
-                    LowerError::not_lowerable(format!("`{arch}` is a vision tower no adapter of kind `vision` claims")),
-                    AdapterSource::None,
-                ));
+                return Err(fail(LowerError::not_lowerable(format!("`{arch}` is a vision tower no adapter of kind `vision` claims")), AdapterSource::None));
             }
         },
     };
     let src = source_of(&adapter);
     if adapter.kind() != "vision" {
-        return Err(fail(
-            LowerError::not_lowerable(format!("{arch}: adapter `{}` is of kind `{}`, not `vision`", adapter.id, adapter.kind())),
-            src,
-        ));
+        return Err(fail(LowerError::not_lowerable(format!("{arch}: adapter `{}` is of kind `{}`, not `vision`", adapter.id, adapter.kind())), src));
     }
     let built = eval::build_vision_spec(&adapter, config).map_err(|e| fail(e, src.clone()))?;
     let spec = crate::lower::vision::vision_spec_from_value(built.spec, None, None).map_err(|e| fail(e, src.clone()))?;
@@ -510,38 +487,24 @@ pub fn is_cnn(config: &Value) -> bool {
 /// [`CNN_DEFAULT_INPUT`] (an assumed default) and the normalisation the adapter's.
 pub fn read_cnn(config: &Value, opts: &ReadOptions) -> Result<CnnRead, ReadFailure> {
     let root = config.as_object().ok_or_else(|| fail(LowerError::bad("config.json is not an object"), AdapterSource::None))?;
-    let arch =
-        root.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("").to_string();
+    let arch = root.get("architectures").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("").to_string();
     let model_type = root.get("model_type").and_then(Value::as_str);
     let adapter: Adapter = match &opts.adapter {
-        AdapterChoice::BuiltIn(id) => builtin::by_id(id)
-            .cloned()
-            .ok_or_else(|| fail(LowerError::bad(format!("no built-in adapter `{id}`")), AdapterSource::None))?,
+        AdapterChoice::BuiltIn(id) => builtin::by_id(id).cloned().ok_or_else(|| fail(LowerError::bad(format!("no built-in adapter `{id}`")), AdapterSource::None))?,
         AdapterChoice::Text(t) => adapter::parse(t, Origin::User).map_err(|e| fail(e, AdapterSource::None))?,
         AdapterChoice::None => {
-            return Err(fail(
-                LowerError::not_lowerable(format!(
-                    "{arch}: a convolutional network has no standard template; it needs an adapter (kind `cnn`)"
-                )),
-                AdapterSource::None,
-            ));
+            return Err(fail(LowerError::not_lowerable(format!("{arch}: a convolutional network has no standard template; it needs an adapter (kind `cnn`)")), AdapterSource::None));
         }
         AdapterChoice::Auto => match builtin::find_cnn_for(&arch, model_type) {
             Some(a) => a.clone(),
             None => {
-                return Err(fail(
-                    LowerError::not_lowerable(format!("`{arch}` is a convolutional network no adapter of kind `cnn` claims")),
-                    AdapterSource::None,
-                ));
+                return Err(fail(LowerError::not_lowerable(format!("`{arch}` is a convolutional network no adapter of kind `cnn` claims")), AdapterSource::None));
             }
         },
     };
     let src = source_of(&adapter);
     if adapter.kind() != "cnn" {
-        return Err(fail(
-            LowerError::not_lowerable(format!("{arch}: adapter `{}` is of kind `{}`, not `cnn`", adapter.id, adapter.kind())),
-            src,
-        ));
+        return Err(fail(LowerError::not_lowerable(format!("{arch}: adapter `{}` is of kind `{}`, not `cnn`", adapter.id, adapter.kind())), src));
     }
     let built = eval::build_cnn_spec(&adapter, config).map_err(|e| fail(e, src.clone()))?;
     let mut assumed_defaults = built.assumed_defaults;
@@ -549,10 +512,7 @@ pub fn read_cnn(config: &Value, opts: &ReadOptions) -> Result<CnnRead, ReadFailu
     let size = if given {
         None
     } else {
-        assumed_defaults.push(format!(
-            "input size {}x{} (the class declares it; a convolutional network's config.json has none)",
-            CNN_DEFAULT_INPUT.0, CNN_DEFAULT_INPUT.1
-        ));
+        assumed_defaults.push(format!("input size {}x{} (the class declares it; a convolutional network's config.json has none)", CNN_DEFAULT_INPUT.0, CNN_DEFAULT_INPUT.1));
         Some(CNN_DEFAULT_INPUT)
     };
     let spec = crate::lower::cnn::cnn_spec_from_value(built.spec, size, None).map_err(|e| fail(e, src.clone()))?;
@@ -598,9 +558,7 @@ fn read_with(
             // `REFERENCE_REMOTE_CODE_V1`: the file the adapter says its lowering follows, by hash (declared by the adapter, never attested).
             let pin = match a.value.get("remote_code_pin").and_then(|p| p.get(module.as_str())) {
                 None | Some(Value::Null) => None,
-                Some(Value::String(h)) if h.len() == 64 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) => {
-                    Some(h.clone())
-                }
+                Some(Value::String(h)) if h.len() == 64 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) => Some(h.clone()),
                 Some(other) => {
                     return Err(f(LowerError::bad(format!(
                         "{arch}: remote_code_pin of `{module}` is a lowercase sha256 (64 hex characters), got {other}"
@@ -616,9 +574,7 @@ fn read_with(
                 _ => false,
             };
             if required {
-                return Err(f(LowerError::not_lowerable(format!(
-                    "{arch}: exists only as remote code and the config has no auto_map"
-                ))));
+                return Err(f(LowerError::not_lowerable(format!("{arch}: exists only as remote code and the config has no auto_map"))));
             }
             Reference::Native
         }

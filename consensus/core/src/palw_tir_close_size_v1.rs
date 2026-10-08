@@ -1217,11 +1217,7 @@ impl<'a> PalwTirClosePriceV1<'a> {
             };
             for k in pieces {
                 let len = row_bytes.saturating_sub(k * PALW_TIR_ROW_PIECE_BYTES_V1).min(PALW_TIR_ROW_PIECE_BYTES_V1);
-                lens[side].push(palw_artifact_operand_borsh_len_v1(
-                    d.name.len() + self.name_extra() as usize,
-                    layer.is_some(),
-                    len as usize,
-                ));
+                lens[side].push(palw_artifact_operand_borsh_len_v1(d.name.len() + self.name_extra() as usize, layer.is_some(), len as usize));
             }
             siblings[side] += run_siblings(side, pieces.len() as u64);
         }
@@ -1526,17 +1522,8 @@ fn worst_closes_priced(
                             pattern: bool| {
                     let request =
                         PalwTirCloseRequestV1 { ctx: DemandContext { pos, occurrence: occ }, target, elements, supplied, range, both };
-                    let split = close_reads_split(
-                        space,
-                        job_ctx,
-                        inventory,
-                        &request,
-                        budget.get(),
-                        hist_only,
-                        pattern,
-                        leaf_cost,
-                        gen_stage,
-                    )?;
+                    let split =
+                        close_reads_split(space, job_ctx, inventory, &request, budget.get(), hist_only, pattern, leaf_cost, gen_stage)?;
                     budget.set(budget.get().saturating_sub(split.work));
                     Ok::<_, String>(split)
                 };
@@ -1890,7 +1877,8 @@ fn worst_closes_priced(
                     range: None,
                     both: false,
                 };
-                let split = close_reads_split(space, job_ctx, inventory, &request, budget.get(), false, false, leaf_cost, gen_stage)?;
+                let split =
+                    close_reads_split(space, job_ctx, inventory, &request, budget.get(), false, false, leaf_cost, gen_stage)?;
                 budget.set(budget.get().saturating_sub(split.work));
                 let mut reads = split.reads;
                 reads.merge(&split.hist);
