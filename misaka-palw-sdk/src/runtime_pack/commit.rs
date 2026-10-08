@@ -177,7 +177,10 @@ impl ConformanceScopeV1 {
 
     /// The identity of the scope AND its fault model (what the evidence's `scope_and_fault_model_id` names).
     pub fn scope_and_fault_model_id(&self, repetitions: u32) -> Digest {
-        tool_root(b"misaka.palw.runtime-pack.scope-fault-model.v1", &(self.clone(), repetitions, self.derived_epsilon_bits(repetitions)))
+        tool_root(
+            b"misaka.palw.runtime-pack.scope-fault-model.v1",
+            &(self.clone(), repetitions, self.derived_epsilon_bits(repetitions)),
+        )
     }
 
     /// The scope in words, for records: never claims more than it is.
@@ -333,7 +336,8 @@ impl CommitParamsV1 {
             scope,
             candidate_id: None,
             plan_positions: None,
-            policy_label: "UNAPPROVED TEST POLICY (reference_policy_v1 numbers; not an approved checker-suite/policy/soundness tuple)".into(),
+            policy_label: "UNAPPROVED TEST POLICY (reference_policy_v1 numbers; not an approved checker-suite/policy/soundness tuple)"
+                .into(),
         }
     }
 }
@@ -369,21 +373,31 @@ fn failure_code(o: &misaka_palw_kernel::outcome::RegistrationOutcomeV1) -> &'sta
     match o {
         O::FrontendRequired { .. } | O::PlanForged { .. } => OnboardingFailureV1::FrontendRequired.code(),
         O::KernelExtensionRequired { .. } | O::KernelNotActive { .. } => OnboardingFailureV1::KernelExtensionRequired.code(),
-        O::BoundsExceeded { .. } | O::IncompleteCoverage { .. } | O::CapacityPending { .. } => OnboardingFailureV1::ResourceRefused.code(),
+        O::BoundsExceeded { .. } | O::IncompleteCoverage { .. } | O::CapacityPending { .. } => {
+            OnboardingFailureV1::ResourceRefused.code()
+        }
         O::ExternalBlocker { .. } => "STATIC_ADMISSION_REFUSED",
         O::EligibleAt { .. } => "STATIC_ADMISSION_REFUSED",
     }
 }
 
 /// Static semantic admission of the program under the reference kernels, hypothetically armed (the first that accepts it).
-pub fn static_admission(program: &misaka_palw_tir::TirProgramV1, program_root: Digest, positions: u32) -> Result<StaticAdmissionRec, Refusal> {
+pub fn static_admission(
+    program: &misaka_palw_tir::TirProgramV1,
+    program_root: Digest,
+    positions: u32,
+) -> Result<StaticAdmissionRec, Refusal> {
     use misaka_palw_kernel::check::registration_outcome_v1;
-    use misaka_palw_kernel::descriptor::{KernelScheduleV1, KernelStatusV1, builtin_schedule_v1, k2_tir_v1_descriptor, k2_tir_v2_descriptor};
+    use misaka_palw_kernel::descriptor::{
+        KernelScheduleV1, KernelStatusV1, builtin_schedule_v1, k2_tir_v1_descriptor, k2_tir_v2_descriptor,
+    };
     use misaka_palw_kernel::outcome::RegistrationOutcomeV1 as O;
     let kernels = [("K2-TIR-v1", k2_tir_v1_descriptor()), ("K2-TIR-v2", k2_tir_v2_descriptor())];
     let judge = |schedule: &KernelScheduleV1, d: &misaka_palw_kernel::descriptor::KernelDescriptorV1| {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| registration_outcome_v1(schedule, d, program, program_root, positions, 0)))
-            .unwrap_or_else(|_| O::FrontendRequired { reason: "the kernel check panicked".into() })
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            registration_outcome_v1(schedule, d, program, program_root, positions, 0)
+        }))
+        .unwrap_or_else(|_| O::FrontendRequired { reason: "the kernel check panicked".into() })
     };
     let mut last: Option<O> = None;
     for (name, d) in &kernels {
@@ -440,7 +454,11 @@ pub fn bind_commitment(
     if hex(&artifact_root) != pack.result.inventory_root {
         return Err(Refusal::new(
             "PACK_MISMATCH",
-            format!("the artifact's inventory root is {}, the pack says {}", &hex(&artifact_root)[..16], &pack.result.inventory_root[..16]),
+            format!(
+                "the artifact's inventory root is {}, the pack says {}",
+                &hex(&artifact_root)[..16],
+                &pack.result.inventory_root[..16]
+            ),
         ));
     }
     if hex(&m.tokenizer_id) != pack.result.tokenizer_id {
@@ -456,7 +474,10 @@ pub fn bind_commitment(
         [] => {
             return Err(Refusal::new(
                 OnboardingFailureV1::LayoutRequired.code(),
-                format!("the pack declares no class for `{}` (bind the declared artifact into a pack first: `pack bind-class`)", params.network),
+                format!(
+                    "the pack declares no class for `{}` (bind the declared artifact into a pack first: `pack bind-class`)",
+                    params.network
+                ),
             ));
         }
         [d] => *d,
@@ -482,7 +503,8 @@ pub fn bind_commitment(
     if class_id.to_string() != d.class_id || layout_digest.to_string() != d.layout_digest {
         return Err(Refusal::new("PACK_MISMATCH", "the artifact's class id / layout digest is not the pack's declared one"));
     }
-    let container = misaka_palw_tir_artifact::PalwTirContainerV1::open(artifact).map_err(|e| Refusal::new("PACK_MISMATCH", e.to_string()))?;
+    let container =
+        misaka_palw_tir_artifact::PalwTirContainerV1::open(artifact).map_err(|e| Refusal::new("PACK_MISMATCH", e.to_string()))?;
     let rebuilt = d
         .class_from_program(&container.program, kaspa_hashes::Hash64::from_bytes(m.tokenizer_id))
         .map_err(|e| Refusal::new("PACK_MISMATCH", e))?;
@@ -495,7 +517,10 @@ pub fn bind_commitment(
     // Scope against the artifact: it must be drawable, and a prompt plus its decode must fit the class.
     let program = &container.program;
     if params.scope.leaves_per_repetition > m.leaf_count {
-        return Err(Refusal::new("SCOPE_INVALID", format!("the scope draws {} leaves of an artifact of {}", params.scope.leaves_per_repetition, m.leaf_count)));
+        return Err(Refusal::new(
+            "SCOPE_INVALID",
+            format!("the scope draws {} leaves of an artifact of {}", params.scope.leaves_per_repetition, m.leaf_count),
+        ));
     }
     let positions = params.plan_positions.unwrap_or_else(|| d.max_context.min(program.history_bound).max(1));
     if params.scope.vectors_per_repetition > 0 {

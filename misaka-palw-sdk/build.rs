@@ -48,7 +48,9 @@ fn main() {
         ("container", "misaka-palw-tir-artifact", "../misaka-palw-tir-artifact/src"),
         ("checker", "misaka-palw-sdk/runtime_pack", "src/runtime_pack"),
     ];
-    let mut code = String::from("/// `(role, crate, source digest)` of the implementations this binary was built from.\npub const IMPL_REVISIONS: &[(&str, &str, &str)] = &[\n");
+    let mut code = String::from(
+        "/// `(role, crate, source digest)` of the implementations this binary was built from.\npub const IMPL_REVISIONS: &[(&str, &str, &str)] = &[\n",
+    );
     for (role, name, rel) in roots {
         let dir = manifest.join(rel);
         println!("cargo:rerun-if-changed={}", dir.display());

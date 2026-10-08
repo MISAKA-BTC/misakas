@@ -15,10 +15,10 @@
 
 use super::commit::{Refusal, hex, unhex64};
 use borsh::{BorshDeserialize, BorshSerialize};
-use misaka_palw_challenge::beacon::{BeaconContextV1, WorkFinalEventV1, WorkSourceKindV1};
+use misaka_palw_challenge::PostCommitChallengePolicyV1;
+use misaka_palw_challenge::beacon::{BeaconContextV1, FinalPathV1, WorkFinalEventV1, WorkSourceKindV1};
 use misaka_palw_challenge::conformance::ConformanceCommitmentV1;
 use misaka_palw_challenge::hash::Digest;
-use misaka_palw_challenge::PostCommitChallengePolicyV1;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -76,7 +76,8 @@ impl ChainBeaconFactsV1 {
 /// `commitment` is the committed statement (the chain looks the commitment up by `statement_root()`); `policy` is the committed
 /// policy (a source that carries one names its id, and the consumer refuses any other).
 pub trait BeaconFactSource {
-    fn facts(&self, commitment: &ConformanceCommitmentV1, policy: &PostCommitChallengePolicyV1) -> Result<ChainBeaconFactsV1, Refusal>;
+    fn facts(&self, commitment: &ConformanceCommitmentV1, policy: &PostCommitChallengePolicyV1)
+    -> Result<ChainBeaconFactsV1, Refusal>;
 }
 
 /// Facts read from a file of `misaka.palw.beacon-facts.v1` JSON.
@@ -84,8 +85,13 @@ pub trait BeaconFactSource {
 pub struct FileFactSource(pub PathBuf);
 
 impl BeaconFactSource for FileFactSource {
-    fn facts(&self, commitment: &ConformanceCommitmentV1, policy: &PostCommitChallengePolicyV1) -> Result<ChainBeaconFactsV1, Refusal> {
-        let text = std::fs::read_to_string(&self.0).map_err(|e| Refusal::new("FACTS_UNREADABLE", format!("{}: {e}", self.0.display())))?;
+    fn facts(
+        &self,
+        commitment: &ConformanceCommitmentV1,
+        policy: &PostCommitChallengePolicyV1,
+    ) -> Result<ChainBeaconFactsV1, Refusal> {
+        let text =
+            std::fs::read_to_string(&self.0).map_err(|e| Refusal::new("FACTS_UNREADABLE", format!("{}: {e}", self.0.display())))?;
         facts_from_json(&text, commitment, policy)
     }
 }
@@ -118,7 +124,10 @@ pub fn resolve_facts(
         ));
     }
     if facts.eligible_profiles.contains(&commitment.candidate_id) {
-        return Err(Refusal::new("FACTS_SELF_ELIGIBLE", "the facts list the candidate under test as an eligible beacon source profile"));
+        return Err(Refusal::new(
+            "FACTS_SELF_ELIGIBLE",
+            "the facts list the candidate under test as an eligible beacon source profile",
+        ));
     }
     if let Some(p) = commitment.canonical_commitment_position
         && p != facts.commitment_position
@@ -172,6 +181,27 @@ fn kind_from(s: &str) -> Option<WorkSourceKindV1> {
     })
 }
 
+fn final_path_json(p: &FinalPathV1) -> Value {
+    match p {
+        FinalPathV1::PanelLicensed { panel_seed_id, panel_epoch } => {
+            json!({ "kind": "PANEL_LICENSED", "panel_seed_id": hex(panel_seed_id), "panel_epoch": panel_epoch })
+        }
+        FinalPathV1::PanelIndependent => json!({ "kind": "PANEL_INDEPENDENT" }),
+    }
+}
+
+/// How a work reached Final: required in every event (a missing path is a malformed file, never a default).
+fn final_path_from(v: &Value) -> Result<FinalPathV1, Refusal> {
+    let p = field(v, "final_path")?;
+    match field(p, "kind")?.as_str() {
+        Some("PANEL_LICENSED") => {
+            Ok(FinalPathV1::PanelLicensed { panel_seed_id: digestf(p, "panel_seed_id")?, panel_epoch: u64f(p, "panel_epoch")? })
+        }
+        Some("PANEL_INDEPENDENT") => Ok(FinalPathV1::PanelIndependent),
+        _ => Err(Refusal::new("FACTS_MALFORMED", "final_path.kind is PANEL_LICENSED or PANEL_INDEPENDENT")),
+    }
+}
+
 /// The file form of facts (`misaka.palw.beacon-facts.v1`): digests are 128 lowercase hex characters.
 pub fn facts_to_json(f: &ChainBeaconFactsV1, policy_id: &Digest) -> Value {
     let (pk, pl) = match &f.provenance {
@@ -199,6 +229,7 @@ pub fn facts_to_json(f: &ChainBeaconFactsV1, policy_id: &Digest) -> Value {
             "da_satisfied": e.da_satisfied,
             "validity_independent": e.validity_independent,
             "depends_on_profiles": e.depends_on_profiles.iter().map(|d| hex(d)).collect::<Vec<_>>(),
+            "final_path": final_path_json(&e.final_path),
         })).collect::<Vec<_>>(),
     })
 }
@@ -264,11 +295,13 @@ pub fn facts_from_json(
             execution_commitment: digestf(e, "execution_commitment")?,
             accepted_position: u64f(e, "accepted_position")?,
             settlement_position: u64f(e, "settlement_position")?,
-            occurrence_index: u32::try_from(u64f(e, "occurrence_index")?).map_err(|_| Refusal::new("FACTS_MALFORMED", "occurrence_index"))?,
+            occurrence_index: u32::try_from(u64f(e, "occurrence_index")?)
+                .map_err(|_| Refusal::new("FACTS_MALFORMED", "occurrence_index"))?,
             claim_final: boolf(e, "claim_final")?,
             da_satisfied: boolf(e, "da_satisfied")?,
             validity_independent: boolf(e, "validity_independent")?,
             depends_on_profiles: digests(e, "depends_on_profiles")?,
+            final_path: final_path_from(e)?,
         });
     }
     Ok(ChainBeaconFactsV1 {

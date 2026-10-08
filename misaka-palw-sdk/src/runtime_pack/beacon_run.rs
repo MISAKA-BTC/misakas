@@ -28,7 +28,8 @@ use super::conformance::{ConformanceJob, ImplOutcomeV1, ImplSet, TripleResult, T
 use super::facts::{BeaconFactSource, ChainBeaconFactsV1, FactsProvenanceV1, resolve_facts};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_consensus_core::palw_artifact::{
-    PalwArtifactMultiproofStreamV1, PalwArtifactMultiproofV1, PalwArtifactOperandV1, artifact_leaf_parts_v1, verify_artifact_multiproof_v1,
+    PalwArtifactMultiproofStreamV1, PalwArtifactMultiproofV1, PalwArtifactOperandV1, artifact_leaf_parts_v1,
+    verify_artifact_multiproof_v1,
 };
 use kaspa_consensus_core::palw_tir_artifact_v1::{
     PALW_TIR_ROW_PIECE_BYTES_V1, PalwTirInventoryRowV1, palw_tir_inventory_leaf_count_v1, palw_tir_visit_inventory_rows_v1,
@@ -114,10 +115,8 @@ pub fn ledger_append(state: &Path, statement_root: &Digest, candidate_id: &Diges
 /// Beacon-unavailable windows already recorded for this candidate (each counts against the policy's retry limit).
 pub fn beacon_retries(state: &Path, candidate_id: &Digest) -> u32 {
     let c = hex(candidate_id);
-    read_ledger(state)
-        .iter()
-        .filter(|e| e["event"] == "BEACON_UNAVAILABLE" && e["candidate_id"].as_str() == Some(c.as_str()))
-        .count() as u32
+    read_ledger(state).iter().filter(|e| e["event"] == "BEACON_UNAVAILABLE" && e["candidate_id"].as_str() == Some(c.as_str())).count()
+        as u32
 }
 
 /// The commitment as persisted, re-checked against itself: the directory name, the policy and the scope must be the ones its
@@ -138,7 +137,8 @@ pub fn save_commitment(state: &Path, b: &BoundCommitment) -> Result<PathBuf, Ref
     write_atomic(&dir.join("commitment.borsh"), &borsh::to_vec(&b.commitment).map_err(|e| io(e.to_string()))?).map_err(io)?;
     write_atomic(&dir.join("policy.borsh"), &borsh::to_vec(&b.params.policy).map_err(|e| io(e.to_string()))?).map_err(io)?;
     write_atomic(&dir.join("params.borsh"), &borsh::to_vec(&b.params).map_err(|e| io(e.to_string()))?).map_err(io)?;
-    write_atomic(&dir.join("summary.json"), serde_json::to_string_pretty(&commitment_summary(b)).unwrap_or_default().as_bytes()).map_err(io)?;
+    write_atomic(&dir.join("summary.json"), serde_json::to_string_pretty(&commitment_summary(b)).unwrap_or_default().as_bytes())
+        .map_err(io)?;
     ledger_append(
         state,
         &root,
@@ -237,7 +237,8 @@ pub fn resolve_commitment_dir(state: &Path, prefix: &str) -> Result<PathBuf, Ref
 }
 
 pub fn load_commitment(dir: &Path) -> Result<LoadedCommitment, Refusal> {
-    let read = |name: &str| std::fs::read(dir.join(name)).map_err(|e| Refusal::new("STATE_IO", format!("{}: {e}", dir.join(name).display())));
+    let read =
+        |name: &str| std::fs::read(dir.join(name)).map_err(|e| Refusal::new("STATE_IO", format!("{}: {e}", dir.join(name).display())));
     let commitment = ConformanceCommitmentV1::try_from_slice(&read("commitment.borsh")?)
         .map_err(|e| Refusal::new("COMMITMENT_INVALID", format!("commitment.borsh: {e}")))?;
     let policy = PostCommitChallengePolicyV1::try_from_slice(&read("policy.borsh")?)
@@ -247,7 +248,10 @@ pub fn load_commitment(dir: &Path) -> Result<LoadedCommitment, Refusal> {
     commitment.well_formed().map_err(|e| Refusal::new("COMMITMENT_INVALID", e))?;
     let root = commitment.statement_root();
     if dir.file_name().and_then(|n| n.to_str()) != Some(commitment_dirname(&root).as_str()) {
-        return Err(Refusal::new("COMMITMENT_INVALID", "the commitment's statement root is not its directory name (renamed or edited)"));
+        return Err(Refusal::new(
+            "COMMITMENT_INVALID",
+            "the commitment's statement root is not its directory name (renamed or edited)",
+        ));
     }
     policy.validate().map_err(|e| Refusal::new("POLICY_INVALID", e.to_string()))?;
     if policy.id() != commitment.challenge_policy_id || params.policy != policy {
@@ -261,8 +265,9 @@ pub fn load_commitment(dir: &Path) -> Result<LoadedCommitment, Refusal> {
 
 /// Re-derive the commitment from the pack and the artifact it was made from; anything that moved since is a different commitment.
 pub fn rebind(loaded: &LoadedCommitment, pack_dir: &Path, artifact: &Path, log: &dyn Fn(String)) -> Result<BoundCommitment, Refusal> {
-    let bound = bind_commitment(pack_dir, artifact, &loaded.params, log)
-        .map_err(|e| Refusal::new("COMMITMENT_STALE", format!("the commitment can no longer be derived from this pack/artifact — {e}")))?;
+    let bound = bind_commitment(pack_dir, artifact, &loaded.params, log).map_err(|e| {
+        Refusal::new("COMMITMENT_STALE", format!("the commitment can no longer be derived from this pack/artifact — {e}"))
+    })?;
     if bound.commitment.statement_root() != loaded.commitment.statement_root() {
         let fields = commitment_diff(&bound.commitment, &loaded.commitment);
         return Err(Refusal::new(
@@ -342,16 +347,28 @@ pub fn derive_selection(
     let mut raw_leaves: Vec<(u32, u32, u32)> = Vec::new();
     for r in 0..policy.repetition_count {
         for i in 0..scope.vectors_per_repetition {
-            let mut s = ChallengeStreamV1::new(seed, &StreamLabelV1 { kind: StreamKindV1::Vector, scope_id: vector_scope, relation: i, repetition: r });
+            let mut s = ChallengeStreamV1::new(
+                seed,
+                &StreamLabelV1 { kind: StreamKindV1::Vector, scope_id: vector_scope, relation: i, repetition: r },
+            );
             let len = 1 + s.index_below(scope.max_prompt_len as u64).map_err(sample_refusal)? as u32;
             let mut prompt = Vec::with_capacity(len as usize);
             for _ in 0..len {
                 prompt.push(s.index_below(program.token_bound as u64).map_err(sample_refusal)? as u32);
             }
-            vectors.push(SelectedVectorV1 { check_id: format!("vec/r{r}/i{i}"), repetition: r, index: i, prompt, decode: scope.decode_tokens });
+            vectors.push(SelectedVectorV1 {
+                check_id: format!("vec/r{r}/i{i}"),
+                repetition: r,
+                index: i,
+                prompt,
+                decode: scope.decode_tokens,
+            });
         }
         if scope.leaves_per_repetition > 0 {
-            let mut s = ChallengeStreamV1::new(seed, &StreamLabelV1 { kind: StreamKindV1::TensorRange, scope_id: leaf_scope, relation: 0, repetition: r });
+            let mut s = ChallengeStreamV1::new(
+                seed,
+                &StreamLabelV1 { kind: StreamKindV1::TensorRange, scope_id: leaf_scope, relation: 0, repetition: r },
+            );
             let picked = s.distinct_indices(leaf_count as u64, scope.leaves_per_repetition as u64).map_err(sample_refusal)?;
             for (k, idx) in picked.into_iter().enumerate() {
                 raw_leaves.push((r, k as u32, idx as u32));
@@ -405,7 +422,8 @@ pub fn authenticated_openings(
     let c = misaka_palw_tir_artifact::PalwTirContainerV1::open(artifact).map_err(|e| fail(e.to_string()))?;
     let count = palw_tir_inventory_leaf_count_v1(&c.program).map_err(|e| fail(e.to_string()))?;
     let draw: Vec<u32> = leaves.iter().map(|l| l.leaf_index).collect::<BTreeSet<_>>().into_iter().collect();
-    let mut stream = PalwArtifactMultiproofStreamV1::new(count, &draw).ok_or_else(|| fail("a drawn leaf is outside the inventory".into()))?;
+    let mut stream =
+        PalwArtifactMultiproofStreamV1::new(count, &draw).ok_or_else(|| fail("a drawn leaf is outside the inventory".into()))?;
     let ranges = ContainerRanges::open(&c).map_err(fail)?;
     let mut buf = vec![0u8; PALW_TIR_ROW_PIECE_BYTES_V1 as usize];
     let want: BTreeSet<u32> = draw.iter().copied().collect();
@@ -426,7 +444,12 @@ pub fn authenticated_openings(
                 if want.contains(&at) {
                     opened.push((
                         at,
-                        PalwArtifactOperandV1 { tensor_name: name.clone(), layer: row.layer, row_start: row.row_start, bytes: bytes.to_vec() },
+                        PalwArtifactOperandV1 {
+                            tensor_name: name.clone(),
+                            layer: row.layer,
+                            row_start: row.row_start,
+                            bytes: bytes.to_vec(),
+                        },
                     ));
                 }
             }
@@ -460,7 +483,9 @@ impl From<&ImplOutcomeV1> for ResultV1 {
         match o {
             ImplOutcomeV1::NotRun => ResultV1::NotRun,
             ImplOutcomeV1::Error(e) => ResultV1::Error(e.clone()),
-            ImplOutcomeV1::Ran(r) => ResultV1::Ran { a: r.logits_digest, b: r.commits_digest, tokens: r.tokens.clone(), positions: r.positions },
+            ImplOutcomeV1::Ran(r) => {
+                ResultV1::Ran { a: r.logits_digest, b: r.commits_digest, tokens: r.tokens.clone(), positions: r.positions }
+            }
         }
     }
 }
@@ -511,7 +536,10 @@ pub enum CheckStatus {
     Passed,
     Failed(String),
     /// A required implementation did not run. `chosen` says it was switched off on purpose (SKIPPED), not lost (INCOMPLETE).
-    Missing { roles: Vec<&'static str>, chosen: bool },
+    Missing {
+        roles: Vec<&'static str>,
+        chosen: bool,
+    },
 }
 
 /// Judge one check against the scope's required implementations.
@@ -531,8 +559,11 @@ pub fn check_status(o: &CheckOutcomeV1, scope: &ConformanceScopeV1) -> CheckStat
     if let Some(d) = &o.disagreement {
         return CheckStatus::Failed(d.clone());
     }
-    let ran: Vec<(Role, &ResultV1)> =
-        [Role::Reference, Role::Independent, Role::Backend].into_iter().map(|r| (r, o.result(r))).filter(|(_, x)| matches!(x, ResultV1::Ran { .. })).collect();
+    let ran: Vec<(Role, &ResultV1)> = [Role::Reference, Role::Independent, Role::Backend]
+        .into_iter()
+        .map(|r| (r, o.result(r)))
+        .filter(|(_, x)| matches!(x, ResultV1::Ran { .. }))
+        .collect();
     if let Some((_, first)) = ran.first()
         && let Some((r, _)) = ran.iter().find(|(_, x)| x != first)
     {
@@ -654,7 +685,8 @@ pub fn assemble_evidence(
             ids.iter().map(|id| (id.clone(), outcomes.get(id).map(|o| o.result(role).clone()).unwrap_or(ResultV1::NotRun))).collect();
         tool_root(DOMAIN_RESULTS, &(role.name().to_string(), rows))
     };
-    let outcome_digests: Vec<Digest> = ids.iter().map(|id| outcomes.get(id).map(CheckOutcomeV1::digest).unwrap_or([0u8; 64])).collect();
+    let outcome_digests: Vec<Digest> =
+        ids.iter().map(|id| outcomes.get(id).map(CheckOutcomeV1::digest).unwrap_or([0u8; 64])).collect();
     let status = if failed > 0 {
         ConformanceStatusV1::Failed
     } else if lost_missing > 0 {
@@ -689,7 +721,10 @@ pub fn assemble_evidence(
         scope_and_fault_model_id: scope.scope_and_fault_model_id(policy.repetition_count),
         derived_epsilon_bits: scope.derived_epsilon_bits(policy.repetition_count),
         status,
-        public_material_locator_root: tool_root(DOMAIN_LOCATORS, &(selection_digest, tool_root(DOMAIN_OPENINGS, proof), outcome_digests)),
+        public_material_locator_root: tool_root(
+            DOMAIN_LOCATORS,
+            &(selection_digest, tool_root(DOMAIN_OPENINGS, proof), outcome_digests),
+        ),
     }
 }
 
@@ -842,7 +877,15 @@ pub struct Computed {
 fn check_binding(e: &Engine<'_>, id: &str, item: &Digest) -> Digest {
     tool_root(
         DOMAIN_CHECK_BINDING,
-        &(e.commitment.statement_root(), e.seed, e.commitment.implementation_set_root, id.to_string(), *item, e.impls.exec, e.impls.ref2),
+        &(
+            e.commitment.statement_root(),
+            e.seed,
+            e.commitment.implementation_set_root,
+            id.to_string(),
+            *item,
+            e.impls.exec,
+            e.impls.ref2,
+        ),
     )
 }
 
@@ -898,17 +941,24 @@ impl Engine<'_> {
         let selection = derive_selection(&self.seed, self.policy, self.scope, program)?;
         let mut m = Measures::default();
         if let Some(dir) = self.store {
-            write_atomic(&dir.join("selection.borsh"), &borsh::to_vec(&selection).map_err(|e| Refusal::new("STATE_IO", e.to_string()))?)
-                .map_err(|e| Refusal::new("STATE_IO", e))?;
+            write_atomic(
+                &dir.join("selection.borsh"),
+                &borsh::to_vec(&selection).map_err(|e| Refusal::new("STATE_IO", e.to_string()))?,
+            )
+            .map_err(|e| Refusal::new("STATE_IO", e))?;
         }
 
         // Authenticated openings of the drawn leaves: reused from the store when they still verify against the committed root.
         let mut proof: Option<PalwArtifactMultiproofV1> = None;
         if !selection.leaves.is_empty() {
-            let cached = self.store.and_then(|d| std::fs::read(d.join("multiproof.borsh")).ok()).and_then(|b| PalwArtifactMultiproofV1::try_from_slice(&b).ok());
+            let cached = self
+                .store
+                .and_then(|d| std::fs::read(d.join("multiproof.borsh")).ok())
+                .and_then(|b| PalwArtifactMultiproofV1::try_from_slice(&b).ok());
             let want: Vec<u32> = selection.leaves.iter().map(|l| l.leaf_index).collect::<BTreeSet<_>>().into_iter().collect();
             let reusable = cached.filter(|p| {
-                p.opened_indices() == want && verify_artifact_multiproof_v1(p, kaspa_hashes::Hash64::from_bytes(self.commitment.artifact_root)).is_ok()
+                p.opened_indices() == want
+                    && verify_artifact_multiproof_v1(p, kaspa_hashes::Hash64::from_bytes(self.commitment.artifact_root)).is_ok()
             });
             proof = Some(match reusable {
                 Some(p) => p,
@@ -919,8 +969,11 @@ impl Engine<'_> {
                     m.open_pass_ms = t.elapsed().as_millis() as u64;
                     m.open_pass_hashed_bytes = hashed;
                     if let Some(dir) = self.store {
-                        write_atomic(&dir.join("multiproof.borsh"), &borsh::to_vec(&p).map_err(|e| Refusal::new("STATE_IO", e.to_string()))?)
-                            .map_err(|e| Refusal::new("STATE_IO", e))?;
+                        write_atomic(
+                            &dir.join("multiproof.borsh"),
+                            &borsh::to_vec(&p).map_err(|e| Refusal::new("STATE_IO", e.to_string()))?,
+                        )
+                        .map_err(|e| Refusal::new("STATE_IO", e))?;
                     }
                     p
                 }
@@ -983,12 +1036,12 @@ impl Engine<'_> {
             }
             log(format!("{}: prompt {:?} + {} decoded token(s) on every required implementation", v.check_id, v.prompt, v.decode));
             let t = Instant::now();
-            let job = ConformanceJob { label: v.check_id.clone(), prompt: v.prompt.iter().map(|x| *x as usize).collect(), decode: v.decode as usize };
-            let triple = runner
-                .as_ref()
-                .expect("opened above")
-                .run_job(&job)
-                .map_err(|e| Refusal::new("CHECK_REFUSED", e))?;
+            let job = ConformanceJob {
+                label: v.check_id.clone(),
+                prompt: v.prompt.iter().map(|x| *x as usize).collect(),
+                decode: v.decode as usize,
+            };
+            let triple = runner.as_ref().expect("opened above").run_job(&job).map_err(|e| Refusal::new("CHECK_REFUSED", e))?;
             let mut o = vector_outcome(v, &triple);
             if let Some(f) = self.fault.filter(|f| f.check_id == v.check_id) {
                 corrupt(&mut o, f.role);
@@ -1003,7 +1056,8 @@ impl Engine<'_> {
             executed += 1;
             m.checks_executed += 1;
         }
-        let evidence = assemble_evidence(self.commitment, self.policy, self.scope, self.beacon, &self.seed, &selection, &proof, &outcomes);
+        let evidence =
+            assemble_evidence(self.commitment, self.policy, self.scope, self.beacon, &self.seed, &selection, &proof, &outcomes);
         m.wall_ms = t0.elapsed().as_millis() as u64;
         m.peak_rss_bytes = peak_rss_bytes();
         Ok(Computed { selection, proof, outcomes, evidence, measures: m })
@@ -1048,7 +1102,9 @@ pub enum RunOutcome {
 fn beacon_state_json(s: &WorkBeaconStateV1) -> Value {
     match s {
         WorkBeaconStateV1::Collecting { have, need } => json!({ "state": "COLLECTING", "have": have, "need": need }),
-        WorkBeaconStateV1::Candidate { have, lock_position } => json!({ "state": "CANDIDATE", "have": have, "lock_position": lock_position }),
+        WorkBeaconStateV1::Candidate { have, lock_position } => {
+            json!({ "state": "CANDIDATE", "have": have, "lock_position": lock_position })
+        }
         WorkBeaconStateV1::Locked(b) => json!({ "state": "LOCKED", "lock_position": b.lock_position }),
         WorkBeaconStateV1::Unavailable { have, need } => json!({ "state": "UNAVAILABLE", "have": have, "need": need }),
     }
@@ -1065,15 +1121,35 @@ pub fn run_conformance(inp: &RunInput<'_>, log: &dyn Fn(String)) -> Result<RunOu
 
     let facts = inp.source.facts(&loaded.commitment, &loaded.policy)?;
     let ctx = resolve_facts(&loaded.commitment, &loaded.policy, &facts)?;
-    let state = collect_work_beacon_v1(&ctx, &facts.events, facts.tip_position).map_err(|e| Refusal::new("POLICY_INVALID", e.to_string()))?;
+    let state =
+        collect_work_beacon_v1(&ctx, &facts.events, facts.tip_position).map_err(|e| Refusal::new("POLICY_INVALID", e.to_string()))?;
     let beacon = match state {
         WorkBeaconStateV1::Collecting { have, need } => {
-            ledger_append(inp.state_dir, &root, &cand, "WAITING_RANDOMNESS", json!({ "beacon": beacon_state_json(&state), "tip": facts.tip_position })).map_err(io)?;
+            ledger_append(
+                inp.state_dir,
+                &root,
+                &cand,
+                "WAITING_RANDOMNESS",
+                json!({ "beacon": beacon_state_json(&state), "tip": facts.tip_position }),
+            )
+            .map_err(io)?;
             return Ok(RunOutcome::Waiting { have, need, lock_position: None, tip: facts.tip_position });
         }
         WorkBeaconStateV1::Candidate { have, lock_position } => {
-            ledger_append(inp.state_dir, &root, &cand, "WAITING_RANDOMNESS", json!({ "beacon": beacon_state_json(&state), "tip": facts.tip_position })).map_err(io)?;
-            return Ok(RunOutcome::Waiting { have, need: loaded.policy.work_count_k, lock_position: Some(lock_position), tip: facts.tip_position });
+            ledger_append(
+                inp.state_dir,
+                &root,
+                &cand,
+                "WAITING_RANDOMNESS",
+                json!({ "beacon": beacon_state_json(&state), "tip": facts.tip_position }),
+            )
+            .map_err(io)?;
+            return Ok(RunOutcome::Waiting {
+                have,
+                need: loaded.policy.work_count_k,
+                lock_position: Some(lock_position),
+                tip: facts.tip_position,
+            });
         }
         WorkBeaconStateV1::Unavailable { have, need } => {
             ledger_append(
@@ -1095,8 +1171,10 @@ pub fn run_conformance(inp: &RunInput<'_>, log: &dyn Fn(String)) -> Result<RunOu
         WorkBeaconStateV1::Locked(b) => b,
     };
     // A beacon this node derived must satisfy the contract's own presented-beacon check (a self-test of the derivation).
-    verify_work_beacon_v1(&ctx, &beacon, &facts.events, facts.tip_position).map_err(|e| Refusal::new("BEACON_NOT_CANONICAL", e.to_string()))?;
-    let seed = challenge_seed_v1(&ctx, &loaded.commitment.subject(), &beacon).map_err(|e| Refusal::new("SEED_REFUSED", e.to_string()))?;
+    verify_work_beacon_v1(&ctx, &beacon, &facts.events, facts.tip_position)
+        .map_err(|e| Refusal::new("BEACON_NOT_CANONICAL", e.to_string()))?;
+    let seed =
+        challenge_seed_v1(&ctx, &loaded.commitment.subject(), &beacon).map_err(|e| Refusal::new("SEED_REFUSED", e.to_string()))?;
     let seed_name = format!("seed-{}", &hex(&seed)[..32]);
     let seed_dir = loaded.dir.join(&seed_name);
 
@@ -1149,12 +1227,22 @@ pub fn run_conformance(inp: &RunInput<'_>, log: &dyn Fn(String)) -> Result<RunOu
     let total = c.selection.check_ids().len();
     let done = c.outcomes.len();
     if done < total && ev.status == ConformanceStatusV1::Incomplete {
-        ledger_append(inp.state_dir, &root, &cand, "INTERRUPTED", json!({ "seed": hex(&seed), "done": done, "total": total })).map_err(io)?;
-        write_atomic(&seed_dir.join("run.json"), serde_json::to_string_pretty(&json!({ "state": "INTERRUPTED", "done": done, "total": total, "measures": c.measures.to_json() })).unwrap_or_default().as_bytes()).map_err(io)?;
+        ledger_append(inp.state_dir, &root, &cand, "INTERRUPTED", json!({ "seed": hex(&seed), "done": done, "total": total }))
+            .map_err(io)?;
+        write_atomic(
+            &seed_dir.join("run.json"),
+            serde_json::to_string_pretty(
+                &json!({ "state": "INTERRUPTED", "done": done, "total": total, "measures": c.measures.to_json() }),
+            )
+            .unwrap_or_default()
+            .as_bytes(),
+        )
+        .map_err(io)?;
         return Ok(RunOutcome::Interrupted { done, total, seed });
     }
     write_atomic(&seed_dir.join("evidence.borsh"), &borsh::to_vec(ev).map_err(|e| io(e.to_string()))?).map_err(io)?;
-    write_atomic(&seed_dir.join("evidence.json"), serde_json::to_string_pretty(&evidence_json(ev)).unwrap_or_default().as_bytes()).map_err(io)?;
+    write_atomic(&seed_dir.join("evidence.json"), serde_json::to_string_pretty(&evidence_json(ev)).unwrap_or_default().as_bytes())
+        .map_err(io)?;
     write_atomic(
         &seed_dir.join("run.json"),
         serde_json::to_string_pretty(&json!({
@@ -1167,7 +1255,14 @@ pub fn run_conformance(inp: &RunInput<'_>, log: &dyn Fn(String)) -> Result<RunOu
         .as_bytes(),
     )
     .map_err(io)?;
-    ledger_append(inp.state_dir, &root, &cand, "EVIDENCE", json!({ "evidence_id": hex(&ev.id()), "status": status_code(ev.status), "seed": hex(&seed) })).map_err(io)?;
+    ledger_append(
+        inp.state_dir,
+        &root,
+        &cand,
+        "EVIDENCE",
+        json!({ "evidence_id": hex(&ev.id()), "status": status_code(ev.status), "seed": hex(&seed) }),
+    )
+    .map_err(io)?;
     let local = verify_conformance_evidence_v1(&loaded.commitment, &beacon, &seed, loaded.policy.security_bits, ev);
     Ok(RunOutcome::Evidence { evidence: ev.clone(), dir: seed_dir, seed, local, measures: c.measures, provenance: facts.provenance })
 }
@@ -1224,17 +1319,25 @@ pub fn verify_conformance(inp: &VerifyInput<'_>, log: &dyn Fn(String)) -> Result
     };
     let facts: ChainBeaconFactsV1 = inp.source.facts(&loaded.commitment, &loaded.policy)?;
     let ctx = resolve_facts(&loaded.commitment, &loaded.policy, &facts)?;
-    let state = collect_work_beacon_v1(&ctx, &facts.events, facts.tip_position).map_err(|e| Refusal::new("POLICY_INVALID", e.to_string()))?;
+    let state =
+        collect_work_beacon_v1(&ctx, &facts.events, facts.tip_position).map_err(|e| Refusal::new("POLICY_INVALID", e.to_string()))?;
     let beacon = match state {
         WorkBeaconStateV1::Locked(b) => b,
         WorkBeaconStateV1::Unavailable { have, need } => {
-            return Ok(Verdict::Pending { why: format!("{}: the window closed with {have} of {need} qualifying works", OnboardingFailureV1::BeaconUnavailable.code()) });
+            return Ok(Verdict::Pending {
+                why: format!(
+                    "{}: the window closed with {have} of {need} qualifying works",
+                    OnboardingFailureV1::BeaconUnavailable.code()
+                ),
+            });
         }
         WorkBeaconStateV1::Collecting { have, need } => {
             return Ok(Verdict::Pending { why: format!("WaitingRandomness: {have} of {need} qualifying works so far") });
         }
         WorkBeaconStateV1::Candidate { have, lock_position } => {
-            return Ok(Verdict::Pending { why: format!("WaitingRandomness: {have} works, the beacon locks at position {lock_position}") });
+            return Ok(Verdict::Pending {
+                why: format!("WaitingRandomness: {have} works, the beacon locks at position {lock_position}"),
+            });
         }
     };
     // A beacon presented next to the evidence is a claim to recompute: reordered, non-canonical, duplicated or forged sources fail here.
@@ -1250,7 +1353,8 @@ pub fn verify_conformance(inp: &VerifyInput<'_>, log: &dyn Fn(String)) -> Result
             Err(e) => return fail("BEACON_NOT_CANONICAL", format!("beacon.borsh: {e}")),
         }
     }
-    let seed = challenge_seed_v1(&ctx, &loaded.commitment.subject(), &beacon).map_err(|e| Refusal::new("SEED_REFUSED", e.to_string()))?;
+    let seed =
+        challenge_seed_v1(&ctx, &loaded.commitment.subject(), &beacon).map_err(|e| Refusal::new("SEED_REFUSED", e.to_string()))?;
 
     // The contract's judgement first: same commitment, same policy, the beacon and seed THIS node derived, and only a complete pass.
     if let Err(e) = verify_conformance_evidence_v1(&loaded.commitment, &beacon, &seed, loaded.policy.security_bits, &presented) {
@@ -1311,7 +1415,10 @@ pub fn verify_conformance(inp: &VerifyInput<'_>, log: &dyn Fn(String)) -> Result
     if c.evidence != presented {
         return fail(
             "EVIDENCE_NOT_REPRODUCED",
-            format!("re-executing every selected check does not reproduce the evidence; differing: {}", evidence_diff(&c.evidence, &presented).join(", ")),
+            format!(
+                "re-executing every selected check does not reproduce the evidence; differing: {}",
+                evidence_diff(&c.evidence, &presented).join(", ")
+            ),
         );
     }
     Ok(Verdict::Pass { evidence_id: presented.id(), measures: c.measures, provenance: facts.provenance })
@@ -1330,7 +1437,7 @@ pub fn synthetic_facts(
     commitment_position: u64,
     label: &str,
 ) -> ChainBeaconFactsV1 {
-    use misaka_palw_challenge::beacon::{WorkFinalEventV1, WorkSourceKindV1};
+    use misaka_palw_challenge::beacon::{FinalPathV1, WorkFinalEventV1, WorkSourceKindV1};
     let a = named_id(&format!("synthetic-profile/{label}/a"));
     let b = named_id(&format!("synthetic-profile/{label}/b"));
     let start = commitment_position.saturating_add(policy.anchor_delay_slots);
@@ -1348,6 +1455,11 @@ pub fn synthetic_facts(
             da_satisfied: true,
             validity_independent: true,
             depends_on_profiles: vec![],
+            // Panel-licensed is today's normal path; a MODEL_CONFORMANCE beacon accepts either.
+            final_path: FinalPathV1::PanelLicensed {
+                panel_seed_id: named_id(&format!("synthetic-panel/{label}/{i}")),
+                panel_epoch: 1,
+            },
         });
     }
     let last = events.last().map(|e| e.settlement_position).unwrap_or(start);

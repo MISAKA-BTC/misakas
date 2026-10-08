@@ -5,7 +5,7 @@
 //! artifact leaves; the evidence is produced, then judged by a fresh derivation. Every test below is an attack that must fail closed
 //! or a property that must hold byte for byte. Nothing here is an approved policy; the numbers are the test policy's.
 
-use misaka_palw_challenge::beacon::{WorkBeaconV1, WorkSourceKindV1};
+use misaka_palw_challenge::beacon::{FinalPathV1, WorkBeaconV1, WorkSourceKindV1};
 use misaka_palw_challenge::conformance::{BeaconConformanceEvidenceV1, ConformanceCommitmentV1, ConformanceStatusV1};
 use misaka_palw_challenge::hash::{Digest, named_id};
 use misaka_palw_challenge::{PostCommitChallengePolicyV1, RootV1, reference_policy_v1};
@@ -122,7 +122,10 @@ fn run_with(
     fault: Option<InjectedFault>,
 ) -> Result<RunOutcome, Refusal> {
     let src = MemoryFactSource(facts.clone());
-    run_conformance(&RunInput { pack_dir: pack, artifact, state_dir: state, commitment: root, source: &src, impls, max_checks: max, fault }, &quiet)
+    run_conformance(
+        &RunInput { pack_dir: pack, artifact, state_dir: state, commitment: root, source: &src, impls, max_checks: max, fault },
+        &quiet,
+    )
 }
 
 fn run_ok(state: &Path, s: &Shared, root: &str, facts: &ChainBeaconFactsV1) -> (BeaconConformanceEvidenceV1, PathBuf) {
@@ -145,7 +148,16 @@ fn verify_with(
 ) -> Result<Verdict, Refusal> {
     let src = MemoryFactSource(facts.clone());
     verify_conformance(
-        &VerifyInput { pack_dir: &s.pack, artifact: &s.class_file, state_dir: state, commitment: root, evidence, source: &src, rerun, impls: ImplSet::default() },
+        &VerifyInput {
+            pack_dir: &s.pack,
+            artifact: &s.class_file,
+            state_dir: state,
+            commitment: root,
+            evidence,
+            source: &src,
+            rerun,
+            impls: ImplSet::default(),
+        },
         &quiet,
     )
 }
@@ -209,8 +221,28 @@ fn a_commitment_binds_every_root_from_the_artifact_and_any_change_is_a_new_commi
         assert!(diff.contains(&field), "{what}: expected {field} among {diff:?}");
         assert!(seen.insert(v.commitment.statement_root()), "{what}: not a new commitment");
     };
-    vary("policy k", &|p| p.policy = { let mut x = test_policy(3); x.work_count_k = 4; x }, "challenge_policy_id");
-    vary("policy delay", &|p| p.policy = { let mut x = test_policy(3); x.anchor_delay_slots = 3; x }, "challenge_policy_id");
+    vary(
+        "policy k",
+        &|p| {
+            p.policy = {
+                let mut x = test_policy(3);
+                x.work_count_k = 4;
+                x
+            }
+        },
+        "challenge_policy_id",
+    );
+    vary(
+        "policy delay",
+        &|p| {
+            p.policy = {
+                let mut x = test_policy(3);
+                x.anchor_delay_slots = 3;
+                x
+            }
+        },
+        "challenge_policy_id",
+    );
     vary("repetitions", &|p| p.policy = test_policy(4), "challenge_policy_id");
     vary("scope vectors", &|p| p.scope.vectors_per_repetition = 3, "test_scope_root");
     vary("scope fault model", &|p| p.scope.leaf_fault_ppm = 400_000, "test_scope_root");
@@ -228,7 +260,9 @@ fn a_changed_layout_is_a_different_class_and_a_different_commitment_and_a_stale_
     let s = shared();
     let work = scratch("layout");
     let params = misaka_palw_sdk::runtime_pack::build::network("testnet-12").unwrap();
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("network") };
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        panic!("network")
+    };
     let class_b = work.join("class-b.palwtir");
     let choice = TirLayoutChoiceV1 { max_context: Some(128), tile_len: 16, h_chunk: 8, logits_tile: Some(32), ..Default::default() };
     tir_declare_layout_v1(&params, bundle, &s.work.join("artifact.palwtir"), &class_b, &choice, None).expect("a second layout");
@@ -250,7 +284,8 @@ fn a_changed_layout_is_a_different_class_and_a_different_commitment_and_a_stale_
     pa.class_id_prefix = Some(pack_a_prefix[0][..16].to_string());
     let mut pb = test_params();
     pb.class_id_prefix = Some(pack_a_prefix[1][..16].to_string());
-    let (cls_a, cls_b) = if pack_a_prefix[0] == class_id_of(&s.class_file) { (&s.class_file, &class_b) } else { (&class_b, &s.class_file) };
+    let (cls_a, cls_b) =
+        if pack_a_prefix[0] == class_id_of(&s.class_file) { (&s.class_file, &class_b) } else { (&class_b, &s.class_file) };
     let (a, root_a) = commit(&state, &pack2, cls_a, &pa);
     let (b, _) = commit(&state, &pack2, cls_b, &pb);
     let diff = commitment_diff(&a.commitment, &b.commitment);
@@ -264,7 +299,11 @@ fn a_changed_layout_is_a_different_class_and_a_different_commitment_and_a_stale_
 }
 
 fn class_id_of(class_file: &Path) -> String {
-    misaka_palw_sdk::tir_manifest::PalwTirManifestV1::derive_streamed(class_file).expect("manifest").class_id.expect("a class").to_string()
+    misaka_palw_sdk::tir_manifest::PalwTirManifestV1::derive_streamed(class_file)
+        .expect("manifest")
+        .class_id
+        .expect("a class")
+        .to_string()
 }
 
 #[test]
@@ -435,7 +474,14 @@ fn beacon_sources_that_are_not_fresh_final_useful_independent_work_never_lock() 
     // One work repeated is one work, however many times it is reattached.
     let mut f = honest.clone();
     let first = f.events[0].clone();
-    f.events = (0..9).map(|i| { let mut e = first.clone(); e.occurrence_index = i; e.settlement_position += i as u64; e }).collect();
+    f.events = (0..9)
+        .map(|i| {
+            let mut e = first.clone();
+            e.occurrence_index = i;
+            e.settlement_position += i as u64;
+            e
+        })
+        .collect();
     f.tip_position = 300;
     never_locks("duplicate work contributions", f);
     // The candidate under test is never a source: its own works are excluded by the context.
@@ -481,6 +527,19 @@ fn a_facts_file_that_names_another_policy_is_refused_and_a_substituted_policy_in
     let other = reference_policy_v1(2, 2, 40, 5, 3);
     std::fs::write(&path, facts_to_json(&facts, &other.id()).to_string()).unwrap();
     assert_eq!(FileFactSource(path).facts(&b.commitment, &b.params.policy).unwrap_err().code, "POLICY_SUBSTITUTED");
+    // How each work reached Final travels with the facts: Panel-licensed (today's normal case) and Panel-independent both round-trip,
+    // and a file that omits the path is malformed rather than defaulted.
+    let mut mixed = facts.clone();
+    mixed.events[1].final_path = FinalPathV1::PanelIndependent;
+    assert!(matches!(mixed.events[0].final_path, FinalPathV1::PanelLicensed { .. }));
+    let mixed_path = state.join("facts-mixed.json");
+    std::fs::write(&mixed_path, facts_to_json(&mixed, &b.params.policy.id()).to_string()).unwrap();
+    assert_eq!(FileFactSource(mixed_path).facts(&b.commitment, &b.params.policy).unwrap(), mixed);
+    let mut stripped = facts_to_json(&facts, &b.params.policy.id());
+    stripped["events"][0].as_object_mut().unwrap().remove("final_path");
+    let stripped_path = state.join("facts-stripped.json");
+    std::fs::write(&stripped_path, stripped.to_string()).unwrap();
+    assert_eq!(FileFactSource(stripped_path).facts(&b.commitment, &b.params.policy).unwrap_err().code, "FACTS_MALFORMED");
     // A different valid policy dropped into the state directory is not the one the statement names.
     let dir = state.join(commitment_dirname(&b.commitment.statement_root()));
     let mut weaker = b.params.policy.clone();
@@ -554,6 +613,13 @@ fn commit_beacon_evidence_verify_passes_reproduces_byte_for_byte_and_the_verifie
     let (_, root3) = commit(&state3, &s.pack, &s.class_file, &test_params());
     let (_, dir3) = run_ok(&state3, s, &root3, &shuffled);
     assert_eq!(std::fs::read(dir.join("evidence.borsh")).unwrap(), std::fs::read(dir3.join("evidence.borsh")).unwrap());
+    // A MODEL_CONFORMANCE beacon accepts either Final path: all-Panel-independent sources lock too (a different history, a different seed).
+    let mut independent = facts.clone();
+    independent.events.iter_mut().for_each(|e| e.final_path = FinalPathV1::PanelIndependent);
+    let state5 = scratch("e2e5");
+    let (_, root5) = commit(&state5, &s.pack, &s.class_file, &test_params());
+    let (ev5, _) = run_ok(&state5, s, &root5, &independent);
+    assert_eq!(ev5.status, ConformanceStatusV1::Passed);
     // A later tip with more history gives the same beacon, hence the same evidence.
     let mut later = facts.clone();
     later.tip_position += 50;
@@ -576,7 +642,8 @@ fn an_interrupted_run_resumes_from_its_records_and_ends_with_the_same_evidence()
         o => panic!("{o:?}"),
     }
     let cdir = state.join(commitment_dirname(&b.commitment.statement_root()));
-    let seed_dir = std::fs::read_dir(&cdir).unwrap().flatten().find(|e| e.file_name().to_string_lossy().starts_with("seed-")).unwrap().path();
+    let seed_dir =
+        std::fs::read_dir(&cdir).unwrap().flatten().find(|e| e.file_name().to_string_lossy().starts_with("seed-")).unwrap().path();
     assert!(!seed_dir.join("evidence.borsh").exists());
     assert_eq!(std::fs::read_dir(seed_dir.join("checks")).unwrap().count(), 4, "one atomic completion record per finished check");
     // A damaged record is not trusted: its own digest does not verify, so the check is run again.
@@ -737,7 +804,10 @@ fn forged_evidence_is_never_a_pass_whichever_field_is_edited() {
     }
     // Garbage is not evidence.
     std::fs::write(dir.join("forged.borsh"), b"not evidence").unwrap();
-    assert!(matches!(verify_with(&state, s, &root, &dir.join("forged.borsh"), &facts, true), Ok(Verdict::Fail { code: "EVIDENCE_MALFORMED", .. })));
+    assert!(matches!(
+        verify_with(&state, s, &root, &dir.join("forged.borsh"), &facts, true),
+        Ok(Verdict::Fail { code: "EVIDENCE_MALFORMED", .. })
+    ));
     // The honest evidence passes, so the table above refused the edits and not the evidence.
     assert!(verify_with(&state, s, &root, &dir.join("evidence.borsh"), &facts, true).unwrap().is_pass());
 }
@@ -749,13 +819,17 @@ fn skipped_and_incomplete_are_never_a_pass_even_when_the_status_and_counters_are
     let (b, root) = commit(&state, &s.pack, &s.class_file, &test_params());
     let facts = facts_of(&b);
     // The independent implementation is switched off: SKIPPED, honestly.
-    let (ev, dir) = match run_with(&state, &s.pack, &s.class_file, &root, &facts, ImplSet { exec: true, ref2: false }, None, None).unwrap() {
-        RunOutcome::Evidence { evidence, dir, local, .. } => {
-            assert!(matches!(local, Err(misaka_palw_challenge::conformance::ConformanceRefusalV1::NotPassed(ConformanceStatusV1::Skipped))));
-            (evidence, dir)
-        }
-        o => panic!("{o:?}"),
-    };
+    let (ev, dir) =
+        match run_with(&state, &s.pack, &s.class_file, &root, &facts, ImplSet { exec: true, ref2: false }, None, None).unwrap() {
+            RunOutcome::Evidence { evidence, dir, local, .. } => {
+                assert!(matches!(
+                    local,
+                    Err(misaka_palw_challenge::conformance::ConformanceRefusalV1::NotPassed(ConformanceStatusV1::Skipped))
+                ));
+                (evidence, dir)
+            }
+            o => panic!("{o:?}"),
+        };
     assert_eq!(ev.status, ConformanceStatusV1::Skipped);
     assert!(ev.missing_checks.iter().all(|m| m.contains("independent")), "{:?}", ev.missing_checks);
     let v = verify_with(&state, s, &root, &dir.join("evidence.borsh"), &facts, true).unwrap();
@@ -785,7 +859,17 @@ fn a_disagreeing_implementation_is_a_failed_check_and_a_failed_evidence_is_not_a
     for (id, role) in [("leaf/r1/k3", Role::Independent), ("vec/r0/i1", Role::Backend), ("vec/r2/i0", Role::Reference)] {
         let st = scratch("fault-case");
         let (_, r) = commit(&st, &s.pack, &s.class_file, &test_params());
-        let out = run_with(&st, &s.pack, &s.class_file, &r, &facts, ImplSet::default(), None, Some(InjectedFault { check_id: id.into(), role })).unwrap();
+        let out = run_with(
+            &st,
+            &s.pack,
+            &s.class_file,
+            &r,
+            &facts,
+            ImplSet::default(),
+            None,
+            Some(InjectedFault { check_id: id.into(), role }),
+        )
+        .unwrap();
         let RunOutcome::Evidence { evidence, dir, local, .. } = out else { panic!("expected evidence") };
         assert_eq!(evidence.status, ConformanceStatusV1::Failed, "{id}");
         assert_eq!(evidence.checks_failed, 1);
@@ -907,27 +991,47 @@ fn the_cli_commits_resumes_runs_and_verifies_with_exit_codes_that_mean_pending_a
     // Two of three works: WaitingRandomness, exit 3, nothing run.
     let (code, ..) = go(&["synthetic-facts", "--state", st, "--commitment", r16, "--out", f, "--works", "2", "--tip", "1010"]);
     assert_eq!(code, 0);
-    let (code, out, _) = go(&["run-conformance", "--pack", pack, "--artifact", class, "--state", st, "--commitment", r16, "--facts", f]);
+    let (code, out, _) =
+        go(&["run-conformance", "--pack", pack, "--artifact", class, "--state", st, "--commitment", r16, "--facts", f]);
     assert_eq!(code, 3, "{out}");
     assert!(out.contains("WAITING_RANDOMNESS"), "{out}");
     // The window closes short: BEACON_UNAVAILABLE, exit 3.
     let (code, ..) = go(&["synthetic-facts", "--state", st, "--commitment", r16, "--out", f, "--works", "2", "--tip", "2000"]);
     assert_eq!(code, 0);
-    let (code, out, _) = go(&["run-conformance", "--pack", pack, "--artifact", class, "--state", st, "--commitment", r16, "--facts", f]);
+    let (code, out, _) =
+        go(&["run-conformance", "--pack", pack, "--artifact", class, "--state", st, "--commitment", r16, "--facts", f]);
     assert_eq!(code, 3, "{out}");
     assert!(out.contains("BEACON_UNAVAILABLE"), "{out}");
     // Enough canonical history: evidence, exit 0; a fresh process verifies it, exit 0.
     let (code, ..) = go(&["synthetic-facts", "--state", st, "--commitment", r16, "--out", f]);
     assert_eq!(code, 0);
-    let (code, out, err) = go(&["run-conformance", "--pack", pack, "--artifact", class, "--state", st, "--commitment", r16, "--facts", f]);
+    let (code, out, err) =
+        go(&["run-conformance", "--pack", pack, "--artifact", class, "--state", st, "--commitment", r16, "--facts", f]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("PASSED") && out.contains("synthetic:"), "{out}");
-    let seed_dir =
-        std::fs::read_dir(state.join(&root[..32])).unwrap().flatten().find(|e| e.file_name().to_string_lossy().starts_with("seed-")).unwrap().path();
+    let seed_dir = std::fs::read_dir(state.join(&root[..32]))
+        .unwrap()
+        .flatten()
+        .find(|e| e.file_name().to_string_lossy().starts_with("seed-"))
+        .unwrap()
+        .path();
     let ev = seed_dir.join("evidence.borsh");
     let evs = ev.to_str().unwrap();
-    let (code, out, err) =
-        go(&["verify-conformance", "--pack", pack, "--artifact", class, "--state", st, "--commitment", r16, "--facts", f, "--evidence", evs]);
+    let (code, out, err) = go(&[
+        "verify-conformance",
+        "--pack",
+        pack,
+        "--artifact",
+        class,
+        "--state",
+        st,
+        "--commitment",
+        r16,
+        "--facts",
+        f,
+        "--evidence",
+        evs,
+    ]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("PASS") && out.contains("SYNTHETIC") && out.contains("not full-scope fidelity"), "{out}");
     let (code, out, _) = go(&[

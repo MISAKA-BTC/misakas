@@ -375,7 +375,6 @@ pub fn show(p: &RuntimePackV1) -> String {
     o
 }
 
-
 /// The beacon-conformance subcommands.
 mod conformance_cli {
     use super::{PACK_USAGE, num, take_bool, take_flag};
@@ -446,7 +445,13 @@ mod conformance_cli {
         let (b, dir) = commit_conformance(&pack, &artifact, &state, &params, log).map_err(|e| e.to_string())?;
         eprintln!("commitment   {}", dir.display());
         eprintln!("policy       {}", params.policy_label);
-        eprintln!("admission    {} (hypothetically armed; shipped schedule: {}), plan {} at {} positions", b.admission.kernel, b.admission.shipped_outcome, &hex(&b.admission.plan_root)[..16], b.admission.positions);
+        eprintln!(
+            "admission    {} (hypothetically armed; shipped schedule: {}), plan {} at {} positions",
+            b.admission.kernel,
+            b.admission.shipped_outcome,
+            &hex(&b.admission.plan_root)[..16],
+            b.admission.positions
+        );
         eprintln!("scope        {}", params.scope.statement(params.policy.repetition_count));
         println!("{}", hex(&b.commitment.statement_root()));
         Ok(0)
@@ -467,7 +472,16 @@ mod conformance_cli {
         no_extra(args)?;
         let src = FileFactSource(facts);
         let out = run_conformance(
-            &RunInput { pack_dir: &pack, artifact: &artifact, state_dir: &state, commitment: &commitment, source: &src, impls: im, max_checks, fault: None },
+            &RunInput {
+                pack_dir: &pack,
+                artifact: &artifact,
+                state_dir: &state,
+                commitment: &commitment,
+                source: &src,
+                impls: im,
+                max_checks,
+                fault: None,
+            },
             log,
         )
         .map_err(|e| e.to_string())?;
@@ -487,7 +501,10 @@ mod conformance_cli {
                 Ok(3)
             }
             RunOutcome::Interrupted { done, total, seed } => {
-                println!("INTERRUPTED: {done} of {total} checks recorded under seed {}; resume with the same command.", &hex(&seed)[..16]);
+                println!(
+                    "INTERRUPTED: {done} of {total} checks recorded under seed {}; resume with the same command.",
+                    &hex(&seed)[..16]
+                );
                 Ok(3)
             }
             RunOutcome::Evidence { evidence, dir, seed, local, measures, provenance } => {
@@ -513,7 +530,9 @@ mod conformance_cli {
                 println!("measured      {}", measures.to_json());
                 match local {
                     Ok(()) => {
-                        println!("local judgement: the contract accepts this evidence for the beacon this process derived (a fresh `verify-conformance` is what counts)");
+                        println!(
+                            "local judgement: the contract accepts this evidence for the beacon this process derived (a fresh `verify-conformance` is what counts)"
+                        );
                         Ok(0)
                     }
                     Err(e) => {
@@ -536,21 +555,45 @@ mod conformance_cli {
         no_extra(args)?;
         let src = FileFactSource(facts);
         let v = verify_conformance(
-            &VerifyInput { pack_dir: &pack, artifact: &artifact, state_dir: &state, commitment: &commitment, evidence: &evidence, source: &src, rerun, impls: ImplSet::default() },
+            &VerifyInput {
+                pack_dir: &pack,
+                artifact: &artifact,
+                state_dir: &state,
+                commitment: &commitment,
+                evidence: &evidence,
+                source: &src,
+                rerun,
+                impls: ImplSet::default(),
+            },
             log,
         )
         .map_err(|e| e.to_string())?;
         match v {
             Verdict::Pass { evidence_id, measures, provenance } => {
-                println!("PASS: every derivable field recomputed from public inputs, every selected check re-executed, the evidence reproduced exactly");
+                println!(
+                    "PASS: every derivable field recomputed from public inputs, every selected check re-executed, the evidence reproduced exactly"
+                );
                 println!("evidence id   {}", hex(&evidence_id));
-                println!("facts         {}{}", provenance.label(), if provenance.is_synthetic() { "  (SYNTHETIC: this exercises the pipeline; it says nothing about any chain's history)" } else { "" });
-                println!("scope         a SAMPLED conditional check — not full-scope fidelity, not semantic admission, not a statement that the beacon is unbiased");
+                println!(
+                    "facts         {}{}",
+                    provenance.label(),
+                    if provenance.is_synthetic() {
+                        "  (SYNTHETIC: this exercises the pipeline; it says nothing about any chain's history)"
+                    } else {
+                        ""
+                    }
+                );
+                println!(
+                    "scope         a SAMPLED conditional check — not full-scope fidelity, not semantic admission, not a statement that the beacon is unbiased"
+                );
                 println!("measured      {}", measures.to_json());
                 Ok(0)
             }
             Verdict::NotReproduced { provenance } => {
-                println!("NOT A PASS (results not re-executed): the challenge, selection and evidence are consistent with the canonical facts ({}), but --no-rerun leaves the result roots unverified", provenance.label());
+                println!(
+                    "NOT A PASS (results not re-executed): the challenge, selection and evidence are consistent with the canonical facts ({}), but --no-rerun leaves the result roots unverified",
+                    provenance.label()
+                );
                 Ok(3)
             }
             Verdict::Pending { why } => {
@@ -577,7 +620,8 @@ mod conformance_cli {
         let tip = num::<u64>(args, "--tip")?;
         let label = take_flag(args, "--label").unwrap_or_else(|| "synthetic".into());
         no_extra(args)?;
-        let l = load_commitment(&resolve_commitment_dir(&state, &commitment).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        let l =
+            load_commitment(&resolve_commitment_dir(&state, &commitment).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         let mut f = synthetic_facts(&l.commitment, &l.policy, position, &label);
         if let Some(w) = works {
             f.events.truncate(w as usize);
@@ -586,7 +630,11 @@ mod conformance_cli {
             f.tip_position = t;
         }
         write_atomic(&out, serde_json::to_string_pretty(&facts_to_json(&f, &l.policy.id())).unwrap_or_default().as_bytes())?;
-        eprintln!("wrote SYNTHETIC beacon facts ({} works, tip {}) — not a canonical history of any chain", f.events.len(), f.tip_position);
+        eprintln!(
+            "wrote SYNTHETIC beacon facts ({} works, tip {}) — not a canonical history of any chain",
+            f.events.len(),
+            f.tip_position
+        );
         Ok(0)
     }
 
