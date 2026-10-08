@@ -821,6 +821,13 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
+        // transformers renames `LayerNorm.gamma` / `LayerNorm.beta` of every checkpoint on load (its "legacy" conversion: checkpoints
+        // saved before the rename, BERT-lineage TF exports, spell a LayerNorm's gain and bias that way).
+        if let Some(legacy) = legacy_layer_norm_name(name)
+            && self.names.contains(&legacy)
+        {
+            return Some(legacy);
+        }
         None
     }
 
@@ -839,6 +846,19 @@ impl<'a> Resolver<'a> {
             .cloned()
             .collect()
     }
+}
+
+/// The pre-rename spelling of a LayerNorm tensor (`LayerNorm.weight` → `LayerNorm.gamma`, `LayerNorm.bias` → `LayerNorm.beta`), as
+/// transformers' `legacy` checkpoint conversion reads it; `None` for any other name.
+pub fn legacy_layer_norm_name(name: &str) -> Option<String> {
+    for (new, old) in [("LayerNorm.weight", "LayerNorm.gamma"), ("LayerNorm.bias", "LayerNorm.beta")] {
+        if let Some(i) = name.rfind(new)
+            && i + new.len() == name.len()
+        {
+            return Some(format!("{}{old}", &name[..i]));
+        }
+    }
+    None
 }
 
 /// A **buffer** of a module, not a parameter: rotary frequency tables and position-id ranges that older
