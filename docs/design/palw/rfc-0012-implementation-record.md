@@ -111,3 +111,64 @@ The consensus test binary needs `--features evm` to run the EVM-lane tests (and 
   head from the log and escalate; it is a consensus-security event, not a node-health one.
 * **Before the height**: confirm every seat's build carries the new fence (fork-id), the DNS validator service is stopped or will self-retire,
   and bridge operators have the `null`-tag note (policy proposal §8).
+
+## 6. D1 follow-up — the maturity offset and the `safe` explanation (lane X12b, branch `rfc12/x12-safe-maturity`, 2026-10-08)
+
+The user's position on D1: do not shorten 5,400 now, do not treat it as final, RFC-0012 is outside DAA 9,000; the user wants evidence. Evidence and
+recommendations-free analysis: [policy proposal §10](rfc-0012-policy-proposal.md). This section is requirement → code → test → status for what the
+follow-up added. **Nothing here changes a shipped preset, a params / schedule / identity id, or the dormant fence (`palw_dns_retirement_v1` is still
+`None` everywhere and in no flag-day list).** v1 is still the only maturity rule in the tree.
+
+### 6.1 What changed in the code
+
+| Change | Files | Why |
+|---|---|---|
+| `palw_native_readiness_v1`: a **pure** explanation of the certificate (which effect holds `safe` back, every unmet condition, running clocks, named history gaps) | `consensus/core/src/palw_native_readiness_v1.rs` (new), `lib.rs` | item 4: the snapshot says one stop; a reader waiting on a transaction needs the reasons |
+| `native_facts_and_skips_v1`: the one fact conversion, now also counting what it skipped (`voided`, `baseClass`, `openDa`, `unpriced`, `bondNotHeld`); `native_facts_of_block_v1` is it with the counters dropped | `palw_native_settlement_v1.rs` | evidence seen and not counted must be visible, not silent |
+| `native_evaluate` returns the snapshot AND the material it was weighed from (or why nothing was); `native_evm_settlement_snapshot` is `native_evaluate(..).snapshot`; walk faults carry a cause and a block | `consensus/src/pipeline/virtual_processor/native_settlement.rs` | the explanation can never be about other evidence than the certificate; the snapshot path pays nothing for it |
+| `native_safe_readiness(sink)`, memoized per sink; `ConsensusApi::get_native_safe_readiness` (default `Ok(None)`), `Consensus` impl, `async_get_native_safe_readiness` | `native_settlement.rs`, `processor.rs` (the memo field), `consensus/src/consensus/mod.rs`, `consensus/core/src/api/mod.rs`, `components/consensusmanager/src/session.rs` | one evaluation per virtual change, however often the RPC is called |
+| `getPalwSettlement.nativeReadiness` (**no new op**): wRPC response v3 only when present, gRPC field 12, JSON/wasm key + TypeScript types; served only when its `generation` equals the snapshot's | `rpc/core/src/model/message.rs`, `rpc/core/src/wasm/message.rs`, `rpc/grpc/core/proto/rpc.proto`, `rpc/grpc/core/src/convert/message.rs`, `rpc/service/src/service.rs` | item 4 on the existing RFC-0012 RPC |
+| `misaka palw settlement` prints the reasons | `misaka-cli/src/palw_settlement.rs` | operators read it in a terminal |
+| The real-fold fixture moves to a shared module; the existing fold test is unchanged in behaviour | `consensus/core/tests/rfc0012_fold_fixture/mod.rs` (new), `rfc0012_native_evidence_fold.rs` | two test files drive the same claim life |
+
+### 6.2 Requirement table
+
+| # | D1 requirement | Code | Test | Status |
+|---|---|---|---|---|
+| D1-1 | Derive 5,400 by formula, with the enforcement point of every term | policy proposal 10.1 (reading) | measured pins: `rfc0012_native_evidence_fold` (accepted 1,001 → `Final` 1,124 → retired 4,125 → retention lapses 6,401), `rfc0012_evidence_window` | IMPLEMENTED (analysis; the formula is not a parameter) |
+| D1-2 | Compare 5,400 / 3,000 / 1,000 / 600: attacks, EVM finality time, what else must change | 10.2, 10.3.4 | `d1_a` (exact instants), `d1_f` (lags against the node's 600-blue bound) | IMPLEMENTED (analysis + tests); hours are DERIVED from 24 and 30 DAA/h |
+| D1-3a | Producer + every Panel seat colluding | `rfc0012_safe_maturity_attacks.rs` (rules exist only there) | `d1_d`: v1 and `Final + 3,000` never retracted; `Final + 1,000` / `+ 600` retract for 2,000 / 2,400 blocks of convictions; `d1_b`: the last reversing block is `Final + 3,000` | IMPLEMENTED_AND_TESTED at the fold level; a fork **race** is a **GAP** |
+| D1-3b | Evidence / material withholding | same | `d1_c` (DA accusation admitted through `Final + 3,000`; an open session holds the claim past retirement; default as late as `Final + 4,201`), `d1_e` (no rule counts a claim under accusation); `rfc12_r3` (the node's own lost history is a named retention gap) | IMPLEMENTED_AND_TESTED; **corrects an inference in 10.2** (stated there) |
+| D1-3c | A private fork released late | none new (fork choice unchanged) | existing `hb_probe_e` (322 s) and `hb_probe_d` (629 s) re-run: both PASS — the comparator refuses a branch lacking a `Final` claim from `Final` on, and only the 600-blue finality depth stops a heartbeat-only reorg; `rfc12_r5` (labels withdrawn, no conflict alarm) | IMPLEMENTED_AND_TESTED for a branch that lacks the claim; a branch carrying its OWN `Final` claim is a **GAP** (capacity security) |
+| D1-3d | Deep reorg across the would-be `safe` point; what `safe` / `finalized` do per value | `native_evaluate` (labels are recomputed; the conflict alarm is only for abandoning the finalized block) | `rfc12_r5` (two worlds: mature / not yet), `d1_f` | IMPLEMENTED_AND_TESTED; the harness has no real clock (`matured_daa` against DAA 1 to 2) |
+| D1-4 | `safe` readiness as structured reasons on the existing RFC-0012 RPC; ask before a new op | `palw_native_readiness_v1.rs`, `native_settlement.rs`, rpc files above | core 11 (agreement with the certificate on 400 generated chains, exact and tight promise, non-monotone evidence), processor `rfc12_r1`–`r4`, wRPC v3 byte-compat, gRPC round trip, CLI | IMPLEMENTED_AND_TESTED; **no new op was needed** |
+| D1-5 | The explorer renders the reasons | — | — | **CODE_GAP** (small; `contrib/misakascan-t12` reads the snapshot only) |
+| D1-6 | Third-party readers of `getPalwSettlement` handle wire v3 | — | — | **EXTERNAL** (v3 appears only past the fence) |
+
+### 6.3 Harness limits that apply to this section (in addition to §3)
+
+* The fold tests are linear (one block per DAA, `blue == DAA`), floor-relabelled, `D = 1`; see policy proposal 10.3.2 for the five named seams. The three
+  alternative maturity rules are a function in the test file, not code in the tree.
+* The processor tests (`rfc12_r*`) place facts and a frontier through the §3 seams; "maturity" there is a fact's `matured_daa` against a sink DAA of 1.
+
+### 6.4 Findings that changed an earlier statement or that a reader must not miss
+
+1. **The DA channel outlives the retirement.** `da_admission_v1` admits an accusation through the block at `Final + claim_retirement`, and an open session holds the
+   claim in state: a default can land at `Final + 4,201` (§10.2 had said `Final + 3,000`; corrected). The `Final + 3,000` rule is safe against it only because an
+   open session removes the fact and keeps the lifecycle open from the accusation on (`d1_e`).
+2. **`Final + 3,000` has zero slack**: the last reversing block is the rule's own instant block (`d1_b`/`d1_d`).
+3. **A conviction after the retirement never retracts work** under any rule (`late` in `d1_d`).
+4. **A published `finalized` retreats with `safe`** (`rfc12_r5`); nothing latches it. On a real chain it is a pruning point at least 74,920 blue score behind.
+5. v1's closing term is the retention (`acceptance + 5,400`), not the retirement; it is above every reversal horizon measured here, including `Final + 4,201`.
+
+### 6.5 What still stands between the fence and arming
+
+The user's course changed (no DAA-9,000 flag day; the next public release enables `palw_dns_retirement_v1` with RFC-0008 / 0010 / 0011-K2 / 0014 / 0015). The sorted list —
+code items with a concrete next step each (C1–C11), the policy values with a recommended value and its trade-off, and external / ops — is
+[policy proposal §11](rfc-0012-policy-proposal.md). The ones this record's tables mark **GAP** / **CODE_GAP** are C1 (a claim reaching `Final` through the processor with EVM on), C2 (a real pruned IBD with
+EVM state), C3 (market fills), C4 (re-measure D1 with 0008 / 0010 / 0011-K2 / 0014 / 0015 armed), C8 (explorer).
+
+### 6.6 Reproduce
+
+See the commands at the end of policy proposal §10.3 (10.3.6). Pre-existing and unrelated: `misaka-cli`'s `cli_surface_tests::palw_settlement_parses_and_says_the_depth_is_anchors`
+needs `RUST_MIN_STACK=33554432` (§4).

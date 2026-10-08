@@ -160,6 +160,11 @@ The 8 genesis cards are 8 operator ids run by one fleet today — a census of *e
 
 ## 8. Go / no-go for arming at testnet-12 DAA 9,000
 
+> **Superseded framing (Lead, 2026-10-08 ~20:00).** There is no DAA-9,000 flag day. The next public release enables `palw_dns_retirement_v1` together
+> with RFC-0008 / 0010 / 0011-K2 / 0014 / 0015, and ships only after all RFC implementation is complete. The list below is still the right content
+> (the "9,000" is just the release height); the consolidated, sorted list of what is left — code with a next step each, the policy values with a
+> recommended value and the trade-off, and external / ops — is **§11**.
+
 **GO needs all of:**
 
 1. The user decides D1 (§3) and the values in §4 are fixed from a **live census** (operators by entity, REAL classes, `pwu` per window).
@@ -272,21 +277,31 @@ from acceptance instead, subtract 123 from the shorter ones; nothing below chang
 `finalized` is **not** moved by any of these: it is the validated pruning point, at least the pruning depth (74,920 blue score on t12; blue score
 grows at least as fast as DAA) behind the tip, which is months, not days. D1 is about `safe`.
 
-**Why `Final + 3,000` is the only anchored value below 5,400.** Both ways the chain can take back a `Final` close at the same instant by
-construction: the court (a prosecution opened at `Final` completes in ≤ 2,988 ≤ 3,000, `W_court`) and DA (a `Final` claim is accusable only while it
-is held and its vesting row is unmatured — `da_admission_v1` palw_state_v2.rs:≈16560, released by the DAA clock at `F + 3,000` — and a session
-is cut off when the claim retires, so the last accusation that can default is at `retirement − W_disclose = F + 1,800` and a default lands by `F + 3,000`). Retirement removes the claim, so a later
-conviction can slash but cannot reverse (`reverse_convicted_final` returns). Counting evidence at `F + C` therefore never counts work the chain
-can still un-count, so `safe` cannot retreat because of a conviction — the property v1 buys with 5,400. The rest of v1's margin (2,277 DAA) protects
-the producer's *unenforced* retention after retirement, which no chain rule can use, and the slash-only tail, which v1 does not cover either (it
-ends at F+5,277, before F+6,000).
+**Why `Final + 3,000` is the only anchored value below 5,400.** Both ways the chain can take back a `Final` are *visible to the certificate* no
+later than `F + 3,000`, by construction: the court (a prosecution opened at `Final` completes in ≤ 2,988 ≤ 3,000, `W_court`; **measured in 10.3:
+the last block that still reverses a `Final` by conviction is the one at `F + 3,000`**), and data availability (a `Final` claim is accusable only
+while it is held — **measured: the accusation is admitted in the block at `F + 3,000` and refused with `MissingClaim` from `F + 3,001`**). Retirement
+removes the claim, so a later conviction can slash but cannot reverse (`reverse_convicted_final` returns). Counting evidence at `F + C` therefore
+never counts work the chain can still un-count, so `safe` cannot retreat because of a conviction — the property v1 buys with 5,400. The rest of
+v1's margin protects the producer's *unenforced* retention after retirement, which no chain rule can use, and the slash-only tail, which v1 does
+not cover either (it ends at F+5,277, before F+6,000).
+
+> **Correction (X12b, 2026-10-08), from the measurement in 10.3.** An earlier draft of this section said a DA session "is cut off when the claim
+> retires, so a default lands by `F + 3,000`". That was an inference from reading `da_admission_v1`, and the real fold contradicts it: an open
+> session **holds the claim in state past its retirement**, and the default lands `W_disclose + 1` blocks after the accusation — **as late as
+> `F + 4,201`** for an accusation at `F + 3,000`. It does not change the conclusion for `Final + 3,000` (every admissible accusation is filed by
+> `F + 3,000` and an open session is exactly what stops a fact from counting and keeps the lifecycle open, so the claim is never counted while a
+> default can land — test `d1_e`), but it does change what a *reader* may assume: a `Final` claim can be voided up to `F + 4,201`
+> (`≈ acceptance + 4,324`) by the DA channel, **after** the retirement point. v1's instant (`acceptance + 5,400`) is above that horizon too;
+> `Final + 3,000` is below it and is safe only because the open session withholds the fact (and any future rule that counts evidence while no
+> session is open must keep that property).
 
 **What each shorter value admits, and what would have to change** (attack timing is demonstrated with the real fold in 10.3; profitability is
 analysis, not measurement):
 
 * **`Final + 1,000` / `+ 600`** count evidence while the claim can still be convicted or defaulted. Producer + every seat colluding can then
   produce `safe`-grade evidence from a fabricated execution that a public verifier — who needs up to 2,988 DAA to dissect — has no time to
-  convict first; withheld material (DA default needs a session opened by `F + 1,800`) is counted though a default could still land. The
+  convict first; withheld material is counted though an accusation can still be filed (through `F + 3,000`) and its default can still land (through `F + 4,201`, 10.3) — the open session withdraws `safe` at the accusation, not at the default. The
   collateral design bar prices fraud gain against recoverable value; a *label* that an external bridge acts on is a **new gain term the bar
   does not price**. A conviction then retracts the evidence (implemented), so `safe` retreats, but whoever acted on it has already acted. Making
   these safe is **not a policy change**: `window_court` would have to fall to ≤ X (the ladder must shrink or the turn clock speed up),
@@ -294,11 +309,238 @@ analysis, not measurement):
   `palw_ruleset_id_v2`, i.e. a re-genesis-class change — or the label would need a stake-weighted discount and a consumer-visible retraction
   protocol that this branch does not specify.
 * **`Final + 3,000`** is a policy-only change (a v2 rule: `matured = Final + claim_retirement`, drop the retention term; a committed policy field
-  and a version bump), with two stated cautions: (1) it ignores a class's own model court window (`palw_model_court_window`), which can outrun
+  and a version bump), with three stated cautions: (0) **it has no slack** — the last block that reverses a `Final` is the block at `F + 3,000`,
+  which is also the rule's own instant; it is closed only because the certificate reads the sink state *including* that block, and
+  `Final + C + 1` (or `+ reorg_margin 300`) is the cheap way to stop depending on that equality (10.3, `d1_b`/`d1_d`); (1) it ignores a class's own model court window (`palw_model_court_window`), which can outrun
   `window_court` and extends the claim's retention (palw_state_v2.rs ≈30790) — neither rule reads an extension made *after* `Final`, so if that
   fence is armed the class window must be read; (2) the slash-only tail (F+3,000…F+6,000) stays open exactly as under v1.
 * **v1 (5,400)** needs nothing more; its cost is the lag and its slack.
 
-### 10.3 Tests and measurements
+### 10.3 Tests and measurements (X12b)
 
-*(filled in by the attack tests and the readiness RPC below)*
+Everything here is printed by a test in the branch (named; reproduce in 10.3.6) on testnet-12's own `Params` and the fence still `None` on every
+preset. Words as at the top of this file: **MEASURED** / **DERIVED** / **GAP**. This section recommends nothing; it is the evidence the user asked for.
+
+#### 10.3.1 What the node now says about `safe` (item 4): `getPalwSettlement.nativeReadiness`
+
+**No new op.** `getPalwSettlement` (op 182) gains one optional field. The snapshot still says *what* is safe and gives ONE stop reason; the
+explanation says *which effect* holds `safe` back, *every* condition it still lacks (not only the first), which clocks are already running, and
+whether the history the certificate needs is present at all. It decides nothing, no consensus path reads it, it is never persisted, and it is
+computed from the SAME evaluation as the snapshot (`native_evaluate` returns both), so it cannot be about other evidence than the certificate.
+
+| Field | Meaning |
+|---|---|
+| `generation`, `sinkDaa`, `sinkBlue` | the sink the explanation stands at (the response carries it only when it equals the snapshot's `generation`: a virtual change between the two reads drops it, the caller asks again) |
+| `policy`, `maturity` | the numbers the certificate is held against; `maturity.rule = "v1"` with `claimRetirementDaa` and `quantumMaturityDaa` — **the rule in force, so a reader knows what "mature" means on this network** |
+| `safe`, `safeLagDaa`, `safeLagBlue`, `stop` | the snapshot's, plus how far `safe` trails the newest executed block |
+| `stoppedEarly` | weighing never happened: `missingHistory { gap, block }` (`gap` is one of `deltaNotRetained`, `executionGap`, `rootChainBroken`, `executionDisagreesWithHeader`, `headerUnreadable`, `parentUnreadable`, `executionRowUnreadable`, `stateUnavailable`, `paramsAbsent`, `persistedSnapshotIncompatible`, `reachabilityUnreadable`, `chainOpenEnded`) · `unexecuted` · `finalizedConflict` |
+| `blocking` | the first effect that does not certify (the one right above `safe`): its `waits`, in the certificate's order, every one |
+| `tip` | the same for the newest executed effect, when it is not the blocking one |
+| `finalized` | the label, the pruning point, and `wait`: `noSafePrefix` · `pruningPointNotExecuted` · `pruningPointNotUnderSafe { safeBlue }` · `conflict` — **`finalized` waits for the pruning point, never for a maturity number** |
+| `skipped` | evidence the node saw and did **not** count, by cause: `voided`, `baseClass`, `openDa`, `unpriced`, `bondNotHeld` (the bond a `Final` claim names has left the sink's state — the retention gap of the bond registry; its operator cannot be named and its work is never guessed) |
+
+`waits[]` kinds (JSON `kind`): `frontierBehind { frontierBlue, effectBlue, frontierOnBranch }` · `openClaim { claim, stage, acceptedBlue,
+retentionDaa, nextDeadlineDaa, waitDaa }` (`waitDaa` only for a `Final` claim, whose retention lapse is a clock; for any other stage the claim's own
+panel / receipt / challenge / court clocks decide and **no end is promised**) · `openDaSession { claim, claimKnown, deadlineDaa, waitDaa }` (open court
+on claim X; `claimKnown: false` = the dispute cannot be located and counts against every effect) · `waitingMaturity { facts, work, earliestMaturedDaa,
+waitDaa, readyDaa }` (**waiting on maturity N DAA**: facts that would qualify exist and are not mature; `readyDaa` is the first DAA at which the facts
+already on the chain meet the policy, `null` if even all of them would not) · `insufficientDepth { have, need }` · `insufficientWork { have, need }` ·
+`concentratedWork { dimension, topPermille, capPermille }` · `duplicateWork` · `arithmeticOverflow` · `invalidPolicy` · and the early-stop kinds above.
+At most 8 claims and 8 sessions are named per effect; the totals (`openClaimsTotal`, `openSessionsTotal`) are exact. `earliestReadyInDaa` is
+`null` the moment any unmet condition needs an event that has not happened — it never promises that `safe` WILL advance.
+
+**Wire.** wRPC response version 3 is written only when `nativeReadiness` is present (v1 and v2 bytes are unchanged otherwise, and a v2 body is the
+byte prefix of a v3 one); the reader accepts 1 to 3. gRPC: `optional string nativeReadinessJson = 12`. JSON/wasm: key `nativeReadiness`, TypeScript
+`INativeSafeReadinessV1`. It exists only past the retirement fence, so no shipped network's wire changes. CLI: `misaka palw settlement` prints the
+lines under the settlement line (`--json` carries the whole document). The explorer (`contrib/misakascan-t12`) does not render it (GAP, small).
+
+**Cost.** The snapshot path is `native_evaluate(..).snapshot` and pays nothing for the explanation (the material is moved out of the evaluation, not
+recomputed). The explanation is built on demand and memoized per sink: one evaluation per virtual change, however often the RPC is called.
+
+**Tests.** Core (`palw_native_readiness_v1`, 11 pass): the first stop-bearing wait of the blocking effect equals `certify_native_prefix_v1`'s stop on
+400 generated chains; a promised time is exact and tight (certifies at `+d`, not at `+d-1`); evidence is re-read at the moment the last clock stops
+(it is not monotone in time: a fact that matures later can break a cap — a test constructs it and the promise is withheld). Processor (`rfc12_r1`
+to `r4`, with x0 to x15: 20 pass): agrees with the snapshot and names `frontierBehind`; names an unresolved claim with its stage and no clock; a deleted
+delta row is `stoppedEarly = missingHistory { deltaNotRetained, block = that block }`, restored it is the ordinary explanation; unmatured work is
+`waitingMaturity` with `readyDaa 500`, `earliestReadyInDaa = 500 - sinkDaa`, and flipping the same fact to mature certifies exactly that effect.
+Wire: rpc-core 8, gRPC 2, CLI 6 pass.
+
+A real answer (`rfc12_r4`, harness chain; the unmatured work was placed at a block through the named `cfg(test)` seam, see 10.3.2):
+
+```json
+"blocking": { "daa": 0, "blue": 1, "inSafePrefix": false,
+  "waits": [ {"kind":"insufficientDepth","have":0,"need":1},
+             {"kind":"insufficientWork","have":"0","need":"1"},
+             {"kind":"waitingMaturity","facts":1,"work":"10","earliestMaturedDaa":500,"waitDaa":499,"readyDaa":500} ],
+  "earliestReadyInDaa": 499, "evidence": {"anchors":0,"work":"0","maturedFacts":0,"pendingFacts":1,"pendingWork":"10"} }
+```
+
+and one that cannot promise (`rfc12_r1`): `waits = [ frontierBehind {frontierBlue 1, effectBlue 2}, openClaim {stage provisional, nextDeadlineDaa 600, waitDaa null} ]`,
+`earliestReadyInDaa: null`.
+
+#### 10.3.2 The attack harness: what is real, what is a seam
+
+* **Real.** `apply_palw_transition_v7` on testnet-12's `Params`: a claim is accepted at DAA 1,001, bound, licensed by five seats, and `Final` at 1,124
+  (+123); a conviction (`PanelFalseValid` with an executor equivocation) or a DA default reverses it; the sweep retires it at `Final + 3,001`. The
+  extraction of evidence from the fold's own deltas, the fact conversion, the lifecycle closure (`native_open_from_v1`, for v1) and the certificate
+  (`certify_native_prefix_v1`) are the shipped functions.
+* **Seams, named.** (1) The chain is one block per DAA, `blue == DAA`, linear: no DAG, no fork choice, no PoW — **a fork race is not run** (the PALW
+  common-prefix property is NOT proven here). (2) The fixture can only drive the floor claim without the class registry, so the fact is converted from
+  the same record relabelled to a REAL class. (3) The policy is `D = 1, W = 1, no cap`, to isolate time; a real policy adds an anchor (`+123` DAA) per
+  unit of `D`. (4) One claim, one effect that matters (the accepting block, DAA 1,001); effects exist at every DAA from 1,000. (5) The three
+  alternative rules **exist only in `rfc0012_safe_maturity_attacks.rs`**: a function that re-times the fact the real conversion made and moves the
+  lifecycle closure to the same instant (`Final + X`). v1 is the only rule in the tree. (6) Processor-level tests (`rfc12_r*`) place facts and a frontier
+  through the `cfg(test)` seams of the x-matrix; the harness clock stops at DAA 1 to 2 (the EVM lane cannot be re-stamped), so "time" there is the fact's
+  `matured_daa` against the sink DAA.
+
+#### 10.3.3 Results (MEASURED)
+
+**(a) Honest timeline** (`d1_a`): the first DAA at which `safe` covers the accepting block (claim accepted 1,001, `Final` 1,124, retired 4,125,
+retention lapses 6,401; frontier after `Final` = blue 1,001):
+
+| Rule | `safe` covers it at | = acceptance + | = `Final` + |
+|---|---|---|---|
+| v1 | 6,401 | 5,400 | 5,277 |
+| `Final + 3,000` | 4,124 | 3,123 | 3,000 |
+| `Final + 1,000` | 2,124 | 1,123 | 1,000 |
+| `Final + 600` | 1,724 | 723 | 600 |
+
+(each exact: not a DAA earlier.) v1's closing term is the retention, not the retirement.
+
+**(b) The last block that still reverses a `Final` by conviction** (`d1_b`; the five seats signed `Valid`, a public verifier files the equivocation):
+every conviction in a block from `Final + 1` to **`Final + 3,000`** voids the claim (`CourtFraud` in that block's delta); the block at `Final + 3,001`
+folds but reverses nothing (the claim is retired in it); from `Final + 3,002` the claim is gone. **The last reversing block is `Final + claim_retirement`.**
+
+**(c) The DA channel** (`d1_c`; `DefaultAccused` by a seat, 13 accusation DAAs from `Final + 5` to `Final + 3,001`): the accusation is **admitted through the
+block at `Final + 3,000`** and refused with `MissingClaim` from `Final + 3,001`; every admitted session stays open `W_disclose + 1 = 1,201` blocks and
+**holds the claim in state past its retirement**; the default lands at `accusation + 1,201` and voids the claim as `ProducerWithholding` (a withholding,
+not a proof of fraud). So **the DA channel can reverse a `Final` as late as `Final + 4,201`** (`≈ acceptance + 4,324`), not by `Final + 3,000` as 10.2
+first said (see the correction there).
+
+**(d) Producer + every seat colluding** (`d1_d`): the conviction lands in the block at `Final + k`. Verdict per rule (`caught` = `safe` never counted the claim;
+`retracted` = `safe` HAD covered the accepting block at the block before and the voided set takes it back in the block of the conviction; `late` = the claim
+was already retired, nothing reverses):
+
+| Rule | `caught` for `k` in | `retracted` for `k` in | `late` (not reversible) |
+|---|---|---|---|
+| v1 | 1 to 3,000 (all of them) | none | 3,001+ — the work then counts at `acceptance + 5,400` and is never taken back |
+| `Final + 3,000` | 1 to 3,000 (all of them) | **none** (the last reversing block, `+3,000`, is the rule's own instant block) | 3,001+ — counted since `+3,000`, stays |
+| `Final + 1,000` | 1 to 1,000 | **1,001 to 3,000 (2,000 blocks)** | 3,001+ |
+| `Final + 600` | 1 to 600 | **601 to 3,000 (2,400 blocks)** | 3,001+ |
+
+(the assertion in the test is stronger than the table: for every rule, "counted at the block before the conviction" is exactly "`k` is past the rule's
+instant", checked at 18 values of `k`.) Two lines the table does not make visible: **`Final + 3,000` is closed with zero slack** (see the caution in 10.2),
+and **a conviction after the retirement never retracts work under any rule** — a `late` conviction slashes, it does not reverse (`reverse_convicted_final`
+finds no claim). That is a property of the fold, not of D1, and it is the same for every rule; it is also why a longer `M` cannot help for `k > 3,000`.
+
+**(e) Withheld material** (`d1_e`, accusation at `Final + a`, `a` in 50 to 3,000): for **every** rule, **no block of the 1,201-block session counts the claim,
+and none counts it after the default** (an open session removes the claim's fact and keeps the lifecycle open). A rule that had not yet counted the claim
+(`a <= X`) never does; a rule that had (`a > X`, only `Final + 1,000` / `+ 600`) **loses `safe` at the accusation, not at the default**. So the DA channel is
+fail-closed for all four rules; what differs is whether `safe` was published before the accusation arrived.
+
+**(f) The node's own reorg bound** (`d1_f`): `finality_depth = window_challenge / 2 = 600` blue score; the node refuses a sink candidate that does not
+contain its finality point (`sink_search`, `virtual_finality_point`). `safe` lags the accepting block by at least 5,400 / 3,123 / 1,123 / 723 DAA
+(9.0 / 5.2 / 1.9 / 1.2 x the finality depth), before the `D` anchors. At 24 DAA/h that is 225 / 130 / 47 / 30 h; at 30 DAA/h 180 / 104 / 37 / 24 h.
+**DERIVED, not measured on a real chain:** it assumes blue score grows at least `600 / lag` per DAA (0.83 for the shortest).
+
+**(g) A private branch released late, at the node** (processor, real fork choice, harness chain). Existing evidence from the heartbeat lane, re-run here
+(`hb_fork_choice_probe`): **`hb_probe_e` — PASS (322 s)**: with the claim not yet `Final` a heavier private branch (two attempts of its own) flips the victim and
+the double spend lands; once the claim is `Final` (frontier = the anchor's blue score, 9; the private frontier is 0) the victim stays on the public chain
+(`kept public` 284 times) however heavy the private branch (+2,097,720 vs +2,097,437 blue work) — the PALW comparator's first key refuses it. **The window in
+which a branch without the claim can still win closes at `Final` (+123 DAA after acceptance), before any `safe` rule above counts the claim (+723 at the
+earliest).** `hb_probe_d` (HB lane) — **PASS (629 s)**: only the finality depth stops a heartbeat-only reorg: with `X` **580** blue score deep (finality depth 600) the heavier private
+branch flips the victim and the double spend lands; with `X` **620** deep the victim never leaves its chain (`kept public` 618 times, private +1,237 blue work vs public +620). What this does NOT show:
+a private branch that carries its OWN `Final` claim with a frontier at least the honest one's (colluding panel signing on a branch nobody saw — a
+capacity-security question, not a maturity one; **GAP**, nothing here bounds it).
+
+**(h) Deep reorg across the would-be `safe` point at the node** (`rfc12_r5`, same chain, same private branch, two worlds): *mature at the release* (a rule whose
+instant has passed): `safe` and `finalized` had been published at b0 (`finalized = safe`); the heavier branch takes the sink and **both labels are
+withdrawn** with `stop = insufficientDepth` — **not** `finalizedConflict` (b0 is still an ancestor of the new sink; the alarm is for a reorg that abandons the
+finalized block itself, x7). *Not yet mature*: nothing was published, nothing to withdraw (`safe = finalized = null` before and after). So **a published
+`finalized` retreats when `safe` does; nothing latches it** — in this harness the pruning point is adjacent to `safe`. On a real chain `finalized` is a
+pruning point at least 74,920 blue score behind the tip (10.1), and a conviction-driven retraction only moves `safe` back by the few effects the retracted
+claim supported, so a retraction cannot reach `finalized`; a `finalizedConflict` needs a reorg deeper than the pruning depth, which the 600-blue finality
+bound already refuses.
+
+#### 10.3.4 What `safe` and `finalized` do under each value — the summary
+
+| | v1 (5,400) | `Final + 3,000` | `Final + 1,000` | `Final + 600` |
+|---|---|---|---|---|
+| `safe` covers an ordinary claim's block at (honest, `D = 1`) | acceptance + 5,400 | + 3,123 | + 1,123 | + 723 |
+| Conviction can still reverse the `Final` through | `Final + 3,000` | same | same | same |
+| ... and the rule counts it from | `Final + 5,277` | `Final + 3,000` | `Final + 1,000` | `Final + 600` |
+| `safe` retracted by a conviction | never | never (zero slack) | for 2,000 blocks of convictions | for 2,400 blocks |
+| DA: counted while a session is open | never | never | never (loses `safe` at the accusation if it had it) | same |
+| DA default can land as late as | `Final + 4,201` — before the rule's instant | `Final + 4,201` — after the instant, but the open session withholds the fact from the accusation on | same | same |
+| late private branch | refused from `Final` (+123) by the comparator, and by the 600-blue bound after | same | same | same |
+| `finalized` | pruning-point-driven (>= 74,920 blue behind); not moved by `M` | same | same | same |
+| What else must change for it to be safe | nothing | a policy field + version (v2 rule), the zero-slack caution, the class model-court window | `window_court` <= 1,000 and everything keyed to it (re-genesis class), or a retraction protocol | the same, harder |
+
+#### 10.3.5 What these tests do not show (GAP)
+
+* **No fork race.** A fork's chance of winning is PALW capacity security; this branch proves nothing about common prefix. (g) shows the veto
+  closes at `Final` for a branch that lacks the claim; it says nothing about a colluding branch that carries its own.
+* One claim, `D = 1`, floor-relabelled, linear chain; a real policy lengthens every lag by `D x F_off` DAA.
+* The fixture's honest-quorum `F_off = 123` is one lifecycle; a re-bound claim finalizes later (up to +2,520) and the v1 rule takes the `max` for it.
+* The griefing cost of DA sessions is not measured: a session withholds the fact for 1,201 blocks; per-claim budgets (4 per seat over its life, 3 non-seat
+  open at once, 16 non-seat in all) and the retention gate (`now + W_disclose <= trace_retention`) bound it; what it costs the accuser if refuted (the
+  accuser is charged, SA-4) is the DA court's economics (ADR-0152), not exercised here.
+* Pre-`Final` withholding (a claim that never finalizes) is `dos_repro_4` (another lane's); here the claim starts at `Final`.
+* A class's own model-court window, which can extend a claim's retention, is not exercised.
+* The explorer does not render `nativeReadiness`; no external SDK reads it.
+
+#### 10.3.6 Reproduce
+
+```
+export CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0
+cargo test --offline -p kaspa-consensus-core --lib palw_native_readiness_v1 palw_native_settlement_v1                  # 22
+cargo test --offline -p kaspa-consensus-core --test rfc0012_safe_maturity_attacks --test rfc0012_native_evidence_fold -- --nocapture --test-threads=1   # 6 + 6
+cargo test --offline -p kaspa-consensus --lib --features evm rfc12_                                                     # 20 (x0-x15, r1-r5)
+cargo test --offline -p kaspa-consensus --lib --features evm hb_probe_e hb_probe_d -- --nocapture --test-threads=1       # existing (HB lane), 1 + 1 (322 s + 629 s)
+RUST_MIN_STACK=33554432 cargo test --offline -p kaspa-rpc-core -p kaspa-grpc-core -p misaka-cli --lib --bins -- rfc0012 palw_settlement   # 8 + 2 + 6
+```
+
+## 11. What stands between `palw_dns_retirement_v1` and arming it on t12 (X12b, 2026-10-08)
+
+The release enables RFC-0012 with RFC-0008, 0010, 0011-K2, 0014 and 0015, and ships after all RFC implementation is complete; D1 stays open and the user
+decides the value from §10. Nothing below is decided by this lane. **Sizes:** S ≤ 1 day, M ≤ 1 week, L > 1 week of one lane. **Owners** are proposals.
+
+### 11.1 Code (each with a concrete next step)
+
+| # | What | Why it blocks | Next step | Owner / size |
+|---|---|---|---|---|
+| C1 | **A claim reaching `Final` through the processor with the EVM lane on**, so `safe` advances from the node's own deltas end to end | today the evidence is proven on the fold (§10.3, `d1_*`) and the processor on placed facts (`x8`–`x10`, `r1`–`r5`); the harness re-stamps templates after the build and the lane executes against the header timestamp (`p2_evm_twin.rs` header), so its clock stops at DAA 1 | give the harness's template builder the simulated stamp as an INPUT to the lane (so build == validate with a simulated clock) instead of re-stamping afterwards; then drive `live_life`'s claim (accepted 1,001 → `Final` 1,124) in the matrix and assert `snapshot.safe` moves at the rule's instant and `nativeReadiness` shows `waitingMaturity` counting down on the way. If the builder change is judged too close to consensus, do it on the C-drill network (11.3) with the shipped binary instead | X12 + the EVM-template owner · M |
+| C2 | **A real pruned IBD with EVM state** | the import function is called directly (`x7`); a real join, its `latest = pruning point` start and the first `safe` after the lag are not exercised | a two-`Consensus` test through the IBD flow harness on a TEST copy of the params with shrunk pruning depth (the t12 derivation, 74,920 blue, keeps the pruning point at genesis in-process); assert the joined node's snapshot equals a full-replay node's once the lag has elapsed, and that the import clears a planted `FinalizedConflict` | IBD / protocol lane + X12 · L |
+| C3 | **Market fills** | the model line has no seeded market, so both sells settle `Refused MARKET_MISSING`; nothing fills across the fence | seed a market through the Position route (lane MP fixtures) in the matrix harness and repeat `x1`/`x12` with a fill: the combined ledger must still move by exactly `coins + fees` | X12 + lane MP · M |
+| C4 | **Re-measure D1 on the merged tree with 0008 / 0010 / 0011-K2 / 0014 / 0015 armed** | the horizons in §10.3 are properties of the fold as it is (`F_off = 123`, last reversing block `Final + 3,000`, DA default horizon `Final + 4,201`). Panel-free licensing (0015), permissionless panels (0010), public non-seat prosecution and the court/`Final` race (0014) and claim-backed slices (0008) can move every one of them, and 0014 §7.3 requires reward maturity and the lease `retained_liability_until` to be aligned with the liability horizon | run `rfc0012_safe_maturity_attacks` and `rfc12_r*` unchanged on the integration branch with those fences armed in the TEST `Params` (they read the windows from `Params`); any change in the `d1_b` / `d1_c` last-block numbers is a D1 input and the 10.2 table is re-issued | X12b · S to run, M to adapt |
+| C5 | **The maturity rule, if D1 ≠ v1** | `Final + 3,000` needs a committed policy field | `NativeMaturityRuleV1 { V1, FinalPlus(offset) }` in `NativeFactRulesV1`, the lifecycle closure and `PalwSettlementPolicyV1::commitment_bytes` (version bump), `readiness.maturity.rule` reporting it, and the `Rule` enum of `rfc0012_safe_maturity_attacks.rs` promoted to the library with those tests unchanged. Must land BEFORE the release's fingerprint, because the policy id is committed in `PalwDnsRetirementV1::commitment_bytes`. Not needed if v1 stays | X12b · M |
+| C6 | **A class's model-court window can extend a claim's retention** (`palw_model_court_window`, palw_state_v2.rs ≈ 30790) | with 0011-K2 / 0014 in the release, check whether any class window can outrun `window_court`; neither maturity rule reads an extension made after `Final` | grep + a fold test that sets a class window above `window_court` and asks `d1_b`/`d1_c`; if it can, the rule must read the class window or the fence must forbid it | X12b · S |
+| C7 | **Preset + release wiring** | the fence is `None` on every preset and in no flag-day list | in the release branch only: set `palw_dns_retirement` on the t12 preset (activation, policy, horizon), add it to the fence list and `consensus_params_id` / fork-id inputs, update `rfc0012_fork_id_and_cost` (its TEST fence is 9,137 today) and `validate_palw_v2`'s tests; the policy id of the preset must equal the committed one (test) | Lead / integration · S |
+| C8 | **Explorer renders `nativeReadiness`** | the reasons are served; only the CLI shows them | `contrib/misakascan-t12/app.js` + `tests/native-settlement.cjs`: show `maturity.rule`, `blocking.waits`, `finalized.wait`, `skipped` | X12b · S |
+| C9 | **Release-build cost at 100k+ blocks** | §6 is a debug-build measurement and an extrapolation | a release-build benchmark of `certify_native_prefix_v1` on 160,000 effects with real fact density, and a cold rebuild of `NativeRowCache` from a devnet DB | X12b · S |
+| C10 | **The DNS "all-equivocating votes" case past the fence** | x2/x13 show DNS is not an input; no equivocation was crafted | one matrix test with equivocating DNS attestations after the fence asserting no effect on the sink or the labels | X12 · S |
+| C11 | **Decide whether a published `finalized` may retreat** | `rfc12_r5`: it retreats with `safe` and is not a `FinalizedConflict`; a latch would have to relax the "finalized is an ancestor of safe" API invariant | recommended: leave it (§10.3.3 h: on a real chain `finalized` is >= 74,920 blue behind and a retraction cannot reach it) and say so in the release notes; if the user wants the latch, a design note first | user decision, then X12 · M |
+
+### 11.2 Policy values the user must choose (recommended value, trade-off)
+
+| Value | Recommended | Trade-off |
+|---|---|---|
+| **D1: the maturity offset** | **keep v1 (5,400 after acceptance) for the first arming; re-decide on the live `nativeReadiness` data** | v1 needs no code, is above every reversal horizon measured (including `Final + 4,201`) and `safe` never retreats for a conviction; the price is a `safe` lag of ≥ 5,400 DAA (≥ 7.5 days at 30 DAA/h, 9.4 days at the observed 24). `Final + 3,000` is the only anchored shorter value (lag 3,124 DAA, 4.3 to 5.4 days): policy-only but needs C5, has zero slack, and depends on the open-session rule (§10.2). `Final + 1,000` / `+ 600` retract `safe` for 2,000 / 2,400 blocks of convictions and cannot be made safe by policy |
+| **D (`settled_anchor_depth`)** | **3** | each unit adds ≈ 123 DAA (≈ 4 h at 30 DAA/h) to the lag; 1 would let one anchor (one operator's claim) certify; 3 is the least that a 400 ‰ operator cap can be met with |
+| **W (`unique_mature_work`)** | **start at 6,331,093,440 (3 × the smallest REAL class's `pwu`), then set from the census: `⌈k × matured REAL work per 5,400-DAA window⌉`** | too high and `safe` is `null` (it flaps at the edge); too low and dust certifies. The floor is a placeholder, not a census |
+| **`max_operator_permille`** | **400** | certifies 3-, 4- and 8-operator populations and a Zipf-8, refuses 1 and 2. With fewer than three entities of matured work `safe` is `null` from day one: either accept that and say so, or set 1000 until the census shows three. A cap is a speed bump (ids are not entities; the 8 genesis cards are one fleet), not a wall |
+| **`max_class_permille`** | **1000 (off) until ≥ 3 REAL classes carry matured work, then 600** | with two classes any cap under 500 can never be met and any under 1000 binds the larger one; 0011-K2 onboarding may change the census before the release |
+| **`legacy_evidence_horizon_daa`** | **10,080** | never shorter than the DNS evidence right it preserves (`evidence_window_blocks`); exposure to pre-fence DNS evidence ends at the fence + 10,080 DAA (≥ 14 days). Shorter ends that exposure sooner and cuts the right off earlier |
+| **The activation height** | the Lead's, after the drill (11.3) is green | the fork-id gate refuses un-upgraded peers FROM the height (before it they stay peers); testnet-11's second flag day cut off six third-party seats within four minutes. Reverting a binary after the height is a fork |
+| **Accepting the emission change** | RFC-0012's own design | from the fence, 88,912,402,800 sompi (889.12 MSK, 20 %) per floor attempt block is never minted; a REAL-class claim after the fence escrows 92 % |
+| **What integrators are told** | in words: ETH `safe` / `finalized` are `null` for at least the lag after activation and whenever evidence stops; state and call queries at those tags error; `latest` is optimistic | a bridge or exchange keyed on `finalized` stops advancing until the first mature REAL work |
+
+### 11.3 External and ops
+
+* **The drill (release gate 4):** an adversarial multi-node run with zero DNS validators, on the **shipped binary**, crossing the fence, on a network that has real `Final` claims, deposits, withdrawals, market fills and a pruned join with EVM state — C1–C3 are its in-process rehearsals, not substitutes. A drill that does not cross the fence with the shipped binary does not count.
+* **Fleet and third-party seats upgraded before the height** (fork-id), with the list of seat builds known; treat it as a flag day for everyone.
+* **Wallets, SDKs, EVM tooling, explorers other than misakascan** that read `safe` / `finalized` or `getPalwSettlement` (wire v3 appears only past the fence). EXTERNAL.
+* **DNS validator service** stopped or self-retiring; the 20 % validator share ends; their bonds exit (`x11`); notify validators.
+* **Runbook and pager** for `FinalizedConflict` (the record §5 has the signal and the resync; the page is OPS).
+* **Live census** (operators by entity, REAL classes, `pwu` per window) — the input for W and the caps; data gathering, not code.
+* **Release notes** carrying the integrator wording above and the D1 choice in the user's words.
