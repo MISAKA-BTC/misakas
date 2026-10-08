@@ -607,6 +607,29 @@ pub const PALW_ONBOARDING_POLICY_WINDOW_DAA_V1: u64 = 120;
 pub const PALW_ONBOARDING_POLICY_DEPTH_DAA_V1: u64 = 2;
 pub const PALW_ONBOARDING_POLICY_REPETITIONS_V1: u32 = 1;
 pub const PALW_ONBOARDING_POLICY_SECURITY_BITS_V1: u16 = 2;
+/// **The seal window `W` of the network's sealed-source (v3) onboarding policy** (INTERIM). The reveal window is the next `W`, so the
+/// ledger's seal TTL must be at least `2W` (`misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1`; G14-R4's interim 100).
+pub const PALW_ONBOARDING_SEALED_WINDOW_DAA_V1: u64 = 40;
+/// v3's `ε_src` terms (INTERIM, stated): `δ`, the bound on how late a block that carries an honest seal is merged, and the adversary's
+/// block share as `−log2 ρ` in millibits (1,000: ½). With `W = 40` that is 30 bits (`sealed_source_censorship_bits_v3`).
+pub const PALW_ONBOARDING_SEALED_MERGE_DELAY_DAA_V1: u64 = 10;
+pub const PALW_ONBOARDING_SEALED_ADVERSARY_NEG_LOG2_MILLIBITS_V1: u64 = 1_000;
+
+/// **The network's sealed-source (v3) onboarding policy** (`docs/design/palw/opv-beacon-bootstrap.md` §6.3): the sampled policy's
+/// numbers under `palw-work-beacon/sealed-source/v3` — commit-reveal over salted claim seals, every qualifying seal of the window
+/// mixed, a withheld or abandoned mixed seal a counted veto. INTERIM like the v2 one (2 bits, a drill), and a different id.
+pub fn palw_onboarding_sealed_policy_v1() -> PostCommitChallengePolicyV1 {
+    PostCommitChallengePolicyV1 {
+        security_bits: PALW_ONBOARDING_POLICY_SECURITY_BITS_V1,
+        ..misaka_palw_challenge::sealed_source_policy_v3(
+            PALW_ONBOARDING_POLICY_K_V1,
+            PALW_ONBOARDING_POLICY_DELAY_DAA_V1,
+            PALW_ONBOARDING_SEALED_WINDOW_DAA_V1,
+            PALW_ONBOARDING_POLICY_DEPTH_DAA_V1,
+            PALW_ONBOARDING_POLICY_REPETITIONS_V1,
+        )
+    }
+}
 
 /// **The network's post-commit challenge policy for model onboarding** — INTERIM, a consensus constant of the never-armed kernel route
 /// fence (like every other onboarding term): the contract's reference policy (unreviewed soundness id, `retry_limit` 2, so three

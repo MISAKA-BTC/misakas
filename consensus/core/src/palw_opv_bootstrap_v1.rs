@@ -353,15 +353,28 @@ pub fn attempt_effective_bits_v1(
             post.scope.leaf_fault_ppm,
         )));
     }
-    effective_false_accept_bits_v1(&EffectiveSoundnessInputV1 {
+    // v3 (sealed sources): the adversary's only post-reveal move is a counted veto, so G = F = 1 — and the beacon's own failure,
+    // `ε_src` (every honest seal censored out of the seal window), is a second term (§6.3). v2: the last contributor, G = 2^128.
+    let sealed = attempt.is_sealed_source();
+    let grinding =
+        if sealed { misaka_palw_challenge::sealed_beacon_grinding_choices_v3(1) } else { palw_onboarding_grinding_choices_v1() };
+    let algorithmic = effective_false_accept_bits_v1(&EffectiveSoundnessInputV1 {
         relations,
         repetition_count: policy.repetition_count,
         retry_limit: policy.retry_limit,
-        grinding_choices_per_beacon: palw_onboarding_grinding_choices_v1(),
+        grinding_choices_per_beacon: grinding,
         beacons_per_attempt: 1,
         adaptive_queries: 1,
     })
-    .unwrap_or(EffectiveBitsV1::Bits(0))
+    .unwrap_or(EffectiveBitsV1::Bits(0));
+    if !sealed {
+        return algorithmic;
+    }
+    use crate::palw_conformance_evidence_v1::{
+        PALW_ONBOARDING_SEALED_ADVERSARY_NEG_LOG2_MILLIBITS_V1 as RHO, PALW_ONBOARDING_SEALED_MERGE_DELAY_DAA_V1 as DELTA,
+    };
+    let src = misaka_palw_challenge::sealed_source_censorship_bits_v3(policy.beacon_window_slots, DELTA, 1, RHO);
+    misaka_palw_challenge::combine_failure_bits_v1(algorithmic, EffectiveBitsV1::Bits(src.min(u16::MAX as u64) as u16))
 }
 
 // =================================================================================================================================

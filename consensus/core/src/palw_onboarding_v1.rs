@@ -233,6 +233,9 @@ pub enum ConformanceAttemptEndV1 {
     Refuted = 4,
     /// `CONFORMANCE_FAILED`: no evidence by the deadline after the lock — a default, never a pass.
     Withheld = 5,
+    /// `BEACON_VETOED` (v3): a mixed seal was withheld past the reveal window, or a mixed source ended without a standing Final — the
+    /// beacon never locks without it (counted, like any beacon retry).
+    BeaconVetoed = 6,
 }
 
 impl ConformanceAttemptEndV1 {
@@ -243,6 +246,7 @@ impl ConformanceAttemptEndV1 {
             Self::EvidenceFailed => "EVIDENCE_FAILED",
             Self::Refuted => "REFUTED",
             Self::Withheld => "EVIDENCE_WITHHELD",
+            Self::BeaconVetoed => "BEACON_VETOED",
         }
     }
 }
@@ -314,10 +318,18 @@ impl ConformanceAttemptRowV1 {
         self.commitment.challenge_policy_id == crate::palw_opv_bootstrap_v1::palw_onboarding_complete_check_policy_v1().id()
     }
 
-    /// The network policy the attempt was committed under: the complete-check one, or the sampled one.
+    /// Whether the attempt was committed under the network's sealed-source (v3) policy.
+    pub fn is_sealed_source(&self) -> bool {
+        self.commitment.challenge_policy_id == crate::palw_conformance_evidence_v1::palw_onboarding_sealed_policy_v1().id()
+    }
+
+    /// The network policy the attempt was committed under: the complete-check one, the sealed-source (v3) one, or the sampled (v2)
+    /// one.
     pub fn policy(&self) -> misaka_palw_challenge::PostCommitChallengePolicyV1 {
         if self.is_complete_check() {
             crate::palw_opv_bootstrap_v1::palw_onboarding_complete_check_policy_v1()
+        } else if self.is_sealed_source() {
+            crate::palw_conformance_evidence_v1::palw_onboarding_sealed_policy_v1()
         } else {
             crate::palw_conformance_evidence_v1::palw_onboarding_challenge_policy_v1()
         }
@@ -586,6 +598,124 @@ impl PalwKernelRouteStateV1 {
     }
 }
 
+/// **An attempt's beacon, whichever the policy** (v2's accumulator or v3's sealed sources), as the fold, the tick, the chunk lane and
+/// op 231 read it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AttemptBeaconV1 {
+    /// No beacon yet; `state` names the phase (`COLLECTING`, `CANDIDATE`, `SEALING`, `REVEALING`, `SETTLING`).
+    Waiting {
+        state: &'static str,
+        have: u32,
+        lock_position: Option<u64>,
+    },
+    Locked(misaka_palw_challenge::beacon::VerifiedWorkBeaconV1),
+    /// `BEACON_UNAVAILABLE`: too few qualifying sources (counted).
+    Unavailable {
+        have: u32,
+        need: u32,
+    },
+    /// v3 only, `BEACON_VETOED`: a mixed seal withheld or a mixed source abandoned (counted).
+    Vetoed {
+        withheld: u32,
+        failed: u32,
+    },
+}
+
+impl PalwKernelRouteStateV1 {
+    /// **The v3 beacon's facts**: every claim seal the kernel ledger holds — live, revealed with its salt, or forfeited (G14-R4's
+    /// tables 25–26, `claim_beacon_seals_v1`) — as `SealedSourceV3`: the profile is the sealed job's class (job rows are permanent),
+    /// the producer the sealing bond, and a reveal's fate is its claim's (Final, with its op-212 facts; failed when convicted, timed
+    /// out or unavailable; live otherwise). The consumer is `Absent` until the ledger keeps the job's poster (F-C4R4-08, G14-R4's
+    /// table 18). `Err` only if the stored rows do not rebuild.
+    pub fn beacon_sealed_sources_v1(&self) -> Result<Vec<misaka_palw_challenge::SealedSourceV3>, String> {
+        use misaka_palw_challenge::{RootV1, SealRevealV3, SealedSourceV3, SourceAttributionV1, SourceFateV3};
+        let ledger = self.ledger()?;
+        let finals: std::collections::BTreeMap<misaka_palw_kernel::hash::Digest, misaka_palw_challenge::WorkFinalEventV1> = self
+            .finals_read_v1()?
+            .into_iter()
+            .filter_map(|f| {
+                let bytes = f.event?;
+                let w: misaka_palw_challenge::AttributedWorkV1 = borsh::from_slice(&bytes).ok()?;
+                Some((f.receipt.claim, w.event))
+            })
+            .collect();
+        let mut out = Vec::new();
+        for s in ledger.claim_beacon_seals_v1() {
+            let Some(profile) = ledger
+                .jobs
+                .get(&s.job)
+                .map(|j| j.class_binding_id)
+                .or_else(|| ledger.pipeline_jobs.get(&s.job).map(|j| j.class_binding_id))
+            else {
+                continue;
+            };
+            let reveal = s.revealed.map(|(claim, revealed_daa, salt)| {
+                use misaka_palw_kernel::lifecycle::ClaimStateV1 as C;
+                let fate = match (ledger.claims.get(&claim), finals.get(&claim)) {
+                    (_, Some(ev)) => SourceFateV3::Final(ev.clone()),
+                    (Some(row), None) if row.convicted || matches!(row.life.state, C::Unavailable { .. } | C::TimedOut { .. }) => {
+                        SourceFateV3::Failed
+                    }
+                    (Some(_), None) => SourceFateV3::Live,
+                    (None, None) => SourceFateV3::Failed,
+                };
+                SealRevealV3 { reveal_position: revealed_daa, salt, fate }
+            });
+            out.push(SealedSourceV3 {
+                source_profile_id: profile,
+                attribution: SourceAttributionV1 { producer_id: s.producer, consumer_id: RootV1::Absent },
+                seal: s.seal,
+                seal_position: s.sealed_daa,
+                reveal,
+            });
+        }
+        Ok(out)
+    }
+
+    /// **The beacon of `attempt` at `daa`** under its own policy. `Err`: a complete check (no beacon), an invalid policy, or rows that
+    /// do not rebuild.
+    pub fn attempt_beacon_v1(&self, attempt: &ConformanceAttemptRowV1, daa: u64) -> Result<AttemptBeaconV1, String> {
+        let policy = attempt.policy();
+        if attempt.is_complete_check() {
+            return Err("a complete check draws no beacon".into());
+        }
+        let ctx = attempt.beacon_context(&policy);
+        if attempt.is_sealed_source() {
+            use misaka_palw_challenge::SealedBeaconStateV3 as B;
+            return Ok(
+                match misaka_palw_challenge::collect_sealed_work_beacon_v3(&ctx, &self.beacon_sealed_sources_v1()?, daa)
+                    .map_err(|e| e.to_string())?
+                {
+                    B::Sealing { sealed, .. } => AttemptBeaconV1::Waiting { state: "SEALING", have: sealed, lock_position: None },
+                    B::Revealing { revealed, .. } => {
+                        AttemptBeaconV1::Waiting { state: "REVEALING", have: revealed, lock_position: None }
+                    }
+                    B::Settling { finals, .. } => AttemptBeaconV1::Waiting { state: "SETTLING", have: finals, lock_position: None },
+                    B::Candidate { mixed, lock_position } => {
+                        AttemptBeaconV1::Waiting { state: "CANDIDATE", have: mixed, lock_position: Some(lock_position) }
+                    }
+                    B::Locked(b) => AttemptBeaconV1::Locked(b),
+                    B::Unavailable { mixed, need } => AttemptBeaconV1::Unavailable { have: mixed, need },
+                    B::Vetoed { withheld, failed } => AttemptBeaconV1::Vetoed { withheld, failed },
+                },
+            );
+        }
+        use misaka_palw_challenge::WorkBeaconStateV1 as B;
+        Ok(
+            match misaka_palw_challenge::collect_attributed_work_beacon_v1(&ctx, &self.beacon_events_v1()?, daa)
+                .map_err(|e| e.to_string())?
+            {
+                B::Collecting { have, .. } => AttemptBeaconV1::Waiting { state: "COLLECTING", have, lock_position: None },
+                B::Candidate { have, lock_position } => {
+                    AttemptBeaconV1::Waiting { state: "CANDIDATE", have, lock_position: Some(lock_position) }
+                }
+                B::Locked(b) => AttemptBeaconV1::Locked(b),
+                B::Unavailable { have, need } => AttemptBeaconV1::Unavailable { have, need },
+            },
+        )
+    }
+}
+
 /// **The capture-proof chunk lane's target for conformance evidence** (G14-R4's tag-113 lane, `PalwKernelChunkTargetV1::Conformance
 /// { v2_class }`): the LAST DAA at which a part of a tag-109 object naming `v2_class` may arrive, or `None` when the class has no
 /// attempt that can still take one. The lane bounds a group's life by `min(64 DAA, this)`; its opener must be the class's registrant
@@ -608,16 +738,17 @@ pub fn palw_conformance_chunk_target_v1(route: &PalwKernelRouteStateV1, v2_class
     let policy = attempt.policy();
     let ctx = attempt.beacon_context(&policy);
     let deadline = crate::palw_conformance_evidence_v1::PALW_CONFORMANCE_EVIDENCE_DEADLINE_DAA_V1;
-    use misaka_palw_challenge::WorkBeaconStateV1 as B;
-    match misaka_palw_challenge::collect_attributed_work_beacon_v1(&ctx, &route.beacon_events_v1().ok()?, daa).ok()? {
-        B::Locked(b) => {
+    match route.attempt_beacon_v1(&attempt, daa).ok()? {
+        AttemptBeaconV1::Locked(b) => {
             let last = b.lock_position.saturating_add(deadline);
             (daa <= last).then_some(last)
         }
-        B::Collecting { .. } | B::Candidate { .. } => {
+        // v2: the latest lock its collection window allows, plus the deadline. v3 locks only once every mixed source is Final, which
+        // no window bounds in advance: no part before the lock (a Post needs the seed anyway).
+        AttemptBeaconV1::Waiting { .. } if !attempt.is_sealed_source() => {
             Some(ctx.window_end().saturating_sub(1).saturating_add(policy.settlement_depth_d).saturating_add(deadline))
         }
-        B::Unavailable { .. } => None,
+        AttemptBeaconV1::Waiting { .. } | AttemptBeaconV1::Unavailable { .. } | AttemptBeaconV1::Vetoed { .. } => None,
     }
 }
 
@@ -664,17 +795,15 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             beacon = "COMPLETE_CHECK";
         } else if let (Some(route), Some(a)) = (route, attempt.as_ref())
             && a.open()
-            && let Ok(events) = route.beacon_events_v1()
         {
-            use misaka_palw_challenge::WorkBeaconStateV1 as B;
-            match misaka_palw_challenge::collect_attributed_work_beacon_v1(&a.beacon_context(&policy), &events, daa) {
-                Ok(B::Collecting { have: h, need: n }) => (beacon, have, need) = ("COLLECTING", h, n),
-                Ok(B::Candidate { have: h, lock_position }) => (beacon, have, lock) = ("CANDIDATE", h, Some(lock_position)),
-                Ok(B::Locked(b)) => {
+            match route.attempt_beacon_v1(a, daa) {
+                Ok(AttemptBeaconV1::Waiting { state, have: h, lock_position }) => (beacon, have, lock) = (state, h, lock_position),
+                Ok(AttemptBeaconV1::Locked(b)) => {
                     (beacon, have, lock, output) =
                         ("LOCKED", b.sources.len() as u32, Some(b.lock_position), Some(Hash64::from_bytes(b.output)))
                 }
-                Ok(B::Unavailable { have: h, need: n }) => (beacon, have, need) = ("UNAVAILABLE", h, n),
+                Ok(AttemptBeaconV1::Unavailable { have: h, need: n }) => (beacon, have, need) = ("UNAVAILABLE", h, n),
+                Ok(AttemptBeaconV1::Vetoed { .. }) => beacon = "VETOED",
                 Err(_) => beacon = "POLICY_INVALID",
             }
         }

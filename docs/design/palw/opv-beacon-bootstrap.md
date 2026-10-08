@@ -245,7 +245,19 @@ burned) or a reservation. None of this prices the last contributor, which needs 
 ### 6.3 The sealed-source beacon v3 (SOUND SG-01, SG-01a)
 
 `misaka-palw-challenge::sealed` (`collect_sealed_work_beacon_v3`, randomness source `palw-work-beacon/sealed-source/v3`, the
-distinct source rule only). Pure: it reads seal facts a consumer derives from authenticated state and has no consensus caller yet.
+distinct source rule only) reads seal facts that a consumer derives from authenticated state.
+
+**Wired on the node, dormant.**
+- The network's third onboarding policy is `palw_onboarding_sealed_policy_v1` (W = 40). Tag 106 accepts it only if
+  `2W ≤ seal_ttl_daa`.
+- The route serves the seal facts as `beacon_sealed_sources_v1`, built from G14-R4's tables 25–26 and `claim_beacon_seals_v1`. The
+  profile comes from the sealed job's class, the fate from the claim row and op 212.
+- One read, `attempt_beacon_v1`, serves the fold, the tick, the chunk lane and op 231. A veto ends the attempt `BEACON_VETOED`,
+  counted.
+- E6 accounts a v3 attempt with `G = F = 1` and combines it with `ε_src` from the interim `δ = 10`, `ρ = ½`.
+- The SDK's fresh verifier refuses a v3 attempt (`SEALED_SOURCE`) until a public read serves the seals.
+- The node tests are `g14_opv_bootstrap_a_sealed_source_v3_beacon_locks_on_salted_seals_and_the_class_passes` and
+  `g14_opv_bootstrap_a_withheld_v3_seal_vetoes_the_attempt_and_is_counted`.
 
 ```text
 S = commitment + anchor delay;  W = beacon_window_slots
@@ -404,10 +416,12 @@ drill floor (§12).
 
 ## 10. GAPs
 
-* **GAP-B1 (DESIGN, blocker for any sampled approval and Panel=0): the last contributor.** §6.2. The v3 collector is written and
-  tested (§6.3); the onboarding fold still collects v2.
-* **GAP-B1a (DESIGN, needs the kernel owner and a Lead allocation): the salt.** G14-R4's bonded seals (`seal_deposit`, `sealed_daa`)
-  hide nothing over a deterministic claim (§6.3); v3 on chain needs `claim_seal_v2(claim id, salt)` and a reveal that carries the salt.
+* **GAP-B1 (DESIGN, blocker for any sampled approval and Panel=0): the last contributor.** §6.2. Closed for attempts committed under
+  the v3 policy (§6.3, wired). The v2 sampled policy stays grindable and accounted at `G = 2^128`.
+* **GAP-B1a: the salt, closed by G14-R4.** It provides `claim_seal_v2`, inner kind 20 `CommitClaimSalted` (unsalted reveals refused
+  past the fence), tables 25–26 and `claim_beacon_seals_v1`.
+* **GAP-B17: v3 has no public seal read.** Op 212 serves Finals, not seals, so the SDK's fresh verifier refuses a v3 attempt. A
+  seal-facts read (an RPC op) is an allocation.
 * **GAP-B12 (POLICY): v3's liveness price.** A withheld seal vetoes, counted; `R + 1` seal deposits exhaust a class's attempts (§6.3).
 * **GAP-B2: consumer distinctness is a no-op** until the route records a job's payer (G14-R4's user-pays escrow); then `finals_read_v1`
   fills `consumer_id`.

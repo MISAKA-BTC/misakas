@@ -13,7 +13,8 @@ use super::*;
 use crate::palw_conformance_evidence_v1::{
     ConformanceEvidenceActionV1, ConformanceFaultV1, PALW_CONFORMANCE_CHALLENGE_WINDOW_DAA_V1,
     PALW_CONFORMANCE_EVIDENCE_DEADLINE_DAA_V1, PostVerdictV1, SelectedCheckV1, derive_selection_v1, judge_leaf_fault_v1,
-    judge_posted_evidence_v1, judge_vector_fault_v1, palw_onboarding_challenge_policy_v1, selected_check_v1,
+    judge_posted_evidence_v1, judge_vector_fault_v1, palw_onboarding_challenge_policy_v1, palw_onboarding_sealed_policy_v1,
+    selected_check_v1,
 };
 use crate::palw_onboarding_v1::*;
 use crate::palw_opv_bootstrap_v1::{
@@ -21,10 +22,7 @@ use crate::palw_opv_bootstrap_v1::{
     PALW_COMPLETE_CHECK_FEE_SOMPI_V1, PALW_COMPLETE_CHECK_MAX_POST_BYTES_V1, PALW_COMPLETE_CHECKS_PER_BLOCK_V1,
     judge_complete_check_v1, palw_complete_check_domain_v1, palw_onboarding_complete_check_policy_v1,
 };
-use misaka_palw_challenge::{
-    ConformanceCommitmentV1, OnboardingFailureV1, OnboardingRecordV1, OnboardingStateV1, OnboardingStepV1, WorkBeaconStateV1,
-    collect_attributed_work_beacon_v1,
-};
+use misaka_palw_challenge::{ConformanceCommitmentV1, OnboardingFailureV1, OnboardingRecordV1, OnboardingStateV1, OnboardingStepV1};
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(why.into())
@@ -198,6 +196,16 @@ pub(super) fn apply_kernel_bound_v1(
             .map_err(|_| refused("the class's stored program does not decode"))?;
         palw_complete_check_domain_v1(&program, record.plan.max_positions)
             .map_err(|why| refused(format!("the complete-check policy needs a class it can check whole: {why}")))?;
+    } else if challenge_policy_id.as_bytes() == palw_onboarding_sealed_policy_v1().id() {
+        // * the SEALED-SOURCE policy (v3, `palw_onboarding_sealed_policy_v1`): its reveal window must fit the ledger's seal TTL, so
+        //   every in-window reveal is legal (`2W ≤ seal_ttl_daa`).
+        let ledger = route.ledger().map_err(refused)?;
+        if !misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1(
+            &ledger.policy,
+            palw_onboarding_sealed_policy_v1().beacon_window_slots,
+        ) {
+            return Err(refused("the sealed-source policy's windows do not fit the ledger's seal TTL (2W > seal_ttl_daa)"));
+        }
     } else if challenge_policy_id.as_bytes() != palw_onboarding_challenge_policy_v1().id() {
         return Err(refused("not one of the network's challenge policies"));
     }
@@ -273,12 +281,19 @@ pub(super) fn apply_conformance_committed_v1(
         _ => {}
     }
     let complete = binding.challenge_policy_id.as_bytes() == palw_onboarding_complete_check_policy_v1().id();
+    let sealed = binding.challenge_policy_id.as_bytes() == palw_onboarding_sealed_policy_v1().id();
     // A complete-check class re-commits only in a LATER block than the one that closed its last attempt: one judgement per class
     // per block, so the block's cap (`complete_checks_judged_at_v1`, counted from the attempt rows) is exact.
     if complete && prior.as_ref().and_then(|a| a.last_end).is_some_and(|(_, at)| at == ctx.daa_score) {
         return Err(refused("a complete-check class re-commits in a later block than the one that closed its last attempt"));
     }
-    let policy = if complete { palw_onboarding_complete_check_policy_v1() } else { palw_onboarding_challenge_policy_v1() };
+    let policy = if complete {
+        palw_onboarding_complete_check_policy_v1()
+    } else if sealed {
+        palw_onboarding_sealed_policy_v1()
+    } else {
+        palw_onboarding_challenge_policy_v1()
+    };
     let statement_root = commitment.statement_root();
     let mut record = match &prior {
         Some(a) => a.record.clone(),
@@ -358,7 +373,9 @@ fn write_attempt(builder: &mut TransitionBuilder<'_>, class: &Hash64, attempt: &
 /// Close an open attempt without a pass: the contract's step for `end` (counted), the reason, the DAA.
 fn end_attempt(attempt: &mut ConformanceAttemptRowV1, end: ConformanceAttemptEndV1, daa: u64) {
     let step = match end {
-        ConformanceAttemptEndV1::BeaconUnavailable | ConformanceAttemptEndV1::BeaconChanged => OnboardingStepV1::BeaconUnavailable,
+        ConformanceAttemptEndV1::BeaconUnavailable
+        | ConformanceAttemptEndV1::BeaconChanged
+        | ConformanceAttemptEndV1::BeaconVetoed => OnboardingStepV1::BeaconUnavailable,
         _ => OnboardingStepV1::ConformanceChecked(Err(OnboardingFailureV1::ConformanceFailed)),
     };
     // An open attempt is ChallengePending, from which both steps are defined: the record cannot refuse them.
@@ -443,7 +460,7 @@ pub(super) fn apply_conformance_evidence_v1(
     if refutation {
         return judge_refutation_v1(builder, ctx, v2_class, attempt, action, signer);
     }
-    let policy = palw_onboarding_challenge_policy_v1();
+    let policy = attempt.policy();
     let route = route_of(builder)?;
     let Some(program) = builder
         .state
@@ -456,11 +473,10 @@ pub(super) fn apply_conformance_evidence_v1(
     match action {
         ConformanceEvidenceActionV1::PostComplete(_) => return Ok(()),
         ConformanceEvidenceActionV1::Post(post) => {
-            let Ok(events) = route.beacon_events_v1() else { return Ok(()) };
             let bctx = attempt.beacon_context(&policy);
-            let beacon = match collect_attributed_work_beacon_v1(&bctx, &events, ctx.daa_score) {
-                Ok(WorkBeaconStateV1::Locked(b)) => b,
-                // WAITING_RANDOMNESS (or unavailable): no seed exists yet, so no evidence can be about it — dismissed.
+            let beacon = match route.attempt_beacon_v1(&attempt, ctx.daa_score) {
+                Ok(AttemptBeaconV1::Locked(b)) => b,
+                // WAITING_RANDOMNESS (or unavailable / vetoed): no seed exists yet, so no evidence can be about it — dismissed.
                 _ => return Ok(()),
             };
             let (seed, verdict) = match judge_posted_evidence_v1(&attempt.commitment, &policy, &bctx, &beacon, &program, post) {
@@ -505,7 +521,7 @@ fn judge_refutation_v1(
 ) -> Result<(), PalwStateV2Error> {
     let ConformanceEvidenceActionV1::Refute { fault, .. } = action else { return Err(refused("not a refutation")) };
     let fee = route_ledger_policy_v1(builder)?.dismissed_proof_fee as u128;
-    let policy = palw_onboarding_challenge_policy_v1();
+    let policy = attempt.policy();
     let route = route_of(builder)?;
     let artifact_root = builder.state.classes.get(v2_class).map(|c| c.artifact_root).unwrap_or_default();
     let program = builder
@@ -678,8 +694,6 @@ fn tick_conformance_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockConte
     if rows.is_empty() {
         return;
     }
-    let policy = palw_onboarding_challenge_policy_v1();
-    let mut events: Option<Option<Vec<misaka_palw_challenge::AttributedWorkV1>>> = None;
     for (class, mut attempt) in rows {
         let route = builder.state.kernel_route.as_ref().expect("read above");
         let kernel_class_stands =
@@ -700,7 +714,7 @@ fn tick_conformance_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockConte
             }
             continue;
         }
-        let bctx = attempt.beacon_context(&policy);
+        let bctx = attempt.beacon_context(&attempt.policy());
         let due = match attempt.evidence {
             Some(posted) => ctx.daa_score >= posted.window_end_daa,
             None => ctx.daa_score >= bctx.start(),
@@ -708,20 +722,19 @@ fn tick_conformance_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockConte
         if !due {
             continue;
         }
-        let events = events.get_or_insert_with(|| route.beacon_events_v1().ok());
-        let Some(events) = events.as_ref() else { continue };
-        let state = collect_attributed_work_beacon_v1(&bctx, events, ctx.daa_score);
+        let Ok(state) = route.attempt_beacon_v1(&attempt, ctx.daa_score) else { continue };
         match (attempt.evidence, state) {
-            (Some(posted), Ok(WorkBeaconStateV1::Locked(b))) if b.output == posted.beacon_output.as_bytes() => {
+            (Some(posted), AttemptBeaconV1::Locked(b)) if b.output == posted.beacon_output.as_bytes() => {
                 // The window closed unrefuted, the beacon re-derives unchanged: CONFORMANCE_PASSED, then the public-prosecution step.
                 let _ = attempt.record.apply(OnboardingStepV1::ConformanceChecked(Ok(posted.evidence_id.as_bytes())));
                 let _ = attempt.record.apply(OnboardingStepV1::PublicProsecutionGate { complete: kernel_class_stands });
             }
             (Some(_), _) => end_attempt(&mut attempt, ConformanceAttemptEndV1::BeaconChanged, ctx.daa_score),
-            (None, Ok(WorkBeaconStateV1::Unavailable { .. })) => {
+            (None, AttemptBeaconV1::Unavailable { .. }) => {
                 end_attempt(&mut attempt, ConformanceAttemptEndV1::BeaconUnavailable, ctx.daa_score)
             }
-            (None, Ok(WorkBeaconStateV1::Locked(b)))
+            (None, AttemptBeaconV1::Vetoed { .. }) => end_attempt(&mut attempt, ConformanceAttemptEndV1::BeaconVetoed, ctx.daa_score),
+            (None, AttemptBeaconV1::Locked(b))
                 if ctx.daa_score >= b.lock_position.saturating_add(PALW_CONFORMANCE_EVIDENCE_DEADLINE_DAA_V1) =>
             {
                 end_attempt(&mut attempt, ConformanceAttemptEndV1::Withheld, ctx.daa_score)

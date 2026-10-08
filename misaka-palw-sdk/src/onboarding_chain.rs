@@ -294,6 +294,12 @@ pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Op
     let program = misaka_palw_tir::TirProgramV1::decode_canonical(&reads.program)
         .map_err(|e| Refusal::new("PROGRAM_MALFORMED", e.to_string()))?;
     let policy = palw_onboarding_challenge_policy_v1();
+    if attempt.is_sealed_source() {
+        return Err(Refusal::new(
+            "SEALED_SOURCE",
+            "a sealed-source (v3) attempt's beacon reads the route's seals, which no public read serves yet (GAP: a seal-facts read)",
+        ));
+    }
     if attempt.is_complete_check() {
         return Err(Refusal::new(
             "COMPLETE_CHECK",

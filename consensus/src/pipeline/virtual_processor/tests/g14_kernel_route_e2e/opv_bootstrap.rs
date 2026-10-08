@@ -22,7 +22,7 @@ use kaspa_consensus_core::palw_conformance_evidence_v1::{
     derive_selection_v1, openings_root_v1, palw_onboarding_challenge_policy_v1, reference_leaf_result_v1,
 };
 use kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1;
-use kaspa_consensus_core::palw_onboarding_v1::{ConformanceAttemptEndV1, ConformanceAttemptRowV1};
+use kaspa_consensus_core::palw_onboarding_v1::{AttemptBeaconV1, ConformanceAttemptEndV1, ConformanceAttemptRowV1};
 use kaspa_consensus_core::palw_opv_bootstrap_v1::*;
 use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_operands_v1;
 use misaka_palw_challenge::{
@@ -70,6 +70,8 @@ struct Onb {
     legacy: Digest,
     opv: Digest,
     complete: bool,
+    /// Bound under the sealed-source (v3) policy instead of the sampled (v2) one.
+    sealed: bool,
 }
 
 impl Onb {
@@ -92,11 +94,17 @@ struct Spec {
     kernel: OnbFixture,
     card: usize,
     complete: bool,
+    sealed: bool,
 }
 
 impl Spec {
     fn honest(seed: u64, card: usize, complete: bool) -> Spec {
-        Spec { v2: onb_fixture(seed), kernel: onb_fixture(seed), card, complete }
+        Spec { v2: onb_fixture(seed), kernel: onb_fixture(seed), card, complete, sealed: false }
+    }
+
+    /// A candidate bound under the network's sealed-source (v3) policy.
+    fn sealed(seed: u64, card: usize) -> Spec {
+        Spec { sealed: true, ..Spec::honest(seed, card, false) }
     }
 }
 
@@ -172,16 +180,26 @@ async fn onboard_all(net: &mut Net, specs: Vec<Spec>) -> Vec<Onb> {
         items.push((s.card, net.route(s.card, &register)));
     }
     net.send(items).await;
-    let (complete, sampled) = (palw_onboarding_complete_check_policy_v1().id(), palw_onboarding_challenge_policy_v1().id());
+    let (complete, sampled, sealed) = (
+        palw_onboarding_complete_check_policy_v1().id(),
+        palw_onboarding_challenge_policy_v1().id(),
+        palw_onboarding_sealed_policy_v1().id(),
+    );
     let mut items = Vec::new();
     let mut out = Vec::new();
     for (s, v2) in specs.into_iter().zip(v2s) {
         let legacy = class_id(&s.kernel, VerificationModeV1::PanelLicensed);
         let opv = class_id(&s.kernel, VerificationModeV1::OptimisticPublicVerification);
         assert!(net.ledger().classes.contains_key(&legacy), "the legacy kernel class registered over the matured binding");
-        let policy = Hash64::from_bytes(if s.complete { complete } else { sampled });
+        let policy = Hash64::from_bytes(if s.complete {
+            complete
+        } else if s.sealed {
+            sealed
+        } else {
+            sampled
+        });
         items.push((s.card, net.kernel_bound_under(s.card, v2, Hash64::from_bytes(legacy), policy)));
-        out.push(Onb { f: s.v2, kernel: s.kernel, card: s.card, v2, legacy, opv, complete: s.complete });
+        out.push(Onb { f: s.v2, kernel: s.kernel, card: s.card, v2, legacy, opv, complete: s.complete, sealed: s.sealed });
     }
     net.send(items).await;
     for o in &out {
@@ -244,10 +262,9 @@ fn complete_post(net: &Net, o: &Onb) -> CompleteCheckPostV1 {
 /// (vectors by the bound kernel class's greedy run, leaves from the V2 artifact).
 fn sampled_post(net: &Net, o: &Onb) -> ConformanceEvidencePostV1 {
     let attempt = net.attempt(o.v2);
-    let policy = palw_onboarding_challenge_policy_v1();
+    let policy = attempt.policy();
     let ctx = attempt.beacon_context(&policy);
-    let WorkBeaconStateV1::Locked(beacon) = collect_attributed_work_beacon_v1(&ctx, &net.attributed_events(), net.daa()).unwrap()
-    else {
+    let AttemptBeaconV1::Locked(beacon) = net.api().expect("the route").attempt_beacon_v1(&attempt, net.daa()).unwrap() else {
         panic!("the beacon is locked")
     };
     let seed = challenge_seed_v1(&ctx, &attempt.commitment.subject(), &beacon).expect("a seed");
@@ -665,6 +682,7 @@ async fn g14_opv_bootstrap_a_class_that_cannot_be_checked_whole_is_refused_the_c
         legacy,
         opv: class_id(&big, VerificationModeV1::OptimisticPublicVerification),
         complete: false,
+        sealed: false,
     };
     commit(&mut net, &onb, 0x22).await;
     let rows = net.api().unwrap().aux.clone();
@@ -797,10 +815,11 @@ async fn g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refu
     // The bootstrap's jobs wait posted (a job is no source; its claim, after C's start, is).
     let jobs = post_jobs(&mut net, BOOT, b.opv, 2, 0x50).await;
     // A false binding: the V2 artifact is seed 37's weights, the kernel class runs seed 38's (the same program).
-    let c = onboard_all(&mut net, vec![Spec { v2: onb_fixture(37), kernel: onb_fixture(38), card: CAND, complete: false }])
-        .await
-        .pop()
-        .unwrap();
+    let c =
+        onboard_all(&mut net, vec![Spec { v2: onb_fixture(37), kernel: onb_fixture(38), card: CAND, complete: false, sealed: false }])
+            .await
+            .pop()
+            .unwrap();
     commit(&mut net, &c, 0x22).await;
     assert_eq!(net.attempt(c.v2).eligible_profiles, vec![Hash64::from_bytes(b.opv)]);
     claims(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..2]).await;
@@ -945,4 +964,129 @@ fn opv_test_eligibility_hook_is_test_only() {
         assert_eq!(src.matches(item).count(), 1, "{item} is defined once");
     }
     assert_eq!(src.matches("test_eligible:").count(), 2, "filled in exactly the two cfg branches");
+}
+
+// ---- the sealed-source beacon v3 on the node ---------------------------------------------------------------------------------
+
+/// Card `p`'s honest claims of `jobs` (of `class`, weights `fx`), SEALED now — salted past the fence — and their reveals kept for later.
+async fn seal_now(net: &mut Net, fx: &Fixture, class: Digest, jobs: &[KernelJobV1], producers: &[usize]) -> Vec<(usize, K, Digest)> {
+    let ledger = net.ledger();
+    let (mut seals, mut out) = (Vec::new(), Vec::new());
+    for (job, p) in jobs.iter().zip(producers) {
+        let generated = greedy(fx, &ledger, &class, &job.prompt, job.max_new_tokens as usize);
+        let produced = produce(fx, &ledger, &class, job, net.kid(*p), generated, |_| {});
+        let id = produced.claim.id();
+        let (seal, reveal) = seal_and_reveal(&ledger, net.kid(*p), &produced.object);
+        assert!(matches!(reveal, K::CommitClaimSalted { .. }), "past the fence the reveal carries its salt");
+        seals.push((*p, net.route(*p, &seal)));
+        out.push((*p, reveal, id));
+    }
+    net.send(seals).await;
+    out
+}
+
+async fn reveal_now(net: &mut Net, reveals: &[(usize, K, Digest)]) {
+    let items: Vec<(usize, Obj)> = reveals.iter().map(|(p, r, _)| (*p, net.route(*p, r))).collect();
+    net.send(items).await;
+}
+
+fn beacon_of(net: &Net, o: &Onb) -> AttemptBeaconV1 {
+    net.api().expect("the route").attempt_beacon_v1(&net.attempt(o.v2), net.daa()).expect("a beacon read")
+}
+
+/// The bootstrap B (complete check, eligible, registered under OPV) and a candidate C bound under the SEALED-SOURCE policy, committed.
+async fn sealed_world(seed: u64) -> (Net, Onb, Onb) {
+    let mut net = Net::over_cfg(boot_config(0, Vec::new()), TestConsensus::new);
+    net.beat_to(1).await;
+    let mut onbs = onboard_all(&mut net, vec![Spec::honest(seed, BOOT, true), Spec::sealed(seed + 1, CAND)]).await;
+    let c = onbs.pop().unwrap();
+    let b = onbs.pop().unwrap();
+    commit(&mut net, &b, 0x22).await;
+    let p = complete_post(&net, &b);
+    let o = net.evidence(BOOT, b.v2, ConformanceEvidenceActionV1::PostComplete(Box::new(p)));
+    net.send(vec![(BOOT, o)]).await;
+    assert!(register_opv(&mut net, BOOT, &b).await, "the bootstrap registers under OPV");
+    commit(&mut net, &c, 0x22).await;
+    let a = net.attempt(c.v2);
+    assert!(a.is_sealed_source() && a.policy() == palw_onboarding_sealed_policy_v1());
+    assert_eq!(a.eligible_profiles, vec![Hash64::from_bytes(b.opv)], "the sources: the derived eligible set");
+    (net, b, c)
+}
+
+/// **SG-01 closed on the node: the sealed-source beacon v3 locks on SALTED seals.** B's two producers seal claims inside C's seal
+/// window `[S, S + W)` (salted: G14-R4's claim seal v2), and reveal them only once it closes, inside `[S + W, S + 2W)`. The beacon is
+/// SEALING, then REVEALING, then SETTLING until both reach OPV Final, then LOCKED over both salts; C's sampled evidence under that
+/// seed passes its window; C is derived-eligible (drill floor) with v3's accounting (`G = F`, and `ε_src` a second term). Replay.
+#[tokio::test]
+async fn g14_opv_bootstrap_a_sealed_source_v3_beacon_locks_on_salted_seals_and_the_class_passes() {
+    kaspa_core::log::try_init_logger("warn");
+    let (mut net, b, c) = sealed_world(51).await;
+    let policy = palw_onboarding_sealed_policy_v1();
+    let start = net.attempt(c.v2).committed_daa + policy.anchor_delay_slots;
+    let w = policy.beacon_window_slots;
+    let jobs = post_jobs(&mut net, BOOT, b.opv, 2, 0x70).await;
+    net.beat_to(start).await;
+    let reveals = seal_now(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..2]).await;
+    assert!(net.daa() < start + w, "both seals inside the seal window");
+    assert!(matches!(beacon_of(&net, &c), AttemptBeaconV1::Waiting { state: "SEALING", have: 2, .. }), "{:?}", beacon_of(&net, &c));
+    net.beat_to(start + w).await;
+    reveal_now(&mut net, &reveals).await;
+    for (_, _, id) in &reveals {
+        assert!(net.ledger().claims.contains_key(id), "the salted reveal committed");
+        assert!(net.ledger().claim_beacon_salt(id).is_some(), "its salt is kept (table 25)");
+    }
+    assert!(net.daa() < start + 2 * w, "both reveals inside the reveal window");
+    let ttpb = net.ttpb();
+    let mut locked = None;
+    for _ in 0..400 {
+        match beacon_of(&net, &c) {
+            AttemptBeaconV1::Locked(bk) => {
+                locked = Some(bk);
+                break;
+            }
+            AttemptBeaconV1::Waiting { .. } => net.chain.heartbeat(ttpb, Vec::new()).await,
+            other => panic!("the v3 beacon must lock here: {other:?}"),
+        }
+    }
+    let locked = locked.expect("the v3 beacon locked");
+    assert_eq!(locked.sources.len(), 2, "both salted sources mixed");
+    let post = sampled_post(&net, &c);
+    let o = net.evidence(CAND, c.v2, ConformanceEvidenceActionV1::Post(Box::new(post)));
+    net.send(vec![(CAND, o)]).await;
+    let posted = net.attempt(c.v2).evidence.expect("the fold accepted the evidence under the v3 seed");
+    assert_eq!(posted.beacon_output.as_bytes(), locked.output);
+    net.beat_to(posted.window_end_daa + 1).await;
+    assert_eq!(net.attempt(c.v2).record.state, S::G14Eligible, "C passed with the v3 beacon");
+    assert_eq!(eligibility(&net, &c, 0), Ok(OpvEligibleV1::Derived { v2_class: c.v2 }));
+    // v3's accounting: a 2-bit scope is still 0 effective bits (a drill), whatever the beacon; never above ε_src − 1.
+    assert_eq!(
+        attempt_effective_bits_v1(&net.api().unwrap(), &c.v2, &net.attempt(c.v2)),
+        misaka_palw_challenge::EffectiveBitsV1::Bits(0)
+    );
+    let z = net.replay().await;
+    net.assert_same(&z, "replay");
+}
+
+/// **A withheld v3 seal vetoes, counted — it is never an exclusion.** Three producers seal inside the window; one never reveals. At
+/// the reveal window's close the attempt ends BEACON_VETOED (a counted retry), whatever the other two salts say: the adversary's only
+/// post-reveal move is {lock, veto}. Replay.
+#[tokio::test]
+async fn g14_opv_bootstrap_a_withheld_v3_seal_vetoes_the_attempt_and_is_counted() {
+    kaspa_core::log::try_init_logger("warn");
+    let (mut net, b, c) = sealed_world(53).await;
+    let policy = palw_onboarding_sealed_policy_v1();
+    let start = net.attempt(c.v2).committed_daa + policy.anchor_delay_slots;
+    let w = policy.beacon_window_slots;
+    let jobs = post_jobs(&mut net, BOOT, b.opv, 3, 0x78).await;
+    net.beat_to(start).await;
+    let reveals = seal_now(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..3]).await;
+    net.beat_to(start + w).await;
+    reveal_now(&mut net, &reveals[..2]).await;
+    assert!(matches!(beacon_of(&net, &c), AttemptBeaconV1::Waiting { state: "REVEALING", have: 2, .. }), "{:?}", beacon_of(&net, &c));
+    net.beat_to(start + 2 * w + 1).await;
+    let a = net.attempt(c.v2);
+    assert_eq!((a.record.state, a.record.attempts()), (S::RegisteredDormant, 1), "vetoed: a counted retry");
+    assert!(matches!(a.last_end, Some((ConformanceAttemptEndV1::BeaconVetoed, _))), "{:?}", a.last_end);
+    let z = net.replay().await;
+    net.assert_same(&z, "replay");
 }
