@@ -2019,6 +2019,8 @@ message GetPalwSettlementResponseMessage {
   uint64 safeFrontierDaa = 9;
   optional uint64 dnsRetiredAt = 10;
   optional string nativeSettlementJson = 11;
+  // RFC-0012 D1: the `safe` readiness explanation (`NativeSafeReadinessV1`) as JSON; absent before the retirement fence.
+  optional string nativeReadinessJson = 12;
   RPCError error = 1000;
 }
 

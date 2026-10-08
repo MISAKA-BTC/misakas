@@ -1903,9 +1903,58 @@ declare! {
         uniqueWork: string;
         stop: string | null;
     }
+    export type SafeWaitV1 =
+        | { kind: "invalidPolicy" }
+        | { kind: "missingHistory"; gap: string; block: string | null }
+        | { kind: "unexecuted" }
+        | { kind: "finalizedConflict" }
+        | { kind: "frontierBehind"; frontierBlue: bigint; effectBlue: bigint; frontierOnBranch: boolean }
+        | { kind: "openClaim"; claim: string; stage: string; acceptedBlue: bigint; retentionDaa: bigint; nextDeadlineDaa: bigint | null; waitDaa: bigint | null }
+        | { kind: "openDaSession"; claim: string; claimKnown: boolean; deadlineDaa: bigint; waitDaa: bigint }
+        | { kind: "waitingMaturity"; facts: bigint; work: string; earliestMaturedDaa: bigint; waitDaa: bigint; readyDaa: bigint | null }
+        | { kind: "insufficientDepth"; have: bigint; need: bigint }
+        | { kind: "insufficientWork"; have: string; need: string }
+        | { kind: "concentratedWork"; dimension: "operator" | "class"; topPermille: number; capPermille: number }
+        | { kind: "duplicateWork" }
+        | { kind: "arithmeticOverflow" };
+    export interface IEffectReadinessV1 {
+        block: string;
+        daa: bigint;
+        blue: bigint;
+        inSafePrefix: boolean;
+        waits: SafeWaitV1[];
+        openClaimsTotal: bigint;
+        openSessionsTotal: bigint;
+        earliestReadyInDaa: bigint | null;
+        evidence: { anchors: bigint; work: string; maturedFacts: bigint; pendingFacts: bigint; pendingWork: string };
+    }
+    export interface INativeSafeReadinessV1 {
+        version: number;
+        generation: string;
+        sinkDaa: bigint;
+        sinkBlue: bigint;
+        policy: { settledAnchorDepth: bigint; uniqueMatureWork: string; maxOperatorPermille: number; maxClassPermille: number };
+        maturity: { rule: string; claimRetirementDaa: bigint; quantumMaturityDaa: bigint };
+        executedEffects: bigint;
+        safe: string | null;
+        safeLagDaa: bigint | null;
+        safeLagBlue: bigint | null;
+        stop: string | null;
+        stoppedEarly: SafeWaitV1 | null;
+        blocking: IEffectReadinessV1 | null;
+        tip: IEffectReadinessV1 | null;
+        finalized: {
+            finalized: string | null;
+            pruningPoint: string;
+            pruningBlue: bigint | null;
+            wait: { kind: "noSafePrefix" | "pruningPointNotExecuted" | "conflict" } | { kind: "pruningPointNotUnderSafe"; safeBlue: bigint } | null;
+        };
+        skipped: { voided: bigint; baseClass: bigint; openDa: bigint; unpriced: bigint; bondNotHeld: bigint };
+    }
     export interface IGetPalwSettlementResponse {
         dnsRetiredAt?: bigint;
         nativeSettlement?: INativeSettlementSnapshotV1;
+        nativeReadiness?: INativeSafeReadinessV1;
         available: boolean;
         sinkDaa: bigint;
         daaScore: bigint;

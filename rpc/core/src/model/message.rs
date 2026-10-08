@@ -5212,6 +5212,11 @@ pub struct GetPalwSettlementResponse {
     pub dns_retired_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_settlement: Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>,
+    /// RFC-0012 D1: why `safe` stands where it does at the answer's sink — the structured reasons (waiting on maturity, an open
+    /// claim or court session, a retention gap, missing history) behind the snapshot's single `stop`. Advisory, never consensus.
+    /// Absent before the retirement fence, on a node that keeps no evaluation, and when the sink moved between the two reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_readiness: Option<kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1>,
     pub available: bool,
     /// The DAA score of the chain block the answer stands at.
     pub sink_daa: u64,
@@ -5231,7 +5236,14 @@ pub struct GetPalwSettlementResponse {
 
 impl Serializer for GetPalwSettlementResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &if self.dns_retired_at.is_some() || self.native_settlement.is_some() { 2 } else { 1 }, writer)?;
+        let version: u16 = if self.native_readiness.is_some() {
+            3
+        } else if self.dns_retired_at.is_some() || self.native_settlement.is_some() {
+            2
+        } else {
+            1
+        };
+        store!(u16, &version, writer)?;
         store!(bool, &self.available, writer)?;
         store!(u64, &self.sink_daa, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -5241,9 +5253,13 @@ impl Serializer for GetPalwSettlementResponse {
         store!(bool, &self.depth_is_lower_bound, writer)?;
         store!(u64, &self.safe_frontier_blue_score, writer)?;
         store!(u64, &self.safe_frontier_daa, writer)?;
-        if self.dns_retired_at.is_some() || self.native_settlement.is_some() {
+        if version >= 2 {
             store!(Option<u64>, &self.dns_retired_at, writer)?;
             let json = self.native_settlement.as_ref().map(serde_json::to_string).transpose().map_err(std::io::Error::other)?;
+            store!(Option<String>, &json, writer)?;
+        }
+        if version >= 3 {
+            let json = self.native_readiness.as_ref().map(serde_json::to_string).transpose().map_err(std::io::Error::other)?;
             store!(Option<String>, &json, writer)?;
         }
         Ok(())
@@ -5253,7 +5269,7 @@ impl Serializer for GetPalwSettlementResponse {
 impl Deserializer for GetPalwSettlementResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if version != 1 && version != 2 { return Err(std::io::Error::other("unknown PALW settlement response version")); }
+        if !(1..=3).contains(&version) { return Err(std::io::Error::other("unknown PALW settlement response version")); }
         Ok(Self {
             available: load!(bool, reader)?,
             sink_daa: load!(u64, reader)?,
@@ -5264,8 +5280,11 @@ impl Deserializer for GetPalwSettlementResponse {
             depth_is_lower_bound: load!(bool, reader)?,
             safe_frontier_blue_score: load!(u64, reader)?,
             safe_frontier_daa: load!(u64, reader)?,
-            dns_retired_at: if version == 2 { load!(Option<u64>, reader)? } else { None },
-            native_settlement: if version == 2 {
+            dns_retired_at: if version >= 2 { load!(Option<u64>, reader)? } else { None },
+            native_settlement: if version >= 2 {
+                load!(Option<String>, reader)?.map(|s| serde_json::from_str(&s)).transpose().map_err(std::io::Error::other)?
+            } else { None },
+            native_readiness: if version >= 3 {
                 load!(Option<String>, reader)?.map(|s| serde_json::from_str(&s)).transpose().map_err(std::io::Error::other)?
             } else { None },
         })
