@@ -16920,6 +16920,10 @@ mod t12_post_launch_fences_combined;
 // whole compressed release, crossed by one chain with the clock running — below the fence a released node, past it the list live, a second
 // node and a restart across the fence agreeing, the fork id keeping and refusing the released build.
 mod t12_int13_flag_day_crossing;
+// RFC-0009 mandatory adversarial test 4 at chain-block level (lane C1r2, fence 4 of the int-13 list): the miner's free-prompt claim is
+// verified from independent DA providers, reaches Final, and ANOTHER builder's PFS4 block redeems it into the miner's payout while the
+// miner is offline — single use, a reorg, a V3 counterfactual twin and a replaying node, all through the real pipeline.
+mod rfc9_v4_chain_e2e;
 // Lane F2-lock (post-launch, 2026-09-27): `palw_final_lock_life_retro` crossed on a real chain — the crossing
 // block re-dates the long post-Final seat locks to max(F + 1,000, H), a Final past it dates exactly.
 mod t12_f2_lock_redate_crossing;
