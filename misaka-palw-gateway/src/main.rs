@@ -94,6 +94,9 @@ mod vlm;
 mod testkit;
 #[cfg(test)]
 mod e2e;
+// A gateway request all the way into a consensus fold, on testnet-12's shipped ruleset and on a copy with the decode rules test-armed.
+#[cfg(test)]
+mod e2e_chain;
 
 use surface::{AdmittedRequest, ChatRequest};
 use wire::{AnswerStream, PromptPlan};

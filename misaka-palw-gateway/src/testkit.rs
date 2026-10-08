@@ -92,6 +92,11 @@ impl FloorWorker {
         }
     }
 
+    /// The real engine, for a seat's replay of what this worker produced.
+    pub fn backend(&self) -> &Base0Backend {
+        &self.backend
+    }
+
     pub fn set_hook(&self, hook: impl Fn(usize) + Send + Sync + 'static) {
         *self.hook.lock().unwrap() = Some(Arc::new(Box::new(hook)));
     }
