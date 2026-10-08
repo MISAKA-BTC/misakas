@@ -111,8 +111,9 @@ pub struct OpvEconomicsV1 {
     pub max_live_claims_per_producer: u32,
     /// Most OPV claims in the whole ledger with a reservation held (bounds the retained commitments).
     pub max_live_claims_total: u32,
-    /// Of an OPV claim's pre-Final default penalty, the share (permille) that is burned instead of paid to the demanders, so a
-    /// producer cannot cycle its own penalty through a Sybil demander for nothing. In `1..=1000`.
+    /// Of an OPV claim's pre-Final default penalty, the LEAST share (permille) that is burned instead of paid to the demanders, so a
+    /// producer cannot cycle its own penalty through a Sybil demander for nothing. In `1..=1000`. The ledger burns the larger of
+    /// this and `1000 − accuser_reward_permille` (a default is split at least like a slash, C4 F-C4R3-02).
     pub default_burn_permille: u16,
 }
 

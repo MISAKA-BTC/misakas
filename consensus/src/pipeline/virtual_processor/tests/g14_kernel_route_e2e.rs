@@ -747,6 +747,14 @@ impl StateName for ClaimStateV1 {
     }
 }
 
+/// **What a pre-Final default pays its (sole) demander** (C4 F-C4R3-02): the penalty split like a slash — the accuser's share, and an
+/// OPV claim's no more than `1000 − default_burn_permille`.
+fn default_share(pol: &misaka_palw_kernel::ledger::LedgerPolicyV1, opv: Option<&misaka_palw_kernel::opv::OpvPolicyV1>) -> u64 {
+    let slash_burn = 1000 - u64::from(pol.accuser_reward_permille);
+    let burn = opv.map_or(slash_burn, |o| slash_burn.max(u64::from(o.economics.default_burn_permille)));
+    pol.default_penalty - pol.default_penalty * burn / 1000
+}
+
 fn mega(n: u64) -> u64 {
     n * kaspa_consensus_core::constants::SOMPI_PER_KASPA
 }
@@ -865,14 +873,23 @@ async fn g14_kernel_route_a_withheld_position_is_a_demand_then_a_default_never_a
 
     // Nobody answers: the deadline's tick is the producer's availability default.
     w.net.beat_to(deadline).await;
-    let penalty = w.policy().default_penalty;
+    let pol = w.policy();
+    let penalty = pol.default_penalty;
     assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Unavailable { producer_defaulted: true, .. }), "{:?}", w.net.claim_state(&lie.id));
     assert!(!w.net.ledger().claims[&lie.id].convicted, "a default is not a conviction");
     assert_eq!(w.net.collateral(0), before - penalty, "the producer pays the fixed penalty, not the fraud slash");
     assert_eq!(w.net.slashed(0), penalty);
-    assert_eq!(w.net.kernel_reserved(0), 0, "the rest of the reservation is released");
-    assert_eq!(w.net.owed(outsider), penalty, "the sole demander takes the penalty");
+    // C4 F-C4R3-02: the rest of the reservation is HELD through the default's liability horizon (a valid proof filed in it would
+    // still convict); the penalty is split like a slash.
+    assert_eq!(w.net.kernel_reserved(0), u128::from(pol.claim_collateral - penalty), "the rest of the reservation is held");
+    assert_eq!(w.net.owed(outsider), default_share(&pol, None), "the sole demander takes the accuser's share of the penalty");
     assert_eq!(w.net.kernel_reserved(outsider), 0, "and its demand bond returns");
+    let horizon = w.net.ledger().claims[&lie.id].liability_until.expect("a default sets the claim's liability horizon");
+    assert_eq!(horizon, deadline + pol.liability_daa);
+    w.net.beat_to(horizon + 1).await;
+    assert_eq!(w.net.kernel_reserved(0), 0, "no valid proof arrived: released at the horizon, never slashed for withholding");
+    assert!(!w.net.ledger().claims[&lie.id].convicted);
+    assert_eq!(w.net.collateral(0), before - penalty);
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }
@@ -920,7 +937,7 @@ async fn g14_kernel_route_malformed_wrong_root_and_fake_opening_responses_are_re
     assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Unavailable { producer_defaulted: true, .. }));
     assert!(!w.net.ledger().claims[&lie.id].convicted);
     assert_eq!(w.net.collateral(0), before - w.policy().default_penalty, "a fixed penalty, not the fraud slash");
-    assert_eq!(w.net.owed(outsider), w.policy().default_penalty);
+    assert_eq!(w.net.owed(outsider), default_share(&w.policy(), None));
 }
 
 /// **A real response convicts via the served values** (an authentic opening is not an acquittal), and a served position cannot be
@@ -1697,9 +1714,9 @@ async fn g14_opv_withheld_material_defaults_the_producer_burns_a_share_and_frees
     assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Unavailable { producer_defaulted: true, .. }));
     assert!(!w.net.ledger().claims[&lie.id].convicted);
     assert_eq!(w.net.collateral(0), before - pol.default_penalty);
-    let burned = pol.default_penalty * u64::from(opv.economics.default_burn_permille) / 1000;
-    assert_eq!(w.net.owed(outsider), pol.default_penalty - burned, "the demander is paid what the default did not burn");
-    assert_eq!(w.net.kernel_reserved(0), 0);
+    assert_eq!(w.net.owed(outsider), default_share(&pol, Some(&opv)), "the demander is paid what the default did not burn");
+    // C4 F-C4R3-02: the rest of the reservation is held through the default's liability horizon.
+    assert_eq!(w.net.kernel_reserved(0), u128::from(opv.economics.reservation_per_claim - pol.default_penalty));
 
     // The job is free: an honest producer's claim for it is accepted.
     let honest = w.claim(4, &job, false).await;

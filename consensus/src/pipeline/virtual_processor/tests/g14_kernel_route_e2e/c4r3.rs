@@ -164,6 +164,10 @@ struct Escape {
     producer_loss: u64,
     sybil_gain: i128,
     outsider_fee: u64,
+    /// What the conviction owes the outsider (its bounty), measured in the folding block.
+    outsider_paid: u64,
+    /// The claim's whole reservation at admission (the undiluted bounty is the accuser's share of it).
+    reservation: u64,
     convicted: bool,
     state: ClaimStateV1,
     censored_daa: u64,
@@ -194,50 +198,56 @@ async fn escape_by_self_default(mut w: World, cover: bool) -> Escape {
     let sybil_gain = w.net.collateral(sybil) as i128 + w.net.owed(sybil) as i128 - sybil_before;
     let producer_loss = before - w.net.collateral(0);
     let outsider_before = w.net.collateral(outsider);
+    let reservation = w.net.ledger().opv.claims.get(&lie.id).map_or(w.policy().claim_collateral, |o| o.reservation);
     w.proof(outsider, &lie.id, proof).await;
     let ledger = w.net.ledger();
     Escape {
         producer_loss,
         sybil_gain,
         outsider_fee: outsider_before - w.net.collateral(outsider),
+        outsider_paid: w.net.owed(outsider),
+        reservation,
         convicted: ledger.claims[&lie.id].convicted,
         state: ledger.claims[&lie.id].life.state.clone(),
         censored_daa: deadline - opened,
     }
 }
 
-/// **F-C4R3-02 (P1, Panel-licensed): a provable fraud is laundered into a FREE availability default by keeping one valid proof out
+/// **F-C4R3-02 (P1, Panel-licensed): a provable fraud was laundered into a FREE availability default by keeping one valid proof out
 /// of the chain for `court_deadline_daa` (20 DAA), not for the window plus the liability horizon (250 DAA).** The colluders' bond
-/// demands a position and the producer stays silent: at the deadline the claim is `Unavailable`, the producer pays `default_penalty`
-/// (100 KAS) — and the colluders' bond is paid the whole of it back as the sole demander. The reservation (1,000 KAS) is released.
-/// The outsider's TRUE fraud proof, filed one block later, is then **dismissed with the filing fee** ("nothing is reserved any
-/// more"): the honest prosecutor is the only party that pays. SAFE property asserted: a valid proof of a lie filed inside the
-/// claim's own horizon convicts it, and an honest prosecutor is never charged for a true proof.
+/// demands a position and the producer stays silent: at the deadline the claim is `Unavailable`. Before the fix the producer paid
+/// `default_penalty` (100 KAS), the colluders' bond was paid the whole of it back as the sole demander, the reservation (1,000 KAS)
+/// was released, and the outsider's TRUE fraud proof filed one block later was **dismissed with the filing fee**. **Fixed (G14-R4)**:
+/// the default is split like a slash, the rest of the reservation stays held until `default + liability_daa`, and a valid proof in
+/// that horizon convicts it (the honest accuser's bounty undiluted, no fee). SAFE property asserted: a valid proof of a lie filed
+/// inside the claim's own horizon convicts it, and an honest prosecutor is never charged for a true proof.
 #[tokio::test]
-#[ignore = "FAIL F-C4R3-02: a self-inflicted default releases the reservation and dismisses a later true proof with a fee"]
 async fn g14_c4r3_a_self_inflicted_default_must_not_erase_a_provable_fraud() {
     kaspa_core::log::try_init_logger("warn");
     let e = escape_by_self_default(World::new().await, true).await;
     eprintln!(
-        "[F-C4R3-02 panel] censored {} DAA; producer lost {}; colluding demander gained {}; outsider paid {}; convicted {}; {:?}",
-        e.censored_daa, e.producer_loss, e.sybil_gain, e.outsider_fee, e.convicted, e.state
+        "[F-C4R3-02 panel] censored {} DAA; producer lost {}; colluding demander gained {}; outsider fee {}, bounty {}; convicted {}; {:?}",
+        e.censored_daa, e.producer_loss, e.sybil_gain, e.outsider_fee, e.outsider_paid, e.convicted, e.state
     );
     assert!(e.convicted, "a valid proof inside the claim's horizon convicts it (it was {:?})", e.state);
     assert_eq!(e.outsider_fee, 0, "a true fraud proof never costs its filer the dismissal fee");
+    assert!(e.sybil_gain < e.producer_loss as i128, "the colluding demander recoups less than the default cost the producer");
+    assert_eq!(e.outsider_paid, e.reservation / 2, "the honest accuser's bounty is not diluted by the self-inflicted default");
 }
 
-/// F-C4R3-02 on an OPV class: the same escape, with RFC-0015's 10 % default burn the colluders' only cost.
+/// F-C4R3-02 on an OPV class: the same escape (it used to cost the colluders only RFC-0015's 10 % default burn). Fixed the same way.
 #[tokio::test]
-#[ignore = "FAIL F-C4R3-02: a self-inflicted default releases the reservation and dismisses a later true proof with a fee (OPV)"]
 async fn g14_c4r3_opv_a_self_inflicted_default_must_not_erase_a_provable_fraud() {
     kaspa_core::log::try_init_logger("warn");
     let e = escape_by_self_default(World::opv().await, false).await;
     eprintln!(
-        "[F-C4R3-02 opv] censored {} DAA; producer lost {}; colluding demander gained {}; outsider paid {}; convicted {}; {:?}",
-        e.censored_daa, e.producer_loss, e.sybil_gain, e.outsider_fee, e.convicted, e.state
+        "[F-C4R3-02 opv] censored {} DAA; producer lost {}; colluding demander gained {}; outsider fee {}, bounty {}; convicted {}; {:?}",
+        e.censored_daa, e.producer_loss, e.sybil_gain, e.outsider_fee, e.outsider_paid, e.convicted, e.state
     );
     assert!(e.convicted, "a valid proof inside the claim's horizon convicts it (it was {:?})", e.state);
     assert_eq!(e.outsider_fee, 0, "a true fraud proof never costs its filer the dismissal fee");
+    assert!(e.sybil_gain < e.producer_loss as i128, "the colluding demander recoups less than the default cost the producer");
+    assert_eq!(e.outsider_paid, e.reservation / 2, "the honest accuser's bounty is not diluted by the self-inflicted default");
 }
 
 // ---- GAP-R7: proof front-running -----------------------------------------------------------------------------------------

@@ -353,7 +353,7 @@ fn a_lying_optimistic_claim_is_convicted_before_final_and_after_it_by_one_outsid
     assert_eq!(r.standing, FinalStandingV1::ConvictedAfterFinal);
     assert!(!r.to_work_final_event(&ctx(None)).unwrap().claim_final, "a convicted work is no longer a Final source");
 
-    // Past the liability horizon a proof is dismissed and the reservation was released (finite retained exposure).
+    // Past the liability horizon the reservation was released (finite retained exposure) and a proof is refused: no court, no fee.
     let job = w.post_job(500, &[3, 17, 9], 3, 3);
     let (_, lie) = w.lying(&job, 3);
     let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[]));
@@ -361,8 +361,10 @@ fn a_lying_optimistic_claim_is_convicted_before_final_and_after_it_by_one_outsid
     w.block(560, vec![]);
     assert_eq!(w.block(761, vec![]), vec![E::Released { claim: id }]);
     let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!() };
+    let fee_payer = w.l.bonds[&OUTSIDER].collateral;
     let ev = w.block(762, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
-    assert!(matches!(&ev[..], [E::ProofDismissed { .. }]), "{ev:?}");
+    assert_eq!(refused(&ev).as_deref(), Some("past the liability horizon"), "{ev:?}");
+    assert_eq!(w.l.bonds[&OUTSIDER].collateral, fee_payer, "a true proof is never charged the dismissal fee");
 }
 
 // ── §5 / §13.2: withheld material is availability, never fraud, and never Final ───────────────────────────────────────────
@@ -383,8 +385,12 @@ fn withheld_material_is_a_default_not_a_fraud_conviction_and_the_claim_never_fin
     assert_eq!(ev, vec![E::ProducerDefault { claim: id, stage: 0, position: at.0, last: None, penalty: 100 }]);
     assert_eq!(w.state(&id), ClaimStateV1::Unavailable { daa: 42, producer_defaulted: true });
     assert!(!w.l.claims[&id].convicted, "availability, not fraud");
-    // The penalty: 10% burned so a producer cannot cycle it through its own demander for nothing, the rest to the demander.
-    assert_eq!((w.consumer.paid(&OUTSIDER), w.l.burned), (90, 10));
+    // The penalty is split at least like a slash so a producer cannot cycle it through its own demander for nothing (the larger of
+    // the policy's 100 permille and the 500 permille a slash burns, C4 F-C4R3-02), the rest to the demander. The rest of the
+    // reservation is held through the default's liability horizon, then released (no valid proof ever arrived).
+    assert_eq!((w.consumer.paid(&OUTSIDER), w.l.burned), (50, 50));
+    assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.bonds[&PRODUCER].reserved), (4900, 900));
+    assert_eq!(w.block(243, vec![]), vec![E::Released { claim: id }]);
     assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.bonds[&PRODUCER].reserved), (4900, 0));
     w.block(500, vec![]);
     assert!(!w.l.claims[&id].rewarded && w.l.final_receipt(&id).is_none());
@@ -588,7 +594,7 @@ fn a_junk_squatter_is_slashed_by_any_outsider_and_a_withholding_squatter_default
     let ev = w.block(133, vec![]);
     assert!(ev.iter().any(|e| matches!(e, E::ProducerDefault { penalty: 100, .. })), "{ev:?}");
     assert_eq!(w.l.bonds[&SQUATTER].collateral, collateral - 100, "the withholding squatter pays the default penalty");
-    assert_eq!(w.consumer.paid(&HONEST), paid + 90, "to the producer that demanded");
+    assert_eq!(w.consumer.paid(&HONEST), paid + 50, "to the producer that demanded (the burned half aside)");
     let ev = w.block(140, vec![honest.tx]);
     assert!(ev.contains(&E::ClaimCommitted { claim: honest.claim.id() }), "the job is free again: {ev:?}");
     assert_eq!(w.block(190, vec![]), vec![E::Final { claim: honest.claim.id(), reward: 7 }]);
@@ -737,8 +743,8 @@ fn a_collateral_another_subsystem_took_is_not_a_bounty_source_and_fake_fraud_and
     let after = w.l.bonds[&PRODUCER].collateral + w.l.bonds[&SPAM1].collateral + w.consumer.paid(&SPAM1);
     assert_eq!(before - after, 500, "the colluding pair lost the burned half of the slash");
 
-    // (c) A fake-default loop: the producer withholds and its Sybil demands. Only the burned tenth of the penalty is lost, and the
-    // claim earned nothing.
+    // (c) A fake-default loop: the producer withholds and its Sybil demands. The burned part of the penalty is lost (a default is
+    // split at least like a slash: 500 permille burned, C4 F-C4R3-02), and the claim earned nothing.
     let mut w = World::new_opv();
     let job = w.post_job(2, &[3, 17, 9], 3, 1);
     let (at, lie) = w.lying(&job, 3);
@@ -748,8 +754,36 @@ fn a_collateral_another_subsystem_took_is_not_a_bounty_source_and_fake_fraud_and
     w.block(22, vec![T::FileDemand { demander: SPAM1, claim: id, stage: 0, position: at.0 }]);
     w.block(42, vec![]);
     let after = w.l.bonds[&PRODUCER].collateral + w.l.bonds[&SPAM1].collateral + w.consumer.paid(&SPAM1);
-    assert_eq!(before - after, 10);
+    assert_eq!(before - after, 50);
     assert!(!w.l.claims[&id].rewarded);
+}
+
+// ── F-C4R3-02 on an OPV claim: a self-inflicted default never erases a provable fraud ─────────────────────────────────────
+
+/// **C4 round 3, F-C4R3-02 (OPV, reference level)**: the producer's own bond demands at once and the producer stays silent; the
+/// default burns at least a slash's share of the penalty, keeps the rest of the reservation through the default's horizon, and the
+/// outsider's true proof filed after it convicts with the undiluted bounty and no fee.
+#[test]
+fn an_optimistic_self_inflicted_default_never_erases_a_provable_fraud() {
+    let mut w = World::new_opv();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let (_, lie) = w.lying(&job, 3);
+    let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[]));
+    w.block(10, vec![lie.tx]);
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!("everything is published") };
+    let producer0 = w.l.bonds[&PRODUCER].collateral;
+    w.block(11, vec![T::FileDemand { demander: SPAM1, claim: id, stage: 0, position: 0 }]);
+    let ev = w.block(31, vec![]);
+    assert_eq!(ev, vec![E::ProducerDefault { claim: id, stage: 0, position: 0, last: None, penalty: 100 }]);
+    assert_eq!((w.consumer.paid(&SPAM1), w.l.bonds[&PRODUCER].reserved), (50, 900));
+    let outsider0 = w.l.bonds[&OUTSIDER].collateral;
+    let ev = w.block(32, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+    assert_eq!(convicted(&ev), Some((900, 500, false)), "{ev:?}");
+    assert_eq!(w.l.bonds[&OUTSIDER].collateral, outsider0, "no fee for a true proof");
+    assert_eq!(w.consumer.paid(&OUTSIDER), 500);
+    assert_eq!(w.l.bonds[&PRODUCER].collateral, producer0 - 1000);
+    assert_eq!(w.l.opv_live_counts(&PRODUCER).0, 0, "the conviction ended the reservation");
+    assert!(w.l.final_receipt(&id).is_none(), "never Final");
 }
 
 // ── reorg, restart, replay ────────────────────────────────────────────────────────────────────────────────────────────────

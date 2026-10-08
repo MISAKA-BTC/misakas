@@ -677,8 +677,8 @@ fn every_money_decision_is_an_explicit_settlement_instruction_and_nothing_is_min
     let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[at]));
     w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
     assert_eq!(settlements(&w, 10), vec![ix(PRODUCER, 1000, K::ReserveClaim, id)]);
-    // A demand that defaults: bond reserved, then default slash, the demander's share, no burn remainder, the bond back, the rest
-    // of the reservation released.
+    // A demand that defaults: bond reserved, then default slash, the demander's share of it and the burned rest (a default is split
+    // like a slash, C4 F-C4R3-02), the bond back. The rest of the reservation is HELD through the default's liability horizon.
     let OutsiderFindingV1::Demand(_) = outsider(&w, id, &da) else { panic!() };
     w.block(11, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
     assert_eq!(settlements(&w, 11), vec![ix(OUTSIDER, 10, K::ReserveDemand, id)]);
@@ -687,9 +687,9 @@ fn every_money_decision_is_an_explicit_settlement_instruction_and_nothing_is_min
         settlements(&w, 31),
         vec![
             ix(PRODUCER, 100, K::SlashDefault, id),
-            ix(OUTSIDER, 100, K::DemanderShare, id),
+            ix(OUTSIDER, 50, K::DemanderShare, id),
+            ix(PRODUCER, 50, K::Burn, id),
             ix(OUTSIDER, 10, K::ReleaseDemand, id),
-            ix(PRODUCER, 900, K::ReleaseClaim, id),
         ]
     );
     // An honest claim: Final pays the reward by instruction, and the liability horizon's end releases the reservation.
@@ -700,9 +700,11 @@ fn every_money_decision_is_an_explicit_settlement_instruction_and_nothing_is_min
     w.block(151, vec![]);
     w.block(352, vec![]);
     assert_eq!(
-        settlements(&w, 101),
+        settlements(&w, 101).into_iter().filter(|s| s.claim == Some(hid)).collect::<Vec<_>>(),
         vec![ix(PRODUCER, 1000, K::ReserveClaim, hid), ix(PRODUCER, 7, K::FinalReward, hid), ix(PRODUCER, 1000, K::ReleaseClaim, hid)]
     );
+    // The defaulted claim's horizon (31 + 200) ended with no valid proof: its reservation is released, never slashed for withholding.
+    assert!(settlements(&w, 352).contains(&ix(PRODUCER, 900, K::ReleaseClaim, id)));
     // A dismissed filing's fee is slashed from the accuser's free collateral and burned.
     let job = w.post_job(400, &[3, 17, 9], 3, 3);
     let h = w.honest(&job, 3);

@@ -34,7 +34,12 @@
 //!   demands then one direct proof is every prosecution's whole path. The response is bounded and classified (served /
 //!   malformed / wrong bytes / wrong root / fake opening / partial / oversized); silence or non-serving past the deadline is
 //!   the producer's availability default — a fixed penalty, never the fraud slash. A bond's open demands are limited by its
-//!   free collateral, not by a count.
+//!   free collateral, not by a count. **A default never erases a provable fraud** (C4 F-C4R3-02): the penalty is split like a
+//!   slash (the demanders take the accuser's share of it, the rest is burned — an OPV claim burns at least its policy's
+//!   `default_burn_permille`), so a producer's own demander never recoups it; the rest of the reservation stays held until
+//!   `default + liability_daa`, and a valid proof filed in that horizon convicts the defaulted claim and slashes it, paying the
+//!   accuser the bounty it would have had without the default. Withholding stays a default, never fraud, when no valid proof
+//!   ever arrives: the reservation is released at the horizon.
 //! * **Filings are bounded and priced**: a filed proof must fit the class's filing envelope, and a dismissed one forfeits
 //!   `dismissed_proof_fee` (a convicting or duplicate one does not). Each block has an adjudication budget
 //!   ([`LedgerPolicyV1::max_adjudications_per_block`], `max_court_work_per_block`): an object past it is refused (dropped, never
@@ -48,7 +53,9 @@
 //! * **Liability** (category A): after Final the reservation is held for `liability_daa`; a proof convicting in that horizon
 //!   slashes it (post-Final liability), even if every Panel seat signed the claim covered. A post-Final demand is accepted only
 //!   while its whole path (deadline, service, grace) still fits inside the horizon; one that defaults forfeits the WHOLE
-//!   remaining reservation (the reward was already paid), an availability outcome that is never the fraud conviction.
+//!   remaining reservation (the reward was already paid), an availability outcome that is never the fraud conviction. A proof
+//!   past the horizon, or against a claim that ended without passing (timed out), is REFUSED — no court runs and no fee is
+//!   charged: a true proof never costs its filer the dismissal fee.
 //! * **RFC-0015 `OptimisticPublicVerification`** (dormant; [`crate::opv`]): a class registered under that mode (route tags 13 / 14,
 //!   the mode bound into the class id) has no Panel. Its claims are Challengeable from inclusion for a fixed window, hold their
 //!   job from the first reveal, reserve a producer collateral sized to the claim's maximum gain, and reach Final by the explicit
@@ -116,7 +123,8 @@ pub struct LedgerPolicyV1 {
     pub dismissed_proof_fee: u64,
     /// Of a slashed reservation, the convicting accuser's share (permille); the rest is burned.
     pub accuser_reward_permille: u16,
-    /// What an availability default forfeits (to the demanders), never more than the reservation.
+    /// What an availability default forfeits, never more than the reservation: split like a slash — the demanders take
+    /// `accuser_reward_permille` of it (an OPV claim's demanders at most `1000 − default_burn_permille`), the rest is burned.
     pub default_penalty: u64,
     /// Paid to the producer at Final (a settlement instruction; the consumer's reward path funds it).
     pub claim_reward: u64,
@@ -148,7 +156,9 @@ impl LedgerPolicyV1 {
             (p.claim_reward < p.claim_collateral, "the Final reward is smaller than the reservation a post-Final default forfeits"),
             (p.default_penalty <= p.claim_collateral, "a default never takes more than the reservation"),
             (p.demand_bond > 0 && p.dismissed_proof_fee > 0, "demands and filings are not free"),
-            (p.accuser_reward_permille <= 1000, "the accuser's share is a share"),
+            // A slash and a default both burn part of what they take: a 100% share would let a producer's own accuser or demander
+            // cycle it back for nothing (C4 F-C4R3-02).
+            (p.accuser_reward_permille < 1000, "the accuser's share is a share, and part of every slash and default is burned"),
             (p.claim_collateral > 0, "a claim reserves collateral"),
             (p.max_adjudications_per_block > 0, "a block may adjudicate"),
             (p.max_court_work_per_block > 0, "a block may run a court"),
@@ -1543,16 +1553,20 @@ impl KernelLedgerV1 {
             return Ok(());
         }
         let is_final = matches!(row.life.state, ClaimStateV1::Final { .. });
+        // **The claim's liability phase**: after Final, and after a pre-Final availability default (C4 F-C4R3-02: a default is never
+        // a way out of a provable fraud), the claim stays convictable until `liability_until` — even with nothing reserved (a
+        // post-Final default may have forfeited it). Past that horizon, or against a claim that ended without ever passing (timed
+        // out), no proof can change anything: the filing is REFUSED before any court runs, and no fee is charged — a TRUE proof never
+        // costs its filer the dismissal fee, and a refusal is free for everyone (it is dropped, as an unknown claim is).
+        let liable = is_final || matches!(row.life.state, ClaimStateV1::Unavailable { .. });
+        if liable && row.liability_until.is_none_or(|until| self.daa > until) {
+            return Err(rule("past the liability horizon"));
+        }
+        if !liable && (row.life.state.is_terminal() || row.reserved == 0) {
+            return Err(rule("the claim ended without passing and holds nothing"));
+        }
         let bounds = self.bounds_of(&row.class_binding_id);
-        let cheap = if is_final && row.liability_until.is_none_or(|until| self.daa > until) {
-            Some("past the liability horizon".to_string())
-        } else if row.reserved == 0 && !is_final {
-            // Before Final nothing reserved means the claim already ended (timed out, unavailable). After Final inside the horizon a
-            // valid proof still convicts — a post-Final default may have forfeited the reservation, but it never erases the liability.
-            Some("nothing is reserved any more".to_string())
-        } else {
-            bounds.and_then(|b| oversized(proof, &b))
-        };
+        let cheap = bounds.and_then(|b| oversized(proof, &b));
         let verdict = match cheap {
             Some(why) => Err(why),
             None => {
@@ -1575,10 +1589,20 @@ impl KernelLedgerV1 {
         Ok(())
     }
 
+    /// What a claim reserved when it was admitted: an OPV claim's policy reservation, else the route's flat collateral.
+    fn admitted_reservation(&self, claim: &Digest) -> u64 {
+        self.opv.claims.get(claim).map_or(self.policy.claim_collateral, |o| o.reservation)
+    }
+
     fn convict(&mut self, claim: &Digest, accuser: &Digest, post_final: bool, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
         let producer_collateral = self.claims.get(claim).and_then(|r| self.bonds.get(&r.producer)).map_or(0, |b| b.collateral);
+        // What a pre-Final default already took of this claim's reservation (0 for any other claim: before Final a reservation
+        // changes only by a default or a conviction, and a post-Final forfeit leaves nothing to slash).
+        let admitted = self.admitted_reservation(claim);
+        let pre_final_default = self.claims.get(claim).is_some_and(|r| matches!(r.life.state, ClaimStateV1::Unavailable { .. }));
         let row = self.claims.get_mut(claim).expect("checked");
+        let taken_by_default = if pre_final_default { admitted.saturating_sub(row.reserved) } else { 0 };
         // Never instruct more than the bond holds (another subsystem may have slashed it since the claim reserved).
         let reserved = row.reserved;
         let slashed = reserved.min(producer_collateral);
@@ -1599,7 +1623,11 @@ impl KernelLedgerV1 {
             b.reserved = b.reserved.saturating_sub(reserved);
             b.collateral = b.collateral.saturating_sub(slashed);
         }
-        let reward = slashed * self.policy.accuser_reward_permille as u64 / 1000;
+        // The bounty is the accuser's share of the claim's reservation as if no default had come first (C4 F-C4R3-02): a producer
+        // that defaults on its own demand before a proof lands neither dilutes the honest accuser's bounty nor recoups more than its
+        // demanders' share of the penalty. Never more than this conviction slashes.
+        let basis = slashed as u128 + taken_by_default as u128;
+        let reward = ((basis * self.policy.accuser_reward_permille as u128 / 1000) as u64).min(slashed);
         self.burned += slashed - reward;
         out.push(LedgerEventV1::Convicted { claim: *claim, accuser: *accuser, slashed, accuser_reward: reward, post_final });
         settle(out, producer, slashed, SettlementKindV1::SlashFraud, Some(*claim));
@@ -1778,15 +1806,19 @@ impl KernelLedgerV1 {
                 .unwrap_or(0);
             // Never instruct more than the bond holds.
             let penalty = taken.min(collateral);
-            // Before Final the demanders share the penalty equally. After Final the forfeit is burned whole: a demander may be the
-            // producer's own Sybil, and paying it would let the colluders recoup part of their forfeit. Their bonds return either way.
-            // An OPV claim's pre-Final default also burns `default_burn_permille` of the penalty (RFC-0015 §8.2): a producer cannot
-            // cycle its own penalty through a Sybil demander for nothing.
-            let opv_burn = match (self.opv.claims.contains_key(&claim), post_final, self.opv.policy) {
-                (true, false, Some(p)) => (penalty as u128 * p.economics.default_burn_permille as u128 / 1000) as u64,
-                _ => 0,
+            // Before Final the demanders share part of the penalty equally and the rest is burned: a demander may be the producer's
+            // own Sybil, so a default is split like a slash (C4 F-C4R3-02) — the demanders take the accuser's share
+            // (`accuser_reward_permille`, < 1000) and an OPV claim's at most `1000 − default_burn_permille` (RFC-0015 §8.2): a producer
+            // can never cycle its own penalty through a Sybil demander for nothing. After Final the forfeit is burned whole (the
+            // colluders would otherwise recoup part of a forfeit that replaces the reward they kept). Their bonds return either way.
+            let burn_permille = match (self.opv.claims.contains_key(&claim), self.opv.policy) {
+                (true, Some(p)) => {
+                    (1000 - self.policy.accuser_reward_permille.min(1000)).max(p.economics.default_burn_permille.min(1000))
+                }
+                _ => 1000 - self.policy.accuser_reward_permille.min(1000),
             };
-            let paid = if post_final { 0 } else { penalty - opv_burn };
+            let default_burn = (penalty as u128 * burn_permille as u128 / 1000) as u64;
+            let paid = if post_final { 0 } else { penalty - default_burn };
             let share = if d.demanders.is_empty() { 0 } else { paid / d.demanders.len() as u64 };
             let burn = penalty - share * d.demanders.len() as u64;
             self.burned += burn;
@@ -1796,6 +1828,11 @@ impl KernelLedgerV1 {
                 row.reserved -= taken;
                 if !was_final {
                     let _ = row.life.apply(ClaimEventV1::MaterialUnavailable { daa, producer_defaulted: true });
+                    // **A pre-Final default is not the end of the claim's liability** (C4 F-C4R3-02): the rest of the reservation
+                    // stays held, and a valid proof filed by `daa + liability_daa` still convicts it — keeping one proof out of the
+                    // chain for a demand's deadline must not turn a provable fraud into a cheap default. If no valid proof arrives
+                    // the outcome stays the default (availability, never fraud) and the reservation is released at the horizon.
+                    row.liability_until = Some(daa.saturating_add(self.policy.liability_daa));
                 }
                 if let Some(b) = self.bonds.get_mut(&row.producer) {
                     b.reserved = b.reserved.saturating_sub(taken);
@@ -1844,8 +1881,10 @@ impl KernelLedgerV1 {
                     self.release(&id, producer, reserved, out);
                     out.push(LedgerEventV1::TimedOut { claim: id });
                 }
-                (ClaimStateV1::Unavailable { .. }, _) if reserved > 0 => {
+                // A defaulted claim's reservation is held through its liability horizon (C4 F-C4R3-02), then released.
+                (ClaimStateV1::Unavailable { .. }, _) if reserved > 0 && liability.is_none_or(|u| daa > u) => {
                     self.release(&id, producer, reserved, out);
+                    out.push(LedgerEventV1::Released { claim: id });
                 }
                 (ClaimStateV1::Final { .. }, _) if reserved > 0 && liability.is_some_and(|u| daa > u) => {
                     self.release(&id, producer, reserved, out);
