@@ -1,4 +1,5 @@
-//! **RFC-0009 stage C — public receipt redemption** (`Params::palw_receipt_spend_v4`, DORMANT on every preset).
+//! **RFC-0009 stage C — public receipt redemption** (`Params::palw_receipt_spend_v4`; dormant on every preset but testnet-12 as shipped,
+//! which arms it with the int-13 list at DAA 9,000 — `PALW_T12_INT13_FENCES_V1`).
 //!
 //! Today a free-prompt `Final` claim's winning quantum is spent into a receipt BLOCK, and the block's producer must be the
 //! claim's executor (`ProducerNotExecutor`): the miner's PC has to stay on after the claim to collect the receipt reward. This

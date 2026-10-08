@@ -21643,22 +21643,23 @@ fn palw_t12_arm_decode_rules_v1(params: &mut Params) {
 pub const PALW_T12_MODEL_COURT_WINDOW_ENTRY: PalwPostLaunchFenceV1 =
     PalwPostLaunchFenceV1 { name: "palw_model_court_window", set: |params, at| params.palw_model_court_window = at };
 
-/// The per-model court window alone — what `--palw-drill-model-court-at` moves. **Armed nowhere on
-/// testnet-12** ([`PALW_T12_MODEL_COURT_WINDOW_DAA`] is `None`): testnet-12 charges every class the held clock
+/// The per-model court window alone — what `--palw-drill-model-court-at` moves. **Armed on testnet-12 only by the int-13 flag day's list
+/// ([`PALW_T12_INT13_FENCES_V1`], DAA 9,000; this list's own height [`PALW_T12_MODEL_COURT_WINDOW_DAA`] is `None`)**, and a no-op for every
+/// verdict there: testnet-12 charges every class the held clock
 /// (`palw_attn_court_admits_row_held_v1` — `held.armed` is the network's regime, from genesis), under which the
 /// window the fence derives is the network window for every admissible class and no admission verdict moves
 /// (`consensus/core/tests/palw_t12_court_window_changes_no_admission.rs`). The code, this list and the drill
-/// flag stay for a ruleset that charges the ladder clock, and the baselines below clear it so arming it later
-/// is a one-line edit.
+/// flag stay for a ruleset that charges the ladder clock, and the baselines below clear it (through this list and through the int-13
+/// list) so each keeps its pinned ids.
 pub const PALW_T12_MODEL_COURT_WINDOW_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_T12_MODEL_COURT_WINDOW_ENTRY];
 
-/// **The model court window's height — `None`: dormant on every testnet-12 ruleset** (the coordinator's
-/// decision of 2026-10-01). See [`PALW_T12_MODEL_COURT_WINDOW_FENCES_V1`]. It must be a height no other
-/// fence uses if it is ever set.
+/// **The model court window's OWN height — `None`** (the coordinator's decision of 2026-10-01: no flag day of its own). Testnet-12 arms the
+/// window with the int-13 list at [`PALW_T12_INT13_DAA`] instead (the coordinator's brief of 2026-10-08). See
+/// [`PALW_T12_MODEL_COURT_WINDOW_FENCES_V1`]. It must be a height no other fence uses if it is ever set.
 pub const PALW_T12_MODEL_COURT_WINDOW_DAA: Option<u64> = None;
 
 /// **The model court window, armed** — every entry of [`PALW_T12_MODEL_COURT_WINDOW_FENCES_V1`] at
-/// [`PALW_T12_MODEL_COURT_WINDOW_DAA`]; a no-op while the height is `None`, which it is.
+/// [`PALW_T12_MODEL_COURT_WINDOW_DAA`]; a no-op while the height is `None`, which it is (the int-13 list arms the entry).
 fn palw_t12_arm_model_court_window_v1(params: &mut Params) {
     let Some(at) = PALW_T12_MODEL_COURT_WINDOW_DAA else { return };
     for fence in PALW_T12_MODEL_COURT_WINDOW_FENCES_V1 {
@@ -21790,7 +21791,8 @@ fn palw_t12_arm_int11_flag_day_v1(params: &mut Params) {
 }
 
 /// **The int-11 flag day at `at`** (`None`: dormant) — the list at `at`, ρ = 100 at `at + 95`; the one body the preset, a drill and the
-/// tests share. Dormant is set in the reverse order, so a step is never the one a later step stands on.
+/// tests share. Dormant is set in the reverse order, so a step is never the one a later step stands on — **and the int-13 list, which
+/// stands on this one (`palw_gen_range_twin_v1` needs `palw_gen_v1`), is set back to dormant first** (arming leaves it alone).
 pub fn palw_t12_arm_int11_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
     match at {
         Some(at) => {
@@ -21808,6 +21810,10 @@ pub fn palw_t12_arm_int11_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
             }
         }
         None => {
+            // **The lists that stand on this one go first** (the reverse order, one level up): the int-13 list's range twin needs this
+            // list's `palw_gen_v1` at or below it, so a ruleset with this list dormant and that one armed does not validate. Setting
+            // the int-11 list back to dormant therefore sets the int-13 list back with it — the int-10 baseline is both dormant.
+            palw_t12_arm_int13_flag_day_at_v1(params, None);
             for fence in PALW_T12_INT11_RHO1000_FENCES_V1
                 .iter()
                 .chain(PALW_T12_INT11_RHO250_FENCES_V1)

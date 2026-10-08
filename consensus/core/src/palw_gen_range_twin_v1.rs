@@ -1,4 +1,4 @@
-//! **RFC-0003 PALW-GEN-20 by the range twin — the fence `palw_gen_range_twin_v1`** (dormant).
+//! **RFC-0003 PALW-GEN-20 by the range twin — the fence `palw_gen_range_twin_v1`** (testnet-12 arms it with the int-13 list at DAA 9,000).
 //!
 //! The pipeline admission prices every close of a generative class with the close-sizing twin, under a work cap
 //! ([`crate::palw_gen_close_price_v1::PALW_GEN_CLOSE_SIZING_WORK_CAP_V1`], 2^26 steps). Below this fence it is the ELEMENT twin
@@ -10,7 +10,8 @@
 //! pipeline stage's inputs — edges, job images — and its `post`-written states): **the same read sets and the same bounds**, far
 //! fewer steps of the same cap. Nothing a close carries changes, and no ceiling moves; only the sizing's own CPU does.
 //!
-//! **Dormant**: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only into `consensus_params_id` and
+//! **Dormant but for testnet-12's int-13 flag day** (`PALW_T12_INT13_FENCES_V1`, DAA 9,000): `None` on every other preset and on every
+//! earlier testnet-12 release; hashed Some-only into `consensus_params_id` and
 //! `consensus_schedule_id`, collapsed whole from `Some(never())` by the identity's normaliser, its activation alone visited by
 //! `for_each_fence` — `palw_fp_job_v5`'s shape. It needs `palw_gen_v1` in force at or below it.
 
@@ -18,7 +19,7 @@ use crate::config::params::{ForkActivation, PalwPostLaunchFenceV1, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 use crate::palw_tir_close_range_v1::PalwTirCloseTwinV1;
 
-/// The fence's entry for a drill or probe that arms it (it moves this one field).
+/// The fence's entry for a drill, a probe or a flag-day list that arms it (it moves this one field and its bundle mirror).
 pub const PALW_DRILL_GEN_RANGE_TWIN_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
     name: "palw_gen_range_twin_v1",
     set: |params, at| {

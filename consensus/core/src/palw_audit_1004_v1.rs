@@ -1,5 +1,5 @@
-//! **The 2026-10-04 audit's consensus fixes, behind one dormant fence** (lane PA; `palw_audit_1004_v1`; no height on any preset —
-//! the lead sets it after the DAA-5,300 release). The findings are `lanes/evidence/palw-fatal-audit-1004/FINDINGS.md`; each rule
+//! **The 2026-10-04 audit's consensus fixes, behind one fence** (lane PA; `palw_audit_1004_v1`; no height on any preset but testnet-12 as
+//! shipped, which arms it with the int-13 list at DAA 9,000 — `PALW_T12_INT13_FENCES_V1`). The findings are `lanes/evidence/palw-fatal-audit-1004/FINDINGS.md`; each rule
 //! below is one finding, named by its id, and every one reads [`PalwStateParamsV2::audit_1004_active_at`] (the fence's mirror on the
 //! V2 bundle's state params) or the same height off `Params`. Below the fence every path folds byte for byte as at 0b1c11b87.
 //!
@@ -70,7 +70,7 @@ pub const fn palw_audit_1004_value_v1() -> [u64; 10] {
     ]
 }
 
-/// **The fence's entry for a flag-day list** (not on any list yet: the lead adds it with the height).
+/// **The fence's entry for a flag-day list** (on testnet-12's int-13 list, `PALW_T12_INT13_FENCES_V1`).
 pub const PALW_T12_AUDIT_1004_ENTRY: crate::config::params::PalwPostLaunchFenceV1 = crate::config::params::PalwPostLaunchFenceV1 {
     name: "palw_audit_1004_v1",
     set: |params, at| {
