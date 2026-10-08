@@ -98,6 +98,17 @@ pub fn template_observation_v1(
     }
 }
 
+/// **Where a template's block reward goes**: the script in its coinbase payload (blue score u64, subsidy u64, script version u16, script
+/// length u8, script — `CoinbaseManager::serialize_coinbase_payload`). A job service (a pool, a node) that hands the miner a template paying
+/// ITS script is offering custody of the reward; the miner refuses it by default (RFC-0009 mode C: non-custodial by default).
+pub fn template_pays_v1(block: &kaspa_consensus_core::block::Block) -> Option<kaspa_consensus_core::tx::ScriptPublicKey> {
+    let payload = &block.transactions.first()?.payload;
+    let version = u16::from_le_bytes(payload.get(16..18)?.try_into().ok()?);
+    let len = *payload.get(18)? as usize;
+    let script = payload.get(19..19 + len)?;
+    Some(kaspa_consensus_core::tx::ScriptPublicKey::new(version, script.to_vec().into()))
+}
+
 /// What the nodes must agree on. Excludes the timestamp, nonce, transactions, coinbase and merkle roots, which legitimately differ
 /// per node and per moment; includes the parents (the attempt's challenge binds `pre_pow_hash`, which commits to them) and every
 /// chain fact the attempt is priced against.

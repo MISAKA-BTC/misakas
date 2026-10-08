@@ -411,11 +411,14 @@ pub(crate) async fn run(ctx: &crate::node::Ctx, profile: Profile, args: ModelAdd
     let mut flow = Flow::new(ctx.output, args.yes);
     let mut doc = serde_json::Map::new();
     let result = walk(ctx, &profile, &args, &mut flow, &mut doc).await;
-    if args.model.is_none() && args.manifest.is_none() && result.is_ok() {
+    let ir =
+        args.artifact.as_deref().is_some_and(|a| misaka_palw_sdk::tir_manifest::PalwTirManifestV1::sniff(std::path::Path::new(a)));
+    if args.model.is_none() && args.manifest.is_none() && !ir && result.is_ok() {
         // The catalog listing: nothing was added, so there is no "done" line to print.
         return Ok(());
     }
     let resume = match (&args.model, &args.manifest) {
+        (None, None) if ir => format!("misaka model add --artifact {}", args.artifact.as_deref().unwrap_or_default()),
         (Some(m), _) => format!("misaka model add {m}"),
         (None, Some(path)) => format!("misaka model add --manifest {}", path.display()),
         (None, None) => "misaka model add <model>".to_string(),
@@ -473,9 +476,15 @@ async fn walk(
     let sdk = crate::operator::model_add::chain_sdk(&params, &bundle, &net.to_string());
     let ledger = sdk.ledger();
 
+    // **An IR artifact** (`--artifact <.palwtir>`, the pack gate already passed in `run`): its own route below, once the node answers.
+    let tir_artifact = args
+        .artifact
+        .as_deref()
+        .map(std::path::Path::new)
+        .filter(|a| args.model.is_none() && args.manifest.is_none() && misaka_palw_sdk::tir_manifest::PalwTirManifestV1::sniff(a));
     // No model named and no manifest: the catalog, and which of it the chain already holds.
     let selector = args.model.clone();
-    if selector.is_none() && args.manifest.is_none() {
+    if selector.is_none() && args.manifest.is_none() && tir_artifact.is_none() {
         let node = snapshot::connect_to(&profile.network, profile.rpc.as_deref(), Duration::from_secs(5)).await.ok();
         let held: Vec<String> = match &node {
             Some(n) if n.ops_0122 => {
@@ -547,9 +556,15 @@ async fn walk(
             Some(selector) => Some(
                 resolve_catalog(&ledger, selector)
                     .map_err(|why| {
-                        Halt::Blocked(Finding::error("E-MODEL-UNKNOWN", exit::MODEL, why).fix(
-                            "misaka model add   (lists this build's catalog), or --manifest <file> for a model it does not carry",
-                        ))
+                        let fix = if selector.starts_with("hf://") {
+                            // H1's routed item 2: an HF repo@rev is converted to an IR artifact + runtime pack first (no HF access here).
+                            "an HF model registers as an IR class: convert repo@rev to a .palwtir and its runtime pack (the HF onboarding \
+                             pipeline), then `misaka model add --artifact <file.palwtir> --pack <dir> --quote | --export-bundle <file> \
+                             --payer-address <addr>`"
+                        } else {
+                            "misaka model add   (lists this build's catalog), or --manifest <file> for a model it does not carry"
+                        };
+                        Halt::Blocked(Finding::error("E-MODEL-UNKNOWN", exit::MODEL, why).fix(fix))
                     })?
                     .clone(),
             ),
@@ -601,6 +616,9 @@ async fn walk(
     }
     let (terms, families) =
         decode_terms(&terms_resp).map_err(|e| Halt::Blocked(Finding::error("E-NODE-TERMS", exit::COMPONENT_DOWN, e)))?;
+    if let Some(artifact) = tir_artifact {
+        return register_tir_v1(ctx, profile, args, flow, doc, params.clone(), &bundle, node, &terms, artifact).await;
+    }
     let (entry, manifest_root) = match (catalog_entry, &args.manifest) {
         (Some(entry), _) => (entry, None),
         (None, Some(path)) => {
@@ -825,7 +843,18 @@ async fn register(
     let candidate = misaka_palw_sdk::PalwRegistrationCandidateV1 { entry: entry.clone(), artifact_root };
     // **Detached signing (RFC-0009 A0): no key is read on this path.** The builder writes an unsigned bundle for a signer elsewhere.
     if walk.args.remote.export_bundle.is_some() {
-        return register_export(walk, flow, bundle, sdk, &candidate, terms, &shape, &bond, bond_op).await;
+        let build = |signature: Vec<u8>| {
+            sdk.build_post_genesis_registration(
+                bundle,
+                &candidate,
+                terms,
+                0,
+                kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond_op),
+                signature,
+                &shape,
+            )
+        };
+        return register_export(walk, flow, bundle, &build, &bond, bond_op).await;
     }
     let ks = walk.key_source()?;
     let key = ks.load_key().map_err(|e| {
@@ -920,6 +949,11 @@ async fn register(
             crate::palw_model::msk(kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1)
         ));
     }
+    crate::operator::model_remote::mode_gate_v1(
+        flow,
+        crate::operator::model_remote::add_mode_v1(&walk.node.url),
+        walk.args.remote.accept_unverified_state.as_deref(),
+    )?;
     flow.ask("Register it?", false, "the class was not registered").await?;
     let object_bytes = borsh::to_vec(&object).unwrap_or_default();
     let object_id = kaspa_consensus_core::palw_model_registration_v1::palw_registration_object_id_v1(&object_bytes).to_string();
@@ -1072,6 +1106,12 @@ async fn register_remote(
     if remote_args.quote_only {
         return Err(Halt::Declined("--quote: the quote above was read from the chain; nothing was signed or sent".into()));
     }
+    // The relayed path quotes from nodes: the terms, the funding and the fork choice are their word (the class says so).
+    crate::operator::model_remote::mode_gate_v1(
+        flow,
+        misaka_palw_remote::verify::ModeLabelV1::UnverifiedRemote,
+        remote_args.accept_unverified_state.as_deref(),
+    )?;
     flow.ask("Sign this registration and relay it?", false, "the class was not registered").await?;
     // Re-read just before the key signs: anything that moved since the quote stops here.
     let fresh = read().await?;
@@ -1177,14 +1217,144 @@ async fn register_remote(
 /// (`--payer-address`, which may belong to another key than the bond's) are enough. Nothing is signed, funded or sent; everything
 /// the nodes said is `UNVERIFIED_REMOTE_STATE`, and the signer re-derives what it signs.
 #[allow(clippy::too_many_arguments)]
+/// **An IR class (`ClassRegisteredTirV1`) through `model add`** (H1's routed item 2, 2026-10-08): artifact (pack gate in `run`) → the
+/// class and root → **DUPLICATE_CLASS before anything is quoted or paid** → the registrant bond → the quote from ≥ 2 nodes (`--quote`) or
+/// an unsigned bundle (`--export-bundle`, then `model sign` / `model submit`, which carry IR registrations like catalog ones). In-process
+/// signing of an IR class stays `misaka palw tir-registration` + `palw submit-object` (both gated) until OB-P0's onboarding flow lands.
+#[allow(clippy::too_many_arguments)]
+async fn register_tir_v1(
+    ctx: &crate::node::Ctx,
+    profile: &Profile,
+    args: &ModelAddArgs,
+    flow: &mut Flow,
+    doc: &mut serde_json::Map<String, serde_json::Value>,
+    params: kaspa_consensus_core::config::params::Params,
+    bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    node: NodeRead,
+    terms: &PalwRegistrationTermsV2,
+    artifact: &std::path::Path,
+) -> Step {
+    let entry = misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(artifact).map_err(|e| {
+        Halt::Blocked(Finding::error("E-MODEL-ARTIFACT", exit::MODEL, "The IR artifact does not open as a class").current(e))
+    })?;
+    let class_id = entry.class_id();
+    let class_hex = class_id.to_string();
+    doc.insert("model_id".into(), entry.model_id.clone().into());
+    doc.insert("class_id".into(), class_hex.clone().into());
+    doc.insert("kind".into(), "ClassRegisteredTirV1".into());
+    flow.row(
+        Severity::Ok,
+        "model",
+        format!(
+            "{} · IR class {}… · root {}… · from {}",
+            entry.model_id,
+            &class_hex[..16],
+            &entry.artifact_root.to_string()[..16],
+            artifact.display()
+        ),
+    );
+    // DUPLICATE_CLASS before anything is quoted or paid.
+    let rows: Vec<misaka_palw_remote::register::RegistryRowV1> = node
+        .client()
+        .get_palw_classes()
+        .await
+        .map(|t| {
+            t.classes
+                .into_iter()
+                .map(|c| misaka_palw_remote::register::RegistryRowV1 {
+                    class_id: c.class_id.parse().unwrap_or_default(),
+                    artifact_root: c.artifact_root.parse().unwrap_or_default(),
+                    registrant_bond: None,
+                    lifecycle: c.status,
+                })
+                .collect()
+        })
+        .map_err(|e| {
+            Halt::Blocked(
+                Finding::error("E-NODE-CLASSES", exit::COMPONENT_DOWN, "The class table could not be read").current(e.to_string()),
+            )
+        })?;
+    match misaka_palw_remote::register::exact_duplicate_v1(class_id, entry.artifact_root, &rows) {
+        misaka_palw_remote::register::DuplicateVerdictV1::Reuse { lifecycle, .. } => {
+            flow.row(
+                Severity::Ok,
+                "registered",
+                format!("DUPLICATE_CLASS: already registered ({lifecycle}, UNVERIFIED_REMOTE_STATE) — nothing is quoted or paid"),
+            );
+            doc.insert("state".into(), "already-registered".into());
+            return Ok(());
+        }
+        misaka_palw_remote::register::DuplicateVerdictV1::Conflict(why) => {
+            return Err(Halt::Blocked(
+                Finding::error(
+                    "E-MODEL-CONFLICT",
+                    exit::MODEL,
+                    "CLASS_CONFLICT: the registry holds this class or these weights under something else",
+                )
+                .current(why),
+            ));
+        }
+        misaka_palw_remote::register::DuplicateVerdictV1::New => {}
+    }
+    let bond = profile.bond.clone().ok_or_else(|| {
+        Halt::Blocked(
+            Finding::error("E-IDENT-NO-BOND", exit::IDENTITY, "No bond to register the class under")
+                .fix("misaka bond register-export … (node-less), or --bond <txid>:<index>"),
+        )
+    })?;
+    let bond_op =
+        crate::bond::parse_outpoint(&bond).map_err(|e| Halt::Blocked(Finding::error("E-SETUP-BOND", exit::IDENTITY, e.msg)))?;
+    if !args.remote.quote_only && args.remote.export_bundle.is_none() {
+        return Err(Halt::Blocked(
+            Finding::error("E-MODEL-IR-DETACHED", exit::MODEL, "An IR class registers through the detached flow here")
+                .fix(format!(
+                    "misaka model add --artifact {} --export-bundle <file> --payer-address <addr> --quote-rpc <node>  (then model sign / model submit), \
+                     or misaka palw tir-registration … + palw submit-object",
+                    artifact.display()
+                )),
+        ));
+    }
+    let max_steps = bundle.court.max_step_leaf_count();
+    let build = |signature: Vec<u8>| {
+        kaspa_consensus_core::palw_tir_admission_v1::palw_tir_post_genesis_registration_v1(
+            entry.class.as_ref().clone(),
+            entry.canonical_context(),
+            entry.artifact_root,
+            0,
+            terms.initial_target,
+            terms.slash_value_per_pwu,
+            0,
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond_op),
+            signature,
+            max_steps,
+        )
+        .map_err(|e| format!("{} ({})", e, e.code()))
+    };
+    let walk = Walk {
+        ctx,
+        profile,
+        args,
+        workdir: dirs::home_dir().unwrap_or_default().join(".misaka").join(&profile.network).join("model-add").join(&class_hex[..16]),
+        params,
+        node,
+        manifest_root: None,
+        exported: std::cell::RefCell::new(None),
+    };
+    register_export(&walk, flow, bundle, &build, &bond, bond_op).await?;
+    if let Some(path) = walk.exported.borrow().clone() {
+        doc.insert("export_bundle".into(), path.display().to_string().into());
+        doc.insert("state".into(), "exported-unsigned".into());
+    }
+    Ok(())
+}
+
 async fn register_export(
     walk: &Walk<'_>,
     flow: &mut Flow,
     bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
-    sdk: &misaka_palw_sdk::PalwClassSdk,
-    candidate: &misaka_palw_sdk::PalwRegistrationCandidateV1,
-    terms: &PalwRegistrationTermsV2,
-    shape: &kaspa_consensus_core::palw_class_admission_v2::PalwAdmissionShapeV1,
+    // The registration object of any carried kind (a catalog/manifest `ClassRegistered`, an IR `ClassRegisteredTirV1`), built with the
+    // signature given — empty for the unsigned form, zero bytes of the real length for the pricing probe.
+    build: &dyn Fn(Vec<u8>) -> Result<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2, String>,
     bond: &str,
     bond_op: kaspa_consensus_core::tx::TransactionOutpoint,
 ) -> Step {
@@ -1192,7 +1362,8 @@ async fn register_export(
     use misaka_palw_remote::bundle as detached;
     use misaka_palw_remote::register::quote_registration_v1;
     let args = &walk.args.remote;
-    let out_path = args.export_bundle.clone().expect("routed on --export-bundle");
+    // `--quote` alone (an IR class's quote): the same reads and the same quote, nothing written.
+    let out_path = args.export_bundle.clone();
     let blocked = |code: &'static str, what: &str, why: String| {
         Halt::Blocked(Finding::error(code, exit::IDENTITY, what.to_string()).current(why))
     };
@@ -1213,17 +1384,6 @@ async fn register_export(
             format!("{payer_text}: a P2PKH-ML-DSA-87 address with prefix {:?} is required", walk.params.prefix()),
         ));
     }
-    let build = |signature: Vec<u8>| {
-        sdk.build_post_genesis_registration(
-            bundle,
-            candidate,
-            terms,
-            0,
-            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond_op),
-            signature,
-            shape,
-        )
-    };
     let refuse = |e: String| {
         Halt::Blocked(Finding::error("E-MODEL-REGISTRATION", exit::MODEL, "The registration could not be built").current(e))
     };
@@ -1265,9 +1425,9 @@ async fn register_export(
         None => None,
         Some(text) => {
             let pin = crate::operator::remote_proof::parse_pin(text)?;
-            let (header, fact) = crate::operator::remote_proof::fetch_state_proof(&walk.node, pin, "bonds").await.map_err(|e| {
-                blocked("E-PROOF-UNAVAILABLE", "The node could not prove the bond table at your pin", e)
-            })?;
+            let (header, fact) = crate::operator::remote_proof::fetch_state_proof(&walk.node, pin, "bonds")
+                .await
+                .map_err(|e| blocked("E-PROOF-UNAVAILABLE", "The node could not prove the bond table at your pin", e))?;
             let proven = misaka_palw_remote::proof::bond_at_pin_v1(
                 &header,
                 pin,
@@ -1290,7 +1450,11 @@ async fn register_export(
                 ));
             }
             if matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }) {
-                return Err(blocked("E-IDENT-BOND-NOT-REGISTRANT", "The bond is retiring in the pinned state", proven.provenance.label()));
+                return Err(blocked(
+                    "E-IDENT-BOND-NOT-REGISTRANT",
+                    "The bond is retiring in the pinned state",
+                    proven.provenance.label(),
+                ));
             }
             flow.row(Severity::Ok, "owner key", proven.provenance.label());
             Some(crate::operator::remote_proof::embeddable(pin, &header, &fact))
@@ -1367,6 +1531,9 @@ async fn register_export(
         )
     })?;
     remote::show(flow, &quote);
+    let Some(out_path) = out_path else {
+        return Err(Halt::Declined("--quote: the quote above was read from the chain; nothing was signed, written or sent".into()));
+    };
     let payer_spk = kaspa_txscript::pay_to_address_script(&payer);
     let b = detached::build_bundle_v1(detached::BundleInputsV1 {
         network: walk.params.net.to_string(),
