@@ -4,6 +4,11 @@ Status: **plan, 2026-10-08** (`release/t12-daa9000`, agent R9). **Nothing in thi
 change to any shared host. The release candidate is the tree whose commit carries the re-pin (`re-pin:`); every id below is read from that
 build, never typed. Long builds and the drill itself are scheduled by the lead after the code freeze (about 10-10).
 
+**Candidate ids at the re-pin commit `f754719df`** (to be re-read from the release build, and re-pinned if the list changes before the freeze):
+params `2e56764257fe24888a7aab4f109b6ef83fa6ac5000dc47d1369398e5959cbc1f`, schedule
+`5f5df8177e77fdf4e690222a690a0b5875f66d4e722d81159273435d754a8c5f`; identity (`5de80e64…`), genesis (`a27f8f44…`), premine txid (`5e0d5f1b…`) and the rule
+manifest digest (`9def81a1…`) do not move.
+
 Related: [`int-11-drill-flags.md`](int-11-drill-flags.md) (the frozen drill flag set, rows 1–19), `audit-combined/dc.sh` (the combined drill
 harness of the DAA-5,300 candidate, which this plan extends), `contrib/t12-deploy-kit/DAA750-ROLLOUT.md` (the rollout runbook this plan
 follows), `consensus/src/pipeline/virtual_processor/tests/t12_int13_flag_day_crossing.rs` (the same crossing at the processor).
