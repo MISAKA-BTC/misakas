@@ -13053,6 +13053,11 @@ impl VirtualStateProcessor {
                         let payload = borsh::to_vec(&(v2_class, kernel_param_root, proof.as_ref())).map_err(|e| e.to_string())?;
                         self.palw_onboarding_signature_ok(state, point.daa_score, 105, &challenger, &payload, &signature)?;
                     }
+                    // Onboarding P0: conformance evidence (or its refutation) delivered in chunks, judged on the assembled whole.
+                    Some(Obj::ConformanceEvidenceV1 { v2_class, action, signer, signature }) => {
+                        let payload = borsh::to_vec(&(v2_class, action.as_ref())).map_err(|e| e.to_string())?;
+                        self.palw_onboarding_signature_ok(state, point.daa_score, 109, &signer, &payload, &signature)?;
+                    }
                     _ => {}
                 },
                 // RFC-0002 Phase F (tag 63): judged by the transition like the legacy lane object;
@@ -13229,6 +13234,12 @@ impl VirtualStateProcessor {
                 Obj::ConformanceCommittedV1 { commitment, signer, signature } => {
                     let payload = borsh::to_vec(commitment.as_ref()).map_err(|e| e.to_string())?;
                     self.palw_onboarding_signature_ok(state, point.daa_score, 107, signer, &payload, signature)?;
+                }
+                // **Onboarding P0 (tag 109): conformance evidence** — the fence, an Active signer, its signature over `(class, action)`;
+                // whether it is the registrant's evidence or a refutation, and what it proves, are the fold's.
+                Obj::ConformanceEvidenceV1 { v2_class, action, signer, signature } => {
+                    let payload = borsh::to_vec(&(v2_class, action.as_ref())).map_err(|e| e.to_string())?;
+                    self.palw_onboarding_signature_ok(state, point.daa_score, 109, signer, &payload, signature)?;
                 }
                 // (tag 108): the acceptance walk replaces the envelope by its registration before this gate; one that reaches it was
                 // not unwrapped (a direct caller of the gate), and is refused.
@@ -14926,7 +14937,7 @@ impl VirtualStateProcessor {
         Ok((**registration).clone())
     }
 
-    /// **An onboarding object's acceptance** (tags 104-107): the route's fence, an Active signer bond, and the signer's ML-DSA-87
+    /// **An onboarding object's acceptance** (tags 104-107, 109): the route's fence, an Active signer bond, and the signer's ML-DSA-87
     /// signature over `(network, kind, signer, payload)`.
     fn palw_onboarding_signature_ok(
         &self,
@@ -21600,6 +21611,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::KernelBoundV1 { .. } => "KernelBoundV1",
         O::ConformanceCommittedV1 { .. } => "ConformanceCommittedV1",
         O::SignedRegistrationV1 { .. } => "SignedRegistrationV1",
+        O::ConformanceEvidenceV1 { .. } => "ConformanceEvidenceV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

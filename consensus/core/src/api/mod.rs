@@ -1316,6 +1316,16 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **Onboarding P0: a V2 class's conformance record and posted evidence** (tables 39 and 40, raw and decoded), the network's
+    /// challenge policy and the beacon state this node derives at the virtual's DAA — RPC op 231's source; with op 212's Finals it is
+    /// everything a fresh verifier needs. `None` for an unknown class and off ConsensusV2.
+    fn palw_conformance_evidence_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+    ) -> Option<crate::palw_onboarding_v1::ConformanceEvidenceReadV1> {
+        None
+    }
+
     /// RFC-0004 (spec 17): every open improvement epoch at the tip, as a node reads it — the line,
     /// its policy, the epoch's header, candidates and items. Empty off ConsensusV2 and below the fence.
     fn palw_improvement_open_epochs_v1(&self) -> Vec<crate::palw_improve_state_v1::PalwImprovementEpochViewV1> {
