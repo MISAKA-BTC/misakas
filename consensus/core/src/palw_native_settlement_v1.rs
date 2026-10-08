@@ -202,7 +202,52 @@ pub fn native_facts_of_block_v1(
     voided: &BTreeSet<Hash64>,
     accepting: (u64, u64),
 ) -> Vec<MatureUsefulWorkV1> {
+    native_facts_and_skips_v1(rules, evidence, voided, accepting).0
+}
+
+/// What [`native_facts_of_block_v1`] left out, counted per claim record in the block's evidence (a free-prompt record that
+/// spent several quanta is one record). Nothing here is evidence and nothing here moves a certificate: it exists so a reader
+/// can see that evidence was seen and NOT counted, and why — in particular `bond_not_held`, the retention gap of the bond
+/// registry (the bond a `Final` claim names has left the sink's state, so its operator cannot be named and its work is never
+/// guessed).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedEvidenceV1 {
+    /// The claim was convicted after `Final` (or is voided) — retracted.
+    pub voided: u64,
+    /// The floor (BASE-0) class: never evidence.
+    pub base_class: u64,
+    /// A data-availability session is open on the claim.
+    pub open_da: u64,
+    /// No canonical work identity / weight (or a free-prompt claim not priced in compute).
+    pub unpriced: u64,
+    /// The bond is no longer in the sink's state: the operator cannot be named.
+    pub bond_not_held: u64,
+}
+
+impl SkippedEvidenceV1 {
+    pub fn total(&self) -> u64 {
+        self.voided.saturating_add(self.base_class).saturating_add(self.open_da).saturating_add(self.unpriced).saturating_add(self.bond_not_held)
+    }
+    pub fn add(&mut self, other: &SkippedEvidenceV1) {
+        self.voided = self.voided.saturating_add(other.voided);
+        self.base_class = self.base_class.saturating_add(other.base_class);
+        self.open_da = self.open_da.saturating_add(other.open_da);
+        self.unpriced = self.unpriced.saturating_add(other.unpriced);
+        self.bond_not_held = self.bond_not_held.saturating_add(other.bond_not_held);
+    }
+}
+
+/// [`native_facts_of_block_v1`] with the accounting of what it skipped. The ONE implementation of the conversion: the plain
+/// function is this one with the counters dropped.
+pub fn native_facts_and_skips_v1(
+    rules: &NativeFactRulesV1<'_>,
+    evidence: &NativeDeltaEvidenceV1,
+    voided: &BTreeSet<Hash64>,
+    accepting: (u64, u64),
+) -> (Vec<MatureUsefulWorkV1>, SkippedEvidenceV1) {
     let (accepting_daa, accepting_blue) = accepting;
+    let mut skipped = SkippedEvidenceV1::default();
     let base = rules.params.base_class_id();
     let retirement = rules.params.claim_retirement_daa();
     let mut facts = Vec::new();
@@ -210,14 +255,26 @@ pub fn native_facts_of_block_v1(
         let PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
             continue;
         };
-        if voided.contains(id) || claim.class_id == base || rules.claims_with_open_da.contains(id) {
+        if voided.contains(id) {
+            skipped.voided += 1;
             continue;
         }
-        let (Some(identity), Some(work), Some(bond)) = (
-            claim.work_id,
-            rules.state.palw_claim_canonical_weight_v1(claim, rules.canonical_work_daa),
-            rules.state.bond(&claim.bond),
-        ) else {
+        if claim.class_id == base {
+            skipped.base_class += 1;
+            continue;
+        }
+        if rules.claims_with_open_da.contains(id) {
+            skipped.open_da += 1;
+            continue;
+        }
+        let (identity, weight, bond) =
+            (claim.work_id, rules.state.palw_claim_canonical_weight_v1(claim, rules.canonical_work_daa), rules.state.bond(&claim.bond));
+        let (Some(identity), Some(work), Some(bond)) = (identity, weight, bond) else {
+            if bond.is_none() {
+                skipped.bond_not_held += 1;
+            } else {
+                skipped.unpriced += 1;
+            }
             continue;
         };
         facts.push(MatureUsefulWorkV1 {
@@ -241,14 +298,29 @@ pub fn native_facts_of_block_v1(
         let PalwClaimSourceV2::FreePrompt { quanta, .. } = &claim.source else {
             continue;
         };
-        if voided.contains(id)
-            || claim.class_id == pricing.base_class_id
-            || !pricing.prices_in_compute(claim)
-            || rules.claims_with_open_da.contains(id)
-        {
+        if voided.contains(id) {
+            skipped.voided += 1;
             continue;
         }
-        let (Some(work_id), Some(bond)) = (claim.work_id, rules.state.bond(&claim.bond)) else {
+        if claim.class_id == pricing.base_class_id {
+            skipped.base_class += 1;
+            continue;
+        }
+        if !pricing.prices_in_compute(claim) {
+            skipped.unpriced += 1;
+            continue;
+        }
+        if rules.claims_with_open_da.contains(id) {
+            skipped.open_da += 1;
+            continue;
+        }
+        let (work_id, bond) = (claim.work_id, rules.state.bond(&claim.bond));
+        let (Some(work_id), Some(bond)) = (work_id, bond) else {
+            if bond.is_none() {
+                skipped.bond_not_held += 1;
+            } else {
+                skipped.unpriced += 1;
+            }
             continue;
         };
         let matured_daa = final_daa
@@ -271,7 +343,7 @@ pub fn native_facts_of_block_v1(
             });
         }
     }
-    facts
+    (facts, skipped)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -330,20 +402,20 @@ pub struct SettlementEvidenceV1 {
 /// evidence arithmetic: [`certify_native_effect_v1`] (the per-effect reference) and
 /// [`certify_native_prefix_v1`] (the O(N + F) sweep) both read their answer from it.
 #[derive(Clone, Debug, Default)]
-struct EvidenceAccumulatorV1 {
+pub(crate) struct EvidenceAccumulatorV1 {
     ids: BTreeSet<Hash64>,
-    anchors: u64,
+    pub(crate) anchors: u64,
     operators: BTreeMap<Hash64, u128>,
     classes: BTreeMap<Hash64, u128>,
-    max_operator: u128,
-    max_class: u128,
-    work: u128,
-    duplicate: bool,
-    overflow: bool,
+    pub(crate) max_operator: u128,
+    pub(crate) max_class: u128,
+    pub(crate) work: u128,
+    pub(crate) duplicate: bool,
+    pub(crate) overflow: bool,
 }
 
 impl EvidenceAccumulatorV1 {
-    fn add_fact(&mut self, f: &MatureUsefulWorkV1) {
+    pub(crate) fn add_fact(&mut self, f: &MatureUsefulWorkV1) {
         if !self.ids.insert(f.identity) {
             self.duplicate = true;
             return;
@@ -370,13 +442,13 @@ impl EvidenceAccumulatorV1 {
     }
 
     /// A distinct anchor that is itself at or after the effect (counted once however many facts share it).
-    fn add_anchor(&mut self) {
+    pub(crate) fn add_anchor(&mut self) {
         self.anchors += 1;
     }
 
     /// The fact-dependent half of a certificate, in the reference order: a duplicated identity, then an
     /// overflow, then depth, work and concentration.
-    fn evidence(&self, policy: PalwSettlementPolicyV1) -> Result<SettlementEvidenceV1, SettlementStopV1> {
+    pub(crate) fn evidence(&self, policy: PalwSettlementPolicyV1) -> Result<SettlementEvidenceV1, SettlementStopV1> {
         use SettlementStopV1::*;
         if self.duplicate {
             return Err(DuplicateWork);
