@@ -38,7 +38,8 @@ use misaka_palw_kernel::evidence::build_evidence_v1;
 use misaka_palw_kernel::hash::Digest;
 use misaka_palw_kernel::job::{DecodeRuleV1, KernelClaimV1, KernelJobV1};
 use misaka_palw_kernel::ledger::{
-    KernelLedgerV1, OutsiderFindingV1, OutsiderV1, ProsecutionV1, PublicSourceV1, claim_seal_v1, proof_seal_v1, single_class_id_v1,
+    KernelLedgerV1, OutsiderFindingV1, OutsiderV1, ProsecutionV1, PublicSourceV1, SaltedCommitV1, claim_seal_v1, claim_seal_v2,
+    proof_seal_v1, single_class_id_v1,
 };
 use misaka_palw_kernel::mode::VerificationModeV1;
 use misaka_palw_kernel::lifecycle::ClaimStateV1;
@@ -464,6 +465,21 @@ fn produce(
     Produced { claim, trace, object }
 }
 
+/// **The seal and the reveal of a produced claim** (OPV-BOOT GAP-B1a): once `palw_panel_free_v1` is reached the ledger opens a seal
+/// only with its salt, so the producer seals `claim_seal_v2(id, salt)` and reveals `CommitClaimSalted`; before the fence, the
+/// historical `claim_seal_v1` and the plain commit. (The test derives the salt from the claim id; a producer draws it from its CSPRNG.)
+fn seal_and_reveal(ledger: &KernelLedgerV1, kid: Digest, reveal: &K) -> (K, K) {
+    let K::CommitClaim { claim, evidence, commitments } = reveal else { panic!("a single-program commit") };
+    let id = claim.id();
+    if ledger.salted_seals_from().is_some_and(|at| ledger.daa.saturating_add(1) >= at) {
+        let salt = misaka_palw_kernel::hash::id(b"misaka-palw/test/claim-salt", &id);
+        let commit = SaltedCommitV1::Claim { claim: claim.clone(), evidence: evidence.clone(), commitments: commitments.clone() };
+        (K::SealClaim { producer: kid, job: claim.job_id, seal: claim_seal_v2(&id, &salt) }, K::CommitClaimSalted { salt, commit })
+    } else {
+        (K::SealClaim { producer: kid, job: claim.job_id, seal: claim_seal_v1(&id) }, reveal.clone())
+    }
+}
+
 fn matmul_at(program: &TirProgramV1, from: u32) -> (u32, u16, u16) {
     for (s, (b, _)) in program.occurrences().iter().enumerate() {
         for (n, node) in program.blocks[*b as usize].nodes.iter().enumerate() {
@@ -677,10 +693,10 @@ impl World {
             }
         });
         let id = produced.claim.id();
-        let seal = K::SealClaim { producer: kid, job: produced.claim.job_id, seal: claim_seal_v1(&id) };
+        let (seal, reveal) = seal_and_reveal(&ledger, kid, &produced.object);
         let o = self.net.route(producer, &seal);
         self.net.send(vec![(producer, o)]).await;
-        let mut o = self.net.route(producer, &produced.object);
+        let mut o = self.net.route(producer, &reveal);
         match delivery {
             Delivery::Direct => {
                 self.net.send(vec![(producer, o)]).await;
@@ -1885,6 +1901,45 @@ async fn g14_opv_an_honest_claim_finalizes_with_no_panel_and_exports_a_panel_ind
 }
 
 /// A lying OPV claim — with no Panel to cover it — is convicted pre-Final by a fresh outsider built from the read API alone.
+/// **OPV-BOOT GAP-B1a on the real node**: past `palw_panel_free_v1` a claim commits only over its SALTED seal. An unsalted reveal of a
+/// v1 seal and a salted reveal whose salt does not open the seal are both dropped by the fold (the blocks stand, nothing commits);
+/// the salted reveal (inner kind 20) commits, and its salt is in the route's rows (table 25), so it is in the committed root.
+#[tokio::test]
+async fn g14_opv_a_claim_commits_only_over_its_salted_seal_and_its_salt_is_kept() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::opv().await;
+    let job = w.job().await;
+    let ledger = w.net.ledger();
+    assert!(ledger.salted_seals_from().is_some(), "the OPV network's fence");
+    let generated = greedy(&w.fx, &ledger, &w.class, &job.prompt, job.max_new_tokens as usize);
+    let kid = w.net.kid(0);
+    let produced = produce(&w.fx, &ledger, &w.class, &job, kid, generated, |_| {});
+    let id = produced.claim.id();
+    // (1) A v1 seal and its unsalted reveal: dropped.
+    let o = w.net.route(0, &K::SealClaim { producer: kid, job: job.id(), seal: claim_seal_v1(&id) });
+    w.net.send(vec![(0, o)]).await;
+    let o = w.net.route(0, &produced.object);
+    w.net.send(vec![(0, o)]).await;
+    assert!(!w.net.ledger().claims.contains_key(&id), "an unsalted reveal past the fence commits nothing");
+    // (2) A v2 seal (the re-seal replaces the v1 one) and a reveal under another salt: dropped.
+    let (seal, reveal) = seal_and_reveal(&w.net.ledger(), kid, &produced.object);
+    let K::CommitClaimSalted { salt, commit } = reveal.clone() else { panic!("past the fence the reveal is salted") };
+    let o = w.net.route(0, &seal);
+    w.net.send(vec![(0, o)]).await;
+    let o = w.net.route(0, &K::CommitClaimSalted { salt: [0xEE; 64], commit });
+    w.net.send(vec![(0, o)]).await;
+    assert!(!w.net.ledger().claims.contains_key(&id), "a salt that does not open the seal commits nothing");
+    // (3) The salted reveal commits; the salt is kept in the route's rows and roots like the ledger.
+    let o = w.net.route(0, &reveal);
+    w.net.send(vec![(0, o)]).await;
+    let ledger = w.net.ledger();
+    assert!(ledger.claims.contains_key(&id), "the salted reveal commits");
+    assert_eq!(ledger.claim_beacon_salt(&id), Some(salt));
+    let route = w.net.api().expect("the route state");
+    assert!(route.rows.keys().any(|(t, _)| *t == misaka_palw_kernel::rows::TABLE_CLAIM_BEACON_SALTS_V1), "table 25 holds the salt");
+    assert_eq!(route.ledger_root().as_bytes(), ledger.root(), "the route's rows root like its ledger, extension included");
+}
+
 #[tokio::test]
 async fn g14_opv_a_lying_claim_is_convicted_by_a_fresh_outsider_before_final() {
     kaspa_core::log::try_init_logger("warn");

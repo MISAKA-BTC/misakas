@@ -191,6 +191,16 @@ impl KernelLedgerV1 {
     /// [`StateRootPartsV1::root`], byte for byte. Once an OPV policy is set the root is [`crate::opv::StateRootPartsV2`]: the
     /// historical root of the whole Panel-licensed route, the policy, the OPV classes and the OPV claim rows.
     pub fn root(&self) -> Digest {
-        if self.opv.is_dormant() { self.root_parts().root() } else { self.root_parts_v2().root() }
+        let base = if self.opv.is_dormant() { self.root_parts().root() } else { self.root_parts_v2().root() };
+        // OPV-BOOT GAP-B1a (tables 25 and 26): an extension only once either holds a row, so every older root is unchanged.
+        if self.claim_beacon_salts.is_empty() && self.forfeited_claim_seals.is_empty() {
+            return base;
+        }
+        let d = |name: &str| format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes();
+        crate::rows::beacon_seal_root_extension_v1(
+            &base,
+            &collection_root(&d("claim-beacon-salts"), self.claim_beacon_salts.len(), self.claim_beacon_salts.iter()),
+            &collection_root(&d("forfeited-claim-seals"), self.forfeited_claim_seals.len(), self.forfeited_claim_seals.iter()),
+        )
     }
 }

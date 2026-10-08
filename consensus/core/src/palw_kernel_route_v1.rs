@@ -660,15 +660,15 @@ impl PalwKernelRouteStateV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum PalwKernelChunkTargetV1 {
+    /// A kernel claim: the assembled object is a `FileProof` against it or a `Respond` to a demand on it (tag 110).
+    Claim(Digest) = 0,
+    /// An onboarding artifact binding: the assembled object is its refutation (tag 105).
+    Binding { v2_class: Hash64, kernel_param_root: Hash64 } = 1,
     /// **OPV-BOOT #1: the conformance attempt of V2 class `v2_class`** — the assembled object is that class's conformance evidence
     /// (tag 109: a Post by the class's registrant, opening the group itself, or a Refute by anyone), applied by its own arm. Its
     /// deadline is OPV-BOOT's `palw_conformance_chunk_target_v1(route, v2_class, daa)` (the agreed signature: the attempt's evidence
     /// deadline for a Post, its refutation window's end for a Refute; `None` when no attempt is open).
     Conformance { v2_class: Hash64 } = 2,
-    /// A kernel claim: the assembled object is a `FileProof` against it or a `Respond` to a demand on it (tag 110).
-    Claim(Digest) = 0,
-    /// An onboarding artifact binding: the assembled object is its refutation (tag 105).
-    Binding { v2_class: Hash64, kernel_param_root: Hash64 } = 1,
 }
 
 /// **One chunk of a prosecution object in the route's own lane** (the body of `KernelRouteChunkV1`, tag 113). `group` is
@@ -752,11 +752,15 @@ pub fn palw_kernel_chunk_inner_matches_target_v1(
         (Obj::KernelRouteV1 { bytes, .. }, PalwKernelChunkTargetV1::Claim(id)) => {
             matches!(K::decode(bytes), Ok(K::FileProof { claim, .. } | K::Respond { claim, .. }) if claim == *id)
         }
-        (Obj::ConformanceEvidenceV1 { v2_class, .. }, PalwKernelChunkTargetV1::Conformance { v2_class: class }) => v2_class == class,
         (
             Obj::ArtifactBindingChallengedV1 { v2_class, kernel_param_root, .. },
             PalwKernelChunkTargetV1::Binding { v2_class: class, kernel_param_root: root },
         ) => v2_class == class && kernel_param_root == root,
+        (Obj::ConformanceEvidenceV1 { v2_class, .. }, PalwKernelChunkTargetV1::Conformance { v2_class: class }) => v2_class == class,
+        _ => false,
+    }
+}
+
 /// **OPV-BOOT #1's deadline, until OPV-BOOT's own lands**: the agreed `palw_conformance_chunk_target_v1(route, v2_class, daa) ->
 /// Option<u64>` (the last DAA a part may arrive; `None`: no attempt open) is OPV-BOOT's to implement over its attempt rows. Until it
 /// is wired here this answers `None`, so every conformance group is refused at its first chunk — the lane adds no acceptance before
@@ -764,10 +768,6 @@ pub fn palw_kernel_chunk_inner_matches_target_v1(
 pub fn palw_conformance_chunk_target_pending_v1(route: &PalwKernelRouteStateV1, v2_class: &Hash64, daa: u64) -> Option<u64> {
     let _ = (route, v2_class, daa);
     None
-}
-
-        _ => false,
-    }
 }
 
 /// **The last DAA a proof against (or a response on) a claim in `state` could still matter** — an upper bound read from the claim
@@ -838,11 +838,11 @@ impl PalwKernelRouteStateV1 {
                 palw_kernel_claim_horizon_bound_v1(&self.header.policy, row.committed_daa, row.liability_until, &row.life.state)
             }
             PalwKernelChunkTargetV1::Binding { v2_class, kernel_param_root } => {
-            PalwKernelChunkTargetV1::Conformance { v2_class } => palw_conformance_chunk_target_pending_v1(self, v2_class, daa),
                 let row = self.artifact_binding_v1(v2_class, kernel_param_root)?;
                 // Refutable while `daa < final_daa`.
                 (!row.refuted).then(|| row.final_daa.saturating_sub(1))
             }
+            PalwKernelChunkTargetV1::Conformance { v2_class } => palw_conformance_chunk_target_pending_v1(self, v2_class, daa),
         }
     }
 
@@ -903,6 +903,14 @@ mod tests {
         assert_eq!(state.ledger().unwrap().root(), state.ledger_root().as_bytes(), "an empty OPV state roots like an empty OPV ledger");
         let plain = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
         assert_ne!(state.ledger_root(), plain.ledger_root(), "the OPV root form is not the historical one");
+        // OPV-BOOT GAP-B1a: with tables 25 and 26 empty there is no root extension — both forms are what they were before them.
+        let (opv_ledger, plain_ledger) = (state.ledger().unwrap(), plain.ledger().unwrap());
+        assert!(opv_ledger.claim_beacon_salts.is_empty() && opv_ledger.forfeited_claim_seals.is_empty());
+        assert_eq!(state.ledger_root().as_bytes(), opv_ledger.root_parts_v2().root(), "the OPV form, unextended");
+        assert_eq!(plain.ledger_root().as_bytes(), plain_ledger.root_parts().root(), "the historical form, unextended");
+        // The v3 beacon's window against the interim seal TTL: OPV-BOOT's interim W = 40 needs 2·W ≤ 100.
+        assert!(misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1(&p, 40));
+        assert!(!misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1(&p, p.seal_ttl_daa / 2 + 1));
     }
 
     #[test]

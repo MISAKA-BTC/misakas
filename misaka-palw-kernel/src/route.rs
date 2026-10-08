@@ -51,6 +51,9 @@ pub const TAG_REGISTER_CLASS_V2: u8 = 13;
 pub const TAG_REGISTER_PIPELINE_CLASS_V2: u8 = 14;
 /// GAP-R7: an accuser's seal of its proof (seal, then reveal; the earliest seal of the convicting bytes is paid the bounty).
 pub const TAG_SEAL_PROOF_V1: u8 = 15;
+// 16–18 are K2S's (K2-TIR-v4), 19 R4X's (Spec); 21 and 22 were reserved beside 20 and are not used.
+/// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
+pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -69,6 +72,11 @@ pub const MAX_SEAL_CLAIM_BYTES_V1: usize = 256;
 pub const MAX_REGISTER_CLASS_V2_BYTES_V1: usize = MAX_REGISTER_CLASS_BYTES_V1;
 pub const MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1: usize = MAX_REGISTER_PIPELINE_CLASS_BYTES_V1;
 pub const MAX_SEAL_PROOF_BYTES_V1: usize = 256;
+/// A salted reveal: the largest commit it can carry, its salt and the inner discriminant. The commit it carries is ALSO held to its
+/// own kind's ceiling ([`KernelRouteObjectV1::max_encoded_bytes`]), so a salt never buys a larger claim.
+pub const MAX_COMMIT_CLAIM_SALTED_BYTES_V1: usize = MAX_COMMIT_PIPELINE_CLAIM_BYTES_V1 + SALTED_REVEAL_OVERHEAD_V1;
+/// What a salt adds to the commit it carries: the salt and the commit's own discriminant inside [`SaltedCommitV1`].
+pub const SALTED_REVEAL_OVERHEAD_V1: usize = 64 + 1;
 
 /// **Who signed an object**: the bond whose key the consumer verified. The ledger checks it names the actor the object names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
@@ -87,6 +95,37 @@ pub enum ProsecutionV1 {
     Decode(DecodeFaultV1) = 1,
     /// A pipeline fault's canonical bytes ([`crate::pipeline_public::PipelineFaultWireV1`]: stage, edge or decode).
     Pipeline(Vec<u8>) = 2,
+}
+
+/// **The commit a salted reveal carries** (inner kind 20): the commit objects' own fields, under their own discriminants (5 and 6,
+/// the commit tags — pinned by a test). A separate,
+/// non-recursive enum — a reveal can never carry another reveal. (K2S appends its segmented commit here at integration.)
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum SaltedCommitV1 {
+    /// A single-program claim, as `CommitClaim` carries it.
+    Claim { claim: KernelClaimV1, evidence: VerificationEvidenceV1, commitments: Vec<Vec<Vec<Digest>>> } = 5,
+    /// A pipeline claim, as `CommitPipelineClaim` carries it.
+    Pipeline { claim: PipelineClaimV1, evidence: PipelineEvidenceV1, stages: Vec<StageCommitmentsV1> } = 6,
+}
+
+impl SaltedCommitV1 {
+    /// The kind the commit would have been carried as without its salt (its ceiling and its name).
+    pub const fn commit_tag(&self) -> u8 {
+        match self {
+            Self::Claim { .. } => TAG_COMMIT_CLAIM_V1,
+            Self::Pipeline { .. } => TAG_COMMIT_PIPELINE_CLAIM_V1,
+        }
+    }
+
+    /// The producer bond the commit names (the reveal's signer).
+    pub fn producer(&self) -> Digest {
+        match self {
+            Self::Claim { claim, .. } => claim.producer_bond,
+            Self::Pipeline { claim, .. } => claim.producer_bond,
+        }
+    }
 }
 
 /// **The public objects of the kernel route.** Every one is signed by a bond (see [`AuthV1`]); none mints or moves money by
@@ -196,6 +235,16 @@ pub enum KernelRouteObjectV1 {
         claim: Digest,
         seal: Digest,
     } = 15,
+    /// **A salted claim reveal** (OPV-BOOT GAP-B1a; signed by the commit's producer): the commit and the 64-byte salt its seal was
+    /// made with, `seal = claim_seal_v2(claim id, salt)`, in ONE object — the salt is public exactly when the claim is. A claim of a
+    /// deterministic class is a function of its public job and producer, so `claim_seal_v1(claim id)` hides nothing and a beacon
+    /// over such seals could be ground by its last contributor; a secret salt (the producer's CSPRNG) makes the seal hiding. A node
+    /// accepts this tag only once `palw_panel_free_v1` is reached; past it a seal accepted at or after the fence is revealed only
+    /// this way, and the ledger keeps the salt (`claim_beacon_salts`) for the sealed-source beacon v3.
+    CommitClaimSalted {
+        salt: Digest,
+        commit: SaltedCommitV1,
+    } = 20,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -217,6 +266,15 @@ pub fn proof_seal_of_digest_v1(claim: &Digest, accuser: &Digest, proof_digest: &
 /// The seal of a claim: `H("misaka-palw/kernel/claim-seal/v1"; claim id)` (the claim id binds the producer, job, output and evidence).
 pub fn claim_seal_v1(claim_id: &Digest) -> Digest {
     crate::hash::id(b"misaka-palw/kernel/claim-seal/v1", claim_id)
+}
+
+/// **The salted seal of a claim** (OPV-BOOT GAP-B1a): `H("misaka-palw/kernel/claim-seal/v2"; claim id ‖ salt)` with a 64-byte salt
+/// from the producer's CSPRNG — the seal hides the claim until the salted reveal ([`KernelRouteObjectV1::CommitClaimSalted`]).
+pub fn claim_seal_v2(claim_id: &Digest, salt: &Digest) -> Digest {
+    let mut preimage = [0u8; 128];
+    preimage[..64].copy_from_slice(claim_id);
+    preimage[64..].copy_from_slice(salt);
+    crate::hash::id(b"misaka-palw/kernel/claim-seal/v2", &preimage)
 }
 
 /// Why an object was not applied. The ledger's state is **byte-identical** to what it was before the call.
@@ -294,6 +352,7 @@ impl KernelRouteObjectV1 {
             Self::RegisterClassV2 { .. } => TAG_REGISTER_CLASS_V2,
             Self::RegisterPipelineClassV2 { .. } => TAG_REGISTER_PIPELINE_CLASS_V2,
             Self::SealProof { .. } => TAG_SEAL_PROOF_V1,
+            Self::CommitClaimSalted { .. } => TAG_COMMIT_CLAIM_SALTED_V1,
         }
     }
 
@@ -301,10 +360,16 @@ impl KernelRouteObjectV1 {
         name_of_tag(self.tag())
     }
 
-    /// The ceiling on this variant's encoded size (the version byte included).
+    /// The ceiling on this variant's encoded size (the version byte included). A salted reveal's is the ceiling of the commit it
+    /// carries plus the salt: a salt never buys a larger claim.
     pub const fn max_encoded_bytes(&self) -> usize {
-        match max_encoded_bytes_of_tag(self.tag()) {
-            Some(n) => n,
+        let tag = match self {
+            Self::CommitClaimSalted { commit, .. } => commit.commit_tag(),
+            _ => self.tag(),
+        };
+        let extra = if matches!(self, Self::CommitClaimSalted { .. }) { SALTED_REVEAL_OVERHEAD_V1 } else { 0 };
+        match max_encoded_bytes_of_tag(tag) {
+            Some(n) => n + extra,
             None => 0,
         }
     }
@@ -343,6 +408,14 @@ impl KernelRouteObjectV1 {
         }
         let object: Self =
             borsh::from_slice(rest).map_err(|e| KernelRefusalV1::new(name_of_tag(tag), RefusalKindV1::Malformed, e.to_string()))?;
+        // A variant whose ceiling depends on what it carries (a salted reveal: its commit's own) is held to it once parsed.
+        if bytes.len() > object.max_encoded_bytes() {
+            return Err(KernelRefusalV1::new(
+                name_of_tag(tag),
+                RefusalKindV1::Oversized,
+                format!("{} bytes past the {}-byte ceiling of what it carries", bytes.len(), object.max_encoded_bytes()),
+            ));
+        }
         if object.encode() != bytes {
             return Err(KernelRefusalV1::new(name_of_tag(tag), RefusalKindV1::Malformed, "not the canonical encoding"));
         }
@@ -367,6 +440,7 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_REGISTER_CLASS_V2 => "RegisterClassV2",
         TAG_REGISTER_PIPELINE_CLASS_V2 => "RegisterPipelineClassV2",
         TAG_SEAL_PROOF_V1 => "SealProof",
+        TAG_COMMIT_CLAIM_SALTED_V1 => "CommitClaimSalted",
         _ => "Unknown",
     }
 }
@@ -389,6 +463,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_REGISTER_CLASS_V2 => MAX_REGISTER_CLASS_V2_BYTES_V1,
         TAG_REGISTER_PIPELINE_CLASS_V2 => MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1,
         TAG_SEAL_PROOF_V1 => MAX_SEAL_PROOF_BYTES_V1,
+        TAG_COMMIT_CLAIM_SALTED_V1 => MAX_COMMIT_CLAIM_SALTED_BYTES_V1,
         _ => return None,
     })
 }
@@ -442,9 +517,53 @@ mod tests {
             assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
             assert_ne!(o.name(), "Unknown");
         }
-        let tags: Vec<u8> = (1..=15).collect();
+        let tags: Vec<u8> = (1..=15).chain([TAG_COMMIT_CLAIM_SALTED_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none() && max_encoded_bytes_of_tag(16).is_none());
+        assert!((21..=22).all(|t| max_encoded_bytes_of_tag(t).is_none()), "21 and 22 are not used");
+    }
+
+    /// **Inner kind 20** (OPV-BOOT GAP-B1a): the salted reveal's wire form is `version ‖ 20 ‖ salt ‖ the commit's own tag ‖ fields`,
+    /// its ceiling is the carried commit's own plus the salt, and the seal it opens is `claim_seal_v2`, which no other salt (and no
+    /// v1 seal) matches.
+    #[test]
+    fn the_salted_reveal_is_kind_20_carries_its_commits_own_tag_and_opens_only_its_v2_seal() {
+        let claim = PipelineClaimV1 {
+            job_id: [1; 64],
+            producer_bond: [2; 64],
+            generated: vec![3],
+            output_root: [5; 64],
+            evidence_root: [4; 64],
+        };
+        let evidence = PipelineEvidenceV1 {
+            network_domain: [0; 64],
+            ruleset_digest: [0; 64],
+            class_binding_id: [0; 64],
+            pipeline_root: [0; 64],
+            plan_root: [0; 64],
+            job_root: [0; 64],
+            random_binding: [0; 64],
+            stages: vec![],
+            output_root: [0; 64],
+        };
+        let o = KernelRouteObjectV1::CommitClaimSalted {
+            salt: [9; 64],
+            commit: SaltedCommitV1::Pipeline { claim: claim.clone(), evidence, stages: vec![] },
+        };
+        let bytes = o.encode();
+        assert_eq!(&bytes[..2], &[KERNEL_ROUTE_VERSION_V1, TAG_COMMIT_CLAIM_SALTED_V1]);
+        assert_eq!(&bytes[2..66], &[9u8; 64]);
+        assert_eq!(bytes[66], TAG_COMMIT_PIPELINE_CLAIM_V1, "the carried commit keeps its own discriminant");
+        assert_eq!((o.name(), o.max_encoded_bytes()), ("CommitClaimSalted", MAX_COMMIT_PIPELINE_CLAIM_BYTES_V1 + 65));
+        assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
+        assert_eq!(o.tag(), 20);
+        let KernelRouteObjectV1::CommitClaimSalted { commit, .. } = &o else { unreachable!() };
+        assert_eq!((commit.commit_tag(), commit.producer()), (TAG_COMMIT_PIPELINE_CLAIM_V1, [2; 64]));
+        let id = [7u8; 64];
+        let seal = claim_seal_v2(&id, &[9; 64]);
+        assert_ne!(seal, claim_seal_v2(&id, &[8; 64]), "another salt is another seal");
+        assert_ne!(seal, claim_seal_v1(&id), "a v1 seal is not a v2 seal");
+        assert_ne!(seal, claim_seal_v2(&[6; 64], &[9; 64]), "another claim is another seal");
     }
 
     #[test]

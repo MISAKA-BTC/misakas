@@ -1111,6 +1111,8 @@ fn the_optimistic_state_root_form_is_versioned_and_pinned_by_a_golden_vector() {
         "a change of the canonical encoding of the OPV state is a new root version"
     );
     assert_eq!(hex(&opv.root()), GOLDEN_OPV_ROOT);
+    // OPV-BOOT GAP-B1a: with tables 25 and 26 empty the root is the OPV form itself (no extension).
+    assert!(opv.claim_beacon_salts.is_empty() && opv.forfeited_claim_seals.is_empty());
     // Any change of the policy is a different root.
     let mut other = opv_example();
     other.economics.reservation_per_claim += 1;
@@ -1123,3 +1125,162 @@ const GOLDEN_OPV_PARTS: [&str; 4] = ["c80c0cd94e6c9465", "557931bf322541c3", "b0
 /// its policy the job fee and escrow TTL) and F-C4R3-05 (the OPV policy's admission fee).
 const GOLDEN_OPV_ROOT: &str =
     "2be2a83576f67a33ef9a441d2d9dd263b14b63b7ef140080e9e5cd30b003e79a178dc93552523b394fe367cdd93fb54a32b3f290fb0d607e4c7079236fc603e5";
+
+// ── OPV-BOOT GAP-B1a: the salted claim seal (claim seal v2) past `palw_panel_free_v1` ─────────────────────────────────────────────
+
+/// The rows of `l` root like `l`, and rebuild a ledger that roots like it (tables 25 and 26 included).
+fn rows_agree(l: &KernelLedgerV1) {
+    let rows = l.to_rows();
+    let from_rows = misaka_palw_kernel::rows::root_of_rows(&l.policy, l.config_root(), l.scalars(), l.opv.policy.as_ref(), &rows);
+    assert_eq!(from_rows, l.root(), "the rows root like the ledger");
+    let rebuilt = KernelLedgerV1::from_rows(l, l.scalars(), &rows).unwrap();
+    assert_eq!(rebuilt.root(), l.root(), "and rebuild it");
+    assert_eq!(
+        (rebuilt.claim_beacon_salts.clone(), rebuilt.forfeited_claim_seals.clone()),
+        (l.claim_beacon_salts.clone(), l.forfeited_claim_seals.clone())
+    );
+}
+
+/// **Past `palw_panel_free_v1` a claim opens only its SALTED seal, and the ledger keeps the salt for the sealed-source beacon v3**
+/// (OPV-BOOT GAP-B1a). A deterministic class's claim is a function of its public job and its producer, so `claim_seal_v1(claim id)`
+/// hides nothing: anyone who runs the model computes it the moment the seal is posted. `claim_seal_v2(id, salt)` with a secret
+/// 64-byte salt does hide it, and the salt is revealed atomically with the claim (`CommitClaimSalted`, inner kind 20). An unsalted
+/// reveal of a seal accepted past the fence is refused (a sealer must not choose, after seeing the honest salts, between "revealed
+/// but no beacon source" and a veto); a salt that does not open the seal is refused; nothing is committed by either.
+#[test]
+fn past_the_panel_free_fence_a_claim_opens_only_its_salted_seal_and_the_salt_is_kept_for_the_beacon() {
+    use misaka_palw_kernel::ledger::{ClaimBeaconSealV1, LedgerTxV1, SaltedCommitV1, claim_seal_v1, claim_seal_v2};
+    let mut w = World::new_opv();
+    assert!(w.l.salted_seals_in_force() && w.l.salted_seals_from() == Some(0));
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let h = w.honest(&job, 3);
+    let id = h.claim.id();
+    let (auth, plain) = h.tx.clone().signed(PRODUCER);
+    let O::CommitClaim { claim, evidence, commitments } = plain.clone() else { unreachable!() };
+    let salted = |salt: Digest| O::CommitClaimSalted {
+        salt,
+        commit: SaltedCommitV1::Claim { claim: claim.clone(), evidence: evidence.clone(), commitments: commitments.clone() },
+    };
+    let obj = |object: O| LedgerTxV1::Object { auth, object };
+    let seal = |s: Digest| obj(O::SealClaim { producer: PRODUCER, job: job.id(), seal: s });
+    // (1) A v1 seal: its unsalted reveal is refused past the fence, and no salt opens it.
+    w.block_raw(4, vec![seal(claim_seal_v1(&id))]);
+    let ev = w.block_raw(6, vec![obj(plain.clone())]);
+    assert!(refused(&ev).unwrap().contains("revealed only with its salt"), "{ev:?}");
+    let ev = w.block_raw(7, vec![obj(salted([1; 64]))]);
+    assert!(refused(&ev).unwrap().contains("salt does not open"), "{ev:?}");
+    // (2) A v2 seal (a re-seal: the one deposit stays): another salt does not open it, and neither does an unsalted reveal.
+    let salt = [0x5A; 64];
+    w.block_raw(8, vec![seal(claim_seal_v2(&id, &salt))]);
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, w.l.policy.seal_deposit, "one deposit across the re-seal");
+    let ev = w.block_raw(10, vec![obj(salted([0x5B; 64]))]);
+    assert!(refused(&ev).unwrap().contains("salt does not open"), "{ev:?}");
+    let ev = w.block_raw(10, vec![obj(plain)]);
+    assert!(refused(&ev).unwrap().contains("revealed only with its salt"), "{ev:?}");
+    assert!(!w.l.claims.contains_key(&id) && w.l.claim_beacon_salts.is_empty(), "nothing committed, nothing kept");
+    // (3) The salted reveal commits, over the seal's DAA, and the salt is kept.
+    let ev = w.block_raw(11, vec![obj(salted(salt))]);
+    assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
+    assert_eq!((w.l.claim_beacon_salt(&id), w.l.claims[&id].sealed_daa, w.l.claims[&id].committed_daa), (Some(salt), 8, 11));
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, 1000, "the seal's deposit returned at the reveal; the claim's reservation alone");
+    assert_eq!(
+        w.l.claim_beacon_seals_v1(),
+        vec![ClaimBeaconSealV1 {
+            job: job.id(),
+            producer: PRODUCER,
+            seal: claim_seal_v2(&id, &salt),
+            sealed_daa: 8,
+            revealed: Some((id, 11, salt)),
+            forfeited_daa: None,
+        }]
+    );
+    // The salt is state: in the root (one extension over tables 25 and 26), in the rows, and rebuilt from them.
+    assert_ne!(w.l.root(), w.l.root_parts_v2().root(), "the extension is present once a salt is kept");
+    rows_agree(&w.l);
+    // A replay from genesis reaches the same state.
+    assert_eq!(KernelLedgerV1::replay(&w.genesis, &w.blocks).root(), w.l.root());
+    // The harness's own path (every reveal salted past the fence) finalizes like any OPV claim.
+    let ev = w.block(61, vec![]);
+    assert_eq!(ev, vec![E::Final { claim: id, reward: 7 }]);
+}
+
+/// **Below `palw_panel_free_v1` a salted reveal rides unjudged** (the A-2 rule): no OPV policy, no salted-seal rule — the ledger
+/// refuses inner kind 20 and leaves its state byte-identical (the consumer checks it), and the historical unsalted path is intact.
+#[test]
+fn below_the_panel_free_fence_a_salted_reveal_is_refused_and_changes_nothing() {
+    use misaka_palw_kernel::ledger::{LedgerTxV1, SaltedCommitV1, claim_seal_v2};
+    let mut w = World::new();
+    assert!(!w.l.salted_seals_in_force() && w.l.salted_seals_from().is_none());
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let h = w.honest(&job, 3);
+    let id = h.claim.id();
+    let (auth, plain) = h.tx.clone().signed(PRODUCER);
+    let O::CommitClaim { claim, evidence, commitments } = plain else { unreachable!() };
+    let salt = [0x5A; 64];
+    let reveal = O::CommitClaimSalted { salt, commit: SaltedCommitV1::Claim { claim, evidence, commitments } };
+    w.block_raw(
+        4,
+        vec![LedgerTxV1::Object { auth, object: O::SealClaim { producer: PRODUCER, job: job.id(), seal: claim_seal_v2(&id, &salt) } }],
+    );
+    // (the consumer asserts that the refusal leaves the root byte-identical)
+    let ev = w.block_raw(6, vec![LedgerTxV1::Object { auth, object: reveal }]);
+    assert!(refused(&ev).unwrap().contains("palw_panel_free_v1 is not in force"), "{ev:?}");
+    assert!(!w.l.claims.contains_key(&id) && w.l.claim_beacon_salts.is_empty());
+    // The historical path is untouched: the harness seals v1 and reveals unsalted.
+    let ev = w.block(10, vec![h.tx, T::PanelCovered { claim: id }]);
+    assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
+    assert!(w.l.claim_beacon_salts.is_empty() && w.l.forfeited_claim_seals.is_empty(), "no salt, no row: the historical root");
+    assert_eq!(w.l.root(), w.l.root_parts().root());
+}
+
+/// **A seal accepted past the fence that expires unrevealed stays readable** (table 26), so a withheld seal stays in the v3
+/// beacon's mix and vetoes it instead of silently dropping out of it (SOUND SG-01a(i)). A re-seal counts at its LATEST seal. The
+/// beacon read lists live, revealed and forfeited seals together in `(sealed_daa, seal)` order. And the v3 window fits the TTL:
+/// `2·W ≤ seal_ttl_daa` (OPV-BOOT's interim W = 40 against the interim TTL of 100).
+#[test]
+fn past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists_every_seal_in_seal_order() {
+    use misaka_palw_kernel::ledger::{ForfeitedSealRowV1, claim_seal_v2, seal_ttl_admits_beacon_window_v1};
+    let mut w = World::new_opv();
+    let ttl = w.l.policy.seal_ttl_daa;
+    assert!(seal_ttl_admits_beacon_window_v1(&w.l.policy, 40) && seal_ttl_admits_beacon_window_v1(&w.l.policy, ttl / 2));
+    assert!(!seal_ttl_admits_beacon_window_v1(&w.l.policy, ttl / 2 + 1));
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let withheld = |n: u8| claim_seal_v2(&[n; 64], &[0x77; 64]);
+    // SQUATTER seals at 20 and re-seals at 30 (only the latest counts); HONEST seals at 25. Neither reveals.
+    w.block(20, vec![T::SealClaim { producer: SQUATTER, job: job.id(), seal: withheld(1) }]);
+    w.block(25, vec![T::SealClaim { producer: HONEST, job: job.id(), seal: withheld(2) }]);
+    w.block(30, vec![T::SealClaim { producer: SQUATTER, job: job.id(), seal: withheld(3) }]);
+    let live = w.l.claim_beacon_seals_v1();
+    assert_eq!(
+        live.iter().map(|s| (s.producer, s.sealed_daa, s.seal)).collect::<Vec<_>>(),
+        vec![(HONEST, 25, withheld(2)), (SQUATTER, 30, withheld(3))]
+    );
+    assert!(live.iter().all(|s| s.revealed.is_none() && s.forfeited_daa.is_none()), "live seals");
+    // HONEST's expires first (25 + TTL), SQUATTER's latest seal later (30 + TTL): both are kept, with their seal and DAA.
+    let ev = w.block(25 + ttl + 1, vec![]);
+    assert!(ev.iter().any(|e| matches!(e, E::SealForfeited { producer, .. } if *producer == HONEST)), "{ev:?}");
+    w.block(30 + ttl + 1, vec![]);
+    assert!(w.l.seals.is_empty());
+    assert_eq!(
+        w.l.forfeited_claim_seals.iter().map(|(k, r)| (*k, *r)).collect::<Vec<_>>(),
+        vec![
+            ((job.id(), HONEST, 25), ForfeitedSealRowV1 { seal: withheld(2), forfeited_daa: 25 + ttl + 1 }),
+            ((job.id(), SQUATTER, 30), ForfeitedSealRowV1 { seal: withheld(3), forfeited_daa: 30 + ttl + 1 }),
+        ],
+        "both withheld seals are kept (HONEST's key sorts first), the re-sealed one at its latest seal"
+    );
+    // An honest claim revealed salted afterwards sorts after them; every seal is in the read, in seal order.
+    let h = w.honest(&job, 3);
+    let id = h.claim.id();
+    let at = 30 + ttl + 5;
+    let ev = w.block(at, vec![h.tx]);
+    assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
+    let read = w.l.claim_beacon_seals_v1();
+    assert_eq!(
+        read.iter().map(|s| (s.sealed_daa, s.forfeited_daa.is_some(), s.revealed.is_some())).collect::<Vec<_>>(),
+        vec![(25, true, false), (30, true, false), (30 + ttl + 1, false, true),]
+    );
+    assert_eq!(read[2].revealed, Some((id, at, common::chain::test_salt(&id))));
+    rows_agree(&w.l);
+    assert_eq!(KernelLedgerV1::replay(&w.genesis, &w.blocks).root(), w.l.root());
+}

@@ -13516,6 +13516,15 @@ impl VirtualStateProcessor {
         {
             return Err("a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)".to_string());
         }
+        // **OPV-BOOT GAP-B1a: a salted claim reveal (inner kind 20) rides the same fence** (A-2: below it, dropped as a build without
+        // the kind drops it at the kernel's decode; the ledger refuses it too).
+        if matches!(object, misaka_palw_kernel::route::KernelRouteObjectV1::CommitClaimSalted { .. })
+            && !self.palw_kernel_opv_at(daa_score)
+        {
+            return Err(
+                "a salted claim reveal is refused: palw_panel_free_v1 is not in force at this block (claim seal v2)".to_string()
+            );
+        }
         Ok(())
     }
 

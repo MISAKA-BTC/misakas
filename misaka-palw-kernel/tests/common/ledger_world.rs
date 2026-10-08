@@ -175,6 +175,8 @@ impl World {
 
     pub fn block(&mut self, daa: u64, txs: Vec<T>) -> Vec<E> {
         // Seal, then reveal: every claim of this block is sealed in a block at the ledger's current DAA first.
+        // Past `palw_panel_free_v1` every reveal carries its seal's salt (OPV-BOOT GAP-B1a).
+        let txs = super::chain::salted(&self.l, txs);
         let seals = seals_for(&txs);
         if !seals.is_empty() && self.l.daa < daa {
             let sb = block_of(self.l.daa, seals, PRODUCER);

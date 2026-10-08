@@ -223,6 +223,8 @@ impl World {
     }
 
     fn block(&mut self, daa: u64, txs: Vec<T>) -> Vec<E> {
+        // Past `palw_panel_free_v1` every reveal carries its seal's salt (OPV-BOOT GAP-B1a).
+        let txs = common::chain::salted(&self.l, txs);
         let seals = common::chain::seals_for(&txs);
         if !seals.is_empty() && self.l.daa < daa {
             let sb = block_of(self.l.daa, seals, PRODUCER);

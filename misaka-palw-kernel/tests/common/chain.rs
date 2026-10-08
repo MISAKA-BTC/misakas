@@ -12,7 +12,7 @@ use misaka_palw_kernel::evidence::VerificationEvidenceV1;
 use misaka_palw_kernel::hash::Digest;
 use misaka_palw_kernel::job::{DecodeRuleV1, KernelClaimV1, KernelJobV1};
 use misaka_palw_kernel::ledger::{
-    AuthV1, KernelLedgerV1, KernelRouteObjectV1 as O, LedgerBlockV1, LedgerEventV1, LedgerTxV1, ProsecutionV1,
+    AuthV1, KernelLedgerV1, KernelRouteObjectV1 as O, LedgerBlockV1, LedgerEventV1, LedgerTxV1, ProsecutionV1, SaltedCommitV1,
 };
 use misaka_palw_kernel::pipeline::PipelineEvidenceV1;
 use misaka_palw_kernel::pipeline::PipelinePlanV1;
@@ -106,13 +106,50 @@ pub enum T {
         claim: Digest,
         seal: Digest,
     },
+    /// OPV-BOOT GAP-B1a: a salted reveal (what [`salted`] makes of a commit past `palw_panel_free_v1`).
+    CommitClaimSalted {
+        salt: Digest,
+        commit: SaltedCommitV1,
+    },
+}
+
+/// The harness's salt of a claim (a producer draws its own from its CSPRNG).
+pub fn test_salt(claim_id: &Digest) -> Digest {
+    misaka_palw_kernel::hash::id(b"misaka-palw/test/claim-salt", claim_id)
+}
+
+/// **The commits among `txs` as `l` must see them**: past `palw_panel_free_v1` (at the DAA the harness seals them, the ledger's
+/// clock) every reveal carries its seal's salt (OPV-BOOT GAP-B1a), so each commit becomes a salted reveal under [`test_salt`];
+/// before the fence (or with no OPV policy) `txs` is returned as it is.
+pub fn salted(l: &KernelLedgerV1, txs: Vec<T>) -> Vec<T> {
+    if !l.salted_seals_from().is_some_and(|at| l.daa >= at) {
+        return txs;
+    }
+    txs.into_iter()
+        .map(|t| match t {
+            T::CommitClaim { claim, evidence, commitments } => {
+                T::CommitClaimSalted { salt: test_salt(&claim.id()), commit: SaltedCommitV1::Claim { claim, evidence, commitments } }
+            }
+            T::CommitPipelineClaim { claim, evidence, stages } => {
+                T::CommitClaimSalted { salt: test_salt(&claim.id()), commit: SaltedCommitV1::Pipeline { claim, evidence, stages } }
+            }
+            other => other,
+        })
+        .collect()
 }
 
 /// The seals the claims among `txs` need (the harness seals every claim one block before revealing it, as a producer would).
 pub fn seals_for(txs: &[T]) -> Vec<T> {
-    use misaka_palw_kernel::ledger::claim_seal_v1;
+    use misaka_palw_kernel::ledger::{claim_seal_v1, claim_seal_v2};
     txs.iter()
         .filter_map(|t| match t {
+            T::CommitClaimSalted { salt, commit } => {
+                let (job, id) = match commit {
+                    SaltedCommitV1::Claim { claim, .. } => (claim.job_id, claim.id()),
+                    SaltedCommitV1::Pipeline { claim, .. } => (claim.job_id, claim.id()),
+                };
+                Some(T::SealClaim { producer: commit.producer(), job, seal: claim_seal_v2(&id, salt) })
+            }
             T::CommitClaim { claim, .. } => {
                 Some(T::SealClaim { producer: claim.producer_bond, job: claim.job_id, seal: claim_seal_v1(&claim.id()) })
             }
@@ -174,6 +211,7 @@ impl T {
             T::Respond { claim, stage, position, bytes } => vec![obj(signer, O::Respond { claim, stage, position, bytes })],
             T::SealClaim { producer, job, seal } => vec![obj(producer, O::SealClaim { producer, job, seal })],
             T::SealProof { accuser, claim, seal } => vec![obj(accuser, O::SealProof { accuser, claim, seal })],
+            T::CommitClaimSalted { salt, commit } => vec![obj(commit.producer(), O::CommitClaimSalted { salt, commit })],
         }
     }
 }

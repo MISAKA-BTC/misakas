@@ -104,8 +104,8 @@ use crate::public::{
 };
 use crate::receipt::TallyStateV1;
 pub use crate::route::{
-    AuthV1, KernelRefusalV1, KernelRouteObjectV1, ProsecutionV1, RefusalKindV1, claim_seal_v1, proof_digest_v1,
-    proof_seal_of_digest_v1, proof_seal_v1,
+    AuthV1, KernelRefusalV1, KernelRouteObjectV1, ProsecutionV1, RefusalKindV1, SaltedCommitV1, claim_seal_v1, claim_seal_v2,
+    proof_digest_v1, proof_seal_of_digest_v1, proof_seal_v1,
 };
 use crate::settle::{SettlementInstructionV1, SettlementKindV1};
 use crate::trace::{EvidenceV1, ParamCommitmentsV1, derived_mask_v1, tensor_commitment};
@@ -339,6 +339,32 @@ pub struct JobEscrowRowV1 {
     pub poster: Digest,
     pub amount: u64,
     pub posted_daa: u64,
+}
+
+/// **A claim seal that expired unrevealed past `palw_panel_free_v1`** (table 26; key `(job, producer, sealed_daa)`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ForfeitedSealRowV1 {
+    pub seal: Digest,
+    pub forfeited_daa: u64,
+}
+
+/// **One claim seal as the sealed-source beacon v3 reads it** ([`KernelLedgerV1::claim_beacon_seals_v1`]): live (neither field),
+/// revealed with its salt (`revealed`: claim id, reveal DAA, salt) or forfeited (`forfeited_daa`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClaimBeaconSealV1 {
+    pub job: Digest,
+    pub producer: Digest,
+    pub seal: Digest,
+    pub sealed_daa: u64,
+    pub revealed: Option<(Digest, u64, Digest)>,
+    pub forfeited_daa: Option<u64>,
+}
+
+/// **The v3 beacon's window against the seal TTL**: every in-window reveal is legal only if `2·W ≤ seal_ttl_daa` (a seal made at
+/// the start of a seal window `[S, S + W)` must still be revealable at the end of its reveal window `[S + W, S + 2W)`). OPV-BOOT's
+/// policy validation asks this with its `beacon_window_slots`.
+pub fn seal_ttl_admits_beacon_window_v1(policy: &LedgerPolicyV1, beacon_window_daa: u64) -> bool {
+    beacon_window_daa.saturating_mul(2) <= policy.seal_ttl_daa
 }
 
 /// An unrevealed seal: the claim seal and the DAA it was carried at.
@@ -655,6 +681,14 @@ pub struct KernelLedgerV1 {
     /// chain keeps its demanders' bonds reserved; they are refunded the moment the claim is convicted, defaults or times out, and
     /// burned only when its liability horizon ends with no conviction — a true demand that leads to a conviction is never penalised.
     pub served_demands: BTreeMap<DemandKeyV1, Vec<(Digest, u64)>>,
+    /// **OPV-BOOT GAP-B1a: `claim id → the salt its seal was made with`** (table 25), written by a salted reveal
+    /// ([`KernelRouteObjectV1::CommitClaimSalted`]) past `palw_panel_free_v1` and never removed (like the claim rows): the
+    /// sealed-source beacon v3 mixes it. Empty below the fence (the root is then the historical one).
+    pub claim_beacon_salts: BTreeMap<Digest, Digest>,
+    /// **OPV-BOOT GAP-B1a: the claim seals that expired unrevealed** (table 26), keyed `(job, producer, sealed_daa)`: written past
+    /// `palw_panel_free_v1` for a seal accepted at or after the fence, and kept, so a withheld seal stays in the v3 beacon's mix and
+    /// vetoes it rather than silently dropping out of it (SOUND SG-01a(i)). Every row cost a forfeited `seal_deposit`.
+    pub forfeited_claim_seals: BTreeMap<(Digest, Digest, u64), ForfeitedSealRowV1>,
     /// Cumulative amount burned (derived from the settlement instructions; kept as a checksum).
     pub burned: u64,
     /// RFC-0015: the OPV policy, classes and claim rows. Dormant (no policy) = the historical ledger, root included.
@@ -722,6 +756,8 @@ impl KernelLedgerV1 {
             proof_seals: BTreeMap::new(),
             job_escrows: BTreeMap::new(),
             served_demands: BTreeMap::new(),
+            claim_beacon_salts: BTreeMap::new(),
+            forfeited_claim_seals: BTreeMap::new(),
             burned: 0,
             opv: OpvStateV1::default(),
             budget: BlockBudgetV1::default(),
@@ -904,12 +940,32 @@ impl KernelLedgerV1 {
                 self.open_job_escrow(&auth.signer_bond, id, &mut out);
             }
             KernelRouteObjectV1::CommitClaim { claim, evidence, commitments } => {
-                self.commit_claim(claim, evidence, commitments, &mut out)?;
+                self.commit_claim(claim, evidence, commitments, None, &mut out)?;
                 out.push(LedgerEventV1::ClaimCommitted { claim: claim.id() });
             }
             KernelRouteObjectV1::CommitPipelineClaim { claim, evidence, stages } => {
-                self.commit_pipeline_claim(claim, evidence, stages, &mut out)?;
+                self.commit_pipeline_claim(claim, evidence, stages, None, &mut out)?;
                 out.push(LedgerEventV1::ClaimCommitted { claim: claim.id() });
+            }
+            // OPV-BOOT GAP-B1a: the salted reveal — refused below `palw_panel_free_v1` (A-2: no state), the commit's own rules above.
+            KernelRouteObjectV1::CommitClaimSalted { salt, commit } => {
+                if !self.salted_seals_in_force() {
+                    return Err(KernelRefusalV1::rule(
+                        name,
+                        "a salted claim reveal is refused: palw_panel_free_v1 is not in force (claim seal v2)",
+                    ));
+                }
+                let id = match commit {
+                    SaltedCommitV1::Claim { claim, evidence, commitments } => {
+                        self.commit_claim(claim, evidence, commitments, Some(salt), &mut out)?;
+                        claim.id()
+                    }
+                    SaltedCommitV1::Pipeline { claim, evidence, stages } => {
+                        self.commit_pipeline_claim(claim, evidence, stages, Some(salt), &mut out)?;
+                        claim.id()
+                    }
+                };
+                out.push(LedgerEventV1::ClaimCommitted { claim: id });
             }
             KernelRouteObjectV1::FileProof { accuser, claim, proof } => self.file_proof(accuser, claim, proof, &mut out)?,
             KernelRouteObjectV1::FileDemand { demander, claim, stage, position } => {
@@ -1042,6 +1098,7 @@ impl KernelLedgerV1 {
         let named = match obj {
             O::CommitClaim { claim, .. } => Some((claim.producer_bond, "producer")),
             O::CommitPipelineClaim { claim, .. } => Some((claim.producer_bond, "producer")),
+            O::CommitClaimSalted { commit, .. } => Some((commit.producer(), "producer")),
             O::FileProof { accuser, .. } => Some((*accuser, "accuser")),
             O::FileDemand { demander, .. } => Some((*demander, "demander")),
             O::RequestExit { bond } | O::Withdraw { bond } => Some((*bond, "bond")),
@@ -1493,7 +1550,70 @@ impl KernelLedgerV1 {
 
     /// **May this claim be revealed now?** No other claim holds its job, its producer bond is ready, and the producer's seal of
     /// exactly this claim is at least `claim_seal_delay_daa` old.
-    fn reveal_ready(&self, job: &Digest, producer: &Digest, id: &Digest) -> Result<(), String> {
+    /// **Past `palw_panel_free_v1`** (the OPV policy's activation): every claim reveal of a seal accepted at or after the fence carries
+    /// its seal's salt (claim seal v2), and the salt is kept for the sealed-source beacon v3. The DAA the fence is reached at, if
+    /// this ledger has one.
+    pub fn salted_seals_from(&self) -> Option<u64> {
+        self.opv.policy.and_then(|p| p.activation_daa)
+    }
+
+    /// Whether the salted-seal rule is in force at the ledger's clock.
+    pub fn salted_seals_in_force(&self) -> bool {
+        self.salted_seals_from().is_some_and(|at| self.daa >= at)
+    }
+
+    /// The salt a claim's seal was made with (`None`: the claim was revealed unsalted, or is unknown).
+    pub fn claim_beacon_salt(&self, claim: &Digest) -> Option<Digest> {
+        self.claim_beacon_salts.get(claim).copied()
+    }
+
+    /// **Every claim seal the sealed-source beacon v3 can count**, in `(sealed_daa, seal)` order: the live seals (at their LATEST
+    /// seal: a re-seal replaces the earlier one), the salted reveals (with the claim id, its reveal DAA and the salt) and the seals
+    /// that expired unrevealed past the fence. A seal revealed unsalted (below the fence) is not a beacon seal and is not listed.
+    pub fn claim_beacon_seals_v1(&self) -> Vec<ClaimBeaconSealV1> {
+        let mut out: Vec<ClaimBeaconSealV1> = self
+            .seals
+            .iter()
+            .map(|((job, producer), row)| ClaimBeaconSealV1 {
+                job: *job,
+                producer: *producer,
+                seal: row.seal,
+                sealed_daa: row.daa,
+                revealed: None,
+                forfeited_daa: None,
+            })
+            .collect();
+        for (id, salt) in &self.claim_beacon_salts {
+            if let Some(row) = self.claims.get(id) {
+                out.push(ClaimBeaconSealV1 {
+                    job: row.job_id,
+                    producer: row.producer,
+                    seal: claim_seal_v2(id, salt),
+                    sealed_daa: row.sealed_daa,
+                    revealed: Some((*id, row.committed_daa, *salt)),
+                    forfeited_daa: None,
+                });
+            }
+        }
+        for ((job, producer, sealed_daa), row) in &self.forfeited_claim_seals {
+            out.push(ClaimBeaconSealV1 {
+                job: *job,
+                producer: *producer,
+                seal: row.seal,
+                sealed_daa: *sealed_daa,
+                revealed: None,
+                forfeited_daa: Some(row.forfeited_daa),
+            });
+        }
+        out.sort_by(|a, b| (a.sealed_daa, a.seal).cmp(&(b.sealed_daa, b.seal)));
+        out
+    }
+
+    /// Whether `producer`'s live seal of `job` is the seal of claim `id` — `claim_seal_v1(id)` unsalted, `claim_seal_v2(id, salt)`
+    /// salted — at least `claim_seal_delay_daa` old. Past `palw_panel_free_v1` a seal accepted at or after the fence opens only
+    /// salted (OPV-BOOT GAP-B1a): an unsalted reveal of it would let a sealer choose, after seeing the honest salts, between
+    /// "revealed but not a beacon source" and a veto.
+    fn reveal_ready(&self, job: &Digest, producer: &Digest, id: &Digest, salt: Option<&Digest>) -> Result<(), String> {
         if self.job_claims.get(job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job) {
             return Err("another claim already holds the job (one claim per job)".into());
         }
@@ -1502,10 +1622,16 @@ impl KernelLedgerV1 {
             Some(b) if b.exit_requested.is_some() => return Err("the producer bond is exiting".into()),
             Some(_) => {}
         }
+        let expected = match salt {
+            None => claim_seal_v1(id),
+            Some(s) => claim_seal_v2(id, s),
+        };
         match self.seals.get(&(*job, *producer)) {
-            Some(row) if row.seal == claim_seal_v1(id) && row.daa.saturating_add(self.policy.claim_seal_delay_daa) <= self.daa => {
-                Ok(())
+            Some(row) if salt.is_none() && self.salted_seals_from().is_some_and(|at| row.daa >= at) => {
+                Err("a seal accepted past palw_panel_free_v1 is revealed only with its salt (claim seal v2)".into())
             }
+            Some(row) if row.seal == expected && row.daa.saturating_add(self.policy.claim_seal_delay_daa) <= self.daa => Ok(()),
+            Some(row) if row.seal != expected && salt.is_some() => Err("the salt does not open the producer's seal of the job".into()),
             _ => Err(format!(
                 "no seal of this claim by its producer at least {} DAA old (seal, then reveal)",
                 self.policy.claim_seal_delay_daa
@@ -1518,6 +1644,7 @@ impl KernelLedgerV1 {
         claim: &KernelClaimV1,
         evidence: &VerificationEvidenceV1,
         commitments: &[Vec<Vec<Digest>>],
+        salt: Option<&Digest>,
         out: &mut Vec<LedgerEventV1>,
     ) -> Result<(), KernelRefusalV1> {
         const NAME: &str = "CommitClaim";
@@ -1540,7 +1667,7 @@ impl KernelLedgerV1 {
             return Err(rule("an exact duplicate claim".into()));
         }
         // Cheap objective checks first: an unsealed or unready reveal never spends the block's adjudication budget (C4 O-C4-14).
-        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id).map_err(rule)?;
+        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id, salt).map_err(rule)?;
         self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
         self.charge(NAME, 0)?;
         let job = self.jobs.get(&claim.job_id).expect("checked");
@@ -1566,6 +1693,9 @@ impl KernelLedgerV1 {
         let class_id = job.class_binding_id;
         self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)?;
         self.seals.remove(&(claim.job_id, claim.producer_bond));
+        if let Some(salt) = salt {
+            self.claim_beacon_salts.insert(id, *salt);
+        }
         Ok(())
     }
 
@@ -1574,6 +1704,7 @@ impl KernelLedgerV1 {
         claim: &PipelineClaimV1,
         evidence: &PipelineEvidenceV1,
         stages: &[StageCommitmentsV1],
+        salt: Option<&Digest>,
         out: &mut Vec<LedgerEventV1>,
     ) -> Result<(), KernelRefusalV1> {
         const NAME: &str = "CommitPipelineClaim";
@@ -1626,7 +1757,7 @@ impl KernelLedgerV1 {
             return Err(rule("an exact duplicate claim".into()));
         }
         // Cheap objective checks first: an unsealed or unready reveal never spends the block's adjudication budget (C4 O-C4-14).
-        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id).map_err(rule)?;
+        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id, salt).map_err(rule)?;
         self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
         self.charge(NAME, 0)?;
         let job = self.pipeline_jobs.get(&claim.job_id).expect("checked");
@@ -1661,6 +1792,9 @@ impl KernelLedgerV1 {
         let class_id = job.class_binding_id;
         self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)?;
         self.seals.remove(&(claim.job_id, claim.producer_bond));
+        if let Some(salt) = salt {
+            self.claim_beacon_salts.insert(id, *salt);
+        }
         Ok(())
     }
 
@@ -2102,10 +2236,17 @@ impl KernelLedgerV1 {
         // Unrevealed seals expire (a junk seal holds nothing and lives a bounded time).
         let ttl = self.policy.seal_ttl_daa;
         // An unrevealed claim seal expires and FORFEITS its deposit (slashed, burned): withholding a sealed reveal is never free.
-        let expired: Vec<((Digest, Digest), u64)> =
-            self.seals.iter().filter(|(_, row)| daa > row.daa.saturating_add(ttl)).map(|(k, row)| (*k, row.deposit)).collect();
-        for ((job, producer), deposit) in expired {
+        let expired: Vec<((Digest, Digest), SealRowV1)> =
+            self.seals.iter().filter(|(_, row)| daa > row.daa.saturating_add(ttl)).map(|(k, row)| (*k, *row)).collect();
+        let salted_from = self.salted_seals_from();
+        for ((job, producer), row) in expired {
             self.seals.remove(&(job, producer));
+            // OPV-BOOT GAP-B1a: a seal accepted past the fence stays readable once forfeited (it vetoes the v3 beacon it was mixed
+            // into; deleting it would turn the veto into a silent exclusion).
+            if salted_from.is_some_and(|at| row.daa >= at) {
+                self.forfeited_claim_seals.insert((job, producer, row.daa), ForfeitedSealRowV1 { seal: row.seal, forfeited_daa: daa });
+            }
+            let deposit = row.deposit;
             if deposit == 0 {
                 continue;
             }

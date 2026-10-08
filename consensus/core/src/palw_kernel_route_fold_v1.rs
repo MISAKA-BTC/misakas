@@ -545,8 +545,8 @@ pub(super) fn apply_kernel_receipt_v1(
     Ok(())
 }
 
-/// **The block's closing step**: the kernel's `tick` (demand deadlines, windows, Final, liability release) and its settlements.
-/// A no-op for a route with no claim and no demand.
+/// **The block's closing step**: the kernel's `tick` (demand deadlines, windows, Final, liability release, seal expiry, escrow
+/// return, the served demands' bonds) and its settlements. A no-op for a route with nothing the tick can move.
 pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     if builder.extras.kernel_route.is_none() {
         return Ok(());
@@ -556,8 +556,19 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // The route's chunk groups past their TTL are dropped and their deposits forfeited, whatever the ledger is doing.
     forfeit_expired_chunk_groups_v1(builder, ctx);
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
+    // Anything the tick moves: claims and demands, and (G14-R4) bonded seals that expire, escrows that return and served demands'
+    // bonds — a route whose only rows are a seal or an escrow must still forfeit or return it on time.
     let busy = kernel.rows.keys().any(|(table, _)| {
-        matches!(*table, misaka_palw_kernel::rows::TABLE_CLAIMS_V1 | misaka_palw_kernel::rows::TABLE_DEMANDS_V1)
+        use misaka_palw_kernel::rows as r;
+        matches!(
+            *table,
+            r::TABLE_CLAIMS_V1
+                | r::TABLE_DEMANDS_V1
+                | r::TABLE_SEALS_V1
+                | r::TABLE_PROOF_SEALS_V1
+                | r::TABLE_JOB_ESCROWS_V1
+                | r::TABLE_SERVED_DEMAND_BONDS_V1
+        )
     });
     if !busy {
         return Ok(());
@@ -702,6 +713,14 @@ pub(super) fn apply_kernel_route_chunk_v1(
     if !palw_kernel_chunk_inner_matches_target_v1(&inner, &chunk.target) {
         return Err(refused("the assembled object is not a prosecution of its group's target"));
     }
+    // OPV-BOOT #1: conformance evidence rides only a group its class's registrant opened — every action but a Refute (anyone's), so
+    // a registrant's action added later (OPV-BOOT's PostComplete) is the registrant's here too, never anyone's by default.
+    if let PalwConsensusObjectV2::ConformanceEvidenceV1 { v2_class, action, .. } = &inner
+        && !matches!(action.as_ref(), crate::palw_conformance_evidence_v1::ConformanceEvidenceActionV1::Refute { .. })
+        && builder.state.classes.get(v2_class).and_then(|c| c.registrant_bond) != Some(chunk.opener)
+    {
+        return Err(refused("conformance evidence other than a Refute rides only a group its class's registrant opened"));
+    }
     // The group delivered: its row (and with it the deposit) goes before the object is applied.
     builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, key, None);
     super::apply_object(builder, ctx, &inner)
@@ -713,14 +732,6 @@ fn forfeit_expired_chunk_groups_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     let Some(route) = builder.state.kernel_route.as_ref() else { return };
     let expired: Vec<(PalwBondKeyV2, Hash64, u64)> = route
         .chunk_groups_v1()
-    // OPV-BOOT #1: conformance evidence rides only a group its class's registrant opened — every action but a Refute (anyone's), so
-    // a registrant's action added later (OPV-BOOT's PostComplete) is the registrant's here too, never anyone's by default.
-    if let PalwConsensusObjectV2::ConformanceEvidenceV1 { v2_class, action, .. } = &inner
-        && !matches!(action.as_ref(), crate::palw_conformance_evidence_v1::ConformanceEvidenceActionV1::Refute { .. })
-        && builder.state.classes.get(v2_class).and_then(|c| c.registrant_bond) != Some(chunk.opener)
-    {
-        return Err(refused("conformance evidence other than a Refute rides only a group its class's registrant opened"));
-    }
         .into_iter()
         .filter(|(_, _, g)| ctx.daa_score > g.expires_daa)
         .map(|(opener, group, g)| (opener, group, g.deposit))

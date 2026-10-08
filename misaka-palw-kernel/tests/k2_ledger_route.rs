@@ -140,6 +140,8 @@ fn the_state_root_is_versioned_canonical_and_pinned_by_a_golden_vector() {
     assert_eq!(got, GOLDEN_PARTS, "a change of the canonical encoding of any collection is a new root version");
     assert_eq!(hex(&l.root()), GOLDEN_ROOT);
     assert_eq!(l.root(), parts.root());
+    // OPV-BOOT GAP-B1a: tables 25 and 26 are empty below `palw_panel_free_v1`, so they add nothing — this golden is the int-12-era root.
+    assert!(l.claim_beacon_salts.is_empty() && l.forfeited_claim_seals.is_empty());
     // Deterministic: the same fold twice, and a clone, agree.
     assert_eq!(small_state().root(), l.root());
     assert_eq!(l.clone().root(), l.root());
@@ -702,6 +704,7 @@ fn a_claim_seal_is_bonded_kept_on_the_claim_row_and_forfeited_when_withheld() {
     assert!(ev.contains(&E::SealForfeited { job: job2.id(), producer: PRODUCER, forfeited: 1 }), "{ev:?}");
     assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.burned), (collateral - 1, burned + 1));
     assert!(w.l.seals.is_empty());
+    assert!(w.l.forfeited_claim_seals.is_empty(), "below palw_panel_free_v1 a forfeited seal leaves no row (the historical root)");
     // A producer with no free collateral for the deposit cannot seal.
     w.block(130, vec![T::RegisterBond { bond: SPAM2, collateral: 0 }]);
     let ev = w.block(131, vec![T::SealClaim { producer: SPAM2, job: job2.id(), seal: [0x5F; 64] }]);

@@ -84,9 +84,10 @@ impl World {
             }
         });
         let id = produced.claim.id();
-        let seal = self.net.route(producer, &K::SealClaim { producer: kid, job: produced.claim.job_id, seal: claim_seal_v1(&id) });
+        let (seal, reveal) = seal_and_reveal(&ledger, kid, &produced.object);
+        let seal = self.net.route(producer, &seal);
         relay(&mut self.net, producer, &seal).await;
-        let reveal = self.net.route(producer, &produced.object);
+        let reveal = self.net.route(producer, &reveal);
         relay(&mut self.net, producer, &reveal).await;
         assert!(self.net.ledger().claims.contains_key(&id), "the relayed claim committed over its relayed seal");
         Claim { id, producer, trace: produced.trace, at }

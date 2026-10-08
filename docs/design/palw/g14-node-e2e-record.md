@@ -343,6 +343,52 @@ v2_class, daa) -> Option<u64>`; until that lands the placeholder `palw_conforman
 conformance group is refused at its first chunk (no acceptance before the rule that bounds it). A-2: the new discriminant lives inside
 tag 113, which is post-int-12 and rides unjudged below its fence as a whole.
 
+**Salted claim seals (OPV-BOOT GAP-B1a; the lead's allocation 2026-10-09: inner kind 20, ledger tables 25 and 26).** A claim of a
+deterministic class is a function of its public job and its producer, so `claim_seal_v1(claim id)` hides nothing: anyone who runs the
+model computes it when the seal is posted, and a beacon over such seals is ground by its last contributor. Past `palw_panel_free_v1`
+(the kernel reads it as the OPV policy's `activation_daa`; OPV-BOOT's sealed-source beacon v3 rides the same fence):
+
+* the seal is `claim_seal_v2(claim id, salt) = H("misaka-palw/kernel/claim-seal/v2"; claim id ‖ salt)` with a 64-byte salt from the
+  producer's CSPRNG (`SealClaim` is unchanged: it carries the digest);
+* the reveal is ONE object, inner kind 20 `CommitClaimSalted { salt, commit: SaltedCommitV1 }`, so the salt is public exactly when the
+  claim is. `SaltedCommitV1` is a separate, non-recursive enum carrying the commit's own fields under its own discriminant (5 single
+  program, 6 pipeline; K2S appends its segmented commit there at integration), held to that commit's own ceiling plus 65 bytes;
+* a seal accepted at or past the fence opens only salted: an unsalted reveal of it is refused (otherwise a sealer could choose, after
+  seeing the honest salts, between "revealed but no beacon source" and a veto), and so is a salt that does not open it. A seal made
+  before the fence keeps the historical unsalted reveal;
+* the salt is kept, `claim id → salt` (table 25, `claim_beacon_salt`), never removed (claim rows are not either); `ClaimRowV1` is
+  unchanged (its `sealed_daa` is the seal position, its `committed_daa` the reveal position);
+* a seal accepted past the fence that expires unrevealed is KEPT as `(job, producer, sealed_daa) → { seal, forfeited_daa }` (table 26),
+  so a withheld seal stays in the v3 mix and vetoes it instead of silently dropping out of it (SOUND SG-01a(i));
+* `claim_beacon_seals_v1()` lists live, salted-revealed and forfeited seals together in `(sealed_daa, seal)` order (a re-seal counts at
+  its latest seal) — OPV-BOOT maps it into `SealedSourceV3`;
+* tables 25 and 26 reach the root through ONE extension, `H("misaka-palw/kernel/ledger-beacon-seal-extension/v1"; base ‖ salts ‖
+  forfeited)`, present only once either holds a row: below the fence both are empty and every root (both goldens, the int-12-era one
+  included) is unchanged;
+* `seal_ttl_admits_beacon_window_v1(policy, W)` states `2·W ≤ seal_ttl_daa` (a seal at the start of `[S, S + W)` must still be
+  revealable at the end of `[S + W, S + 2W)`); the interim TTL of 100 admits OPV-BOOT's interim `W = 40` (pinned in core);
+* below the fence kind 20 rides unjudged (A-2): the processor's kernel gate drops it beside the OPV registrations (A2U's table: row 20
+  → `palw_panel_free_v1`) and the ledger refuses it with its state byte-identical.
+
+*Retention of table 26, and its growth priced.* A row could be dropped once no beacon attempt can still count it (its seal window,
+the reveal window, the mixed sources' Finals and the finality depth). That horizon depends on OPV-BOOT's v3 policy (`W`, the anchor
+delay, `k`, `D`), which is not a ledger constant, and the rows are re-read by later re-derivations (the onboarding fold at the lock,
+op 231, a fresh verifier), so the rows are **kept**, and the prune is a code item below. The growth is priced: a row exists only for a
+seal that forfeited its deposit `d` (burned), at most one per `SealClaim` accepted (a re-seal replaces a live seal, it adds no row), and
+a bond with free collateral `C` holds at most `C / d` live seals, so it can add at most `C / d` rows per `seal_ttl_daa + 1` DAA while
+burning `C`. A row is 208 bytes (a 136-byte key, a 72-byte row): **1 GiB of table 26 burns at least ≈ 5.16 million BILI** at the interim
+`d` = 1 BILI (`2^30 / 208 · d`), and a growth of `g` bytes per DAA burns `g / 208 · d` per DAA. Table 25 adds 128 bytes per committed
+salted claim, beside a claim row that is kept anyway.
+
+Tests: route `the_salted_reveal_is_kind_20_carries_its_commits_own_tag_and_opens_only_its_v2_seal`; k2_opv
+`past_the_panel_free_fence_a_claim_opens_only_its_salted_seal_and_the_salt_is_kept_for_the_beacon` (a v1-sealed commit refused, a
+salt that does not open the seal refused, the salted reveal commits, the salt in the root and the rows, replay),
+`below_the_panel_free_fence_a_salted_reveal_is_refused_and_changes_nothing`,
+`past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists_every_seal_in_seal_order`; the golden roots
+(k2_ledger_route, k2_opv) and core `the_interim_opv_policy_validates_…` assert the empty tables add no extension; node
+`g14_opv_a_claim_commits_only_over_its_salted_seal_and_its_salt_is_kept`. Every OPV node test now seals and reveals salted
+(`seal_and_reveal`), and the kernel harness salts every reveal past the fence (`common::chain::salted`).
+
 **Served demands (K2S's DA griefing).** A served position's demand bonds stay reserved: refunded the moment the claim is convicted,
 defaults or times out; burned only when its liability horizon ends with no conviction — a true demand that leads to a conviction (even
 long after the grace) is never penalised.
@@ -414,7 +460,11 @@ refuse any armed height unconditionally. What has to be true before they can be 
 10. RFC-0015's `work_credit_per_claim` is released by nothing; it must come from the job escrow (GAP-5) before it is.
 11. OPV-BOOT #1: wire `palw_conformance_chunk_target_v1` into the chunk lane (the placeholder `palw_conformance_chunk_target_pending_v1`
     refuses every conformance group; the integrator replaces its body with the call), then a node case that carries a Post and a Refute
-    through the lane; OPV-BOOT's beacon v3 over the bonded seals.
+    through the lane; OPV-BOOT's beacon v3 over the bonded, salted seals (`beacon_sealed_sources_v1()` over `claim_beacon_seals_v1()`,
+    OPV-BOOT's), and K2S's segmented commit appended to `SaltedCommitV1` at integration (a segmented claim past the fence must reveal
+    salted too).
+13. The prune horizon of table 26 (forfeited claim seals), once OPV-BOOT's v3 policy is a ledger constant (see "Retention" above);
+    until then the rows are kept and their growth is priced in forfeited deposits.
 12. The FileProof-over-budget gap (accepted by the lead, bounded here): a proof refused over budget is not "accepted", so Final can pass
     and post-Final liability convicts. Junk FileProofs can fill every run of a block (the prosecution reserve is theirs too), each
     dismissed at `dismissed_proof_fee`: holding ONE valid proof out costs `max_adjudications × fee` per block = 64 × 0.1 = 6.4 BILI per
