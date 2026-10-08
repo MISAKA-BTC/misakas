@@ -1237,3 +1237,114 @@ async fn t12_exec_v2_a_burst_of_competing_slice_blocks_is_anchored_once_credited
     let (next, _) = lane.chain.attempt(1, 1_000, Vec::new(), &|_| true).await;
     assert!(palw_exec_v2_anchor_split(&next.transactions[0].payload).unwrap().1.is_none(), "the burst is anchored once");
 }
+
+/// **A reorg across a slice's acceptance.** Node 1 anchors slice 0 on branch X (a chain block over the lane block); node 2, which
+/// shares X's prefix, mints a longer branch Y that never saw the lane block. Node 1 takes Y: its state at the new sink is the
+/// state BEFORE the slice was accepted (the root has taken nothing, the covered set does not hold the lane block), the lane block —
+/// still a body tip nothing named — is anchored by the next chain block on Y, and the slice is credited exactly once, on Y. A third
+/// party that receives both branches agrees: the credit is branch-local, never doubled, never lost.
+#[tokio::test]
+async fn t12_exec_v2_a_reorg_unanchors_the_lane_and_the_winning_branch_anchors_and_credits_it_once() {
+    let mut a = open_session(Some(FENCE)).await;
+    let claim = a.claim;
+    let ttpb = a.config.params.target_time_per_block();
+    let (config, premine, floats) = config_with(Some(FENCE));
+    // Node 2: the same chain up to the point of divergence.
+    let mut b = chain_of(&config, &premine, &floats);
+    for block in selected_chain_blocks(&a.chain, a.chain.sink()) {
+        b.ctx.consensus.validate_and_insert_block(block).virtual_state_task.await.expect("the prefix replays");
+    }
+    let base = a.chain.sink();
+    assert_eq!(b.sink(), base, "both nodes stand at the divergence");
+    b.ctx.simulated_time = a.chain.ctx.simulated_time;
+    b.set_nonce_for_fork(a.chain.nonce_for_reopen() + 1_000);
+
+    // Branch X (node 1): slice 0 as a lane block, then a chain block over it that anchors it.
+    let s0 = a.slice_block(1, 0, |_| {});
+    a.insert_lane_block(&s0, "slice 0").await;
+    let x1 = a.chain.heartbeat(ttpb, Vec::new()).await;
+    let trailer = palw_exec_v2_anchor_split(&x1.transactions[0].payload).unwrap().1.expect("X1 anchors the lane block");
+    assert_eq!(trailer.count, 1);
+    {
+        let (_, state) = a.chain.tip_state();
+        assert!(state.exec_v2_anchored_v1(&s0.header.hash));
+        assert_eq!(state.exec_v2_slice_v1(&claim, 0).map(|row| row.carrier), Some(s0.header.hash), "credited on X");
+    }
+
+    // Branch Y (node 2): two chain blocks from the same base, neither knowing the lane block.
+    // (Chain weight is what attempts certify, not heartbeats: branch Y opens with an attempt so it outweighs X whatever the hashes.)
+    let (y1, _) = b.attempt(3, 1_000, Vec::new(), &|_| true).await;
+    let y2 = b.heartbeat(ttpb, Vec::new()).await;
+    assert!(palw_exec_v2_anchor_split(&y1.transactions[0].payload).unwrap().1.is_none() && !y2.transactions.is_empty());
+    for block in [&y1, &y2] {
+        a.chain
+            .ctx
+            .consensus
+            .validate_and_insert_block(block.clone())
+            .virtual_state_task
+            .await
+            .unwrap_or_else(|e| panic!("branch Y block {}: {e}", block.header.hash));
+    }
+    assert_eq!(a.chain.sink(), y2.header.hash, "the longer branch wins: node 1 reorganises onto Y");
+    {
+        let (tip, state) = a.chain.tip_state();
+        assert_eq!(tip, y2.header.hash);
+        assert!(!state.exec_v2_anchored_v1(&s0.header.hash), "on Y the lane block is not covered yet");
+        assert!(state.exec_v2_slice_v1(&claim, 0).is_none(), "and the slice is not credited");
+        let root = state.exec_v2_root_v1(&claim).unwrap();
+        assert_eq!((root.next_index, root.accepted_work, root.pending), (0, 0, 0), "{root:?}");
+    }
+
+    // By the lane's design the anchoring window is the block's span and the one before (a span is one DAA on testnet-12), so the lane
+    // block — anchored on the stranded branch — has left it: the next chain block on Y covers NOTHING (no trailer, no write), the node's
+    // own health view calls the head stale, and the root stays untouched. Nothing is invalidated and nothing is credited twice.
+    let y3 = a.chain.heartbeat(ttpb, Vec::new()).await;
+    assert_eq!(a.chain.sink(), y3.header.hash);
+    assert!(
+        palw_exec_v2_anchor_split(&y3.transactions[0].payload).unwrap().1.is_none(),
+        "a lane block out of the window is not covered"
+    );
+    {
+        let (tip, state) = a.chain.tip_state();
+        assert!(!state.exec_v2_anchored_v1(&s0.header.hash));
+        assert_eq!(state.exec_v2_root_v1(&claim).map(|root| root.next_index), Some(0));
+        let health = a.chain.vp().palw_exec_v2_health(&state, tip, a.chain.daa_of(tip) + 1).expect("in force");
+        assert!(health.stale && health.stale_reason.is_some(), "the node reports its head stale: {health:?}");
+    }
+
+    // The executor republishes: a fresh lane block over Y's own anchor, covered by the next chain block, credited once on Y.
+    let s0_again = a.slice_block(1, 0, |slice| slice.output_root = Hash64::from_u64_word(0xAAAA));
+    assert_ne!(s0_again.header.hash, s0.header.hash);
+    a.insert_lane_block(&s0_again, "slice 0 republished on Y").await;
+    let y4 = a.chain.heartbeat(ttpb, Vec::new()).await;
+    assert_eq!(a.chain.sink(), y4.header.hash);
+    let trailer = palw_exec_v2_anchor_split(&y4.transactions[0].payload).unwrap().1.expect("Y4 anchors the republished block");
+    assert_eq!(trailer.count, 1, "covered once on this branch");
+    let (_, state) = a.chain.tip_state();
+    assert!(state.exec_v2_anchored_v1(&s0_again.header.hash) && !state.exec_v2_anchored_v1(&s0.header.hash));
+    assert_eq!(state.exec_v2_slice_v1(&claim, 0).map(|row| row.carrier), Some(s0_again.header.hash));
+    let root = state.exec_v2_root_v1(&claim).unwrap();
+    assert_eq!((root.next_index, root.accepted_work, root.pending), (1, SLICE_WORK, 1), "credited exactly once: {root:?}");
+    let data = a.chain.vp().ghostdag_store.get_data(y4.header.hash).unwrap();
+    assert!(
+        [s0.header.hash, s0_again.header.hash].iter().all(|h| !data.mergeset_blues.contains(h) && !data.mergeset_reds.contains(h)),
+        "still in no stored mergeset"
+    );
+
+    // A third node that receives everything — the lane block, both branches — agrees with node 1 (X1 is merged by Y3 or a sibling).
+    let c = chain_of(&config, &premine, &floats);
+    for block in selected_chain_blocks(&a.chain, base) {
+        c.ctx.consensus.validate_and_insert_block(block).virtual_state_task.await.expect("the prefix");
+    }
+    // Every block of both branches and both lane blocks, parents first (the republished lane block hangs from Y).
+    let delivered: Vec<Block> =
+        vec![s0.clone().to_immutable(), x1.clone(), y1.clone(), y2.clone(), y3.clone(), s0_again.clone().to_immutable(), y4.clone()];
+    for block in delivered {
+        let hash = block.header.hash;
+        c.ctx.consensus.validate_and_insert_block(block).virtual_state_task.await.unwrap_or_else(|e| panic!("block {hash}: {e}"));
+    }
+    assert_eq!(c.sink(), a.chain.sink(), "the third node reaches node 1's sink");
+    let (_, c_state) = c.tip_state();
+    assert_eq!(c_state.state_root(), state.state_root(), "and its PALW state");
+    assert_eq!(c_state.exec_v2_root_v1(&claim), state.exec_v2_root_v1(&claim));
+}

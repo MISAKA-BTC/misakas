@@ -588,6 +588,12 @@ impl T12Chain {
     pub(super) fn nonce_for_reopen(&self) -> u64 {
         self.nonce
     }
+
+    /// Start this chain's heartbeat nonces at `nonce`, so a second node that builds a competing branch off a shared prefix mints
+    /// blocks of its own rather than the first node's.
+    pub(super) fn set_nonce_for_fork(&mut self, nonce: u64) {
+        self.nonce = nonce;
+    }
 }
 
 /// Which seed anchor the chain is given — see [`a_floor_final_scheduled`].
