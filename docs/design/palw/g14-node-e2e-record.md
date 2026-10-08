@@ -109,6 +109,7 @@ All dormant behind `palw_probabilistic_constraints_v1` (the envelope behind its 
 | Rows | the route's aux tables **36** artifact bindings `(class, kernel root)`, **37** kernel bindings `class`, **38** conformance `(class, artifact root)`. They ride the route's existing `KernelRouteRow` deltas (160), tail `0xEC` and `kernel-route/v1` root block — **no new delta, tail or root block** (the allocated 190–199 / `0xEF` stay unused: the onboarding rows are the route's state, journaled by the one writer that already reverts, roots and carries them) |
 | Reservation | a binding holds `PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1` of the binder's FREE collateral until its liability horizon ends, mirrored into V2's committed-collateral ledger and both withdrawal gates (`onboarding_reserved`) |
 | Fence | `Params::palw_signed_registration_v1` (tag 108): dormant, `None` everywhere, Some-only hashed, `never()` collapsed, refused when armed |
+| Large objects | the refutation (a commitment map + two openings) rides `ObjectChunk`s like a kernel object: judged on the assembled whole at the completing chunk, and not a certification for the grading cap |
 | Read | `ConsensusApi::palw_onboarding_v1`, RPC **230** `getPalwOnboarding` (bindings with state, kernel binding, conformance, the gate's verdict and the code that names the wait) |
 
 **The artifact attestation (the least-trust source).** A kernel class registers only over an artifact root the route attests; the hook is

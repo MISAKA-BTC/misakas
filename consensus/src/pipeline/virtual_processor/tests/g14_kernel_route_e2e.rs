@@ -2298,9 +2298,13 @@ async fn g14_onboarding_a_false_artifact_binding_is_refuted_by_two_disagreeing_o
     net.send(vec![(challenger, o)]).await;
     assert!(!net.api().unwrap().artifact_binding_v1(&v2_class, &wrong_root).unwrap().refuted);
 
-    // The genuine refutation.
+    // The genuine refutation — a whole commitment map and two openings: delivered in ObjectChunks, judged on the assembled whole.
     let o = net.artifact_challenged(challenger, v2_class, wrong_root, proof);
-    net.send(vec![(challenger, o)]).await;
+    let chunks = kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&o, 6 << 10)
+        .expect("chunks")
+        .expect("a refutation is larger than one chunk");
+    assert!(chunks.len() >= 2, "{} chunks", chunks.len());
+    net.send(chunks.into_iter().map(|c| (challenger, c)).collect()).await;
     let row = net.api().unwrap().artifact_binding_v1(&v2_class, &wrong_root).unwrap();
     assert!(row.refuted && row.reserved == 0);
     assert_eq!(row.state_at(net.daa()), ArtifactBindingStateV1::Refuted);

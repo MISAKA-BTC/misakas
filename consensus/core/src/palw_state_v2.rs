@@ -9304,7 +9304,13 @@ pub fn palw_object_chunk_group_id_v1(object_bytes: &[u8]) -> Hash64 {
 pub fn palw_chunked_object_kind_admitted_v1(object: &PalwConsensusObjectV2) -> bool {
     // G14 lane D: a kernel route object (a class registration, a claim's commitments, a response) may exceed one carrier; its
     // signature is checked on the assembled whole at the completing chunk (the acceptance walk).
-    matches!(object, PalwConsensusObjectV2::FamilyCertified { .. } | PalwConsensusObjectV2::KernelRouteV1 { .. })
+    // G14 phase 3: a binding's refutation carries a whole commitment map and two openings — it may exceed one carrier too.
+    matches!(
+        object,
+        PalwConsensusObjectV2::FamilyCertified { .. }
+            | PalwConsensusObjectV2::KernelRouteV1 { .. }
+            | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. }
+    )
 }
 
 /// Cut an object into the chunks that carry it, `None` when it fits one carrier as it is.

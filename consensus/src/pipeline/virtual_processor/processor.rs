@@ -8238,8 +8238,10 @@ impl VirtualStateProcessor {
             // **G14 lane D: a chunk group that carries a kernel route object is not a certification.** The grading cap and its work
             // budget are the family court's; the kernel route's own bounds are its fold's (and the carrier's fee).
             let completes_a_group = completes_a_group
-                && !Self::palw_kernel_chunk_inner(&folded, &object)
-                    .is_some_and(|inner| kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(&inner));
+                && !Self::palw_kernel_chunk_inner(&folded, &object).is_some_and(|inner| {
+                    kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(&inner)
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_onboarding_v1(&inner)
+                });
             let is_certification =
                 matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
                     || completes_a_group;
@@ -13042,11 +13044,17 @@ impl VirtualStateProcessor {
                 // checked (the fold trusts the acceptance layer for it, as it does for every directly carried one): the assembled
                 // inner is judged exactly as the direct `KernelRouteV1` arm judges it, and an inner the fence or the signature
                 // refuses drops the completing chunk. Every other chunk is the transition's.
-                Obj::ObjectChunk { .. } => {
-                    if let Some(Obj::KernelRouteV1 { bytes, signer, signature }) = Self::palw_kernel_chunk_inner(state, object) {
+                Obj::ObjectChunk { .. } => match Self::palw_kernel_chunk_inner(state, object) {
+                    Some(Obj::KernelRouteV1 { bytes, signer, signature }) => {
                         self.palw_kernel_route_object_is_signed(state, point.daa_score, &bytes, &signer, &signature)?;
                     }
-                }
+                    // A binding's refutation delivered in chunks: judged as the direct object is, on the assembled whole.
+                    Some(Obj::ArtifactBindingChallengedV1 { v2_class, kernel_param_root, challenger, proof, signature }) => {
+                        let payload = borsh::to_vec(&(v2_class, kernel_param_root, proof.as_ref())).map_err(|e| e.to_string())?;
+                        self.palw_onboarding_signature_ok(state, point.daa_score, 105, &challenger, &payload, &signature)?;
+                    }
+                    _ => {}
+                },
                 // RFC-0002 Phase F (tag 63): judged by the transition like the legacy lane object;
                 // below `palw_tir_v1` dropped by name (the acceptance walk drops it first).
                 Obj::ClassLaneCertifiedTirV1 { class_id, .. } => {
