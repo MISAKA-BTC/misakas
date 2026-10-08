@@ -885,6 +885,12 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **RFC-0006 × G14: the shards a non-seat bond may watch** (agent SHARD) — every shard of a live claim drawn per shard that
+    /// `watcher` neither seats nor produced, as watch duties ([`crate::palw_tir_shard_watch_v1::palw_tir_shard_watch_duties_v1`]).
+    fn palw_tir_shard_watch_duties_v1(&self, _watcher: crate::palw_state_v2::PalwBondKeyV2) -> Vec<crate::palw_producer_v2::PalwSeatDutyV2> {
+        Vec::new()
+    }
+
     /// **A bond's claims, as its operator reads them** (ADR-0122 §6.5, `getPalwClaims`): the ones
     /// it made (`Executor`) or the ones whose panels seat it (`Seat`), newest first, with the tip
     /// DAA they were read at, whether `limit` left rows out, and the bond's own registry record.

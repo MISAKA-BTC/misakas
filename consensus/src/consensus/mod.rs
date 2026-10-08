@@ -2255,6 +2255,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_seat_duties_v2_impl(&mine)
     }
 
+    fn palw_tir_shard_watch_duties_v1(
+        &self,
+        watcher: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2> {
+        self.virtual_processor.palw_tir_shard_watch_duties_v1_impl(&watcher)
+    }
+
     fn palw_court_duties_v2(
         &self,
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

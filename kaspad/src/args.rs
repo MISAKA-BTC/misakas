@@ -621,6 +621,9 @@ pub struct Args {
     /// RFC-0006: a sharded seat with no capture demands the runs its cell reads on chain (`DefaultAccusedTirStep`, unit
     /// `TirStepRun`) before it abstains. Off by default.
     pub palw_tir_shard_demand_runs: bool,
+    /// **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`): verify the shards of live sharded claims this bond does
+    /// not seat from public material, and accuse (as a non-seat bond) or demand their runs on chain. Off by default; files no receipt.
+    pub palw_tir_shard_watch: bool,
     /// RFC-0006: where an outsider fetches a class it does not hold (`--palw-tir-shard-mirror=<class container path>`); verified against
     /// the chain's registered root before it is used.
     pub palw_tir_shard_mirror: Option<String>,
@@ -941,6 +944,7 @@ impl Default for Args {
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_boundary: None,
             palw_tir_shard_demand_runs: false,
+            palw_tir_shard_watch: false,
             palw_tir_shard_mirror: None,
             palw_tir_shard_fetch: false,
             palw_tir_shard_run_leaves: None,
@@ -2591,6 +2595,16 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-tir-shard-watch")
+                .long("palw-tir-shard-watch")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "RFC-0006 x G14: the non-seat cell watcher — verify every shard of a live sharded claim this bond does not seat from \
+                     public material only; a false cell is accused as a non-seat bond (TirShardCourtAccused), a claim with no public capture \
+                     has its runs demanded on chain (with --palw-tir-shard-demand-runs). Signs no receipt. Off by default.",
+                ),
+        )
+        .arg(
             Arg::new("palw-challenge")
                 .long("palw-challenge")
                 .env("KASPAD_PALW_CHALLENGE")
@@ -3694,6 +3708,7 @@ impl Args {
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_boundary: m.get_one::<String>("palw-drill-tamper-boundary").cloned(),
             palw_tir_shard_demand_runs: m.get_one::<bool>("palw-tir-shard-demand-runs").copied().unwrap_or(false),
+            palw_tir_shard_watch: m.get_one::<bool>("palw-tir-shard-watch").copied().unwrap_or(false),
             palw_tir_shard_mirror: m.get_one::<String>("palw-tir-shard-mirror").cloned(),
             palw_tir_shard_fetch: m.get_one::<bool>("palw-tir-shard-fetch").copied().unwrap_or(false),
             palw_tir_shard_run_leaves: m.get_one::<u32>("palw-tir-shard-run-leaves").copied(),

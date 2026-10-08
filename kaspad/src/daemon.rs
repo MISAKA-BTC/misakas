@@ -2003,6 +2003,7 @@ Do you confirm? (y/n)";
                         },
                         tir_shard_gpu: args.palw_tir_shard_gpu,
                         tir_shard_demand_runs: args.palw_tir_shard_demand_runs,
+                        tir_shard_watch: args.palw_tir_shard_watch,
                         tir_shard_mirror: args.palw_tir_shard_mirror.as_ref().map(std::path::PathBuf::from),
                         tir_shard_fetch: args.palw_tir_shard_fetch,
                         tir_shard_run_leaves: args.palw_tir_shard_run_leaves.unwrap_or(0),
