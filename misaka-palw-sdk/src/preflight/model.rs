@@ -203,6 +203,23 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         }
     }
 
+    // A weight file the frontend refuses by its FORM (a PyTorch pickle that is not a plain state dict, a global off the allowlist, a
+    // legacy serialization): named, with the safe path — never "the tensors are missing".
+    if let Some(why) = &src.weights_refusal {
+        blockers.push(
+            Blocker::new(
+                Stage::Convert,
+                "FORMAT_UNSUPPORTED",
+                "the weights are a file form this build does not read (a PyTorch pickle is interpreted, never run)",
+            )
+            .evidence([short(why)])
+            .safe([
+                "re-save the checkpoint with safetensors (`model.save_pretrained(..., safe_serialization=True)`)".to_string(),
+                "a plain `torch.save(model.state_dict())` of contiguous tensors is read; a training checkpoint, a strided view or the legacy format is not".to_string(),
+            ]),
+        );
+    }
+
     // ---- the configuration, the features, the scope -----------------------------------------------------------------
     let mut model: Option<ModelInfo> = None;
     let mut scope: Option<FeatureScope> = None;

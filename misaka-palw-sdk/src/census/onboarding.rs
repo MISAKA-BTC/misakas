@@ -207,7 +207,7 @@ pub fn classify_blocker_v1(b: &Blocker) -> GapClassV1 {
         "ARCH_NEEDS_FEATURE" => {
             class_of_feature(b.arg.as_deref(), b.safe_paths.iter().any(|p| p.contains("smallest general")))
         }
-        "REMOTE_CODE" => FrontendRequired,
+        "REMOTE_CODE" | "FORMAT_UNSUPPORTED" => FrontendRequired,
         "SOURCE_INCOMPLETE" => ExternalBlocker,
         "CANONICAL_JOB_OUT_OF_BOUNDS" | "COURT_COST_OVER_CEILING" | "CLOSE_SIZE_OVER_CAP" | "SEAT_MEMORY_SHORT"
         | "READY_SEATS_INSUFFICIENT" | "INDEPENDENT_OPERATORS" => ResourceRefused,
@@ -361,6 +361,7 @@ mod tests {
             "TOKENIZER_MISSING",
             "ADAPTER_REFUSED",
             "SOURCE_INCOMPLETE",
+            "FORMAT_UNSUPPORTED",
             "ADMISSION_EXCEEDS",
             "ADMISSION_REFUSED",
             "CLOSE_SIZE_OVER_CAP",

@@ -476,3 +476,45 @@ fn a_gguf_lora_is_named_as_an_adapter_and_not_as_an_architecture_the_frontend_fa
     assert!(b.evidence.iter().any(|e| e.contains("LoRA adapter")), "{:?}", b.evidence);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// **A PyTorch checkpoint is judged like its safetensors original** (`weights::torchzip`: the pickle is interpreted, never run). The
+/// fixture is `hf/llama` re-saved with `torch.save` as `pytorch_model.bin`, in one file and in two shards with an index: the same
+/// tensors are bound, the same spec digest read, and the verdict is the same.
+#[test]
+fn a_pytorch_model_bin_is_judged_like_the_safetensors_it_was_saved_from() {
+    let st = copy_fixture(&fixture("hf/llama"), "bin-ref", false);
+    let reference = run(&st, &opts(Depth::Headers)).expect("preflight");
+    assert_eq!(reference.verdict.convert.status, StageStatus::Ok, "{}", reference.render());
+    for (name, shards) in [("hf-bin/llama", 1usize), ("hf-bin/llama-sharded", 2)] {
+        let dir = copy_fixture(&fixture(name), &format!("bin-{shards}"), false);
+        let r = run(&dir, &opts(Depth::Headers)).expect("preflight");
+        assert_eq!(r.verdict.convert.status, StageStatus::Ok, "{name}: {}", r.render());
+        assert_eq!(r.tensors.checked, "shapes", "{name}");
+        assert_eq!((r.tensors.bound, r.tensors.missing_total, r.tensors.shape_mismatch_total), (reference.tensors.bound, 0, 0), "{name}");
+        assert_eq!(r.model.as_ref().map(|m| m.spec_digest.clone()), reference.model.as_ref().map(|m| m.spec_digest.clone()), "{name}");
+        assert_eq!(r.source.shards.len(), shards, "{name}");
+        // The same weights, in bytes, and none of the tensor data read.
+        assert_eq!(r.source.weight_bytes, reference.source.weight_bytes, "{name}");
+        assert!(r.input.bytes_read < reference.source.weight_bytes.unwrap_or(0) + 70_000, "{name}: read {}", r.input.bytes_read);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    let _ = std::fs::remove_dir_all(st);
+}
+
+/// A `.bin` the reader refuses by its form is a named `FORMAT_UNSUPPORTED` blocker with its reason and a safe path — not a crash, and
+/// not "tensors missing": the legacy serialization, a strided view and a training checkpoint, each beside a real `config.json`.
+#[test]
+fn a_pytorch_file_the_reader_refuses_is_format_unsupported_with_its_reason() {
+    for (file, why) in [("legacy.bin", "legacy"), ("strided.bin", "strided view"), ("nested.bin", "training checkpoint")] {
+        let dir = scratch(&format!("refused-{file}"));
+        std::fs::copy(fixture("hf/llama").join("config.json"), dir.join("config.json")).expect("config");
+        std::fs::write(dir.join("tokenizer.json"), "{}").expect("tokenizer");
+        std::fs::copy(fixture("torch").join(file), dir.join("pytorch_model.bin")).expect("bin");
+        let r = run(&dir, &opts(Depth::Headers)).expect("preflight");
+        let b = r.verdict.convert.blockers.iter().find(|b| b.code == "FORMAT_UNSUPPORTED").unwrap_or_else(|| panic!("{file}: {}", r.render()));
+        assert!(b.evidence.iter().any(|e| e.contains(why)), "{file}: {:?}", b.evidence);
+        assert!(b.safe_paths.iter().any(|p| p.contains("safetensors")), "{file}: {:?}", b.safe_paths);
+        assert_eq!(r.verdict.convert.status, StageStatus::Blocked);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

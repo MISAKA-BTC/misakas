@@ -373,6 +373,7 @@ pub fn source_of(l: &ListingV1, sel: &SelectedV1, fx: &Fetched) -> Result<Census
                 gguf_model: model,
                 gguf_truncated: false,
                 gguf_file_bytes: size,
+                weights_refusal: None,
                 bytes_read,
             };
             Ok(CensusSource { source: src, scratch, label, bytes_read, needs_tensor_data })

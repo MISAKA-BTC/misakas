@@ -153,6 +153,8 @@ pub fn gate_code_of_preflight(code: &str) -> Option<(Gate, &'static str)> {
         "TENSOR_SHAPE" => (Gate::Lower, "TENSOR_SHAPE"),
         "TOKENIZER_MISSING" => (Gate::Lower, "TOKENIZER_MISSING"),
         "ADAPTER_REFUSED" => (Gate::Lower, "ADAPTER_REFUSED"),
+        // A weight file the frontend refuses by its form (a PyTorch pickle off the allowlist, a strided view, the legacy format).
+        "FORMAT_UNSUPPORTED" => (Gate::Lower, FORMAT_UNSUPPORTED),
         "SOURCE_INCOMPLETE" => (Gate::Source, WEIGHTS_INCOMPLETE),
         // register stage → admit
         "ADMISSION_EXCEEDS" => (Gate::Admit, "ADMISSION_EXCEEDS"),
@@ -249,6 +251,7 @@ mod tests {
             "TOKENIZER_MISSING",
             "ADAPTER_REFUSED",
             "SOURCE_INCOMPLETE",
+            "FORMAT_UNSUPPORTED",
             "ADMISSION_EXCEEDS",
             "ADMISSION_REFUSED",
             "CLOSE_SIZE_OVER_CAP",
