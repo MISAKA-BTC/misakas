@@ -80,6 +80,9 @@ pub const AUDIT: &[BindingRow] = &[
     BindingRow { fact: "raw picture bytes (before preprocessing)", enters: "NOT in the claim (resampling is outside consensus): PreprocessRecordV1.source_digest in the VLM receipt — a byte the sampler never reads is in neither the pixels nor the job", test: "changing_the_picture_the_fit_or_the_prompt_moves_the_job_the_stage_roots_and_the_execution_root", bound: Bound::NotBound },
     BindingRow { fact: "canonical pixels (slot size, tile length)", enters: "images[k].input_root inside the V5 job -> fp_job_id_v5 -> the claim id; the vision stage's root reads them", test: "a_picture_of_another_size_is_preprocessed_run_through_both_stages_and_judged_valid", bound: Bound::InClaim },
     BindingRow { fact: "preprocessing algorithm, fit, pad, placement", enters: "the PreprocessRecordV1 digest sealed in the VLM receipt; pixels produced another way are refused by the worker and the seat", test: "the_receipt_binds_the_preprocessing_the_job_and_the_output_and_refuses_each_forgery", bound: Bound::CheckedNotCommitted },
+    // ---- image generation (RFC-0003 §II.1) ----
+    BindingRow { fact: "image request: n, size, steps, guidance, prompt ids, negative ids", enters: "imagegen::plan -> PalwGenJobV1.body (image_index per image, steps, guidance_q, width/height, prompt hashes), each held to the class by palw_gen_job_resolve_class_v1 before it runs", test: "what_the_class_does_not_offer_is_refused_before_anything_runs", bound: Bound::InClaim },
+    BindingRow { fact: "generation seed R (images)", enters: "PalwGenJobV1.seed — the requester's, or a pure function of the request digest; never the anchor, a nonce, the clock or a verification beacon", test: "the_generation_seed_depends_on_the_request_alone_and_never_on_the_chain", bound: Bound::InClaim },
     // ---- the evidence ----
     BindingRow { fact: "evidence / DA root", enters: "EvidenceManifestV1 header must equal the claim's roots, chunk count and retention", test: "evidence_a_manifest_that_differs_from_the_claim_in_any_root_is_refused", bound: Bound::CheckedNotCommitted },
 ];
@@ -968,7 +971,7 @@ mod tests {
     fn the_audit_table_names_only_tests_that_exist() {
         let source = std::include_str!("binding.rs");
         // Rows may be proven in a sibling module's tests (the vision-language path lives in `vlm`).
-        let siblings = [source, std::include_str!("vlm.rs"), std::include_str!("preprocess.rs")];
+        let siblings = [source, std::include_str!("vlm.rs"), std::include_str!("preprocess.rs"), std::include_str!("imagegen.rs")];
         for row in AUDIT {
             assert!(
                 siblings.iter().any(|s| s.contains(&format!("fn {}(", row.test))),

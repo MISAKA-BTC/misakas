@@ -89,6 +89,8 @@ mod receipt;
 // RFC-0003 §II.4: deterministic integer image preprocessing, and the vision-language job built over it.
 mod preprocess;
 mod vlm;
+// RFC-0003 §II.1: an image-generation request as canonical generative jobs, run and committed (library; no route runs it yet).
+mod imagegen;
 // Test support: an in-process worker over the floor engine, and the e2e suites that drive the whole chat path against it.
 #[cfg(test)]
 mod testkit;
@@ -3325,6 +3327,17 @@ fn serve_connection(
                 ),
             }
         }
+        // **RFC-0003 §II.1 — image generation.** This binary serves ONE family worker (`--worker`) and holds no generative class, and no generative
+        // worker process exists to talk to (the class is held in process by `misaka_palw_base0::gen_worker`), so the route answers by name rather
+        // than 404: `imagegen` is the library it will call (CODE_GAP recorded in docs/design/palw/rfc-0001-0003-delivery-record.md).
+        ("POST", "/v1/images/generations") => respond(
+            stream,
+            "501 Not Implemented",
+            &error_body(
+                "image generation is not served by this gateway: it holds no generative class and has no generative worker to run one (RFC-0003 §II.1); \
+                 the request/job/commitment path exists as a library (`imagegen`) and is exercised in process",
+            ),
+        ),
         // ADR-0078 Decision 6's fetch handle: a derived artifact too large to ride inline is
         // served by its derived id. A GET with no side effects, so it needs neither the job slot
         // nor the in-flight reservation — but it is dispatched HERE, inside the bounded accept
@@ -3364,7 +3377,7 @@ fn serve_connection(
             stream,
             "404 Not Found",
             &error_body(
-                "this gateway serves POST /v1/chat/completions, POST /v1/embeddings, GET /v1/models, GET /health, GET /v1/requests/<id>, GET /v1/receipts/<id> and GET /v1/artifacts/<derived-id>",
+                "this gateway serves POST /v1/chat/completions, POST /v1/embeddings, GET /v1/models, GET /health, GET /v1/requests/<id>, GET /v1/receipts/<id> and GET /v1/artifacts/<derived-id> (POST /v1/images/generations answers 501)",
             ),
         ),
     }

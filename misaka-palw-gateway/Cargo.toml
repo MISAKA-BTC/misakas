@@ -69,5 +69,12 @@ serde_json.workspace = true
 # `misaka.format.canonical_sha256`: the digest a consumer checks its stored canonical JSON against.
 sha2.workspace = true
 
+[dev-dependencies]
+# RFC-0003 §II.1 + the gateway's image-generation path: the SDK declares and holds a generative class, tir-lower builds the tiny SD3 pipeline
+# the SDK's own tests run (`tests/gen_sd3_class.rs`), tir-artifact is the container a worker holds. Tests only: the gateway binary links none.
+misaka-palw-sdk.workspace = true
+misaka-palw-tir-lower = { path = "../misaka-palw-tir-lower" }
+misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact" }
+
 [lints]
 workspace = true

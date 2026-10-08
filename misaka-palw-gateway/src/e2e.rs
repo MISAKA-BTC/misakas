@@ -451,3 +451,13 @@ fn the_receipt_route_serves_the_sealed_receipt_and_adds_the_txid_the_rail_record
     let rid = refused["id"].as_str().unwrap();
     assert_eq!(h.call(&get(&format!("/v1/receipts/{rid}"))).status(), 404);
 }
+
+#[test]
+fn the_image_generation_route_answers_501_by_name_not_404() {
+    let h = Harness::new("e2e-images");
+    let raw = b"POST /v1/images/generations HTTP/1.1\r\nHost: t\r\nContent-Length: 2\r\n\r\n{}".to_vec();
+    let response = h.call(&raw);
+    assert_eq!(response.status(), 501, "{}", response.head);
+    assert!(response.json()["error"]["message"].as_str().unwrap().contains("generative class"));
+    assert_eq!(h.worker.runs(), 0);
+}
