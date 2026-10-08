@@ -127,6 +127,9 @@ pub struct PalwKernelRouteExtrasV1 {
     /// **RFC-0015 OptimisticPublicVerification**: `Some` exactly where the network declares the OPV policy (a genesis constant — it is
     /// `Some` at every block of a chain or at none). The processor resolves it from `Params::palw_panel_free_v1`.
     pub opv: Option<PalwKernelOpvExtrasV1>,
+    /// **Lane DA16: `Params::palw_provider_court_v1`'s activation DAA, where that fence is in force at the block** (`None` below it and on
+    /// every network). The provider court's objects fold only with it; a claim committed below it can never move its DA responsibility.
+    pub provider_court: Option<u64>,
 }
 
 /// What the processor hands the fold for the OPV mode (RFC-0015): the network's policy and its admission list, both read from

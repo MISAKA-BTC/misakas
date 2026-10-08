@@ -14246,6 +14246,11 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ConformanceCommittedV1 { .. } => "ConformanceCommittedV1",
         PalwConsensusObjectV2::SignedRegistrationV1 { .. } => "SignedRegistrationV1",
         PalwConsensusObjectV2::ConformanceEvidenceV1 { .. } => "ConformanceEvidenceV1",
+        // DA16 (tags 150–153): the provider court.
+        PalwConsensusObjectV2::ProviderLeaseV1 { .. } => "ProviderLeaseV1",
+        PalwConsensusObjectV2::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
+        PalwConsensusObjectV2::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
+        PalwConsensusObjectV2::DaTransferV1 { .. } => "DaTransferV1",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

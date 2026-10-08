@@ -776,6 +776,8 @@ mod tests {
             "palw_probabilistic_constraints_v1" => params.palw_probabilistic_constraints_v1 = Some(at),
             "palw_panel_free_v1" => params.palw_panel_free_v1 = Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(at)),
             "palw_signed_registration_v1" => params.palw_signed_registration_v1 = Some(at),
+            // DA16's provider court: a bare height, refused when armed by `validate_palw_v2` (which the probe does not run).
+            "palw_provider_court_v1" => params.palw_provider_court_v1 = Some(at),
             // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
             // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
             "palw_dns_retirement_v1" => {

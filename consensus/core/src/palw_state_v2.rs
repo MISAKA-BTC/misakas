@@ -136,6 +136,9 @@ mod palw_kernel_route_fold_v1;
 // G14 lane D phase 3: the onboarding objects' fold arms (artifact binding and refutation, kernel binding, conformance commitment).
 #[path = "palw_onboarding_fold_v1.rs"]
 mod palw_onboarding_fold_v1;
+// Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
+#[path = "palw_provider_court_fold_v1.rs"]
+mod palw_provider_court_fold_v1;
 // RFC-0001 §2.10 (ADR-0163): the adapter class listing's fold arm — a child module for the same reason.
 #[path = "palw_adapter_class_fold_v1.rs"]
 mod palw_adapter_class_fold_v1;
@@ -3790,7 +3793,11 @@ pub fn palw_anchor_ring_prune_count_v1(ring: &[u64], now_daa: u64, horizon_daa: 
 /// delay elapsed while that lock was still live: up to a whole seat's collateral of liability
 /// that nothing could recover (`dos_l1_q4b`).
 pub fn palw_bond_backs_live_duty_v1(state: &PalwChainStateV2, key: &PalwBondKeyV2, now_daa: u64, depth: Option<u64>) -> bool {
-    if state.reserved_exposure(key) > 0 || state.kernel_reserved(key) > 0 || state.onboarding_reserved(key) > 0 {
+    if state.reserved_exposure(key) > 0
+        || state.kernel_reserved(key) > 0
+        || state.onboarding_reserved(key) > 0
+        || state.provider_court_reserved(key) > 0
+    {
         return true;
     }
     let settled_now = state.settled_attempt_finals;
@@ -3827,7 +3834,11 @@ pub fn palw_bond_backs_live_duty_v2(
     depth: Option<u64>,
     window_court: u64,
 ) -> bool {
-    if state.reserved_exposure(key) > 0 || state.kernel_reserved(key) > 0 || state.onboarding_reserved(key) > 0 {
+    if state.reserved_exposure(key) > 0
+        || state.kernel_reserved(key) > 0
+        || state.onboarding_reserved(key) > 0
+        || state.provider_court_reserved(key) > 0
+    {
         return true;
     }
     let settled_now = state.settled_attempt_finals;
@@ -4092,6 +4103,8 @@ pub fn palw_bond_committed_v1(
         // G14 lane D: what the kernel route has reserved against the bond (a claim's collateral, a demand bond); 0 with no route.
         .saturating_add(state.kernel_reserved(bond))
         .saturating_add(state.onboarding_reserved(bond))
+        // DA16: the provider court's leases and challenge bonds.
+        .saturating_add(state.provider_court_reserved(bond))
 }
 
 /// **[`palw_bond_committed_v1`]'s per-lock term: does `lock` on `claim_id` still hold its seat's
@@ -8471,6 +8484,41 @@ pub enum PalwConsensusObjectV2 {
         signer: PalwBondKeyV2,
         signature: Vec<u8>,
     } = 109,
+    // Tags 150–153 are lane DA16's provider court (RFC-0009's reservation; the lead's allocation of 2026-10-09). Dropped by name below
+    // `palw_provider_court_v1`; rows in the kernel route's aux tables 43–45. Every signature: the signer's ML-DSA-87 over
+    // [`crate::palw_provider_court_v1::palw_provider_court_message_v1`] (kind = the tag, payload = the Borsh of the other fields).
+    /// **(tag 150): a provider's bonded lease** of a subject's public material until `serve_until_daa`, reserving `reserved` of its
+    /// free collateral. **Tag 150.**
+    ProviderLeaseV1 {
+        subject: crate::palw_provider_court_v1::ProviderSubjectV1,
+        reserved: u64,
+        serve_until_daa: u64,
+        provider: PalwBondKeyV2,
+        signature: Vec<u8>,
+    } = 150,
+    /// **(tag 151): a challenge of ONE unit of ONE lease**, filed on chain by a bond of another operator; a challenge bond, a
+    /// deadline. The challenger signs `valid_until_daa` (at most one response window past the block that carries it): a replay of
+    /// the signed object never re-opens a closed challenge. **Tag 151.**
+    ProviderChallengeV1 {
+        subject: crate::palw_provider_court_v1::ProviderSubjectV1,
+        provider: PalwBondKeyV2,
+        unit: crate::palw_public_material_v1::PublicUnitV1,
+        valid_until_daa: u64,
+        challenger: PalwBondKeyV2,
+        signature: Vec<u8>,
+    } = 151,
+    /// **(tag 152): the provider's answer** — the unit, verified against the chain's own root. Large answers ride `ObjectChunk`s.
+    /// **Tag 152.**
+    ProviderAnswerV1 {
+        subject: crate::palw_provider_court_v1::ProviderSubjectV1,
+        provider: PalwBondKeyV2,
+        unit: crate::palw_public_material_v1::PublicUnitV1,
+        answer: Box<crate::palw_public_material_v1::PublicUnitAnswerV1>,
+        signature: Vec<u8>,
+    } = 152,
+    /// **(tag 153): a kernel claim's producer moves the claim's DA responsibility to its leases** (irreversible; see
+    /// [`crate::palw_provider_court_v1`]). **Tag 153.**
+    DaTransferV1 { claim: Hash64, producer: PalwBondKeyV2, signature: Vec<u8> } = 153,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -8483,6 +8531,19 @@ pub fn palw_object_is_onboarding_v1(object: &PalwConsensusObjectV2) -> bool {
             | PalwConsensusObjectV2::KernelBoundV1 { .. }
             | PalwConsensusObjectV2::ConformanceCommittedV1 { .. }
             | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. }
+    )
+}
+
+/// **Is this object a provider-court object (tags 150–153, lane DA16)** — a variant an older build cannot decode and skips (A-2)? Below
+/// `Params::palw_provider_court_v1` the acceptance walk drops it by name before any slot, rent or budget is charged for it; the fold
+/// refuses it as the second lock.
+pub fn palw_object_is_provider_court_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(
+        object,
+        PalwConsensusObjectV2::ProviderLeaseV1 { .. }
+            | PalwConsensusObjectV2::ProviderChallengeV1 { .. }
+            | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
+            | PalwConsensusObjectV2::DaTransferV1 { .. }
     )
 }
 
@@ -9331,6 +9392,8 @@ pub fn palw_chunked_object_kind_admitted_v1(object: &PalwConsensusObjectV2) -> b
             | PalwConsensusObjectV2::KernelRouteV1 { .. }
             | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. }
             | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. }
+            // DA16: a provider's answer may carry a run of row-tree nodes and the commitments map — judged on the whole, likewise.
+            | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
     )
 }
 
@@ -34578,6 +34641,19 @@ fn apply_object(
         // **Onboarding P0 (tag 109): conformance evidence** — posted or refuted; tables 39 and 40 (`palw_onboarding_fold_v1`).
         PalwConsensusObjectV2::ConformanceEvidenceV1 { v2_class, action, signer, signature: _ } => {
             palw_onboarding_fold_v1::apply_conformance_evidence_v1(builder, ctx, v2_class, action, signer)?;
+        }
+        // **Lane DA16 (tags 150–153): the provider court** — rows in the route's aux tables 43–45 (`palw_provider_court_fold_v1`).
+        PalwConsensusObjectV2::ProviderLeaseV1 { subject, reserved, serve_until_daa, provider, signature: _ } => {
+            palw_provider_court_fold_v1::apply_provider_lease_v1(builder, ctx, subject, *reserved, *serve_until_daa, provider)?;
+        }
+        PalwConsensusObjectV2::ProviderChallengeV1 { subject, provider, unit, valid_until_daa, challenger, signature: _ } => {
+            palw_provider_court_fold_v1::apply_provider_challenge_v1(builder, ctx, subject, provider, unit, *valid_until_daa, challenger)?;
+        }
+        PalwConsensusObjectV2::ProviderAnswerV1 { subject, provider, unit, answer, signature: _ } => {
+            palw_provider_court_fold_v1::apply_provider_answer_v1(builder, ctx, subject, provider, unit, answer)?;
+        }
+        PalwConsensusObjectV2::DaTransferV1 { claim, producer, signature: _ } => {
+            palw_provider_court_fold_v1::apply_da_transfer_v1(builder, ctx, claim, producer)?;
         }
         // (tag 108): the acceptance walk replaces the envelope by the registration it wraps, so the fold never meets one.
         PalwConsensusObjectV2::SignedRegistrationV1 { .. } => {

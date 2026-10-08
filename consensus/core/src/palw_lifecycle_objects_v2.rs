@@ -359,6 +359,20 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::KernelBoundV1 { .. }
         | PalwConsensusObjectV2::ConformanceCommittedV1 { .. }
         | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. } => Ok(()),
+        // DA16 (tags 150–153): provider-court objects ride at every height (A-2) and carry their signer's signature; the fence, the
+        // bonds, the rows and the units are the acceptance layer's and the fold's.
+        PalwConsensusObjectV2::ProviderLeaseV1 { signature, .. }
+        | PalwConsensusObjectV2::ProviderChallengeV1 { signature, .. }
+        | PalwConsensusObjectV2::ProviderAnswerV1 { signature, .. }
+        | PalwConsensusObjectV2::DaTransferV1 { signature, .. }
+            if signature.is_empty() =>
+        {
+            Err("a provider-court object must carry its signer's signature")
+        }
+        PalwConsensusObjectV2::ProviderLeaseV1 { .. }
+        | PalwConsensusObjectV2::ProviderChallengeV1 { .. }
+        | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
+        | PalwConsensusObjectV2::DaTransferV1 { .. } => Ok(()),
         PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
             if signature.is_empty() {
                 Err("a signed registration envelope must carry its signer's signature")

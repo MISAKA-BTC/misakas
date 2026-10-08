@@ -632,6 +632,9 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
     /// (tag 108). Resolved in ONE place, [`Self::palw_signed_registration_at`]. Never armable by a real network.
     pub(super) palw_signed_registration_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_provider_court_v1` (lane DA16, RFC-0009 §4.2): may the provider court's objects (tags 150–153) be folded. Resolved in
+    /// ONE place, [`Self::palw_provider_court_at`]. Never armable by a real network.
+    pub(super) palw_provider_court_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_gen_v1` (RFC-0003): may a class be a pipeline of PALW-TIR version-2 programs on
     /// this chain. Resolved in ONE place, [`Self::palw_gen_at`], at the block.
     pub(super) palw_gen_v1: Option<kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1>,
@@ -1253,6 +1256,7 @@ impl VirtualStateProcessor {
             palw_probabilistic_constraints_v1: params.palw_probabilistic_constraints_v1,
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_signed_registration_v1: params.palw_signed_registration_v1,
+            palw_provider_court_v1: params.palw_provider_court_v1,
             palw_gen_v1: params.palw_gen_v1_fence(),
             palw_tir_only_v1: params.palw_tir_only_fence(),
             palw_gdn_key_heads: params.palw_gdn_key_heads_fence(),
@@ -7746,6 +7750,16 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a kernel route object was dropped by name below palw_probabilistic_constraints_v1, and the block stands (G14)");
                 continue;
             }
+            // **Lane DA16: below `palw_provider_court_v1` a provider-court object (tags 150–153) is dropped by name**, first and charged
+            // nothing, for the same reason (an older build cannot decode it and skips it, A-2).
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(&object)
+                && !self.palw_provider_court_at(point.daa_score)
+            {
+                info!(
+                    "Block {block}: a provider-court object was dropped by name below palw_provider_court_v1, and the block stands (DA16)"
+                );
+                continue;
+            }
             // **RFC-0003: below `palw_gen_v1` a generative object is dropped by name**, first and
             // charged nothing, for the IR objects' reason above (an older build skips it undecoded).
             if kaspa_consensus_core::palw_state_v2::palw_object_is_gen_v1(&object) && !self.palw_gen_at(point.daa_score) {
@@ -8060,6 +8074,7 @@ impl VirtualStateProcessor {
                 && !Self::palw_kernel_chunk_inner(&folded, &object).is_some_and(|inner| {
                     kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(&inner)
                         || kaspa_consensus_core::palw_state_v2::palw_object_is_onboarding_v1(&inner)
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(&inner)
                 });
             let is_certification =
                 matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
@@ -12877,6 +12892,11 @@ impl VirtualStateProcessor {
                         let payload = borsh::to_vec(&(v2_class, action.as_ref())).map_err(|e| e.to_string())?;
                         self.palw_onboarding_signature_ok(state, point.daa_score, 109, &signer, &payload, &signature)?;
                     }
+                    // DA16: a provider's answer delivered in chunks, judged on the assembled whole.
+                    Some(Obj::ProviderAnswerV1 { subject, provider, unit, answer, signature }) => {
+                        let payload = borsh::to_vec(&(subject, unit, answer.as_ref())).map_err(|e| e.to_string())?;
+                        self.palw_provider_court_signature_ok(state, point.daa_score, 152, &provider, &payload, &signature)?;
+                    }
                     _ => {}
                 },
                 // RFC-0002 Phase F (tag 63): judged by the transition like the legacy lane object;
@@ -13059,6 +13079,24 @@ impl VirtualStateProcessor {
                 Obj::ConformanceEvidenceV1 { v2_class, action, signer, signature } => {
                     let payload = borsh::to_vec(&(v2_class, action.as_ref())).map_err(|e| e.to_string())?;
                     self.palw_onboarding_signature_ok(state, point.daa_score, 109, signer, &payload, signature)?;
+                }
+                // **Lane DA16 (tags 150–153): the provider court** — the fence, an Active signer, its signature over the payload; the
+                // leases, units and verdicts are the fold's.
+                Obj::ProviderLeaseV1 { subject, reserved, serve_until_daa, provider, signature } => {
+                    let payload = borsh::to_vec(&(subject, reserved, serve_until_daa)).map_err(|e| e.to_string())?;
+                    self.palw_provider_court_signature_ok(state, point.daa_score, 150, provider, &payload, signature)?;
+                }
+                Obj::ProviderChallengeV1 { subject, provider, unit, valid_until_daa, challenger, signature } => {
+                    let payload = borsh::to_vec(&(subject, provider, unit, valid_until_daa)).map_err(|e| e.to_string())?;
+                    self.palw_provider_court_signature_ok(state, point.daa_score, 151, challenger, &payload, signature)?;
+                }
+                Obj::ProviderAnswerV1 { subject, provider, unit, answer, signature } => {
+                    let payload = borsh::to_vec(&(subject, unit, answer.as_ref())).map_err(|e| e.to_string())?;
+                    self.palw_provider_court_signature_ok(state, point.daa_score, 152, provider, &payload, signature)?;
+                }
+                Obj::DaTransferV1 { claim, producer, signature } => {
+                    let payload = borsh::to_vec(claim).map_err(|e| e.to_string())?;
+                    self.palw_provider_court_signature_ok(state, point.daa_score, 153, producer, &payload, signature)?;
                 }
                 // (tag 108): the acceptance walk replaces the envelope by its registration before this gate; one that reaches it was
                 // not unwrapped (a direct caller of the gate), and is refused.
@@ -14701,6 +14739,51 @@ impl VirtualStateProcessor {
         self.palw_probabilistic_constraints_v1.is_some_and(|fence| fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score))
     }
 
+    /// **Lane DA16: `Params::palw_provider_court_v1` resolved at the block's DAA**, in exactly one place (the kernel route's fence must be in
+    /// force too: the court's rows are the route's).
+    pub(super) fn palw_provider_court_at(&self, daa_score: u64) -> bool {
+        self.palw_kernel_route_at(daa_score)
+            && self.palw_provider_court_v1.is_some_and(|fence| {
+                fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score)
+            })
+    }
+
+    /// **Lane DA16: a provider-court object's acceptance** (tags 150–153): the court's fence, an Active signer bond, and the signer's
+    /// ML-DSA-87 signature over `(network, kind, signer, payload)`. The rows, the units and the verdicts are the fold's.
+    fn palw_provider_court_signature_ok(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa_score: u64,
+        kind: u8,
+        signer: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> Result<(), String> {
+        if !self.palw_provider_court_at(daa_score) {
+            return Err("a provider-court object is refused: palw_provider_court_v1 is not in force at this block (DA16)".to_string());
+        }
+        let record =
+            state.bond(signer).ok_or_else(|| "a provider-court object is signed by a bond this chain does not have".to_string())?;
+        if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err("a provider-court object is signed by a bond that is not Active".to_string());
+        }
+        let message = kaspa_consensus_core::palw_provider_court_v1::palw_provider_court_message_v1(
+            self.palw_network_domain_v2(),
+            kind,
+            signer,
+            payload,
+        );
+        if !Self::verify_mldsa87_with_context_bool(
+            &record.pubkey,
+            message.as_byte_slice(),
+            signature,
+            kaspa_consensus_core::palw_provider_court_v1::PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1,
+        ) {
+            return Err("a provider-court object carries a signature its bond's key does not verify".to_string());
+        }
+        Ok(())
+    }
+
     /// **RFC-0009 G-EXPIRY / G-RULESET: `Params::palw_signed_registration_v1` resolved at the block's DAA**, in exactly one place.
     pub(super) fn palw_signed_registration_at(&self, daa_score: u64) -> bool {
         self.palw_signed_registration_v1
@@ -14840,6 +14923,11 @@ impl VirtualStateProcessor {
                     policy: fence.opv_policy(),
                     admitted_classes: fence.admitted_classes.clone(),
                 }),
+                // DA16: the provider court's activation, where its (never armable) fence is in force at this block.
+                provider_court: self
+                    .palw_provider_court_at(daa_score)
+                    .then(|| self.palw_provider_court_v1.map(|f| f.daa_score()))
+                    .flatten(),
             }
         })
     }
@@ -21451,6 +21539,10 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ConformanceCommittedV1 { .. } => "ConformanceCommittedV1",
         O::SignedRegistrationV1 { .. } => "SignedRegistrationV1",
         O::ConformanceEvidenceV1 { .. } => "ConformanceEvidenceV1",
+        O::ProviderLeaseV1 { .. } => "ProviderLeaseV1",
+        O::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
+        O::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
+        O::DaTransferV1 { .. } => "DaTransferV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

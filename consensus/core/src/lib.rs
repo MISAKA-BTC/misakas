@@ -523,6 +523,12 @@ pub mod palw_receipt_v4;
 pub mod palw_evidence_v1;
 /// RFC-0009 stage B: the provider challenge court (`palw_evidence_court_v1`, DORMANT, not yet folded into the chain state).
 pub mod palw_evidence_court_v1;
+/// Lane DA16 (RFC-0014 §16, RFC-0009 §4): public material units — what an artifact leaf, a bound kernel row or a claim position is checked
+/// against (always the chain's root), the artifact manifest, and a binding confirmed or refuted from the bytes.
+pub mod palw_public_material_v1;
+/// Lane DA16 (RFC-0009 §4.2): the provider court on the kernel route — leases, unit challenges, answers, the DA transfer, its rows and its
+/// fence `palw_provider_court_v1` (dormant, refused when armed).
+pub mod palw_provider_court_v1;
 /// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
 pub mod palw_state_proof_v1;
 /// Lane PA: the 2026-10-04 audit's consensus fixes behind one dormant fence (`palw_audit_1004_v1`).
