@@ -2221,6 +2221,67 @@ enum KeyCmd {
 /// ADR-0063 D2/D3: the operator's half of the PALW bond lifecycle.
 #[derive(Subcommand, Debug)]
 enum BondCmd {
+    /// RFC-0009 A0, node-less bond registration, step 1 (NO key): the unsigned `BondRegistered` and its carrier, quoted from ≥ 2 nodes
+    /// running this build's ruleset — the floor is this build's, the funding and the DAA are the nodes' word (UNVERIFIED_REMOTE).
+    RegisterExport {
+        /// The bond's ML-DSA-87 public key, hex (`misaka key show`): the key that will sign the registration.
+        #[arg(long, value_name = "HEX")]
+        owner_pubkey: String,
+        /// The collateral to lock, in sompi (at least the network's registration floor).
+        #[arg(long, value_name = "SOMPI")]
+        collateral: u64,
+        /// Where the collateral returns and the rewards go (default: the bond key's own address).
+        #[arg(long, value_name = "ADDRESS")]
+        payout_address: Option<String>,
+        /// The address that funds the carrier (collateral + fee); it may belong to another key.
+        #[arg(long, value_name = "ADDRESS")]
+        payer_address: String,
+        /// More nodes to quote from, beside --rpc (their answers must agree).
+        #[arg(long, value_delimiter = ',', value_name = "HOST:PORT,...")]
+        quote_rpc: Vec<String>,
+        /// Quote from ONE node — only for a node you run.
+        #[arg(long)]
+        allow_single_rpc: bool,
+        /// Where to write the unsigned bundle (never overwritten).
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+    /// Step 2 (offline): the bond key signs the registration, the payer key the carrier — each refusing a bundle that moved the payout,
+    /// the collateral, the change or the fee. Below VERIFIED_REMOTE it signs only with --accept-unverified-state.
+    RegisterSign {
+        bundle: std::path::PathBuf,
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The payer's seed file, when another key funds the carrier.
+        #[arg(long, value_name = "FILE")]
+        payer_key_file: Option<String>,
+        /// The collateral you mean to lock (refused on any other).
+        #[arg(long, value_name = "SOMPI")]
+        expect_collateral: u64,
+        /// The payout you mean (default: the bond key's own address).
+        #[arg(long, value_name = "ADDRESS")]
+        expect_payout: Option<String>,
+        /// The most the carrier may cost, in sompi.
+        #[arg(long, value_name = "SOMPI")]
+        max_fee_sompi: u64,
+        /// Name the class you accept signing in (an exported bundle is UNVERIFIED_REMOTE).
+        #[arg(long, value_name = "LABEL")]
+        accept_unverified_state: Option<String>,
+        #[arg(long, value_name = "FILE")]
+        out: Option<std::path::PathBuf>,
+    },
+    /// Step 3 (NO key): verify the signed bytes, relay them through any nodes, follow the bond (`<carrier>:0`) to registration.
+    RegisterSubmit {
+        signed: std::path::PathBuf,
+        #[arg(long, value_delimiter = ',', value_name = "HOST:PORT,...", required = true)]
+        relay: Vec<String>,
+        #[arg(long, value_name = "N")]
+        relay_min: Option<usize>,
+        #[arg(long, value_name = "SOMPI")]
+        max_fee_sompi: Option<u64>,
+        #[arg(long)]
+        no_wait: bool,
+    },
     /// Inspect an exact outpoint in the Bond registry, or show the bonds registered to a key.
     Status {
         #[command(flatten)]
@@ -3287,6 +3348,61 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Bond(BondCmd::Capability { key, bond, class_id, declare, dry_run, yes }) => {
             bond::capability(&ctx, &key.source(), bond.as_deref(), class_id.as_deref(), &declare, dry_run, yes).await
+        }
+        Command::Bond(BondCmd::RegisterExport {
+            owner_pubkey,
+            collateral,
+            payout_address,
+            payer_address,
+            quote_rpc,
+            allow_single_rpc,
+            out,
+        }) => {
+            operator::bond_remote::export(
+                &ctx,
+                operator::bond_remote::ExportArgs {
+                    owner_pubkey,
+                    collateral,
+                    payout_address,
+                    payer_address,
+                    quote_rpc,
+                    allow_single_rpc,
+                    out,
+                },
+            )
+            .await
+        }
+        Command::Bond(BondCmd::RegisterSign {
+            bundle,
+            key,
+            payer_key_file,
+            expect_collateral,
+            expect_payout,
+            max_fee_sompi,
+            accept_unverified_state,
+            out,
+        }) => {
+            operator::bond_remote::sign(
+                &ctx,
+                operator::bond_remote::SignArgs {
+                    bundle,
+                    key: key.source(),
+                    payer_key_file,
+                    expect_collateral,
+                    expect_payout,
+                    max_fee_sompi,
+                    accept_unverified_state,
+                    out,
+                },
+            )
+            .await
+        }
+        Command::Bond(BondCmd::RegisterSubmit { signed, relay, relay_min, max_fee_sompi, no_wait }) => {
+            operator::bond_remote::submit(
+                &ctx,
+                operator::bond_remote::SubmitArgs { signed, relay, relay_min, max_fee_sompi, no_wait },
+            )
+            .await
         }
         Command::Bond(BondCmd::Retire { key, bond, class_id, dry_run, yes }) => {
             bond::retire(&ctx, &key.source(), bond.as_deref(), class_id.as_deref(), dry_run, yes).await
