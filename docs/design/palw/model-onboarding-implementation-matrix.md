@@ -74,7 +74,7 @@ Each fix records **before N / after M** here.
 
 1. frontend vs semantic gaps distinguished (`FRONTEND_REQUIRED` ≠ `KERNEL_EXTENSION_REQUIRED`) — partly (outcome codes exist); census re-run pending.
 2. known-semantics models register without model-name consensus code — GAP (no real registration E2E yet).
-3. exact layout preserved pack → preflight → registration — GAP (D parity test).
+3. exact layout preserved pack → preflight → registration — PASS for gate↔chain parity (lane D: 1,050 mutations, 30 classes × 33 heights, real checkpoints); pack→registration with real artifact bytes GAP (real-checkpoint fixtures use a synthetic artifact commitment).
 4. runtime pack bounded on large artifacts — PARTIAL: streamed authentication of a 1.87 GB artifact (3 s hash pass) + sampled leaves; vector checks O(positions) heavy (GAP: tiled range evaluator, stored Merkle index).
 5. static admission not replaced by beacon — PASS by construction (contract: beacon only after `StaticAdmitted`; tests).
 6. challenge entropy fixed only after commitment — PASS (contract + pack tests, real checkpoint on synthetic facts); chain wiring GAP (on-chain commitment, facts RPC).
@@ -84,11 +84,18 @@ Each fix records **before N / after M** here.
 10. registered vs active separated — PASS (lifecycle); consensus state GAP (D).
 11. Active profiles PUBLIC_PROSECUTION_COMPLETE — reference PASS (gate at class registration); real node GAP.
 12. fresh outsider prosecution from public material — reference PASS; real node GAP.
-13. real-node registration E2E — GAP (D).
-14. restart/IBD/reorg same state/challenge — contract PASS; node GAP.
-15. adversarial registration tests — GAP (D).
+13. real-node registration E2E — PASS to REGISTERED_DORMANT/Candidate→Active by the existing V2 lifecycle (mempool → template → fold → persisted tip → ConsensusApi reads; SmolLM2, Mamba, Granite MoE, Qwen3.5 GDN at 32,783 positions under shipped rules); RPC over the wire not exercised; no conformance/beacon/G14 states on chain (GAP).
+14. restart/IBD/reorg same state/challenge — registration state PASS on the node (second-node replay, reorg incl. merge re-fold, pruned import, restart); challenge state not on chain (GAP).
+15. adversarial registration tests — PASS for everything the current wire can express (27 adversarial + mutation differential, replay on another network, below-fence, duplicate, cap); GAP for challenge-policy substitution, conformance after artifact change, beacon reorder, heartbeat/self beacon, G14-incomplete activation, plan substitution (no consensus objects yet — lane D phase 3).
 
 ## 6. Change log
+
+* 2026-10-08 — lane D phase 1 integrated (…`0bf26024f`): `docs/design/palw/registration-e2e-record.md`; fixed registration-status
+  readers missing `ClassRegisteredTirV1` carriers. Findings F2 (mempool admits IR registrations the chain drops → fee lost; propose
+  gate + signature/target at admission as node policy), F3 (dropped-carrier RPC diagnosis re-asks only the gate), F4 (RPC/SDK judge
+  at tip DAA — safe direction), F5 (same weights under a second class id pass), F6 (model alias is a free claim). Consensus GAP list
+  1–10 (challenge policy binding, conformance commitment per (class, artifact), beacon state, plan/kernel binding in the class id,
+  G14 gate at activation, tokenizer/artifact bound to bytes) → lane D phase 3 after the G14 node wiring.
 
 * 2026-10-08 — lane C final integrated (`8906aa73b..d059e8fef` as `…aaad290ac`): `pack commit-conformance` / `run-conformance` /
   `verify-conformance` over the shared contract; real SmolLM2-1.7B (1.87 GB class file): commit 5.5 s → WAITING_RANDOMNESS with
