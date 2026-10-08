@@ -173,21 +173,23 @@ fn a_borrowed_trace_is_refused_at_inclusion_and_a_substituted_output_is_convicte
     short[0][0].pop();
     let mut short_ev = evidence.clone();
     short_ev.trace_root = misaka_palw_kernel::trace::EvidenceV1::new(short.clone()).root();
-    let ev = w.block(
-        6,
-        vec![
-            T::CommitClaim {
-                claim: KernelClaimV1 { evidence_root: fabricated.root(), ..h1.claim.clone() },
-                evidence: fabricated,
-                commitments: commitments.clone(),
-            },
-            T::CommitClaim {
-                claim: KernelClaimV1 { evidence_root: short_ev.root(), ..h1.claim.clone() },
-                evidence: short_ev,
-                commitments: short,
-            },
-        ],
+    // One block each: a producer's seal for a job is one seal (a re-seal replaces it), so each reveal is sealed on its own.
+    let mut ev = w.block(
+        7,
+        vec![T::CommitClaim {
+            claim: KernelClaimV1 { evidence_root: fabricated.root(), ..h1.claim.clone() },
+            evidence: fabricated,
+            commitments: commitments.clone(),
+        }],
     );
+    ev.extend(w.block(
+        8,
+        vec![T::CommitClaim {
+            claim: KernelClaimV1 { evidence_root: short_ev.root(), ..h1.claim.clone() },
+            evidence: short_ev,
+            commitments: short,
+        }],
+    ));
     let why: Vec<_> = ev.iter().filter_map(|e| if let E::Refused { why, .. } = e { Some(why.clone()) } else { None }).collect();
     assert_eq!(why.len(), 2, "{ev:?}");
     assert!(why.iter().all(|w| w.starts_with("malformed evidence")), "{why:?}");
@@ -199,10 +201,10 @@ fn a_borrowed_trace_is_refused_at_inclusion_and_a_substituted_output_is_convicte
     last[2] = (last[2] + 1) % w.program.token_bound;
     let sub = w.produce(&job1, PRODUCER, last, &w.params.clone(), |_| {});
     let (id, da) = (sub.claim.id(), Da::publishing(&sub.trace, &[]));
-    w.block(7, vec![sub.tx, T::PanelCovered { claim: id }]);
+    w.block(9, vec![sub.tx, T::PanelCovered { claim: id }]);
     let OutsiderFindingV1::Prosecute(ProsecutionV1::Decode(f)) = outsider(&w, id, &da) else { panic!() };
     assert_eq!(f.index, 2);
-    let ev = w.block(8, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof: ProsecutionV1::Decode(f) }]);
+    let ev = w.block(10, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof: ProsecutionV1::Decode(f) }]);
     assert_eq!(convicted(&ev), Some((1000, 500, false)));
 
     // A token substituted mid-generation, the trace recomputed over the substituted stream (self-consistent): the logits of
@@ -211,10 +213,10 @@ fn a_borrowed_trace_is_refused_at_inclusion_and_a_substituted_output_is_convicte
     mid[0] = (mid[0] + 1) % w.program.token_bound;
     let sub = w.produce(&job2, PRODUCER, mid, &w.params.clone(), |_| {});
     let (id, da) = (sub.claim.id(), Da::publishing(&sub.trace, &[]));
-    w.block(9, vec![sub.tx, T::PanelCovered { claim: id }]);
+    w.block(11, vec![sub.tx, T::PanelCovered { claim: id }]);
     let OutsiderFindingV1::Prosecute(ProsecutionV1::Decode(f)) = outsider(&w, id, &da) else { panic!() };
     assert_eq!(f.index, 0);
-    let ev = w.block(10, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof: ProsecutionV1::Decode(f) }]);
+    let ev = w.block(12, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof: ProsecutionV1::Decode(f) }]);
     assert_eq!(convicted(&ev), Some((1000, 500, false)));
 }
 

@@ -1062,6 +1062,28 @@ impl KernelLedgerV1 {
         Ok(())
     }
 
+    /// **May this claim be revealed now?** No other claim holds its job, its producer bond is ready, and the producer's seal of
+    /// exactly this claim is at least `claim_seal_delay_daa` old.
+    fn reveal_ready(&self, job: &Digest, producer: &Digest, id: &Digest) -> Result<(), String> {
+        if self.job_claims.get(job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job) {
+            return Err("another claim already holds the job (one claim per job)".into());
+        }
+        match self.bonds.get(producer) {
+            None => return Err("the producer bond is not registered".into()),
+            Some(b) if b.exit_requested.is_some() => return Err("the producer bond is exiting".into()),
+            Some(_) => {}
+        }
+        match self.seals.get(&(*job, *producer)) {
+            Some(row) if row.seal == claim_seal_v1(id) && row.daa.saturating_add(self.policy.claim_seal_delay_daa) <= self.daa => {
+                Ok(())
+            }
+            _ => Err(format!(
+                "no seal of this claim by its producer at least {} DAA old (seal, then reveal)",
+                self.policy.claim_seal_delay_daa
+            )),
+        }
+    }
+
     fn commit_claim(
         &mut self,
         claim: &KernelClaimV1,
@@ -1087,6 +1109,8 @@ impl KernelLedgerV1 {
         if self.claims.contains_key(&id) {
             return Err(rule("an exact duplicate claim".into()));
         }
+        // Cheap objective checks first: an unsealed or unready reveal never spends the block's adjudication budget (C4 O-C4-14).
+        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id).map_err(rule)?;
         self.charge(NAME, 0)?;
         let job = self.jobs.get(&claim.job_id).expect("checked");
         let class = self.classes.get(&job.class_binding_id).expect("checked");
@@ -1109,28 +1133,8 @@ impl KernelLedgerV1 {
             .map_err(|why| rule(format!("malformed evidence: {why}")))?;
         let body = ClaimBodyV1::Program { claim: claim.clone(), evidence: evidence.clone(), commitments: commitments.to_vec() };
         let class_id = job.class_binding_id;
-        if let Some(holder) = self.job_claims.get(&claim.job_id).and_then(|c| self.claims.get(c))
-            && holder.holds_job()
-        {
-            return Err(rule("another claim already holds the job (one claim per job)".into()));
-        }
-        match self.bonds.get(&claim.producer_bond) {
-            None => return Err(rule("the producer bond is not registered".into())),
-            Some(b) if b.exit_requested.is_some() => return Err(rule("the producer bond is exiting".into())),
-            Some(_) => {}
-        }
-        let key = (claim.job_id, claim.producer_bond);
-        match self.seals.get(&key) {
-            Some(row) if row.seal == claim_seal_v1(&id) && row.daa.saturating_add(self.policy.claim_seal_delay_daa) <= self.daa => {}
-            _ => {
-                return Err(rule(format!(
-                    "no seal of this claim by its producer at least {} DAA old (seal, then reveal)",
-                    self.policy.claim_seal_delay_daa
-                )));
-            }
-        }
         self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)?;
-        self.seals.remove(&key);
+        self.seals.remove(&(claim.job_id, claim.producer_bond));
         Ok(())
     }
 
@@ -1189,6 +1193,8 @@ impl KernelLedgerV1 {
         if self.claims.contains_key(&id) {
             return Err(rule("an exact duplicate claim".into()));
         }
+        // Cheap objective checks first: an unsealed or unready reveal never spends the block's adjudication budget (C4 O-C4-14).
+        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id).map_err(rule)?;
         self.charge(NAME, 0)?;
         let job = self.pipeline_jobs.get(&claim.job_id).expect("checked");
         let class = self.pipeline_classes.get(&job.class_binding_id).expect("checked");
@@ -1214,28 +1220,8 @@ impl KernelLedgerV1 {
             .map_err(|why| rule(format!("malformed evidence: {why}")))?;
         let body = ClaimBodyV1::Pipeline { claim: claim.clone(), evidence: evidence.clone(), stages: stages.to_vec() };
         let class_id = job.class_binding_id;
-        if let Some(holder) = self.job_claims.get(&claim.job_id).and_then(|c| self.claims.get(c))
-            && holder.holds_job()
-        {
-            return Err(rule("another claim already holds the job (one claim per job)".into()));
-        }
-        match self.bonds.get(&claim.producer_bond) {
-            None => return Err(rule("the producer bond is not registered".into())),
-            Some(b) if b.exit_requested.is_some() => return Err(rule("the producer bond is exiting".into())),
-            Some(_) => {}
-        }
-        let key = (claim.job_id, claim.producer_bond);
-        match self.seals.get(&key) {
-            Some(row) if row.seal == claim_seal_v1(&id) && row.daa.saturating_add(self.policy.claim_seal_delay_daa) <= self.daa => {}
-            _ => {
-                return Err(rule(format!(
-                    "no seal of this claim by its producer at least {} DAA old (seal, then reveal)",
-                    self.policy.claim_seal_delay_daa
-                )));
-            }
-        }
         self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)?;
-        self.seals.remove(&key);
+        self.seals.remove(&(claim.job_id, claim.producer_bond));
         Ok(())
     }
 
