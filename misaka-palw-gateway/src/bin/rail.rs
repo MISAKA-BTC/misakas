@@ -151,6 +151,8 @@ fn main() {
     // RFC-0009 stage B: `--evidence-out <dir>` places the claim's material in an evidence-provider directory (an `EvidenceManifestV1` and its chunks) so a panel
     // seat can fetch it from any provider with this PC off. Needs `--capture`; the producer pull is unchanged and stays the fallback.
     let mut evidence_out: Option<PathBuf> = None;
+    // A PanelDa job's prompt ids are private: they may be placed only in a directory served to Panel seats alone.
+    let mut evidence_panel_only = false;
     let mut track_claim: Option<String> = None;
     let mut track_tx_id: Option<String> = None;
     let mut finality_depth: u64 = 60;
@@ -208,6 +210,7 @@ fn main() {
             }
             "--checkpoint" => view_checkpoint = Some(value("--checkpoint")),
             "--evidence-out" => evidence_out = Some(PathBuf::from(value("--evidence-out"))),
+            "--evidence-panel-only" => evidence_panel_only = true,
             "--track" => track_claim = Some(value("--track")),
             "--tx-id" => track_tx_id = Some(value("--tx-id")),
             "--finality-depth" => finality_depth = value("--finality-depth").parse().unwrap_or_else(|e| die(format!("--finality-depth: {e}"))),
@@ -621,6 +624,11 @@ fn main() {
             std::fs::read(path).unwrap_or_else(|e| die(format!("cannot read the capture at {}: {e}", path.display())))
         });
         let (payload, _) = misaka_palw_fp_submit::decode_commitment_payload(&tx).unwrap_or_else(|e| die(e.to_string()));
+        // Under PanelDa the payload carries no prompt ids and the material would hold the private ones: never into a directory that
+        // may be served publicly unless the operator states it is Panel-only.
+        if payload.commitment.job.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA && !evidence_panel_only {
+            die("--evidence-out under PanelDa would write the job's private prompt ids; pass --evidence-panel-only only for a directory served to Panel seats alone".into());
+        }
         let prompt_ids = misaka_palw_fp_submit::staged_prompt_ids(&payload, Some(&result.prompt_token_ids)).unwrap_or_else(|e| die(e.to_string()));
         let material = misaka_palw_fp_submit::encode_claim_material(&payload, prompt_ids, capture_bytes.as_deref())
             .unwrap_or_else(|e| die(e.to_string()));
