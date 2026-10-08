@@ -12,8 +12,9 @@ use serde::Serialize;
 pub const TASK_PROFILES_VERSION: &str = "misaka.palw.hf-census-tasks.v1";
 
 /// The rules `census::listing::task_of` infers a missing task by: v2 (2026-10-04) adds transformers head classes and GGUF
-/// architecture names to v1's causal-LM classes and PEFT task types.
-pub const TASK_INFERENCE_VERSION: &str = "inference-v2";
+/// architecture names to v1's causal-LM classes and PEFT task types; v3 (2026-10-08) reads every PEFT `task_type` and, for an adapter
+/// that declares none, the task of its pinned base's head class (`store::base_task_of`, applied where the base was read).
+pub const TASK_INFERENCE_VERSION: &str = "inference-v3";
 
 /// What carries a task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

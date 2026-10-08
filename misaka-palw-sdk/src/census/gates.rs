@@ -706,6 +706,14 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
         task = TaskV1 { task: t.clone(), group: r.group.to_string(), profile: r.profile, source: "frame".into() };
     }
     let sel = select(l);
+    // An adapter that declares no task carries its pinned base's (inference v3), where the base was read.
+    if task.task == "unknown"
+        && sel.kind == ArtifactKind::Adapter
+        && let Some(t) = fetched.and_then(store::base_task_of)
+    {
+        let r = super::tasks::task_row(t);
+        task = TaskV1 { task: t.to_string(), group: r.group.to_string(), profile: r.profile, source: "inferred:base-architecture".into() };
+    }
     let strata = strata_of(l, &task, &sel);
     let rights = rights_of(l, ctx.policy);
     let depth = if fetched.is_some() { "headers" } else { "listing" };
