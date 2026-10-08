@@ -225,6 +225,15 @@ refused at the handshake by every upgraded node, exactly as DAA 750 did).
 
 1. **Fence 4's evidence** (§1, §3.4): the plan can drive it end to end only if the V4 leg is scripted (rail + builder + a Final free-prompt
    claim). Decide by the freeze whether it ships on this evidence, with the leg as a gate, or is dropped.
+   **Update 2026-10-08 evening (C1r2):** the chain-block E2E exists and passes — `rfc9_v4_chain_e2e` (real templates, funded
+   carriers, the int-13 list armed at H=80): PFS4 refused by name below the fence; the executor offline after filing material + RDA4
+   with two providers; seats fetch from the providers only; Final at DAA 147; another bond redeems at slot 547 in builder mode; payout
+   to the executor's registered address, builder fee exactly 500 bps of the worker reward; a V3 counterfactual twin matches every other
+   output, safe weight and claim row; sibling PFS4 and a later V3 re-spend paid nothing; reorg reverts and the quantum is re-spent once;
+   replay from genesis reaches the same root. The leg is scripted: `audit-combined/rfc9-v4-leg.sh`. **Timing:** the 400-DAA receipt
+   maturity puts the leg at ≈19.5 h of drill chain (≈125 s/DAA), longer than the ~12 h budget of §2 — start the leg's claim in the
+   first DAA of the run. **Public t12:** V4 is reachable only after someone files `FamilyCertified` + `ClassLaneCertified` (FreePrompt)
+   on chain (genesis certifies only in params); the observation in §4 step 7 waits for that.
 2. **`palw_model_court_window` was "armed nowhere" by decision** (2026-10-01): this release arms it at 9,000 on the lead's instruction. The
    verdict-neutrality proof (`palw_t12_court_window_changes_no_admission.rs`) passes unchanged with the fence armed; the delta at position
    100 first appears on a public chain at 9,000.
@@ -232,3 +241,6 @@ refused at the handshake by every upgraded node, exactly as DAA 750 did).
 4. **The undecided/other-lane fences** (`palw_tir_only_v1`, `palw_model_virtual_v1`, `palw_dns_retirement_v1`, `palw_exec_payload_v2`,
    `palw_permissionless_panel_v1`, `palw_probabilistic_constraints_v1`, `palw_panel_free_v1`) join `PALW_T12_INT13_FENCES_V1` by one line and the
    re-pin; each added fence adds its own leg to §3 and moves every id of §4 (so the drill and the fleet staging are repeated).
+   **Only before the code freeze.** After the int-13 build is cut the list is frozen (C4 round 3, F-C4R3-04, pinned by
+   `c4r3_fork_id_at_int13.rs`): a fence joining 9,000 after an int-13 binary is deployed is invisible to the fork id, so the two builds
+   would stay peers past 9,000 while disagreeing. A later fence takes a fresh height.

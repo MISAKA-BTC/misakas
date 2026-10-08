@@ -2583,3 +2583,6 @@ async fn g14_onboarding_a_signed_registration_envelope_expires_and_binds_its_rul
     let z = net.replay().await;
     net.assert_same(&z, "replay");
 }
+
+// C4 round 3 (independent adversarial review on the real node): `g14_kernel_route_e2e/c4r3.rs`.
+mod c4r3;

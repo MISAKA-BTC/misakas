@@ -17,6 +17,12 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The one line `misaka palw settlement` prints.
 pub(crate) fn settlement_line(r: &GetPalwSettlementResponse) -> String {
     if let Some(native) = &r.native_settlement {
+        // A below-finalized conflict is an alarm, not a stop reason: every settlement label is withheld until the node resyncs.
+        if native.stop == Some(kaspa_consensus_core::palw_native_settlement_v1::SettlementStopV1::FinalizedConflict) {
+            return "SAFETY ALARM: this node's chain abandons a head it had published as finalized; safe and finalized are withheld \
+                    until it is resynced (a validated pruning-point import) — do not rely on its settlement labels"
+                .into();
+        }
         let head = |h: Option<kaspa_consensus_core::Hash64>| h.map(|h| h.to_string()).unwrap_or_else(|| "unavailable".into());
         return format!("PALW native settlement: latest={} safe={} finalized={} depth={} work={} stop={:?}",
             head(native.latest), head(native.safe), head(native.finalized), native.depth, native.unique_work, native.stop);
@@ -48,6 +54,10 @@ fn depth_text(r: &GetPalwSettlementResponse) -> String {
 /// A node that cannot answer is an error, never "not yet": waiting on it would wait forever.
 pub(crate) fn settlement_exit(r: &GetPalwSettlementResponse, min_depth: Option<u64>) -> i32 {
     if !r.available {
+        return exit::GENERIC;
+    }
+    // A node in FinalizedConflict will never settle anything until it is resynced: that is an error to a script, not "not yet".
+    if r.native_settlement.as_ref().is_some_and(|s| s.stop == Some(kaspa_consensus_core::palw_native_settlement_v1::SettlementStopV1::FinalizedConflict)) {
         return exit::GENERIC;
     }
     match min_depth {
@@ -166,6 +176,41 @@ mod tests {
         let unavailable = GetPalwSettlementResponse::default();
         assert_eq!(settlement_exit(&unavailable, Some(1)), exit::GENERIC, "a node that cannot answer is no reason to wait");
         assert_eq!(settlement_exit(&unavailable, None), exit::GENERIC);
+    }
+
+    /// RFC-0012: a finalized conflict is an alarm line and an error exit (a script must not wait on a node that cannot settle),
+    /// while an ordinary stop reason stays a report that waits.
+    #[test]
+    fn rfc0012_a_finalized_conflict_is_an_alarm_and_an_error_exit_and_an_ordinary_stop_is_not() {
+        use kaspa_consensus_core::palw_native_settlement_v1::{NativeSettlementSnapshotV1, SettlementStopV1};
+        let native = |stop| NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: Default::default(),
+            policy_id: Default::default(),
+            generation: Default::default(),
+            retirement_daa: 5,
+            frontier: None,
+            latest: None,
+            safe: None,
+            finalized: None,
+            depth: 0,
+            unique_work: "0".into(),
+            stop: Some(stop),
+        };
+        let response = |stop| GetPalwSettlementResponse {
+            available: true,
+            dns_retired_at: Some(5),
+            native_settlement: Some(native(stop)),
+            ..Default::default()
+        };
+        let conflict = response(SettlementStopV1::FinalizedConflict);
+        assert!(settlement_line(&conflict).starts_with("SAFETY ALARM"));
+        assert_eq!(settlement_exit(&conflict, Some(1)), exit::GENERIC);
+        assert_eq!(settlement_exit(&conflict, None), exit::GENERIC);
+        let ordinary = response(SettlementStopV1::FrontierNotCovered);
+        assert!(settlement_line(&ordinary).contains("stop=Some(FrontierNotCovered)"));
+        assert_eq!(settlement_exit(&ordinary, Some(1)), exit::TIMEOUT_PENDING, "still waiting");
+        assert_eq!(settlement_exit(&ordinary, None), exit::SUCCESS, "a report succeeds");
     }
 
     #[test]

@@ -3278,6 +3278,75 @@ mod native_settlement_wire_tests {
         assert!(<GetPrecommitDutyResponse as Deserializer>::deserialize(&mut &duty[..]).unwrap().retired_at.is_none());
     }
 
+    /// A response a pre-RFC-0012 node wrote as JSON (no native keys, plus a key this build has never heard of) is still readable,
+    /// and reads as "no retirement": nothing is inferred from the absent fields.
+    #[test]
+    fn rfc0012_a_json_response_from_an_older_node_is_readable_and_means_no_retirement() {
+        let old = r#"{"available":true,"sinkDaa":9000,"daaScore":8000,"settled":true,"depth":3,"pendingAnchors":0,"depthIsLowerBound":false,
+            "safeFrontierBlueScore":7,"safeFrontierDaa":7990,"someFutureField":{"x":1}}"#;
+        let decoded: GetPalwSettlementResponse = serde_json::from_str(old).unwrap();
+        assert!(decoded.available && decoded.settled && decoded.depth == 3);
+        assert!(decoded.dns_retired_at.is_none() && decoded.native_settlement.is_none());
+        let again = serde_json::to_value(&decoded).unwrap();
+        assert!(again.get("dnsRetiredAt").is_none() && again.get("nativeSettlement").is_none(), "and it re-serialises without them");
+    }
+
+    /// Response v2 is chosen by what is present, per field: either native field alone selects it, neither keeps the v1 bytes, and each
+    /// round-trips with the other absent.
+    #[test]
+    fn rfc0012_response_v2_is_selected_by_either_field_and_never_by_neither() {
+        let native = NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: Default::default(),
+            policy_id: Default::default(),
+            generation: kaspa_hashes::Hash64::from_u64_word(9),
+            retirement_daa: 5,
+            frontier: None,
+            latest: Some(kaspa_hashes::Hash64::from_u64_word(9)),
+            safe: None,
+            finalized: None,
+            depth: 0,
+            unique_work: "0".into(),
+            stop: Some(SettlementStopV1::FinalizedConflict),
+        };
+        let cases = [
+            (GetPalwSettlementResponse::default(), 1u8),
+            (GetPalwSettlementResponse { dns_retired_at: Some(5), ..Default::default() }, 2),
+            (GetPalwSettlementResponse { native_settlement: Some(native.clone()), ..Default::default() }, 2),
+            (GetPalwSettlementResponse { dns_retired_at: Some(5), native_settlement: Some(native.clone()), ..Default::default() }, 2),
+        ];
+        for (value, version) in cases {
+            let mut bytes = Vec::new();
+            Serializer::serialize(&value, &mut bytes).unwrap();
+            assert_eq!(bytes[0], version);
+            let back = <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap();
+            assert_eq!((back.dns_retired_at, back.native_settlement), (value.dns_retired_at, value.native_settlement));
+        }
+    }
+
+    /// The stop reasons are a wire vocabulary: a reader keys on these names, so they are pinned, and the conflict alarm keeps its own.
+    #[test]
+    fn rfc0012_stop_reasons_have_stable_json_names() {
+        use SettlementStopV1::*;
+        let names: Vec<(SettlementStopV1, &str)> = vec![
+            (InvalidPolicy, "invalidPolicy"),
+            (MissingHistory, "missingHistory"),
+            (Unexecuted, "unexecuted"),
+            (FrontierNotCovered, "frontierNotCovered"),
+            (OpenLifecycle, "openLifecycle"),
+            (DuplicateWork, "duplicateWork"),
+            (InsufficientDepth, "insufficientDepth"),
+            (InsufficientWork, "insufficientWork"),
+            (ConcentratedWork, "concentratedWork"),
+            (ArithmeticOverflow, "arithmeticOverflow"),
+            (FinalizedConflict, "finalizedConflict"),
+        ];
+        for (stop, name) in names {
+            assert_eq!(serde_json::to_value(stop).unwrap(), serde_json::Value::String(name.into()));
+            assert_eq!(serde_json::from_value::<SettlementStopV1>(serde_json::Value::String(name.into())).unwrap(), stop);
+        }
+    }
+
     #[test]
     fn rfc0012_v2_wire_preserves_explicit_absent_heads_and_stop_reason() {
         let native = NativeSettlementSnapshotV1 {

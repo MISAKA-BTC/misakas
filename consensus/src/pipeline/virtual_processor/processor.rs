@@ -467,7 +467,18 @@ pub struct VirtualStateProcessor {
     /// ADR-0126: `Params::palw_overlay_carve_fence` — the height from which the overlay's full split
     /// pays validators a fifth and a claim escrows the tenth they gave up.
     pub(super) palw_native_ruleset_id: kaspa_consensus_core::Hash,
+    /// **C4 round 3, F-C4R3-01: the kernel route's ruleset digest is the network's IDENTITY**, never `consensus_params_id`, which moves
+    /// with every SCHEDULED fence: a stored route header binding it made the first node to take the next release disqualify every block
+    /// with a live claim ("folded under another policy") while un-upgraded nodes accepted it — a split at the binary swap. Two builds
+    /// that differ only in future fences share the identity, exactly as the handshake requires.
+    pub(super) palw_kernel_route_ruleset_id: kaspa_consensus_core::Hash,
     pub(super) palw_dns_retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
+    /// RFC-0012: the per-block rows of the native settlement walk. Memory only and rebuildable; see `native_settlement`.
+    pub(super) native_rows: parking_lot::Mutex<super::native_settlement::NativeRowCache>,
+    /// Test-only: facts a test places at a chain block, as if its PALW delta had carried that work.
+    #[cfg(test)]
+    pub(super) native_fact_override:
+        parking_lot::Mutex<std::collections::HashMap<BlockHash, Vec<kaspa_consensus_core::palw_native_settlement_v1::MatureUsefulWorkV1>>>,
     pub(super) palw_overlay_carve: Option<kaspa_consensus_core::config::params::PalwOverlayCarveV1>,
     /// ADR-0130: `Params::palw_panel_exposure_floor_fence` — the seat exposure floor's height and
     /// reward multiple. Resolved at the claim's ANCHOR for the draw and at the BLOCK's DAA for the
@@ -1185,7 +1196,11 @@ impl VirtualStateProcessor {
             palw_execution_lane: params.palw_execution_lane_fence(),
             palw_overlay_carve: params.palw_overlay_carve_fence(),
             palw_dns_retirement: params.palw_dns_retirement,
+            native_rows: Default::default(),
+            #[cfg(test)]
+            native_fact_override: Default::default(),
             palw_native_ruleset_id: params.consensus_params_id(),
+            palw_kernel_route_ruleset_id: params.consensus_identity_id(),
             palw_panel_exposure_floor: params.palw_panel_exposure_floor_fence(),
             palw_compute_overlay_retired: params.palw_compute_overlay_retired,
             palw_model_registry: params.palw_model_registry,
@@ -3291,211 +3306,6 @@ impl VirtualStateProcessor {
     /// previous finalized. The blue-work-depth `safe` + DNS-confirmed-anchor
     /// `finalized` selection lands with the RPC phase that first exposes the
     /// tags. Inert (one u64 compare) on every current network.
-    /// RFC-0012: derive one crash-safe snapshot from the same candidate state as fork choice.
-    pub(super) fn native_evm_settlement_snapshot(
-        &self,
-        sink: BlockHash,
-    ) -> kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1 {
-        use crate::model::stores::evm::EvmHeaderStoreReader;
-        use kaspa_consensus_core::palw_native_settlement_v1::*;
-        use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2};
-        let retirement = self.palw_dns_retirement.expect("called only after the retirement fence");
-        let sink_daa = self.headers_store.get_daa_score(sink).unwrap_or(0);
-        let pruning = self.pruning_point_store.read().pruning_point().unwrap();
-        let mut result = NativeSettlementSnapshotV1 {
-            version: 1,
-            ruleset_id: self.palw_native_ruleset_id,
-            policy_id: retirement.settlement.id(),
-            generation: sink,
-            retirement_daa: retirement.activation.daa_score(),
-            frontier: None,
-            latest: None,
-            safe: None,
-            finalized: None,
-            depth: 0,
-            unique_work: "0".into(),
-            stop: Some(SettlementStopV1::MissingHistory),
-        };
-        let previous = match self.evm_heads_store.read().native_snapshot() {
-            Ok(Some(s))
-                if s.version == 1 && s.policy_id == retirement.settlement.id() && s.ruleset_id == self.palw_native_ruleset_id =>
-            {
-                Some(s)
-            }
-            Ok(None) | Err(StoreError::KeyNotFound(_)) => None,
-            _ => return result, // Corrupt or incompatible evidence is never silently forgotten.
-        };
-        // A below-finalized conflict remains an alarm until a validated resync/import clears it.
-        // Publishing absent heads once must not let the next block forget the conflict.
-        if previous.as_ref().is_some_and(|s| s.stop == Some(SettlementStopV1::FinalizedConflict)) {
-            result.stop = Some(SettlementStopV1::FinalizedConflict);
-            return result;
-        }
-        if let Some(previous_finalized) = previous.and_then(|s| s.finalized) {
-            match self.reachability_service.try_is_chain_ancestor_of(previous_finalized, sink) {
-                Ok(false) => {
-                    error!("[native-settlement] FINALIZED CONFLICT: {sink} abandons {previous_finalized}; resync required");
-                    result.stop = Some(SettlementStopV1::FinalizedConflict);
-                    return result;
-                }
-                Err(_) => return result,
-                Ok(true) => {}
-            }
-        }
-        // Explicit parent reads: a gap never gets skipped to manufacture a connected prefix.
-        let mut chain = Vec::new();
-        let mut cursor = sink;
-        loop {
-            let Ok(header) = self.headers_store.get_header(cursor) else {
-                return result;
-            };
-            let executed = match self.evm_header_store.get(cursor) {
-                Ok(execution) if execution.commitment_root() == header.evm_commitment_root => true,
-                Ok(_) => return result,
-                Err(StoreError::KeyNotFound(_)) => false,
-                Err(_) => return result,
-            };
-            if executed {
-                if result.latest.is_none() {
-                    result.latest = Some(cursor);
-                }
-                chain.push((cursor, header.daa_score, header.blue_score));
-            } else if result.latest.is_some() && header.daa_score >= self.evm_activation_daa_score {
-                // An execution gap inside a supposedly connected result chain is not a safe prefix.
-                return result;
-            }
-            if cursor == pruning || header.daa_score < self.evm_activation_daa_score {
-                break;
-            }
-            let Ok(parent) = self.ghostdag_store.get_selected_parent(cursor) else {
-                return result;
-            };
-            if parent == cursor || parent == kaspa_consensus_core::blockhash::ORIGIN {
-                return result;
-            }
-            cursor = parent;
-        }
-        if chain.is_empty() {
-            result.stop = Some(SettlementStopV1::Unexecuted);
-            return result;
-        }
-        let Some(state) = self.palw_candidate_state_v2(sink) else {
-            return result;
-        };
-        let Some(params) = self.palw_state_params_v2.as_ref() else {
-            return result;
-        };
-        let (frontier_blue, frontier) = state.safe_frontier();
-        result.frontier = (frontier != BlockHash::default()).then_some(frontier);
-        let frontier_on_branch =
-            frontier != BlockHash::default() && self.reachability_service.try_is_dag_ancestor_of(frontier, sink).unwrap_or(false);
-        let mut facts = Vec::new();
-        for (_, claim) in state.claims_iter() {
-            let PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
-                continue;
-            };
-            if !matches!(claim.source, PalwClaimSourceV2::Attempt)
-                || claim.class_id == params.base_class_id()
-                || claim.trace_retention_daa > sink_daa
-            {
-                continue;
-            }
-            let Some(identity) = claim.work_id else {
-                continue;
-            };
-            let Some(work) = state.palw_claim_canonical_weight_v1(claim, self.palw_canonical_work_daa) else {
-                continue;
-            };
-            let Some(bond) = state.bond(&claim.bond) else {
-                continue;
-            };
-            if !self.reachability_service.try_is_dag_ancestor_of(claim.accepted_block, sink).unwrap_or(false) {
-                return result;
-            }
-            facts.push(MatureUsefulWorkV1 {
-                identity,
-                anchor: claim.accepted_block,
-                operator: bond.operator_id,
-                class: claim.class_id,
-                anchor_blue: claim.accepted_blue_score,
-                accepted_blue: claim.accepted_blue_score,
-                anchor_daa: claim.accepted_daa,
-                accepted_daa: claim.accepted_daa,
-                matured_daa: final_daa,
-                work,
-            });
-        }
-        let pricing = kaspa_consensus_core::palw_state_v2::PalwFpPricingV1::of(params, self.palw_canonical_work_daa);
-        for (index, (block, daa, blue)) in chain.iter().enumerate() {
-            if *block == pruning {
-                continue;
-            } // checkpoint contributions are never guessed
-            let Ok((root, delta)) = self.palw_state_v2_store.read().delta_of(*block) else {
-                return result;
-            };
-            // The child commits its parent's PALW state, just as it carries its parent's EVM
-            // execution result. The sink's root is verified by the reconstructed candidate state.
-            let expected_root = if index == 0 {
-                state.state_root()
-            } else {
-                let Ok(child) = self.headers_store.get_header(chain[index - 1].0) else {
-                    return result;
-                };
-                child.palw_state_root
-            };
-            if root != expected_root {
-                return result;
-            }
-            facts.extend(mature_fp_slices_in_delta_v1(
-                &state,
-                &delta,
-                *daa,
-                *blue,
-                sink_daa,
-                self.palw_exec_quantum_maturity_daa,
-                &pricing,
-            ));
-        }
-        // Oldest to newest: certify a contiguous prefix, never jump an uncertified effect.
-        result.stop = None;
-        for (block, daa, blue) in chain.iter().rev() {
-            let closed = state.claims_iter().all(|(_, c)| {
-                c.accepted_blue_score > *blue
-                    || (matches!(c.phase, PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. })
-                        && (matches!(c.phase, PalwClaimPhaseV2::Voided { .. }) || c.trace_retention_daa <= sink_daa))
-            }) && state
-                .da_sessions_iter()
-                .all(|((claim, _), _)| state.claim(claim).is_some_and(|c| c.accepted_blue_score > *blue));
-            match certify_native_effect_v1(
-                retirement.settlement,
-                (*daa, *blue),
-                sink_daa,
-                true,
-                frontier_on_branch && frontier_blue >= *blue,
-                closed,
-                true,
-                &facts,
-            ) {
-                Ok(e) => {
-                    result.safe = Some(*block);
-                    result.depth = e.depth;
-                    result.unique_work = e.work.to_string();
-                }
-                Err(stop) => {
-                    result.stop = Some(stop);
-                    break;
-                }
-            }
-        }
-        // Pruning is a checkpoint safety condition, not a replacement for the PALW certificate.
-        if result.safe.is_some_and(|safe| self.reachability_service.try_is_chain_ancestor_of(pruning, safe).unwrap_or(false))
-            && self.evm_header_store.has(pruning).unwrap_or(false)
-        {
-            result.finalized = Some(pruning);
-        }
-        result
-    }
-
     pub(super) fn update_evm_canonical_heads(&self, batch: &mut WriteBatch, sink: BlockHash) {
         use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader};
         if self.evm_activation_daa_score == u64::MAX {
@@ -14990,7 +14800,7 @@ impl VirtualStateProcessor {
     fn palw_kernel_route_extras_at(&self, daa_score: u64) -> Option<kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteExtrasV1> {
         self.palw_kernel_route_at(daa_score).then(|| {
             let mut ruleset = [0u8; 64];
-            ruleset[..32].copy_from_slice(&self.palw_native_ruleset_id.as_bytes());
+            ruleset[..32].copy_from_slice(&self.palw_kernel_route_ruleset_id.as_bytes());
             kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
                 network_domain: self.palw_network_domain_v2(),
                 ruleset_digest: kaspa_hashes::Hash64::from_bytes(ruleset),
@@ -18551,12 +18361,19 @@ impl VirtualStateProcessor {
         if long_maturity_daa == 0 {
             return None;
         }
-        let confirmed_anchor_daa = self
-            .dns_state_store
-            .read()
-            .get()
-            .ok()
-            .and_then(|s| (s.last_dns_confirmed_anchor != BlockHash::default()).then_some(s.last_dns_confirmed_anchor_daa_score));
+        // RFC-0012: once the virtual is past the retirement the DNS row is a frozen historical fact (nothing writes it any more),
+        // and an anchor frozen below the fence must not keep releasing coinbases early in the mempool while the wallet — which
+        // clears the shortcut when the node reports none — shows them pending. The long fallback still releases them by the DAA alone.
+        let retired = self.virtual_stores.read().state.get().ok().is_some_and(|v| self.dns_retired_at(v.daa_score));
+        let confirmed_anchor_daa = if retired {
+            None
+        } else {
+            self.dns_state_store
+                .read()
+                .get()
+                .ok()
+                .and_then(|s| (s.last_dns_confirmed_anchor != BlockHash::default()).then_some(s.last_dns_confirmed_anchor_daa_score))
+        };
         // **DAA-based maturity only** (the user's Mainnet Decision A, 2026-09-24): no second clock
         // on a coinbase. The long fallback matures it by the DAA alone, or a DNS-final anchor
         // releases it early; the attempt lane's settled anchors are not asked (they still gate

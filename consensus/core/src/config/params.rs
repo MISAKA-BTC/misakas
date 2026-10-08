@@ -21877,7 +21877,10 @@ pub fn palw_t12_arm_int11_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
 ///
 /// **Not on this list, by decision:** `palw_tir_only_v1` and `palw_model_virtual_v1` (the user has not decided) and the lanes that are
 /// not ready (`palw_dns_retirement_v1`, `palw_exec_payload_v2`, `palw_permissionless_panel_v1`, `palw_probabilistic_constraints_v1`,
-/// `palw_panel_free_v1`) — each joins by one line here plus the re-pin, when it passes its gates before the code freeze.
+/// `palw_panel_free_v1`) — each joins by one line here plus the re-pin, when it passes its gates **before the code freeze**.
+/// **Once the int-13 build is cut, this list is frozen** (C4 round 3, F-C4R3-04): a fence that joins DAA 9,000 after an int-13 binary
+/// is deployed is invisible to the fork id (`fork_id_v1` fires it with the others at the same height), so the two builds would stay
+/// peers past 9,000 while disagreeing about blocks. A later fence takes a fresh height on a new list.
 ///
 /// * a drill's `--palw-drill-int13-at=<DAA>` moves exactly these to a low height on a salted drill chain;
 /// * every entry is hashed Some-only with the `never()` collapse, so while the height is `None` the list is dormant and every shipped
