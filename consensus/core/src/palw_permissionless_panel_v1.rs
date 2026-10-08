@@ -47,6 +47,14 @@ pub fn panel_claim_rule_v1(fence: Option<PalwPermissionlessPanelV1>, accepted_da
     }
 }
 
+impl crate::palw_state_v2::PalwStateParamsV2 {
+    /// **Which anchoring rule governs a claim's Panel** — decided by the claim's ACCEPTANCE (`accepted_daa`), the V2 bundle's
+    /// mirror of the fence read through [`panel_claim_rule_v1`]'s rule. `HistoricalLaneA` for every claim of every shipped preset.
+    pub fn panel_claim_rule_v1(&self, accepted_daa: u64) -> PanelClaimRuleV1 {
+        if self.panel_v3_rule_at(accepted_daa) { PanelClaimRuleV1::PermissionlessV3 } else { PanelClaimRuleV1::HistoricalLaneA }
+    }
+}
+
 impl PalwPermissionlessPanelV1 {
     pub fn commitment_bytes(self) -> Vec<u8> {
         let mut bytes = WIRE_VERSION_V1.to_le_bytes().to_vec();

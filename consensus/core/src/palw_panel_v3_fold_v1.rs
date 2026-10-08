@@ -298,16 +298,29 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
         !claim_awaits_its_panel(self.builder.state.claims.get(claim))
     }
 
-    /// A bound claim's receipt window runs from V2's own phase anchor (which a data-availability pause credits) and stops while
-    /// the claim is disputed.
+    /// **The receipt clock never runs against a pending accusation — structural, G14.** A Panel's receipt window
+    /// (and the redraw and `PanelUnavailable` expiry it ends in) must not pre-empt a DA default a public bond has already
+    /// demanded: a colluding producer and Panel could otherwise let the window lapse, void the claim uncharged and close the
+    /// session neutrally (a void closes every session without conviction). So the engine's clock is PAUSED while ANY session
+    /// on the claim is open — seat or non-seat; V2 itself pauses only for seat sessions (V3S-08), which is the narrower rule
+    /// this strengthens — and so is it while a court session is open; a session's close re-bases the window to start no
+    /// earlier than that close. The pause is bounded:
+    /// a claim takes at most three non-seat sessions open at once and sixteen over its life, each at most the disclose window.
+    /// V2's own phase anchor (which a seat session's pause credit moves) and the old court's `DefaultDisputed` are read too.
     fn receipt_clock(&self, claim: &Hash64) -> Option<ReceiptClockV1> {
-        // V2's own pause (DL-1's data-availability row): a live claim with an open SEAT session owes no receipt deadline, and the
-        // session's close credits the pause to the phase's anchor. A non-seat session pauses nothing (V3S-08), here as there.
-        if self.builder.state.da_claims.get(claim).is_some_and(|record| record.open_seat_sessions > 0) {
+        let record = self.builder.state.da_claims.get(claim);
+        if record.is_some_and(|record| record.open_sessions() > 0) {
+            return Some(ReceiptClockV1::Paused);
+        }
+        // …and while a court session is open on it: an accusation of the executor must reach its verdict (or its own backstop)
+        // before a non-fraud expiry can close the claim and the session with it. Bounded by the court's session capacity.
+        if self.builder.state.open_courts_by_claim.get(claim).is_some_and(|open| *open > 0) {
             return Some(ReceiptClockV1::Paused);
         }
         match self.builder.state.claims.get(claim).map(|claim| &claim.phase) {
-            Some(PalwClaimPhaseV2::PanelBound { bound_daa }) => Some(ReceiptClockV1::Running { bound_daa: *bound_daa }),
+            Some(PalwClaimPhaseV2::PanelBound { bound_daa }) => Some(ReceiptClockV1::Running {
+                bound_daa: (*bound_daa).max(record.and_then(|record| record.last_closed_daa).unwrap_or(0)),
+            }),
             Some(PalwClaimPhaseV2::DefaultDisputed { .. }) => Some(ReceiptClockV1::Paused),
             _ => None,
         }

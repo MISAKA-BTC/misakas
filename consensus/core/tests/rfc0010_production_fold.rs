@@ -340,8 +340,10 @@ fn a_v3_claim_is_bound_as_an_ordinary_v2_panel_then_licensed_and_finalised_by_v2
 /// exists for. Before the bind the claim has no panel and is `DaClaimNotAccusable` (as a V2 claim is before its bind); after it, a
 /// bond that is neither the producer nor a seat opens a data-availability session, nobody answers, and the V2 sweep convicts the
 /// producer (`ProducerWithholding`): the claim voids, the producer is slashed, no seat is charged. The engine releases the claim.
-/// A non-seat session pauses nothing (V3S-08), so the policy's receipt window is the V2 one's order of magnitude: a window shorter
-/// than the disclose window would let the engine's redraws expire the claim, uncharged, before the default could convict it.
+/// **The engine's receipt clock never runs against a pending DA demand (G14).** A non-seat session pauses nothing in V2 (V3S-08), but
+/// here the policy's 3-DAA receipt window would have redrawn the Panel and then expired the claim `PanelUnavailable` (uncharged,
+/// the session closed neutrally) long before the default: the clock is paused while ANY session is open, so the outcome is the DA
+/// default's, `ProducerWithholding`.
 #[test]
 fn a_non_seat_public_bond_accuses_and_convicts_a_v3_bound_claim_exactly_as_it_would_a_v2_claim() {
     let mut w = V3::new();
@@ -356,20 +358,22 @@ fn a_non_seat_public_bond_accuses_and_convicts_a_v3_bound_claim_exactly_as_it_wo
     };
     assert!(matches!(refused, Err(PalwStateV2Error::DaClaimNotAccusable(_))), "{refused:?}");
 
-    let mut policy = engine_policy();
-    policy.receipt_window_daa = 100_000;
-    let mut w = V3::with(policy, FENCE);
-    let (id, _bound_at) = w.run_to_bound(20);
+    let mut w = V3::new();
+    let (id, bound_at) = w.run_to_bound(20);
     let seats = seats_of_panel(&w.c.s, &id);
     let outsider = genesis_bonds(&w.c.p).iter().map(|(k, _, _)| *k).find(|k| *k != producer && !seats.contains(k)).expect("a bond outside the Panel");
     let collateral_before = w.c.s.bond(&producer).unwrap().collateral;
     w.step_with(&[da_accuse(id, outsider, 3)]);
     assert!(w.c.s.da_session(&id, &outsider).is_some(), "the public bond's session is open");
-    assert!(matches!(w.phase_v2(&id), PalwClaimPhaseV2::PanelBound { .. }), "a non-seat session pauses nothing (V3S-08)");
-    // Nobody answers: the session's deadline, then the default one block later.
+    assert!(matches!(w.phase_v2(&id), PalwClaimPhaseV2::PanelBound { .. }), "a non-seat session pauses nothing in V2 (V3S-08)");
+    // The V3 window (3 DAA, one redraw) would end the claim at bound + 9: the open session holds the clock past it.
     let deadline = w.c.s.da_session(&id, &outsider).unwrap().deadline_daa;
+    assert!(deadline > bound_at + 100, "the disclose window outlasts the engine's whole receipt budget");
+    w.step_at(bound_at + 20, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_eq!(w.record(&id).binding_history.len(), 1, "no redraw while a session is open");
+    assert!(matches!(w.phase_v2(&id), PalwClaimPhaseV2::PanelBound { .. }), "and no expiry");
     w.step_at(deadline, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
-    assert_eq!(w.record(&id).binding_history.len(), 1, "no redraw while the engine's window runs");
+    assert_eq!(w.record(&id).binding_history.len(), 1, "no redraw while the session runs");
     w.step_at(deadline + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     assert!(
         matches!(w.phase_v2(&id), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }),
@@ -470,4 +474,253 @@ fn a_legacy_duty_and_a_v3_duty_cannot_spend_the_same_collateral() {
     for ((key, _), before) in legacy_seats.iter().zip(&held) {
         assert_eq!(w.c.s.reserved_exposure(key), *before, "the V3 draw left the legacy duty untouched");
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Task 5: the non-fraud terminations hold nothing and charge nothing
+// ---------------------------------------------------------------------------------------------------------------------------
+
+/// What every non-fraud end shares: the V2 claim is `Voided` under the versioned reason, the engine says why, the producer is not
+/// slashed or struck, its collateral is whole, no seat holds a duty or an exposure, and the engine releases nothing it still counts.
+fn assert_non_fraud_end(w: &V3, id: &Hash64, v2: PalwVoidReasonV2, v3: NonFraudReasonV1, seats: &[PalwBondKeyV2]) {
+    let (producer, _, _) = floor_producer(&w.c.p);
+    assert!(matches!(w.phase_v2(id), PalwClaimPhaseV2::Voided { reason, .. } if reason == v2), "{:?}", w.phase_v2(id));
+    assert!(matches!(w.record(id).phase, ClaimPhaseV3::Voided { reason, .. } if reason == v3), "{:?}", w.record(id).phase);
+    let bond = w.c.s.bond(&producer).unwrap();
+    assert_eq!(bond.slashed, 0, "nobody is slashed for a seal, a beacon or a population the chain could not provide");
+    assert!(w.c.s.withholding_strikes(&producer).is_none(), "no strike");
+    assert_eq!(w.c.s.reserved_exposure(&producer), 0, "the producer's reservation returned at once (no E-4 hold)");
+    assert!(w.c.s.panel_duties_of(id).is_none());
+    for seat in seats {
+        assert_eq!(w.c.s.reserved_exposure(seat), 0, "no seat holds an exposure");
+        assert!(w.c.s.slashable_lock(*seat, *id).is_none());
+    }
+    assert!(w.engine().live_claims().all(|(live, _)| live != id));
+}
+
+#[test]
+fn seal_unavailable_ends_a_claim_that_never_reached_its_checkpoint_depth() {
+    let mut policy = engine_policy();
+    policy.seal_depth_blocks = 1_000; // never reached inside seal_wait_daa
+    let mut w = V3::with(policy, FENCE);
+    let id = w.floor_claim(41);
+    w.step_at(FENCE + 51, &[], PalwBlockWorkV3::None, Hash64::default(), 0); // = accepted + seal_wait: still waiting
+    assert_eq!(w.record(&id).phase, ClaimPhaseV3::PendingSeal);
+    w.step_at(FENCE + 52, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_non_fraud_end(&w, &id, PalwVoidReasonV2::SealUnavailable, NonFraudReasonV1::SealUnavailable, &[]);
+}
+
+#[test]
+fn beacon_unavailable_ends_a_sealed_claim_when_no_proof_arrived_and_no_block_hash_is_a_fallback() {
+    let mut w = V3::new();
+    let id = w.floor_claim(42);
+    w.step();
+    w.step();
+    let release = w.record(&id).seal.unwrap().anchor_slot;
+    // The window runs to release + 8 inclusive; nothing is carried; a heartbeat-style empty block at the deadline decides nothing.
+    w.step_at(release + 8, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_eq!(w.record(&id).phase, ClaimPhaseV3::Sealed, "the contribution window is still open at its last DAA");
+    w.step_at(release + 9, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_non_fraud_end(&w, &id, PalwVoidReasonV2::BeaconUnavailable, NonFraudReasonV1::BeaconUnavailable, &[]);
+    assert!(w.engine().beacon_rows().is_empty());
+}
+
+#[test]
+fn no_capable_panel_ends_a_claim_the_public_population_cannot_seat() {
+    let mut policy = engine_policy();
+    policy.seat_count = 8; // seven non-producer genesis bonds exist
+    let mut w = V3::with(policy, FENCE);
+    let id = w.floor_claim(43);
+    w.step();
+    w.step();
+    let release = w.record(&id).seal.unwrap().anchor_slot;
+    let proof = w.proof_for(&id);
+    w.step_at(release + 4, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    w.step_at(release + 5, &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }], PalwBlockWorkV3::None, Hash64::default(), 0);
+    w.step_at(release + 10, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_non_fraud_end(&w, &id, PalwVoidReasonV2::PermissionlessNoCapablePanel, NonFraudReasonV1::NoCapablePanel, &[]);
+}
+
+/// A Panel that says nothing is redrawn from the original seed (disjoint, public seats, the previous round's duties released,
+/// the claim marked as V2 marks a redrawn one), and when the retries are spent the claim EXPIRES — V2's lane-PL `PanelUnavailable`,
+/// uncharged — rather than burning the producer for verifiers that did not show up.
+#[test]
+fn panel_unavailable_redraws_from_the_original_seed_then_expires_uncharged() {
+    let mut policy = engine_policy();
+    policy.seat_count = 3; // seven public bonds: a redraw needs fresh operators, so three then three of the remaining four
+    let mut w = V3::with(policy, FENCE);
+    let (id, bound_at) = w.run_to_bound(44);
+    let first = seats_of_panel(&w.c.s, &id);
+    let ClaimPhaseV3::Bound(b0) = w.record(&id).phase else { unreachable!() };
+    // The window is bound + 3: at bound + 3 nothing is due, one DAA later the engine redraws.
+    w.step_at(bound_at + 3, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_eq!(w.record(&id).binding_history.len(), 1);
+    w.step_at(bound_at + 4, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    let ClaimPhaseV3::Bound(b1) = w.record(&id).phase else { panic!("redrawn: {:?}", w.record(&id).phase) };
+    assert_eq!((b1.retry_index, b1.panel_seed_v3), (1, b0.panel_seed_v3), "the original seed, the next round");
+    let second = seats_of_panel(&w.c.s, &id);
+    assert!(second.iter().all(|seat| !first.contains(seat)), "alternates are never reused");
+    assert_eq!(second.len(), 3);
+    // The V2 side moved with it: a fresh panel record at the redraw, one duty row, the old round's exposure gone.
+    assert_eq!(w.c.s.panel(&id).unwrap().bound_daa, bound_at + 4);
+    assert_eq!(w.phase_v2(&id), PalwClaimPhaseV2::PanelBound { bound_daa: bound_at + 4 });
+    assert_eq!(w.c.s.claim(&id).unwrap().rebound_daa, Some(bound_at + 4), "marked as a redrawn claim");
+    for seat in &first {
+        if !second.contains(seat) {
+            assert_eq!(w.c.s.reserved_exposure(seat), 0, "the previous round's seat left duty");
+        }
+    }
+    for seat in &second {
+        assert_eq!(w.c.s.reserved_exposure(seat), b1.exposure as u128);
+    }
+    // Spent: the next window's end is the expiry.
+    w.step_at(bound_at + 7, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(matches!(w.record(&id).phase, ClaimPhaseV3::Bound(_)));
+    w.step_at(bound_at + 8, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    let all: Vec<_> = first.iter().chain(second.iter()).copied().collect();
+    assert_non_fraud_end(&w, &id, PalwVoidReasonV2::PanelUnavailable, NonFraudReasonV1::PanelUnavailable, &all);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Task 6 at the fold: the carried proof is evidence, never a command
+// ---------------------------------------------------------------------------------------------------------------------------
+
+/// A bad carried proof — forged output, another epoch's, garbage bytes, a scheme nobody approved — is DROPPED and the block stands:
+/// the block folds, the engine retains nothing, and the claim ends `BeaconUnavailable` as if nothing had been carried.
+#[test]
+fn a_bad_carried_proof_is_dropped_and_the_block_stands() {
+    let mut w = V3::new();
+    let id = w.floor_claim(45);
+    w.step();
+    w.step();
+    let release = w.record(&id).seal.unwrap().anchor_slot;
+    let good = w.proof_for(&id);
+    let mut forged_output = good.clone();
+    forged_output.output = Hash64::from_u64_word(7);
+    let mut other_epoch = good.clone();
+    other_epoch.epoch += 1;
+    let garbage = BeaconProofV1 { proof: vec![1, 2, 3], ..good.clone() };
+    w.step_at(release + 4, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    // One block carries all three (the policy admits two per block; the third is not even queued) and stands.
+    let objects: Vec<_> = [forged_output, other_epoch, garbage].into_iter().map(|p| PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(p) }).collect();
+    let delta = w.step_at(release + 5, &objects, PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(w.engine().beacon_rows().is_empty(), "nothing verified, nothing retained");
+    assert!(!delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::PanelV3Beacon { .. })));
+    // A scheme the release does not approve: the same good bytes, no approved policy.
+    let mut none = V3::new();
+    none.inputs.approved_beacons.clear();
+    let id2 = none.floor_claim(45);
+    none.step();
+    none.step();
+    let release2 = none.record(&id2).seal.unwrap().anchor_slot;
+    let good2 = none.proof_for(&id2);
+    none.step_at(release2 + 4, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    none.step_at(release2 + 5, &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(good2) }], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(none.engine().beacon_rows().is_empty());
+    none.step_at(release2 + 9, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_non_fraud_end(&none, &id2, PalwVoidReasonV2::BeaconUnavailable, NonFraudReasonV1::BeaconUnavailable, &[]);
+    // …and the same good bytes, carried on the honest chain, verify (the control).
+    let mut control = V3::new();
+    let (cid, _) = control.run_to_bound(45);
+    assert!(matches!(control.record(&cid).phase, ClaimPhaseV3::Bound(_)));
+}
+
+/// The second lock: below the fence the object is a payload an older build cannot decode (the acceptance walk drops it first); the
+/// fold refuses it.
+#[test]
+fn the_beacon_object_is_refused_by_name_below_the_fence() {
+    let mut w = V3::with(engine_policy(), 10_000_000);
+    let proof = BeaconProofV1 { epoch: 1, output: Hash64::from_u64_word(1), proof: vec![] };
+    let object = PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) };
+    assert!(kaspa_consensus_core::palw_state_v2::palw_object_is_panel_v3_v1(&object));
+    let x = ctx(0xCA_0000 + w.c.daa + 1, w.c.daa + 1, w.c.daa + 1, 0);
+    let parent = w.c.s.clone();
+    let refused = w.fold(&parent, &x, &[object], PalwBlockWorkV3::None, Hash64::default());
+    assert!(matches!(refused, Err(PalwStateV2Error::CarriageInconsistent(_))), "{refused:?}");
+    w.step();
+}
+
+/// **Today's chain yields `BEACON_UNAVAILABLE`.** Every Final the V2 lattice writes is Panel-licensed (a claim reaches `Final` only
+/// through a Panel's licence), so the events the chain derives are all `PanelLicensed` and none may seed a Panel assignment — even
+/// with a scheme approved and the claim's class forced G14-eligible. The fold's own consequence: with the chain as the source and
+/// no proof possible, the claim ends `BeaconUnavailable`, non-fraud.
+#[test]
+fn on_todays_chain_no_final_is_panel_independent_so_the_beacon_is_unavailable() {
+    use kaspa_consensus_core::palw_panel_beacon_v1::{PanelBeaconHistoryV1, panel_beacon_state_v1};
+    use kaspa_consensus_core::palw_state_v2::{ChainPanelBeaconHistoryV1, palw_panel_v3_final_events_v1};
+    let mut w = V3::new();
+    let (id, bound_at) = w.run_to_bound(46);
+    let seats = seats_of_panel(&w.c.s, &id);
+    w.step_with(&[quorum(id, &seats, bound_at + 1)]);
+    let deadline = w.c.s.deadline_of(&id).unwrap();
+    w.step_at(deadline + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(matches!(w.phase_v2(&id), PalwClaimPhaseV2::Final { .. }));
+    let floor = w.inputs.floor_class;
+    for base in [floor, Hash64::default()] {
+        let events = palw_panel_v3_final_events_v1(&w.c.s, base);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].final_path, FinalPathV1::PanelLicensed { .. }), "a Final is Panel-licensed on this lattice");
+        assert_eq!(events[0].kind, if base == floor { WorkSourceKindV1::Base0Fallback } else { WorkSourceKindV1::RealUsefulWork });
+    }
+    // The chain's own history: no eligible profile, and with the class forced eligible the Panel-licensed path still refuses it.
+    let challenge = challenge_policy();
+    let mirror = *w.c.sp.panel_v3().unwrap();
+    let req = BeaconRequestV1 {
+        network: mirror.network,
+        ruleset: mirror.ruleset,
+        scheme: mirror.policy.beacon_scheme,
+        epoch: 11,
+        release_daa: bound_at + 1,
+        deadline_daa: bound_at + 9,
+    };
+    let source = PalwPanelV3BeaconSourceV1::Chain;
+    let history = ChainPanelBeaconHistoryV1::new(&w.c.s, Hash64::default(), w.c.s.panel_v3(), &source, bound_at + 2);
+    assert!(history.eligible_profiles().is_empty(), "no class is G14-complete in consensus");
+    let unavailable = panel_beacon_state_v1(std::slice::from_ref(&challenge), &history, &req, bound_at + 100).unwrap();
+    assert!(matches!(unavailable, WorkBeaconStateV1::Unavailable { have: 0, need: 1 }));
+    let class = w.c.s.claim(&id).unwrap().class_id.as_bytes();
+    let forced = PalwPanelV3BeaconSourceV1::Reference {
+        events: palw_panel_v3_final_events_v1(&w.c.s, Hash64::default()),
+        eligible_profiles: BTreeSet::from([class]),
+    };
+    let history = ChainPanelBeaconHistoryV1::new(&w.c.s, Hash64::default(), w.c.s.panel_v3(), &forced, bound_at + 2);
+    let still = panel_beacon_state_v1(std::slice::from_ref(&challenge), &history, &req, bound_at + 100).unwrap();
+    assert!(matches!(still, WorkBeaconStateV1::Unavailable { have: 0, need: 1 }), "{still:?}");
+
+    // The fold's consequence, with the chain as the source: no proof can exist, the claim ends BeaconUnavailable.
+    let mut chain_source = V3::new();
+    chain_source.inputs.beacon_source = PalwPanelV3BeaconSourceV1::Chain;
+    let cid = chain_source.floor_claim(47);
+    chain_source.step();
+    chain_source.step();
+    let release = chain_source.record(&cid).seal.unwrap().anchor_slot;
+    chain_source.step_at(release + 9, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_non_fraud_end(&chain_source, &cid, PalwVoidReasonV2::BeaconUnavailable, NonFraudReasonV1::BeaconUnavailable, &[]);
+}
+
+/// **An open court session on a V3-bound claim holds the engine's receipt clock too** (G14): an accusation of the executor must
+/// reach its verdict or its own backstop before a non-fraud expiry can close the claim — and the session with it, neutrally.
+#[test]
+fn an_open_court_session_holds_the_receipt_clock() {
+    let mut w = V3::new();
+    let (id, bound_at) = w.run_to_bound(48);
+    let (producer, _, _) = floor_producer(&w.c.p);
+    let seats = seats_of_panel(&w.c.s, &id);
+    let challenger = genesis_bonds(&w.c.p).iter().map(|(k, _, _)| *k).find(|k| *k != producer && !seats.contains(k)).expect("a bond outside the Panel");
+    w.step_with(&[court_opened(&w.c.s, id, challenger)]);
+    assert!(w.c.s.open_courts_of(&id) > 0, "the court is open");
+    // The window (3 DAA, one redraw) is long past at bound + 50; the session holds it.
+    w.step_at(bound_at + 50, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_eq!(w.record(&id).binding_history.len(), 1, "no redraw while a court session is open");
+    // The court is the accusation's own clock: with its responder silent it ends the claim by CONVICTION, not by a non-fraud expiry.
+    let phase = w.phase_v2(&id);
+    assert!(
+        matches!(
+            phase,
+            PalwClaimPhaseV2::PanelBound { .. }
+                | PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault, .. }
+        ),
+        "the court decides, never the V3 expiry: {phase:?}"
+    );
+    eprintln!("[court-pause] phase at bound + 50: {phase:?}");
 }

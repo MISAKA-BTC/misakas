@@ -7969,6 +7969,13 @@ impl VirtualStateProcessor {
                 info!("Block {block}: an audit mesh move was dropped by name below palw_audit_mesh_v1, and the block stands (RFC-0007)");
                 continue;
             }
+            // **RFC-0010, likewise**: below `palw_permissionless_panel_v1` a certified Panel epoch output is a payload an older build
+            // cannot decode and skips; dropped by name, first, and charged nothing. Past it the fold verifies the proof against the
+            // branch and drops one that does not verify — a bad carried proof never invalidates a block.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_panel_v3_v1(&object) && !state_params.panel_v3_rule_at(point.daa_score) {
+                info!("Block {block}: a permissionless-Panel certified output was dropped by name below palw_permissionless_panel_v1, and the block stands (RFC-0010)");
+                continue;
+            }
             // **Lane PA, G-3 (`palw_audit_1004_v1`)**: past the fence a generative registration is sized like an IR one and takes the
             // same one place a block.
             if tir_registration_gated
@@ -9869,6 +9876,17 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| e.to_string())?;
                 }
+                // **RFC-0010: a certified Panel epoch output** (tag 120): the fence, and the proof's bound (the lifecycle shape check
+                // already holds it). Whether it verifies against THIS branch is the fold's, which drops one that does not and lets the
+                // block stand — a bad carried proof never invalidates a block, so nothing stateful is asked here.
+                Obj::PanelBeaconProofV3 { proof } => {
+                    if !state_params.panel_v3_rule_at(point.daa_score) {
+                        return Err("a permissionless-Panel certified output before palw_permissionless_panel_v1 is in force".to_string());
+                    }
+                    if proof.proof.len() > kaspa_consensus_core::palw_permissionless_panel_v1::MAX_BEACON_PROOF_BYTES_V1 as usize {
+                        return Err("a certified Panel epoch output exceeds the proof bound (RFC-0010)".to_string());
+                    }
+                }
                 // **RFC-0007 §I.6: two vertices of one `(seat, round)` with different roots** (tag 92) — admissible evidence
                 // (one seat, one round, two roots, provable still, not yet convicted) and BOTH signatures under the seat's
                 // registered key. No court: two signatures over one round are the whole proof.
@@ -10027,11 +10045,19 @@ impl VirtualStateProcessor {
                 }
                 Obj::PanelBound { claim, anchor, seats } => {
                     let claim_record = state.claim(claim).ok_or_else(|| format!("panel names unknown claim {claim}"))?;
+                    // RFC-0010: a claim accepted under the permissionless rule is bound by the fold, never by an object — a
+                    // lane-A binding of it would be a second, operator-anchored answer to a question the engine answers.
+                    if matches!(
+                        state_params.panel_claim_rule_v1(claim_record.accepted_daa),
+                        kaspa_consensus_core::palw_permissionless_panel_v1::PanelClaimRuleV1::PermissionlessV3
+                    ) {
+                        return Err(format!("claim {claim} is bound by the permissionless Panel's fold (RFC-0010); a lane-A binding of it is refused"));
+                    }
                     let anchor_fact = self
                         // The REDRAW's base, or the second panel's anchor is derived for a slot
                         // `validate_panel_bound_v2` no longer expects (it moved to
                         // `bind_base_daa()`), and every revived claim fails `AnchorMismatch`.
-                        .palw_v2_anchor_fact_of_candidate(point.block, claim_record.bind_base_daa(), panel_params)
+                        .palw_v2_anchor_fact_for_claim_v1(point.block, claim_record, state_params, panel_params)
                         .ok_or_else(|| format!("no anchor exists yet for claim {claim} on this chain"))?;
                     // ADR-0065 D1. The fence is read at the ANCHOR's DAA, not at this block's,
                     // and the sibling assembler does the same: the panel is a pure function of the
@@ -13380,6 +13406,31 @@ impl VirtualStateProcessor {
         verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
     }
 
+    /// **RFC-0010: the claim-level, VERSIONED anchor — the only door to the lane-A anchor functions below for a CLAIM.**
+    ///
+    /// Which rule governs a claim's Panel is decided by its ACCEPTANCE (`PalwStateParamsV2::panel_claim_rule_v1`), never by the
+    /// block that happens to anchor, bind or retry it. `HistoricalLaneA` claims — everything accepted below
+    /// `palw_permissionless_panel_v1`, which is every claim of every shipped preset — take exactly the anchor
+    /// [`Self::palw_v2_anchor_fact_of_candidate`] has always derived, genesis-operator privilege (`palw_operator_anchor`,
+    /// [`Self::palw_chain_block_as_anchor_v1`], `operator_of_v1`) included, and drain under those rules to their own timeout,
+    /// court and DA liability. A `PermissionlessV3` claim has NO lane-A anchor: its Panel is bound by the fold from a
+    /// certified, claim-sealed entropy over a public population (`palw_panel_v3_fold_v1`), so it can inherit neither an
+    /// operator's attempt as its seed nor a named operator as its binder. `None` here is that answer, not a missing anchor.
+    pub(super) fn palw_v2_anchor_fact_for_claim_v1(
+        &self,
+        from: BlockHash,
+        claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+    ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2> {
+        match state_params.panel_claim_rule_v1(claim.accepted_daa) {
+            kaspa_consensus_core::palw_permissionless_panel_v1::PanelClaimRuleV1::HistoricalLaneA => {
+                self.palw_v2_anchor_fact_of_candidate(from, claim.bind_base_daa(), panel_params)
+            }
+            kaspa_consensus_core::palw_permissionless_panel_v1::PanelClaimRuleV1::PermissionlessV3 => None,
+        }
+    }
+
     /// The panel's anchor, derived from THIS candidate's chain (Decision 7's sortition input).
     ///
     /// The first chain block at or past `accepted_daa + anchor_delay` that anchors a claim with that
@@ -16434,7 +16485,9 @@ impl VirtualStateProcessor {
         // one exists the claim simply waits — that delay is what stops a producer from
         // mining until it likes its own jury.
         // Same base as the validator's, for the same reason — see the sibling call site.
-        let Some(anchor) = self.palw_v2_anchor_fact_of_candidate(block, claim.bind_base_daa(), panel_params) else {
+        // RFC-0010: through the versioned door — a V3-rule claim has no lane-A anchor (and the list this binder walks never offers one).
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Err(None) };
+        let Some(anchor) = self.palw_v2_anchor_fact_for_claim_v1(block, claim, state_params, panel_params) else {
             return Err(None);
         };
         // C-02 (deep fence) and ADR-0124 (the panel economy): the whole draw policy, from the
@@ -21150,6 +21203,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::VertexEquivocationV1 { .. } => "VertexEquivocationV1",
         O::TrapCommittedV1 { .. } => "TrapCommittedV1",
         O::TrapRevealedV1 { .. } => "TrapRevealedV1",
+        O::PanelBeaconProofV3 { .. } => "PanelBeaconProofV3",
         O::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         O::AttemptRidersV1 { .. } => "AttemptRidersV1",
         O::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
