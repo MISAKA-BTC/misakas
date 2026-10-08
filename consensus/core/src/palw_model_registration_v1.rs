@@ -26,19 +26,20 @@ pub fn palw_registration_object_id_v1(bytes: &[u8]) -> Hash64 {
 
 /// **The class a lifecycle carrier registers**: `(class_id, artifact_root)` exactly when `tx` rides
 /// the lifecycle subnetwork (0x4b) at the wire version the fold reads and its one object is a
-/// `ClassRegistered`; `None` for any other transaction.
+/// `ClassRegistered` or a `ClassRegisteredTirV1`; `None` for any other transaction.
 ///
 /// Read off the carrier's own bytes, the way the fold reads them
 /// (`palw_lifecycle_objects_from_accepted_txs_v2`), so a registration status and the transition
 /// cannot disagree about what a transaction carried.
 pub fn palw_registration_carrier_class_v1(tx: &crate::tx::Transaction) -> Option<(Hash64, Hash64)> {
     match palw_registration_carrier_object_v1(tx)? {
-        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. } => Some((class_id, artifact_root)),
+        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. }
+        | PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, artifact_root, .. } => Some((class_id, artifact_root)),
         _ => None,
     }
 }
 
-/// **The `ClassRegistered` a lifecycle carrier carries, whole** — [`palw_registration_carrier_class_v1`]'s
+/// **The `ClassRegistered` (or `ClassRegisteredTirV1`) a lifecycle carrier carries, whole** — [`palw_registration_carrier_class_v1`]'s
 /// read, keeping the object: what a node re-asks its preflight about when a MINED carrier wrote no
 /// row (`REGISTRATION_DROPPED`, testnet-12 lifecycle audit T12-030). `None` for any other
 /// transaction.
@@ -51,7 +52,11 @@ pub fn palw_registration_carrier_object_v1(tx: &crate::tx::Transaction) -> Optio
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
         return None;
     }
-    matches!(payload.object, PalwConsensusObjectV2::ClassRegistered { .. }).then_some(payload.object)
+    // An IR registration (`ClassRegisteredTirV1`, RFC-0002 Phase F) rides the same carrier and writes the same class row: the
+    // registration status and the dropped-carrier diagnosis read it exactly as they read a legacy one (before this they
+    // answered `REGISTRATION_NOT_INCLUDED` / an unknown verdict for every IR carrier, mined or dropped).
+    matches!(payload.object, PalwConsensusObjectV2::ClassRegistered { .. } | PalwConsensusObjectV2::ClassRegisteredTirV1 { .. })
+        .then_some(payload.object)
 }
 
 /// **How many DAA past a carrier's acceptance the fold of its accepting block has certainly run** —
