@@ -1003,8 +1003,10 @@ async fn sanity_test() {
             KaspadPayloadOps::GetPalwPanelSeats => {
                 let rpc_client = client.clone();
                 tst!(op, {
-                    let response =
-                        rpc_client.get_palw_panel_seats_call(None, GetPalwPanelSeatsRequest { class_id: String::new() }).await.unwrap();
+                    let response = rpc_client
+                        .get_palw_panel_seats_call(None, GetPalwPanelSeatsRequest { class_id: String::new() })
+                        .await
+                        .unwrap();
                     assert!(!response.available);
                     assert!(response.seats.is_empty());
                 })
@@ -1012,8 +1014,10 @@ async fn sanity_test() {
             KaspadPayloadOps::GetPalwPanelStatus => {
                 let rpc_client = client.clone();
                 tst!(op, {
-                    let response =
-                        rpc_client.get_palw_panel_status_call(None, GetPalwPanelStatusRequest { class_id: String::new() }).await.unwrap();
+                    let response = rpc_client
+                        .get_palw_panel_status_call(None, GetPalwPanelStatusRequest { class_id: String::new() })
+                        .await
+                        .unwrap();
                     assert!(!response.available);
                 })
             }
@@ -1033,10 +1037,16 @@ async fn sanity_test() {
             KaspadPayloadOps::GetPalwModelPreflight => {
                 let rpc_client = client.clone();
                 tst!(op, {
-                    assert!(rpc_client
-                        .get_palw_model_preflight_call(None, GetPalwModelPreflightRequest { object_hex: String::new(), class_id: String::new() })
+                    // Simnet carries no PALW V2 bundle, so the preflight answers "not available"
+                    // before it reads the object — the same default its sibling ops return.
+                    let response = rpc_client
+                        .get_palw_model_preflight_call(
+                            None,
+                            GetPalwModelPreflightRequest { object_hex: String::new(), class_id: String::new() },
+                        )
                         .await
-                        .is_err());
+                        .unwrap();
+                    assert!(!response.available);
                 })
             }
             KaspadPayloadOps::SubmitPalwModelRegistration => {
@@ -1058,7 +1068,11 @@ async fn sanity_test() {
                     let response = rpc_client
                         .get_palw_model_registration_status_call(
                             None,
-                            GetPalwModelRegistrationStatusRequest { class_id: String::new(), object_id: String::new(), transaction_id: String::new() },
+                            GetPalwModelRegistrationStatusRequest {
+                                class_id: String::new(),
+                                object_id: String::new(),
+                                transaction_id: String::new(),
+                            },
                         )
                         .await
                         .unwrap();
@@ -1068,34 +1082,38 @@ async fn sanity_test() {
             KaspadPayloadOps::GetPalwModel => {
                 let rpc_client = client.clone();
                 tst!(op, {
+                    // Simnet carries no PALW V2 bundle: the model reads answer "not available" before
+                    // they parse the selector, like every other model op here.
                     let malformed = GetPalwModelRequest { class_id: "not-hex".to_string() };
-                    assert!(rpc_client.get_palw_model_call(None, malformed).await.is_err());
+                    assert!(!rpc_client.get_palw_model_call(None, malformed).await.unwrap().available);
                 })
             }
             KaspadPayloadOps::GetPalwModelReadiness => {
                 let rpc_client = client.clone();
                 tst!(op, {
                     let malformed = GetPalwModelReadinessRequest { class_id: "not-hex".to_string() };
-                    assert!(rpc_client.get_palw_model_readiness_call(None, malformed).await.is_err());
+                    assert!(!rpc_client.get_palw_model_readiness_call(None, malformed).await.unwrap().available);
                 })
             }
             KaspadPayloadOps::GetPalwModelAdmission => {
                 let rpc_client = client.clone();
                 tst!(op, {
-                    assert!(rpc_client
+                    // Admission is the preflight's answer, so it is "not available" on simnet too.
+                    let response = rpc_client
                         .get_palw_model_admission_call(
                             None,
                             GetPalwModelAdmissionRequest { class_id: String::new(), object_hex: String::new() },
                         )
                         .await
-                        .is_err());
+                        .unwrap();
+                    assert!(!response.available);
                 })
             }
             KaspadPayloadOps::GetPalwModelCertification => {
                 let rpc_client = client.clone();
                 tst!(op, {
                     let malformed = GetPalwModelCertificationRequest { class_id: "not-hex".to_string() };
-                    assert!(rpc_client.get_palw_model_certification_call(None, malformed).await.is_err());
+                    assert!(!rpc_client.get_palw_model_certification_call(None, malformed).await.unwrap().available);
                 })
             }
             KaspadPayloadOps::GetPalwVesting => {
