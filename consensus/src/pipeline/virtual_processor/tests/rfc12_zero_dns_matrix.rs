@@ -1476,11 +1476,20 @@ async fn rfc12_x13_the_mempool_stops_reading_a_frozen_dns_anchor_past_the_fence(
     plant_dns(&a, b0.header.hash, anchor_daa, b0.header.hash, 0);
     let legacy = a.vp().dns_coinbase_settlement().expect("the long fallback is configured");
     assert_eq!(legacy.confirmed_anchor_daa, Some(anchor_daa), "below the fence the policy reads the anchor");
+    assert!(a.api().get_dns_confirmation().is_some(), "below the fence the node still answers a DNS confirmation");
     prefix_rest(&mut a).await;
     let daa = a.api().get_virtual_daa_score();
     assert!(a.config.params.palw_dns_retired_at(daa), "the virtual is past the fence (daa {daa})");
     // The row is still there, frozen; the policy no longer reads it.
     assert_eq!(a.vp().dns_state_store.read().get().ok().map(|s| s.last_dns_confirmed_anchor_daa_score), Some(anchor_daa));
+    // Every DNS reader the RPC, the validator service and the wallet use answers "none" past the fence.
+    assert!(a.api().get_dns_confirmation().is_none(), "no DNS confirmation past the fence");
+    assert!(a.api().get_active_validator_set().is_none(), "no active validator set");
+    assert!(a.api().get_attestation_quality_deficits().is_empty(), "no attestation deficits");
+    assert!(
+        a.api().get_validator_attestation_targets(TransactionOutpoint::new(Hash64::from_u64_word(1), 0), 0, 8).is_empty(),
+        "no duties"
+    );
     let retired = a.vp().dns_coinbase_settlement().expect("the long fallback still applies");
     assert_eq!((retired.confirmed_anchor_daa, retired.long_maturity_daa), (None, legacy.long_maturity_daa));
 }

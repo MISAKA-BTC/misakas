@@ -42,8 +42,8 @@ eligible depth, decimal unique work and a stop reason. It is written in the same
 virtual-state RocksDB batch as the legacy three-hash EVM-head row and UTXO/index
 changes; the old singleton's Borsh layout remains unchanged.
 
-* `latest` is the newest persisted canonical EVM execution result. Readers verify
-  its committed execution root and selected-chain membership.
+* `latest` is the newest persisted canonical EVM execution result. Readers verify its committed execution root and selected-chain
+  membership. It is a fact about execution and is reported even when a certificate cannot be built (and in `FinalizedConflict`).
 * `safe` is the deepest **contiguous executed prefix** covered by the PALW frontier,
   closed relevant claim/court/DA lifecycle and the configured D/W/concentration
   requirements. Work before the effect's accepting DAA/blue position does not
@@ -51,16 +51,17 @@ changes; the old singleton's Borsh layout remains unchanged.
 * `finalized` additionally requires the validated pruning point to be an executed
   ancestor of that certified safe prefix. Pruning alone supplies no certificate.
 
-Evidence consists of retained Final non-floor REAL attempts with canonical work
-identities/weights and eligible matured FP slices actually consumed in root-verified
-canonical deltas. An unspent FP grant, heartbeat, floor or execution carrier alone
-supplies no W. A slice is identified by `(canonical work id, quantum index)`; carrier
-copies cannot supply duplicate credit. FP slice maturity is at least claim Final
-and accepting DAA plus the existing committed execution-quantum maturity window.
-FP pricing must be in the compute regime. D counts distinct qualifying grant/attempt
-anchors, so multiple slices from one grant do not manufacture depth. W concentration
-is measured by registered operator and class. These definitions need economic and
-adversarial justification before production parameters are assigned.
+Evidence consists of REAL (non-floor) attempt claims read at their `Final` transition and matured free-prompt slices read at the spend
+that consumed them, **both taken from the PALW delta of the chain block that carried them** — not from the claims the sink still holds, which
+are retired at `terminal + claim_retirement` before their trace retention lapses (see the [policy proposal](../design/palw/rfc-0012-policy-proposal.md)
+§0). A `Final → Voided` conviction anywhere on the chain retracts what the `Final` counted. A fact is mature at
+`max(trace_retention, Final + claim_retirement)` (and, for a slice, no earlier than the spend plus the committed execution-quantum maturity
+window); an unspent FP grant, heartbeat, floor or execution carrier alone supplies no W. A slice is identified by
+`(canonical work id, quantum index)`; carrier copies cannot supply duplicate credit. FP pricing must be in the compute regime. D counts
+distinct qualifying grant/attempt anchors, so multiple slices from one grant do not manufacture depth. W concentration is measured by
+registered operator and class. The per-block extraction is cached in memory by block hash (rebuilt from the retained deltas after a restart)
+and certified by an O(N + F) sweep. These definitions still need economic and adversarial justification before production parameters are
+assigned; the proposal carries the measurements.
 
 PALW delta provenance follows the child header's commitment to its parent's state;
 the sink is checked against its reconstructed candidate state. Missing/pruned
@@ -105,20 +106,19 @@ bridge notices report native evidence availability instead of DNS funding/quorum
 
 ## Activation work still required
 
-This is dormant engineering support, **not a completed production migration or a
-PALW common-prefix security proof**. Before assigning an activation:
+This is dormant engineering support, **not a completed production migration or a PALW common-prefix security proof**. Status after lane X12
+([record](../design/palw/rfc-0012-implementation-record.md), [policy proposal](../design/palw/rfc-0012-policy-proposal.md)):
 
-* Justify D, W, concentration caps, evidence horizon and trusted-sync assumptions;
-  measure private maturation, class/operator concentration and withholding attacks.
-* Complete the RFC matrix on an activated private network: healthy zero-DNS REAL/FP
-  work with deposits, withdrawals and market orders; sibling/deep forks and partitions;
-  missing DA/open court; fee/subsidy and all retained-liability reconciliation;
-  process crash, full restart and pruned IBD/reconstruction.
-* Review conservative loss of retained work evidence after claim retirement/pruning,
-  incremental certificate/index design and the cost of walking the retained chain.
-  Current missing evidence stops certification; it is never an activation workaround.
-* Complete external wallet/SDK/client compatibility and historical-exit acceptance,
-  and operational alarm/resync handling for below-finalized conflicts.
+* **Policy.** D, W, concentration caps, evidence horizon and trusted-sync assumptions are *proposed with measurements*, not assigned. Open:
+  the maturity-rule decision (≥ 7.5 days to the first `safe`), a live census of operators / classes / `pwu` per window, release builds.
+* **Private-network matrix.** Run in-process (`rfc12_zero_dns_matrix`: healthy zero-DNS deposits, withdrawals and market orders across the
+  fence; opposed DNS state; sibling / deep forks and partitions; fee / subsidy / retained-liability reconciliation; restart; old-version node;
+  finalized conflict; lost history; historical exit; hostile block). Open: a real multi-node drill with real `Final` claims through the shipped
+  binary, a pruned join with EVM state, and market fills (release gate 4).
+* **Evidence loss and cost.** Done: evidence survives claim retirement (read from deltas), a missing delta stops certification, the walk is cached
+  and the sweep is O(N + F). Open: a >100,000-block processor run and release-build timings.
+* **Clients and operations.** Done for the wallet, CLI, wRPC / gRPC and the first-party explorer; the `FinalizedConflict` alarm and resync are
+  implemented, the pager rule and runbook are OPS. Open: third-party wallets / SDKs / EVM tooling (EXTERNAL).
 
 Focused regression tests cover committed policy values, unset presets, duplicate
 work, concentration/maturity/order/lifecycle stops, evidence windows, integer subsidy
