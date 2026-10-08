@@ -125,6 +125,20 @@ def main() -> int:
         default=[],
         help="RULESET=FILE: the partial-task cohort's rows for that ruleset, judged with PALW_CENSUS_GEN_RANGE_TWIN=1 (the range twin that is in force at DAA 9,000 on testnet-12); the text-only column reads them",
     )
+    ap.add_argument(
+        "--registered-full-task",
+        type=int,
+        default=0,
+        help="RFC-0011 §18 number 2's numerator: repositories registered on chain as their full advertised task at their full advertised "
+        "context (evidence: real checkpoint → .palwart → G14 → chain registration), counted by the caller from the evidence; never inferred here",
+    )
+    ap.add_argument(
+        "--mined-funded-final",
+        type=int,
+        default=0,
+        help="RFC-0011 §18 number 3's numerator: of those, the repositories whose class reached mining and a funded Final reward",
+    )
+    ap.add_argument("--registration-evidence", default="none supplied", help="where numbers 2 and 3 come from (printed beside them)")
     a = ap.parse_args()
     snap = Path(a.snapshot).expanduser()
     out = Path(a.out).expanduser()
@@ -452,6 +466,35 @@ def main() -> int:
                 "text_only_partial_cohort": {"N": partial_design["N"], "n": partial_design["n"], **dict(text_only)},
                 "unmapped": {f"{k[0]}:{k[1]}": round(v, 1) for k, v in unmapped.items()},
                 "class_disagreements": {f"{k[0]}:{k[1]}": v for k, v in agree_bad.items()},
+            }
+            # RFC-0011 §18: three numbers, always together, each with its lower bound. `D_complete` is `D_b` (the repositories whose
+            # weights, base, task and access are present: the four external buckets removed and nothing else). Numbers 2 and 3 are the
+            # caller's evidence counts over the census's `D_complete`; shape-ready never enters them.
+            reg, fin = a.registered_full_task, a.mined_funded_final
+            # The numerators are exact counts; the denominator is the D_b estimate. The bound divides by D_b's one-sided 95 % upper
+            # bound (normal approximation of its estimate), so a small denominator never flatters the rate.
+            db_ub = D_t["total"] + Z95 * math.sqrt(D_t["var"])
+            res_v["rfc0011_s18_three_numbers"] = {
+                "1_coverage_over_d_all": {
+                    "what": "shape-ready (full declared task, declared context <= 8,192, shape depth): a header verdict, NOT a registration",
+                    **res_v["shape_ready_over_d_all"],
+                },
+                "2_registered_full_task_full_context_over_d_complete": {
+                    "numerator": reg,
+                    "d_complete_est": round(db_total, 1),
+                    "point": reg / db_total if db_total else 0.0,
+                    "lb95": reg / db_ub,
+                    "d_complete_ub95": round(db_ub, 1),
+                    "evidence": a.registration_evidence,
+                },
+                "3_mined_funded_final_over_d_complete": {
+                    "numerator": fin,
+                    "point": fin / db_total if db_total else 0.0,
+                    "lb95": fin / db_ub,
+                    "evidence": a.registration_evidence,
+                },
+                "d_complete_rule": "D_all minus MISSING_WEIGHTS, GATED, ADAPTER_BASE_MISSING, NO_MODEL_TASK (buckets.py EXTERNAL); every "
+                "architecture and task this build does not support stays in it as a failure",
             }
             if post_strat:
                 results[ruleset] = res_v

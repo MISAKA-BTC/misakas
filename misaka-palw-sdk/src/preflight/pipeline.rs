@@ -306,6 +306,8 @@ pub fn judge_pipeline(net: &PreflightNetwork, opts: &Options, routed: &RoutedCla
             admission.gate = "not asked".into();
             admission.gate_detail = Some(why.clone());
         }
+        // A bidirectional encoder's class is judged by `judge_encoder` (below the match).
+        RoutedClass::Encoder(_) => {}
         RoutedClass::EncDec(st) => {
             let (armed_params, hypo) = match gen_params(net, height) {
                 Ok(x) => x,
@@ -547,8 +549,315 @@ pub fn judge_pipeline(net: &PreflightNetwork, opts: &Options, routed: &RoutedCla
         }
     }
 
+    if let RoutedClass::Encoder(enc) = routed {
+        return judge_encoder(out, net, opts, enc, height, daa_choice, gen_activation, judge_daa, tir_armed, what_if, admission);
+    }
+
     finish(out, net, daa_choice, judge_daa, tir_armed, what_if, admission, conditions, register, mine, seat, notes, pipeline_info)
 }
+
+/// What a bidirectional encoder's class declares shape-only (recorded in every report that judges one).
+pub const ENCODER_CONVENTIONS_V1: &[&str] = &[
+    "the artifact root and the tokenizer id are placeholders (the inventory needs the weights)",
+    "the template is the configuration's class-start and separator ids around the prompt, padded with its pad id to the declared context (`cls_token_id`/`bos_token_id`, `sep_token_id`/`eos_token_id`, `pad_token_id`, else 0)",
+    "an embedding pools as its sentence-transformers Pooling module says when its files were read, else by the mean (the costlier mode); a head reads the [CLS] row or every row",
+    "the padded length is the declared context (`--max-context`, else the model's declared positions, at most 1,024), at most the position table's rows",
+    "the layout is the first of a short list the pipeline admission admits (commit tile 64/32/16/256 lanes, logits tile 256/1,024, history tile 32/16/8, widest checkpoint interval)",
+];
+
+/// The class of a bidirectional encoder under one layout: an embedding is an `Embedding`-profile class; a head is a `Head`-profile
+/// class (`kaspa_consensus_core::palw_task_heads_v1`) whose offers name its task — a placeholder label map's root (a header carries no
+/// `id2label` the census keeps), the template's separator for a span head — so the admission a `Head` registration would run is asked.
+fn encoder_class(enc: &misaka_palw_tir_lower::model::route::BidirClassShapeV1, choice: &GenLayoutChoiceV1) -> PalwGenClassV1 {
+    use kaspa_consensus_core::palw_gen_class_v1::PalwGenEmbeddingOffersV1;
+    use kaspa_consensus_core::palw_task_heads_v1 as heads;
+    use misaka_palw_tir_lower::model::route::BidirHeadV1;
+    let programs = std::slice::from_ref(&enc.program);
+    let (profile, profile_offers) = match enc.head {
+        BidirHeadV1::Embedding => (
+            PalwGenProfileV1::Embedding,
+            PalwGenProfileOffersV1::Embedding(PalwGenEmbeddingOffersV1 { pooling: enc.pooling, dims: vec![enc.width] }),
+        ),
+        head => {
+            let task = match head {
+                BidirHeadV1::Token => heads::PALW_HEAD_TASK_TOKEN_V1,
+                BidirHeadV1::SpanQa => heads::PALW_HEAD_TASK_SPAN_QA_V1,
+                _ => heads::PALW_HEAD_TASK_SEQUENCE_V1,
+            };
+            let regression = enc.width == 1 && task == heads::PALW_HEAD_TASK_SEQUENCE_V1;
+            let span = task == heads::PALW_HEAD_TASK_SPAN_QA_V1;
+            (
+                PalwGenProfileV1::Head,
+                PalwGenProfileOffersV1::Head(heads::PalwGenHeadOffersV1 {
+                    task,
+                    problem: if regression {
+                        heads::PALW_HEAD_PROBLEM_REGRESSION_V1
+                    } else {
+                        heads::PALW_HEAD_PROBLEM_SINGLE_LABEL_V1
+                    },
+                    labels: enc.width,
+                    label_map_root: if span { Hash64::default() } else { heads::palw_head_label_map_root_v1(&[]) },
+                    pair_separator: if span { vec![enc.template.1] } else { vec![] },
+                    entailment_label: None,
+                    position_scalar: None,
+                }),
+            )
+        }
+    };
+    PalwGenClassV1 {
+        version: PALW_GEN_CLASS_VERSION_V1,
+        profile: profile as u8,
+        pipeline: enc.pipeline.encode(),
+        programs: vec![enc.program.encode()],
+        layouts: gen_default_layouts_v1(&enc.pipeline, programs, choice, choice.checkpoint_interval),
+        output: OutputSpecV1::embedding_i32(enc.rows, enc.width, if enc.normalised { 30 } else { 0 }, enc.normalised),
+        offers: PalwGenOffersV1 {
+            steps: vec![],
+            scalars: vec![],
+            max_prompt_tokens: enc.lmax.saturating_sub(2).max(1),
+            max_negative_tokens: 0,
+            images: vec![],
+            max_source_tokens: 0,
+            forced_prompt_prefix: vec![],
+            source_token_floor: 0,
+            profile: profile_offers,
+        },
+        tokenizer_id: Hash64::from_bytes([0; 64]),
+    }
+}
+
+/// **Judge a bidirectional encoder's class** (HFX 2026-10-08): an embedding is an `Embedding`-profile class under `palw_gen_v1`; a
+/// head (a sequence classifier, a token or span head) is the dormant `Head` profile's — `FENCE_NOT_ARMED(palw_task_heads_v1)` on every
+/// ruleset of this build, with the admission that profile would run recorded beside it (`HEAD_PROFILE_HYPOTHETICAL: …`), never a pass.
+#[allow(clippy::too_many_arguments)]
+fn judge_encoder(
+    out: ChainOutput,
+    net: &PreflightNetwork,
+    opts: &Options,
+    enc: &misaka_palw_tir_lower::model::route::BidirClassShapeV1,
+    height: u64,
+    daa_choice: String,
+    gen_activation: Option<u64>,
+    judge_daa: u64,
+    tir_armed: bool,
+    mut what_if: Option<String>,
+    mut admission: super::chain::AdmissionInfo,
+) -> ChainOutput {
+    use misaka_palw_tir_lower::model::route::BidirHeadV1;
+    let bundle = &net.bundle;
+    let mut register: Vec<Blocker> = Vec::new();
+    let mut mine: Vec<Blocker> = Vec::new();
+    let mut conditions: Vec<Condition> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    let head = enc.head != BidirHeadV1::Embedding;
+    let (mut armed_params, hypo) = match gen_params(net, height) {
+        Ok(x) => x,
+        Err(e) => {
+            register.push(Blocker::new(Stage::Register, "FENCE_NOT_ARMED", e).arg("palw_gen_v1"));
+            return finish(
+                out, net, daa_choice, judge_daa, tir_armed, what_if, admission, conditions, register, mine, None, notes, None,
+            );
+        }
+    };
+    // A head is judged as the `Head` profile judges it: the head fence armed hypothetically at the judged height (testnet-12's proposed
+    // value), on the ruleset the generative fence is judged on. The blocker below says the fence is armed nowhere.
+    let heads_armed_here = armed_params.palw_task_heads_active_at(judge_daa);
+    if head && !heads_armed_here {
+        let at = ForkActivation::new(judge_daa.max(armed_params.palw_gen_v1.map_or(1, |g| g.activation.daa_score())));
+        (kaspa_consensus_core::palw_task_heads_v1::PALW_DRILL_TASK_HEADS_ENTRY.set)(&mut armed_params, Some(at));
+    }
+    if let Some(h) = hypo {
+        what_if = Some(h);
+    }
+    if head && !heads_armed_here {
+        register.push(
+            Blocker::new(
+                Stage::Register,
+                "FENCE_NOT_ARMED",
+                format!(
+                    "a {} head is a task of the `Head` profile (task-heads-profile-v1), behind {}, which no ruleset schedules: not registrable at any height",
+                    enc.head.name(),
+                    crate::census::tasks::HEAD_PROFILE_FENCE
+                ),
+            )
+            .arg(crate::census::tasks::HEAD_PROFILE_FENCE)
+            .safe(["the admission below is the Head profile's own (the fence armed hypothetically at the judged height): it says whether the class fits once the fence is armed".to_string()]),
+        );
+        admission.ceilings = "palw_task_heads_v1's proposed Head-profile ceilings, the fence armed hypothetically".into();
+    } else if head {
+        admission.ceilings = "palw_task_heads_v1's Head-profile ceilings (the network's fence)".into();
+    } else {
+        admission.ceilings = "palw_gen_v1's Embedding-profile ceilings (the network's fence)".into();
+    }
+    if gen_activation.is_none_or(|a| a > height) {
+        register.push(
+            Blocker::new(
+                Stage::Register,
+                "FENCE_NOT_ARMED",
+                "palw_gen_v1 is not in force at this height: no pipeline class can be registered yet",
+            )
+            .arg("palw_gen_v1"),
+        );
+    }
+    let programs = [enc.program.clone()];
+    admission.program_bytes = enc.program.encode().len();
+    admission.blocks = enc.program.blocks.len();
+    admission.nodes = enc.program.blocks.iter().map(|b| b.nodes.len()).sum();
+    let mut first: Option<(Blocker, String, String)> = None;
+    let mut admitted = None;
+    for (tile_len, output_tile, h_chunk, checkpoint) in LAYOUTS {
+        let choice = GenLayoutChoiceV1 { tile_len, output_tile, h_chunk, checkpoint_interval: checkpoint };
+        let tag = format!("layout ({tile_len},{output_tile:?},{h_chunk},{checkpoint})");
+        let class = encoder_class(enc, &choice);
+        let object = match palw_gen_post_genesis_registration_v1(
+            class.clone(),
+            Hash64::from_bytes([0; 64]),
+            0,
+            1 << 100,
+            1,
+            judge_daa,
+            bond_key(),
+            Vec::new(),
+        ) {
+            Ok(o) => o,
+            Err(e) => {
+                if first.is_none() {
+                    first = Some((gate_blocker(&e, &[]), e.code().to_string(), format!("{tag}: {e}")));
+                }
+                continue;
+            }
+        };
+        match palw_gen_registration_preflight_at_v1(&armed_params, bundle, &object, judge_daa) {
+            Ok(a) => {
+                admitted = Some((class, choice, a));
+                break;
+            }
+            Err(e) => {
+                if first.is_none() {
+                    first = Some((gate_blocker(&e, &[]), e.code().to_string(), format!("{tag}: {e}")));
+                }
+            }
+        }
+    }
+    let shown_class;
+    let mut seat = None;
+    match admitted {
+        Some((class, choice, a)) => {
+            admission.gate = "admitted".into();
+            admission.verdict = format!(
+                "pipeline class admitted: 1 stage, {} profile{}",
+                if head && !heads_armed_here {
+                    "Head (hypothetical)"
+                } else if head {
+                    "Head"
+                } else {
+                    "Embedding"
+                },
+                if head && !heads_armed_here { ", not registrable while palw_task_heads_v1 is not armed" } else { "" }
+            );
+            let entry = &a.entry;
+            let g = GateNumbers {
+                max_step_leaf_count: entry.max_step_leaf_count,
+                canonical_step_leaf_count: entry.canonical_step_leaf_count,
+                max_close_bytes: entry.court_cost.max_close_bytes,
+                max_terminal_macs: entry.court_cost.max_terminal_macs,
+                max_operand_count: u64::from(entry.court_cost.max_operand_count),
+            };
+            conditions.push(Condition {
+                id: "close_bytes".into(),
+                what: "the worst terminal close of any commit point".into(),
+                needed: Some(g.max_close_bytes),
+                limit: Some(bundle.court.max_close_bytes()),
+                unit: "bytes".into(),
+                ok: Some(g.max_close_bytes <= bundle.court.max_close_bytes()),
+                source: "the pipeline admission (PALW-GEN-21)".into(),
+            });
+            conditions.push(Condition {
+                id: "da_ladder".into(),
+                what: "step leaves of the class's longest job against the ladder in force".into(),
+                needed: Some(g.max_step_leaf_count),
+                limit: Some(bundle.court.max_step_leaf_count()),
+                unit: "step leaves".into(),
+                ok: Some(g.max_step_leaf_count <= bundle.court.max_step_leaf_count()),
+                source: "the court's max_step_leaf_count".into(),
+            });
+            admission.layout = Some(LayoutInfo {
+                max_context: enc.lmax,
+                checkpoint_interval: class.layouts[0].checkpoint_interval,
+                h_tile: class.layouts[0].h_tile,
+                commit_tiles: class.layouts[0].commit_tiles.len(),
+                logits_tile: choice.output_tile,
+                searched: false,
+                widest_context: enc.lmax,
+            });
+            admission.numbers = Some(g);
+            let (mut state, mut peak, mut tile) = (0u64, 0u64, 0u64);
+            for s in &a.report.admission.stages {
+                state = state.max(s.admission.view.position.state_bytes);
+                peak = peak.max(s.admission.view.position.peak_live_bytes);
+                tile = tile.max(s.admission.view.cones.iter().map(|c| c.tile_opened_bytes).max().unwrap_or(0));
+            }
+            let (info, blocker, note) = seat_of(&programs, state, peak, tile, opts);
+            mine.extend(blocker);
+            notes.extend(note);
+            seat = Some(info);
+            if head && !heads_armed_here {
+                notes.push(format!(
+                    "{HEAD_PROFILE_HYPOTHETICAL_V1}: admitted ({} head, [{}, {}] at {} positions)",
+                    enc.head.name(),
+                    enc.rows,
+                    enc.width,
+                    enc.lmax
+                ));
+            }
+            shown_class = Some(class);
+        }
+        None => {
+            let (mut b, code, text) = first.expect("a layout was tried");
+            admission.gate = code.clone();
+            admission.gate_detail = Some(text);
+            if head && !heads_armed_here {
+                notes.push(format!("{HEAD_PROFILE_HYPOTHETICAL_V1}: refused {} ({})", b.code, b.arg.clone().unwrap_or_default()));
+            }
+            if !(b.code == "FENCE_NOT_ARMED" && register.iter().any(|x| x.code == "FENCE_NOT_ARMED")) {
+                b.evidence.push(format!("the first layout of {} tried; its refusal is the widest tile's", LAYOUTS.len()));
+                register.push(b);
+            }
+            shown_class = None;
+        }
+    }
+    let class = shown_class.unwrap_or_else(|| {
+        encoder_class(enc, &GenLayoutChoiceV1 { tile_len: 64, output_tile: Some(256), h_chunk: 32, checkpoint_interval: 64 })
+    });
+    let pipeline_info = Some(PipelineInfo {
+        kind: format!("encoder:{}", enc.head.name()),
+        profile: if head && !heads_armed_here {
+            "Head (hypothetical: palw_task_heads_v1 armed for the judgment)".into()
+        } else if head {
+            "Head".into()
+        } else {
+            "Embedding".into()
+        },
+        adapter: String::new(),
+        source_len: 0,
+        target_len: enc.lmax,
+        stages: vec![PipelineStageInfo {
+            name: "encoder".into(),
+            max_trip: 1,
+            nodes: admission.nodes,
+            commit_tile: class.layouts[0].commit_tiles.iter().copied().max().unwrap_or(0),
+            h_tile: class.layouts[0].h_tile,
+            checkpoint_interval: class.layouts[0].checkpoint_interval,
+        }],
+        source_token_floor: 0,
+        admitted: admission.gate == "admitted",
+        conventions: ENCODER_CONVENTIONS_V1.iter().map(|s| s.to_string()).collect(),
+    });
+    finish(out, net, daa_choice, judge_daa, tir_armed, what_if, admission, conditions, register, mine, seat, notes, pipeline_info)
+}
+
+/// The note a head class's report carries: what the `Head` profile's admission would say were its fence armed (never a pass).
+pub const HEAD_PROFILE_HYPOTHETICAL_V1: &str = "HEAD_PROFILE_HYPOTHETICAL";
 
 /// The chain output from the parts: the fences (the generative one is the one this class needs), the conditions over them.
 #[allow(clippy::too_many_arguments)]

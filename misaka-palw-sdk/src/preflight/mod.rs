@@ -532,6 +532,13 @@ impl JudgeCache {
             model::RoutedClass::Undeclarable { kind, adapter, why } => {
                 st.update(format!("undeclarable|{kind}|{adapter}|{why}").as_bytes());
             }
+            model::RoutedClass::Encoder(e) => {
+                st.update(&e.program.encode());
+                st.update(&e.pipeline.encode());
+                st.update(
+                    format!("|encoder|{}|{}|{}|{}|{}|{}", e.head.name(), e.rows, e.width, e.pooling, e.normalised, e.lmax).as_bytes(),
+                );
+            }
         }
         st.update(
             format!(

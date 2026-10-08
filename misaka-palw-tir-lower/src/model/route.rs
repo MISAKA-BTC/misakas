@@ -224,3 +224,135 @@ pub fn lower_encdec_stages_v1(
         )),
     }
 }
+
+/// What a bidirectional encoder class computes (the head over the encoder's rows).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BidirHeadV1 {
+    /// A pooled sentence embedding (`OUTPUT_EMBEDDING_V1`).
+    Embedding,
+    /// A sequence classifier's logits on the pooled row (`OUTPUT_CLASSIFY_V1`).
+    Sequence,
+    /// Per-token logits (`OUTPUT_TOKEN_LOGITS_V1`): a token classifier.
+    Token,
+    /// Per-token start and end logits (`OUTPUT_TOKEN_LOGITS_V1`, two): an extractive QA span head.
+    SpanQa,
+}
+
+impl BidirHeadV1 {
+    pub fn name(self) -> &'static str {
+        match self {
+            BidirHeadV1::Embedding => "embedding",
+            BidirHeadV1::Sequence => "sequence",
+            BidirHeadV1::Token => "token",
+            BidirHeadV1::SpanQa => "span_qa",
+        }
+    }
+}
+
+/// **A bidirectional encoder's class, shape-only** (HFX 2026-10-08): the one-stage RFC-0003 pipeline a BERT-lineage repository
+/// registers as — an embedding, a sequence classifier or a token head — lowered from the specification alone. No weight is read: a
+/// program's structure (its nodes, shapes and declared params) does not depend on the weights' values or on the calibration, which
+/// fill the params at materialisation. The template ids are the configuration's (`cls`/`bos`, `sep`/`eos`, `pad`), else 0.
+#[derive(Clone, Debug)]
+pub struct BidirClassShapeV1 {
+    pub head: BidirHeadV1,
+    pub program: misaka_palw_tir::program_v2::TirProgramV2,
+    pub pipeline: misaka_palw_tir::pipeline::TirPipelineV1,
+    /// The output `[rows, width]`: `[1, d]` pooled, `[lmax, labels]` per token.
+    pub rows: u32,
+    pub width: u32,
+    /// `PALW_GEN_POOLING_*`: 1 cls, 2 mean.
+    pub pooling: u8,
+    pub normalised: bool,
+    pub lmax: u32,
+    pub vocab: u32,
+    pub template: (u32, u32, u32),
+}
+
+/// The head a specification's output computes over a bidirectional encoder, or `None` for an output that is not one.
+pub fn bidir_head_of(spec: &crate::spec::ArchSpec) -> Option<BidirHeadV1> {
+    use crate::spec::OutputSpec;
+    match &spec.output {
+        OutputSpec::Embedding { proj: None, .. } => Some(BidirHeadV1::Embedding),
+        OutputSpec::Classify { .. } => Some(BidirHeadV1::Sequence),
+        OutputSpec::TokenLogits { labels: 2, .. } if spec.architecture.ends_with("ForQuestionAnswering") => Some(BidirHeadV1::SpanQa),
+        OutputSpec::TokenLogits { .. } => Some(BidirHeadV1::Token),
+        _ => None,
+    }
+}
+
+/// The feature a span head over a model with token types needs and this build does not have: BERT-type pair segments (token type 1
+/// from the first separator on). Without it the program adds type row 0 to every position, so a `question ‖ sep ‖ context` input is
+/// read as one segment — not the function the checkpoint computes in its own pipeline. `task-heads-profile-v1.md` §6.
+pub const ENC_PAIR_SEGMENTS_V1: &str = "ENC_PAIR_SEGMENTS_V1";
+
+/// **Does this head need [`ENC_PAIR_SEGMENTS_V1`]?** A span QA head (its input is a pair) over a token-type table of more than one row.
+/// RoBERTa / XLM-R (one row) and DistilBERT (no table) do not.
+pub fn bidir_needs_pair_segments_v1(spec: &crate::spec::ArchSpec) -> bool {
+    bidir_head_of(spec) == Some(BidirHeadV1::SpanQa) && spec.embedding.type_rows.is_some_and(|rows| rows > 1)
+}
+
+/// Lower a bidirectional encoder's class shape-only at `lmax` padded positions (at most the position table's rows past its offset).
+/// `mean` pools by the mean (an embedding's sentence-transformers default; the costlier of the two modes), else by `[CLS]`. A span
+/// head over a token-type table is refused by name ([`bidir_needs_pair_segments_v1`]).
+pub fn lower_bidir_class_shape_v1(
+    spec: &crate::spec::ArchSpec,
+    hl: &crate::hl::HlProgram,
+    config: &Value,
+    lmax: u32,
+    mean: bool,
+    normalize: bool,
+) -> crate::error::Result<BidirClassShapeV1> {
+    use crate::lower::bidir::{self, BidirCfg, Pooling};
+    let head = bidir_head_of(spec).ok_or_else(|| crate::error::LowerError::not_lowerable("not a bidirectional encoder's head"))?;
+    if bidir_needs_pair_segments_v1(spec) {
+        return Err(crate::error::LowerError::not_lowerable(format!(
+            "{ENC_PAIR_SEGMENTS_V1}: a span head over a token-type table reads its pair as two segments; this build reads one"
+        )));
+    }
+    let pooled = matches!(head, BidirHeadV1::Embedding | BidirHeadV1::Sequence);
+    let pooling = if head == BidirHeadV1::Embedding && mean { Pooling::Mean } else { Pooling::Cls };
+    let normalize = normalize && head == BidirHeadV1::Embedding;
+    let rows_max = spec.embedding.positions.as_ref().map(|p| p.rows.saturating_sub(p.offset) as u32);
+    let lmax = rows_max.map_or(lmax, |r| lmax.min(r)).max(3);
+    let lw = bidir::lower_bidir(hl, spec, &BidirCfg { lmax, pooling, normalize })?;
+    let vocab = spec.vocab_size as u32;
+    let mut program = crate::encoder::bidir_v2(&lw, vocab, lmax)?;
+    if pooled {
+        program = crate::embedding::embedding_row_v2(program)?;
+    }
+    let misaka_palw_tir::program_v2::OutputDecl::Final { node } = program.output else {
+        return Err(crate::error::LowerError::eval("a bidirectional encoder's output is Final"));
+    };
+    let shape = &program.blocks[program.schedule.post as usize].nodes[node as usize].out.shape;
+    let ext = |d: &misaka_palw_tir::Dim| match d {
+        misaka_palw_tir::Dim::Fixed(n) => Some(*n),
+        _ => None,
+    };
+    let (rows, width) = match shape.as_slice() {
+        [r, w] => (ext(r), ext(w)),
+        _ => (None, None),
+    };
+    let (Some(rows), Some(width)) = (rows, width) else {
+        return Err(crate::error::LowerError::eval(format!("a bidirectional encoder's output is [rows, width], not {shape:?}")));
+    };
+    let id = |keys: &[&str]| {
+        keys.iter().find_map(|k| config.get(*k).and_then(Value::as_u64)).unwrap_or(0).min(vocab.saturating_sub(1) as u64) as u32
+    };
+    let template = (id(&["cls_token_id", "bos_token_id"]), id(&["sep_token_id", "eos_token_id"]), id(&["pad_token_id"]));
+    let pipeline = crate::encoder::bidir_pipeline(vec![template.0], vec![template.1], template.2, lmax);
+    misaka_palw_tir::pipeline::validate_pipeline(&pipeline, std::slice::from_ref(&program))
+        .map_err(|e| crate::error::LowerError::eval(format!("pipeline normal form: {e}")))?;
+    Ok(BidirClassShapeV1 {
+        head,
+        program,
+        pipeline,
+        rows,
+        width,
+        pooling: if pooling == Pooling::Mean { 2 } else { 1 },
+        normalised: normalize,
+        lmax,
+        vocab,
+        template,
+    })
+}

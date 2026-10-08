@@ -116,6 +116,11 @@ pub enum RoutedClass {
     EncDec(Box<misaka_palw_tir_lower::model::route::EncDecStagesV1>),
     /// A route whose class this build cannot declare shape-only, and why (never a pass).
     Undeclarable { kind: String, adapter: String, why: String },
+    /// **A bidirectional encoder's class** (HFX 2026-10-08): an embedding, a sequence classifier or a token head, lowered shape-only to
+    /// its one-stage pipeline and judged by the generative lane's admission. An embedding is an `Embedding`-profile class (RFC-0003
+    /// §II.3, `palw_gen_v1`); a head's task profile is the dormant `Head` profile's (`task-heads-profile-v1.md`), judged as that
+    /// profile would judge it and refused by name while its fence is not armed.
+    Encoder(Box<misaka_palw_tir_lower::model::route::BidirClassShapeV1>),
 }
 
 /// Everything the convert stage learned.
@@ -581,8 +586,62 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         );
     }
 
+    // ---- a bidirectional encoder (an embedding, a sequence classifier, a token head): an RFC-0003 pipeline class --------------------
+    // Its class is the one-stage pipeline over the padded token axis, not the per-position program above: it is declared shape-only and
+    // judged by the generative lane's admission (`super::pipeline`), as an encoder–decoder is.
+    let mut encoder_routed = false;
+    if opts.pipeline_admission
+        && routed.is_none()
+        && let (Some(p), Some(config)) = (&prepared, &src.config)
+        && misaka_palw_tir_lower::model::route::bidir_head_of(&p.spec).is_some()
+        && p.spec.features().iter().any(|f| f.id.0 == "ENC_BIDIR_V1")
+    {
+        let lmax = opts.max_context.unwrap_or_else(|| pipeline_default_context(config));
+        // A sentence-transformers repository says its pooling and normalisation; without its files, the mean (the costlier mode).
+        let dir = (src.kind == InputKind::HfDirectory).then(|| std::path::PathBuf::from(&src.label)).filter(|d| d.is_dir());
+        let st = dir.as_deref().and_then(|d| misaka_palw_tir_lower::encoder::sentence_transformers(d).ok().flatten());
+        let mean = st.as_ref().is_none_or(|s| s.pooling == misaka_palw_tir_lower::encoder::StPooling::Mean);
+        let normalize = st.as_ref().is_some_and(|s| s.normalize);
+        let segments = misaka_palw_tir_lower::model::route::ENC_PAIR_SEGMENTS_V1;
+        match misaka_palw_tir_lower::model::route::lower_bidir_class_shape_v1(&p.spec, &p.hl, config, lmax, mean, normalize) {
+            // A span head over a token-type table: the class would read `question ‖ sep ‖ context` as one segment — a feature, by name.
+            Err(_) if misaka_palw_tir_lower::model::route::bidir_needs_pair_segments_v1(&p.spec) => blockers.push(
+                Blocker::new(
+                    Stage::Convert,
+                    "ARCH_NEEDS_FEATURE",
+                    format!("the model needs `{segments}`, which the generic lowerer does not lower yet"),
+                )
+                .arg(segments.to_string())
+                .evidence([format!(
+                    "a span QA head over a token-type table of {} rows: its pair input is two segments (type 1 from the first separator on); this build adds type row 0 everywhere",
+                    p.spec.embedding.type_rows.unwrap_or(0)
+                )]),
+            ),
+            Ok(shape) => {
+                notes.push(format!(
+                    "a bidirectional encoder class ({} head, [{}, {}] output at {} padded positions): lowered to 1 RFC-0003 program; it registers as a pipeline class, {}",
+                    shape.head.name(),
+                    shape.rows,
+                    shape.width,
+                    shape.lmax,
+                    "judged below by the generative lane's admission (RFC-0003)"
+                ));
+                routed = Some(RoutedClass::Encoder(Box::new(shape)));
+                encoder_routed = true;
+            }
+            Err(e) => blockers.push(
+                Blocker::new(
+                    Stage::Convert,
+                    "ARCH_REFUSED",
+                    "the bidirectional encoder's class cannot be lowered at the declared context",
+                )
+                .evidence([format!("{lmax} padded positions: {}", short(&e.to_string()))]),
+            ),
+        }
+    }
+
     // ---- the artifact estimate ------------------------------------------------------------------------------------------------------
-    let program = prepared.as_ref().map(|p| p.lowered.program.clone());
+    let program = prepared.as_ref().filter(|_| !encoder_routed).map(|p| p.lowered.program.clone());
     let artifact = program.as_ref().map(|p| artifact_of(src, p, &scope, &tensors, &unused_set, &ignored));
     Analysis { model, scope, storage, tensors, artifact, blockers, notes, program, tokenizer_known, routed }
 }

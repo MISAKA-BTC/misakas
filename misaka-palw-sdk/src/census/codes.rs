@@ -112,6 +112,10 @@ pub const TASK_UNKNOWN: &str = "TASK_UNKNOWN";
 pub const TASK_UNKNOWN_NO_CONFIG: &str = "no-config";
 /// The declared task has no canonical job profile (inputs, output, court path, artifact) in any RFC this build carries.
 pub const MODALITY_PROFILE_MISSING: &str = "MODALITY_PROFILE_MISSING";
+/// The declared task HAS a canonical job profile in this build, behind a fence no ruleset the census judges arms (the `Head` profile,
+/// `palw_task_heads_v1`, HFX 2026-10-08): not registrable at any judged height. A fetched repository is still lowered and its class
+/// judged as the profile would judge it (recorded beside the row, never a pass).
+pub const PROFILE_NOT_ARMED: &str = "PROFILE_NOT_ARMED";
 /// The declared task needs parts the class this build produces does not compute (a VLM's vision stage): the text class is a
 /// separately scoped class and does not credit the repository's task.
 pub const PARTIAL_TASK_ONLY: &str = "PARTIAL_TASK_ONLY";
@@ -204,6 +208,7 @@ pub fn priority(gate: Gate, code: &str) -> u32 {
         Gate::Lower => &[
             TASK_UNKNOWN,
             MODALITY_PROFILE_MISSING,
+            PROFILE_NOT_ARMED,
             PARTIAL_TASK_ONLY,
             FORMAT_UNSUPPORTED,
             ADAPTER_UNCHECKED,

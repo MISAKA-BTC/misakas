@@ -10,6 +10,7 @@
 //! * [`codes`] — the gates' codes and the one table from the preflight's codes (§II.2.4) to them.
 //! * [`onboarding`] — the one machine-readable class of every refusal: `FRONTEND_REQUIRED` / `KERNEL_EXTENSION_REQUIRED` / `LAYOUT_REQUIRED` /
 //!   `RESOURCE_REFUSED` / … / `NOT_RUN` (a gate not run is never a gap).
+//! * [`inference_tables`] — generated data the task inference v4 reads (transformers' auto-model tables, llama.cpp's converter).
 //! * [`rights`] — the rights policies (`none`, the headline's; a proposal for the lead to decide).
 //!
 //! The HTTP side (enumeration, fetching headers by exact byte ranges, sampling and the statistics) is `tools/hf_census/`. Nothing in
@@ -18,6 +19,7 @@
 pub mod cli;
 pub mod codes;
 pub mod gates;
+pub mod inference_tables;
 pub mod listing;
 pub mod onboarding;
 pub mod rights;
