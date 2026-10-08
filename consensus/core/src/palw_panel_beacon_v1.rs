@@ -41,6 +41,9 @@ use misaka_palw_challenge::{
 };
 use misaka_palw_panel::{BeaconProofV1, BeaconRequestV1, MAX_BEACON_PROOF_BYTES_V1, PanelErrorV1};
 
+/// The shared challenge contract, re-exported so a downstream test (the processor's) names its types without a new dependency edge.
+pub use misaka_palw_challenge as challenge;
+
 /// The domain of an epoch's committed subject. Not shared with any other subject kind's commitment.
 pub const PANEL_ASSIGNMENT_COMMITMENT_DOMAIN_V1: &[u8] = b"MISAKA/PALW/PANEL-ASSIGNMENT/COMMITMENT/V1";
 

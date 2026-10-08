@@ -296,6 +296,16 @@ pub struct VirtualStateProcessor {
     /// a dead handle in a blue-work pipeline would be surface without semantics (ADR-0042
     /// Decision 9's own words about the fork-choice sites).
     pub(super) palw_state_params_v2: Option<kaspa_consensus_core::palw_state_v2::PalwStateParamsV2>,
+    /// **RFC-0010, TESTS ONLY: the beacon schemes and source a test chain resolves** in place of the release's (an empty registry and the
+    /// chain's own settlements, which can approve and verify nothing). Compiled out of every non-test build, so no running node can
+    /// carry it; the fence it serves is itself refused at every real height.
+    #[cfg(test)]
+    pub(super) panel_v3_test_beacon: parking_lot::Mutex<
+        Option<(
+            Vec<kaspa_consensus_core::palw_panel_beacon_v1::challenge::PostCommitChallengePolicyV1>,
+            kaspa_consensus_core::palw_state_v2::PalwPanelV3BeaconSourceV1,
+        )>,
+    >,
     /// ADR-0044's free-prompt bundle, `Some` on the same networks as `palw_state_params_v2`. It is
     /// what turns an accepted transaction into a consensus object (Unit C step 3).
     pub(super) palw_freeprompt_params_v3: Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3>,
@@ -1045,6 +1055,8 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.clone()),
                 _ => None,
             },
+            #[cfg(test)]
+            panel_v3_test_beacon: parking_lot::Mutex::new(None),
             palw_freeprompt_params_v3: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.freeprompt.clone()),
                 _ => None,
@@ -14380,12 +14392,18 @@ impl VirtualStateProcessor {
             .and_then(|data| self.headers_store.get_header(data.selected_parent).ok())
             .map(|header| header.daa_score)
             .unwrap_or(point.daa_score);
+        let (approved_beacons, beacon_source) = (
+            kaspa_consensus_core::palw_panel_beacon_v1::approved_panel_beacon_policies_v1(),
+            kaspa_consensus_core::palw_state_v2::PalwPanelV3BeaconSourceV1::Chain,
+        );
+        #[cfg(test)]
+        let (approved_beacons, beacon_source) = self.panel_v3_test_beacon.lock().clone().unwrap_or((approved_beacons, beacon_source));
         Some(kaspa_consensus_core::palw_state_v2::PalwPanelV3InputsV1 {
             draw: self.palw_panel_draw_policy_at(checkpoint_daa),
             capability_proof: self.palw_capability_bound_at(checkpoint_daa),
             floor_class: state.base_class_id(),
-            approved_beacons: kaspa_consensus_core::palw_panel_beacon_v1::approved_panel_beacon_policies_v1(),
-            beacon_source: kaspa_consensus_core::palw_state_v2::PalwPanelV3BeaconSourceV1::Chain,
+            approved_beacons,
+            beacon_source,
         })
     }
 

@@ -16887,6 +16887,9 @@ mod t12_panel_seed_fence;
 // chain, past it only an operator's attempt anchors a panel, and a slot only non-operators reach voids at
 // the bind window's backstop.
 mod t12_operator_anchor_fence;
+// RFC-0010 (the permissionless Panel's production fold): a testnet-12 chain crossing a bypassed (never armable) fence — the V3 claim bound
+// on a heartbeat, lane A draining the legacy claim, IBD and reorg of the engine state.
+mod t12_permissionless_panel_e2e;
 // Lane V02 (post-launch, 2026-09-26): `palw_final_lock_full_collateral` crossed on a real chain — lock-heavy
 // seats bind from the height and void their anchor below it.
 mod t12_final_lock_full_collateral_fence;
