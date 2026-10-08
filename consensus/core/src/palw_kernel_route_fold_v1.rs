@@ -134,9 +134,10 @@ impl TransitionBuilder<'_> {
 }
 
 /// The ledger policy and the OPV policy this block's rules put the route under (both genesis constants of the network).
+#[allow(clippy::type_complexity)]
 fn route_policies(
     builder: &TransitionBuilder<'_>,
-) -> Result<(misaka_palw_kernel::ledger::LedgerPolicyV1, Option<misaka_palw_kernel::opv::OpvPolicyV1>), PalwStateV2Error> {
+) -> Result<(misaka_palw_kernel::ledger::LedgerPolicyV1, Option<misaka_palw_kernel::opv::OpvPolicyV1>, Option<u64>), PalwStateV2Error> {
     let Some(extras) = builder.extras.kernel_route.as_ref() else {
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
     };
@@ -150,21 +151,27 @@ fn route_policies(
     if let Some(p) = &opv_policy {
         p.validate(&policy).map_err(refused)?;
     }
-    Ok((policy, opv_policy))
+    Ok((policy, opv_policy, extras.typed_roots))
 }
 
 /// **The route's header, created on first use** under the policies the processor resolved (and refused if the stored route was folded
 /// under others). Every object that writes a row — a kernel object or an onboarding one — starts here, so the rows always have a
 /// header to live under.
 pub(super) fn ensure_route_header(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    let (policy, opv_policy) = route_policies(builder)?;
+    let (policy, opv_policy, typed_roots) = route_policies(builder)?;
     match builder.state.kernel_route.as_ref() {
         None => {
-            let created =
-                PalwKernelRouteStateV1::new(policy, opv_policy, misaka_palw_kernel::rows::LedgerScalarsV1 { daa: ctx.daa_score, burned: 0 });
+            let created = PalwKernelRouteStateV1::new_typed(
+                policy,
+                opv_policy,
+                typed_roots,
+                misaka_palw_kernel::rows::LedgerScalarsV1 { daa: ctx.daa_score, burned: 0 },
+            );
             builder.write_kernel_header(created.header);
         }
-        Some(kernel) if kernel.header.policy != policy || kernel.header.opv != opv_policy => {
+        Some(kernel)
+            if kernel.header.policy != policy || kernel.header.opv != opv_policy || kernel.header.typed_roots != typed_roots =>
+        {
             return Err(refused("the stored kernel route was folded under another policy"));
         }
         Some(_) => {}
@@ -359,7 +366,8 @@ pub(super) fn apply_kernel_route_object_v1(
     // A class registers only if its worst filing, response and commitments can actually be carried (chunking counted).
     for event in &events {
         if let LedgerEventV1::ClassRegistered { class } = event {
-            let bounds = ledger.classes.get(class).map(|c| c.bounds).or_else(|| ledger.pipeline_classes.get(class).map(|c| c.bounds));
+            // Every kind's bounds: single program, pipeline, typed (RFC-0004 Part II).
+            let bounds = ledger.bounds_of(class);
             let fits = bounds.is_some_and(|b| {
                 misaka_palw_kernel::ledger::carrier_fit_v1(
                     &b,
@@ -423,7 +431,7 @@ pub(super) fn charge_route_budget_v1(
     ctx: &PalwBlockContextV2,
     court_work: u64,
 ) -> Result<bool, PalwStateV2Error> {
-    let (policy, _) = route_policies(builder)?;
+    let (policy, _, _) = route_policies(builder)?;
     let (adjudications, work) = match builder
         .state
         .kernel_route
