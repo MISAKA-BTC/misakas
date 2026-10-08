@@ -730,3 +730,106 @@ fn the_panels_coverage_is_derived_by_the_consumer_never_submitted_and_silence_ne
     assert_eq!(w.l.root(), root);
     assert_eq!(KERNEL_ROUTE_VERSION_V1, 1);
 }
+
+// ── R5: the claim's challenge subject comes from the single contract ─────────────────────────────────────────────────────
+
+#[test]
+fn a_claims_challenge_subject_feeds_the_single_contracts_seed_and_the_ledger_stores_no_beacon() {
+    use misaka_palw_challenge::seed::SeedRefusalV1;
+    use misaka_palw_challenge::{
+        BeaconContextV1, RootV1, SubjectKindV1, WorkBeaconStateV1, WorkFinalEventV1, WorkSourceKindV1, challenge_seed_v1,
+        collect_work_beacon_v1, reference_policy_v1,
+    };
+
+    let contract = reference_policy_v1(3, 2, 40, 5, 4);
+    let mut p = policy();
+    p.challenge_policy_id = contract.id();
+    let mut w = World::with(p);
+    let job1 = w.post_job(2, &[3, 17, 9], 3, 1);
+    let job2 = w.post_job(3, &[3, 17, 9], 3, 2);
+    let (h1, h2) = (w.honest(&job1, 3), w.honest(&job2, 3));
+    let (id1, id2) = (h1.claim.id(), h2.claim.id());
+    w.block(10, vec![h1.tx, h2.tx]);
+
+    let s1 = w.l.claim_challenge_subject(&id1).unwrap();
+    let s2 = w.l.claim_challenge_subject(&id2).unwrap();
+    assert!(w.l.claim_challenge_subject(&[7; 64]).is_none());
+    assert_eq!(s1.subject_kind, SubjectKindV1::ClaimVerification);
+    assert_eq!((s1.chain_genesis, s1.ruleset_id, s1.challenge_policy_id), ([9; 64], [3; 64], contract.id()));
+    assert_eq!(s1.subject_id, id1);
+    // The roots the claim's class binds are present and equal; the claim's own roots differ; what does not apply is typed absent.
+    let class = &w.l.classes[&w.class];
+    let evidence = |id: &Digest| match &w.l.claims[id].body {
+        misaka_palw_kernel::ledger::ClaimBodyV1::Program { evidence, .. } => evidence.clone(),
+        _ => panic!(),
+    };
+    assert_eq!(s1.kernel_id, RootV1::Present(class.descriptor.digest()));
+    assert_eq!(s1.verification_plan_root, RootV1::Present(class.plan.root()));
+    assert_eq!(s1.program_root, RootV1::Present(misaka_palw_kernel::public::program_root_v1(&class.program_bytes)));
+    assert_eq!(s1.artifact_root, RootV1::Present(class.param_commitments.root()));
+    assert_eq!(s1.input_root, RootV1::Present(evidence(&id1).job_input_root));
+    assert_eq!(
+        s1.commitment_root,
+        misaka_palw_kernel::claim_subject::claim_commitment_root_v1(&id1, &evidence(&id1).root()),
+        "the claim and the evidence object the producer fixed before any challenge existed"
+    );
+    // The two claims commit byte-identical evidence (same prompt, same honest trace) under different jobs: their commitment roots
+    // still differ, so no beacon context is shared between claims.
+    assert_eq!(evidence(&id1).root(), evidence(&id2).root());
+    assert!(matches!(s1.state_root, RootV1::Present(_)));
+    assert_eq!((s1.tokenizer_or_schema_root, s1.layout_root, s1.constraint_root), (RootV1::Absent, RootV1::Absent, RootV1::Absent));
+    assert_eq!(
+        (s1.kernel_id, s1.verification_plan_root, s1.program_root, s1.artifact_root),
+        (s2.kernel_id, s2.verification_plan_root, s2.program_root, s2.artifact_root)
+    );
+    assert_ne!(s1.subject_id, s2.subject_id);
+    assert_ne!(s1.commitment_root, s2.commitment_root);
+    assert_ne!(s1.id(), s2.id());
+    // A pure function of ledger state: a fresh node derives the same subject.
+    let fresh = KernelLedgerV1::replay(&w.genesis, &w.blocks);
+    assert_eq!(fresh.claim_challenge_subject(&id1).unwrap(), s1);
+
+    // The subject drives the contract's seed under a locked PALW Work Beacon of its own commitment; it is refused for another claim's
+    // beacon context and for another policy. The ledger itself stores no beacon at all.
+    let ctx = |s: &misaka_palw_challenge::ChallengeSubjectV1| BeaconContextV1 {
+        chain_genesis: s.chain_genesis,
+        ruleset_id: s.ruleset_id,
+        policy: contract.clone(),
+        subject_kind: s.subject_kind,
+        commitment_root: s.commitment_root,
+        commitment_position: 100,
+        challenge_epoch: 7,
+        eligible_profiles: [[0xA1; 64], [0xA2; 64]].into_iter().collect(),
+        excluded_profiles: [[0xCA; 64]].into_iter().collect(),
+    };
+    let work = |n: u8, profile: Digest, accepted: u64, settled: u64| WorkFinalEventV1 {
+        kind: WorkSourceKindV1::RealUsefulWork,
+        source_profile_id: profile,
+        canonical_work_id: [n; 64],
+        execution_commitment: [n ^ 0xFF; 64],
+        accepted_position: accepted,
+        settlement_position: settled,
+        occurrence_index: 0,
+        claim_final: true,
+        da_satisfied: true,
+        validity_independent: true,
+        depends_on_profiles: vec![],
+    };
+    let events = [work(1, [0xA1; 64], 103, 110), work(2, [0xA2; 64], 104, 111), work(3, [0xA1; 64], 105, 112)];
+    let locked = |c: &BeaconContextV1| match collect_work_beacon_v1(c, &events, 117).unwrap() {
+        WorkBeaconStateV1::Locked(b) => b,
+        other => panic!("{other:?}"),
+    };
+    let (c1, c2) = (ctx(&s1), ctx(&s2));
+    let (b1, b2) = (locked(&c1), locked(&c2));
+    let seed1 = challenge_seed_v1(&c1, &s1, &b1).unwrap();
+    let seed2 = challenge_seed_v1(&c2, &s2, &b2).unwrap();
+    assert_ne!(seed1, seed2, "two claims never share a seed");
+    assert_eq!(challenge_seed_v1(&c1, &s2, &b1), Err(SeedRefusalV1::SubjectMismatch), "another claim's subject under this beacon");
+    let mut other_policy = s1.clone();
+    other_policy.challenge_policy_id = [0x77; 64];
+    assert_eq!(challenge_seed_v1(&c1, &other_policy, &b1), Err(SeedRefusalV1::PolicyMismatch));
+    // The legacy per-claim beacon is gone: the public record the ledger assembles carries none, and an outsider's checks use its
+    // own salt (the faults it finds are convictable whatever vectors found them).
+    assert_eq!(w.l.public_record(&id1).unwrap().0.beacon, [0; 64]);
+}

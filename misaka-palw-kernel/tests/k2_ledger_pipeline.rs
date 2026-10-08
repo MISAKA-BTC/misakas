@@ -291,6 +291,26 @@ fn a_text_to_image_pipeline_with_r_finalizes_honest_and_a_stage_lie_an_edge_lie_
     let ev = w.block(10, vec![honest.tx, T::PanelCovered { claim: id }]);
     assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
     assert_eq!(outsider(&w, id, &da), OutsiderFindingV1::Clean);
+
+    // The claim's CLAIM_VERIFICATION subject (single challenge contract): the pipeline root, the pipeline evidence root as the
+    // commitment, typed absence where nothing applies.
+    {
+        use misaka_palw_challenge::{RootV1, SubjectKindV1};
+        let subject = w.l.claim_challenge_subject(&id).unwrap();
+        let class = &w.l.pipeline_classes[&w.class];
+        let misaka_palw_kernel::ledger::ClaimBodyV1::Pipeline { evidence, .. } = &w.l.claims[&id].body else { panic!() };
+        assert_eq!(subject.subject_kind, SubjectKindV1::ClaimVerification);
+        assert_eq!(subject.subject_id, id);
+        assert_eq!(subject.program_root, RootV1::Present(class.binding.pipeline_root));
+        assert_eq!(subject.verification_plan_root, RootV1::Present(class.plan.root()));
+        assert_eq!(subject.commitment_root, misaka_palw_kernel::claim_subject::claim_commitment_root_v1(&id, &evidence.root()));
+        assert_eq!(subject.state_root, RootV1::Absent);
+        assert_eq!(
+            (subject.tokenizer_or_schema_root, subject.layout_root, subject.constraint_root),
+            (RootV1::Absent, RootV1::Absent, RootV1::Absent)
+        );
+        assert_eq!(subject.chain_genesis, w.l.policy.network_domain);
+    }
     let ev = w.block(60, vec![]);
     assert!(ev.contains(&E::Final { claim: id, reward: 7 }), "{ev:?}");
 

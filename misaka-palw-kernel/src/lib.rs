@@ -46,6 +46,11 @@
 //! * [`public`] — the 2026-10-07 amendments' measure: a fresh non-seat verifier built from a claim's published **bytes**, fault
 //!   proofs and the court as byte-level operations, the withholding path (demand → served | producer default), RFC-0015 §1.1's
 //!   G14 criteria per profile, and the reward gate that stays closed until they are complete and the material is public.
+//! * [`ledger`], [`route`], [`settle`], [`state`], [`claim_subject`] — the consensus-embeddable shape of the route: signed
+//!   [`route::KernelRouteObjectV1`]s applied one at a time by a transactional ledger (a refusal leaves the state byte-identical,
+//!   a per-block adjudication budget), bonds and the Panel's coverage supplied by the consumer, every money decision an explicit
+//!   [`settle::SettlementInstructionV1`], a versioned canonical state root, and a claim's `CLAIM_VERIFICATION` subject for the
+//!   single challenge contract (`misaka-palw-challenge`). [`beacon`] (selected-chain block-hash entropy) is LEGACY.
 //!
 //! # What this is not
 //!
@@ -66,6 +71,7 @@ pub mod assurance;
 pub mod beacon;
 pub mod challenge;
 pub mod check;
+pub mod claim_subject;
 pub mod descriptor;
 pub mod evidence;
 pub mod family;

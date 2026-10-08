@@ -17,6 +17,8 @@ repository.workspace = true
 misaka-palw-tir.workspace = true
 # RFC-0003's R (blake2b + borsh only): a pipeline's random inputs are a public function of the job's seed.
 misaka-palw-gen.workspace = true
+# The one post-commit challenge contract: a claim's CLAIM_VERIFICATION subject (`KernelLedgerV1::claim_challenge_subject`).
+misaka-palw-challenge.workspace = true
 blake2b_simd.workspace = true
 borsh.workspace = true
 thiserror.workspace = true

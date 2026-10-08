@@ -1,4 +1,12 @@
-//! **The challenge anchor and beacon policy** (RFC-0011 §15.3 items 1, 2 and 5).
+//! **LEGACY — the selected-chain block-hash beacon (RFC-0011 §15.3 items 1, 2 and 5). Not for new routes.**
+//!
+//! RFC-0007 Part VI replaced block-hash entropy with the PALW Work Beacon of the single challenge contract
+//! (`misaka-palw-challenge`): a claim's check randomness is `challenge_seed_v1(ctx, claim_challenge_subject(claim), work_beacon)`,
+//! never `H(block hashes)` (block hashes are producer-influenced and rewrappable). The kernel ledger carries no beacon in its claim
+//! rows any more, outsiders check with their own salt, and nothing in the route reads this module. It stays only because the
+//! reference harness's rebind/grinding tests (`k2_adversarial`) still exercise its arithmetic; a new route must not use it.
+//!
+//! The original description follows.
 //!
 //! 1. A claim's commitments are carried first; its **anchor** is the first selected-chain block at DAA `≥ inclusion + delay`
 //!    (`delay ≥ 1`), so nothing the beacon is made from exists when the commitments are bound.
