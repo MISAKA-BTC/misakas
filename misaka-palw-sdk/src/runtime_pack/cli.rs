@@ -27,6 +27,17 @@ USAGE:
                            [--no-ref2] [--no-exec] [--no-declared] [--stream|--no-stream] [--strict] [--json]
     palw-class pack show   <pack dir> [--json]
     palw-class pack bind-class --pack <existing dir> --artifact <declared.palwtir> --network <network> --out <new dir>
+    palw-class pack commit-conformance --pack <dir> --artifact <declared class file> --state <dir> --network <net>
+                           --chain-genesis <hex128|label:x> --ruleset-id <hex128|label:x> [--class-id <prefix>] [--candidate-id <hex128>]
+                           [--k N] [--delay N] [--window N] [--depth N] [--repetitions N] [--security-bits N] [--retry-limit N]
+                           [--vectors N] [--prompt-len N] [--decode N] [--leaves N] [--vector-fault-ppm N] [--leaf-fault-ppm N]
+                           [--no-require-independent] [--no-require-backend] [--plan-positions N]
+    palw-class pack run-conformance --pack <dir> --artifact <file> --state <dir> --commitment <statement root prefix> --facts <facts.json>
+                           [--no-ref2] [--no-exec] [--max-checks N]
+    palw-class pack verify-conformance --pack <dir> --artifact <file> --state <dir> --commitment <prefix> --facts <facts.json>
+                           --evidence <evidence.borsh> [--no-rerun]
+    palw-class pack synthetic-facts --state <dir> --commitment <prefix> --out <facts.json> [--position N] [--works N] [--tip N] [--label L]
+    palw-class pack conformance-status --state <dir>
 
 `build` converts the model (the streaming converter, libm-v1 math by default), writes the artifact to --out and
 the pack to --pack: the manifest `pack.json` and the sidecars it pins by hash (the calibration statistics, the
@@ -39,7 +50,18 @@ with --artifact it checks that file. VERIFIED only when nothing failed and nothi
 (or, without --strict, nothing failed), 2 failed, 1 an error.
 `bind-class` pins an existing declared artifact's exact layout into a NEW pack without recalibration or admission search.
 It changes the pack digest, not the class/artifact identity. It does not certify admission, readiness or mining;
-run `pack verify` and live `misaka model preflight` separately. Old packs remain untouched.";
+run `pack verify` and live `misaka model preflight` separately. Old packs remain untouched.
+
+Beacon conformance (RFC-0013 §9; the policy is an UNAPPROVED test policy; nothing here is consensus):
+`commit-conformance` binds the pack into a ConformanceCommitmentV1 (artifact/program/tokenizer/exact-layout roots re-derived from the
+artifact, the VerificationPlan root of the kernel that would run it — judged hypothetically armed —, the policy, the calibration,
+the implementation set and the sampled-check scope) and refuses before any randomness if static admission fails or the scope cannot
+meet the policy. `run-conformance` takes the canonical beacon facts (misaka.palw.beacon-facts.v1; the node RPC that serves them does
+not exist yet — `synthetic-facts` writes SYNTHETIC ones for exercising the pipeline), derives the beacon and the challenge with the
+shared contract only, runs the selected checks and writes BeaconConformanceEvidenceV1. `verify-conformance` recomputes everything in
+a fresh process and re-executes the checks. Exit: run 0 passed, 2 evidence written but not a pass, 3 pending (WaitingRandomness /
+BEACON_UNAVAILABLE / interrupted — resume with the same command), 1 refused; verify 0 PASS, 2 FAIL or not a pass, 3 pending or
+results not re-executed. A sampled pass is never full-scope fidelity, never semantic admission, never a claim about an unbiased beacon.";
 
 fn take_flag(args: &mut Vec<String>, flag: &str) -> Option<String> {
     let i = args.iter().position(|a| a == flag)?;
@@ -100,6 +122,11 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     let t0 = Instant::now();
     let log = |m: String| eprintln!("[{:>7.1}s] {m}", t0.elapsed().as_secs_f64());
     match sub.as_str() {
+        "commit-conformance" => conformance_cli::commit(&mut args, &log),
+        "run-conformance" => conformance_cli::run_cmd(&mut args, &log),
+        "verify-conformance" => conformance_cli::verify_cmd(&mut args, &log),
+        "synthetic-facts" => conformance_cli::synthetic(&mut args),
+        "conformance-status" => conformance_cli::status(&mut args),
         "bind-class" => {
             let dir = PathBuf::from(take_flag(&mut args, "--pack").ok_or(PACK_USAGE)?);
             let artifact = PathBuf::from(take_flag(&mut args, "--artifact").ok_or(PACK_USAGE)?);
@@ -346,4 +373,228 @@ pub fn show(p: &RuntimePackV1) -> String {
         ));
     }
     o
+}
+
+
+/// The beacon-conformance subcommands.
+mod conformance_cli {
+    use super::{PACK_USAGE, num, take_bool, take_flag};
+    use crate::runtime_pack::beacon_run::*;
+    use crate::runtime_pack::commit::{CommitParamsV1, ConformanceScopeV1, hex, unhex64};
+    use crate::runtime_pack::conformance::ImplSet;
+    use crate::runtime_pack::facts::{FileFactSource, facts_to_json};
+    use misaka_palw_challenge::hash::{Digest, named_id};
+    use misaka_palw_challenge::reference_policy_v1;
+    use std::path::PathBuf;
+
+    fn req(args: &mut Vec<String>, flag: &str) -> Result<String, String> {
+        take_flag(args, flag).ok_or_else(|| format!("{flag} is required\n{PACK_USAGE}"))
+    }
+
+    fn digest_arg(s: &str) -> Result<Digest, String> {
+        match s.strip_prefix("label:") {
+            Some(l) => Ok(named_id(&format!("tool-label/{l}"))),
+            None => unhex64(s),
+        }
+    }
+
+    fn no_extra(args: &[String]) -> Result<(), String> {
+        match args.first() {
+            Some(extra) => Err(format!("unexpected argument `{extra}`\n{PACK_USAGE}")),
+            None => Ok(()),
+        }
+    }
+
+    pub fn commit(args: &mut Vec<String>, log: &dyn Fn(String)) -> Result<i32, String> {
+        let pack = PathBuf::from(req(args, "--pack")?);
+        let artifact = PathBuf::from(req(args, "--artifact")?);
+        let state = PathBuf::from(req(args, "--state")?);
+        let network = req(args, "--network")?;
+        let genesis = digest_arg(&req(args, "--chain-genesis")?)?;
+        let ruleset = digest_arg(&req(args, "--ruleset-id")?)?;
+        let k = num::<u32>(args, "--k")?.unwrap_or(3);
+        let delay = num::<u64>(args, "--delay")?.unwrap_or(2);
+        let window = num::<u64>(args, "--window")?.unwrap_or(40);
+        let depth = num::<u64>(args, "--depth")?.unwrap_or(5);
+        let reps = num::<u32>(args, "--repetitions")?.unwrap_or(4);
+        let mut policy = reference_policy_v1(k, delay, window, depth, reps);
+        if let Some(b) = num::<u16>(args, "--security-bits")? {
+            policy.security_bits = b;
+        }
+        if let Some(r) = num::<u32>(args, "--retry-limit")? {
+            policy.retry_limit = r;
+        }
+        let mut scope = ConformanceScopeV1::new(
+            num(args, "--vectors")?.unwrap_or(14),
+            num(args, "--prompt-len")?.unwrap_or(4),
+            num(args, "--decode")?.unwrap_or(2),
+            num(args, "--leaves")?.unwrap_or(512),
+        );
+        if let Some(p) = num(args, "--vector-fault-ppm")? {
+            scope.vector_fault_ppm = p;
+        }
+        if let Some(p) = num(args, "--leaf-fault-ppm")? {
+            scope.leaf_fault_ppm = p;
+        }
+        scope.require_independent = !take_bool(args, "--no-require-independent");
+        scope.require_backend = !take_bool(args, "--no-require-backend");
+        let mut params = CommitParamsV1::new(network, genesis, ruleset, policy, scope);
+        params.class_id_prefix = take_flag(args, "--class-id");
+        params.candidate_id = take_flag(args, "--candidate-id").map(|s| digest_arg(&s)).transpose()?;
+        params.plan_positions = num(args, "--plan-positions")?;
+        no_extra(args)?;
+        let (b, dir) = commit_conformance(&pack, &artifact, &state, &params, log).map_err(|e| e.to_string())?;
+        eprintln!("commitment   {}", dir.display());
+        eprintln!("policy       {}", params.policy_label);
+        eprintln!("admission    {} (hypothetically armed; shipped schedule: {}), plan {} at {} positions", b.admission.kernel, b.admission.shipped_outcome, &hex(&b.admission.plan_root)[..16], b.admission.positions);
+        eprintln!("scope        {}", params.scope.statement(params.policy.repetition_count));
+        println!("{}", hex(&b.commitment.statement_root()));
+        Ok(0)
+    }
+
+    fn impls(args: &mut Vec<String>) -> ImplSet {
+        ImplSet { exec: !take_bool(args, "--no-exec"), ref2: !take_bool(args, "--no-ref2") }
+    }
+
+    pub fn run_cmd(args: &mut Vec<String>, log: &dyn Fn(String)) -> Result<i32, String> {
+        let pack = PathBuf::from(req(args, "--pack")?);
+        let artifact = PathBuf::from(req(args, "--artifact")?);
+        let state = PathBuf::from(req(args, "--state")?);
+        let commitment = req(args, "--commitment")?;
+        let facts = PathBuf::from(req(args, "--facts")?);
+        let max_checks = num::<usize>(args, "--max-checks")?;
+        let im = impls(args);
+        no_extra(args)?;
+        let src = FileFactSource(facts);
+        let out = run_conformance(
+            &RunInput { pack_dir: &pack, artifact: &artifact, state_dir: &state, commitment: &commitment, source: &src, impls: im, max_checks, fault: None },
+            log,
+        )
+        .map_err(|e| e.to_string())?;
+        match out {
+            RunOutcome::Waiting { have, need, lock_position, tip } => {
+                println!(
+                    "WAITING_RANDOMNESS: {have} of {need} qualifying works{} at tip {tip}; nothing was run, no fallback randomness is used. Resume with the same command when the canonical history has advanced.",
+                    lock_position.map(|l| format!(", the beacon locks at position {l}")).unwrap_or_default()
+                );
+                Ok(3)
+            }
+            RunOutcome::Unavailable { have, need, tip, retries, retry_limit } => {
+                println!(
+                    "BEACON_UNAVAILABLE: the window closed with {have} of {need} qualifying works at tip {tip} (window {retries} of {} allowed). Not fraud, not a pass; a retry is a NEW commitment and window.",
+                    retry_limit + 1
+                );
+                Ok(3)
+            }
+            RunOutcome::Interrupted { done, total, seed } => {
+                println!("INTERRUPTED: {done} of {total} checks recorded under seed {}; resume with the same command.", &hex(&seed)[..16]);
+                Ok(3)
+            }
+            RunOutcome::Evidence { evidence, dir, seed, local, measures, provenance } => {
+                println!("evidence      {}", dir.join("evidence.borsh").display());
+                println!("evidence id   {}", hex(&evidence.id()));
+                println!("challenge seed {}", hex(&seed));
+                println!("facts         {}", provenance.label());
+                println!(
+                    "status        {} — {} of {} required checks run, {} failed, {} missing; derived -log2(eps) >= {}",
+                    status_code(evidence.status),
+                    evidence.checks_run,
+                    evidence.checks_required,
+                    evidence.checks_failed,
+                    evidence.missing_checks.len(),
+                    evidence.derived_epsilon_bits
+                );
+                for f in &evidence.failures {
+                    println!("  FAILED   {f}");
+                }
+                for m in &evidence.missing_checks {
+                    println!("  MISSING  {m}");
+                }
+                println!("measured      {}", measures.to_json());
+                match local {
+                    Ok(()) => {
+                        println!("local judgement: the contract accepts this evidence for the beacon this process derived (a fresh `verify-conformance` is what counts)");
+                        Ok(0)
+                    }
+                    Err(e) => {
+                        println!("NOT A PASS: {e}");
+                        Ok(2)
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn verify_cmd(args: &mut Vec<String>, log: &dyn Fn(String)) -> Result<i32, String> {
+        let pack = PathBuf::from(req(args, "--pack")?);
+        let artifact = PathBuf::from(req(args, "--artifact")?);
+        let state = PathBuf::from(req(args, "--state")?);
+        let commitment = req(args, "--commitment")?;
+        let facts = PathBuf::from(req(args, "--facts")?);
+        let evidence = PathBuf::from(req(args, "--evidence")?);
+        let rerun = !take_bool(args, "--no-rerun");
+        no_extra(args)?;
+        let src = FileFactSource(facts);
+        let v = verify_conformance(
+            &VerifyInput { pack_dir: &pack, artifact: &artifact, state_dir: &state, commitment: &commitment, evidence: &evidence, source: &src, rerun, impls: ImplSet::default() },
+            log,
+        )
+        .map_err(|e| e.to_string())?;
+        match v {
+            Verdict::Pass { evidence_id, measures, provenance } => {
+                println!("PASS: every derivable field recomputed from public inputs, every selected check re-executed, the evidence reproduced exactly");
+                println!("evidence id   {}", hex(&evidence_id));
+                println!("facts         {}{}", provenance.label(), if provenance.is_synthetic() { "  (SYNTHETIC: this exercises the pipeline; it says nothing about any chain's history)" } else { "" });
+                println!("scope         a SAMPLED conditional check — not full-scope fidelity, not semantic admission, not a statement that the beacon is unbiased");
+                println!("measured      {}", measures.to_json());
+                Ok(0)
+            }
+            Verdict::NotReproduced { provenance } => {
+                println!("NOT A PASS (results not re-executed): the challenge, selection and evidence are consistent with the canonical facts ({}), but --no-rerun leaves the result roots unverified", provenance.label());
+                Ok(3)
+            }
+            Verdict::Pending { why } => {
+                println!("NOT A PASS (pending): {why}");
+                Ok(3)
+            }
+            Verdict::NotPass { status, detail } => {
+                println!("NOT A PASS: the evidence says {} — {detail}", status_code(status));
+                Ok(2)
+            }
+            Verdict::Fail { code, detail } => {
+                println!("FAIL {code}: {detail}");
+                Ok(2)
+            }
+        }
+    }
+
+    pub fn synthetic(args: &mut Vec<String>) -> Result<i32, String> {
+        let state = PathBuf::from(req(args, "--state")?);
+        let commitment = req(args, "--commitment")?;
+        let out = PathBuf::from(req(args, "--out")?);
+        let position = num::<u64>(args, "--position")?.unwrap_or(1000);
+        let works = num::<u32>(args, "--works")?;
+        let tip = num::<u64>(args, "--tip")?;
+        let label = take_flag(args, "--label").unwrap_or_else(|| "synthetic".into());
+        no_extra(args)?;
+        let l = load_commitment(&resolve_commitment_dir(&state, &commitment).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        let mut f = synthetic_facts(&l.commitment, &l.policy, position, &label);
+        if let Some(w) = works {
+            f.events.truncate(w as usize);
+        }
+        if let Some(t) = tip {
+            f.tip_position = t;
+        }
+        write_atomic(&out, serde_json::to_string_pretty(&facts_to_json(&f, &l.policy.id())).unwrap_or_default().as_bytes())?;
+        eprintln!("wrote SYNTHETIC beacon facts ({} works, tip {}) — not a canonical history of any chain", f.events.len(), f.tip_position);
+        Ok(0)
+    }
+
+    pub fn status(args: &mut Vec<String>) -> Result<i32, String> {
+        let state = PathBuf::from(req(args, "--state")?);
+        no_extra(args)?;
+        let text = std::fs::read_to_string(ledger_path(&state)).map_err(|e| format!("{}: {e}", ledger_path(&state).display()))?;
+        print!("{text}");
+        Ok(0)
+    }
 }
