@@ -72,7 +72,8 @@ struct Args {
     /// What the lazy params may keep resident between asks, in MiB (default 512).
     #[arg(long, default_value_t = 512)]
     calib_lazy_cache_mib: usize,
-    /// The tokenizer the class binds (default: `<model>/tokenizer.json`, zero when absent).
+    /// The tokenizer the class binds (default: `<model>/tokenizer.json`, else another tokenizer file of the directory
+    /// (`artifact::TOKENIZER_FILES_V1`), zero when it has none).
     #[arg(long)]
     tokenizer: Option<PathBuf>,
     /// The math the tables and scales are computed with: `libm-v1` (pure-Rust libm; the same bytes on

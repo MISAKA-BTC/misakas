@@ -41,6 +41,50 @@ pub fn tokenizer_id_of(tokenizer_bytes: &[u8]) -> [u8; 64] {
     out
 }
 
+/// **The files a tokenizer is read from**, in the order the converter binds the first one present when no `--tokenizer <file>` is
+/// given. The class commits to the BYTES of one file ([`tokenizer_id_of`]); which tokenizer algorithm they describe is the file's
+/// own business (a fast-tokenizers JSON, a SentencePiece model, a tiktoken ranks file, WordPiece's vocabulary), so the names are a
+/// vocabulary of *data*, not of models: `tokenizer.json` first (every model that has it binds it, as before).
+pub const TOKENIZER_FILES_V1: &[&str] = &[
+    "tokenizer.json",
+    "tokenizer.model",
+    "spiece.model",
+    "sentencepiece.bpe.model",
+    "sentencepiece.model",
+    "tekken.json",
+    "vocab.json",
+    "vocab.txt",
+];
+
+/// A file name a tokenizer is read from: one of [`TOKENIZER_FILES_V1`], or a tiktoken ranks file (`*.tiktoken`).
+pub fn is_tokenizer_file(name: &str) -> bool {
+    TOKENIZER_FILES_V1.contains(&name) || name.ends_with(".tiktoken")
+}
+
+/// The tokenizer file among `names` (file names of one directory) the converter binds: the first of [`TOKENIZER_FILES_V1`] present,
+/// else the first `*.tiktoken` by name.
+pub fn tokenizer_file_among<'a>(names: impl IntoIterator<Item = &'a str> + Clone) -> Option<String> {
+    for want in TOKENIZER_FILES_V1 {
+        if names.clone().into_iter().any(|n| n == *want) {
+            return Some((*want).to_string());
+        }
+    }
+    let mut tik: Vec<&str> = names.into_iter().filter(|n| n.ends_with(".tiktoken")).collect();
+    tik.sort_unstable();
+    tik.first().map(|n| (*n).to_string())
+}
+
+/// The tokenizer file of a model directory, if it has one ([`tokenizer_file_among`]).
+pub fn tokenizer_path_in(dir: &Path) -> Option<std::path::PathBuf> {
+    let names: Vec<String> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    tokenizer_file_among(names.iter().map(String::as_str)).map(|n| dir.join(n))
+}
+
 /// Write `params` for `program` as a `PALWTIR1` container; returns the file digest (hex).
 /// `meta` is provenance (scales, calibration set) and enters no identity.
 pub fn write(
@@ -71,4 +115,20 @@ pub fn read(path: &Path, program: &TirProgramV1) -> Result<(PalwTirContainerV1, 
         params.tensors.insert((e.param, e.layer), t);
     }
     Ok((c, params))
+}
+
+#[cfg(test)]
+mod tokenizer_file_tests {
+    use super::*;
+
+    #[test]
+    fn the_converter_binds_the_first_tokenizer_file_in_the_tables_order_and_tokenizer_json_wins() {
+        let names = ["config.json", "vocab.txt", "spiece.model", "tokenizer.json", "merges.txt"];
+        assert_eq!(tokenizer_file_among(names).as_deref(), Some("tokenizer.json"));
+        assert_eq!(tokenizer_file_among(["config.json", "vocab.txt", "spiece.model"]).as_deref(), Some("spiece.model"));
+        assert_eq!(tokenizer_file_among(["b.tiktoken", "a.tiktoken"]).as_deref(), Some("a.tiktoken"));
+        assert_eq!(tokenizer_file_among(["vocab.json", "merges.txt", "a.tiktoken"]).as_deref(), Some("vocab.json"));
+        assert_eq!(tokenizer_file_among(["config.json", "merges.txt", "special_tokens_map.json"]), None);
+        assert!(is_tokenizer_file("x.tiktoken") && is_tokenizer_file("spiece.model") && !is_tokenizer_file("merges.txt"));
+    }
 }

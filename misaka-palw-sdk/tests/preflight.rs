@@ -434,3 +434,25 @@ fn the_residency_is_read_off_the_program_and_reported_without_judging() {
     let _ = std::fs::remove_dir_all(dir);
     let _ = std::fs::remove_dir_all(dense);
 }
+
+/// **A tokenizer is a file the class commits to the bytes of, whatever algorithm it describes.** `tokenizer.json` was the only name
+/// (with `tokenizer.model` and `vocab.json`) the preflight knew, so a T5/ALBERT/XLNet checkpoint (`spiece.model`), an XLM-R
+/// (`sentencepiece.bpe.model`), a BERT (`vocab.txt`) or a tiktoken model (`*.tiktoken`) was `TOKENIZER_MISSING` beside its own tokenizer.
+/// A directory with none is still missing one, and a file that only looks like one (`merges.txt` alone) is not one.
+#[test]
+fn a_sentencepiece_wordpiece_or_tiktoken_file_is_a_tokenizer_and_nothing_else_is() {
+    let dir = copy_fixture(&fixture("hf/llama"), "tokenizer-names", false);
+    let missing = |d: &Path| codes(&run(d, &opts(Depth::Headers)).expect("preflight")).iter().any(|c| c == "TOKENIZER_MISSING");
+    std::fs::remove_file(dir.join("tokenizer.json")).expect("remove");
+    assert!(missing(&dir), "no tokenizer file at all");
+    std::fs::write(dir.join("merges.txt"), "a b\n").expect("merges");
+    std::fs::write(dir.join("special_tokens_map.json"), "{}").expect("map");
+    assert!(missing(&dir), "merges and a special-token map are not a tokenizer");
+    for name in ["spiece.model", "sentencepiece.bpe.model", "sentencepiece.model", "tokenizer.model", "vocab.txt", "tekken.json", "cl100k_base.tiktoken", "vocab.json", "tokenizer.json"] {
+        std::fs::write(dir.join(name), b"x").expect("tokenizer");
+        assert!(!missing(&dir), "{name} is a tokenizer");
+        std::fs::remove_file(dir.join(name)).expect("remove");
+        assert!(missing(&dir), "back to none");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

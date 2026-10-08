@@ -320,8 +320,9 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             meta["composite"] = serde_json::json!({ "p": c.p });
             meta["adapter"] = serde_json::json!({ "config": c.config });
         }
-        // The checkpoint's tokenizer.json binds the artifact to its tokenizer (zero when absent).
-        let tokenizer_id = match std::fs::read(a.model.join("tokenizer.json")) {
+        // The checkpoint's tokenizer file (`tokenizer.json`, else another of `artifact::TOKENIZER_FILES_V1`) binds the artifact to
+        // its tokenizer (zero when absent).
+        let tokenizer_id = match std::fs::read(artifact::tokenizer_path_in(&a.model).unwrap_or_else(|| a.model.join("tokenizer.json"))) {
             Ok(bytes) => artifact::tokenizer_id_of(&bytes),
             Err(_) => [0u8; 64],
         };

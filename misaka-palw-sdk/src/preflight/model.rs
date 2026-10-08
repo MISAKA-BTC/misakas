@@ -193,6 +193,16 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         );
     }
 
+    // Tensors whose values the mapping reads and a header-only view cannot hold (a GGUF's `rope_freqs.weight`): the program's structure
+    // — every bound a static admission checks — does not depend on them, so the verdict stands; the values are read at conversion.
+    if let Some(g) = &src.gguf_model {
+        for p in g.pending_tensor_data() {
+            notes.push(format!(
+                "{p}: its values are read at conversion; the program's structure does not depend on them (ROPE_FREQ_FACTORS_V1), so this verdict stands for any table"
+            ));
+        }
+    }
+
     // ---- the configuration, the features, the scope -----------------------------------------------------------------
     let mut model: Option<ModelInfo> = None;
     let mut scope: Option<FeatureScope> = None;
@@ -447,7 +457,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
     // ---- the tokenizer ------------------------------------------------------------------------------------------------------------
     let tokenizer_known = match src.kind {
         InputKind::HfDirectory => {
-            Some(src.files.iter().any(|f| matches!(f.name.as_str(), "tokenizer.json" | "tokenizer.model" | "vocab.json")))
+            Some(src.files.iter().any(|f| misaka_palw_tir_lower::artifact::is_tokenizer_file(&f.name)))
         }
         InputKind::Gguf => src.gguf_file.as_ref().map(|g| g.meta.contains_key("tokenizer.ggml.tokens")),
         _ => None,
@@ -460,7 +470,10 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
                 "TOKENIZER_MISSING",
                 "no tokenizer file beside the checkpoint: the class commits to a tokenizer id",
             )
-            .safe(["download tokenizer.json (a few MB) from the model repository".to_string()]),
+            .safe([
+                "download tokenizer.json (a few MB) from the model repository".to_string(),
+                "or bind the tokenizer of the base model it was fine-tuned from: the class commits to the bytes of one tokenizer file".to_string(),
+            ]),
         );
     }
 
@@ -808,15 +821,8 @@ fn artifact_of(
         .files
         .iter()
         .filter(|f| {
-            matches!(
-                f.name.as_str(),
-                "tokenizer.json"
-                    | "tokenizer.model"
-                    | "tokenizer_config.json"
-                    | "vocab.json"
-                    | "merges.txt"
-                    | "special_tokens_map.json"
-            )
+            misaka_palw_tir_lower::artifact::is_tokenizer_file(&f.name)
+                || matches!(f.name.as_str(), "tokenizer_config.json" | "merges.txt" | "special_tokens_map.json" | "added_tokens.json")
         })
         .map(|f| f.bytes)
         .sum();

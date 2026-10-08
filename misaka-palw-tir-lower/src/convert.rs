@@ -311,7 +311,13 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
     if let Some(p) = &req.stats_out {
         std::fs::write(p, stats_to_json(&stats)).map_err(|e| LowerError::Io(format!("{}: {e}", p.display())))?;
     }
-    let tokenizer_path = req.tokenizer.clone().unwrap_or_else(|| req.model.join("tokenizer.json"));
+    // The tokenizer the class binds: the one given, else the model directory's first tokenizer file
+    // ([`crate::artifact::TOKENIZER_FILES_V1`]; `tokenizer.json` when it has one), zero when it has none.
+    let tokenizer_path = req
+        .tokenizer
+        .clone()
+        .or_else(|| crate::artifact::tokenizer_path_in(&req.model))
+        .unwrap_or_else(|| req.model.join("tokenizer.json"));
     let (tokenizer_id, tokenizer_file) = match std::fs::read(&tokenizer_path) {
         Ok(bytes) => (crate::artifact::tokenizer_id_of(&bytes), Some(tokenizer_path)),
         Err(_) => ([0u8; 64], None),
