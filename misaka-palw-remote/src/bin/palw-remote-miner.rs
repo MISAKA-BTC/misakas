@@ -77,6 +77,50 @@ struct WrpcNode<'a> {
     bond: TransactionOutpoint,
 }
 
+impl WrpcNode<'_> {
+    /// What this node says about OUR attempt's claim (the attempt id is the claim id): the claim row under our bond, if the chain holds it. The
+    /// claim tracker turns it into a state and refuses to call a row naming another executor bond ours.
+    fn claim_observation(&self, claim_id: Hash64) -> Result<misaka_palw_remote::track::ChainObservation, String> {
+        use misaka_palw_remote::track::{ChainObservation, ClaimObs, ClaimPhaseObs};
+        let info = self.runtime.block_on(self.client.get_block_dag_info()).map_err(|e| e.to_string())?;
+        let rows = self
+            .runtime
+            .block_on(self.client.get_palw_claims(
+                format!("{}:{}", self.bond.transaction_id, self.bond.index),
+                "executor".into(),
+                true,
+                0,
+            ))
+            .map_err(|e| format!("getPalwClaims: {e}"))?;
+        let wanted = claim_id.to_string();
+        let claim = match rows.claims.iter().find(|r| r.claim_id == wanted) {
+            None => None,
+            Some(r) => {
+                let (txid, index) = r.executor_bond.split_once(':').ok_or("the node's executor_bond is not txid:index")?;
+                let bond = TransactionOutpoint::new(
+                    txid.parse::<Hash64>().map_err(|_| "the node's executor_bond is not a 128-hex id")?,
+                    index.parse::<u32>().map_err(|e| e.to_string())?,
+                );
+                let phase = match r.phase.as_str() {
+                    "provisional" => ClaimPhaseObs::Provisional,
+                    "panel_bound" => ClaimPhaseObs::PanelBound,
+                    "receipt_licensed" => ClaimPhaseObs::ReceiptLicensed { licensed_daa: r.phase_daa },
+                    "final" => ClaimPhaseObs::Final { final_daa: r.phase_daa },
+                    "voided" => ClaimPhaseObs::Voided { voided_daa: r.phase_daa },
+                    other => return Err(format!("the node reports a claim phase this client does not know: {other:?}")),
+                };
+                Some(ClaimObs {
+                    executor_bond: bond,
+                    accepted_block: r.accepted_block.parse().unwrap_or_default(),
+                    accepted_daa: r.accepted_daa,
+                    phase,
+                })
+            }
+        };
+        Ok(ChainObservation { sink: info.sink, virtual_daa: info.virtual_daa_score, tx_in_mempool: false, claim })
+    }
+}
+
 impl RemoteNode for WrpcNode<'_> {
     fn node_id(&self) -> &str {
         &self.endpoint
@@ -474,6 +518,8 @@ fn main() {
     };
     let mut state = MinerState::default();
     let mut trackers: Vec<BlockTracker> = Vec::new();
+    // The claim an attempt makes (its attempt id), followed per node: a claim row that names another executor bond is Misattributed, never ours.
+    let mut claim_trackers: Vec<(Hash64, Vec<misaka_palw_remote::track::ClaimTracker>)> = Vec::new();
     // The network lottery against the header's own bits (past `palw_single_lottery` the chain admits the digest unconditionally).
     let network_id_bytes = args.network.clone().into_bytes();
     let network_draw = |header: &kaspa_consensus_core::header::Header, nonce: u64, _single: bool| -> bool {
@@ -507,6 +553,20 @@ fn main() {
                 );
                 let daa = refs.iter().find_map(|r| r.chain_facts().ok()).map(|f| f.virtual_daa).unwrap_or(0);
                 trackers.push(BlockTracker::new(p.block_hash, daa, cfg.min_submit, cfg.finality_depth, cfg.grace_daa));
+                claim_trackers.push((
+                    p.attempt_id,
+                    nodes
+                        .iter()
+                        .map(|_| {
+                            misaka_palw_remote::track::ClaimTracker::new(
+                                Hash64::default(),
+                                p.attempt_id,
+                                args.bond,
+                                cfg.finality_depth,
+                            )
+                        })
+                        .collect(),
+                ));
             }
             Ok(StepOutcome::Republished { block_hash, report }) => {
                 say("republished", serde_json::json!({ "block": block_hash.to_string(), "accepted_by": report.successes }));
@@ -539,6 +599,28 @@ fn main() {
                         say("resend-failed", serde_json::json!({ "block": tracker.block_hash.to_string(), "reason": e.to_string() }))
                     }
                 }
+            }
+        }
+        // The claims those blocks made, node by node. Disagreement between nodes is printed as disagreement, not averaged.
+        for (claim_id, per_node) in claim_trackers.iter_mut() {
+            let mut states = Vec::new();
+            for (node, tracker) in nodes.iter().zip(per_node.iter_mut()) {
+                if let Ok(obs) = node.claim_observation(*claim_id) {
+                    states.push((node.endpoint.clone(), tracker.observe(&obs).clone()));
+                }
+            }
+            if states.iter().any(|(_, st)| !st.is_settled())
+                || states.iter().any(|(_, st)| matches!(st, misaka_palw_remote::track::TrackState::Misattributed { .. }))
+            {
+                let agree = states.windows(2).all(|w| w[0].1 == w[1].1);
+                say(
+                    "claim-state",
+                    serde_json::json!({
+                        "claim": claim_id.to_string(), "agree": agree,
+                        "per_node": states.iter().map(|(n, st)| format!("{n}: {st:?}")).collect::<Vec<_>>(),
+                        "label": misaka_palw_remote::trust::UNVERIFIED_REMOTE_STATE,
+                    }),
+                );
             }
         }
         std::thread::sleep(std::time::Duration::from_secs(args.poll_secs));

@@ -22,7 +22,6 @@ use std::collections::BTreeMap;
 
 use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::header::Header;
-use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_hashes::Hash64;
 
 use crate::attempt::{AttemptError, AttemptExecutor, AttemptParams, AttemptSigner, MountedAttempt, mount_attempt, ready_to_publish};
@@ -340,20 +339,10 @@ impl BlockTracker {
     }
 }
 
-/// The executor bond a claim row must name for the claim to be ours — the attribution check of [`crate::track::ClaimTracker`], restated for
-/// an attempt, whose claim id is its attempt id.
-pub fn attempt_claim_tracker(
-    attempt_id: Hash64,
-    bond: TransactionOutpoint,
-    tx_id_placeholder: Hash64,
-    finality_depth: u64,
-) -> crate::track::ClaimTracker {
-    crate::track::ClaimTracker::new(tx_id_placeholder, attempt_id, bond, finality_depth)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kaspa_consensus_core::tx::TransactionOutpoint;
     use crate::attempt::{ExecutedAttempt, MlDsaAttemptSigner};
     use kaspa_consensus_core::palw_attempt_v2::PalwAttemptExecutionV1;
     use std::cell::{Cell, RefCell};

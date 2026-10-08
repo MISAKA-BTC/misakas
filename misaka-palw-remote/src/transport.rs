@@ -1577,7 +1577,7 @@ mod tests {
 
     #[test]
     fn a_miner_files_its_authorization_and_a_builder_on_another_machine_mirrors_it_into_its_node_directory() {
-        let (handle, http_dir, http) = up("rda-http");
+        let (handle, _http_dir, http) = up("rda-http");
         let dir_provider = FsProvider::new(scratch("rda-dir"));
         let providers: Vec<&dyn EvidenceProvider> = vec![&http, &dir_provider];
         let (bundle, claim) = rda4(0x21, 500, u64::MAX, 3);
