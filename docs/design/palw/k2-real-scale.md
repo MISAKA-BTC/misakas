@@ -71,8 +71,8 @@ position's committed write), so the boundary is never a separate statement the p
 
 ```text
 on chain:  segment roots ──────────────► segment i of position p (index arithmetic: i = p / S)
-part 0 of position p:   position root + its path to segment root i (10 siblings)
-any part:               C(value) + its path to the position root (⌈log2 N⌉ siblings) + leaves / leaf ranges of the value
+every part of position p: position root + its path to segment root i (10 siblings)
+every chunk of a part:   C(value) + its path to the position root (⌈log2 N⌉ siblings) + the whole value, or a row-leaf range with its range proof
 court:                  one output element e of (p, s, n) + one leaf per input dependency line (§3)
 ```
 
@@ -81,16 +81,16 @@ needs the committed values of `p` (its own derived windows included) and of `p �
 §3.3), plus the artifact. It never needs the history rows of earlier positions: a window is judged against the previous window and the new
 row. So **one prosecution reads two positions**, whatever the context:
 
-| Per prosecution | Bound | 9B-8k (estimate; pinned by `k2_real_scale` at the end) |
+| Per prosecution | Bound | 9B-8k (measured, `k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers`) |
 |---|---|---|
-| public bytes | `2 · M_pos + A + 2 · N · 64 + filing` | 2 × ~2.0 GB + 3.5 GB ≈ 7.5 GB |
+| public bytes | `2 · M_pos + A + 2 · N · 64 + filing` | **8,193,657,124 B** (2 × 2,341,827,961 + 3,508,121,330 + …) |
 | on-chain rounds | one demand round (both positions at once, multi-part) + one filing | 2 |
 | concurrent sessions | 2 position sessions | 2 |
-| largest response object | one part, ≤ `SEG_PART_BYTES_V4` = 1 MiB | 1 MiB |
-| largest filing | the worst element court (§3) | ~0.3–1.2 MB |
+| largest response object | one part, ≤ `SEG_PART_BYTES_V4` = 1 MiB | 1,048,576 B (2,294 parts a position) |
+| largest filing | the worst element court (§3) | **170,432 B** (+ 4 KiB header) |
 
-`M_pos` (a position's material) = non-derived values + derived windows at the worst `H`. Detection of a lie in ONE position by an outsider
-that checks `m` random positions is `m / P`; a whole-claim check reads `P · M_pos` (16 TB at 9B-8k) — that is the Panel's / a
+`M_pos` (a position's material) = every committed value, derived windows included, at the worst `H` the claim can reach. Detection of a lie
+in ONE position by an outsider that checks `m` random positions is `m / P`; a whole-claim check reads `P · M_pos` (19.2 TB at 9B-8k) — that is the Panel's / a
 well-resourced outsider's choice and was never what G14 bounds. G14 bounds what happens **after** a check finds a fault or a withholding.
 
 ## 3. Element courts (row/column-tiled exact openings)
@@ -126,11 +126,12 @@ the new row; a view against its window. No court reads a value the producer with
 
 **Decode**: greedy token `t` at round `r` is wrong iff some `j` has `logits[j] > logits[t]` (or `=` with `j < t`): two leaves of the logits.
 
-**Bound**: per relation, `court bytes = Σ leaves (≤ T elements + path) + Σ node openings`, derived by the plan and checked against the
-descriptor (`max_court_bytes`) and the consumer's carrier. A relation whose dependency line is too long for one carrier is refused at
-registration by name (`BOUNDS_EXCEEDED court bytes`, block/node named). At 9B-8k the worst is a vocabulary-wide reduction (61 leaves) or
-the FFN-down product (k = 12,288: 3 + 3 + 1 leaves); at 262k the P·V product's `k = H` is ≈ 1.3–1.8 MB: carriable only with a
-history-chunked lowering (the frontend's h-chunk) — the honest refusal names it otherwise.
+**Bound**: per relation, `court bytes = Σ leaves (≤ T elements + path) + Σ node openings`, priced by running the court's own evaluator over
+zero operands at the first and the last element at `H = min(window, max_positions)` (`element_court_cost_v1`), carried in the plan's
+`worst_court_bytes`, checked against the descriptor (`max_court_bytes`, 16 MiB: `BOUNDS_EXCEEDED court bytes` at `check_plan`) and, on the
+node, against the carrier (`carrier_fit_v1` at registration). Measured at 9B-8k: **170,432 B** (block 3, node 41); the 2 GB `Gather` court of
+v2 opens one index leaf and one 4,096-element table leaf. A history product whose `k = H` is very long (an attention `P·V` over a 2^18
+window: ≈ 1.7 MB) prices past the carrier and the class is refused by the carrier fit: such a context needs a history-chunked lowering.
 
 ## 4. The DA/demand protocol per segment
 
@@ -186,17 +187,33 @@ carrier; (5) withheld → default at the deadline, lie → conviction, honest �
 proofs that are never pre-empted (unchanged); (7) the E2E runs the real path. **v4 classes register only under
 OptimisticPublicVerification**: a Panel seat cannot cover a claim whose whole material is terabytes, and G14 is exactly OPV's premise.
 
-## 7. Numbers (estimates; the test pins exact values and this table is updated with them)
+## 7. Numbers (measured; shape level — real weights are H1's)
 
-| Case | v2 (measured) | v4 |
+9B-8k from the shipped fixture (`fixtures/g14/shipped/huihui-qwen3.5-9b-8k.json`, the same program lane D registers), 838 relations,
+13,323 committed values a position (`k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers`):
+
+| 9B-8k | K2-TIR-v2 (whole-claim gate) | K2-TIR-v4 |
 |---|---|---|
-| 9B-8k retained on chain | 6.99 GB | ~1.3 KB / claim |
-| 9B-8k sessions | 8,192 | 2 per prosecution |
-| 9B-8k public bytes | 12.6 TB (whole claim) | ~7.5 GB per prosecution; 16 TB producer DA obligation |
-| 9B-8k worst opening | 2.03 GB (`Gather` of the table) | ≤ ~1.2 MB (element court) |
-| 9B-8k response | 1.54 GB in one object | ≤ 1 MiB parts, ~2,000 per position |
-| SmolVLM-512 worst filing | 113.6 MB | ≤ ~0.3 MB |
-| 262k / 2M claim on chain | 1.29e15 / 1.03e16 B evidence > 2^50 | 256 / 2,048 segment roots = 16 KB / 128 KB; prompt 64 / 512 tiles |
+| `check_plan_v1` | PASS (ε ≤ 2^-150) | PASS (ε ≤ 2^-150) |
+| public bytes | 12,597,678,100,210 > 2^40 — REFUSED | **8,193,657,124** per prosecution — PASS |
+| retained state | 6,985,614,336 > 2^32 — REFUSED | **4,608 B** on chain per claim (8 segment roots + fixed) — PASS |
+| concurrent sessions | 8,192 > 1,024 — REFUSED | **2** per prosecution — PASS |
+| worst opening / filing | 2,034,245,636 B | **170,432 B** / 174,528 B — PASS |
+| response | 1.54 GB in one object | **1,048,576 B** parts (2,294 a position) |
+| `carrier_fit_v1` at 1,583,616 B | REFUSED | **PASS** (filing, response, commitment) |
+| position material / claim material | — | 2,341,827,961 B / 19,184,254,656,512 B (the producer's DA obligation) |
+| verifier RAM | — | 8,191,777,252 B |
+
+Beyond 8k (informational, same test): the fixture's program declares an 8,192-position window, so at **262,144** positions the gate
+passes with the same per-prosecution bytes and court (the window slides), 256 segment roots on chain (16 KB) and 613,896,149,008,384 B of
+claim material; this is the class's declared window, not full-context attention. At **2,097,152** `check_plan_v1` refuses
+`BOUNDS_EXCEEDED positions 2,097,152 > 262,144` (the program's history bound) — the 2M row of `coverage-p1p2-record.md` §1.2(c) stands.
+Prompts: 262,144 ids = 64 tiles, 2,097,152 = 512 tiles, each ≤ 64 KiB on chain.
+
+SmolVLM text class: see §10 (the SDK probe's lowering of the committed headers).
+
+Real node (wide128 under v4, `real_scale.rs`): a lie at position 1,200 is filed in **3,359 B** (class bound 22,760) after the outsider read
+**2,208 B** of material — exactly positions 1,199 and 1,200 — against a per-prosecution bound of 29,448 B.
 
 ## 8. Node work and allocations
 
