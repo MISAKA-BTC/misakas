@@ -229,6 +229,11 @@ pub struct VerifiedWorkBeaconV1 {
 }
 
 impl VerifiedWorkBeaconV1 {
+    /// A beacon a collector of this crate derived for the context `context_id` (never from presented bytes).
+    pub(crate) fn derived(beacon: WorkBeaconV1, context_id: Digest) -> Self {
+        Self { beacon, context_id }
+    }
+
     pub fn beacon(&self) -> &WorkBeaconV1 {
         &self.beacon
     }
@@ -367,6 +372,9 @@ pub fn collect_work_beacon_v1(
     events: &[WorkFinalEventV1],
     tip_position: u64,
 ) -> Result<WorkBeaconStateV1, PolicyRefusalV1> {
+    if ctx.policy.is_sealed_source() {
+        return Err(PolicyRefusalV1::WrongCollector("a sealed-source (v3) policy is collected by collect_sealed_work_beacon_v3"));
+    }
     if ctx.policy.source_rule().is_some_and(SourceRuleV1::needs_attribution) {
         return Err(PolicyRefusalV1::Missing(
             "the attribution of each source (this policy's source rule reads producers and consumers)",
@@ -385,6 +393,9 @@ pub fn collect_attributed_work_beacon_v1(
     ctx.policy.validate()?;
     if !ctx.policy.needs_beacon() {
         return Err(PolicyRefusalV1::NoBeacon);
+    }
+    if ctx.policy.is_sealed_source() {
+        return Err(PolicyRefusalV1::WrongCollector("a sealed-source (v3) policy is collected by collect_sealed_work_beacon_v3"));
     }
     let rule = ctx.policy.source_rule().ok_or(PolicyRefusalV1::UnknownId("source_eligibility_policy_id"))?;
     if matches!(ctx.subject_kind, SubjectKindV1::ModelConformance | SubjectKindV1::KernelConformance)
@@ -429,6 +440,8 @@ pub enum BeaconEvidenceRefusalV1 {
     Policy(PolicyRefusalV1),
     #[error("this branch has no locked beacon for the subject ({0:?})")]
     NotLocked(WorkBeaconStateV1),
+    #[error("this branch has no locked sealed-source beacon for the subject ({0})")]
+    NotLockedV3(String),
     #[error("the presented beacon differs from the one derived from canonical history at source {at}")]
     Mismatch { at: usize },
     #[error("the presented accumulator chain, output or anchor is not the derivation of its sources")]
@@ -460,10 +473,17 @@ pub fn verify_attributed_work_beacon_v1(
 }
 
 fn compare_presented(derived: WorkBeaconStateV1, presented: &WorkBeaconV1) -> Result<VerifiedWorkBeaconV1, BeaconEvidenceRefusalV1> {
-    let derived = match derived {
-        WorkBeaconStateV1::Locked(b) => b,
-        other => return Err(BeaconEvidenceRefusalV1::NotLocked(other)),
-    };
+    match derived {
+        WorkBeaconStateV1::Locked(b) => compare_presented_v1(b, presented),
+        other => Err(BeaconEvidenceRefusalV1::NotLocked(other)),
+    }
+}
+
+/// A presented beacon against the one this node derived: refused at the first differing source, or if anything else differs.
+pub(crate) fn compare_presented_v1(
+    derived: VerifiedWorkBeaconV1,
+    presented: &WorkBeaconV1,
+) -> Result<VerifiedWorkBeaconV1, BeaconEvidenceRefusalV1> {
     let n = derived.sources.len().max(presented.sources.len());
     if let Some(at) = (0..n).find(|i| derived.sources.get(*i) != presented.sources.get(*i)) {
         return Err(BeaconEvidenceRefusalV1::Mismatch { at });

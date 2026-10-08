@@ -19,6 +19,7 @@ pub mod conformance;
 pub mod hash;
 pub mod lifecycle;
 pub mod policy;
+pub mod sealed;
 pub mod seed;
 pub mod soundness;
 pub mod subject;
@@ -33,7 +34,11 @@ pub use hash::Digest;
 pub use lifecycle::{OnboardingFailureV1, OnboardingRecordV1, OnboardingStateV1, OnboardingStepV1};
 pub use policy::{
     ApprovedTupleV1, InteractiveModeV1, PostCommitChallengePolicyV1, SourceRuleV1, approved_v1, complete_check_policy_v1,
-    reference_policy_v1, shipped_registry_v1,
+    reference_policy_v1, sealed_source_policy_v3, shipped_registry_v1,
+};
+pub use sealed::{
+    SealRevealV3, SealedBeaconStateV3, SealedSourceV3, SourceFateV3, collect_sealed_work_beacon_v3, combine_failure_bits_v1,
+    sealed_beacon_grinding_choices_v3, sealed_source_censorship_bits_v3, verify_sealed_work_beacon_v3,
 };
 pub use seed::{ChallengeStreamV1, FiatShamirTranscriptV1, StreamKindV1, StreamLabelV1, challenge_seed_v1, staged_round_challenge_v1};
 pub use soundness::{

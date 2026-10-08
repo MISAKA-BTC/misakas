@@ -92,6 +92,11 @@ impl ImplementedV1 {
     pub fn randomness_source() -> Digest {
         named_id("palw-work-beacon/v1")
     }
+    /// **The sealed-source PALW Work Beacon v3** (`crate::sealed`): commit-reveal over bonded, salted claim seals, every qualifying
+    /// seal of the window mixed, withholding a counted veto. Its source rule is the distinct one.
+    pub fn randomness_sealed_source() -> Digest {
+        named_id("palw-work-beacon/sealed-source/v3")
+    }
     /// **No randomness: a complete check.** Every input of the subject's (small, finite) domain and every artifact leaf is checked,
     /// so nothing is sampled and no beacon exists (the OPV bootstrap, `docs/design/palw/opv-beacon-bootstrap.md` §4).
     pub fn randomness_none_complete() -> Digest {
@@ -178,6 +183,8 @@ pub enum PolicyRefusalV1 {
     CompleteCheckShape(&'static str),
     #[error("a complete-check policy has no beacon to collect")]
     NoBeacon,
+    #[error("another collector: {0}")]
+    WrongCollector(&'static str),
     #[error("the policy's target of {target} bits is below the approval floor of {floor} effective bits")]
     TargetBelowFloor { target: u16, floor: u16 },
     #[error("the approved tuple delivers {effective:?} effective bits, below the policy's target of {target}")]
@@ -208,7 +215,12 @@ impl PostCommitChallengePolicyV1 {
 
     /// Whether challenges of this policy are drawn from a PALW Work Beacon (`false`: a complete check, which draws nothing).
     pub fn needs_beacon(&self) -> bool {
-        self.randomness_source_policy_id == ImplementedV1::randomness_source()
+        self.randomness_source_policy_id == ImplementedV1::randomness_source() || self.is_sealed_source()
+    }
+
+    /// Whether the beacon is the sealed-source v3 one ([`crate::sealed::collect_sealed_work_beacon_v3`]).
+    pub fn is_sealed_source(&self) -> bool {
+        self.randomness_source_policy_id == ImplementedV1::randomness_sealed_source()
     }
 
     /// Whether this is a complete-check policy (no randomness, the whole domain enumerated).
@@ -235,8 +247,14 @@ impl PostCommitChallengePolicyV1 {
         if self.source_rule().is_none() {
             return Err(R::UnknownId("source_eligibility_policy_id"));
         }
+        // v3 mixes every qualifying seal, one per producer (and per known consumer): the distinct rule and no other.
+        if self.is_sealed_source() && self.source_rule() != Some(SourceRuleV1::Distinct) {
+            return Err(R::UnknownId("source_eligibility_policy_id"));
+        }
+        let randomness =
+            if self.is_sealed_source() { ImplementedV1::randomness_sealed_source() } else { ImplementedV1::randomness_source() };
         let ids: [(&'static str, Digest, Digest); 10] = [
-            ("randomness_source_policy_id", self.randomness_source_policy_id, ImplementedV1::randomness_source()),
+            ("randomness_source_policy_id", self.randomness_source_policy_id, randomness),
             ("anchor_settlement_policy_id", self.anchor_settlement_policy_id, ImplementedV1::anchor_settlement()),
             ("binding_schema_id", self.binding_schema_id, ImplementedV1::binding_schema()),
             ("hash_suite_id", self.hash_suite_id, ImplementedV1::hash_suite()),
@@ -395,6 +413,16 @@ pub fn approved_v1(
         return Err(PolicyRefusalV1::BelowTarget { effective, target: policy.security_bits });
     }
     Ok(())
+}
+
+/// [`reference_policy_v1`]'s numbers under the **sealed-source beacon v3** (the distinct rule; `window` is the seal window `W`, the
+/// reveal window being the next `W`) — for tests and tools; NOT an approved or shipped value.
+pub fn sealed_source_policy_v3(k: u32, delay: u64, window: u64, depth: u64, repetitions: u32) -> PostCommitChallengePolicyV1 {
+    PostCommitChallengePolicyV1 {
+        randomness_source_policy_id: ImplementedV1::randomness_sealed_source(),
+        source_eligibility_policy_id: ImplementedV1::source_eligibility_distinct(),
+        ..reference_policy_v1(k, delay, window, depth, repetitions)
+    }
 }
 
 /// A structurally valid policy with the given numbers — for tests and tools; NOT an approved or shipped value.
