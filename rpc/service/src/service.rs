@@ -3263,6 +3263,15 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             receipts_counted: read.receipts_counted,
             ledger_root: read.ledger_root.to_string(),
             aux_root: read.aux_root.to_string(),
+            mode: read.mode.to_string(),
+            opv: read.opv.is_some(),
+            opv_admitted_daa: read.opv.as_ref().map(|o| o.admitted_daa).unwrap_or(0),
+            opv_verifier_start_cutoff_daa: read.opv.as_ref().map(|o| o.verifier_start_cutoff_daa).unwrap_or(0),
+            opv_final_floor_daa: read.opv.as_ref().map(|o| o.final_floor_daa).unwrap_or(0),
+            opv_hard_deadline_daa: read.opv.as_ref().map(|o| o.hard_deadline_daa).unwrap_or(0),
+            opv_reservation_sompi: read.opv.as_ref().map(|o| o.reservation).unwrap_or(0),
+            opv_max_gain_sompi: read.opv.as_ref().map(|o| o.max_gain).unwrap_or(0),
+            final_statement: read.opv.as_ref().map(|o| o.statement.to_string()).unwrap_or_default(),
         })
     }
 
@@ -3320,6 +3329,52 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             next_key,
             total_rows: page.total_rows,
         })
+    }
+
+    async fn get_palw_kernel_finals_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwKernelFinalsRequest,
+    ) -> RpcResult<GetPalwKernelFinalsResponse> {
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwKernelFinalsResponse::default());
+        }
+        let limit = match request.limit {
+            0 => PALW_KERNEL_FINALS_RPC_ROWS,
+            n => (n as usize).min(PALW_KERNEL_FINALS_RPC_ROWS_MAX),
+        };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let tip_daa = session.get_virtual_daa_score();
+        let Some((ledger_root, finals)) = session
+            .spawn_blocking(move |c| c.palw_kernel_route_v1().map(|route| (route.ledger_root(), route.finals_read_v1())))
+            .await
+        else {
+            return Ok(GetPalwKernelFinalsResponse { tip_daa, ..Default::default() });
+        };
+        let finals = finals.map_err(RpcError::General)?;
+        let hex = |bytes: &[u8]| faster_hex::hex_string(bytes);
+        let total = finals.len() as u64;
+        // Newest first: a beacon reads the latest Finals.
+        let rows = finals
+            .iter()
+            .rev()
+            .take(limit)
+            .map(|f| RpcPalwKernelFinal {
+                claim_id: hex(&f.receipt.claim),
+                mode: f.receipt.mode.name().to_string(),
+                final_path: f.final_path.to_string(),
+                source_profile_id: hex(&f.receipt.source_profile_id),
+                canonical_work_id: hex(&f.receipt.canonical_work_id),
+                execution_commitment: hex(&f.receipt.execution_commitment),
+                accepted_daa: f.receipt.accepted_daa,
+                final_daa: f.receipt.final_daa,
+                da_satisfied: f.receipt.da_satisfied,
+                standing: format!("{:?}", f.receipt.standing),
+                work_final_event: f.event.as_deref().map(hex).unwrap_or_default(),
+                statement: f.statement.to_string(),
+            })
+            .collect();
+        Ok(GetPalwKernelFinalsResponse { available: true, tip_daa, finals: rows, total, ledger_root: ledger_root.to_string() })
     }
 
     // ------------------------------------------------------------------------------------------
@@ -5029,6 +5084,9 @@ impl AsyncService for RpcCoreService {
 }
 
 /// `getPalwKernelRows`'s default page budget (key and row bytes) and the most a caller may ask.
+/// `getPalwKernelFinals`'s default page of Finals and the most a caller may ask.
+const PALW_KERNEL_FINALS_RPC_ROWS: usize = 64;
+const PALW_KERNEL_FINALS_RPC_ROWS_MAX: usize = 1024;
 const PALW_KERNEL_ROWS_RPC_BYTES: usize = 1 << 20;
 const PALW_KERNEL_ROWS_RPC_BYTES_MAX: usize = 8 << 20;
 

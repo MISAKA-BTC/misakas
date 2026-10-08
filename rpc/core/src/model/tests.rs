@@ -2744,6 +2744,15 @@ mod mockery {
                 receipts_counted: mock(),
                 ledger_root: mock_hex(),
                 aux_root: mock_hex(),
+                mode: "OptimisticPublicVerification".to_string(),
+                opv: mock(),
+                opv_admitted_daa: mock(),
+                opv_verifier_start_cutoff_daa: mock(),
+                opv_final_floor_daa: mock(),
+                opv_hard_deadline_daa: mock(),
+                opv_reservation_sompi: mock(),
+                opv_max_gain_sompi: mock(),
+                final_statement: "Final under optimistic public verification".to_string(),
             }
         }
     }
@@ -2780,6 +2789,46 @@ mod mockery {
         }
     }
     test!(GetPalwKernelRowsResponse);
+
+    impl Mock for GetPalwKernelFinalsRequest {
+        fn mock() -> Self {
+            GetPalwKernelFinalsRequest { limit: mock() }
+        }
+    }
+    test!(GetPalwKernelFinalsRequest);
+
+    impl Mock for RpcPalwKernelFinal {
+        fn mock() -> Self {
+            RpcPalwKernelFinal {
+                claim_id: mock_hex(),
+                mode: "OptimisticPublicVerification".to_string(),
+                final_path: "PanelIndependent".to_string(),
+                source_profile_id: mock_hex(),
+                canonical_work_id: mock_hex(),
+                execution_commitment: mock_hex(),
+                accepted_daa: mock(),
+                final_daa: mock(),
+                da_satisfied: mock(),
+                standing: "Standing".to_string(),
+                work_final_event: mock_hex(),
+                statement: "Final".to_string(),
+            }
+        }
+    }
+    test!(RpcPalwKernelFinal);
+
+    impl Mock for GetPalwKernelFinalsResponse {
+        fn mock() -> Self {
+            GetPalwKernelFinalsResponse {
+                available: mock(),
+                tip_daa: mock(),
+                finals: mock(),
+                total: mock(),
+                ledger_root: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwKernelFinalsResponse);
 
     // ADR-0152 P2-10: op 199 and its parts round-trip.
     impl Mock for GetPalwVestingRequest {

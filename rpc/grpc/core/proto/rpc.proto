@@ -3099,6 +3099,15 @@ message GetPalwKernelClaimResponseMessage {
   uint32 receiptsCounted = 23;
   string ledgerRoot = 24;
   string auxRoot = 25;
+  string mode = 26;
+  bool opv = 27;
+  uint64 opvAdmittedDaa = 28;
+  uint64 opvVerifierStartCutoffDaa = 29;
+  uint64 opvFinalFloorDaa = 30;
+  uint64 opvHardDeadlineDaa = 31;
+  uint64 opvReservationSompi = 32;
+  uint64 opvMaxGainSompi = 33;
+  string finalStatement = 34;
   RPCError error = 1000;
 }
 
@@ -3126,6 +3135,35 @@ message GetPalwKernelRowsResponseMessage {
   uint32 nextTable = 8;
   string nextKey = 9;
   uint64 totalRows = 10;
+  RPCError error = 1000;
+}
+
+// G14 lane D / RFC-0015: the kernel route's Finals and the beacon's fact for each (op 212).
+message GetPalwKernelFinalsRequestMessage {
+  uint32 limit = 1;
+}
+
+message RpcPalwKernelFinal {
+  string claimId = 1;
+  string mode = 2;
+  string finalPath = 3;
+  string sourceProfileId = 4;
+  string canonicalWorkId = 5;
+  string executionCommitment = 6;
+  uint64 acceptedDaa = 7;
+  uint64 finalDaa = 8;
+  bool daSatisfied = 9;
+  string standing = 10;
+  string workFinalEvent = 11;
+  string statement = 12;
+}
+
+message GetPalwKernelFinalsResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  repeated RpcPalwKernelFinal finals = 3;
+  uint64 total = 4;
+  string ledgerRoot = 5;
   RPCError error = 1000;
 }
 

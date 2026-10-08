@@ -1071,6 +1071,19 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwKernelRowsResponse::default())
     }
 
+    /// G14 lane D / RFC-0015 (op 212): the kernel route's Finals and the beacon's fact for each.
+    async fn get_palw_kernel_finals(&self, request: GetPalwKernelFinalsRequest) -> RpcResult<GetPalwKernelFinalsResponse> {
+        self.get_palw_kernel_finals_call(None, request).await
+    }
+    async fn get_palw_kernel_finals_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwKernelFinalsRequest,
+    ) -> RpcResult<GetPalwKernelFinalsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwKernelFinalsResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

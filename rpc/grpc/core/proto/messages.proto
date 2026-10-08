@@ -125,6 +125,7 @@ message KaspadRequest {
     GetPalwPanelV3StatusRequestMessage getPalwPanelV3StatusRequest = 1254;
     GetPalwKernelClaimRequestMessage getPalwKernelClaimRequest = 1234;
     GetPalwKernelRowsRequestMessage getPalwKernelRowsRequest = 1236;
+    GetPalwKernelFinalsRequestMessage getPalwKernelFinalsRequest = 1238;
   }
 }
 
@@ -249,6 +250,7 @@ message KaspadResponse {
     GetPalwPanelV3StatusResponseMessage getPalwPanelV3StatusResponse = 1255;
     GetPalwKernelClaimResponseMessage getPalwKernelClaimResponse = 1235;
     GetPalwKernelRowsResponseMessage getPalwKernelRowsResponse = 1237;
+    GetPalwKernelFinalsResponseMessage getPalwKernelFinalsResponse = 1239;
   }
 }
 

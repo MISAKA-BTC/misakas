@@ -118,6 +118,7 @@ impl Router {
                 GetPalwPanelV3Status,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,
+                GetPalwKernelFinals,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 GetValidatorAttestationTarget,

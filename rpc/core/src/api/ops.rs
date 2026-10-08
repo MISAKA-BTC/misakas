@@ -290,6 +290,9 @@ pub enum RpcApiOps {
     /// G14 lane D: the kernel route's rows, a page at a time, with the committed ledger and aux roots (a reader that gathers every
     /// page rebuilds the ledger and checks the root). Appended at the tail.
     GetPalwKernelRows = 211,
+    /// G14 lane D / RFC-0015: every Final the kernel route holds, in canonical order, with the beacon's `WorkFinalEventV1` for it
+    /// (an OPV Final is `PanelIndependent`: the fact RFC-0010's Panel-assignment beacon needs). Appended at the tail.
+    GetPalwKernelFinals = 212,
 }
 
 impl RpcApiOps {

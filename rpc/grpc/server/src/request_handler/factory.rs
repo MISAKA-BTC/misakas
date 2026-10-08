@@ -130,6 +130,7 @@ impl Factory {
                 GetPalwPanelV3Status,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,
+                GetPalwKernelFinals,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 NotifyBlockAdded,

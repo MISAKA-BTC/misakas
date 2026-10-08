@@ -1213,6 +1213,14 @@ async fn sanity_test() {
                     assert!(!read.available && read.rows.is_empty() && !read.more);
                 })
             }
+            KaspadPayloadOps::GetPalwKernelFinals => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // G14 / RFC-0015 (op 212): a network that holds no kernel route answers `available: false`, no Finals.
+                    let read = rpc_client.get_palw_kernel_finals_call(None, GetPalwKernelFinalsRequest::default()).await.unwrap();
+                    assert!(!read.available && read.finals.is_empty() && read.total == 0);
+                })
+            }
             KaspadPayloadOps::GetPalwFreePromptClaim => {
                 let rpc_client = client.clone();
                 tst!(op, {

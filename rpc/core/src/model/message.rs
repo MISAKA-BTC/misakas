@@ -12877,6 +12877,18 @@ pub struct GetPalwKernelClaimResponse {
     /// The committed ledger root and the consensus tables' root (see `getPalwKernelRows`).
     pub ledger_root: String,
     pub aux_root: String,
+    /// RFC-0015: `PanelLicensed` or `OptimisticPublicVerification`.
+    pub mode: String,
+    /// The OPV clock facts a fresh verifier plans by (all zero / empty for a Panel-licensed claim).
+    pub opv: bool,
+    pub opv_admitted_daa: u64,
+    pub opv_verifier_start_cutoff_daa: u64,
+    pub opv_final_floor_daa: u64,
+    pub opv_hard_deadline_daa: u64,
+    pub opv_reservation_sompi: u64,
+    pub opv_max_gain_sompi: u64,
+    /// What a Final of this claim means (an OPV Final is never shown as a proof of correctness).
+    pub final_statement: String,
 }
 
 impl Serializer for GetPalwKernelClaimResponse {
@@ -12907,6 +12919,15 @@ impl Serializer for GetPalwKernelClaimResponse {
         store!(u32, &self.receipts_counted, writer)?;
         store!(String, &self.ledger_root, writer)?;
         store!(String, &self.aux_root, writer)?;
+        store!(String, &self.mode, writer)?;
+        store!(bool, &self.opv, writer)?;
+        store!(u64, &self.opv_admitted_daa, writer)?;
+        store!(u64, &self.opv_verifier_start_cutoff_daa, writer)?;
+        store!(u64, &self.opv_final_floor_daa, writer)?;
+        store!(u64, &self.opv_hard_deadline_daa, writer)?;
+        store!(u64, &self.opv_reservation_sompi, writer)?;
+        store!(u64, &self.opv_max_gain_sompi, writer)?;
+        store!(String, &self.final_statement, writer)?;
         Ok(())
     }
 }
@@ -12940,6 +12961,15 @@ impl Deserializer for GetPalwKernelClaimResponse {
             receipts_counted: load!(u32, reader)?,
             ledger_root: load!(String, reader)?,
             aux_root: load!(String, reader)?,
+            mode: load!(String, reader)?,
+            opv: load!(bool, reader)?,
+            opv_admitted_daa: load!(u64, reader)?,
+            opv_verifier_start_cutoff_daa: load!(u64, reader)?,
+            opv_final_floor_daa: load!(u64, reader)?,
+            opv_hard_deadline_daa: load!(u64, reader)?,
+            opv_reservation_sompi: load!(u64, reader)?,
+            opv_max_gain_sompi: load!(u64, reader)?,
+            final_statement: load!(String, reader)?,
         })
     }
 }
@@ -13056,6 +13086,128 @@ impl Deserializer for GetPalwKernelRowsResponse {
             next_table: load!(u32, reader)?,
             next_key: load!(String, reader)?,
             total_rows: load!(u64, reader)?,
+        })
+    }
+}
+
+
+/// **`getPalwKernelFinals` (op 212)**: every Final the kernel route holds, in canonical order, with the beacon's fact for it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwKernelFinalsRequest {
+    /// The most Finals to return (0 = the node's default; capped by the node).
+    pub limit: u32,
+}
+
+impl Serializer for GetPalwKernelFinalsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u32, &self.limit, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwKernelFinalsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { limit: load!(u32, reader)? })
+    }
+}
+
+/// One Final: the kernel's receipt, how the work reached it, and the borsh `WorkFinalEventV1` where the route can state every fact the
+/// beacon needs (RFC-0015: an OPV Final is `PanelIndependent`; a Panel-licensed Final exports none).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwKernelFinal {
+    pub claim_id: String,
+    /// `PanelLicensed` or `OptimisticPublicVerification`.
+    pub mode: String,
+    /// `PanelIndependent` or `PanelLicensed`.
+    pub final_path: String,
+    pub source_profile_id: String,
+    pub canonical_work_id: String,
+    pub execution_commitment: String,
+    pub accepted_daa: u64,
+    pub final_daa: u64,
+    pub da_satisfied: bool,
+    /// `Standing`, `ConvictedAfterFinal` or `DaForfeitedAfterFinal`.
+    pub standing: String,
+    /// Borsh of `WorkFinalEventV1`, hex (empty where the route cannot state the beacon's facts).
+    pub work_final_event: String,
+    pub statement: String,
+}
+
+impl Serializer for RpcPalwKernelFinal {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.mode, writer)?;
+        store!(String, &self.final_path, writer)?;
+        store!(String, &self.source_profile_id, writer)?;
+        store!(String, &self.canonical_work_id, writer)?;
+        store!(String, &self.execution_commitment, writer)?;
+        store!(u64, &self.accepted_daa, writer)?;
+        store!(u64, &self.final_daa, writer)?;
+        store!(bool, &self.da_satisfied, writer)?;
+        store!(String, &self.standing, writer)?;
+        store!(String, &self.work_final_event, writer)?;
+        store!(String, &self.statement, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwKernelFinal {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            claim_id: load!(String, reader)?,
+            mode: load!(String, reader)?,
+            final_path: load!(String, reader)?,
+            source_profile_id: load!(String, reader)?,
+            canonical_work_id: load!(String, reader)?,
+            execution_commitment: load!(String, reader)?,
+            accepted_daa: load!(u64, reader)?,
+            final_daa: load!(u64, reader)?,
+            da_satisfied: load!(bool, reader)?,
+            standing: load!(String, reader)?,
+            work_final_event: load!(String, reader)?,
+            statement: load!(String, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwKernelFinalsResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub finals: Vec<RpcPalwKernelFinal>,
+    /// How many Finals the route holds (more than `finals.len()` when the page was capped).
+    pub total: u64,
+    pub ledger_root: String,
+}
+
+impl Serializer for GetPalwKernelFinalsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        serialize!(Vec<RpcPalwKernelFinal>, &self.finals, writer)?;
+        store!(u64, &self.total, writer)?;
+        store!(String, &self.ledger_root, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwKernelFinalsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            finals: deserialize!(Vec<RpcPalwKernelFinal>, reader)?,
+            total: load!(u64, reader)?,
+            ledger_root: load!(String, reader)?,
         })
     }
 }
