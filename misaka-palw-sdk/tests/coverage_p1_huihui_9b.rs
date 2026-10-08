@@ -245,7 +245,8 @@ fn huihui_qwen35_9b_ir_route_from_headers() {
     let src = source::open(&dir, kind, None, reg).expect("the headers");
     let tokenizer_bytes = std::fs::read(dir.join("tokenizer.json")).unwrap_or_default();
     let tokenizer_id = Hash64::from_bytes(misaka_palw_tir_lower::artifact::tokenizer_id_of(&tokenizer_bytes));
-    let config_bytes = std::fs::read(dir.join("config.json")).expect("config.json");
+    // A GGUF file is its own configuration: its path names the synthetic root.
+    let config_bytes = std::fs::read(dir.join("config.json")).unwrap_or_else(|_| dir.to_string_lossy().as_bytes().to_vec());
     let root = {
         let mut st = blake2b_simd::Params::new().hash_length(64).key(b"g14-synthetic-artifact-root/v1").to_state();
         st.update(&config_bytes);

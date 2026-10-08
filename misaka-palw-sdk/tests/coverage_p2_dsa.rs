@@ -93,3 +93,36 @@ fn the_dsa_fixtures_register_under_the_shipped_rules_and_have_a_complete_k2_plan
         assert_eq!(route.shipped, "KERNEL_NOT_ACTIVE");
     }
 }
+
+/// **`WEIGHT_ROTATION_HADAMARD_V1` stays inside the shipped primitives and K2 families**: the tiny rotated Qwen3.5 GGUF
+/// (`misaka-palw-tir-lower/tests/fixtures/gguf/prism_rotated/rotated`) lowered with its rotation ops (`Op::BlockLinear` → a batched
+/// `MatMul` of `i8` rows) is admitted by the IR gate at DAA 7,000 and its K2-TIR-v1 plan is ELIGIBLE_AT — no new primitive, no new
+/// family.
+#[test]
+fn the_rotation_op_is_admitted_and_planned_with_existing_families() {
+    let params = palw_t12_shipped_params();
+    let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("a V2 network") };
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../misaka-palw-tir-lower/tests/fixtures/gguf/prism_rotated/rotated/model.gguf");
+    let model = misaka_palw_tir_lower::gguf::GgufModel::open(&path).expect("the rotated fixture");
+    let prep = model.prepare(&misaka_palw_tir_lower::lower::LowerOpts::default()).expect("prepared");
+    let rotations = prep
+        .hl
+        .blocks
+        .iter()
+        .flat_map(|b| b.nodes.iter())
+        .filter(|n| matches!(n.op, misaka_palw_tir_lower::hl::Op::BlockLinear { .. }))
+        .count();
+    assert!(rotations > 0);
+    let program = tir_program_with_scheme_v1(&prep.lowered.program, None).expect("tiled");
+    let ctx = 128;
+    let choice = TirLayoutChoiceV1 { max_context: Some(ctx), ..Default::default() };
+    let judged = |c: &PalwTirClassV1| gate(&params, bundle, c, 7_000);
+    let chosen = tir_choose_layout_judged_v1(&params, bundle, &program, Hash64::from_bytes([0x22; 64]), 64, &choice, true, &judged)
+        .expect("search");
+    eprintln!("[rotation] {rotations} rotation ops; @{ctx}: {:?}", chosen.admission);
+    assert!(chosen.admission.is_ok(), "{:?}", chosen.admission);
+    let route = misaka_palw_sdk::preflight::kernel::kernel_route_of(&program, ctx, 0);
+    eprintln!("[rotation] {} hypothetical {} — {}", route.kernel, route.hypothetical, route.detail);
+    assert_eq!(route.hypothetical, "ELIGIBLE_AT", "{}", route.detail);
+}
