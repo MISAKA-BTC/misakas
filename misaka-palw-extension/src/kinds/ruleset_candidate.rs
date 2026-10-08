@@ -379,14 +379,16 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
     Ok(())
 }
 
-/// The flag-day entry that spells `name`, if one does: the int-11/int-12 list, the IR flag days' lists and the two fences no
-/// testnet-12 list arms.
+/// The flag-day entry that spells `name`, if one does: the int-11/int-12 list, the int-13 list, the IR flag days' lists and the two
+/// fences no testnet-12 list arms.
 fn palw_candidate_entry_v1(name: &str) -> Option<&'static kaspa_consensus_core::config::params::PalwPostLaunchFenceV1> {
     use kaspa_consensus_core::config::params::{
-        PALW_T12_INT11_FENCES_V1, PALW_T12_MODEL_COURT_WINDOW_ENTRY, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1,
+        PALW_T12_INT11_FENCES_V1, PALW_T12_INT13_FENCES_V1, PALW_T12_MODEL_COURT_WINDOW_ENTRY, PALW_T12_TIR_FENCE2_FENCES_V1,
+        PALW_T12_TIR_FLAG_DAY_FENCES_V1,
     };
     PALW_T12_INT11_FENCES_V1
         .iter()
+        .chain(PALW_T12_INT13_FENCES_V1)
         .chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1)
         .chain(PALW_T12_TIR_FENCE2_FENCES_V1)
         .chain(std::iter::once(&PALW_T12_MODEL_COURT_WINDOW_ENTRY))
