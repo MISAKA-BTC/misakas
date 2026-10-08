@@ -93,6 +93,8 @@ struct Arch {
     dis: Option<crate::spec::DisentangledSpec>,
     /// ALBERT: the embedding is at the table's width and a projection (bias or not) lifts the normed row to the hidden width.
     proj_in: Option<bool>,
+    /// `OUTPUT_CLASSIFY_V1`: the pooled row `[CLS]` goes through an optional dense layer + activation and a linear layer to the labels.
+    classify: Option<(bool, Option<crate::spec::ClassifyPre>)>,
 }
 
 impl Arch {
@@ -226,6 +228,10 @@ fn arch_of(spec: &ArchSpec) -> Result<Arch> {
         rel: e.rel_bias,
         proj_in: factorised.then_some(e.proj_in_bias),
         dis: e.disentangled,
+        classify: match &spec.output {
+            crate::spec::OutputSpec::Classify { bias, pre, .. } => Some((*bias, *pre)),
+            _ => None,
+        },
     })
 }
 
@@ -807,6 +813,30 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
             let pv = rows_val(pooled, DType::I32, resid.clone(), d, "pool");
             note_resid(cx, &lb, &pv);
             note_site(cx, tb, &pv);
+            // **A classification head** (`OUTPUT_CLASSIFY_V1`): the `[CLS]` row through the optional dense + activation (BERT's pooler,
+            // RoBERTa's `dense` + tanh, DistilBERT's `pre_classifier` + ReLU) and the linear layer to the labels; the output is the
+            // labels' logits in one power-of-two unit.
+            if let Some((cbias, pre)) = a.classify {
+                if cfg.pooling != Pooling::Cls || cfg.normalize {
+                    return Err(LowerError::not_lowerable("a classification head reads the [CLS] row, un-normalised"));
+                }
+                let codes_want = |site: &str| Want { dt: DType::I16, key: site_key(site) };
+                let mut h = codes_rows(&mut b, cx, &mut lb, &pv)?;
+                if let Some(p) = pre {
+                    let up = linear_rows(&mut b, cx, &mut lb, &h, "classifier.pre.w", p.bias.then_some("classifier.pre.b"), "cls.pre", &codes_want("cls.pre"))?;
+                    note_site(cx, tb, &up);
+                    h = lower_table_named(&mut b, cx, &mut lb, &up, TableFn::Act(p.act), "cls.act")?;
+                    note_site(cx, tb, &h);
+                }
+                let key = ScaleKey { base: Base::Pow2Site { names: vec!["cls.out".into()] }, factor: 1.0 };
+                let out = linear_rows(&mut b, cx, &mut lb, &h, "classifier.out.w", cbias.then_some("classifier.out.b"), "cls.out", &Want { dt: DType::I32, key })?;
+                let out = ensure_node(&mut b, &out);
+                let tir::Ref::Node(oi) = out.r else { unreachable!("ensure_node") };
+                b.commit(out.r);
+                note_site(cx, tb, &out);
+                cx.logits_key = Some(out.key.clone());
+                return Ok((b.finish(&[]), Some(oi)));
+            }
             let out = if cfg.normalize {
                 let pc = codes_rows(&mut b, cx, &mut lb, &pv)?;
                 let u = b.l2_unit_q15(pc.r);
@@ -1411,6 +1441,26 @@ pub fn float_forward(
         Pooling::Mean => (0..d).map(|j| (0..n_real).map(|i| x[i][j]).sum::<f64>() / n_real as f64).collect(),
     };
     observe("post.pool".into(), std::slice::from_ref(&pooled));
+    if let Some((cbias, pre)) = a.classify {
+        if cfg.pooling != Pooling::Cls || cfg.normalize {
+            return Err(LowerError::not_lowerable("a classification head reads the [CLS] row, un-normalised"));
+        }
+        let mut h = pooled.clone();
+        if let Some(pr) = pre {
+            let w = p("classifier.pre.w", None)?;
+            let bv = if pr.bias { Some(p("classifier.pre.b", None)?) } else { None };
+            h = lin(&h, &w, bv.as_deref(), d);
+            observe("post.cls.pre".into(), std::slice::from_ref(&h));
+            h = h.iter().map(|v| crate::float_ref::act(pr.act, *v as f32) as f64).collect();
+            observe("post.cls.act".into(), std::slice::from_ref(&h));
+        }
+        let w = p("classifier.out.w", None)?;
+        let labels = hl.params[hl_param(hl, "classifier.out.w")? as usize].shape[0];
+        let bv = if cbias { Some(p("classifier.out.b", None)?) } else { None };
+        let out = lin(&h, &w, bv.as_deref(), labels);
+        observe("post.cls.out".into(), std::slice::from_ref(&out));
+        return Ok(out);
+    }
     Ok(if cfg.normalize {
         let nrm = pooled.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-12);
         let out: Vec<f64> = pooled.iter().map(|v| v / nrm).collect();

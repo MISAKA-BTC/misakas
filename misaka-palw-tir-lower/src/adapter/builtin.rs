@@ -153,6 +153,10 @@ pack!(
     "olmo2-seqcls",
     "gpt2-seqcls",
     "opt-seqcls",
+    "mixin-seqcls-encoder",
+    "bert-seqcls",
+    "roberta-seqcls",
+    "distilbert-seqcls",
 );
 
 /// The text of a built-in adapter, by id.
