@@ -407,6 +407,11 @@ impl GgufFile {
         if t.ty.block().is_some() { Some(t.bytes) } else { self.unsized_bounds.get(name).copied() }
     }
 
+    /// The view holds the tensor data (a file opened from disk), not just a parsed header.
+    pub fn has_data(&self) -> bool {
+        self.file.is_some()
+    }
+
     fn data_file(&self) -> Result<&std::fs::File> {
         self.file.as_deref().ok_or_else(|| LowerError::weights("GGUF: a header-only view holds no tensor data"))
     }
@@ -743,6 +748,9 @@ pub struct GgufModel {
     map: BTreeMap<String, Source>,
     /// Every GGUF tensor the view consumed (the rest is reported as unread).
     consumed: std::collections::BTreeSet<String>,
+    /// Tensors whose *values* the mapping uses and a header-only view does not hold (`rope_freqs.weight (256 bytes)`): read at
+    /// conversion. Empty for a view with its data.
+    pending: Vec<String>,
 }
 
 /// `llama`'s q/k rows: llama.cpp's converter permutes Hugging Face's `[heads, 2, d/2]` rows to
@@ -1132,22 +1140,43 @@ impl GgufModel {
                 );
             }
         }
+        // **`rope_freqs.weight`: llama.cpp's table of frequency divisors** (the Llama-3.x scalings are written as this tensor and as no
+        // metadata). A set the converter derived from a Llama-3 `rope_scaling` reads back as that scaling (checked value by value,
+        // so the program is the one the Hugging Face configuration lowers to); **any other table reads as itself**
+        // (`freq_factors`, `ROPE_FREQ_FACTORS_V1`) — a conversion never refuses a GGUF for the numbers in it.
+        //
+        // A header-only view (a census, a preflight of a file not yet downloaded) holds no tensor data. The frequency table is
+        // *values*: the program's structure, and so every bound a static admission checks, is the same for every table, so the
+        // header-only reading uses a table of ones of the right length and records that the values are read at conversion
+        // ([`GgufModel::pending_tensor_data`]). It is never converted from (no data, no conversion).
+        let mut pending: Vec<String> = Vec::new();
         if let Some(rf) = file.tensors.get("rope_freqs.weight") {
             if arch != "llama" {
                 return Err(LowerError::not_lowerable(format!("GGUF {arch}: rope_freqs.weight is not mapped")));
             }
-            let got = file.tensor_f32(&rf.name)?.data;
-            let hit = LLAMA3_ROPES.iter().find(|c| {
-                let want = llama3_factors(head_dim, theta, **c);
-                want.len() == got.len() && want.iter().zip(&got).all(|(a, b)| (a - b).abs() <= 1e-6 * a.abs().max(1.0))
-            });
-            let (factor, lo, hi, orig) =
-                *hit.ok_or_else(|| LowerError::not_lowerable("GGUF rope_freqs.weight is not a Llama-3 factor set this mapping recognises"))?;
-            o.insert(
-                "rope_scaling".into(),
-                json!({"rope_type": "llama3", "factor": factor, "low_freq_factor": lo, "high_freq_factor": hi,
-                       "original_max_position_embeddings": orig}),
-            );
+            let want = rope_dim / 2;
+            if rf.numel() as usize != want {
+                return Err(LowerError::bad(format!(
+                    "GGUF: rope_freqs.weight has {} entries, the rotary dimension {rope_dim} needs {want}",
+                    rf.numel()
+                )));
+            }
+            let scaling = if file.has_data() {
+                let got = file.tensor_f32(&rf.name)?.data;
+                let hit = LLAMA3_ROPES.iter().find(|c| {
+                    let w = llama3_factors(head_dim, theta, **c);
+                    w.len() == got.len() && w.iter().zip(&got).all(|(a, b)| (a - b).abs() <= 1e-6 * a.abs().max(1.0))
+                });
+                match hit {
+                    Some(&(factor, lo, hi, orig)) => json!({"rope_type": "llama3", "factor": factor, "low_freq_factor": lo,
+                        "high_freq_factor": hi, "original_max_position_embeddings": orig}),
+                    None => json!({"rope_type": "freq_factors", "factors": got.iter().map(|v| *v as f64).collect::<Vec<f64>>()}),
+                }
+            } else {
+                pending.push(format!("{} ({} bytes)", rf.name, rf.bytes));
+                json!({"rope_type": "freq_factors", "factors": vec![1.0f64; want]})
+            };
+            o.insert("rope_scaling".into(), scaling);
             consumed.insert(rf.name.clone());
         }
         // Tensor names.
@@ -1260,7 +1289,13 @@ impl GgufModel {
             }
             consumed.insert(s.gguf.clone());
         }
-        Ok(GgufModel { file, arch, config: cfg, map, consumed })
+        Ok(GgufModel { file, arch, config: cfg, map, consumed, pending })
+    }
+
+    /// Tensors whose values the mapping reads and this (header-only) view could not: the program's structure does not depend on
+    /// them, a conversion reads them. Empty when the view has its data.
+    pub fn pending_tensor_data(&self) -> &[String] {
+        &self.pending
     }
 
     /// GGUF tensors this view does not map (reported as unread by the weight check).
