@@ -30,7 +30,7 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 | RFC-0002 / 0011 | the HF-majority acceptance bar (RFC-0011: one-sided 95% lower bound ≥ 90% over all public repos); census re-measurement running (COV-P4) | CODE + measurement |
 | RFC-0001 | proposals P1–P4 | CODE |
 | G14-for-rewards (lane D GAP 6/3) | H1 on a running devnet: a class whose kernel is KERNEL_NOT_ACTIVE and that has no PUBLIC_PROSECUTION_COMPLETE moved Candidate → Probation once 8 seats proved readiness — the V2 lifecycle consults seats/readiness only, and only classes that began onboarding are gated. From the full-activation release every NEW class must pass the onboarding/G14 gate before it can earn; whether live Panel-route classes are grandfathered is a user decision | CODE + POLICY |
-| fork-choice safety (FINX finding V6) | a fork-choice safety finding confirmed on t12's rules; details are internal (FINX branch, not for publication). The fix (C3 or rule E, ADR-0175 draft) ships in the full-activation release (user) | CODE (fence) + POLICY (C3 vs E) |
+| fork-choice safety (FINX finding V6) | a fork-choice safety finding confirmed on t12's rules; details are internal (FINX branch, not for publication). The fix (C3 or rule E, ADR-0175 draft) ships in the full-activation release (user) and is a **hard prerequisite for arming `palw_dns_retirement_v1`** (the DNS layer currently bounds it) | CODE (fence) + POLICY (C3 vs E) |
 | liveness | a minority that was partitioned ~41 min never rejoins (DNS reorg gate DominanceViolation) and one node deadlocks after "Chain participation held" — found by H1 on the devnet; the code is in int-12 too (LIVE-R1 investigating) | CODE (HIGH) |
 
 ## 3. Decisions for the user (collected, not urgent until the code is ready)
