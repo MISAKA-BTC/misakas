@@ -84,6 +84,9 @@ wire/fence impact · test · real-node result · status.
 | Kernel route (A, G14) | 110–119 | 160–169 | 0xEC | `palw_probabilistic_constraints_v1` (refused) |
 | RFC-0010 V3 production fold (C2) | 120–129 (120 = `PanelBeaconProofV3`) | 170–179 (170–173 used) | 0xED | `palw_permissionless_panel_v1` (refused); `PalwVoidReasonV2` 120–129 (120–122 used; 0–10 implicit unchanged) |
 | EXEC payload v2 (A, later) | 130–139 | 180–189 | 0xEE | `palw_exec_payload_v2` (not yet declared) |
+| Onboarding objects (D phase 3) | 104–108 used (104 ArtifactBound, 105 refutation, 106 KernelBound, 107 ConformanceCommitted, 108 SignedRegistrationV1), 109 free | none (rows in the kernel route's aux tables 36–38, journalled by deltas 160/161) | none (tail 0xEC) | `palw_signed_registration_v1` (108; refused) |
+| RPC ops | C1 202–209 (202 used), D 210–219 (210, 211, 212 used) and 230–239 (230 used), C2 220–229 (220 used) | — | — | — |
+| `PalwVoidReasonV2` | C2 120–122; X8 one variant (assign an explicit number ≥ 130 at merge) | — | — | — |
 
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the
 skeleton first; lanes build on that commit.
@@ -99,6 +102,10 @@ skeleton first; lanes build on that commit.
 6. Real-node adversarial — C4; Lead runs the single final full regression.
 
 ## 4. Change log
+
+* 2026-10-08 evening — integrated: lane D phases 2/2b/3 (kernel route + RFC-0015 OPV on the node, onboarding objects 104–108,
+  `palw_panel_free_v1` as a struct fence with the OPV admission list/terms, `palw_signed_registration_v1` for G-EXPIRY/G-RULESET,
+  RPC 210/211/212/230), C4 round-2 fixes, X15, lane A, R9's DAA-9,000 flag day (params `2e567642…`, schedule `5f5df817…`).
 
 * 2026-10-08 13:00 — **Correction (fence inventory of params.rs):** on testnet-12 the int-11 list ARMS at DAA 5,300 `palw_fp_decode_rules`
   (FP Job V4 / RFC-0001 §A), `palw_gen_v1` + `palw_fp_job_v5` (RFC-0003), `palw_improvement_v1` (RFC-0004), `palw_tir_shard_v1`
