@@ -16935,6 +16935,9 @@ mod t53_drill_isolation;
 // with the `evm` feature only, like `p2_evm_twin`.
 #[cfg(feature = "evm")]
 mod rfc12_zero_dns_matrix;
+// RFC-0012 wave 2 (C1 a real claim to `Final` with the lane on, C2 a pruned join with EVM state): `evm` feature only, like the matrix.
+#[cfg(feature = "evm")]
+mod rfc12_c_items;
 
 /// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
 /// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`
