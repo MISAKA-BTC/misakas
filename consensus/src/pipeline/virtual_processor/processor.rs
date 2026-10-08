@@ -5781,6 +5781,18 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2(&state, state_params, mine)
     }
 
+    /// **RFC-0006 × G14: the shards `watcher` may watch at the tip** (agent SHARD) — the same store-tip read as the seat duties.
+    pub fn palw_tir_shard_watch_duties_v1_impl(
+        &self,
+        watcher: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
+            return Vec::new();
+        };
+        kaspa_consensus_core::palw_tir_shard_watch_v1::palw_tir_shard_watch_duties_v1(&state, state_params, watcher)
+    }
+
     /// **ADR-0148: the free-prompt lane's price for one job, at the virtual** — the fold's own
     /// function over the tip state, at the DAA a commitment sent now would be accepted at, with the
     /// bond's room by the fold's two terms. A gateway reads this AFTER its job ran and BEFORE the

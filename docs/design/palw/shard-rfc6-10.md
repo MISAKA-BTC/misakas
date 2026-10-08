@@ -153,7 +153,10 @@ the same hold (a fence decision for the Lead; no code here).
 
 **Edge (documented).** A claim the engine refuses at admission (no work identity, strata that do not validate, a full bound)
 is ended at once, not deferred: the engine never held it, and the refusal is decided in the claim's own acceptance block (4b″).
-An attempt claim does not exist during that block's objects (the attempt is step 4), so nothing can be pending on it.
+An attempt claim does not exist during that block's objects (the attempt is step 4), so nothing can be pending on it. A
+free-prompt claim created by the block's own objects (step 3) could in principle carry a court opened later in the same block's
+objects; that court is closed with the refusal. **Residual edge, reported**: such a claim never had a Panel, never licensed and
+earned nothing, so no fraud gain survives the neutral close; deferring it would need the engine to hold a claim it refused.
 
 ## 3. RFC-0006 — the non-seat cell watcher
 
@@ -207,7 +210,8 @@ collapse) and the bundle mirror `PalwStateParamsV2::tir_shard_segment_from_daa`.
   the fence). The slash term is unchanged, so the deterrent does not shrink.
 * **Readiness = the heaviest cell** (node policy past the fence): a node files a shard's possession proof only when its host
   ledger can hold the shard's heaviest cell (`palw_tir_shard_seat_need_bytes_v2`: max over segments of the resident bytes).
-  So every ready seat can host every cell of its shard, and the draw needs no tier.
+  So every ready seat can host every cell of its shard, and the draw needs no tier. Implemented in the node's possession-proof
+  carrier (`kaspad/src/palw_panel/tir_shard.rs`, `tir_shard_objects_v1`: `capacity_admits` of the host ledger), inert below the fence.
 
 ### 4.4 Why no on-chain tier
 
