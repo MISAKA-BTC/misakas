@@ -515,7 +515,9 @@ async fn carry(a: &mut T12Chain, wallet: &mut Wallet, config: &Config, payloads:
 
 /// **Every seat of the claim's panel signs `Valid`** and the node assembles the licence its panel service would submit (the
 /// assembler picks the set the ruleset's door takes).
-fn licence_for(chain: &T12Chain, claim_id: Hash64) -> Obj {
+/// `None` where the ruleset licenses the claim otherwise (past RFC-0007's vertex fence a claim licenses by the vertices' tally, and the
+/// node's assembler offers no receipt set).
+fn licence_for(chain: &T12Chain, claim_id: Hash64) -> Option<Obj> {
     use kaspa_consensus_core::palw_panel_v2::{
         PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
     };
@@ -544,12 +546,12 @@ fn licence_for(chain: &T12Chain, claim_id: Hash64) -> Obj {
             PalwSeatReceiptV2 { claim: claim_id, verdict: PalwReceiptVerdictV2::Valid, seat_bond: seat.bond, signed_daa, signature }
         })
         .collect();
-    let object = chain.vp().palw_v2_receipt_quorum_assemble_impl(claim_id, &receipts).expect("a signed quorum assembles");
+    let object = chain.vp().palw_v2_receipt_quorum_assemble_impl(claim_id, &receipts)?;
     assert!(
         matches!(object, Obj::ReceiptLicensed { .. } | Obj::ReceiptLicensedV2 { .. } | Obj::OptimisticLicensed { .. }),
         "every seat's Valid licenses the claim: {object:?}"
     );
-    object
+    Some(object)
 }
 
 /// **Below their fences, every kind and form the live build cannot decode is judged as it judges them — beside live-build kinds that
@@ -606,7 +608,16 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         payloads.push(("a one-chunk group of a new kind".into(), payload_of(chunk)));
     }
     let two_chunks = chunks_of(&Obj::KernelRouteV1 { bytes: vec![7; 2048], signer: bond, signature: vec![1; 64] }, 2);
-    let answer_chunks = chunks_of(&provider_answer(), 2);
+    // Another answer than the one-chunk group's (a group id is the hash of the whole bytes).
+    let answer_chunks = chunks_of(
+        &{
+            let mut answer = provider_answer();
+            let Obj::ProviderAnswerV1 { signature, .. } = &mut answer else { unreachable!("tag 152") };
+            *signature = vec![2; 64];
+            answer
+        },
+        2,
+    );
     payloads.insert(0, ("a two-chunk group's opening part".into(), payload_of(&two_chunks[0])));
     payloads.insert(1, ("a chunked provider answer's opening part (tag 152)".into(), payload_of(&answer_chunks[0])));
     payloads.push(("a two-chunk group's completing part".into(), payload_of(&two_chunks[1])));
@@ -619,26 +630,46 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     }
     carry(&mut a, &mut wallet, &config, &payloads).await;
 
-    // ---- the mixed block: a licence that folds, a duplicate the walk refuses, and new kinds riding unjudged ----
+    // ---- the mixed block: an ATTEMPT block (its claim folds) carrying a licence that folds, a duplicate the walk refuses, and new
+    //      kinds riding unjudged ----
     a.attempt_at_the_anchor_slot(claim_id, 7).await;
     let licence = licence_for(&a, claim_id);
-    let mixed: Vec<(String, Vec<u8>)> = vec![
-        ("the claim's licence (a live-build kind that folds)".into(), payload_of(&licence)),
-        ("the same licence again (a live-build kind the walk refuses)".into(), payload_of(&licence)),
+    assert_eq!(
+        licence.is_some(),
+        ruleset == Ruleset::Launch,
+        "the launch ruleset licenses by receipts, the release by the vertex tally"
+    );
+    let mut mixed: Vec<(String, Vec<u8>)> = Vec::new();
+    if let Some(licence) = &licence {
+        mixed.push(("the claim's licence (a live-build kind that folds)".into(), payload_of(licence)));
+        mixed.push(("the same licence again (a live-build kind the walk refuses)".into(), payload_of(licence)));
+    }
+    mixed.extend::<Vec<(String, Vec<u8>)>>(vec![
         ("a kernel route object".into(), payload_of(&well_formed(bond)[6])),
         ("an unsigned onboarding object".into(), payload_of(&malformed(bond)[0])),
         ("a Panel V3 proof".into(), payload_of(&well_formed(bond)[8])),
         ("the reference".into(), reference),
         ("a zero-filled kernel receipt".into(), payload_of(&zero_filled_kind(111))),
         ("a signed provider answer (tag 152)".into(), payload_of(&provider_answer())),
-    ];
-    assert_eq!(carry(&mut a, &mut wallet, &config, &mixed).await, 1, "the mixed carriers ride ONE block");
+    ]);
+    let mixed_bytes: usize = mixed.iter().map(|(_, p)| p.len() + CARRIER_OVERHEAD_BYTES).sum();
+    assert!(mixed.len() <= 8 && mixed_bytes <= BLOCK_CARRIAGE_BYTES, "the mixed carriers fit ONE block ({mixed_bytes} bytes)");
+    let txs: Vec<Transaction> =
+        mixed.iter().enumerate().map(|(card, (_, payload))| wallet.carrier(&config, card, payload.clone())).collect();
+    let (attempt_block, mixed_claim) = a.attempt(3, ttpb, txs.clone(), &|_| true).await;
+    for (tx, (what, _)) in txs.iter().zip(&mixed) {
+        assert!(attempt_block.transactions.iter().any(|t| t.id() == tx.id()), "carried by the attempt block, valid: {what}");
+    }
+    a.heartbeat(ttpb, Vec::new()).await; // accepts the attempt block's carriers
     let (_, state) = a.tip_state();
-    assert!(
-        matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
-        "the live-build kind in the mixed block folded: the claim is licensed ({:?})",
-        state.claim(&claim_id).unwrap().phase
-    );
+    assert!(state.claim(&mixed_claim).is_some(), "the attempt block's own claim folded beside the carriers");
+    if licence.is_some() {
+        assert!(
+            matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
+            "the live-build kind in the mixed block folded: the claim is licensed ({:?})",
+            state.claim(&claim_id).unwrap().phase
+        );
+    }
 
     // ---- nothing was folded, charged or opened past what the live build does ----
     assert!(state.kernel_route().is_none(), "no kernel route state: every 104–111 object skipped");
