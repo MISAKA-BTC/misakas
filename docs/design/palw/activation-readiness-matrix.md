@@ -47,6 +47,9 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 4d. RFC-0004 Part II memory classes: a lie that reaches Final after the liability horizon taints the memory line permanently,
     so the collateral bar's max gain must include the line value at risk. Options: a per-class declared cap, or a horizon
     stretched to match the line. Source: `rfc-0004-part2-typed-roots.md` §10 and §13.
+4e. K2 v4 (real-scale) detection policy: the drawn share q of claims re-executed after commit, and how P_run (the chance a drawn
+    watcher actually runs and files) is derived. Per-claim detection is q·P_run; until these are set, v4 classes do not earn.
+    Source: `k2-real-scale.md` §11 (SG-06). This is Q-01 made concrete.
 5. The activation height of the single release, once every row above is clear.
 
 ## 3a. User rulings on the Panel=0 parameters (2026-10-08 ~20:30)
