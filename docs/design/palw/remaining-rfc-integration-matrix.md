@@ -82,7 +82,7 @@ wire/fence impact · test · real-node result · status.
 | existing (pre) | positional ≤ 82, declared 83–95, 100–103 | … ≤ 150 (150 = lane MU seat root readiness) | 0x87–0xDA (see `PALW_CARRIAGE_*`), 0xE0, 0xE1, 0xE4, 0xE6, 0xEA, 0xEB | — |
 | RFC-0009 B/D (reserved, spec) | 150–153 | 140–141 | 0xE9 | provider court (unallocated) |
 | Kernel route (A, G14) | 110–119 | 160–169 | 0xEC | `palw_probabilistic_constraints_v1` (refused) |
-| RFC-0010 V3 production fold (C2) | 120–129 | 170–179 | 0xED | `palw_permissionless_panel_v1` (refused) |
+| RFC-0010 V3 production fold (C2) | 120–129 (120 = `PanelBeaconProofV3`) | 170–179 (170–173 used) | 0xED | `palw_permissionless_panel_v1` (refused); `PalwVoidReasonV2` 120–129 (120–122 used; 0–10 implicit unchanged) |
 | EXEC payload v2 (A, later) | 130–139 | 180–189 | 0xEE | `palw_exec_payload_v2` (not yet declared) |
 
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the
@@ -99,6 +99,14 @@ skeleton first; lanes build on that commit.
 6. Real-node adversarial — C4; Lead runs the single final full regression.
 
 ## 4. Change log
+
+* 2026-10-08 — C2 milestone 1 (`rfc10/c2-panel` 5e294cdcc, d6f93e68b, 8f8410b0f; not yet integrated): V3 engine staged
+  (advance / accept_beacon / admit); beacon adapter = borsh `WorkBeaconV1` verified by `verify_work_beacon_v1`; production fold —
+  `PalwChainStateV2.panel_v3` Some-only root block `panel_v3/v1`, deltas 170–173, tail 0xED, tag 120 (bad proof dropped, block
+  stands), void reasons 120–122; one exposure ledger via `reserve_seat_duties_with` (V3 binding writes the V2 Panel record anchored
+  at the V3 seed, duty rows and seat `reserved_exposure`); a non-seat DA accusation + default convicts a V3-bound claim
+  (ProducerWithholding, producer slashed). Open: V3 receipt/retry expiry vs non-seat DA default (G14 pre-emption — Lead asked for a
+  structural guard + test); sharded classes end PermissionlessNoCapablePanel (per-shard V3 draw = RFC-0006 DESIGN_GAP).
 
 * 2026-10-08 — C1 milestone 1 (`rfc9/c1-remote` d7f206a58, a8e073c5f; not yet integrated): detached registration —
   `model add --export-bundle` (no key read, ≥2 agreeing quote nodes unless `--allow-single-rpc`), offline `model sign` (bond key ≠
