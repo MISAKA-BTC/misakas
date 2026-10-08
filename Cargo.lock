@@ -6205,6 +6205,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-opv-meas"
+version = "1.1.0"
+dependencies = [
+ "borsh",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "libc",
+ "misaka-palw-kernel",
+ "misaka-palw-remote",
+ "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
+ "serde_json",
+]
+
+[[package]]
 name = "misaka-palw-panel"
 version = "1.1.0"
 dependencies = [
