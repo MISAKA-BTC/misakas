@@ -29,6 +29,9 @@ use crate::preflight::Blocker;
 use misaka_palw_tir_lower::model::{Requirement, feature_info};
 use serde::{Deserialize, Serialize};
 
+/// The reason text of a lifecycle record whose failure is a missing job profile (`KERNEL_EXTENSION_REQUIRED`, "task profile").
+pub const TASK_PROFILE_REASON: &str = "task profile";
+
 /// Who has to change something. See the module documentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -71,6 +74,16 @@ impl GapClassV1 {
             GapClassV1::LayoutRequired => Some("LAYOUT_REQUIRED"),
             GapClassV1::ResourceRefused => Some("RESOURCE_REFUSED"),
             GapClassV1::ExternalBlocker | GapClassV1::NotRun | GapClassV1::Unmapped => None,
+        }
+    }
+
+    /// The reason text a lifecycle record carries beside [`onboarding_failure_code`](Self::onboarding_failure_code), so that the matrix
+    /// can count the classes that share a code separately: a missing job profile is recorded as `KERNEL_EXTENSION_REQUIRED` **with the
+    /// reason `"task profile"`** — never bare, and no contract change (the reason is text, not a new code).
+    pub const fn onboarding_reason(self) -> Option<&'static str> {
+        match self {
+            GapClassV1::ProfileRequired => Some(TASK_PROFILE_REASON),
+            _ => None,
         }
     }
 
@@ -316,6 +329,12 @@ mod tests {
         assert_eq!(k(Gate::Lower, codes::MODALITY_PROFILE_MISSING, &[]), ProfileRequired);
         assert_eq!(k(Gate::Lower, codes::PARTIAL_TASK_ONLY, &[]), ProfileRequired);
         assert_eq!(ProfileRequired.onboarding_failure_code(), Some("KERNEL_EXTENSION_REQUIRED"));
+        // …always with the reason text, so the matrix counts it apart from a relation gap; no other class carries one.
+        assert_eq!(ProfileRequired.onboarding_reason(), Some("task profile"));
+        for c in [FrontendRequired, KernelExtensionRequired, KernelNotActive, LayoutRequired, ResourceRefused, ExternalBlocker, NotRun, Unmapped] {
+            assert_eq!(c.onboarding_reason(), None, "{c:?}");
+        }
+        assert!(ProfileRequired.onboarding_failure_code() == KernelExtensionRequired.onboarding_failure_code());
         for c in [codes::GATED_ACCESS, codes::MISSING_WEIGHTS, codes::BASE_UNPINNED, codes::HEADER_INVALID, codes::WEIGHTS_INCOMPLETE, codes::CONFIG_MISSING] {
             assert_eq!(k(Gate::Source, c, &[]), ExternalBlocker, "{c}");
             assert_eq!(ExternalBlocker.onboarding_failure_code(), None);

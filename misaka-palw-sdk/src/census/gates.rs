@@ -42,6 +42,10 @@ pub struct GateResultV1 {
     /// or `NOT_RUN` for a gate that was not run): [`super::onboarding`]. Absent on a PASS.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub class: Option<GapClassV1>,
+    /// The reason text the lifecycle record of this failure carries (`"task profile"` for a missing job profile, which is recorded
+    /// as `KERNEL_EXTENSION_REQUIRED`); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class_reason: Option<&'static str>,
 }
 
 /// A code found at a gate, with its argument and evidence.
@@ -77,11 +81,12 @@ fn fail(gate: Gate, mut f: Vec<Found>, depth: &str) -> GateResultV1 {
         evidence,
         depth: Some(depth.into()),
         class: Some(class),
+        class_reason: class.onboarding_reason(),
     }
 }
 
 fn pass(gate: Gate, depth: &str, evidence: Vec<String>) -> GateResultV1 {
-    GateResultV1 { gate, status: GateStatus::Pass, blocking: None, arg: None, codes: vec![], evidence, depth: Some(depth.into()), class: None }
+    GateResultV1 { gate, status: GateStatus::Pass, blocking: None, arg: None, codes: vec![], evidence, depth: Some(depth.into()), class: None, class_reason: None }
 }
 
 fn not_run(gate: Gate, why: &str, evidence: Vec<String>) -> GateResultV1 {
@@ -94,6 +99,7 @@ fn not_run(gate: Gate, why: &str, evidence: Vec<String>) -> GateResultV1 {
         evidence,
         depth: None,
         class: Some(GapClassV1::NotRun),
+        class_reason: None,
     }
 }
 
@@ -997,6 +1003,7 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                     evidence: vec![rights.why.clone()],
                     depth: Some(depth.into()),
                     class: Some(GapClassV1::ExternalBlocker),
+                    class_reason: None,
                 };
                 for x in g.iter_mut().skip(1) {
                     *x = not_run(x.gate, &Gate::Source.not_run_after(), vec![]);
@@ -1125,6 +1132,8 @@ mod tests {
         let r = evaluate(&listing(Some("image-classification"), &["config.json", "model.safetensors"]), None, &ctx());
         assert_eq!(gate(&r.technical, Gate::Source).class, None);
         assert_eq!(gate(&r.technical, Gate::Lower).class, Some(GapClassV1::ProfileRequired));
+        assert_eq!(gate(&r.technical, Gate::Lower).class_reason, Some("task profile"));
+        assert_eq!(serde_json::to_value(gate(&r.technical, Gate::Lower)).unwrap()["class_reason"], "task profile");
         for g in [Gate::Pack, Gate::Admit, Gate::Seat, Gate::Final] {
             let x = gate(&r.technical, g);
             assert_eq!((x.status, x.class), (GateStatus::NotRun, Some(GapClassV1::NotRun)), "{g:?}");
