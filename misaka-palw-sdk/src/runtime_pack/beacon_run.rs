@@ -26,7 +26,7 @@
 use super::commit::{BoundCommitment, CommitParamsV1, ConformanceScopeV1, Refusal, bind_commitment, commitment_diff, hex, tool_root};
 use super::conformance::{ConformanceJob, ImplOutcomeV1, ImplSet, TripleResult, TripleRunner, ref2_dtype};
 use super::facts::{BeaconFactSource, ChainBeaconFactsV1, FactsProvenanceV1, resolve_facts};
-use borsh::{BorshDeserialize, BorshSerialize};
+use borsh::BorshDeserialize;
 use kaspa_consensus_core::palw_artifact::{
     PalwArtifactMultiproofStreamV1, PalwArtifactMultiproofV1, PalwArtifactOperandV1, artifact_leaf_parts_v1,
     verify_artifact_multiproof_v1,
@@ -40,22 +40,21 @@ use misaka_palw_challenge::conformance::{
 };
 use misaka_palw_challenge::hash::{Digest, named_id};
 use misaka_palw_challenge::lifecycle::OnboardingFailureV1;
-use misaka_palw_challenge::seed::{ChallengeStreamV1, StreamKindV1, StreamLabelV1, challenge_seed_v1};
+use misaka_palw_challenge::seed::challenge_seed_v1;
 use misaka_palw_challenge::{PostCommitChallengePolicyV1, RootV1};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-pub const DOMAIN_SOURCES: &[u8] = b"misaka.palw.runtime-pack.beacon-sources.v1";
-pub const DOMAIN_VECTORS: &[u8] = b"misaka.palw.runtime-pack.selected-vectors.v1";
-pub const DOMAIN_RANGES: &[u8] = b"misaka.palw.runtime-pack.selected-leaves.v1";
-pub const DOMAIN_RESULTS: &[u8] = b"misaka.palw.runtime-pack.result-root.v1";
-pub const DOMAIN_OPENINGS: &[u8] = b"misaka.palw.runtime-pack.openings-root.v1";
-pub const DOMAIN_LOCATORS: &[u8] = b"misaka.palw.runtime-pack.material-locators.v1";
+// What evidence IS — the selection a seed draws, a check's outcome, the assembly — lives in consensus-core (onboarding P0): the
+// chain's fold re-derives posted evidence with exactly this code (tag 109), so the pack and the chain cannot disagree about it.
+pub use kaspa_consensus_core::palw_conformance_evidence_v1::{
+    CheckOutcomeV1, CheckStatus, ConformanceEvidencePostV1, DOMAIN_CHECK_OUTCOME, DOMAIN_LOCATORS, DOMAIN_OPENINGS, DOMAIN_RANGES,
+    DOMAIN_RESULTS, DOMAIN_SOURCES, DOMAIN_VALUES, DOMAIN_VECTORS, ResultV1, Role, SelectedLeafV1, SelectedVectorV1, SelectionV1,
+    check_status, evidence_diff_v1 as evidence_diff,
+};
 pub const DOMAIN_CHECK_BINDING: &[u8] = b"misaka.palw.runtime-pack.check-binding.v1";
-pub const DOMAIN_CHECK_OUTCOME: &[u8] = b"misaka.palw.runtime-pack.check-outcome.v1";
-pub const DOMAIN_VALUES: &[u8] = b"misaka.palw.runtime-pack.decoded-values.v1";
 
 pub const LEDGER_SCHEMA_V1: &str = "misaka.palw.beacon-conformance-ledger.v1";
 
@@ -285,123 +284,15 @@ pub fn rebind(loaded: &LoadedCommitment, pack_dir: &Path, artifact: &Path, log: 
 // Selection: what the seed picks
 // ---------------------------------------------------------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct SelectedVectorV1 {
-    pub check_id: String,
-    pub repetition: u32,
-    pub index: u32,
-    pub prompt: Vec<u32>,
-    pub decode: u32,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct SelectedLeafV1 {
-    pub check_id: String,
-    pub repetition: u32,
-    pub ordinal: u32,
-    pub leaf_index: u32,
-    pub param: u16,
-    pub layer: Option<u16>,
-    pub row_start: u32,
-    pub len: u32,
-    pub tensor_name: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct SelectionV1 {
-    pub vectors: Vec<SelectedVectorV1>,
-    pub leaves: Vec<SelectedLeafV1>,
-}
-
-impl SelectionV1 {
-    pub fn vectors_root(&self) -> Digest {
-        tool_root(DOMAIN_VECTORS, &self.vectors)
-    }
-    pub fn leaves_root(&self) -> Digest {
-        tool_root(DOMAIN_RANGES, &self.leaves)
-    }
-    pub fn checks_required(&self) -> u64 {
-        (self.vectors.len() + self.leaves.len()) as u64
-    }
-    /// Check ids in canonical order: vectors, then leaves.
-    pub fn check_ids(&self) -> Vec<String> {
-        self.vectors.iter().map(|v| v.check_id.clone()).chain(self.leaves.iter().map(|l| l.check_id.clone())).collect()
-    }
-}
-
-fn sample_refusal(e: impl std::fmt::Display) -> Refusal {
-    Refusal::new("SAMPLER_EXHAUSTED", e.to_string())
-}
-
-/// **The checks a seed selects**, from the contract's streams only: one labelled stream per (family, relation, repetition).
+/// **The checks a seed selects** (consensus-core's `derive_selection_v1`, with the pack's refusal codes).
 pub fn derive_selection(
     seed: &Digest,
     policy: &PostCommitChallengePolicyV1,
     scope: &ConformanceScopeV1,
     program: &misaka_palw_tir::TirProgramV1,
 ) -> Result<SelectionV1, Refusal> {
-    let vector_scope = named_id("pack-conformance/vector/v1");
-    let leaf_scope = named_id("pack-conformance/artifact-leaf/v1");
-    let leaf_count = palw_tir_inventory_leaf_count_v1(program).map_err(|e| Refusal::new("SCOPE_INVALID", e.to_string()))?;
-    let mut vectors = Vec::new();
-    let mut raw_leaves: Vec<(u32, u32, u32)> = Vec::new();
-    for r in 0..policy.repetition_count {
-        for i in 0..scope.vectors_per_repetition {
-            let mut s = ChallengeStreamV1::new(
-                seed,
-                &StreamLabelV1 { kind: StreamKindV1::Vector, scope_id: vector_scope, relation: i, repetition: r },
-            );
-            let len = 1 + s.index_below(scope.max_prompt_len as u64).map_err(sample_refusal)? as u32;
-            let mut prompt = Vec::with_capacity(len as usize);
-            for _ in 0..len {
-                prompt.push(s.index_below(program.token_bound as u64).map_err(sample_refusal)? as u32);
-            }
-            vectors.push(SelectedVectorV1 {
-                check_id: format!("vec/r{r}/i{i}"),
-                repetition: r,
-                index: i,
-                prompt,
-                decode: scope.decode_tokens,
-            });
-        }
-        if scope.leaves_per_repetition > 0 {
-            let mut s = ChallengeStreamV1::new(
-                seed,
-                &StreamLabelV1 { kind: StreamKindV1::TensorRange, scope_id: leaf_scope, relation: 0, repetition: r },
-            );
-            let picked = s.distinct_indices(leaf_count as u64, scope.leaves_per_repetition as u64).map_err(sample_refusal)?;
-            for (k, idx) in picked.into_iter().enumerate() {
-                raw_leaves.push((r, k as u32, idx as u32));
-            }
-        }
-    }
-    // Where each drawn leaf lives: one walk of the closed-form inventory layout.
-    let want: BTreeSet<u32> = raw_leaves.iter().map(|x| x.2).collect();
-    let mut coords: BTreeMap<u32, PalwTirInventoryRowV1> = BTreeMap::new();
-    let mut at = 0u32;
-    palw_tir_visit_inventory_rows_v1(program, &mut |row| {
-        if want.contains(&at) {
-            coords.insert(at, row);
-        }
-        at += 1;
-    })
-    .map_err(|e| Refusal::new("SCOPE_INVALID", e.to_string()))?;
-    let mut leaves = Vec::new();
-    for (r, k, idx) in raw_leaves {
-        let row = coords.get(&idx).ok_or_else(|| Refusal::new("SCOPE_INVALID", format!("leaf {idx} has no coordinates")))?;
-        leaves.push(SelectedLeafV1 {
-            check_id: format!("leaf/r{r}/k{k}"),
-            repetition: r,
-            ordinal: k,
-            leaf_index: idx,
-            param: row.param,
-            layer: row.layer,
-            row_start: row.row_start,
-            len: row.len,
-            tensor_name: program.params[row.param as usize].name.clone(),
-        });
-    }
-    Ok(SelectionV1 { vectors, leaves })
+    kaspa_consensus_core::palw_conformance_evidence_v1::derive_selection_v1(seed, policy, scope, program)
+        .map_err(|e| Refusal::new(e.code, e.detail))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -471,13 +362,6 @@ pub fn authenticated_openings(
 // Check outcomes
 // ---------------------------------------------------------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum ResultV1 {
-    NotRun,
-    Error(String),
-    Ran { a: [u8; 32], b: [u8; 32], tokens: Vec<u32>, positions: u32 },
-}
-
 impl From<&ImplOutcomeV1> for ResultV1 {
     fn from(o: &ImplOutcomeV1) -> Self {
         match o {
@@ -490,89 +374,6 @@ impl From<&ImplOutcomeV1> for ResultV1 {
     }
 }
 
-/// The deterministic record of one check: nothing in it depends on the machine, the time or the thread count.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct CheckOutcomeV1 {
-    pub check_id: String,
-    pub reference: ResultV1,
-    pub independent: ResultV1,
-    pub backend: ResultV1,
-    pub disagreement: Option<String>,
-}
-
-impl CheckOutcomeV1 {
-    pub fn digest(&self) -> Digest {
-        tool_root(DOMAIN_CHECK_OUTCOME, self)
-    }
-
-    fn result(&self, role: Role) -> &ResultV1 {
-        match role {
-            Role::Reference => &self.reference,
-            Role::Independent => &self.independent,
-            Role::Backend => &self.backend,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Role {
-    Reference,
-    Independent,
-    Backend,
-}
-
-impl Role {
-    pub fn name(self) -> &'static str {
-        match self {
-            Role::Reference => "reference",
-            Role::Independent => "independent",
-            Role::Backend => "backend",
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CheckStatus {
-    Passed,
-    Failed(String),
-    /// A required implementation did not run. `chosen` says it was switched off on purpose (SKIPPED), not lost (INCOMPLETE).
-    Missing {
-        roles: Vec<&'static str>,
-        chosen: bool,
-    },
-}
-
-/// Judge one check against the scope's required implementations.
-pub fn check_status(o: &CheckOutcomeV1, scope: &ConformanceScopeV1) -> CheckStatus {
-    let mut required = vec![Role::Reference];
-    if scope.require_independent {
-        required.push(Role::Independent);
-    }
-    if scope.require_backend {
-        required.push(Role::Backend);
-    }
-    for role in [Role::Reference, Role::Independent, Role::Backend] {
-        if let ResultV1::Error(e) = o.result(role) {
-            return CheckStatus::Failed(format!("{} implementation failed: {e}", role.name()));
-        }
-    }
-    if let Some(d) = &o.disagreement {
-        return CheckStatus::Failed(d.clone());
-    }
-    let ran: Vec<(Role, &ResultV1)> = [Role::Reference, Role::Independent, Role::Backend]
-        .into_iter()
-        .map(|r| (r, o.result(r)))
-        .filter(|(_, x)| matches!(x, ResultV1::Ran { .. }))
-        .collect();
-    if let Some((_, first)) = ran.first()
-        && let Some((r, _)) = ran.iter().find(|(_, x)| x != first)
-    {
-        return CheckStatus::Failed(format!("the {} implementation's result differs from the reference's", r.name()));
-    }
-    let missing: Vec<&'static str> = required.iter().filter(|r| matches!(o.result(**r), ResultV1::NotRun)).map(|r| r.name()).collect();
-    if missing.is_empty() { CheckStatus::Passed } else { CheckStatus::Missing { roles: missing, chosen: true } }
-}
-
 /// Test-only: corrupt one implementation's recorded result for one check, to see the failure path end to end.
 #[derive(Clone, Debug)]
 pub struct InjectedFault {
@@ -580,16 +381,7 @@ pub struct InjectedFault {
     pub role: Role,
 }
 
-fn values_digest(values: &[i128]) -> [u8; 32] {
-    let mut st = blake2b_simd::Params::new().hash_length(32).key(DOMAIN_VALUES).to_state();
-    st.update(&(values.len() as u64).to_le_bytes());
-    for v in values {
-        st.update(&v.to_le_bytes());
-    }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(st.finalize().as_bytes());
-    out
-}
+use kaspa_consensus_core::palw_conformance_evidence_v1::values_digest_v1 as values_digest;
 
 /// The leaf's bytes as every enabled implementation's own decoder reads them.
 fn leaf_outcome(leaf: &SelectedLeafV1, bytes: &[u8], program: &misaka_palw_tir::TirProgramV1, impls: ImplSet) -> CheckOutcomeV1 {
@@ -639,9 +431,9 @@ fn vector_outcome(v: &SelectedVectorV1, t: &TripleResult) -> CheckOutcomeV1 {
 // Evidence assembly
 // ---------------------------------------------------------------------------------------------------------------------------
 
-/// **Assemble the evidence from the checks that ran** — a pure function of (commitment, policy, scope, beacon, seed, selection,
-/// openings, outcomes). Used by the producer and, from scratch, by the verifier: evidence is accepted only if the verifier's own
-/// assembly equals it exactly.
+/// **Assemble the evidence from the checks that ran** — consensus-core's `assemble_evidence_v1` over this multiproof's openings root.
+/// Used by the producer and, from scratch, by the verifier: evidence is accepted only if the verifier's own assembly equals it
+/// exactly — and the chain's fold re-assembles it the same way from a posted evidence's outcomes (tag 109).
 #[allow(clippy::too_many_arguments)]
 pub fn assemble_evidence(
     commitment: &ConformanceCommitmentV1,
@@ -653,121 +445,23 @@ pub fn assemble_evidence(
     proof: &Option<PalwArtifactMultiproofV1>,
     outcomes: &BTreeMap<String, CheckOutcomeV1>,
 ) -> BeaconConformanceEvidenceV1 {
-    let ids = selection.check_ids();
-    let (mut run, mut failed, mut chosen_missing, mut lost_missing) = (0u64, 0u64, 0u64, 0u64);
-    let (mut missing_checks, mut failures) = (Vec::new(), Vec::new());
-    for id in &ids {
-        match outcomes.get(id) {
-            None => {
-                lost_missing += 1;
-                missing_checks.push(format!("{id}: not run"));
-            }
-            Some(o) => match check_status(o, scope) {
-                CheckStatus::Passed => run += 1,
-                CheckStatus::Failed(why) => {
-                    run += 1;
-                    failed += 1;
-                    failures.push(format!("{id}: {why}"));
-                }
-                CheckStatus::Missing { roles, chosen } => {
-                    if chosen {
-                        chosen_missing += 1;
-                    } else {
-                        lost_missing += 1;
-                    }
-                    missing_checks.push(format!("{id}: required implementation(s) not run: {}", roles.join(", ")));
-                }
-            },
-        }
-    }
-    let role_root = |role: Role| -> Digest {
-        let rows: Vec<(String, ResultV1)> =
-            ids.iter().map(|id| (id.clone(), outcomes.get(id).map(|o| o.result(role).clone()).unwrap_or(ResultV1::NotRun))).collect();
-        tool_root(DOMAIN_RESULTS, &(role.name().to_string(), rows))
-    };
-    let outcome_digests: Vec<Digest> =
-        ids.iter().map(|id| outcomes.get(id).map(CheckOutcomeV1::digest).unwrap_or([0u8; 64])).collect();
-    let status = if failed > 0 {
-        ConformanceStatusV1::Failed
-    } else if lost_missing > 0 {
-        ConformanceStatusV1::Incomplete
-    } else if chosen_missing > 0 {
-        ConformanceStatusV1::Skipped
-    } else {
-        ConformanceStatusV1::Passed
-    };
-    let selection_digest = tool_root(b"misaka.palw.runtime-pack.selection.v1", selection);
-    BeaconConformanceEvidenceV1 {
-        version: 1,
-        commitment_root: commitment.statement_root(),
-        challenge_policy_id: policy.id(),
-        challenge_anchor: beacon.challenge_anchor,
-        qualifying_source_evidence_root: tool_root(DOMAIN_SOURCES, &beacon.sources),
-        lock_evidence_root: misaka_palw_challenge::lock_evidence_root_v1(beacon),
-        lock_position: beacon.lock_position,
-        beacon_output: beacon.output,
-        challenge_seed: *seed,
-        selected_vectors_root: selection.vectors_root(),
-        selected_tensor_ranges_root: selection.leaves_root(),
-        reference_result_root: role_root(Role::Reference),
-        independent_result_root: role_root(Role::Independent),
-        backend_result_root: role_root(Role::Backend),
-        authenticated_openings_root: tool_root(DOMAIN_OPENINGS, proof),
-        transcript_root: RootV1::Absent,
-        checks_required: selection.checks_required(),
-        checks_run: run,
-        checks_failed: failed,
-        missing_checks,
-        failures,
-        scope_and_fault_model_id: scope.scope_and_fault_model_id(policy.repetition_count),
-        soundness_assumptions_root: tool_root(
-            b"misaka.palw.runtime-pack.soundness-assumptions.v1",
-            &(policy.soundness_policy_id, policy.field_policy_id, scope.scope_and_fault_model_id(policy.repetition_count)),
-        ),
-        derived_epsilon_bits: scope.derived_epsilon_bits(policy.repetition_count),
-        status,
-        public_material_locator_root: tool_root(
-            DOMAIN_LOCATORS,
-            &(selection_digest, tool_root(DOMAIN_OPENINGS, proof), outcome_digests),
-        ),
-    }
+    kaspa_consensus_core::palw_conformance_evidence_v1::assemble_evidence_v1(
+        commitment,
+        policy,
+        scope,
+        beacon,
+        seed,
+        selection,
+        &kaspa_consensus_core::palw_conformance_evidence_v1::openings_root_v1(proof),
+        outcomes,
+    )
 }
 
-/// The evidence fields that differ between two evidences (names only).
-pub fn evidence_diff(a: &BeaconConformanceEvidenceV1, b: &BeaconConformanceEvidenceV1) -> Vec<&'static str> {
-    let mut out = Vec::new();
-    macro_rules! cmp {
-        ($($f:ident),*) => { $(if a.$f != b.$f { out.push(stringify!($f)); })* };
-    }
-    cmp!(
-        version,
-        commitment_root,
-        challenge_policy_id,
-        challenge_anchor,
-        qualifying_source_evidence_root,
-        lock_evidence_root,
-        lock_position,
-        beacon_output,
-        challenge_seed,
-        selected_vectors_root,
-        selected_tensor_ranges_root,
-        reference_result_root,
-        independent_result_root,
-        backend_result_root,
-        authenticated_openings_root,
-        transcript_root,
-        checks_required,
-        checks_run,
-        checks_failed,
-        missing_checks,
-        failures,
-        scope_and_fault_model_id,
-        soundness_assumptions_root,
-        derived_epsilon_bits,
-        status,
-        public_material_locator_root
-    );
-    out
+/// **What tag 109 carries for a computed run**: the evidence, the committed scope and every selected check's outcome in the
+/// selection's canonical order (vectors, then leaves) — the material the chain's fold rebuilds the evidence from.
+pub fn post_payload(scope: &ConformanceScopeV1, c: &Computed) -> ConformanceEvidencePostV1 {
+    let outcomes = c.selection.check_ids().iter().filter_map(|id| c.outcomes.get(id).cloned()).collect();
+    ConformanceEvidencePostV1 { evidence: c.evidence.clone(), scope: scope.clone(), outcomes }
 }
 
 pub fn status_code(s: ConformanceStatusV1) -> &'static str {

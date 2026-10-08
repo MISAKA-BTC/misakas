@@ -2880,6 +2880,52 @@ mod mockery {
     }
     test!(GetPalwOnboardingResponse);
 
+    impl Mock for GetPalwConformanceEvidenceRequest {
+        fn mock() -> Self {
+            GetPalwConformanceEvidenceRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwConformanceEvidenceRequest);
+
+    impl Mock for GetPalwConformanceEvidenceResponse {
+        fn mock() -> Self {
+            GetPalwConformanceEvidenceResponse {
+                available: mock(),
+                found: mock(),
+                tip_daa: mock(),
+                class_id: mock_hex(),
+                lifecycle_state: "CHALLENGE_PENDING".to_string(),
+                last_failure: "BEACON_UNAVAILABLE".to_string(),
+                attempt_end: "EVIDENCE_WITHHELD".to_string(),
+                attempts: mock(),
+                attempt_limit: mock(),
+                challenge_policy_id: mock_hex(),
+                challenge_policy: mock_hex(),
+                statement_root: mock_hex(),
+                committed_daa: mock(),
+                challenge_epoch: mock(),
+                beacon_state: "LOCKED".to_string(),
+                beacon_have: mock(),
+                beacon_need: mock(),
+                lock_position: mock(),
+                beacon_output: mock_hex(),
+                evidence_posted: mock(),
+                evidence_id: mock_hex(),
+                evidence_daa: mock(),
+                window_end_daa: mock(),
+                gate: "Held".to_string(),
+                gate_code: "CHALLENGE_PENDING".to_string(),
+                gate_reason: "the window is open".to_string(),
+                attempt_row: mock_hex(),
+                evidence_row: mock_hex(),
+                program: mock_hex(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwConformanceEvidenceResponse);
+
     // ADR-0152 P2-10: op 199 and its parts round-trip.
     impl Mock for GetPalwVestingRequest {
         fn mock() -> Self {

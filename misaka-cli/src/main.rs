@@ -784,6 +784,58 @@ enum ModelCmd {
     /// A model's market: open it (seed its line up to the least seed).
     #[command(subcommand)]
     Market(MarketCmd),
+    /// G14 onboarding P0: the signed registration envelope (tag 108; export unsigned, sign where the key is, file it) and the chain's
+    /// conformance record (op 231), re-verified from public material.
+    #[command(subcommand)]
+    Onboard(OnboardCmd),
+}
+
+#[derive(Subcommand, Debug)]
+enum OnboardCmd {
+    /// Step 1, no key and no node: wrap a registration object (Borsh) in an UNSIGNED tag-108 request for BOND, valid in
+    /// [--valid-from, --valid-until] while the chain's fork digest is this build's at --valid-from.
+    EnvelopeExport {
+        /// The registration object (Borsh), as `misaka palw tir-registration` writes it.
+        #[arg(long, value_name = "FILE")]
+        registration: std::path::PathBuf,
+        /// The registrant bond, <txid>:<index>.
+        #[arg(long)]
+        bond: String,
+        /// The first DAA at which the registration may be accepted; the fork digest is this build's at it (G-RULESET).
+        #[arg(long, value_name = "DAA")]
+        valid_from: u64,
+        /// The last DAA at which the registration may be accepted (G-EXPIRY).
+        #[arg(long, value_name = "DAA")]
+        valid_until: u64,
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+    /// Step 2, the key and no node: re-derive the request's message, refuse it unless it is for this build's network and fork
+    /// digest, sign it and write the envelope object for `misaka palw submit-object`.
+    EnvelopeSign {
+        #[arg(long, value_name = "FILE")]
+        request: std::path::PathBuf,
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Refuse unless the request names this signer bond.
+        #[arg(long)]
+        expect_bond: Option<String>,
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+    /// A class's conformance record as the chain states it (op 231).
+    Status {
+        #[arg(long)]
+        class: String,
+    },
+    /// Rebuild the conformance verdict from public reads (ops 231, 212) and, with --artifact, re-read every selected leaf.
+    Verify {
+        #[arg(long)]
+        class: String,
+        /// The class's artifact (PALWTIR1), from its public source; its inventory must root to the registered artifact root.
+        #[arg(long, value_name = "FILE")]
+        artifact: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -3036,6 +3088,16 @@ async fn main() -> std::process::ExitCode {
         Command::Model(ModelCmd::Verify { signed, class, root, owner, pin }) => {
             operator::remote_proof::verify(&ctx, operator::remote_proof::VerifyArgs { signed, class, root, owner, pin }).await
         }
+        Command::Model(ModelCmd::Onboard(cmd)) => match cmd {
+            OnboardCmd::EnvelopeExport { registration, bond, valid_from, valid_until, out } => {
+                operator::model_onboard::envelope_export(&ctx, &registration, &bond, valid_from, valid_until, &out)
+            }
+            OnboardCmd::EnvelopeSign { request, key, expect_bond, out } => {
+                operator::model_onboard::envelope_sign(&ctx, &request, &key.source(), expect_bond.as_deref(), &out)
+            }
+            OnboardCmd::Status { class } => operator::model_onboard::status(&ctx, &class).await,
+            OnboardCmd::Verify { class, artifact } => operator::model_onboard::verify(&ctx, &class, artifact.as_deref()).await,
+        },
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => match profile(&args) {
             Ok(p) => operator::market::market_open(&ctx, p, &model, line, seed, yes, no_wait).await,
             Err(e) => Err(e),

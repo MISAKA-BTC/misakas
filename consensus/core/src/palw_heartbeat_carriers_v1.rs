@@ -204,6 +204,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::KernelBoundV1 { .. }
         | O::ConformanceCommittedV1 { .. }
         | O::SignedRegistrationV1 { .. }
+        // Onboarding P0 (tag 109): conformance evidence is registry traffic too; a refutation decides an attempt, never a halt.
+        | O::ConformanceEvidenceV1 { .. }
         | O::LineageHeadRolledBack { .. }
         | O::ImprovementPoolFunded { .. }
         // RFC-0007 Part I (tags 91, 92): a vertex is verification traffic, in the fee market beside the licence it replaces; the

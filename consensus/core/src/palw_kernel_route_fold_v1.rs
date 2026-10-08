@@ -415,6 +415,35 @@ fn persist_budget(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2,
     }
 }
 
+/// **Charge one adjudication (and `court_work`) of THIS block's budget to an onboarding object** (tag 109's judgement): the same
+/// budget, row and caps the kernel's own objects spend (`load_ledger` restores it for the next kernel object of the block), so the
+/// block is bounded across both. `Ok(false)`: the budget is spent and nothing is charged (the object is dismissed, the block stands).
+pub(super) fn charge_route_budget_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    court_work: u64,
+) -> Result<bool, PalwStateV2Error> {
+    let (policy, _) = route_policies(builder)?;
+    let (adjudications, work) = match builder
+        .state
+        .kernel_route
+        .as_ref()
+        .and_then(|k| k.aux_row::<(u64, u32, u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]))
+    {
+        Some((blue_score, a, w)) if blue_score == ctx.blue_score => (a, w),
+        _ => (0, 0),
+    };
+    if adjudications >= policy.max_adjudications_per_block || work.saturating_add(court_work) > policy.max_court_work_per_block {
+        return Ok(false);
+    }
+    builder.write_kernel_row(
+        PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,
+        Vec::new(),
+        Some(borsh::to_vec(&(ctx.blue_score, adjudications + 1, work.saturating_add(court_work))).expect("a budget serializes")),
+    );
+    Ok(true)
+}
+
 /// **Tag 111: a seat's constraint receipt.** Its signature verified at acceptance; the fold admits it structurally against the claim's
 /// interim assignment, counts it, and — the tally covered — tells the ledger the Panel passed the claim.
 pub(super) fn apply_kernel_receipt_v1(

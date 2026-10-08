@@ -120,6 +120,7 @@ impl Router {
                 GetPalwKernelRows,
                 GetPalwKernelFinals,
                 GetPalwOnboarding,
+                GetPalwConformanceEvidence,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 GetValidatorAttestationTarget,

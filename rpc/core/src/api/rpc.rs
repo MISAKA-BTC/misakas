@@ -1097,6 +1097,22 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwOnboardingResponse::default())
     }
 
+    /// Onboarding P0 (op 231): a V2 class's conformance record and posted evidence.
+    async fn get_palw_conformance_evidence(
+        &self,
+        request: GetPalwConformanceEvidenceRequest,
+    ) -> RpcResult<GetPalwConformanceEvidenceResponse> {
+        self.get_palw_conformance_evidence_call(None, request).await
+    }
+    async fn get_palw_conformance_evidence_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwConformanceEvidenceRequest,
+    ) -> RpcResult<GetPalwConformanceEvidenceResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwConformanceEvidenceResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await
