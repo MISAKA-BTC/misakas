@@ -12559,6 +12559,110 @@ impl Deserializer for GetPalwCapacityShadowResponse {
     }
 }
 
+/// **RFC-0009 stage D: `getPalwStateProof` (op 202)** — one collection of the PALW state, proven against the header that commits it.
+///
+/// The node returns the header of `block_hash` (or of its sink when empty) and the state that header commits — the state as-of the block's
+/// SELECTED PARENT: the state-root preimage and every row of the requested collection. A client that pinned the block's hash recomputes the
+/// header's hash, takes `palw_state_root` from it and checks `state_preimage` and `rows` against it
+/// (`kaspa_consensus_core::palw_state_proof_v1`); until then every field is `UNVERIFIED_REMOTE_STATE`. The proof is O(rows) because the state
+/// commitment is flat. **Op 202 is new: a node built before it drops the WebSocket on it**, so a client asks it last on a connection, or
+/// reconnects.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwStateProofRequest {
+    /// 128 hex: the block whose header commits the state. Empty: the sink.
+    pub block_hash: String,
+    /// `bonds`, `classes` or `claims`.
+    pub collection: String,
+}
+
+impl Serializer for GetPalwStateProofRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.block_hash, writer)?;
+        store!(String, &self.collection, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwStateProofRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { block_hash: load!(String, reader)?, collection: load!(String, reader)? })
+    }
+}
+
+/// One committed row: the borsh bytes of the key and of the value.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwProofRow {
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+}
+
+impl Serializer for RpcPalwProofRow {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(Vec<u8>, &self.key, writer)?;
+        store!(Vec<u8>, &self.value, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwProofRow {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { key: load!(Vec<u8>, reader)?, value: load!(Vec<u8>, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwStateProofResponse {
+    /// False with `reason` when the node cannot prove (no V2 ruleset, a header that commits no state, a block too far behind the sink, a
+    /// table over the flat-proof cap, or a state this node holds that its own header contradicts).
+    pub available: bool,
+    pub reason: String,
+    /// The block whose header is returned (the sink when the request named none).
+    pub block_hash: String,
+    pub header: Option<RpcHeader>,
+    /// The state-root preimage (ADR-0043 order): every collection root and the small scalar blocks.
+    pub state_preimage: Vec<u8>,
+    /// The collection the rows open.
+    pub collection: String,
+    /// Every row of the collection, in key order.
+    pub rows: Vec<RpcPalwProofRow>,
+}
+
+impl Serializer for GetPalwStateProofResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(String, &self.reason, writer)?;
+        store!(String, &self.block_hash, writer)?;
+        serialize!(Option<RpcHeader>, &self.header, writer)?;
+        store!(Vec<u8>, &self.state_preimage, writer)?;
+        store!(String, &self.collection, writer)?;
+        serialize!(Vec<RpcPalwProofRow>, &self.rows, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwStateProofResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            reason: load!(String, reader)?,
+            block_hash: load!(String, reader)?,
+            header: deserialize!(Option<RpcHeader>, reader)?,
+            state_preimage: load!(Vec<u8>, reader)?,
+            collection: load!(String, reader)?,
+            rows: deserialize!(Vec<RpcPalwProofRow>, reader)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod palw_model_market_wire_tests {
     use super::*;

@@ -3110,6 +3110,52 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     }
 
     // ------------------------------------------------------------------------------------------
+    // RFC-0009 stage D — one PALW state collection proven against the header that commits it (op 202)
+    // ------------------------------------------------------------------------------------------
+
+    /// A remote miner's check of a bond, a class or a claim against a block it pinned: the header of the block and the state that header
+    /// commits (the state as-of its selected parent), one collection wide. **Nothing here is trusted by the caller until it has recomputed
+    /// the header's hash and checked the rows against `palw_state_root`** (`kaspa_consensus_core::palw_state_proof_v1`). A node that cannot
+    /// prove says why instead of answering from a state its own header contradicts.
+    async fn get_palw_state_proof_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwStateProofRequest,
+    ) -> RpcResult<GetPalwStateProofResponse> {
+        // Everything the caller sent is parsed before a byte of chain state is read: a malformed request is free, and an error.
+        let collection = request.collection.trim().to_ascii_lowercase();
+        if !matches!(collection.as_str(), "bonds" | "classes" | "claims") {
+            return Err(RpcError::General(format!("collection '{}' is not one of bonds, classes, claims", request.collection)));
+        }
+        let named = match request.block_hash.trim() {
+            "" => None,
+            text => Some(parse_hash64(text, "blockHash")?),
+        };
+        let unavailable = |reason: String| GetPalwStateProofResponse { available: false, reason, ..Default::default() };
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(unavailable("this network has no PALW V2 state".to_string()));
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let block = match named {
+            Some(block) => block,
+            None => session.async_get_sink().await,
+        };
+        let wanted = collection.clone().into_bytes();
+        match session.spawn_blocking(move |c| c.palw_state_proof_v1(block, &wanted)).await {
+            Err(reason) => Ok(unavailable(reason)),
+            Ok((header, proof)) => Ok(GetPalwStateProofResponse {
+                available: true,
+                reason: String::new(),
+                block_hash: block.to_string(),
+                header: Some(RpcHeader::from(&header)),
+                state_preimage: proof.state.preimage,
+                collection,
+                rows: proof.collection.rows.into_iter().map(|(key, value)| RpcPalwProofRow { key, value }).collect(),
+            }),
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
     // ADR-0152 P2-10 — the vesting table (op 199)
     // ------------------------------------------------------------------------------------------
 

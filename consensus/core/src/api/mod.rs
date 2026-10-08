@@ -1391,6 +1391,23 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **RFC-0009 stage D: the PALW state a block's header commits, as a proof one collection wide.**
+    ///
+    /// `block`'s header commits the root of the state as-of its SELECTED PARENT (`Header::palw_state_root`), so the proof is built from that
+    /// state and the header is returned with it: a client that pinned `block`'s hash recomputes the header's hash, takes its
+    /// `palw_state_root`, and checks the proof against it (`palw_state_proof_v1`). `collection` is `bonds`, `classes` or `claims`.
+    /// `Err` names why a node could not (a network with no V2 ruleset, a header that commits no state, a block too far behind the sink for
+    /// this node to rebuild the state, a state this node holds that does not hash to what the header commits, a table too large for a flat
+    /// proof). The proof is O(rows): the state commitment is flat.
+    fn palw_state_proof_v1(
+        &self,
+        block: BlockHash,
+        collection: &[u8],
+    ) -> Result<(crate::header::Header, crate::palw_state_proof_v1::PalwFactProofV1), String> {
+        let _ = (block, collection);
+        Err("this consensus serves no PALW state proof".to_string())
+    }
+
     /// Import: persist the pruning point's DNS/PoS-v2 overlay snapshot.
     fn import_pruning_point_overlay_snapshot(
         &self,

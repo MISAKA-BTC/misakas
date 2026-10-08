@@ -142,6 +142,7 @@ pub enum KaspadPayloadOps {
     GetPalwVesting,
     GetPalwActivationPool,
     GetPalwCapacityShadow,
+    GetPalwStateProof,
     GetTokenSupply,
     GetTokenEmissionInfo,
 

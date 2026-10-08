@@ -2642,6 +2642,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.pruning_point_palw_state(pruning_point)
     }
 
+    fn palw_state_proof_v1(
+        &self,
+        block: BlockHash,
+        collection: &[u8],
+    ) -> Result<(kaspa_consensus_core::header::Header, kaspa_consensus_core::palw_state_proof_v1::PalwFactProofV1), String> {
+        self.virtual_processor.palw_state_proof_v1_impl(block, collection)
+    }
+
     fn import_pruning_point_overlay_snapshot(
         &self,
         pruning_point: BlockHash,

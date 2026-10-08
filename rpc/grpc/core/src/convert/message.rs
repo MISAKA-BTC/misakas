@@ -1614,6 +1614,24 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwCapacityShadowResponse>, protowire
         error: None,
     }
 });
+from!(item: &kaspa_rpc_core::GetPalwStateProofRequest, protowire::GetPalwStateProofRequestMessage, {
+    Self { block_hash: item.block_hash.clone(), collection: item.collection.clone() }
+});
+from!(item: &kaspa_rpc_core::RpcPalwProofRow, protowire::RpcPalwProofRow, {
+    Self { key: item.key.clone(), value: item.value.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwStateProofResponse>, protowire::GetPalwStateProofResponseMessage, {
+    Self {
+        available: item.available,
+        reason: item.reason.clone(),
+        block_hash: item.block_hash.clone(),
+        header: item.header.as_ref().map(protowire::RpcBlockHeader::from),
+        state_preimage: item.state_preimage.clone(),
+        collection: item.collection.clone(),
+        rows: item.rows.iter().map(protowire::RpcPalwProofRow::from).collect(),
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::GetPalwVestingRequest, protowire::GetPalwVestingRequestMessage, {
     Self {
         bond: item.bond.clone(),
@@ -3794,6 +3812,23 @@ try_from!(item: &protowire::GetPalwCapacityShadowResponseMessage, RpcResult<kasp
         adversary: item.adversary.iter().map(kaspa_rpc_core::RpcPalwCapacityAdversaryRow::try_from).collect::<RpcResult<Vec<_>>>()?,
     }
 });
+try_from!(item: &protowire::GetPalwStateProofRequestMessage, kaspa_rpc_core::GetPalwStateProofRequest, {
+    Self { block_hash: item.block_hash.clone(), collection: item.collection.clone() }
+});
+try_from!(item: &protowire::RpcPalwProofRow, kaspa_rpc_core::RpcPalwProofRow, {
+    Self { key: item.key.clone(), value: item.value.clone() }
+});
+try_from!(item: &protowire::GetPalwStateProofResponseMessage, RpcResult<kaspa_rpc_core::GetPalwStateProofResponse>, {
+    Self {
+        available: item.available,
+        reason: item.reason.clone(),
+        block_hash: item.block_hash.clone(),
+        header: item.header.as_ref().map(kaspa_rpc_core::RpcHeader::try_from).transpose()?,
+        state_preimage: item.state_preimage.clone(),
+        collection: item.collection.clone(),
+        rows: item.rows.iter().map(kaspa_rpc_core::RpcPalwProofRow::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
 try_from!(item: &protowire::GetPalwVestingRequestMessage, kaspa_rpc_core::GetPalwVestingRequest, {
     Self {
         bond: item.bond.clone(),
@@ -5008,5 +5043,69 @@ mod native_settlement_tests {
         let duty = GetPrecommitDutyResponse { retired_at: Some(5), ..Default::default() };
         let wire: protowire::GetPrecommitDutyResponseMessage = RpcResult::Ok(&duty).into();
         assert_eq!(GetPrecommitDutyResponse::try_from(&wire).unwrap().retired_at, Some(5));
+    }
+}
+
+#[cfg(test)]
+mod palw_state_proof_grpc_tests {
+    use crate::protowire;
+    use kaspa_rpc_core::{GetPalwStateProofRequest, GetPalwStateProofResponse, RpcHeader, RpcPalwProofRow, RpcResult};
+
+    /// **`getPalwStateProof` (op 202) survives the grpc wire, both ways**: the request, the header (its `palw_state_root` is what the
+    /// client checks the proof against, so it must cross), the preimage bytes and every row.
+    #[test]
+    fn the_state_proof_survives_the_grpc_round_trip() {
+        let request = GetPalwStateProofRequest { block_hash: "ab".repeat(64), collection: "bonds".into() };
+        let wire: protowire::GetPalwStateProofRequestMessage = (&request).into();
+        let back: GetPalwStateProofRequest = (&wire).try_into().unwrap();
+        assert_eq!((back.block_hash, back.collection), (request.block_hash.clone(), request.collection.clone()));
+
+        let h = |n: u8| kaspa_consensus_core::Hash64::from_bytes([n; 64]);
+        let mut full = kaspa_consensus_core::header::Header::new_finalized(
+            1,
+            vec![vec![h(1)]].try_into().unwrap(),
+            h(2),
+            h(3),
+            h(4),
+            1,
+            0x1d00ffff,
+            0,
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
+            77,
+            0u64.into(),
+            0,
+            h(5),
+        )
+        .with_palw_state_root(h(9));
+        full.palw_commitment = vec![0xAB; 5];
+        full.finalize();
+        let header = RpcHeader::from(&full);
+        let response = GetPalwStateProofResponse {
+            available: true,
+            reason: "r".into(),
+            block_hash: "cd".repeat(64),
+            header: Some(header.clone()),
+            state_preimage: vec![1, 2, 3, 4, 5],
+            collection: "classes".into(),
+            rows: vec![
+                RpcPalwProofRow { key: vec![7; 68], value: vec![8; 300] },
+                RpcPalwProofRow { key: vec![6; 64], value: vec![] },
+            ],
+        };
+        let wire: protowire::GetPalwStateProofResponseMessage = RpcResult::Ok(&response).into();
+        let back: GetPalwStateProofResponse = (&wire).try_into().unwrap();
+        assert!(back.available);
+        assert_eq!(back.reason, "r");
+        assert_eq!(back.block_hash, response.block_hash);
+        let got = back.header.expect("the header crosses");
+        assert_eq!((got.hash, got.daa_score, got.palw_state_root, got.palw_commitment), (header.hash, 77, header.palw_state_root, header.palw_commitment));
+        assert_eq!(back.state_preimage, vec![1, 2, 3, 4, 5]);
+        assert_eq!(back.collection, "classes");
+        assert_eq!(back.rows, response.rows);
+        // An unavailable answer keeps its reason and carries no header.
+        let none = GetPalwStateProofResponse { reason: "too far behind".into(), ..Default::default() };
+        let wire: protowire::GetPalwStateProofResponseMessage = RpcResult::Ok(&none).into();
+        let back: GetPalwStateProofResponse = (&wire).try_into().unwrap();
+        assert!(!back.available && back.header.is_none() && back.reason == "too far behind");
     }
 }

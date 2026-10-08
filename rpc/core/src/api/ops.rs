@@ -276,6 +276,9 @@ pub enum RpcApiOps {
     /// would reserve, weigh and allow for every live claim and bond, per ramp step, next to today's
     /// values. Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwCapacityShadow = 201,
+    /// RFC-0009 stage D: one PALW state collection proven against the header that commits it (a remote miner checks it against a block it
+    /// pinned). Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwStateProof = 202,
 }
 
 impl RpcApiOps {

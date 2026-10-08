@@ -126,6 +126,7 @@ impl Factory {
                 GetPalwVesting,
                 GetPalwActivationPool,
                 GetPalwCapacityShadow,
+                GetPalwStateProof,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 NotifyBlockAdded,

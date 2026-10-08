@@ -1016,6 +1016,20 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwCapacityShadowResponse::default())
     }
 
+    /// RFC-0009 stage D: one PALW state collection with the header that commits it. A node built before op 202 drops the WebSocket on it:
+    /// ask it last on a connection, or reconnect.
+    async fn get_palw_state_proof(&self, request: GetPalwStateProofRequest) -> RpcResult<GetPalwStateProofResponse> {
+        self.get_palw_state_proof_call(None, request).await
+    }
+    async fn get_palw_state_proof_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwStateProofRequest,
+    ) -> RpcResult<GetPalwStateProofResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwStateProofResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

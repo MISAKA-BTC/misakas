@@ -114,6 +114,7 @@ impl Router {
                 GetPalwVesting,
                 GetPalwActivationPool,
                 GetPalwCapacityShadow,
+                GetPalwStateProof,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 GetValidatorAttestationTarget,

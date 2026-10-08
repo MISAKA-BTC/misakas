@@ -2635,6 +2635,36 @@ mod mockery {
     }
     test!(GetPalwCapacityShadowResponse);
 
+    // RFC-0009 stage D: op 202 and its parts round-trip.
+    impl Mock for GetPalwStateProofRequest {
+        fn mock() -> Self {
+            GetPalwStateProofRequest { block_hash: mock_hex(), collection: "bonds".to_string() }
+        }
+    }
+    test!(GetPalwStateProofRequest);
+
+    impl Mock for RpcPalwProofRow {
+        fn mock() -> Self {
+            RpcPalwProofRow { key: mock(), value: vec![1, 2, 3] }
+        }
+    }
+    test!(RpcPalwProofRow);
+
+    impl Mock for GetPalwStateProofResponse {
+        fn mock() -> Self {
+            GetPalwStateProofResponse {
+                available: mock(),
+                reason: "a reason".to_string(),
+                block_hash: mock_hex(),
+                header: mock(),
+                state_preimage: vec![9; 70],
+                collection: "classes".to_string(),
+                rows: mock(),
+            }
+        }
+    }
+    test!(GetPalwStateProofResponse);
+
     // ADR-0152 P2-10: op 199 and its parts round-trip.
     impl Mock for GetPalwVestingRequest {
         fn mock() -> Self {

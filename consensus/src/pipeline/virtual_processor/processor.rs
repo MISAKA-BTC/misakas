@@ -169,6 +169,13 @@ impl EvmLaneKpi {
     }
 }
 
+/// RFC-0009 stage D: how far behind the sink (in DAA) a block may be for this node to rebuild the PALW state its header commits and serve a
+/// proof of it. Older: the client pins a newer checkpoint.
+pub const PALW_STATE_PROOF_MAX_LAG_DAA: u64 = 4_000;
+
+/// RFC-0009 stage D: the most one flat state proof may carry (the preimage plus every row of the collection).
+pub const PALW_STATE_PROOF_MAX_BYTES: usize = 24 * 1024 * 1024;
+
 /// **The grading work one block may demand of every node, in FAULT VECTORS** (ADR-0075 Decision 9,
 /// widened by the audit of 2026-09-02).
 ///
@@ -20692,6 +20699,64 @@ impl VirtualStateProcessor {
         }
         self.db.write(batch).unwrap();
         Ok(())
+    }
+
+    /// **RFC-0009 stage D: the proof of one PALW collection against the header of `block`.**
+    ///
+    /// A header commits the root of the state as-of its SELECTED PARENT (the chain walk compares `header.palw_state_root` with the state
+    /// it has reached BEFORE applying the block), so the state served is `palw_v2_state_at(selected_parent(block))` — the reconstruction
+    /// the template and the validating walk both use — and it is refused unless it hashes to exactly what the header commits: a node never
+    /// hands a client a proof that its own header contradicts. The header rides along; the client recomputes its hash against the block it
+    /// pinned.
+    ///
+    /// **Bounded.** Walking the state back to an old block costs delta applications, and a flat proof of a table costs every row. A block
+    /// more than [`PALW_STATE_PROOF_MAX_LAG_DAA`] behind the sink is refused (pin a newer checkpoint), and so is a collection whose rows
+    /// would exceed [`PALW_STATE_PROOF_MAX_BYTES`] (a tree-shaped state commitment is the fix, and a consensus change).
+    pub fn palw_state_proof_v1_impl(
+        &self,
+        block: BlockHash,
+        collection: &[u8],
+    ) -> Result<(kaspa_consensus_core::header::Header, kaspa_consensus_core::palw_state_proof_v1::PalwFactProofV1), String> {
+        use kaspa_consensus_core::palw_state_proof_v1 as proof;
+        if self.palw_state_params_v2.is_none() {
+            return Err("this network has no PALW V2 state".to_string());
+        }
+        let header = self.headers_store.get_header(block).map_err(|_| format!("the node holds no header for block {block}"))?;
+        if header.palw_state_root == kaspa_hashes::Hash64::default() {
+            return Err("the header commits no PALW state root".to_string());
+        }
+        let sink_daa = self.virtual_stores.read().state.get().map(|v| v.daa_score).unwrap_or(0);
+        if header.daa_score.saturating_add(PALW_STATE_PROOF_MAX_LAG_DAA) < sink_daa {
+            return Err(format!(
+                "block {block} is {} DAA behind the sink, more than the {PALW_STATE_PROOF_MAX_LAG_DAA} this node rebuilds state for: pin a newer checkpoint",
+                sink_daa - header.daa_score
+            ));
+        }
+        let parent = self.ghostdag_store.get_selected_parent(block).map_err(|_| format!("the node holds no GHOSTDAG data for block {block}"))?;
+        let (_at, state) = self
+            .palw_v2_state_at(parent)
+            .ok_or_else(|| format!("this node cannot establish the PALW state as-of {parent}, the selected parent of {block}"))?;
+        if state.state_root() != header.palw_state_root {
+            return Err(format!(
+                "the state this node holds as-of {parent} hashes to {}, and the header of {block} commits {}: nothing is served",
+                state.state_root(),
+                header.palw_state_root
+            ));
+        }
+        let fact = match collection {
+            c if c == proof::PALW_PROOF_LABEL_BONDS => proof::prove_bonds_v1(&state),
+            c if c == proof::PALW_PROOF_LABEL_CLASSES => proof::prove_classes_v1(&state),
+            c if c == proof::PALW_PROOF_LABEL_CLAIMS => proof::prove_claims_v1(&state),
+            other => return Err(format!("no such collection {:?}: bonds, classes or claims", String::from_utf8_lossy(other))),
+        };
+        let bytes: usize = fact.state.preimage.len() + fact.collection.rows.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
+        if bytes > PALW_STATE_PROOF_MAX_BYTES {
+            return Err(format!(
+                "the {} table is {bytes} bytes, over the {PALW_STATE_PROOF_MAX_BYTES} a flat proof may carry: the state commitment is flat, and a tree-shaped one is a consensus change",
+                String::from_utf8_lossy(collection)
+            ));
+        }
+        Ok(((*header).clone(), fact))
     }
 
     /// The PALW state this node holds AT `pruning_point`, for a peer syncing from it.
