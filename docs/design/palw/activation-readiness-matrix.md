@@ -38,6 +38,41 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 4. GAP-5: the FinalReward funding source.
 5. The activation height of the single release, once every row above is clear.
 
+## 3a. User rulings on the Panel=0 parameters (2026-10-08 ~20:30)
+
+**Policy: user-pays rewards; an effective 128-bit target; OPV only for G14-complete classes; production numbers and the beacon scheme's
+production approval on hold. Panel=0 activation deferred** — it needs measurements, economic safety and beacon independence, not only code.
+
+* **OPV admission** — eligibility DERIVED, not a manual allowlist: Active Kernel + conformance + G14-complete + public DA + bounded
+  resource/deadline + a verified beacon policy (the empty set stays the initial value). Window
+  `T_challenge ≥ T_beacon + T_fetch + T_check + T_localize + T_file + T_margin`, all measured; a valid prosecution accepted in time halts
+  Final until the exact court ends, with bounded accept / reserve / continuation deadlines. The interim 50 / 37 DAA, 1,000 BILI collateral
+  and 10 % burn are not production values; collateral from the false claim's maximum gain, concurrent exposure, detection probability
+  and the collectable slash (detection probability 0 ⇒ no finite collateral is enough). The 32-slot capture (F-C4R3-05) must be fixed
+  against Sybil splitting: reservation cost, collateral exposure, bounded release, prosecution capacity.
+* **Challenge policy / beacon** — target an effective 128-bit false-accept bound (retries, grinding, multiple relations, adaptive
+  attacks); 2 bits is drill-only; the approval registry stays empty until an external review and bootstrap/grinding attack tests.
+  OPV still assumes at least one capable honest verifier within the deadline (RFC-0015).
+* **Final reward** — option A, user-pays escrow; invariant `payouts ≤ existing issuance + collected fees + pre-funded`, no double
+  counting, no double payment across reorg / re-application / duplicate redemption; a self-posted job pays a non-refundable cost.
+  Subsidy carves (B/C) later, separately designed and reviewed.
+* **Units** — the coin is Misaka, ticker BILI (ADR-0174); `SOMPI_PER_KASPA` = 10^8 is a legacy constant name for 1 BILI; "KAS" in
+  older reports is that legacy label; amounts and units unchanged.
+
+**Bootstrap cycle (checked first, 2026-10-08).** In the code today OPV admission is the fence's manual `admitted_classes`, and an
+outsider's check uses its own salt, so an OPV claim needs no beacon: no hard cycle yet. The cycle appears with the ruled eligibility:
+conformance needs the PALW Work Beacon, which OB-P0 sources only from Panel-independent (OPV) Finals of other classes; OPV eligibility
+and ACTIVE_REWARDABLE need conformance. A non-circular bootstrap source must be designed before derived eligibility is armed — e.g. a
+small class whose conformance is a complete deterministic check (no sampling, so no beacon), reaching Final by an independent rule, whose
+own activation needs no beacon — and its grinding surface analysed (output selection, withdrawal, Final timing, fork choice, work
+concentration).
+
+**Order:** (1) GAP-5 by escrow + coinbase/escrow/reorg accounting tests (G14-R4); (2) the dependency graph and an explicit non-circular
+bootstrap path; (3) fresh-verifier time per class measured on real hardware → window and collateral recomputed; (4) C4: grinding,
+watcher absence, 32-slot capture, Final race, economic attacks; (5) the production challenge policy and the Panel=0 activation decided
+separately.
+
 ## 4. Change log
 
+* 2026-10-08 ~20:30 — the user's Panel=0 rulings (§3a).
 * 2026-10-08 — created on the user's decision; rc1 (`release/t12-int13-rc1`) abandoned; `PALW_T12_INT13_DAA` → None (UNSCHED).
