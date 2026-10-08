@@ -3753,6 +3753,7 @@ dependencies = [
  "misaka-palw-base0",
  "misaka-palw-challenge",
  "misaka-palw-kernel",
+ "misaka-palw-remote",
  "misaka-palw-tir",
  "misaka-palw-tir-sketch",
  "once_cell",
