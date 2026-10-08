@@ -265,5 +265,10 @@ to `REGISTERED_DORMANT` with its failure code and is counted.
    refutation) off the chain — the lane's fix is the Lead's.
 8. **A source Final convicted after the evidence is posted** ends the attempt BEACON_CHANGED at the window's close (counted as a beacon
    retry) — safe, but it charges an honest registrant an attempt.
-9. **The fresh verifier trusts op 231's frozen eligible/excluded sets** (chain state under the aux root, checkable through op 211's rows)
+9. **A VectorTokens refutation rests on a kernel Final, which is optimistic truth.** A griefer can post the selected prompt as a job,
+   carry a LYING claim of it to Final unchallenged inside the window, and burn an honest attempt (it loses its OPV reservation only if
+   someone convicts the claim within liability, and the attempt is not restored). Hardening (deciding at the claim's liability horizon,
+   or restoring the attempt on a later conviction) is not done. The LeafDecode refutation has no such residual (authenticated bytes,
+   deterministic decode).
+10. **The fresh verifier trusts op 231's frozen eligible/excluded sets** (chain state under the aux root, checkable through op 211's rows)
    rather than re-deriving the route's OPV classes at the commitment's height.
