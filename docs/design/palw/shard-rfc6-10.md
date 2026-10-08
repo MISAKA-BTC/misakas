@@ -53,7 +53,8 @@ retry history, so the engine learns *strata* — generically, with no RFC-0006 i
 | `ConsensusViewV1::stratified_candidates(claim, strata)` | default: empty population (a host that cannot answer seals nothing a stratified claim can use → `NoCapablePanel`, never a failed block) |
 | `PermissionlessPanelStateV1::admit_with_strata` | `admit` is `admit_with_strata` with `None` everywhere |
 | Stratum seed | `H("misaka-palw/panel-v3/stratum-seed" ‖ seed ‖ stratum)`; tickets as the flat draw (`seat_order` with the stratum's eligibility) |
-| Seal id | flat: unchanged tuple; stratified: the same tuple and the strata under `…/seal-strata` |
+| Seal id | flat: unchanged tuple; stratified: `H("…/seal-strata" ‖ flat id ‖ strata)` |
+| Per-block draw budget | `max_assignments_per_block` counts DRAWS: a flat claim is one, a stratified claim one per stratum; in queue order, the first due claim that does not fit stops the block's draws (the first always runs) — no subset is chosen. A flat-only queue takes exactly the old `take(max)` |
 
 **Draw rules** (`stage_assign`, stratified record), mirroring `derive_tir_shard_panel_v1` (lane A) where V3 has no reason
 to differ:
@@ -150,15 +151,20 @@ closed unrewarded; and **lane PL part C (`palw_panel_unavailable_expiry`, dorman
 `PanelUnavailable` with the same pre-emption shape as 2.1(1). If part C is armed in the full-activation release it needs
 the same hold (a fence decision for the Lead; no code here).
 
+**Edge (documented).** A claim the engine refuses at admission (no work identity, strata that do not validate, a full bound)
+is ended at once, not deferred: the engine never held it, and the refusal is decided in the claim's own acceptance block (4b″).
+An attempt claim does not exist during that block's objects (the attempt is step 4), so nothing can be pending on it.
+
 ## 3. RFC-0006 — the non-seat cell watcher
 
 G14 for a sharded claim: one bonded verifier outside the seats, with public material only, reaches a conviction or a
 correctly classified default. Consensus already allows it (`TirShardCourtAccused` takes any Active bond at the floor;
 `TirStepRun` is a DA unit any Active bond may demand within the non-seat budget). What was missing is the verifier.
 
-`kaspad/src/palw_panel/tir_shard_watch.rs`:
+`consensus/core/src/palw_tir_shard_watch_v1.rs` (the targets, a consensus read like the seat duties; `ConsensusApi::palw_tir_shard_watch_duties_v1`)
+and `kaspad/src/palw_panel/tir_shard_watch.rs` (the node pass, a child of `tir_shard`):
 
-* **Targets** (`palw_tir_shard_watch_targets_v1`, pure over the tip state): every live claim drawn per shard
+* **Targets** (`palw_tir_shard_watch_duties_v1`, pure over the tip state): every live claim drawn per shard
   (`tir_shard_claims`: `PanelBound`, `ReceiptLicensed`) whose producer is not the watcher, and every shard of it the
   watcher does not seat (a seat's own duty covers that shard). A watcher checks a **whole shard** (every segment), the
   outsider's span.
@@ -188,7 +194,7 @@ collapse) and the bundle mirror `PalwStateParamsV2::tir_shard_segment_from_daa`.
 `palw_tir_shard_v1` in force at or below it. Its height must be one no other fence uses. **The Lead chooses the height**
 (the full-activation release).
 
-### 4.3 Rules past the fence (keyed on the claim's panel `bound_daa`, so bind and parts agree)
+### 4.3 Rules past the fence (keyed on the claim's `accepted_daa` — immutable, so its bind and every part agree; a panel's `bound_daa` can be moved by the long-D DA pause credit)
 
 * **Resident table** (`palw_tir_shard_cell_resident_permille_v2`): per cell `(i, j)`, the shard's weight bytes
   (`pre`/`post`/globals as RFC §1.1) + its layers' `Fixed` state + its layers' `Hist` rows up to the segment's end
@@ -226,6 +232,7 @@ readiness class can be added under its own fence.
 |---|---|
 | Engine strata | `misaka-palw-panel/tests/strata.rs`: per-stratum seats and operators, outsiders distinct, alternates per stratum, thin stratum → `NoCapablePanel`, reservations once per bond, tampered stratified binding refused, flat claims unchanged |
 | Sharded class bound by a per-shard V3 draw | `consensus/core/tests/rfc0010_shard_v3.rs`: an IR class with a 2-shard plan, readiness per shard, a V3 claim sealed, certified and bound per shard; the per-shard record written; two parts license it by cells; the delta reverts and the carriage reloads at every block |
-| Non-seat watcher acting | `rfc0010_shard_v3.rs`: a bond outside every seat convicts the V3-bound sharded claim with `TirShardCourtAccused` from public material, and a non-seat `TirStepRun` demand defaults to `ProducerWithholding`; `kaspad/src/palw_panel/tir_shard_watch_e2e.rs`: targets, verdicts and the watcher-built accusation the one-move gate convicts |
+| Non-seat watcher acting | `rfc0010_shard_v3.rs`: the watch duties (both shards for a non-seat bond, the other shard for a seat, none for the producer), a bond outside every seat convicts the V3-bound sharded claim with `TirShardCourtAccused` from public material, and a non-seat `TirStepRun` demand holds the engine's window and defaults to `ProducerWithholding`; `kaspad/src/palw_panel/tir_shard_e2e.rs` (`a_non_seat_watcher_…`): the watch duty verifies whole shards and builds, with the watcher's bond as accuser, the accusation the one-move gate convicts |
 | Per-segment pricing | `consensus/core/tests/palw_tir_shard_segment_v2.rs`: the fence's refusals and dormancy; resident table sums to 1,000 and grows with the segment; lock and pay by `max(work, resident)` past the fence, unchanged below it |
-| G14 guard | `consensus/core/tests/rfc0010_g14_guard.rs`: the S2-expiry race (default wins, refuted twin expires after the close), pre-bind `BeaconUnavailable` deferred under an open court (conviction or deferred void, never a neutral close), the receipt-window boundary races |
+| G14 guard | `consensus/core/tests/rfc0010_g14_guard.rs`: pre-bind `BeaconUnavailable` deferred under an open court and applied in the block the court is cleared; walked to the court's own end, never a neutral close (conviction, or the deferred void after the close); the V3 S2 licence: with nothing pending it expires at its gate, a pending non-seat DA session holds it past the gate and the default wins, a court cleared under a pending session re-arms no gate; the receipt-window edge (inside: held; carried by the redrawing block: late, then held) |
+| Unarmed byte identity | `consensus/core/tests/shard_unarmed_byte_identity.rs`: testnet-12's own fold (lane-A binds, a licence to `Final`, a non-seat DA accusation to its default, a court; with the permissionless Panel unconfigured and configured at an unreached height) and lane A's RFC-0006 flow, every block's root and delta and the tip carriage hashed — pinned on `b676927de` before any lane change |

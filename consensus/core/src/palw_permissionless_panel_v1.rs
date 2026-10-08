@@ -221,6 +221,73 @@ pub fn panel_snapshot_candidates_v1(
     Ok(seats.into_values().collect())
 }
 
+/// **The population of a claim drawn per shard** (RFC-0006 × RFC-0010, agent SHARD): the stratified twin of
+/// [`panel_snapshot_candidates_v1`], under the same structural rules at the same checkpoint. Stratum `s` (shard `s` of the class's
+/// plan of `strata.count` shards) is the bonds that may judge the shard's readiness class
+/// ([`crate::palw_tir_shard_v1::palw_tir_shard_ready_class_v1`] — the population lane A's per-shard draw reads): each carries
+/// the CLASS role and bit `s`. For an outsider-judged claim, the base class's population carries the OUTSIDER role (no bit). A
+/// bond in several populations is one candidate with every role and bit it earned. In bond order, each with its bits.
+#[allow(clippy::too_many_arguments)]
+pub fn panel_stratified_candidates_v1(
+    state: &PalwChainStateV2,
+    claim_id: Hash64,
+    floor_class: Hash64,
+    checkpoint_daa: u64,
+    policy: PanelPolicyV1,
+    draw: PalwPanelDrawPolicyV1,
+    capability_proof: bool,
+    strata: &PanelStrataV1,
+) -> Result<Vec<(SeatCandidateV1, u64)>, PanelErrorV1> {
+    policy.validate()?;
+    strata.validate()?;
+    let claim = state.claim(&claim_id).ok_or(PanelErrorV1::InvalidSnapshot)?;
+    let Some(registered_by) = checkpoint_daa.checked_sub(policy.bond_maturity_daa) else { return Ok(Vec::new()) };
+    let mut populations: Vec<(Hash64, u8, u64)> = (0..strata.count)
+        .map(|stratum| {
+            (crate::palw_tir_shard_v1::palw_tir_shard_ready_class_v1(&claim.class_id, strata.count, stratum), CLASS_ROLE_V1, 1u64 << stratum)
+        })
+        .collect();
+    if strata.outsider {
+        populations.push((floor_class, OUTSIDER_ROLE_V1, 0));
+    }
+    let readiness_root = commitment(b"misaka-palw/panel-v3/readiness", &(state.state_root(), claim.class_id));
+    let mut seats = std::collections::BTreeMap::<BondIdV1, (SeatCandidateV1, u64)>::new();
+    for (class, role, bit) in populations {
+        let eligible = palw_panel_stake_base_bonds_judging_v1(
+            state,
+            &claim_id,
+            &class,
+            policy.min_collateral,
+            Some(registered_by),
+            capability_proof,
+            draw.readiness,
+            draw.economy,
+            strata.stride(),
+        )
+        .map_err(|_| PanelErrorV1::InvalidSnapshot)?;
+        for (bond, row) in eligible {
+            let entry = seats.entry((*bond).into()).or_insert_with(|| {
+                (
+                    SeatCandidateV1 {
+                        bond: (*bond).into(),
+                        operator: row.operator_id,
+                        key: commitment(b"misaka-palw/panel-v3/key", &row.pubkey),
+                        collateral: row.collateral,
+                        registered_daa: row.registered_daa,
+                        capability_root: commitment(b"misaka-palw/panel-v3/capability", &row.capable_classes),
+                        readiness_root,
+                        roles: 0,
+                    },
+                    0,
+                )
+            });
+            entry.0.roles |= role;
+            entry.1 |= bit;
+        }
+    }
+    Ok(seats.into_values().collect())
+}
+
 /// Headroom from the existing one-ledger filter, excluding this engine's own reservations.
 /// Callers must pass the same pre-object state for every due claim in the fold.
 pub fn panel_live_headroom_v1(state: &PalwChainStateV2, bond: BondIdV1, filter: &crate::palw_panel_v2::PalwPanelValidLockV1) -> u128 {

@@ -597,6 +597,12 @@ pub mod palw_tir_step_v1;
 pub mod palw_tir_work_v1;
 /// RFC-0006: layer-sharded panels for IR classes — the plan, the partition, the cells, the V4 receipt, the recount, the fence.
 pub mod palw_tir_shard_v1;
+/// RFC-0006 per-segment pricing (agent SHARD): the dormant fence `palw_tir_shard_segment_v2` and the resident table, the price share
+/// `max(work, resident)` and the seat need it puts in force.
+pub mod palw_tir_shard_segment_v2;
+/// RFC-0006 × G14 (agent SHARD): the non-seat cell watcher's targets — every shard of a live claim drawn per shard that a bond does
+/// not seat, as a watch duty (pure over the tip state; node policy).
+pub mod palw_tir_shard_watch_v1;
 pub mod palw_terminal;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in

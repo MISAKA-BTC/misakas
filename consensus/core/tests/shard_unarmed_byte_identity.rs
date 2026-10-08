@@ -27,8 +27,10 @@ use kaspa_consensus_core::palw_permissionless_panel_v1::{PalwPermissionlessPanel
 use kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2;
 
 /// The pins (hex BLAKE2b-512 of the transcript), computed on the integration line `b676927de`.
-const PIN_T12_FLOW: &str = "27f526cb29563e85e9a70a49f4f6df720f8e9f5f2486293b65b720167206df54af7d207e5762d3c26a282226bd1eb3017a55c1f149953da65e835ebfff9efe3f";
-const PIN_IR_SHARD_FLOW: &str = "2a6cd2332a402c62d628925d4a597f58a2cb9126be909630b320c9dc53509aec49db6f7a3f9ee80f6e1a0a133b31fc7f72c2134f62edd1675cc8f637bae68e40";
+const PIN_T12_FLOW: &str =
+    "27f526cb29563e85e9a70a49f4f6df720f8e9f5f2486293b65b720167206df54af7d207e5762d3c26a282226bd1eb3017a55c1f149953da65e835ebfff9efe3f";
+const PIN_IR_SHARD_FLOW: &str =
+    "2a6cd2332a402c62d628925d4a597f58a2cb9126be909630b320c9dc53509aec49db6f7a3f9ee80f6e1a0a133b31fc7f72c2134f62edd1675cc8f637bae68e40";
 
 struct Transcript(blake2b_simd::State);
 
@@ -66,7 +68,8 @@ fn block(
 ) {
     let x = ctx(0xCA_0000 + daa, daa, daa, subsidy);
     let parent = c.s.clone();
-    let (child, delta, skips) = c.try_fold(&parent, &x, objects, work, key).unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
+    let (child, delta, skips) =
+        c.try_fold(&parent, &x, objects, work, key).unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
     assert!(skips.is_empty(), "nothing skipped at {daa}: {skips:?}");
     assert_eq!(apply_delta_v2(&parent, &delta, &c.sp).expect("re-applies"), child);
     assert_eq!(revert_delta_v2(&child, &delta, &c.sp).expect("reverts"), parent);
@@ -98,7 +101,8 @@ fn t12_flow(p: Params) -> String {
     let mut t = Transcript::new();
     let seats = c.floor_seats();
     let (producer, _, _) = floor_producer(&c.p);
-    let outsider = genesis_bonds(&c.p).iter().map(|(k, _, _)| *k).find(|k| *k != producer && !seats.iter().any(|(s, _)| s == k)).unwrap();
+    let outsider =
+        genesis_bonds(&c.p).iter().map(|(k, _, _)| *k).find(|k| *k != producer && !seats.iter().any(|(s, _)| s == k)).unwrap();
     let a = floor_claim(&mut c, &mut t, 1);
     let b = floor_claim(&mut c, &mut t, 2);
     let d = floor_claim(&mut c, &mut t, 3);
@@ -236,7 +240,13 @@ mod ir {
     }
     fn receipt(claim: Hash64, n: u64, shard: u16, segments: PalwSegmentMaskV2, signed_daa: u64) -> PalwSeatReceiptV4 {
         PalwSeatReceiptV4 {
-            receipt: PalwSeatReceiptV2 { claim, verdict: PalwReceiptVerdictV2::Valid, seat_bond: bond_key(n), signed_daa, signature: vec![7; 8] },
+            receipt: PalwSeatReceiptV2 {
+                claim,
+                verdict: PalwReceiptVerdictV2::Valid,
+                seat_bond: bond_key(n),
+                signed_daa,
+                signature: vec![7; 8],
+            },
             shard,
             segments,
         }
@@ -335,7 +345,11 @@ mod ir {
         };
         let claim = attempt_id_v2(&env.attempt);
         run.at(3, &[], Some(&env));
-        run.at(SHARD_AT, &[PalwConsensusObjectV2::TirShardPlanDeclared { class_id: f.class_id, s_l: 2, s_p: 1, signature: vec![1; 8] }], None);
+        run.at(
+            SHARD_AT,
+            &[PalwConsensusObjectV2::TirShardPlanDeclared { class_id: f.class_id, s_l: 2, s_p: 1, signature: vec![1; 8] }],
+            None,
+        );
         let anchor = h64(77);
         let seats: Vec<PalwPanelSeatV2> = (0..8).map(|i| seat(10 + i)).collect();
         run.at(SHARD_AT + 1, &[PalwConsensusObjectV2::PanelBound { claim, anchor, seats }], None);
