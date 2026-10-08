@@ -7,8 +7,12 @@
 //! * [`conformance`] — the reference evaluator, the typed backend and the independent implementation on
 //!   the same vectors.
 //! * [`hfref`] — the Hugging Face reference an integer program is held to, and the unit check.
+//! * [`commit`], [`facts`], [`beacon_run`] — beacon-aware conformance (RFC-0013 §9): bind a `ConformanceCommitmentV1` from a pack, take
+//!   the canonical beacon facts across one loader boundary, derive the challenge from the contract, run the selected checks and
+//!   judge the evidence in a fresh process (`pack commit-conformance | run-conformance | verify-conformance`).
 //! * [`provenance`] — what an artifact's own provenance record says (scope, adapter, descriptors, math).
 
+pub mod beacon_run;
 pub mod bind;
 pub mod build;
 pub mod cli;
