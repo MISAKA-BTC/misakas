@@ -724,3 +724,146 @@ fn an_open_court_session_holds_the_receipt_clock() {
     );
     eprintln!("[court-pause] phase at bound + 50: {phase:?}");
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Observation: what a client reads of a V3 claim (RPC op 220 serves exactly these records)
+// ---------------------------------------------------------------------------------------------------------------------------
+
+use kaspa_consensus_core::palw_permissionless_panel_v1::{panel_v3_claim_status_v1, panel_v3_overview_v1, PANEL_V3_OBSERVATION_VERSION_V1};
+
+fn status(w: &V3, id: &Hash64) -> kaspa_consensus_core::palw_permissionless_panel_v1::PanelV3ClaimStatusV1 {
+    panel_v3_claim_status_v1(&w.c.s, &w.c.sp, id).expect("the state holds the claim")
+}
+
+/// **The read follows one claim from acceptance to its end**: the rule, the V2 phase, the engine phase, the seal, the frozen snapshot,
+/// the epoch's certified-output state, the assignment (seed, seats, exposure, witness block), the retries and the terminal reason —
+/// each only once the chain has fixed it. It is a pure read of the state: reading changes nothing.
+#[test]
+fn the_observation_follows_a_claim_from_acceptance_to_release() {
+    let mut w = V3::new();
+    let before = w.c.s.state_root();
+    assert!(panel_v3_claim_status_v1(&w.c.s, &w.c.sp, &Hash64::from_bytes([9; 64])).is_none(), "an unknown claim is not a status");
+    assert!(!panel_v3_overview_v1(&w.c.s).active, "no engine below the fence");
+    let id = w.floor_claim(60);
+    let s = status(&w, &id);
+    assert_eq!((s.version, s.rule, s.v2_phase.as_str(), s.engine_phase), (PANEL_V3_OBSERVATION_VERSION_V1, "permissionlessV3", "provisional", Some("pendingSeal")));
+    assert!(s.seal.is_none() && s.snapshot.is_none() && s.beacon.is_none() && s.assignment.is_none() && s.terminal.is_none());
+    assert_eq!(s.acceptance_order, Some(w.record(&id).acceptance_order));
+
+    w.step();
+    w.step();
+    let s = status(&w, &id);
+    assert_eq!(s.engine_phase, Some("sealed"));
+    let seal = s.seal.clone().expect("sealed");
+    let snapshot = s.snapshot.clone().expect("the frozen snapshot");
+    assert_eq!(snapshot.root, w.record(&id).snapshot.unwrap().root);
+    assert!(snapshot.candidates > 0);
+    let beacon = s.beacon.clone().expect("the epoch the seal named");
+    assert_eq!((beacon.epoch, beacon.release_daa, beacon.state, beacon.output), (seal.beacon_epoch, seal.anchor_slot, "collecting", None));
+    assert_eq!(beacon.deadline_daa, seal.anchor_slot + engine_policy().beacon_wait_daa);
+
+    let release = seal.anchor_slot;
+    let proof = w.proof_for(&id);
+    let output = proof.output;
+    w.step_at(release + 4, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    w.step_at(release + 5, &[PalwConsensusObjectV2::PanelBeaconProofV3 { proof: Box::new(proof) }], PalwBlockWorkV3::None, Hash64::default(), 0);
+    let beacon = status(&w, &id).beacon.expect("beacon");
+    assert_eq!((beacon.state, beacon.output), ("certified", Some(output)), "the retained certified output is shown");
+    w.step_at(release + 10, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    let s = status(&w, &id);
+    assert_eq!((s.engine_phase, s.v2_phase.as_str(), s.retries), (Some("bound"), "panelBound", 0));
+    let assignment = s.assignment.clone().expect("the assignment");
+    let ClaimPhaseV3::Bound(binding) = w.record(&id).phase else { unreachable!() };
+    assert_eq!(assignment.seed, binding.panel_seed_v3);
+    assert_eq!(assignment.beacon_id, binding.beacon_id);
+    assert_eq!(assignment.seats.len(), 5);
+    assert_eq!(assignment.exposure, binding.exposure.to_string());
+    assert_eq!(assignment.bound_daa, release + 10);
+    assert!(s.terminal.is_none());
+    let overview = panel_v3_overview_v1(&w.c.s);
+    assert!(overview.active);
+    assert_eq!((overview.tracked_claims, overview.bound, overview.pending_seal), (1, 1, 0));
+    assert_eq!(overview.certified_epochs, vec![seal.beacon_epoch]);
+
+    let seats = seats_of_panel(&w.c.s, &id);
+    w.step_with(&[quorum(id, &seats, release + 11)]);
+    w.step();
+    let s = status(&w, &id);
+    assert_eq!((s.engine_phase, s.v2_phase.as_str()), (Some("released"), "receiptLicensed"));
+    let terminal = s.terminal.expect("the end");
+    assert_eq!((terminal.reason, terminal.fraud), ("RELEASED", false));
+    assert!(s.assignment.is_some(), "the assignment stays readable after the release");
+
+    assert_ne!(w.c.s.state_root(), before);
+    let again = w.c.s.state_root();
+    let _ = (status(&w, &id), panel_v3_overview_v1(&w.c.s));
+    assert_eq!(w.c.s.state_root(), again, "reading a status changes nothing");
+}
+
+/// **The non-fraud ends read as such**: `BEACON_UNAVAILABLE` carries `fraud: false`, the beacon block says `unavailable` with no
+/// output, and the V2 phase names the void. A redrawn Panel shows its retry count and keeps the original seed's seats' history.
+#[test]
+fn the_observation_names_a_non_fraud_end_and_counts_a_retry() {
+    let mut w = V3::new();
+    let id = w.floor_claim(61);
+    w.step();
+    w.step();
+    let release = w.record(&id).seal.unwrap().anchor_slot;
+    w.step_at(release + 9, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    let s = status(&w, &id);
+    assert_eq!(s.engine_phase, Some("voided"));
+    assert!(s.v2_phase.starts_with("voided:"), "{}", s.v2_phase);
+    let terminal = s.terminal.expect("terminal");
+    assert_eq!((terminal.reason, terminal.fraud), ("BEACON_UNAVAILABLE", false));
+    let beacon = s.beacon.expect("beacon");
+    assert_eq!((beacon.state, beacon.output), ("unavailable", None));
+    assert!(s.assignment.is_none());
+
+    // A retry: the Panel never answers, the engine redraws once (from the original seed), and the count shows it.
+    let mut policy = engine_policy();
+    policy.seat_count = 3;
+    let mut r = V3::with(policy, FENCE);
+    let (rid, bound_at) = r.run_to_bound(62);
+    assert_eq!(status(&r, &rid).retries, 0);
+    r.step_at(bound_at + 4, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    let s = status(&r, &rid);
+    assert_eq!(s.retries, 1, "one redraw so far");
+    assert_eq!(s.assignment.expect("the new Panel").retry_index, 1);
+}
+
+/// **The read is stable**: version 1's JSON keys are pinned (a reader of version 1 ignores keys it does not know; keys are only
+/// appended), and a legacy claim reads as `historicalLaneA` with no engine phase.
+#[test]
+fn the_observation_json_is_pinned_and_a_legacy_claim_reads_as_lane_a() {
+    let mut w = V3::new();
+    w.c.daa = FENCE - 10;
+    let legacy = w.floor_claim(63);
+    w.c.daa = FENCE;
+    let v3 = w.floor_claim(64);
+    let l = status(&w, &legacy);
+    assert_eq!((l.rule, l.engine_phase, l.acceptance_order), ("historicalLaneA", None, None));
+    assert!(l.seal.is_none() && l.assignment.is_none() && l.terminal.is_none());
+    let json = serde_json::to_value(status(&w, &v3)).unwrap();
+    let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "acceptanceOrder", "acceptedDaa", "assignment", "beacon", "claimId", "enginePhase", "retries", "rule", "seal", "snapshot",
+            "terminal", "v2Phase", "version"
+        ]
+    );
+    assert_eq!(json["version"], 1);
+    assert_eq!(json["rule"], "permissionlessV3");
+    assert_eq!(json["enginePhase"], "pendingSeal");
+    let overview = serde_json::to_value(panel_v3_overview_v1(&w.c.s)).unwrap();
+    let mut keys: Vec<&str> = overview.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "active", "bound", "certifiedEpochs", "daa", "entropyReady", "height", "pendingSeal", "policyId", "released", "retainedWorkIds",
+            "sealed", "tip", "trackedClaims", "version", "voided"
+        ]
+    );
+}
