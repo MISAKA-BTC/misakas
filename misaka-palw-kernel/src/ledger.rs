@@ -82,7 +82,7 @@ use crate::public::{
     program_root_v1,
 };
 use crate::receipt::TallyStateV1;
-pub use crate::route::{AuthV1, KernelRefusalV1, KernelRouteObjectV1, ProsecutionV1, RefusalKindV1};
+pub use crate::route::{AuthV1, KernelRefusalV1, KernelRouteObjectV1, ProsecutionV1, RefusalKindV1, claim_seal_v1};
 use crate::settle::{SettlementInstructionV1, SettlementKindV1};
 use crate::trace::{EvidenceV1, ParamCommitmentsV1, derived_mask_v1, tensor_commitment};
 use crate::verify::MaterialV1;
@@ -117,6 +117,10 @@ pub struct LedgerPolicyV1 {
     pub max_adjudications_per_block: u32,
     /// The most court work (the class's declared worst court work, summed over the block's filed proofs) one block may trigger.
     pub max_court_work_per_block: u64,
+    /// A claim commits only over its producer's seal at least this old (≥ 1: a seal in the same block as the reveal proves nothing).
+    pub claim_seal_delay_daa: u64,
+    /// An unrevealed seal is dropped after this long (bounds the state junk seals can occupy).
+    pub seal_ttl_daa: u64,
     pub prosecution: ProsecutionPolicyV1,
 }
 
@@ -124,7 +128,7 @@ impl LedgerPolicyV1 {
     /// The relations among the timings and amounts every rule below relies on.
     pub fn validate(&self) -> Result<(), String> {
         let p = self;
-        let checks: [(bool, &str); 11] = [
+        let checks: [(bool, &str); 13] = [
             (p.court_deadline_daa == p.prosecution.court_deadline_daa, "the ledger's court deadline is the gate's"),
             (p.court_deadline_daa > 0 && p.challenge_window_daa > 0 && p.check_window_daa > 0, "every window is non-empty"),
             (p.proof_grace_daa > 0, "a served demand leaves a non-empty grace to file the proof it enables"),
@@ -141,6 +145,8 @@ impl LedgerPolicyV1 {
             (p.claim_collateral > 0, "a claim reserves collateral"),
             (p.max_adjudications_per_block > 0, "a block may adjudicate"),
             (p.max_court_work_per_block > 0, "a block may run a court"),
+            (p.claim_seal_delay_daa > 0, "a seal precedes its reveal by at least one block"),
+            (p.seal_ttl_daa >= p.claim_seal_delay_daa, "a seal lives long enough to be revealed"),
         ];
         match checks.iter().find(|(ok, _)| !ok) {
             Some((_, why)) => Err(format!("ledger policy: {why}")),
@@ -265,13 +271,20 @@ pub struct ClaimRowV1 {
     pub rewarded: bool,
 }
 
+/// An unrevealed seal: the claim seal and the DAA it was carried at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SealRowV1 {
+    pub seal: Digest,
+    pub daa: u64,
+}
+
 impl ClaimRowV1 {
     fn terminal_for_demands(&self) -> bool {
         self.convicted || matches!(self.life.state, ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. })
     }
 
     /// Whether this claim still holds its job (live or Final): only a failed claim frees the job for another.
-    fn holds_job(&self) -> bool {
+    pub fn holds_job(&self) -> bool {
         !self.terminal_for_demands()
     }
 }
@@ -412,6 +425,10 @@ pub enum LedgerEventV1 {
     } = 18,
     /// An explicit instruction the consumer applies to its real bonds ([`crate::settle`]).
     Settlement(SettlementInstructionV1) = 19,
+    ClaimSealed {
+        job: Digest,
+        producer: Digest,
+    } = 20,
 }
 
 /// One block.
@@ -529,6 +546,8 @@ pub struct KernelLedgerV1 {
     /// **One claim per job**: the claim holding each job. A job is computed (and paid) once; another bond re-signing a published
     /// claim's evidence for the same job is refused. A holder that fails (convicted, unavailable, timed out) frees the job.
     pub job_claims: BTreeMap<Digest, Digest>,
+    /// Unrevealed seals, keyed `(job, producer)` (see [`KernelRouteObjectV1::SealClaim`]).
+    pub seals: BTreeMap<(Digest, Digest), SealRowV1>,
     /// Cumulative amount burned (derived from the settlement instructions; kept as a checksum).
     pub burned: u64,
     budget: BlockBudgetV1,
@@ -558,6 +577,7 @@ impl KernelLedgerV1 {
             served: BTreeMap::new(),
             attested_artifacts: BTreeSet::new(),
             job_claims: BTreeMap::new(),
+            seals: BTreeMap::new(),
             burned: 0,
             budget: BlockBudgetV1::default(),
         })
@@ -691,6 +711,22 @@ impl KernelLedgerV1 {
                 }
                 _ => return Err(KernelRefusalV1::rule(name, "no such bond, or already exiting")),
             },
+            KernelRouteObjectV1::SealClaim { producer, job, seal } => {
+                if !self.jobs.contains_key(job) && !self.pipeline_jobs.contains_key(job) {
+                    return Err(KernelRefusalV1::rule(name, "no such job"));
+                }
+                match self.bonds.get(producer) {
+                    None => return Err(KernelRefusalV1::rule(name, "the producer bond is not registered")),
+                    Some(b) if b.exit_requested.is_some() => return Err(KernelRefusalV1::rule(name, "the producer bond is exiting")),
+                    Some(_) => {}
+                }
+                if self.job_claims.get(job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job) {
+                    return Err(KernelRefusalV1::rule(name, "the job already has a live or Final claim"));
+                }
+                // A producer may re-seal (another output): the latest seal replaces the earlier and its clock restarts.
+                self.seals.insert((*job, *producer), SealRowV1 { seal: *seal, daa: self.daa });
+                out.push(LedgerEventV1::ClaimSealed { job: *job, producer: *producer });
+            }
             KernelRouteObjectV1::Withdraw { bond } => {
                 let (daa, delay) = (self.daa, self.policy.exit_delay_daa);
                 match self.bonds.get(bond) {
@@ -761,6 +797,7 @@ impl KernelLedgerV1 {
             O::FileProof { accuser, .. } => Some((*accuser, "accuser")),
             O::FileDemand { demander, .. } => Some((*demander, "demander")),
             O::RequestExit { bond } | O::Withdraw { bond } => Some((*bond, "bond")),
+            O::SealClaim { producer, .. } => Some((*producer, "producer")),
             _ => None,
         };
         if let Some((actor, role)) = named {
@@ -1063,7 +1100,23 @@ impl KernelLedgerV1 {
         {
             return Err(rule("the job already has a live or Final claim (one claim per job)".into()));
         }
+        match self.bonds.get(&claim.producer_bond) {
+            None => return Err(rule("the producer bond is not registered".into())),
+            Some(b) if b.exit_requested.is_some() => return Err(rule("the producer bond is exiting".into())),
+            Some(_) => {}
+        }
+        let key = (claim.job_id, claim.producer_bond);
+        match self.seals.get(&key) {
+            Some(row) if row.seal == claim_seal_v1(&id) && row.daa.saturating_add(self.policy.claim_seal_delay_daa) <= self.daa => {}
+            _ => {
+                return Err(rule(format!(
+                    "no seal of this claim by its producer at least {} DAA old (seal, then reveal)",
+                    self.policy.claim_seal_delay_daa
+                )));
+            }
+        }
         self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)?;
+        self.seals.remove(&key);
         self.job_claims.insert(claim.job_id, id);
         Ok(())
     }
@@ -1153,7 +1206,23 @@ impl KernelLedgerV1 {
         {
             return Err(rule("the job already has a live or Final claim (one claim per job)".into()));
         }
+        match self.bonds.get(&claim.producer_bond) {
+            None => return Err(rule("the producer bond is not registered".into())),
+            Some(b) if b.exit_requested.is_some() => return Err(rule("the producer bond is exiting".into())),
+            Some(_) => {}
+        }
+        let key = (claim.job_id, claim.producer_bond);
+        match self.seals.get(&key) {
+            Some(row) if row.seal == claim_seal_v1(&id) && row.daa.saturating_add(self.policy.claim_seal_delay_daa) <= self.daa => {}
+            _ => {
+                return Err(rule(format!(
+                    "no seal of this claim by its producer at least {} DAA old (seal, then reveal)",
+                    self.policy.claim_seal_delay_daa
+                )));
+            }
+        }
         self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)?;
+        self.seals.remove(&key);
         self.job_claims.insert(claim.job_id, id);
         Ok(())
     }
@@ -1482,6 +1551,9 @@ impl KernelLedgerV1 {
     /// Deadlines, windows, Final, liability release.
     fn tick_into(&mut self, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
+        // Unrevealed seals expire (a junk seal holds nothing and lives a bounded time).
+        let ttl = self.policy.seal_ttl_daa;
+        self.seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
         // Demands past their deadline: the producer's availability default.
         let due: Vec<_> = self.demands.iter().filter(|(_, d)| daa >= d.deadline_daa).map(|(k, _)| *k).collect();
         for (claim, stage, position) in due {

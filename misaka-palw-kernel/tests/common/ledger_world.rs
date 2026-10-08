@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use super::chain::{Consumer, T, block_of};
+use super::chain::{Consumer, T, block_of, seals_for};
 use super::{MAX_POSITIONS, active_for, bump, root_of};
 use misaka_palw_kernel::descriptor::{k2_tir_v1_descriptor, k2_tir_v2_descriptor};
 use misaka_palw_kernel::evidence::build_evidence_v1;
@@ -54,6 +54,8 @@ pub fn policy() -> LedgerPolicyV1 {
         claim_reward: 7,
         max_adjudications_per_block: 64,
         max_court_work_per_block: u64::MAX,
+        claim_seal_delay_daa: 1,
+        seal_ttl_daa: 100,
         prosecution: PROSECUTION,
     }
 }
@@ -158,6 +160,13 @@ impl World {
     }
 
     pub fn block(&mut self, daa: u64, txs: Vec<T>) -> Vec<E> {
+        // Seal, then reveal: every claim of this block is sealed in a block at the ledger's current DAA first.
+        let seals = seals_for(&txs);
+        if !seals.is_empty() && self.l.daa < daa {
+            let sb = block_of(self.l.daa, seals, PRODUCER);
+            self.consumer.apply(&mut self.l, &sb);
+            self.blocks.push(sb);
+        }
         let b = block_of(daa, txs, PRODUCER);
         let ev = self.consumer.apply(&mut self.l, &b);
         self.blocks.push(b);

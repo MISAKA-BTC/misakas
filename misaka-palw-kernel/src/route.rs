@@ -44,6 +44,7 @@ pub const TAG_FILE_DEMAND_V1: u8 = 8;
 pub const TAG_RESPOND_V1: u8 = 9;
 pub const TAG_REQUEST_EXIT_V1: u8 = 10;
 pub const TAG_WITHDRAW_V1: u8 = 11;
+pub const TAG_SEAL_CLAIM_V1: u8 = 12;
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -58,6 +59,7 @@ pub const MAX_FILE_DEMAND_BYTES_V1: usize = 256;
 pub const MAX_RESPOND_BYTES_V1: usize = 128 << 20;
 pub const MAX_REQUEST_EXIT_BYTES_V1: usize = 256;
 pub const MAX_WITHDRAW_BYTES_V1: usize = 256;
+pub const MAX_SEAL_CLAIM_BYTES_V1: usize = 256;
 
 /// **Who signed an object**: the bond whose key the consumer verified. The ledger checks it names the actor the object names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
@@ -146,6 +148,19 @@ pub enum KernelRouteObjectV1 {
     Withdraw {
         bond: Digest,
     } = 11,
+    /// **Seal a claim before revealing it** (signed by `producer`): `seal = claim_seal_v1(claim id)`. A claim commits only over its
+    /// producer's seal at least `claim_seal_delay_daa` old, so a mempool observer who copies a revealed claim's evidence under its
+    /// own bond is always too late — the original's seal precedes anything the copyist could seal after seeing it.
+    SealClaim {
+        producer: Digest,
+        job: Digest,
+        seal: Digest,
+    } = 12,
+}
+
+/// The seal of a claim: `H("misaka-palw/kernel/claim-seal/v1"; claim id)` (the claim id binds the producer, job, output and evidence).
+pub fn claim_seal_v1(claim_id: &Digest) -> Digest {
+    crate::hash::id(b"misaka-palw/kernel/claim-seal/v1", claim_id)
 }
 
 /// Why an object was not applied. The ledger's state is **byte-identical** to what it was before the call.
@@ -219,6 +234,7 @@ impl KernelRouteObjectV1 {
             Self::Respond { .. } => TAG_RESPOND_V1,
             Self::RequestExit { .. } => TAG_REQUEST_EXIT_V1,
             Self::Withdraw { .. } => TAG_WITHDRAW_V1,
+            Self::SealClaim { .. } => TAG_SEAL_CLAIM_V1,
         }
     }
 
@@ -288,6 +304,7 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_RESPOND_V1 => "Respond",
         TAG_REQUEST_EXIT_V1 => "RequestExit",
         TAG_WITHDRAW_V1 => "Withdraw",
+        TAG_SEAL_CLAIM_V1 => "SealClaim",
         _ => "Unknown",
     }
 }
@@ -306,6 +323,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_RESPOND_V1 => MAX_RESPOND_BYTES_V1,
         TAG_REQUEST_EXIT_V1 => MAX_REQUEST_EXIT_BYTES_V1,
         TAG_WITHDRAW_V1 => MAX_WITHDRAW_BYTES_V1,
+        TAG_SEAL_CLAIM_V1 => MAX_SEAL_CLAIM_BYTES_V1,
         _ => return None,
     })
 }
@@ -358,9 +376,9 @@ mod tests {
             assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
             assert_ne!(o.name(), "Unknown");
         }
-        let tags: Vec<u8> = (1..=11).collect();
+        let tags: Vec<u8> = (1..=12).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
-        assert!(max_encoded_bytes_of_tag(0).is_none() && max_encoded_bytes_of_tag(12).is_none());
+        assert!(max_encoded_bytes_of_tag(0).is_none() && max_encoded_bytes_of_tag(13).is_none());
     }
 
     #[test]
@@ -371,7 +389,7 @@ mod tests {
         assert_eq!(kind(&[2]), RefusalKindV1::Malformed, "another version");
         assert_eq!(kind(&[KERNEL_ROUTE_VERSION_V1]), RefusalKindV1::Malformed, "no variant");
         assert_eq!(kind(&[KERNEL_ROUTE_VERSION_V1, 0]), RefusalKindV1::Malformed, "tag 0 is not declared");
-        assert_eq!(kind(&[KERNEL_ROUTE_VERSION_V1, 12]), RefusalKindV1::Malformed, "an undeclared tag");
+        assert_eq!(kind(&[KERNEL_ROUTE_VERSION_V1, 13]), RefusalKindV1::Malformed, "an undeclared tag");
         assert_eq!(kind(&good[..good.len() - 1]), RefusalKindV1::Malformed, "truncated");
         let mut trailing = good.clone();
         trailing.push(0);

@@ -60,6 +60,14 @@ fn settlements(w: &World, from_daa: u64) -> Vec<S> {
     w.consumer.settlements.iter().filter(|(d, _)| *d >= from_daa).map(|(_, s)| *s).collect()
 }
 
+/// Seal `claim` in a block at the ledger's current DAA (a producer seals before it reveals).
+fn seal_first(w: &mut World, claim: &misaka_palw_kernel::job::KernelClaimV1) {
+    let seal = misaka_palw_kernel::ledger::claim_seal_v1(&claim.id());
+    let daa = w.l.daa;
+    let ev = w.block(daa, vec![T::SealClaim { producer: claim.producer_bond, job: claim.job_id, seal }]);
+    assert!(ev.contains(&E::ClaimSealed { job: claim.job_id, producer: claim.producer_bond }), "{ev:?}");
+}
+
 fn ix(bond: Digest, amount: u64, kind: K, claim: Digest) -> S {
     S { bond, amount, kind, claim: Some(claim) }
 }
@@ -140,7 +148,7 @@ fn the_state_root_is_versioned_canonical_and_pinned_by_a_golden_vector() {
 /// The first 8 bytes of each collection's root, for `small_state()`: header, bonds, classes, pipeline classes, jobs, pipeline jobs,
 /// claims, demands, served, attested artifacts.
 const GOLDEN_PARTS: [&str; 10] = [
-    "e02e0b858cf18ce7",
+    "5966cb0f285d7ec3",
     "801771b3f093df1f",
     "365486291ac886c2",
     "589b62088e37616b",
@@ -152,7 +160,7 @@ const GOLDEN_PARTS: [&str; 10] = [
     "b7a5cb38db702693",
 ];
 const GOLDEN_ROOT: &str =
-    "7298bd0df6a05d0cda62382a46531039f0c6c71aa48f1ded002aa86b3f456d5746fc1aaa0bb5d3eb31434f6eefa303f262e2bf45952b15486bce3c4c1f7a27fd";
+    "d64d45545c9faceb3117b18e6293aee4be780032cbbc8a3b702f4e4af2b0d737776503766d468a42dc6cb6b13d3cf71e972ba5668b7ebc7f54b19f5573568f40";
 
 #[test]
 fn each_collection_has_its_own_root_and_the_root_covers_the_state_and_nothing_else() {
@@ -254,6 +262,7 @@ fn an_object_is_applied_only_if_signed_by_the_actor_it_names_and_a_refusal_chang
     let id = lie.claim.id();
     let (a, commit) = lie.tx.clone().signed(PRODUCER);
     assert_eq!(a, auth(PRODUCER));
+    seal_first(&mut w, &lie.claim);
     // Nobody but the producer a claim names can commit it (the Panel's friends cannot commit a claim in its name).
     w.l.begin_block(10).unwrap();
     for imposter in [OUTSIDER, SPAM1, [0xEE; 64]] {
@@ -291,6 +300,7 @@ fn malformed_and_oversized_objects_are_refused_transactionally_through_the_stric
     let mut w = World::new();
     let job = w.post_job(2, &[3, 17, 9], 3, 1);
     let h = w.honest(&job, 3);
+    seal_first(&mut w, &h.claim);
     let (a, commit) = h.tx.clone().signed(PRODUCER);
     let good = commit.encode();
     w.l.begin_block(3).unwrap();

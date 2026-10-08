@@ -102,6 +102,7 @@ pub struct StateRootPartsV1 {
     pub served: Digest,
     pub attested_artifacts: Digest,
     pub job_claims: Digest,
+    pub seals: Digest,
 }
 
 impl StateRootPartsV1 {
@@ -171,6 +172,7 @@ impl KernelLedgerV1 {
                 self.attested_artifacts.iter().map(|k| (k, &())),
             ),
             job_claims: collection_root(&d("job-claims"), self.job_claims.len(), self.job_claims.iter()),
+            seals: collection_root(&d("seals"), self.seals.len(), self.seals.iter()),
         }
     }
 

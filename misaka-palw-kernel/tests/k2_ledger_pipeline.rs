@@ -55,6 +55,8 @@ fn policy() -> LedgerPolicyV1 {
         claim_reward: 7,
         max_adjudications_per_block: 64,
         max_court_work_per_block: u64::MAX,
+        claim_seal_delay_daa: 1,
+        seal_ttl_daa: 100,
         prosecution: ProsecutionPolicyV1 {
             court_deadline_daa: 20,
             max_sessions_per_claim: 1 << 10,
@@ -195,6 +197,13 @@ impl World {
     }
 
     fn block(&mut self, daa: u64, txs: Vec<T>) -> Vec<E> {
+        // Seal, then reveal (see common::chain::seals_for).
+        let seals = common::chain::seals_for(&txs);
+        if !seals.is_empty() && self.l.daa < daa {
+            let sb = block_of(self.l.daa, seals, PRODUCER);
+            self.consumer.apply(&mut self.l, &sb);
+            self.blocks.push(sb);
+        }
         let b = block_of(daa, txs, PRODUCER);
         let ev = self.consumer.apply(&mut self.l, &b);
         self.blocks.push(b);

@@ -89,6 +89,27 @@ pub enum T {
         position: u32,
         bytes: Vec<u8>,
     },
+    SealClaim {
+        producer: Digest,
+        job: Digest,
+        seal: Digest,
+    },
+}
+
+/// The seals the claims among `txs` need (the harness seals every claim one block before revealing it, as a producer would).
+pub fn seals_for(txs: &[T]) -> Vec<T> {
+    use misaka_palw_kernel::ledger::claim_seal_v1;
+    txs.iter()
+        .filter_map(|t| match t {
+            T::CommitClaim { claim, .. } => {
+                Some(T::SealClaim { producer: claim.producer_bond, job: claim.job_id, seal: claim_seal_v1(&claim.id()) })
+            }
+            T::CommitPipelineClaim { claim, .. } => {
+                Some(T::SealClaim { producer: claim.producer_bond, job: claim.job_id, seal: claim_seal_v1(&claim.id()) })
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 impl T {
@@ -139,6 +160,7 @@ impl T {
                 vec![obj(demander, O::FileDemand { demander, claim, stage, position })]
             }
             T::Respond { claim, stage, position, bytes } => vec![obj(signer, O::Respond { claim, stage, position, bytes })],
+            T::SealClaim { producer, job, seal } => vec![obj(producer, O::SealClaim { producer, job, seal })],
         }
     }
 }
