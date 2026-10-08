@@ -228,12 +228,48 @@ pub fn tile_rows(rest_elems: u64, tile_elems: u64) -> u64 {
 }
 
 /// A param the node reads in tiles: where to read it, and what it was declared as.
+///
+/// With `transposed` the node reads the param **through a `Transpose` `[1, 0]` of a rank-2 param** (RFC-0013 §5): the lowerer declares a linear
+/// layer's weights `[out, in]` and feeds the `MatMul` their transpose, so the weights of nearly every lowered model reach their `MatMul` this
+/// way. `shape` is always the param's own (`[out, in]`: the rows the container stores and the tiles are read in); the operand the `MatMul` sees is
+/// [`Self::logical_shape`]. The transposed tensor is never built.
 pub struct LazyParam<'a> {
     pub tiles: &'a dyn TileAccess,
     pub index: u16,
     pub layer: Option<u32>,
     pub dtype: DType,
     pub shape: Vec<u64>,
+    pub transposed: bool,
+}
+
+impl LazyParam<'_> {
+    /// The shape of the operand the consuming primitive sees: the param's, or — through the fused transpose — its reverse.
+    pub fn logical_shape(&self) -> Vec<u64> {
+        if self.transposed { self.shape.iter().rev().copied().collect() } else { self.shape.clone() }
+    }
+}
+
+/// The nodes of a block that [`fusable_transposes`] may leave unbuilt: `Transpose` `[1, 0]` of a rank-2 param, never committed, neither a carry-out
+/// nor the logits node, and read by exactly one node, a `MatMul`. Such a node's value is observable only through that `MatMul`, which reads the
+/// param in tiles. (Whether a given node is left unbuilt also depends on the param being larger than a tile, decided where it is evaluated.)
+pub fn fusable_transposes(p: &crate::program::Program, b: usize) -> std::collections::BTreeSet<usize> {
+    use crate::program::Ref;
+    let block = &p.blocks[b];
+    let mut out = std::collections::BTreeSet::new();
+    for (t, n) in block.nodes.iter().enumerate() {
+        let is_param_transpose = matches!(&n.prim, Prim::Transpose { perm } if perm.as_slice() == [1, 0])
+            && matches!(n.inputs.as_slice(), [Ref::Param(j)] if p.params.get(*j as usize).is_some_and(|d| d.shape.len() == 2));
+        if !is_param_transpose || n.commit || t == p.logits as usize || block.carry_out.contains(&(t as u16)) {
+            continue;
+        }
+        let me = Ref::Node(t as u16);
+        let reads: usize = block.nodes.iter().map(|m| m.inputs.iter().filter(|r| **r == me).count()).sum();
+        let reader = block.nodes.iter().find(|m| m.inputs.contains(&me));
+        if reads == 1 && reader.is_some_and(|m| matches!(m.prim, Prim::MatMul)) {
+            out.insert(t);
+        }
+    }
+    out
 }
 
 /// Does `prim` have a tiled form for a param of rank `rank` at input position `pos`? `MatMul` either operand (rank ≥ 2); `Gather`'s data
@@ -266,7 +302,9 @@ pub fn eval_prim_tiled(
     }
     match prim {
         Prim::MatMul => matmul_tiled(prim, ins, pos, lazy, out_dtype, out_shape, n_out as usize),
-        Prim::Gather { axis: 0, batch_dims: 0 } if pos == 0 => gather_tiled(prim, ins, lazy, out_dtype, out_shape, n_out as usize),
+        Prim::Gather { axis: 0, batch_dims: 0 } if pos == 0 && !lazy.transposed => {
+            gather_tiled(prim, ins, lazy, out_dtype, out_shape, n_out as usize)
+        }
         _ => err(Class::Shape, format!("{} has no tiled form for a param at input {pos}", prim.name())),
     }
 }
@@ -301,7 +339,8 @@ fn matmul_tiled(
     let out_rank = out_shape.len();
     // The operand shapes: the lazy one is the declaration, the other the activation in memory (the other input is `ins[1 - pos]`).
     let other = ins[1 - pos];
-    let (ash, bsh): (&[u64], &[u64]) = if pos == 0 { (&lazy.shape, &other.shape) } else { (&other.shape, &lazy.shape) };
+    let lshape = lazy.logical_shape();
+    let (ash, bsh): (&[u64], &[u64]) = if pos == 0 { (&lshape, &other.shape) } else { (&other.shape, &lshape) };
     let (ra, rb) = (ash.len(), bsh.len());
     if ra < 2 || rb < 2 || out_rank < 2 || ash[ra - 1] != bsh[rb - 2] {
         return shape_err(prim, "contraction");
@@ -338,16 +377,18 @@ fn matmul_tiled(
 
     let mut acc: Vec<OrderFree> = (0..n_out).map(|_| OrderFree::new()).collect();
     let mut macs: u128 = 0;
+    // Elements per physical row of the param (the rows the tiles are made of).
+    let phys_rest = if lazy.shape.len() <= 1 { 1 } else { count(&lazy.shape[1..]) as usize };
     if pos == 1 {
         // B is the param: element g = bb·(K·N) + t·N + c contributes x[beta, r, t] · y to out[beta, r, c] for every reading beta and r.
         for_each_tile(lazy, |r0, tile| {
-            let rest = count(&bsh[1..]) as usize;
+            let rest = phys_rest;
             let base = r0 as usize * rest;
             for (e, &y) in tile.data.iter().enumerate() {
                 let g = base + e;
-                let c = g % nn_us;
-                let t = (g / nn_us) % kk_us;
-                let bb = g / (kk_us * nn_us);
+                // Through the fused transpose the param element W[pr, pc] is B[t = pc, c = pr] (a rank-2 param: no batch).
+                let (c, t, bb) =
+                    if lazy.transposed { (g / rest, g % rest, 0) } else { (g % nn_us, (g / nn_us) % kk_us, g / (kk_us * nn_us)) };
                 for &beta in &readers[bb] {
                     let beta = beta as usize;
                     let a_row = a_lin[beta] as usize * (m_us * kk_us);
@@ -362,13 +403,13 @@ fn matmul_tiled(
     } else {
         // A is the param: element g = ba·(M·K) + r·K + t contributes x · y[beta, t, c] to out[beta, r, c] for every reading beta and c.
         for_each_tile(lazy, |r0, tile| {
-            let rest = if ash.len() <= 1 { 1 } else { count(&ash[1..]) as usize };
+            let rest = phys_rest;
             let base = r0 as usize * rest;
             for (e, &x) in tile.data.iter().enumerate() {
                 let g = base + e;
-                let t = g % kk_us;
-                let r = (g / kk_us) % m_us;
-                let ba = g / (m_us * kk_us);
+                // Through the fused transpose the param element W[pr, pc] is A[r = pc, t = pr].
+                let (t, r, ba) =
+                    if lazy.transposed { (g / rest, g % rest, 0) } else { (g % kk_us, (g / kk_us) % m_us, g / (m_us * kk_us)) };
                 for &beta in &readers[ba] {
                     let beta = beta as usize;
                     let b_row = b_lin[beta] as usize * (kk_us * nn_us);
@@ -441,7 +482,7 @@ mod tests {
         map.insert((0, None), param.clone());
         let source = MapRowSource(&map);
         let tp = TiledParams::new(&source, tile);
-        let lazy = LazyParam { tiles: &tp, index: 0, layer: None, dtype: param.dtype, shape: param.shape.clone() };
+        let lazy = LazyParam { tiles: &tp, index: 0, layer: None, dtype: param.dtype, shape: param.shape.clone(), transposed: false };
         let placeholder = Tensor::zeros(DType::I8, vec![]);
         let ins: Vec<&Tensor> = if pos == 0 { vec![&placeholder, other] } else { vec![other, &placeholder] };
         let r = eval_prim_tiled(prim, &ins, pos, &lazy, out_dtype, out_shape);
@@ -511,6 +552,55 @@ mod tests {
         assert!(ok > 100 && failed > 20, "both the values and the refusals were exercised: {ok} ok, {failed} refused");
     }
 
+    /// **A `MatMul` that reads a rank-2 param through a fused `Transpose [1, 0]`** (the lowerer's linear layer: weights `[out, in]`): the param either
+    /// operand, the other operand batched or not, every output dtype, every tile size from one element up — the result, values and refusals, is the
+    /// whole `MatMul` of the explicitly transposed tensor, the transposed tensor is never built, and each param element is read exactly once.
+    #[test]
+    fn a_matmul_through_a_fused_transpose_equals_the_matmul_of_the_transposed_tensor() {
+        let mut rng = ChaCha8Rng::seed_from_u64(0x0013_5003);
+        let (mut ok, mut failed) = (0, 0);
+        for case in 0..400 {
+            let (p0, p1) = (rng.gen_range(1..=6u64), rng.gen_range(1..=6u64));
+            let (m, batch) = (rng.gen_range(1..=4u64), if rng.gen_bool(0.4) { vec![rng.gen_range(1..=3u64)] } else { vec![] });
+            let w_dtype = *[DType::I8, DType::I16, DType::I32, DType::I64].get(rng.gen_range(0..4)).unwrap();
+            let x_dtype = *[DType::I8, DType::I16, DType::I32, DType::I64].get(rng.gen_range(0..4)).unwrap();
+            let out_dtype = *[DType::I16, DType::I32, DType::I64, DType::I128].get(rng.gen_range(0..4)).unwrap();
+            let wide = rng.gen_bool(0.3);
+            let (lo, hi) = if wide { (i128::MIN, i128::MAX) } else { (-9, 9) };
+            let w = rand_tensor(&mut rng, w_dtype, &[p0, p1], lo, hi);
+            let wt = eval_prim(&Prim::Transpose { perm: vec![1, 0] }, &[&w], w_dtype, &[p1, p0], &[], None).expect("transpose");
+            for pos in [0usize, 1] {
+                // pos 1: B = Wᵀ is [p1, p0], x is [.., m, p1]; pos 0: A = Wᵀ is [p1, p0], y is [.., p0, m].
+                let other_shape: Vec<u64> =
+                    if pos == 1 { [batch.clone(), vec![m, p1]].concat() } else { [batch.clone(), vec![p0, m]].concat() };
+                let other = rand_tensor(&mut rng, x_dtype, &other_shape, lo, hi);
+                let out_shape: Vec<u64> =
+                    if pos == 1 { [batch.clone(), vec![m, p0]].concat() } else { [batch.clone(), vec![p1, m]].concat() };
+                let expected = whole(&Prim::MatMul, &other, &wt, pos, out_dtype, &out_shape);
+                for tile in [1u64, 2, 3, 5, 1_000] {
+                    let mut map = Params::new();
+                    map.insert((0, None), w.clone());
+                    let source = MapRowSource(&map);
+                    let tp = TiledParams::new(&source, tile);
+                    let lazy = LazyParam { tiles: &tp, index: 0, layer: None, dtype: w_dtype, shape: vec![p0, p1], transposed: true };
+                    assert_eq!(lazy.logical_shape(), vec![p1, p0]);
+                    let placeholder = Tensor::zeros(DType::I8, vec![]);
+                    let ins: Vec<&Tensor> = if pos == 0 { vec![&placeholder, &other] } else { vec![&other, &placeholder] };
+                    let got = eval_prim_tiled(&Prim::MatMul, &ins, pos, &lazy, out_dtype, &out_shape);
+                    assert_eq!(got, expected, "case {case} pos {pos} tile {tile}: W={p0}x{p1} other={other_shape:?} {out_dtype:?}");
+                    if expected.is_ok() {
+                        let r = tp.report();
+                        assert_eq!(r.elems_read, p0 * p1, "each element of the param is read exactly once");
+                        assert!(r.peak_tile_elems <= tile_elems_bound(p1, tile), "tile {tile}: {r:?}");
+                        assert_eq!(r.whole_loads, 0, "the transposed tensor was never built");
+                    }
+                }
+                if expected.is_ok() { ok += 1 } else { failed += 1 }
+            }
+        }
+        assert!(ok > 100 && failed > 20, "values and refusals were both exercised: {ok} ok, {failed} refused");
+    }
+
     #[test]
     fn a_tiled_gather_equals_the_whole_gather_including_an_out_of_range_index() {
         let mut rng = ChaCha8Rng::seed_from_u64(0x0013_5002);
@@ -539,7 +629,8 @@ mod tests {
                 map.insert((3, Some(1)), table.clone());
                 let source = MapRowSource(&map);
                 let tp = TiledParams::new(&source, tile);
-                let lazy = LazyParam { tiles: &tp, index: 3, layer: Some(1), dtype: DType::I16, shape: dshape.clone() };
+                let lazy =
+                    LazyParam { tiles: &tp, index: 3, layer: Some(1), dtype: DType::I16, shape: dshape.clone(), transposed: false };
                 let placeholder = Tensor::zeros(DType::I8, vec![]);
                 let got = eval_prim_tiled(&prim, &[&placeholder, &idx], 0, &lazy, DType::I16, &out_shape);
                 assert_eq!(got, expected, "case {case} tile {tile}");
@@ -588,7 +679,7 @@ mod tests {
             }
         }
         let tp = TiledParams::new(&Broken, 1);
-        let lazy = LazyParam { tiles: &tp, index: 0, layer: None, dtype: DType::I8, shape: vec![4, 2] };
+        let lazy = LazyParam { tiles: &tp, index: 0, layer: None, dtype: DType::I8, shape: vec![4, 2], transposed: false };
         let x = Tensor::zeros(DType::I8, vec![1, 4]);
         let ph = Tensor::zeros(DType::I8, vec![]);
         let e = eval_prim_tiled(&Prim::MatMul, &[&x, &ph], 1, &lazy, DType::I64, &[1, 2]).unwrap_err();
@@ -599,7 +690,7 @@ mod tests {
         bad.insert((0, None), Tensor { dtype: DType::I8, shape: vec![4, 2], data: vec![0, 0, 0, 0, 0, 999, 0, 0] });
         let source = MapRowSource(&bad);
         let tp = TiledParams::new(&source, 2);
-        let lazy = LazyParam { tiles: &tp, index: 0, layer: None, dtype: DType::I8, shape: vec![4, 2] };
+        let lazy = LazyParam { tiles: &tp, index: 0, layer: None, dtype: DType::I8, shape: vec![4, 2], transposed: false };
         let e = eval_prim_tiled(&Prim::MatMul, &[&x, &ph], 1, &lazy, DType::I64, &[1, 2]).unwrap_err();
         assert_eq!((e.class, e.reason.as_str()), (Class::Operand, "param: malformed tensor"));
         let short = Tensor { dtype: DType::I8, shape: vec![4, 2], data: vec![0; 7] };
@@ -610,7 +701,7 @@ mod tests {
         // The shape rules are the whole path's, from the declaration: a contraction that does not match is refused before any read.
         let wrong_x = Tensor::zeros(DType::I8, vec![1, 5]);
         let tp = TiledParams::new(&source, 2);
-        let lazy = LazyParam { tiles: &tp, index: 0, layer: None, dtype: DType::I8, shape: vec![4, 2] };
+        let lazy = LazyParam { tiles: &tp, index: 0, layer: None, dtype: DType::I8, shape: vec![4, 2], transposed: false };
         let e = eval_prim_tiled(&Prim::MatMul, &[&wrong_x, &ph], 1, &lazy, DType::I64, &[1, 2]).unwrap_err();
         assert_eq!(e.class, Class::Shape);
         assert_eq!(tp.report().tiles, 0, "nothing was read");

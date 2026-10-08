@@ -287,3 +287,104 @@ fn a_source_that_fails_mid_run_stops_the_run_with_its_own_refusal() {
     assert_eq!(e.class, Class::Missing);
     assert_eq!(run(&prog, &missing, &[1]).unwrap_err().class, Class::Missing, "the whole path says the same");
 }
+
+// ------------------------------------------------------------------------------------------------------------------
+// The lowerer's linear layer: weights declared [out, in] and read through `Transpose [1, 0]`.
+// ------------------------------------------------------------------------------------------------------------------
+
+/// `lower_linear` (`misaka-palw-tir-lower`) declares a projection's weights `[out, in]` and feeds the `MatMul` their transpose, so the weights of
+/// nearly every lowered model reach their `MatMul` through a `Transpose` node. This is that shape: an embedding `Gather`, `layers` projections
+/// `y = clamp(x · Wᵀ / 64)`, and a head `logits = x · Hᵀ`.
+fn lowered_linear_decoder(d: u32, vocab: u32, layers: usize) -> Program {
+    use ref2::Rounding;
+    use ref2::build::{ProgBuilder, fixed};
+    let mut pb = ProgBuilder::new(16, vocab);
+    let emb = pb.param("embed", DType::I8, &[vocab, d], false);
+    let w = pb.param("w", DType::I8, &[d, d], true);
+    let head = pb.param("head", DType::I8, &[vocab, d], false);
+    let pre = pb.block("pre", vec![]);
+    let e = pb.node(pre, Prim::Gather { axis: 0, batch_dims: 0 }, &[Ref::Param(emb), Ref::Input(0)], fixed(DType::I8, &[d]), true);
+    pb.carry_out(pre, &[e]);
+    let lay = pb.block("layer", vec![fixed(DType::I8, &[d])]);
+    let xr = pb.node(lay, Prim::Reshape, &[Ref::CarryIn(0)], fixed(DType::I8, &[1, d]), false);
+    let wt = pb.node(lay, Prim::Transpose { perm: vec![1, 0] }, &[Ref::Param(w)], fixed(DType::I8, &[d, d]), false);
+    let y = pb.node(lay, Prim::MatMul, &[Ref::Node(xr), Ref::Node(wt)], fixed(DType::I64, &[1, d]), false);
+    let c64 = Ref::Const(pb.konst(DType::I64, &[1], &[64]));
+    let q = pb.node(lay, Prim::Div { rule: Rounding::HalfAwayFromZero }, &[Ref::Node(y), c64], fixed(DType::I64, &[1, d]), false);
+    let c = pb.node(lay, Prim::Clamp { lo: -127, hi: 127 }, &[Ref::Node(q)], fixed(DType::I8, &[1, d]), false);
+    let out = pb.node(lay, Prim::Reshape, &[Ref::Node(c)], fixed(DType::I8, &[d]), true);
+    pb.carry_out(lay, &[out]);
+    let post = pb.block("post", vec![fixed(DType::I8, &[d])]);
+    let xr2 = pb.node(post, Prim::Reshape, &[Ref::CarryIn(0)], fixed(DType::I8, &[1, d]), false);
+    let ht = pb.node(post, Prim::Transpose { perm: vec![1, 0] }, &[Ref::Param(head)], fixed(DType::I8, &[d, vocab]), false);
+    let l = pb.node(post, Prim::MatMul, &[Ref::Node(xr2), Ref::Node(ht)], fixed(DType::I64, &[1, vocab]), false);
+    let logits =
+        pb.node(post, Prim::Clamp { lo: i32::MIN as i64, hi: i32::MAX as i64 }, &[Ref::Node(l)], fixed(DType::I32, &[1, vocab]), true);
+    pb.schedule(pre, &vec![lay; layers], post, logits);
+    pb.finish()
+}
+
+#[test]
+fn weights_read_through_the_lowerers_transpose_are_tiled_never_built_and_the_run_is_the_whole_run() {
+    let (d, vocab, layers) = (12u32, 37u32, 3usize);
+    let prog = lowered_linear_decoder(d, vocab, layers);
+    let mut rng = R::seed_from_u64(0x0013_2029);
+    let params = small_params(&mut rng, &prog);
+    let tokens = [3u64, 17, 0, 36, 8];
+    let whole = run(&prog, &params, &tokens).expect("the decoder runs");
+    // The two transposes are the fusable ones: not committed, not carried, not the logits, one MatMul reader each.
+    for b in [1usize, 2] {
+        assert_eq!(ref2::tiled::fusable_transposes(&prog, b).len(), 1, "block {b}");
+    }
+    assert!(ref2::tiled::fusable_transposes(&prog, 0).is_empty());
+    let widest = widest_row(&prog);
+    // Every param is read by a Gather or through a fused transpose into a MatMul, so strict tiling holds even at one element per tile.
+    for tile in [1u64, 5, 12, 100, 1_000_000] {
+        let source = MapRowSource(&params);
+        let tiled = TiledParams::new(&source, tile).strict();
+        let got = run(&prog, &tiled, &tokens).unwrap_or_else(|e| panic!("tile {tile}: {e}"));
+        assert_eq!(got, whole, "tile {tile}: logits and every commit, position by position");
+        let r = tiled.report();
+        // The work is the whole path's: d·d per layer and vocab·d for the head, per position.
+        let analytic = (layers as u128 * d as u128 * d as u128 + vocab as u128 * d as u128) * tokens.len() as u128;
+        if tile < (d as u64) * (d as u64) {
+            assert!(r.macs > 0 && r.macs <= analytic, "tile {tile}: {} of {analytic}", r.macs);
+            assert!(r.tiles > 0 && r.peak_tile_elems <= tile.max(widest), "tile {tile}: {r:?}");
+            assert_eq!(r.whole_loads, 0, "tile {tile}: nothing was loaded whole, so no transposed tensor was ever built: {r:?}");
+        }
+        if tile == 1 {
+            assert_eq!(r.macs, analytic, "every weight larger than a tile: the whole path's products, exactly");
+        }
+    }
+}
+
+#[test]
+fn a_fused_transpose_that_is_also_committed_or_carried_is_built_as_ever() {
+    // The same program with the layer's transpose committed: its value is observable, so it is built whole (and the run is still the whole run).
+    use ref2::build::{ProgBuilder, fixed};
+    let mut pb = ProgBuilder::new(4, 5);
+    let emb = pb.param("embed", DType::I8, &[5, 4], false);
+    let w = pb.param("w", DType::I8, &[4, 4], false);
+    let pre = pb.block("pre", vec![]);
+    let e = pb.node(pre, Prim::Gather { axis: 0, batch_dims: 0 }, &[Ref::Param(emb), Ref::Input(0)], fixed(DType::I8, &[4]), true);
+    pb.carry_out(pre, &[e]);
+    let lay = pb.block("layer", vec![fixed(DType::I8, &[4])]);
+    let xr = pb.node(lay, Prim::Reshape, &[Ref::CarryIn(0)], fixed(DType::I8, &[1, 4]), false);
+    let wt = pb.node(lay, Prim::Transpose { perm: vec![1, 0] }, &[Ref::Param(w)], fixed(DType::I8, &[4, 4]), true);
+    let y = pb.node(lay, Prim::MatMul, &[Ref::Node(xr), Ref::Node(wt)], fixed(DType::I64, &[1, 4]), false);
+    let c = pb.node(lay, Prim::Clamp { lo: -127, hi: 127 }, &[Ref::Node(y)], fixed(DType::I8, &[1, 4]), false);
+    let out = pb.node(lay, Prim::Reshape, &[Ref::Node(c)], fixed(DType::I8, &[4]), true);
+    pb.carry_out(lay, &[out]);
+    let post = pb.block("post", vec![fixed(DType::I8, &[4])]);
+    let l = pb.node(post, Prim::Reshape, &[Ref::CarryIn(0)], fixed(DType::I8, &[1, 4]), false);
+    let logits = pb.node(post, Prim::Clamp { lo: -127, hi: 127 }, &[Ref::Node(l)], fixed(DType::I8, &[1, 4]), true);
+    pb.schedule(pre, &[lay], post, logits);
+    let prog = pb.finish();
+    assert!(ref2::tiled::fusable_transposes(&prog, 1).is_empty(), "a committed transpose is observable");
+    let mut rng = R::seed_from_u64(0x0013_202A);
+    let params = small_params(&mut rng, &prog);
+    let whole = run(&prog, &params, &[1, 2, 3]).expect("runs");
+    let source = MapRowSource(&params);
+    let tiled = TiledParams::new(&source, 1);
+    assert_eq!(run(&prog, &tiled, &[1, 2, 3]).expect("tiled"), whole);
+}
