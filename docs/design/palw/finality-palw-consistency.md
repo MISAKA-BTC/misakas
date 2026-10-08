@@ -1,5 +1,9 @@
 # The finality guard and the PALW fork choice — are they consistent? (FINX, 2026-10-08)
 
+> **INTERNAL — not for publication (user decision 2026-10-08).** V6 (§3) is a live safety finding on testnet-12; its mechanism stays
+> out of every public text (docs, commit messages, explorer text, issues). This record, the tests and the model live on the unpushed
+> branch `fin/palw-finality-consistency`. The fix ships in the single full-activation release (C3 or rule E — the user's choice).
+
 Lane FINX · branch `fin/palw-finality-consistency` (from the integration head `9ea89994b`) · decision draft:
 [ADR-0175](../../adr/0175-fork-choice-heals-a-partition-on-bonded-participation.md).
 
@@ -25,27 +29,43 @@ the root cause of devnet r1's permanent partition:
    strictly ahead in the economic keys (V1, V2). In devnet r1 the minority was economically ahead (a portable licence), the majority
    heavier: each kept its own. It needs no licence at all: **an honest partition three DAA long with nothing economic on either side
    never heals** (MEASURED, `finx_p0_a_*`; MODEL).
-2. **The finality guard seals what the PALW rule would replace.** The finality point advances by the node's *own* heartbeats, 600 blue
-   score ≈ 200–300 DAA ≈ 7–10 h, whether or not the node is refusing a competing branch at the time; once it passes the fork the
-   PALW gate is never asked again (V3, MEASURED `finx_p0_d_*`). The economic keys change on their own clock (a licence lands, a claim
-   matures 123 DAA after acceptance on testnet-12's short challenge window, or 1,226 on the unshortened one), so whether a partition
-   heals depends on which clock runs out first.
+2. **The finality guard seals what the PALW rule would replace.** The finality point advances by the node's *own* heartbeats — 600
+   blue score is 154 slots on a side whose producers race (3.90 blue a slot) and 300 on a single producer's (2.00), 5.2–10.2 h
+   (MEASURED `finx_p0_facts`) — whether or not the node is refusing a competing branch at the time; once it passes the fork the PALW
+   gate is never asked again (V3, MEASURED `finx_p0_d_*`). The economic keys change on their own clock (a licence lands; testnet-12
+   ships the short challenge window from DAA 0, so a licence turns `Final` 121 DAA later — MEASURED; 1,201 on the unshortened window),
+   so whether a partition heals depends on which clock runs out first.
 
-The analysis also found a **safety** defect next to the liveness one (V6, MODEL; mechanism MEASURED `finx_p0_e_*`): because the
+The analysis also found a **safety** defect next to the liveness one (V6, MEASURED `finx_p0_e_*` and `finx_p0_f_*`; MODEL): because the
 deep-reorg gate compares a candidate with the node's *previous* sink and the economic keys move with time, **a bondless private
-heartbeat branch can reverse a payment several DAA deep** by carrying a public licence (or crossing a pre-fork claim's `Final`
-height) one tick before the victim's chain does. The honest chain catching up one block later does not undo it.
+heartbeat branch reverses a payment past the 2-DAA shallow window** by carrying a public licence (or crossing a shared claim's `Final`
+height) one tick before the victim's chain does. The honest chain catching up one block later does not undo it. The same code path is
+in int-12 (`rcore/int-12` @`0b1c11b87`). On the live chain the DNS BFT veto (armed from DAA 0) runs in front of it and bounds its reach
+to payments newer than the last DNS-final anchor while the overlay is Active and confirming; with the overlay inactive, stalled past
+its 120-DAA TTL, or retired (RFC-0012's proposal), V6 reaches to the finality depth (§3.1).
 
 **What heals it** (MODEL, §5): no rule that uses only blue work, hashes and the economic keys can both heal an economically tied honest
 partition and refuse an attacker's private branch — to the lighter node they are the same blocks (§2.3). The candidates that keep the
 private-branch defence and heal partitions use an unforgeable signal; the one the chain already has is **bonded participation** —
-distinct pre-fork bonds that signed attempts on each branch above the fork. Rule **E** (C1's search over every tip, C3's fork-relative
+distinct pre-fork bonds that signed attempts in each branch's exclusive past. Rule **E** (C1's search over every tip, C3's exclusive-past
 keys, participation first once the fork is `W_p` deep) heals every partition shorter than the seal in which bonds were active on both
 sides, on the side with more of them, and holds against every private-branch adversary modelled, including panel collusion and the
 stale-incumbent attack. What no candidate heals without a new trust assumption: a partition in a heartbeat-only period (no bond signs
 anything), and a partition longer than the seal (rule K, a 2/3-participation checkpoint, does; at the price of crossing finality).
 
 ## 1. The two rules, as the code runs them
+
+**testnet-12 as shipped** (MEASURED `finx_p0_facts`): finality depth 600 blue, merge depth 30, pruning depth 74,920; windows bind 600,
+receipt 600, challenge 1,200 with the short window (120) armed from DAA 0, court 3,000; anchor delay 20, quorum 3; strict-win and the
+pruning-proof strict-economic commit at DAA 750, F-W at 1,700; **frontier provenance (ADR-0065 D2) `None`**; DNS overlay configured and
+**the DNS BFT veto (ADR-0128) armed from DAA 0** (`dns_bft_gate`, params.rs:22443). `dns_bft_gate_refusal` runs in `dns_reorg_outcome`
+before the V2 arm and refuses a candidate that abandons the last DNS-final anchor — when the rollout stage is Active, an anchor is
+confirmed, it is not stale (TTL 120 DAA on the node's own chain) and the gate is not abstaining; otherwise it answers nothing and the V2
+arm decides. The harness runs the overlay in Bootstrap (no validators), so every pipeline test here measures the V2 arm alone. t12's DNS
+cadence: attestation epoch 2 blue, lag 2 blue, backoff 1.
+int-12 (`0b1c11b87`): `sink_search_algorithm`, `palw_reorg_shallow_ghostdag_win_v1`, `palw_candidate_order_v2`,
+`palw_fork_authority_v2.rs` and `palw_fork_choice.rs` byte-identical to this branch's base; `dns_reorg_outcome` differs only by RFC-0012's
+dormant DNS-retirement switch.
 
 **The finality guard** (GHOSTDAG/Kaspa). `resolve_virtual` (processor.rs:1802) computes the finality point from the *previous*
 virtual (`virtual_finality_point`, :1938 → `BlockDepthManager::calc_finality_point`, block_depth.rs: the highest chain block whose blue
@@ -113,7 +133,9 @@ The way out is an input an honest partition side has and a private branch does n
 * **bonded participation** — a pre-fork bond's signature on an attempt above the fork. An attempt is signed by its bond over its own
   challenge, which binds its parents, so it cannot be copied onto another branch; header-verifiable; bonds minted after the fork are
   already excluded by ADR-0065 D2's set difference. A private branch carries only the attacker's bonds; an honest side carries its own;
-- **external** — operators, checkpoints (`--checkpoint`, `trusted_checkpoint`), the DNS overlay's BFT votes (retired on testnet-12).
+* **external** — operators, checkpoints (`--checkpoint`, `trusted_checkpoint`), the DNS overlay's BFT votes (armed on testnet-12 from
+  DAA 0; RFC-0012 proposes retiring them). The DNS overlay is itself a stake-signed finality layer; it bounds V6 while it confirms
+  (§3.1) but does not heal a partition: a side whose DNS-final anchor is on its own branch refuses the other branch outright.
 
 ## 3. The violations
 
@@ -121,11 +143,44 @@ The way out is an input an honest partition side has and a private branch does n
 |---|---|---|---|
 | **V1** | **The sink is not the comparator's maximum.** The search pops GHOSTDAG's order and accepts the first extension of the previous sink without asking the comparator; a lighter branch is never weighed — even when the node holds it and it is strictly ahead on every economic key. | processor.rs:18530, :17975 (the V2 arm scoped to non-extensions) | MEASURED `finx_p0_b_*` (a `Final` on the lighter side: the heavy node keeps its own tip; the light chain is the comparator's maximum), `finx_p0_c_*` (r1); MODEL rows `PortableOnMinority` |
 | **V2** | **A deep all-economic tie keeps the incumbent on both sides**, so the outcome is a function of history. An honest partition longer than 2 DAA with nothing economic on either side never heals, symmetric or not, whatever the node count. | `palw_reorg_strict_economic_win_v1` (Equal & !shallow → Refuse) | MEASURED `finx_p0_a_*` (2 slots agree; 3 and 6 split, three more exchanged rounds change nothing); MODEL `HeartbeatOnly`, `AttemptsNoLicence` |
-| **V3** | **Finality seals what the gate refuses.** The finality point advances on the node's own chain while the gate is refusing a fully validated competitor; past the fork, the competitor fails `candidate_at_or_above_finality` before the gate is asked — even once it strictly wins. `T_seal` = 600 blue ÷ 2–3 blue a slot ≈ 200–300 DAA (6.7–10 h), shorter than any post-fork claim's `Final` on the unshortened window (1,226 DAA) by construction (`finality_depth = window_challenge / 2`). | processor.rs:1806, :18593 | MEASURED `finx_p0_d_*` (the same strict win heals before the seal and is refused after it); MODEL "sealed" verdicts |
+| **V3** | **Finality seals what the gate refuses.** The finality point advances on the node's own chain while the gate is refusing a fully validated competitor; past the fork, the competitor fails `candidate_at_or_above_finality` before the gate is asked — even once it strictly wins. `T_seal` = 600 blue ÷ 3.90 or 2.00 blue a slot = 154–300 slots (5.2–10.2 h, MEASURED), shorter than any post-fork claim's `Final` on the unshortened window (≥ 1,221 DAA) by construction (`finality_depth = window_challenge / 2`); on the short window a `Final` (≥ 141 DAA after acceptance) can beat it, but a `Final` on the lighter side still does not heal (V1). | processor.rs:1806, :18593 | MEASURED `finx_p0_d_*` (the same strict win heals before the seal and is refused after it); MODEL "sealed" verdicts |
 | **V4** | **The relay path and the IBD path decide the same pair differently.** An old heavy-side datadir staging the light chain COMMITS it (strict economic win), though its relay never weighs it; an old light-side datadir staging the heavy chain is refused. | `ibd/flow.rs:2016–2030` vs V1 | MEASURED `finx_p0_c_*` |
 | **V5** | **Arrival order decides for a node with no history.** Two fresh nodes handed one DAG in opposite orders end on opposite sides; an IBD onto an empty datadir commits whatever the first peer serves ("an incumbent standing at genesis defends nothing"). A Sybil-eclipsed fresh node stays on an attacker's branch after it meets honest peers. | heap order + V2; `ibd/flow.rs` genesis exemption | MEASURED `finx_p0_c_*`; MODEL `SybilFreshNode` |
-| **V6** | **The stale incumbent (safety).** The gate compares a candidate with the PREVIOUS sink, and the keys are time-dependent (a licence lands, a claim turns `Final` at a fixed DAA, an unlicensed claim is voided). A branch that carries a public licence carrier first, or whose clock runs a tick ahead (the lead cap allows two), is "strictly ahead" of a stale incumbent on keys the incumbent's own next block would tie. No bond, no collusion. Open while pre-fork claims have pending transitions: their licences (≈25 DAA) and, on the short challenge window, their `Final`s (≈146 DAA). | `dns_reorg_outcome(candidate, prev_sink)` | MECHANISM MEASURED `finx_p0_e_*` (a private branch carrying a public licence first reverses X; the honest chain's own carrier one block later changes nothing); MODEL `PrivateHeartbeats @4` (and `@40` on the short window): reversed under SQ, C1, C2, F |
+| **V6** | **The stale incumbent (safety).** The gate compares a candidate with the PREVIOUS sink, and the keys are time-dependent (a licence lands, a claim turns `Final` at a fixed DAA, an unlicensed claim is voided). A branch that carries first the licence of a claim both branches hold, or whose clock runs a slot ahead across such a claim's `Final` height, is "strictly ahead" of a stale incumbent on keys the incumbent's own next block would tie. No bond, no seat, no collusion. See §3.1. | `dns_reorg_outcome(candidate, prev_sink)` (processor.rs:17939, the V2 arm at :17975) | MEASURED `finx_p0_e_*` (carrier form: X reversed 32 and 60 blue score deep; the honest chain's own carrier one block later changes nothing; past the seal X stands) and `finx_p0_f_*` (clock form); MODEL `PrivateHeartbeats @4` (and `@40` on the short window): reversed under SQ, C1, C2, F; held under C3, C1+C3, E′, E, E+F, K |
 | **V7** | **The information is not even shared.** The heavier side's relay skips every lighter block below its merge-depth root, so after a partition longer than ~10 DAA the majority does not hold the minority's branch at all. | blockrelay/flow.rs:294–307 | code; LIVE-R1's r1 logs |
+
+### 3.1 V6 on live testnet-12 (internal)
+
+What the attacker needs, both forms: a private branch forked at or before the payment X that is GHOSTDAG-heavier than the public tip
+when it is released (so the victim's heap pops it before its own extension: sibling heartbeats give up to 4 blue a slot against the
+honest 2–3.9, and unbonded junk attempt headers add 2^20 each at the price of a signature); X more than 2 DAA deep and above the victim's
+finality point; and a claim **both branches hold** with a pending transition. *Carrier form:* the claim's quorum receipts exist (the seats
+broadcast them; the quorum object is assembled by anyone) and the victim's chain has not yet carried them; the attacker funds the carrier
+from any UTXO and releases right after including it. *Clock form:* the claim's `Final` height is the next DAA; the attacker's branch runs
+one slot ahead (within the timestamp tolerance, `hb_probe_b_future_*`) and is released standing on that height. Neither needs a bond.
+
+**The DNS BFT veto bounds it on the live chain.** While the overlay is Active with a confirmed, non-stale DNS-final anchor, a candidate
+that abandons that anchor is refused before the V2 arm — so V6 reaches only a payment newer than the victim's last DNS-final anchor,
+i.e. the DNS confirmation lag (GAP: the live lag is not measured here; it is the fleet's tip-minus-anchor DAA distance). The bound
+disappears when the overlay is not Active, when validators stall past the veto's 120-DAA TTL, when the gate abstains, and when RFC-0012
+retires the overlay — then the window below applies. **So C3 or rule E must be active no later than the DNS retirement.**
+
+Window without the veto (DERIVED from the rules; ~120 s a DAA): lower bound 3 DAA (≈ 6 min) — the shallow window is 2. Upper bound the
+victim's finality point (600 blue: 154–300 DAA, 5.2–10.2 h). In practice the carrier form closes once the public chain carries licences of its own claims
+made after X, which the private branch cannot hold without merging X's past (anchor delay 20 + receipts ≈ 21–25 DAA, ≈ 45–50 min, while
+attempts flow; open to the finality depth in quiet stretches, and receipts may land anywhere in the 600-DAA receipt window); the clock
+form wins on `safe` weight and the frontier, which outrank `live`, so it stays open until the public chain's own post-X claims turn
+`Final` (≈ 20 + licence + 121 ≥ 141 DAA after X, ≈ 4.7 h).
+
+Payments at risk: any payment deeper than 2 DAA and shallower than the finality depth that no `Final` settlement anchor covers. The
+published small-value rule (30 blue score above, attempts continuing) does not protect; a `Final` anchor after X does (its frontier
+outranks every key the attacker can bring), as does waiting for the finality depth.
+
+**A note on the fix's definition.** An attacker can also make a post-fork claim "shared": fork earlier and merge the public attempts made
+between the fork and X (their pasts exclude X; ADR-0058 counts merged work). Their claims are then "above the fork" on both branches, and
+their licences and `Final`s are timing-sensitive again. So C3 and rule E close V6 only when "portable" and "participation" are taken over
+each tip's **exclusive past** (blocks in one tip's past and not the other's) — merged honest attempts then cancel — not over "accepted
+above the fork's blue score". In the model's tree (no merging) the two definitions coincide; the merge variant is not exercised (§9).
 
 A further note, not a violation measured here: `safe_frontier` is a **blue score**, which heartbeat density inflates — of two branches
 that matured the same claims at the same DAA, the denser one ranks higher on the first key. Comparing frontiers by DAA (or by claim)
@@ -149,15 +204,39 @@ the seal into a debug build; `finx_p0_facts` converts.
 | `finx_p0_b_a_final_heals_only_on_the_heavier_side` | a `Final` on one side | on the heavier side: the light node takes it; on the lighter side: split, the comparator's maximum on the light side, the heavy node never asks | §4.1 |
 | `finx_p0_c_the_minority_holds_the_licence_and_no_way_back_heals_it` | the minority with more licences (r1); restart and IBD of a node on each side; nodes joining fresh during the split | split; restart keeps both sinks; IBD light←heavy refused, heavy←light commits; fresh nodes end on the side heard first | §4.1 |
 | `finx_p0_d_finality_seals_a_chain_the_palw_rule_would_replace` | V3; a deep reorg across the seal | the heavy side's strict win heals before the seal, is refused after it | §4.1 |
-| `finx_p0_e_a_private_economic_win_reverses_x_up_to_the_finality_depth_and_no_further` | an attacker's private branch released half-way, at the last slot before, and past the finality depth; V6 | reversed, reversed, refused; the honest catch-up block does not undo it | §4.1 |
+| `finx_p0_e_a_private_economic_win_reverses_x_up_to_the_finality_depth_and_no_further` | an attacker's private branch released half-way, at the last slot before, and past the finality depth; V6 carrier form | reversed, reversed, refused; the honest catch-up block does not undo it | §4.1 |
+| `finx_p0_f_a_branch_one_tick_ahead_crosses_a_pre_fork_final_first_and_reverses_x` | V6 clock form (real depth 600) | a heartbeat branch one slot ahead, standing on a shared claim's `Final` height, reverses X | §4.1 |
 
-### 4.1 Measured
+### 4.1 Measured (2026-10-08; logs `finx-cons2-p0e.log`, `finx-cons3-p0.log`, `finx-cons4-df.log` in `MISAKA-wt-b/`)
 
-FILLED FROM THE RUN — see §8 for the command.
+All seven pass on testnet-12's rules as armed past DAA 1,700 (they assert the status quo's behaviour).
+
+* **facts.** Finality 600 blue, merge 30, pruning 74,920, k 1; windows bind 600, receipt 600, challenge 1,200 (applied 120 from DAA 0),
+  court 3,000, anchor delay 20, quorum 3; shipped fences: strict-win 750, pruning-proof strict-economic 750, F-W 1,700, frontier
+  provenance none, short challenge window 0, DNS BFT veto 0. Blue score a slot: **3.90** with two producers racing, **2.00** with one —
+  the seal at depth 600 comes **154 / 300 slots (5.2 / 10.2 h)** after a fork.
+* **a (V2).** Heartbeat-only, keys `(0, 0, 0)` on both sides. One producer a side: 2 slots AGREE at the heal and after three rounds;
+  3 and 6 slots SPLIT at the heal and after three rounds. Two producers against one (+7 against +4 blue work at 2 slots, +23 against +12
+  at 6): the same. The light node logs "refusing the heavier candidate … DominanceViolation" on every resolve.
+* **b (V1).** A claim licensed on one side only, `Final` at DAA 145 there (licensed 24, window 120), healed 122 slots after the fork.
+  `Final` on the heavier side: keys `(8, 6.04e9, 6.04e9)` against `(0, 0, 6.0e6)` — the light node takes the heavy tip. `Final` on the
+  lighter side: the light chain is the comparator's maximum, the heavy node keeps its own, and its fold of the light tip is `None` —
+  **never UTXO-validated: its search stopped at its own extension**; the light node refuses the heavy tip. Split for two more rounds.
+* **c (r1, V4, V5).** Heavy tip +3,145,758 blue work, keys `(0, 0, 6.0e6)`; light tip +1,048,591, keys `(0, 0, 6.04e8)` (the portable
+  licence). Split; **both nodes restarted on their databases come back on their own sinks**; **IBD light←heavy: KeepIncumbent; heavy←light:
+  Commit**; two fresh nodes fed one DAG in opposite orders end on the side each heard first.
+* **d (V3).** Depth 60. Three claims bound before the fork; the light side carries one licence. The heavy side carrying two more
+  licences right after the heal: keys `(0, 0, 1.21e9)` against `(0, 0, 6.16e8)` — the gate Allows and the light node moves. Carried after
+  the light node's finality point passed the fork (**31 slots, 62 blue score, after the fork**): the same keys, the gate would Allow — and
+  the light node stays on its own chain for good.
+* **e (V6, carrier form).** Depth 60; the victim seals at 62 blue score above the fork. Released at 32 and at 60: the victim's sink goes
+  PRIVATE, X gone, Y present; the honest chain's own carrier one block later leaves it there. Released at 62: X stands.
+* **f (V6, clock form).** Real depth 600. A shared claim `Final` at DAA 145; the private tip at DAA 145 `(8, 6.04e9, 6.04e9)` against the
+  victim's sink at DAA 144 `(0, 0, 6.04e8)`; X at DAA 136. Released: the victim's sink goes PRIVATE, **X reversed 8 DAA deep**.
 
 ## 5. The model (P1)
 
-`consensus/core/tests/finality_palw_consistency_model.rs` — an executable model, deterministic, ~1,500 lines, 30 seconds a grid.
+`consensus/core/tests/finality_palw_consistency_model.rs` — an executable model, deterministic, ~1,500 lines; the full table takes about two minutes.
 
 **What it models.** A tree of branches over one shared prefix, one model block per branch per DAA tick, cumulative blue score and blue
 work (a blue beat 2^24, an attempt 2^20), each bond's last attempt on the chain, and the claim lifecycle per chain: an attempt creates a
@@ -336,14 +415,14 @@ work alone.
 ### 5.3 Reading
 
 * **SQ** heals an honest partition only when the side heavier in blue work is also strictly ahead economically, or inside two DAA; every
-  tied partition — and r1 — is a permanent split, sealed in 200–300 DAA. It loses X to the stale-incumbent timing (V6), to panel
+  tied partition — and r1 — is a permanent split, sealed in 154–300 slots (5.2–10.2 h). It loses X to the stale-incumbent timing (V6), to panel
   collusion, and captures Sybil-fed fresh nodes.
 * **C1** heals whenever the economics differ — on the economic winner's side, the minority included (r1 converges on B: seven nodes
   reorg 20 DAA onto the two-node branch). Ties still split. Safety as SQ (V6 included, because its keys still count portable weight,
   and the attacker's clock lead beats even a fresh comparison), Sybil fixed.
 * **C2** never helps an honest partition (3:2 is not 4×) and lets junk headers reverse X at any depth under the seal: it trusts blue
   work. Not a candidate.
-* **C3** removes the portable advantage and V6 — and with it SQ's only healing path for portable cases: a portable licence on either
+* **C3** removes the portable advantage and V6 (both forms, with the exclusive-past definition of §3.1) — and with it SQ's only healing path for portable cases: a portable licence on either
   side becomes a tie, and every tie splits. Partial, as LIVE-R1 said: safety improves, liveness does not.
 * **F** heals nothing SQ does not (it only keeps the side holding the refused branch unsealed), and it **reopens the DA time bomb**:
   holding the finality point open on a heavier refused branch lets a reorg land once a court void flips the keys, past the depth
@@ -353,7 +432,7 @@ work alone.
 * **E** heals every partition shorter than the seal in which bonds were active on both sides — 5:3, 4:4, portable licence on either side,
   r1 (on the bond majority's side, 5 DAA after the heal, the old-datadir IBD then commits) — and holds against every adversary modelled.
   It cannot heal a heartbeat-only partition (zero participation on both sides — §2.3) or a partition longer than the seal. Its trust
-  assumption: the attacker controls fewer bonds than the honest bonds active above the fork over `W_p`; at an even split of at least a
+  assumption: the attacker controls fewer bonds than the honest bonds active in the public branch's exclusive past over `W_p`; at an even split of at least a
   third of the bonds each, GHOSTDAG's order decides (an attacker that ties the honest participation is already at that line).
 * **E+F** adds nothing to E in any modelled case.
 * **K** additionally heals a partition longer than the seal when one side holds more than 2/3 of the bonds (6:2 row), by crossing
@@ -378,11 +457,11 @@ brought up.
 | rule | heals a tied partition | heals r1 | private branch (tied) | stale incumbent (V6) | panel collusion | DA time bomb | Sybil fresh node | trusts blue work | fence / fingerprint |
 |---|---|---|---|---|---|---|---|---|---|
 | SQ | no (> 2 DAA) | no | holds | **reversed** | **reversed** | holds | **captured** | no | — |
-| C1 | no | yes (minority side) | holds | **reversed** | **reversed** | holds | holds | no | new fork-choice fence; relay change node-local |
+| C1 | no | yes (minority side) | holds | **reversed** | **reversed** | holds | holds (short window: **captured**, by V6) | no | new fork-choice fence; relay change node-local |
 | C2 | no | no | holds (junk: **reversed**) | **reversed** | **reversed** | holds | **captured** | **yes** | fence |
 | C3 | no | no | holds | holds | **reversed** | holds | **captured** | no | fence; a delta walk from the fork |
 | F | no | no (unsealed, wedged) | holds | **reversed** | **reversed** | **reversed** | **captured** | no | node-local; bounded by pruning |
-| E | **yes, if bonds active on both sides** | **yes (bond majority)** | holds | holds | holds | holds | holds | only at an even split ≥ n/3 | fence; C3's walk + attempt headers above the fork; no state-root change |
+| E | **yes, if bonds active on both sides** | **yes (bond majority)** | holds | holds | holds | holds | holds | only at an even split ≥ n/3 | fence; C3's walk + the attempt headers of both exclusive pasts; no state-root change |
 | K | E + > 2/3-bond partitions past the seal | yes | holds | holds | holds | holds | holds | as E | fence; changes finality |
 
 "Fence / fingerprint": every rule that changes which chain a node follows must be armed by a `Params` fence at a scheduled DAA (the
@@ -393,9 +472,17 @@ chains a node can follow, so a mixed network still disagrees.
 ## 8. Reproduce
 
 * Model: `cargo test -p kaspa-consensus-core --test finality_palw_consistency_model -- --nocapture` (≈ 2 min; prints §5's tables).
-* Pipeline: `cargo test -p kaspa-consensus --lib finx_ -- --nocapture --test-threads 2`.
+* Pipeline: `~/Downloads/MISAKA-wt-b/buildslot.sh cargo test -p kaspa-consensus --lib finx_p0 -- --nocapture --test-threads 2`
+  (≈ 10 min of tests after the build; `finx_p0_b` is the long one).
 
 ## 9. GAPs
+
+* **The live DNS confirmation lag** — V6's reach on the live chain while the DNS BFT veto confirms (§3.1). Read it off the fleet.
+* **The merge-borrow variant of V6** (§3.1) is analysis only; neither the model (no merging) nor a pipeline test exercises it. It decides
+  the definition the fix must use (exclusive past), not whether the fix is needed.
+* **C3 and rule E are not implemented in real code**, even behind a test-only fence: C3's fork-relative keys need the weight of each claim
+  in a tip's exclusive past, which `retired_safe_weight` and the F-W capacity index aggregate away — re-deriving them is the
+  implementation's first piece of work. The C3-vs-E comparison rests on the model.
 
 * The model abstracts merging; the pipeline tests carry it (they merge whatever the real virtual merges).
 * V6 is measured through the pipeline in its carrier form (`finx_p0_e`); the `Final`-crossing form with a clock lead is MODEL only.

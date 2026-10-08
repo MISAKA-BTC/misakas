@@ -279,6 +279,11 @@ async fn finx_p0_facts_depths_windows_fences_and_blue_per_slot() {
         shipped.palw_frontier_provenance,
         shipped.palw_short_challenge_window,
     );
+    eprintln!(
+        "[finx facts] testnet-12 as shipped: DNS overlay configured {}, DNS BFT finality gate {:?} — the V2 arm decides every non-extension",
+        shipped.dns_params.is_some(),
+        shipped.dns_bft_gate.map(|g| g.activation)
+    );
     let fork = shared_prefix(&mut n).await;
     for _ in 0..10 {
         private_slot(&mut n.heavy, &mut n.nonce, 2, Vec::new()).await;
@@ -635,38 +640,41 @@ async fn finx_p0_d_finality_seals_a_chain_the_palw_rule_would_replace() {
                 bs(&n.light, n.light.sink()) - bs(&n.light, fork)
             );
         }
-        // The heavy side carries the other two claims' licences.
+        // The heavy side carries the other two claims' licences. The gate's question is asked of the light
+        // node's sink as it stands when the heavy tip arrives — measured here, before the feed.
         let txs = vec![licence_carrier(&n.heavy, &n.floats, 4, claims[1]), licence_carrier(&n.heavy, &n.floats, 5, claims[2])];
         let h = private_slot(&mut n.heavy, &mut n.nonce, 2, txs).await;
-        let l = honest_slot(&mut n.light, Vec::new()).await;
-        feed(&mut n.light, &h).await;
-        feed(&mut n.heavy, &l).await;
-        let (ht, lt) = (n.heavy.sink(), n.light.sink());
+        let (ht, lt0) = (n.heavy.sink(), n.light.sink());
         // Each tip as its own node folded it — one fold, one answer (a sealed node never folds the other).
-        let (kh, kl) = (keys(&n.heavy, ht), keys(&n.light, lt));
+        let (kh, kl) = (keys(&n.heavy, ht), keys(&n.light, lt0));
         let would = palw_reorg_strict_economic_win_v1(&kl, &kh, || false);
+        let sealed = sealed_past(&n.light, fork);
+        feed(&mut n.light, &h).await;
+        let l = honest_slot(&mut n.light, Vec::new()).await;
+        feed(&mut n.heavy, &l).await;
+        let lt = n.light.sink();
         eprintln!(
-            "[finx {tag}] after {rounds} rounds: heavy tip keys {:?} vs light {:?} — the PALW gate would {:?}; light node sealed against the heavy tip: {}; sinks {}",
+            "[finx {tag}] after {rounds} rounds: heavy tip keys {:?} vs the light node's sink {:?} — the PALW gate would {:?}; the light node's finality point past the fork: {sealed}; then: light node on {}",
             econ(&kh),
             econ(&kl),
             would,
-            sealed_against(&n.light, ht),
-            if ht == lt { "AGREE" } else { "SPLIT" }
+            if n.light.ctx.consensus.is_chain_ancestor_of(ht, lt).unwrap_or(false) { "the heavy chain" } else { "its own chain" }
         );
         assert_eq!(
             would,
             PalwDeepReorgV2::Allow,
             "{tag}: the heavy side is now strictly ahead — the PALW rule would replace the light chain"
         );
+        let on_heavy = n.light.ctx.consensus.is_chain_ancestor_of(ht, lt).unwrap_or(false);
         if late {
-            assert!(sealed_against(&n.light, ht), "{tag}: …and finality refuses it first");
-            assert_ne!(ht, lt, "{tag}: V3 — the split is sealed");
+            assert!(sealed, "{tag}: …and finality refuses it first");
+            assert!(!on_heavy, "{tag}: V3 — the split is sealed");
             for round in 0..2 {
                 exchange_round(&mut n).await;
                 assert_ne!(n.heavy.sink(), n.light.sink(), "{tag}: round {round}: sealed");
             }
         } else {
-            assert_eq!(ht, lt, "{tag}: inside the finality depth the strict win heals the split");
+            assert!(!sealed && on_heavy, "{tag}: inside the finality depth the strict win heals the split");
         }
     }
 }
@@ -792,4 +800,81 @@ async fn finx_p0_e_a_private_economic_win_reverses_x_up_to_the_finality_depth_an
             assert!(!has_x && has_y, "{tag}: the honest chain catching up does not undo the reversal");
         }
     }
+}
+
+// =====================================================================================================
+// (f) V6's second form: a branch one tick ahead crosses a pre-fork claim's Final first
+// =====================================================================================================
+
+/// **V6 without any carrier: the clock.** A claim bound AND licensed before the fork turns `Final` at a
+/// fixed DAA (`licensed + window_challenge_at(licensed) + 1`) on every branch that reaches that DAA. The
+/// attacker's private heartbeat branch (no bond, no attempt, no licence of its own) forks a few slots
+/// before that height, carries Y, and runs one slot ahead of the victim — as `hb_probe_b_future_*`
+/// measures a branch may, within the timestamp tolerance. Released when the private tip stands AT the
+/// `Final` height and the victim's sink one tick under it, the private branch is strictly ahead on the
+/// first key (the safe frontier) and the second (safe weight) — keys the victim's own next slot would tie
+/// — and the gate, comparing with the previous sink, takes it: X, several DAA deep, is reversed.
+#[tokio::test]
+async fn finx_p0_f_a_branch_one_tick_ahead_crosses_a_pre_fork_final_first_and_reverses_x() {
+    kaspa_core::log::try_init_logger("warn");
+    let tag = "f V6 by the clock";
+    let mut n = net(None);
+    shared_prefix(&mut n).await;
+    let c = bind_claims(&mut n.heavy, 1).await[0];
+    let carrier = licence_carrier(&n.heavy, &n.floats, 0, c);
+    honest_slot(&mut n.heavy, vec![carrier]).await;
+    let licensed_daa = match n.heavy.tip_state().1.claim(&c).unwrap().phase.clone() {
+        PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => licensed_daa,
+        other => panic!("{tag}: licensed in the shared history, is {other:?}"),
+    };
+    let final_daa = licensed_daa + n.bundle.state.window_challenge_at(licensed_daa) + 1;
+    const LEAD_IN: u64 = 10;
+    while n.heavy.daa_of(n.heavy.sink()) < final_daa - LEAD_IN {
+        honest_slot(&mut n.heavy, Vec::new()).await;
+    }
+    let shared = blocks_in_topological_order(&n.heavy);
+    feed(&mut n.light, &shared).await;
+    let fork = n.heavy.sink();
+    assert_eq!(n.light.sink(), fork, "{tag}: the licence is shared history");
+    // The victim (`light`) mines X and honest slots up to one tick under the Final height; the attacker
+    // (`heavy`) mines Y and two-sibling slots up to the Final height itself — one slot ahead.
+    let (x, y) = (n.x.clone(), n.y.clone());
+    honest_slot(&mut n.light, vec![x.clone()]).await;
+    let x_daa = n.light.daa_of(n.light.sink());
+    while n.light.daa_of(n.light.sink()) < final_daa - 1 {
+        honest_slot(&mut n.light, Vec::new()).await;
+    }
+    let mut private = private_slot(&mut n.heavy, &mut n.nonce, 1, vec![y.clone()]).await;
+    while n.heavy.daa_of(n.heavy.sink()) < final_daa {
+        private.extend(private_slot(&mut n.heavy, &mut n.nonce, 2, Vec::new()).await);
+    }
+    let (pt, vt) = (n.heavy.sink(), n.light.sink());
+    let private_phase = n.heavy.tip_state().1.claim(&c).unwrap().phase.clone();
+    let public_phase = n.light.tip_state().1.claim(&c).unwrap().phase.clone();
+    let (kp, kv) = (keys(&n.heavy, pt), keys(&n.light, vt));
+    eprintln!(
+        "[finx {tag}] Final height {final_daa}: private tip DAA {} ({private_phase:?}) keys {:?}; victim sink DAA {} ({public_phase:?}) keys {:?}; X at DAA {x_daa}",
+        n.heavy.daa_of(pt),
+        econ(&kp),
+        n.light.daa_of(vt),
+        econ(&kv)
+    );
+    assert!(matches!(private_phase, PalwClaimPhaseV2::Final { .. }), "{tag}: Final on the private tip");
+    assert!(matches!(public_phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "{tag}: one tick short of Final on the victim");
+    assert!(econ(&kp) > econ(&kv), "{tag}: the private tip is strictly ahead on keys the victim's next slot would tie");
+    assert!(
+        n.light.daa_of(vt) - x_daa > kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1,
+        "{tag}: X is past the shallow window"
+    );
+    feed(&mut n.light, &private).await;
+    let (x_out, y_out) = (TransactionOutpoint::new(x.id(), 0), TransactionOutpoint::new(y.id(), 0));
+    let (has_x, has_y) = (has_utxo(&n.light, x_out), has_utxo(&n.light, y_out));
+    eprintln!(
+        "[finx {tag}] released with X {} DAA deep: victim sink {} — X {} Y {}",
+        n.light.daa_of(vt) - x_daa,
+        if n.light.sink() == vt { "public" } else { "PRIVATE" },
+        if has_x { "present" } else { "gone" },
+        if has_y { "PRESENT" } else { "absent" }
+    );
+    assert!(!has_x && has_y, "{tag}: the branch one tick ahead reverses X — no bond, no carrier, no collusion");
 }
