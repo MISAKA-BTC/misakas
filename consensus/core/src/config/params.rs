@@ -2949,6 +2949,14 @@ pub struct Params {
     /// ([`Self::validate_palw_probabilistic_constraints_v1`]) — the RFC assigns none, and shadow comparison precedes any proposal.
     pub palw_probabilistic_constraints_v1: Option<ForkActivation>,
 
+    /// **RFC-0015: Panel=0 (`OptimisticPublicVerification`) on the kernel route** ([`crate::palw_panel_free_v1`]): the separately named
+    /// fence under which a network admits classes registered under the Panel-free verification mode (a fixed public challenge window,
+    /// objective fraud proofs, producer reservations; `misaka-palw-kernel`'s `OpvPolicyV1`). **Dormant with no activation height**: `None`
+    /// on every preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from `Some(never())`, and refused when
+    /// armed ([`Self::validate_palw_panel_free_v1`]) until RFC-0015 §13.3's `ACTIVATION_ALLOWED` is evidenced (G14 on a real node, the
+    /// new lifecycle / collateral review, a coordinated schedule).
+    pub palw_panel_free_v1: Option<ForkActivation>,
+
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
     /// context ([`crate::palw_v2::PalwJobContextV2::prefix_context_hash_v1`], context version 3), so every claim over the same prefix
@@ -4140,6 +4148,8 @@ impl Params {
         self.validate_palw_gen_range_twin_v1()?;
         // **RFC-0011 §15.7's dormant fence** (`crate::palw_probabilistic_constraints_v1`): refused when armed.
         self.validate_palw_probabilistic_constraints_v1()?;
+        // **RFC-0015's dormant fence** (`crate::palw_panel_free_v1`): refused when armed.
+        self.validate_palw_panel_free_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **palw_fp_prefix_inherit** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_inherit_v1()?;
@@ -6483,6 +6493,10 @@ impl Params {
         // The probabilistic-constraint fence, likewise.
         if self.palw_probabilistic_constraints_v1 == Some(ForkActivation::never()) {
             self.palw_probabilistic_constraints_v1 = None;
+        }
+        // The Panel-free fence, likewise.
+        if self.palw_panel_free_v1 == Some(ForkActivation::never()) {
+            self.palw_panel_free_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -10158,6 +10172,7 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_panel_free_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -10426,6 +10441,7 @@ impl Params {
             ("palw_fp_job_v5", *palw_fp_job_v5),
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
+            ("palw_panel_free_v1", *palw_panel_free_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -10707,6 +10723,11 @@ impl Params {
         // The probabilistic-constraint fence, NAMED likewise.
         if let Some(at) = self.palw_probabilistic_constraints_v1 {
             h.write(b"palw_probabilistic_constraints_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // The Panel-free fence, NAMED likewise.
+        if let Some(at) = self.palw_panel_free_v1 {
+            h.write(b"palw_panel_free_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
@@ -11384,6 +11405,7 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_panel_free_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -12131,6 +12153,10 @@ impl Params {
         if let Some(activation) = palw_probabilistic_constraints_v1.as_mut() {
             fork(activation, visit);
         }
+        // The Panel-free fence. Some-only.
+        if let Some(activation) = palw_panel_free_v1.as_mut() {
+            fork(activation, visit);
+        }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
             fork(activation, visit);
@@ -12661,6 +12687,7 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_panel_free_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -13460,6 +13487,11 @@ impl Params {
             h.write(b"palw_probabilistic_constraints_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The Panel-free fence, Some-only for the same reason.
+        if let Some(activation) = palw_panel_free_v1 {
+            h.write(b"palw_panel_free_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // palw_fp_prefix_inherit, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_inherit {
             h.write(b"palw_fp_prefix_inherit");
@@ -14249,6 +14281,7 @@ impl Params {
             palw_fp_job_v5: self.palw_fp_job_v5,
             palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
+            palw_panel_free_v1: self.palw_panel_free_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -15341,6 +15374,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_panel_free_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15629,6 +15663,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_panel_free_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15899,6 +15934,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_panel_free_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -23429,6 +23465,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_panel_free_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
