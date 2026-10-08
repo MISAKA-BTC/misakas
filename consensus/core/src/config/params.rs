@@ -2955,7 +2955,7 @@ pub struct Params {
     /// on every preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from `Some(never())`, and refused when
     /// armed ([`Self::validate_palw_panel_free_v1`]) until RFC-0015 §13.3's `ACTIVATION_ALLOWED` is evidenced (G14 on a real node, the
     /// new lifecycle / collateral review, a coordinated schedule).
-    pub palw_panel_free_v1: Option<ForkActivation>,
+    pub palw_panel_free_v1: Option<crate::palw_panel_free_v1::PalwPanelFreeFenceV1>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
@@ -6495,7 +6495,7 @@ impl Params {
             self.palw_probabilistic_constraints_v1 = None;
         }
         // The Panel-free fence, likewise.
-        if self.palw_panel_free_v1 == Some(ForkActivation::never()) {
+        if self.palw_panel_free_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_panel_free_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
@@ -10441,7 +10441,7 @@ impl Params {
             ("palw_fp_job_v5", *palw_fp_job_v5),
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
-            ("palw_panel_free_v1", *palw_panel_free_v1),
+            ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -10726,9 +10726,10 @@ impl Params {
             h.write(at.daa_score().to_le_bytes());
         }
         // The Panel-free fence, NAMED likewise.
-        if let Some(at) = self.palw_panel_free_v1 {
+        if let Some(fence) = &self.palw_panel_free_v1 {
             h.write(b"palw_panel_free_v1");
-            h.write(at.daa_score().to_le_bytes());
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
         }
         // palw_fp_prefix_inherit, NAMED likewise.
         if let Some(at) = self.palw_fp_prefix_inherit {
@@ -12154,8 +12155,8 @@ impl Params {
             fork(activation, visit);
         }
         // The Panel-free fence. Some-only.
-        if let Some(activation) = palw_panel_free_v1.as_mut() {
-            fork(activation, visit);
+        if let Some(fence) = palw_panel_free_v1.as_mut() {
+            fork(&mut fence.activation, visit);
         }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
@@ -13488,9 +13489,10 @@ impl Params {
             h.write(activation.daa_score().to_le_bytes());
         }
         // The Panel-free fence, Some-only for the same reason.
-        if let Some(activation) = palw_panel_free_v1 {
+        if let Some(fence) = palw_panel_free_v1 {
             h.write(b"palw_panel_free_v1");
-            h.write(activation.daa_score().to_le_bytes());
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
         }
         // palw_fp_prefix_inherit, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_inherit {
@@ -14281,7 +14283,7 @@ impl Params {
             palw_fp_job_v5: self.palw_fp_job_v5,
             palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
-            palw_panel_free_v1: self.palw_panel_free_v1,
+            palw_panel_free_v1: self.palw_panel_free_v1.clone(),
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,

@@ -18,7 +18,7 @@ use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_genesis_chain_on, t12_reopened_chain, t12_with_harness_cards,
 };
 use crate::consensus::test_consensus::TestConsensus;
-use crate::pipeline::virtual_processor::processor::{kernel_route_test_admit_opv_class_v1, kernel_route_test_attest_artifact_v1};
+use crate::pipeline::virtual_processor::processor::kernel_route_test_attest_artifact_v1;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::config::params::ForkActivation;
@@ -28,6 +28,7 @@ use kaspa_consensus_core::palw_kernel_route_v1::{
     palw_kernel_route_message_v1,
 };
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2;
+use kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1;
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2 as Obj};
 use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_hashes::Hash64;
@@ -60,23 +61,39 @@ const MAX_POSITIONS: u32 = 64;
 
 /// testnet-12 as launched, harness cards, the kernel route's fence armed at genesis WITHOUT its validation (module doc).
 fn kernel_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
-    kernel_config_at(0)
+    kernel_config_with(None)
 }
 
-/// [`kernel_config`] with the route's fence at DAA `fence_at`. **`1` is the harness's OPV switch** (RFC-0015): until X15 declares
-/// `palw_panel_free_v1` in `Params`, a chain whose route fence activates at DAA 1 declares the OPV policy, activating at DAA 1 (the
-/// processor's `palw_kernel_opv_activation`, `cfg(test)`); any other height declares none.
-fn kernel_config_at(fence_at: u64) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+/// **An OPV network** (RFC-0015): [`kernel_config`] with `Params::palw_panel_free_v1` carrying the network's admission list and the
+/// interim OPV terms, activating at DAA 1. Like the route's fence it is armed WITHOUT its validation (which refuses every height).
+fn kernel_config_opv(admitted: Vec<Hash64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    kernel_config_with(Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), admitted)))
+}
+
+fn kernel_config_with(opv: Option<PalwPanelFreeFenceV1>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
-    params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(fence_at));
+    params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
+    params.palw_panel_free_v1 = opv;
     // A shallow all-economic tie (a heartbeat branch against a heartbeat branch) is GHOSTDAG's, not a hash race: the reorg tests need
     // a heavier branch to win deterministically (rcore/f1-strictwin-tie).
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
     params.skip_proof_of_work = true;
-    // `ConfigBuilder::build` runs `validate_palw_v2`, which refuses this fence by design (module doc): construct the config directly.
+    // `ConfigBuilder::build` runs `validate_palw_v2`, which refuses these fences by design (module doc): construct the config directly.
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fence; only this harness bypasses it");
     (Config::new(params), bundle, premine, floats)
+}
+
+/// The class ids the OPV network's policy admits: the fixture's class under `OptimisticPublicVerification`.
+fn opv_admitted() -> Vec<Hash64> {
+    let (d, fx) = (k2_tir_v2_descriptor(), fixture());
+    vec![Hash64::from_bytes(single_class_id_v1(
+        d.digest(),
+        &fx.program.encode(),
+        &fx.plan,
+        &fx.pc,
+        VerificationModeV1::OptimisticPublicVerification,
+    ))]
 }
 
 /// The class every scenario uses: the sketch's history-free `i128`-accumulator layer (K2-TIR-v2), small enough that its worst
@@ -119,11 +136,11 @@ impl Net {
 
     /// The network over a consensus the caller builds (a database it keeps, to restart the node over it).
     fn over(make: impl FnOnce(&Config) -> TestConsensus) -> Net {
-        Net::over_at(0, make)
+        Net::over_cfg(kernel_config(), make)
     }
 
-    fn over_at(fence_at: u64, make: impl FnOnce(&Config) -> TestConsensus) -> Net {
-        let (config, bundle, premine, floats) = kernel_config_at(fence_at);
+    fn over_cfg(parts: (Config, PalwConsensusParamsV2, Premine, Premine), make: impl FnOnce(&Config) -> TestConsensus) -> Net {
+        let (config, bundle, premine, floats) = parts;
         let chain = t12_genesis_chain_on(make(&config), &config, &bundle, &premine, &floats);
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             config.params.net.to_string().as_bytes(),
@@ -548,10 +565,10 @@ impl World {
         World::on(Net::new()).await
     }
 
-    /// **An OPV network** (RFC-0015): the route's fence at DAA 1 (the harness switch), the chain beaten to DAA 1, the network policy's
-    /// admission of the class (the test hook), and the class registered under `OptimisticPublicVerification` by card 1 (tag 13).
+    /// **An OPV network** (RFC-0015): `Params::palw_panel_free_v1` carries the network's admission list and the interim terms
+    /// (activating at DAA 1), the chain is beaten to DAA 1 and the class registered under `OptimisticPublicVerification` by card 1.
     async fn opv() -> World {
-        World::on_opv(Net::over_at(1, TestConsensus::new)).await
+        World::on_opv(Net::over_cfg(kernel_config_opv(opv_admitted()), TestConsensus::new)).await
     }
 
     async fn on_opv(mut net: Net) -> World {
@@ -559,7 +576,6 @@ impl World {
         let d = k2_tir_v2_descriptor();
         net.beat_to(1).await;
         let id = single_class_id_v1(d.digest(), &fx.program.encode(), &fx.plan, &fx.pc, VerificationModeV1::OptimisticPublicVerification);
-        kernel_route_test_admit_opv_class_v1(Hash64::from_bytes(id), 0);
         let register = K::RegisterClassV2 {
             mode: VerificationModeV1::OptimisticPublicVerification,
             descriptor: d.digest(),
@@ -1544,7 +1560,7 @@ async fn g14_kernel_route_hostile_objects_are_dropped_or_dismissed_and_never_sto
 
 // ---- RFC-0015 OptimisticPublicVerification on the real node ----------------------------------------------------------------
 //
-// An OPV network (the harness's switch: the route's fence at DAA 1) carries the OPV policy at genesis; a class registers under the
+// An OPV network (`Params::palw_panel_free_v1`, activating at DAA 1) carries the OPV policy at genesis; a class registers under the
 // mode by tag 13 (the network's admission is the test hook), a claim of it has NO Panel — no seats, no assignment, no receipts — and
 // is Challengeable from its inclusion for a fixed window. Everything an outsider needs to stop it is the route's, unchanged.
 
@@ -1854,7 +1870,7 @@ async fn g14_opv_survives_a_node_restart_and_finalizes_after_it() {
     kaspa_core::log::try_init_logger("warn");
     let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
     let (sender, receiver) = async_channel::unbounded();
-    let mut net = Net::over_at(1, |c| TestConsensus::with_db(db.clone(), c, sender));
+    let mut net = Net::over_cfg(kernel_config_opv(opv_admitted()), |c| TestConsensus::with_db(db.clone(), c, sender));
     net._keep.push(Box::new(receiver));
     let mut w = World::on_opv(net).await;
     let job = w.job().await;

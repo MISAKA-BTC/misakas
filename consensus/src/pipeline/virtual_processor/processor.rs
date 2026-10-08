@@ -240,29 +240,6 @@ pub(crate) fn kernel_route_test_attest_artifact_v1(artifact_root: kaspa_hashes::
     }
 }
 
-/// **G14 lane D / RFC-0015, TEST ONLY: the class ids the network's policy admits for OptimisticPublicVerification.** Their home is a
-/// `Params` list behind `palw_panel_free_v1` (the Lead's decision), not yet declared; a test names the (mode-bound) ids it treats as
-/// admitted, each from a DAA, append-only like the artifact attestations. The ids are content addresses, so one process-wide list is
-/// harmless to chains that never declare an OPV policy.
-#[cfg(test)]
-static KERNEL_ROUTE_TEST_OPV_ADMITTED_V1: std::sync::Mutex<Vec<(kaspa_hashes::Hash64, u64)>> = std::sync::Mutex::new(Vec::new());
-
-#[cfg(test)]
-pub(crate) fn kernel_route_test_admit_opv_class_v1(class: kaspa_hashes::Hash64, from_daa: u64) {
-    let mut list = KERNEL_ROUTE_TEST_OPV_ADMITTED_V1.lock().unwrap();
-    if !list.iter().any(|(id, _)| *id == class) {
-        list.push((class, from_daa));
-    }
-}
-
-#[cfg(test)]
-fn kernel_route_test_opv_admitted_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64> {
-    let mut ids: Vec<_> =
-        KERNEL_ROUTE_TEST_OPV_ADMITTED_V1.lock().unwrap().iter().filter(|(_, from)| *from <= daa_score).map(|(id, _)| *id).collect();
-    ids.sort();
-    ids
-}
-
 #[cfg(test)]
 fn kernel_route_test_attestations_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64> {
     let mut roots: Vec<_> =
@@ -630,6 +607,10 @@ pub struct VirtualStateProcessor {
     /// Resolved in ONE place, [`Self::palw_kernel_route_at`]. Never armable by a real network (its validation refuses every
     /// height); a test builds the config without that validation.
     pub(super) palw_probabilistic_constraints_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_panel_free_v1` (RFC-0015): the OPV fence, the network's admission list and the policy's terms. Resolved in ONE place
+    /// ([`Self::palw_kernel_opv_fence`]). Never armable by a real network (its validation refuses every height); a test builds the
+    /// config without that validation.
+    pub(super) palw_panel_free_v1: Option<kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1>,
     /// `Params::palw_gen_v1` (RFC-0003): may a class be a pipeline of PALW-TIR version-2 programs on
     /// this chain. Resolved in ONE place, [`Self::palw_gen_at`], at the block.
     pub(super) palw_gen_v1: Option<kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1>,
@@ -1243,6 +1224,7 @@ impl VirtualStateProcessor {
             palw_kimi_k3: params.palw_kimi_k3_fence(),
             palw_tir_v1: params.palw_tir_v1_fence(),
             palw_probabilistic_constraints_v1: params.palw_probabilistic_constraints_v1,
+            palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_gen_v1: params.palw_gen_v1_fence(),
             palw_tir_only_v1: params.palw_tir_only_fence(),
             palw_gdn_key_heads: params.palw_gdn_key_heads_fence(),
@@ -14837,24 +14819,16 @@ impl VirtualStateProcessor {
         self.palw_probabilistic_constraints_v1.is_some_and(|fence| fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score))
     }
 
-    /// **RFC-0015: does this network declare the OPV policy, and from which DAA?** The policy is a genesis constant, so the answer is a
-    /// property of the ruleset and never of the block. Its fence is `palw_panel_free_v1`, which X15 declares in `Params` (dormant);
-    /// until that lands the answer is `None` outside a test. **Test seam**: a chain whose route fence (`palw_probabilistic_constraints_v1`)
-    /// activates at DAA 1 declares the policy, activating at DAA 1 — the harness's only per-chain switch that needs no new `Params` field.
-    fn palw_kernel_opv_activation(&self) -> Option<u64> {
-        #[cfg(test)]
-        {
-            self.palw_probabilistic_constraints_v1.filter(|f| *f == kaspa_consensus_core::config::params::ForkActivation::new(1)).map(|_| 1)
-        }
-        #[cfg(not(test))]
-        {
-            None
-        }
+    /// **RFC-0015: the network's OPV fence, resolved in ONE place** — `None` where `Params::palw_panel_free_v1` is absent (every preset,
+    /// and `Some(never())`, which the params collapse). The policy is a genesis constant, so whether the network declares it is a
+    /// property of the ruleset and never of the block; the fence's activation decides from which DAA it acts.
+    fn palw_kernel_opv_fence(&self) -> Option<&kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1> {
+        self.palw_panel_free_v1.as_ref().filter(|fence| fence.activation != kaspa_consensus_core::config::params::ForkActivation::never())
     }
 
     /// Is the OPV fence in force at `daa_score` (a registration under the mode, tags 13 / 14, may be carried)?
     pub(super) fn palw_kernel_opv_at(&self, daa_score: u64) -> bool {
-        self.palw_kernel_opv_activation().is_some_and(|at| daa_score >= at)
+        self.palw_kernel_opv_fence().is_some_and(|fence| fence.activation.is_active(daa_score))
     }
 
     /// What the kernel route's fold is handed where the fence is in force: the network, the ruleset and the artifact attestations.
@@ -14876,14 +14850,9 @@ impl VirtualStateProcessor {
                 max_adjudications_per_block: Some(4),
                 #[cfg(not(test))]
                 max_adjudications_per_block: None,
-                opv: self.palw_kernel_opv_activation().map(|at| {
-                    kaspa_consensus_core::palw_kernel_route_v1::PalwKernelOpvExtrasV1 {
-                        activation_daa: Some(at),
-                        #[cfg(test)]
-                        admitted_classes: kernel_route_test_opv_admitted_v1(daa_score),
-                        #[cfg(not(test))]
-                        admitted_classes: Vec::new(),
-                    }
+                opv: self.palw_kernel_opv_fence().map(|fence| kaspa_consensus_core::palw_kernel_route_v1::PalwKernelOpvExtrasV1 {
+                    policy: fence.opv_policy(),
+                    admitted_classes: fence.admitted_classes.clone(),
                 }),
             }
         })

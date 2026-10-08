@@ -30,7 +30,7 @@ use misaka_palw_kernel::descriptor::{
 use misaka_palw_kernel::gate::ProsecutionPolicyV1;
 use misaka_palw_kernel::hash::Digest;
 use misaka_palw_kernel::ledger::{KernelLedgerV1, LedgerPolicyV1};
-use misaka_palw_kernel::opv::{CarrierCapsV1, OpvBudgetsV1, OpvEconomicsV1, OpvPolicyV1, OpvWindowV1};
+use misaka_palw_kernel::opv::OpvPolicyV1;
 use misaka_palw_kernel::rows::{LedgerRowsV1, LedgerScalarsV1, config_root_of, root_of_rows};
 use misaka_palw_kernel::verify::ScopeV1;
 
@@ -123,19 +123,17 @@ pub struct PalwKernelRouteExtrasV1 {
     /// block budget with a handful of carriers instead of sixty-five.
     pub max_adjudications_per_block: Option<u32>,
     /// **RFC-0015 OptimisticPublicVerification**: `Some` exactly where the network declares the OPV policy (a genesis constant — it is
-    /// `Some` at every block of a chain or at none). The processor resolves it from the `palw_panel_free_v1` fence, which X15 has not
-    /// yet declared in `Params`; until then it is `None` outside a test and a test arms it through its harness seam.
+    /// `Some` at every block of a chain or at none). The processor resolves it from `Params::palw_panel_free_v1`.
     pub opv: Option<PalwKernelOpvExtrasV1>,
 }
 
-/// What the processor hands the fold for the OPV mode (RFC-0015): the fence's activation and the network policy's admission list.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// What the processor hands the fold for the OPV mode (RFC-0015): the network's policy and its admission list, both read from
+/// `Params::palw_panel_free_v1` ([`crate::palw_panel_free_v1::PalwPanelFreeFenceV1`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwKernelOpvExtrasV1 {
-    /// The first DAA at which an OPV class registers and an OPV claim commits (`None`: the fence never activates).
-    pub activation_daa: Option<u64>,
-    /// **The class ids (mode-bound) the NETWORK'S policy admits for OPV** — consensus, never a registrant's choice. Its home is a
-    /// `Params` list behind the fence (the Lead's decision; not yet declared), so it is empty outside a test and a test hook fills it:
-    /// GAP — until then no OPV class registers on a real network even with the fence in force.
+    /// The OPV policy, a genesis constant of the route (the fence's terms, activating at the fence's height).
+    pub policy: OpvPolicyV1,
+    /// **The class ids (mode-bound) the NETWORK'S policy admits for OPV** — consensus, never a registrant's choice.
     pub admitted_classes: Vec<Hash64>,
 }
 
@@ -177,43 +175,6 @@ pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash6
             max_public_bytes: 1 << 40,
             max_verifier_ram: 1 << 36,
             max_retained_state: 1 << 32,
-        },
-    }
-}
-
-/// **The INTERIM OPV policy** (RFC-0015): relations the kernel validates, values chosen for the (never-armed) fence and written once
-/// here. The window is the ledger's own 50 DAA (40 base + 10 horizon); the budgets of a fresh verifier's path fit it and the court
-/// deadline and proof grace; the reservation covers the claim's maximum gain (reward + work credit + a stated external bound) plus the
-/// default penalty and the gain over the assumed detection probability. A real activation would revisit every number (and measure the
-/// budgets on real hardware — an external gate).
-pub fn palw_kernel_route_opv_policy_v1(activation_daa: Option<u64>) -> OpvPolicyV1 {
-    use misaka_palw_kernel::route::{MAX_COMMIT_CLAIM_BYTES_V1, MAX_FILE_PROOF_BYTES_V1, MAX_RESPOND_BYTES_V1};
-    let carrier = PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 as u64;
-    OpvPolicyV1 {
-        activation_daa,
-        window: OpvWindowV1 { base_challenge_window_daa: 40, verification_horizon_daa: 10 },
-        budgets: OpvBudgetsV1 {
-            cold_material_daa: 10,
-            check_daa: 10,
-            localize_daa: 2,
-            disclose_daa: 8,
-            court_daa: 3,
-            carrier_daa: 2,
-            reorg_slack_daa: 2,
-        },
-        economics: OpvEconomicsV1 {
-            reservation_per_claim: 1_000 * SOMPI_PER_KASPA,
-            work_credit_per_claim: 5 * SOMPI_PER_KASPA,
-            external_gain_bound: 10 * SOMPI_PER_KASPA,
-            assumed_detection_permille: 500,
-            max_live_claims_per_producer: 3,
-            max_live_claims_total: 32,
-            default_burn_permille: 100,
-        },
-        carrier: CarrierCapsV1 {
-            filing_cap: carrier.min(MAX_FILE_PROOF_BYTES_V1 as u64),
-            response_cap: carrier.min(MAX_RESPOND_BYTES_V1 as u64),
-            commit_cap: carrier.min(MAX_COMMIT_CLAIM_BYTES_V1 as u64),
         },
     }
 }
@@ -669,7 +630,7 @@ mod tests {
     #[test]
     fn the_interim_opv_policy_validates_against_the_interim_ledger_policy_and_roots_like_its_ledger() {
         let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
-        let opv = palw_kernel_route_opv_policy_v1(Some(7));
+        let opv = crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(crate::config::params::ForkActivation::new(7)).opv_policy();
         opv.validate(&p).unwrap();
         // The test node's four-adjudication block must still satisfy the OPV relations.
         let mut small = p;

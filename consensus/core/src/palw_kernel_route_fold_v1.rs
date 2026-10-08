@@ -145,8 +145,13 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
     }
     let attested = extras.attested_artifacts.clone();
     // RFC-0015: the OPV policy is a genesis constant of the network — present at every block of a chain or at none.
-    let opv_policy = extras.opv.as_ref().map(|o| palw_kernel_route_opv_policy_v1(o.activation_daa));
+    let opv_policy = extras.opv.as_ref().map(|o| o.policy);
     let admitted: Vec<Hash64> = extras.opv.as_ref().map(|o| o.admitted_classes.clone()).unwrap_or_default();
+    // A policy that violates the kernel's own relations never creates a ledger (Params validation refuses it at startup; this is the
+    // fold's own guard, so a bad value fails the block loudly instead of panicking inside the ledger constructor).
+    if let Some(p) = &opv_policy {
+        p.validate(&policy).map_err(refused)?;
+    }
     match builder.state.kernel_route.as_ref() {
         None => {
             let created =
