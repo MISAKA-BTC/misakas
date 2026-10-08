@@ -200,3 +200,104 @@ No claim reaches `Final` through the processor with the EVM lane on (the harness
 is not reachable in-process; market orders settle as `Refused MARKET_MISSING` (no seeded market, so nothing fills); live census data;
 the comparator against a capacity adversary; the DNS "all-equivocating votes" case (the DNS state is simply not an input past the fence,
 x2/x13, but no equivocation was crafted); release-build timings.
+
+## 10. D1 — the maturity offset: where 5,400 comes from, what the alternatives would admit (lane X12b, 2026-10-08)
+
+The user's position on D1: **do not shorten 5,400 now, and do not treat it as final.** RFC-0012 is outside the DAA-9,000 release. This section
+is the evidence; it recommends no change. Sections 10.1 and 10.2 are reading and arithmetic on the tree at `9050b06bc`; 10.3 holds the tests.
+
+### 10.1 The derivation (every term, its t12 value, where the code enforces it)
+
+```
+M_v1(claim)  =  max( t_acc + R ,  t_F + C )              palw_native_settlement_v1.rs  native_facts_of_block_v1
+R            =  W_bind + W_receipt + W_challenge^max + W_court          = trace_retention − accepted
+             =  A_DA + W_disclose        with  A_DA = W_bind + W_receipt + W_court
+t12:   R = 600 + 600 + 1,200 + 3,000 = 5,400  = 4,200 + 1,200        C = claim_retirement = 3,000
+       t_F − t_acc = F_off = bind_used + receipt_used + W_challenge^applied  = 123 (honest quorum, MEASURED)
+       t_F + C = t_acc + 3,123 < t_acc + 5,400  ⇒  M_v1 = t_acc + 5,400   (the second term wins only if F_off > 2,400: a re-bound claim)
+```
+
+| Term | t12 | What it protects | Enforced at |
+|---|---|---|---|
+| `W_bind` | 600 | the panel must be bound by here, else `BindTimeout` | `sweep_deadlines` palw_state_v2.rs:33283 (`bind_timeout_reason`); shape `anchor_delay + max_beacon_gap < window_bind` palw_mode_v2.rs ≈1150 |
+| `W_receipt` | 600 | the quorum must licence by here, else `ReceiptTimeout` | palw_state_v2.rs:33370 |
+| `W_challenge` | 1,200 unshortened, **120 applied** | a licensed claim finalizes after `window_challenge_at(licensed_daa)`; but retention and the DA disclose window use the **unshortened** value | applied: palw_state_v2.rs:4955, `PALW_SHORT_CHALLENGE_WINDOW_DAA_V1`:1756; retention: palw_producer_v2.rs:437; disclose: palw_state_v2.rs:6795 (`W_disclose = window_challenge`, SA-3 `≥ 2 ×` the finality window, finality_depth = window_challenge/2 = 600, params.rs:3908) |
+| `W_court` | 3,000 | the worst-case **honest prosecution** fits: `54 moves × 42 + 216 = 2,484` (2^26 ladder), `66 × 42 + 216 = 2,988` (2^32) | `palw_ladder_fits_window_court_v1` palw_context_ladder.rs:500; `validate_ruleset_shape` palw_mode_v2.rs:1299; `sweep_court_deadlines` palw_state_v2.rs:31175 |
+| `R` itself | 5,400 | "the four windows a claim can be asked inside" — a promise shorter discards evidence before it can be asked for (ADR-0072 D8) | admission equality pin `check_palw_attempt_da_pins_v1` palw_admission_v2.rs:972,986; header stage pre_ghostdag_validation.rs:776,800 |
+| DA gate | `now + W_disclose ≤ trace_retention` | an accusation must be answerable inside the retention | `DaOutsideRetention` palw_state_v2.rs:16587,30013; `CourtOutsideRetention` :30782 (a class's own court window can *extend* the claim's retention) |
+| `C = claim_retirement` | 3,000 (`CLAIM_RETIREMENT == WINDOW_COURT`) | after it the claim record, its DA record, panel and derivations are gone: nothing can reverse the `Final` | `terminal_deadline_at_v1` palw_state_v2.rs ≈15470; `arm_retirement` :27916; `retire_claim` :27930; `reverse_convicted_final` :23921 returns when the claim is absent; palw_fp_devnet_v3.rs:198 |
+
+**What 5,400 is.** It is the producer's *trace-retention duty*, equal to the last moment a data-availability session can conclude
+(`accuse window 4,200 + disclose 1,200`), sized for the slowest single-path lifecycle with the **unshortened** challenge window. It is not
+derived from the reversal horizon. For an ordinary claim the chain stops being able to reverse the `Final` at **`F + 3,001 = acceptance + 3,124`**
+(retirement), so v1 waits **2,277 DAA longer than the chain's own reversal horizon**: 1,080 from counting the challenge window at 1,200 when 120
+applies, and 1,197 from bind/receipt allowance a claim finalizing at +123 did not use. The reverse also holds: a re-bound claim (Final up to
++2,520) retires at +5,520, after 5,400, which is why v1 takes the `max`.
+
+**Horizons that are *not* inside 5,400** (all t12, DAA after acceptance unless "F+" = after `Final`):
+
+| Horizon | Value | Expression / site |
+|---|---|---|
+| claim lattice (a redraw, then court) | 6,600 | `2(W_bind+W_receipt)+W_challenge+W_court`, `palw_v2_claim_lattice_daa_v1` params.rs:3864 |
+| pruning depth (blue-score units) | **74,920** with the class-verify cap (`2(600+16,000)+1,200+3,000+37,520`) | `palw_v2_pruning_depth_v1` params.rs:3839 — this, not M, bounds `finalized` (below) |
+| max claim exposure | 7,200 | lattice windows `+ fp_abandon_hold 600`, `max_claim_exposure_daa` palw_fp_devnet_v3.rs:~104 |
+| liability period | 6,900 | lattice `+ reorg_margin 300`, `liability_daa` palw_mode_v2.rs:1166; `withdrawal_delay 7,500 >` it |
+| seat lock life after `Final` | F+1,000 | `PALW_FINAL_LOCK_LIFE_DAA_V1` palw_state_v2.rs:1784 (lane V02) |
+| liability record / vesting-row clawback | F+3,000 | `persist_panel_liability` :22755 (`expiry = F + window_court`); palw_vesting_v1.rs:94 |
+| record prune horizon (a late `PanelFalseValid` can still bind, slash-only, no reversal) | F+6,000 | `palw_panel_obligation_prunable_v1` palw_panel_var_v1.rs ≈367 |
+| second clock (settled-anchor depth) on locks/rows | at most `+2 × window_court` past the DAA expiry | `palw_second_clock_holds_v1` palw_panel_var_v1.rs:261 |
+| node finality depth (the reorg bound) | 600 blue score | `window_challenge/2`; a sink candidate that does not contain the finality point is refused by the DAG's own rule |
+| draw-beacon reorg fringe | 300 | `reorg_margin_daa`, palw_mode_v2.rs:1077 |
+
+There is **no parameter called "proof grace"** in this tree (the nearest names — `receipt_maturity` 400, `max_beacon_gap` 400,
+`anchor_delay` 20 — concern the draw beacon, not evidence). RFC-0014 §7.3 / §16 says reward maturity and the model-lease `retained_liability_until`
+must be aligned with the liability horizon; it is not armed here, and when it is, `M` must be re-derived against it (a lease that must be
+retained "through the claim's dispute / liability horizon" is longer than today's 5,400).
+
+### 10.2 The candidates: 5,400 / 3,000 / 1,000 / 600
+
+Read as **`Final + X`** for the three shorter values (3,000 = `claim_retirement` = `window_court`; 1,000 = the seat lock life; 600 = the bind /
+receipt / abandon-hold unit), with the closure rule moved to the same instant; v1's 5,400 is acceptance-relative (= `Final + 5,277`). Measured
+from acceptance instead, subtract 123 from the shorter ones; nothing below changes in kind. Lag = `F_off (123) + X` (v1: `max(closure 3,124,
+5,400)`), **before** the D anchors and the frontier cover, which add at least one more `Final` (+123) after the effect.
+
+| Rule | `safe` lag | at 24 DAA/h (observed) | at 30 DAA/h (design, 120 s) | Windows still open when the evidence counts |
+|---|---|---|---|---|
+| **v1: 5,400 after acceptance** | 5,400 | 225 h = 9.4 d | 180 h = 7.5 d | none that can reverse; the slash-only record tail (F+3,000…F+6,000) |
+| **`Final + 3,000`** | 3,124 | 130 h = 5.4 d | 104 h = 4.3 d | none that can reverse; the same slash-only tail |
+| **`Final + 1,000`** | 1,123 | 47 h = 1.9 d | 37 h = 1.6 d | **2,000 DAA** of conviction / DA default / vesting clawback / record, the seats' locks just expired |
+| **`Final + 600`** | 723 | 30 h = 1.3 d | 24 h = 1.0 d | **2,400 DAA** of the same; also shorter than one DA disclose window (1,200) and the seat lock |
+| *(for reference) `Final + 6,000`* | 6,123 | 255 h | 204 h | none, including the slash-only tail |
+
+`finalized` is **not** moved by any of these: it is the validated pruning point, at least the pruning depth (74,920 blue score on t12; blue score
+grows at least as fast as DAA) behind the tip, which is months, not days. D1 is about `safe`.
+
+**Why `Final + 3,000` is the only anchored value below 5,400.** Both ways the chain can take back a `Final` close at the same instant by
+construction: the court (a prosecution opened at `Final` completes in ≤ 2,988 ≤ 3,000, `W_court`) and DA (the last accusation that can default
+before the claim retires is at `retirement − W_disclose = F + 1,800`; default lands at `F + 3,000`). Retirement removes the claim, so a later
+conviction can slash but cannot reverse (`reverse_convicted_final` returns). Counting evidence at `F + C` therefore never counts work the chain
+can still un-count, so `safe` cannot retreat because of a conviction — the property v1 buys with 5,400. The rest of v1's margin (2,277 DAA) protects
+the producer's *unenforced* retention after retirement, which no chain rule can use, and the slash-only tail, which v1 does not cover either (it
+ends at F+5,277, before F+6,000).
+
+**What each shorter value admits, and what would have to change** (attack timing is demonstrated with the real fold in 10.3; profitability is
+analysis, not measurement):
+
+* **`Final + 1,000` / `+ 600`** count evidence while the claim can still be convicted or defaulted. Producer + every seat colluding can then
+  produce `safe`-grade evidence from a fabricated execution that a public verifier — who needs up to 2,988 DAA to dissect — has no time to
+  convict first; withheld material (DA default needs a session opened by `F + 1,800`) is counted though a default could still land. The
+  collateral design bar prices fraud gain against recoverable value; a *label* that an external bridge acts on is a **new gain term the bar
+  does not price**. A conviction then retracts the evidence (implemented), so `safe` retreats, but whoever acted on it has already acted. Making
+  these safe is **not a policy change**: `window_court` would have to fall to ≤ X (the ladder must shrink or the turn clock speed up),
+  `claim_retirement`, the liability period, `withdrawal_delay`, the pruning lattice and the retention pin follow — all inside
+  `palw_ruleset_id_v2`, i.e. a re-genesis-class change — or the label would need a stake-weighted discount and a consumer-visible retraction
+  protocol that this branch does not specify.
+* **`Final + 3,000`** is a policy-only change (a v2 rule: `matured = Final + claim_retirement`, drop the retention term; a committed policy field
+  and a version bump), with two stated cautions: (1) it ignores a class's own model court window (`palw_model_court_window`), which can outrun
+  `window_court` and extends the claim's retention (palw_state_v2.rs ≈30790) — neither rule reads an extension made *after* `Final`, so if that
+  fence is armed the class window must be read; (2) the slash-only tail (F+3,000…F+6,000) stays open exactly as under v1.
+* **v1 (5,400)** needs nothing more; its cost is the lag and its slack.
+
+### 10.3 Tests and measurements
+
+*(filled in by the attack tests and the readiness RPC below)*
