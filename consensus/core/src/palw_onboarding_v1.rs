@@ -560,6 +560,8 @@ pub struct ConformanceEvidenceReadV1 {
     pub attempt_row: Option<Vec<u8>>,
     /// Table 40's row, raw (a `ConformanceEvidencePostV1`).
     pub evidence_row: Option<Vec<u8>>,
+    /// The class's canonical program bytes (its IR record; byte for byte its bound kernel class's, tag 106).
+    pub program: Option<Vec<u8>>,
     pub attempt: Option<ConformanceAttemptRowV1>,
     pub policy: misaka_palw_challenge::PostCommitChallengePolicyV1,
     /// `COLLECTING`, `CANDIDATE`, `LOCKED`, `UNAVAILABLE` (empty with no open attempt).
@@ -603,6 +605,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             class_id: *class,
             attempt_row: raw(PALW_ONBOARDING_TABLE_CONFORMANCE_ATTEMPTS_V1),
             evidence_row: raw(PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1),
+            program: self.tir_class_v1(class).map(|r| r.program.as_slice().to_vec()),
             attempt,
             policy,
             beacon,

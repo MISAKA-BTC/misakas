@@ -28,10 +28,11 @@ use std::path::Path;
 
 include!(concat!(env!("OUT_DIR"), "/impl_revisions.rs"));
 
-/// The check protocol this tool runs on a committed pack: `pack-sampled-differential/v1`. A different protocol is a different scope root.
-pub const CHECK_PROTOCOL_V1: &str = "pack-sampled-differential/v1";
-
-pub const DOMAIN_SCOPE: &[u8] = b"misaka.palw.runtime-pack.conformance-scope.v1";
+// The check protocol, the scope and its fault model live in consensus-core (onboarding P0): the chain's fold re-derives a posted
+// evidence's selection and roots from exactly this code, so the pack and the chain can never disagree about what evidence is.
+pub use kaspa_consensus_core::palw_conformance_evidence_v1::{
+    CHECK_PROTOCOL_V1, ConformanceScopeV1, DOMAIN_SCOPE, approved_fault_model_v1, tool_root,
+};
 pub const DOMAIN_IMPL_SET: &[u8] = b"misaka.palw.runtime-pack.impl-set.v1";
 pub const DOMAIN_CALIBRATION: &[u8] = b"misaka.palw.runtime-pack.calibration-id.v1";
 pub const DOMAIN_BINDING: &[u8] = b"misaka.palw.runtime-pack.input-state-binding.v1";
@@ -74,157 +75,11 @@ pub fn hex(d: &[u8]) -> String {
     hash::hex(d)
 }
 
-/// A typed record's root under a tool domain (`H(domain; borsh(record))`, the contract's hash suite).
-pub fn tool_root<T: BorshSerialize>(domain: &[u8], record: &T) -> Digest {
-    hash::object_id(domain, record)
-}
-
 // ---------------------------------------------------------------------------------------------------------------------------
 // The test scope
 // ---------------------------------------------------------------------------------------------------------------------------
 
-/// **What the committed check is** — fixed before any randomness (it is the commitment's `test_scope_root`).
-///
-/// A repetition (the policy's `repetition_count` of them) draws, from its own labelled streams of the one challenge seed,
-/// `vectors_per_repetition` prompts (full forward passes on every required implementation) and `leaves_per_repetition` artifact
-/// leaves (an authenticated opening against the artifact root, then the integer values every required implementation decodes from
-/// those bytes). Nothing else is checked: this is a SAMPLED differential check, not full-scope fidelity, not semantic admission.
-///
-/// The fault model is part of the scope: `*_fault_ppm` is the density of faulty draws the bound speaks about (a fault that shows
-/// on at least that fraction of the family's draws), under independent uniform draws. See [`ConformanceScopeV1::derived_epsilon_bits`].
-/// **The fault model a soundness policy approves**: the densest fault (ppm of vector / leaf draws on which a faulty implementation
-/// shows) a scope may assume under it. The candidate never chooses it (C4 GAP-C4-D): a denser assumed fault buys unearned bits.
-/// Only the reference policy's unreviewed test soundness id has one here; every reviewed soundness policy is an external gate, so no
-/// production policy can pass conformance until its fault model is approved and listed.
-pub fn approved_fault_model_v1(policy: &PostCommitChallengePolicyV1) -> Option<(u32, u32)> {
-    (policy.soundness_policy_id == hash::named_id("soundness/unreviewed-test-only/v1")).then_some((1_000_000, 1_000_000))
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct ConformanceScopeV1 {
-    pub version: u16,
-    pub protocol: String,
-    pub vectors_per_repetition: u32,
-    /// A prompt has `1 ..= max_prompt_len` tokens (the length is drawn too).
-    pub max_prompt_len: u32,
-    /// Greedily decoded tokens after the prompt.
-    pub decode_tokens: u32,
-    pub leaves_per_repetition: u32,
-    pub vector_fault_ppm: u32,
-    pub leaf_fault_ppm: u32,
-    /// The independent second implementation must agree (a pack without it cannot pass).
-    pub require_independent: bool,
-    /// The typed backend must agree.
-    pub require_backend: bool,
-}
-
-impl ConformanceScopeV1 {
-    pub fn new(vectors: u32, max_prompt_len: u32, decode_tokens: u32, leaves: u32) -> Self {
-        Self {
-            version: 1,
-            protocol: CHECK_PROTOCOL_V1.into(),
-            vectors_per_repetition: vectors,
-            max_prompt_len,
-            decode_tokens,
-            leaves_per_repetition: leaves,
-            vector_fault_ppm: 500_000,
-            leaf_fault_ppm: 62_500,
-            require_independent: true,
-            require_backend: true,
-        }
-    }
-
-    pub fn root(&self) -> Digest {
-        tool_root(DOMAIN_SCOPE, self)
-    }
-
-    pub fn validate(&self, policy: &PostCommitChallengePolicyV1) -> Result<(), String> {
-        if self.version != 1 || self.protocol != CHECK_PROTOCOL_V1 {
-            return Err(format!("unknown scope version/protocol ({} / {})", self.version, self.protocol));
-        }
-        if self.vectors_per_repetition == 0 && self.leaves_per_repetition == 0 {
-            return Err("a scope that checks nothing".into());
-        }
-        if self.vectors_per_repetition > 0 && self.max_prompt_len == 0 {
-            return Err("vectors need a prompt length of at least 1".into());
-        }
-        // The implementation set and the fault model are the protocol's, not the candidate's (C4 F-C4-11, GAP-C4-D): a candidate
-        // may not drop the independent or backend implementation, nor assume a denser (more detectable) fault than scope v1 fixes —
-        // either would let a reference-only or tiny scope derive a pass with any bits it likes.
-        if !self.require_independent || !self.require_backend {
-            return Err(
-                "scope v1 requires the independent and the typed backend implementation (the candidate cannot waive them)".into()
-            );
-        }
-        let Some((max_vector, max_leaf)) = approved_fault_model_v1(policy) else {
-            return Err("the challenge policy's soundness policy approves no fault model (an external review gate)".into());
-        };
-        for (what, ppm, max) in
-            [("vector_fault_ppm", self.vector_fault_ppm, max_vector), ("leaf_fault_ppm", self.leaf_fault_ppm, max_leaf)]
-        {
-            if ppm == 0 || ppm > max {
-                return Err(format!(
-                    "{what} must be in 1 ..= {max} (the soundness policy's fault model; a denser fault buys unearned bits)"
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// Checks one repetition makes.
-    pub fn checks_per_repetition(&self) -> u64 {
-        self.vectors_per_repetition as u64 + self.leaves_per_repetition as u64
-    }
-
-    /// **`-log2 ε` the committed scope derives, as a lower bound** — an integer function of the scope and the policy's repetition
-    /// count, so every machine gets the same number.
-    ///
-    /// Model: a faulty implementation shows on at least `f` of a family's draws; draws are independent and uniform; the check
-    /// misses it only if every one of the `n` draws is clean: `ε ≤ (1 − f)^n ≤ e^(−f·n)`, so `−log2 ε ≥ f·n·log2 e`, and
-    /// `log2 e > 1.4426`. The result is the smaller of the two families that are present. It is a CONDITIONAL bound under this
-    /// fault model — not a theorem about the whole model, not a Kernel soundness claim, and it speaks of no fault outside the
-    /// two families (a fault that lives only in unsampled leaves or unsampled prompts is exactly what a sample can miss).
-    pub fn derived_epsilon_bits(&self, repetitions: u32) -> u16 {
-        let bits = |n: u128, ppm: u32| -> u128 { n * ppm as u128 * 14_426 / 10_000_000_000 };
-        let mut best: Option<u128> = None;
-        if self.vectors_per_repetition > 0 {
-            let b = bits(repetitions as u128 * self.vectors_per_repetition as u128, self.vector_fault_ppm);
-            best = Some(best.map_or(b, |x| x.min(b)));
-        }
-        if self.leaves_per_repetition > 0 {
-            let b = bits(repetitions as u128 * self.leaves_per_repetition as u128, self.leaf_fault_ppm);
-            best = Some(best.map_or(b, |x| x.min(b)));
-        }
-        best.unwrap_or(0).min(u16::MAX as u128) as u16
-    }
-
-    /// The identity of the scope AND its fault model (what the evidence's `scope_and_fault_model_id` names).
-    pub fn scope_and_fault_model_id(&self, repetitions: u32) -> Digest {
-        tool_root(
-            b"misaka.palw.runtime-pack.scope-fault-model.v1",
-            &(self.clone(), repetitions, self.derived_epsilon_bits(repetitions)),
-        )
-    }
-
-    /// The scope in words, for records: never claims more than it is.
-    pub fn statement(&self, repetitions: u32) -> String {
-        format!(
-            "SAMPLED differential check ({}): {repetitions} repetition(s) x [{} prompt(s) of 1..={} tokens + {} decoded, run on reference{}{}; {} artifact leaf(s) opened against the artifact root and decoded by each]; \
-             fault model: a fault visible on >= {} ppm of vector draws and >= {} ppm of leaf draws, independent uniform draws; \
-             derived -log2(eps) >= {} (conditional bound, not whole-model fidelity, not semantic admission, not full-scope)",
-            self.protocol,
-            self.vectors_per_repetition,
-            self.max_prompt_len,
-            self.decode_tokens,
-            if self.require_independent { " + independent" } else { "" },
-            if self.require_backend { " + typed backend" } else { "" },
-            self.leaves_per_repetition,
-            self.vector_fault_ppm,
-            self.leaf_fault_ppm,
-            self.derived_epsilon_bits(repetitions),
-        )
-    }
-}
+// (`ConformanceScopeV1`, its fault model and `approved_fault_model_v1` are re-exported above from consensus-core.)
 
 // ---------------------------------------------------------------------------------------------------------------------------
 // The implementation set, calibration identity and the other tool-level roots

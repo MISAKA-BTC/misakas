@@ -884,8 +884,8 @@ pub fn judge_vector_fault_v1(
 // V. The fresh verifier: the verdict from public reads alone
 // =================================================================================================================================
 
-/// What a fresh verifier holds: public reads (op 231's attempt and evidence rows, op 212's Final facts, the class's program and
-/// registered artifact root from op 230 / the registry) and, optionally, the artifact from its public source.
+/// What a fresh verifier holds: public reads (op 231's attempt and evidence rows and the class's program, op 212's Final facts)
+/// and, optionally, the artifact from its public source.
 pub struct FreshInputV1<'a> {
     pub commitment: &'a ConformanceCommitmentV1,
     pub policy: &'a PostCommitChallengePolicyV1,
@@ -896,10 +896,10 @@ pub struct FreshInputV1<'a> {
     /// The DAA the reads were taken at.
     pub tip_daa: u64,
     pub program: &'a TirProgramV1,
-    pub artifact_root: Hash64,
     /// The posted evidence (op 231), if any.
     pub post: Option<&'a ConformanceEvidencePostV1>,
-    /// The bytes of a selected leaf from the public artifact: `(param, layer, row_start, len) → bytes`, or `None` (not held).
+    /// The bytes of a selected leaf from the public artifact: `(param, layer, row_start, len) → bytes`, or `None` (not held). The
+    /// caller authenticates its source against the commitment's `artifact_root` (the SDK checks the file's inventory root).
     pub leaf_source: Option<&'a dyn Fn(&SelectedLeafV1) -> Option<Vec<u8>>>,
 }
 

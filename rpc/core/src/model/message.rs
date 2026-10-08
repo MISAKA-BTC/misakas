@@ -13363,6 +13363,156 @@ impl Deserializer for GetPalwOnboardingResponse {
     }
 }
 
+/// **`getPalwConformanceEvidence` (op 231, onboarding P0)**: a V2 class's conformance record, its current attempt and the evidence
+/// posted for it — the raw rows of the route's aux tables 39 and 40, the network's challenge policy and the beacon state the node
+/// derives. With op 212's Finals and op 230's class this is everything a fresh verifier needs.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwConformanceEvidenceRequest {
+    /// The V2 class id: 128 hex.
+    pub class_id: String,
+}
+
+impl Serializer for GetPalwConformanceEvidenceRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwConformanceEvidenceRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { class_id: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwConformanceEvidenceResponse {
+    /// The node answered from a V2 state.
+    pub available: bool,
+    pub found: bool,
+    pub tip_daa: u64,
+    pub class_id: String,
+    /// The class's `OnboardingStateV1` code (`CHALLENGE_PENDING`, `CONFORMANCE_PASSED`, `ACTIVE_REWARDABLE`, ...); empty with no record.
+    pub lifecycle_state: String,
+    /// The record's last `OnboardingFailureV1` code (`BEACON_UNAVAILABLE`, `CONFORMANCE_FAILED`, ...), or empty.
+    pub last_failure: String,
+    /// How the last closed attempt ended (`BEACON_UNAVAILABLE`, `BEACON_CHANGED`, `EVIDENCE_FAILED`, `REFUTED`, `EVIDENCE_WITHHELD`), or empty.
+    pub attempt_end: String,
+    /// Counted attempts so far (`beacon_retries + conformance_failures`) and the policy's limit.
+    pub attempts: u32,
+    pub attempt_limit: u32,
+    pub challenge_policy_id: String,
+    /// The network's `PostCommitChallengePolicyV1`, Borsh, hex (its id is `challenge_policy_id`).
+    pub challenge_policy: String,
+    /// The current attempt's `ConformanceCommitmentV1::statement_root`, its accepted DAA and its ordinal (the beacon's epoch).
+    pub statement_root: String,
+    pub committed_daa: u64,
+    pub challenge_epoch: u64,
+    /// `COLLECTING`, `CANDIDATE`, `LOCKED`, `UNAVAILABLE` (empty with no open attempt), derived by the node at `tip_daa`.
+    pub beacon_state: String,
+    pub beacon_have: u32,
+    pub beacon_need: u32,
+    pub lock_position: u64,
+    pub beacon_output: String,
+    /// The attempt's posted evidence: its id, DAA and the end (exclusive) of its challenge window.
+    pub evidence_posted: bool,
+    pub evidence_id: String,
+    pub evidence_daa: u64,
+    pub window_end_daa: u64,
+    /// `NotKernelBound`, `Ready` or `Held` (with the code and the reason), as op 230 says.
+    pub gate: String,
+    pub gate_code: String,
+    pub gate_reason: String,
+    /// Table 39's row and table 40's row, raw Borsh in hex: a fresh verifier decodes them itself (and can check them against the aux root op 211's rows rebuild).
+    pub attempt_row: String,
+    pub evidence_row: String,
+    /// The class's canonical program bytes, hex (the V2 class's IR record; byte-for-byte its bound kernel class's, tag 106).
+    pub program: String,
+    pub ledger_root: String,
+    pub aux_root: String,
+}
+
+impl Serializer for GetPalwConformanceEvidenceResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(bool, &self.found, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.lifecycle_state, writer)?;
+        store!(String, &self.last_failure, writer)?;
+        store!(String, &self.attempt_end, writer)?;
+        store!(u32, &self.attempts, writer)?;
+        store!(u32, &self.attempt_limit, writer)?;
+        store!(String, &self.challenge_policy_id, writer)?;
+        store!(String, &self.challenge_policy, writer)?;
+        store!(String, &self.statement_root, writer)?;
+        store!(u64, &self.committed_daa, writer)?;
+        store!(u64, &self.challenge_epoch, writer)?;
+        store!(String, &self.beacon_state, writer)?;
+        store!(u32, &self.beacon_have, writer)?;
+        store!(u32, &self.beacon_need, writer)?;
+        store!(u64, &self.lock_position, writer)?;
+        store!(String, &self.beacon_output, writer)?;
+        store!(bool, &self.evidence_posted, writer)?;
+        store!(String, &self.evidence_id, writer)?;
+        store!(u64, &self.evidence_daa, writer)?;
+        store!(u64, &self.window_end_daa, writer)?;
+        store!(String, &self.gate, writer)?;
+        store!(String, &self.gate_code, writer)?;
+        store!(String, &self.gate_reason, writer)?;
+        store!(String, &self.attempt_row, writer)?;
+        store!(String, &self.evidence_row, writer)?;
+        store!(String, &self.program, writer)?;
+        store!(String, &self.ledger_root, writer)?;
+        store!(String, &self.aux_root, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwConformanceEvidenceResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            found: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            class_id: load!(String, reader)?,
+            lifecycle_state: load!(String, reader)?,
+            last_failure: load!(String, reader)?,
+            attempt_end: load!(String, reader)?,
+            attempts: load!(u32, reader)?,
+            attempt_limit: load!(u32, reader)?,
+            challenge_policy_id: load!(String, reader)?,
+            challenge_policy: load!(String, reader)?,
+            statement_root: load!(String, reader)?,
+            committed_daa: load!(u64, reader)?,
+            challenge_epoch: load!(u64, reader)?,
+            beacon_state: load!(String, reader)?,
+            beacon_have: load!(u32, reader)?,
+            beacon_need: load!(u32, reader)?,
+            lock_position: load!(u64, reader)?,
+            beacon_output: load!(String, reader)?,
+            evidence_posted: load!(bool, reader)?,
+            evidence_id: load!(String, reader)?,
+            evidence_daa: load!(u64, reader)?,
+            window_end_daa: load!(u64, reader)?,
+            gate: load!(String, reader)?,
+            gate_code: load!(String, reader)?,
+            gate_reason: load!(String, reader)?,
+            attempt_row: load!(String, reader)?,
+            evidence_row: load!(String, reader)?,
+            program: load!(String, reader)?,
+            ledger_root: load!(String, reader)?,
+            aux_root: load!(String, reader)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod palw_model_market_wire_tests {
     use super::*;
