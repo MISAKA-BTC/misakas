@@ -112,7 +112,7 @@ impl StateRootPartsV1 {
 }
 
 /// The root of one keyed collection: its size, then each `(key, row)` leaf in key order.
-fn collection_root<'a, K: BorshSerialize + 'a, V: BorshSerialize + 'a>(
+pub(crate) fn collection_root<'a, K: BorshSerialize + 'a, V: BorshSerialize + 'a>(
     domain: &[u8],
     len: usize,
     rows: impl Iterator<Item = (&'a K, &'a V)>,
@@ -177,7 +177,11 @@ impl KernelLedgerV1 {
     }
 
     /// **The state root**: two nodes agree iff their roots do. Versioned, canonical, over per-collection roots.
+    ///
+    /// A ledger with no OPV policy (RFC-0015 dormant: [`crate::opv::OpvStateV1::is_dormant`]) has the historical root,
+    /// [`StateRootPartsV1::root`], byte for byte. Once an OPV policy is set the root is [`crate::opv::StateRootPartsV2`]: the
+    /// historical root of the whole Panel-licensed route, the policy, the OPV classes and the OPV claim rows.
     pub fn root(&self) -> Digest {
-        self.root_parts().root()
+        if self.opv.is_dormant() { self.root_parts().root() } else { self.root_parts_v2().root() }
     }
 }

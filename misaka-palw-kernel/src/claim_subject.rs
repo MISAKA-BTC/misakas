@@ -8,6 +8,9 @@
 //!
 //! **Outsiders do not depend on any of this.** A public prosecutor checks with its own salt and files an exact, authenticated proof;
 //! a probabilistic check failing never convicts, and the beacon authorizes nothing.
+//!
+//! RFC-0015: a claim of an `OptimisticPublicVerification` class has no Panel checking and so draws nothing from this subject; the
+//! function still describes it (it is a function of the committed claim) and a consumer must not start a Panel check for it.
 
 use misaka_palw_challenge::{ChallengeSubjectV1, RootV1, SubjectKindV1};
 

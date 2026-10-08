@@ -222,6 +222,7 @@ impl Consumer {
                     Ok(Vec::new())
                 }
                 LedgerTxV1::PanelCovered { claim } => l.apply_panel_tally(claim, true),
+                LedgerTxV1::AdmitOptimisticClass { class } => l.admit_optimistic_class(*class).map(|()| Vec::new()),
                 LedgerTxV1::Object { auth, object } => {
                     assert_eq!(&O::decode(&object.encode()).expect("canonical"), object, "{} round-trips", object.name());
                     l.apply_object(object, auth)
