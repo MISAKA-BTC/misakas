@@ -360,6 +360,16 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::TrapRevealedV1 { reveal } => {
             crate::palw_mesh_v1::palw_trap_revealed_shape_v1(reveal).map_err(|_| "a trap reveal is malformed (RFC-0007 Part IV.1)")
         }
+        // RFC-0010: a certified epoch output rides bounded (its proof is at most `MAX_BEACON_PROOF_BYTES_V1`); whether it verifies
+        // against the branch is the fold's, which drops one that does not, the block standing. Below
+        // `palw_permissionless_panel_v1` the walk drops it by name.
+        PalwConsensusObjectV2::PanelBeaconProofV3 { proof } => {
+            if proof.proof.len() > misaka_palw_panel::MAX_BEACON_PROOF_BYTES_V1 as usize {
+                Err("a certified Panel epoch output exceeds the proof bound (RFC-0010)")
+            } else {
+                Ok(())
+            }
+        }
         PalwConsensusObjectV2::ClassRegistered { admission: None, .. } => Err(
             "a class registered on a running chain must carry its shape profile and canonical job —              without them nothing can check its coverage, its ladder depth or its declared pwu",
         ),

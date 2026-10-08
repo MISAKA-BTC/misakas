@@ -411,6 +411,10 @@ pub fn palw_void_reason_keeps_obligation_v1(reason: PalwVoidReasonV2) -> bool {
         // Lane PL part C (ADR-0166): verifier unavailability is nobody's abandonment — the reservation returns at once, so the
         // obligation is neither held nor charged.
         PalwVoidReasonV2::PanelUnavailable => false,
+        // RFC-0010: the permissionless Panel's non-fraud terminations hold nothing (the reservation returns at once).
+        PalwVoidReasonV2::SealUnavailable
+        | PalwVoidReasonV2::BeaconUnavailable
+        | PalwVoidReasonV2::PermissionlessNoCapablePanel => false,
     }
 }
 

@@ -1,11 +1,13 @@
 //! RFC-0010: dormant configuration, public-chain snapshot/admission adapters and versioned fold.
-//! Historical lane A remains unchanged. The independent beacon and production V3 receipt/court
-//! handoff are unassigned; this binary refuses EVERY attempted activation, including custom params.
+//! Historical lane A remains unchanged. The production fold (`palw_panel_v3_fold_v1`, a child of `palw_state_v2`) wires the
+//! engine into `PalwChainStateV2` — Some-only root block, deltas 170–173, carriage tail `0xED` — and hands every binding to the
+//! V2 receipt/court machinery as an ordinary panel record. **No certified entropy source is approved**
+//! ([`crate::palw_panel_beacon_v1`]), so this binary refuses EVERY attempted activation, including custom params.
 
 use crate::{
     Hash64,
     config::params::{ForkActivation, Params},
-    palw_mode_v2::PalwModeV2Error,
+    palw_mode_v2::{PalwConsensusMode, PalwModeV2Error, palw_ruleset_id_v2},
     palw_panel_v2::{PalwPanelDrawPolicyV1, palw_panel_stake_base_bonds_judging_v1},
     palw_state_v2::{PalwBondKeyV2, PalwChainStateV2},
 };
@@ -15,6 +17,19 @@ pub use misaka_palw_panel::*;
 pub struct PalwPermissionlessPanelV1 {
     pub activation: ForkActivation,
     pub policy: PanelPolicyV1,
+}
+
+/// **The fence, mirrored on the V2 bundle's state params** (`PalwStateParamsV2::panel_v3`), which the fold reads: its height, its
+/// complete policy, and the engine's chain and ruleset identities. Not Borsh and not hashed — the fence itself is what the params
+/// and schedule ids name (Some-only), and `validate_palw_permissionless_panel_v1` refuses an armed one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPanelV3ParamsV1 {
+    pub from_daa: u64,
+    pub policy: PanelPolicyV1,
+    /// `palw_network_domain_v2_for(network, genesis)`: a chain, not a name.
+    pub network: Hash64,
+    /// `palw_ruleset_id_v2` of the bundle the mirror rides on.
+    pub ruleset: Hash64,
 }
 
 /// Migration is decided by acceptance, never by a later anchor/retry block's height.
@@ -42,13 +57,25 @@ impl PalwPermissionlessPanelV1 {
 }
 
 impl Params {
+    /// **The fence's mirror** on the V2 bundle's state params. Dormant: `None` on every shipped preset; a fixture that bypasses
+    /// `validate_palw_permissionless_panel_v1` (as `consensus/core/tests/rfc0010_permissionless_panel.rs` does) calls this.
+    pub fn sync_palw_permissionless_panel_v1(&mut self) {
+        let fence = self.palw_permissionless_panel_v1.filter(|fence| fence.activation != ForkActivation::never());
+        let network = crate::palw_attempt_v2::palw_network_domain_v2_for(self.net.to_string().as_bytes(), Some(self.genesis.hash));
+        if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            let ruleset = palw_ruleset_id_v2(bundle);
+            let mirror = fence.map(|fence| PalwPanelV3ParamsV1 { from_daa: fence.activation.daa_score(), policy: fence.policy, network, ruleset });
+            bundle.state = bundle.state.clone().with_panel_v3(mirror);
+        }
+    }
+
     pub fn validate_palw_permissionless_panel_v1(&self) -> Result<(), PalwModeV2Error> {
         if let Some(rule) = self.palw_permissionless_panel_v1.filter(|r| r.activation != ForkActivation::never()) {
             rule.policy.validate().map_err(|_| {
                 PalwModeV2Error::Invalid("palw_permissionless_panel_v1 has invalid timing, capacity or beacon parameters")
             })?;
             return Err(PalwModeV2Error::Invalid(
-                "palw_permissionless_panel_v1 cannot be armed: RFC-0010 assigns no certified beacon or activation; production V3 receipt/court/state-store wiring and RFC-0014 gates must pass first",
+                "palw_permissionless_panel_v1 cannot be armed: RFC-0010 approves no certified Panel beacon (BEACON_UNAVAILABLE: no Panel-independent Final exists, `approved_panel_beacon_policies_v1` is empty) and its bias/withholding/P0-10 review is external; R-core+, the panel economy and audit_2026_09_23 must also be in force before it, and RFC-0014's gates must pass first",
             ));
         }
         Ok(())
@@ -196,8 +223,7 @@ pub fn panel_live_headroom_v1(state: &PalwChainStateV2, bond: BondIdV1, filter: 
     filter.room_v1(state, &key).unwrap_or(0)
 }
 
-/// Public-chain adapter for offline/shadow folds. A real, audited certificate verifier must replace
-/// the explicit InvalidBeacon below before this can become a live consensus route.
+/// Public-chain adapter for offline/shadow folds (the production fold reads its own view over the transition builder).
 pub struct PalwPanelChainViewV1<'a> {
     pub state: &'a PalwChainStateV2,
     pub floor_class: Hash64,
@@ -225,8 +251,22 @@ impl ConsensusViewV1 for PalwPanelChainViewV1<'_> {
         panel_live_headroom_v1(self.state, *bond, &self.lock_filter)
     }
 
-    fn verify_beacon(&self, _: &BeaconRequestV1, _: &BeaconProofV1) -> Result<(), PanelErrorV1> {
-        Err(PanelErrorV1::InvalidBeacon)
+    /// The production adapter ([`crate::palw_panel_beacon_v1`]): a proof is a borsh `WorkBeaconV1` verified against THIS chain's
+    /// settlements. The shipped scheme registry is empty and no Final on this chain is Panel-independent, so it refuses everything.
+    fn verify_beacon(&self, request: &BeaconRequestV1, proof: &BeaconProofV1) -> Result<(), PanelErrorV1> {
+        let history = crate::palw_state_v2::ChainPanelBeaconHistoryV1::new(
+            self.state,
+            self.floor_class,
+            None,
+            &crate::palw_state_v2::PalwPanelV3BeaconSourceV1::Chain,
+            self.state.last_point().map(|point| point.daa_score).unwrap_or(0),
+        );
+        crate::palw_panel_beacon_v1::verify_panel_beacon_for_engine_v1(
+            &crate::palw_panel_beacon_v1::approved_panel_beacon_policies_v1(),
+            &history,
+            request,
+            proof,
+        )
     }
 
     fn terminal_claim(&self, claim: &Hash64) -> bool {

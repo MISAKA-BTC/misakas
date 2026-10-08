@@ -235,6 +235,10 @@ pub(crate) fn own_claim_events_at_v1(
                     // ADR-0160 lane liab (AG-2): voided by its bond's aggregate forfeiture.
                     R::AggregateForfeit => "aggregate_forfeit",
                     R::PanelUnavailable => "panel_unavailable",
+                    // RFC-0010: the permissionless Panel's non-fraud terminations.
+                    R::SealUnavailable => "seal_unavailable",
+                    R::BeaconUnavailable => "beacon_unavailable",
+                    R::PermissionlessNoCapablePanel => "permissionless_no_capable_panel",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }

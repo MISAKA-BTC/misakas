@@ -603,6 +603,10 @@ pub fn palw_capacity_void_attribution_v1(reason: PalwVoidReasonV2) -> PalwCapaci
         PalwVoidReasonV2::AggregateForfeit => PalwCapacityVoidAttributionV1::Censored,
         // Lane PL part C (ADR-0166): nobody is convicted of an expiry the verifiers caused or the chain cannot attribute.
         PalwVoidReasonV2::PanelUnavailable => PalwCapacityVoidAttributionV1::Undetected,
+        // RFC-0010: a seal, a beacon or a population the chain could not provide is nobody's conviction.
+        PalwVoidReasonV2::SealUnavailable
+        | PalwVoidReasonV2::BeaconUnavailable
+        | PalwVoidReasonV2::PermissionlessNoCapablePanel => PalwCapacityVoidAttributionV1::Undetected,
     }
 }
 

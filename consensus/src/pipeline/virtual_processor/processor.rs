@@ -14307,6 +14307,37 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// **RFC-0010: what the permissionless Panel's draw reads that the transition cannot see**, resolved at the PRE-ENTROPY
+    /// CHECKPOINT — the block's selected parent, never the block itself or anything it carries. `None` unless the fence is in
+    /// force at the block (the V2 bundle's mirror, `PalwStateParamsV2::panel_v3`) with R-core+, which is every shipped
+    /// preset: `validate_palw_permissionless_panel_v1` refuses every armed height, because no beacon scheme is approved
+    /// (`approved_panel_beacon_policies_v1` is empty) and every Final on this chain is Panel-licensed.
+    fn palw_panel_v3_inputs_for(
+        &self,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwPanelV3InputsV1> {
+        let state = self.palw_state_params_v2.as_ref()?;
+        let mirror = state.panel_v3()?;
+        if point.daa_score < mirror.from_daa || !state.rcore_plus_active_at(point.daa_score) {
+            return None;
+        }
+        // The checkpoint's DAA: the selected parent's. A block whose GHOSTDAG record the store cannot serve resolves at its own.
+        let checkpoint_daa = self
+            .ghostdag_store
+            .get_data(point.block)
+            .ok()
+            .and_then(|data| self.headers_store.get_header(data.selected_parent).ok())
+            .map(|header| header.daa_score)
+            .unwrap_or(point.daa_score);
+        Some(kaspa_consensus_core::palw_state_v2::PalwPanelV3InputsV1 {
+            draw: self.palw_panel_draw_policy_at(checkpoint_daa),
+            capability_proof: self.palw_capability_bound_at(checkpoint_daa),
+            floor_class: state.base_class_id(),
+            approved_beacons: kaspa_consensus_core::palw_panel_beacon_v1::approved_panel_beacon_policies_v1(),
+            beacon_source: kaspa_consensus_core::palw_state_v2::PalwPanelV3BeaconSourceV1::Chain,
+        })
+    }
+
     /// **ADR-0089 Decision 9, resolved in exactly one place, at the BLOCK's own DAA.**
     pub(super) fn palw_model_evm_active_at(&self, daa_score: u64) -> bool {
         self.palw_model_evm.is_some_and(|fence| fence.is_active(daa_score))
@@ -14536,6 +14567,8 @@ impl VirtualStateProcessor {
             sw8_draw,
             model_court_window_active: self.palw_model_court_window_active_at(daa_score),
             class_court_windows: std::collections::BTreeMap::new(),
+            // RFC-0010: the permissionless Panel's draw inputs, resolved at the pre-entropy checkpoint (None while the fence is off).
+            panel_v3: self.palw_panel_v3_inputs_for(point),
         }
     }
 

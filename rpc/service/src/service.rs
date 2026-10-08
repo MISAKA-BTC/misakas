@@ -495,6 +495,10 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 R::AggregateForfeit => "aggregate_forfeit",
                 // Lane PL part C (ADR-0166): an expiry of unavailable verifiers, no producer fault.
                 R::PanelUnavailable => "panel_unavailable",
+                // RFC-0010: the permissionless Panel's non-fraud terminations.
+                R::SealUnavailable => "seal_unavailable",
+                R::BeaconUnavailable => "beacon_unavailable",
+                R::PermissionlessNoCapablePanel => "permissionless_no_capable_panel",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }

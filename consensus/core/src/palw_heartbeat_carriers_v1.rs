@@ -203,7 +203,9 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::VertexEquivocationV1 { .. }
         // RFC-0007 Part IV.1 (tags 93, 94): trap commitments and reveals are mesh traffic in the fee market.
         | O::TrapCommittedV1 { .. }
-        | O::TrapRevealedV1 { .. } => false,
+        | O::TrapRevealedV1 { .. }
+        // RFC-0010: a certified Panel epoch output is evidence in the fee market beside the claims it serves, not a conviction.
+        | O::PanelBeaconProofV3 { .. } => false,
     }
 }
 
