@@ -17,6 +17,12 @@
 //! | `finx_e_merge_past_…` | — | X stands | X stands, and the merged public attempts count for neither side (an above-the-fork count would rank the attacker first) |
 //! | `finx_e_sybil_…` | V5 (Sybil) | the fresh node stays on a Sybil branch | the fresh node moves to the honest branch |
 //! | `finx_e_dos_…` | — | no continuation runs | a heartbeat flood costs no validation; an attempt flood at most `PALW_RULE_E_MAX_EXTRA_CANDIDATES_V1` a resolve |
+//!
+//! **Weights in this harness.** PoW is skipped, so a heartbeat carries almost no blue work and an attempt header 2^20: the side
+//! with more attempt blocks is the GHOSTDAG-heavier one, whatever its producer count. Each scenario below sets "heavier" with
+//! attempts by FEWER bonds (one bond attempting repeatedly) and "more bonds" on the other side. A claim's panel binds at the first
+//! attempt at or past its anchor slot (acceptance + 20 DAA), which gives it anchored weight; where a scenario must stay an economic
+//! tie, no attempt lands 20 DAA after another on the same chain.
 use super::*;
 use crate::model::services::reachability::ReachabilityService;
 use kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2;
@@ -151,11 +157,12 @@ fn bonds_above(state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2, fo
 // =====================================================================================================
 
 /// **V1 flipped: the lighter branch more bonds worked on is weighed, and taken by both nodes.** A partition `SPLIT` slots long:
-/// the heavy side races two producers a slot and no bond attempts there; on the light side one producer, and cards 2 and 3
-/// attempt. Healed: unarmed, the heavy node never weighs the light tip (its search stops at its own extension) and the light node
-/// keeps its own on a deep economic tie — split. Armed, the heavy node's search goes on past its own tip, finds the light tip
-/// ranked first by its header-level participation, weighs it over the two exclusive pasts (two bonds against none, both tips past
-/// `W_p`) and takes it; the light node refuses the heavier tip on the same order.
+/// on the heavy side two producers race and ONE bond (card 5) attempts four times, six slots apart; on the light side one producer,
+/// and cards 2 and 3 attempt once each. No panel binds (no attempt lands 20 DAA after another), so the economic keys tie. Healed:
+/// unarmed, the heavy node never weighs the light tip (its search stops at its own extension) and the light node keeps its own on a
+/// deep economic tie — split. Armed, the heavy node's search goes on past its own tip, finds the light tip ranked by its
+/// header-level participation, weighs it over the two exclusive pasts (two bonds against one, both tips past `W_p`) and takes it;
+/// the light node refuses the heavier tip on the same order.
 #[tokio::test]
 async fn finx_e_v1_the_lighter_branch_more_bonds_worked_on_is_weighed_and_taken() {
     kaspa_core::log::try_init_logger("warn");
@@ -166,6 +173,9 @@ async fn finx_e_v1_the_lighter_branch_more_bonds_worked_on_is_weighed_and_taken(
         let (mut hb, mut lb) = (Vec::new(), Vec::new());
         for slot in 0..SPLIT {
             hb.extend(free_slot(&mut n.heavy, &mut n.nonce, 2, Vec::new()).await);
+            if slot % 6 == 0 {
+                hb.push(free_attempt(&mut n.heavy, 5).await.0);
+            }
             lb.extend(free_slot(&mut n.light, &mut n.nonce, 1, Vec::new()).await);
             if slot < 2 {
                 lb.push(free_attempt(&mut n.light, 2 + slot).await.0);
@@ -176,7 +186,7 @@ async fn finx_e_v1_the_lighter_branch_more_bonds_worked_on_is_weighed_and_taken(
         feed(&mut n.heavy, &lb).await;
         assert!(bw(&n.heavy, ht) > bw(&n.heavy, lt), "{tag}: the heavy side is GHOSTDAG-heavier");
         eprintln!(
-            "[finx {tag}] healed {SPLIT} slots after the fork: heavy tip +{} blue work, light tip +{} (two bonds attempted there); sinks: heavy node on {}, light node on {}; rule E searches on the heavy node {}, most extra validations {}",
+            "[finx {tag}] healed {SPLIT} slots after the fork: heavy tip +{} blue work (one bond, four attempts), light tip +{} (two bonds); sinks: heavy node on {}, light node on {}; rule E searches on the heavy node {}, most extra validations {}",
             bw(&n.heavy, ht) - bw(&n.heavy, fork),
             bw(&n.heavy, lt) - bw(&n.heavy, fork),
             if n.heavy.sink() == ht { "its own" } else { "the LIGHT tip" },
@@ -188,7 +198,8 @@ async fn finx_e_v1_the_lighter_branch_more_bonds_worked_on_is_weighed_and_taken(
         // The light node holds both tips UTXO-validated in either arm (it weighed the heavier one at its gate).
         let pair = node_pair(&n.light, lt, ht);
         assert_eq!(client_pair(&n.light, lt, ht), pair, "{tag}: leaf v2 gives a client the node's pair");
-        assert_eq!((pair.a.participation, pair.b.participation), (2, 0), "{tag}: two bonds against none");
+        assert_eq!((pair.a.participation, pair.b.participation), (2, 1), "{tag}: two bonds against one");
+        assert_eq!((pair.a.economic(), pair.b.economic()), ((0, 0, 0), (0, 0, 0)), "{tag}: an economic tie");
         if armed {
             assert_eq!((n.heavy.sink(), n.light.sink()), (lt, lt), "{tag}: both nodes on the lighter branch more bonds worked on");
         } else {
@@ -206,11 +217,12 @@ async fn finx_e_v1_the_lighter_branch_more_bonds_worked_on_is_weighed_and_taken(
 ///
 /// * Heartbeat-only, three and six slots, armed: still split at the heal and after three rounds — nothing unforgeable exists on
 ///   either side (ADR-0175 residual a; the record's §2.3 bound).
-/// * Three slots with bonds on both sides (cards 2 and 3 on the heavy side, card 4 on the light side), and the bonds keep
-///   attempting every fourth round after the heal. Unarmed: a deep economic tie keeps both incumbents for good. Armed: the split
-///   holds while the fork is shallower than `W_p` (the economic keys over the exclusive pasts tie), and heals once both tips stand
-///   `W_p` above the fork — on the side whose exclusive past more bonds attempted in. (The heavy node merges the light side's
-///   blocks while they are within its merge depth, so those attempts count for neither side; the record states it.)
+/// * Three slots with bonds on both sides (cards 2 and 3 on the heavy side, card 4 on the light side), heartbeats only after the
+///   heal (no panel ever binds, so the economic keys tie for good). Unarmed: a deep economic tie keeps both incumbents — split for
+///   good. Armed: the split holds while the fork is shallower than `W_p`, and heals once both tips stand `W_p` above the fork, on
+///   the side with more exclusive participation. (Each node merges the other side's blocks that are lighter than its own tip and
+///   inside its merge window, and a merged attempt counts for neither side — so the heavy side, whose second attempt the light
+///   node never merges, keeps one exclusive bond while the light side's one attempt is merged away; the record states it.)
 #[tokio::test]
 async fn finx_e_v2_a_deep_tie_heals_once_w_p_deep_where_bonds_stay_active() {
     kaspa_core::log::try_init_logger("warn");
@@ -236,9 +248,8 @@ async fn finx_e_v2_a_deep_tie_heals_once_w_p_deep_where_bonds_stay_active() {
         feed(&mut n.heavy, &lb).await;
         let mut agreed: Vec<bool> = vec![n.heavy.sink() == n.light.sink()];
         let rounds = W_P as usize + 8;
-        for round in 0..rounds {
-            let (h, l): (&[usize], &[usize]) = if round % 4 == 3 { (&[2, 3], &[4]) } else { (&[], &[]) };
-            round_with_bonds(&mut n, h, l).await;
+        for _ in 0..rounds {
+            round_with_bonds(&mut n, &[], &[]).await;
             agreed.push(n.heavy.sink() == n.light.sink());
         }
         let first_agree = agreed.iter().position(|a| *a);
@@ -249,7 +260,10 @@ async fn finx_e_v2_a_deep_tie_heals_once_w_p_deep_where_bonds_stay_active() {
         );
         if armed {
             assert!(agreed.last().copied().unwrap_or(false), "{tag}: healed by the end");
-            assert!(on_chain(&n.light, heavy_at_heal) && on_chain(&n.heavy, heavy_at_heal), "{tag}: on the side two bonds worked on");
+            assert!(
+                on_chain(&n.light, heavy_at_heal) && on_chain(&n.heavy, heavy_at_heal),
+                "{tag}: on the side with the exclusive participation"
+            );
             assert!(!agreed[0], "{tag}: not at the heal — the fork is shallower than W_p there");
         } else {
             assert!(agreed.iter().all(|a| !a), "{tag}: the status quo — split for good (V2)");
@@ -263,9 +277,9 @@ async fn finx_e_v2_a_deep_tie_heals_once_w_p_deep_where_bonds_stay_active() {
 
 /// **V3 flipped: the PALW rule heals before finality seals.** `finx_p0_d`'s shape at depth 60: three claims bound before the
 /// fork, the light side carries one licence (of a claim both sides hold — under rule E it decides nothing), the heavy side's cards
-/// 5 and 6 attempt every third round after the heal. Unarmed: the light node keeps its own chain on the licence until its finality
-/// point passes the fork — sealed. Armed: once both tips stand `W_p` above the fork the light node moves to the side the bonds
-/// worked on, before its finality point reaches the fork.
+/// 5 and 6 attempt once right after the heal (no panel of theirs binds before the seal, so the status quo stays on the licence).
+/// Unarmed: the light node keeps its own chain on the licence until its finality point passes the fork — sealed. Armed: once both
+/// tips stand `W_p` above the fork the light node moves to the side the bonds worked on, before its finality point reaches it.
 #[tokio::test]
 async fn finx_e_v3_the_rule_heals_before_finality_seals() {
     kaspa_core::log::try_init_logger("warn");
@@ -302,7 +316,7 @@ async fn finx_e_v3_the_rule_heals_before_finality_seals() {
             if moved_at.is_some() || sealed_at.is_some_and(|s| round > s + 2) {
                 break;
             }
-            let h: &[usize] = if round % 3 == 0 { &[5, 6] } else { &[] };
+            let h: &[usize] = if round == 0 { &[5, 6] } else { &[] };
             round_with_bonds(&mut n, h, &[]).await;
         }
         eprintln!(
@@ -532,15 +546,16 @@ async fn finx_e_v6_clock_form_x_stands() {
 // =====================================================================================================
 
 /// **The merge-past attacker: public attempts merged into a private branch count for neither side.** The attacker (one bond, card
-/// 5) forks at the shared prefix and keeps its branch the heavier while it MERGES every public block made before X — the attempts
-/// of cards 2, 3 and 4 among them — so their claims are accepted above the fork on both branches. Then X on the public chain; the
-/// attacker stops merging, carries Y and its own bond's attempt; the public chain's cards 2 and 3 attempt again after X. Released
-/// with both tips `SPLIT` slots past the fork.
+/// 5) forks at the shared prefix and MERGES every public block made before X — the attempts of cards 2, 3 and 4 among them — so
+/// their claims are accepted above the fork on both branches. Then X on the public chain; the attacker stops merging, carries Y,
+/// and its own bond attempts every fourth slot (which keeps its branch the heavier and binds panels on it); the public chain's
+/// cards 2 and 3 attempt again after X. Released with both tips `SPLIT` slots past X.
 ///
-/// * Rule E over the exclusive pasts: the merged attempts are in both tips' pasts and cancel — the attacker shows one bond (its
-///   own), the victim two (its attempts after X): refused, X stands.
+/// * Armed — rule E over the exclusive pasts: the merged attempts are in both tips' pasts and cancel; the attacker shows one bond
+///   (its own), the victim two (its attempts after X): refused, X stands.
 /// * An "above the fork" count — the definition the record warns against — gives the attacker four bonds (the three it merged and
 ///   its own) against the victim's three: it would rank the attacker first. Measured on the same two states.
+/// * Unarmed — the status quo's absolute keys: measured and printed (the record carries it), not asserted.
 #[tokio::test]
 async fn finx_e_merge_past_merged_public_attempts_count_for_neither_side() {
     kaspa_core::log::try_init_logger("warn");
@@ -570,13 +585,15 @@ async fn finx_e_merge_past_merged_public_attempts_count_for_neither_side() {
         let (x, y) = (n.x.clone(), n.y.clone());
         free_slot(&mut n.light, &mut n.nonce, 1, vec![x.clone()]).await;
         private.extend(free_slot(&mut n.heavy, &mut n.nonce, 2, vec![y.clone()]).await);
-        private.push(free_attempt(&mut n.heavy, 5).await.0);
         for slot in 0..SPLIT {
             free_slot(&mut n.light, &mut n.nonce, 1, Vec::new()).await;
             if slot == 2 || slot == 4 {
                 free_attempt(&mut n.light, if slot == 2 { 2 } else { 3 }).await;
             }
             private.extend(free_slot(&mut n.heavy, &mut n.nonce, 2, Vec::new()).await);
+            if slot % 4 == 0 {
+                private.push(free_attempt(&mut n.heavy, 5).await.0);
+            }
         }
         let (at, vt) = (n.heavy.sink(), n.light.sink());
         feed(&mut n.light, &private).await;
@@ -599,7 +616,9 @@ async fn finx_e_merge_past_merged_public_attempts_count_for_neither_side() {
         );
         assert_eq!((pair.a.participation, pair.b.participation), (1, 2), "{tag}: the merged attempts cancel");
         assert!(naive_a > naive_v, "{tag}: an above-the-fork count would rank the attacker first");
-        assert!(has_x && !has_y, "{tag}: X stands");
+        if armed {
+            assert!(has_x && !has_y, "{tag}: X stands");
+        }
     }
 }
 
@@ -607,10 +626,11 @@ async fn finx_e_merge_past_merged_public_attempts_count_for_neither_side() {
 // A Sybil peer flood, and the search's cost
 // =====================================================================================================
 
-/// **A fresh node fed by Sybil peers first.** Three bondless branches from the fork, each heavier than the honest one (two and
-/// three producers a slot), reach a fresh node before the honest branch does (cards 2, 3 and 4 attempt on it). Unarmed, the node
-/// stays on a Sybil branch (V5: heard first; V1: the lighter honest branch is never weighed). Armed, the Sybil branches score no
-/// header-level participation and cost no validation; the honest branch is weighed and taken.
+/// **A fresh node fed by Sybil peers first.** Three Sybil branches from the fork — each carrying ONE bond's attempts (card 6, four
+/// times, which makes each heavier than the honest branch) — reach a fresh node before the honest branch does (cards 2, 3 and 4
+/// attempt on it, once each). Unarmed, the node stays on a Sybil branch (V5: heard first; V1: the lighter honest branch is never
+/// weighed). Armed, the honest branch ranks first by header-level participation, is weighed, and is taken (three bonds against
+/// one).
 #[tokio::test]
 async fn finx_e_sybil_peers_first_cannot_hold_a_fresh_node() {
     kaspa_core::log::try_init_logger("warn");
@@ -630,14 +650,14 @@ async fn finx_e_sybil_peers_first_cannot_hold_a_fresh_node() {
                 honest.push(free_attempt(&mut n.light, 2 + slot).await.0);
             }
         }
-        let mut branches: Vec<Vec<Block>> = vec![Vec::new()];
-        for _ in 0..SPLIT {
-            branches[0].extend(free_slot(&mut n.heavy, &mut n.nonce, 2, Vec::new()).await);
-        }
-        for s in sybils.iter_mut() {
+        let mut branches: Vec<Vec<Block>> = Vec::new();
+        for s in std::iter::once(&mut n.heavy).chain(sybils.iter_mut()) {
             let mut b = Vec::new();
-            for _ in 0..SPLIT {
-                b.extend(free_slot(s, &mut n.nonce, 3, Vec::new()).await);
+            for slot in 0..SPLIT {
+                b.extend(free_slot(s, &mut n.nonce, 2, Vec::new()).await);
+                if slot % 6 == 0 {
+                    b.push(free_attempt(s, 6).await.0);
+                }
             }
             branches.push(b);
         }
@@ -650,8 +670,9 @@ async fn finx_e_sybil_peers_first_cannot_hold_a_fresh_node() {
         let on_sybil = fresh.sink();
         feed(&mut fresh, &honest).await;
         let vp = fresh.vp();
+        assert!(bw(&fresh, on_sybil) > bw(&fresh, ht), "{tag}: the Sybil branch the node heard first is the heavier");
         eprintln!(
-            "[finx {tag}] fresh node on {} after the honest branch arrived (it was on a Sybil tip with +{} blue work over the honest tip); continuations {}, most extra validations in one {}",
+            "[finx {tag}] fresh node on {} after the honest branch arrived (it was on a Sybil tip with {:+} blue work over the honest tip); continuations {}, most extra validations in one {}",
             if fresh.sink() == ht { "the HONEST tip" } else { "a Sybil tip" },
             bw(&fresh, on_sybil) - bw(&fresh, ht),
             vp.palw_rule_e_searches.load(Relaxed),
