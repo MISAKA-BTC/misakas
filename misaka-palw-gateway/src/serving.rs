@@ -125,23 +125,26 @@ impl ClientLink for AlwaysPresent {
 /// such a client. The watch toggles `O_NONBLOCK` and restores it before returning, on the one thread that also writes
 /// the response, so it never races a write.
 pub struct TcpLink {
-    stream: TcpStream,
+    /// Behind a lock because the probe flips `O_NONBLOCK` on a descriptor shared with every clone: two probes interleaving (the `n`
+    /// candidates of one request run on threads) could leave one of them peeking on a BLOCKING socket, which waits for the client to speak.
+    stream: std::sync::Mutex<TcpStream>,
 }
 
 impl TcpLink {
     pub fn new(stream: &TcpStream) -> Option<Self> {
-        stream.try_clone().ok().map(|stream| Self { stream })
+        stream.try_clone().ok().map(|stream| Self { stream: std::sync::Mutex::new(stream) })
     }
 }
 
 impl ClientLink for TcpLink {
     fn is_gone(&self) -> bool {
-        if self.stream.set_nonblocking(true).is_err() {
+        let stream = self.stream.lock().unwrap_or_else(|e| e.into_inner());
+        if stream.set_nonblocking(true).is_err() {
             return true;
         }
         let mut byte = [0u8; 1];
-        let seen = self.stream.peek(&mut byte);
-        let restored = self.stream.set_nonblocking(false);
+        let seen = stream.peek(&mut byte);
+        let restored = stream.set_nonblocking(false);
         match seen {
             // End of stream: the peer closed its side.
             Ok(0) => true,
@@ -280,6 +283,27 @@ mod tests {
         std::io::Read::read_exact(&mut &server_side, &mut sink).unwrap();
         assert!(link.is_gone(), "after the peer closed, the link reports it");
         assert!(!AlwaysPresent.is_gone());
+    }
+
+    /// Several probes of one link at once (the `n` candidates of a request) must neither hang nor misreport a live client as gone.
+    #[test]
+    fn concurrent_probes_of_one_link_neither_hang_nor_misreport() {
+        use std::sync::Arc;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).unwrap();
+        let (server_side, _) = listener.accept().unwrap();
+        let link = Arc::new(TcpLink::new(&server_side).expect("clone"));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let link = Arc::clone(&link);
+            handles.push(std::thread::spawn(move || (0..200).filter(|_| link.is_gone()).count()));
+        }
+        let wrongly_gone: usize = handles.into_iter().map(|h| h.join().expect("a probe thread finished: none hung")).sum();
+        assert_eq!(wrongly_gone, 0, "a connected, silent client is never reported gone");
+        drop(client);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(link.is_gone());
     }
 
     #[test]
