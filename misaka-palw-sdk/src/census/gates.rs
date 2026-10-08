@@ -9,6 +9,7 @@
 //!   shape depth for `admit`). `pack` needs the weights and `seat`/`final` a chain: in a census they are never `PASS`.
 
 use super::codes::{self, Gate, GateStatus};
+use super::onboarding::{GapClassV1, classify_census_code_v1};
 use super::listing::{ArtifactKind, ListingV1, SelectedV1, StrataV1, TaskV1, select, strata_of, task_of};
 use super::rights::{RightsPolicy, RightsV1, rights_of};
 use super::store::{self, Fetched};
@@ -37,6 +38,10 @@ pub struct GateResultV1 {
     /// The depth the result was established at (`listing`, `headers`, `shape`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<String>,
+    /// **Who has to change something** (`FRONTEND_REQUIRED`, `KERNEL_EXTENSION_REQUIRED`, `LAYOUT_REQUIRED`, `RESOURCE_REFUSED`, …,
+    /// or `NOT_RUN` for a gate that was not run): [`super::onboarding`]. Absent on a PASS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class: Option<GapClassV1>,
 }
 
 /// A code found at a gate, with its argument and evidence.
@@ -60,6 +65,7 @@ fn fail(gate: Gate, mut f: Vec<Found>, depth: &str) -> GateResultV1 {
         }
     }
     let first = f.first().cloned().expect("a failure has a code");
+    let class = classify_census_code_v1(gate, &first.code, first.arg.as_deref(), &first.evidence);
     let mut evidence: Vec<String> = first.evidence.clone();
     evidence.truncate(8);
     GateResultV1 {
@@ -70,15 +76,25 @@ fn fail(gate: Gate, mut f: Vec<Found>, depth: &str) -> GateResultV1 {
         codes: cs,
         evidence,
         depth: Some(depth.into()),
+        class: Some(class),
     }
 }
 
 fn pass(gate: Gate, depth: &str, evidence: Vec<String>) -> GateResultV1 {
-    GateResultV1 { gate, status: GateStatus::Pass, blocking: None, arg: None, codes: vec![], evidence, depth: Some(depth.into()) }
+    GateResultV1 { gate, status: GateStatus::Pass, blocking: None, arg: None, codes: vec![], evidence, depth: Some(depth.into()), class: None }
 }
 
 fn not_run(gate: Gate, why: &str, evidence: Vec<String>) -> GateResultV1 {
-    GateResultV1 { gate, status: GateStatus::NotRun, blocking: Some(why.into()), arg: None, codes: vec![], evidence, depth: None }
+    GateResultV1 {
+        gate,
+        status: GateStatus::NotRun,
+        blocking: Some(why.into()),
+        arg: None,
+        codes: vec![],
+        evidence,
+        depth: None,
+        class: Some(GapClassV1::NotRun),
+    }
 }
 
 /// What the preflight said, summarised for the row.
@@ -972,6 +988,7 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                     codes: vec![codes::RIGHTS_UNCONFIRMED.into()],
                     evidence: vec![rights.why.clone()],
                     depth: Some(depth.into()),
+                    class: Some(GapClassV1::ExternalBlocker),
                 };
                 for x in g.iter_mut().skip(1) {
                     *x = not_run(x.gate, &Gate::Source.not_run_after(), vec![]);
@@ -1091,6 +1108,34 @@ mod tests {
         assert_eq!(gate(&r.gates, Gate::Source).blocking.as_deref(), Some(codes::RIGHTS_UNCONFIRMED));
         assert_eq!(gate(&r.gates, Gate::Lower).blocking.as_deref(), Some("NOT_RUN_AFTER_SOURCE"));
         assert_eq!((r.stopped_at.as_str(), r.technical_stopped_at.as_str()), ("source", "lower"));
+    }
+
+    /// **Every gate of a row carries its onboarding class** (machine-readable, additive to the row): a failure its own class, a gate
+    /// that was not run `NOT_RUN` (never a gap), a PASS none.
+    #[test]
+    fn every_gate_of_a_row_carries_who_has_to_change_something() {
+        let r = evaluate(&listing(Some("image-classification"), &["config.json", "model.safetensors"]), None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Source).class, None);
+        assert_eq!(gate(&r.technical, Gate::Lower).class, Some(GapClassV1::ProfileRequired));
+        for g in [Gate::Pack, Gate::Admit, Gate::Seat, Gate::Final] {
+            let x = gate(&r.technical, g);
+            assert_eq!((x.status, x.class), (GateStatus::NotRun, Some(GapClassV1::NotRun)), "{g:?}");
+        }
+        // The strict view's rights failure is the source's, not the importer's.
+        assert_eq!(gate(&r.gates, Gate::Source).class, Some(GapClassV1::ExternalBlocker));
+        // A format with no reader is the importer's; missing weights are the source's.
+        let r = evaluate(&listing(Some("text-generation"), &["config.json", "pytorch_model.bin"]), None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Lower).class, Some(GapClassV1::FrontendRequired));
+        let r = evaluate(&listing(Some("text-generation"), &["README.md"]), None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Source).class, Some(GapClassV1::ExternalBlocker));
+        // An unsampled model's lower gate is NOT_RUN: not a verdict, not a gap.
+        let r = evaluate(&listing(Some("text-generation"), &["config.json", "model.safetensors"]), None, &ctx());
+        let lo = gate(&r.technical, Gate::Lower);
+        assert_eq!(lo.class, Some(GapClassV1::NotRun));
+        assert!(!lo.class.unwrap().is_semantic_gap());
+        // The serialized row carries the token.
+        let j = serde_json::to_value(lo).unwrap();
+        assert_eq!(j["class"], "NOT_RUN");
     }
 
     #[test]
