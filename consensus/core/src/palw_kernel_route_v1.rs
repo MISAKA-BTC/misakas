@@ -30,6 +30,7 @@ use misaka_palw_kernel::descriptor::{
 use misaka_palw_kernel::gate::ProsecutionPolicyV1;
 use misaka_palw_kernel::hash::Digest;
 use misaka_palw_kernel::ledger::{KernelLedgerV1, LedgerPolicyV1};
+use misaka_palw_kernel::opv::{CarrierCapsV1, OpvBudgetsV1, OpvEconomicsV1, OpvPolicyV1, OpvWindowV1};
 use misaka_palw_kernel::rows::{LedgerRowsV1, LedgerScalarsV1, config_root_of, root_of_rows};
 use misaka_palw_kernel::verify::ScopeV1;
 
@@ -121,6 +122,21 @@ pub struct PalwKernelRouteExtrasV1 {
     /// `cfg(test)`, uniformly for every chain of a test process, so a header's policy never changes mid-chain). Lets a test exhaust the
     /// block budget with a handful of carriers instead of sixty-five.
     pub max_adjudications_per_block: Option<u32>,
+    /// **RFC-0015 OptimisticPublicVerification**: `Some` exactly where the network declares the OPV policy (a genesis constant — it is
+    /// `Some` at every block of a chain or at none). The processor resolves it from the `palw_panel_free_v1` fence, which X15 has not
+    /// yet declared in `Params`; until then it is `None` outside a test and a test arms it through its harness seam.
+    pub opv: Option<PalwKernelOpvExtrasV1>,
+}
+
+/// What the processor hands the fold for the OPV mode (RFC-0015): the fence's activation and the network policy's admission list.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwKernelOpvExtrasV1 {
+    /// The first DAA at which an OPV class registers and an OPV claim commits (`None`: the fence never activates).
+    pub activation_daa: Option<u64>,
+    /// **The class ids (mode-bound) the NETWORK'S policy admits for OPV** — consensus, never a registrant's choice. Its home is a
+    /// `Params` list behind the fence (the Lead's decision; not yet declared), so it is empty outside a test and a test hook fills it:
+    /// GAP — until then no OPV class registers on a real network even with the fence in force.
+    pub admitted_classes: Vec<Hash64>,
 }
 
 /// **The INTERIM ledger policy.** Windows are short so a drill crosses them; the amounts are sompi. Values are consensus constants
@@ -165,6 +181,52 @@ pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash6
     }
 }
 
+/// **The INTERIM OPV policy** (RFC-0015): relations the kernel validates, values chosen for the (never-armed) fence and written once
+/// here. The window is the ledger's own 50 DAA (40 base + 10 horizon); the budgets of a fresh verifier's path fit it and the court
+/// deadline and proof grace; the reservation covers the claim's maximum gain (reward + work credit + a stated external bound) plus the
+/// default penalty and the gain over the assumed detection probability. A real activation would revisit every number (and measure the
+/// budgets on real hardware — an external gate).
+pub fn palw_kernel_route_opv_policy_v1(activation_daa: Option<u64>) -> OpvPolicyV1 {
+    use misaka_palw_kernel::route::{MAX_COMMIT_CLAIM_BYTES_V1, MAX_FILE_PROOF_BYTES_V1, MAX_RESPOND_BYTES_V1};
+    let carrier = PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 as u64;
+    OpvPolicyV1 {
+        activation_daa,
+        window: OpvWindowV1 { base_challenge_window_daa: 40, verification_horizon_daa: 10 },
+        budgets: OpvBudgetsV1 {
+            cold_material_daa: 10,
+            check_daa: 10,
+            localize_daa: 2,
+            disclose_daa: 8,
+            court_daa: 3,
+            carrier_daa: 2,
+            reorg_slack_daa: 2,
+        },
+        economics: OpvEconomicsV1 {
+            reservation_per_claim: 1_000 * SOMPI_PER_KASPA,
+            work_credit_per_claim: 5 * SOMPI_PER_KASPA,
+            external_gain_bound: 10 * SOMPI_PER_KASPA,
+            assumed_detection_permille: 500,
+            max_live_claims_per_producer: 3,
+            max_live_claims_total: 32,
+            default_burn_permille: 100,
+        },
+        carrier: CarrierCapsV1 {
+            filing_cap: carrier.min(MAX_FILE_PROOF_BYTES_V1 as u64),
+            response_cap: carrier.min(MAX_RESPOND_BYTES_V1 as u64),
+            commit_cap: carrier.min(MAX_COMMIT_CLAIM_BYTES_V1 as u64),
+        },
+    }
+}
+
+/// [`palw_kernel_route_template_v1`] over a network that declares an OPV policy.
+pub fn palw_kernel_route_template_opv_v1(policy: LedgerPolicyV1, opv: Option<OpvPolicyV1>) -> KernelLedgerV1 {
+    let template = palw_kernel_route_template_v1(policy);
+    match opv {
+        Some(p) => template.with_opv_policy(p).expect("the interim OPV policy validates against the interim ledger policy"),
+        None => template,
+    }
+}
+
 /// The ledger configuration the fold starts every block from (policy, the schedule that arms the K2 descriptors, the descriptors
 /// this binary implements). Rows are loaded over it.
 pub fn palw_kernel_route_template_v1(policy: LedgerPolicyV1) -> KernelLedgerV1 {
@@ -204,6 +266,8 @@ pub struct PalwKernelRouteHeaderV1 {
     pub policy: LedgerPolicyV1,
     pub config_root: Digest,
     pub scalars: LedgerScalarsV1,
+    /// RFC-0015: the network's OPV policy, a genesis constant (`None`: the Panel-licensed route alone, and the historical root form).
+    pub opv: Option<OpvPolicyV1>,
 }
 
 /// **The kernel route state** (module doc). `rows` are the ledger's tables; `aux` the consensus tables.
@@ -215,16 +279,21 @@ pub struct PalwKernelRouteStateV1 {
 }
 
 impl PalwKernelRouteStateV1 {
-    pub fn new(policy: LedgerPolicyV1, scalars: LedgerScalarsV1) -> Self {
-        let template = palw_kernel_route_template_v1(policy);
+    pub fn new(policy: LedgerPolicyV1, opv: Option<OpvPolicyV1>, scalars: LedgerScalarsV1) -> Self {
+        let template = palw_kernel_route_template_opv_v1(policy, opv);
         let config_root = config_root_of(&template.schedule, &template.known);
-        Self { header: PalwKernelRouteHeaderV1 { policy, config_root, scalars }, rows: LedgerRowsV1::new(), aux: BTreeMap::new() }
+        Self { header: PalwKernelRouteHeaderV1 { policy, config_root, scalars, opv }, rows: LedgerRowsV1::new(), aux: BTreeMap::new() }
+    }
+
+    /// The configuration the rows were folded under (policy, OPV policy, schedule, descriptors).
+    pub fn template(&self) -> KernelLedgerV1 {
+        palw_kernel_route_template_opv_v1(self.header.policy, self.header.opv)
     }
 
     /// The ledger's root, computed from the rows alone (equal to [`KernelLedgerV1::root`] of the ledger they describe).
     pub fn ledger_root(&self) -> Hash64 {
         let h = &self.header;
-        Hash64::from_bytes(root_of_rows(&h.policy, h.config_root, h.scalars, &self.rows))
+        Hash64::from_bytes(root_of_rows(&h.policy, h.config_root, h.scalars, h.opv.as_ref(), &self.rows))
     }
 
     /// The consensus tables' root: every aux row, in key order.
@@ -245,8 +314,7 @@ impl PalwKernelRouteStateV1 {
 
     /// The kernel ledger these rows describe (over the state's own configuration).
     pub fn ledger(&self) -> Result<KernelLedgerV1, String> {
-        let template = palw_kernel_route_template_v1(self.header.policy);
-        KernelLedgerV1::from_rows(&template, self.header.scalars, &self.rows)
+        KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &self.rows)
     }
 
     /// A decoded aux row.
@@ -351,6 +419,22 @@ pub struct KernelDemandReadV1 {
     pub last_rejection: Option<String>,
 }
 
+/// **What public discovery returns for an OPV claim** (RFC-0015 §5): the clock facts a fresh verifier plans by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KernelOpvReadV1 {
+    pub admitted_daa: u64,
+    /// The latest DAA a fresh verifier may START from and still reach a first filing inside the window.
+    pub verifier_start_cutoff_daa: u64,
+    /// The earliest Final (the window's end).
+    pub final_floor_daa: u64,
+    /// The latest Final / decision, whatever is filed.
+    pub hard_deadline_daa: u64,
+    pub reservation: u64,
+    pub max_gain: u64,
+    /// What a Final of this claim means (never shown as a proof of correctness).
+    pub statement: &'static str,
+}
+
 /// **Everything public about one claim** (nothing private exists in the route: every field is chain state): its lifecycle, the
 /// public record a fresh verifier is built from, the positions served on chain, the open demands, and the interim assignment while
 /// the Panel's receipts are being counted. `ledger_root` and `aux_root` anchor it to the committed state.
@@ -359,6 +443,10 @@ pub struct KernelClaimReadV1 {
     pub claim_id: Digest,
     /// `program` or `pipeline`.
     pub kind: &'static str,
+    /// How the claim's class verifies and finalizes (RFC-0015): `PanelLicensed` or `OptimisticPublicVerification`.
+    pub mode: &'static str,
+    /// The OPV clock facts a fresh verifier plans by (`None` for a Panel-licensed claim).
+    pub opv: Option<KernelOpvReadV1>,
     /// The lifecycle state, spelled out (`Final { final_daa: 7 }`, `Convicted { daa: 9 }`, ...).
     pub state: String,
     pub final_daa: Option<u64>,
@@ -395,7 +483,58 @@ pub struct KernelRowsPageV1 {
     pub total_rows: u64,
 }
 
+/// One Final of the route, for a reader and for the beacon: the kernel's receipt, how the work reached Final, and — where the route
+/// knows every fact the beacon needs — the borsh `WorkFinalEventV1` (RFC-0010's `BeaconFactSource` input).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KernelFinalReadV1 {
+    pub receipt: misaka_palw_kernel::opv::FinalReceiptV1,
+    /// `PanelIndependent` (an OPV Final, never anything else) or `PanelLicensed` (the interim route does not know the licensing
+    /// Panel's seed and epoch, so it exports no beacon event for it).
+    pub final_path: &'static str,
+    /// Borsh of `misaka_palw_challenge::WorkFinalEventV1`; `None` for a Panel-licensed Final.
+    pub event: Option<Vec<u8>>,
+    pub statement: &'static str,
+}
+
 impl PalwKernelRouteStateV1 {
+    /// **Every Final the ledger holds**, in the kernel's canonical order, each with the beacon's event where the route can state it
+    /// (RFC-0015: an OPV Final is `FinalPathV1::PanelIndependent`). Positions are DAA scores; the earliest acceptance of a work
+    /// identity is the earliest commitment of any claim of the same job (a convicted or defaulted earlier holder counts).
+    pub fn finals_read_v1(&self) -> Result<Vec<KernelFinalReadV1>, String> {
+        use misaka_palw_kernel::mode::VerificationModeV1;
+        use misaka_palw_kernel::opv::WorkFinalContextV1;
+        let ledger = self.ledger()?;
+        let mut out = Vec::new();
+        for receipt in ledger.final_receipts() {
+            let work = ledger.claims.get(&receipt.claim).map(|r| (r.class_binding_id, r.job_id));
+            let earliest = ledger
+                .claims
+                .values()
+                .filter(|row| Some((row.class_binding_id, row.job_id)) == work)
+                .map(|row| row.committed_daa)
+                .min()
+                .unwrap_or(receipt.accepted_daa);
+            let (final_path, event) = match receipt.mode {
+                VerificationModeV1::OptimisticPublicVerification => {
+                    let ctx = WorkFinalContextV1 {
+                        accepted_position: earliest,
+                        settlement_position: receipt.final_daa,
+                        occurrence_index: 0,
+                        validity_independent: true,
+                        depends_on_profiles: Vec::new(),
+                        panel: None,
+                    };
+                    let event = receipt.to_work_final_event(&ctx)?;
+                    ("PanelIndependent", Some(borsh::to_vec(&event).map_err(|e| e.to_string())?))
+                }
+                VerificationModeV1::PanelLicensed => ("PanelLicensed", None),
+            };
+            let statement = receipt.assurance.statement();
+            out.push(KernelFinalReadV1 { receipt, final_path, event, statement });
+        }
+        Ok(out)
+    }
+
     /// **The public read of one claim** (see [`KernelClaimReadV1`]); `Ok(None)` for an unknown claim, `Err` only if the stored rows do
     /// not rebuild (corruption, not an input).
     pub fn claim_read_v1(&self, claim: &Digest) -> Result<Option<KernelClaimReadV1>, String> {
@@ -437,9 +576,20 @@ impl PalwKernelRouteStateV1 {
             misaka_palw_kernel::lifecycle::ClaimStateV1::Final { final_daa } => Some(final_daa),
             _ => None,
         };
+        let opv = ledger.opv_claim_view(claim).map(|v| KernelOpvReadV1 {
+            admitted_daa: v.admitted_daa,
+            verifier_start_cutoff_daa: v.verifier_start_cutoff_daa,
+            final_floor_daa: v.final_floor_daa,
+            hard_deadline_daa: v.hard_deadline_daa,
+            reservation: v.reservation,
+            max_gain: v.max_gain,
+            statement: v.assurance.statement(),
+        });
         Ok(Some(KernelClaimReadV1 {
             claim_id: *claim,
             kind,
+            mode: ledger.mode_of_class(&row.class_binding_id).name(),
+            opv,
             state: format!("{:?}", row.life.state),
             final_daa,
             convicted: row.convicted,
@@ -512,8 +662,23 @@ mod tests {
         p.validate().unwrap();
         let b = |i| PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(9), i));
         assert_ne!(palw_kernel_bond_id_v1(&b(0)), palw_kernel_bond_id_v1(&b(1)));
-        let state = PalwKernelRouteStateV1::new(p, LedgerScalarsV1::default());
+        let state = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
         assert_eq!(state.ledger().unwrap().root(), state.ledger_root().as_bytes(), "an empty state roots like an empty ledger");
+    }
+
+    #[test]
+    fn the_interim_opv_policy_validates_against_the_interim_ledger_policy_and_roots_like_its_ledger() {
+        let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let opv = palw_kernel_route_opv_policy_v1(Some(7));
+        opv.validate(&p).unwrap();
+        // The test node's four-adjudication block must still satisfy the OPV relations.
+        let mut small = p;
+        small.max_adjudications_per_block = 4;
+        opv.validate(&small).unwrap();
+        let state = PalwKernelRouteStateV1::new(p, Some(opv), LedgerScalarsV1::default());
+        assert_eq!(state.ledger().unwrap().root(), state.ledger_root().as_bytes(), "an empty OPV state roots like an empty OPV ledger");
+        let plain = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
+        assert_ne!(state.ledger_root(), plain.ledger_root(), "the OPV root form is not the historical one");
     }
 
     #[test]

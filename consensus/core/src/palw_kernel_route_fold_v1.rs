@@ -144,12 +144,16 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
         policy.max_adjudications_per_block = cap;
     }
     let attested = extras.attested_artifacts.clone();
+    // RFC-0015: the OPV policy is a genesis constant of the network — present at every block of a chain or at none.
+    let opv_policy = extras.opv.as_ref().map(|o| palw_kernel_route_opv_policy_v1(o.activation_daa));
+    let admitted: Vec<Hash64> = extras.opv.as_ref().map(|o| o.admitted_classes.clone()).unwrap_or_default();
     match builder.state.kernel_route.as_ref() {
         None => {
-            let created = PalwKernelRouteStateV1::new(policy, misaka_palw_kernel::rows::LedgerScalarsV1 { daa: ctx.daa_score, burned: 0 });
+            let created =
+                PalwKernelRouteStateV1::new(policy, opv_policy, misaka_palw_kernel::rows::LedgerScalarsV1 { daa: ctx.daa_score, burned: 0 });
             builder.write_kernel_header(created.header);
         }
-        Some(kernel) if kernel.header.policy != policy => {
+        Some(kernel) if kernel.header.policy != policy || kernel.header.opv != opv_policy => {
             return Err(refused("the stored kernel route was folded under another policy"));
         }
         Some(_) => {}
@@ -168,6 +172,12 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
     }
     for root in attested {
         ledger.attest_artifact(root.as_bytes());
+    }
+    // The network policy's admissions (consensus, not a registrant's choice); idempotent, so an admitted class is one row.
+    if opv_policy.is_some() {
+        for class in admitted {
+            ledger.admit_optimistic_class(class.as_bytes()).map_err(|r| refused(r.to_string()))?;
+        }
     }
     Ok(ledger)
 }
@@ -343,7 +353,9 @@ pub(super) fn apply_kernel_route_object_v1(
     for event in &events {
         if let LedgerEventV1::ClaimCommitted { claim } = event {
             let deadline = ledger.claims.get(claim).map(|c| c.committed_daa + ledger.policy.check_window_daa).unwrap_or(ctx.daa_score);
-            if matches!(ledger.claims.get(claim).map(|c| &c.body), Some(ClaimBodyV1::Program { .. })) {
+            // RFC-0015: an OptimisticPublicVerification claim has no Panel — no seats, no assignment, no receipts.
+            let panel_licensed = ledger.mode_of_claim(claim) == Some(misaka_palw_kernel::mode::VerificationModeV1::PanelLicensed);
+            if panel_licensed && matches!(ledger.claims.get(claim).map(|c| &c.body), Some(ClaimBodyV1::Program { .. })) {
                 let assignment = draw_seats(builder, claim, signer, deadline);
                 for seat in &assignment.seats {
                     builder.note_kernel_bond(&seat.bond);

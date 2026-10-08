@@ -26,6 +26,7 @@ use crate::gate::{public_pipeline_prosecution_complete_v1, public_prosecution_co
 use crate::hash::{Digest, finish, id, keyed, object_id};
 use crate::ledger::{ClaimRowV1, DemandKeyV1, DemandRowV1, KernelLedgerV1, LedgerPolicyV1, PipelineClassRowV1, ClassRowV1, BondRowV1};
 use crate::pipeline::{pipeline_root_v1};
+use crate::opv::{OPV_POLICY_DOMAIN_V1, OPV_STATE_VERSION_V2, OpvClaimRowV1, OpvPolicyV1, StateRootPartsV2};
 use crate::pipeline_public::PipelineClassV1;
 use crate::public::{ProfileMaterialV1, ServedPositionV1};
 use crate::state::{
@@ -47,6 +48,11 @@ pub const TABLE_ATTESTED_V1: u8 = 9;
 pub const TABLE_JOB_CLAIMS_V1: u8 = 10;
 /// `(job, producer) → the producer's unrevealed claim seal` (seal-then-reveal; in the state root since the C4 fix F-C4-06).
 pub const TABLE_SEALS_V1: u8 = 11;
+/// RFC-0015 (OPV): the class ids the network's policy admitted, the ids registered under the mode, and the OPV claims' fixed facts.
+/// Absent (no rows) on a ledger with no OPV policy. The policy itself is configuration (the consumer's header), like the ledger's.
+pub const TABLE_OPV_ADMITTED_V1: u8 = 12;
+pub const TABLE_OPV_CLASSES_V1: u8 = 13;
+pub const TABLE_OPV_CLAIMS_V1: u8 = 14;
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -75,6 +81,9 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_SERVED_V1 => "served",
         TABLE_JOB_CLAIMS_V1 => "job-claims",
         TABLE_SEALS_V1 => "seals",
+        TABLE_OPV_ADMITTED_V1 => "opv-admitted",
+        TABLE_OPV_CLASSES_V1 => "opv-classes",
+        TABLE_OPV_CLAIMS_V1 => "opv-claims",
         _ => "attested-artifacts",
     };
     format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes()
@@ -122,6 +131,15 @@ impl KernelLedgerV1 {
         for (k, v) in &self.seals {
             rows.insert((TABLE_SEALS_V1, bytes_of(k)), bytes_of(v));
         }
+        for k in &self.opv.admitted {
+            rows.insert((TABLE_OPV_ADMITTED_V1, bytes_of(k)), Vec::new());
+        }
+        for k in &self.opv.classes {
+            rows.insert((TABLE_OPV_CLASSES_V1, bytes_of(k)), Vec::new());
+        }
+        for (k, v) in &self.opv.claims {
+            rows.insert((TABLE_OPV_CLAIMS_V1, bytes_of(k)), bytes_of(v));
+        }
         rows
     }
 
@@ -130,6 +148,10 @@ impl KernelLedgerV1 {
     /// is an error — a consumer's stored rows are its own consensus state, so that is corruption, not an input.
     pub fn from_rows(template: &KernelLedgerV1, scalars: LedgerScalarsV1, rows: &LedgerRowsV1) -> Result<Self, String> {
         let mut l = KernelLedgerV1::genesis(template.policy, template.schedule.clone(), template.known.clone())?;
+        // The OPV policy is configuration (a genesis constant): the template carries it, exactly as it carries the ledger's own.
+        if let Some(p) = template.opv.policy {
+            l = l.with_opv_policy(p)?;
+        }
         l.daa = scalars.daa;
         l.burned = scalars.burned;
         fn dec<T: borsh::BorshDeserialize>(b: &[u8], what: &str) -> Result<T, String> {
@@ -172,9 +194,20 @@ impl KernelLedgerV1 {
                 TABLE_SEALS_V1 => {
                     l.seals.insert(dec(key, "seal key")?, dec(row, "seal")?);
                 }
+                TABLE_OPV_ADMITTED_V1 => {
+                    l.opv.admitted.insert(dec(key, "admitted class")?);
+                }
+                TABLE_OPV_CLASSES_V1 => {
+                    l.opv.classes.insert(dec(key, "opv class")?);
+                }
+                TABLE_OPV_CLAIMS_V1 => {
+                    l.opv.claims.insert(dec(key, "opv claim key")?, dec::<OpvClaimRowV1>(row, "opv claim")?);
+                }
                 other => return Err(format!("a stored row names no table ({other})")),
             }
         }
+        // The live-claim index is derived (not committed): rebuilt from the rows, exactly as a restored ledger does.
+        l.opv_rebuild_live();
         Ok(l)
     }
 }
@@ -265,7 +298,13 @@ fn sort_key(table: u8, key: &[u8]) -> (Vec<u8>, u8, u32) {
 
 /// **The state root computed from the rows alone** — equal to [`KernelLedgerV1::root`] of the ledger they describe (tested), so a
 /// consumer roots its stored rows without rebuilding the ledger.
-pub fn root_of_rows(policy: &LedgerPolicyV1, config_root: Digest, scalars: LedgerScalarsV1, rows: &LedgerRowsV1) -> Digest {
+pub fn root_of_rows(
+    policy: &LedgerPolicyV1,
+    config_root: Digest,
+    scalars: LedgerScalarsV1,
+    opv: Option<&OpvPolicyV1>,
+    rows: &LedgerRowsV1,
+) -> Digest {
     let mut by_table: BTreeMap<u8, Vec<(&Vec<u8>, &Vec<u8>)>> = BTreeMap::new();
     for ((table, key), row) in rows {
         by_table.entry(*table).or_default().push((key, row));
@@ -306,7 +345,20 @@ pub fn root_of_rows(policy: &LedgerPolicyV1, config_root: Digest, scalars: Ledge
         seals: coll(TABLE_SEALS_V1),
     };
     let _ = LEDGER_ROOT_DOMAIN_V1;
-    parts.root()
+    let v1 = parts.root();
+    // RFC-0015: with no OPV policy the root is the historical one, byte for byte; with one it is the OPV root form.
+    match opv {
+        None => v1,
+        Some(p) => StateRootPartsV2 {
+            version: OPV_STATE_VERSION_V2,
+            v1,
+            opv_policy: object_id(OPV_POLICY_DOMAIN_V1, &Some(*p)),
+            opv_admitted: coll(TABLE_OPV_ADMITTED_V1),
+            opv_classes: coll(TABLE_OPV_CLASSES_V1),
+            opv_claims: coll(TABLE_OPV_CLAIMS_V1),
+        }
+        .root(),
+    }
 }
 
 /// One row's change between two row sets: `(key, old, new)`, in key order.

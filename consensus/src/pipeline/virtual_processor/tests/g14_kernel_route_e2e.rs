@@ -18,14 +18,14 @@ use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_genesis_chain_on, t12_reopened_chain, t12_with_harness_cards,
 };
 use crate::consensus::test_consensus::TestConsensus;
-use crate::pipeline::virtual_processor::processor::kernel_route_test_attest_artifact_v1;
+use crate::pipeline::virtual_processor::processor::{kernel_route_test_admit_opv_class_v1, kernel_route_test_attest_artifact_v1};
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::palw_kernel_route_v1::{
     PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1, PalwKernelRouteStateV1, palw_kernel_bond_id_v1, palw_kernel_payout_key_v1,
-    palw_kernel_route_message_v1, palw_kernel_route_template_v1,
+    palw_kernel_route_message_v1,
 };
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2;
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2 as Obj};
@@ -35,7 +35,10 @@ use misaka_palw_kernel::descriptor::k2_tir_v2_descriptor;
 use misaka_palw_kernel::evidence::build_evidence_v1;
 use misaka_palw_kernel::hash::Digest;
 use misaka_palw_kernel::job::{DecodeRuleV1, KernelClaimV1, KernelJobV1};
-use misaka_palw_kernel::ledger::{KernelLedgerV1, OutsiderFindingV1, OutsiderV1, ProsecutionV1, PublicSourceV1, claim_seal_v1};
+use misaka_palw_kernel::ledger::{
+    KernelLedgerV1, OutsiderFindingV1, OutsiderV1, ProsecutionV1, PublicSourceV1, claim_seal_v1, single_class_id_v1,
+};
+use misaka_palw_kernel::mode::VerificationModeV1;
 use misaka_palw_kernel::lifecycle::ClaimStateV1;
 use misaka_palw_kernel::plan::plan_for_tir_program_v1;
 use misaka_palw_kernel::public::{MaterialResponseV1, PositionResponseV1, TensorWireV1, program_root_v1};
@@ -57,9 +60,16 @@ const MAX_POSITIONS: u32 = 64;
 
 /// testnet-12 as launched, harness cards, the kernel route's fence armed at genesis WITHOUT its validation (module doc).
 fn kernel_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    kernel_config_at(0)
+}
+
+/// [`kernel_config`] with the route's fence at DAA `fence_at`. **`1` is the harness's OPV switch** (RFC-0015): until X15 declares
+/// `palw_panel_free_v1` in `Params`, a chain whose route fence activates at DAA 1 declares the OPV policy, activating at DAA 1 (the
+/// processor's `palw_kernel_opv_activation`, `cfg(test)`); any other height declares none.
+fn kernel_config_at(fence_at: u64) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
-    params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
+    params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(fence_at));
     // A shallow all-economic tie (a heartbeat branch against a heartbeat branch) is GHOSTDAG's, not a hash race: the reorg tests need
     // a heavier branch to win deterministically (rcore/f1-strictwin-tie).
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
@@ -109,7 +119,11 @@ impl Net {
 
     /// The network over a consensus the caller builds (a database it keeps, to restart the node over it).
     fn over(make: impl FnOnce(&Config) -> TestConsensus) -> Net {
-        let (config, bundle, premine, floats) = kernel_config();
+        Net::over_at(0, make)
+    }
+
+    fn over_at(fence_at: u64, make: impl FnOnce(&Config) -> TestConsensus) -> Net {
+        let (config, bundle, premine, floats) = kernel_config_at(fence_at);
         let chain = t12_genesis_chain_on(make(&config), &config, &bundle, &premine, &floats);
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             config.params.net.to_string().as_bytes(),
@@ -430,7 +444,7 @@ struct Fresh {
 impl Fresh {
     fn from_api(api: &PalwKernelRouteStateV1, committed_ledger_root: Hash64, salt: u8) -> Fresh {
         assert_eq!(api.ledger_root(), committed_ledger_root, "the served rows root to the committed ledger root");
-        let template = palw_kernel_route_template_v1(api.header.policy);
+        let template = api.template();
         let ledger = KernelLedgerV1::from_rows(&template, api.header.scalars, &api.rows).expect("the served rows rebuild a ledger");
         assert_eq!(ledger.root(), committed_ledger_root.as_bytes(), "and the rebuilt ledger's own root agrees");
         Fresh { ledger, salt: [salt; 64] }
@@ -532,6 +546,33 @@ struct World {
 impl World {
     async fn new() -> World {
         World::on(Net::new()).await
+    }
+
+    /// **An OPV network** (RFC-0015): the route's fence at DAA 1 (the harness switch), the chain beaten to DAA 1, the network policy's
+    /// admission of the class (the test hook), and the class registered under `OptimisticPublicVerification` by card 1 (tag 13).
+    async fn opv() -> World {
+        World::on_opv(Net::over_at(1, TestConsensus::new)).await
+    }
+
+    async fn on_opv(mut net: Net) -> World {
+        let fx = fixture();
+        let d = k2_tir_v2_descriptor();
+        net.beat_to(1).await;
+        let id = single_class_id_v1(d.digest(), &fx.program.encode(), &fx.plan, &fx.pc, VerificationModeV1::OptimisticPublicVerification);
+        kernel_route_test_admit_opv_class_v1(Hash64::from_bytes(id), 0);
+        let register = K::RegisterClassV2 {
+            mode: VerificationModeV1::OptimisticPublicVerification,
+            descriptor: d.digest(),
+            program_bytes: fx.program.encode(),
+            plan: fx.plan.clone(),
+            param_commitments: fx.pc.clone(),
+        };
+        let o = net.route(1, &register);
+        net.send(vec![(1, o)]).await;
+        let class = *net.ledger().classes.keys().next().expect("the OPV class registered through the real path");
+        assert_eq!(class, id, "the class id binds the mode");
+        assert!(net.ledger().opv.classes.contains(&class), "and the ledger holds it as an OPV class");
+        World { net, fx, class, jobs: 0 }
     }
 
     /// Registers the class (signed by card 1) over `net`.
@@ -676,6 +717,17 @@ impl World {
             OutsiderFindingV1::Prosecute(proof) => proof,
             other => panic!("the fresh verifier should prosecute: {other:?}"),
         }
+    }
+}
+
+/// A lifecycle state's spelled-out name (`Challengeable { .. }`, `Final { .. }`, ...).
+trait StateName {
+    fn to_string_state(&self) -> String;
+}
+
+impl StateName for ClaimStateV1 {
+    fn to_string_state(&self) -> String {
+        format!("{self:?}")
     }
 }
 
@@ -1401,7 +1453,7 @@ async fn g14_kernel_route_the_read_model_serves_a_claim_and_rows_that_rebuild_th
 
     // The public record alone builds a fresh verifier (what an outsider does with the RPC's bytes).
     let route = w.net.api().unwrap();
-    let template = palw_kernel_route_template_v1(route.header.policy);
+    let template = route.template();
     let header: EvidenceHeaderV1 = borsh::from_slice(&read.record_header).expect("the header decodes");
     misaka_palw_kernel::public::FreshVerifierV1::from_public_bytes(&read.public_record, &template.known, header)
         .expect("a fresh verifier is built from the served public record");
@@ -1488,4 +1540,337 @@ async fn g14_kernel_route_hostile_objects_are_dropped_or_dismissed_and_never_sto
     assert!(w.net.ledger().claims[&lie.id].convicted, "the outsider still convicts after the noise");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
+}
+
+// ---- RFC-0015 OptimisticPublicVerification on the real node ----------------------------------------------------------------
+//
+// An OPV network (the harness's switch: the route's fence at DAA 1) carries the OPV policy at genesis; a class registers under the
+// mode by tag 13 (the network's admission is the test hook), a claim of it has NO Panel — no seats, no assignment, no receipts — and
+// is Challengeable from its inclusion for a fixed window. Everything an outsider needs to stop it is the route's, unchanged.
+
+fn opv_view(w: &World, claim: &Digest) -> (misaka_palw_kernel::opv::OpvPolicyV1, kaspa_consensus_core::palw_kernel_route_v1::KernelOpvReadV1) {
+    let route = w.net.api().expect("the route");
+    let policy = route.header.opv.expect("the network declares the OPV policy");
+    let view = route.claim_read_v1(claim).unwrap().expect("the claim").opv.expect("an OPV claim has the clock view");
+    (policy, view)
+}
+
+/// **An honest OPV claim finalizes with no Panel** — Challengeable from inclusion, nothing can pass it early, Final exactly when the
+/// fixed window closes (the producer paid the INTERIM reward), and the route exports the beacon's fact for it: a Final whose path is
+/// `PanelIndependent`, not a proof that the computation is correct.
+#[tokio::test]
+async fn g14_opv_an_honest_claim_finalizes_with_no_panel_and_exports_a_panel_independent_beacon_fact() {
+    use misaka_palw_challenge::{FinalPathV1, WorkFinalEventV1, WorkSourceKindV1};
+    use misaka_palw_kernel::opv::{CANONICAL_WORK_DOMAIN_V1, FinalStandingV1};
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::opv().await;
+    let job = w.job().await;
+    let honest = w.claim(0, &job, false).await;
+    let route = w.net.api().unwrap();
+    assert!(route.assignment_of(&honest.id).is_none() && route.receipts_of(&honest.id).is_empty(), "no Panel: no seats, no receipts");
+    let read = route.claim_read_v1(&honest.id).unwrap().unwrap();
+    assert_eq!(read.mode, "OptimisticPublicVerification");
+    assert!(read.seats.is_empty() && read.state.starts_with("Challengeable"), "{} / {} seats", read.state, read.seats.len());
+    let (policy, view) = opv_view(&w, &honest.id);
+    assert_eq!(view.reservation, policy.economics.reservation_per_claim);
+    assert_eq!(view.final_floor_daa, view.admitted_daa + policy.window_daa());
+    assert_eq!(view.hard_deadline_daa, policy.hard_deadline(view.admitted_daa, &w.policy()));
+    assert!(view.statement.contains("not a proof that the computation is correct"));
+    assert_eq!(w.net.kernel_reserved(0), u128::from(view.reservation), "V2 sees the OPV reservation against the producer's real bond");
+
+    // Nothing passes it before the window closes...
+    w.net.beat_to(view.final_floor_daa - 1).await;
+    assert!(w.net.claim_state(&honest.id).to_string_state().starts_with("Challengeable"), "{:?}", w.net.claim_state(&honest.id));
+    assert!(w.net.api().unwrap().finals_read_v1().unwrap().is_empty(), "and no Final is exported");
+    // ...and the window's end finalizes it.
+    w.net.beat_to(view.final_floor_daa).await;
+    let ClaimStateV1::Final { final_daa } = w.net.claim_state(&honest.id) else { panic!("{:?}", w.net.claim_state(&honest.id)) };
+    assert!(final_daa >= view.final_floor_daa && final_daa <= view.hard_deadline_daa);
+    assert_eq!(w.net.owed(0), w.policy().claim_reward, "the Final reward is queued for the producer's payee (INTERIM, unfunded: GAP)");
+
+    // The beacon fact.
+    let finals = w.net.api().unwrap().finals_read_v1().unwrap();
+    assert_eq!(finals.len(), 1);
+    let f = &finals[0];
+    assert_eq!((f.final_path, f.receipt.claim, f.receipt.standing), ("PanelIndependent", honest.id, FinalStandingV1::Standing));
+    let event: WorkFinalEventV1 = borsh::from_slice(f.event.as_ref().expect("an OPV Final carries the beacon's event")).unwrap();
+    assert_eq!(event.final_path, FinalPathV1::PanelIndependent);
+    assert_eq!(event.kind, WorkSourceKindV1::RealUsefulWork);
+    assert!(event.claim_final && event.da_satisfied && event.validity_independent && event.depends_on_profiles.is_empty());
+    assert_eq!((event.accepted_position, event.settlement_position), (view.admitted_daa, final_daa));
+    assert_eq!(event.source_profile_id, w.class);
+    assert_eq!(event.canonical_work_id, misaka_palw_kernel::hash::object_id(CANONICAL_WORK_DOMAIN_V1, &(w.class, job.id())));
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+/// A lying OPV claim — with no Panel to cover it — is convicted pre-Final by a fresh outsider built from the read API alone.
+#[tokio::test]
+async fn g14_opv_a_lying_claim_is_convicted_by_a_fresh_outsider_before_final() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::opv().await;
+    let job = w.job().await;
+    let before = w.net.collateral(0);
+    let lie = w.claim(0, &job, true).await;
+    let outsider = w.outsiders(&lie, &[], 1)[0];
+    let (policy, view) = opv_view(&w, &lie.id);
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x5A);
+    w.proof(outsider, &lie.id, proof).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted);
+    assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Convicted { .. }));
+    let slashed = policy.economics.reservation_per_claim;
+    assert_eq!(w.net.collateral(0), before - slashed, "the real bond lost the whole OPV reservation");
+    assert_eq!(w.net.owed(outsider), slashed * u64::from(w.policy().accuser_reward_permille) / 1000);
+    assert_eq!(w.net.kernel_reserved(0), 0);
+    w.net.beat_to(view.hard_deadline_daa + 2).await;
+    assert!(w.net.api().unwrap().finals_read_v1().unwrap().is_empty(), "a convicted claim never finalizes");
+    assert_eq!(w.net.owed(0), 0, "and is never paid");
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+/// A lying OPV claim nobody prosecuted in the window finalizes; the liability horizon still convicts it, and the Final then reads
+/// `ConvictedAfterFinal` with `claim_final: false` — the beacon will not take it.
+#[tokio::test]
+async fn g14_opv_a_lie_that_finalized_is_convicted_within_liability_and_its_fact_is_withdrawn() {
+    use misaka_palw_challenge::WorkFinalEventV1;
+    use misaka_palw_kernel::opv::FinalStandingV1;
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::opv().await;
+    let job = w.job().await;
+    let before = w.net.collateral(0);
+    let lie = w.claim(0, &job, true).await;
+    let outsider = w.outsiders(&lie, &[], 1)[0];
+    let (policy, view) = opv_view(&w, &lie.id);
+    w.net.beat_to(view.final_floor_daa).await;
+    assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Final { .. }), "nobody prosecuted: Final");
+    let f = w.net.api().unwrap().finals_read_v1().unwrap();
+    let event: WorkFinalEventV1 = borsh::from_slice(f[0].event.as_ref().unwrap()).unwrap();
+    assert!(event.claim_final, "at Final the fact stands");
+
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x33);
+    w.proof(outsider, &lie.id, proof).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted, "convicted after Final");
+    let slashed = policy.economics.reservation_per_claim;
+    assert_eq!(w.net.collateral(0), before - slashed);
+    let f = w.net.api().unwrap().finals_read_v1().unwrap();
+    assert_eq!(f[0].receipt.standing, FinalStandingV1::ConvictedAfterFinal);
+    let event: WorkFinalEventV1 = borsh::from_slice(f[0].event.as_ref().unwrap()).unwrap();
+    assert!(!event.claim_final, "the withdrawn fact fails the beacon's eligibility by its own reason");
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+/// Withheld material is an availability default on an OPV claim too — with a share of the penalty burned — and the squatted job is
+/// free again: an honest producer's claim for it is accepted.
+#[tokio::test]
+async fn g14_opv_withheld_material_defaults_the_producer_burns_a_share_and_frees_the_job() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::opv().await;
+    let job = w.job().await;
+    let before = w.net.collateral(0);
+    let lie = w.claim(0, &job, true).await;
+    let outsider = w.outsiders(&lie, &[], 1)[0];
+    let da = lie.published(&w.fx, &[lie.at]);
+    assert_eq!(w.fresh(0x77).check(lie.id, &da, &w.fx.params), OutsiderFindingV1::Demand(vec![(0, lie.at.0)]));
+    w.demand(outsider, &lie.id, lie.at.0).await;
+    let deadline = w.net.ledger().demands[&(lie.id, 0, lie.at.0)].deadline_daa;
+    w.net.beat_to(deadline).await;
+    let pol = w.policy();
+    let (opv, _) = opv_view(&w, &lie.id);
+    assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Unavailable { producer_defaulted: true, .. }));
+    assert!(!w.net.ledger().claims[&lie.id].convicted);
+    assert_eq!(w.net.collateral(0), before - pol.default_penalty);
+    let burned = pol.default_penalty * u64::from(opv.economics.default_burn_permille) / 1000;
+    assert_eq!(w.net.owed(outsider), pol.default_penalty - burned, "the demander is paid what the default did not burn");
+    assert_eq!(w.net.kernel_reserved(0), 0);
+
+    // The job is free: an honest producer's claim for it is accepted.
+    let honest = w.claim(4, &job, false).await;
+    assert!(w.net.claim_state(&honest.id).to_string_state().starts_with("Challengeable"), "{:?}", w.net.claim_state(&honest.id));
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+/// Spam cannot hold an OPV claim's Final past its hard deadline: every position demanded in the window's last block by two bonds,
+/// each served at its deadline.
+#[tokio::test]
+async fn g14_opv_spam_demands_cannot_hold_final_past_the_hard_deadline() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::opv().await;
+    let job = w.job().await;
+    let honest = w.claim(0, &job, false).await;
+    let spam = w.outsiders(&honest, &[], 2);
+    let (_, view) = opv_view(&w, &honest.id);
+    let positions = {
+        let ledger = w.net.ledger();
+        let misaka_palw_kernel::ledger::ClaimBodyV1::Program { evidence, .. } = &ledger.claims[&honest.id].body else { panic!() };
+        evidence.positions
+    };
+    w.net.beat_to(view.final_floor_daa - 3 - 2 * u64::from(positions)).await;
+    let mut items = Vec::new();
+    for p in 0..positions {
+        for card in &spam {
+            let o = w.net.route(*card, &K::FileDemand { demander: w.net.kid(*card), claim: honest.id, stage: 0, position: p });
+            items.push((*card, o));
+        }
+    }
+    w.net.send(items).await;
+    assert!(w.net.daa() < view.final_floor_daa, "all the demands landed inside the window");
+    assert_eq!(w.net.ledger().demands.len(), positions as usize);
+    let deadline = w.net.ledger().demands.values().map(|d| d.deadline_daa).max().unwrap();
+    w.net.beat_to(deadline - 2 - u64::from(positions)).await;
+    let mut items = Vec::new();
+    for p in 0..positions {
+        let bytes = honest.position(&w.fx, p, |_| {});
+        let o = w.net.route(0, &K::Respond { claim: honest.id, stage: 0, position: p, bytes });
+        items.push((0, o));
+    }
+    w.net.send(items).await;
+    assert!(w.net.ledger().demands.is_empty());
+    w.net.beat_to(view.hard_deadline_daa + 3).await;
+    let ClaimStateV1::Final { final_daa } = w.net.claim_state(&honest.id) else { panic!("{:?}", w.net.claim_state(&honest.id)) };
+    assert!(final_daa <= view.hard_deadline_daa, "Final at {final_daa} within the hard deadline {}", view.hard_deadline_daa);
+}
+
+/// **The mode is dropped unless the fence and the network's admission say so.** On a network that declares no OPV policy a tag-13
+/// registration is dropped by name; on an OPV network a class the policy did not admit, and a "registration under PanelLicensed" by
+/// the wrong tag, are refused; the legacy route keeps working beside the mode, and a Panel-covered lie there is still convicted.
+#[tokio::test]
+async fn g14_opv_registration_is_dropped_without_the_fence_the_admission_or_the_right_tag_and_the_legacy_route_coexists() {
+    kaspa_core::log::try_init_logger("warn");
+    let d = k2_tir_v2_descriptor();
+    let opv_register = |fx: &Fixture, mode: VerificationModeV1, plan: misaka_palw_kernel::VerificationPlanV1| K::RegisterClassV2 {
+        mode,
+        descriptor: d.digest(),
+        program_bytes: fx.program.encode(),
+        plan,
+        param_commitments: fx.pc.clone(),
+    };
+
+    // (a) A network that declares no OPV policy: dropped by name (the fence), the legacy class is the only one.
+    let mut w = World::new().await;
+    assert!(w.net.api().unwrap().header.opv.is_none());
+    let before = w.net.api().unwrap().rows.clone();
+    let o = w.net.route(2, &opv_register(&w.fx, VerificationModeV1::OptimisticPublicVerification, w.fx.plan.clone()));
+    w.net.send(vec![(2, o)]).await;
+    assert_eq!(w.net.ledger().classes.len(), 1, "no OPV class on a network without the policy");
+    assert_eq!(w.net.api().unwrap().rows, before, "and the route's rows are untouched (the historical root form)");
+
+    // (b) An OPV network: only the admitted class registers, and only by tag 13 under a non-legacy mode.
+    let mut w = World::opv().await;
+    let plan48 = plan_for_tir_program_v1(&d, &w.fx.program, program_root_v1(&w.fx.program.encode()), 48).unwrap();
+    let o = w.net.route(2, &opv_register(&w.fx, VerificationModeV1::OptimisticPublicVerification, plan48));
+    w.net.send(vec![(2, o)]).await;
+    assert_eq!(w.net.ledger().classes.len(), 1, "a class the network's policy did not admit is refused: no registrant choice");
+    let o = w.net.route(2, &opv_register(&w.fx, VerificationModeV1::PanelLicensed, w.fx.plan.clone()));
+    w.net.send(vec![(2, o)]).await;
+    assert_eq!(w.net.ledger().classes.len(), 1, "the legacy mode has one registration path (tag 1)");
+
+    // (c) The legacy route beside the mode: the same program under tag 1 is another class, with the Panel's lifecycle.
+    let legacy = K::RegisterClass {
+        descriptor: d.digest(),
+        program_bytes: w.fx.program.encode(),
+        plan: w.fx.plan.clone(),
+        param_commitments: w.fx.pc.clone(),
+    };
+    let o = w.net.route(1, &legacy);
+    w.net.send(vec![(1, o)]).await;
+    assert_eq!(w.net.ledger().classes.len(), 2, "two classes: the same program under two modes");
+    let opv_class = w.class;
+    let panel_class = *w.net.ledger().classes.keys().find(|c| **c != opv_class).unwrap();
+    assert_eq!(w.net.ledger().mode_of_class(&panel_class), VerificationModeV1::PanelLicensed);
+    w.class = panel_class;
+    let job = w.job().await;
+    let lie = w.claim(0, &job, true).await;
+    let seats = w.seats(&lie.id);
+    w.cover(&lie.id).await;
+    let outsider = w.outsiders(&lie, &seats, 1)[0];
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x21);
+    w.proof(outsider, &lie.id, proof).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted, "a Panel-covered lie of the legacy class is convicted beside the mode");
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+/// OPV state across a reorg: the conviction (and the OPV rows it moved) is undone exactly by a heavier branch and returns
+/// identically when the original out-works it again.
+#[tokio::test]
+async fn g14_opv_replay_and_reorg_reach_the_same_roots() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::opv().await;
+    let job = w.job().await;
+    let lie = w.claim(0, &job, true).await;
+    let outsider = w.outsiders(&lie, &[], 1)[0];
+    let fork = w.net.chain.sink();
+    let at_fork = w.net.api().expect("the route");
+    let collateral = w.net.collateral(0);
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x5A);
+    w.proof(outsider, &lie.id, proof).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted);
+
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "Z on A");
+    let mut zn = w.net.on_chain(z);
+    let b = t12_genesis_chain(&w.net.config, &w.net.bundle, &w.net.premine, &w.net.floats);
+    let up_to_fork = chain_blocks(&w.net.chain, fork);
+    let fork_timestamp = up_to_fork.last().unwrap().header.timestamp;
+    for blk in up_to_fork {
+        arrive(&b, blk, "a block up to the fork").await;
+    }
+    let mut b = b;
+    b.ctx.simulated_time = fork_timestamp;
+    let ttpb = w.net.ttpb();
+    let mut b_blocks = Vec::new();
+    for _ in 0..4 {
+        b_blocks.push(b.heartbeat(ttpb, Vec::new()).await);
+    }
+    for blk in &b_blocks {
+        arrive(&zn.chain, blk.clone(), "B's block").await;
+    }
+    assert_eq!(zn.chain.sink(), b.sink(), "B out-works A: Z reorgs onto B");
+    let on_b = zn.api().unwrap();
+    assert_eq!((on_b.rows.clone(), on_b.aux.clone()), (at_fork.rows.clone(), at_fork.aux.clone()), "no OPV row, no trace of the conviction");
+    assert!(!zn.ledger().claims[&lie.id].convicted && zn.ledger().opv_invariants().is_ok());
+    assert_eq!((zn.collateral(0), zn.slashed(0), zn.owed(outsider)), (collateral, 0, 0));
+    assert_eq!(zn.chain.ctx.consensus.palw_kernel_route_v1(), b.ctx.consensus.palw_kernel_route_v1());
+
+    let old_len = chain_blocks(&w.net.chain, w.net.chain.sink()).len();
+    for _ in 0..4 {
+        w.net.chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    for blk in chain_blocks(&w.net.chain, w.net.chain.sink()).into_iter().skip(old_len) {
+        arrive(&zn.chain, blk, "A's later block").await;
+    }
+    w.net.assert_same(&zn.chain, "Z back on A");
+    assert!(zn.ledger().claims[&lie.id].convicted);
+}
+
+/// OPV state across a real restart: the rows come off disk, the claim finalizes after the restart on the restarted node, and a node
+/// replaying the whole chain agrees with every root.
+#[tokio::test]
+async fn g14_opv_survives_a_node_restart_and_finalizes_after_it() {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    kaspa_core::log::try_init_logger("warn");
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, receiver) = async_channel::unbounded();
+    let mut net = Net::over_at(1, |c| TestConsensus::with_db(db.clone(), c, sender));
+    net._keep.push(Box::new(receiver));
+    let mut w = World::on_opv(net).await;
+    let job = w.job().await;
+    let honest = w.claim(0, &job, false).await;
+    let (sink, root, route) = (w.net.chain.sink(), w.net.chain.tip_state().1.state_root(), w.net.api());
+    let (_, view) = opv_view(&w, &honest.id);
+
+    let mut w = w.restart(db.clone());
+    assert_eq!(w.net.chain.sink(), sink);
+    assert_eq!(w.net.chain.tip_state().1.state_root(), root, "the PALW tip off disk");
+    assert_eq!(w.net.api(), route, "the OPV route's rows, aux and header off disk");
+    assert!(w.net.ledger().opv_invariants().is_ok() && w.net.ledger().opv.claims.contains_key(&honest.id));
+
+    w.net.beat_to(view.final_floor_daa).await;
+    assert!(matches!(w.net.claim_state(&honest.id), ClaimStateV1::Final { .. }), "finalized by the restarted node");
+    assert_eq!(w.net.api().unwrap().finals_read_v1().unwrap().len(), 1);
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "a node replaying the whole chain");
 }

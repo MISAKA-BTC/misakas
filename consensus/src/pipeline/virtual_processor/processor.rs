@@ -240,6 +240,29 @@ pub(crate) fn kernel_route_test_attest_artifact_v1(artifact_root: kaspa_hashes::
     }
 }
 
+/// **G14 lane D / RFC-0015, TEST ONLY: the class ids the network's policy admits for OptimisticPublicVerification.** Their home is a
+/// `Params` list behind `palw_panel_free_v1` (the Lead's decision), not yet declared; a test names the (mode-bound) ids it treats as
+/// admitted, each from a DAA, append-only like the artifact attestations. The ids are content addresses, so one process-wide list is
+/// harmless to chains that never declare an OPV policy.
+#[cfg(test)]
+static KERNEL_ROUTE_TEST_OPV_ADMITTED_V1: std::sync::Mutex<Vec<(kaspa_hashes::Hash64, u64)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn kernel_route_test_admit_opv_class_v1(class: kaspa_hashes::Hash64, from_daa: u64) {
+    let mut list = KERNEL_ROUTE_TEST_OPV_ADMITTED_V1.lock().unwrap();
+    if !list.iter().any(|(id, _)| *id == class) {
+        list.push((class, from_daa));
+    }
+}
+
+#[cfg(test)]
+fn kernel_route_test_opv_admitted_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64> {
+    let mut ids: Vec<_> =
+        KERNEL_ROUTE_TEST_OPV_ADMITTED_V1.lock().unwrap().iter().filter(|(_, from)| *from <= daa_score).map(|(id, _)| *id).collect();
+    ids.sort();
+    ids
+}
+
 #[cfg(test)]
 fn kernel_route_test_attestations_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64> {
     let mut roots: Vec<_> =
@@ -13565,7 +13588,18 @@ impl VirtualStateProcessor {
         ) {
             return Err("a kernel route object carries a signature its bond's key does not verify".to_string());
         }
-        misaka_palw_kernel::route::KernelRouteObjectV1::decode(bytes).map(|_| ()).map_err(|refusal| format!("{refusal}"))
+        let object = misaka_palw_kernel::route::KernelRouteObjectV1::decode(bytes).map_err(|refusal| format!("{refusal}"))?;
+        // **RFC-0015: a registration under a non-legacy mode (tags 13 / 14) is dropped unless `palw_panel_free_v1` is in force.** The
+        // network declares the OPV policy or it does not; the ledger refuses the rest (admission, economics, carriers).
+        if matches!(
+            object,
+            misaka_palw_kernel::route::KernelRouteObjectV1::RegisterClassV2 { .. }
+                | misaka_palw_kernel::route::KernelRouteObjectV1::RegisterPipelineClassV2 { .. }
+        ) && !self.palw_kernel_opv_at(daa_score)
+        {
+            return Err("a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)".to_string());
+        }
+        Ok(())
     }
 
     fn verify_mldsa87_with_context_bool(key: &[u8], message: &[u8], sig: &[u8], context: &[u8]) -> bool {
@@ -14803,6 +14837,26 @@ impl VirtualStateProcessor {
         self.palw_probabilistic_constraints_v1.is_some_and(|fence| fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score))
     }
 
+    /// **RFC-0015: does this network declare the OPV policy, and from which DAA?** The policy is a genesis constant, so the answer is a
+    /// property of the ruleset and never of the block. Its fence is `palw_panel_free_v1`, which X15 declares in `Params` (dormant);
+    /// until that lands the answer is `None` outside a test. **Test seam**: a chain whose route fence (`palw_probabilistic_constraints_v1`)
+    /// activates at DAA 1 declares the policy, activating at DAA 1 — the harness's only per-chain switch that needs no new `Params` field.
+    fn palw_kernel_opv_activation(&self) -> Option<u64> {
+        #[cfg(test)]
+        {
+            self.palw_probabilistic_constraints_v1.filter(|f| *f == kaspa_consensus_core::config::params::ForkActivation::new(1)).map(|_| 1)
+        }
+        #[cfg(not(test))]
+        {
+            None
+        }
+    }
+
+    /// Is the OPV fence in force at `daa_score` (a registration under the mode, tags 13 / 14, may be carried)?
+    pub(super) fn palw_kernel_opv_at(&self, daa_score: u64) -> bool {
+        self.palw_kernel_opv_activation().is_some_and(|at| daa_score >= at)
+    }
+
     /// What the kernel route's fold is handed where the fence is in force: the network, the ruleset and the artifact attestations.
     /// **There is no on-chain artifact attestation yet** (onboarding conformance + availability: GAP), so outside a test the list is
     /// empty and a kernel class can never register; a test's hook (`kernel_route_test_attest_artifact_v1`, `cfg(test)`) fills it.
@@ -14822,6 +14876,15 @@ impl VirtualStateProcessor {
                 max_adjudications_per_block: Some(4),
                 #[cfg(not(test))]
                 max_adjudications_per_block: None,
+                opv: self.palw_kernel_opv_activation().map(|at| {
+                    kaspa_consensus_core::palw_kernel_route_v1::PalwKernelOpvExtrasV1 {
+                        activation_daa: Some(at),
+                        #[cfg(test)]
+                        admitted_classes: kernel_route_test_opv_admitted_v1(daa_score),
+                        #[cfg(not(test))]
+                        admitted_classes: Vec::new(),
+                    }
+                }),
             }
         })
     }

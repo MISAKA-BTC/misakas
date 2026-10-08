@@ -80,6 +80,8 @@ misaka-palw-base0.workspace = true
 misaka-palw-kernel.workspace = true
 misaka-palw-tir.workspace = true
 misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }
+# RFC-0015: the E2E decodes the Panel-independent beacon fact (WorkFinalEventV1) the route exports.
+misaka-palw-challenge.workspace = true
 
 [[bench]]
 name = "parallel_muhash"

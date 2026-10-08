@@ -3751,6 +3751,7 @@ dependencies = [
  "libcrux-ml-dsa",
  "log",
  "misaka-palw-base0",
+ "misaka-palw-challenge",
  "misaka-palw-kernel",
  "misaka-palw-tir",
  "misaka-palw-tir-sketch",
