@@ -174,6 +174,17 @@ pub struct BeaconRequestV1 {
     pub deadline_daa: u64,
 }
 
+/// How the caller's own record of a bound claim stands for the receipt clock. The engine's built-in clock is
+/// `bound_daa + receipt_window_daa` from its own binding; a host that pauses or re-bases the receipt window (a data-availability
+/// session, a verification-horizon credit) reports it here so the engine never redraws a Panel whose window the host stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiptClockV1 {
+    /// The window runs from this bound DAA (the host's, possibly credited later than the engine's own binding).
+    Running { bound_daa: u64 },
+    /// The window is stopped (a pause): no timeout is due and no retry is drawn.
+    Paused,
+}
+
 /// This interface must read one validated selected-chain base, before this block's own objects.
 /// There is deliberately no built-in production beacon verifier, mock VRF or block-hash fallback.
 /// Certificate verification must bind the entire request, enforce unique epoch output, canonical
@@ -184,6 +195,27 @@ pub trait ConsensusViewV1 {
     fn verify_beacon(&self, request: &BeaconRequestV1, proof: &BeaconProofV1) -> Result<(), PanelErrorV1>;
     /// Validate a terminal claim outcome under the existing receipt/court/payout rules.
     fn terminal_claim(&self, claim: &Hash64) -> bool;
+    /// The host's receipt clock for a currently bound claim; `None` (the default) is the engine's own
+    /// `bound_daa + receipt_window_daa`.
+    fn receipt_clock(&self, _claim: &Hash64) -> Option<ReceiptClockV1> {
+        None
+    }
+}
+
+/// The scalar header of the engine state: the unit a production state store journals when the selected chain advances.
+/// Everything else in the state is keyed (claims, retained work identities, certified epoch outputs), so a block's change to the
+/// state is exactly a cursor change plus keyed row changes; reservations are derived from the claims and never journalled.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelCursorV1 {
+    pub version: u16,
+    pub network: Hash64,
+    pub ruleset: Hash64,
+    pub policy: PanelPolicyV1,
+    pub tip: Hash64,
+    pub height: u64,
+    pub daa: u64,
+    pub next_order: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
