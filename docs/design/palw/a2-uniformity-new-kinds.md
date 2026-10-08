@@ -153,7 +153,9 @@ the object, the block standing. So an inner kind added later is read the same wa
   from a zero-filled body.
 
 Inner kinds added before tag 110's fence is first armed on a live network ride with it (`None`): G14-R4's 15 and K2S's 16–18 are
-such. Once tag 110 is live, every later inner kind needs a fence of its own.
+such. Once tag 110 is live, every later inner kind needs a fence of its own. G14R's inner 20 `CommitClaimSalted` (the salted claim
+seal v2) is `palw_panel_free_v1`'s, beside the OPV registrations: below that fence the kernel refuses it and the gate drops it through
+the table (`PalwKernelInnerFenceV1::PanelFreeV1`), never through a hand-written arm. Inner kinds 21 and 22 are not allocated.
 
 ### 3.4 Inside the live build's own kinds: its wire types are frozen
 
@@ -192,15 +194,17 @@ manifest reports (§7).
 
 `PALW_A2_KIND_FENCE_TABLE_V1` (`palw_lifecycle_objects_v2.rs`) is the one table of every post-int-12 member, landed or allocated, and
 the fence below which it rides unjudged. A2U keeps it; the Lead allocates; a lane fills its row's code at merge. Each row names its
-fence as a `Params` field name, so a row can be written before its lane merges.
+fence as a `Params` field name, so a row can be written before its lane merges. An unallocated tag (112, 114–119, 121–129, 140–149)
+has no row, so a kind landing there fails the table test until the Lead allocates it.
 
 | Slot | Members | Fence | Lane | In this tree |
 |---|---|---|---|---|
 | object tags 104–107 | onboarding | `palw_probabilistic_constraints_v1` | G14 lane D | yes |
 | object tag 108 | `SignedRegistrationV1` | `palw_signed_registration_v1` | RFC-0009 | yes |
 | object tag 109 | `ConformanceEvidenceV1` | `palw_probabilistic_constraints_v1` | OB-P0 | yes |
-| object tags 110–119 | 110 route, 111 receipt; **113 `KernelRouteChunkV1`** | `palw_probabilistic_constraints_v1` | G14; 113 G14-R4 | 110/111 |
-| object tags 120–129 | 120 `PanelBeaconProofV3` | `palw_permissionless_panel_v1` | RFC-0010 | yes |
+| object tags 110–111 | 110 route, 111 receipt | `palw_probabilistic_constraints_v1` | G14 lane D | yes |
+| object tag 113 | `KernelRouteChunkV1` (the route's own chunk lane) | `palw_probabilistic_constraints_v1` | G14-R4 | no |
+| object tag 120 | `PanelBeaconProofV3` | `palw_permissionless_panel_v1` | RFC-0010 | yes |
 | object tags 130–139 | 130 `ExecWorkRootOpenedV2` | `palw_exec_payload_v2` | X8R | no |
 | object tags 150–153 | lease, challenge, answer, transfer | `palw_provider_court_v1` | DA16 | no |
 | inner kinds 1–12 | the kernel route | `palw_probabilistic_constraints_v1` (tag 110's own) | G14 lane D | yes |
@@ -208,6 +212,7 @@ fence as a `Params` field name, so a row can be written before its lane merges.
 | inner kind 15 | `SealProof` | tag 110's own | G14-R4 | no |
 | inner kinds 16–18 | segmented claim, tiled job, prompt tile | tag 110's own | K2S | no |
 | inner kind 19 | `Spec` | `palw_typed_roots_v1` | R4X | no |
+| inner kind 20 | `CommitClaimSalted` (salted claim seal v2) | `palw_panel_free_v1` | G14R | no |
 | nested in inner kinds | `ProsecutionV1::Segmented` (3), `ClaimBodyV1::Segmented` (2) | tag 110's own | K2S | no |
 | nested in inner kinds | `ProsecutionV1::Spec` (4), `ClaimBodyV1::Spec` (3) | `palw_typed_roots_v1` | R4X | no |
 | header form algo 7 `PFS4` | V4 receipt carriage | `palw_receipt_spend_v4` | RFC-0009 | yes |
@@ -327,6 +332,15 @@ profile, a decoder helper's change: a lane re-runs the pin test and this replay 
 6. **Merge gate:** the A2U unit tests, the pin test on both rulesets, and the int-12 replay of its dumps (§5).
 7. The live-build lists (`PALW_LIFECYCLE_INT12_KINDS_V1`, the manifest) are frozen. They change only when a new release becomes the
    live baseline, in their own reviewed commit.
+
+**Worked example — merging G14-R4's tag 113 (`KernelRouteChunkV1`, in `g14/r4-fixes` and `adv/c4r4`).** On those branches, without
+this rule, isolation runs its may-ride arm (unsigned, or an index, count or part out of range → `ObjectMayNotRide`) at every height, so
+the upgraded node marks invalid a block int-12 tolerates — the split C4R4's `c4r4_a2_tag113` pins. At the merge with this branch:
+add `O::KernelRouteChunkV1 { .. }` to the `ProbabilisticConstraintsV1` arm of `palw_lifecycle_kind_owner_v1` (the compiler demands
+it), add `(113, "KernelRouteChunkV1", ProbabilisticConstraintsV1)` to `PALW_LIFECYCLE_NEW_KINDS_V1` and flip the tag-113 row to landed
+(the table tests demand both). Nothing else: isolation then tolerates it at every height, the header context asks its may-ride arm
+only past `palw_probabilistic_constraints_v1`, the objects-of-block walk skips it below (so the chunk gate, the chunk lane's rows and
+deposit, and the UTXO walk never see it), and the pin test carries it generically, well-formed and near-zero.
 
 ## 7. Results
 

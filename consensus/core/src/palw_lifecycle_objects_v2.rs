@@ -1495,7 +1495,7 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
 // [`PALW_A2_KIND_FENCE_TABLE_V1`] names: G14-R4 inner 15 and K2S 16–18 under tag 110's own fence (`None` here), R4X 19 `Spec` under
 // `palw_typed_roots_v1` (a `PalwKernelInnerFenceV1` variant, and its gate in `palw_kernel_inner_fence_at` — not a hand-written arm in
-// the gate). A variant appended INSIDE an inner kind (R4X's `ClaimBodyV1::Spec`) is answered by a guarded arm of
+// the gate), G14R 20 `CommitClaimSalted` under `palw_panel_free_v1` (`Some(PanelFreeV1)`, beside 13 and 14). A variant appended INSIDE an inner kind (R4X's `ClaimBodyV1::Spec`) is answered by a guarded arm of
 // [`palw_kernel_route_inner_fence_v1`] ahead of the kind's own, exactly as the top-level table's guarded arms work.
 
 // ---- Inside the live build's own kinds: its wire types are frozen ------------------------------------------------------------------
@@ -1630,10 +1630,13 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::ObjectTags { lo: 104, hi: 107 }, "palw_probabilistic_constraints_v1", "G14 lane D phase 3 onboarding", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 108, hi: 108 }, "palw_signed_registration_v1", "RFC-0009 signed-expiry registration", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 109, hi: 109 }, "palw_probabilistic_constraints_v1", "OB-P0 conformance evidence", true),
-    // 110 route, 111 receipt (landed); 113 `KernelRouteChunkV1` (G14-R4, `g14/r4-fixes`); 112, 114–119 unallocated.
-    a2_row(PalwA2SlotV1::ObjectTags { lo: 110, hi: 119 }, "palw_probabilistic_constraints_v1", "G14 kernel route; 113 G14-R4", true),
+    // The kernel route's block 110–119: 110 route, 111 receipt (landed); 113 `KernelRouteChunkV1`, the route's own chunk lane (G14-R4,
+    // `g14/r4-fixes`, merged into `adv/c4r4`). 112 and 114–119 are unallocated: no row, so a kind landing there fails the table test
+    // until the Lead allocates it.
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 110, hi: 111 }, "palw_probabilistic_constraints_v1", "G14 lane D kernel route", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 113, hi: 113 }, "palw_probabilistic_constraints_v1", "G14-R4 KernelRouteChunkV1", false),
     // 120 `PanelBeaconProofV3` (landed); 121–129 unallocated.
-    a2_row(PalwA2SlotV1::ObjectTags { lo: 120, hi: 129 }, "palw_permissionless_panel_v1", "RFC-0010 V3 production fold", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 120, hi: 120 }, "palw_permissionless_panel_v1", "RFC-0010 V3 production fold", true),
     // 130 `ExecWorkRootOpenedV2` (X8R, `rfc8/x8r-review`).
     a2_row(PalwA2SlotV1::ObjectTags { lo: 130, hi: 139 }, "palw_exec_payload_v2", "X8R RFC-0008 v2", false),
     // DA16: lease, challenge, answer, transfer.
@@ -1649,6 +1652,9 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         false,
     ),
     a2_row(PalwA2SlotV1::KernelInner { lo: 19, hi: 19 }, "palw_typed_roots_v1", "R4X Spec (RFC-0004 Part II)", false),
+    // G14R's salted claim seal v2, beside the OPV registrations (the Lead, 2026-10-09): below `palw_panel_free_v1` the kernel refuses
+    // it and the gate drops it through this table. Inner kinds 21 and 22 are not allocated.
+    a2_row(PalwA2SlotV1::KernelInner { lo: 20, hi: 20 }, "palw_panel_free_v1", "G14R CommitClaimSalted (salted claim seal v2)", false),
     a2_row(
         PalwA2SlotV1::KernelNested { what: "ProsecutionV1::Segmented (3), ClaimBodyV1::Segmented (2)" },
         "palw_probabilistic_constraints_v1",

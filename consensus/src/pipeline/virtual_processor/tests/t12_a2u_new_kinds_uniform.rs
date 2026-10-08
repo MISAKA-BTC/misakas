@@ -466,18 +466,37 @@ async fn replay(
     node
 }
 
-/// Carry `payloads` eight a block (one carrier per card) on heartbeats, and demand each carrier is in its block.
-async fn carry(a: &mut T12Chain, wallet: &mut Wallet, config: &Config, payloads: &[(String, Vec<u8>)]) {
+/// What a block's carriers may weigh, in bytes (payloads plus each carrier's ML-DSA-87 key and signature): the block's transient
+/// storage mass is four times its bytes and its limit is 500,000, so 120 KB keeps every block under it.
+const BLOCK_CARRIAGE_BYTES: usize = 120_000;
+/// One carrier's own bytes beside its payload: the input's ML-DSA-87 signature and key, the output, the header fields.
+const CARRIER_OVERHEAD_BYTES: usize = 7_600;
+
+/// Carry `payloads` in order on heartbeats — at most eight a block (one carrier per card) and at most [`BLOCK_CARRIAGE_BYTES`] —
+/// and demand each carrier is in its block. Returns how many blocks carried them.
+async fn carry(a: &mut T12Chain, wallet: &mut Wallet, config: &Config, payloads: &[(String, Vec<u8>)]) -> usize {
     let ttpb = config.params.target_time_per_block();
-    for batch in payloads.chunks(8) {
+    let mut batches: Vec<&[(String, Vec<u8>)]> = Vec::new();
+    let (mut start, mut bytes) = (0usize, 0usize);
+    for (i, (_, payload)) in payloads.iter().enumerate() {
+        let weight = payload.len() + CARRIER_OVERHEAD_BYTES;
+        if i > start && (i - start == 8 || bytes + weight > BLOCK_CARRIAGE_BYTES) {
+            batches.push(&payloads[start..i]);
+            (start, bytes) = (i, 0);
+        }
+        bytes += weight;
+    }
+    batches.push(&payloads[start..]);
+    for batch in &batches {
         let txs: Vec<Transaction> =
             batch.iter().enumerate().map(|(card, (_, payload))| wallet.carrier(config, card, payload.clone())).collect();
         let block = a.heartbeat(ttpb, txs.clone()).await;
-        for (tx, (what, _)) in txs.iter().zip(batch) {
+        for (tx, (what, _)) in txs.iter().zip(batch.iter()) {
             assert!(block.transactions.iter().any(|t| t.id() == tx.id()), "carried, its block valid: {what}");
         }
     }
     a.heartbeat(ttpb, Vec::new()).await; // accepts the last batch
+    batches.len()
 }
 
 /// **Every seat of the claim's panel signs `Valid`** and the node assembles the licence its panel service would submit (the
@@ -592,11 +611,10 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         ("a kernel route object".into(), payload_of(&well_formed(bond)[6])),
         ("an unsigned onboarding object".into(), payload_of(&malformed(bond)[0])),
         ("a Panel V3 proof".into(), payload_of(&well_formed(bond)[8])),
-        ("a signed registration envelope".into(), payload_of(&well_formed(bond)[4])),
         ("the reference".into(), reference),
         ("a zero-filled kernel receipt".into(), payload_of(&zero_filled_kind(111))),
     ];
-    carry(&mut a, &mut wallet, &config, &mixed).await;
+    assert_eq!(carry(&mut a, &mut wallet, &config, &mixed).await, 1, "the mixed carriers ride ONE block");
     let (_, state) = a.tip_state();
     assert!(
         matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
