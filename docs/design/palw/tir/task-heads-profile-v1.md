@@ -1,7 +1,9 @@
 # PALW-TIR — the task-head profile (`Head`), v1 design (HFX, 2026-10-08)
 
-*Lane HFX, branch `hf/x-blockers`. Status: **design + off-chain pieces built; the consensus profile waits for the Lead's allocation**
-(the fence name, the profile tag, the two appended Borsh variants). Nothing here is armed, scheduled or in any shipped ruleset.*
+*Lane HFX, branch `hf/x-blockers`. Status: **built behind the dormant fence `palw_task_heads_v1`** (allocation approved by the Lead,
+2026-10-08: the fence, profile tag 6, offers variant 3, body variant 2; condition: the A-2 rule inside ARMED tag 68, §5.1). Nothing here
+is armed, scheduled or in any shipped ruleset; testnet-12's params id `5ee7fd8ee019968c…` and schedule id `1678e07359f6727e…` do not move.
+No Head class is registered anywhere, and none earns reward or consensus work weight: PRINCIPLES §6's conditions are not claimed here.*
 
 ## 0. 日本語での要約
 
@@ -13,7 +15,7 @@
   court が判定するのは logits テンソル(既存の generic output root)で、label は検証済み logits の純関数(argmax 等)なので、
   logits が正しければ答えも一意に正しい。新しい output kind は作らない(`output_set_id` 不変 = 稼働中の `palw_gen_v1` 指紋は不変)。
 - consensus に見えるもの(profile tag 6、offers の追記 variant、job body の追記 variant、fence `palw_task_heads_v1`)は
-  **休眠 fence の後ろ**。割り当ては Lead に依頼中。
+  **休眠 fence の後ろ**(Lead 承認済み、2026-10-08)。fence 未満では int-12 が復号できないバイトとして扱う(A-2、§5.1)。
 
 ## 1. What a class of the profile is
 
@@ -102,6 +104,34 @@ job: the prompt ids; `scalars[position_scalar] = |prefix| + position` for `MASKE
 * Admission is the pipeline admission under the fence's own `Head` ceilings (initially testnet-12's Embedding ceilings); the court,
   the claim fold, the worker and the gateway accept `Head` wherever they accept `Embedding` (same output kind, same output root).
 
+### 5.1 The A-2 rule inside ARMED tag 68 (`palw_object_needs_task_heads_v1`)
+
+`palw_gen_v1` is armed on testnet-12, so the int-12 build decodes tag 68 and FP job version 10 — but not the appended variants. An
+object carrying `PalwGenProfileOffersV1::Head` or `PalwGenBodyV1::Head` (a registration, a tensor commitment, a court close or
+accusation whose binding carries a `Head` job, a gen root claim, a signed-expiry envelope around any of them) is bytes int-12 cannot
+decode. Below the fence this build reads it exactly so, with ONE predicate:
+
+| place | int-12 (cannot decode) | this build below `palw_task_heads_v1` |
+| --- | --- | --- |
+| lifecycle isolation (`validate_palw_lifecycle_tx`) | tolerated on an audit-armed ruleset, refused elsewhere | the same (the predicate first) |
+| extraction / acceptance walk | skipped: no slot, rent, budget or state | dropped by name, first, charged nothing |
+| the fold (`apply_object`) | never reached | refused by name (the second lock) |
+| a chunked object / an assembled court close | undecodable | `ChunkedObjectUndecodable` / the declarer convicted, as for undecodable bytes |
+| a version-10 free-prompt payload with a `Head` body | refused at the isolation door: the block is invalid | refused in the header context: the block is invalid |
+
+A class whose profile BYTE is 6 with an older offers variant is bytes int-12 decodes; it is not dropped, and it takes int-12's own path:
+refused at admission as an unknown profile (`Profile(6)`), because below the fence tag 6 resolves exactly as int-12 resolves it
+(`PalwGenProfileV1::from_tag`; `Head` is not in `PalwGenProfileV1::ALL`, so `palw_gen_v1`'s fingerprint is unchanged). The mixed-verdict
+test is `consensus/core/tests/palw_task_heads_fence.rs`.
+
+### 5.2 The ceilings are a court-cost question (measured, 2026-10-09)
+
+The proposed value (`PalwTaskHeadsFenceV1::testnet12_v1`) copies testnet-12's Embedding ceilings. Measured on the census
+(`hf-coverage-gaps-hfx-2026-10-08.md` §6): **under them no encoder or head class is admitted** — a bidirectional encoder's class is one
+pipeline position over the whole padded sequence, and its close (2^26 cap), position MACs (2^37) and tile MACs (2^24) all scale with
+the sequence. Which court or ceilings would admit such a class, and with what collateral, is the court owner's decision (routed to
+K2S); until then the fence's value is a placeholder and the profile closes no head repository.
+
 ## 6. What exists today (this branch) and what does not
 
 | piece | status |
@@ -109,14 +139,22 @@ job: the prompt ids; `scalars[position_scalar] = |prefix| + position` for `MASKE
 | `…ForSequenceClassification` lowering (encoder, decoder) | existed (`OUTPUT_CLASSIFY_V1`, `tests/seqcls.rs`) |
 | `…ForTokenClassification`, `…ForQuestionAnswering` lowering (BERT, RoBERTa / XLM-R, DistilBERT) | **built** (`OUTPUT_TOKEN_LOGITS_V1`, `tests/heads.rs`: HF logits, integer program, pipeline, court, admission) |
 | `…ForMaskedLM` at a position | **not built**: needs the task-driven adapter choice (a `…ForMaskedLM` checkpoint is read today as its encoder for sentence embedding) and a third lifted input (`input.pos`) |
-| BERT-type pair segments (token type 1 after the first separator) | **not built** (`ENC_PAIR_SEGMENTS_V1`): a `PAIR` / `SPAN_QA` class over a model with `type_vocab_size > 1` is refused by the profile until it is |
+| BERT-type pair segments (token type 1 after the first separator) | **not built** (`ENC_PAIR_SEGMENTS_V1`): a span head over a model with `type_vocab_size > 1` is refused by name (`ARCH_NEEDS_FEATURE(ENC_PAIR_SEGMENTS_V1)`, `route::bidir_needs_pair_segments_v1`); the census's hypothetical `Head` class of a pair task (zero-shot NLI, a reranker) is a `SEQUENCE` class over the concatenated ids, which is the same function only for a model without token types |
 | vision heads (`IMAGE`, `DETECTION`, `SEGMENTATION`) | the ViT / CNN stage programs exist (`read_vision`, `read_cnn`); the heads are not lowered |
-| the `Head` profile in consensus (offers, body, acceptance, fence) | **waits for the allocation** |
+| the `Head` profile in consensus (offers, body, acceptance, fence) | **built, dormant** (`consensus/core/src/palw_task_heads_v1.rs`; the profile's offers check, the job's acceptance, the claim fold's second lock, the registration gate's head ceilings, the node's A-2 drops; tests `palw_task_heads_fence.rs`) |
+| a bidirectional encoder's class declared shape-only and judged (preflight / census) | **built** (`route::lower_bidir_class_shape_v1`, `preflight::pipeline::judge_encoder`): an embedding as `Embedding`, a head as the `Head` profile hypothetically (`HEAD_PROFILE_HYPOTHETICAL`, never a pass) |
+| the declaration tool (`gen_class`), the worker and the gateway for `Head` jobs | **not built** |
 | the census row (`census::tasks`) | the tasks map to `Profile::GenHead` (fence `palw_task_heads_v1`): `FENCE_NOT_ARMED` at every shipped ruleset; a hypothetical ruleset judges the declared class |
 
-## 7. Allocation requested from the Lead
+## 7. Allocation (approved by the Lead, 2026-10-08)
 
-1. the fence name `palw_task_heads_v1` and its `Params` field (dormant everywhere);
+1. the fence name `palw_task_heads_v1` and its `Params` field (dormant everywhere; a `palw_fences_v1` entry, a fork-id probe arm, the
+   drill entry `PALW_DRILL_TASK_HEADS_ENTRY`, no flag-day list);
 2. `PalwGenProfileV1::Head = 6`;
 3. `PalwGenProfileOffersV1::Head` (Borsh variant 3) and `PalwGenBodyV1::Head` (Borsh variant 2), both appended;
-4. no new output kind and no new registration object tag (confirm).
+4. no new output kind and no new registration object tag.
+
+The fence refuses arming (`validate_palw_task_heads_v1`) without `palw_gen_v1` in force at or below it, with a V2-bundle mirror that
+disagrees, or naming a head set this build does not implement. It is one of the fences the single future full-activation release arms;
+before that, a `Head` class earns nothing (PRINCIPLES §6: the heads' verification coverage, public material and prosecution under G14
+are not claimed by this lane).
