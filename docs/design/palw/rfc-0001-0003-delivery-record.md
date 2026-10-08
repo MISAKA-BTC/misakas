@@ -102,7 +102,7 @@ adding a field to any of them is a compile error until it has a row and a mutati
 ## 5. Tests and how to run them (targeted only)
 
 ```
-cargo test --offline -p misaka-palw-gateway            # 157 bin tests + rail 7 + drill 8 + dsl_da_election_gate 3, ~35 s (imagegen runs the SD3 pipeline)
+cargo test --offline -p misaka-palw-gateway            # 158 bin tests + rail 7 + drill 8 + dsl_da_election_gate 3, ~35 s (imagegen runs the SD3 pipeline)
 cargo test --offline -p misaka-palw-gateway --bin misaka-palw-gateway e2e_chain      # the fold paths
 ```
 Dev-dependencies added (tests only; `Cargo.lock` gains three edges): `misaka-palw-sdk`, `misaka-palw-tir-lower`, `misaka-palw-tir-artifact`.
