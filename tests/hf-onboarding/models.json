@@ -45,8 +45,15 @@
    "revision": "fe8a4ea1ffedaf415f4da2f062534de366a451e6",
    "task": "text-generation",
    "context": 512,
-   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-   "full": "downloaded (approved 2026-10-08 ~18:20, hash-verified)"
+   "local": null,
+   "full": "checkpoint DELETED 2026-10-09 (never run); a re-download needs a new approval",
+   "deleted": {
+    "when": "2026-10-09",
+    "kib": 2150872,
+    "why": "never run; the shared disk fell to 12-14 GB free (Lead instruction)",
+    "redownload": "needs a new approval",
+    "was_local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+   }
   },
   {
    "order": 2,
@@ -179,8 +186,15 @@
    "revision": "0da7a48b0276d500ce5922fd2b33944091fc6c09",
    "task": "text-generation",
    "context": 512,
-   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/ibm-granite/granite-3.1-1b-a400m-instruct",
-   "full": "local"
+   "local": null,
+   "full": "checkpoint DELETED 2026-10-09 (never run); a re-download needs a new approval",
+   "deleted": {
+    "when": "2026-10-09",
+    "kib": 2611380,
+    "why": "never run; the shared disk fell to 12-14 GB free (Lead instruction)",
+    "redownload": "needs a new approval",
+    "was_local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/ibm-granite/granite-3.1-1b-a400m-instruct"
+   }
   },
   {
    "order": 7,
@@ -190,8 +204,15 @@
    "revision": "b519127f5bfaaa1c27dd938dad051ec360972b23",
    "task": "text-generation",
    "context": 512,
-   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/state-spaces/mamba-370m-hf",
-   "full": "local"
+   "local": null,
+   "full": "checkpoint DELETED 2026-10-09 (never run); a re-download needs a new approval",
+   "deleted": {
+    "when": "2026-10-09",
+    "kib": 1453400,
+    "why": "never run; the shared disk fell to 12-14 GB free (Lead instruction)",
+    "redownload": "needs a new approval",
+    "was_local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/state-spaces/mamba-370m-hf"
+   }
   },
   {
    "order": 7,
@@ -201,8 +222,15 @@
    "revision": "77aa61eeac94fbf33d492b9f2744c98b42d5b5eb",
    "task": "text-generation",
    "context": 512,
-   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/microsoft/phi-1_5",
-   "full": "local"
+   "local": null,
+   "full": "checkpoint DELETED 2026-10-09 (never run); a re-download needs a new approval",
+   "deleted": {
+    "when": "2026-10-09",
+    "kib": 2773460,
+    "why": "never run; the shared disk fell to 12-14 GB free (Lead instruction)",
+    "redownload": "needs a new approval",
+    "was_local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/microsoft/phi-1_5"
+   }
   },
   {
    "order": 7,
@@ -212,8 +240,15 @@
    "revision": "ed303361004ac875426a61675edecf8e9d976882",
    "task": "text-generation",
    "context": 512,
-   "local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/ai21labs/Jamba-tiny-dev",
-   "full": "local"
+   "local": null,
+   "full": "checkpoint DELETED 2026-10-09 (never run); a re-download needs a new approval",
+   "deleted": {
+    "when": "2026-10-09",
+    "kib": 627804,
+    "why": "never run; the shared disk fell to 12-14 GB free (Lead instruction)",
+    "redownload": "needs a new approval",
+    "was_local": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/ai21labs/Jamba-tiny-dev"
+   }
   },
   {
    "order": 8,

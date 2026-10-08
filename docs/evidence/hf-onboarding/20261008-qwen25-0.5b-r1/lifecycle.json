@@ -1,0 +1,32 @@
+{
+ "class_id": "55b32ae12c8fa0031ea8d78b826f75632a6863585f2d3b5efc906c856460324a640591f69bc1ed1cb9160f878f64fd62bfa98b3ad577fb626b36d24ba787cb1c",
+ "first_seen": {
+  "Candidate": {
+   "time": "2026-10-08T17:46:58",
+   "daa": 48
+  },
+  "Prefetching": {
+   "time": "2026-10-08T22:08:02",
+   "daa": 134
+  },
+  "Probation { probes_passed: 0 }": {
+   "time": "2026-10-08T22:11:03",
+   "daa": 135
+  }
+ },
+ "last": {
+  "time": "2026-10-09T00:44:04",
+  "daa": 192,
+  "state": "Probation { probes_passed: 0 }",
+  "ready_now": 8,
+  "ready_required": 7,
+  "probes_passed": 0,
+  "probes_failed": 0,
+  "class_status": "Active",
+  "share": 0,
+  "inflight": 34,
+  "reason": "probing: 0/10 finals passed, 0 failed since entry"
+ },
+ "reached_weight_bearing": false,
+ "updated": "2026-10-09T00:44:04"
+}
