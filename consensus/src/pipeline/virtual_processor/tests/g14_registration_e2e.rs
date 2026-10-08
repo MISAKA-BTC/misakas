@@ -774,12 +774,12 @@ async fn g14_program_mutation_differential() {
 
 // ---- the pipeline: carrier -> mempool -> template -> block -> fold -> persisted tip -> reads ---------------
 
-/// A 0x4b lifecycle carrier for `object`, funded by card `card`'s genesis fee float and signed by that card.
-fn carrier_of(env: &Env, object: &Obj, card: usize, fee: u64) -> Transaction {
+/// A 0x4b lifecycle carrier for `object`, spending `funding` (owned by card `card`'s payout key) and signed by that card.
+fn carrier_from(env: &Env, object: &Obj, card: usize, funding: (TransactionOutpoint, UtxoEntry), fee: u64) -> Transaction {
     use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
     let payload =
         borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).expect("serializes");
-    let (outpoint, entry) = env.floats[card].clone();
+    let (outpoint, entry) = funding;
     let mut tx = Transaction::new(
         crate::constants::TX_VERSION,
         vec![TransactionInput::new(outpoint, vec![], 0, 1)],
@@ -791,6 +791,16 @@ fn carrier_of(env: &Env, object: &Obj, card: usize, fee: u64) -> Transaction {
     );
     sign_spend(&mut tx, entry, card, env.config.params.storage_mass_parameter);
     tx
+}
+
+/// [`carrier_from`] funded by the card's genesis fee float.
+fn carrier_of(env: &Env, object: &Obj, card: usize, fee: u64) -> Transaction {
+    carrier_from(env, object, card, env.floats[card].clone(), fee)
+}
+
+/// The funding a carrier's change offers the next one.
+fn change_of(tx: &Transaction, card: usize) -> (TransactionOutpoint, UtxoEntry) {
+    (TransactionOutpoint::new(tx.id(), 0), UtxoEntry::new(tx.outputs[0].value, card_payout_spk(card), 0, false))
 }
 
 const CARRIER_FEE: u64 = 2_000_000;
@@ -1098,4 +1108,136 @@ async fn g14_registration_survives_a_pruned_import() {
     }
     let (_, end) = importer.tip_state();
     assert_eq!(end.class(&a.class_id).map(|c| c.status.clone()), Some(PalwClassStatusV2::Active), "the importer flipped the class Active itself");
+}
+
+// ---- mined: what the node does with a registration the gate would refuse --------------------------------------
+
+/// Carry `tx` in the node's own template and let the next chain block fold it: returns the two blocks.
+async fn mine_carrier(chain: &mut T12Chain, tx: &Transaction) -> (Block, Block) {
+    let ttpb = chain.config.params.target_time_per_block();
+    let carrying = chain.heartbeat(ttpb, vec![tx.clone()]).await;
+    assert!(carrying.transactions.iter().any(|t| t.id() == tx.id()), "the template carries the registration carrier");
+    let folding = chain.heartbeat(ttpb, Vec::new()).await;
+    (carrying, folding)
+}
+
+/// **Below `palw_tir_v1` an IR registration is a carrier the chain mines and ignores; the same object, re-carried past the
+/// fence, registers.** The signature does not bind the height, so nothing is re-signed: the gate's `daa` and the chain's
+/// block DAA are the only clock.
+#[tokio::test]
+async fn g14_registration_mined_below_the_fence_is_dropped_by_name_then_accepted_past_it() {
+    kaspa_core::log::try_init_logger("warn");
+    const FENCE: u64 = 8;
+    let mut env = Env::new(FENCE);
+    let ttpb = env.config.params.target_time_per_block();
+    env.chain.heartbeat(ttpb, Vec::new()).await;
+    let (block, state) = env.chain.tip_state();
+    let daa = env.chain.daa_of(block);
+    let object = signed(&env, &state, &spec_of(&case("moe-top2-shared"), 3, 100));
+    let class_id = class_id_of(&object);
+    assert_eq!(
+        palw_tir_registration_preflight_at_v1(&env.config.params, &env.bundle, &object, daa, &[]).map(|_| ()),
+        Err(E::TirNeedsItsFence),
+        "the gate names the fence at the tip"
+    );
+    // The mempool does not run the gate (it runs the lifecycle shape and the funding): the carrier is admitted.
+    let first = carrier_of(&env, &object, 3, CARRIER_FEE);
+    mempool_verdict(&env, &first).expect("the mempool admits a registration the gate refuses (node policy asks nothing of an IR registration)");
+    let (carrying, folding) = mine_carrier(&mut env.chain, &first).await;
+    assert!(env.chain.daa_of(folding.header.hash) < FENCE);
+    let _ = &carrying;
+    let (_, after) = env.chain.tip_state();
+    assert!(after.class(&class_id).is_none() && after.tir_class_v1(&class_id).is_none(), "dropped by name below the fence");
+    assert_eq!(after.bond(&env.chain.bonds[3]).unwrap().collateral, state.bond(&env.chain.bonds[3]).unwrap().collateral, "no burn");
+    assert!(env.chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(first.id(), 0)).is_some(), "but the fee is spent");
+    // The status readers: mined, change stands, no row, two DAA on — a dropped carrier, and the gate's reason is re-derivable.
+    let change_daa = env.chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(first.id(), 0)).unwrap().block_daa_score;
+    while env.chain.ctx.consensus.get_virtual_daa_score() < change_daa + kaspa_consensus_core::palw_model_registration_v1::PALW_REGISTRATION_DROP_SETTLE_DAA_V1
+    {
+        env.chain.heartbeat(ttpb, Vec::new()).await; // the settle margin: the fold of the accepting block has certainly run
+    }
+    eprintln!("[g14] change entry daa {change_daa}, virtual daa {}, sink daa {}, carrying {} folding {}", env.chain.ctx.consensus.get_virtual_daa_score(), env.chain.daa_of(env.chain.sink()), env.chain.daa_of(carrying.header.hash), env.chain.daa_of(folding.header.hash));
+    assert!(
+        kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_dropped_v1(
+            false,
+            false,
+            Some(change_daa),
+            env.chain.ctx.consensus.get_virtual_daa_score()
+        )
+        .is_some()
+    );
+    let reread = kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_object_v1(&first).expect("an IR carrier re-reads");
+    assert_eq!(reread, object);
+    assert_eq!(
+        palw_tir_registration_preflight_at_v1(&env.config.params, &env.bundle, &reread, change_daa, &[]).map(|_| ()),
+        Err(E::TirNeedsItsFence),
+        "re-asked at the accepting DAA, the gate gives the chain's reason"
+    );
+
+    // Past the fence: the SAME object, a new carrier funded by the first one's change.
+    while env.chain.daa_of(env.chain.sink()) < FENCE + 1 {
+        env.chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    let (block, state) = env.chain.tip_state();
+    check("past the fence", &judge(&env, &state, block, env.chain.daa_of(block), &object), Want::Accept).unwrap();
+    let second = carrier_from(&env, &object, 3, change_of(&first, 3), CARRIER_FEE);
+    mempool_verdict(&env, &second).expect("the second carrier");
+    mine_carrier(&mut env.chain, &second).await;
+    let (_, registered) = env.chain.tip_state();
+    assert!(registered.class(&class_id).is_some(), "registered past the fence under the signature made before it");
+}
+
+/// **A registration the chain will drop still costs a carrier fee: the mempool admits it and the template mines it.**
+/// Each refused object below is judged by the gate (or, for the chain-state reasons, by the arm); mined, the block stands,
+/// the class row is never written, and the carrier's change is the only trace.
+#[tokio::test]
+async fn g14_refused_registrations_cost_a_fee_and_write_nothing() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut env = Env::new(0);
+    let ttpb = env.config.params.target_time_per_block();
+    env.chain.heartbeat(ttpb, Vec::new()).await;
+    let (block, state) = env.chain.tip_state();
+    let daa = env.chain.daa_of(block);
+    let dense = case("dense-gqa-2layer");
+    let s = spec_of(&dense, 1, daa + 5);
+    let (target, ..) = env.terms(&state);
+    let genesis = env.config.params.genesis.hash;
+    let refused: Vec<(&str, Obj, Option<&str>)> = vec![
+        ("unknown op tag", mutate_class(&env, &state, &s, |c| c.program[40] = 0xFE), Some("TIR_PROGRAM_REFUSED")),
+        ("stale id (tokenizer)", stale_id(&env, &state, &s, |c, _| c.tokenizer_id = Hash64::from_bytes([1; 64])), Some("TIR_CLASS_ID_IS_NOT_DERIVED")),
+        ("share claim", edit_raw(&env, &state, &s, |o| reg!(o, { share_permille } => *share_permille = 1)), Some("NOT_END_TO_END_CERTIFIED")),
+        (
+            "replayed from another network",
+            {
+                let mut o = build(&env, &state, &s);
+                sign(&mut o, 1, network_domain("kaspa-testnet-11", genesis));
+                o
+            },
+            None,
+        ),
+        ("wrong target", edit_raw(&env, &state, &s, |o| reg!(o, { initial_target } => *initial_target = target / 2)), None),
+    ];
+    let mut funding = env.floats[5].clone();
+    for (name, object, gate_code) in refused {
+        let tx = carrier_from(&env, &object, 5, funding.clone(), CARRIER_FEE);
+        mempool_verdict(&env, &tx).unwrap_or_else(|e| panic!("{name}: the mempool takes the carrier ({e})"));
+        let (_, before) = env.chain.tip_state();
+        let (carrying, folding) = mine_carrier(&mut env.chain, &tx).await;
+        let mined_daa = env.chain.daa_of(carrying.header.hash);
+        let (_, after) = env.chain.tip_state();
+        assert!(after.class(&class_id_of(&object)).is_none(), "{name}: no class row");
+        assert_eq!(after.bond(&env.chain.bonds[1]).unwrap().collateral, before.bond(&env.chain.bonds[1]).unwrap().collateral, "{name}: no burn");
+        assert_eq!(after.registration_exposure(&env.chain.bonds[1]), before.registration_exposure(&env.chain.bonds[1]), "{name}: no exposure");
+        assert_eq!(env.chain.sink(), folding.header.hash, "{name}: the block stands");
+        // The RPC's diagnosis of a dropped carrier: the gate re-asked at the accepting DAA. It names the gate's reasons;
+        // for the chain-state ones (signature, target) it can only say the gate admits.
+        let reread = kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_object_v1(&tx).expect("re-read");
+        let rediagnosed = palw_tir_registration_preflight_at_v1(&env.config.params, &env.bundle, &reread, mined_daa, &[]);
+        match gate_code {
+            Some(code) => assert_eq!(rediagnosed.as_ref().err().map(|e| e.code()), Some(code), "{name}: the diagnosis names the gate's code"),
+            None => assert!(rediagnosed.is_ok(), "{name}: the diagnosis cannot see a chain-state refusal ({rediagnosed:?})"),
+        }
+        eprintln!("[g14] mined+dropped {name:<32} mempool=Ok block stands, class absent, gate re-diagnosis={:?}", rediagnosed.map(|_| ()).map_err(|e| e.code()));
+        funding = change_of(&tx, 5);
+    }
 }
