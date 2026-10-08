@@ -38,7 +38,7 @@ cargo test --offline -p kaspa-grpc-core --lib palw_kernel_route_grpc
 | Fence | `Params::palw_probabilistic_constraints_v1` — validation REFUSES every real height; the harness builds `Config` directly (and asserts the refusal still holds) |
 | Reads | `ConsensusApi::palw_kernel_route_v1()`; RPC **210** `getPalwKernelClaim`, **211** `getPalwKernelRows` (paged), **212** `getPalwKernelFinals` |
 | Mode (RFC-0015) | tags 13 / 14 ride inside tag-110 bytes; dropped at the gate unless the OPV fence is in force; OPV policy = genesis constant in the route header |
-| G14-R4 additions | consensus tag **113** `KernelRouteChunkV1` (the route's own chunk lane, F-C4R3-03; 112 unallocated); aux tables **41** chunk groups, **42** allocated and unused (both ride delta 160 / tail 0xEC / the root); kernel route tag **15** `SealProof` (inside tag 110, GAP-R7); kernel ledger tables **15** proof seals and **16** job escrows (GAP-5); settlement kinds **13** `AdmissionFee` (F-C4R3-05), **14–17** `ReserveJobEscrow` / `ReleaseJobEscrow` / `PayJobEscrow` / `JobFee` (GAP-5); policy fields `job_fee`, `job_escrow_ttl_daa` |
+| G14-R4 additions | consensus tag **113** `KernelRouteChunkV1` (the route's own chunk lane, F-C4R3-03; 112 unallocated); aux tables **41** chunk groups, **42** allocated and unused (both ride delta 160 / tail 0xEC / the root); kernel route tag **15** `SealProof` (inside tag 110, GAP-R7); kernel ledger tables **15** proof seals and **16** job escrows (GAP-5); settlement kinds **13** `AdmissionFee` (F-C4R3-05), **14–17** `ReserveJobEscrow` / `ReleaseJobEscrow` / `PayJobEscrow` / `JobFee` (GAP-5); policy fields `job_fee`, `job_escrow_ttl_daa`; then (lead's registry, 2026-10-09: G14R holds settlement kinds 14–21 and `LedgerEventV1` 21–24): kernel ledger table **17** served demand bonds; settlement kinds **18–20** `ReserveSealDeposit` / `ReleaseSealDeposit` / `ForfeitSealDeposit` (bonded seals), **21** `ForfeitDemandBond`; events **21** `ProofSealed`, **22** `JobEscrowReturned`, **23** `SealForfeited`, **24** `ServedDemandBondsBurned`; policy field `seal_deposit`, claim-row field `sealed_daa`; tag-113 target discriminant **2** `Conformance` (OPV-BOOT #1) |
 
 Fold shape: **eager per object** — each object loads the ledger from the rows, runs the kernel's own per-object API, applies every
 `SettlementInstructionV1` exactly, writes back the rows that changed. A kernel refusal DROPS the object (nothing written, block stands);
@@ -311,7 +311,37 @@ window` of locked collateral plus `hard × fee` per window — 240,000 BILI lock
 is split across bonds (the Sybil test measures it on the example policy: 35,000 locked + 21 per window).
 
 **Bonded claim seals (OPV-BOOT #2).** A claim seal reserves `seal_deposit` (interim 1 BILI) until it is revealed and forfeits it if it
-expires unrevealed; the claim row keeps `sealed_daa` (the seal's DAA) for OPV-BOOT's sealed-source beacon v3.
+expires unrevealed; the claim row keeps `sealed_daa` (the seal's DAA) for OPV-BOOT's sealed-source beacon v3. A seal whose job another
+claim takes first can never be revealed (one claim per job) and is forfeited at expiry like a withheld one — **deliberately**: a refund
+would let N bonds seal one job (one honest output, N claim ids) and reveal whichever id suits the beacon at no cost. The forfeit prices
+that choice at one deposit per discarded seal; an honest producer reads the seals on chain before it seals, and its residual cost is one
+deposit per lost race (a policy value; the lead accepted the design 2026-10-09). Pinned by k2_ledger_route
+`a_seal_on_a_job_another_claim_took_is_forfeited_at_its_expiry`.
+
+*Sizing `seal_deposit` = d: the expected honest loss.* If `n` producers seal the same job, one claim takes it and `n − 1` seals forfeit:
+**`(n − 1)·d` burned per won claim**. Seen by one of `n` symmetric producers it is the same figure: it loses `(1 − 1/n)·d` per attempt
+and wins once in `n` attempts, so it bears `(n − 1)·d` per claim it wins (each loser has also spent its production cost `C`). With the
+claim reward `R` (the job's escrow), entering a race pays while `R/n > C + (1 − 1/n)·d`, so free entry settles near `n* ≈ (R + d) /
+(C + d)` competitors and burns `(n* − 1)·d ≤ R − C` per won claim: the deposit cuts duplicated work, and at worst it burns the margin.
+
+| competitors `n` | 1 | 2 | 3 | 5 | 6 |
+|---|---|---|---|---|---|
+| honest loss per won claim, `(n − 1)·d` | 0 | d | 2d | 4d | 5d |
+| at the interim terms (d = 1, R = 5 BILI) | 0 | 1 BILI (20 % of R) | 2 (40 %) | 4 (80 %) | 5 (100 %: `n*` when `C ≪ R`) |
+
+`n` counts the producers that seal before the winning reveal lands: the first REVEAL (not the first seal) takes the job, a seal is public
+once mined and revealable `claim_seal_delay_daa` later, so a producer that sees a live seal of the job may still race, at that price. The
+floor on `d` is the grinding price: choosing among `N` claim ids of one job costs `(N − 1)·d`, which OPV-BOOT's grinding accounting must
+weigh against the `⌈log2 N⌉` bits it buys.
+
+**The chunk lane's conformance target (OPV-BOOT #1).** `PalwKernelChunkTargetV1::Conformance { v2_class }` (discriminant 2 of tag 113's
+target) carries a class's tag-109 conformance evidence in the route's own lane: the assembled object must be evidence of that class;
+every action but a `Refute` (anyone's) must ride a group the class's registrant opened — fail-closed, so an action added later
+(OPV-BOOT's `PostComplete`) is the registrant's by default; its signature is checked at the completing chunk exactly as the direct
+object's (`processor.rs`), and it is then applied by the tag-109 arm. Its deadline is OPV-BOOT's `palw_conformance_chunk_target_v1(route,
+v2_class, daa) -> Option<u64>`; until that lands the placeholder `palw_conformance_chunk_target_pending_v1` answers `None`, so every
+conformance group is refused at its first chunk (no acceptance before the rule that bounds it). A-2: the new discriminant lives inside
+tag 113, which is post-int-12 and rides unjudged below its fence as a whole.
 
 **Served demands (K2S's DA griefing).** A served position's demand bonds stay reserved: refunded the moment the claim is convicted,
 defaults or times out; burned only when its liability horizon ends with no conviction — a true demand that leads to a conviction (even
@@ -382,8 +412,9 @@ refuse any armed height unconditionally. What has to be true before they can be 
 8. Node-level cases for families 2–13 and 15 (the route E2E class is single-layer).
 9. `Respond` is signed by any bond and a rejected response spends a court run for free (O-C4R3-respond): a fee or a producer-only rule.
 10. RFC-0015's `work_credit_per_claim` is released by nothing; it must come from the job escrow (GAP-5) before it is.
-11. OPV-BOOT #1: wire `palw_conformance_chunk_target_v1` into the chunk lane (the placeholder refuses every conformance group); OPV-BOOT's
-    beacon v3 over the bonded seals.
+11. OPV-BOOT #1: wire `palw_conformance_chunk_target_v1` into the chunk lane (the placeholder `palw_conformance_chunk_target_pending_v1`
+    refuses every conformance group; the integrator replaces its body with the call), then a node case that carries a Post and a Refute
+    through the lane; OPV-BOOT's beacon v3 over the bonded seals.
 12. The FileProof-over-budget gap (accepted by the lead, bounded here): a proof refused over budget is not "accepted", so Final can pass
     and post-Final liability convicts. Junk FileProofs can fill every run of a block (the prosecution reserve is theirs too), each
     dismissed at `dismissed_proof_fee`: holding ONE valid proof out costs `max_adjudications × fee` per block = 64 × 0.1 = 6.4 BILI per
@@ -399,8 +430,8 @@ court work 2^30, seal delay 1 / TTL 100 / deposit 1); the OPV terms (the 50-DAA 
 reorg margin for the first step and localize + court + file inside the grace, but no `T_beacon` term — reservation 1,000, work credit 5,
 external gain 10, detection 500‰, caps 3 / 32 + 16 fresh, default burn 10% (≥ 50% effective), admission fee 1, carriers); the chunk lane
 (2 groups a bond, TTL 64, 1 BILI a part); onboarding (binding reservation 100, window 40, liability 200, challenger 500‰); the admitted
-OPV class list; the demand-bond size against a position's carriage cost; and the one coordinated activation height with RFC-0010 / 0012
-/ 0008.
+OPV class list; the demand-bond size against a position's carriage cost; the seal deposit against an honest producer's race-loss cost
+(`(n − 1)·d` per won claim with `n` competing sealers, above); and the one coordinated activation height with RFC-0010 / 0012 / 0008.
 
 *External gates*: an independent soundness review (Freivalds / CRT / alias composition, exact court terminals); RFC-0011 §15.7's
 activation tests (adaptive adversary, beacon bias and withholding, reference vectors) and real-scale reports (9B-8k, 2M, Kimi K3);

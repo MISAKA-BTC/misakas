@@ -708,6 +708,31 @@ fn a_claim_seal_is_bonded_kept_on_the_claim_row_and_forfeited_when_withheld() {
     assert!(refused(&ev).unwrap().contains("seal deposit"), "{ev:?}");
 }
 
+/// **A seal that lost its job to another claim is forfeited too — deliberately.** One claim per job: once another producer's claim
+/// holds the job, a rival's live seal of it can never be revealed, and it expires like a withheld one. Refunding it would make
+/// grinding free: N bonds each seal the same job (one honest output, N claim ids) and the last to act reveals the one whose id suits
+/// the sealed-source beacon — the others would come back. The forfeit prices that choice at one deposit per discarded seal; an honest
+/// producer reads the seals already on chain before it seals a job.
+#[test]
+fn a_seal_on_a_job_another_claim_took_is_forfeited_at_its_expiry() {
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    w.block(4, vec![T::SealClaim { producer: OUTSIDER, job: job.id(), seal: [0x5A; 64] }]);
+    assert_eq!(w.l.bonds[&OUTSIDER].reserved, 1, "the rival's seal holds its deposit");
+    let h = w.honest(&job, 3);
+    let id = h.claim.id();
+    w.block(8, vec![h.tx, T::PanelCovered { claim: id }]);
+    assert!(w.l.claims.contains_key(&id), "the producer's claim holds the job");
+    let ev = w.block(9, vec![T::SealClaim { producer: OUTSIDER, job: job.id(), seal: [0x5B; 64] }]);
+    assert!(refused(&ev).unwrap().contains("another claim already holds the job"), "{ev:?}");
+    assert_eq!(w.l.seals[&(job.id(), OUTSIDER)].deposit, 1, "the live seal stays, unrevealable");
+    w.block(100, vec![]);
+    let (collateral, burned) = (w.l.bonds[&OUTSIDER].collateral, w.l.burned);
+    let ev = w.block(4 + 100 + 1, vec![]);
+    assert!(ev.contains(&E::SealForfeited { job: job.id(), producer: OUTSIDER, forfeited: 1 }), "{ev:?}");
+    assert_eq!((w.l.bonds[&OUTSIDER].collateral, w.l.bonds[&OUTSIDER].reserved, w.l.burned), (collateral - 1, 0, burned + 1));
+}
+
 /// **GAP-5 (the user's ruling: user-pays escrow): a Final reward is paid out of the job's escrow, once — nothing is issued.** Every
 /// posted job reserves `claim_reward` of its poster's free collateral (`ReserveJobEscrow`) and burns `job_fee` (`JobFee` + `Burn`).
 /// The job's first Final debits the escrow (`PayJobEscrow`) and pays exactly that (`FinalReward`). A post-Final conviction frees the

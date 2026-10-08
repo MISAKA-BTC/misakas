@@ -1243,7 +1243,8 @@ async fn g14_kernel_route_a_chunked_object_is_signature_checked_at_the_completin
     let cap = 4 << 10;
     let bad = w.claim_with(0, &job, true, Delivery::ChunkedTampered(cap)).await;
     assert!(!w.net.ledger().claims.contains_key(&bad.id), "a chunked object whose signature does not verify commits nothing");
-    assert_eq!(w.net.kernel_reserved(0), 0, "and reserves nothing");
+    // (only its bonded seal's deposit stays held, until that seal is revealed or expires: OPV-BOOT's bonded seals)
+    assert_eq!(w.net.kernel_reserved(0), u128::from(w.net.ledger().policy.seal_deposit), "and reserves nothing for the claim");
     let good = w.claim_with(0, &job, true, Delivery::Chunked(cap)).await;
     assert_eq!(good.id, bad.id, "the same claim");
     assert!(w.net.ledger().claims.contains_key(&good.id), "the genuine chunked object commits");

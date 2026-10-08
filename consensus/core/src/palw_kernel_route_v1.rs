@@ -660,6 +660,11 @@ impl PalwKernelRouteStateV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum PalwKernelChunkTargetV1 {
+    /// **OPV-BOOT #1: the conformance attempt of V2 class `v2_class`** — the assembled object is that class's conformance evidence
+    /// (tag 109: a Post by the class's registrant, opening the group itself, or a Refute by anyone), applied by its own arm. Its
+    /// deadline is OPV-BOOT's `palw_conformance_chunk_target_v1(route, v2_class, daa)` (the agreed signature: the attempt's evidence
+    /// deadline for a Post, its refutation window's end for a Refute; `None` when no attempt is open).
+    Conformance { v2_class: Hash64 } = 2,
     /// A kernel claim: the assembled object is a `FileProof` against it or a `Respond` to a demand on it (tag 110).
     Claim(Digest) = 0,
     /// An onboarding artifact binding: the assembled object is its refutation (tag 105).
@@ -747,10 +752,20 @@ pub fn palw_kernel_chunk_inner_matches_target_v1(
         (Obj::KernelRouteV1 { bytes, .. }, PalwKernelChunkTargetV1::Claim(id)) => {
             matches!(K::decode(bytes), Ok(K::FileProof { claim, .. } | K::Respond { claim, .. }) if claim == *id)
         }
+        (Obj::ConformanceEvidenceV1 { v2_class, .. }, PalwKernelChunkTargetV1::Conformance { v2_class: class }) => v2_class == class,
         (
             Obj::ArtifactBindingChallengedV1 { v2_class, kernel_param_root, .. },
             PalwKernelChunkTargetV1::Binding { v2_class: class, kernel_param_root: root },
         ) => v2_class == class && kernel_param_root == root,
+/// **OPV-BOOT #1's deadline, until OPV-BOOT's own lands**: the agreed `palw_conformance_chunk_target_v1(route, v2_class, daa) ->
+/// Option<u64>` (the last DAA a part may arrive; `None`: no attempt open) is OPV-BOOT's to implement over its attempt rows. Until it
+/// is wired here this answers `None`, so every conformance group is refused at its first chunk — the lane adds no acceptance before
+/// the rule that bounds it exists. (The integrator replaces this body with the call.)
+pub fn palw_conformance_chunk_target_pending_v1(route: &PalwKernelRouteStateV1, v2_class: &Hash64, daa: u64) -> Option<u64> {
+    let _ = (route, v2_class, daa);
+    None
+}
+
         _ => false,
     }
 }
@@ -811,7 +826,7 @@ impl PalwKernelRouteStateV1 {
 
     /// **The last DAA at which an object for `target` could still change anything** (`None`: nothing can — the claim is decided or
     /// unknown, the binding refuted or unknown). A group's TTL is never longer.
-    pub fn chunk_target_deadline_v1(&self, target: &PalwKernelChunkTargetV1) -> Option<u64> {
+    pub fn chunk_target_deadline_v1(&self, target: &PalwKernelChunkTargetV1, daa: u64) -> Option<u64> {
         match target {
             PalwKernelChunkTargetV1::Claim(id) => {
                 let key = borsh::to_vec(id).expect("a digest serializes");
@@ -823,6 +838,7 @@ impl PalwKernelRouteStateV1 {
                 palw_kernel_claim_horizon_bound_v1(&self.header.policy, row.committed_daa, row.liability_until, &row.life.state)
             }
             PalwKernelChunkTargetV1::Binding { v2_class, kernel_param_root } => {
+            PalwKernelChunkTargetV1::Conformance { v2_class } => palw_conformance_chunk_target_pending_v1(self, v2_class, daa),
                 let row = self.artifact_binding_v1(v2_class, kernel_param_root)?;
                 // Refutable while `daa < final_daa`.
                 (!row.refuted).then(|| row.final_daa.saturating_sub(1))
@@ -957,10 +973,30 @@ mod tests {
         assert_eq!((state.chunk_groups_of_v1(&opener), state.chunk_groups_of_v1(&other)), (1, 0));
         assert_eq!((state.reserved_of(&opener), state.ledger_reserved_of(&opener)), (3, 0));
         // An unknown claim and a refuted / unknown binding have no deadline; a claim's is its horizon bound.
-        assert_eq!(state.chunk_target_deadline_v1(&target), None);
+        assert_eq!(state.chunk_target_deadline_v1(&target, 0), None);
         let binding =
             PalwKernelChunkTargetV1::Binding { v2_class: Hash64::from_u64_word(3), kernel_param_root: Hash64::from_u64_word(4) };
-        assert_eq!(state.chunk_target_deadline_v1(&binding), None);
+        assert_eq!(state.chunk_target_deadline_v1(&binding, 0), None);
+        // OPV-BOOT #1: a conformance attempt's deadline is OPV-BOOT's (pending: no attempt is ever open here yet).
+        let conformance = PalwKernelChunkTargetV1::Conformance { v2_class: Hash64::from_u64_word(3) };
+        assert_eq!(state.chunk_target_deadline_v1(&conformance, 0), None);
+        assert!(!palw_kernel_chunk_inner_matches_target_v1(&inner, &conformance), "a proof is not conformance evidence");
+        {
+            use crate::palw_conformance_evidence_v1::{ConformanceEvidenceActionV1 as A, ConformanceFaultV1 as F};
+            let refute = |class: u64| Obj::ConformanceEvidenceV1 {
+                v2_class: Hash64::from_u64_word(class),
+                action: Box::new(A::Refute {
+                    evidence_id: Hash64::from_u64_word(9),
+                    fault: Box::new(F::VectorTokens { check: 0, kernel_claim: Hash64::from_u64_word(5) }),
+                }),
+                signer: other,
+                signature: vec![5; 64],
+            };
+            assert!(palw_kernel_chunk_inner_matches_target_v1(&refute(3), &conformance), "the class's evidence");
+            assert!(!palw_kernel_chunk_inner_matches_target_v1(&refute(4), &conformance), "another class's evidence");
+            assert!(!palw_kernel_chunk_inner_matches_target_v1(&refute(3), &binding), "evidence is not a binding's refutation");
+            assert!(!palw_kernel_chunk_inner_matches_target_v1(&refute(3), &target), "evidence is not a claim's prosecution");
+        }
         use misaka_palw_kernel::lifecycle::ClaimStateV1 as S;
         let bound = |state: &S, liability: Option<u64>| palw_kernel_claim_horizon_bound_v1(&p, 10, liability, state);
         let tail = p.court_deadline_daa + p.proof_grace_daa + p.liability_daa;

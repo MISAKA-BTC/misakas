@@ -661,7 +661,7 @@ pub(super) fn apply_kernel_route_chunk_v1(
                 )));
             }
             // Never longer than the target can use it.
-            let Some(deadline) = route.chunk_target_deadline_v1(&chunk.target).filter(|d| *d >= ctx.daa_score) else {
+            let Some(deadline) = route.chunk_target_deadline_v1(&chunk.target, ctx.daa_score).filter(|d| *d >= ctx.daa_score) else {
                 return Err(refused("a kernel chunk group's target can no longer use it (decided, unknown, or past its horizon)"));
             };
             let deposit = PALW_KERNEL_CHUNK_DEPOSIT_PER_PART_SOMPI_V1.saturating_mul(u64::from(chunk.count));
@@ -713,6 +713,14 @@ fn forfeit_expired_chunk_groups_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     let Some(route) = builder.state.kernel_route.as_ref() else { return };
     let expired: Vec<(PalwBondKeyV2, Hash64, u64)> = route
         .chunk_groups_v1()
+    // OPV-BOOT #1: conformance evidence rides only a group its class's registrant opened — every action but a Refute (anyone's), so
+    // a registrant's action added later (OPV-BOOT's PostComplete) is the registrant's here too, never anyone's by default.
+    if let PalwConsensusObjectV2::ConformanceEvidenceV1 { v2_class, action, .. } = &inner
+        && !matches!(action.as_ref(), crate::palw_conformance_evidence_v1::ConformanceEvidenceActionV1::Refute { .. })
+        && builder.state.classes.get(v2_class).and_then(|c| c.registrant_bond) != Some(chunk.opener)
+    {
+        return Err(refused("conformance evidence other than a Refute rides only a group its class's registrant opened"));
+    }
         .into_iter()
         .filter(|(_, _, g)| ctx.daa_score > g.expires_daa)
         .map(|(opener, group, g)| (opener, group, g.deposit))

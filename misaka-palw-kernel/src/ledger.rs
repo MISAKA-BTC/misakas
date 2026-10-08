@@ -1416,7 +1416,7 @@ impl KernelLedgerV1 {
             ));
         }
         // The seal is spent by its reveal: its deposit returns (OPV-BOOT's sealed-source beacon reads `sealed_daa` from the row).
-        bond.reserved = bond.reserved - seal_credit + need;
+        bond.reserved = bond.reserved.saturating_sub(seal_credit) + need;
         bond.collateral -= fee;
         self.burned += fee;
         let daa = self.daa;

@@ -231,8 +231,12 @@ consensus object is decodable only past the fence, the new rows live in the rout
 
 Queued from the lead and landed on the same branch: **OPV-BOOT #2** bonded claim seals and `ClaimRowV1::sealed_daa` (`00b2491cc`);
 **K2S's demand-bond fate** (a served position's demand bond is held, refunded on conviction / default / timeout and burned only at an
-unconvicted liability horizon); **OPV-BOOT #1** the chunk lane's `Conformance { v2_class }` target (plumbing; its deadline is OPV-BOOT's
-`palw_conformance_chunk_target_v1`, pending, so every such group is refused at its first chunk until it is wired).
+unconvicted liability horizon; `ca2a2080a`); **OPV-BOOT #1** the chunk lane's `Conformance { v2_class }` target (plumbing; every action
+but a Refute rides only a group the class's registrant opened, fail-closed for actions added later; its deadline is OPV-BOOT's
+`palw_conformance_chunk_target_v1`, pending, so every such group is refused at its first chunk until it is wired). A seal whose job another
+claim took is forfeited at expiry like a withheld one — a refund would make choosing among N claim ids of one job free (accepted by the
+lead; the honest race-loss cost `(n − 1)·d` per won claim is sized in `g14-node-e2e-record.md` §8; k2_ledger_route
+`a_seal_on_a_job_another_claim_took_is_forfeited_at_its_expiry`).
 
 Round 3 is closed on this branch: **F-C4R3-01(b)** was fixed by OB-P0 on the integration line (the envelope signs the fork-id fired
 digest, not `consensus_params_id`) and its PoC passes after the merge of `claude/g14-public-prosecution-integration-9bee39`; **F-C4R3-04**

@@ -13050,6 +13050,11 @@ impl VirtualStateProcessor {
                             let payload = borsh::to_vec(&(v2_class, kernel_param_root, proof.as_ref())).map_err(|e| e.to_string())?;
                             self.palw_onboarding_signature_ok(state, point.daa_score, 105, &challenger, &payload, &signature)?;
                         }
+                        // OPV-BOOT #1: conformance evidence (tag 109), judged as the direct object is.
+                        Some(Obj::ConformanceEvidenceV1 { v2_class, action, signer, signature }) => {
+                            let payload = borsh::to_vec(&(v2_class, action.as_ref())).map_err(|e| e.to_string())?;
+                            self.palw_onboarding_signature_ok(state, point.daa_score, 109, &signer, &payload, &signature)?;
+                        }
                         _ => {}
                     }
                 }
