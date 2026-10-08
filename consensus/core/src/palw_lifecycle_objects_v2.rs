@@ -1040,19 +1040,22 @@ pub fn validate_palw_lifecycle_tx(payload: &[u8], tolerate_undecodable: bool) ->
 // tables below cannot drift from it. **A new kind is never `Int12`** — that list is frozen at the live build's 100 kinds.
 
 /// **The fences that own the lifecycle kinds added after the live testnet-12 build** (int-12, `0b1c11b87`). Each names the `Params`
-/// field it is resolved from ([`PalwLifecycleKindFencesV1`]).
+/// field it is resolved from ([`PalwLifecycleKindFencesV1`]). The discriminant is the fence's index in [`Self::ALL`]
+/// (`the_fence_list_is_the_enum`). A lane whose kind needs a fence of its own adds a variant here, its `params_field` arm, its
+/// resolution in `Params::palw_lifecycle_kind_fences_v1` and its arm in the fold's `palw_fold_kind_in_force_v1` — the compiler asks
+/// for each — and the row of [`PALW_A2_KIND_FENCE_TABLE_V1`] it fills must name the same field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PalwLifecycleKindFenceV1 {
     /// `Params::palw_probabilistic_constraints_v1` — G14 lane D's kernel route (tags 110, 111) and onboarding (104–107, 109).
-    ProbabilisticConstraintsV1,
+    ProbabilisticConstraintsV1 = 0,
     /// `Params::palw_signed_registration_v1` — RFC-0009 G-EXPIRY / G-RULESET's signed-expiry registration envelope (tag 108).
-    SignedRegistrationV1,
+    SignedRegistrationV1 = 1,
     /// `Params::palw_permissionless_panel_v1` — RFC-0010's certified Panel epoch output (tag 120).
-    PermissionlessPanelV1,
+    PermissionlessPanelV1 = 2,
 }
 
 impl PalwLifecycleKindFenceV1 {
-    /// Every owning fence, in declaration order.
+    /// Every owning fence, in declaration order (index = discriminant).
     pub const ALL: [Self; 3] = [Self::ProbabilisticConstraintsV1, Self::SignedRegistrationV1, Self::PermissionlessPanelV1];
 
     /// The `Params` field the fence is resolved from.
@@ -1322,20 +1325,27 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
 /// walk and its chunk reader, and the UTXO walk's rent. `Default` is every fence unarmed — the live build's reading of every new kind.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PalwLifecycleKindFencesV1 {
-    pub probabilistic_constraints_v1: Option<crate::config::params::ForkActivation>,
-    pub signed_registration_v1: Option<crate::config::params::ForkActivation>,
-    pub permissionless_panel_v1: Option<crate::config::params::ForkActivation>,
+    /// Indexed by the fence's discriminant ([`PalwLifecycleKindFenceV1::ALL`]'s order).
+    activations: [Option<crate::config::params::ForkActivation>; PalwLifecycleKindFenceV1::ALL.len()],
 }
 
 impl PalwLifecycleKindFencesV1 {
-    /// The activation a fence resolves to (`never()` read as absence).
-    pub fn activation(&self, fence: PalwLifecycleKindFenceV1) -> Option<crate::config::params::ForkActivation> {
-        match fence {
-            PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1 => self.probabilistic_constraints_v1,
-            PalwLifecycleKindFenceV1::SignedRegistrationV1 => self.signed_registration_v1,
-            PalwLifecycleKindFenceV1::PermissionlessPanelV1 => self.permissionless_panel_v1,
+    /// These activations with `fence` resolved to `activation` (how `Params` resolves each fence, and how a test arms one).
+    pub fn with(mut self, fence: PalwLifecycleKindFenceV1, activation: Option<crate::config::params::ForkActivation>) -> Self {
+        if let Some(slot) = self.activations.get_mut(fence as usize) {
+            *slot = activation;
         }
-        .filter(|activation| *activation != crate::config::params::ForkActivation::never())
+        self
+    }
+
+    /// The activation a fence resolves to (`never()` read as absence; a fence missing from [`PalwLifecycleKindFenceV1::ALL`] is never
+    /// in force, so its kinds ride unjudged — the safe reading).
+    pub fn activation(&self, fence: PalwLifecycleKindFenceV1) -> Option<crate::config::params::ForkActivation> {
+        self.activations
+            .get(fence as usize)
+            .copied()
+            .flatten()
+            .filter(|activation| *activation != crate::config::params::ForkActivation::never())
     }
 
     /// Is `fence` in force at `daa_score`?
@@ -1356,11 +1366,16 @@ impl PalwLifecycleKindFencesV1 {
 impl crate::config::params::Params {
     /// **The owning fences, resolved once** — the one reading every height-holding site asks ([`PalwLifecycleKindFencesV1`]).
     pub fn palw_lifecycle_kind_fences_v1(&self) -> PalwLifecycleKindFencesV1 {
-        PalwLifecycleKindFencesV1 {
-            probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
-            signed_registration_v1: self.palw_signed_registration_v1,
-            permissionless_panel_v1: self.palw_permissionless_panel_v1.map(|rule| rule.activation),
-        }
+        PalwLifecycleKindFenceV1::ALL.into_iter().fold(PalwLifecycleKindFencesV1::default(), |fences, fence| {
+            fences.with(
+                fence,
+                match fence {
+                    PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1 => self.palw_probabilistic_constraints_v1,
+                    PalwLifecycleKindFenceV1::SignedRegistrationV1 => self.palw_signed_registration_v1,
+                    PalwLifecycleKindFenceV1::PermissionlessPanelV1 => self.palw_permissionless_panel_v1.map(|rule| rule.activation),
+                },
+            )
+        })
     }
 
     /// **A-2 is the premise of every owning fence.** Below its fence a new kind's bytes are judged as the live build judges them, and
@@ -1477,25 +1492,44 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (14, "RegisterPipelineClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
 ];
 
+// The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
+// [`PALW_A2_KIND_FENCE_TABLE_V1`] names: G14-R4 inner 15 and K2S 16–18 under tag 110's own fence (`None` here), R4X 19 `Spec` under
+// `palw_typed_roots_v1` (a `PalwKernelInnerFenceV1` variant, and its gate in `palw_kernel_inner_fence_at` — not a hand-written arm in
+// the gate). A variant appended INSIDE an inner kind (R4X's `ClaimBodyV1::Spec`) is answered by a guarded arm of
+// [`palw_kernel_route_inner_fence_v1`] ahead of the kind's own, exactly as the top-level table's guarded arms work.
+
 // ---- Inside the live build's own kinds: its wire types are frozen ------------------------------------------------------------------
 //
-// A kind the live build DOES decode can still carry bytes it cannot: a variant appended to a nested enum, or a field appended to a
-// nested struct (an "appended Borsh variant inside tag 68" is the shape the HFX lane carries). The live build fails the whole payload's
-// decode there and tolerates it; a newer build that decodes it must read it the same way below its fence. So every Borsh wire type the
-// live build compiled is frozen (`palw_lifecycle_objects_v2/int12_borsh_manifest.tsv`, a digest per type, read off `0b1c11b87`'s
-// source), and `every_int12_wire_type_is_unchanged_or_classified` refuses any change not classified here — a CARRIED change also needs
-// a guarded arm in [`palw_lifecycle_kind_owner_v1`] (before the `Int12` arm) naming the fence that owns objects carrying the new form.
+// A kind the live build DOES decode can still carry bytes it cannot read as a newer build does. Two shapes:
+//
+// * **appended** — a variant appended to a nested Borsh enum, or a field appended to a nested struct (HFX's
+//   `PalwGenProfileOffersV1::Head` inside tag 68). The live build fails the whole payload's decode and tolerates it; a newer build
+//   that decodes it must read it the same way below its fence: a guarded arm in [`palw_lifecycle_kind_owner_v1`] (before the `Int12`
+//   arm) names the fence that owns every object carrying the form, and from that arm every site reads it as undecodable.
+// * **re-read** — a new meaning for bytes the live build DECODES: a tag byte it reads by hand (HFX's `PalwGenProfileV1::Head = 6` in
+//   the class's `profile: u8`). The live build judges those bytes with its own code — for tag 68, a refusal where its `from_tag`
+//   fails — so below the fence the newer build must give THAT verdict at THAT stage with the same side effects; reading them as
+//   undecodable would be a different verdict (skipped before the acceptance walk instead of dropped in it). No guarded arm: the kind's
+//   own rule refuses the new meaning below its fence, and a probe in the pin test plus the replay through int-12 is the evidence.
+//
+// So every wire type the live build compiled is frozen (`palw_lifecycle_objects_v2/int12_borsh_manifest.tsv`, a digest per type, read
+// off `0b1c11b87`'s source): each Borsh-derived `struct`/`enum`, each hand-written `impl BorshDeserialize`, and each `#[repr(uN)]` enum
+// (the tag bytes read by hand). `every_int12_wire_type_is_unchanged_or_classified` refuses any change not classified here.
 
-/// How a change to one of the live build's Borsh wire types is accounted for.
+/// How a change to one of the live build's wire types is accounted for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwInt12WireChangeV1 {
     /// `PalwConsensusObjectV2` itself: its added variants are [`PALW_LIFECYCLE_NEW_KINDS_V1`]'s.
     ObjectEnum,
     /// State, delta or parameter encoding — never inside a block's carriage (why).
     NotCarried(&'static str),
-    /// Inside a carried kind: every object carrying the new form is owned by this fence ([`palw_lifecycle_kind_owner_v1`]'s guarded
-    /// arm), and the type's current digest is pinned so a further change is classified again.
-    Carried { fence: PalwLifecycleKindFenceV1, digest: u64 },
+    /// Appended inside a carried kind (the live build cannot decode the new form): every object carrying it is owned by the lifecycle
+    /// fence whose `Params` field is `fence` ([`palw_lifecycle_kind_owner_v1`]'s guarded arm, which the test asks of a sample), and
+    /// the type's current digest is pinned so a further change is classified again.
+    CarriedAppended { fence: &'static str, digest: u64 },
+    /// A new meaning for bytes the live build decodes and judges (a hand-read tag): below `fence` the kind's own rule gives the live
+    /// build's verdict at the live build's stage. Digest pinned as above; its row in [`PALW_A2_KIND_FENCE_TABLE_V1`] names the probe.
+    CarriedReread { fence: &'static str, digest: u64 },
 }
 
 /// **Every live-build wire type that has changed since `0b1c11b87`, keyed `"<path>::<item>"`** — reconciled exactly (no missing,
@@ -1517,6 +1551,152 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
     (
         "consensus/core/src/palw_improve_state_v1.rs::PalwNoChangeReasonV1",
         PalwInt12WireChangeV1::NotCarried("an improvement epoch row's outcome, written by the fold"),
+    ),
+    (
+        "consensus/core/src/palw_state_v2.rs::impl BorshDeserialize for PalwStateCarriageV2",
+        PalwInt12WireChangeV1::NotCarried(
+            "the PALW state's own carriage (pruning point, IBD sidecar): three tails appended (seat-root readiness, Panel V3, the kernel \
+             route), each written only when its state is non-empty, so below every fence the bytes are int-12's — the int-12 replay \
+             checks the root of every block",
+        ),
+    ),
+];
+
+// ---- The central kind → fence table (A2U, 2026-10-09) -------------------------------------------------------------------------------
+//
+// One row per thing the live testnet-12 build (int-12, `0b1c11b87`) cannot read the way a newer build reads it — a top-level object
+// tag, a kernel-route inner kind or nested variant, a header carriage form, a coinbase trailer, a form appended inside a type int-12
+// decodes, a free-prompt job form, a formula a header commits, a state encoding — and the fence below which a newer build must read
+// it exactly as int-12 does. Rows are the Lead's allocations (`remaining-rfc-integration-matrix.md` §2); a row whose lane has not
+// merged is a promise the merge is held to: the tests reconcile every row with what the code in this tree says
+// (`every_landed_kind_sits_in_its_row_with_the_rows_fence` and its siblings), so a kind that lands under another fence, or outside
+// every row, fails.
+
+/// What a row of [`PALW_A2_KIND_FENCE_TABLE_V1`] covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwA2SlotV1 {
+    /// `PalwConsensusObjectV2` tags `lo..=hi` on a 0x4b carrier. int-12: undecodable — tolerated (testnet-12 declares the audit fence),
+    /// the carrier skipped. Landed kinds: [`PALW_LIFECYCLE_NEW_KINDS_V1`].
+    ObjectTags { lo: u8, hi: u8 },
+    /// `misaka_palw_kernel::route::KernelRouteObjectV1` inner kinds `lo..=hi`, inside tag 110's bytes. Below tag 110's own fence they
+    /// are tag 110's undecodable payload; past it a build without the inner kind fails the kernel's decode and drops the object, the
+    /// block standing. Landed kinds: [`PALW_KERNEL_ROUTE_INNER_KINDS_V1`].
+    KernelInner { lo: u8, hi: u8 },
+    /// A variant or field appended inside a kernel-route inner kind (`"<enum>::<variant> (<discriminant>)"`): read as that inner kind's
+    /// undecodable bytes below the fence ([`palw_kernel_route_inner_fence_v1`] answers the fence for an object carrying it).
+    KernelNested { what: &'static str },
+    /// A header `palw_commitment` form, by algo id and magic. int-12: its shape gate has no arm for it — refused. Landed forms:
+    /// `crate::pow_layer0::palw_header_form_owner_v1`.
+    HeaderForm { algo_id: u8, magic: [u8; 4] },
+    /// A trailer at the end of a chain block's coinbase extra data, by magic. int-12: opaque miner bytes — nothing validated or read.
+    CoinbaseTrailer { magic: [u8; 4] },
+    /// A form appended inside a type int-12 DECODES, carried by an int-12 kind (`"<path>::<item>"`, a key of the frozen manifest, or for
+    /// a tag byte int-12 reads by hand the field that holds it). int-12's verdict is whatever its own code gives those bytes — for an
+    /// appended Borsh variant, undecodable (tolerated on 0x4b); for an unknown tag byte, its own refusal at its own stage. Below the fence
+    /// a newer build gives that verdict, at that stage, with the same side effects (`PalwInt12WireChangeV1::Carried`).
+    Int12Inner { key: &'static str },
+    /// A free-prompt job form on 0x4a (a job version or an appended variant inside a job). int-12: undecodable 0x4a bytes are REFUSED
+    /// (the block is invalid) — 0x4a has no audit tolerance — so below the fence a newer build refuses them too: its door admits the
+    /// form at isolation only where the ruleset carries the fence, and the header-context door below its height.
+    FpJobForm { what: &'static str },
+    /// A formula a header commits (e.g. `palw_state_root`): below the fence every header's bytes and hash are int-12's, which the
+    /// replay through int-12 itself checks block by block (`docs/design/palw/a2-uniformity-new-kinds.md` §5).
+    HeaderFormula { what: &'static str },
+    /// State, delta, carriage-tail or engine encodings — never a block's carriage. Below the fence the fold must be byte-identical to
+    /// int-12's (the same PALW state root at every block), which the int-12 replay checks.
+    StateEncoding { what: &'static str },
+}
+
+/// One row: the slot, the `Params` field of the fence that owns it, the lane or RFC that holds the allocation, and whether the code is
+/// in this tree. `fence` is a field NAME so a row can be written before its lane merges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwA2RowV1 {
+    pub slot: PalwA2SlotV1,
+    pub fence: &'static str,
+    pub owner: &'static str,
+    pub landed: bool,
+}
+
+const fn a2_row(slot: PalwA2SlotV1, fence: &'static str, owner: &'static str, landed: bool) -> PalwA2RowV1 {
+    PalwA2RowV1 { slot, fence, owner, landed }
+}
+
+/// **The central kind → fence table.** Every post-int-12 kind, variant, header form, trailer, appended form, formula and encoding, and
+/// the fence below which it rides unjudged (read exactly as int-12 reads its bytes: the same verdict, nothing charged, counted or
+/// written). The Lead allocates; A2U keeps the table; a lane fills its row's code at merge, and the reconciliation tests hold it to the
+/// row.
+pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
+    // ---- top-level object tags (0x4b) ----
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 104, hi: 107 }, "palw_probabilistic_constraints_v1", "G14 lane D phase 3 onboarding", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 108, hi: 108 }, "palw_signed_registration_v1", "RFC-0009 signed-expiry registration", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 109, hi: 109 }, "palw_probabilistic_constraints_v1", "OB-P0 conformance evidence", true),
+    // 110 route, 111 receipt (landed); 113 `KernelRouteChunkV1` (G14-R4, `g14/r4-fixes`); 112, 114–119 unallocated.
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 110, hi: 119 }, "palw_probabilistic_constraints_v1", "G14 kernel route; 113 G14-R4", true),
+    // 120 `PanelBeaconProofV3` (landed); 121–129 unallocated.
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 120, hi: 129 }, "palw_permissionless_panel_v1", "RFC-0010 V3 production fold", true),
+    // 130 `ExecWorkRootOpenedV2` (X8R, `rfc8/x8r-review`).
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 130, hi: 139 }, "palw_exec_payload_v2", "X8R RFC-0008 v2", false),
+    // DA16: lease, challenge, answer, transfer.
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 150, hi: 153 }, "palw_provider_court_v1", "DA16 provider court", false),
+    // ---- kernel-route inner kinds (inside tag 110) ----
+    a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 13, hi: 14 }, "palw_panel_free_v1", "RFC-0015 OPV registrations", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 15, hi: 15 }, "palw_probabilistic_constraints_v1", "G14-R4 SealProof", false),
+    a2_row(
+        PalwA2SlotV1::KernelInner { lo: 16, hi: 18 },
+        "palw_probabilistic_constraints_v1",
+        "K2S segmented / tiled / prompt tile",
+        false,
+    ),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 19, hi: 19 }, "palw_typed_roots_v1", "R4X Spec (RFC-0004 Part II)", false),
+    a2_row(
+        PalwA2SlotV1::KernelNested { what: "ProsecutionV1::Segmented (3), ClaimBodyV1::Segmented (2)" },
+        "palw_probabilistic_constraints_v1",
+        "K2S",
+        false,
+    ),
+    a2_row(PalwA2SlotV1::KernelNested { what: "ProsecutionV1::Spec (4), ClaimBodyV1::Spec (3)" }, "palw_typed_roots_v1", "R4X", false),
+    // ---- header carriage forms and coinbase trailers ----
+    a2_row(PalwA2SlotV1::HeaderForm { algo_id: 7, magic: *b"PFS4" }, "palw_receipt_spend_v4", "RFC-0009 V4 receipt carriage", true),
+    a2_row(PalwA2SlotV1::HeaderForm { algo_id: 10, magic: *b"PXE2" }, "palw_exec_payload_v2", "X8R EXEC envelope", false),
+    a2_row(PalwA2SlotV1::CoinbaseTrailer { magic: *b"PXA2" }, "palw_exec_payload_v2", "X8R anchor trailer", false),
+    // ---- forms appended inside kinds int-12 decodes (tag 68 is ARMED on testnet-12: `palw_gen_v1`) ----
+    a2_row(
+        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" },
+        "palw_task_heads_v1",
+        "HFX task heads: PalwGenProfileV1::Head = 6, the class's hand-read profile byte inside tag 68 (re-read)",
+        false,
+    ),
+    a2_row(
+        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1" },
+        "palw_task_heads_v1",
+        "HFX task heads: PalwGenProfileOffersV1::Head (3), inside tag 68 (appended)",
+        false,
+    ),
+    a2_row(
+        PalwA2SlotV1::FpJobForm { what: "PalwGenBodyV1::Head (2) inside a generative job" },
+        "palw_task_heads_v1",
+        "HFX task heads",
+        false,
+    ),
+    // ---- formulas and encodings ----
+    a2_row(
+        PalwA2SlotV1::HeaderFormula { what: "header.palw_state_root = H(fork-choice leaf || ADR-0043 root) past the fence" },
+        "palw_fork_choice_commitment_v1",
+        "L2FC",
+        false,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "per-shard V3 draw (strata; delta 171, tail 0xED)" },
+        "palw_permissionless_panel_v1",
+        "SHARD",
+        false,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "per-segment pricing and the shard engine's encodings" },
+        "palw_tir_shard_segment_v2",
+        "SHARD",
+        false,
     ),
 ];
 
@@ -2480,8 +2660,41 @@ pub(crate) mod tests {
             PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(7), 0))
         }
 
+        /// **The smallest value of `T` a near-zero body decodes to**: a zero-filled body (every length 0, every option `None`, every
+        /// nested enum its first variant), with each byte borsh refuses stepped up until it decodes — an enum whose first variant is
+        /// `= 1` (`SubjectKindV1`) refuses tag 0, and the byte it refused is the last one it read. `None` when no stepping decodes.
+        pub(crate) fn minimal_decode<T: borsh::BorshDeserialize>(prefix: &[u8]) -> Option<T> {
+            let mut bytes = prefix.to_vec();
+            bytes.extend_from_slice(&[0u8; 16_384]);
+            for _ in 0..4_096 {
+                let mut reader = &bytes[..];
+                match T::deserialize(&mut reader) {
+                    Ok(value) => return Some(value),
+                    Err(_) => {
+                        let refused = (bytes.len() - reader.len()).checked_sub(1)?;
+                        if refused < prefix.len() || bytes[refused] == u8::MAX {
+                            return None;
+                        }
+                        bytes[refused] += 1;
+                    }
+                }
+            }
+            None
+        }
+
         fn zeros<T: borsh::BorshDeserialize>() -> T {
-            T::deserialize(&mut &[0u8; 8192][..]).expect("a zero-filled encoding decodes")
+            minimal_decode(&[]).expect("a near-zero encoding decodes")
+        }
+
+        /// **The kind with object tag `tag`, every field zero** — its tag then a zero-filled body (every length 0, every option
+        /// `None`, every nested enum its first variant). Generic over the enum, so a kind a lane adds is in every sweep the moment its
+        /// table row exists; a kind whose zero-filled body does not decode needs a hand-built sample here instead (the panic says so).
+        pub(crate) fn zero_filled_kind(tag: u8) -> PalwConsensusObjectV2 {
+            let object: PalwConsensusObjectV2 = minimal_decode(&[tag]).unwrap_or_else(|| {
+                panic!("kind {tag} decodes from no near-zero body; give it a hand-built sample in the A2U sweeps instead")
+            });
+            assert_eq!(borsh::to_vec(&object).unwrap()[0], tag);
+            object
         }
 
         /// One well-formed, signed object of every kind added after the live build, by tag.
@@ -2729,11 +2942,15 @@ pub(crate) mod tests {
             assert_eq!(PALW_LIFECYCLE_INT12_KINDS_V1.last(), Some(&(103, "TrapRevealedV1")));
         }
 
-        /// The new-kind table IS the owner function: each sample's tag is its table row's, its owner the row's fence.
+        /// The new-kind table IS the owner function: every row's kind (decoded from a zero-filled body, generically, and each
+        /// hand-built sample) is owned by the row's fence, never by the live build.
         #[test]
         fn the_new_kind_table_is_the_owner_function() {
-            let samples = new_kind_samples();
-            assert_eq!(samples.len(), PALW_LIFECYCLE_NEW_KINDS_V1.len(), "one sample per new kind");
+            let mut samples = new_kind_samples();
+            samples.extend(PALW_LIFECYCLE_NEW_KINDS_V1.iter().map(|(tag, _, _)| (*tag, zero_filled_kind(*tag))));
+            for (tag, _, _) in PALW_LIFECYCLE_NEW_KINDS_V1 {
+                assert!(samples.iter().any(|(t, _)| t == tag), "kind {tag} is sampled");
+            }
             for (tag, object) in &samples {
                 assert_eq!(borsh::to_vec(object).unwrap()[0], *tag, "{object:?}");
                 let (_, _, fence) = PALW_LIFECYCLE_NEW_KINDS_V1.iter().find(|(t, _, _)| t == tag).expect("a table row");
@@ -2742,6 +2959,170 @@ pub(crate) mod tests {
             }
             for fence in PalwLifecycleKindFenceV1::ALL {
                 assert!(PALW_LIFECYCLE_NEW_KINDS_V1.iter().any(|(_, _, f)| *f == fence), "{} owns a kind", fence.params_field());
+            }
+        }
+
+        /// `PalwLifecycleKindFenceV1::ALL` is the enum, in discriminant order — the activations array is indexed by it, so a variant
+        /// missing from `ALL` would never be in force (its kinds would ride unjudged forever: safe, but never armable).
+        #[test]
+        fn the_fence_list_is_the_enum() {
+            let variants = enum_variants_from_source(include_str!("palw_lifecycle_objects_v2.rs"), "PalwLifecycleKindFenceV1");
+            assert_eq!(variants.len(), PalwLifecycleKindFenceV1::ALL.len(), "{variants:?}");
+            for (index, fence) in PalwLifecycleKindFenceV1::ALL.into_iter().enumerate() {
+                assert_eq!(fence as usize, index, "{fence:?}");
+                assert_eq!(variants[index].1 as usize, index, "{:?}", variants[index]);
+                let armed = PalwLifecycleKindFencesV1::default().with(fence, Some(ForkActivation::new(7)));
+                assert_eq!(armed.activation(fence), Some(ForkActivation::new(7)));
+                assert!(armed.in_force_at(fence, 7) && !armed.in_force_at(fence, 6));
+                assert!(PalwLifecycleKindFenceV1::ALL.iter().filter(|f| **f != fence).all(|f| armed.activation(*f).is_none()));
+            }
+            let mut p =
+                crate::config::params::Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
+            p.palw_signed_registration_v1 = Some(ForkActivation::new(9));
+            assert_eq!(
+                p.palw_lifecycle_kind_fences_v1(),
+                PalwLifecycleKindFencesV1::default()
+                    .with(PalwLifecycleKindFenceV1::SignedRegistrationV1, Some(ForkActivation::new(9))),
+                "Params resolves each fence into its own slot"
+            );
+        }
+
+        /// The landed half of a table row: does `fence` name a `Params` fence this tree has?
+        fn params_has_fence(name: &str) -> bool {
+            crate::config::params::Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12))
+                .palw_fences_v1()
+                .iter()
+                .any(|(n, _)| *n == name)
+        }
+
+        /// **The central table is consistent with itself and with the code** (`PALW_A2_KIND_FENCE_TABLE_V1`):
+        ///
+        /// * object-tag and inner-kind rows never overlap one another, nor the live build's tags;
+        /// * every landed kind (top level, inner) sits in exactly one row, and that row names the fence the code answers;
+        /// * every landed header form sits in its row, with the fence its gate asks;
+        /// * every carried change to a live-build wire type sits in an `Int12Inner` row with the same fence;
+        /// * a row is `landed` exactly when the code in this tree fills it, and a landed row's fence is a `Params` fence.
+        ///
+        /// A lane that merges a kind outside its allocation, under another fence, or without flipping its row fails here.
+        #[test]
+        fn every_landed_kind_sits_in_its_row_with_the_rows_fence() {
+            use PalwA2SlotV1 as S;
+            let rows = PALW_A2_KIND_FENCE_TABLE_V1;
+            let tag_rows: Vec<(u8, u8, &PalwA2RowV1)> = rows
+                .iter()
+                .filter_map(|r| match r.slot {
+                    S::ObjectTags { lo, hi } => Some((lo, hi, r)),
+                    _ => None,
+                })
+                .collect();
+            let inner_rows: Vec<(u8, u8, &PalwA2RowV1)> = rows
+                .iter()
+                .filter_map(|r| match r.slot {
+                    S::KernelInner { lo, hi } => Some((lo, hi, r)),
+                    _ => None,
+                })
+                .collect();
+            for set in [&tag_rows, &inner_rows] {
+                for (i, (lo, hi, row)) in set.iter().enumerate() {
+                    assert!(lo <= hi, "{row:?}");
+                    for (lo2, hi2, row2) in &set[i + 1..] {
+                        assert!(hi < lo2 || hi2 < lo, "overlapping rows: {row:?} and {row2:?}");
+                    }
+                }
+            }
+            for (lo, hi, row) in &tag_rows {
+                assert!(
+                    !PALW_LIFECYCLE_INT12_KINDS_V1.iter().any(|(t, _)| (lo..=hi).contains(&t)),
+                    "a row over the live build's tags: {row:?}"
+                );
+            }
+            // Top-level kinds.
+            for (tag, name, fence) in PALW_LIFECYCLE_NEW_KINDS_V1 {
+                let covering: Vec<_> = tag_rows.iter().filter(|(lo, hi, _)| (lo..=hi).contains(&tag)).collect();
+                assert_eq!(covering.len(), 1, "{name} (tag {tag}) sits in exactly one row of PALW_A2_KIND_FENCE_TABLE_V1");
+                let (_, _, row) = covering[0];
+                assert_eq!(row.fence, fence.params_field(), "{name} (tag {tag}) is owned by its row's fence ({row:?})");
+            }
+            for (lo, hi, row) in &tag_rows {
+                let landed = PALW_LIFECYCLE_NEW_KINDS_V1.iter().any(|(t, _, _)| (lo..=hi).contains(&t));
+                assert_eq!(row.landed, landed, "a row is landed exactly when a kind of it is in the enum: {row:?}");
+            }
+            // Kernel-route inner kinds.
+            for (tag, name, fence) in PALW_KERNEL_ROUTE_INNER_KINDS_V1 {
+                let covering: Vec<_> = inner_rows.iter().filter(|(lo, hi, _)| (lo..=hi).contains(&tag)).collect();
+                assert_eq!(covering.len(), 1, "inner kind {name} ({tag}) sits in exactly one row");
+                let (_, _, row) = covering[0];
+                let wants = fence.map_or("palw_probabilistic_constraints_v1", |f| f.params_field());
+                assert_eq!(row.fence, wants, "inner kind {name} ({tag}): `None` is tag 110's own fence ({row:?})");
+            }
+            for (lo, hi, row) in &inner_rows {
+                let landed = PALW_KERNEL_ROUTE_INNER_KINDS_V1.iter().any(|(t, _, _)| (lo..=hi).contains(&t));
+                assert_eq!(row.landed, landed, "{row:?}");
+            }
+            // Header forms: every owned form has its landed row, and a landed row's (algo, magic) is the form the gate owns.
+            for form in crate::pow_layer0::PalwHeaderFormFenceV1::ALL {
+                assert!(
+                    rows.iter().any(|r| matches!(r.slot, S::HeaderForm { .. }) && r.landed && r.fence == form.params_field()),
+                    "{form:?} has its landed HeaderForm row"
+                );
+            }
+            for row in rows {
+                if let S::HeaderForm { algo_id, magic } = row.slot {
+                    let mut carriage = magic.to_vec();
+                    carriage.extend_from_slice(&[0u8; 64]);
+                    let owner = crate::pow_layer0::palw_header_form_owner_v1(algo_id, &carriage);
+                    assert_eq!(owner.is_some(), row.landed, "{row:?}");
+                    if let Some(form) = owner {
+                        assert_eq!(form.params_field(), row.fence, "{row:?}");
+                    }
+                }
+            }
+            // Carried changes to the live build's wire types.
+            for (key, change) in PALW_INT12_WIRE_CHANGES_V1 {
+                let fence = match change {
+                    PalwInt12WireChangeV1::CarriedAppended { fence, .. } | PalwInt12WireChangeV1::CarriedReread { fence, .. } => fence,
+                    PalwInt12WireChangeV1::ObjectEnum | PalwInt12WireChangeV1::NotCarried(_) => continue,
+                };
+                assert!(
+                    rows.iter().any(|r| r.slot == S::Int12Inner { key: *key } && r.fence == *fence && r.landed),
+                    "{key}: a carried change has its landed Int12Inner row naming {fence}"
+                );
+            }
+            for row in rows {
+                if let S::Int12Inner { key } = row.slot {
+                    let classified = PALW_INT12_WIRE_CHANGES_V1.iter().any(|(k, c)| {
+                        *k == key
+                            && matches!(c, PalwInt12WireChangeV1::CarriedAppended { .. } | PalwInt12WireChangeV1::CarriedReread { .. })
+                    });
+                    assert_eq!(row.landed, classified, "{row:?}");
+                }
+            }
+            // A landed row's fence exists in this tree.
+            for row in rows.iter().filter(|r| r.landed) {
+                assert!(params_has_fence(row.fence), "a landed row names a Params fence: {row:?}");
+            }
+            let pending: Vec<String> =
+                rows.iter().filter(|r| !r.landed).map(|r| format!("{:?} → {} ({})", r.slot, r.fence, r.owner)).collect();
+            eprintln!("[a2u] rows awaiting their lane's merge:\n  {}", pending.join("\n  "));
+        }
+
+        /// **An appended form inside a live-build kind is owned at the top level**: for every `CarriedAppended` change, a sample object
+        /// carrying the new form (listed here by the lane that appends it) is owned by its fence — the guarded arm of
+        /// [`palw_lifecycle_kind_owner_v1`] — so every site reads it as the live build does, undecodable, below the fence.
+        #[test]
+        fn every_appended_form_has_a_guarded_owner_arm() {
+            // `(manifest key, an object of an int-12 kind carrying the appended form)` — one per `CarriedAppended` change.
+            let samples: Vec<(&str, PalwConsensusObjectV2)> = Vec::new();
+            for (key, change) in PALW_INT12_WIRE_CHANGES_V1 {
+                let PalwInt12WireChangeV1::CarriedAppended { fence, .. } = change else { continue };
+                let carrying: Vec<_> = samples.iter().filter(|(k, _)| k == key).collect();
+                assert!(!carrying.is_empty(), "{key}: a sample object carrying the appended form");
+                for (_, object) in carrying {
+                    match palw_lifecycle_kind_owner_v1(object) {
+                        PalwLifecycleKindOwnerV1::Fence(f) => assert_eq!(f.params_field(), *fence, "{key}"),
+                        PalwLifecycleKindOwnerV1::Int12 => panic!("{key}: an object carrying the appended form is owned by {fence}"),
+                    }
+                }
             }
         }
 
@@ -2757,6 +3138,7 @@ pub(crate) mod tests {
             let mut objects: Vec<(u8, &str, PalwConsensusObjectV2)> =
                 new_kind_samples().into_iter().map(|(tag, object)| (tag, "well-formed", object)).collect();
             objects.extend(new_kind_malformed());
+            objects.extend(PALW_LIFECYCLE_NEW_KINDS_V1.iter().map(|(tag, _, _)| (*tag, "zero-filled", zero_filled_kind(*tag))));
             for (tag, why, object) in &objects {
                 let payload = payload_of(object);
                 for tolerate in [true, false] {
@@ -2767,13 +3149,15 @@ pub(crate) mod tests {
                     );
                 }
                 let (_, _, fence) = PALW_LIFECYCLE_NEW_KINDS_V1.iter().find(|(t, _, _)| t == tag).unwrap();
-                let mut armed = PalwLifecycleKindFencesV1::default();
-                assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &armed, u64::MAX), Ok(()), "unarmed: nothing asked");
-                *match fence {
-                    PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1 => &mut armed.probabilistic_constraints_v1,
-                    PalwLifecycleKindFenceV1::SignedRegistrationV1 => &mut armed.signed_registration_v1,
-                    PalwLifecycleKindFenceV1::PermissionlessPanelV1 => &mut armed.permissionless_panel_v1,
-                } = Some(ForkActivation::new(1_000));
+                let unarmed = PalwLifecycleKindFencesV1::default();
+                assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &unarmed, u64::MAX), Ok(()), "unarmed: nothing asked");
+                let armed = unarmed.with(*fence, Some(ForkActivation::new(1_000)));
+                // Every OTHER fence armed from 0 changes nothing for this kind.
+                let others = PalwLifecycleKindFenceV1::ALL
+                    .into_iter()
+                    .filter(|f| f != fence)
+                    .fold(unarmed, |fences, f| fences.with(f, Some(ForkActivation::new(0))));
+                assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &others, u64::MAX), Ok(()), "another kind's fence");
                 assert_eq!(
                     validate_palw_lifecycle_tx_in_context_v1(&payload, &armed, 999),
                     Ok(()),
@@ -2785,11 +3169,9 @@ pub(crate) mod tests {
                     "tag {tag} ({why}) past the fence: its own rule"
                 );
                 // `never()` is absence.
-                let mut never = armed;
-                never.probabilistic_constraints_v1 = never.probabilistic_constraints_v1.map(|_| ForkActivation::never());
-                never.signed_registration_v1 = never.signed_registration_v1.map(|_| ForkActivation::never());
-                never.permissionless_panel_v1 = never.permissionless_panel_v1.map(|_| ForkActivation::never());
+                let never = armed.with(*fence, Some(ForkActivation::never()));
                 assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &never, u64::MAX), Ok(()));
+                assert!(!never.kind_in_force_at(object, u64::MAX) && armed.kind_in_force_at(object, 1_000));
             }
             // A kind the live build knows is judged at isolation as before, at every height, and the header context asks nothing.
             let known = PalwConsensusObjectV2::ModelSell {
@@ -2861,16 +3243,20 @@ pub(crate) mod tests {
             }
         }
 
-        /// The source directories whose Borsh types a lifecycle payload can carry (consensus-core and the crates it decodes with).
-        const WIRE_DIRS: [&str; 8] = [
+        /// The source directories whose types a payload can carry: consensus-core and every crate it decodes with (the PALW crates
+        /// and their own PALW dependencies, hashes, math).
+        const WIRE_DIRS: [&str; 11] = [
             "consensus/core/src",
             "crypto/hashes/src",
+            "math/src",
             "misaka-palw-tir/src",
+            "misaka-palw-tir-exec/src",
+            "misaka-palw-tir-lower/src",
+            "misaka-palw-tir-sketch/src",
             "misaka-palw-gen/src",
             "misaka-palw-panel/src",
             "misaka-palw-challenge/src",
             "misaka-palw-kernel/src",
-            "misaka-palw-tir-sketch/src",
         ];
 
         fn fnv64(bytes: &[u8]) -> u64 {
@@ -2926,7 +3312,8 @@ pub(crate) mod tests {
             String::from_utf8_lossy(&out).into_owned()
         }
 
-        /// The end (exclusive) of the bracketed group opening at `open`.
+        /// The end (exclusive) of the bracketed group opening at `open`. String and char literals are skipped whole, so a `"{"` in a
+        /// test's assertion cannot unbalance the walk.
         fn group_end(b: &[u8], open: usize) -> usize {
             let (o, c) = match b[open] {
                 b'{' => (b'{', b'}'),
@@ -2937,7 +3324,24 @@ pub(crate) mod tests {
             let mut depth = 0usize;
             let mut i = open;
             while i < b.len() {
-                if b[i] == o {
+                if b[i] == b'"' && o != b'<' {
+                    i += 1;
+                    while i < b.len() && b[i] != b'"' {
+                        i += if b[i] == b'\\' { 2 } else { 1 };
+                    }
+                } else if b[i] == b'\'' && o != b'<' {
+                    // A char literal (`'{'`, `'\\''`, `'\\u{..}'`) is skipped; a lifetime (`'a`) is not one.
+                    let close = if b.get(i + 1) == Some(&b'\\') {
+                        b.get(i + 3..).and_then(|rest| rest.iter().position(|x| *x == b'\'')).map(|k| i + 3 + k)
+                    } else if b.get(i + 2) == Some(&b'\'') {
+                        Some(i + 2)
+                    } else {
+                        None
+                    };
+                    if let Some(close) = close {
+                        i = close;
+                    }
+                } else if b[i] == o {
                     depth += 1;
                 } else if b[i] == c && !(c == b'>' && i > 0 && b[i - 1] == b'-') {
                     depth -= 1;
@@ -2950,10 +3354,48 @@ pub(crate) mod tests {
             b.len()
         }
 
+        /// `text` (comments already stripped) without each item a `#[cfg(test)]` attribute guards — a `mod … { … }` or `mod …;`, a
+        /// function, an `impl`, a `use` — wherever it stands: test-only types are not wire types, and a production type after a test
+        /// helper still is.
+        fn strip_cfg_test_items(text: &str) -> String {
+            const ATTR: &str = "#[cfg(test)]";
+            let b = text.as_bytes();
+            let mut out = String::with_capacity(text.len());
+            let mut i = 0;
+            while let Some(at) = text[i..].find(ATTR).map(|k| k + i) {
+                out.push_str(&text[i..at]);
+                // The guarded item ends at its first `;` or at the close of its first `{` — whichever comes first outside brackets
+                // and parentheses (`[u8; 4]` in a signature is not the end).
+                let mut j = at + ATTR.len();
+                let mut depth = 0usize;
+                let end = loop {
+                    match b.get(j) {
+                        None => break b.len(),
+                        Some(b'(') | Some(b'[') => depth += 1,
+                        Some(b')') | Some(b']') => depth = depth.saturating_sub(1),
+                        Some(b';') if depth == 0 => break j + 1,
+                        Some(b'{') if depth == 0 => break group_end(b, j),
+                        Some(b'"') => {
+                            // a string literal inside an attribute or a default
+                            j += 1;
+                            while j < b.len() && b[j] != b'"' {
+                                j += if b[j] == b'\\' { 2 } else { 1 };
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                };
+                i = end;
+            }
+            out.push_str(&text[i..]);
+            out
+        }
+
         /// **Every Borsh wire type under `root`'s [`WIRE_DIRS`]** — each derived `struct`/`enum` and each hand-written
         /// `impl BorshDeserialize for …`, keyed `"<path>::<item>"`, valued by an FNV-1a of its declaration with comments and
         /// whitespace removed. Test modules (`#[cfg(test)]` onward, `tests/`) are not wire types.
-        fn wire_types_of(root: &std::path::Path) -> std::collections::BTreeMap<String, u64> {
+        fn wire_types_of(root: &std::path::Path) -> std::collections::BTreeMap<String, (u64, String)> {
             fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
                 let Ok(entries) = std::fs::read_dir(dir) else { return };
                 for entry in entries.flatten() {
@@ -2976,8 +3418,7 @@ pub(crate) mod tests {
             for file in files {
                 let rel = file.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
                 let raw = std::fs::read_to_string(&file).unwrap();
-                let production = raw.split("\n#[cfg(test)]").next().unwrap();
-                let text = strip_comments(production);
+                let text = strip_cfg_test_items(&strip_comments(&raw));
                 let b = text.as_bytes();
                 let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
                 let mut insert = |name: String, decl: String| {
@@ -2987,18 +3428,53 @@ pub(crate) mod tests {
                         key = format!("{rel}::{name}#{n}");
                         n += 1;
                     }
-                    out.insert(key, fnv64(decl.as_bytes()));
+                    out.insert(key, (fnv64(decl.as_bytes()), decl));
                 };
                 let mut i = 0;
                 while let Some(at) = text[i..].find("#[derive(").map(|k| k + i) {
                     let attr_end = group_end(b, at + 1);
                     i = attr_end;
-                    if !text[at..attr_end].contains("Borsh") {
-                        continue;
-                    }
-                    // Further attributes (the borsh and repr ones are part of the wire form), then the visibility.
-                    let mut j = attr_end;
+                    let borsh = text[at..attr_end].contains("Borsh");
+                    // The attributes around the derive (the borsh and repr ones are part of the wire form): those before it, then
+                    // those after it, then the visibility.
                     let mut attrs = String::new();
+                    let mut start = at;
+                    loop {
+                        let before = text[..start].trim_end();
+                        if !before.ends_with(']') {
+                            break;
+                        }
+                        let close = before.len() - 1;
+                        let mut depth = 0isize;
+                        let mut k = close + 1;
+                        let open = loop {
+                            if k == 0 {
+                                break None;
+                            }
+                            k -= 1;
+                            match b[k] {
+                                b']' => depth += 1,
+                                b'[' => {
+                                    depth -= 1;
+                                    if depth <= 0 {
+                                        break Some(k);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        };
+                        match open {
+                            Some(open) if open > 0 && b[open - 1] == b'#' => {
+                                let a = &text[open - 1..=close];
+                                if a.starts_with("#[borsh") || a.starts_with("#[repr") {
+                                    attrs.insert_str(0, a);
+                                }
+                                start = open - 1;
+                            }
+                            _ => break,
+                        }
+                    }
+                    let mut j = attr_end;
                     loop {
                         while j < b.len() && b[j].is_ascii_whitespace() {
                             j += 1;
@@ -3022,9 +3498,10 @@ pub(crate) mod tests {
                     while j < b.len() && b[j].is_ascii_whitespace() {
                         j += 1;
                     }
-                    let kind = if text[j..].starts_with("struct ") {
+                    let kind = if text[j..].starts_with("struct ") && borsh {
                         "struct"
-                    } else if text[j..].starts_with("enum ") {
+                    } else if text[j..].starts_with("enum ") && (borsh || attrs.contains("#[repr(u") || attrs.contains("#[repr(i")) {
+                        // A Borsh enum, or a tag enum read by hand from a byte (`#[repr(u8)]` + `from_tag`): both are wire forms.
                         "enum"
                     } else {
                         continue;
@@ -3079,26 +3556,60 @@ pub(crate) mod tests {
                 .collect()
         }
 
+        /// The item name a manifest key names (`"<path>::<item>"`, `"…::<item>#2"`, `"…::impl BorshDeserialize for <item>"`).
+        fn item_of(key: &str) -> &str {
+            let item = key.rsplit("::").next().unwrap_or(key);
+            let item = item.strip_prefix("impl BorshDeserialize for ").unwrap_or(item);
+            item.split('#').next().unwrap_or(item)
+        }
+
+        /// The item names reachable from `roots` through the declarations of `types` (a type named in a declaration is read; a name
+        /// shared by two types counts for both — an over-approximation, which is the safe side for "never carried").
+        fn reachable_from(
+            types: &std::collections::BTreeMap<String, (u64, String)>,
+            roots: &[&str],
+        ) -> std::collections::BTreeSet<String> {
+            let mut by_name: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+            for (key, (_, decl)) in types {
+                by_name.entry(item_of(key)).or_default().push(decl);
+            }
+            let mut seen: std::collections::BTreeSet<String> = roots.iter().map(|r| r.to_string()).collect();
+            let mut queue: Vec<String> = seen.iter().cloned().collect();
+            while let Some(name) = queue.pop() {
+                for decl in by_name.get(name.as_str()).into_iter().flatten() {
+                    for ident in decl.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+                        if by_name.contains_key(ident) && seen.insert(ident.to_string()) {
+                            queue.push(ident.to_string());
+                        }
+                    }
+                }
+            }
+            seen
+        }
+
         /// **The live build's wire types are frozen: each is unchanged, or its change is classified** in
-        /// [`PALW_INT12_WIRE_CHANGES_V1`] — the object enum (whose new variants the kind table owns), a type never carried, or a carried
-        /// type whose new form a fence owns (its digest pinned). An appended variant or field inside a kind the live build decodes
+        /// [`PALW_INT12_WIRE_CHANGES_V1`] — the object enum (whose new variants the kind table owns), a type never carried (checked:
+        /// not reachable from the lifecycle payload), or a carried type whose new form a fence owns (appended or re-read; its digest
+        /// pinned). An appended variant or field inside a kind the live build decodes, or a new value of a tag it reads by hand,
         /// fails here until it is classified. No row may be stale.
         ///
-        /// `A2U_WIRE_MANIFEST_OF=<tree>` prints `<tree>`'s manifest instead (how the frozen one was made, from a worktree at
-        /// `0b1c11b87`).
+        /// `A2U_WIRE_MANIFEST_OF=<tree> A2U_WIRE_MANIFEST_OUT=<file>` writes `<tree>`'s manifest to `<file>` instead (how the frozen
+        /// one was made, from the source of `0b1c11b87`).
         #[test]
         fn every_int12_wire_type_is_unchanged_or_classified() {
             if let Ok(tree) = std::env::var("A2U_WIRE_MANIFEST_OF") {
+                let out = std::env::var("A2U_WIRE_MANIFEST_OUT").expect("A2U_WIRE_MANIFEST_OUT=<file>");
                 let manifest = wire_types_of(std::path::Path::new(&tree));
-                println!(
-                    "# The live testnet-12 build's Borsh wire types (int-12, `rcore/int-12` @ 0b1c11b87): `<path>::<item>`<TAB>FNV-1a of"
+                let mut text = String::from(
+                    "# The live testnet-12 build's wire types (int-12, `rcore/int-12` @ 0b1c11b87): `<path>::<item>`<TAB>FNV-1a of its\n\
+                     # declaration without comments, `#[cfg(test)]` items and whitespace (`wire_types_of`: Borsh-derived structs and enums,\n\
+                     # hand-written BorshDeserialize impls, `#[repr(uN)]` tag enums). Frozen; never regenerated against a newer tree.\n",
                 );
-                println!(
-                    "# its declaration without comments and whitespace (`wire_types_of`). Frozen; never regenerated against a newer tree."
-                );
-                for (key, digest) in &manifest {
-                    println!("{key}\t{digest:016x}");
+                for (key, (digest, _)) in &manifest {
+                    text.push_str(&format!("{key}\t{digest:016x}\n"));
                 }
+                std::fs::write(&out, text).expect("writes the manifest");
+                eprintln!("[a2u] wrote {} wire types of {tree} to {out}", manifest.len());
                 return;
             }
             let frozen = int12_manifest();
@@ -3108,25 +3619,40 @@ pub(crate) mod tests {
             let mut unclassified = Vec::new();
             let mut changed = std::collections::BTreeSet::new();
             for (key, digest) in &frozen {
-                if now.get(key) == Some(digest) {
+                if now.get(key).map(|(d, _)| d) == Some(digest) {
                     continue;
                 }
                 changed.insert(key.as_str());
+                let now_digest = now.get(key).map(|(d, _)| *d);
                 match PALW_INT12_WIRE_CHANGES_V1.iter().find(|(k, _)| k == key) {
-                    None => unclassified.push(format!("{key} ({})", if now.contains_key(key) { "changed" } else { "gone" })),
-                    Some((_, PalwInt12WireChangeV1::Carried { digest: pinned, .. })) if now.get(key) != Some(pinned) => {
-                        unclassified.push(format!("{key} (changed again: now {:016x?})", now.get(key)))
-                    }
+                    None => unclassified
+                        .push(format!("{key} ({})", now_digest.map_or("gone".to_string(), |d| format!("changed: now {d:016x}")))),
+                    Some((
+                        _,
+                        PalwInt12WireChangeV1::CarriedAppended { digest: pinned, .. }
+                        | PalwInt12WireChangeV1::CarriedReread { digest: pinned, .. },
+                    )) if now_digest != Some(*pinned) => unclassified.push(format!("{key} (changed again: now {now_digest:016x?})")),
                     Some(_) => {}
                 }
             }
             assert!(
                 unclassified.is_empty(),
                 "the live build's wire types changed without a classification in PALW_INT12_WIRE_CHANGES_V1 — a change inside a kind it \
-                 decodes is bytes it cannot decode, and below its fence must be read so (A-2 uniformity): {unclassified:#?}"
+                 decodes is bytes it cannot read as this build does, and below its fence must be read as it reads them (A-2 \
+                 uniformity): {unclassified:#?}"
             );
             for (key, _) in PALW_INT12_WIRE_CHANGES_V1 {
                 assert!(changed.contains(key), "a stale row: {key} is the live build's again (or never was one)");
+            }
+            // "Never carried" is checked, not taken on trust: no such type is reachable from the lifecycle payload.
+            let carried = reachable_from(&now, &["PalwLifecycleTxPayloadV2", "PalwConsensusObjectV2"]);
+            for (key, change) in PALW_INT12_WIRE_CHANGES_V1 {
+                if let PalwInt12WireChangeV1::NotCarried(why) = change {
+                    assert!(
+                        !carried.contains(item_of(key)),
+                        "{key} is classified NotCarried ({why}) but a lifecycle payload can carry it"
+                    );
+                }
             }
         }
     }

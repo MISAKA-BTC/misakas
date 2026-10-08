@@ -92,13 +92,17 @@ wire/fence impact · test · real-node result · status.
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the
 skeleton first; lanes build on that commit.
 
-**A-2 uniformity rule (A2U, 2026-10-08; `a2-uniformity-new-kinds.md`).** Every new object kind needs a kind→fence entry: a row in
-`PALW_LIFECYCLE_NEW_KINDS_V1` and an arm in `palw_lifecycle_kind_owner_v1`. The compiler demands the arm, and the test
-`every_kind_in_the_enum_has_exactly_one_owner` demands the row. Every new header carriage form or coinbase trailer needs a
-`PalwHeaderFormFenceV1` variant. **Below its owning fence a kind or form rides unjudged**: it is read exactly as the live testnet-12
-build reads its bytes, as undecodable. That means the same verdict and the same skip, with nothing charged, counted or written.
-Never refuse it at isolation. Its own rule (may-ride, shape, size) is asked only past the fence, in the header context, the acceptance
-walk and the fold. The live build's kind list (`PALW_LIFECYCLE_INT12_KINDS_V1`) is frozen.
+**A-2 uniformity rule (A2U, 2026-10-08/09; `a2-uniformity-new-kinds.md`).** Every allocation in this table that the live testnet-12
+build (int-12) cannot read as a newer build does — an object tag, a kernel inner kind or nested variant, a header form, a coinbase
+trailer, a form appended or re-read inside an int-12 kind, an FP job form, a header formula, a state encoding — has a row in the
+central kind→fence table `PALW_A2_KIND_FENCE_TABLE_V1` naming its fence; A2U keeps it, and a lane's merge flips its row to landed (the
+table test holds the code to the row). A new object kind also needs a row in `PALW_LIFECYCLE_NEW_KINDS_V1` and an arm in
+`palw_lifecycle_kind_owner_v1`; a new header form or trailer a `PalwHeaderFormFenceV1` variant; a change inside a type int-12 decodes a
+classification in `PALW_INT12_WIRE_CHANGES_V1`. **Below its owning fence a kind or form rides unjudged**: it is read exactly as int-12
+reads its bytes — the same verdict (0x4b: tolerated and skipped; 0x4a and header forms: refused), the same skip, nothing charged,
+counted or written. Never refuse it at isolation on 0x4b. Its own rule (may-ride, shape, size) is asked only past the fence, in the
+header context, the acceptance walk and the fold. Merge gate: the A2U tests, the mixed-verdict pin test on both rulesets, and the replay
+of its chains through int-12 itself (`scripts/a2u-int12-replay.sh`). The live build's lists are frozen.
 
 ## 3. Waves
 

@@ -880,6 +880,19 @@ pub enum PalwHeaderFormFenceV1 {
     ReceiptSpendV4,
 }
 
+impl PalwHeaderFormFenceV1 {
+    /// Every owned form. A form added here needs its `HeaderForm` row in
+    /// `crate::palw_lifecycle_objects_v2::PALW_A2_KIND_FENCE_TABLE_V1`, which the table test reconciles.
+    pub const ALL: [Self; 1] = [Self::ReceiptSpendV4];
+
+    /// The `Params` field the form's fence is resolved from.
+    pub const fn params_field(self) -> &'static str {
+        match self {
+            Self::ReceiptSpendV4 => "palw_receipt_spend_v4",
+        }
+    }
+}
+
 /// Which owned form a header's carriage is, if any (`None`: a form the live build knows, judged as it judges it at every height).
 pub fn palw_header_form_owner_v1(algo_id: u8, palw_commitment: &[u8]) -> Option<PalwHeaderFormFenceV1> {
     (algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 && crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment))

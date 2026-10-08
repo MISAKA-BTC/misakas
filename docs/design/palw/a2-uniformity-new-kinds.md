@@ -1,6 +1,7 @@
 # A-2 uniformity for every kind the live build cannot decode (A2U, 2026-10-08)
 
-**Status:** implemented on `fix/a2-uniform-new-tags` (lane A2U), over the integration line at `35a9ae1c8`. No live id moves.
+**Status:** implemented on `fix/a2-uniform-new-tags` (lane A2U), over the integration line at `35a9ae1c8`; the central kind→fence
+table (§3.5) holds every post-int-12 member, landed or allocated. No live id moves. Results: §7.
 **Finding:** X8R's review (2026-10-08). **Live build:** testnet-12 runs int-12, `rcore/int-12` @ `0b1c11b87`.
 
 ## 1. The class
@@ -101,8 +102,10 @@ tolerance) is what the fix converges to.
   | 108 | `palw_signed_registration_v1` |
   | 120 | `palw_permissionless_panel_v1` |
 
-* **`PalwLifecycleKindFencesV1`** holds the fences' activations, resolved once by `Params::palw_lifecycle_kind_fences_v1()`.
-  `kind_in_force_at(object, daa)` is the single question every height-holding site asks.
+* **`PalwLifecycleKindFencesV1`** holds the fences' activations, resolved once by `Params::palw_lifecycle_kind_fences_v1()` into
+  an array indexed by the fence's discriminant (`with(fence, activation)` sets one). `kind_in_force_at(object, daa)` is the single
+  question every height-holding site asks. A fence missing from `PalwLifecycleKindFenceV1::ALL` is never in force: its kinds ride
+  unjudged, the safe reading (`the_fence_list_is_the_enum` keeps `ALL` equal to the enum).
 
 ### 3.1 Where the rule is applied
 
@@ -134,66 +137,104 @@ All three production gates pass the forms:
 
 The by-name `BelowFence` refusal in `palw_carriage_stateless_v2` stays as a second lock, and is now unreachable below the fence.
 
-### 3.3 One level down, and inside the live build's own kinds
+### 3.3 One level down: the kernel route's inner kinds
 
-The same rule applies below the top-level object tag, in two places.
+Tag 110's bytes are a `KernelRouteObjectV1`. Below `palw_probabilistic_constraints_v1` all of them are int-12's undecodable payload
+(§3). Past it, a build that does not know an inner kind fails the kernel's decode at the gate (`KernelRouteObjectV1::decode`) and drops
+the object, the block standing. So an inner kind added later is read the same way below ITS fence.
 
-**Kernel-route inner kinds (inside tag 110).** `palw_kernel_route_inner_fence_v1` is exhaustive and wildcard-free.
-`PALW_KERNEL_ROUTE_INNER_KINDS_V1` lists each inner kind with the fence it needs beyond tag 110's own:
+* `palw_kernel_route_inner_fence_v1` is exhaustive and wildcard-free; `PALW_KERNEL_ROUTE_INNER_KINDS_V1` lists each inner kind with
+  the fence it needs beyond tag 110's own (`None`: tag 110's fence is the whole rule).
+* The processor's kernel gate (`palw_kernel_route_object_is_signed`) asks the table (`palw_kernel_inner_fence_at`) instead of a
+  hand-written arm. RFC-0015's inner 13 and 14 are `palw_panel_free_v1`'s.
+* A variant appended INSIDE an inner kind (R4X's `ClaimBodyV1::Spec` inside a `CommitClaim`) is answered by a guarded arm of
+  `palw_kernel_route_inner_fence_v1` ahead of the kind's own, as the top-level guarded arms work (§3.4).
+* `every_kernel_inner_kind_has_exactly_one_row` reconciles the table with `KernelRouteObjectV1`'s source, decoding each inner kind
+  from a zero-filled body.
 
-| Inner kinds | Owning fence |
-|---|---|
-| 1–12 | none (tag 110's fence is the whole rule) |
-| 13, 14 (OPV mode) | `palw_panel_free_v1` |
+Inner kinds added before tag 110's fence is first armed on a live network ride with it (`None`): G14-R4's 15 and K2S's 16–18 are
+such. Once tag 110 is live, every later inner kind needs a fence of its own.
 
-The processor's kernel gate (`palw_kernel_route_object_is_signed`) now asks the table instead of a hand-written OPV arm. An inner kind
-whose fence is not in force is dropped and the block stands, which is exactly what a build without the kind does at the kernel's decode.
+### 3.4 Inside the live build's own kinds: its wire types are frozen
 
-In-flight lanes join the table when they merge:
+A kind int-12 DOES decode can still carry bytes it cannot read as a newer build reads them. There are two shapes, and they need
+different readings.
 
-| Lane | Inner kinds | Owning fence |
-|---|---|---|
-| G14-R4 | 15 | (its fence) |
-| K2S | 16–18 | the K2 fence |
-| R4X | 19 | `palw_typed_roots_v1` |
+| Shape | Example | int-12's verdict | The newer build below the fence |
+|---|---|---|---|
+| **appended**: a variant appended to a nested Borsh enum, or a field appended to a nested struct | HFX's `PalwGenProfileOffersV1::Head` (3) inside tag 68 | the whole payload fails to decode: tolerated on 0x4b, skipped | a **guarded arm** in `palw_lifecycle_kind_owner_v1`, before the `Int12` arm, names the fence that owns every object carrying the form; from that arm every site of §3.1 reads it as undecodable |
+| **re-read**: a new meaning for bytes int-12 decodes, such as a tag byte it reads by hand | HFX's `PalwGenProfileV1::Head = 6` in the class's `profile: u8` | decoded; judged by int-12's own code at int-12's own stage (for tag 68, a refusal where its `from_tag` fails, in the acceptance walk) | **no guarded arm** — reading it as undecodable would skip it before the acceptance walk, a different verdict wherever int-12 charges, counts or refunds before refusing. The kind's own rule refuses the new meaning below its fence, at the stage int-12 does; a probe in the pin test (§4.2) and the int-12 replay (§5) are the evidence |
 
-Adding an inner kind without a row does not compile, and `every_kernel_inner_kind_has_exactly_one_row` reconciles the table with
-`KernelRouteObjectV1`'s source.
+The freeze:
 
-**Appended variants and fields inside a kind int-12 decodes.** For example, HFX's `PalwGenProfileV1::Head = 6` and further Borsh
-variants inside tag 68, which **is armed on live testnet-12** (`palw_gen_v1`). int-12 fails the whole payload's decode and tolerates it,
-so the newer build must read such a payload as undecodable below the appended form's fence.
+* Every wire type int-12 compiled is frozen in `consensus/core/src/palw_lifecycle_objects_v2/int12_borsh_manifest.tsv`: one FNV-1a per
+  Borsh-derived `struct`/`enum`, per hand-written `impl BorshDeserialize` and per `#[repr(uN)]` enum (a tag read by hand from a byte),
+  after removing comments, `#[cfg(test)]` items and whitespace; the `#[borsh]`/`#[repr]` attributes on either side of the derive are
+  part of the digest. It covers consensus-core, hashes, math and every PALW crate consensus-core decodes with that existed at
+  `0b1c11b87` (tir, tir-exec, tir-lower, tir-sketch, gen); panel, challenge and kernel did not exist there, and their types are carried
+  only by post-int-12 kinds. The manifest is made by the test itself from `git archive 0b1c11b87` of those directories
+  (`A2U_WIRE_MANIFEST_OF=<tree> A2U_WIRE_MANIFEST_OUT=<file>`).
+* `every_int12_wire_type_is_unchanged_or_classified` fails on any changed or removed int-12 type not classified in
+  `PALW_INT12_WIRE_CHANGES_V1` as one of `ObjectEnum`, `NotCarried(why)`, `CarriedAppended { fence, digest }` or
+  `CarriedReread { fence, digest }`. A carried digest is pinned, so a further change is classified again. **`NotCarried` is checked, not
+  trusted**: no such type may be reachable, by name, from `PalwLifecycleTxPayloadV2` through the declarations of the current tree.
+* `every_appended_form_has_a_guarded_owner_arm` asks, of every `CarriedAppended` change, a sample object carrying the form that the
+  owner function maps to the named fence.
+* Every carried change needs its `Int12Inner` row in the central table (§3.5), with the same fence.
 
-* Every Borsh wire type int-12 compiled is frozen in `consensus/core/src/palw_lifecycle_objects_v2/int12_borsh_manifest.tsv`. It holds
-  one FNV-1a per derived `struct`/`enum` and per hand-written `impl BorshDeserialize`, after removing comments and whitespace. It covers
-  consensus-core, hashes and the five PALW crates consensus-core decodes with, and was made by the test itself from a worktree at
-  `0b1c11b87`.
-* `every_int12_wire_type_is_unchanged_or_classified` fails on any changed or removed int-12 type that is not classified in
-  `PALW_INT12_WIRE_CHANGES_V1` as one of:
-  * `ObjectEnum`: the top-level enum, whose kinds the kind table owns;
-  * `NotCarried(why)`: state, delta or params;
-  * `Carried { fence, digest }`: the digest is pinned, so a further change is classified again.
-* A `Carried` change also needs a **guarded arm in `palw_lifecycle_kind_owner_v1` before the `Int12` arm**. For HFX that is
-  `ClassRegisteredGenV1 { .. } if <carries the appended profile> => Fence(<HFX fence>)`, for every int-12 kind that can carry the form.
-  From that arm, isolation, the header context, the objects-of-block walk, the chunk reader, the fold and the rent all read the payload
-  as int-12 does, with no further edit.
+Known limits of the freeze, each covered by the int-12 replay instead: a change inside a helper function a hand-written decoder calls;
+a `use` that rebinds a name to another type; a formula (a hash or a root) rather than a wire form.
 
-The changes classified today are:
+The changes classified today are `PalwConsensusObjectV2` (`ObjectEnum`) and the `NotCarried` state, delta and parameter types the
+manifest reports (§7).
 
-* `PalwConsensusObjectV2` (`ObjectEnum`);
-* `PalwDeltaEntryV2`, `PalwVoidReasonV2`, `PalwStateParamsV2` and `PalwNoChangeReasonV1` (all `NotCarried`).
+### 3.5 The central kind → fence table
 
-### 3.4 Other in-flight members (the Lead's list, 2026-10-08)
+`PALW_A2_KIND_FENCE_TABLE_V1` (`palw_lifecycle_objects_v2.rs`) is the one table of every post-int-12 member, landed or allocated, and
+the fence below which it rides unjudged. A2U keeps it; the Lead allocates; a lane fills its row's code at merge. Each row names its
+fence as a `Params` field name, so a row can be written before its lane merges.
 
-* **DA16, tags 150–153 → `palw_provider_court_v1`.** These are new top-level kinds. The enum scan fails until each has a
-  `PALW_LIFECYCLE_NEW_KINDS_V1` row. The owner `match` does not compile without an arm, and the fence needs a `PalwLifecycleKindFenceV1`
-  variant, a `PalwLifecycleKindFencesV1` field and an arm in the fold's `palw_fold_kind_in_force_v1`.
-* **G14-R4, tag 113 (the G14 chunk table).** Same as DA16, under its fence.
-* **SHARD (delta 171, tail `0xED`).** These are state encodings. A change to an int-12 state type is classified `NotCarried`. A new type
-  is not an int-12 type and needs nothing.
-* **L2FC (a header-root formula change behind `palw_fork_choice_commitment_v1`).** This is a header form in this sense: below its fence,
-  every pre-fence header must hash and validate byte-identically to int-12. It must be pinned at merge by a dormant-root/hash parity
-  test. The manifest test does not see formulas.
+| Slot | Members | Fence | Lane | In this tree |
+|---|---|---|---|---|
+| object tags 104–107 | onboarding | `palw_probabilistic_constraints_v1` | G14 lane D | yes |
+| object tag 108 | `SignedRegistrationV1` | `palw_signed_registration_v1` | RFC-0009 | yes |
+| object tag 109 | `ConformanceEvidenceV1` | `palw_probabilistic_constraints_v1` | OB-P0 | yes |
+| object tags 110–119 | 110 route, 111 receipt; **113 `KernelRouteChunkV1`** | `palw_probabilistic_constraints_v1` | G14; 113 G14-R4 | 110/111 |
+| object tags 120–129 | 120 `PanelBeaconProofV3` | `palw_permissionless_panel_v1` | RFC-0010 | yes |
+| object tags 130–139 | 130 `ExecWorkRootOpenedV2` | `palw_exec_payload_v2` | X8R | no |
+| object tags 150–153 | lease, challenge, answer, transfer | `palw_provider_court_v1` | DA16 | no |
+| inner kinds 1–12 | the kernel route | `palw_probabilistic_constraints_v1` (tag 110's own) | G14 lane D | yes |
+| inner kinds 13–14 | OPV registrations | `palw_panel_free_v1` | RFC-0015 | yes |
+| inner kind 15 | `SealProof` | tag 110's own | G14-R4 | no |
+| inner kinds 16–18 | segmented claim, tiled job, prompt tile | tag 110's own | K2S | no |
+| inner kind 19 | `Spec` | `palw_typed_roots_v1` | R4X | no |
+| nested in inner kinds | `ProsecutionV1::Segmented` (3), `ClaimBodyV1::Segmented` (2) | tag 110's own | K2S | no |
+| nested in inner kinds | `ProsecutionV1::Spec` (4), `ClaimBodyV1::Spec` (3) | `palw_typed_roots_v1` | R4X | no |
+| header form algo 7 `PFS4` | V4 receipt carriage | `palw_receipt_spend_v4` | RFC-0009 | yes |
+| header form algo 10 `PXE2` | EXEC envelope | `palw_exec_payload_v2` | X8R | no |
+| coinbase trailer `PXA2` | EXEC anchor | `palw_exec_payload_v2` | X8R | no |
+| inside tag 68 (re-read) | `PalwGenProfileV1::Head = 6` | `palw_task_heads_v1` | HFX | no |
+| inside tag 68 (appended) | `PalwGenProfileOffersV1::Head` (3) | `palw_task_heads_v1` | HFX | no |
+| FP job form (0x4a) | `PalwGenBodyV1::Head` (2) | `palw_task_heads_v1` | HFX | no |
+| header formula | `palw_state_root = H(fork-choice leaf ‖ ADR-0043 root)` past the fence | `palw_fork_choice_commitment_v1` | L2FC | no |
+| state encoding | per-shard V3 draw (delta 171, tail `0xED`) | `palw_permissionless_panel_v1` | SHARD | no |
+| state encoding | per-segment pricing, the shard engine's encodings | `palw_tir_shard_segment_v2` | SHARD | no |
+
+**The verdict int-12 gives depends on the carriage**, and "below the fence" means that verdict:
+
+* 0x4b lifecycle payloads: undecodable is **tolerated** (testnet-12 declares the audit fence), the carrier skipped.
+* 0x4a free-prompt jobs: undecodable is **refused** — there is no audit tolerance on 0x4a. A job form a lane adds (HFX's Head body)
+  must be refused below its fence exactly as int-12 refuses it: the form passes the isolation door only where the ruleset carries the
+  fence, and the header-context door below its height (the pattern of `palw_gen_door` and the decode-rules door).
+* Header carriage forms: **refused** by int-12's shape gate (§3.2).
+* Coinbase trailers: **opaque** miner bytes to int-12 — nothing read, nothing refused (X8R's reader is lenient only where the fence is
+  armed, and the length rule is the body stage's at the height).
+* Formulas and state encodings: **byte-identical** below the fence, block by block (the int-12 replay checks every block's root).
+
+`every_landed_kind_sits_in_its_row_with_the_rows_fence` holds the table to the code: rows never overlap one another or int-12's tags;
+every landed top-level kind, inner kind, header form and carried change sits in exactly one row whose fence is the one the code
+answers; a row is marked landed exactly when the code in the tree fills it; a landed row's fence is a `Params` fence
+(`palw_fences_v1`). A lane that merges a kind outside its allocation, under another fence, or without flipping its row fails there.
 
 ## 4. Tests
 
@@ -206,42 +247,43 @@ In `palw_lifecycle_objects_v2::tests::a2u`:
   fails here.**
 * **`the_int12_kind_list_is_frozen`** pins the int-12 list with an FNV-1a.
 * **`the_new_kind_table_is_the_owner_function`** checks a sample of every new kind against its table row and owner.
-* **`below_its_fence_a_new_kind_is_judged_as_the_live_build_judges_undecodable_bytes`**: every new kind, well-formed or malformed
-  (unsigned, oversized, empty encoding, an envelope wrapping no registration), gets the isolation verdict of a tag-254 payload no
-  build decodes, both tolerated and refused. The in-context rule asks nothing below the fence (or at `never()`) and is exactly may-ride
-  at the fence.
+* **`the_fence_list_is_the_enum`** keeps `PalwLifecycleKindFenceV1::ALL` equal to the enum, and checks each fence's slot.
+* **`every_landed_kind_sits_in_its_row_with_the_rows_fence`** reconciles the central table with the code (§3.5) and prints the rows
+  awaiting their lanes.
+* **`every_appended_form_has_a_guarded_owner_arm`** (§3.4).
+* **`below_its_fence_a_new_kind_is_judged_as_the_live_build_judges_undecodable_bytes`**: every new kind — hand-built well-formed,
+  every malformed form (unsigned, oversized, empty encoding, an envelope wrapping no registration), and **each kind decoded from a
+  zero-filled body, generically over the table** — gets the isolation verdict of a tag-254 payload no build decodes, both tolerated and
+  refused. The in-context rule asks nothing below the fence, at `never()`, or when only other kinds' fences are armed, and is exactly
+  may-ride at the fence.
 * **`a_not_in_force_kind_is_undecodable_in_the_live_builds_words`** pins `palw_lifecycle_unknown_tag_reason_v1` against borsh.
-* **`every_kernel_inner_kind_has_exactly_one_row`** reconciles the inner-kind table with `KernelRouteObjectV1`'s source, and checks
-  each row's fence against `palw_kernel_route_inner_fence_v1`, decoding each inner kind from a zero-filled body.
-* **`every_int12_wire_type_is_unchanged_or_classified`** checks the frozen manifest (§3.3). Each run reports any unclassified change and
-  any stale row.
+* **`every_kernel_inner_kind_has_exactly_one_row`** (§3.3).
+* **`every_int12_wire_type_is_unchanged_or_classified`** (§3.4).
 * **`an_owning_fence_needs_the_audit_fence_declared`** checks the params validation.
 
-### 4.2 The processor pin test
+### 4.2 The processor pin test: mixed verdicts over every new kind
 
-`t12_a2u_every_new_kind_below_its_fence_is_the_live_builds_undecodable_payload_and_every_node_agrees`, in
-`consensus/src/pipeline/virtual_processor/tests/t12_a2u_new_kinds_uniform.rs`, generalises X8R's P11. It runs on testnet-12 with
-harness cards and every owning fence unarmed. Every block is a heartbeat, and every carrier is a funded 0x4b transaction. The chain
-carries:
+`t12_a2u_mixed_verdicts_every_new_kind_below_its_fence_{launch,release}_ruleset`, in
+`consensus/src/pipeline/virtual_processor/tests/t12_a2u_new_kinds_uniform.rs`, generalises X8R's P11. It runs testnet-12 with harness
+cards and every owning fence unarmed, on two rulesets: **as launched**, and **the live release compressed** (every flag day live
+testnet-12 has crossed — the DAA-750 list, the second list, capacity, `palw_tir_v1`, `palw_tir_fence2`, int-11 — at heights 20–40, the
+chain carried past DAA 330 where the compressed release is the present one). Every block is a heartbeat or a real attempt; every
+carrier is a funded 0x4b transaction. The chain carries:
 
-* every new kind, well-formed;
-* every signed kind, unsigned;
-* the malformed forms;
-* a tag-254 reference payload;
-* three one-chunk groups of new kinds;
-* a two-chunk group that completes into a new kind.
+* **every new kind generically**: each `PALW_LIFECYCLE_NEW_KINDS_V1` row's kind decoded from a zero-filled body, so a kind a lane
+  adds is carried the moment its row exists; plus a hand-built well-formed, signed one of each;
+* every may-ride refusal a new kind has, a tag-254 reference payload, and a **re-read probe** (a tag-68 class whose profile byte is
+  `Head = 6`);
+* three one-chunk groups of new kinds, and a two-chunk group that completes into a new kind;
+* **a mixed block**: a quorum's `ReceiptLicensed` (an int-12 kind that folds and licenses a real claim), the same licence again (an
+  int-12 kind the walk refuses), and new kinds riding unjudged.
 
-It asserts:
-
-* each carrier is in its block, and each block is valid;
-* there is no kernel-route state and no Panel V3 state;
-* no group completed;
-* the walk's chunk reader is "undecodable" below the fence and the kind past it;
-* a `PFS4` header is refused on the header path **and** the pruning-proof path with int-12's own refusal (the unchanged gate), and
-  differently on a node where the form is in force.
-
-An unarmed node and a node with every owning fence armed far above the chain then replay every block. They give the same statuses,
-refusals, sink, PALW state root, UTXO multiset and pruning-proof refusal.
+It asserts each carrier is in its block and each block is valid; the licence licenses; there is no kernel-route state, no Panel V3
+state and no completed group; the walk's chunk reader is "undecodable" below the fence and the kind past it; a `PFS4` header is
+refused on the header path **and** the pruning-proof path with a refusal int-12's own gate gives, and differently on a node where the
+form is in force. An unarmed node and a node with every owning fence armed far above the chain (armed through exhaustive matches over
+every fence list, so a new fence must be armed there to compile) then replay every block: the same statuses, refusals, PALW state root
+**at every block**, sink, UTXO multiset and pruning-proof refusal.
 
 ### 4.3 Adapted test
 
@@ -250,34 +292,41 @@ cap. It previously expected `BelowFence`.
 
 ## 5. Replay through int-12 itself
 
-The pin test writes its chain when `A2U_INT12_REPLAY_OUT=<file>` is set. The file contains the genesis hash, every block's header and
-transactions, the refused block with its refusal, and the final view (sink, PALW root, multiset). It is Borsh; `Header` and
-`Transaction` are unchanged since `0b1c11b87`.
+The pin test writes each ruleset's chain when `A2U_INT12_REPLAY_OUT=<dir>` is set (`a2u-launch.borsh`, `a2u-release.borsh`: the
+genesis, every block's header and transactions, every block's PALW root, the refused block with its header and pruning-proof
+refusals, and the final view). `Header` and `Transaction` are unchanged since `0b1c11b87`.
 
-A test placed in a worktree at `0b1c11b87` rebuilds the same chain with int-12's own `t12_with_harness_cards()` and
-`t12_genesis_chain`, and checks it against the file:
+`scripts/a2u-int12-replay.sh <work-dir> <dump>…` extracts the source of `0b1c11b87` (`git archive`, no worktree), adds
+`a2u_int12_replay.rs.int12` as a test module, and runs it through the shared build gate. With int-12's own harness and fence lists it
+demands the same genesis, every block accepted and UTXO-valid **with the same PALW root block by block**, every refusal in the same
+words (header and pruning proof), and the same final view.
 
-* the genesis must be equal;
-* every block must be accepted;
-* every refusal must be equal;
-* the final view must be equal.
-
-Result: see §7.
+This is the merge gate for every row of §3.5 that a unit test cannot see — L2FC's formula, SHARD's unarmed fold, HFX's re-read
+profile, a decoder helper's change: a lane re-runs the pin test and this replay after it merges.
 
 ## 6. The rule for every future kind (also in `remaining-rfc-integration-matrix.md` §2)
 
-0. The same holds for a kernel-route inner kind (`PALW_KERNEL_ROUTE_INNER_KINDS_V1`) and for any change to a type the live build
-   decodes (`PALW_INT12_WIRE_CHANGES_V1`, plus a guarded owner arm when the change is carried).
-1. **Every new `PalwConsensusObjectV2` kind needs a kind→fence entry.** That means a row in `PALW_LIFECYCLE_NEW_KINDS_V1`, an arm in
-   `palw_lifecycle_kind_owner_v1` (the compiler demands the arm, the table test demands the row), and its fence in
-   `PalwLifecycleKindFenceV1` / `PalwLifecycleKindFencesV1`.
-2. **Every new header carriage form or coinbase trailer** gets a `PalwHeaderFormFenceV1` variant. Every gate that holds the header's
-   height must admit it only through `check_palw_commitment_shape_with_forms_at`, or the trailer's equivalent.
-3. **Below its fence a kind or form rides unjudged.** Its bytes are read exactly as the live build reads them: the same verdict, the
+0. **The Lead allocates; the row comes first.** Every post-int-12 kind, inner kind, nested variant, header form, coinbase trailer,
+   appended or re-read form inside an int-12 kind, FP job form, header formula and state encoding has a row in
+   `PALW_A2_KIND_FENCE_TABLE_V1` naming its fence. A merge flips its row to landed; the table test holds the code to the row.
+1. **Every new `PalwConsensusObjectV2` kind** needs a row in `PALW_LIFECYCLE_NEW_KINDS_V1` (the table test demands it), an arm in
+   `palw_lifecycle_kind_owner_v1` (the compiler demands it), and — if its fence is new — a `PalwLifecycleKindFenceV1` variant, its
+   `params_field`, its resolution in `Params::palw_lifecycle_kind_fences_v1`, its arm in the fold's `palw_fold_kind_in_force_v1` and
+   its arming in the pin test's `arm_every_owning_fence` (each demanded by an exhaustive match).
+2. **Every new kernel-route inner kind** needs its row in `PALW_KERNEL_ROUTE_INNER_KINDS_V1` and its arm in
+   `palw_kernel_route_inner_fence_v1`; a fence of its own goes in `PalwKernelInnerFenceV1` and `palw_kernel_inner_fence_at`, never as a
+   hand-written arm in the gate.
+3. **Every new header carriage form or coinbase trailer** gets a `PalwHeaderFormFenceV1` variant (and its `ALL` entry). Every gate
+   that holds the header's height admits it only through `check_palw_commitment_shape_with_forms_at`, or the trailer's equivalent.
+4. **A change inside a type int-12 decodes** is classified in `PALW_INT12_WIRE_CHANGES_V1`: appended (a guarded owner arm and a
+   sample) or re-read (the kind's own rule gives int-12's verdict at int-12's stage below the fence, and a probe in the pin test).
+5. **Below its fence a kind or form rides unjudged.** Its bytes are read exactly as the live build reads them: the same verdict, the
    same skip, nothing charged, counted or written. Never add a may-ride arm, size bound or shape check that refuses at isolation for a
-   kind the live build cannot decode. Put it in the kind's own rule, which the header context asks at its fence.
-4. The live-build list (`PALW_LIFECYCLE_INT12_KINDS_V1`) is frozen. It only changes when a new release becomes the live baseline, in
-   its own reviewed commit.
+   kind the live build cannot decode on 0x4b; put it in the kind's own rule, which the header context asks at its fence. On 0x4a the
+   live verdict for unknown bytes is refusal, and below the fence a new form is refused.
+6. **Merge gate:** the A2U unit tests, the pin test on both rulesets, and the int-12 replay of its dumps (§5).
+7. The live-build lists (`PALW_LIFECYCLE_INT12_KINDS_V1`, the manifest) are frozen. They change only when a new release becomes the
+   live baseline, in their own reviewed commit.
 
 ## 7. Results
 
