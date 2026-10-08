@@ -738,6 +738,8 @@ fn a16_execute_streaming_v1(
     let mut next = select(&last_logits);
     generated.push(next);
     on_token(next);
+    // RFC-0001 P1: a cancelled run stops at the next token.
+    crate::cancel::check_abort_v1()?;
     logits_rows.push(last_logits);
 
     // Calls 1..=D−1 — decode. The COORDINATE's position is 0 in every decode call (each call has
@@ -755,6 +757,7 @@ fn a16_execute_streaming_v1(
         next = select(&logits);
         generated.push(next);
         on_token(next);
+        crate::cancel::check_abort_v1()?;
         logits_rows.push(logits);
         // Through the CACHE's own serializer, at the width the class declares. Under a map that
         // cannot describe this state — the v1 one-byte map over an `i32` cache — this refuses, and
@@ -2967,6 +2970,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             }
             generated.push(next);
             on_token(next);
+            crate::cancel::check_abort_v1()?;
             if stop_ids.contains(&next) {
                 ended_on_stop_id = true;
                 break;
