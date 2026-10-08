@@ -211,7 +211,7 @@ the seal into a debug build; `finx_p0_facts` converts.
 
 ### 4.1 Measured (2026-10-08; logs `finx-cons2-p0e.log`, `finx-cons3-p0.log`, `finx-cons4-df.log` in `MISAKA-wt-b/`)
 
-All seven pass on testnet-12's rules as armed past DAA 1,700 (they assert the status quo's behaviour).
+All seven pass on testnet-12's rules as armed past DAA 1,700 (they assert the status quo's behaviour); the final run of all seven on one binary: `finx-cons5-final.log`, 7 passed in 399 s.
 
 * **facts.** Finality 600 blue, merge 30, pruning 74,920, k 1; windows bind 600, receipt 600, challenge 1,200 (applied 120 from DAA 0),
   court 3,000, anchor delay 20, quorum 3; shipped fences: strict-win 750, pruning-proof strict-economic 750, F-W 1,700, frontier

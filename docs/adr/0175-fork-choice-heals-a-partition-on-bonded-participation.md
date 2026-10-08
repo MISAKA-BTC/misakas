@@ -115,7 +115,7 @@ Under one dormant fence, `Params::palw_fork_choice_participation_v1` (a height),
   public branch's exclusive past over `W_p`**. An attacker that ties honest participation at a third of the bonds or more is decided by
   GHOSTDAG (blue work).
 * **Residuals, named.** (a) A partition in a heartbeat-only period (no bond attempts on either side) stays split — no unforgeable input
-  exists then (§2.3); the node-local partition watchdog (LIVE-R1's N2) and a resync with `--checkpoint` are the remedy; bonded slot clocks
+  exists then (record §2.3); the node-local partition watchdog (LIVE-R1's N2) and a resync with `--checkpoint` are the remedy; bonded slot clocks
   would remove it (out of scope). (b) A partition longer than the seal stays split, as on every Kaspa network; K is the protocol answer if
   ever wanted. (c) The assumption is about *active* bonds.
 * **Cost.** No block-validity or state-root change. Per non-extension comparison: the exclusive pasts of both tips (bounded by the
