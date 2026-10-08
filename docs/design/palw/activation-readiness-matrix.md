@@ -72,6 +72,31 @@ bootstrap path; (3) fresh-verifier time per class measured on real hardware → 
 watcher absence, 32-slot capture, Final race, economic attacks; (5) the production challenge policy and the Panel=0 activation decided
 separately.
 
+## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
+
+Waves, because the Mac (32 GiB, ~40 GB free disk) cannot build a dozen targets at once, and builds are batched (user rule): each lane
+designs and writes first and builds at milestones with one cargo invocation; a new wave starts as a running lane ends.
+
+| Wave | Lane | Model | Covers |
+| --- | --- | --- | --- |
+| running | G14-R4 | opus | RFC-0014/0015: escrow Final reward (GAP-5), 32-slot capture (Sybil-robust), accuser seal (GAP-R7), GAP-11; arming-blocker list |
+| running | OPV-BOOT | opus | RFC-0015/0010/0007: dependency graph, non-circular beacon bootstrap, derived OPV eligibility, grinding table, effective-bits function |
+| running | LIVE-R1 | opus | liveness: the IBD-candidates lock deadlock (in int-12 → node-only hotfix) and the post-partition economic-comparator split |
+| running | UNSCHED | sonnet | no DAA-9,000 flag day; ids back to int-12 |
+| running | COV-P4 | sonnet | RFC-0002/0011 census (two denominators, eight buckets); T5 preflight verdict |
+| running | H1 | — | real-checkpoint devnet loop (9B, Llama, Mitsuba …) |
+| 1 | X8R | opus | RFC-0008: review every un-gated pipeline path of `rfc8/x8-exec-v2`, integrate it, then the slice verification route (G14 on slices), suffix void, relay backpressure, the five design gaps |
+| 1 | K2S | opus | RFC-0011 K2 at real scale: per-position roots, segments, per-prosecution public-byte bound, row-tiled court openings, authenticated prompt tiles (262k / 2M), cached ledger per block, mempool gate, pipeline header wire |
+| 2 | X12 (resume) | opus | RFC-0012 C1–C11 code items |
+| 2 | DA16 | opus | RFC-0014 §16 transport (artifact availability → binding equality, held 8k) and RFC-0009's provider court (objective DA responsibility transfer) |
+| 2 | SMALL | sonnet | RFC-0001 P1–P4, RFC-0013 tiled range evaluator + Merkle index, RFC-0009 rail auto-resubmit and the RDA4 SigningPurpose |
+| 3 | SHARD | opus | RFC-0006 non-seat watcher, per-segment pricing, per-shard V3 draw; RFC-0010 V3 receipt/retry-vs-DA-default guard |
+| 3 | L2FC | opus | RFC-0009 L2: verifiable PALW fork choice for remote clients (state-root version, transition verification) |
+| 3 | MEAS | sonnet | RFC-0015 fresh-verifier timings per class on real hardware → window and collateral formulas |
+| 3 | HFX | opus | RFC-0002/0011 the census's top software-closable blockers as generic features |
+| 4 | C4R4 | opus | independent attack round: grinding, watcher absence, 32-slot capture, Final race, economics, partition rejoin |
+| 4 | SOUND | opus | RFC-0007/0015 review dossier for the external soundness review (the review itself stays EXTERNAL) |
+
 ## 4. Change log
 
 * 2026-10-08 ~20:30 — the user's Panel=0 rulings (§3a).
