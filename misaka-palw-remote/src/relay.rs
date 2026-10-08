@@ -138,7 +138,7 @@ fn read_push(script: &[u8]) -> Option<(&[u8], &[u8])> {
     (rest.len() >= len).then(|| rest.split_at(len))
 }
 
-fn parse_two_pushes(script: &[u8]) -> Option<(&[u8], &[u8])> {
+pub(crate) fn parse_two_pushes(script: &[u8]) -> Option<(&[u8], &[u8])> {
     let (first, rest) = read_push(script)?;
     let (second, tail) = read_push(rest)?;
     tail.is_empty().then_some((first, second))

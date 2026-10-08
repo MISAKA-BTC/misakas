@@ -30,7 +30,7 @@ use crate::{finish, keyed, put_len};
 pub const QUOTE_DOMAIN_V1: &[u8] = b"misaka-palw/remote/registration-quote/v1";
 
 /// The registrant bond as the chain reports it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BondFactsV1 {
     pub outpoint: String,
     pub known: bool,
@@ -46,7 +46,7 @@ pub struct BondFactsV1 {
 }
 
 /// One further filing the user would pay for (certification rent, a sponsor) — listed apart, approved apart.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FilingV1 {
     pub what: String,
     pub sompi: u64,
@@ -55,7 +55,7 @@ pub struct FilingV1 {
 }
 
 /// What a quote is read from: one node's (or a quorum's agreed) view, plus the locally built object and carrier.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RegistrationFactsV1 {
     /// `palw_network_domain_v2` of the network and genesis the object is signed for.
     pub network_domain: Hash64,
@@ -81,7 +81,7 @@ pub struct RegistrationFactsV1 {
 }
 
 /// The quote the user approves. Its digest is what the approval names.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RegistrationQuoteV1 {
     pub facts: RegistrationFactsV1,
     /// The quote lapses at this DAA: re-read and re-quote past it.

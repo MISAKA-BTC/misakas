@@ -11,12 +11,18 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true
 kaspa-txscript.workspace = true
+# Read-only: the shared onboarding lifecycle codes the registration status is shown in (Registered is not Active).
+misaka-palw-challenge.workspace = true
 blake2b_simd.workspace = true
 borsh.workspace = true
+faster-hex.workspace = true
 libcrux-ml-dsa.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 thiserror.workspace = true
 
 [lints]

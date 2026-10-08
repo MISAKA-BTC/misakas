@@ -23,6 +23,7 @@
 //! Domain strings are `misaka-palw/remote/...`; none of them is a consensus rule.
 
 pub mod attempt;
+pub mod bundle;
 pub mod checkpoint;
 pub mod evidence;
 pub mod proof;
