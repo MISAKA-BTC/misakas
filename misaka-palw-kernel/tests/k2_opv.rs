@@ -1112,7 +1112,7 @@ fn the_optimistic_state_root_form_is_versioned_and_pinned_by_a_golden_vector() {
     );
     assert_eq!(hex(&opv.root()), GOLDEN_OPV_ROOT);
     // OPV-BOOT GAP-B1a: with tables 25 and 26 empty the root is the OPV form itself (no extension).
-    assert!(opv.claim_beacon_salts.is_empty() && opv.forfeited_claim_seals.is_empty());
+    assert!(opv.claim_beacon_salts.is_empty() && opv.forfeited_claim_seals.is_empty() && opv.job_posters.is_empty());
     // Any change of the policy is a different root.
     let mut other = opv_example();
     other.economics.reservation_per_claim += 1;
@@ -1192,8 +1192,11 @@ fn past_the_panel_free_fence_a_claim_opens_only_its_salted_seal_and_the_salt_is_
             sealed_daa: 8,
             revealed: Some((id, 11, salt)),
             forfeited_daa: None,
+            poster: Some(common::chain::POSTER),
         }]
     );
+    // C4R4 F-C4R4-08: the job's poster is kept past the fence (the beacon's consumer), beyond the escrow that also names it.
+    assert_eq!(w.l.job_poster(&job.id()), Some(common::chain::POSTER));
     // The salt is state: in the root (one extension over tables 25 and 26), in the rows, and rebuilt from them.
     assert_ne!(w.l.root(), w.l.root_parts_v2().root(), "the extension is present once a salt is kept");
     rows_agree(&w.l);
@@ -1202,6 +1205,9 @@ fn past_the_panel_free_fence_a_claim_opens_only_its_salted_seal_and_the_salt_is_
     // The harness's own path (every reveal salted past the fence) finalizes like any OPV claim.
     let ev = w.block(61, vec![]);
     assert_eq!(ev, vec![E::Final { claim: id, reward: 7 }]);
+    assert!(!w.l.job_escrows.contains_key(&job.id()), "the escrow is spent at Final");
+    assert_eq!(w.l.job_poster(&job.id()), Some(common::chain::POSTER), "and the poster is still on record");
+    rows_agree(&w.l);
 }
 
 /// **Below `palw_panel_free_v1` a salted reveal rides unjudged** (the A-2 rule): no OPV policy, no salted-seal rule — the ledger
@@ -1229,7 +1235,10 @@ fn below_the_panel_free_fence_a_salted_reveal_is_refused_and_changes_nothing() {
     // The historical path is untouched: the harness seals v1 and reveals unsalted.
     let ev = w.block(10, vec![h.tx, T::PanelCovered { claim: id }]);
     assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
-    assert!(w.l.claim_beacon_salts.is_empty() && w.l.forfeited_claim_seals.is_empty(), "no salt, no row: the historical root");
+    assert!(
+        w.l.claim_beacon_salts.is_empty() && w.l.forfeited_claim_seals.is_empty() && w.l.job_posters.is_empty(),
+        "no salt, no row, no poster: the historical root"
+    );
     assert_eq!(w.l.root(), w.l.root_parts().root());
 }
 
@@ -1281,6 +1290,7 @@ fn past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists
         vec![(25, true, false), (30, true, false), (30 + ttl + 1, false, true),]
     );
     assert_eq!(read[2].revealed, Some((id, at, common::chain::test_salt(&id))));
+    assert!(read.iter().all(|s| s.poster == Some(common::chain::POSTER)), "every seal reads its job's poster");
     rows_agree(&w.l);
     assert_eq!(KernelLedgerV1::replay(&w.genesis, &w.blocks).root(), w.l.root());
 }

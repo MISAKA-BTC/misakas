@@ -1951,6 +1951,7 @@ async fn g14_opv_a_claim_commits_only_over_its_salted_seal_and_its_salt_is_kept(
     let ledger = w.net.ledger();
     assert!(ledger.claims.contains_key(&id), "the salted reveal commits");
     assert_eq!(ledger.claim_beacon_salt(&id), Some(salt));
+    assert!(ledger.job_poster(&job.id()).is_some(), "past the fence the job's poster is on record (C4R4 F-C4R4-08)");
     let route = w.net.api().expect("the route state");
     assert!(route.rows.keys().any(|(t, _)| *t == misaka_palw_kernel::rows::TABLE_CLAIM_BEACON_SALTS_V1), "table 25 holds the salt");
     assert_eq!(route.ledger_root().as_bytes(), ledger.root(), "the route's rows root like its ledger, extension included");

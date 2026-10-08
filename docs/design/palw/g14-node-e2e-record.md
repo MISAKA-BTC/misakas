@@ -364,9 +364,13 @@ model computes it when the seal is posted, and a beacon over such seals is groun
   so a withheld seal stays in the v3 mix and vetoes it instead of silently dropping out of it (SOUND SG-01a(i));
 * `claim_beacon_seals_v1()` lists live, salted-revealed and forfeited seals together in `(sealed_daa, seal)` order (a re-seal counts at
   its latest seal) — OPV-BOOT maps it into `SealedSourceV3`;
-* tables 25 and 26 reach the root through ONE extension, `H("misaka-palw/kernel/ledger-beacon-seal-extension/v1"; base ‖ salts ‖
-  forfeited)`, present only once either holds a row: below the fence both are empty and every root (both goldens, the int-12-era one
-  included) is unchanged;
+* **the job's poster is kept** (C4R4 F-C4R4-08, agreed with OPV-BOOT): `job → poster` (table 18, `job_posters`, `job_poster()`),
+  written at every job post past the fence (single-program, pipeline and typed jobs: wherever the escrow opens) and kept as long as
+  the job row (never removed) — the escrow that also names the poster is spent at Final, and the v3 distinct-consumer rule must read
+  the same poster at every later tip. `ClaimBeaconSealV1::poster` carries it;
+* tables 25, 26 and 18 reach the root through ONE extension, `H("misaka-palw/kernel/ledger-beacon-seal-extension/v1"; base ‖ salts ‖
+  forfeited ‖ posters)`, present only once any holds a row: below the fence all are empty and every root (both goldens, the
+  int-12-era one included) is unchanged;
 * `seal_ttl_admits_beacon_window_v1(policy, W)` states `2·W ≤ seal_ttl_daa` (a seal at the start of `[S, S + W)` must still be
   revealable at the end of `[S + W, S + 2W)`); the interim TTL of 100 admits OPV-BOOT's interim `W = 40` (pinned in core);
 * below the fence kind 20 rides unjudged (A-2): the processor's kernel gate drops it beside the OPV registrations (A2U's table: row 20
@@ -399,6 +403,35 @@ long after the grace) is never penalised.
 earliest seal of the convicting bytes at least `claim_seal_delay_daa` old, whoever files them. Self-recoup (the colluders' own first
 proof) is priced, not prevented: `claim_collateral × (1 − accuser‰) > claim_reward`, and RFC-0015's required reservation is divided
 by `1 − accuser‰`.
+
+**DESIGN_GAP — the honest verifier's incentive (PRINCIPLES §6 condition 6; C4R4b's round-4 observation).** A convicting proof's bytes
+are a function of the claim and its fault, never of the verifier's salt, and the producer of a lie knows its fault the moment it
+commits. Its own Sybil therefore seals the proof at `commit + 0` (or earlier, over the claim id it is about to reveal), is the earliest
+seal of the convicting bytes, and takes the whole accuser share of its own conviction. Deterrence still holds — the self-recoup is
+priced above — but an honest verifier who finds the same lie is never first and earns nothing: the bounty pays the liar's own Sybil,
+so condition 6 (an incentive for honest verifiers) is not met by the slash alone. No rule keyed on time after the commit fixes this
+(the liar can always be first); the bounty must instead be bound to something the liar cannot know or cannot pre-empt.
+
+*Sketch (not built; a new inner kind and a class-level sampler, so after this lane):*
+1. **Pre-committed watcher salts.** A verifier bonds a watch commitment `c_v = H(salt_v)` (a new route object, bonded, one per bond)
+   at any DAA before the claims it will watch. For a claim, its sample `S_v(claim) = PRF(salt_v, claim id)` selects the positions /
+   relations of that claim it checks. A proof is **bounty-eligible** for `v` only if it opens `c_v` (reveals `salt_v`) and the
+   convicting fault lies in `S_v(claim)`; a proof outside every opened sample still convicts (detection is unchanged) but earns only a
+   fixed finder fee.
+2. **A split, not a race.** The accuser share is split equally among every distinct bond whose pre-committed sample covers the fault
+   and whose proof seal lands inside the claim's window (ties are not resolved by time). The liar knows its own Sybils' salts and can
+   place the lie where they cover it, but it cannot see the honest salts, so each honest watcher covers the fault with its sampling
+   probability `q` and then takes an equal share; the liar can only dilute, and every extra Sybil watcher costs a bonded commitment.
+   With `h` honest watchers and `s` Sybil watchers covering, an honest share is `bounty / (s + (covering honest))`, and the liar's
+   recoup falls from the whole share to `s / (s + q·h)` of it.
+3. **Pricing.** The watch-commitment bond and the Sybil count enter the self-recoup relation (`claim_collateral × (1 − accuser‰ ×
+   s/(s + q·h)) > claim_reward`), and the expected honest income per watched lie (`q × bounty / (s + q·h)` at the detection rate)
+   must exceed an honest watcher's per-claim check cost from MEAS (`T_check` and fetch) — a policy relation the release states.
+
+What it needs: the watch-commitment object and its table (an allocation), a per-class sampler `S_v` that every court can evaluate
+from public data (the challenge crate's sampler shape fits), and an independent economics review. Until then the honest verifier's
+reward rests on the escrow-funded `work_credit_per_claim` path (item 10 below) or on altruism — **listed as a DESIGN_GAP for
+condition 6.**
 
 ### GAP-5: the Final reward's funding — user-pays escrow (the user's ruling, option A)
 
@@ -467,6 +500,9 @@ refuse any armed height unconditionally. What has to be true before they can be 
     salted too).
 13. The prune horizon of table 26 (forfeited claim seals), once OPV-BOOT's v3 policy is a ledger constant (see "Retention" above);
     until then the rows are kept and their growth is priced in forfeited deposits.
+14. DESIGN_GAP, PRINCIPLES §6 condition 6: an honest verifier's bounty can always be pre-empted by the liar's own Sybil (proof bytes
+    do not depend on the verifier's salt). Sketch above ("the honest verifier's incentive"): pre-committed watcher salts and a split
+    among every covering watcher, priced against MEAS's check cost.
 12. The FileProof-over-budget gap (accepted by the lead, bounded here): a proof refused over budget is not "accepted", so Final can pass
     and post-Final liability convicts. Junk FileProofs can fill every run of a block (the prosecution reserve is theirs too), each
     dismissed at `dismissed_proof_fee`: holding ONE valid proof out costs `max_adjudications × fee` per block = 64 × 0.1 = 6.4 BILI per
