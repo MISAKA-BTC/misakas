@@ -92,6 +92,14 @@ pub fn tool_root<T: BorshSerialize>(domain: &[u8], record: &T) -> Digest {
 ///
 /// The fault model is part of the scope: `*_fault_ppm` is the density of faulty draws the bound speaks about (a fault that shows
 /// on at least that fraction of the family's draws), under independent uniform draws. See [`ConformanceScopeV1::derived_epsilon_bits`].
+/// **The fault model a soundness policy approves**: the densest fault (ppm of vector / leaf draws on which a faulty implementation
+/// shows) a scope may assume under it. The candidate never chooses it (C4 GAP-C4-D): a denser assumed fault buys unearned bits.
+/// Only the reference policy's unreviewed test soundness id has one here; every reviewed soundness policy is an external gate, so no
+/// production policy can pass conformance until its fault model is approved and listed.
+pub fn approved_fault_model_v1(policy: &PostCommitChallengePolicyV1) -> Option<(u32, u32)> {
+    (policy.soundness_policy_id == hash::named_id("soundness/unreviewed-test-only/v1")).then_some((1_000_000, 1_000_000))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ConformanceScopeV1 {
     pub version: u16,
@@ -130,7 +138,7 @@ impl ConformanceScopeV1 {
         tool_root(DOMAIN_SCOPE, self)
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self, policy: &PostCommitChallengePolicyV1) -> Result<(), String> {
         if self.version != 1 || self.protocol != CHECK_PROTOCOL_V1 {
             return Err(format!("unknown scope version/protocol ({} / {})", self.version, self.protocol));
         }
@@ -140,9 +148,24 @@ impl ConformanceScopeV1 {
         if self.vectors_per_repetition > 0 && self.max_prompt_len == 0 {
             return Err("vectors need a prompt length of at least 1".into());
         }
-        for (what, ppm) in [("vector_fault_ppm", self.vector_fault_ppm), ("leaf_fault_ppm", self.leaf_fault_ppm)] {
-            if ppm == 0 || ppm > 1_000_000 {
-                return Err(format!("{what} must be in 1 ..= 1_000_000"));
+        // The implementation set and the fault model are the protocol's, not the candidate's (C4 F-C4-11, GAP-C4-D): a candidate
+        // may not drop the independent or backend implementation, nor assume a denser (more detectable) fault than scope v1 fixes —
+        // either would let a reference-only or tiny scope derive a pass with any bits it likes.
+        if !self.require_independent || !self.require_backend {
+            return Err(
+                "scope v1 requires the independent and the typed backend implementation (the candidate cannot waive them)".into()
+            );
+        }
+        let Some((max_vector, max_leaf)) = approved_fault_model_v1(policy) else {
+            return Err("the challenge policy's soundness policy approves no fault model (an external review gate)".into());
+        };
+        for (what, ppm, max) in
+            [("vector_fault_ppm", self.vector_fault_ppm, max_vector), ("leaf_fault_ppm", self.leaf_fault_ppm, max_leaf)]
+        {
+            if ppm == 0 || ppm > max {
+                return Err(format!(
+                    "{what} must be in 1 ..= {max} (the soundness policy's fault model; a denser fault buys unearned bits)"
+                ));
             }
         }
         Ok(())
@@ -441,7 +464,7 @@ pub fn bind_commitment(
     log: &dyn Fn(String),
 ) -> Result<BoundCommitment, Refusal> {
     params.policy.validate().map_err(|e| Refusal::new("POLICY_INVALID", e.to_string()))?;
-    params.scope.validate().map_err(|e| Refusal::new("SCOPE_INVALID", e))?;
+    params.scope.validate(&params.policy).map_err(|e| Refusal::new("SCOPE_INVALID", e))?;
     let text = std::fs::read_to_string(pack_dir.join(PACK_FILE))
         .map_err(|e| Refusal::new("PACK_MISMATCH", format!("{}: {e}", pack_dir.join(PACK_FILE).display())))?;
     let pack = RuntimePackV1::parse(&text).map_err(|e| Refusal::new("PACK_MISMATCH", e))?;

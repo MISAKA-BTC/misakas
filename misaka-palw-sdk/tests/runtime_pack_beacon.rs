@@ -246,7 +246,7 @@ fn a_commitment_binds_every_root_from_the_artifact_and_any_change_is_a_new_commi
     vary("repetitions", &|p| p.policy = test_policy(4), "challenge_policy_id");
     vary("scope vectors", &|p| p.scope.vectors_per_repetition = 3, "test_scope_root");
     vary("scope fault model", &|p| p.scope.leaf_fault_ppm = 400_000, "test_scope_root");
-    vary("scope require_independent", &|p| p.scope.require_independent = false, "test_scope_root");
+    vary("scope decode tokens", &|p| p.scope.decode_tokens += 1, "test_scope_root");
     vary("chain", &|p| p.chain_genesis = named_id("another-genesis"), "chain_genesis");
     vary("ruleset", &|p| p.ruleset_id = named_id("another-ruleset"), "ruleset_id");
     vary("candidate", &|p| p.candidate_id = Some(named_id("another-candidate")), "candidate_id");
@@ -364,7 +364,19 @@ fn the_derived_epsilon_is_an_integer_conditional_bound_and_never_zero_for_a_scop
     s.vectors_per_repetition = 0;
     assert_eq!(s.derived_epsilon_bits(4), 184);
     s.leaves_per_repetition = 0;
-    assert!(s.validate().is_err(), "a scope that checks nothing is refused");
+    let policy = reference_policy_v1(3, 2, 40, 5, 4);
+    assert!(s.validate(&policy).is_err(), "a scope that checks nothing is refused");
+    // C4 F-C4-11 / GAP-C4-D: the candidate cannot waive an implementation, and the fault model is the soundness policy's.
+    let mut weak = ConformanceScopeV1::new(14, 4, 2, 512);
+    weak.validate(&policy).unwrap();
+    weak.require_independent = false;
+    assert!(weak.validate(&policy).is_err(), "a reference-only scope is refused");
+    let mut weak = ConformanceScopeV1::new(14, 4, 2, 512);
+    weak.require_backend = false;
+    assert!(weak.validate(&policy).is_err(), "a scope without the backend is refused");
+    let mut reviewed = policy.clone();
+    reviewed.soundness_policy_id = misaka_palw_challenge::hash::named_id("soundness/some-reviewed-policy/v1");
+    assert!(ConformanceScopeV1::new(14, 4, 2, 512).validate(&reviewed).is_err(), "no fault model is approved for it yet");
     assert!(s.statement(4).contains("not whole-model fidelity") && s.statement(4).contains("not full-scope"));
 }
 

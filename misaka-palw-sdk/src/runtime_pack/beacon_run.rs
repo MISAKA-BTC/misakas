@@ -1330,6 +1330,11 @@ fn fail(code: &'static str, detail: impl Into<String>) -> Result<Verdict, Refusa
 /// Judge presented evidence from public inputs alone: the pack and artifact, the committed state, and the canonical facts.
 pub fn verify_conformance(inp: &VerifyInput<'_>, log: &dyn Fn(String)) -> Result<Verdict, Refusal> {
     let loaded = load_commitment(&resolve_commitment_dir(inp.state_dir, inp.commitment)?)?;
+    // A commitment whose scope waived an implementation or assumed a denser fault is never verifiable as a pass, whatever a
+    // verifier mirroring that weak scope would reproduce (C4 F-C4-11).
+    if let Err(why) = loaded.params.scope.validate(&loaded.policy) {
+        return fail("SCOPE_BELOW_PROTOCOL", why);
+    }
     rebind(&loaded, inp.pack_dir, inp.artifact, log)?;
     let ev_bytes = std::fs::read(inp.evidence).map_err(|e| Refusal::new("STATE_IO", format!("{}: {e}", inp.evidence.display())))?;
     let presented = match BeaconConformanceEvidenceV1::try_from_slice(&ev_bytes) {
