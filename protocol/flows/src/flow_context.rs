@@ -561,6 +561,19 @@ mod tests {
     }
 }
 
+/// LIVE-R1: what a confirmed verified resync reports (the daemon writes it beside the data directory).
+#[derive(Clone, Debug)]
+pub struct ResyncReport {
+    pub confirmed_unix_ms: u64,
+    pub sink: BlockHash,
+    pub sink_daa: u64,
+    pub confirming_outbound_peers: usize,
+    pub eligible_outbound_peers: usize,
+}
+
+/// LIVE-R1: called once when a verified resync is confirmed.
+pub type ResyncReporter = Arc<dyn Fn(&ResyncReport) + Send + Sync>;
+
 pub struct FlowContextInner {
     pub node_id: PeerId,
     pub consensus_manager: Arc<ConsensusManager>,
@@ -588,6 +601,12 @@ pub struct FlowContextInner {
     ibd_lease: Arc<RwLock<Option<IbdLease>>>,
     /// Chains peers advertised while an IBD held the latch, keyed by chain rather than by peer.
     ibd_candidates: Arc<RwLock<IbdCandidateRegistry>>,
+    /// LIVE-R1 N2: which chain this node's peers relay, for the partition watchdog
+    /// (`flowcontext::partition_watch`).
+    partition_watch: Arc<Mutex<crate::flowcontext::partition_watch::PartitionWatch>>,
+    /// LIVE-R1: a verified resync in progress (`kaspad --palw-verified-resync`): the reporter to call
+    /// once the synced chain is confirmed. `None` otherwise.
+    verified_resync: Arc<Mutex<Option<ResyncReporter>>>,
     /// The chain this node has decided to sync next, reserved so that cancelling an IBD hands the
     /// latch to the winner rather than to whoever relays first. See [`PreferredIbdCandidate`].
     preferred_ibd_candidate: Arc<RwLock<Option<PreferredIbdCandidate>>>,
@@ -939,6 +958,8 @@ impl FlowContext {
                 ibd_metadata: Default::default(),
                 ibd_lease: Default::default(),
                 ibd_candidates: Default::default(),
+                partition_watch: Default::default(),
+                verified_resync: Default::default(),
                 challenger_tx: broadcast::channel(CHALLENGER_NOMINATION_BACKLOG).0,
                 preferred_ibd_candidate: Default::default(),
                 handoff_tx: broadcast::channel(CHALLENGER_NOMINATION_BACKLOG).0,
@@ -1460,6 +1481,110 @@ impl FlowContext {
     /// dropped connection is a source failover, not a reason to reconsider which chain to follow.
     pub fn forget_ibd_candidate_peer(&self, peer: &PeerKey) {
         self.ibd_candidates.write().forget_peer(peer);
+        self.partition_watch.lock().forget_peer(peer);
+    }
+
+    /// **LIVE-R1: start a verified resync.** The node (whose data directory the daemon has just moved
+    /// aside) stays out of participation — the partition hold — until long-lived outbound peers confirm
+    /// the chain it synced (`PartitionWatch::resync_verdict`); then `reporter` is called once and the hold
+    /// is released. Never started by the node itself.
+    pub fn begin_verified_resync(&self, reporter: ResyncReporter) {
+        *self.verified_resync.lock() = Some(reporter);
+        self.chain_participation().set_partition_hold(true);
+        warn!(
+            "VERIFIED RESYNC: syncing from an empty data directory; this node will not mine, attest or report synced until \
+             at least {} long-lived outbound peers confirm the chain it synced.",
+            crate::flowcontext::partition_watch::RESYNC_MIN_CONFIRMING_PEERS
+        );
+    }
+
+    /// Whether a verified resync is still waiting for its confirmation.
+    pub fn verified_resync_pending(&self) -> bool {
+        self.verified_resync.lock().is_some()
+    }
+
+    /// **LIVE-R1 N2: the partition watchdog, asked after every relayed block is processed.** Records
+    /// whether `block` (relayed by `peer`) extends this node's chain, then holds or releases chain
+    /// participation on the verdict — see `flowcontext::partition_watch` for the threat model. Holding
+    /// changes participation only (no mining, no attesting, unsynced), never the sink.
+    pub async fn observe_relay_for_partition(&self, session: &ConsensusSessionOwned, peer: PeerKey, block: BlockHash) {
+        use crate::flowcontext::partition_watch::{PartitionVerdict, PeerView, RelayedRelation};
+        let sink = session.async_get_sink().await;
+        let relation = match session.async_is_chain_ancestor_of(sink, block).await {
+            Ok(true) => RelayedRelation::ExtendsOurs,
+            Ok(false) => RelayedRelation::Other,
+            Err(_) => return,
+        };
+        let now = std::time::Instant::now();
+        let peers: Vec<PeerView> = self
+            .hub()
+            .active_peers()
+            .iter()
+            .map(|p| PeerView {
+                key: p.key(),
+                outbound: p.is_outbound(),
+                connected_for: std::time::Duration::from_millis(p.time_connected()),
+            })
+            .collect();
+        let refusal = session.palw_partition_refusal_v1();
+        let pending_resync = self.verified_resync.lock().clone();
+        if let Some(reporter) = pending_resync {
+            use crate::flowcontext::partition_watch::ResyncVerdict;
+            let resync = {
+                let mut watch = self.partition_watch.lock();
+                watch.note_relay(peer, relation, now);
+                watch.resync_verdict(refusal, &peers, now)
+            };
+            if let ResyncVerdict::Confirmed { on_ours, eligible } = resync {
+                let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
+                let report = ResyncReport {
+                    confirmed_unix_ms: unix_now(),
+                    sink,
+                    sink_daa,
+                    confirming_outbound_peers: on_ours,
+                    eligible_outbound_peers: eligible,
+                };
+                *self.verified_resync.lock() = None;
+                self.chain_participation().set_partition_hold(false);
+                info!(
+                    "VERIFIED RESYNC confirmed: sink {sink} (DAA {sink_daa}) is extended by {on_ours} of {eligible} long-lived outbound \
+                     peers and refuses nothing heavier. Participating again; the previous data directory is kept where the \
+                     daemon moved it, for the operator to delete."
+                );
+                reporter(&report);
+            }
+            return;
+        }
+        let verdict = {
+            let mut watch = self.partition_watch.lock();
+            watch.note_relay(peer, relation, now);
+            watch.verdict(refusal, &peers, now)
+        };
+        match verdict {
+            PartitionVerdict::Hold { refusal, on_other, on_ours, eligible } => {
+                if self.chain_participation().set_partition_hold(true) {
+                    kaspa_core::error!(
+                        "PARTITION HOLD: this node keeps a branch its peers have left. Its sink {} (DAA {}) has refused the heavier, \
+                         fully validated chain at {} (DAA {}, advanced {} ticks while refused, {} resolves) on the PALW deep-reorg \
+                         rule, and {on_other} of its {eligible} long-lived outbound peers relay only that chain ({on_ours} relay this \
+                         one). Not mining, not attesting, reporting unsynced — so this branch stops growing toward its finality depth \
+                         and the split stays healable. Released by itself if the condition clears; otherwise resync from the \
+                         network's chain (`kaspad --palw-verified-resync`, which keeps this data directory aside).",
+                        refusal.sink,
+                        refusal.own_daa,
+                        refusal.refused,
+                        refusal.refused_daa,
+                        refusal.refused_span_daa(),
+                        refusal.resolves
+                    );
+                }
+            }
+            PartitionVerdict::Clear(reason) => {
+                if self.chain_participation().set_partition_hold(false) {
+                    info!("Partition hold released ({reason:?}): this node participates again.");
+                }
+            }
+        }
     }
 
     pub fn is_ibd_running(&self) -> bool {
@@ -1745,6 +1870,13 @@ impl FlowContext {
     /// `true` on a chain nobody has compared.
     pub fn is_consensus_participation_allowed(&self) -> bool {
         self.chain_participation().allows_participation()
+    }
+
+    /// Whether this node's chain is settled — participation without the LIVE-R1 partition hold. The
+    /// IBD and candidate-recovery paths ask this one: the hold stops mining and attesting, it is not a
+    /// reason to re-open chain recovery (that answers a different question, by blue work and proofs).
+    pub fn is_chain_settled(&self) -> bool {
+        self.chain_participation().chain_settled()
     }
 
     /// Record that an IBD has replaced the active consensus (`staging.commit()` returned).

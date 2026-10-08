@@ -184,7 +184,7 @@ impl HandleRelayInvsFlow {
             // CandidateReview exists precisely because the chain is not settled, so that is exactly
             // when a competing offer matters. Recording it here does not process the block or change
             // the flow's behaviour; it only makes the offer visible to the coordinator.
-            if !self.ctx.is_consensus_participation_allowed() && self.ctx.ibd_peer_key() != Some(self.router.key()) {
+            if !self.ctx.is_chain_settled() && self.ctx.ibd_peer_key() != Some(self.router.key()) {
                 self.ctx.observe_ibd_candidate_peer(self.router.key());
                 record_stage(
                     RecoveryStage::CandidateObserved,
@@ -400,9 +400,12 @@ impl HandleRelayInvsFlow {
             // We spawn post-processing as a separate task so that this loop
             // can continue processing the following relay blocks
             let ctx = self.ctx.clone();
+            let peer = self.router.key();
             tokio::spawn(async move {
                 ctx.on_new_block(&session, ancestor_batch, block, virtual_state_task).await;
                 ctx.log_block_event(BlockLogEvent::Relay(inv.hash));
+                // LIVE-R1 N2: after virtual processing, so the sink the relation is read against is current.
+                ctx.observe_relay_for_partition(&session, peer, inv.hash).await;
             });
         }
     }
@@ -417,7 +420,7 @@ impl HandleRelayInvsFlow {
     /// construction: it returns immediately unless participation is withheld, and the per-peer
     /// cooldown bounds how often a peer is actually asked.
     async fn poll_for_candidate_summary(&mut self) {
-        if self.ctx.is_consensus_participation_allowed() {
+        if self.ctx.is_chain_settled() {
             return;
         }
         // This used to skip the peer whose IBD is running — don't pester the peer we are already

@@ -176,6 +176,10 @@ pub struct Args {
     pub user_agent_comments: Vec<String>,
     pub utxoindex: bool,
     pub reset_db: bool,
+    /// LIVE-R1: `--palw-verified-resync` — move the data directory aside (never delete it), sync from an
+    /// empty one, and stay out of participation until long-lived outbound peers confirm the chain.
+    #[serde(default)]
+    pub palw_verified_resync: bool,
     #[serde(rename = "outpeers")]
     pub outbound_target: usize,
     #[serde(rename = "maxinpeers")]
@@ -844,6 +848,7 @@ impl Default for Args {
             async_threads: num_cpus::get(),
             utxoindex: false,
             reset_db: false,
+            palw_verified_resync: false,
             outbound_target: 8,
             inbound_limit: 128,
             rpc_max_clients: 128,
@@ -1764,6 +1769,7 @@ pub fn cli() -> Command {
                 .help("Max number of RPC clients for standard connections (default: 128)."),
         )
         .arg(arg!(--"reset-db" "Reset database before starting node. It's needed when switching between subnetworks.").env("KASPAD_RESET_DB"))
+        .arg(arg!(--"palw-verified-resync" "Resync this node from the network's chain, verified: the data directory is moved aside (kept, never deleted), the node syncs from an empty one, and it does not mine, attest or report synced until at least two long-lived outbound peers confirm the synced chain. Writes palw-resync-report.json beside the data directory. The remedy for a PARTITION HOLD; never started automatically."))
         .arg(arg!(--"enable-unsynced-mining" "Allow the node to accept blocks from RPC while not synced (this flag is mainly used for testing)").env("KASPAD_ENABLE_UNSYNCED_MINING"))
         .arg(
             Arg::new("enable-mainnet-mining")
@@ -3576,6 +3582,7 @@ impl Args {
             rpc_max_clients: arg_match_unwrap_or::<usize>(&m, "rpcmaxclients", defaults.rpc_max_clients),
             max_tracked_addresses: arg_match_unwrap_or::<usize>(&m, "max-tracked-addresses", defaults.max_tracked_addresses),
             reset_db: arg_match_unwrap_or::<bool>(&m, "reset-db", defaults.reset_db),
+            palw_verified_resync: arg_match_unwrap_or::<bool>(&m, "palw-verified-resync", defaults.palw_verified_resync),
             enable_unsynced_mining: arg_match_unwrap_or::<bool>(&m, "enable-unsynced-mining", defaults.enable_unsynced_mining),
             enable_mainnet_mining: arg_match_unwrap_or::<bool>(&m, "enable-mainnet-mining", defaults.enable_mainnet_mining),
             trusted_checkpoint: m.get_one::<String>("trusted-checkpoint").cloned(),

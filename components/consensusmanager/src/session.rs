@@ -533,6 +533,11 @@ impl ConsensusSessionOwned {
         self.consensus.palw_locked_bond_outpoints_v2()
     }
 
+    /// LIVE-R1 N2: a memory read (one mutex), cheap enough to ask from an async flow directly.
+    pub fn palw_partition_refusal_v1(&self) -> Option<kaspa_consensus_core::api::PalwPartitionRefusalV1> {
+        self.consensus.palw_partition_refusal_v1()
+    }
+
     /// **ADR-0078 Decision 5: one claim's derivations, as the chain holds them.** The claim (its
     /// `output_root`, phase and accepting block), the executor's registered bond key, and the
     /// `(key, row)` pairs of the derived table under it. Same store-tip read profile as

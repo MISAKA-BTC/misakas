@@ -933,6 +933,14 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     }
     disk_free_preflight(args, &app_dir);
 
+    // LIVE-R1: the verified resync moves the data directory ASIDE before anything opens it. Never deleted:
+    // the operator removes it once the report says the synced chain was confirmed, or moves it back.
+    let resync_report_path = app_dir.join(network.to_prefixed()).join(crate::palw_verified_resync::REPORT_FILE);
+    let resync_aside: Option<Option<PathBuf>> = args.palw_verified_resync.then(|| {
+        crate::palw_verified_resync::move_datadir_aside(&db_dir, &resync_report_path)
+            .unwrap_or_else(|e| panic!("--palw-verified-resync: {e}"))
+    });
+
     let consensus_db_dir = db_dir.join(CONSENSUS_DB);
     let utxoindex_db_dir = db_dir.join(UTXOINDEX_DB);
     let meta_db_dir = db_dir.join(META_DB);
@@ -1390,6 +1398,9 @@ Do you confirm? (y/n)";
         hub.clone(),
         mining_rule_engine.clone(),
     ));
+    if let Some(aside) = resync_aside {
+        flow_context.begin_verified_resync(crate::palw_verified_resync::confirmed_reporter(resync_report_path.clone(), aside));
+    }
 
     // MISAKA PALW v2 (Land stage): monitor a palw-agent when one is configured. Observation
     // and a capability handle only — an absent or quarantined agent withdraws v2 compute

@@ -38,6 +38,30 @@ use crate::BlockHash;
 
 pub use self::stats::{BlockCount, ConsensusStats};
 
+/// **LIVE-R1 N2: the consensus half of the partition watchdog.** This node's recent resolves settled on
+/// `sink` after refusing the heavier `refused` on the PALW deep-reorg rule — a candidate it had
+/// UTXO-validated and weighed, and that did not strictly out-weigh its sink on `(safe frontier, safe
+/// weight, live)`. A run, not an event: `resolves` counts the consecutive resolves that ended this way and
+/// `first_refused_daa ..= refused_daa` is how far the refused branch advanced meanwhile. Node-local; no
+/// verdict reads it. On its own it is NOT a reason to stop: an attacker's released heavy branch produces
+/// the same record on every honest node — the flows add which chain the node's outbound peers are on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPartitionRefusalV1 {
+    pub sink: BlockHash,
+    pub refused: BlockHash,
+    pub own_daa: u64,
+    pub refused_daa: u64,
+    pub first_refused_daa: u64,
+    pub resolves: u64,
+}
+
+impl PalwPartitionRefusalV1 {
+    /// How many DAA ticks the refused branch has advanced while this node kept refusing it.
+    pub fn refused_span_daa(&self) -> u64 {
+        self.refused_daa.saturating_sub(self.first_refused_daa)
+    }
+}
+
 /// ADR-0088 Decision 12: one line's row as a reader sees it, with what the row alone does not say
 /// — whether it is a written row or the founding line synthesised from its class, and the payout
 /// payloads of the bonds its roles name (looked up from the bond registry at the same tip).
@@ -401,6 +425,12 @@ pub trait ConsensusApi: Send + Sync {
     /// input 0 of the next `wallet send`. Empty on every network that is not `ConsensusV2`.
     fn palw_locked_bond_outpoints_v2(&self) -> Vec<crate::tx::TransactionOutpoint> {
         Vec::new()
+    }
+
+    /// LIVE-R1 N2: the run of resolves that refused a heavier, fully validated candidate on the PALW
+    /// deep-reorg rule ([`PalwPartitionRefusalV1`]). `None` when the last resolve did not, and off V2.
+    fn palw_partition_refusal_v1(&self) -> Option<PalwPartitionRefusalV1> {
+        None
     }
 
     /// **ADR-0078 Decision 5: the chain's half of "verification belongs to the consumer".**
