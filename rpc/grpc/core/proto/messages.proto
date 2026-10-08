@@ -123,6 +123,11 @@ message KaspadRequest {
     GetPalwCapacityShadowRequestMessage getPalwCapacityShadowRequest = 1216;
     GetPalwStateProofRequestMessage getPalwStateProofRequest = 1218;
     GetPalwPanelV3StatusRequestMessage getPalwPanelV3StatusRequest = 1254;
+    GetPalwKernelClaimRequestMessage getPalwKernelClaimRequest = 1234;
+    GetPalwKernelRowsRequestMessage getPalwKernelRowsRequest = 1236;
+    GetPalwKernelFinalsRequestMessage getPalwKernelFinalsRequest = 1238;
+    GetPalwOnboardingRequestMessage getPalwOnboardingRequest = 1274;
+    GetPalwConformanceEvidenceRequestMessage getPalwConformanceEvidenceRequest = 1276;
   }
 }
 
@@ -245,6 +250,11 @@ message KaspadResponse {
     GetPalwCapacityShadowResponseMessage getPalwCapacityShadowResponse = 1217;
     GetPalwStateProofResponseMessage getPalwStateProofResponse = 1219;
     GetPalwPanelV3StatusResponseMessage getPalwPanelV3StatusResponse = 1255;
+    GetPalwKernelClaimResponseMessage getPalwKernelClaimResponse = 1235;
+    GetPalwKernelRowsResponseMessage getPalwKernelRowsResponse = 1237;
+    GetPalwKernelFinalsResponseMessage getPalwKernelFinalsResponse = 1239;
+    GetPalwOnboardingResponseMessage getPalwOnboardingResponse = 1275;
+    GetPalwConformanceEvidenceResponseMessage getPalwConformanceEvidenceResponse = 1277;
   }
 }
 

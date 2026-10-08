@@ -57,7 +57,7 @@ const BEFORE_THE_HORIZON: &[(&str, &str, &str, &str)] = &[
 /// Re-pinned 2026-09-25 (`rcore/exec-maturity-120`): testnet-12's 120-DAA execution-quantum maturity
 /// (`palw_exec_maturity_is_t12_only`) is in this twin — and so are c6ffd812's mainnet values, which the
 /// merge `2004c588` left un-re-pinned here. Previous: `fd7353c0…` / `a7fe561c…` / `28d866f1…`.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was 6ae62ed9…, d03277bb…)
+// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was a991bd82…, 0f02bad0…)
 const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
     "715b7894d2988224d15e2ae97fab907e5ee96638508d6fccf100314c85da9cf0",
     "9f267fb1794c366a70a9b9008773bc470f8d0ab03ebb0ca26e9a28eaacb70ab4",
@@ -71,7 +71,7 @@ const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
 /// (= `palw_exec_maturity_is_t12_only`'s `T12_WITH_THE_MATURITY`; at `2004c588` they were `2790d7ce…` /
 /// `1fd06c99…` / `e0af0218…`, which this pin never caught up with). Previous: `4d38b3f1…` / `2477a803…` /
 /// `06dd5566…`.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was b41089e3…, 34b0dc14…)
+// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2e567642…, 5f5df817…)
 const T12_WITH_THE_HORIZON: (&str, &str, &str) = (
     "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",

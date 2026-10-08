@@ -26,11 +26,11 @@
 
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1};
 use kaspa_consensus_core::config::params::{
-    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, PALW_T12_TIR_FENCE2_DAA,
+    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT13_DAA, PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, PALW_T12_TIR_FENCE2_DAA,
     PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_DAA, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,
     TESTNET11_PARAMS,
     devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_drill_params_v1, palw_t12_launch_params_v1,
-    palw_t12_arm_int11_flag_day_at_v1, palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params,
+    palw_t12_arm_int11_flag_day_at_v1, palw_t12_arm_int13_flag_day_at_v1, palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params,
     palw_t12_shipped_params,
 };
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
@@ -288,10 +288,14 @@ fn every_armed_row_is_its_pinned_row_with_the_ir_flag_day_at_2000() {
         }
         // …and the int-11 flag day, which builds on both and arms on every testnet-12 row at its own height.
         palw_t12_arm_int11_flag_day_at_v1(&mut rearmed, PALW_T12_INT11_FLAG_DAY_DAA);
+        // …and the int-13 list, which stands on the int-11 list's `palw_gen_v1`. It has no height (`PALW_T12_INT13_DAA` is `None`: the user
+        // cancelled the DAA-9,000 flag day on 2026-10-08), so this arms nothing and every testnet-12 row ships it dormant; if the future
+        // release gives it a height this line re-arms it with the others.
+        palw_t12_arm_int13_flag_day_at_v1(&mut rearmed, PALW_T12_INT13_DAA);
         assert_eq!(
             ids(&armed),
             ids(&rearmed),
-            "{name}: the pinned row with the IR flag day at {at}, the DAA-3,600 flag day at {day} and the int-11 flag day"
+            "{name}: the pinned row with the IR flag day at {at}, the DAA-3,600 flag day at {day}, the int-11 flag day and the int-13 flag day"
         );
         assert_ne!(ids(&armed).0, ids(&dormant).0, "{name}: the flag day moves the params id");
         assert_ne!(ids(&armed).2, ids(&dormant).2, "{name}: and the schedule id");

@@ -38,7 +38,7 @@ use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_
 /// `PALW_T12_POST_LAUNCH_FENCES_V1` (this one among them) at DAA 750, re-pinned by `scripts/t12-repin.sh`
 /// with it (the launch release was `b8564b88…` / `5de80e64…` / `93da24cc…`, which
 /// `palw_t12_launch_params_v1()` still hashes to): params, identity, schedule.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was b41089e3…, 34b0dc14…)
+// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2e567642…, 5f5df817…)
 const T12_RELEASE: (&str, &str, &str) = (
     "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",

@@ -80,10 +80,15 @@ wire/fence impact · test · real-node result · status.
 | Owner | Object tags | Delta numbers | Carriage tail | Fence |
 |---|---|---|---|---|
 | existing (pre) | positional ≤ 82, declared 83–95, 100–103 | … ≤ 150 (150 = lane MU seat root readiness) | 0x87–0xDA (see `PALW_CARRIAGE_*`), 0xE0, 0xE1, 0xE4, 0xE6, 0xEA, 0xEB | — |
-| RFC-0009 B/D (reserved, spec) | 150–153 | 140–141 | 0xE9 | provider court (unallocated) |
-| Kernel route (A, G14) | 110–119 | 160–169 | 0xEC | `palw_probabilistic_constraints_v1` (refused) |
+| RFC-0009 provider court (DA16) | **150–153 used** (lease, challenge, answer, transfer) | 140–141 **released** | 0xE9 **released** (rows ride kernel route aux 43–45, delta 160, tail 0xEC) | `palw_provider_court_v1` (dormant) |
+| Kernel route (A, G14) | 110–119 (110–112 used; **113 reserved for G14-R4** accusation seal, 2026-10-08) | 160–169 | 0xEC (aux tables: 36–38 onboarding, 39–40 OB-P0, **41–42 G14-R4** G14 chunk table) | `palw_probabilistic_constraints_v1` (refused) |
 | RFC-0010 V3 production fold (C2) | 120–129 (120 = `PanelBeaconProofV3`) | 170–179 (170–173 used) | 0xED | `palw_permissionless_panel_v1` (refused); `PalwVoidReasonV2` 120–129 (120–122 used; 0–10 implicit unchanged) |
 | EXEC payload v2 (A, later) | 130–139 | 180–189 | 0xEE | `palw_exec_payload_v2` (not yet declared) |
+| Onboarding objects (D phase 3) | 104–108 used (104 ArtifactBound, 105 refutation, 106 KernelBound, 107 ConformanceCommitted, 108 SignedRegistrationV1), 109 **used by OB-P0** `ConformanceEvidenceV1` (2026-10-08 18:10; aux tables 39 attempts / 40 evidence material used with it) | none (rows in the kernel route's aux tables 36–38, journalled by deltas 160/161) | none (tail 0xEC) | `palw_signed_registration_v1` (108; refused) |
+| RPC ops | C1 202–209 (202 used; 203 getPalwForkChoiceOpening (L2FC), 204–209 free), D 210–219 (210, 211, 212 used) and 230–239 (230 used; 231 used by OB-P0 `getPalwConformanceEvidence`, 232 unused), C2 220–229 (220 used), X8R 240–249 (RFC-0008 v2) | — | — | — |
+| Other fences (dormant) | `palw_provider_court_v1` (DA16), `palw_fork_choice_commitment_v1` (L2FC), `palw_tir_shard_segment_v2` (SHARD), `palw_typed_roots_v1` (R4X), `palw_task_heads_v1` (HFX) | — | — | — |
+| Kernel route inner kinds / ledger tables (inside tag 110) | inner discriminants: 12 SealClaim, 13/14 OPV mode, **15 G14-R4 accuser seal**, **16 CommitSegmentedClaim, 17 PostTiledJob, 18 PostPromptTile (K2S)**, **19 Spec (R4X, RFC-0004 Part II)** — no inner kind left; `ProsecutionV1` 3 Segmented (K2S), 4 Spec (R4X); `ClaimBodyV1` 2 Segmented (K2S), 3 Spec (R4X); kernel ledger tables 1–14 used, **15–19 G14-R4**, **20–21 K2S**, **22–24 R4X** (hashed only when non-empty); kernel route aux tables 36–38 onboarding, 39–40 OB-P0, 41–42 G14-R4, **43–45 DA16**; LedgerEventV1 21–24 G14-R4 (24 ServedDemandBondsBurned), 30 ProviderLiableDefault + 31 ProviderLapsed (DA16); SettlementKindV1 14–21 G14-R4 (21 ForfeitDemandBond); fence `palw_typed_roots_v1` (R4X, dormant, refused) | — | — | — |
+| `PalwVoidReasonV2` | C2 120–122; X8 one variant (assign an explicit number ≥ 130 at merge) | — | — | — |
 
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the
 skeleton first; lanes build on that commit.
@@ -99,6 +104,26 @@ skeleton first; lanes build on that commit.
 6. Real-node adversarial — C4; Lead runs the single final full regression.
 
 ## 4. Change log
+
+* 2026-10-08 night — **X8 (RFC-0008 v2) final, HELD out of the integration line until after the DAA-9,000 cut.** Branch
+  `rfc8/x8-exec-v2` (7 commits on `c931df046`; consensus lib 614/0/22, `t12_exec_v2_carriage` 10 green ×6). Fence `palw_exec_payload_v2`
+  None everywhere and unarmable (`PALW_EXEC_PAYLOAD_V2_ARMABLE = false`). Status: weightless carriage, gates, slice admission/expiry,
+  EXEC_TX permits, restart/replay/IBD/reorg — IMPLEMENTED_AND_TESTED behind the fence; RPC/producer DORMANT_NOT_INTEGRATED; verification
+  route, prosecution/DA, capacity/liveness drills EXTERNAL_GATE_PENDING; suffix void, relay backpressure CODE_GAP; flood residual,
+  schedule credit, post-Final liability, permit equivocation, anchoring-window strand DESIGN_GAP. **Why held:** ~8k lines including
+  un-gated pipeline paths (header pre/post-PoW validation, `deps_manager`, sync, orphan pool, coinbase) — an opus review of every path
+  the fence does not guard comes before it enters a release candidate; RFC-0008 is outside 9,000 by the user's §12 anyway.
+* 2026-10-08 night — **X12 (RFC-0012) integrated** (`9050b06bc` + test fixes `cd1abccb1`, `1c9532536`): zero-DNS matrix x0–x15 (evm
+  feature), evidence from deltas; fence `palw_dns_retirement_v1` dormant. D1 (first `safe` ≥ 5,400 DAA) analysed on
+  `rfc12/x12-safe-maturity` — user: no change now, not final; attack tests and RPC readiness reasons pending disk.
+* 2026-10-08 night — **C4 round 3 integrated** (`b2d43068f`): mandatory test 3 passes on the real node (Panel-licensed and OPV, node-less
+  relay path); F-C4R3-01(a) fixed; 01(b) → OB-P0; 02/03/05 + GAP-R7 + GAP-5 + GAP-11 → G14-R4; 04 → int-13 list frozen at the cut.
+  **C1r2 P1 integrated** (`7ddf22251`): `rfc9_v4_chain_e2e` (fence 4 end to end, miner offline, another builder redeems) and the drill's V4
+  leg (`audit-combined/rfc9-v4-leg.sh`, ≈19.5 h).
+
+* 2026-10-08 evening — integrated: lane D phases 2/2b/3 (kernel route + RFC-0015 OPV on the node, onboarding objects 104–108,
+  `palw_panel_free_v1` as a struct fence with the OPV admission list/terms, `palw_signed_registration_v1` for G-EXPIRY/G-RULESET,
+  RPC 210/211/212/230), C4 round-2 fixes, X15, lane A, R9's DAA-9,000 flag day (params `2e567642…`, schedule `5f5df817…`).
 
 * 2026-10-08 13:00 — **Correction (fence inventory of params.rs):** on testnet-12 the int-11 list ARMS at DAA 5,300 `palw_fp_decode_rules`
   (FP Job V4 / RFC-0001 §A), `palw_gen_v1` + `palw_fp_job_v5` (RFC-0003), `palw_improvement_v1` (RFC-0004), `palw_tir_shard_v1`

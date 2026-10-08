@@ -283,6 +283,23 @@ pub enum RpcApiOps {
     /// snapshot, certified-beacon state, assignment, retries and terminal reason — and the engine's overview, as one versioned
     /// JSON observation. Read-only: no rule reads it. Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwPanelV3Status = 220,
+    /// G14 lane D (kernel route; ops 210-219 are this lane's): one claim of the probabilistic-constraint route, everything public about
+    /// it — its lifecycle, the public record a fresh verifier is built from, the positions served on chain, the open demands, the
+    /// interim assignment — with the roots that anchor it. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwKernelClaim = 210,
+    /// G14 lane D: the kernel route's rows, a page at a time, with the committed ledger and aux roots (a reader that gathers every
+    /// page rebuilds the ledger and checks the root). Appended at the tail.
+    GetPalwKernelRows = 211,
+    /// G14 lane D / RFC-0015: every Final the kernel route holds, in canonical order, with the beacon's `WorkFinalEventV1` for it
+    /// (an OPV Final is `PanelIndependent`: the fact RFC-0010's Panel-assignment beacon needs). Appended at the tail.
+    GetPalwKernelFinals = 212,
+    /// G14 lane D phase 3 (this lane's 230-239): where a V2 class stands on the onboarding path — its artifact bindings (and their
+    /// refutation horizon), its kernel binding, its conformance commitment and the activation gate's verdict with the reason it holds.
+    /// Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwOnboarding = 230,
+    /// Onboarding P0 (the lead's allocation): a V2 class's conformance record, current attempt and posted evidence (aux tables 39 and
+    /// 40, raw), the network's challenge policy and the beacon state the node derives. Appended at the tail.
+    GetPalwConformanceEvidence = 231,
 }
 
 impl RpcApiOps {

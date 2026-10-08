@@ -217,6 +217,13 @@ pub struct ChainOutput {
     pub seat: Option<SeatInfo>,
     pub forecast: Option<Forecast>,
     pub notes: Vec<String>,
+    /// The pipeline class a report judged ([`super::pipeline`]); absent for an IR class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipeline: Option<super::pipeline::PipelineInfo>,
+    /// Why the mine stage was not judged when it cannot be (a pipeline class that was not declared or not admitted has no seat to
+    /// size): the stage is then `unknown` with this reason — never `ok` for want of a blocker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mine_not_judged: Option<String>,
 }
 
 impl ChainOutput {
@@ -224,7 +231,10 @@ impl ChainOutput {
     /// and possession exist only for a class that is on the chain.
     pub fn mine_verdict(&self, convert: &StageVerdict) -> StageVerdict {
         let _ = convert;
-        StageVerdict::of(self.mine.clone())
+        match &self.mine_not_judged {
+            Some(why) if self.mine.is_empty() => StageVerdict::unknown(why.clone()),
+            _ => StageVerdict::of(self.mine.clone()),
+        }
     }
 }
 
@@ -291,12 +301,15 @@ fn gate(params: &Params, bundle: &PalwConsensusParamsV2, class: &PalwTirClassV1,
 }
 
 /// A refusal of admission v10 as a blocker, with the code it has on the chain mapped to the preflight's.
-fn gate_blocker(e: &PalwClassAdmissionError, window_hint: &[String]) -> Blocker {
+pub(super) fn gate_blocker(e: &PalwClassAdmissionError, window_hint: &[String]) -> Blocker {
     use PalwClassAdmissionError as E;
     let on_chain = e.code();
     match e {
         E::TirNeedsItsFence => {
             Blocker::new(Stage::Register, "FENCE_NOT_ARMED", "palw_tir_v1 is not in force at this height").arg("palw_tir_v1")
+        }
+        E::GenNeedsItsFence => {
+            Blocker::new(Stage::Register, "FENCE_NOT_ARMED", "palw_gen_v1 is not in force at this height").arg("palw_gen_v1")
         }
         E::TirNeedsDissection { block, node } => Blocker::new(
             Stage::Register,

@@ -355,3 +355,78 @@ fn refusal_4_the_legacy_held_route_has_no_builder_for_24_recurrent_layers() {
         );
     }
 }
+
+// ───────────────────────────── every registration-time rule, at today's height ─────────────────────────────
+
+/// **The 9B text decoder at 8,192 positions against every registration-time rule of testnet-12 at DAA 7,000** (the fleet's height
+/// on 2026-10-08; `palw_held_context` armed from genesis), in the processor's order (`processor.rs`, the `ClassRegisteredTirV1` arm
+/// of the acceptance walk, then the fold). The stateful rules (target, signature, bond, slash value, activation window, exposure,
+/// duplicate) are the registrant's object's to satisfy and the lane-D E2E carries this class through them
+/// (`fixtures/g14/shipped/huihui-qwen3.5-9b-8k.json`); this test pins the class-dependent ones with their numbers.
+#[test]
+fn the_9b_8k_text_class_meets_every_class_rule_at_daa_7000() {
+    use kaspa_consensus_core::palw_tir_admission_v1::{PalwTirAdmissionRulesV1, palw_tir_carriable_close_bytes_v1};
+    let (params, bundle) = t12();
+    let daa = 7_000;
+    let p = program(8_192);
+    let c = class(&p, layout(&params, &p, 8_192, 256, 32, 298));
+    // 0. The IR fence is in force; no other fence moves between 5,585 and 9,000.
+    assert!(params.palw_tir_v1_fence().is_some_and(|f| f.activation.is_active(daa)));
+    assert!(params.fence_schedule_v1().iter().all(|h| *h <= 5_585 || *h >= 9_000));
+    // 1. Program bytes, decoded strictly.
+    assert_eq!(c.program.len(), 32_640);
+    let rules = PalwTirAdmissionRulesV1::at(&params, daa).expect("in force");
+    assert!(c.program.len() as u32 <= rules.fence.ceilings.max_program_bytes);
+    // 2. Not the held history bound: the GDN layers are `Fixed` states replayed from checkpoints (C = 298), never a held site —
+    //    ADR-0152 §4-ter C5 is the LEGACY arm's (`ClassRegistered`); the IR arm does not ask it.
+    assert_eq!(p.history_bound, misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL);
+    assert_eq!(p.states.iter().filter(|s| matches!(s.kind, misaka_palw_tir::program::StateKind::Fixed { .. })).count(), 2);
+    let processor = include_str!("../../consensus/src/pipeline/virtual_processor/processor.rs");
+    let arm =
+        processor.split("Obj::ClassRegisteredTirV1 { class_id, share_permille, admission, .. } => {").nth(1).expect("the IR arm");
+    let arm = &arm[..arm.find("Obj::FamilyCertified").expect("the next arm")];
+    assert!(!arm.contains("palw_held_class_is_attributable_v1"), "the IR arm asks C5 now: re-judge this class");
+    assert!(arm.contains("verify_class_admission_v10("));
+    // 3. Context within the program's bound and the network's (2^18).
+    assert!(8_192 <= rules.fence.ceilings.max_context);
+    // 5. The court window: the held clock, no model window at this height — the network's 3,000.
+    let court = rules.court.expect("the k-ary court is armed");
+    assert!(rules.held.armed && !rules.model_court_window_active);
+    assert_eq!(court.window_court_daa, 3_000);
+    // 6. J5b: the canonical prompt (1,023 ids) is within the inline bound (4,096).
+    assert_eq!(palw_tir_attempt_canonical_v1(&c), Some((1_023, 2)));
+    assert!(1_023 <= kaspa_consensus_core::palw_attempt_rules_v1::PALW_J5_INLINE_PROMPT_IDS_V1);
+    // 1–9. Admission v10 at this height admits it.
+    gate(&params, &bundle, &c, daa).unwrap_or_else(|e| panic!("{} ({e})", e.code()));
+    // 9. The carried closes: within the 3,200,000 bytes a close is carried in, the root claims within one carrier.
+    assert_eq!(palw_tir_carriable_close_bytes_v1(&bundle.court), 3_200_000);
+    // Share rule: no certified family covers the IR primitives on testnet-12, so the class registers at 0‰ (weightless, Dormant
+    // until certified) — required 0, which the object carries.
+    let reachable = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_reachable_prims_v1(&p);
+    let covered = kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v2(
+        bundle.court_e2e_root,
+        &kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1(),
+        &[],
+        &reachable,
+    )
+    .expect("priced");
+    assert!(covered.is_none(), "a certified family covers the IR primitives: the share rule now requires a nonzero share");
+    // Tooling, not consensus: the calibration-length rule (declare-layout and the runtime pack refuse a recurrent artifact that does
+    // not record a calibration as long as the context — the 9B must be calibrated on one sequence of at least 8,192 tokens).
+    let meta = |m: serde_json::Value| m;
+    assert!(misaka_palw_sdk::tir_layout::tir_calibration_covers_context_v1(&p, &meta(serde_json::json!({})), 8_192).is_err());
+    assert!(
+        misaka_palw_sdk::tir_layout::tir_calibration_covers_context_v1(
+            &p,
+            &meta(serde_json::json!({ "calibrated_context": 4_096 })),
+            8_192
+        )
+        .is_err()
+    );
+    misaka_palw_sdk::tir_layout::tir_calibration_covers_context_v1(
+        &p,
+        &meta(serde_json::json!({ "calibrated_context": 8_192 })),
+        8_192,
+    )
+    .expect("an 8,192-token calibration covers it");
+}

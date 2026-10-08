@@ -1,5 +1,7 @@
 # RFC index
 
+> **設計前提(ADR・RFC より上位)— [MISAKAの不可侵原則](../PRINCIPLES.md):** 確率的に検出し、公開証拠で局所化し、決定論的に裁き、経済的に不正を抑止する。この索引のすべての文書はこの前提の下にあり、衝突する場合は前提が優先する(2026-10-09)。
+
 **トークン名は Misaka、ticker は BILI。** アドレスの `misaka` 系プレフィックスと既存のチェーンID・コマンド・wire/API識別子は維持する。過去の実測・出力のMSKは旧表記として保存する（[ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)）。
 
 ## MISAKAの中核目標と設計の優先順位（2026-10-07）

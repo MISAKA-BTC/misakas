@@ -1417,6 +1417,35 @@ pub struct HfStorage {
     /// the serialised spec when empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub weights: BTreeMap<String, serde_json::Value>,
+    /// **`WEIGHT_ROTATION_HADAMARD_V1`** (COV-P1P2): the projections whose stored weights act on a ROTATED activation, keyed by the
+    /// HL role of the projection (`gdn.q`, `mlp.down`, `head`): `y = W'·(R·x)` with `R = blockdiag_k(H_B·diag(s_k))`, `H_B` the
+    /// normalised Sylvester–Hadamard matrix of order `block` and `s` the sign vector of the input's width. The transform is an
+    /// activation-side op of the model (`Op::BlockLinear`, param `rotation.fwd.{width}`), never folded into the weights, so the
+    /// stored integers stay the class's. Absent from the serialised spec when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub input_rotations: BTreeMap<String, RotationRef>,
+    /// The embedding table whose rows are stored rotated: the lookup's row `z` is restored as `h = R⁻¹·z`
+    /// (`blockdiag_k(diag(s_k)·H_B)`, param `rotation.inv.{width}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed_rotation: Option<RotationRef>,
+}
+
+/// One [`HfStorage::input_rotations`] entry: the Hadamard order and the width of the rotated activation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RotationRef {
+    pub block: usize,
+    pub width: usize,
+}
+
+impl RotationRef {
+    /// The param that holds the forward transform as `[width, block]` rows (row `k·block + i` is `H[i, ·]·diag(s_k)`).
+    pub fn fwd_param(&self) -> String {
+        format!("rotation.fwd.{}.{}", self.block, self.width)
+    }
+    /// The param that holds the inverse (`diag(s_k)·H`), rows as [`Self::fwd_param`].
+    pub fn inv_param(&self) -> String {
+        format!("rotation.inv.{}.{}", self.block, self.width)
+    }
 }
 
 fn one_shard() -> usize {

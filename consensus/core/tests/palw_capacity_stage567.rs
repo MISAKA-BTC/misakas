@@ -25,7 +25,7 @@ use kaspa_consensus_core::config::params::{
     PALW_T12_CAPACITY_RHO10_FENCES_V1, PALW_T12_CAPACITY_RHO100_STEP_3_V1, PALW_T12_CAPACITY_RHO250_STEP_4_V1,
     PALW_T12_CAPACITY_RHO1000_STEP_5_V1, PALW_T12_CAPACITY_RHO25_STEP_2_V1, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA,
     PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT11_RHO100_DAA, PALW_T12_INT11_RHO250_DAA, PalwPostLaunchFenceV1, palw_t12_arm_int11_flag_day_at_v1,
-    palw_t12_release_v5_params, palw_t12_shipped_params,
+    palw_t12_release_v5_params, palw_t12_release_v6_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::palw_aggregate_liability_v1::{PalwCapacityLiabilityV1, PalwCapacityStepOffsetV1};
@@ -123,8 +123,10 @@ fn the_release_arms_the_package_at_h_and_the_two_steps_at_the_directed_heights()
     for name in NAMES {
         assert!(names.contains(&name), "{name} is on the int-11 list");
     }
-    let shipped = palw_t12_shipped_params();
-    shipped.validate_palw_v2().expect("testnet-12 as shipped validates");
+    // The int-12 release (testnet-12 as shipped: the int-13 list is unscheduled — no DAA-9,000 flag day, user 2026-10-08 — and has its own
+    // suite: palw_t12_flag_day_9000).
+    let shipped = palw_t12_release_v6_params();
+    shipped.validate_palw_v2().expect("testnet-12 as the int-12 release ships it validates");
     for name in NAMES {
         assert_eq!(fence_at(&shipped, name), Some(H0), "{name} arms at H");
     }

@@ -96,7 +96,7 @@ fn honest(policy: &PostCommitChallengePolicyV1, history: &History) -> BeaconProo
     let WorkBeaconStateV1::Locked(beacon) = collect_work_beacon_v1(&context, &history.events, history.tip).unwrap() else {
         panic!("the history locks a beacon");
     };
-    BeaconProofV1 { epoch: request.epoch, output: Hash64::from_bytes(beacon.output), proof: borsh::to_vec(&beacon).unwrap() }
+    BeaconProofV1 { epoch: request.epoch, output: Hash64::from_bytes(beacon.output), proof: borsh::to_vec(beacon.beacon()).unwrap() }
 }
 
 /// A beacon built BY HAND from `sources`, as an adversary would: every accumulator, the anchor and the output computed correctly

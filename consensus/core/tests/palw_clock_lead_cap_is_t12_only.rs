@@ -59,7 +59,7 @@ const SIMNET_IDS: (&str, &str, &str) = (
 
 /// testnet-12 at `befb59dfe` (the mainnet-values commit's own pins: `1870bc1f…` / `6e193d30…` /
 /// `79563f51…`) — what testnet-12 is with the cap taken away: the cap is the only thing that moved it.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was 9d3a0096…, 4ae08484…)
+// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2d4d50dd…, 75261e0b…)
 const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
     "a928098725ed6533cdae313f39d5c32089720eeb1255a8d490ce1c06f4f47e19",
     "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
@@ -67,7 +67,7 @@ const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
 );
 
 /// testnet-12 as this change ships it — the ids a testnet-12 node on this build announces.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was b41089e3…, 34b0dc14…)
+// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 2e567642…, 5f5df817…)
 const T12_WITH_THE_CAP: (&str, &str, &str) = (
     "5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",

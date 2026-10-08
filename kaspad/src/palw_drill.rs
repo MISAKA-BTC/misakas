@@ -119,6 +119,9 @@ pub struct PalwDrillExtraFencesV1 {
     /// The int-11 flag day as the release arms it (`--palw-drill-int11-at`): the whole list at H', ρ = 100 at H' + 95 — instead of the
     /// per-fence flags of its entries, never with them.
     pub int11_at: Option<u64>,
+    /// The int-13 flag day as the release arms it (`--palw-drill-int13-at`): the whole list at H' — instead of the per-fence flag of its
+    /// entry that has one (`--palw-drill-model-court-at`), never with it.
+    pub int13_at: Option<u64>,
     /// testnet-12's fourth post-launch flag day (P0a, the GDN key-head count; `palw_gdn_key_heads`), `--palw-drill-fence4-at`: its own
     /// list, no prerequisite among the other fences.
     pub fence4_at: Option<u64>,
@@ -161,6 +164,7 @@ impl PalwDrillExtraFencesV1 {
             improve_at: args.palw_drill_improve_at,
             tir_shard_at: args.palw_drill_tir_shard_at,
             int11_at: args.palw_drill_int11_at,
+            int13_at: args.palw_drill_int13_at,
             fence4_at: args.palw_drill_fence4_at,
             class_seating_at: args.palw_drill_class_seating_at,
         }
@@ -190,6 +194,7 @@ impl PalwDrillExtraFencesV1 {
             || self.improve_at.is_some()
             || self.tir_shard_at.is_some()
             || self.int11_at.is_some()
+            || self.int13_at.is_some()
             || self.fence4_at.is_some()
             || self.class_seating_at.is_some()
     }
@@ -261,6 +266,11 @@ impl PalwDrillExtraFencesV1 {
             ("--palw-drill-improve-at", self.improve_at, "RFC-0004's improvement fence (palw_improvement_v1)"),
             ("--palw-drill-tir-shard-at", self.tir_shard_at, "RFC-0006's layer-sharded panels (palw_tir_shard_v1)"),
             ("--palw-drill-int11-at", self.int11_at, "the int-11 flag day's whole list (RFC-0003, RFC-0004, the capacity ramp to rho = 25 / 100)"),
+            (
+                "--palw-drill-int13-at",
+                self.int13_at,
+                "the int-13 flag day's whole list (palw_audit_1004_v1, the range twin, the model court window, palw_receipt_spend_v4)",
+            ),
         ]
         .into_iter()
         .find_map(|(flag, at, what)| at.map(|at| (flag, at, what)))
@@ -309,6 +319,14 @@ impl PalwDrillExtraFencesV1 {
                 ));
             }
         }
+        // The int-13 list's one entry with a per-fence flag: a second move of it would undo the first.
+        if self.int13_at.is_some() && self.model_court_at.is_some() {
+            return Err(
+                "--palw-drill-int13-at moves the int-13 flag day's whole list (palw_audit_1004_v1, the range twin, the model court window and \
+                 palw_receipt_spend_v4), and --palw-drill-model-court-at moves one of its entries: pick the combined crossing or the per-fence flag"
+                    .to_owned(),
+            );
+        }
         let mut moves = Vec::new();
         if let Some(at) = self.fence4_at {
             moves.extend(d::palw_drill_post_launch_fences_v4_at_v1(params, at).map_err(|e| format!("--palw-drill-fence4-at: {e}"))?);
@@ -322,6 +340,10 @@ impl PalwDrillExtraFencesV1 {
         // After the IR fences it needs below it, before the per-fence flags it excludes.
         if let Some(at) = self.int11_at {
             moves.extend(d::palw_drill_int11_at_v1(params, at).map_err(|e| format!("--palw-drill-int11-at: {e}"))?);
+        }
+        // The int-13 list needs the int-11 list's `palw_gen_v1` at or below it (the range twin): after it.
+        if let Some(at) = self.int13_at {
+            moves.extend(d::palw_drill_int13_at_v1(params, at).map_err(|e| format!("--palw-drill-int13-at: {e}"))?);
         }
         if let Some(at) = self.capacity_network_room_at {
             moves.extend(
@@ -492,6 +514,7 @@ impl PalwDrillExtraFencesV1 {
                 self.capacity2_marker_text(),
             ),
             ("useful_work_at=", "--palw-drill-useful-work-at", palw_drill_marker_fence_text_v1(self.useful_work_at)),
+            ("int13_at=", "--palw-drill-int13-at", palw_drill_marker_fence_text_v1(self.int13_at)),
         ]
     }
 
@@ -1161,6 +1184,7 @@ pub fn palw_drill_write_keyring_v4(
         "panel_liveness_at": extra.panel_liveness_at,
         "useful_work_at": extra.useful_work_at,
         "int11_at": extra.int11_at,
+        "int13_at": extra.int13_at,
         "improve_at": extra.improve_at,
         "tir_shard_at": extra.tir_shard_at,
         "fence4_at": extra.fence4_at,
@@ -1972,12 +1996,14 @@ mod tests {
             parse(&v.iter().map(String::as_str).collect::<Vec<_>>())
         };
         let release = config_of(&parsed(&[]));
-        assert_eq!(release.params.palw_model_court_window, None, "dormant on the release drill");
+        // The int-13 list (the window's carrier) has no height — the user cancelled the DAA-9,000 flag day on 2026-10-08 — so the window is
+        // dormant on every testnet-12 ruleset, a drill's included, until a flag arms it.
+        assert_eq!(release.params.palw_model_court_window, None, "dormant on the release drill: the int-13 list is unscheduled");
         assert_eq!(release.params.palw_tir_fence2, Some(ForkActivation::new(3_600)), "and fence2 alone is the DAA-3,600 flag day");
         // The DAA-3,600 flag day's drill flag moves fence2 alone and leaves the window dormant.
         let crossing = config_of(&parsed(&["--palw-drill-tir2-at=30"]));
         assert_eq!(crossing.params.palw_tir_fence2, Some(ForkActivation::new(30)));
-        assert_eq!(crossing.params.palw_model_court_window, None, "the DAA-3,600 flag day arms no court window");
+        assert_eq!(crossing.params.palw_model_court_window, release.params.palw_model_court_window, "the DAA-3,600 flag day moves no court window");
         assert_eq!(crossing.palw_drill_fence_moves.len(), release.palw_drill_fence_moves.len() + 1, "fence2, and nothing else");
         palw_drill_validate_args_v1(&parsed(&["--palw-drill-tir2-at=30"])).expect("with the IR fence below it");
         // The window flag arms it alone.
@@ -2480,6 +2506,103 @@ mod tests {
         let moved = PalwDrillExtraFencesV1 { panel_liveness_at: Some(70), ..Default::default() };
         let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), None, moved).unwrap_err();
         assert!(why.contains("--palw-drill-panel-liveness-at (recorded 60, now 70)"), "{why}");
+    }
+
+    /// **The int-13 flag day is ONE drill flag** (`--palw-drill-int13-at`): refused without the salt; with it MOVES `palw_audit_1004_v1`,
+    /// `palw_gen_range_twin_v1`, `palw_model_court_window` and `palw_receipt_spend_v4` ARMS them at its height (they are dormant on the
+    /// release: the user cancelled the DAA-9,000 flag day on 2026-10-08), mirrors included, and moves nothing else; refused, by the ruleset's own check and never a panic, while the int-11 list's `palw_gen_v1` is
+    /// above it (`--palw-drill-int11-at` below it); refused beside the per-fence `--palw-drill-model-court-at`, which would move one of its
+    /// entries a second time; the marker keeps its own line (`int13_at=`, `none` where a marker written before it has none) and a stored
+    /// chain is never reopened under another height; the keyring's manifest names it and announces the fingerprint the node on the same
+    /// command line announces.
+    #[test]
+    fn the_int13_list_is_one_drill_flag_that_needs_the_int11_list_below_it() {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        let a = salt();
+        let root = tempfile::tempdir().unwrap();
+        let marker_of = |dir: &Path| std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let salted = format!("--palw-drill-genesis-salt={SALT}");
+        let days = [
+            "--palw-drill-fence-at=6",
+            "--palw-drill-fence2-at=10",
+            "--palw-drill-fence3-at=14",
+            "--palw-drill-tir-at=20",
+            "--palw-drill-tir2-at=24",
+            "--palw-drill-int11-at=28",
+        ];
+        let parsed = |days: &[&str], extra: &[&str]| {
+            let v: Vec<String> =
+                base.iter().copied().chain([salted.as_str()]).chain(days.iter().copied()).chain(extra.iter().copied()).map(str::to_owned).collect();
+            parse(&v.iter().map(String::as_str).collect::<Vec<_>>())
+        };
+        let unsalted = parse(&["--testnet", "--netsuffix=12", "--palw-drill-int13-at=60"]);
+        let refused = palw_drill_validate_args_v1(&unsalted).unwrap_err().to_string();
+        assert!(refused.contains("--palw-drill-int13-at=60") && refused.contains("--palw-drill-genesis-salt"), "{refused}");
+
+        let without = config_of(&parsed(&days, &[]));
+        let with = config_of(&parsed(&days, &["--palw-drill-int13-at=60"]));
+        let list = ["palw_audit_1004_v1", "palw_gen_range_twin_v1", "palw_model_court_window", "palw_receipt_spend_v4"];
+        let height = |c: &Config, name: &str| c.params.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, f)| f);
+        for name in list {
+            assert_eq!(height(&without, name), None, "{name}: dormant on the release drill (the int-13 list is unscheduled)");
+            assert_eq!(height(&with, name), Some(ForkActivation::new(60)), "{name}: moved to the drill's height");
+        }
+        assert!(!with.params.palw_audit_1004_active_at(59) && with.params.palw_audit_1004_active_at(60));
+        assert!(!with.params.palw_gen_range_twin_active_at(59) && with.params.palw_gen_range_twin_active_at(60));
+        assert!(!with.params.palw_receipt_spend_v4_active_at(59) && with.params.palw_receipt_spend_v4_active_at(60));
+        assert_eq!(with.palw_drill_fence_moves.len(), without.palw_drill_fence_moves.len() + 4, "four fences moved, nothing else");
+        for (name, was) in without.params.palw_fences_v1() {
+            if !list.contains(&name) {
+                assert_eq!(height(&with, name), was, "{name} did not move");
+            }
+        }
+        with.params.validate_palw_v2().expect("the drill with the int-13 list at 60 validates");
+        palw_drill_validate_args_v1(&parsed(&days, &["--palw-drill-int13-at=60"])).expect("the int-13 flag day, over the int-11 list");
+
+        // The per-fence court-window flag would move one entry of the list a second time: refused by name.
+        let both = palw_drill_validate_args_v1(&parsed(&days, &["--palw-drill-int13-at=60", "--palw-drill-model-court-at=36"]))
+            .unwrap_err()
+            .to_string();
+        assert!(both.contains("--palw-drill-int13-at") && both.contains("--palw-drill-model-court-at"), "{both}");
+        // The range twin needs `palw_gen_v1` below it: with the int-11 list still at 5,300 a low height is refused, by name.
+        let no_int11 = &days[..5];
+        let why = palw_drill_validate_args_v1(&parsed(no_int11, &["--palw-drill-int13-at=60"])).unwrap_err().to_string();
+        assert!(why.contains("--palw-drill-int13-at") && why.contains("palw_gen_range_twin_v1"), "{why}");
+
+        // The marker names it on a line of its own and refuses another height over a stored chain.
+        let dir = root.path().join("x/misaka-testnet-12");
+        let set = PalwDrillExtraFencesV1 { int13_at: Some(60), ..Default::default() };
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), set).expect("created");
+        assert!(marker_of(&dir).contains("int13_at=60\n"), "{}", marker_of(&dir));
+        std::fs::create_dir_all(dir.join("datadir")).unwrap();
+        palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), set).expect("the same start");
+        let moved = PalwDrillExtraFencesV1 { int13_at: Some(70), ..Default::default() };
+        let why = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), moved).unwrap_err();
+        assert!(why.contains("--palw-drill-int13-at (recorded 60, now 70)"), "{why}");
+        let dropped = palw_drill_datadir_guard_v4(&dir, Some(&a), "g", Some(6), Some(10), Some(14), Some(20), PalwDrillExtraFencesV1::default())
+            .unwrap_err();
+        assert!(dropped.contains("--palw-drill-int13-at (recorded 60, now none)"), "dropped over a stored chain: {dropped}");
+        // A marker written by an older start counts as started without the flag.
+        let old = root.path().join("older/misaka-testnet-12");
+        palw_drill_datadir_guard_v3(&old, Some(&a), "g", Some(6), Some(10), Some(14), Some(20)).expect("an older start");
+        assert!(marker_of(&old).contains("int13_at=none\n"), "{}", marker_of(&old));
+
+        // The keyring names it, and the fingerprint is the one a node on the same command line announces.
+        let keys = tempfile::tempdir().unwrap();
+        let path = palw_drill_write_keyring_v4(
+            &a,
+            keys.path(),
+            Some(6),
+            Some(10),
+            Some(14),
+            Some(20),
+            PalwDrillExtraFencesV1 { tir2_at: Some(24), int11_at: Some(28), int13_at: Some(60), ..Default::default() },
+        )
+        .expect("written");
+        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(manifest["int13_at"], serde_json::json!(60));
+        assert_eq!(manifest["consensus_params_id"], with.params.consensus_params_id().to_string().as_str());
     }
 
     /// **RFC-0003's held leaf challenge is a drill flag of its own** (`--palw-drill-held-chunks-at`, decision 22,

@@ -1,6 +1,10 @@
 //! RFC-0012: deterministic, DNS-free native settlement. No production policy is assigned here.
 //! Inputs must come from one canonical, executed PALW snapshot; missing evidence never buys safety.
 
+use crate::palw_state_v2::{
+    PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwClaimStateV2, PalwDeltaEntryV2, PalwFpPricingV1, PalwStateDeltaV2,
+    PalwStateParamsV2, palw_fp_spend_weight_v1,
+};
 use crate::{Hash64, config::params::ForkActivation, subnets::*};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -107,61 +111,226 @@ pub struct MatureUsefulWorkV1 {
     pub work: u128,
 }
 
-/// Extract newly consumed certified FP slices from a root-verified canonical delta. A grant is
-/// not work credit by itself; each slice's canonical execution identity is counted once.
-pub fn mature_fp_slices_in_delta_v1(
-    state: &crate::palw_state_v2::PalwChainStateV2,
-    delta: &crate::palw_state_v2::PalwStateDeltaV2,
-    accepting_daa: u64,
-    accepting_blue: u64,
-    snapshot_daa: u64,
-    maturity_daa: u64,
-    pricing: &crate::palw_state_v2::PalwFpPricingV1,
-) -> Vec<MatureUsefulWorkV1> {
-    use crate::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2, PalwDeltaEntryV2, palw_fp_spend_weight_v1};
-    let mut facts = Vec::new();
+/// What one selected-chain block's PALW transition contributes to native-settlement evidence — a pure
+/// function of that block's delta, so it can be computed once per block hash and cached.
+///
+/// **Why the evidence is read from deltas and not from the sink's claims.** A terminal claim leaves
+/// PALW state at `terminal + claim_retirement` (3,000 DAA on testnet-12) while the producer's trace
+/// retention outlives it (`bind + receipt + challenge + court`, 5,400); a reader that only sees claims
+/// still held at the sink would see none of an ordinary claim's work at the DAA it matures. The delta of
+/// the block that finalized the claim (or spent a free-prompt slice) carries the full claim record, and
+/// deltas are kept for the whole selected chain above the pruning point.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NativeDeltaEvidenceV1 {
+    /// REAL (attempt) claims that entered `Final` in this block, with their record at `Final`.
+    pub finalized_attempts: Vec<(Hash64, PalwClaimStateV2)>,
+    /// Free-prompt claims whose spent set grew in this block: the record after the spend and the newly spent quanta.
+    pub fp_spends: Vec<(Hash64, PalwClaimStateV2, Vec<u32>)>,
+    /// Claims that entered `Voided` in this block. Evidence recorded for them anywhere on the chain is retracted
+    /// (a conviction after `Final` reverses it, `reverse_convicted_final`).
+    pub voided: Vec<Hash64>,
+}
+
+impl NativeDeltaEvidenceV1 {
+    pub fn is_empty(&self) -> bool {
+        self.finalized_attempts.is_empty() && self.fp_spends.is_empty() && self.voided.is_empty()
+    }
+}
+
+/// Read a block's native-settlement evidence out of its PALW delta. Entries are taken in application order;
+/// a claim touched twice in one block contributes each transition once.
+pub fn native_delta_evidence_v1(delta: &PalwStateDeltaV2) -> NativeDeltaEvidenceV1 {
+    let mut out = NativeDeltaEvidenceV1::default();
     for entry in &delta.entries {
-        let PalwDeltaEntryV2::Claim { key, old: Some(old), new: Some(new) } = entry else {
+        let PalwDeltaEntryV2::Claim { key, old, new: Some(new) } = entry else {
             continue;
         };
-        let (PalwClaimSourceV2::FreePrompt { spent: before, .. }, PalwClaimSourceV2::FreePrompt { spent: after, .. }) =
-            (&old.source, &new.source)
-        else {
-            continue;
-        };
-        let Some(claim) = state.claim(key) else {
-            continue;
-        };
+        let was_final = old.as_ref().is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. }));
+        let was_void = old.as_ref().is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::Voided { .. }));
+        match (&new.phase, &new.source) {
+            (PalwClaimPhaseV2::Voided { .. }, _) if !was_void => out.voided.push(*key),
+            (PalwClaimPhaseV2::Final { .. }, PalwClaimSourceV2::Attempt) if !was_final => {
+                out.finalized_attempts.push((*key, new.clone()))
+            }
+            (PalwClaimPhaseV2::Final { .. }, PalwClaimSourceV2::FreePrompt { spent: after, .. }) => {
+                let before = match old.as_ref().map(|c| &c.source) {
+                    Some(PalwClaimSourceV2::FreePrompt { spent, .. }) => spent.clone(),
+                    _ => Default::default(),
+                };
+                let fresh: Vec<u32> = after.difference(&before).copied().collect();
+                if !fresh.is_empty() {
+                    out.fp_spends.push((*key, new.clone(), fresh));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The sink-state facts the conversion from claim records to evidence needs.
+pub struct NativeFactRulesV1<'a> {
+    pub state: &'a PalwChainStateV2,
+    pub params: &'a PalwStateParamsV2,
+    /// `Params::palw_canonical_work_daa()`: a REAL attempt below it has no canonical weight and supplies none.
+    pub canonical_work_daa: Option<u64>,
+    /// The committed execution-quantum maturity window (DAA).
+    pub quantum_maturity_daa: u64,
+    /// Claims with a DA session open at the sink are not mature.
+    pub claims_with_open_da: &'a BTreeSet<Hash64>,
+}
+
+fn fp_slice_identity(work_id: &Hash64, index: u32) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).to_state();
+    h.update(b"MISAKA/native-settlement-slice/v1");
+    h.update(&work_id.as_bytes());
+    h.update(&index.to_le_bytes());
+    Hash64::from_bytes(*h.finalize().as_array())
+}
+
+/// Turn one block's extracted evidence into facts. `accepting` is that block's `(daa, blue)`. Missing information
+/// is never guessed: a bond the sink no longer holds, a claim without a canonical work id or weight, a floor
+/// claim, a claim in `voided` and a claim with an open DA session contribute nothing.
+///
+/// **Maturity** is the latest of the claim's trace retention (the producer's own obligation to keep the trace
+/// available), `final + claim_retirement` (after which no conviction can reverse the `Final`), and for a
+/// free-prompt slice its execution-quantum maturity after the spend. A fact is therefore never counted while
+/// the claim can still be convicted or its trace still be demanded.
+pub fn native_facts_of_block_v1(
+    rules: &NativeFactRulesV1<'_>,
+    evidence: &NativeDeltaEvidenceV1,
+    voided: &BTreeSet<Hash64>,
+    accepting: (u64, u64),
+) -> Vec<MatureUsefulWorkV1> {
+    native_facts_and_skips_v1(rules, evidence, voided, accepting).0
+}
+
+/// What [`native_facts_of_block_v1`] left out, counted per claim record in the block's evidence (a free-prompt record that
+/// spent several quanta is one record). Nothing here is evidence and nothing here moves a certificate: it exists so a reader
+/// can see that evidence was seen and NOT counted, and why — in particular `bond_not_held`, the retention gap of the bond
+/// registry (the bond a `Final` claim names has left the sink's state, so its operator cannot be named and its work is never
+/// guessed).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedEvidenceV1 {
+    /// The claim was convicted after `Final` (or is voided) — retracted.
+    pub voided: u64,
+    /// The floor (BASE-0) class: never evidence.
+    pub base_class: u64,
+    /// A data-availability session is open on the claim.
+    pub open_da: u64,
+    /// No canonical work identity / weight (or a free-prompt claim not priced in compute).
+    pub unpriced: u64,
+    /// The bond is no longer in the sink's state: the operator cannot be named.
+    pub bond_not_held: u64,
+}
+
+impl SkippedEvidenceV1 {
+    pub fn total(&self) -> u64 {
+        self.voided.saturating_add(self.base_class).saturating_add(self.open_da).saturating_add(self.unpriced).saturating_add(self.bond_not_held)
+    }
+    pub fn add(&mut self, other: &SkippedEvidenceV1) {
+        self.voided = self.voided.saturating_add(other.voided);
+        self.base_class = self.base_class.saturating_add(other.base_class);
+        self.open_da = self.open_da.saturating_add(other.open_da);
+        self.unpriced = self.unpriced.saturating_add(other.unpriced);
+        self.bond_not_held = self.bond_not_held.saturating_add(other.bond_not_held);
+    }
+}
+
+/// [`native_facts_of_block_v1`] with the accounting of what it skipped. The ONE implementation of the conversion: the plain
+/// function is this one with the counters dropped.
+pub fn native_facts_and_skips_v1(
+    rules: &NativeFactRulesV1<'_>,
+    evidence: &NativeDeltaEvidenceV1,
+    voided: &BTreeSet<Hash64>,
+    accepting: (u64, u64),
+) -> (Vec<MatureUsefulWorkV1>, SkippedEvidenceV1) {
+    let (accepting_daa, accepting_blue) = accepting;
+    let mut skipped = SkippedEvidenceV1::default();
+    let base = rules.params.base_class_id();
+    let retirement = rules.params.claim_retirement_daa();
+    let mut facts = Vec::new();
+    for (id, claim) in &evidence.finalized_attempts {
         let PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
             continue;
         };
-        let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source else {
-            continue;
-        };
-        if claim.class_id == pricing.base_class_id
-            || !pricing.prices_in_compute(claim)
-            || claim.trace_retention_daa > snapshot_daa
-            || state.da_sessions_iter().any(|((id, _), _)| id == key)
-        {
+        if voided.contains(id) {
+            skipped.voided += 1;
             continue;
         }
-        let Some(work_id) = claim.work_id else {
-            continue;
-        };
-        let Some(bond) = state.bond(&claim.bond) else {
-            continue;
-        };
-        let matured_daa = final_daa.max(accepting_daa.saturating_add(maturity_daa));
-        if matured_daa > snapshot_daa {
+        if claim.class_id == base {
+            skipped.base_class += 1;
             continue;
         }
-        for index in after.difference(before).filter(|index| spent.contains(index)) {
-            let mut h = blake2b_simd::Params::new().hash_length(64).to_state();
-            h.update(b"MISAKA/native-settlement-slice/v1");
-            h.update(&work_id.as_bytes());
-            h.update(&index.to_le_bytes());
+        if rules.claims_with_open_da.contains(id) {
+            skipped.open_da += 1;
+            continue;
+        }
+        let (identity, weight, bond) =
+            (claim.work_id, rules.state.palw_claim_canonical_weight_v1(claim, rules.canonical_work_daa), rules.state.bond(&claim.bond));
+        let (Some(identity), Some(work), Some(bond)) = (identity, weight, bond) else {
+            if bond.is_none() {
+                skipped.bond_not_held += 1;
+            } else {
+                skipped.unpriced += 1;
+            }
+            continue;
+        };
+        facts.push(MatureUsefulWorkV1 {
+            identity,
+            anchor: claim.accepted_block,
+            operator: bond.operator_id,
+            class: claim.class_id,
+            anchor_blue: claim.accepted_blue_score,
+            accepted_blue: claim.accepted_blue_score,
+            anchor_daa: claim.accepted_daa,
+            accepted_daa: claim.accepted_daa,
+            matured_daa: claim.trace_retention_daa.max(final_daa.saturating_add(retirement)),
+            work,
+        });
+    }
+    let pricing = PalwFpPricingV1::of(rules.params, rules.canonical_work_daa);
+    for (id, claim, fresh) in &evidence.fp_spends {
+        let PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
+            continue;
+        };
+        let PalwClaimSourceV2::FreePrompt { quanta, .. } = &claim.source else {
+            continue;
+        };
+        if voided.contains(id) {
+            skipped.voided += 1;
+            continue;
+        }
+        if claim.class_id == pricing.base_class_id {
+            skipped.base_class += 1;
+            continue;
+        }
+        if !pricing.prices_in_compute(claim) {
+            skipped.unpriced += 1;
+            continue;
+        }
+        if rules.claims_with_open_da.contains(id) {
+            skipped.open_da += 1;
+            continue;
+        }
+        let (work_id, bond) = (claim.work_id, rules.state.bond(&claim.bond));
+        let (Some(work_id), Some(bond)) = (work_id, bond) else {
+            if bond.is_none() {
+                skipped.bond_not_held += 1;
+            } else {
+                skipped.unpriced += 1;
+            }
+            continue;
+        };
+        let matured_daa = final_daa
+            .max(accepting_daa.saturating_add(rules.quantum_maturity_daa))
+            .max(claim.trace_retention_daa)
+            .max(final_daa.saturating_add(retirement));
+        let work = palw_fp_spend_weight_v1(rules.state, claim, *quanta, &pricing);
+        for index in fresh {
             facts.push(MatureUsefulWorkV1 {
-                identity: Hash64::from_bytes(*h.finalize().as_array()),
+                identity: fp_slice_identity(&work_id, *index),
                 anchor: claim.accepted_block,
                 operator: bond.operator_id,
                 class: claim.class_id,
@@ -170,11 +339,11 @@ pub fn mature_fp_slices_in_delta_v1(
                 anchor_daa: claim.accepted_daa,
                 accepted_daa: accepting_daa,
                 matured_daa,
-                work: palw_fp_spend_weight_v1(state, claim, *quanta, pricing),
+                work,
             });
         }
     }
-    facts
+    (facts, skipped)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -229,9 +398,87 @@ pub struct SettlementEvidenceV1 {
     pub work: u128,
 }
 
+/// Add-only accumulation of the facts that qualify for one effect. The single implementation of the
+/// evidence arithmetic: [`certify_native_effect_v1`] (the per-effect reference) and
+/// [`certify_native_prefix_v1`] (the O(N + F) sweep) both read their answer from it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct EvidenceAccumulatorV1 {
+    ids: BTreeSet<Hash64>,
+    pub(crate) anchors: u64,
+    operators: BTreeMap<Hash64, u128>,
+    classes: BTreeMap<Hash64, u128>,
+    pub(crate) max_operator: u128,
+    pub(crate) max_class: u128,
+    pub(crate) work: u128,
+    pub(crate) duplicate: bool,
+    pub(crate) overflow: bool,
+}
+
+impl EvidenceAccumulatorV1 {
+    pub(crate) fn add_fact(&mut self, f: &MatureUsefulWorkV1) {
+        if !self.ids.insert(f.identity) {
+            self.duplicate = true;
+            return;
+        }
+        if self.overflow {
+            return;
+        }
+        let Some(work) = self.work.checked_add(f.work) else {
+            self.overflow = true;
+            return;
+        };
+        let (Some(op), Some(class)) = (
+            self.operators.get(&f.operator).copied().unwrap_or(0).checked_add(f.work),
+            self.classes.get(&f.class).copied().unwrap_or(0).checked_add(f.work),
+        ) else {
+            self.overflow = true;
+            return;
+        };
+        self.work = work;
+        self.operators.insert(f.operator, op);
+        self.classes.insert(f.class, class);
+        self.max_operator = self.max_operator.max(op);
+        self.max_class = self.max_class.max(class);
+    }
+
+    /// A distinct anchor that is itself at or after the effect (counted once however many facts share it).
+    pub(crate) fn add_anchor(&mut self) {
+        self.anchors += 1;
+    }
+
+    /// The fact-dependent half of a certificate, in the reference order: a duplicated identity, then an
+    /// overflow, then depth, work and concentration.
+    pub(crate) fn evidence(&self, policy: PalwSettlementPolicyV1) -> Result<SettlementEvidenceV1, SettlementStopV1> {
+        use SettlementStopV1::*;
+        if self.duplicate {
+            return Err(DuplicateWork);
+        }
+        if self.overflow {
+            return Err(ArithmeticOverflow);
+        }
+        if self.anchors < policy.settled_anchor_depth {
+            return Err(InsufficientDepth);
+        }
+        if self.work < policy.unique_mature_work {
+            return Err(InsufficientWork);
+        }
+        for (max, limit) in [(self.max_operator, policy.max_operator_permille), (self.max_class, policy.max_class_permille)] {
+            // Division before multiplication is deliberately avoided; overflow fails closed.
+            let bound = self.work.checked_mul(limit as u128).ok_or(ArithmeticOverflow)?;
+            if max.checked_mul(1000).is_none_or(|scaled| scaled > bound) {
+                return Err(ConcentratedWork);
+            }
+        }
+        Ok(SettlementEvidenceV1 { depth: self.anchors, work: self.work })
+    }
+}
+
 /// One effect's certificate in executed-result order. The caller proves canonical membership,
 /// root verification, frontier coverage and the absence of unresolved lifecycle obligations.
 /// Heartbeat, floor and DNS weights are deliberately not accepted as evidence by this interface.
+///
+/// This is the per-effect REFERENCE: O(facts). The processor calls [`certify_native_prefix_v1`], which is tested
+/// equal to calling this once per effect.
 pub fn certify_native_effect_v1(
     policy: PalwSettlementPolicyV1,
     effect_order: (u64, u64),
@@ -259,42 +506,156 @@ pub fn certify_native_effect_v1(
     if !lifecycle_closed {
         return Err(OpenLifecycle);
     }
-    let mut ids = BTreeSet::new();
+    let mut acc = EvidenceAccumulatorV1::default();
     let mut anchors = BTreeSet::new();
-    let mut operators = BTreeMap::<Hash64, u128>::new();
-    let mut classes = BTreeMap::<Hash64, u128>::new();
-    let mut work = 0u128;
     for f in facts
         .iter()
         .filter(|f| f.accepted_daa >= effect_daa && f.accepted_blue >= effect_blue && f.matured_daa <= snapshot_daa && f.work > 0)
     {
-        if !ids.insert(f.identity) {
-            return Err(DuplicateWork);
-        }
+        acc.add_fact(f);
         if f.anchor_daa >= effect_daa && f.anchor_blue >= effect_blue {
             anchors.insert(f.anchor);
         }
-        work = work.checked_add(f.work).ok_or(ArithmeticOverflow)?;
-        for (map, key) in [(&mut operators, f.operator), (&mut classes, f.class)] {
-            let entry = map.entry(key).or_default();
-            *entry = entry.checked_add(f.work).ok_or(ArithmeticOverflow)?;
+    }
+    acc.anchors = anchors.len() as u64;
+    acc.evidence(policy)
+}
+
+/// **The lifecycle question, answered once for the whole chain.** An effect at blue score `b` is *closed* iff every claim
+/// accepted at or before `b` is resolved — `Voided`, or `Final` with its trace retention lapsed — and no data-availability session
+/// names a claim accepted at or before `b` (a session whose claim the state no longer holds is open for every effect: the dispute it
+/// records cannot be located, and an unlocatable dispute is not a closed one). A claim already retired is absent from the state and
+/// therefore closed.
+///
+/// Returns the first blue score at which an effect is NOT closed: `b` is closed iff `b < result` (`u64::MAX` when nothing is open).
+/// The O(chain x claims) form this replaces asked the question once per effect; this is one pass over the claims.
+///
+/// `claims` is `(accepted_blue_score, phase, trace_retention_daa)` for every claim the sink's state holds; `sessions` is, for every
+/// open DA session, the `accepted_blue_score` of its claim (`None` when the claim is not in the state).
+pub fn native_open_from_v1(
+    claims: impl IntoIterator<Item = (u64, PalwClaimPhaseV2, u64)>,
+    sessions: impl IntoIterator<Item = Option<u64>>,
+    sink_daa: u64,
+) -> u64 {
+    let open_claims = claims
+        .into_iter()
+        .filter(|(_, phase, retention)| {
+            !(matches!(phase, PalwClaimPhaseV2::Voided { .. })
+                || (matches!(phase, PalwClaimPhaseV2::Final { .. }) && *retention <= sink_daa))
+        })
+        .map(|(blue, _, _)| blue)
+        .min();
+    let open_sessions = sessions.into_iter().map(|claim_blue| claim_blue.unwrap_or(0)).min();
+    open_claims.into_iter().chain(open_sessions).min().unwrap_or(u64::MAX)
+}
+
+/// One executed effect on the selected chain, for [`certify_native_prefix_v1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeEffectV1 {
+    pub daa: u64,
+    pub blue: u64,
+    pub frontier_covers: bool,
+    pub lifecycle_closed: bool,
+}
+
+/// The certified prefix of a chain of executed effects, oldest first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativePrefixV1 {
+    /// Index (in `effects`) of the newest effect of the contiguous certified prefix.
+    pub safe: Option<usize>,
+    /// The certificate of that effect (`depth 0 / work 0` when there is none).
+    pub evidence: SettlementEvidenceV1,
+    /// Why the prefix ends, `None` when every effect certified.
+    pub stop: Option<SettlementStopV1>,
+}
+
+/// **Certify the longest contiguous prefix of `effects` (oldest first) in O(N log N + F log F)**, not one
+/// O(F) pass per effect: the facts that qualify for an effect only grow as the effect gets older, so one
+/// sweep from the newest effect to the oldest adds each fact once. A prefix never jumps an uncertified
+/// effect: the answer is the newest effect for which it and every older one certify, and the stop reason is
+/// that of the first uncertified effect. Equal to calling [`certify_native_effect_v1`] per effect
+/// (`rfc0012_prefix_sweep_equals_the_per_effect_reference`).
+pub fn certify_native_prefix_v1(
+    policy: PalwSettlementPolicyV1,
+    effects: &[NativeEffectV1],
+    snapshot_daa: u64,
+    facts: &[MatureUsefulWorkV1],
+) -> NativePrefixV1 {
+    use SettlementStopV1::*;
+    let n = effects.len();
+    let mut results: Vec<Result<SettlementEvidenceV1, SettlementStopV1>> = Vec::with_capacity(n);
+    let monotone = effects.windows(2).all(|w| w[0].daa <= w[1].daa && w[0].blue <= w[1].blue);
+    if !monotone || !policy.valid() {
+        // Not an ordered chain (or an unusable policy): the reference, one effect at a time.
+        for e in effects {
+            results.push(certify_native_effect_v1(
+                policy,
+                (e.daa, e.blue),
+                snapshot_daa,
+                true,
+                e.frontier_covers,
+                e.lifecycle_closed,
+                true,
+                facts,
+            ));
+        }
+    } else {
+        // Effect `i` is qualified by a position `(daa, blue)` iff `i <= below(daa, blue)`: the thresholds fall with `i`.
+        let below = |daa: u64, blue: u64| -> Option<usize> {
+            let by_daa = effects.partition_point(|e| e.daa <= daa);
+            let by_blue = effects.partition_point(|e| e.blue <= blue);
+            by_daa.min(by_blue).checked_sub(1)
+        };
+        let mut fact_at: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut anchor_first: BTreeMap<Hash64, usize> = BTreeMap::new();
+        let live: Vec<&MatureUsefulWorkV1> = facts.iter().filter(|f| f.matured_daa <= snapshot_daa && f.work > 0).collect();
+        for (k, f) in live.iter().enumerate() {
+            let Some(q) = below(f.accepted_daa, f.accepted_blue) else {
+                continue;
+            };
+            fact_at[q].push(k);
+            if let Some(qa) = below(f.anchor_daa, f.anchor_blue).map(|a| a.min(q)) {
+                let first = anchor_first.entry(f.anchor).or_insert(qa);
+                *first = (*first).max(qa);
+            }
+        }
+        let mut anchor_at: Vec<u64> = vec![0; n];
+        for first in anchor_first.values() {
+            anchor_at[*first] += 1;
+        }
+        let mut acc = EvidenceAccumulatorV1::default();
+        results.resize(n, Err(InvalidPolicy));
+        for i in (0..n).rev() {
+            for k in &fact_at[i] {
+                acc.add_fact(live[*k]);
+            }
+            for _ in 0..anchor_at[i] {
+                acc.add_anchor();
+            }
+            let e = effects[i];
+            results[i] = if !e.frontier_covers {
+                Err(FrontierNotCovered)
+            } else if !e.lifecycle_closed {
+                Err(OpenLifecycle)
+            } else {
+                acc.evidence(policy)
+            };
         }
     }
-    let depth = anchors.len() as u64;
-    if depth < policy.settled_anchor_depth {
-        return Err(InsufficientDepth);
-    }
-    if work < policy.unique_mature_work {
-        return Err(InsufficientWork);
-    }
-    for (map, limit) in [(&operators, policy.max_operator_permille), (&classes, policy.max_class_permille)] {
-        // Division before multiplication is deliberately avoided; overflow fails closed.
-        let bound = work.checked_mul(limit as u128).ok_or(ArithmeticOverflow)?;
-        if map.values().any(|v| v.checked_mul(1000).is_none_or(|scaled| scaled > bound)) {
-            return Err(ConcentratedWork);
+    let mut out = NativePrefixV1 { safe: None, evidence: SettlementEvidenceV1::default(), stop: None };
+    for (i, r) in results.into_iter().enumerate() {
+        match r {
+            Ok(e) => {
+                out.safe = Some(i);
+                out.evidence = e;
+            }
+            Err(stop) => {
+                out.stop = Some(stop);
+                break;
+            }
         }
     }
-    Ok(SettlementEvidenceV1 { depth, work })
+    out
 }
 
 #[cfg(test)]
@@ -434,6 +795,170 @@ mod tests {
             base.palw_dns_retirement = Some(changed);
             assert_ne!(assigned.0, base.consensus_params_id());
             assert_ne!(assigned.1, base.consensus_schedule_id());
+        }
+    }
+
+    /// The sweep is the per-effect reference, effect for effect, over random chains, facts, duplicates, overflows,
+    /// equal-DAA groups, anchors older than their work and flags: 20,000 instances, deterministic.
+    #[test]
+    fn rfc0012_prefix_sweep_equals_the_per_effect_reference() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move |m: u64| -> u64 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % m
+        };
+        let mut seen: BTreeMap<String, u32> = BTreeMap::new();
+        for case in 0..20_000u32 {
+            let n = 1 + next(8) as usize;
+            let (mut daa, mut blue) = (next(5), next(3));
+            let effects: Vec<NativeEffectV1> = (0..n)
+                .map(|_| {
+                    daa += next(3); // equal-DAA groups
+                    blue += 1 + next(2);
+                    NativeEffectV1 { daa, blue, frontier_covers: next(8) != 0, lifecycle_closed: next(8) != 0 }
+                })
+                .collect();
+            let policy = PalwSettlementPolicyV1 {
+                settled_anchor_depth: 1 + next(2),
+                unique_mature_work: 1 + next(12) as u128,
+                max_operator_permille: [300, 500, 1000][next(3) as usize],
+                max_class_permille: [400, 700, 1000][next(3) as usize],
+            };
+            let snapshot_daa = daa + next(4);
+            let facts: Vec<MatureUsefulWorkV1> = (0..4 + next(20))
+                .map(|_| {
+                    let accepted_daa = next(daa + 3);
+                    let accepted_blue = next(blue + 3);
+                    MatureUsefulWorkV1 {
+                        identity: h(1 + if next(7) == 0 { 0 } else { next(40) }),
+                        anchor: h(100 + next(6)),
+                        operator: h(200 + next(3)),
+                        class: h(300 + next(2)),
+                        anchor_blue: next(accepted_blue + 1),
+                        accepted_blue,
+                        anchor_daa: next(accepted_daa + 1),
+                        accepted_daa,
+                        matured_daa: next(snapshot_daa + 3),
+                        work: match next(20) {
+                            0 => 0,
+                            1 => u128::MAX / 3,
+                            _ => 1 + next(15) as u128,
+                        },
+                    }
+                })
+                .collect();
+            let swept = certify_native_prefix_v1(policy, &effects, snapshot_daa, &facts);
+            let mut expected = NativePrefixV1 { safe: None, evidence: SettlementEvidenceV1::default(), stop: None };
+            for (i, e) in effects.iter().enumerate() {
+                match certify_native_effect_v1(
+                    policy,
+                    (e.daa, e.blue),
+                    snapshot_daa,
+                    true,
+                    e.frontier_covers,
+                    e.lifecycle_closed,
+                    true,
+                    &facts,
+                ) {
+                    Ok(ev) => {
+                        expected.safe = Some(i);
+                        expected.evidence = ev;
+                    }
+                    Err(stop) => {
+                        expected.stop = Some(stop);
+                        break;
+                    }
+                }
+            }
+            assert_eq!(swept, expected, "case {case}: effects {effects:?} facts {facts:?} policy {policy:?} at {snapshot_daa}");
+            *seen.entry(format!("{:?}/{}", swept.stop, swept.safe.is_some())).or_default() += 1;
+        }
+        // The instances are not all one shape: every stop reason and a certified prefix both occur.
+        for stop in [
+            "DuplicateWork",
+            "ArithmeticOverflow",
+            "InsufficientDepth",
+            "InsufficientWork",
+            "ConcentratedWork",
+            "FrontierNotCovered",
+            "OpenLifecycle",
+        ] {
+            assert!(seen.keys().any(|k| k.contains(stop)), "no instance stopped at {stop}: {seen:?}");
+        }
+        let certifying: u32 = seen.iter().filter(|(k, _)| k.ends_with("true")).map(|(_, v)| *v).sum();
+        assert!(certifying > 500 && seen.get("None/true").copied().unwrap_or(0) > 20, "certifying instances: {seen:?}");
+    }
+
+    #[test]
+    fn rfc0012_certify_precedence_is_duplicate_then_overflow_then_depth_work_concentration() {
+        let policy = PalwSettlementPolicyV1 {
+            settled_anchor_depth: 1,
+            unique_mature_work: 1,
+            max_operator_permille: 1000,
+            max_class_permille: 1000,
+        };
+        let fact = |id: u64, work: u128| MatureUsefulWorkV1 {
+            identity: h(id),
+            anchor: h(id),
+            operator: h(id),
+            class: h(id),
+            anchor_blue: 10,
+            accepted_blue: 10,
+            anchor_daa: 10,
+            accepted_daa: 10,
+            matured_daa: 0,
+            work,
+        };
+        let big = u128::MAX / 2 + 1;
+        let order = |facts: &[MatureUsefulWorkV1]| certify_native_effect_v1(policy, (10, 10), 20, true, true, true, true, facts);
+        // Both orders of the same three facts report the duplicate before the overflow.
+        let (a, b, dup) = (fact(1, big), fact(2, big), fact(1, 1));
+        assert_eq!(order(&[a, b, dup]), Err(SettlementStopV1::DuplicateWork));
+        assert_eq!(order(&[dup, a, b]), Err(SettlementStopV1::DuplicateWork));
+        assert_eq!(order(&[a, b]), Err(SettlementStopV1::ArithmeticOverflow));
+    }
+
+    /// The one-pass lifecycle answer equals the per-effect question it replaced, over random claim sets and DA sessions.
+    #[test]
+    fn rfc0012_open_from_equals_the_per_effect_lifecycle_question() {
+        use crate::palw_state_v2::PalwVoidReasonV2;
+        let mut seed = 0xD1B5_4A32_D192_ED03u64;
+        let mut next = move |m: u64| -> u64 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % m
+        };
+        for case in 0..5_000u32 {
+            let sink_daa = 50 + next(100);
+            let claims: Vec<(u64, PalwClaimPhaseV2, u64)> = (0..next(9))
+                .map(|_| {
+                    let phase = match next(5) {
+                        0 => PalwClaimPhaseV2::Provisional,
+                        1 => PalwClaimPhaseV2::PanelBound { bound_daa: 1 },
+                        2 => PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1 },
+                        3 => PalwClaimPhaseV2::Final { final_daa: 1 },
+                        _ => PalwClaimPhaseV2::Voided { voided_daa: 1, reason: PalwVoidReasonV2::BindTimeout },
+                    };
+                    (1 + next(40), phase, 30 + next(140))
+                })
+                .collect();
+            let sessions: Vec<Option<u64>> = (0..next(3)).map(|_| if next(4) == 0 { None } else { Some(1 + next(40)) }).collect();
+            let open_from = native_open_from_v1(claims.iter().cloned(), sessions.iter().cloned(), sink_daa);
+            for blue in 0..45u64 {
+                let reference = claims.iter().all(|(accepted, phase, retention)| {
+                    *accepted > blue
+                        || (matches!(phase, PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. })
+                            && (matches!(phase, PalwClaimPhaseV2::Voided { .. }) || *retention <= sink_daa))
+                }) && sessions.iter().all(|claim| claim.is_some_and(|accepted| accepted > blue));
+                assert_eq!(
+                    blue < open_from,
+                    reference,
+                    "case {case}: blue {blue}, open_from {open_from}, claims {claims:?}, sessions {sessions:?}"
+                );
+            }
         }
     }
 

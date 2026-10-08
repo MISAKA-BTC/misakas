@@ -60,6 +60,7 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                         c.macs_fixed += l.rank as u64 * (inp + out);
                     }
                 }
+                Op::BlockLinear { block } => c.macs_fixed += out * *block as u64,
                 Op::Attention { heads, head_dim, v_head_dim, window, .. } => {
                     let per = (*heads * (*head_dim + *v_head_dim)) as u64;
                     match window {

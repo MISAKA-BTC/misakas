@@ -35,7 +35,7 @@ fn ids(p: &Params) -> (String, String, String) {
 ///
 /// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
 /// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was 4db7c459…, cc6dd90f…)
+// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was d445125c…, 27ad3cf4…)
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
     "b272e2f5f7adcacc8e3b7ef5121f2223a04ed50a7a0ec6ad5a3ffde3ebb066ad",
     "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",

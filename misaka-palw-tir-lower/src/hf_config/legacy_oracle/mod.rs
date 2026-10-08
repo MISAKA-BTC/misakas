@@ -548,6 +548,8 @@ impl P<'_> {
                 quant: None,
                 table_shards: 1,
                 weights: Default::default(),
+                input_rotations: Default::default(),
+                embed_rotation: None,
             },
             notes: std::mem::take(&mut self.notes),
             prefix_lm: false,

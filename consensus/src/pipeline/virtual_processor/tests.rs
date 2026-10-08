@@ -16837,6 +16837,8 @@ mod t12_tir_registration_cap;
 // G14 lane D: a model registration on the REAL consensus path against the offline gate (preflight parity, adversarial
 // registrations, mempool -> template -> fold -> persisted tip -> ConsensusApi reads, replay and reorg).
 mod g14_registration_e2e;
+// G14 lane D phase 2: the kernel route folded into PalwChainStateV2 -- a covered lie convicted by a fresh outsider through the real node path.
+mod g14_kernel_route_e2e;
 // RFC-0002 Phase F's second IR fence: the IR step-leaf DA demand at the gate.
 mod t12_tir_da_step_gate;
 // RFC-0004 A4/A5: the material objects' and the candidate's signatures at the gate, and a licence
@@ -16914,12 +16916,25 @@ mod t12_seat_maturity_fence;
 // testnet-12's post-launch release (int-4): EVERY fence of PALW_T12_POST_LAUNCH_FENCES_V1 at one
 // height, crossed by one chain with the clock running — the combined crossing no lane ran alone.
 mod t12_post_launch_fences_combined;
+// testnet-12's int-13 list (armed explicitly at a test height; the DAA-9,000 flag day was cancelled by the user on 2026-10-08): the four tier-1 fences of PALW_T12_INT13_FENCES_V1 at one height over the
+// whole compressed release, crossed by one chain with the clock running — below the fence a released node, past it the list live, a second
+// node and a restart across the fence agreeing, the fork id keeping and refusing the released build.
+mod t12_int13_flag_day_crossing;
+// RFC-0009 mandatory adversarial test 4 at chain-block level (lane C1r2, fence 4 of the int-13 list): the miner's free-prompt claim is
+// verified from independent DA providers, reaches Final, and ANOTHER builder's PFS4 block redeems it into the miner's payout while the
+// miner is offline — single use, a reorg, a V3 counterfactual twin and a replaying node, all through the real pipeline.
+mod rfc9_v4_chain_e2e;
 // Lane F2-lock (post-launch, 2026-09-27): `palw_final_lock_life_retro` crossed on a real chain — the crossing
 // block re-dates the long post-Final seat locks to max(F + 1,000, H), a Final past it dates exactly.
 mod t12_f2_lock_redate_crossing;
 // ADR-0152 §8.2 / T53 (P2-12): what a testnet-12 drill chain produces — a registration and its
 // carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
 mod t53_drill_isolation;
+
+// RFC-0012: the private zero-DNS acceptance matrix (lane X12). It drives the EVM lane (deposits, sells, withdrawals), so it builds
+// with the `evm` feature only, like `p2_evm_twin`.
+#[cfg(feature = "evm")]
+mod rfc12_zero_dns_matrix;
 
 /// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
 /// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`

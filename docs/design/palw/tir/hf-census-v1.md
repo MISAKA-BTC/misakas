@@ -46,7 +46,7 @@ a `FAIL` every later gate is `NOT_RUN_AFTER_<GATE>`. A gate that cannot be decid
 `NOT_RUN` with its reason: `NOT_RUN_NOT_SAMPLED` (only the listing was read), `NOT_RUN_NEEDS_WEIGHTS` (pack; a diffusers route
 that lowers from weights), `NOT_RUN_NEEDS_TENSOR_DATA` (a GGUF whose mapping reads a small tensor's data, e.g. Llama-3's
 `rope_freqs.weight`, which this census's network policy does not read), `NOT_RUN_PIPELINE_ADMISSION` (an RFC-0003 pipeline
-class: the census does not run the pipeline registration admission at the shape depth), `NOT_RUN_NEEDS_CHAIN` (seat, final).
+class whose admission cannot be asked from headers: since 2026-10-08 an encoder–decoder is asked — `preflight::pipeline`, §4d — and this code stays for a route this build cannot declare shape-only, `PIPELINE_CLASS_UNDECLARED`, and for embedding / image classes), `NOT_RUN_NEEDS_CHAIN` (seat, final).
 
 ### 2.1 The codes
 
@@ -155,6 +155,34 @@ each, backs off on 429/5xx, sends no token (a token on this machine is not read:
 2. **The lowered history window** was the program's history bound; a class declared at C positions is now lowered with
    `max_window = C` (`ADMISSION_EXCEEDS(max_state_bytes|max_position_macs)` was this).
 3. **The DA-answerability twin** read the flag day's height too. All three are off-chain (SDK) changes; no consensus rule changed.
+
+## 4d. The coverage census of 2026-10-08: primary blockers in the Model Onboarding buckets, two denominators (COV-P4)
+
+`tools/hf_census/{buckets,compact_rows,shadow_dirs,coverage_report,render_coverage,assemble_evidence}.py`; report `hf-census-report-2026-10-08.md`,
+evidence `docs/rfc/evidence/0011-hf-census-coverage-2026-10-08.json` (arithmetic checked by `0011-census-coverage-check.mjs`).
+
+* **One primary blocker per repository** (RFC-0011 §16.4), in the user's buckets: `MISSING_WEIGHTS`, `GATED`, `ADAPTER_BASE_MISSING`, `FRONTEND`,
+  `NEW_KERNEL`, `QUANT_FORMAT`, `RESOURCE`, `UNTESTED`, and a ninth, `NO_MODEL_TASK` (no declared task and no configuration naming a model class,
+  or no readable configuration). `buckets.py` is the one table (census code → bucket → the earlier analysis's dimension: `external`,
+  `feature-only`, `frontend-only`, `protocol-envelope`, `untested`); a `NOT_RUN_*` code is `UNTESTED` and is never a pass. External = the first
+  three and `NO_MODEL_TASK`; software-closable = the other five (`NEW_KERNEL` needs a consensus flag day, `RESOURCE` a rule or a new route).
+* **Denominator (b), `D_b`** = `D_all` minus the external buckets: weights present and complete, public and not gated, an adapter's base pinned in
+  the snapshot, a model task or a configuration naming a model class. The listing-decided part is exact from the snapshot; the part only a header
+  decides (an unreachable repository, an unreadable header, an incomplete shard, a missing configuration) is estimated from the sample. The rate over
+  `D_b` is a ratio estimator (linearised variance, Korn–Graubard bound). The ceiling of any rate over `D_all` is `|D_b| / |D_all|`.
+* **The sample is the method's, re-judged.** The sampled repositories' fetched directories are re-read with the current listing record
+  (`shadow_dirs.py`: symlinks plus a fresh `listing.json`; the fetched directories are never written) and judged at the shape depth, at each ruleset,
+  by `palw-class census gates`. No header is fetched.
+* **One refinement of the estimator, stated.** The baseline's three bucket cohorts (n = 150 each) estimate their frames; here a frame member that
+  the current tree's *listing* already decides is counted exactly, and the cohort estimates only the members the listing leaves undecided,
+  post-stratified by the listing verdict's cell (`NOT_RUN_NOT_SAMPLED` / `NOT_RUN_NEEDS_PICKLE_DIRECTORY`). A cell with frame members and no cohort
+  member is counted as not passing (`NOT_SAMPLED_CELL`). The plain expansion of §4b is computed beside it (`plain_method`); on update 2's rows the two
+  agree within one standard error.
+* **An encoder–decoder with no declared positions is declared at 512** (`ENCDEC_ASSUMED_CONTEXT`), not the IR decoders' assumed 8,192, where its
+  encoder's attention scores exceed a node's 2^28 elements. A pipeline class is judged by the generative admission (`preflight::pipeline`), not left
+  `NOT_RUN_PIPELINE_ADMISSION`; a route this build cannot declare shape-only keeps that code.
+* **Rulesets.** `--height 6900` (testnet-12 today) and `--height 9000` (the first height at which every scheduled fence is in force:
+  `palw_model_court_window`, `palw_gen_range_twin_v1`, `palw_receipt_spend_v4`, `palw_audit_1004_v1`).
 
 ## 5. Feasibility of the RFC's "header preflight for every `D_all` entry"
 

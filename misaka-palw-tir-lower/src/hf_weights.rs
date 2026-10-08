@@ -297,6 +297,9 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     for d in &prog.params {
         srcs.push(match overrides.get(&d.name) {
             Some(expr) => expr.clone(),
+            // `WEIGHT_ROTATION_HADAMARD_V1`: the rotation's blocks are a tensor of the checkpoint's view under the param's own name
+            // (computed from the checkpoint's declared transform and signs, `gguf::GgufModel`), never a model weight.
+            None if d.name.starts_with("rotation.") => Src::t(d.name.clone()),
             None => m
                 .out
                 .get(&d.name)

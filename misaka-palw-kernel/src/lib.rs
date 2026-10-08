@@ -96,6 +96,7 @@ pub mod plan;
 pub mod public;
 pub mod receipt;
 pub mod route;
+pub mod rows;
 pub mod settle;
 pub mod state;
 pub mod trace;

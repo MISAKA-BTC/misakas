@@ -7,9 +7,12 @@
 //! RFC-0014/ADR-0173 public-prosecution gate and the 9B-8k / long-context measurements gate any proposal to arm it.
 //!
 //! **Dormant**: `None` on every preset and in no flag-day list; hashed Some-only into `consensus_params_id` and
-//! `consensus_schedule_id`, collapsed whole from `Some(never())`, its activation alone visited by `for_each_fence`. Nothing in
-//! consensus reads it. Arming it is refused by [`Params::validate_palw_probabilistic_constraints_v1`]: an unknown kernel is never
-//! success, so a network cannot switch on a route this binary has no acceptance rule for.
+//! `consensus_schedule_id`, collapsed whole from `Some(never())`, its activation alone visited by `for_each_fence`. Since G14 lane D
+//! the virtual processor reads it: where it is in force, kernel route objects (tags 110–119) and onboarding objects (104–108) are
+//! folded into `PalwChainStateV2` with their rows, deltas, tail 0xEC and root (`g14_kernel_route_e2e`, `g14_registration_e2e`);
+//! below it they are dropped by name and the block stands. Arming it is still refused by
+//! [`Params::validate_palw_probabilistic_constraints_v1`]: the acceptance rule exists, but the gates above (and the funded reward,
+//! the shadow comparison and the measurements) do not, so no network can switch it on yet.
 
 use crate::config::params::{ForkActivation, Params};
 use crate::palw_mode_v2::PalwModeV2Error;

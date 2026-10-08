@@ -131,6 +131,11 @@ mod palw_held_close_fold_v1;
 mod palw_vertex_fold_v1;
 #[path = "palw_mesh_fold_v1.rs"]
 mod palw_mesh_fold_v1;
+#[path = "palw_kernel_route_fold_v1.rs"]
+mod palw_kernel_route_fold_v1;
+// G14 lane D phase 3: the onboarding objects' fold arms (artifact binding and refutation, kernel binding, conformance commitment).
+#[path = "palw_onboarding_fold_v1.rs"]
+mod palw_onboarding_fold_v1;
 // RFC-0001 §2.10 (ADR-0163): the adapter class listing's fold arm — a child module for the same reason.
 #[path = "palw_adapter_class_fold_v1.rs"]
 mod palw_adapter_class_fold_v1;
@@ -3785,7 +3790,7 @@ pub fn palw_anchor_ring_prune_count_v1(ring: &[u64], now_daa: u64, horizon_daa: 
 /// delay elapsed while that lock was still live: up to a whole seat's collateral of liability
 /// that nothing could recover (`dos_l1_q4b`).
 pub fn palw_bond_backs_live_duty_v1(state: &PalwChainStateV2, key: &PalwBondKeyV2, now_daa: u64, depth: Option<u64>) -> bool {
-    if state.reserved_exposure(key) > 0 {
+    if state.reserved_exposure(key) > 0 || state.kernel_reserved(key) > 0 || state.onboarding_reserved(key) > 0 {
         return true;
     }
     let settled_now = state.settled_attempt_finals;
@@ -3822,7 +3827,7 @@ pub fn palw_bond_backs_live_duty_v2(
     depth: Option<u64>,
     window_court: u64,
 ) -> bool {
-    if state.reserved_exposure(key) > 0 {
+    if state.reserved_exposure(key) > 0 || state.kernel_reserved(key) > 0 || state.onboarding_reserved(key) > 0 {
         return true;
     }
     let settled_now = state.settled_attempt_finals;
@@ -4080,7 +4085,13 @@ pub fn palw_bond_committed_v1(
         .filter(|((_, claim_id), lock)| palw_lock_is_committed_v1(state, claim_id, lock, now_daa, escaped_depth, window_court))
         .map(|((_, claim_id), lock)| lock.amount.saturating_sub(palw_seat_duty_of_v1(state, claim_id, bond)))
         .fold(0u128, u128::saturating_add);
-    state.reserved_exposure(bond).saturating_add(state.registration_exposure(bond)).saturating_add(lock_excess)
+    state
+        .reserved_exposure(bond)
+        .saturating_add(state.registration_exposure(bond))
+        .saturating_add(lock_excess)
+        // G14 lane D: what the kernel route has reserved against the bond (a claim's collateral, a demand bond); 0 with no route.
+        .saturating_add(state.kernel_reserved(bond))
+        .saturating_add(state.onboarding_reserved(bond))
 }
 
 /// **[`palw_bond_committed_v1`]'s per-lock term: does `lock` on `claim_id` still hold its seat's
@@ -8393,6 +8404,91 @@ pub enum PalwConsensusObjectV2 {
     /// is Panel-licensed, so on this chain no proof can verify. **Tag 120** (RFC-0010's range 120–129, explicit). Dropped by name
     /// below `palw_permissionless_panel_v1`; the fold refuses it there as the second lock.
     PanelBeaconProofV3 { proof: Box<misaka_palw_panel::BeaconProofV1> } = 120,
+    // Tags 110–119 are the kernel route's (lane D, G14; the lead's allocation of 2026-10-08).
+    /// **G14: a kernel route object (tag 110)** — `bytes` are the kernel's wire form (`version ‖ borsh`,
+    /// [`misaka_palw_kernel::route::KernelRouteObjectV1`]: register a class, post a job, commit a claim, file a proof or a
+    /// demand, respond, request an exit, withdraw), strictly decoded by the consumer; `signer` is the bond whose ML-DSA-87 key
+    /// signs `H(network ‖ signer ‖ bytes)` ([`crate::palw_kernel_route_v1::palw_kernel_route_message_v1`]) and is mapped to the
+    /// kernel's actor ([`crate::palw_kernel_route_v1::palw_kernel_bond_id_v1`]). Dropped by name below
+    /// `palw_probabilistic_constraints_v1`; a kernel refusal drops the object and the block stands. Rides directly or in
+    /// `ObjectChunk`s. **Tag 110, declared explicitly.**
+    KernelRouteV1 { bytes: Vec<u8>, signer: PalwBondKeyV2, signature: Vec<u8> } = 110,
+    /// **G14: a seat's signed constraint receipt (tag 111)** — the ONLY source of the kernel ledger's panel tally. The receipt is
+    /// [`misaka_palw_kernel::receipt::PalwConstraintReceiptV1`]; `signature` is the seat bond's ML-DSA-87 signature over its
+    /// `signing_message()` under the receipt context, checked at acceptance. Admitted structurally by the kernel
+    /// (`admit_receipt_v1`) against the claim's INTERIM assignment. **Tag 111, declared explicitly.**
+    KernelConstraintReceiptV1 { receipt: Box<misaka_palw_kernel::receipt::PalwConstraintReceiptV1>, signature: Vec<u8> } = 111,
+    // Tags 104–108 are lane D's onboarding objects (phase 3; the lead's allocation of 2026-10-08), 109 P0's evidence. Dropped by name below
+    // `palw_probabilistic_constraints_v1` (the envelope, 108, below `palw_signed_registration_v1`); rows in the route's aux tables.
+    /// **G14 phase 3 (tag 104): the registrant of an existing V2 class states that its artifact has kernel root `kernel_param_root`**
+    /// (`ParamCommitmentsV1::root`). Bonded (a slice of the signer's free collateral is reserved) and refutable by tag 105; the root is
+    /// attested to the kernel route only after a challenge window. `signature`: the signer's ML-DSA-87 over
+    /// [`crate::palw_onboarding_v1::palw_onboarding_message_v1`]. **Tag 104, declared explicitly.**
+    ArtifactBoundV1 { v2_class: Hash64, kernel_param_root: Hash64, signer: PalwBondKeyV2, signature: Vec<u8> } = 104,
+    /// **(tag 105): the fraud proof of a binding** — two openings of the same coordinates, the V2 inventory's and the kernel's,
+    /// that disagree ([`crate::palw_onboarding_v1::verify_artifact_mismatch_v1`]). Slashes the binder's reservation. **Tag 105.**
+    ArtifactBindingChallengedV1 {
+        v2_class: Hash64,
+        kernel_param_root: Hash64,
+        challenger: PalwBondKeyV2,
+        proof: Box<crate::palw_onboarding_v1::ArtifactMismatchProofV1>,
+        signature: Vec<u8>,
+    } = 105,
+    /// **(tag 106): a V2 class is bound to a kernel class of the route** — the same program bytes, the artifact of a live binding, the
+    /// network's challenge policy. The kernel class stands only because the route registered it after `PUBLIC_PROSECUTION_COMPLETE`.
+    /// One binding per class: a plan or program cannot be substituted afterwards. **Tag 106.**
+    KernelBoundV1 { v2_class: Hash64, kernel_class: Hash64, challenge_policy_id: Hash64, signer: PalwBondKeyV2, signature: Vec<u8> } = 106,
+    /// **(tag 107): the RFC-0013 conformance commitment** for `(class, artifact root)`, accepted on chain before the beacon that will
+    /// select its checks. A new artifact root is a new class and needs a new commitment; `statement_root` excludes provenance.
+    /// **Tag 107.**
+    ConformanceCommittedV1 { commitment: Box<misaka_palw_challenge::ConformanceCommitmentV1>, signer: PalwBondKeyV2, signature: Vec<u8> } = 107,
+    /// **(tag 108): a class registration with a SIGNED validity window and fork** (RFC-0009 G-EXPIRY, G-RULESET). The owner's
+    /// signature on a registration covers neither a last-valid DAA nor the rules, so a leaked signed bundle stays valid until its
+    /// funding input is spent. This envelope signs both: it is accepted only at a block with `valid_from_daa ≤ daa ≤ valid_until_daa`
+    /// whose fork-id fired digest (`fork_id_v1(params, daa).fired`: genesis and every fence crossed so far) equals `fork_digest`, the
+    /// digest the signer computed at `valid_from_daa` from its own compiled params — then it is replaced by the registration it wraps,
+    /// every rule of the wrapped object applying unchanged. **Not `consensus_params_id`** (F-C4R3-01(b)): that id moves when a release
+    /// merely SCHEDULES a fence, so an envelope in flight during a rollout split old and upgraded builds before any fence height; builds
+    /// that agree on every fence fired so far agree on the envelope, and one signed before a fence crosses expires across it.
+    /// Dropped by name below `palw_signed_registration_v1`. **Tag 108.**
+    SignedRegistrationV1 {
+        registration: Box<PalwConsensusObjectV2>,
+        valid_from_daa: u64,
+        valid_until_daa: u64,
+        fork_digest: crate::Hash,
+        signer: PalwBondKeyV2,
+        signature: Vec<u8>,
+    } = 108,
+    /// **(tag 109, onboarding P0): conformance evidence** — `Post` (the class's registrant: the evidence of its current attempt and
+    /// the material that rebuilds it, judged in the fold against the beacon THIS chain locked from future Panel-independent Finals) or
+    /// `Refute` (any other operator, inside the evidence's challenge window: an objective fault from public material). Rows in the
+    /// route's aux tables 39 and 40; large evidence rides `ObjectChunk`s and is judged on the assembled whole. `signature`: the
+    /// signer's ML-DSA-87 over [`crate::palw_onboarding_v1::palw_onboarding_message_v1`] (kind 109, payload `borsh(v2_class, action)`).
+    /// Dropped by name below `palw_probabilistic_constraints_v1`. **Tag 109.**
+    ConformanceEvidenceV1 {
+        v2_class: Hash64,
+        action: Box<crate::palw_conformance_evidence_v1::ConformanceEvidenceActionV1>,
+        signer: PalwBondKeyV2,
+        signature: Vec<u8>,
+    } = 109,
+}
+
+/// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
+/// `Params::palw_probabilistic_constraints_v1` the acceptance walk drops it by name; the fold refuses it as the second lock.
+pub fn palw_object_is_onboarding_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(
+        object,
+        PalwConsensusObjectV2::ArtifactBoundV1 { .. }
+            | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. }
+            | PalwConsensusObjectV2::KernelBoundV1 { .. }
+            | PalwConsensusObjectV2::ConformanceCommittedV1 { .. }
+            | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. }
+    )
+}
+
+/// **Is this object the signed registration envelope (tag 108)?**
+pub fn palw_object_is_signed_registration_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::SignedRegistrationV1 { .. })
 }
 
 /// **Is this object the permissionless Panel's certified output (RFC-0010, tag 120)** — a variant an older build cannot decode and
@@ -8400,6 +8496,13 @@ pub enum PalwConsensusObjectV2 {
 /// is charged for it, and the fold refuses it as the second lock.
 pub fn palw_object_is_panel_v3_v1(object: &PalwConsensusObjectV2) -> bool {
     matches!(object, PalwConsensusObjectV2::PanelBeaconProofV3 { .. })
+}
+
+/// **Is this object a kernel route object (tag 110 or 111)** — a variant an older build cannot decode and skips (A-2)? Below
+/// `Params::palw_probabilistic_constraints_v1` the acceptance walk drops it by name before any slot, rent or budget is charged
+/// for it, and the fold refuses it as the second lock.
+pub fn palw_object_is_kernel_route_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::KernelRouteV1 { .. } | PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. })
 }
 
 /// **Is this object an RFC-0007 audit-mesh move** (tag 102 or 103) — a variant an older build cannot decode and skips (A-2)? Below
@@ -9217,7 +9320,18 @@ pub fn palw_object_chunk_group_id_v1(object_bytes: &[u8]) -> Hash64 {
 /// it is a function so the splitter, the completion gate and the acceptance filter cannot each
 /// hold their own copy of the answer.
 pub fn palw_chunked_object_kind_admitted_v1(object: &PalwConsensusObjectV2) -> bool {
-    matches!(object, PalwConsensusObjectV2::FamilyCertified { .. })
+    // G14 lane D: a kernel route object (a class registration, a claim's commitments, a response) may exceed one carrier; its
+    // signature is checked on the assembled whole at the completing chunk (the acceptance walk).
+    // G14 phase 3: a binding's refutation carries a whole commitment map and two openings — it may exceed one carrier too.
+    // Onboarding P0: conformance evidence carries every selected check's outcome (and a refutation an artifact opening) — judged on
+    // the assembled whole, its signature checked at the completing chunk, like the two above.
+    matches!(
+        object,
+        PalwConsensusObjectV2::FamilyCertified { .. }
+            | PalwConsensusObjectV2::KernelRouteV1 { .. }
+            | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. }
+            | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. }
+    )
 }
 
 /// Cut an object into the chunks that carry it, `None` when it fits one carrier as it is.
@@ -10792,6 +10906,9 @@ pub enum PalwStateV2Error {
     /// by tally).
     #[error("a verification vertex move is refused: {0}")]
     VertexRefused(String),
+    /// **G14: a kernel route move the fold refuses** (below the fence, or the stored state does not rebuild), by the reason.
+    #[error("a kernel route move is refused: {0}")]
+    KernelRouteRefused(String),
     /// **RFC-0007 Parts II and IV: a mesh move the fold refuses** (a trap object below its fence, an inadmissible commit or reveal,
     /// an audit leaf below `palw_audit_mesh_v1`), by the rule's own reason.
     #[error("an audit mesh move is refused: {0}")]
@@ -11097,6 +11214,11 @@ pub struct PalwChainStateV2 {
     /// fence needs no migration); this table holds the roots a model line publishes later. Enters the root and the carriage
     /// (tail `0xEB`) only once written, which nothing below the fence can do.
     seat_root_readiness: BTreeMap<(PalwBondKeyV2, Hash64, Hash64), crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
+    /// **G14 lane D: the kernel route** (`misaka-palw-kernel`'s ledger as rows, plus the interim assignments and the receipts
+    /// counted so far; [`crate::palw_kernel_route_v1`]). `None` until the first block at or past
+    /// `Params::palw_probabilistic_constraints_v1` — which no network can arm — so a dormant network roots exactly as before.
+    /// One Some-only root block (`kernel-route/v1`) and one carriage tail (`0xEC`) once `Some`.
+    kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>,
     /// **ADR-0124 Decisions 2 and 3: the seats on duty for each live claim, and when each
     /// discharged it.** A row is written when a panel is bound past `Params::palw_panel_economy`,
     /// one entry per drawn seat at `0`; an entry becomes the DAA at which the chain credited that
@@ -11614,6 +11736,7 @@ impl PalwChainStateV2 {
             floor_state: None,
             seat_availability: BTreeMap::new(),
             seat_root_readiness: BTreeMap::new(),
+            kernel_route: None,
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
             round_span: 0,
@@ -14075,6 +14198,12 @@ impl PalwChainStateV2 {
         if !self.seat_root_readiness.is_empty() {
             state.update(collection_root(b"seat_root_readiness", &self.seat_root_readiness).as_byte_slice());
         }
+        // **G14 lane D.** Its own block, Some-only: `None` until the first block at or past the fence nobody can arm.
+        if let Some(kernel) = &self.kernel_route {
+            state.update(b"kernel-route/v1");
+            state.update(kernel.ledger_root().as_byte_slice());
+            state.update(kernel.aux_root().as_byte_slice());
+        }
         // **ADR-0124 Decisions 2 and 3.** Its own block, for the same reason: empty until a panel
         // is bound past `Params::palw_panel_economy`, and the reserve is zero until a pool leaves a
         // share unpaid, which only such a panel can do. Below the fence the root is the one a
@@ -16267,6 +16396,17 @@ pub enum PalwDeltaEntryV2 {
     PanelV3WorkId { key: Hash64, old: bool, new: bool } = 172,
     /// A certified epoch output was retained or dropped (**delta number 173**). Keyed by epoch.
     PanelV3Beacon { key: u64, old: Option<Hash64>, new: Option<Hash64> } = 173,
+    /// **G14 lane D (delta number 160, declared explicitly; 160–169 are the kernel route's): a row of the kernel route state** was
+    /// written, rewritten or dropped — `table` names the table (the ledger's own `1..=9`, the consensus tables `32..=34`, see
+    /// [`crate::palw_kernel_route_v1`]), and the key and rows ride as their Borsh bytes. One entry for every table, so a table added
+    /// later takes a table id and not a delta discriminant. Dormant: `palw_probabilistic_constraints_v1` is armed on no network.
+    KernelRouteRow { table: u8, key: Vec<u8>, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 160,
+    /// **G14 lane D (delta number 161): the kernel route's header** — the configuration it was created under and the ledger's two
+    /// scalars (the clock and the burn checksum). `None` before the first block at or past the fence.
+    KernelRouteHeader {
+        old: Option<crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1>,
+        new: Option<crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1>,
+    } = 161,
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -29185,6 +29325,9 @@ pub fn apply_palw_transition_v7(
     for object in accepted_objects {
         apply_object(&mut builder, ctx, object)?;
     }
+    // 3″. G14 lane D: the kernel route's closing step — demand deadlines, windows, Final, liability release, and the settlements
+    //     they decide — after every object of the block. A no-op for a route with no claim and no demand (and on every network).
+    palw_kernel_route_fold_v1::tick_kernel_route_v1(&mut builder, ctx)?;
     // 3′. The 2026-09-23 Position route matrix, P-B1: the carrier-borne market moves acceptance
     //     refused are paid back — after every object, so no object of this block is quoted against
     //     a queue its own refunds changed (the acceptance rehearsal folds objects only, and must
@@ -31551,6 +31694,18 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         })
         .collect();
     for (class_id, share) in due {
+        // **G14 lane D phase 3: a kernel-bound class leaves `Registered` only through the onboarding gate** — its artifact binding past the
+        // refutation horizon, the kernel class standing (registered only after PUBLIC_PROSECUTION_COMPLETE) and its conformance record
+        // past CONFORMANCE_PASSED (onboarding P0: verified, unrefuted evidence — a commitment alone never). A class with no kernel
+        // binding follows the legacy path unchanged. Held, it stays Registered and is asked again at every block; the gate's reason is
+        // readable (`getPalwOnboarding`, `getPalwConformanceEvidence`).
+        if let Some(route) = builder.state.kernel_route.as_ref()
+            && let Some(class) = builder.state.classes.get(&class_id)
+            && let crate::palw_onboarding_v1::PalwOnboardingGateV1::Held { .. } =
+                route.onboarding_gate_v1(&class_id, &class.artifact_root, ctx.daa_score)
+        {
+            continue;
+        }
         // **A grant that cannot be made freezes the CLASS, not the chain.**
         //
         // This was `?`, and the error propagated out of a transition that is a pure function of
@@ -31596,6 +31751,8 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         let mut record = builder.state.classes.get(&class_id).expect("just listed").clone();
         record.status = PalwClassStatusV2::Active;
         builder.write_class(class_id, Some(record));
+        // Onboarding P0: a gated class that activated is ACTIVE_REWARDABLE in its conformance record (a no-op for any other class).
+        palw_onboarding_fold_v1::note_class_activated_v1(builder, &class_id);
     }
     Ok(())
 }
@@ -34396,6 +34553,37 @@ fn apply_object(
         // possession proof read (`palw_adapter_class_fold_v1::apply_adapter_class_listed_v1`).
         PalwConsensusObjectV2::AdapterClassListed { payload, lister, signature: _ } => {
             palw_adapter_class_fold_v1::apply_adapter_class_listed_v1(builder, ctx, payload, lister)?;
+        }
+        // **G14 lane D (tags 110 and 111): the kernel route** — dormant behind `palw_probabilistic_constraints_v1`, which no network
+        // can arm (`palw_kernel_route_fold_v1`). A kernel refusal drops the object; only a missing fence fails the block.
+        PalwConsensusObjectV2::KernelRouteV1 { bytes, signer, signature: _ } => {
+            palw_kernel_route_fold_v1::apply_kernel_route_object_v1(builder, ctx, bytes, signer)?;
+        }
+        PalwConsensusObjectV2::KernelConstraintReceiptV1 { receipt, signature } => {
+            palw_kernel_route_fold_v1::apply_kernel_receipt_v1(builder, ctx, receipt, signature)?;
+        }
+        // **G14 lane D phase 3 (tags 104–107): model onboarding** — rows in the route's aux tables (`palw_onboarding_fold_v1`).
+        PalwConsensusObjectV2::ArtifactBoundV1 { v2_class, kernel_param_root, signer, signature: _ } => {
+            palw_onboarding_fold_v1::apply_artifact_bound_v1(builder, ctx, v2_class, kernel_param_root, signer)?;
+        }
+        PalwConsensusObjectV2::ArtifactBindingChallengedV1 { v2_class, kernel_param_root, challenger, proof, signature: _ } => {
+            palw_onboarding_fold_v1::apply_artifact_challenged_v1(builder, ctx, v2_class, kernel_param_root, challenger, proof)?;
+        }
+        PalwConsensusObjectV2::KernelBoundV1 { v2_class, kernel_class, challenge_policy_id, signer, signature: _ } => {
+            palw_onboarding_fold_v1::apply_kernel_bound_v1(builder, ctx, v2_class, kernel_class, challenge_policy_id, signer)?;
+        }
+        PalwConsensusObjectV2::ConformanceCommittedV1 { commitment, signer, signature: _ } => {
+            palw_onboarding_fold_v1::apply_conformance_committed_v1(builder, ctx, commitment, signer)?;
+        }
+        // **Onboarding P0 (tag 109): conformance evidence** — posted or refuted; tables 39 and 40 (`palw_onboarding_fold_v1`).
+        PalwConsensusObjectV2::ConformanceEvidenceV1 { v2_class, action, signer, signature: _ } => {
+            palw_onboarding_fold_v1::apply_conformance_evidence_v1(builder, ctx, v2_class, action, signer)?;
+        }
+        // (tag 108): the acceptance walk replaces the envelope by the registration it wraps, so the fold never meets one.
+        PalwConsensusObjectV2::SignedRegistrationV1 { .. } => {
+            return Err(PalwStateV2Error::KernelRouteRefused(
+                "a signed registration envelope is unwrapped by the acceptance walk; the fold folds the registration it wraps".to_string(),
+            ));
         }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {
@@ -38134,6 +38322,11 @@ pub struct PalwTransitionExtrasV1 {
     /// seat is drawn from, the beacon schemes this release approves and where the beacon's source events come from. `None` on every
     /// shipped preset and wherever the fence is not in force (and then the transition is byte-identical).
     pub panel_v3: Option<PalwPanelV3InputsV1>,
+    /// **G14 lane D: `Params::palw_probabilistic_constraints_v1` resolved at the block's DAA** — `Some` exactly when the (never
+    /// armable) fence is active, with the network, the ruleset and the artifact attestations the consumer supplies
+    /// ([`crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1`]). `None` by `Default` and on every network: no kernel route move
+    /// is folded and the state has no kernel route.
+    pub kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1>,
 }
 
 /// What each `Valid` signer of one set locks: `every` seat's price, except the one seat a door
@@ -39984,6 +40177,36 @@ pub fn revert_delta_v2(
 
 /// RFC-0007: one [`PalwDeltaEntryV2::VertexRow`] applied or reverted — decode the key and the rows as the table's types, check the
 /// expected row, install the other.
+/// **G14 lane D: apply (or revert) one kernel route row** — verify the row is what the delta expects, then install the other side.
+/// Table numbers below 32 are the ledger's own, the rest the consensus tables ([`crate::palw_kernel_route_v1`]).
+fn apply_kernel_route_row_v1(
+    state: &mut PalwChainStateV2,
+    table: u8,
+    key: &[u8],
+    old: &Option<Vec<u8>>,
+    new: &Option<Vec<u8>>,
+    revert: bool,
+) -> Result<(), PalwStateV2Error> {
+    let Some(kernel) = state.kernel_route.as_mut() else {
+        return Err(PalwStateV2Error::DeltaMismatch("a kernel route row for a state with no kernel route"));
+    };
+    let (expected, install) = if revert { (new, old) } else { (old, new) };
+    let map = if table < crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 { &mut kernel.rows } else { &mut kernel.aux };
+    let k = (table, key.to_vec());
+    if map.get(&k) != expected.as_ref() {
+        return Err(PalwStateV2Error::DeltaMismatch("a kernel route row does not match the delta's expectation"));
+    }
+    match install {
+        Some(bytes) => {
+            map.insert(k, bytes.clone());
+        }
+        None => {
+            map.remove(&k);
+        }
+    }
+    Ok(())
+}
+
 fn apply_vertex_row_v1(
     state: &mut PalwChainStateV2,
     table: u8,
@@ -40312,6 +40535,30 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::PanelV3Claim { key, old, new } => palw_panel_v3_fold_v1::apply_claim_entry_v1(state, key, old, new, revert)?,
         PalwDeltaEntryV2::PanelV3WorkId { key, old, new } => palw_panel_v3_fold_v1::apply_work_id_entry_v1(state, key, *old, *new, revert)?,
         PalwDeltaEntryV2::PanelV3Beacon { key, old, new } => palw_panel_v3_fold_v1::apply_beacon_entry_v1(state, *key, old, new, revert)?,
+        PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } => apply_kernel_route_row_v1(state, *table, key, old, new, revert)?,
+        PalwDeltaEntryV2::KernelRouteHeader { old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if state.kernel_route.as_ref().map(|k| &k.header) != expected.as_ref() {
+                return Err(PalwStateV2Error::DeltaMismatch("the kernel route header does not match the delta's expectation"));
+            }
+            match (install, state.kernel_route.as_mut()) {
+                (Some(header), Some(kernel)) => kernel.header = header.clone(),
+                (Some(header), None) => {
+                    state.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
+                        header: header.clone(),
+                        rows: Default::default(),
+                        aux: Default::default(),
+                    })
+                }
+                (None, Some(kernel)) => {
+                    if !kernel.rows.is_empty() || !kernel.aux.is_empty() {
+                        return Err(PalwStateV2Error::DeltaMismatch("the kernel route is dropped while it still holds rows"));
+                    }
+                    state.kernel_route = None;
+                }
+                (None, None) => {}
+            }
+        }
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -40700,6 +40947,8 @@ pub struct PalwStateCarriageV2 {
     pub seat_root_readiness: BTreeMap<(PalwBondKeyV2, Hash64, Hash64), crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
     /// **RFC-0010: the permissionless Panel's engine**, in appended tail `0xED`, present only once the fence's first block created it.
     pub panel_v3: Option<misaka_palw_panel::PermissionlessPanelStateV1>,
+    /// G14 lane D: the kernel route's state, in appended tail `0xEC`, present only when `Some`.
+    pub kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
     /// the duties are non-empty or the reserve is non-zero. Each row carries the exposure its seats
     /// reserved (ADR-0130, [`PalwPanelDutyRowV1`]); the tail gained it before any chain wrote one.
@@ -41391,6 +41640,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_PANEL_V3_TAIL_V1.serialize(writer)?;
             panel.serialize(writer)?;
         }
+        if let Some(kernel) = &self.kernel_route {
+            crate::palw_kernel_route_v1::PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1.serialize(writer)?;
+            kernel.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -41579,6 +41832,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_seat_root_readiness = false;
         let mut panel_v3 = None;
         let mut seen_panel_v3 = false;
+        let mut kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1> = None;
+        let mut seen_kernel_route = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -41842,6 +42097,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_panel_v3 = true;
                     panel_v3 = Some(misaka_palw_panel::PermissionlessPanelStateV1::deserialize_reader(reader)?);
                 }
+                crate::palw_kernel_route_v1::PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1 if !seen_kernel_route => {
+                    seen_kernel_route = true;
+                    kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::deserialize_reader(reader)?);
+                }
                 PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1 if !seen_seat_availability => {
                     seen_seat_availability = true;
                     seat_availability = BTreeMap::deserialize_reader(reader)?;
@@ -41984,6 +42243,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             seat_availability,
             seat_root_readiness,
             panel_v3,
+            kernel_route,
         })
     }
 }
@@ -42100,6 +42360,7 @@ impl PalwStateCarriageV2 {
             seat_availability: state.seat_availability.clone(),
             seat_root_readiness: state.seat_root_readiness.clone(),
             panel_v3: state.panel_v3.clone(),
+            kernel_route: state.kernel_route.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -42319,6 +42580,7 @@ impl PalwStateCarriageV2 {
             seat_availability: self.seat_availability,
             seat_root_readiness: self.seat_root_readiness,
             panel_v3: self.panel_v3,
+            kernel_route: self.kernel_route,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -59454,6 +59716,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::PanelV3Claim { .. } => "panel_v3_claim",
                     PalwDeltaEntryV2::PanelV3WorkId { .. } => "panel_v3_work_id",
                     PalwDeltaEntryV2::PanelV3Beacon { .. } => "panel_v3_beacon",
+                    PalwDeltaEntryV2::KernelRouteRow { .. } => "kernel_route_row",
+                    PalwDeltaEntryV2::KernelRouteHeader { .. } => "kernel_route_header",
                     PalwDeltaEntryV2::RealWork { .. } => "floor_state",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
@@ -59866,6 +60130,9 @@ pub(crate) mod tests {
             (171, PalwDeltaEntryV2::PanelV3Claim { key, old: None, new: None }),
             (172, PalwDeltaEntryV2::PanelV3WorkId { key, old: false, new: true }),
             (173, PalwDeltaEntryV2::PanelV3Beacon { key: 1, old: None, new: None }),
+            // G14 lane D (the kernel route, 160–169), declared explicitly.
+            (160, PalwDeltaEntryV2::KernelRouteRow { table: 1, key: Vec::new(), old: None, new: None }),
+            (161, PalwDeltaEntryV2::KernelRouteHeader { old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -60522,6 +60789,7 @@ pub(crate) mod tests {
             seat_availability: _,
             seat_root_readiness: _,
             panel_v3: _,
+            kernel_route: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -70223,6 +70491,7 @@ pub(crate) mod tests {
                 model_court_window_active: false,
                 class_court_windows: BTreeMap::new(),
                 panel_v3: None,
+                kernel_route: None,
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
@@ -70481,6 +70750,7 @@ pub(crate) mod tests {
                 model_court_window_active: false,
                 class_court_windows: BTreeMap::new(),
                 panel_v3: None,
+                kernel_route: None,
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,

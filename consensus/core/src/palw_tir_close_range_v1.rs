@@ -1189,7 +1189,20 @@ pub fn palw_tir_worst_closes_range_work_v1(
     sizing: &PalwTirCloseSizingV1,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
-    worst_closes_range_priced(space, inventory, job_ctx, sizing, price, None)
+    worst_closes_range_priced(space, inventory, job_ctx, sizing, price, None, None)
+}
+
+/// **Diagnostics only** (RFC-0011 §4.A, `cap_exceeded_at`): [`palw_tir_worst_closes_range_work_v1`], recording after each commit
+/// point `(block, node, work done so far)` into `trace`. Decides nothing: the bounds and the work are the range twin's.
+pub fn palw_tir_worst_closes_range_trace_v1(
+    space: &PalwTirStepSpaceV1,
+    inventory: &PalwTirInventoryIndexV1,
+    job_ctx: &PalwJobContextV2,
+    sizing: &PalwTirCloseSizingV1,
+    trace: &mut Vec<(u8, u16, u64)>,
+) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
+    let price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
+    worst_closes_range_priced(space, inventory, job_ctx, sizing, price, None, Some(trace))
 }
 
 /// **[`crate::palw_tir_close_size_v1::palw_gen_worst_closes_v1`] by the range twin** (RFC-0003 PALW-GEN-20 under
@@ -1207,7 +1220,7 @@ pub fn palw_gen_worst_closes_range_v1(
     pricing: PalwGenClosePricingV1,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let price = PalwTirClosePriceV1::generative(space, inventory, stage, class_inventory_leaves, pricing)?;
-    worst_closes_range_priced(space, inventory, job_ctx, sizing, price, Some(model))
+    worst_closes_range_priced(space, inventory, job_ctx, sizing, price, Some(model), None)
 }
 
 fn worst_closes_range_priced(
@@ -1217,6 +1230,7 @@ fn worst_closes_range_priced(
     sizing: &PalwTirCloseSizingV1,
     price: PalwTirClosePriceV1<'_>,
     gen_stage: Option<&PalwGenTwinStageV1>,
+    mut trace: Option<&mut Vec<(u8, u16, u64)>>,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let program = &space.program;
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
@@ -1586,6 +1600,9 @@ fn worst_closes_range_priced(
             let past = sizing
                 .stop_above
                 .is_some_and(|(close, root)| worst.close_bytes > close || (worst.dissected && worst.root_claim_bytes > root));
+            if let Some(t) = trace.as_deref_mut() {
+                t.push((bi8, ni16, sizing.cap - budget.get()));
+            }
             out.push(worst);
             if past {
                 return Ok((out, sizing.cap - budget.get()));

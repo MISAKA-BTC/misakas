@@ -9,6 +9,7 @@ extern crate core;
 extern crate self as consensus_core;
 
 pub mod palw_mergeset_v1;
+pub mod palw_native_readiness_v1;
 pub mod palw_native_settlement_v1;
 pub mod palw_panel_beacon_v1;
 pub mod palw_permissionless_panel_v1;
@@ -491,6 +492,14 @@ pub mod palw_fp_job_v5;
 pub mod palw_gen_range_twin_v1;
 /// RFC-0011 §15.7: the kernel route's fence `palw_probabilistic_constraints_v1` — dormant, no height, refused when armed.
 pub mod palw_probabilistic_constraints_v1;
+/// G14 lane D: the kernel route's consensus state, messages and interim policy (fence `palw_probabilistic_constraints_v1`).
+pub mod palw_kernel_route_v1;
+/// G14 lane D phase 3: the onboarding objects (artifact binding and its refutation, the kernel binding, the conformance commitment,
+/// the signed registration envelope) and the activation gate they feed — rows in the kernel route's aux tables.
+pub mod palw_onboarding_v1;
+/// G14 onboarding P0: conformance evidence on chain (tag 109) — the evidence core shared with the runtime pack, the network's
+/// interim challenge policy, the fold's judgement of posted evidence and of a refutation, and the fresh verifier.
+pub mod palw_conformance_evidence_v1;
 /// RFC-0015: the Panel=0 (`OptimisticPublicVerification`) fence `palw_panel_free_v1` — dormant, no height, refused when armed.
 pub mod palw_panel_free_v1;
 /// RFC-0001 §2.6 stage 2: FP job version 11 — the prefix-state receipt; dormant behind `palw_fp_prefix_state`.

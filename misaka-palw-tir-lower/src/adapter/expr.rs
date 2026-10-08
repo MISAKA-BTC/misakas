@@ -15,7 +15,7 @@
 //! | group | operators |
 //! | --- | --- |
 //! | configuration | `$cfg` (`"key"` or `["key", default]`), `$cfg?` (null if absent), `$cfgn` (`["key", default]`: absent → default, explicit null → null), `$alias` (`[["k1","k2"], default?]`), `$has`, `$root` (the wrapper config of a VLM), `$forbid` (`["key", why]`), `$require_eq` (`["key", value, why]`), `$get` (`[object, "key", default?]`) |
-//! | tensors (when a tensor index is given) | `$has_tensor` (true / false / null if unknown), `$tensor_flag` (`[name, default]`: present?, else the default, recorded as assumed), `$tensor_shape`, `$tensor_prefix` (`{candidates, probe, default}`) |
+//! | tensors (when a tensor index is given) | `$has_tensor` (true / false / null if unknown), `$tensor_flag` (`[name, default]`: present?, else the default, recorded as assumed), `$tensor_shape`, `$tensor_prefix` (`{candidates, probe, default}`), `$tensor_prefix_scan` (`{probe, exclude?, default}`: the one prefix the index stores `probe` under; two is a refusal) |
 //! | variables | `$var`, `$let` (`["name", value, body]`) |
 //! | arithmetic | `$add $sub $mul $div $idiv $mod $neg $abs $min $max $pow $sqrt $ln $exp $floor $ceil $round $int $float` |
 //! | logic | `$eq $ne $lt $le $gt $ge $and $or $not $if` (`[c, a, b]`) `$switch` (`[value, {case: result}, default]`) |
@@ -498,6 +498,46 @@ impl<'a> Env<'a> {
                     }
                 }
                 Ok(default)
+            }
+            "$tensor_prefix_scan" => {
+                // **The one prefix under which the checkpoint stores `probe`**, found in the tensor index rather than named in
+                // advance: a multimodal wrapper keeps its text decoder under the attribute path of its language model
+                // (`model.text_model.`, `model.language_model.`, `language_model.model.`), which differs per wrapper class.
+                // `exclude` lists prefixes never taken (a vision tower's own `embed_tokens`); two or more distinct prefixes is a
+                // refusal by name (the decoder is not identified), none is `default`, and no index is `default` too.
+                let o = arg.as_object().ok_or_else(|| bad("`$tensor_prefix_scan` takes {probe, exclude?, default}"))?;
+                let probe = as_str(&self.ev(o.get("probe").ok_or_else(|| bad("`$tensor_prefix_scan`: probe"))?, d)?, op)?.to_string();
+                if probe.is_empty() {
+                    return Err(bad("`$tensor_prefix_scan`: an empty probe matches every tensor"));
+                }
+                let exclude: Vec<String> = match o.get("exclude") {
+                    Some(e) => self
+                        .ev(e, d)?
+                        .as_array()
+                        .ok_or_else(|| bad("`$tensor_prefix_scan`: exclude is a list"))?
+                        .iter()
+                        .map(|x| as_str(x, op).map(str::to_string))
+                        .collect::<Result<_>>()?,
+                    None => Vec::new(),
+                };
+                let default = self.ev(o.get("default").ok_or_else(|| bad("`$tensor_prefix_scan`: default"))?, d)?;
+                let Some(t) = self.tensors else { return Ok(default) };
+                let found: BTreeSet<String> = t
+                    .names()
+                    .filter_map(|n| n.strip_suffix(probe.as_str()))
+                    .filter(|x| x.is_empty() || x.ends_with('.'))
+                    .filter(|x| !exclude.iter().any(|e| x.starts_with(e.as_str())))
+                    .map(str::to_string)
+                    .collect();
+                match found.len() {
+                    0 => Ok(default),
+                    1 => Ok(Value::String(found.into_iter().next().expect("one"))),
+                    _ => Err(LowerError::not_lowerable(format!(
+                        "the checkpoint stores `{probe}` under {} prefixes ({}): which one is the text decoder is not identified",
+                        found.len(),
+                        found.iter().map(|x| format!("`{x}`")).collect::<Vec<_>>().join(", ")
+                    ))),
+                }
             }
             // ───────────── variables ─────────────
             "$var" => self.var(as_str(arg, "$var")?),

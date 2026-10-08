@@ -7,8 +7,10 @@
 //!   uses: the fork id names heights, not fences. `palw_model_court_window` and `palw_model_virtual_v1` stay dormant;
 //! * **the baseline** — [`palw_t12_release_v5_params`] (the shipped ruleset with the list dormant) IS the DAA-3,600 release
 //!   (int-10, the fleet's): its params and schedule ids are pinned here by value, so this release's re-pin cannot move them;
-//! * **the release** — testnet-12 as shipped IS that baseline with the list at H and ρ = 100 at H + 95: params and schedule ids move,
-//!   the identity does not, and no other fence moves;
+//! * **the release** — testnet-12 as the int-12 release ships it ([`palw_t12_release_v6_params`]; the int-13 list of
+//!   `palw_t12_flag_day_9000.rs` is unscheduled — the user cancelled the DAA-9,000 flag day on 2026-10-08 — so the shipped ruleset IS
+//!   this release's) IS that baseline with the list at H and ρ = 100 at
+//!   H + 95: params and schedule ids move, the identity does not, and no other fence moves;
 //! * **the ceilings** — testnet-12's provisional ones ([`PALW_T12_GEN_CEILINGS_V1`], [`PALW_T12_IMPROVE_CEILINGS_V1`]): the
 //!   generative fence no looser than the IR where the IR bounds the same dimension, the improvement fence's the drill's by value;
 //! * **the fork id** — an int-10 node is kept below H in both directions and refused from H; a build with the list but not
@@ -30,7 +32,7 @@ use kaspa_consensus_core::config::params::{
     PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FLAG_DAY_DAA, Params,
     palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
     palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v4_params, palw_t12_release_v5_params,
-    palw_t12_shipped_params,
+    palw_t12_release_v6_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
@@ -136,8 +138,8 @@ fn the_flag_day_is_the_list_at_h_and_rho100_at_h_plus_95_heights_no_other_fence_
     // The dormant decode-rules list keeps its own (dormant) height; the court window and ADR-0162 stay dormant by decision.
     assert_eq!(PALW_T12_DECODE_RULES_DAA, None, "the decode rules arm with the int-11 list, not with their own dormant one");
     assert_eq!(PALW_T12_MODEL_COURT_WINDOW_DAA, None);
-    let shipped = palw_t12_shipped_params();
-    assert_eq!(fence_at(&shipped, "palw_model_court_window"), None, "the court window is armed nowhere");
+    let shipped = palw_t12_release_v6_params();
+    assert_eq!(fence_at(&shipped, "palw_model_court_window"), None, "the court window is armed nowhere on the int-12 release");
     assert_eq!(fence_at(&shipped, "palw_model_virtual_v1"), None, "ADR-0162's fence is not scheduled: the user has not decided");
     for name in LIST {
         assert_eq!(fence_at(&shipped, name), Some(H), "{name} arms at H");
@@ -202,10 +204,19 @@ fn the_release_v5_baseline_is_int10s_ruleset_to_the_id() {
 #[test]
 fn testnet12_ships_the_list_armed_at_h_over_the_int10_release() {
     let baseline = palw_t12_release_v5_params();
-    let shipped = palw_t12_shipped_params();
-    shipped.validate_palw_v2().expect("testnet-12 as shipped validates");
-    assert_eq!(ids(&shipped), ids(&with_list(baseline.clone(), Some(H))), "testnet-12 as shipped arms the list at 5,300 over int-10");
-    assert_eq!(ids(&Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))), ids(&shipped), "the node's door");
+    let shipped = palw_t12_release_v6_params();
+    shipped.validate_palw_v2().expect("testnet-12 as the int-12 release ships it validates");
+    assert_eq!(ids(&shipped), ids(&with_list(baseline.clone(), Some(H))), "testnet-12 as the int-12 release ships it arms the list at 5,300 over int-10");
+    assert_eq!(
+        ids(&Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))),
+        ids(&palw_t12_shipped_params()),
+        "the node's door is testnet-12 as shipped"
+    );
+    assert_eq!(
+        ids(&palw_t12_shipped_params()),
+        ids(&shipped),
+        "testnet-12 as shipped IS the int-12 release (no int-13 flag day is scheduled: user, 2026-10-08)"
+    );
     let (bp, bi, bs) = ids(&baseline);
     let (sp, si, ss) = ids(&shipped);
     assert_ne!(sp, bp, "the ruleset names the fences");
@@ -242,7 +253,7 @@ fn testnet12_ships_the_list_armed_at_h_over_the_int10_release() {
 
 #[test]
 fn the_rules_are_live_from_h_and_rho_steps_up_at_h_and_at_h_plus_95() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v6_params();
     assert!(!shipped.palw_gen_v1_active_at(H - 1) && shipped.palw_gen_v1_active_at(H));
     assert!(!shipped.palw_fp_decode_rules_active_at(H - 1) && shipped.palw_fp_decode_rules_active_at(H));
     assert!(!shipped.palw_fp_job_v5_active_at(H - 1) && shipped.palw_fp_job_v5_active_at(H));
@@ -299,7 +310,7 @@ fn the_ceilings_are_no_looser_than_the_ir_and_the_improvement_ones_are_the_drill
 #[test]
 fn the_fork_id_keeps_an_int10_node_below_h_and_refuses_it_from_h() {
     let old = palw_t12_release_v5_params();
-    let new = palw_t12_shipped_params();
+    let new = palw_t12_release_v6_params();
     for daa in [3_700, 4_500, H - 1] {
         let o = fork_id_v1(&old, daa);
         let n = fork_id_v1(&new, daa);
@@ -342,7 +353,7 @@ fn refused_opt(p: &Params) -> Option<String> {
 /// in both directions, and the new build announces each next.
 #[test]
 fn a_build_without_rho_250_or_rho_1000_is_refused_from_their_heights() {
-    let new = palw_t12_shipped_params();
+    let new = palw_t12_release_v6_params();
     let mut up_to_100 = new.clone();
     for f in PALW_T12_INT11_RHO1000_FENCES_V1.iter().chain(PALW_T12_INT11_RHO250_FENCES_V1) {
         (f.set)(&mut up_to_100, None);
@@ -556,7 +567,7 @@ fn a_per_fence_drill_flag_moves_its_entry_and_keeps_the_rest_of_the_release_arme
 /// do not: it is the table the release is announced with.
 #[test]
 fn print_the_release_fence_table() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v6_params();
     let baseline = palw_t12_release_v5_params();
     let mut rows: Vec<(u64, &str)> = shipped
         .palw_fences_v1()

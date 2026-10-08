@@ -18,6 +18,9 @@ export INT11=1 INT12=1
 # measured by the int-11 drill), then the legs. D-M's epochs (~1,000 DAA) do not fit: they run as background load and are informational; only D-M5's crossing and
 # DG-1 / DG-2 are crossing checks here.
 export INT11_AT=${INT11_AT:-26}
+# The int-13 flag day (the DAA-9,000 release, t12-daa9000-drill-plan.md §2.2): H' = 110 by default (after the first REAL attempts, before
+# rho 100 at 121, distinct from every other height); INT13_AT= (empty) runs the int-11 drill without it.
+export INT13_AT=${INT13_AT-110}
 export TIR_AT=${TIR_AT:-16}   # H registers ~17 (the driver restarts new4 once the IR fence is past); its admission slot 91 needs registration <= DAA 20
 export CAP_RHOS=${CAP_RHOS:-"rho100 rho250 rho1000"} CAP_WINDOW_DAA=${CAP_WINDOW_DAA:-32} CAP_SETTLE_DAA=${CAP_SETTLE_DAA:-8} DM_NO_LIARS=${DM_NO_LIARS:-1}
 # the PANEL windows, each inside its rho regime (rho100 from H'+95, rho250 from H'+190, rho1000 from H'+285), placed so that the floor-policy legs run BETWEEN them:
@@ -115,14 +118,14 @@ extra_checks() {
   if "$k" --help 2>/dev/null | grep -q -- "--palw-drill-real-submit-delay-s"; then echo "  ok   kaspad lists --palw-drill-real-submit-delay-s (the 8k emulation runs on new6, delay $REAL_SUBMIT_DELAY_S s)"
   else echo "  FAIL kaspad lacks --palw-drill-real-submit-delay-s: lane RS's flag is not in this binary, the drill would run WITHOUT the 8k emulation"; ok=0; fi
   python3 "$C/dcwatch.py" selftest >/dev/null && echo "  ok   dcwatch selftest (windows, anticone kinds, recovery logic)" || { echo "  FAIL dcwatch selftest"; ok=0; }
-  for f in --palw-riders --palw-drill-int11-at; do "$k" --help 2>/dev/null | grep -q -- "$f" && echo "  ok   kaspad lists $f" || { echo "  FAIL kaspad lacks $f"; ok=0; }; done
+  for f in --palw-riders --palw-drill-int11-at ${INT13_AT:+--palw-drill-int13-at}; do "$k" --help 2>/dev/null | grep -q -- "$f" && echo "  ok   kaspad lists $f" || { echo "  FAIL kaspad lacks $f"; ok=0; }; done
   grep -aq "LEGACY_HEARTBEAT" "$k" && echo "  ok   the node reports blockKind (REAL / FALLBACK / LEGACY_*) in getBlock verboseData" || { echo "  FAIL no blockKind in the binary: SHARE cannot be read"; ok=0; }
   python3 -m py_compile "$C/dcwatch.py" && echo "  ok   dcwatch.py compiles" || ok=0
   [ -x "$OLD_KASPAD_BIN" ] && echo "  ok   old relay $OLD_KASPAD_BIN" || { echo "  FAIL OLD_KASPAD_BIN missing"; ok=0; }
   # the identity the binary computes: the keyring export prints the public t12 ids; compare them with the BUILD-INFO the builder wrote beside the binary
   local T; T=$(mktemp -d)
   "$k" --testnet --netsuffix=12 --appdir="$T/app" "--palw-drill-genesis-salt=$(openssl rand -hex 32)" --palw-drill-fence-at=6 --palw-drill-fence2-at=10 --palw-drill-fence3-at=14 \
-     --palw-drill-tir-at=$TIR_AT --palw-drill-tir2-at=24 --palw-drill-int11-at=$INT11_AT --palw-drill-write-keyring="$T/kr" > "$T/out" 2>&1 || true
+     --palw-drill-tir-at=$TIR_AT --palw-drill-tir2-at=24 --palw-drill-int11-at=$INT11_AT ${INT13_AT:+--palw-drill-int13-at=$INT13_AT} --palw-drill-write-keyring="$T/kr" > "$T/out" 2>&1 || true
   if [ -s "$T/kr/manifest.json" ]; then
     local pub; pub=$(python3 -c "import json,sys; m=json.load(open(sys.argv[1])); print(m.get('public_consensus_params_id',''), m.get('public_genesis_hash','')[:16])" "$T/kr/manifest.json")
     local want; want=$(awk '/^t12 params/ {print $3}' "$BIN_DIR/BUILD-INFO" 2>/dev/null || true)

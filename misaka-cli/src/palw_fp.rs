@@ -281,7 +281,86 @@ pub async fn submit(
 /// chunked object goes out as one chained burst; every fee is sized from its carrier's own
 /// compute mass, because a drill's chunk is a hundred kilobytes and a send-sized fee would be
 /// refused by the mempool as insufficient.
-pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std::path::PathBuf], yes: bool) -> Result<Vec<String>, CliError> {
+pub async fn submit_objects(
+    ctx: &Ctx,
+    ks: &crate::keys::KeySource,
+    paths: &[std::path::PathBuf],
+    yes: bool,
+) -> Result<Vec<String>, CliError> {
+    submit_objects_v2(ctx, ks, paths, yes, false).await
+}
+
+/// **The class a registration object registers, and over which root** — `ClassRegistered` and `ClassRegisteredTirV1` (and nothing else):
+/// what the duplicate gate below compares with the registry before a fee is spent.
+pub(crate) fn registration_identity_v1(
+    object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+) -> Option<(kaspa_consensus_core::Hash64, kaspa_consensus_core::Hash64)> {
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as O;
+    match object {
+        O::ClassRegistered { class_id, artifact_root, .. } | O::ClassRegisteredTirV1 { class_id, artifact_root, .. } => {
+            Some((*class_id, *artifact_root))
+        }
+        _ => None,
+    }
+}
+
+/// **DUPLICATE_CLASS, before anything is paid** (H1's real-user loop, 2026-10-08: an identical `ClassRegisteredTirV1` re-sent with
+/// `submit-object --yes` was mined, dropped by the fold — the class row unchanged, no second burn — and the client paid a second carrier fee
+/// with no warning). `rows` are the node's class rows (`getPalwClasses`, `UNVERIFIED_REMOTE_STATE`: a node can hide a row — then the chain
+/// drops the duplicate and only the fee is lost — or invent one, which `--allow-duplicate` overrides). `Ok(Some(note))` lets the send go on
+/// with a note; `Err` refuses it by name and nothing is spent.
+pub(crate) fn duplicate_registration_gate_v1(
+    class_id: kaspa_consensus_core::Hash64,
+    artifact_root: kaspa_consensus_core::Hash64,
+    rows: Option<&[misaka_palw_remote::register::RegistryRowV1]>,
+    allow_duplicate: bool,
+) -> Result<Option<String>, CliError> {
+    use misaka_palw_remote::register::{DuplicateVerdictV1, exact_duplicate_v1};
+    use misaka_palw_remote::trust::UNVERIFIED_REMOTE_STATE;
+    let Some(rows) = rows else {
+        return if allow_duplicate {
+            Ok(Some(format!("the registry could not be read; sent anyway (--allow-duplicate) — class {class_id}")))
+        } else {
+            Err(CliError::new(
+                exit::MODEL,
+                format!(
+                    "DUPLICATE_CHECK_UNAVAILABLE: the node did not answer getPalwClasses, so this client cannot tell whether class {class_id} is \
+                     already registered — nothing was sent. Re-run against a node that answers, or pass --allow-duplicate to pay anyway"
+                ),
+            ))
+        };
+    };
+    match exact_duplicate_v1(class_id, artifact_root, rows) {
+        DuplicateVerdictV1::New => Ok(None),
+        DuplicateVerdictV1::Reuse { lifecycle, .. } if !allow_duplicate => Err(CliError::new(
+            exit::MODEL,
+            format!(
+                "DUPLICATE_CLASS: class {class_id} over root {artifact_root} is already registered ({lifecycle}; the node's class row, \
+                 {UNVERIFIED_REMOTE_STATE}). A second carrier is mined and its registration dropped by the fold — the row and the burn do not \
+                 change, only a second carrier fee is spent. Nothing was sent. --allow-duplicate re-sends anyway"
+            ),
+        )),
+        DuplicateVerdictV1::Conflict(why) if !allow_duplicate => Err(CliError::new(
+            exit::MODEL,
+            format!(
+                "CLASS_CONFLICT: {why} (the node's class rows, {UNVERIFIED_REMOTE_STATE}). Nothing was sent. --allow-duplicate sends anyway"
+            ),
+        )),
+        DuplicateVerdictV1::Reuse { lifecycle, .. } => Ok(Some(format!(
+            "class {class_id} is already registered ({lifecycle}) — sent anyway (--allow-duplicate): expect a dropped registration"
+        ))),
+        DuplicateVerdictV1::Conflict(why) => Ok(Some(format!("{why} — sent anyway (--allow-duplicate)"))),
+    }
+}
+
+/// [`submit_objects`] with the duplicate gate's override (`palw submit-object --allow-duplicate`).
+pub async fn submit_objects_v2(
+    ctx: &Ctx,
+    ks: &crate::keys::KeySource,
+    paths: &[std::path::PathBuf],
+    yes: bool,
+    allow_duplicate: bool,
+) -> Result<Vec<String>, CliError> {
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
     use kaspa_consensus_core::tx::UtxoEntry;
 
@@ -362,6 +441,29 @@ pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std
     }
 
     let nv = connect(ctx).await?;
+    // **Before any funding is chosen or any carrier built**: a class registration the registry already holds is refused by name.
+    if objects.iter().any(|(_, object, _)| registration_identity_v1(object).is_some()) {
+        let rows: Option<Vec<misaka_palw_remote::register::RegistryRowV1>> = nv.client.get_palw_classes().await.ok().map(|t| {
+            t.classes
+                .into_iter()
+                .map(|c| misaka_palw_remote::register::RegistryRowV1 {
+                    class_id: c.class_id.parse().unwrap_or_default(),
+                    artifact_root: c.artifact_root.parse().unwrap_or_default(),
+                    registrant_bond: None,
+                    lifecycle: c.status,
+                })
+                .collect()
+        });
+        for (path, object, _) in &objects {
+            if let Some((class_id, root)) = registration_identity_v1(object) {
+                let note = duplicate_registration_gate_v1(class_id, root, rows.as_deref(), allow_duplicate)
+                    .map_err(|e| CliError::new(e.code, format!("{}: {}", path.display(), e.msg)))?;
+                if let Some(note) = note {
+                    eprintln!("warning: {}: {note}", path.display());
+                }
+            }
+        }
+    }
     let key = ks.load_key()?;
     let addr = key.funding_address(nv.params.prefix());
     // Every carrier here pays only its fee and returns its change to `addr`, so a panel's reserved
@@ -751,5 +853,76 @@ mod rent_tests {
                 "the two spellings of the relay rate disagree at mass {mass}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod duplicate_gate_tests {
+    use super::{duplicate_registration_gate_v1, registration_identity_v1};
+    use kaspa_consensus_core::Hash64;
+    use misaka_palw_remote::register::RegistryRowV1;
+
+    fn row(class: u64, root: u64, lifecycle: &str) -> RegistryRowV1 {
+        RegistryRowV1 {
+            class_id: Hash64::from_u64_word(class),
+            artifact_root: Hash64::from_u64_word(root),
+            registrant_bond: None,
+            lifecycle: lifecycle.into(),
+        }
+    }
+
+    /// **H1's re-registration, refused before a fee** (2026-10-08 real-user loop: an identical `ClassRegisteredTirV1` re-sent with
+    /// `submit-object --yes` cost a second carrier fee with no warning). The same class over the same root is `DUPLICATE_CLASS`; the same id
+    /// over another root, or the same weights under another id, is `CLASS_CONFLICT`; a registry that cannot be read is
+    /// `DUPLICATE_CHECK_UNAVAILABLE` — each refused, nothing sent, unless `--allow-duplicate`, which turns each into a loud note.
+    #[test]
+    fn a_class_the_registry_already_holds_is_refused_before_any_fee() {
+        let (c, r) = (Hash64::from_u64_word(7), Hash64::from_u64_word(70));
+        let rows = vec![row(7, 70, "Registered"), row(8, 80, "ActiveRewardable")];
+        assert_eq!(
+            duplicate_registration_gate_v1(Hash64::from_u64_word(9), Hash64::from_u64_word(90), Some(&rows), false).unwrap(),
+            None
+        );
+        let dup = duplicate_registration_gate_v1(c, r, Some(&rows), false).expect_err("an exact duplicate is refused");
+        assert!(
+            dup.msg.starts_with("DUPLICATE_CLASS")
+                && dup.msg.contains("Nothing was sent")
+                && dup.msg.contains("UNVERIFIED_REMOTE_STATE"),
+            "{}",
+            dup.msg
+        );
+        let other_root = duplicate_registration_gate_v1(c, Hash64::from_u64_word(71), Some(&rows), false).expect_err("conflict");
+        assert!(other_root.msg.starts_with("CLASS_CONFLICT"), "{}", other_root.msg);
+        let other_id = duplicate_registration_gate_v1(Hash64::from_u64_word(9), r, Some(&rows), false).expect_err("conflict");
+        assert!(
+            other_id.msg.starts_with("CLASS_CONFLICT") && other_id.msg.contains("already registered as class"),
+            "{}",
+            other_id.msg
+        );
+        let unread = duplicate_registration_gate_v1(c, r, None, false).expect_err("an unreadable registry refuses");
+        assert!(unread.msg.starts_with("DUPLICATE_CHECK_UNAVAILABLE"), "{}", unread.msg);
+        for rows in [Some(rows.as_slice()), None] {
+            let note = duplicate_registration_gate_v1(c, r, rows, true).expect("--allow-duplicate sends").expect("…with a note");
+            assert!(note.contains("--allow-duplicate"), "{note}");
+        }
+    }
+
+    /// The gate looks only at class registrations: a certification, a chunk or a licence passes through untouched.
+    #[test]
+    fn only_class_registrations_are_gated() {
+        use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2 as O, PalwPwuRuleV2};
+        let reg = O::ClassRegistered {
+            class_id: Hash64::from_u64_word(1),
+            artifact_root: Hash64::from_u64_word(2),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+            initial_target: u128::MAX / 2,
+            share_permille: 1000,
+            activation_daa: 0,
+            admission: None,
+        };
+        assert_eq!(registration_identity_v1(&reg), Some((Hash64::from_u64_word(1), Hash64::from_u64_word(2))));
+        let chunk = O::ObjectChunk { group: Hash64::from_u64_word(3), index: 0, count: 1, bytes: vec![1, 2, 3] };
+        assert_eq!(registration_identity_v1(&chunk), None);
     }
 }

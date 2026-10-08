@@ -645,6 +645,39 @@ reconstruction/localization/conviction, reorg/restart/IBD/pruning and existing l
 All new protocol gates remain open. Preserve existing 9B/2M/HF evidence and coverage denominators; these added
 requirements do not convert untested models or dormant proposals into registered/active successes.
 
+## 18. Coverage target restated — 2026-10-08 (user decision)
+
+The 2026-10-08 census (`docs/design/palw/tir/hf-census-report-2026-10-08.md`) measured 3,117,871 public repositories:
+
+- shape-ready (full task, declared context, shape depth): **16.65%** of `D_all` (one-sided 95% lower bound 15.74%);
+- software-closable failures: 34.84%;
+- external failures under the current classification: 48.51% (missing weights 18.93%, gated 1.71%, adapter base missing 7.58%, no model task or config 20.28%).
+
+So even with every software failure closed, `D_all` tops out at 51.49% under today's snapshot and buckets. The 90% bar of §0/§7/§10 over `D_all` is unreachable *by construction*. That says nothing about how much of the actual model population MISAKA can serve. It is a property of what the denominator counts.
+
+**Primary target (replaces `registered_full_task / D_all ≥ 0.90` as the acceptance bar):** at least 90%, as a one-sided 95% lower bound, of the public Hugging Face repositories that form a **complete model** are registered on chain as their complete advertised task and advertised context, without model-specific consensus changes.
+
+`D_complete` is the set of public repositories at a pinned snapshot whose weights and the information needed to build the model can be obtained. That means weights present or resolvable, a base resolvable for adapters, a task and config that are declared or deterministically derivable, and access permitted.
+
+**Denominator rules (anti-gaming):**
+
+- **Architectures and tasks MISAKA does not support stay in `D_complete`** and count as failures. This applies to any architecture or task (Qwen, Llama, GLM, DeepSeek, vision, audio, classification, …). Excluding a repository because MISAKA cannot handle it is forbidden; otherwise 90% could be reached by choosing easy models.
+- **External failures are not permanent.** A repository moves into `D_complete` when its gap is resolved by a generic, auditable rule. Examples:
+  - weights it references in another repository, resolved at a pinned revision;
+  - a LoRA/adapter whose base is identified and pinned;
+  - a task fixed safely from its weights and metadata;
+  - a gated model whose access and redistribution rights are actually held.
+
+  Each reclassification rule is published with the census, and its effect is reported separately.
+
+**Always publish three numbers,** with their lower bounds, never only the flattering one:
+
+1. coverage over **all public repositories** (`D_all`);
+2. **full-task, full-advertised-context on-chain registration** over `D_complete`;
+3. the share that reached **mining and a funded `Final` reward**.
+
+**Evidence standard.** Frontend or shape-ready coverage never counts as registration. A sampled success is a real checkpoint → `.palwart` → G14 verification (public prosecution complete for its route) → devnet/chain registration. Alternatively, it is independently reproduced equivalence to an already registered class (§11.2). Text-only, short-context, synthetic-beacon, unit-test and dormant registrations are reported in their own columns. This section supersedes the acceptance bar of §0, §7, §10 and §14's "Broad coverage" row. `D_all` stays the first published number.
+
 ## Mission alignment amendment — 2026-10-07
 
 §13、§15、§16のVerificationPlan/kernel admission、9B-8k/long-context/全taskのcoverageに、fresh non-seat public-bond prosecutionの実測を追加する。kernel-only certificateや正直なFinalだけを成功と数えない。非公開weights/input/state、FOLD prefixやfused preimageが必要なprofileは、公開取得または承認済み公開証明経路が完結するまで新しい報酬対象にしない。HF coverage、ε_check、source fidelityとこのgateは別の指標である。

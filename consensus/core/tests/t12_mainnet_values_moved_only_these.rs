@@ -40,7 +40,7 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was 54353a89…, f0468188…)
+// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 61d4eb4d…, 2d23b5f3…)
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
     "d837fb191d81f01d30f241d28fdb9d13a12caa9cd5ee5644abbe37da53b37cf5",
     "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",

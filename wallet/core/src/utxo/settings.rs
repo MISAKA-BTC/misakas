@@ -241,6 +241,37 @@ mod tests {
     /// `TESTNET_PARAMS` today, so checking t11 against `TESTNET_PARAMS` would pass and would keep
     /// passing after t11 overrode the field — checking the wrong network's number and calling it
     /// a mirror.
+    /// RFC-0012: after retirement the node reports no DNS confirmation; the wallet drops the anchor it had cached, so the
+    /// coinbase it showed as accelerated falls back to the long maturity — the same `coinbase_spend_settled` the node's mempool asks.
+    #[test]
+    fn rfc0012_an_unavailable_dns_confirmation_clears_the_cached_shortcut() {
+        use crate::utxo::processor::dns_shortcut_after_poll;
+        use kaspa_consensus_core::dns_finality::{DnsCoinbaseSettlement, coinbase_spend_settled};
+        let params = NetworkParams {
+            coinbase_transaction_maturity_period_daa: AtomicU64::new(1_000),
+            coinbase_transaction_stasis_period_daa: 500,
+            user_transaction_maturity_period_daa: AtomicU64::new(100),
+            additional_compound_transaction_mass: 100,
+            coinbase_settlement_long_maturity_daa: 600,
+            dns_confirmed_anchor_daa: AtomicU64::new(0),
+        };
+        let (coinbase_daa, pov) = (1_000u64, 1_100u64);
+        let settled = |p: &NetworkParams| {
+            let anchor = p.dns_confirmed_anchor_daa();
+            let s = DnsCoinbaseSettlement { long_maturity_daa: p.coinbase_settlement_long_maturity_daa(), confirmed_anchor_daa: (anchor > 0).then_some(anchor) };
+            coinbase_spend_settled(coinbase_daa, pov, 0, Some(&s))
+        };
+        assert!(!settled(&params), "no anchor and 100 DAA old: held");
+        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(true, 1_050));
+        assert!(settled(&params), "a live anchor past the coinbase accelerates it");
+        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(false, 1_050));
+        assert_eq!(params.dns_confirmed_anchor_daa(), 0, "a retired/unavailable confirmation clears the shortcut, whatever the stale value");
+        assert!(!settled(&params), "and the coinbase is held again");
+        // The long fallback still frees it by the DAA clock alone.
+        let s = DnsCoinbaseSettlement { long_maturity_daa: 600, confirmed_anchor_daa: None };
+        assert!(coinbase_spend_settled(coinbase_daa, coinbase_daa + 600, 0, Some(&s)));
+    }
+
     #[test]
     fn settlement_knob_mirrors_consensus_params() {
         assert_eq!(
