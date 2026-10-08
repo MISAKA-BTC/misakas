@@ -417,3 +417,77 @@ async fn g14_c4r3_an_envelope_in_flight_must_not_split_builds_that_differ_only_i
     assert_eq!(upgraded.sink(), net.chain.sink(), "the upgraded node follows the chain the old build produced");
     assert_eq!(upgraded.tip_state().1.state_root(), net.chain.tip_state().1.state_root(), "and agrees about its PALW state");
 }
+
+// ---- censorship: the chunk lane ---------------------------------------------------------------------------------------------
+
+/// **F-C4R3-03 (P1 wherever the route is armed): the colluders hold every chunked prosecution off the chain for 4,000 DAA with 8
+/// junk chunks.** Every kernel object larger than one carrier — a real class's `FileProof`, a position `Respond`, an onboarding
+/// refutation — rides `ObjectChunk`s, and the chunk lane is ONE network-wide table of `PALW_OBJECT_CHUNK_MAX_GROUPS` = 8 half-assembled
+/// groups, each held until `PALW_OBJECT_CHUNK_TTL_DAA` = 4,000 DAA unless completed. A chunk is unsigned and anyone may open a group:
+/// eight one-part junk groups (8 × the flat 0.2 KAS slot rent, ADR-0075 SA-1 — a price, not the deposit SA-1 asked for) and no new
+/// group opens anywhere. The lie's window (50 DAA) and its whole liability horizon (200 DAA) pass inside that; the outsider's chunked
+/// proof never opens a group, and after the horizon even a proof that fits one carrier is "past the liability horizon". (The fixture's
+/// proof fits one carrier, so it is cut at 1 KiB here to stand for a real class's.) The same 1.6 KAS makes an HONEST producer default
+/// on a demanded position whose response needs chunks — and a pre-Final default pays the demander the penalty. SAFE property asserted:
+/// a chunked proof filed inside the horizon convicts.
+#[tokio::test]
+#[ignore = "FAIL F-C4R3-03: eight junk chunk groups hold the network's chunk lane past the lie's window and liability horizon"]
+async fn g14_c4r3_eight_junk_chunk_groups_must_not_hold_a_chunked_proof_off_the_chain() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::new().await;
+    let job = w.job().await;
+    let lie = w.claim(0, &job, true).await;
+    let seats = w.seats(&lie.id);
+    w.cover(&lie.id).await;
+    let outsider = w.outsiders(&lie, &seats, 1)[0];
+    let ClaimStateV1::ProbabilisticPass { window_end_daa, .. } = w.net.claim_state(&lie.id) else { panic!("covered") };
+    let pol = w.policy();
+    // The colluders fill the network's chunk table: eight one-part junk groups, two parts declared, never completed.
+    let junk_groups: Vec<Hash64> = (0..8u64).map(|g| Hash64::from_u64_word(0xC4C4_0000 + g)).collect();
+    let mut junk = Vec::new();
+    for (i, group) in junk_groups.iter().enumerate() {
+        let card = [0usize, 1, 2, 3][i % 4]; // any funded key: a chunk is unsigned
+        junk.push((card, Obj::ObjectChunk { group: *group, index: 0, count: 2, bytes: vec![i as u8; 32] }));
+    }
+    w.net.send(junk).await;
+    let held = junk_groups.iter().filter(|g| w.net.chain.tip_state().1.pending_chunk_group(g).is_some()).count();
+    assert_eq!(held, 8, "the junk holds every pending-chunk slot");
+
+    // The outsider's (chunked) proof, sent at once and again each 40 DAA, freshly signed each time (a new group id).
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x3C);
+    let horizon = window_end_daa + pol.liability_daa;
+    let mut attempts = 0;
+    while w.net.daa() <= horizon && !w.net.ledger().claims[&lie.id].convicted {
+        let o = w.net.route(outsider, &K::FileProof { accuser: w.net.kid(outsider), claim: lie.id, proof: proof.clone() });
+        let chunks = kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&o, 1024).unwrap().expect("chunked");
+        w.net.send(chunks.into_iter().map(|c| (outsider, c)).collect()).await;
+        attempts += 1;
+        let target = w.net.daa() + 40;
+        w.net.beat_to(target.min(horizon + 1)).await;
+    }
+    eprintln!(
+        "[F-C4R3-03] {attempts} chunked attempts between DAA {} and the horizon {horizon}: convicted = {}; claim {:?}",
+        window_end_daa - pol.challenge_window_daa,
+        w.net.ledger().claims[&lie.id].convicted,
+        w.net.claim_state(&lie.id)
+    );
+    assert!(w.net.ledger().claims[&lie.id].convicted, "a chunked proof filed inside the horizon convicts");
+}
+
+/// Control for F-C4R3-03: the same 1 KiB-chunked proof convicts when the chunk lane is free (so the failure above is the lane's).
+#[tokio::test]
+async fn g14_c4r3_control_a_chunked_proof_convicts_when_the_chunk_lane_is_free() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::new().await;
+    let job = w.job().await;
+    let lie = w.claim(0, &job, true).await;
+    let seats = w.seats(&lie.id);
+    w.cover(&lie.id).await;
+    let outsider = w.outsiders(&lie, &seats, 1)[0];
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x3C);
+    let o = w.net.route(outsider, &K::FileProof { accuser: w.net.kid(outsider), claim: lie.id, proof });
+    let chunks = kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&o, 1024).unwrap().expect("chunked");
+    assert!(chunks.len() >= 2);
+    w.net.send(chunks.into_iter().map(|c| (outsider, c)).collect()).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted, "a chunked proof convicts when the lane is free");
+}
