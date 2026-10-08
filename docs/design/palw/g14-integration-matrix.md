@@ -109,6 +109,18 @@ activation height.
 
 ## 5. Change log
 
+* 2026-10-08 — C4 round 1 on the kernel ledger, fixed by the Lead (116 → 117 kernel tests green):
+  * F-C4-03 (HIGH) copied claim paid twice → one claim per job (`job_claims`, `fffaf74ec`); F-C4-09 job squatting by
+    shape-correct junk → a claim holds its job from the Panel's coverage, not its commit (`592ab3382`).
+  * GAP-R6 front-running by a mempool copyist → seal-then-reveal (`SealClaim`, tag 12; reveal needs a seal ≥ `claim_seal_delay_daa`
+    old; seals expire after `seal_ttl_daa`) (`3d27e026d`).
+  * F-C4-02 (MEDIUM-HIGH) post-Final Sybil demand default erased liability and paid the colluders → post-Final forfeit burned whole;
+    a Final claim inside its horizon is adjudicated even with nothing reserved (`fffaf74ec`).
+  * F-C4-04 slash above synced collateral → clamped, unslashed rest released explicitly (`fffaf74ec`).
+  * Recorded, not kernel bugs: R-C4-10 a bond posting its own job with an identical prompt and answering with a published trace is
+    paid (consumer economics: job price ≥ reward — DESIGN_GAP for lane D/economics); O-C4-09 a post-Final conviction frees the job
+    and the first reward is not clawed back (collateral > reward by policy).
+
 * 2026-10-08 — **P0 found by C4 (independent fuzz) and fixed (`098ffc749`)**: a one-bond stranger could panic the kernel-route
   ledger (release overflow-checks) with a tiny FileProof (Decode/Kernel) or Respond whose tensor/opening shape overflows the element
   count (`[u64::MAX, 2]`, or `[0, 2^40, 2^40]` via LayoutV1 m·n). Now malformed, never a panic (checked counts in misaka-palw-tir
