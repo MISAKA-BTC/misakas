@@ -751,6 +751,9 @@ pub struct GgufModel {
     /// Tensors whose *values* the mapping uses and a header-only view does not hold (`rope_freqs.weight (256 bytes)`): read at
     /// conversion. Empty for a view with its data.
     pending: Vec<String>,
+    /// Tensors left out BY DESIGN, named: the multi-token-prediction draft layers (`{arch}.nextn_predict_layers`), which the
+    /// model's own forward pass never reads (transformers ignores Qwen3.5's `mtp.*`). Not unread, not consumed.
+    dropped: Vec<String>,
 }
 
 /// `llama`'s q/k rows: llama.cpp's converter permutes Hugging Face's `[heads, 2, d/2]` rows to
@@ -797,7 +800,46 @@ const COMMON_KEYS: &[&str] = &[
     "rope.scaling.factor",
     "rope.scaling.original_context_length",
     "vocab_size",
+    // The trailing multi-token-prediction (MTP) draft layers llama.cpp counts in `block_count`: dropped by design (COV-P1P2).
+    "nextn_predict_layers",
 ];
+
+/// The metadata namespaces a GGUF reader may meet besides the architecture's own: provenance and the tokenizer. **Any other
+/// namespace is refused by name** — an unmodelled key may change the math, and a weight-space transform a format's writer declares
+/// beside the weights (`prism.hadamard.*`: a block-Hadamard rotation of the stored weights) is exactly that: lowering the stored
+/// weights as if they were the model's would be a silent semantic substitution (COV-P1P2).
+const PROVENANCE_NAMESPACES: &[&str] = &["general", "tokenizer", "quantize", "split"];
+
+/// The refusal of a metadata key outside the architecture's namespace and [`PROVENANCE_NAMESPACES`]: what the namespace declares,
+/// quoted from the file, and why it is not ignored.
+fn unmodelled_namespace_refusal(meta: &BTreeMap<String, GValue>, key: &str, ns: &str) -> String {
+    let quote = |k: &str| -> Option<String> {
+        meta.get(k).map(|v| match v {
+            GValue::Str(s) => s.chars().take(64).collect(),
+            GValue::Bool(b) => b.to_string(),
+            GValue::Arr(a) if a.len() > 8 => format!("[{} entries]", a.len()),
+            GValue::Arr(a) => format!("{:?}", a.iter().map(|x| x.as_u64().map(|u| u.to_string()).or_else(|| x.as_str().map(str::to_string)).unwrap_or_default()).collect::<Vec<_>>()),
+            other => other.as_u64().map(|u| u.to_string()).or_else(|| other.as_f64().map(|f| f.to_string())).unwrap_or_else(|| "?".into()),
+        })
+    };
+    if meta.contains_key("prism.hadamard.transform") || ns == "prism" {
+        let field = |k: &str| quote(&format!("prism.hadamard.{k}")).unwrap_or_else(|| "absent".into());
+        return format!(
+            "GGUF metadata `{key}`: the file declares a weight-space rotation (`prism.hadamard`: transform {}, block {}, axis {}, signs {} \
+             of widths {}, {} rotated weights, inverse-rotated {}, gdn_v_grouped {}) — its stored weights are the model's only with \
+             the rotation applied, and this reader models none (WEIGHT_ROTATION_HADAMARD not modelled: refused by name, never ignored)",
+            field("transform"),
+            field("block_size"),
+            field("axis"),
+            field("sign_mode"),
+            field("sign_widths"),
+            meta.get("prism.hadamard.weight_names").and_then(GValue::as_arr).map_or(0, |a| a.len()),
+            field("inverse_weight_names"),
+            field("gdn_v_grouped"),
+        );
+    }
+    format!("GGUF metadata `{key}` is in a namespace this reader does not model (`{ns}.*`): it may change the math, so it is refused, not ignored")
+}
 
 fn arch_keys(arch: &str) -> &'static [&'static str] {
     match arch {
@@ -897,6 +939,12 @@ impl GgufModel {
                 return Err(LowerError::not_lowerable(format!("GGUF metadata `{k}` is not mapped (it may change the math)")));
             }
         }
+        for k in file.meta.keys() {
+            let ns = k.split('.').next().unwrap_or("");
+            if ns != arch && !PROVENANCE_NAMESPACES.contains(&ns) {
+                return Err(LowerError::not_lowerable(unmodelled_namespace_refusal(&file.meta, k, ns)));
+            }
+        }
         let get = |k: &str| file.meta.get(&format!("{pre}{k}"));
         let need_u = |k: &str| -> Result<usize> {
             get(k).and_then(GValue::as_u64).map(|v| v as usize).ok_or_else(|| LowerError::bad(format!("GGUF: no `{pre}{k}`")))
@@ -912,7 +960,26 @@ impl GgufModel {
             }
         }
         let hidden = need_u("embedding_length")?;
-        let layers = need_u("block_count")?;
+        let blocks = need_u("block_count")?;
+        // **Multi-token prediction** (`nextn_predict_layers`, llama.cpp's convention for Qwen3.5/3.8, GLM-4.5, DeepSeek-V3): the
+        // trailing `nextn` blocks are draft layers a speculative decoder runs beside the model; the model's own logits never read
+        // them (transformers' `Qwen3_5ForCausalLM` ignores `mtp.*`). The class is the model: those blocks are DROPPED, named, and
+        // each must carry its `nextn.*` tensors (else the count is not what it says, and it is refused).
+        let nextn = get("nextn_predict_layers").and_then(GValue::as_u64).unwrap_or(0) as usize;
+        if nextn >= blocks {
+            return Err(LowerError::bad(format!("GGUF: nextn_predict_layers {nextn} of {blocks} blocks")));
+        }
+        let layers = blocks - nextn;
+        let mut dropped: Vec<String> = Vec::new();
+        for i in layers..blocks {
+            let b = format!("blk.{i}.");
+            if !file.tensors.keys().any(|k| k.starts_with(&format!("{b}nextn."))) {
+                return Err(LowerError::not_lowerable(format!(
+                    "GGUF: nextn_predict_layers {nextn} names block {i} a multi-token-prediction layer, and it has no `nextn.*` tensor"
+                )));
+            }
+            dropped.extend(file.tensors.keys().filter(|k| k.starts_with(&b)).cloned());
+        }
         let ffn = need_u("feed_forward_length")?;
         let heads = need_u("attention.head_count")?;
         let kv = get("attention.head_count_kv").and_then(GValue::as_u64).map_or(heads, |v| v as usize);
@@ -1296,7 +1363,7 @@ impl GgufModel {
             }
             consumed.insert(s.gguf.clone());
         }
-        Ok(GgufModel { file, arch, config: cfg, map, consumed, pending })
+        Ok(GgufModel { file, arch, config: cfg, map, consumed, pending, dropped })
     }
 
     /// Tensors whose values the mapping reads and this (header-only) view could not: the program's structure does not depend on
@@ -1305,9 +1372,15 @@ impl GgufModel {
         &self.pending
     }
 
-    /// GGUF tensors this view does not map (reported as unread by the weight check).
+    /// GGUF tensors this view does not map (reported as unread by the weight check); the tensors it drops by design
+    /// ([`Self::dropped`]) are not among them.
     pub fn unmapped(&self) -> Vec<String> {
-        self.file.tensors.keys().filter(|k| !self.consumed.contains(*k)).cloned().collect()
+        self.file.tensors.keys().filter(|k| !self.consumed.contains(*k) && !self.dropped.contains(*k)).cloned().collect()
+    }
+
+    /// The tensors left out by design: the multi-token-prediction draft layers (`nextn_predict_layers`).
+    pub fn dropped(&self) -> &[String] {
+        &self.dropped
     }
 
     /// The quantisation this checkpoint's projections carry: for each Hugging Face module (a

@@ -1,0 +1,14 @@
+{
+ "schema": "misaka.cov-p1p2.header-fixture.v1",
+ "repo": "HuggingFaceTB/SmolVLM-256M-Instruct",
+ "revision": "7e3e67edbbed1bf9888184d9df282b700a323964",
+ "license": "apache-2.0",
+ "weights_read": false,
+ "shards": {
+  "model.safetensors": {
+   "header_sha256": "aa10d06ce394f9f1ba247ab6445e44eb96993a1ec453be663deadb53292e0c75",
+   "file_bytes": 513028808
+  }
+ },
+ "note": "the shard is its 8-byte length and JSON header only; fetched by HTTP range from the pinned revision"
+}

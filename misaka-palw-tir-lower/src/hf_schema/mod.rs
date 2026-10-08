@@ -261,7 +261,23 @@ pub fn read_model_with(
         AdapterChoice::None => Route::Generic,
         AdapterChoice::Auto => match builtin::find_for(&arch, model_type) {
             Some(a) => Route::Adapter(a.clone()),
-            None => Route::Generic,
+            // A multimodal wrapper no adapter names: its text decoder, by the generic route (`vlm-generic`, data).
+            None => match builtin::find_wrapper_for(&arch, config) {
+                Some(Ok(a)) => Route::Adapter(a),
+                Some(Err(why)) => {
+                    return Err(ReadFailure {
+                        error: LowerError::not_lowerable(why.clone()),
+                        adapter: AdapterSource::None,
+                        unmapped_config_keys: Vec::new(),
+                        missing: vec![MissingItem {
+                            what: format!("a decoder adapter for the text decoder of `{arch}`"),
+                            why,
+                            general_primitive: None,
+                        }],
+                    });
+                }
+                None => Route::Generic,
+            },
         },
     };
     // An adapter that only dispatches (a VLM wrapper: the text decoder's own `model_type` picks the

@@ -453,9 +453,20 @@ pub fn tir_canonical_job_answerable_at_v1(params: &Params, class: &PalwTirClassV
 }
 
 /// **The ruleset an offline admission is asked under**: the network's own where `palw_tir_v1` is
-/// armed on it (at the fence's height), else — on testnet-12, whose IR fence is a post-launch flag
-/// day not yet scheduled — the same ruleset with the fence armed at DAA 1, so a layout is judged by
-/// the gate it will meet rather than refused for the fence alone.
+/// armed on it — at the first height at which EVERY fence the network schedules is in force (never
+/// below the IR fence's own), the height the model preflight judges at by default — else, on a drill
+/// network whose IR fence is not scheduled, the same ruleset with the fence armed at DAA 1, so a layout
+/// is judged by the gate it will meet rather than refused for the fence alone.
+///
+/// **COV-P1P2 (2026-10-08): not the IR fence's own height.** This gate judged at `palw_tir_v1`'s
+/// activation (testnet-12: DAA 2,000), below `palw_tir_fence2` (DAA 3,600): `declare-layout`, the
+/// checkpoint-interval search and `palw-class preflight` sized every class's closes with the ELEMENT
+/// twin and the pre-fence2 rules the chain has not applied since DAA 3,600. That is the
+/// `TIR_EXCEEDS_CEILING` (close-sizing work 67,108,865 = cap + 1, a refusal sentinel) the
+/// Huihui-Qwen3.5-9B layouts met at every context, while the gate in force — the RANGE twin — admits
+/// the same class at 8,192 positions in 40.5 M steps (0.60 × the cap). The model preflight was moved
+/// off that height on 2026-10-04 (`preflight::chain`); this is the same correction for the tools that
+/// write and judge a class offline.
 pub struct TirOfflineGateV1 {
     pub params: Params,
     pub daa: u64,
@@ -465,7 +476,8 @@ pub struct TirOfflineGateV1 {
 impl TirOfflineGateV1 {
     pub fn of(params: &Params) -> Self {
         if let Some(fence) = params.palw_tir_v1_fence() {
-            return Self { params: params.clone(), daa: fence.activation.daa_score(), hypothetical: false };
+            let schedule_end = params.fence_schedule_v1().last().copied().unwrap_or(0);
+            return Self { params: params.clone(), daa: fence.activation.daa_score().max(schedule_end), hypothetical: false };
         }
         let mut armed = params.clone();
         if armed.net == kaspa_consensus_core::config::drill::palw_drill_network_v1() {
@@ -482,7 +494,7 @@ impl TirOfflineGateV1 {
         if self.hypothetical {
             "as if palw_tir_v1 were armed (it is dormant on this network: a post-launch flag day)".to_string()
         } else {
-            format!("at DAA {} (palw_tir_v1 on this network)", self.daa)
+            format!("at DAA {} (every fence this network schedules in force, palw_tir_v1 among them)", self.daa)
         }
     }
 }
@@ -895,11 +907,14 @@ mod tests {
 
     const CONTEXT: u32 = 32;
 
-    /// **A canonical job past 2^22 step leaves is refused under the live rules** — the chain verifies
-    /// an IR data-availability answer at 2^22 until `palw_tir_fence2`, so every producer of such a class
-    /// would default on a demand — and passes where the fence is in force (admission bounds it there).
-    /// The Qwen2.5-1.5B A16 program at 64-lane tiles: its canonical job at 512 positions (64 of them)
-    /// answers; at 8,192 (1,024) it commits past 2^22.
+    /// **A canonical job past 2^22 step leaves is refused below `palw_tir_fence2`** — the chain verifies
+    /// an IR data-availability answer at 2^22 until that fence, so every producer of such a class would
+    /// default on a demand — and passes where the fence is in force (admission bounds it there). The
+    /// Qwen2.5-1.5B A16 program at 64-lane tiles: its canonical job at 512 positions (64 of them)
+    /// answers; at 8,192 (1,024) it commits past 2^22. Below the fence is testnet-12's DAA-2,000
+    /// release (int-8), which schedules no `palw_tir_fence2`; the shipped ruleset is judged where every
+    /// scheduled fence is in force (COV-P1P2: the offline gate no longer judges at the IR fence's own
+    /// height, DAA 2,000, below the fence2 the chain has applied since DAA 3,600).
     #[test]
     fn a_canonical_job_no_producer_could_answer_is_refused_until_the_second_fence() {
         let g = kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B;
@@ -917,7 +932,7 @@ mod tests {
         let program = misaka_palw_base0::tir_a16::a16_mirror_program(&shape, misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL)
             .expect("the A16 program");
         let program = tir_program_with_scheme_v1(&program, None).unwrap();
-        let params = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let params = kaspa_consensus_core::config::params::palw_t12_release_v4_params();
         let class_at = |max_context: u32| {
             let choice = TirLayoutChoiceV1 { max_context: Some(max_context), logits_tile: Some(1024), ..Default::default() };
             PalwTirClassV1 {
@@ -927,7 +942,7 @@ mod tests {
                 tokenizer_id: Hash64::from_bytes([0; 64]),
             }
         };
-        assert_eq!(tir_da_answer_leaf_cap_v1(&params), Some(1 << 22), "testnet-12 today: palw_tir_fence2 dormant");
+        assert_eq!(tir_da_answer_leaf_cap_v1(&params), Some(1 << 22), "testnet-12's DAA-2,000 release: palw_tir_fence2 not scheduled");
         tir_canonical_job_answerable_v1(&params, &class_at(512)).expect("64 positions answer");
         let refused = tir_canonical_job_answerable_v1(&params, &class_at(8_192)).expect_err("1,024 positions commit past 2^22");
         assert!(refused.contains("TIR_DA_UNANSWERABLE"), "{refused}");
@@ -940,6 +955,13 @@ mod tests {
         );
         assert_eq!(tir_da_answer_leaf_cap_v1(&armed), None, "past the second fence admission bounds the job");
         tir_canonical_job_answerable_v1(&armed, &class_at(8_192)).expect("the class's ladder, past the fence");
+        // testnet-12 as shipped: palw_tir_fence2 in force from DAA 3,600, and the offline gate judges there.
+        let shipped = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let gate = TirOfflineGateV1::of(&shipped);
+        assert!(shipped.palw_tir_fence2_active_at(gate.daa), "the offline gate judges where fence2 is in force (DAA {})", gate.daa);
+        assert_eq!(gate.daa, shipped.fence_schedule_v1().last().copied().unwrap(), "every scheduled fence in force");
+        assert_eq!(tir_da_answer_leaf_cap_v1(&shipped), None);
+        tir_canonical_job_answerable_v1(&shipped, &class_at(8_192)).expect("the shipped ruleset admits the 8,192-position job's DA");
     }
 
     /// A layout of one commit tile and the logits tile, at `h_tile`, the interval left for the search.
