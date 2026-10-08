@@ -475,6 +475,10 @@ pub struct VirtualStateProcessor {
     pub(super) palw_dns_retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
     /// RFC-0012: the per-block rows of the native settlement walk. Memory only and rebuildable; see `native_settlement`.
     pub(super) native_rows: parking_lot::Mutex<super::native_settlement::NativeRowCache>,
+    /// RFC-0012 D1: the last `safe`-readiness explanation served, keyed by the sink it stands at (memory only, advisory). Bounds the
+    /// cost of the RPC to one evaluation per virtual change; see `native_settlement::native_safe_readiness`.
+    pub(super) native_readiness_memo:
+        parking_lot::Mutex<Option<(BlockHash, kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1)>>,
     /// Test-only: facts a test places at a chain block, as if its PALW delta had carried that work.
     #[cfg(test)]
     pub(super) native_fact_override:
@@ -1197,6 +1201,7 @@ impl VirtualStateProcessor {
             palw_overlay_carve: params.palw_overlay_carve_fence(),
             palw_dns_retirement: params.palw_dns_retirement,
             native_rows: Default::default(),
+            native_readiness_memo: Default::default(),
             #[cfg(test)]
             native_fact_override: Default::default(),
             palw_native_ruleset_id: params.consensus_params_id(),

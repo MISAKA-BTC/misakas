@@ -1146,6 +1146,7 @@ fn plant_frontier(rig: &Rig, blue: u64, frontier: BlockHash) {
     drop(store);
     // A plant rewrites a delta row under the cache (a real chain never does): the rows read before it are stale.
     vp.native_rows.lock().clear();
+    vp.native_readiness_memo.lock().take();
 }
 
 /// Place a unit of matured useful work at `at`, as if its PALW delta had carried it (the cfg(test) seam; the extraction from real
@@ -1164,6 +1165,7 @@ fn place_fact(rig: &Rig, at: &Block, work: u128) {
         work,
     };
     rig.vp().native_fact_override.lock().entry(at.header.hash).or_default().push(fact);
+    rig.vp().native_readiness_memo.lock().take();
 }
 
 /// Build the certified scenario on `a`: prefix, a planted frontier at b0, one attempt carrying a placed fact, one more attempt, the
@@ -1639,4 +1641,231 @@ async fn claim_reorg_case(b_attempts: usize, what: &str) {
 async fn rfc12_x14_a_reorg_across_a_deposit_claim_and_the_fence_undoes_both_ledgers_together() {
     claim_reorg_case(5, "the branch without the lock is heavier").await;
     claim_reorg_case(1, "the branch with the lock is heavier").await;
+}
+
+// =====================================================================================================================
+// MATRIX 9 — RFC-0012 D1: the readiness explanation (`getPalwSettlement.nativeReadiness`)
+// =====================================================================================================================
+
+fn readiness_of(rig: &Rig) -> kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1 {
+    rig.api().get_native_safe_readiness().expect("a readable readiness").expect("a readiness past the fence")
+}
+
+/// Like [`place_fact`], but the work matures at `matured_daa` (the seam's usual fact is mature at once).
+fn place_maturing_fact(rig: &Rig, at: &Block, work: u128, matured_daa: u64) {
+    place_fact(rig, at, work);
+    rig.vp().native_fact_override.lock().get_mut(&at.header.hash).unwrap().last_mut().unwrap().matured_daa = matured_daa;
+    rig.vp().native_readiness_memo.lock().take();
+}
+
+/// **EXPECTED.** In the certified scenario of x8 the explanation AGREES with the snapshot on everything the snapshot says
+/// (generation, `safe`, `finalized`, the stop) and adds the cause: the blocking effect is the first one the frontier does not
+/// cover, its first wait is `FrontierBehind` with the frontier's and the effect's blue scores, and no clock is promised for an event
+/// that has not happened. `finalized` has nothing to wait for (the pruning point is executed and under `safe`). A second call at the
+/// same sink is the memo (equal value); the next block moves the generation.
+#[tokio::test]
+async fn rfc12_r1_the_explanation_agrees_with_the_snapshot_and_names_the_frontier() {
+    use kaspa_consensus_core::palw_native_readiness_v1::SafeWaitV1;
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_a100_0000);
+    let (b0, _e3, _pre) = certified(&mut a).await;
+    let s = snapshot_of(&a).expect("a snapshot");
+    let r = readiness_of(&a);
+    eprintln!("[r1] {}", serde_json::to_string_pretty(&r).unwrap());
+    assert_eq!(
+        (r.generation, r.safe, r.stop, r.finalized.finalized),
+        (s.generation, s.safe, s.stop, s.finalized),
+        "the explanation is about the snapshot's evidence"
+    );
+    assert_eq!(r.safe, Some(b0.header.hash));
+    assert!(r.stopped_early.is_none());
+    let blocking = r.blocking.as_ref().expect("a stop has a blocking effect");
+    assert_eq!(blocking.waits.iter().find_map(|w| w.stop()), s.stop, "its first wait is the snapshot's stop");
+    match &blocking.waits[0] {
+        SafeWaitV1::FrontierBehind { frontier_blue, effect_blue, frontier_on_branch } => {
+            assert_eq!((*frontier_blue, *frontier_on_branch), (b0.header.blue_score, true));
+            assert!(*effect_blue > *frontier_blue, "the effect is past the frontier");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(blocking.earliest_ready_in_daa, None, "a frontier that has not advanced is not a clock");
+    assert_eq!(r.finalized.wait, None, "finalized is the pruning point under safe: nothing to wait for");
+    assert_eq!(r.finalized.finalized, s.finalized);
+    assert!(r.executed_effects >= 2, "the chain walked is reported ({} effects)", r.executed_effects);
+    // The memo: the same sink answers the same value; a new block moves the generation.
+    assert_eq!(readiness_of(&a), r);
+    let next = extend(&mut a, &[4]).await.remove(0);
+    let r2 = readiness_of(&a);
+    assert_eq!(r2.generation, next.header.hash);
+    assert_eq!(r2.generation, snapshot_of(&a).unwrap().generation);
+}
+
+/// **EXPECTED.** x10's unresolved claim: the blocking effect is held by `OpenClaim` for the claim that effect accepted, stage
+/// `Provisional` (it has no panel yet), with no retention wait promised and no clock; the explanation also says the pruning point
+/// (genesis) carries no EVM result, which is why `finalized` is absent.
+#[tokio::test]
+async fn rfc12_r2_an_unresolved_claim_is_named_with_its_stage_and_promises_no_clock() {
+    use kaspa_consensus_core::palw_native_readiness_v1::{ClaimStageV1, FinalizedWaitV1, SafeWaitV1};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_a200_0000);
+    let pre = prefix(&mut a).await;
+    plant_frontier(&a, pre[3].header.blue_score, pre[3].header.hash);
+    let e3 = extend(&mut a, &[2]).await.remove(0);
+    place_fact(&a, &e3, 10);
+    extend(&mut a, &[3]).await;
+    let s = snapshot_of(&a).expect("a snapshot");
+    assert_eq!(s.stop, Some(SettlementStopV1::OpenLifecycle));
+    let r = readiness_of(&a);
+    eprintln!("[r2] {}", serde_json::to_string_pretty(&r).unwrap());
+    let blocking = r.blocking.as_ref().expect("a blocking effect");
+    assert_eq!(blocking.waits.iter().find_map(|w| w.stop()), Some(SettlementStopV1::OpenLifecycle));
+    let claims: Vec<_> = blocking
+        .waits
+        .iter()
+        .filter_map(|w| match w {
+            SafeWaitV1::OpenClaim { stage, accepted_blue, wait_daa, .. } => Some((*stage, *accepted_blue, *wait_daa)),
+            _ => None,
+        })
+        .collect();
+    assert!(!claims.is_empty(), "the claim that holds the effect is named");
+    assert!(claims.iter().all(|(stage, blue, wait)| *stage == ClaimStageV1::Provisional && *blue <= blocking.blue && wait.is_none()));
+    assert_eq!(claims.len() as u64, blocking.open_claims_total.min(8), "the named claims are the open ones, capped at 8");
+    assert_eq!(blocking.earliest_ready_in_daa, None, "a claim without a panel is an event, not a clock");
+    assert_eq!(r.finalized.wait, Some(FinalizedWaitV1::PruningPointNotExecuted), "genesis carries no EVM result");
+    assert_eq!(r.safe, s.safe);
+}
+
+/// **EXPECTED.** x9's lost history: with one delta row gone the explanation is `stoppedEarly = MissingHistory { DeltaNotRetained,
+/// block = the block whose row is missing }` — a retention gap named, not a generic stop — and carries no `blocking` (nothing was
+/// weighed). Restoring the row gives the ordinary explanation back.
+#[tokio::test]
+async fn rfc12_r3_a_lost_delta_row_is_a_named_retention_gap_not_a_generic_stop() {
+    use crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2;
+    use kaspa_consensus_core::palw_native_readiness_v1::{HistoryGapV1, SafeWaitV1};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_a300_0000);
+    let (_b0, _e3, pre) = certified(&mut a).await;
+    let b1 = pre[2].header.hash;
+    let (root, delta) = a.vp().palw_state_v2_store.read().delta_of(b1).expect("b1's row");
+    let record = PalwStateDeltaRecordV2 { state_root: root, delta_borsh: borsh::to_vec(&delta).unwrap() };
+    a.vp().palw_state_v2_store.write().delete_delta_for_tests(b1).unwrap();
+    a.vp().native_rows.lock().clear();
+    extend(&mut a, &[5]).await;
+    let r = readiness_of(&a);
+    eprintln!("[r3] {}", serde_json::to_string_pretty(&r).unwrap());
+    assert_eq!(r.stop, Some(SettlementStopV1::MissingHistory));
+    assert_eq!(r.stopped_early, Some(SafeWaitV1::MissingHistory { gap: HistoryGapV1::DeltaNotRetained, block: Some(b1) }));
+    assert!(r.blocking.is_none() && r.tip.is_none() && r.safe.is_none());
+    assert_eq!(snapshot_of(&a).unwrap().stop, r.stop);
+    a.vp().palw_state_v2_store.write().set_delta_record_for_tests(b1, record).unwrap();
+    a.vp().native_rows.lock().clear();
+    extend(&mut a, &[6]).await;
+    let back = readiness_of(&a);
+    assert!(back.stopped_early.is_none() && back.safe.is_some(), "restored: the ordinary explanation");
+}
+
+/// **EXPECTED.** Facts that exist but are not mature: the blocking effect (the pruning point b0, whose frontier covers it) lacks
+/// depth and work ONLY because the placed work matures at DAA 500 — the explanation says so (`WaitingMaturity`, `ready_daa = 500`,
+/// `wait = 500 - sink DAA`) and, since nothing else is unmet, promises `earliest_ready_in_daa = 500 - sink DAA`. The snapshot's own
+/// stop for the same state is `InsufficientDepth`. Flipping the same fact to mature-now certifies b0: the explanation was right.
+#[tokio::test]
+async fn rfc12_r4_work_that_has_not_matured_is_a_maturity_wait_with_an_exact_clock() {
+    use kaspa_consensus_core::palw_native_readiness_v1::SafeWaitV1;
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_a400_0000);
+    let pre = prefix(&mut a).await;
+    plant_frontier(&a, pre[0].header.blue_score, pre[0].header.hash);
+    let e3 = extend(&mut a, &[2]).await.remove(0);
+    place_maturing_fact(&a, &e3, 10, 500);
+    a.vp().pruning_point_store.write().set(pre[0].header.hash, 1).unwrap();
+    extend(&mut a, &[3]).await;
+    let s = snapshot_of(&a).expect("a snapshot");
+    assert_eq!((s.safe, s.stop), (None, Some(SettlementStopV1::InsufficientDepth)), "immature work certifies nothing");
+    let r = readiness_of(&a);
+    eprintln!("[r4] {}", serde_json::to_string_pretty(&r).unwrap());
+    let blocking = r.blocking.as_ref().expect("a blocking effect");
+    assert_eq!(blocking.block, pre[0].header.hash);
+    assert_eq!(blocking.evidence.pending_facts, 1);
+    let sink_daa = r.sink_daa;
+    let wait = blocking.waits.iter().find(|w| matches!(w, SafeWaitV1::WaitingMaturity { .. })).expect("a maturity wait").clone();
+    assert_eq!(
+        wait,
+        SafeWaitV1::WaitingMaturity {
+            facts: 1,
+            work: "10".into(),
+            earliest_matured_daa: 500,
+            wait_daa: 500 - sink_daa,
+            ready_daa: Some(500)
+        }
+    );
+    assert_eq!(blocking.waits.iter().find_map(|w| w.stop()), Some(SettlementStopV1::InsufficientDepth));
+    assert_eq!(
+        blocking.earliest_ready_in_daa,
+        Some(500 - sink_daa),
+        "frontier covers b0 and its lifecycle is closed: only the clock remains"
+    );
+    // The explanation was right: the same fact, mature now, certifies b0.
+    a.vp().native_fact_override.lock().get_mut(&e3.header.hash).unwrap().last_mut().unwrap().matured_daa = 0;
+    a.vp().native_readiness_memo.lock().take();
+    extend(&mut a, &[4]).await;
+    assert_eq!(snapshot_of(&a).unwrap().safe, Some(pre[0].header.hash));
+    assert_eq!(readiness_of(&a).safe, Some(pre[0].header.hash));
+}
+
+/// One run of x8's scenario with the placed work either already mature at the moment the heavier branch arrives, or not yet:
+/// `(snapshot before the reorg, snapshot after it, readiness after it)`. The harness clock stops at DAA 1-2, so "time" is the fact's
+/// own `matured_daa` against the sink DAA: a rule that has elapsed by the release is `matured_daa = 0`, one that has not is far ahead.
+async fn reorg_across_the_would_be_safe_point(
+    nonce: u64,
+    mature_at_release: bool,
+) -> (NativeSettlementSnapshotV1, NativeSettlementSnapshotV1, kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1) {
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, nonce);
+    let pre_blocks = prefix(&mut a).await;
+    plant_frontier(&a, pre_blocks[0].header.blue_score, pre_blocks[0].header.hash);
+    let mut b = follower(&p, nonce + 0x10_0000, &pre_blocks).await;
+    plant_frontier(&b, pre_blocks[0].header.blue_score, pre_blocks[0].header.hash);
+    let e3 = extend(&mut a, &[2]).await.remove(0);
+    place_maturing_fact(&a, &e3, 10, if mature_at_release { 0 } else { 1_000_000 });
+    a.vp().pruning_point_store.write().set(pre_blocks[0].header.hash, 1).unwrap();
+    extend(&mut a, &[3]).await;
+    let before = snapshot_of(&a).expect("a snapshot");
+    let ys = extend(&mut b, &[4, 5, 6]).await;
+    for y in &ys {
+        a.arrive(y.clone(), "the privately built, heavier branch").await;
+    }
+    assert_eq!(a.chain.sink(), ys.last().unwrap().header.hash, "the released branch took the sink");
+    let after = snapshot_of(&a).expect("a snapshot");
+    let readiness = readiness_of(&a);
+    (before, after, readiness)
+}
+
+/// **EXPECTED (deep reorg across the would-be `safe` point; D1).** The same chain, the same private branch, released when the work is
+/// either already counted under the rule in force or not yet:
+/// * **mature at the release** (a rule whose instant has passed): `safe` and `finalized` had been published at b0; the heavier branch
+///   takes the sink and BOTH labels are withdrawn — `stop = InsufficientDepth`, **not** a `FinalizedConflict` (b0 is still an ancestor of
+///   the new sink; the conflict alarm is for a reorg that abandons the finalized block itself, x7). A published `finalized` therefore
+///   retreats here; nothing latches it.
+/// * **not yet mature**: nothing was ever published at b0, so there is nothing to withdraw — `safe`/`finalized` are absent before and
+///   after, and the readiness after says why (`InsufficientDepth` with the maturity wait gone: the work is on the abandoned branch).
+///
+/// Which world a candidate rule is in at a given release time is arithmetic on its instant (the fold-level tests); this test is the
+/// node's behaviour in each world.
+#[tokio::test]
+async fn rfc12_r5_a_late_private_branch_withdraws_a_published_safe_and_finalized_only_if_the_rule_had_counted_the_work() {
+    let (before, after, readiness) = reorg_across_the_would_be_safe_point(0x12_a500_0000, true).await;
+    eprintln!("[r5 mature] before {before:?}\n[r5 mature] after  {after:?}");
+    assert!(before.safe.is_some() && before.finalized == before.safe, "published before the release");
+    assert_eq!((after.safe, after.finalized), (None, None), "withdrawn after it");
+    assert_eq!(after.stop, Some(SettlementStopV1::InsufficientDepth), "an ordinary stop, not the conflict alarm");
+    assert_ne!(after.stop, Some(SettlementStopV1::FinalizedConflict));
+    assert_eq!(readiness.stop, after.stop);
+    assert_eq!(readiness.finalized.wait, Some(kaspa_consensus_core::palw_native_readiness_v1::FinalizedWaitV1::NoSafePrefix));
+
+    let (before, after, readiness) = reorg_across_the_would_be_safe_point(0x12_a600_0000, false).await;
+    eprintln!("[r5 immature] before {before:?}\n[r5 immature] after  {after:?}");
+    assert_eq!((before.safe, before.finalized), (None, None), "never published: the rule had not counted the work");
+    assert_eq!((after.safe, after.finalized), (None, None));
+    assert_eq!(after.stop, Some(SettlementStopV1::InsufficientDepth));
+    assert_eq!(readiness.generation, after.generation);
 }
