@@ -495,6 +495,8 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 R::AggregateForfeit => "aggregate_forfeit",
                 // Lane PL part C (ADR-0166): an expiry of unavailable verifiers, no producer fault.
                 R::PanelUnavailable => "panel_unavailable",
+                // RFC-0008 v2: a work session not ready by its expiry voids its claim, uncharged.
+                R::WorkRootExpired => "work_root_expired",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }
