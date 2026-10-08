@@ -1377,6 +1377,10 @@ enum PalwCmd {
         /// Actually broadcast (otherwise a dry-run preview).
         #[arg(long)]
         yes: bool,
+        /// Send a class registration (`ClassRegistered`, `ClassRegisteredTirV1`) even when the node's class rows already hold the class
+        /// (`DUPLICATE_CLASS`) or hold it in conflict (`CLASS_CONFLICT`), or cannot be read. Without it those are refused before any fee.
+        #[arg(long)]
+        allow_duplicate: bool,
     },
     /// **File a court close, whole or in the carriage ADR-0080 gave it** (W13).
     ///
@@ -3026,7 +3030,9 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
-        Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await.map(|_| ()),
+        Command::Palw(PalwCmd::SubmitObject { key, object, yes, allow_duplicate }) => {
+            palw_fp::submit_objects_v2(&ctx, &key.source(), &object, yes, allow_duplicate).await.map(|_| ())
+        }
         Command::Palw(PalwCmd::TirRegistration { key, artifact, parent, bond, out, model_id, pack_gate }) => {
             palw_model_ops::tir_registration_object(
                 &ctx,
