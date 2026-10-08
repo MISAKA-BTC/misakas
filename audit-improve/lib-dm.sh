@@ -170,6 +170,9 @@ tir2|--palw-drill-tir2-at|$TIR2_AT
 int11|--palw-drill-int11-at|$INT11_AT
 EOF
         [ -n "${USEFUL_WORK_AT:-}" ] && echo "useful_work|--palw-drill-useful-work-at|$USEFUL_WORK_AT"
+        # The int-13 flag day (DAA 9,000 on testnet-12: palw_audit_1004_v1, the range twin, the model court window, palw_receipt_spend_v4)
+        # as the release arms it: ONE flag moves the whole list, applied after --palw-drill-int11-at (t12-daa9000-drill-plan.md §2.2).
+        [ -n "${INT13_AT:-}" ] && echo "int13|--palw-drill-int13-at|$INT13_AT"
         return 0
     fi
     cat <<EOF
