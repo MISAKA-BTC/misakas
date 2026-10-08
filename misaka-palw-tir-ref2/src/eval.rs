@@ -19,6 +19,13 @@ pub type Params = BTreeMap<(u16, Option<u32>), Tensor>;
 /// The independent evaluator still checks each tensor and evaluates all primitives itself.
 pub trait ParamSource {
     fn tensor(&self, index: u16, layer: Option<u32>) -> Res<Option<Tensor>>;
+
+    /// **Row-tiled access, if this source offers it** (RFC-0013 §5; [`crate::tiled`]). A source that returns one lets a `MatMul` or a
+    /// `Gather` consume a param larger than a tile in row ranges, never whole. The default offers none, and evaluation is the whole-tensor
+    /// evaluation it always was.
+    fn tiles(&self) -> Option<&dyn crate::tiled::TileAccess> {
+        None
+    }
 }
 
 impl ParamSource for Params {
@@ -175,7 +182,9 @@ fn eval_one(
     let n = &block.nodes[i];
     let mut owned: Vec<Tensor> = Vec::with_capacity(n.inputs.len());
     let mut from_node: Vec<Option<usize>> = Vec::with_capacity(n.inputs.len());
-    for r in &n.inputs {
+    // A param this node reads in row tiles instead of whole (RFC-0013 §5): its position among the inputs and its declaration.
+    let mut lazy: Option<(usize, crate::tiled::LazyParam<'_>)> = None;
+    for (pos, r) in n.inputs.iter().enumerate() {
         match *r {
             Ref::Node(k) => {
                 if k as usize >= i || vals[k as usize].is_none() {
@@ -194,6 +203,30 @@ fn eval_one(
             }
             Ref::Param(j) => {
                 let d = &p.params[j as usize];
+                // One param per node is read in tiles; a second (a `MatMul` of two params) is loaded whole like any other.
+                if lazy.is_none()
+                    && let Some(tiles) = params.tiles()
+                    && crate::tiled::tiled_form_exists(&n.prim, pos, d.shape.len())
+                {
+                    // The declaration is checked as the whole path checks it (present, the declared dtype and shape); the elements are
+                    // checked tile by tile as they are read.
+                    let Some((dtype, shape)) = tiles.decl(j, instance(d.per_layer, layer))? else {
+                        return err(Class::Missing, format!("param {j} ({}) at layer {layer:?} not supplied", d.name));
+                    };
+                    let declared: Vec<u64> = d.shape.iter().map(|&x| x as u64).collect();
+                    if dtype != d.dtype || shape != declared {
+                        return err(Class::Operand, "param: dtype or shape is not the declared one");
+                    }
+                    if crate::tensor::count(&shape) > tiles.tile_elems() {
+                        lazy = Some((
+                            pos,
+                            crate::tiled::LazyParam { tiles, index: j, layer: instance(d.per_layer, layer), dtype, shape },
+                        ));
+                        from_node.push(None);
+                        owned.push(Tensor::zeros(DType::I8, vec![])); // placeholder, never read
+                        continue;
+                    }
+                }
                 let Some(t) = params.tensor(j, instance(d.per_layer, layer))? else {
                     return err(Class::Missing, format!("param {j} ({}) at layer {layer:?} not supplied", d.name));
                 };
@@ -248,7 +281,10 @@ fn eval_one(
         }
         _ => None,
     };
-    let v = eval_prim(&n.prim, &ins, n.out.dtype, &n.out.extents(h), &p.states, prior.as_deref())?;
+    let v = match &lazy {
+        Some((pos, param)) => crate::tiled::eval_prim_tiled(&n.prim, &ins, *pos, param, n.out.dtype, &n.out.extents(h))?,
+        None => eval_prim(&n.prim, &ins, n.out.dtype, &n.out.extents(h), &p.states, prior.as_deref())?,
+    };
     let effect = match n.prim {
         Prim::StateWrite { .. } => Some((n.prim.clone(), layer, v.clone())),
         Prim::HistAppend { .. } => Some((n.prim.clone(), layer, ins[0].clone())),
