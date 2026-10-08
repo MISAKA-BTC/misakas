@@ -33,7 +33,8 @@
 //!   deadline, and a position is served once. A dismissed direct proof changes nothing.
 //! * **Liability** (category A): after Final the reservation is held for `liability_daa`; a proof convicting in that horizon
 //!   slashes it (post-Final liability), even if every Panel seat signed the claim covered. A post-Final demand is accepted only
-//!   while its whole path (deadline, service, grace) still fits inside the horizon.
+//!   while its whole path (deadline, service, grace) still fits inside the horizon; one that defaults forfeits the WHOLE
+//!   remaining reservation (the reward was already paid), an availability outcome that is never the fraud conviction.
 //! * **Idempotence and replay** (category 18): a claim is convicted at most once (a second proof is `Duplicate`); the state is
 //!   a pure function of the block sequence, so a reorg is a replay of the new branch and a restart or IBD is a replay from
 //!   genesis ([`KernelLedgerV1::replay`]).
@@ -96,7 +97,7 @@ impl LedgerPolicyV1 {
     /// The relations among the timings and amounts every rule below relies on.
     pub fn validate(&self) -> Result<(), String> {
         let p = self;
-        let checks: [(bool, &str); 8] = [
+        let checks: [(bool, &str); 9] = [
             (p.court_deadline_daa == p.prosecution.court_deadline_daa, "the ledger's court deadline is the gate's"),
             (p.court_deadline_daa > 0 && p.challenge_window_daa > 0 && p.check_window_daa > 0, "every window is non-empty"),
             (p.proof_grace_daa > 0, "a served demand leaves a non-empty grace to file the proof it enables"),
@@ -106,6 +107,7 @@ impl LedgerPolicyV1 {
                 p.liability_daa > p.court_deadline_daa.saturating_add(p.proof_grace_daa),
                 "the liability horizon outlasts a demand's deadline and the proof grace after it",
             ),
+            (p.claim_reward < p.claim_collateral, "the Final reward is smaller than the reservation a post-Final default forfeits"),
             (p.default_penalty <= p.claim_collateral, "a default never takes more than the reservation"),
             (p.demand_bond > 0 && p.dismissed_proof_fee > 0, "demands and filings are not free"),
             (p.accuser_reward_permille <= 1000, "the accuser's share is a share"),
@@ -339,23 +341,90 @@ pub enum LedgerTxV1 {
 /// What a transaction did (the ledger's receipt log; part of the state).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LedgerEventV1 {
-    Refused { tx: &'static str, why: String },
-    ClassRegistered { class: Digest },
-    JobPosted { job: Digest },
-    ClaimCommitted { claim: Digest },
-    Convicted { claim: Digest, accuser: Digest, slashed: u64, accuser_reward: u64, post_final: bool },
-    ProofDismissed { claim: Digest, accuser: Digest, why: String, fee: u64 },
-    Duplicate { claim: Digest },
-    DemandOpened { claim: Digest, stage: u8, position: u32, deadline: u64 },
-    DemandJoined { claim: Digest, stage: u8, position: u32 },
-    Served { claim: Digest, stage: u8, position: u32 },
-    ResponseRejected { claim: Digest, stage: u8, position: u32, class: &'static str },
-    ProducerDefault { claim: Digest, stage: u8, position: u32, last: Option<&'static str>, penalty: u64 },
-    DemandsMoot { claim: Digest, refunded: u32 },
-    Final { claim: Digest, reward: u64 },
-    TimedOut { claim: Digest },
-    Released { claim: Digest },
-    Withdrawn { bond: Digest, amount: u64 },
+    Refused {
+        tx: &'static str,
+        why: String,
+    },
+    ClassRegistered {
+        class: Digest,
+    },
+    JobPosted {
+        job: Digest,
+    },
+    ClaimCommitted {
+        claim: Digest,
+    },
+    Convicted {
+        claim: Digest,
+        accuser: Digest,
+        slashed: u64,
+        accuser_reward: u64,
+        post_final: bool,
+    },
+    ProofDismissed {
+        claim: Digest,
+        accuser: Digest,
+        why: String,
+        fee: u64,
+    },
+    Duplicate {
+        claim: Digest,
+    },
+    DemandOpened {
+        claim: Digest,
+        stage: u8,
+        position: u32,
+        deadline: u64,
+    },
+    DemandJoined {
+        claim: Digest,
+        stage: u8,
+        position: u32,
+    },
+    Served {
+        claim: Digest,
+        stage: u8,
+        position: u32,
+    },
+    ResponseRejected {
+        claim: Digest,
+        stage: u8,
+        position: u32,
+        class: &'static str,
+    },
+    ProducerDefault {
+        claim: Digest,
+        stage: u8,
+        position: u32,
+        last: Option<&'static str>,
+        penalty: u64,
+    },
+    /// A demand on a Final claim defaulted: the whole remaining reservation is forfeited (availability, never a conviction).
+    PostFinalDefault {
+        claim: Digest,
+        stage: u8,
+        position: u32,
+        last: Option<&'static str>,
+        forfeited: u64,
+    },
+    DemandsMoot {
+        claim: Digest,
+        refunded: u32,
+    },
+    Final {
+        claim: Digest,
+        reward: u64,
+    },
+    TimedOut {
+        claim: Digest,
+    },
+    Released {
+        claim: Digest,
+    },
+    Withdrawn {
+        bond: Digest,
+        amount: u64,
+    },
 }
 
 /// One block.
@@ -1108,9 +1177,19 @@ impl KernelLedgerV1 {
         let due: Vec<_> = self.demands.iter().filter(|(_, d)| daa >= d.deadline_daa).map(|(k, d)| (*k, d.last)).collect();
         for ((claim, stage, position), last) in due {
             let Some(d) = self.demands.remove(&(claim, stage, position)) else { continue };
-            let penalty = self.claims.get(&claim).map(|r| r.reserved.min(self.policy.default_penalty)).unwrap_or(0);
-            // The penalty goes to the demanders, equally; their bonds return.
-            let share = if d.demanders.is_empty() { 0 } else { penalty / d.demanders.len() as u64 };
+            let post_final = self.claims.get(&claim).is_some_and(|r| matches!(r.life.state, ClaimStateV1::Final { .. }));
+            // Before Final a default costs the fixed penalty (the claim is Unavailable and earns no reward). After Final the reward
+            // was already paid, so a default forfeits the WHOLE remaining reservation: withholding is never cheaper than a
+            // conviction would be for the reward it kept.
+            let penalty = self
+                .claims
+                .get(&claim)
+                .map(|r| if post_final { r.reserved } else { r.reserved.min(self.policy.default_penalty) })
+                .unwrap_or(0);
+            // The demanders share the penalty equally (after Final, the accuser's share of a slash; the rest is burned); their
+            // bonds return.
+            let paid = if post_final { penalty * self.policy.accuser_reward_permille as u64 / 1000 } else { penalty };
+            let share = if d.demanders.is_empty() { 0 } else { paid / d.demanders.len() as u64 };
             for (bond, amount) in &d.demanders {
                 if let Some(b) = self.bonds.get_mut(bond) {
                     b.reserved = b.reserved.saturating_sub(*amount);
@@ -1130,7 +1209,11 @@ impl KernelLedgerV1 {
                     b.collateral = b.collateral.saturating_sub(penalty);
                 }
             }
-            self.log(LedgerEventV1::ProducerDefault { claim, stage, position, last, penalty });
+            self.log(if post_final {
+                LedgerEventV1::PostFinalDefault { claim, stage, position, last, forfeited: penalty }
+            } else {
+                LedgerEventV1::ProducerDefault { claim, stage, position, last, penalty }
+            });
             // An unavailable claim never finalizes; its other open demands are moot.
             self.settle_demands_moot(&claim);
         }

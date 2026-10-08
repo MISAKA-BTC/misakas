@@ -802,6 +802,38 @@ fn a_post_final_demand_must_fit_its_whole_path_in_the_liability_horizon() {
     assert_eq!(convicted(&ev), Some((1000, 500, true)), "{ev:?}");
 }
 
+#[test]
+fn a_post_final_default_forfeits_the_whole_reservation_and_is_never_a_conviction() {
+    let mut w = World::new();
+    let (id, at, da, _) = final_lying_claim(&mut w);
+    assert_eq!(w.l.bonds[&PRODUCER].credits, 7, "the reward was paid at Final");
+    let OutsiderFindingV1::Demand(p) = outsider(&w, id, &da) else { panic!() };
+    assert_eq!(p, vec![(0, at.0)]);
+    w.block(100, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
+    let collateral = w.l.bonds[&PRODUCER].collateral;
+    let burned = w.l.burned;
+    let ev = w.block(120, vec![]);
+    assert_eq!(ev, vec![E::PostFinalDefault { claim: id, stage: 0, position: at.0, last: None, forfeited: 1000 }]);
+    assert!(convicted(&ev).is_none() && !w.l.claims[&id].convicted, "an availability outcome, not fraud");
+    assert!(matches!(w.state(&id), ClaimStateV1::Final { .. }), "the claim stays Final");
+    assert_eq!(w.l.bonds[&PRODUCER].collateral, collateral - 1000, "the whole reservation, not default_penalty");
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, 0);
+    assert_eq!(w.l.bonds[&OUTSIDER].credits, 500, "the demander's share of the forfeit");
+    assert_eq!(w.l.burned, burned + 500);
+    assert_eq!(w.l.bonds[&OUTSIDER].reserved, 0, "the demand bond returns");
+
+    // Before Final the same default costs only `default_penalty` and the claim earns no reward.
+    let job = w.post_job(200, &[3, 17, 9], 3, 2);
+    let (at, lie) = w.lying(&job, 3);
+    let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[at]));
+    w.block(201, vec![lie.tx, T::PanelCovered { claim: id }]);
+    let OutsiderFindingV1::Demand(_) = outsider(&w, id, &da) else { panic!() };
+    w.block(202, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
+    let ev = w.block(222, vec![]);
+    assert_eq!(ev, vec![E::ProducerDefault { claim: id, stage: 0, position: at.0, last: None, penalty: 100 }]);
+    assert!(!w.l.claims[&id].rewarded);
+}
+
 // ── G: DA outcomes are classified, and none of them is the fraud slash ───────────────────────────────────────────────────
 
 #[test]
