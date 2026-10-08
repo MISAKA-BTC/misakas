@@ -162,12 +162,16 @@ detached signing through `misaka model onboard`).
    class cannot activate. Rewardability of kernel claims does not yet depend on the V2 class being Active (the `FinalReward` is unfunded
    anyway — GAP-3).
 5. **The Final reward is unfunded.** `FinalReward` joins the coinbase queue like the accuser reward; nothing carves it from the subsidy.
-6. **Pipeline claims have no Panel on the real node** (legacy mode) and the pipeline header has no wire form: `getPalwKernelClaim` returns
-   an empty `recordHeader` for it. OPV pipeline classes need no Panel.
+6. **Pipeline claims have no Panel on the real node** (legacy mode). OPV pipeline classes need no Panel. ~~The pipeline header has no wire
+   form.~~ **Closed by K2S** (`k2-real-scale.md` §8): `recordHeader` = borsh `(PipelineHeaderV1, PipelineClassV1)`; no pipeline claim runs on
+   the real-node E2E yet.
 7. **Interim seats are grindable.** G14 does not rest on them: every seat colluding is the tested case.
-8. **Per-object cost is O(rows).** Each kernel object rebuilds the ledger from the rows. A production fold needs a cached ledger per block.
+8. ~~**Per-object cost is O(rows).** Each kernel object rebuilds the ledger from the rows.~~ **Closed by K2S** (`k2-real-scale.md` §8): a
+   cached ledger per block (no decode, no program decode, no gate after the block's first load); the residual (a clone, a serialization and
+   a diff per object; one rebuild per block) is recorded there.
 9. **Verdict / settlement events are not stored**; `getPalwKernelClaim` serves the state they decided and replay reproduces them.
-10. **The mempool does not run the acceptance gate** (as for every `0x4b` object); a chunk group's opener pays the slot rent.
+10. ~~**The mempool does not run the acceptance gate.**~~ **Closed by K2S** (`k2-real-scale.md` §8): the mempool and the template run it
+    (`TxRuleError::PalwKernelRouteRefused`); chunks are judged at the completing chunk, and a chunk group's opener pays the slot rent.
 11. The phase-1 reorg test runs without the strict-win fence; it passed in every run so far but is subject to the same tie-by-hash race on
     a deeper fork.
 12. `getPalwOnboarding` and the other new ops are exercised over the grpc conversion and the model round trips, not through a running RPC

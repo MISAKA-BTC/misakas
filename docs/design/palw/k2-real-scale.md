@@ -124,6 +124,14 @@ element `e` of it; every input it reads is an earlier value (or a param/const/ze
 element court on `e` convicts. Derived windows are no exception: the window at `p` is judged against the window at `p − 1` (already right) and
 the new row; a view against its window. No court reads a value the producer withheld: the leaves come from served or demanded material.
 
+**A producer duty the soundness argument rests on.** "An honest trace has every leaf equal to the reference value" assumes the class's v3
+param commitments are commitments of the public artifact. Registration does not check that: the registrant supplies digests. If a
+class's commitment is not reproducible from the artifact (for example its row and column trees disagree), no producer can make a claim
+that survives: the prover opens whichever tree covers the dependency line, and two disagreeing param leaves convict as an inconsistent
+operand. So a producer recomputes the class's v3 param commitments from the artifact bytes before it produces for the class. A class
+that fails that check is a trap, not a class. The class-level remedy is the artifact binding (onboarding; GAP 1 of the readiness
+matrix), which would let anyone refute such a class from two disagreeing openings.
+
 **Decode**: greedy token `t` at round `r` is wrong iff some `j` has `logits[j] > logits[t]` (or `=` with `j < t`): two leaves of the logits.
 
 **Bound**: per relation, `court bytes = Σ leaves (≤ T elements + path) + Σ node openings`, priced by running the court's own evaluator over
@@ -215,21 +223,206 @@ SmolVLM text class: see §10 (the SDK probe's lowering of the committed headers)
 Real node (wide128 under v4, `real_scale.rs`): a lie at position 1,200 is filed in **3,359 B** (class bound 22,760) after the outsider read
 **2,208 B** of material — exactly positions 1,199 and 1,200 — against a per-prosecution bound of 29,448 B.
 
-## 8. Node work and allocations
+## 8. Node work, the real-node E2E, and allocations
 
-* **GAP 8 (cached ledger)**: the route state carries a non-state cache of the ledger its rows describe (`Arc`, never hashed, never in a
-  delta, cleared by every row write outside the fold's flush and by every delta apply/revert); an object clones it instead of rebuilding
-  (no program decode, no gate per class), and the fold diffs against the stored rows instead of re-serializing them.
-* **GAP 10 (mempool)**: a `KernelRouteV1` / `KernelConstraintReceiptV1` carrier is put through the acceptance gate (fence, Active signer,
-  ML-DSA-87, strict decode, OPV fence) at admission and again at the template, and refused with `PalwKernelRouteRefused` (chunks: judged at the
-  completing chunk, as today).
-* **GAP 6 (pipeline header)**: `getPalwKernelClaim.recordHeader` for a pipeline claim = borsh `(PipelineHeaderV1, PipelineClassV1)`.
-* **Allocations requested** (all inside tag 110; no consensus tag, aux table, delta, tail or root block): inner kernel-route discriminants
-  **16** `CommitSegmentedClaim`, **17** `PostTiledJob`, **18** `PostPromptTile` (15 is G14-R4's accuser seal); `ProsecutionV1` variant **3**
-  `Segmented`; `ClaimBodyV1` variant **2** `Segmented`; kernel ledger tables **20** tiled jobs and **21** segmented demand progress (15–19 are G14-R4's; in the
-  ledger root only when non-empty, so every existing root is unchanged); `TxRuleError::PalwKernelRouteRefused`.
+**The real-node E2E** (`consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/real_scale.rs`; the class is the sketch's
+wide128 layer under K2-TIR-v4 at 8,192 positions, registered under OPV through the mempool, the template and the fold; the outsider is
+built from the read API's segmented record and public material only):
+
+| Test | What it shows |
+|---|---|
+| `g14_k2s_a_tiled_prompt_past_4096_ids_commits_as_a_multi_segment_claim_on_the_real_node` | a 4,500-id prompt posted in two tiles; a 4,501-position claim in five segments with a row under 4,416 B; one position of every segment checks clean; an honest element filed anyway is dismissed (no conviction, no slash); Final at the window's end with no Panel; a replaying node agrees |
+| `g14_k2s_a_lie_in_one_segment_is_localized_and_convicted_with_bounded_bytes` | the lie at position 1,200 is found by checking position 1,200, filed in 3,359 B after reading exactly positions 1,199 and 1,200; convicted, the real bond slashed |
+| `g14_k2s_a_withheld_segment_is_demanded_and_defaults_never_a_conviction` | the check demands exactly the two positions it reads; a wrong-root response is classified; at the deadline the claim is Unavailable, the default charged, never a conviction, the demand bonds returned |
+| `g14_k2s_a_demanded_position_served_on_chain_is_checked_from_the_blocks_and_convicted` | nothing published off-chain; both positions demanded, served on chain in parts, both demands closed; the outsider reads the `Respond` parts back from the blocks (the ledger keeps none of their bytes), assembles the positions and convicts (filing 3,359 B after reading 2,208 B back from the blocks) |
+| `g14_k2s_the_mempool_runs_the_kernel_acceptance_gate` | GAP 10 below |
+
+**GAP 8 — a cached ledger instead of a rebuild per object.** The route state carries a non-state cache of the ledger its rows describe
+(`Arc`, never hashed, never encoded, never in a delta, equal for every comparison). The fold's flush sets it; every other write of a
+ledger row or of the header clears it (a delta applied or reverted, a row written outside the flush); a state decoded from a store, a
+snapshot or a carriage starts without it. A load clones the cached ledger instead of rebuilding it: no row decode, no program decode, no
+gate per class. A debug build checks the cache against the rows on every hit, so a write path that forgets to clear it fails the tests
+(lane D's whole `g14_kernel_route_e2e` suite ran with it). What is left: the block's first load rebuilds from the rows (the fold starts
+every block from the decoded tip), and that is where a big class costs — a 9B-8k class row rebuilds in 1.7 ms (the program decode, 32,640 B) plus the v4 gate (§8.1); and every object still
+clones the ledger, serializes it to rows and diffs them (O(rows) bytes, no decode). Removing those needs either a cache across blocks
+keyed by the route's rows root or dirty-row tracking in the kernel ledger. G14 does not need either; recorded as the residual.
+
+**GAP 10 — the mempool and the template run the acceptance gate.** A `KernelRouteV1` carrier is put through the fold's own
+acceptance checks at admission and again at every template: the fence, an Active signer, ML-DSA-87 under the signer's registered key,
+the kernel's strict canonical decode, and the OPV fence for a mode registration. A `KernelConstraintReceiptV1` is checked against an
+assigned, Active seat's key. A refusal is `TxRuleError::PalwKernelRouteRefused(why)`. It is a node policy, never a block rule: a block
+carrying such a carrier folds exactly as before (the fold drops the same objects). Below the fence, which is every live height, a
+tag-110 carrier is refused at admission by the node ("not in force"); a block from another node that carries one is unchanged. Chunks
+are judged at the completing chunk, as before. Tested: a forged signature (refused by name), bytes changed under their signature, the
+same non-canonical bytes **genuinely signed** (the signature verifies; the strict decode refuses them by name), and the genuine carrier
+admitted and folded.
+
+**GAP 6 — the pipeline header's wire form.** `getPalwKernelClaim.recordHeader` for a pipeline claim is borsh
+`(PipelineHeaderV1, PipelineClassV1)`: the header a pipeline verifier is built with, and the class binding it checks the record against.
+With the record, that is exactly the triple the kernel's own outsider builds `FreshPipelineVerifierV1::from_public_bytes_in_mode` from
+(`ledger.rs`, `OutsiderV1::check_pipeline`), and the verifier itself checks that the header's class is the binding's under the mode.
+Tested: the wire form round-trips (consensus-core). No pipeline claim runs on the real-node E2E: the toy pipeline fixture lives in
+`misaka-palw-tir`'s tests and needs `misaka-palw-gen`; the kernel's OPV pipeline tests cover the verifier. Recorded as the residual.
+
+**Allocations** (granted in the lane brief; all inside tag 110 — no consensus tag, aux table, delta, tail or root block): inner
+kernel-route discriminants **16** `CommitSegmentedClaim`, **17** `PostTiledJob`, **18** `PostPromptTile` (15 is G14-R4's accuser seal);
+`ProsecutionV1` variant **3** `Segmented`; `ClaimBodyV1` variant **2** `Segmented`; kernel ledger tables **20** tiled jobs and **21**
+segmented demand progress (15–19 are G14-R4's; in the ledger root only when non-empty, so every existing root is unchanged). Not in the
+brief, so listed for the Lead: `TxRuleError::PalwKernelRouteRefused` (a node error, no wire form; next to `PalwH1CarrierRefused`). The new
+kinds ride the K2 fence `palw_probabilistic_constraints_v1` with the rest of tag 110 (A2U's kind→fence table).
+
+### 8.1 Finding: the position layout was the fold's cost at real scale
+
+The first 9B-8k measurement of the class-row rebuild was 1.7 ms for the program decode and **14.9 s for the v4 gate** (debug build).
+Almost all of the 14.9 s was `seg_da::position_parts_v1`, the deterministic layout of one position's material into parts. It built
+every row leaf's element list only to count its bytes, at 2.34 GB of position material. The layout does not run only at registration.
+It runs at every block's first ledger load (once per v4 class), at every `FileDemand` and at every `Respond` part (`classify_part_v1`
+recomputes it). A served 9B-8k position is 2,294 parts, so the fold would have spent seconds per part, against a per-block budget that
+charges a part zero work. Fixed in the next commit.
 
 ## 9. What this does not do
 
-Real 9B weights and a real 9B trace (H1); the DA-griefing economics (§4, proposed); Panel coverage of v4 claims (none: OPV only); pipelines
-under v4 (K2-TIR-v3 keeps v1 commitments); 262k/2M attention courts without a history-chunked lowering; the IR route's J5b.
+Real 9B weights and a real 9B trace (H1); the DA-griefing economics (§4, proposed); Panel coverage of v4 claims (none: OPV only);
+pipelines under v4 (K2-TIR-v3 keeps v1 commitments); 262k/2M attention courts without a history-chunked lowering; the IR route's J5b;
+the residuals of GAP 8 and GAP 6 (§8); and the parts of detection §11 lists as POLICY, CODE elsewhere, or DESIGN_GAP.
+
+## 10. SmolVLM-256M's text class under K2-TIR-v4
+
+The SDK probe (`misaka-palw-sdk/tests/coverage_p1_huihui_9b.rs`, `COV_P1_K2=1 COV_P1_K2_ONLY=1`) over the committed header-only
+fixture of SmolVLM-256M-Instruct (`misaka-palw-tir-lower/tests/fixtures/vlm-generic/smolvlm-256m-instruct`, revision `7e3e67e…`). The
+class is the text decoder only, a partial-task class (`coverage-p1p2-record.md` §2.1), with 8,031 committed values a position:
+
+| SmolVLM-256M text class | K2-TIR-v1 / v2 | K2-TIR-v4 |
+|---|---|---|
+| @512: `check_plan_v1` (armed) | PASS | PASS (ε ≤ 2^-156) |
+| @512: gate | PASS (public 24,240,078,625 B, 512 sessions) | PASS: **258,871,987 B** per prosecution, 2 sessions, 4,160 B on chain |
+| @512: worst opening / filing | 56,771,716 B / 113,608,968 B | **169,856 B / 173,952 B** |
+| @512: `carrier_fit_v1` at 1,583,616 B | REFUSED | **PASS** |
+| @512: position / claim material | — | 82,036,553 B in 97 parts / 42,002,715,136 B |
+| @8,192: gate | REFUSED (public 2,153,078,148,385 B > 2^40; 8,192 sessions > 1,024) | PASS: **1,751,863,987 B** per prosecution, worst court 169,856 B, 8 segments, 4,608 B on chain |
+| @8,192: `carrier_fit_v1` | — | **PASS** |
+| @8,192: position / claim material | — | 828,532,553 B in 848 parts / 6,787,338,674,176 B |
+
+The probe also reports `TOKENIZER_MISSING`: the fixture carries no tokenizer file. That is a limit of the fixture, not a K2 refusal.
+Log: `~/Downloads/MISAKA-wt-b/k2s-m1-smolvlm.log`.
+
+## 11. Detection at real scale (SOUND's SG-06, reviewer question Q-01)
+
+§2–§7 bound what a prosecution costs **once a fault is known**. They do not say how the fault is found. At 9B-8k a claim's material is
+`P · M_pos` = 19,184,254,656,512 B (19.2 TB; SG-06's "≈ 16 TB, v4 estimate" is this measured figure — v4 commits the derived windows
+too). SG-06: a verifier that reads `m` of `P` positions finds a one-position lie with probability `m / P` (8 of 8,192: 1/1,024); the
+per-relation `2^-150` is then irrelevant and only deterrence is left, at a reservation of `gain · P / m / (1 − a)` = 40,960 BILI.
+
+**The answer.** Detection at real scale is by **re-execution against the roots** (route B below), run on a post-commit sample of
+claims. Reading positions at random (route A) is not a detection route at this scale. A check that costs less than a re-execution and
+still finds every lie needs aggregated proofs: **sublinear-read proofs are a DESIGN_GAP** (§11.4).
+
+### 11.1 Route A — sample positions and read their material
+
+A verifier that checks a run of `m` positions reads `(m + 1) · M_pos + A` (scattered samples read up to twice that) and finds a lie
+confined to one position with probability `m / P`. At 9B-8k (`M_pos` = 2,341,827,961 B, `A` = 3,508,121,330 B):
+
+| `m` | per-lie detection | material read |
+|---|---|---|
+| 8 | 1/1,024 | 24.6 GB |
+| 819 | 0.1 | 1.92 TB |
+| 4,096 | 0.5 | 9.6 TB |
+| 8,192 | 1 | 19.2 TB |
+
+Detection is linear in the bytes read, so one bit of it costs about 9.6 TB. At this scale route A is a spot check (and the right
+tool when a specific position is suspect), not coverage.
+
+### 11.2 Route B — re-execute, compare roots, descend (`misaka-palw-kernel::seg_detect`)
+
+The reference semantics are exact integers. A verifier that re-executes the claim's fed ids (the prompt is public on chain in tiles;
+the delivered ids are in the claim; the artifact is public) computes every value an honest producer must have committed. It hashes
+them into position roots and segment roots, and compares those with the claim's on-chain segment roots:
+
+* **every root equal**: every committed value is the verifier's own (collision resistance). Only the decode relation is left, and the
+  verifier checks it on its own logits (`first_decode_mismatch_v1`); a mismatch is a decode fault filed from one position;
+* **a segment differs**: the verifier descends that segment's tree with the producer's **position paths** (a position root and its
+  ≤ 10 siblings, authenticated against the on-chain root). Each probe shows both children of every node on its path, so the descent
+  reaches the **first** divergent position `q` with at most `⌈log2 S⌉` = 10 probes. Every position before `q` is the verifier's own,
+  so every input of `q`'s first wrong value is right, and the element courts' check of `q` (§3) returns a filing that convicts. That
+  check reads positions `q − 1` and `q`.
+
+What one check reads at 9B-8k, whatever `P`:
+
+| Read | Bytes |
+|---|---|
+| the artifact | 3,508,121,330 |
+| the segment roots and the prompt tiles (on chain) | 8 × 64 + ≈ 32 KB |
+| ≤ 10 position paths | ≤ 10 × 704 |
+| positions `q − 1` and `q`, and their node lists | 2 × 2,341,827,961 + 2 × 13,323 × 64 |
+| **total** | **≈ 8.19 GB**: the per-prosecution read of §2, plus ≤ 7 KB of paths and the prompt |
+
+What it costs: one re-execution of the claim in the reference semantics, plus hashing its values into commitments (`P · M_pos` =
+19.2 TB hashed locally). That is the producer's own work: the producer hashes the same bytes to commit. Within that cost the check is
+not a sample. Any wrong committed value or wrong delivered id is found with certainty, if the check runs.
+
+Measured at the ledger level (wide128 at 4,501 positions,
+`k2s_a_reexecuting_verifier_finds_any_lie_with_certainty_reading_two_positions`): an honest claim checks Clean with no material
+read and no probe; a lie at position 3,000 (segment 2) is found after **7** position paths, reading exactly positions 2,999 and 3,000
+(2,208 B), and is filed in 3,487 B and convicted; a delivered id that is not the rule's, over honest values, is found with no probe and
+convicted by the decode court.
+
+Under withholding, a probe the producer does not publish becomes a demand of that position. That is the whole position, served in
+parts (§4), so the worst case is 10 more demand rounds. A demand for part 0 only (the position root and its path, ≈ 1 KB) would make a
+probe cheap. That is a proposal; it needs an allocation (a demand stage value).
+
+### 11.3 Coverage: a post-commit sample of claims, each one fully checked
+
+Route B costs one re-execution per claim. Running it on every claim is the "everyone re-executes" requirement that PRINCIPLES §2 rules
+out. The form that fits the principle runs route B on a post-commit sample of claims:
+
+1. after a claim commits, a grinding-resistant beacon (the sealed-source v3, OPVB) draws whether the claim is checked (probability `q`)
+   and by which bonded watcher(s);
+2. a drawn watcher runs route B. A checked claim's detection is exact (no per-position loss), so the per-claim detection probability
+   is `P_dc = q · P_run`, where `P_run` is the probability that a drawn watcher actually runs the check and files in time (A-HV);
+3. the collateral follows SOUND's P-ECON: `reservation ≥ ⌈max(gain + default_penalty, ⌈gain / P_dc⌉) / (1 − a)⌉`.
+
+At the interim terms (gain 20 BILI, default penalty 100 BILI, `a` = ½):
+
+| Detection | `P_dc` | Reservation |
+|---|---|---|
+| route A, 8 positions a claim (SG-06, row K) | 1/1,024 | 40,960 BILI |
+| route B on every claim, `P_run` = ½ | 1/2 | 240 BILI |
+| route B, `q` = 1/16, `P_run` = ½ | 1/32 | 1,280 BILI |
+| route B, `q` = 1/64, `P_run` = ½ | 1/128 | 5,120 BILI |
+
+The interim reservation of 1,000 BILI covers `P_dc ≥ 1/25`, i.e. `q ≥ 8 %` at `P_run` = ½. The expected verification work is `q`
+re-executions per claim. An honest claim pays no accuser reward, so a drawn watcher needs a fee for the check (PRINCIPLES §6
+condition 6).
+
+This is how coverage can be achieved. It is not achieved today, and until each item below holds a K2-TIR-v4 class may stay registered
+but earns no reward and no consensus work weight (PRINCIPLES §6):
+
+| Needed | Kind | Where |
+|---|---|---|
+| the post-commit claim draw and watcher assignment, on the sealed-source v3 beacon | CODE | OPVB |
+| a fee for a drawn check, from the user's escrow | ECON | G14-R4 |
+| `q`, and a derivation of `P_run` (today `assumed_detection_permille` is an input, SG-13) | POLICY | Lead / user |
+| the lazy watcher: a drawn watcher can report "clean" without running, and `P_run` cannot be read from the chain (forced-error audit claims, redundant watchers) | DESIGN | reviewer question |
+| an OPV window that contains a route-B check of the class (`T_check` measured per class) | MEASUREMENT | MEAS |
+| a part-0-only demand (a cheap probe under withholding) | proposal, needs an allocation | Lead |
+
+### 11.4 Detection cheaper than re-execution — DESIGN_GAP
+
+A check that finds every lie (or finds it with probability ≥ `1 − 2^-k` on every claim) at a cost well below re-execution needs an
+aggregated proof over the whole trace. That means sum-check / GKR over a **polynomial** commitment of every committed value, with lookup
+arguments for the non-linear primitives (`IntExp`, `IntRsqrt`, `IntLn`, `Compare` / `Select`, `TopK`, `Gather`) and the exact-integer
+rules (RFC-0007 §V.4). K2-TIR-v4's commitments are hash trees: they localize and adjudicate (G14), but they do not aggregate.
+Freivalds-style projections (K2-TIR-v1/v2) reduce a MatMul's compute, but they read all of its operands, so a whole-claim check still
+reads `P · M_pos`. **Sublinear-read proofs for real-scale classes: DESIGN_GAP.** Following the appendix of PRINCIPLES: where the
+collateral of §11.3 is unaffordable, the answer is these proofs, not a lower assumed detection rate.
+
+### 11.5 Status
+
+| Item | Status |
+|---|---|
+| post-detection bounds: one prosecution reads two positions and files one element court | IMPLEMENTED_AND_TESTED (§2–§8) |
+| the re-execution detector: roots compared, ≤ ⌈log2 S⌉ probes, two positions read, decode checked | IMPLEMENTED_AND_TESTED (`seg_detect`; ledger level) |
+| per-claim detection probability `q · P_run`, derived | POLICY + DESIGN (§11.3) |
+| claim draw and watcher assignment on a grinding-resistant beacon | CODE (OPVB) |
+| a fee for drawn checks | ECON (G14-R4) |
+| sublinear-read proofs | DESIGN_GAP |

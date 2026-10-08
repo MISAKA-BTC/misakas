@@ -53,7 +53,8 @@
 //! * [`merkle3`], [`seg`], [`element`], [`seg_da`], [`seg_ledger`] — **K2-TIR-v4, the real-scale suite**
 //!   (`docs/design/palw/k2-real-scale.md`): tiled dual-root commitments, position / segment / claim roots with only the segment roots on
 //!   chain, element courts bounded by the tile, per-position demands served in parts, prompts posted in tiles, and the per-prosecution
-//!   bounds of `PUBLIC_PROSECUTION_COMPLETE`.
+//!   bounds of `PUBLIC_PROSECUTION_COMPLETE`. [`seg_detect`] is the detector that pairs with them at real scale: re-execute the claim,
+//!   compare roots, descend the first divergent segment and check two positions.
 //! * [`ledger`], [`route`], [`settle`], [`state`], [`claim_subject`] — the consensus-embeddable shape of the route: signed
 //!   [`route::KernelRouteObjectV1`]s applied one at a time by a transactional ledger (a refusal leaves the state byte-identical,
 //!   a per-block adjudication budget), bonds and the Panel's coverage supplied by the consumer, every money decision an explicit
@@ -105,6 +106,7 @@ pub mod route;
 pub mod rows;
 pub mod seg;
 pub mod seg_da;
+pub mod seg_detect;
 pub mod seg_ledger;
 pub mod settle;
 pub mod state;

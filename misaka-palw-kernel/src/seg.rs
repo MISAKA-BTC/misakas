@@ -58,7 +58,7 @@ fn pos_node(l: &Digest, r: &Digest) -> Digest {
     node(SEG_POS_NODE_DOMAIN_V1, l, r)
 }
 
-fn seg_node(l: &Digest, r: &Digest) -> Digest {
+pub(crate) fn seg_node(l: &Digest, r: &Digest) -> Digest {
     node(SEG_SEG_NODE_DOMAIN_V1, l, r)
 }
 
@@ -83,7 +83,7 @@ fn position_root_of_tree(p: u32, count: u64, tree: &Digest) -> Digest {
     finish(s)
 }
 
-fn segment_leaf_v1(p: u32, position_root: &Digest) -> Digest {
+pub(crate) fn segment_leaf_v1(p: u32, position_root: &Digest) -> Digest {
     let mut s = keyed(SEG_SEG_LEAF_DOMAIN_V1);
     s.update(&p.to_le_bytes()).update(position_root);
     finish(s)
@@ -116,6 +116,19 @@ pub fn claim_root_v1(positions: u32, segment_roots: &[Digest]) -> Digest {
         .update(&(segment_roots.len() as u32).to_le_bytes())
         .update(&tree);
     finish(s)
+}
+
+/// **A claim's segment roots from its position roots alone** — what a verifier that re-executed the claim compares with the on-chain
+/// roots (`crate::seg_detect`): it needs no node commitment of anyone's.
+pub fn segment_roots_of_position_roots_v1(position_roots: &[Digest]) -> Vec<Digest> {
+    let positions = position_roots.len() as u32;
+    (0..segment_count_v1(positions))
+        .map(|index| {
+            let (first, end) = segment_bounds_v1(positions, index).expect("a segment of the claim");
+            let leaves = (first..end).map(|q| segment_leaf_v1(q, &position_roots[q as usize])).collect();
+            segment_root_of_tree(index, first, end, &tree_root(leaves, seg_node, SEG_SEG_NODE_DOMAIN_V1))
+        })
+        .collect()
 }
 
 /// **A producer's segmented commitments**: every node commitment of every position, `commitments[p][occurrence][node]`
@@ -530,6 +543,14 @@ mod tests {
             let mut swapped = roots.clone();
             swapped[0][0] ^= 1;
             assert!(ev.check_structure(&swapped).is_err());
+        }
+    }
+
+    #[test]
+    fn segment_roots_from_position_roots_alone_are_the_commitments_own() {
+        for positions in [1u32, 1023, 1024, 1025, 3000] {
+            let c = commitments(positions, &[2, 1]);
+            assert_eq!(segment_roots_of_position_roots_v1(&c.position_roots), c.segment_roots(), "{positions}");
         }
     }
 

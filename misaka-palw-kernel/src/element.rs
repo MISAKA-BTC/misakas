@@ -643,6 +643,14 @@ pub fn verify_seg_fault_v1(c: &SegClaimContextV1<'_>, fault: &SegFaultV1) -> Res
 pub trait SegMaterialV1 {
     fn position(&self, p: u32) -> Option<Vec<Vec<Tensor>>>;
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>>;
+    /// Position `p`'s root and its path to its segment root, **without its values** where the source keeps them apart (part 0 of a
+    /// demand, a stream's position-root list): what the re-execution check descends a segment with (`crate::seg_detect`). By default
+    /// it is derived from the values.
+    fn position_path(&self, p: u32) -> Option<(Digest, Vec<Digest>)> {
+        let values = self.position(p)?;
+        let commitments: Vec<Vec<Digest>> = values.iter().map(|occ| occ.iter().map(tensor_commitment_v3).collect()).collect();
+        Some((position_root_of_v1(p, &commitments), self.position_siblings(p)?))
+    }
 }
 
 /// What a check of some positions found.

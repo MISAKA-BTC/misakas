@@ -1,7 +1,8 @@
 //! **K2-TIR-v4 on the real node (lane K2S, `docs/design/palw/k2-real-scale.md`)**: segmented claims through the mempool, the node's
-//! template, the chain block's fold, the persisted tip and the read API — a tiled prompt past 4,096 ids as a multi-segment claim, a
-//! lie in one segment localized to one element and convicted with bounded bytes, a withheld segment demanded and defaulted, the
-//! mempool's acceptance gate (GAP 10) and the cached ledger (GAP 8).
+//! template, the chain block's fold, the persisted tip and the read API — a tiled prompt past 4,096 ids as a multi-segment claim (an
+//! honest element filed against it dismissed), a lie in one segment localized to one element and convicted with bounded bytes, a
+//! withheld segment demanded and defaulted, a demanded position served on chain and convicted from the blocks' bytes, the mempool's
+//! acceptance gate (GAP 10) and the cached ledger (GAP 8).
 //!
 //! The outsider is fresh: its verifier is the read API's segmented record (op 210's `public_record`, checked against the class
 //! header the chain serves), the public artifact and whatever material the producer publishes — the bytes it reads are counted.
@@ -10,12 +11,13 @@
 
 use super::*;
 use misaka_palw_kernel::descriptor::k2_tir_v4_descriptor;
-use misaka_palw_kernel::element::{SegFaultV1, SegFindingV1, SegMaterialV1, check_positions_v1};
+use misaka_palw_kernel::element::{SegFaultV1, SegFindingV1, SegMaterialV1, check_positions_v1, prove_element_v1};
 use misaka_palw_kernel::evidence::EvidenceHeaderV1;
 use misaka_palw_kernel::seg::{
     PromptTileOpeningV1, SEG_LEN_V4, SegmentedCommitmentsV1, TiledJobV1, build_segmented_evidence_v1, prompt_root_of_ids_v1,
     prompt_tiles_v1, seg_commitments_of_trace_v1,
 };
+use misaka_palw_kernel::seg_da::{assemble_position_v1, position_part_v1, position_parts_v1};
 use misaka_palw_kernel::seg_ledger::SegmentedClaimRecordV1;
 use std::cell::Cell;
 
@@ -82,6 +84,65 @@ impl SegMaterialV1 for SegDa<'_> {
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
         (!self.withhold.contains(&p) && p < self.claim.c.positions()).then(|| self.claim.c.position_path(p).1)
     }
+}
+
+/// Positions assembled from the parts the chain's blocks carry, with the bytes a verifier reads counted.
+struct FromBlocks {
+    positions: BTreeMap<u32, (Vec<Vec<Tensor>>, Vec<Digest>)>,
+    read: Cell<u128>,
+}
+
+impl SegMaterialV1 for FromBlocks {
+    fn position(&self, p: u32) -> Option<Vec<Vec<Tensor>>> {
+        let v = self.positions.get(&p)?.0.clone();
+        let bytes: u128 = v.iter().flatten().map(|t| (t.len() * t.dtype.width()) as u128).sum();
+        self.read.set(self.read.get() + bytes);
+        Some(v)
+    }
+    fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
+        self.positions.get(&p).map(|(_, siblings)| siblings.clone())
+    }
+}
+
+/// **Every `Respond` part the selected chain carries for `(claim, position)`**, read back from the blocks' transactions the way a fresh
+/// verifier reads them: the ledger keeps none of their bytes.
+fn served_parts_from_blocks(net: &Net, claim: &Digest, position: u32) -> Vec<Vec<u8>> {
+    use kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2;
+    let mut out = Vec::new();
+    for b in chain_blocks(&net.chain, net.chain.sink()) {
+        for tx in b.transactions.iter() {
+            if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+                continue;
+            }
+            let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload) else { continue };
+            let Obj::KernelRouteV1 { bytes, .. } = payload.object else { continue };
+            if let Ok(K::Respond { claim: c, stage: 0, position: p, bytes }) = K::decode(&bytes)
+                && c == *claim
+                && p == position
+            {
+                out.push(bytes);
+            }
+        }
+    }
+    out
+}
+
+/// A `KernelRouteV1` carrying `bytes` exactly as given, genuinely signed by card `card`'s bond (the bytes need not be a route object).
+fn signed_bytes(net: &mut Net, card: usize, bytes: Vec<u8>) -> Obj {
+    let signer = net.bond(card);
+    let message = palw_kernel_route_message_v1(net.domain, &signer, &bytes);
+    net.rnd = net.rnd.wrapping_add(1);
+    let key = TestConsensus::palw_v2_registry_keypair(card as u64);
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &key.signing_key,
+        message.as_byte_slice(),
+        PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
+        [net.rnd; 32],
+    )
+    .expect("ML-DSA-87 signs")
+    .as_ref()
+    .to_vec();
+    Obj::KernelRouteV1 { bytes, signer, signature }
 }
 
 impl SegWorld {
@@ -227,6 +288,20 @@ async fn g14_k2s_a_tiled_prompt_past_4096_ids_commits_as_a_multi_segment_claim_o
     let art = |j: u16, l: Option<u16>| w.f.params.tensors.get(&(j, l)).cloned();
     let checked: Vec<u32> = (0..5).map(|s| s * SEG_LEN_V4 + 100).chain([4500]).collect();
     assert_eq!(check_positions_v1(&view.context(), &da, &art, &claim.tokens, &checked), SegFindingV1::Clean);
+    // An honest element filed anyway is dismissed by the fold: no conviction, no slash, and the claim still finalizes.
+    let filing = prove_element_v1(&view.context(), &da, &art, &claim.tokens, (4100, 1, 2), 0).unwrap();
+    let (outsider, slashed_before) = (3usize, w.net.slashed(0));
+    let o = w.net.route(
+        outsider,
+        &K::FileProof {
+            accuser: w.net.kid(outsider),
+            claim: claim.id,
+            proof: ProsecutionV1::Segmented(SegFaultV1::Element(filing).to_bytes()),
+        },
+    );
+    w.net.send(vec![(outsider, o)]).await;
+    assert!(!w.net.ledger().claims[&claim.id].convicted, "an honest element is never a conviction");
+    assert_eq!(w.net.slashed(0), slashed_before, "and never a slash");
     // No Panel: Final at the OPV window's end.
     let ev_daa = w.net.daa() + 80;
     w.net.beat_to(ev_daa).await;
@@ -361,15 +436,106 @@ async fn g14_k2s_the_mempool_runs_the_kernel_acceptance_gate() {
         Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(why)) => assert!(why.contains("signature"), "{why}"),
         other => panic!("a forged kernel carrier is refused at admission: {other:?}"),
     }
+    // (A refused carrier never confirms: card 4's next carrier spends the output the refused one tried to.)
+    let card4_funding = w.net.funding[4].clone();
     let mut junk = w.net.route(4, &K::PostTiledJob { job: job.clone() });
     let Obj::KernelRouteV1 { bytes, .. } = &mut junk else { unreachable!() };
     bytes.push(0);
     let tx = w.net.carrier(4, &junk);
     assert!(
         matches!(w.net.mempool(&tx), Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(_))),
-        "a non-canonical encoding"
+        "bytes changed under their signature"
     );
+    // The same non-canonical bytes, genuinely signed: the signature verifies and the kernel's strict decode refuses them, by name.
+    let mut bytes = K::PostTiledJob { job: job.clone() }.encode();
+    bytes.push(0);
+    let signed_junk = signed_bytes(&mut w.net, 4, bytes);
+    w.net.funding[4] = card4_funding;
+    let tx = w.net.carrier(4, &signed_junk);
+    match w.net.mempool(&tx) {
+        Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(why)) => {
+            assert!(why.contains("PostTiledJob refused (Malformed)") && !why.contains("signature"), "{why}")
+        }
+        other => panic!("a signed non-canonical encoding is refused at admission: {other:?}"),
+    }
     let genuine = w.net.route(3, &K::PostTiledJob { job: job.clone() });
     w.net.send(vec![(3, genuine)]).await;
     assert!(w.net.ledger().tiled_jobs.contains_key(&job.id()), "the genuine carrier is admitted and folded");
+}
+
+/// **A demanded position is served on chain, and a fresh verifier convicts from the blocks.** The producer lies at position 1,200 and
+/// publishes nothing off-chain. The outsider's check asks for positions 1,199 and 1,200, and it demands both. The producer answers each
+/// with its parts (it must, or it defaults), and both demands close as served. The outsider reads the responses back from the chain's
+/// blocks — the ledger keeps none of their bytes — assembles the two positions, checks them and files. The claim is convicted, the real
+/// bond slashed, the demand bonds return, and a replaying node agrees.
+#[tokio::test]
+async fn g14_k2s_a_demanded_position_served_on_chain_is_checked_from_the_blocks_and_convicted() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = SegWorld::new().await;
+    let prompt: Vec<u32> = (0..1300u32).map(|i| (i * 5 + 4) % 32).collect();
+    let job = w.tiled_job(&prompt).await;
+    let (_, s, n) = matmul_at(&w.f.program, 0);
+    let lie = w.claim(0, job, &prompt, Some((1200, s, n))).await;
+    let view = w.fresh_record(&lie.id);
+    let art = |j: u16, l: Option<u16>| w.f.params.tensors.get(&(j, l)).cloned();
+    let nothing = SegDa { claim: &lie, withhold: 0..lie.c.positions(), read: Cell::new(0) };
+    let SegFindingV1::Demand(missing) = check_positions_v1(&view.context(), &nothing, &art, &lie.tokens, &[1200]) else {
+        panic!("material nobody published is a demand")
+    };
+    assert_eq!(missing, vec![1199, 1200]);
+    let outsider = 3usize;
+    let demands: Vec<(usize, Obj)> = missing
+        .iter()
+        .map(|p| {
+            (outsider, w.net.route(outsider, &K::FileDemand { demander: w.net.kid(outsider), claim: lie.id, stage: 0, position: *p }))
+        })
+        .collect();
+    w.net.send(demands).await;
+    assert!(w.net.kernel_reserved(outsider) > 0, "the demand bonds are reserved on the real bond");
+    // The producer serves every part of both positions.
+    let mut answers = Vec::new();
+    for &p in &missing {
+        for i in 0..position_parts_v1(&w.f.program, p).unwrap().len() as u32 {
+            let part = position_part_v1(&w.f.program, p, &lie.values[p as usize], lie.c.position_path(p).1, i).unwrap();
+            let o = w.net.route(0, &K::Respond { claim: lie.id, stage: 0, position: p, bytes: borsh::to_vec(&part).unwrap() });
+            answers.push((0usize, o));
+        }
+    }
+    w.net.send(answers).await;
+    let ledger = w.net.ledger();
+    for &p in &missing {
+        assert!(ledger.seg_progress.get(&(lie.id, 0, p)).is_some_and(|g| g.complete_daa.is_some()), "position {p} served on chain");
+    }
+    assert!(ledger.demands.keys().all(|(c, _, _)| *c != lie.id), "both demands closed by service");
+    // The fresh verifier: the record from the read API, the parts from the blocks.
+    let mut positions = BTreeMap::new();
+    for &p in &missing {
+        let parts = served_parts_from_blocks(&w.net, &lie.id, p);
+        assert!(!parts.is_empty(), "the chain carries position {p}'s parts");
+        let assembled = assemble_position_v1(&w.f.program, &view.segment_roots, view.positions, p, &parts)
+            .expect("every part of the position is in the blocks and authentic");
+        positions.insert(p, assembled);
+    }
+    let chain = FromBlocks { positions, read: Cell::new(0) };
+    let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &lie.tokens, &[1200]) else {
+        panic!("the served lie is found")
+    };
+    eprintln!(
+        "[k2s] node: a served lie is filed in {} B after reading {} B back from the blocks",
+        fault.to_bytes().len(),
+        chain.read.get()
+    );
+    let slashed_before = w.net.slashed(0);
+    let o = w.net.route(
+        outsider,
+        &K::FileProof { accuser: w.net.kid(outsider), claim: lie.id, proof: ProsecutionV1::Segmented(fault.to_bytes()) },
+    );
+    w.net.send(vec![(outsider, o)]).await;
+    let ledger = w.net.ledger();
+    assert!(ledger.claims[&lie.id].convicted, "the served values convict the claim");
+    assert!(matches!(ledger.claims[&lie.id].life.state, ClaimStateV1::Convicted { .. }));
+    assert!(w.net.slashed(0) > slashed_before, "the producer's real bond is slashed");
+    assert_eq!(w.net.kernel_reserved(outsider), 0, "the demand bonds return with the conviction");
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay of a conviction from served material");
 }

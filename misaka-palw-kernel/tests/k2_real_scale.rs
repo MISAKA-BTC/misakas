@@ -12,7 +12,7 @@ use common::opv_world::opv_example;
 use misaka_palw_kernel::descriptor::{
     KernelDescriptorV1, KernelScheduleV1, KernelStatusV1, k2_tir_v1_descriptor, k2_tir_v2_descriptor, k2_tir_v4_descriptor,
 };
-use misaka_palw_kernel::element::{SegFindingV1, SegMaterialV1, check_positions_v1, prove_element_v1};
+use misaka_palw_kernel::element::{SegClaimContextV1, SegFaultV1, SegFindingV1, SegMaterialV1, check_positions_v1, prove_element_v1};
 use misaka_palw_kernel::gate::{ProsecutionPolicyV1, public_prosecution_complete_v1, public_prosecution_complete_v4};
 use misaka_palw_kernel::hash::Digest;
 use misaka_palw_kernel::job::{DecodeRuleV1, KernelClaimV1, KernelJobV1};
@@ -29,12 +29,14 @@ use misaka_palw_kernel::seg::{
     prompt_root_of_ids_v1, prompt_tiles_v1, seg_commitments_of_trace_v1,
 };
 use misaka_palw_kernel::seg_da::{assemble_position_v1, position_part_v1, position_parts_v1};
+use misaka_palw_kernel::seg_detect::{check_claim_by_reexecution_v1, first_decode_mismatch_v1};
 use misaka_palw_kernel::trace::{ParamCommitmentsV1, trace_v1};
 use misaka_palw_kernel::{VerificationPlanV1, check_plan_v1};
 use misaka_palw_tir::builder::ProgramBuilder;
 use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, INPUT_TOKEN, Ref, TirProgramV1};
 use misaka_palw_tir::{DType, Dim, MapParams, Tensor, TensorType};
 use misaka_palw_tir_sketch::fixture::wide128_v1;
+use std::cell::{Cell, RefCell};
 
 const PROD: Digest = [0xA1; 64];
 const OUT: Digest = [0x0B; 64];
@@ -353,6 +355,128 @@ fn k2s_a_withheld_position_is_demanded_then_defaults_never_a_conviction() {
     assert_eq!(w.l.bonds[&OUT].reserved, 0, "every demand bond returned");
 }
 
+/// What a verifier reads from a producer: values (bytes counted, positions listed) and position paths (probes counted).
+struct Counted<'a> {
+    inner: &'a Produced,
+    bytes: Cell<u128>,
+    positions: RefCell<Vec<u32>>,
+    probes: Cell<u32>,
+}
+
+fn counted(inner: &Produced) -> Counted<'_> {
+    Counted { inner, bytes: Cell::new(0), positions: RefCell::new(Vec::new()), probes: Cell::new(0) }
+}
+
+impl SegMaterialV1 for Counted<'_> {
+    fn position(&self, p: u32) -> Option<Vec<Vec<Tensor>>> {
+        let v = self.inner.position(p)?;
+        self.bytes.set(self.bytes.get() + v.iter().flatten().map(|t| (t.len() * t.dtype.width()) as u128).sum::<u128>());
+        self.positions.borrow_mut().push(p);
+        Some(v)
+    }
+    fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
+        self.inner.position_siblings(p)
+    }
+    fn position_path(&self, p: u32) -> Option<(Digest, Vec<Digest>)> {
+        self.probes.set(self.probes.get() + 1);
+        (p < self.inner.c.positions()).then(|| self.inner.c.position_path(p))
+    }
+}
+
+/// The verifier's own re-execution of a claim's fed ids: its position roots and its first decode mismatch.
+fn reexecute(w: &W, ctx: &SegClaimContextV1<'_>, tokens: &[u32]) -> (Vec<Digest>, Option<u32>) {
+    let own = trace_v1(&w.program, &w.params, tokens).unwrap();
+    let post = w.program.occurrences().len() - 1;
+    let logits = |p: u32| own.values.get(p as usize).map(|v| v[post][w.program.logits as usize].clone());
+    let mismatch = first_decode_mismatch_v1(ctx, &logits);
+    (seg_commitments_of_trace_v1(&own).position_roots, mismatch)
+}
+
+/// **SOUND's SG-06: detection by re-execution, not by sampling** (`seg_detect`, design §11). A verifier that re-executes the claim
+/// compares roots. An honest claim is Clean and no material is read. A one-element lie at position 3,000 (segment 2) is found with
+/// certainty: its segment is descended in at most 10 position paths, and exactly positions 2,999 and 3,000 are read, then the claim is
+/// convicted. A delivered id that is not the decode rule's, over honest values, is a decode fault found from one position. Sampling
+/// two positions at random reads the same material and finds the lie with probability 1/4,501.
+#[test]
+fn k2s_a_reexecuting_verifier_finds_any_lie_with_certainty_reading_two_positions() {
+    let fx = wide128_v1(7);
+    let mut w = W::new(fx.program, fx.params, 8192);
+    let prompt: Vec<u32> = (0..4500u32).map(|i| (i * 11 + 3) % 32).collect();
+    let (s, n) = w
+        .program
+        .occurrences()
+        .iter()
+        .enumerate()
+        .find_map(|(s, (b, _))| {
+            w.program.blocks[*b as usize]
+                .nodes
+                .iter()
+                .position(|nd| matches!(nd.prim, misaka_palw_tir::Prim::MatMul))
+                .map(|n| (s as u16, n as u16))
+        })
+        .unwrap();
+    // An honest claim: every root agrees; nothing of the producer's is read.
+    let job = w.tiled_job(&prompt, 2);
+    let honest = produce(&w, job, &prompt, None);
+    commit(&mut w, &honest);
+    let view = w.l.seg_claim_view_v1(&honest.claim.id()).unwrap();
+    let ctx = view.context();
+    let (own, mismatch) = reexecute(&w, &ctx, &honest.tokens);
+    let m = counted(&honest);
+    let r = check_claim_by_reexecution_v1(&ctx, &own, mismatch, &m, &artifact(&w), &honest.tokens);
+    assert_eq!((r.finding, r.divergent, r.probes, m.bytes.get()), (SegFindingV1::Clean, None, 0, 0));
+    // One wrong element at position 3,000.
+    let job = w.tiled_job(&prompt, 2);
+    let liar = produce(&w, job, &prompt, Some((3000, s, n)));
+    commit(&mut w, &liar);
+    let id = liar.claim.id();
+    let view = w.l.seg_claim_view_v1(&id).unwrap();
+    let ctx = view.context();
+    let (own, mismatch) = reexecute(&w, &ctx, &liar.tokens);
+    assert_eq!(mismatch, None, "the delivered ids are the rule's");
+    let m = counted(&liar);
+    let r = check_claim_by_reexecution_v1(&ctx, &own, mismatch, &m, &artifact(&w), &liar.tokens);
+    assert_eq!(r.divergent, Some(3000), "the first divergent position");
+    assert!((1..=10).contains(&r.probes) && r.probes == m.probes.get(), "{} probes", r.probes);
+    let mut read = m.positions.borrow().clone();
+    read.sort_unstable();
+    read.dedup();
+    assert_eq!(read, vec![2999, 3000], "two positions of material, whatever the context");
+    let SegFindingV1::Fault(fault) = r.finding else { panic!("the lie is not found: {:?}", r.finding) };
+    let SegFaultV1::Element(e) = fault.as_ref() else { panic!("an element fault") };
+    assert_eq!((e.position, e.occurrence, e.node), (3000, s, n));
+    let bytes = fault.to_bytes();
+    eprintln!(
+        "[k2s] SG-06 re-execution check: {} positions, divergent position {:?} after {} position paths, material read {} B \
+         (positions {read:?}), filing {} B",
+        ctx.positions,
+        r.divergent,
+        r.probes,
+        m.bytes.get(),
+        bytes.len()
+    );
+    let ev = w.block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(bytes) })]);
+    assert!(ev.iter().any(|e| matches!(e, E::Convicted { claim, .. } if *claim == id)), "{ev:?}");
+    // A wrong delivered id over honest values: every root agrees and the decode relation does not.
+    let job = w.tiled_job(&prompt, 2);
+    let mut cheat = produce(&w, job, &prompt, None);
+    cheat.claim.generated[1] = (cheat.claim.generated[1] + 1) % 32;
+    let ev = commit(&mut w, &cheat);
+    assert!(ev.iter().any(|e| matches!(e, E::ClaimCommitted { .. })), "{ev:?}");
+    let id = cheat.claim.id();
+    let view = w.l.seg_claim_view_v1(&id).unwrap();
+    let ctx = view.context();
+    let (own, mismatch) = reexecute(&w, &ctx, &cheat.tokens);
+    assert_eq!(mismatch, Some(4500), "the last delivered id is not the rule's");
+    let m = counted(&cheat);
+    let r = check_claim_by_reexecution_v1(&ctx, &own, mismatch, &m, &artifact(&w), &cheat.tokens);
+    assert_eq!((r.divergent, r.probes), (None, 0), "no root differs");
+    let SegFindingV1::Fault(fault) = r.finding else { panic!("the decode lie is not found: {:?}", r.finding) };
+    assert!(matches!(fault.as_ref(), SegFaultV1::Decode(_)), "{fault:?}");
+    let ev = w.block(vec![obj(OUT, O::FileProof { accuser: OUT, claim: id, proof: ProsecutionV1::Segmented(fault.to_bytes()) })]);
+    assert!(ev.iter().any(|e| matches!(e, E::Convicted { claim, .. } if *claim == id)), "{ev:?}");
+}
+
 /// One layer that broadcasts the hidden vector to `[40,000, 8]` (1.28 MB a position) and sums it back: a position served in parts.
 fn fat_v1(seed: u8) -> (TirProgramV1, MapParams) {
     let mut pb = ProgramBuilder::new(16, HISTORY_BOUND_V1_SMALL);
@@ -492,6 +616,21 @@ fn k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers() {
     let accepted = check_plan_v1(&armed, &v4, &program, root, &plan, 0).unwrap();
     let (bounds, seg) = public_prosecution_complete_v4(&v4, &plan, &program, &material, &ROUTE).unwrap();
     carrier_fit_v1(&bounds, CARRIER, CARRIER, CARRIER).unwrap();
+    // GAP 8's figure: what rebuilding this class's row costs (`rows::class_row_of`: the program decode, then the v4 gate). The node
+    // pays it on the block's first ledger load only; every later object of the block takes the cached ledger.
+    let bytes = program.encode();
+    let t = std::time::Instant::now();
+    let decoded = TirProgramV1::decode_canonical(&bytes).unwrap();
+    let decode_time = t.elapsed();
+    let t = std::time::Instant::now();
+    public_prosecution_complete_v4(&v4, &plan, &decoded, &material, &ROUTE).unwrap();
+    let gate_time = t.elapsed();
+    eprintln!(
+        "[k2s] GAP 8: a 9B-8k class row rebuilds in {decode_time:?} (program decode, {} B) + {gate_time:?} (the v4 gate), this build \
+         (debug: {})",
+        bytes.len(),
+        cfg!(debug_assertions)
+    );
     let worst = {
         let mut best = (0u64, 0u8, 0u16);
         let nc = seg.node_count;
