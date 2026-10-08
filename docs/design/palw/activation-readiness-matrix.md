@@ -67,6 +67,13 @@ small class whose conformance is a complete deterministic check (no sampling, so
 own activation needs no beacon — and its grinding surface analysed (output selection, withdrawal, Final timing, fork choice, work
 concentration).
 
+**Beacon grinding finding (OPV-BOOT, 2026-10-08).** With today's PALW Work Beacon the LAST contributor can steer the output: once
+k−1 sources are public, one funded job's nonce is ground offline (`canonical_work_id` changes per nonce) and committed as source k, so a
+sampled conformance keeps only `scope bits − h` against an adversary with 2^h offline hashes. Fix (DESIGN blocker for any sampled
+approval and for Panel=0): a sealed-source beacon v3 — sources ordered by their claim SEAL position, sealed inside the window, revealed
+after it closes, seals bonded (ledger primitives from G14-R4; beacon from OPV-BOOT). The complete-check bootstrap is unaffected (ε = 0,
+no randomness).
+
 **Order:** (1) GAP-5 by escrow + coinbase/escrow/reorg accounting tests (G14-R4); (2) the dependency graph and an explicit non-circular
 bootstrap path; (3) fresh-verifier time per class measured on real hardware → window and collateral recomputed; (4) C4: grinding,
 watcher absence, 32-slot capture, Final race, economic attacks; (5) the production challenge policy and the Panel=0 activation decided
