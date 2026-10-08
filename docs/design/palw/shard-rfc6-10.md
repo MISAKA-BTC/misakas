@@ -143,13 +143,23 @@ in step 2 before 2f, so at the block a default matures it always wins.
 **Bound.** A deferral lasts at most as long as the accusations can: three non-seat DA sessions open at once and sixteen
 over a claim's life, four per seat, each at most `W_disclose`; court sessions by the court's own capacity and backstop.
 
-### 2.3 Not changed (reported)
+### 2.3 Lane A under PL part C — the same hold (Lead's ruling, 2026-10-09)
 
-Lane A (armed or not) keeps V3S-08: a non-seat session does not pause a V2 claim's receipt timeout. Today the second
-timeout charges the producer (`ReceiptTimeout`, S0′), which is a charge, not an acquittal, but the accuser's session is
-closed unrewarded; and **lane PL part C (`palw_panel_unavailable_expiry`, dormant)** would make it an uncharged
-`PanelUnavailable` with the same pre-emption shape as 2.1(1). If part C is armed in the full-activation release it needs
-the same hold (a fence decision for the Lead; no code here).
+Lane A keeps V3S-08 below `palw_panel_unavailable_expiry`: a non-seat session does not pause a V2 claim's receipt timeout, and
+the second timeout charges the producer (`ReceiptTimeout`, S0′). Past part C that second failure is an uncharged
+`PanelUnavailable` (and a redrawn claim's bind window an uncharged `BindTimeout`) with the same pre-emption shape as 2.1(1). Under
+PRINCIPLES §3/§6.7 nothing may escape to an uncharged void while a valid accusation is open, so the same predicate holds it:
+
+* **reach** (`palw_v2_expiry_hold_applies_v1`): a lane-A claim (not the engine's) redrawn at or past the fence (`rebound_daa` —
+  immutable, so DL-1 agrees at rest and in the fold), `Provisional`, `PanelBound` or an S2 licence awaiting replay;
+* **the hold** (`palw_v2_expiry_held_v1` = reach ∧ `palw_accusation_pending_v1`): DL-1 owes no deadline; `arm_deadline` (the one
+  primitive every arm site calls) arms none; a DA session's open disarms and the last close re-derives; `write_court` (the one
+  writer of court sessions) re-derives a `Provisional`/`PanelBound` claim's deadline when a session starts or ends; the sweep and
+  step 4c's unbound-at-its-anchor void skip a held claim;
+* **the end**: the expiry already due lands at the next sweep once nothing is pending; a default or a conviction ends it first.
+
+Tested in `consensus/core/tests/palw_panel_part_c_g14_hold.rs` (the twin expires uncharged; a non-seat DA session holds it and the
+default wins; a court holds it and the void lands the block after the clear; below the fence nothing holds).
 
 **Edge (documented).** A claim the engine refuses at admission (no work identity, strata that do not validate, a full bound)
 is ended at once, not deferred: the engine never held it, and the refusal is decided in the claim's own acceptance block (4b″).

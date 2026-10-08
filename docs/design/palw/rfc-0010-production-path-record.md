@@ -196,7 +196,7 @@ connection of its own. `misaka palw panel-v3 [--claim ID]… [--limit N] [--json
 | `PanelUnavailable` obligation hold for V3 (re-roll cost) | policy decision |
 | Real-node IBD / non-genesis cohort drill (a mature bonded cohort that is not the genesis operators, on a multi-node network) | EXTERNAL_GATE_PENDING |
 | Sharded-IR classes under V3 | IMPLEMENTED_AND_TESTED at the fold, dormant (the per-shard V3 draw above); needs the beacon |
-| G14 pre-emption by a V3 non-fraud end (S2 expiry, pre-bind seal/beacon end) | IMPLEMENTED_AND_TESTED at the fold, dormant (agent SHARD, `shard-rfc6-10.md` §2: `palw_accusation_pending_v1`, the deferred end, DL-1's G14 row; `rfc0010_g14_guard.rs`); lane PL part C (`palw_panel_unavailable_expiry`) on a V2 claim keeps V3S-08 — a fence decision for the full-activation release |
+| G14 pre-emption by a V3 non-fraud end (S2 expiry, pre-bind seal/beacon end) | IMPLEMENTED_AND_TESTED at the fold, dormant (agent SHARD, `shard-rfc6-10.md` §2: `palw_accusation_pending_v1`, the deferred end, DL-1's G14 row; `rfc0010_g14_guard.rs`); past lane PL part C (`palw_panel_unavailable_expiry`) a lane-A claim's uncharged expiry waits on the same predicate (Lead's ruling 2026-10-09; `palw_panel_part_c_g14_hold.rs`) |
 | Processor-level `PanelUnavailable` / `NoCapablePanel` and exhausted-alternates cases | fold-level only (`rfc0010_production_fold.rs`); the processor tests cover bind, IBD, reorg, legacy drain, the fence drop |
 | An RPC typed protobuf tree for the observation (explorers) | not built; the JSON document is versioned |
 
