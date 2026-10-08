@@ -24,7 +24,7 @@ use std::collections::BTreeSet;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::hash::{DOMAIN_CHALLENGE_ANCHOR, DOMAIN_WORK_BEACON, DOMAIN_WORK_BEACON_ITEM, DOMAIN_WORK_BEACON_MIX, Digest, object_id};
-use crate::policy::{PolicyRefusalV1, PostCommitChallengePolicyV1};
+use crate::policy::{PolicyRefusalV1, PostCommitChallengePolicyV1, SourceRuleV1};
 use crate::subject::{RootV1, SubjectKindV1};
 
 /// What a Final event on the chain is. Only `RealUsefulWork` can be a source.
@@ -64,6 +64,23 @@ pub struct WorkFinalEventV1 {
     pub depends_on_profiles: Vec<Digest>,
     /// How the work reached Final: through a Panel licence (and which Panel draw), or with no Panel in its path.
     pub final_path: FinalPathV1,
+}
+
+/// **Who stands behind a source work** — facts the consumer derives from authenticated state (never a field the producer writes
+/// into its own claim): the producer (the bond that committed and stands liable for the work) and the consumer (whoever posted and
+/// paid for the job), `Absent` where the consumer's state does not record one. The distinct source rules
+/// ([`crate::policy::SourceRuleV1`]) read them so one party cannot fill every source position with its own bonds or its own jobs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, BorshSerialize, BorshDeserialize)]
+pub struct SourceAttributionV1 {
+    pub producer_id: Digest,
+    pub consumer_id: RootV1,
+}
+
+/// A Final event with its attribution — what the attributed collector reads, and what a node serves for each Final it can state.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
+pub struct AttributedWorkV1 {
+    pub event: WorkFinalEventV1,
+    pub attribution: SourceAttributionV1,
 }
 
 /// **How a source work reached Final** — the fact that decides whether it may seed a Panel draw.
@@ -275,44 +292,101 @@ pub fn challenge_anchor_v1(ctx: &BeaconContextV1, sources: &[BeaconSourceV1]) ->
     object_id(DOMAIN_CHALLENGE_ANCHOR, &(ctx.policy.id(), ctx.challenge_epoch, ctx.start(), ctx.policy.beacon_window_slots, ids))
 }
 
-/// The canonical, eligible, de-duplicated source list from `events` (any order).
+/// The canonical, eligible, de-duplicated source list from `events` (any order), under the policy's plain rule.
 pub fn canonical_sources_v1(ctx: &BeaconContextV1, events: &[WorkFinalEventV1]) -> Vec<BeaconSourceV1> {
-    let mut sorted: Vec<&WorkFinalEventV1> = events.iter().collect();
-    // The canonical key, then the whole event: events that tie on the key are never ordered by arrival.
+    let works: Vec<AttributedWorkV1> = events.iter().map(unattributed).collect();
+    canonical_attributed_sources_v1(ctx, &works, SourceRuleV1::Plain)
+}
+
+/// A work whose attribution is unknown (the plain rule never reads it).
+fn unattributed(ev: &WorkFinalEventV1) -> AttributedWorkV1 {
+    AttributedWorkV1 { event: ev.clone(), attribution: SourceAttributionV1 { producer_id: [0u8; 64], consumer_id: RootV1::Absent } }
+}
+
+/// **The canonical source list under `rule`**: sorted by `(settlement_position, occurrence_index, canonical_work_id)` (then the
+/// whole record, so ties never fall to arrival order); a work identity counts once, at its first canonical occurrence, eligible or
+/// not; an eligible work is then taken only if the rule allows it beside the works already taken (distinct producers; distinct
+/// consumers where both are known; the per-profile cap). A work the rule passes over is simply not a source — a later work may take
+/// the place — so the list is a prefix-stable function of the branch's events.
+pub fn canonical_attributed_sources_v1(ctx: &BeaconContextV1, works: &[AttributedWorkV1], rule: SourceRuleV1) -> Vec<BeaconSourceV1> {
+    let mut sorted: Vec<&AttributedWorkV1> = works.iter().collect();
     sorted.sort_by(|a, b| {
-        (a.settlement_position, a.occurrence_index, a.canonical_work_id)
-            .cmp(&(b.settlement_position, b.occurrence_index, b.canonical_work_id))
+        let (x, y) = (&a.event, &b.event);
+        (x.settlement_position, x.occurrence_index, x.canonical_work_id)
+            .cmp(&(y.settlement_position, y.occurrence_index, y.canonical_work_id))
             .then_with(|| a.cmp(b))
     });
+    let cap = rule.per_profile_cap(ctx.policy.work_count_k) as usize;
     let mut seen = BTreeSet::new();
+    let (mut producers, mut consumers) = (BTreeSet::new(), BTreeSet::new());
+    let mut per_profile: std::collections::BTreeMap<Digest, usize> = std::collections::BTreeMap::new();
     let mut out = Vec::new();
-    for ev in sorted {
-        // A work identity counts once, at its first canonical occurrence, eligible or not: an ineligible first occurrence is not
-        // rescued by a later reattachment.
+    for w in sorted {
+        let ev = &w.event;
         if !seen.insert(ev.canonical_work_id) {
             continue;
         }
-        if eligibility_v1(ctx, ev).is_ok() {
-            out.push(BeaconSourceV1 {
-                source_profile_id: ev.source_profile_id,
-                canonical_work_id: ev.canonical_work_id,
-                execution_commitment: ev.execution_commitment,
-                accepted_position: ev.accepted_position,
-                settlement_position: ev.settlement_position,
-                occurrence_index: ev.occurrence_index,
-            });
+        if eligibility_v1(ctx, ev).is_err() {
+            continue;
         }
+        if rule.needs_attribution() {
+            if producers.contains(&w.attribution.producer_id) {
+                continue;
+            }
+            if let RootV1::Present(c) = w.attribution.consumer_id
+                && consumers.contains(&c)
+            {
+                continue;
+            }
+            if per_profile.get(&ev.source_profile_id).copied().unwrap_or(0) >= cap {
+                continue;
+            }
+            producers.insert(w.attribution.producer_id);
+            if let RootV1::Present(c) = w.attribution.consumer_id {
+                consumers.insert(c);
+            }
+            *per_profile.entry(ev.source_profile_id).or_insert(0) += 1;
+        }
+        out.push(BeaconSourceV1 {
+            source_profile_id: ev.source_profile_id,
+            canonical_work_id: ev.canonical_work_id,
+            execution_commitment: ev.execution_commitment,
+            accepted_position: ev.accepted_position,
+            settlement_position: ev.settlement_position,
+            occurrence_index: ev.occurrence_index,
+        });
     }
     out
 }
 
-/// **The beacon at `tip_position`** of the branch whose settlement events are `events`.
+/// **The beacon at `tip_position`** of the branch whose settlement events are `events` — for a policy whose source rule reads no
+/// attribution. A rule that does (the distinct rules) is refused here: use [`collect_attributed_work_beacon_v1`]. A complete-check
+/// policy has no beacon at all ([`PolicyRefusalV1::NoBeacon`]).
 pub fn collect_work_beacon_v1(
     ctx: &BeaconContextV1,
     events: &[WorkFinalEventV1],
     tip_position: u64,
 ) -> Result<WorkBeaconStateV1, PolicyRefusalV1> {
+    if ctx.policy.source_rule().is_some_and(SourceRuleV1::needs_attribution) {
+        return Err(PolicyRefusalV1::Missing(
+            "the attribution of each source (this policy's source rule reads producers and consumers)",
+        ));
+    }
+    let works: Vec<AttributedWorkV1> = events.iter().map(unattributed).collect();
+    collect_attributed_work_beacon_v1(ctx, &works, tip_position)
+}
+
+/// **The beacon at `tip_position`** of the branch whose attributed settlement events are `works`, under the policy's source rule.
+pub fn collect_attributed_work_beacon_v1(
+    ctx: &BeaconContextV1,
+    works: &[AttributedWorkV1],
+    tip_position: u64,
+) -> Result<WorkBeaconStateV1, PolicyRefusalV1> {
     ctx.policy.validate()?;
+    if !ctx.policy.needs_beacon() {
+        return Err(PolicyRefusalV1::NoBeacon);
+    }
+    let rule = ctx.policy.source_rule().ok_or(PolicyRefusalV1::UnknownId("source_eligibility_policy_id"))?;
     if matches!(ctx.subject_kind, SubjectKindV1::ModelConformance | SubjectKindV1::KernelConformance)
         && ctx.candidate_profile_id == RootV1::Absent
     {
@@ -320,8 +394,8 @@ pub fn collect_work_beacon_v1(
     }
     let need = ctx.policy.work_count_k;
     // Only what has settled by the tip exists on this branch.
-    let settled: Vec<WorkFinalEventV1> = events.iter().filter(|e| e.settlement_position <= tip_position).cloned().collect();
-    let mut sources = canonical_sources_v1(ctx, &settled);
+    let settled: Vec<AttributedWorkV1> = works.iter().filter(|w| w.event.settlement_position <= tip_position).cloned().collect();
+    let mut sources = canonical_attributed_sources_v1(ctx, &settled, rule);
     sources.truncate(need as usize);
     let have = sources.len() as u32;
     if have < need {
@@ -370,7 +444,23 @@ pub fn verify_work_beacon_v1(
     events: &[WorkFinalEventV1],
     tip_position: u64,
 ) -> Result<VerifiedWorkBeaconV1, BeaconEvidenceRefusalV1> {
-    let derived = match collect_work_beacon_v1(ctx, events, tip_position).map_err(BeaconEvidenceRefusalV1::Policy)? {
+    let derived = collect_work_beacon_v1(ctx, events, tip_position).map_err(BeaconEvidenceRefusalV1::Policy)?;
+    compare_presented(derived, presented)
+}
+
+/// [`verify_work_beacon_v1`] over attributed works (the distinct source rules).
+pub fn verify_attributed_work_beacon_v1(
+    ctx: &BeaconContextV1,
+    presented: &WorkBeaconV1,
+    works: &[AttributedWorkV1],
+    tip_position: u64,
+) -> Result<VerifiedWorkBeaconV1, BeaconEvidenceRefusalV1> {
+    let derived = collect_attributed_work_beacon_v1(ctx, works, tip_position).map_err(BeaconEvidenceRefusalV1::Policy)?;
+    compare_presented(derived, presented)
+}
+
+fn compare_presented(derived: WorkBeaconStateV1, presented: &WorkBeaconV1) -> Result<VerifiedWorkBeaconV1, BeaconEvidenceRefusalV1> {
+    let derived = match derived {
         WorkBeaconStateV1::Locked(b) => b,
         other => return Err(BeaconEvidenceRefusalV1::NotLocked(other)),
     };
