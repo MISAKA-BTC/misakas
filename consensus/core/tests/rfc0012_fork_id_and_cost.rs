@@ -34,8 +34,9 @@ fn rfc0012_the_unassigned_fence_leaves_every_identity_and_fork_id_alone_and_an_a
     for at in [0, 750, 9_000, 12_000] {
         assert_eq!(fork_id_v1(&p, at), fork_id_v1(&never, at), "a never-leave fence is invisible to the fork id (DAA {at})");
     }
-    // 9,137, not 9,000: DAA 9,000 is testnet-12's int-13 flag day, and a fence at an already-scheduled height is invisible to the
-    // fork id (it fires with the others).
+    // 9,137, not 9,000: DAA 9,000 was the int-13 flag day's height (cancelled by the user on 2026-10-08; it is not scheduled on testnet-12
+    // any more), and a fence at an already-scheduled height is invisible to the fork id (it fires with the others) — a height of its own
+    // is the test's honest case.
     let armed = fenced(9_137);
     assert_ne!(p.consensus_params_id(), armed.consensus_params_id());
     assert_ne!(p.consensus_schedule_id(), armed.consensus_schedule_id());

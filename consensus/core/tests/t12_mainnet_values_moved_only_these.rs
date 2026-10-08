@@ -40,11 +40,11 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
-// re-pin 2026-10-08 @9e1704dab859: int-13 flag day @ DAA 9,000: palw_audit_1004_v1, palw_gen_range_twin_v1, palw_model_court_window, palw_receipt_spend_v4 armed (the shipped params and schedule ids move; genesis and identity do not) (was d837fb19…, 9e6afcf5…)
+// re-pin 2026-10-08 @42452229ee51: no DAA-9,000 flag day (user, 2026-10-08): the int-13 list is dormant; ids back to the int-12 release (was 61d4eb4d…, 2d23b5f3…)
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "61d4eb4df1cc36a457be4b65eb46a61e544febb6dfead4ce9b8e896ae4772ff3",
+    "d837fb191d81f01d30f241d28fdb9d13a12caa9cd5ee5644abbe37da53b37cf5",
     "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
-    "2d23b5f34dd73baa9e3d770c62902305227f0d8a735569b8dd10200047bc11ce",
+    "9e6afcf540c02944e18bf3a75e31cbfaf65884510c136e57ce9f692a7cd5c27b",
 );
 
 #[test]

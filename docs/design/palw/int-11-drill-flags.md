@@ -183,6 +183,8 @@ Carriage tails: `0xE4` vertex, `0xE1` shard, `0xEA` real work, `0xE6` seat avail
 
 ## int-13 addendum (2026-10-08): row 19, `--palw-drill-int13-at`
 
+**Note (user, 2026-10-08): the DAA-9,000 flag day is CANCELLED** — `PALW_T12_INT13_DAA` is `None`; the list waits for the full-activation release and takes a fresh height then. Row 19 stays: it ARMS the (otherwise dormant) list on a salted drill chain.
+
 The DAA-9,000 flag day (`PALW_T12_INT13_FENCES_V1` at `PALW_T12_INT13_DAA`, `consensus/core/src/config/params.rs`) arms four code-change-only
 fences at one height: `palw_audit_1004_v1`, `palw_gen_range_twin_v1`, `palw_model_court_window` and `palw_receipt_spend_v4`. Like the int-11 list it is
 armed on every testnet-12 ruleset, a drill's included, so a drill flag *moves* an entry.

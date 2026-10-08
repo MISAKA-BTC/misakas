@@ -7,8 +7,9 @@
 //!   uses: the fork id names heights, not fences. `palw_model_court_window` and `palw_model_virtual_v1` stay dormant;
 //! * **the baseline** — [`palw_t12_release_v5_params`] (the shipped ruleset with the list dormant) IS the DAA-3,600 release
 //!   (int-10, the fleet's): its params and schedule ids are pinned here by value, so this release's re-pin cannot move them;
-//! * **the release** — testnet-12 as the int-12 release ships it ([`palw_t12_release_v6_params`]: since the int-13 flag day
-//!   `palw_t12_flag_day_9000.rs` the shipped ruleset also arms that list at 9,000) IS that baseline with the list at H and ρ = 100 at
+//! * **the release** — testnet-12 as the int-12 release ships it ([`palw_t12_release_v6_params`]; the int-13 list of
+//!   `palw_t12_flag_day_9000.rs` is unscheduled — the user cancelled the DAA-9,000 flag day on 2026-10-08 — so the shipped ruleset IS
+//!   this release's) IS that baseline with the list at H and ρ = 100 at
 //!   H + 95: params and schedule ids move, the identity does not, and no other fence moves;
 //! * **the ceilings** — testnet-12's provisional ones ([`PALW_T12_GEN_CEILINGS_V1`], [`PALW_T12_IMPROVE_CEILINGS_V1`]): the
 //!   generative fence no looser than the IR where the IR bounds the same dimension, the improvement fence's the drill's by value;
@@ -209,7 +210,12 @@ fn testnet12_ships_the_list_armed_at_h_over_the_int10_release() {
     assert_eq!(
         ids(&Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))),
         ids(&palw_t12_shipped_params()),
-        "the node's door is testnet-12 as shipped (with the int-13 flag day armed on top of this release)"
+        "the node's door is testnet-12 as shipped"
+    );
+    assert_eq!(
+        ids(&palw_t12_shipped_params()),
+        ids(&shipped),
+        "testnet-12 as shipped IS the int-12 release (no int-13 flag day is scheduled: user, 2026-10-08)"
     );
     let (bp, bi, bs) = ids(&baseline);
     let (sp, si, ss) = ids(&shipped);

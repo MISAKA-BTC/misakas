@@ -16916,7 +16916,7 @@ mod t12_seat_maturity_fence;
 // testnet-12's post-launch release (int-4): EVERY fence of PALW_T12_POST_LAUNCH_FENCES_V1 at one
 // height, crossed by one chain with the clock running — the combined crossing no lane ran alone.
 mod t12_post_launch_fences_combined;
-// testnet-12's int-13 flag day (DAA 9,000 on the shipped ruleset): the four tier-1 fences of PALW_T12_INT13_FENCES_V1 at one height over the
+// testnet-12's int-13 list (armed explicitly at a test height; the DAA-9,000 flag day was cancelled by the user on 2026-10-08): the four tier-1 fences of PALW_T12_INT13_FENCES_V1 at one height over the
 // whole compressed release, crossed by one chain with the clock running — below the fence a released node, past it the list live, a second
 // node and a restart across the fence agreeing, the fork id keeping and refusing the released build.
 mod t12_int13_flag_day_crossing;
