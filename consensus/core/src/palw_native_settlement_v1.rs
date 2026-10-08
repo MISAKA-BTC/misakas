@@ -213,9 +213,11 @@ pub fn native_facts_of_block_v1(
         if voided.contains(id) || claim.class_id == base || rules.claims_with_open_da.contains(id) {
             continue;
         }
-        let (Some(identity), Some(work), Some(bond)) =
-            (claim.work_id, rules.state.palw_claim_canonical_weight_v1(claim, rules.canonical_work_daa), rules.state.bond(&claim.bond))
-        else {
+        let (Some(identity), Some(work), Some(bond)) = (
+            claim.work_id,
+            rules.state.palw_claim_canonical_weight_v1(claim, rules.canonical_work_daa),
+            rules.state.bond(&claim.bond),
+        ) else {
             continue;
         };
         facts.push(MatureUsefulWorkV1 {
@@ -239,7 +241,10 @@ pub fn native_facts_of_block_v1(
         let PalwClaimSourceV2::FreePrompt { quanta, .. } = &claim.source else {
             continue;
         };
-        if voided.contains(id) || claim.class_id == pricing.base_class_id || !pricing.prices_in_compute(claim) || rules.claims_with_open_da.contains(id)
+        if voided.contains(id)
+            || claim.class_id == pricing.base_class_id
+            || !pricing.prices_in_compute(claim)
+            || rules.claims_with_open_da.contains(id)
         {
             continue;
         }
@@ -463,7 +468,8 @@ pub fn native_open_from_v1(
     let open_claims = claims
         .into_iter()
         .filter(|(_, phase, retention)| {
-            !(matches!(phase, PalwClaimPhaseV2::Voided { .. }) || (matches!(phase, PalwClaimPhaseV2::Final { .. }) && *retention <= sink_daa))
+            !(matches!(phase, PalwClaimPhaseV2::Voided { .. })
+                || (matches!(phase, PalwClaimPhaseV2::Final { .. }) && *retention <= sink_daa))
         })
         .map(|(blue, _, _)| blue)
         .min();
@@ -510,7 +516,16 @@ pub fn certify_native_prefix_v1(
     if !monotone || !policy.valid() {
         // Not an ordered chain (or an unusable policy): the reference, one effect at a time.
         for e in effects {
-            results.push(certify_native_effect_v1(policy, (e.daa, e.blue), snapshot_daa, true, e.frontier_covers, e.lifecycle_closed, true, facts));
+            results.push(certify_native_effect_v1(
+                policy,
+                (e.daa, e.blue),
+                snapshot_daa,
+                true,
+                e.frontier_covers,
+                e.lifecycle_closed,
+                true,
+                facts,
+            ));
         }
     } else {
         // Effect `i` is qualified by a position `(daa, blue)` iff `i <= below(daa, blue)`: the thresholds fall with `i`.
@@ -789,7 +804,15 @@ mod tests {
             *seen.entry(format!("{:?}/{}", swept.stop, swept.safe.is_some())).or_default() += 1;
         }
         // The instances are not all one shape: every stop reason and a certified prefix both occur.
-        for stop in ["DuplicateWork", "ArithmeticOverflow", "InsufficientDepth", "InsufficientWork", "ConcentratedWork", "FrontierNotCovered", "OpenLifecycle"] {
+        for stop in [
+            "DuplicateWork",
+            "ArithmeticOverflow",
+            "InsufficientDepth",
+            "InsufficientWork",
+            "ConcentratedWork",
+            "FrontierNotCovered",
+            "OpenLifecycle",
+        ] {
             assert!(seen.keys().any(|k| k.contains(stop)), "no instance stopped at {stop}: {seen:?}");
         }
         let certifying: u32 = seen.iter().filter(|(k, _)| k.ends_with("true")).map(|(_, v)| *v).sum();
@@ -798,7 +821,12 @@ mod tests {
 
     #[test]
     fn rfc0012_certify_precedence_is_duplicate_then_overflow_then_depth_work_concentration() {
-        let policy = PalwSettlementPolicyV1 { settled_anchor_depth: 1, unique_mature_work: 1, max_operator_permille: 1000, max_class_permille: 1000 };
+        let policy = PalwSettlementPolicyV1 {
+            settled_anchor_depth: 1,
+            unique_mature_work: 1,
+            max_operator_permille: 1000,
+            max_class_permille: 1000,
+        };
         let fact = |id: u64, work: u128| MatureUsefulWorkV1 {
             identity: h(id),
             anchor: h(id),
@@ -853,7 +881,11 @@ mod tests {
                         || (matches!(phase, PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. })
                             && (matches!(phase, PalwClaimPhaseV2::Voided { .. }) || *retention <= sink_daa))
                 }) && sessions.iter().all(|claim| claim.is_some_and(|accepted| accepted > blue));
-                assert_eq!(blue < open_from, reference, "case {case}: blue {blue}, open_from {open_from}, claims {claims:?}, sessions {sessions:?}");
+                assert_eq!(
+                    blue < open_from,
+                    reference,
+                    "case {case}: blue {blue}, open_from {open_from}, claims {claims:?}, sessions {sessions:?}"
+                );
             }
         }
     }

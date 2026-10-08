@@ -311,8 +311,12 @@ mod tests {
     /// that finalize or spend work.
     #[test]
     fn rfc0012_a_row_without_evidence_is_small() {
-        let bytes = std::mem::size_of::<NativeChainRow>() + std::mem::size_of::<Arc<NativeChainRow>>() + std::mem::size_of::<BlockHash>();
-        eprintln!("[rfc0012-cost] NativeChainRow: {} bytes (+ map entry): about {bytes} bytes per chain block", std::mem::size_of::<NativeChainRow>());
+        let bytes =
+            std::mem::size_of::<NativeChainRow>() + std::mem::size_of::<Arc<NativeChainRow>>() + std::mem::size_of::<BlockHash>();
+        eprintln!(
+            "[rfc0012-cost] NativeChainRow: {} bytes (+ map entry): about {bytes} bytes per chain block",
+            std::mem::size_of::<NativeChainRow>()
+        );
         assert!(bytes < 512);
     }
 }

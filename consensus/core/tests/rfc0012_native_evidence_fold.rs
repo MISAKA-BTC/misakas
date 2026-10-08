@@ -23,8 +23,8 @@ use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::palw_attempt_v2::{attempt_id_v2, execution_anchor_v3, execution_commitment_v3};
 use kaspa_consensus_core::palw_native_settlement_v1::{
-    NativeDeltaEvidenceV1, NativeFactRulesV1, PalwSettlementPolicyV1, SettlementStopV1, certify_native_effect_v1, native_delta_evidence_v1,
-    native_facts_of_block_v1,
+    NativeDeltaEvidenceV1, NativeFactRulesV1, PalwSettlementPolicyV1, SettlementStopV1, certify_native_effect_v1,
+    native_delta_evidence_v1, native_facts_of_block_v1,
 };
 use kaspa_consensus_core::palw_producer_v2::palw_min_trace_retention_daa_v1;
 use kaspa_consensus_core::palw_pwu::palw_pwu_v1;
@@ -120,7 +120,6 @@ fn rebuild(p: &Params, c: PalwStateCarriageV2) -> PalwChainStateV2 {
         .expect("carriage rebuilds")
 }
 
-
 /// One claim's life through the fold.
 struct Life {
     p: Params,
@@ -140,6 +139,9 @@ struct Life {
     old_reader_saw: Vec<(u64, bool)>,
     class: Hash64,
     retention_daa: u64,
+    executor_bond: PalwBondKeyV2,
+    executor_pubkey: Vec<u8>,
+    valid_seats: Vec<PalwBondKeyV2>,
 }
 
 fn live_life() -> Life {
@@ -153,13 +155,16 @@ fn live_life() -> Life {
         .genesis_objects
         .iter()
         .find_map(|o| match o {
-            PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, .. } => Some((*bond, pubkey.clone(), operator_pubkey.clone())),
+            PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, .. } => {
+                Some((*bond, pubkey.clone(), operator_pubkey.clone()))
+            }
             _ => None,
         })
         .expect("a genesis bond");
     let seats: Vec<(PalwBondKeyV2, Hash64)> = bonds[1..6].iter().map(|(k, o, _)| (*k, *o)).collect();
     let valid_seats: Vec<PalwBondKeyV2> = seats.iter().map(|s| s.0).collect();
     let s = with_floor_lifecycle(&p, &genesis_state(&p));
+    let exec_pk_kept = exec_pk.clone();
     let (mut env, _, _) = junk_attempt(floor, exec_bond, exec_pk, &exec_op, pwu, 77, 0x6077);
     let accepted_daa = 1_001u64;
     // The retention a producer commits (`palw_min_trace_retention_daa_v1`), not the fixture's placeholder.
@@ -227,11 +232,20 @@ fn live_life() -> Life {
         old_reader_saw,
         class: floor,
         retention_daa,
+        executor_bond: exec_bond,
+        executor_pubkey: exec_pk_kept,
+        valid_seats,
     }
 }
 
 fn rules<'a>(l: &'a Life, state: &'a PalwChainStateV2, open: &'a BTreeSet<Hash64>) -> NativeFactRulesV1<'a> {
-    NativeFactRulesV1 { state, params: &l.sp, canonical_work_daa: l.p.palw_canonical_work_daa(), quantum_maturity_daa: 120, claims_with_open_da: open }
+    NativeFactRulesV1 {
+        state,
+        params: &l.sp,
+        canonical_work_daa: l.p.palw_canonical_work_daa(),
+        quantum_maturity_daa: 120,
+        claims_with_open_da: open,
+    }
 }
 
 #[test]
@@ -251,7 +265,10 @@ fn rfc0012_the_old_reader_never_sees_the_claim_and_the_finalizing_delta_carries_
         l.old_reader_saw.len()
     );
     // EXPECTED: the claim is retired exactly `claim_retirement` after Final, before its retention lapses.
-    assert!(l.retired_daa >= l.final_daa + retirement && l.retired_daa <= l.final_daa + retirement + 2, "retired at Final + {retirement}");
+    assert!(
+        l.retired_daa >= l.final_daa + retirement && l.retired_daa <= l.final_daa + retirement + 2,
+        "retired at Final + {retirement}"
+    );
     assert!(l.retired_daa < l.retention_daa, "retired at {} before its retention lapses at {}", l.retired_daa, l.retention_daa);
     // The dormant reader never saw the Final claim, at any block of its life.
     assert!(!l.old_reader_saw.is_empty() && l.old_reader_saw.iter().all(|(_, saw)| !saw), "the old reader saw an ordinary claim");
@@ -268,26 +285,49 @@ fn rfc0012_the_old_reader_never_sees_the_claim_and_the_finalizing_delta_carries_
 
     // The floor is never evidence, retired or not.
     let open = BTreeSet::new();
-    let none = native_facts_of_block_v1(&rules(&l, &l.after_retirement, &open), &evidence, &BTreeSet::new(), (l.accepted_daa, l.accepted_daa));
+    let none = native_facts_of_block_v1(
+        &rules(&l, &l.after_retirement, &open),
+        &evidence,
+        &BTreeSet::new(),
+        (l.accepted_daa, l.accepted_daa),
+    );
     assert!(none.is_empty(), "a floor claim is no evidence");
 
     // The same record relabelled to a REAL class (the fixture can only drive the floor without the class registry).
     let real = genesis_classes(&l.p)[1].0;
     assert_ne!(real, l.class);
     let mut relabelled = NativeDeltaEvidenceV1::default();
-    relabelled.finalized_attempts.push((*key, { let mut c = claim.clone(); c.class_id = real; c }));
+    relabelled.finalized_attempts.push((*key, {
+        let mut c = claim.clone();
+        c.class_id = real;
+        c
+    }));
     assert!(l.after_retirement.claim(&l.id).is_none(), "the claim is gone from the sink state");
-    let facts = native_facts_of_block_v1(&rules(&l, &l.after_retirement, &open), &relabelled, &BTreeSet::new(), (l.accepted_daa, l.accepted_daa));
+    let facts = native_facts_of_block_v1(
+        &rules(&l, &l.after_retirement, &open),
+        &relabelled,
+        &BTreeSet::new(),
+        (l.accepted_daa, l.accepted_daa),
+    );
     assert_eq!(facts.len(), 1, "the work survives the claim's retirement");
     let f = facts[0];
     assert_eq!(f.work, claim.pwu as u128, "weight is the canonical pwu");
     assert_eq!(f.accepted_daa, l.accepted_daa);
-    assert_eq!(f.matured_daa, l.retention_daa.max(l.final_daa + retirement), "matured when it can no longer be convicted and its trace may be dropped");
+    assert_eq!(
+        f.matured_daa,
+        l.retention_daa.max(l.final_daa + retirement),
+        "matured when it can no longer be convicted and its trace may be dropped"
+    );
     assert_eq!(f.identity, claim.work_id.expect("a canonical work id"));
     assert_eq!(f.class, real);
 
     // Counting: not before maturity, once after, however many chain blocks restate it.
-    let policy = PalwSettlementPolicyV1 { settled_anchor_depth: 1, unique_mature_work: 1, max_operator_permille: 1000, max_class_permille: 1000 };
+    let policy = PalwSettlementPolicyV1 {
+        settled_anchor_depth: 1,
+        unique_mature_work: 1,
+        max_operator_permille: 1000,
+        max_class_permille: 1000,
+    };
     let effect = (l.accepted_daa, l.accepted_daa);
     let at = |snapshot| certify_native_effect_v1(policy, effect, snapshot, true, true, true, true, &facts);
     assert_eq!(at(f.matured_daa - 1), Err(SettlementStopV1::InsufficientDepth), "an immature fact counts nothing");
@@ -323,7 +363,10 @@ fn rfc0012_a_void_entry_is_extracted_and_a_resumed_final_is_not_evidence_twice()
     let delta = |entries| PalwStateDeltaV2 { point, entries };
     let entry = |old: Option<&_>, new: Option<&_>| PalwDeltaEntryV2::Claim { key: id, old: old.cloned(), new: new.cloned() };
     // Provisional -> Final is the evidence; a re-write of the same Final (Final -> Final) is not a second one.
-    let e = native_delta_evidence_v1(&delta(vec![entry(Some(&provisional), Some(&final_claim)), entry(Some(&final_claim), Some(&final_claim))]));
+    let e = native_delta_evidence_v1(&delta(vec![
+        entry(Some(&provisional), Some(&final_claim)),
+        entry(Some(&final_claim), Some(&final_claim)),
+    ]));
     assert_eq!(e.finalized_attempts.len(), 1);
     // Final -> Voided retracts; a later Voided -> Voided (the retirement re-arm) retracts nothing new.
     let e = native_delta_evidence_v1(&delta(vec![entry(Some(&final_claim), Some(&voided)), entry(Some(&voided), Some(&voided))]));
@@ -332,7 +375,6 @@ fn rfc0012_a_void_entry_is_extracted_and_a_resumed_final_is_not_evidence_twice()
     // A removal (retirement) is neither.
     assert!(native_delta_evidence_v1(&delta(vec![entry(Some(&final_claim), None)])).is_empty());
 }
-
 
 // =====================================================================================================================
 // Measurements for the policy proposal (docs/design/palw/rfc-0012-policy-proposal.md): every number comes from the fold or
@@ -352,7 +394,9 @@ fn run_claim(bind: bool, receipts: bool) -> (u64, PalwClaimPhaseV2, u64) {
         .genesis_objects
         .iter()
         .find_map(|o| match o {
-            PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, .. } => Some((*bond, pubkey.clone(), operator_pubkey.clone())),
+            PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, .. } => {
+                Some((*bond, pubkey.clone(), operator_pubkey.clone()))
+            }
             _ => None,
         })
         .expect("a genesis bond");
@@ -369,10 +413,32 @@ fn run_claim(bind: bool, receipts: bool) -> (u64, PalwClaimPhaseV2, u64) {
     let mut daa = accepted;
     if bind {
         daa += 1;
-        s = step(&p, &sp, &s, daa, &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0x6A), seats: seats_of(&seats) }], PalwBlockWorkV3::None, Hash64::default(), 0, true).0;
+        s = step(
+            &p,
+            &sp,
+            &s,
+            daa,
+            &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0x6A), seats: seats_of(&seats) }],
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+            0,
+            true,
+        )
+        .0;
         if receipts {
             daa += 1;
-            s = step(&p, &sp, &s, daa, &[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: valid_receipts(id, &valid_seats) }], PalwBlockWorkV3::None, Hash64::default(), 0, true).0;
+            s = step(
+                &p,
+                &sp,
+                &s,
+                daa,
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: valid_receipts(id, &valid_seats) }],
+                PalwBlockWorkV3::None,
+                Hash64::default(),
+                0,
+                true,
+            )
+            .0;
         }
     }
     loop {
@@ -411,7 +477,10 @@ fn rfc0012_measure_the_work_a_genesis_claim_carries() {
     let p = t12();
     for (class, leaves, target, slash) in genesis_classes(&p) {
         let pwu = palw_pwu_v1(target, leaves);
-        eprintln!("[rfc0012-measure] class {} leaves {leaves} -> pwu per claim {pwu} (slash value per pwu {slash})", &class.to_string()[..12]);
+        eprintln!(
+            "[rfc0012-measure] class {} leaves {leaves} -> pwu per claim {pwu} (slash value per pwu {slash})",
+            &class.to_string()[..12]
+        );
         assert!(pwu > 0);
     }
 }
@@ -450,7 +519,12 @@ fn rfc0012_measure_which_operator_caps_certify_which_distributions() {
         let row: Vec<&str> = caps
             .iter()
             .map(|cap| {
-                let policy = PalwSettlementPolicyV1 { settled_anchor_depth: 1, unique_mature_work: 1, max_operator_permille: *cap, max_class_permille: 1000 };
+                let policy = PalwSettlementPolicyV1 {
+                    settled_anchor_depth: 1,
+                    unique_mature_work: 1,
+                    max_operator_permille: *cap,
+                    max_class_permille: 1000,
+                };
                 match certify_native_effect_v1(policy, (10, 10), 20, true, true, true, true, &facts) {
                     Ok(_) => "ok",
                     Err(SettlementStopV1::ConcentratedWork) => "X",
@@ -464,4 +538,100 @@ fn rfc0012_measure_which_operator_caps_certify_which_distributions() {
             assert_eq!(*outcome == "ok", top <= *cap as u32, "{name} at {cap}: the largest share is {top}");
         }
     }
+}
+
+/// The same equivocation `dos_g2_conviction_takes_back` files against a `Final` floor claim: an `ExecutorEquivocation` carriage
+/// that convicts the execution, accusing seat `accused`.
+fn false_valid(l: &Life, accused: PalwBondKeyV2) -> PalwConsensusObjectV2 {
+    use kaspa_consensus_core::palw_offence_v1::{
+        PALW_PANEL_FALSE_VALID_VERSION_V1, PalwOffenceKindV1, PalwPanelContradictionV1, PalwPanelFalseValidEvidenceV1,
+        palw_offence_evidence_digest_v1,
+    };
+    use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2};
+    let attestation = |root: u64| kaspa_consensus_core::palw_slash::PalwExecutionAttestationV1 {
+        version: kaspa_consensus_core::palw_slash::PALW_S_OBJECT_VERSION_V3,
+        executor_id: h(0x1),
+        job_context_hash: h(0x2),
+        full_logits_trace_root: h(root),
+        committed_root: h(root),
+        bond_outpoint: l.executor_bond.0,
+        signature: Vec::new(),
+    };
+    let equivocation = kaspa_consensus_core::palw_carriage::PalwEquivocationCarriageV1 {
+        version: kaspa_consensus_core::palw_carriage::PALW_CARRIAGE_VERSION_V1,
+        accused_bond_outpoint: l.executor_bond.0,
+        certificate: kaspa_consensus_core::palw_slash::PalwClassContradictionCertificateV1 {
+            version: kaspa_consensus_core::palw_slash::PALW_S_OBJECT_VERSION_V3,
+            job_context: kaspa_consensus_core::palw_base0_profile::rc_job_context(&floor_profile(), 512, 256),
+            attestation_a: attestation(0xAA),
+            attestation_b: attestation(0xBB),
+        },
+    };
+    let payload = PalwPanelFalseValidEvidenceV1 {
+        version: PALW_PANEL_FALSE_VALID_VERSION_V1,
+        claim_id: l.id,
+        network_domain: h(NET),
+        accused_seat: accused.0,
+        valid_receipt: PalwSeatReceiptV2 {
+            claim: l.id,
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: accused,
+            signed_daa: 0,
+            signature: Vec::new(),
+        },
+        executor_pubkey: l.executor_pubkey.clone(),
+        contradiction: PalwPanelContradictionV1::ExecutorEquivocation(equivocation),
+    };
+    let evidence = borsh::to_vec(&payload).unwrap();
+    PalwConsensusObjectV2::ObjectiveOffence {
+        kind: PalwOffenceKindV1::PanelFalseValid,
+        accused,
+        evidence_id: palw_offence_evidence_digest_v1(&evidence),
+        evidence,
+    }
+}
+
+/// **A conviction after `Final`, through the real fold: the void is in the convicting block's delta, and it retracts the work.**
+/// `reverse_convicted_final` writes `Final -> Voided`; `native_delta_evidence_v1` reads that as a void; a fact converted with that
+/// claim in the voided set is gone — wherever on the chain the conviction landed relative to the block that finalized it.
+#[test]
+fn rfc0012_a_conviction_after_final_is_a_void_in_its_delta_and_retracts_the_work() {
+    let l = live_life();
+    let conviction_daa = l.final_daa + 5;
+    let (convicted, delta) = step(
+        &l.p,
+        &l.sp,
+        &l.at_final,
+        conviction_daa,
+        &[false_valid(&l, l.valid_seats[0])],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+        true,
+    );
+    assert!(
+        matches!(convicted.claim(&l.id).map(|c| c.phase.clone()), Some(PalwClaimPhaseV2::Voided { voided_daa, .. }) if voided_daa == conviction_daa),
+        "the fold voids the Final claim"
+    );
+    let evidence = native_delta_evidence_v1(&delta);
+    assert_eq!(evidence.voided, vec![l.id], "the conviction is a void in the delta");
+    assert!(evidence.finalized_attempts.is_empty());
+    // The Final's evidence (from its own block), relabelled to a REAL class as in the test above, is retracted by it.
+    let finalized = native_delta_evidence_v1(&l.final_delta);
+    let real = genesis_classes(&l.p)[1].0;
+    let mut relabelled = NativeDeltaEvidenceV1::default();
+    relabelled.finalized_attempts.push((l.id, {
+        let mut c = finalized.finalized_attempts[0].1.clone();
+        c.class_id = real;
+        c
+    }));
+    let open = BTreeSet::new();
+    let rules = rules(&l, &convicted, &open);
+    let kept = native_facts_of_block_v1(&rules, &relabelled, &BTreeSet::new(), (l.accepted_daa, l.accepted_daa));
+    assert_eq!(kept.len(), 1, "before the conviction is seen the work counts");
+    let voided: BTreeSet<Hash64> = evidence.voided.iter().copied().collect();
+    assert!(
+        native_facts_of_block_v1(&rules, &relabelled, &voided, (l.accepted_daa, l.accepted_daa)).is_empty(),
+        "after it, it does not"
+    );
 }

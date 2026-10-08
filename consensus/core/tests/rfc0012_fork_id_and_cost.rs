@@ -8,7 +8,8 @@ use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params};
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::palw_native_settlement_v1::{
-    MatureUsefulWorkV1, NativeEffectV1, PalwDnsRetirementV1, PalwSettlementPolicyV1, certify_native_effect_v1, certify_native_prefix_v1,
+    MatureUsefulWorkV1, NativeEffectV1, PalwDnsRetirementV1, PalwSettlementPolicyV1, certify_native_effect_v1,
+    certify_native_prefix_v1,
 };
 use std::time::Instant;
 
@@ -18,7 +19,8 @@ fn policy() -> PalwSettlementPolicyV1 {
 
 fn fenced(at: u64) -> Params {
     let mut p = palw_t12_shipped_params();
-    p.palw_dns_retirement = Some(PalwDnsRetirementV1 { activation: ForkActivation::new(at), settlement: policy(), legacy_evidence_horizon_daa: 300 });
+    p.palw_dns_retirement =
+        Some(PalwDnsRetirementV1 { activation: ForkActivation::new(at), settlement: policy(), legacy_evidence_horizon_daa: 300 });
     p
 }
 
@@ -38,15 +40,24 @@ fn rfc0012_the_unassigned_fence_leaves_every_identity_and_fork_id_alone_and_an_a
     // The armed node and the unupgraded node agree until the height, and the armed one refuses the other from it.
     let unupgraded_before = fork_id_v1(&p, 8_999);
     let armed_before = fork_id_v1(&armed, 8_999);
-    assert!(!evaluate_fork_id_v1(&armed, 8_999, &unupgraded_before.fired.as_bytes(), unupgraded_before.next).refuses(), "before the fence: peers");
-    assert!(!evaluate_fork_id_v1(&p, 8_999, &armed_before.fired.as_bytes(), armed_before.next).refuses(), "and the unupgraded node keeps the armed one");
+    assert!(
+        !evaluate_fork_id_v1(&armed, 8_999, &unupgraded_before.fired.as_bytes(), unupgraded_before.next).refuses(),
+        "before the fence: peers"
+    );
+    assert!(
+        !evaluate_fork_id_v1(&p, 8_999, &armed_before.fired.as_bytes(), armed_before.next).refuses(),
+        "and the unupgraded node keeps the armed one"
+    );
     let unupgraded_at = fork_id_v1(&p, 9_000);
     let verdict = evaluate_fork_id_v1(&armed, 9_000, &unupgraded_at.fired.as_bytes(), unupgraded_at.next);
     assert!(verdict.refuses(), "from the fence: {verdict:?}");
     // A peer that scheduled a DIFFERENT retirement height is refused past the earlier one.
     let other = fenced(9_500);
     let other_at = fork_id_v1(&other, 9_200);
-    assert!(evaluate_fork_id_v1(&armed, 9_200, &other_at.fired.as_bytes(), other_at.next).refuses(), "a different height is a different network");
+    assert!(
+        evaluate_fork_id_v1(&armed, 9_200, &other_at.fired.as_bytes(), other_at.next).refuses(),
+        "a different height is a different network"
+    );
     // A different policy value is a different network too (the values are committed).
     let mut other_policy = armed.clone();
     other_policy.palw_dns_retirement.as_mut().unwrap().settlement.unique_mature_work += 1;
@@ -84,7 +95,12 @@ fn workload(n: u64) -> (Vec<NativeEffectV1>, Vec<MatureUsefulWorkV1>) {
 
 #[test]
 fn rfc0012_the_sweep_scales_near_linearly_and_the_per_effect_reference_does_not() {
-    let policy = PalwSettlementPolicyV1 { settled_anchor_depth: 1, unique_mature_work: 1, max_operator_permille: 1000, max_class_permille: 1000 };
+    let policy = PalwSettlementPolicyV1 {
+        settled_anchor_depth: 1,
+        unique_mature_work: 1,
+        max_operator_permille: 1000,
+        max_class_permille: 1000,
+    };
     let mut timings = Vec::new();
     for n in [10_000u64, 40_000, 160_000] {
         let (effects, facts) = workload(n);

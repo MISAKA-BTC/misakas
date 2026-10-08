@@ -17,7 +17,9 @@ use kaspa_consensus_core::palw_producer_v2::palw_min_trace_retention_daa_v1;
 
 #[test]
 fn rfc0012_gap_a_retained_claim_is_retired_before_its_trace_retention_lapses() {
-    for (name, params) in [("testnet-12 as launched", palw_t12_launch_params_v1()), ("testnet-12 as shipped", palw_t12_shipped_params())] {
+    for (name, params) in
+        [("testnet-12 as launched", palw_t12_launch_params_v1()), ("testnet-12 as shipped", palw_t12_shipped_params())]
+    {
         let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("{name} is ConsensusV2") };
         let s = &bundle.state;
         let retention = palw_min_trace_retention_daa_v1(s); // trace_retention_daa - accepted_daa

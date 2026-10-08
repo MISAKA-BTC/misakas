@@ -23,12 +23,12 @@ use super::t12_round_lane_e2e::{
     T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_genesis_chain_on, t12_reopened_chain, t12_with_harness_cards_and_evm,
 };
 use super::{OnetimeTxSelector, new_miner_data};
-use crate::model::stores::dns_state::DnsStateStore;
-use crate::model::stores::pruning::PruningStore;
 use crate::consensus::test_consensus::TestConsensus;
+use crate::model::stores::dns_state::DnsStateStore;
 use crate::model::stores::dns_state::DnsStateStoreReader;
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use crate::model::stores::headers::HeaderStoreReader;
+use crate::model::stores::pruning::PruningStore;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::{Block, MutableBlock, TemplateBuildMode};
@@ -128,7 +128,11 @@ pub(super) fn parts_with(fence: Option<u64>, bft: bool) -> Parts {
 }
 
 /// [`parts_with`] and then `edit` on the params copy (a test value, never a preset).
-pub(super) fn parts_custom(fence: Option<u64>, bft: bool, edit: impl FnOnce(&mut kaspa_consensus_core::config::params::Params)) -> Parts {
+pub(super) fn parts_custom(
+    fence: Option<u64>,
+    bft: bool,
+    edit: impl FnOnce(&mut kaspa_consensus_core::config::params::Params),
+) -> Parts {
     let (config, bundle, premine, floats) = t12_with_harness_cards_and_evm(true);
     let mut params = config.params.clone();
     if let Some(at) = fence {
@@ -629,18 +633,17 @@ async fn rfc12_x1_a_zero_dns_chain_crosses_the_fence_with_deposit_withdrawal_and
     let lock_out = TransactionOutpoint::new(run.lock.id(), 0);
     assert!(rig.api().get_virtual_utxo_entry(lock_out).is_none(), "the lock output was consumed by the claim");
     let (_, spk) = withdrawal();
-    let paid: Vec<_> = rig
-        .api()
-        .get_virtual_utxos(None, 10_000_000, false)
-        .into_iter()
-        .filter(|(_, e)| e.script_public_key == spk)
-        .collect();
+    let paid: Vec<_> =
+        rig.api().get_virtual_utxos(None, 10_000_000, false).into_iter().filter(|(_, e)| e.script_public_key == spk).collect();
     assert_eq!(paid.len(), 1, "the withdrawal materialized exactly one UTXO");
     assert_eq!(paid[0].1.amount, WITHDRAW_SOMPI);
     let scale = EVM_NATIVE_SCALE as u128;
     let after = balance_of(&rig, ACCOUNT);
     let expected_before_gas = DEPOSIT as u128 * scale - WITHDRAW_SOMPI as u128 * scale;
-    assert!(after <= expected_before_gas && expected_before_gas - after < 10 * scale * 1_000_000, "credited once, debited once, gas aside: {after}");
+    assert!(
+        after <= expected_before_gas && expected_before_gas - after < 10 * scale * 1_000_000,
+        "credited once, debited once, gas aside: {after}"
+    );
     let settlements = rig.chain.tip_state().1.evm_settlements();
     // The sells were queued by e3's lane and settled by e4's fold, which e5 carries; the state tip is e6, so read the log of outcomes.
     let _ = settlements;
@@ -664,7 +667,6 @@ async fn rfc12_x1_a_zero_dns_chain_crosses_the_fence_with_deposit_withdrawal_and
     }
 }
 
-
 /// **CONTROL (EXPECTED: identical script, no fence — every block UTXO-valid, the claim carried, the ledger conserves).**
 #[tokio::test]
 async fn rfc12_x0_control_the_same_script_without_the_fence() {
@@ -677,7 +679,6 @@ async fn rfc12_x0_control_the_same_script_without_the_fence() {
     assert!(rig.api().get_virtual_utxo_entry(lock_out).is_none(), "the lock output was consumed by the claim");
     let _ = genesis_supply;
 }
-
 
 // =====================================================================================================================
 // shared scenario pieces
@@ -694,7 +695,10 @@ async fn prefix(rig: &mut Rig) -> Vec<Block> {
     blocks.push(rig.take(b, "b1").await);
     let e = rig.attempt(1, Vec::new(), no_evm());
     let e2 = rig.take(e, "e2").await;
-    assert!(rig.config.params.palw_dns_retired_at(e2.header.daa_score) || rig.config.params.palw_dns_retirement.is_none(), "e2 is past the fence");
+    assert!(
+        rig.config.params.palw_dns_retired_at(e2.header.daa_score) || rig.config.params.palw_dns_retirement.is_none(),
+        "e2 is past the fence"
+    );
     blocks.push(e2);
     blocks
 }
@@ -778,12 +782,19 @@ async fn rfc12_x2_an_opposed_dns_anchor_vetoes_below_the_fence_and_is_ignored_pa
         b.take(e, "e1b").await
     };
     a.arrive(e1b.clone(), "the sibling").await;
-    assert!(a.config.params.palw_dns_retirement.is_some_and(|r| !r.activation.is_active(e1a.header.daa_score)), "the incumbent is below the fence");
+    assert!(
+        a.config.params.palw_dns_retirement.is_some_and(|r| !r.activation.is_active(e1a.header.daa_score)),
+        "the incumbent is below the fence"
+    );
     plant_dns(&a, e1a.header.hash, e1a.header.daa_score, e1a.header.hash, e1a.header.daa_score);
     let below = a.vp().dns_bft_gate_refusal(e1b.header.hash, e1a.header.hash);
     eprintln!("[x2] below the fence: gate refusal of the sibling that abandons the anchor = {below:?}");
     assert_eq!(below, Some(kaspa_consensus_core::dns_finality::DnsReorgOutcome::HardCheckpointReject), "history keeps the veto");
-    assert_eq!(a.vp().dns_bft_gate_refusal(e1a.header.hash, e1a.header.hash), None, "a candidate that keeps the anchor is not refused");
+    assert_eq!(
+        a.vp().dns_bft_gate_refusal(e1a.header.hash, e1a.header.hash),
+        None,
+        "a candidate that keeps the anchor is not refused"
+    );
 
     // ---- past the fence: a sibling pair at DAA 1, and the whole outcome -----------------------------------------------------
     let mut q = Rig::new(&p, 0x12_0230_0000);
@@ -898,7 +909,6 @@ async fn rfc12_x3_sibling_and_deep_forks_converge_in_any_arrival_order_and_match
     fork_case(&[2], &[3, 4, 5, 6, 7], "deep: one block against five (a withheld private fork released later)").await;
 }
 
-
 // =====================================================================================================================
 // MATRIX 5 — process restart; old-version node
 // =====================================================================================================================
@@ -918,7 +928,8 @@ async fn rfc12_x5_a_restart_keeps_the_heads_and_the_snapshot_and_carries_on() {
     extend(&mut a, &[2]).await;
     let (sink, snap, heads, supply) = (a.chain.sink(), snapshot_of(&a), heads_of(&a), a.supply());
     assert!(snap.is_some(), "a snapshot was published before the stop");
-    let (wallets, nonce, simulated_time, reopen_nonce) = (a.wallets.clone(), a.nonce, a.chain.ctx.simulated_time, a.chain.nonce_for_reopen());
+    let (wallets, nonce, simulated_time, reopen_nonce) =
+        (a.wallets.clone(), a.nonce, a.chain.ctx.simulated_time, a.chain.nonce_for_reopen());
     drop(a);
 
     let mut resumed = p.0.clone();
@@ -960,8 +971,13 @@ async fn rfc12_x6_a_node_without_the_fence_follows_history_to_the_fence_and_no_f
     for (i, blk) in chain.iter().enumerate() {
         let verdict = old.api().validate_and_insert_block(blk.clone()).virtual_state_task.await;
         let status = old.api().block_status(blk.header.hash);
-        eprintln!("[x6] block {i} daa {} -> {:?} / {:?}; the old node's sink is block {:?}", blk.header.daa_score, verdict.as_ref().map(|_| ()).map_err(|e| e.to_string()), status,
-            chain.iter().position(|c| c.header.hash == old.chain.sink()));
+        eprintln!(
+            "[x6] block {i} daa {} -> {:?} / {:?}; the old node's sink is block {:?}",
+            blk.header.daa_score,
+            verdict.as_ref().map(|_| ()).map_err(|e| e.to_string()),
+            status,
+            chain.iter().position(|c| c.header.hash == old.chain.sink())
+        );
         if old.chain.sink() != blk.header.hash && divergence.is_none() {
             divergence = Some(i);
         }
@@ -971,7 +987,8 @@ async fn rfc12_x6_a_node_without_the_fence_follows_history_to_the_fence_and_no_f
     eprintln!("[x6] the old rules agree on blocks 0..{first}; the first retired block is {first_retired}");
     assert!(first >= first_retired, "no block below the fence is refused by the old rules: history is byte-identical");
     assert!(first < chain.len(), "and the old node cannot follow the whole fenced chain");
-    let old_sink_pos = chain.iter().position(|c| c.header.hash == old.chain.sink()).expect("the old node's sink is on the fenced chain");
+    let old_sink_pos =
+        chain.iter().position(|c| c.header.hash == old.chain.sink()).expect("the old node's sink is on the fenced chain");
     assert!(old_sink_pos < chain.len() - 1, "the old node's sink is behind the fenced node's");
     assert_eq!(old_sink_pos + 1, first, "it stays on the last common block");
 }
@@ -1049,11 +1066,22 @@ async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_cle
     a.vp().import_pruning_point_evm_state(pp, header, snapshot).expect("a root-verified import");
     assert_eq!(snapshot_of(&a), None, "the import clears native evidence until reconstruction supplies proof");
     let heads = heads_of(&a).expect("heads");
-    assert_eq!((heads.latest_head(), heads.safe_head(), heads.finalized_head()), (Some(pp), None, None), "and never invents safe or finalized");
+    assert_eq!(
+        (heads.latest_head(), heads.safe_head(), heads.finalized_head()),
+        (Some(pp), None, None),
+        "and never invents safe or finalized"
+    );
     let z3 = extend(&mut a, &[6]).await;
     let rebuilt = snapshot_of(&a).expect("a snapshot");
-    assert_eq!((rebuilt.generation, rebuilt.latest, rebuilt.safe, rebuilt.finalized), (z3[0].header.hash, Some(z3[0].header.hash), None, None));
-    assert_eq!(rebuilt.stop, Some(SettlementStopV1::FrontierNotCovered), "reconstruction built it from the chain; the conflict is gone");
+    assert_eq!(
+        (rebuilt.generation, rebuilt.latest, rebuilt.safe, rebuilt.finalized),
+        (z3[0].header.hash, Some(z3[0].header.hash), None, None)
+    );
+    assert_eq!(
+        rebuilt.stop,
+        Some(SettlementStopV1::FrontierNotCovered),
+        "reconstruction built it from the chain; the conflict is gone"
+    );
 }
 
 // =====================================================================================================================
@@ -1077,7 +1105,10 @@ fn plant_frontier(rig: &Rig, blue: u64, frontier: BlockHash) {
     let (_, mut delta) = store.delta_of(sink).expect("the sink's delta row");
     delta.entries.push(PalwDeltaEntryV2::Frontier { old: before, new: (blue, frontier) });
     store
-        .set_delta_record_for_tests(sink, PalwStateDeltaRecordV2 { state_root: planted.state_root(), delta_borsh: borsh::to_vec(&delta).unwrap() })
+        .set_delta_record_for_tests(
+            sink,
+            PalwStateDeltaRecordV2 { state_root: planted.state_root(), delta_borsh: borsh::to_vec(&delta).unwrap() },
+        )
         .unwrap();
     store.set_tip_for_tests(sink, &planted).unwrap();
     drop(store);
@@ -1179,7 +1210,10 @@ async fn rfc12_x9_lost_history_stops_certification_and_never_certifies_around_th
     a.vp().native_rows.lock().clear();
     extend(&mut a, &[4]).await;
     let rebuilt = snapshot_of(&a).expect("a snapshot");
-    assert_eq!((rebuilt.safe, rebuilt.finalized, rebuilt.depth, rebuilt.unique_work.clone()), (want.safe, want.finalized, want.depth, want.unique_work.clone()));
+    assert_eq!(
+        (rebuilt.safe, rebuilt.finalized, rebuilt.depth, rebuilt.unique_work.clone()),
+        (want.safe, want.finalized, want.depth, want.unique_work.clone())
+    );
     // A gap: b1's delta row is lost.
     let b1 = pre[2].header.hash;
     let (root, delta) = a.vp().palw_state_v2_store.read().delta_of(b1).expect("b1's row");
@@ -1197,7 +1231,10 @@ async fn rfc12_x9_lost_history_stops_certification_and_never_certifies_around_th
     a.vp().native_rows.lock().clear();
     let tip2 = extend(&mut a, &[6]).await.remove(0);
     let back = snapshot_of(&a).expect("a snapshot");
-    assert_eq!((back.generation, back.safe, back.finalized, back.depth, back.unique_work.clone()), (tip2.header.hash, want.safe, want.finalized, want.depth, want.unique_work));
+    assert_eq!(
+        (back.generation, back.safe, back.finalized, back.depth, back.unique_work.clone()),
+        (tip2.header.hash, want.safe, want.finalized, want.depth, want.unique_work)
+    );
 }
 
 /// **EXPECTED (open court / unresolved dispute).** With the safe frontier planted past every effect and work placed after them,
@@ -1222,7 +1259,6 @@ async fn rfc12_x10_an_unresolved_claim_holds_the_prefix_at_open_lifecycle() {
     let h = heads_of(&a).expect("heads");
     assert_eq!((h.safe_head(), h.finalized_head()), (Some(pre[0].header.hash), None));
 }
-
 
 // =====================================================================================================================
 // MATRIX 8 — a legacy validator's bond: it can exit after retirement, and nothing new can enter
@@ -1269,7 +1305,8 @@ async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_re
     sign_spend(&mut split, float_entry.clone(), owner, mass);
     let e = rig.attempt(0, vec![split.clone()], no_evm());
     rig.take(e, "the attempt carrying the split").await;
-    let (bond_tx, _, _) = dns_harness::funded_signed_bond_tx(card_seed(owner), TransactionOutpoint::new(split.id(), 0), half, 0, BOND, 0, mass);
+    let (bond_tx, _, _) =
+        dns_harness::funded_signed_bond_tx(card_seed(owner), TransactionOutpoint::new(split.id(), 0), half, 0, BOND, 0, mass);
     let bond_outpoint = TransactionOutpoint::new(bond_tx.id(), 0);
     let e = rig.attempt(1, vec![bond_tx], no_evm());
     let bond_block = rig.take(e, "the attempt carrying the stake bond").await;
@@ -1279,24 +1316,40 @@ async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_re
     assert!(rig.api().get_stake_bond(bond_outpoint).is_some(), "the bond is on record");
 
     let rest = TransactionOutpoint::new(split.id(), 1);
-    let unbond = dns_harness::funded_signed_unbond_tx(card_seed(owner), net_id.as_byte_slice(), rest, split.outputs[1].value, 0, bond_outpoint, mass);
+    let unbond = dns_harness::funded_signed_unbond_tx(
+        card_seed(owner),
+        net_id.as_byte_slice(),
+        rest,
+        split.outputs[1].value,
+        0,
+        bond_outpoint,
+        mass,
+    );
     let e = rig.attempt(2, vec![unbond], no_evm());
     let exit_block = rig.take(e, "the attempt carrying the owner's unbond request").await;
-    assert!(rig.config.params.palw_dns_retired_at(exit_block.header.daa_score), "the exit is requested past the fence (daa {})", exit_block.header.daa_score);
+    assert!(
+        rig.config.params.palw_dns_retired_at(exit_block.header.daa_score),
+        "the exit is requested past the fence (daa {})",
+        exit_block.header.daa_score
+    );
     let e = rig.attempt(3, Vec::new(), no_evm());
     rig.take(e, "the block after the exit").await;
     let record = rig.api().get_stake_bond(bond_outpoint).expect("the bond is still on record");
-    assert!(record.unbond_request_daa_score.is_some() && record.slashed_at_daa_score.is_none(), "Unbonding, not slashed or confiscated: {:?}", record.status);
+    assert!(
+        record.unbond_request_daa_score.is_some() && record.slashed_at_daa_score.is_none(),
+        "Unbonding, not slashed or confiscated: {:?}",
+        record.status
+    );
 
     // A NEW bond cannot be created: funded from another card's float.
     let (spare_out, spare_entry) = rig.wallets.remove(&spare).expect("a spare float");
     let (late, _, _) = dns_harness::funded_signed_bond_tx(card_seed(spare), spare_out, spare_entry.amount, 0, BOND, 0, mass);
-    let refused = rig.api().build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(vec![late])), TemplateBuildMode::Standard);
+    let refused =
+        rig.api().build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(vec![late])), TemplateBuildMode::Standard);
     let err = format!("{:?}", refused.err().expect("a stake bond after the fence cannot be mined"));
     eprintln!("[x11] a new bond after the fence: {err}");
     assert!(err.contains("DnsParticipationRetired"), "refused by name: {err}");
 }
-
 
 // =====================================================================================================================
 // MATRIX 9 — the retired 20 % is never minted, and an old claim's escrow is not raised
@@ -1305,7 +1358,11 @@ async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_re
 /// The recorded escrow of the claim an attempt block created.
 fn escrow_of(rig: &Rig, attempt: BlockHash) -> u64 {
     let (_, state) = rig.chain.tip_state();
-    state.claims_iter().find(|(_, c)| c.accepted_block == attempt).map(|(_, c)| c.escrowed_reward).expect("the attempt created a claim")
+    state
+        .claims_iter()
+        .find(|(_, c)| c.accepted_block == attempt)
+        .map(|(_, c)| c.escrowed_reward)
+        .expect("the attempt created a claim")
 }
 
 /// **EXPECTED.** On the same script, fenced and unfenced:
@@ -1335,7 +1392,11 @@ async fn rfc12_x12_the_retired_share_is_never_minted_and_an_old_escrow_is_not_ra
         if !fa.attempt {
             continue;
         }
-        if fa.retired { retired_rows += 1 } else { legacy_rows += 1 }
+        if fa.retired {
+            retired_rows += 1
+        } else {
+            legacy_rows += 1
+        }
         let subsidy = f.vp().coinbase_manager.calc_block_subsidy(fa.daa);
         assert_eq!(subsidy, c.vp().coinbase_manager.calc_block_subsidy(ca.daa));
         let (escrow_f, escrow_c) = (escrow_of(&f, fa.hash), escrow_of(&c, ca.hash));
@@ -1353,7 +1414,10 @@ async fn rfc12_x12_the_retired_share_is_never_minted_and_an_old_escrow_is_not_ra
         );
         assert_eq!(fc.minted, fa.fees, "(1) the coinbase merging an attempt mints no subsidy, only the attempt's fees");
         assert_eq!(cc.minted, ca.fees, "(1) and neither does the legacy one: the worker base is withheld there too");
-        assert_eq!(escrow_f, escrow_c, "(2)/(3) the recorded escrow is the legacy carve for a legacy claim and for the recovery floor");
+        assert_eq!(
+            escrow_f, escrow_c,
+            "(2)/(3) the recorded escrow is the legacy carve for a legacy claim and for the recovery floor"
+        );
         if paying_retired {
             assert!(escrow_f <= base, "(4) the escrow fits the withheld base");
             let (unminted, pool) = (base - escrow_f, subsidy - base);
@@ -1361,5 +1425,8 @@ async fn rfc12_x12_the_retired_share_is_never_minted_and_an_old_escrow_is_not_ra
             eprintln!("[x12]   S = escrow {escrow_f} + unminted {unminted} + inclusion pool {pool} = {}", escrow_f + unminted + pool);
         }
     }
-    assert!(legacy_rows >= 1 && retired_rows >= 2, "attempts on both sides of the fence ({legacy_rows} legacy, {retired_rows} retired)");
+    assert!(
+        legacy_rows >= 1 && retired_rows >= 2,
+        "attempts on both sides of the fence ({legacy_rows} legacy, {retired_rows} retired)"
+    );
 }
