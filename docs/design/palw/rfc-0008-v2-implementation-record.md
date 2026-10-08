@@ -1,14 +1,18 @@
 # RFC-0008 v2 implementation record — claim-backed work slices on the weightless EXEC lane (DORMANT)
 
-Branch `rfc8/x8-exec-v2` (worktree `MISAKA-wt-b/wc-x8`), base `c931df046`, written 2026-10-08 by lane X8.
-Normative text: [RFC-0008](../../rfc/0008-palw-claim-backed-consensus-blocks.md) and the
-[implementation spec v1](rfc-0008-implementation-spec.md). This record says what exists, what proves it, and what does not.
+Branch `rfc8/x8-exec-v2` (worktree `MISAKA-wt-b/wc-x8`), base `c931df046`, written 2026-10-08 by lane X8; reviewed, integrated and
+completed on `rfc8/x8r-review` by lane X8R (sections 10–12), merged with the integration line at `35a9ae1c8` (the UNSCHED reset: the
+shipped t12 ids are int-12's). Normative text: [RFC-0008](../../rfc/0008-palw-claim-backed-consensus-blocks.md) and the
+[implementation spec v1](rfc-0008-implementation-spec.md) with its **amendment 1** (section 10 there: the verification route and the
+five design decisions). This record says what exists, what proves it, and what does not.
 
-**The fence `palw_exec_payload_v2` is `None` on every ruleset and cannot be armed: `PALW_EXEC_PAYLOAD_V2_ARMABLE = false`, so
-`validate_palw_v2` refuses every real height by name.** No shipped params id, fingerprint, schedule id or golden changed (the field is
-Some-only in every hasher and `Some(never())` collapses out). Every test below arms the fence by editing the `Config` it owns *after*
+**The fence `palw_exec_payload_v2` is `None` on every ruleset and cannot be armed on a public one: `PALW_EXEC_PAYLOAD_V2_ARMABLE =
+false`, so `validate_palw_v2` refuses every real height by name.** Only a salted drill of testnet-12 lifts that refusal
+(`palw_exec_payload_v2_armable_on`), and every other refusal — the prerequisites, among them the kernel route whose own validation
+refuses every height — still applies there. No shipped params id, fingerprint, schedule id or golden changed (the field is Some-only in
+every hasher and `Some(never())` collapses out). Every pipeline test arms the fence by editing the `Config` it owns *after*
 `ConfigBuilder::build`, the documented validation bypass; no node can. Nothing here is a statement that RFC-0008 is complete: the
-verification route, public-bond prosecution, DA availability and the capacity/liveness drills of spec section 9 are open (section 5).
+capacity/liveness and recovery drills of spec section 9 are external, and section 12 names the code that remains.
 
 Statuses (the matrix vocabulary): **IMPLEMENTED_AND_TESTED** (real node path, real pipeline test, behind the unarmed fence) ·
 **DORMANT_NOT_INTEGRATED** (code with no node caller) · **CODE_GAP** · **DESIGN_GAP** · **EXTERNAL_GATE_PENDING**.
@@ -23,21 +27,29 @@ Statuses (the matrix vocabulary): **IMPLEMENTED_AND_TESTED** (real node path, re
 | `e54330e33` | `WORK_SLICE` challenge subject checked against the shared contract crate (`misaka-palw-sdk` test) |
 | `504aed522` | reorg test (stranded anchor leaves the window; republished slice credited once; a third node agrees) |
 | `0dca2ca35` | RPC claim provenance names the new void reason (an exhaustive match in `kaspa-rpc-service` that the first commits broke) |
-| the commit that adds this record | kaspad: the operator's `EXEC_TX` producer signs `PXE2` from the fence; the two exhaustive matches in `kaspad/src/palw_panel.rs` (void reason, object name); this record; a pointer in the spec |
+| `960f65a42` | kaspad: the operator's `EXEC_TX` producer signs `PXE2` from the fence; the two exhaustive matches in `kaspad/src/palw_panel.rs` (void reason, object name); this record; a pointer in the spec |
+| `ad1f609ed` (X8R) | merge of the integration line `9ea89994b`: union-only conflicts; `WorkRootExpired` takes the explicit void number 130 |
+| `253e5a355` (X8R) | the review (section 10): every un-gated pipeline path gated on the fence at the block's DAA; tag 130 rides exactly as an undecodable payload; P11, the orphan fence-off test |
+| `966606811` (X8R) | amendment 1: the verification route through the G14 kernel route, suffix void (void reasons 131/132), leg cap, refusal record (delta note 181), RPC op 240, relay admission, the `EXEC_SLICE` producer, the drill-path armability, the kernel-route prerequisite |
+| `fd9a7f22e` (X8R) | merge of the integration line `35a9ae1c8` (UNSCHED: ids back to int-12's) |
 
 ## 2. Allocation and wire facts
 
 | item | value |
 | --- | --- |
 | object tag | 130 `ExecWorkRootOpenedV2` (tags 131-139 unused) |
-| delta number | 180 `ExecV2Row { table, key, old, new }`, tables 1 roots, 2 slices, 3 jobs, 4 anchored (181-189 unused) |
+| delta number | 180 `ExecV2Row { table, key, old, new }`, tables 1 roots, 2 slices, 3 jobs, 4 anchored; **181 `ExecV2Verdict { carrier, code }`**, the refusal record (a note: inert on apply and revert); 182-189 unused |
 | state carriage tail | `0xEE` (`PALW_CARRIAGE_EXEC_V2_TAIL_V1`); the empty carriage is byte-identical to before; root block `exec_v2/v1` is Some-only |
-| void reason | **explicit borsh 130** `WorkRootExpired` (was the implicit 11; moved by X8R at the integration merge, beside RFC-0010's explicit 120–122; pinned in `rcore_v22_skeleton::the_v22_void_reasons_are_pinned` and `exec_v2_fold_v1::the_object_and_delta_numbers_are_the_allocated_ones`) |
+| void reasons | **explicit borsh 130** `WorkRootExpired` (was the implicit 11; moved by X8R at the integration merge, beside RFC-0010's explicit 120–122), **131** `WorkSliceProvenFalse`, **132** `WorkSliceDefaulted` (amendment 1); pinned in `rcore_v22_skeleton::the_v22_void_reasons_are_pinned` and `exec_v2_fold_v1::the_object_and_delta_numbers_are_the_allocated_ones` |
+| slice refusal codes | `PalwSliceRefusalV2::code`, 1–27 (0 = admitted), never renumbered (`refusal_codes_are_distinct_and_named`) |
+| RPC | op **240** `getPalwExecV2Status` (lane range 240–249), gRPC messages 1294/1295; a versioned camelCase JSON observation (`PalwExecV2ObservationV1`, version 1) |
+| verification binding domains | `misaka-palw/exec-v2/slice-job-nonce/v1`, `misaka-palw/exec-v2/token-state/v1` (amendment 1) |
 | envelope | magic `PXE2`, version 2, subtypes `EXEC_TX` / `EXEC_SLICE` (exclusive), 16 KiB header cap, distinct keyed-BLAKE2b signing/content/payload/binding/id domains and ML-DSA-87 contexts per subtype |
 | anchor trailer | `PXA2` v1 at the end of a **chain** block's coinbase extra data: up to 8 heads, count, Merkle root over the covered members in canonical order |
 | limits | open roots 256 (4 per bond), extra executors 7, slices per root 128, pending depth 4 (16 per bond), 8 slices folded per block, lifetime 100,000 DAA, root work 2^48 |
 | fence | `Params::palw_exec_payload_v2: Option<ForkActivation>`, mirrored by `sync_palw_exec_payload_v2()` into the V2 bundle; in `palw_fences_v1`, `for_each_fence` and both id hashers (Some-only) |
-| arming prerequisites (enforced the day it flips) | ConsensusV2, `palw_execution_lane` open, `palw_lane_accept_parents_first`, `palw_rcore_plus`, `palw_canonical_work` in force at or below it |
+| arming prerequisites (enforced the day it flips) | ConsensusV2, `palw_execution_lane` open, `palw_lane_accept_parents_first`, `palw_rcore_plus`, `palw_canonical_work` and **`palw_probabilistic_constraints_v1`** (the verification route) in force at or below it; **`palw_audit_2026_09_11` declared** (tag 130's mixed-fleet tolerance) |
+| armability | `PALW_EXEC_PAYLOAD_V2_ARMABLE = false`; `palw_exec_payload_v2_armable_on(params)` is true only on a salted testnet-12 drill (network testnet-12, genesis not public testnet-12's) |
 
 ## 3. Design as built (where it departs from or fixes the spec's open choices)
 
@@ -75,102 +87,88 @@ Pipeline tests are `consensus/src/pipeline/virtual_processor/tests/t12_exec_v2_c
 | --- | --- | --- | --- | --- |
 | 1 | EXEC never a selected parent; zero raw/PALW weight, blue score, DAA/retarget, pruning level, k-anticone | `palw_exec_v2_augment` (reds appended in memory only), header rule (no lane parent from a chain block), algo 10 derives no block level (`algo_id_derives_no_block_level`, unchanged) | P1 twin-chain comparison of blue score, blue work, DAA, bits, timestamp, pruning point, mergeset size and absence from stored mergesets; P9 14-block burst against a twin; P3 chain block naming a lane parent refused | IMPLEMENTED_AND_TESTED |
 | 1 | heartbeat / BASE-0 / REAL unchanged; EXEC never feeds beacon entropy | no edit to those rules; the challenge contract tags a slice `ExecWorkSlice` (not a beacon source) | P1/P9 twins; `misaka-palw-sdk/tests/exec_v2_work_slice_subject.rs`; the contract's own eligibility test | IMPLEMENTED_AND_TESTED |
-| 1 | fence dormant on all presets, fingerprints unchanged, refused until section 9 passes | `palw_exec_v2.rs` (`PALW_EXEC_PAYLOAD_V2_ARMABLE`, `validate_palw_exec_payload_v2`), `params.rs`, `fork_id_v1.rs` | `tests/palw_exec_payload_v2_fence.rs` (6 tests: 20 rulesets dormant, `never()` collapses, a height moves ruleset+schedule not identity, every real height refused by name, mirror consistency) | IMPLEMENTED_AND_TESTED |
+| 1 | fence dormant on all presets, fingerprints unchanged, refused until section 9 passes | `palw_exec_v2.rs` (`PALW_EXEC_PAYLOAD_V2_ARMABLE`, `palw_exec_payload_v2_armable_on`, `validate_palw_exec_payload_v2`), `params.rs`, `fork_id_v1.rs` | `tests/palw_exec_payload_v2_fence.rs` (7 tests: 20 rulesets dormant, `never()` collapses, a height moves ruleset+schedule not identity, every real height refused by name, mirror consistency, **a salted drill may arm and a public ruleset may not**) | IMPLEMENTED_AND_TESTED |
 | 2 | exhaustive dispatch; both/neither/unknown version reject the whole carrier | `PalwExecV2Envelope::validate_shape`, `expected_payload_root` | `palw_exec_v2` module tests (`the_dispatch_table_is_exhaustive...`, `decode_is_strict`, `a_decodable_envelope_of_another_version...`) | IMPLEMENTED_AND_TESTED |
 | 2 | distinct TX/SLICE domains; no cross-network/version/anchor/subtype replay; golden vectors | keyed domains + contexts, `signing_message` | `domains_are_distinct...`, `a_permit_signature_never_verifies_as_a_slice_signature...`, `golden_vectors_pin_the_hashes`, `subtype_bytes_are_pinned`; P2 forged commitment / re-hung anchor refused | IMPLEMENTED_AND_TESTED |
-| 2 | constant algo-10 header price for both subtypes; no free header | no change to the lane's target | P2 (a slice block is an algo-10 constant-target block); flood residual in section 6 | IMPLEMENTED_AND_TESTED (price unchanged); flood DESIGN_GAP |
+| 2 | constant algo-10 header price for both subtypes; no free header | no change to the lane's target; relay admission (amendment 1, §10.3) | P2 (a slice block is an algo-10 constant-target block); `palw_exec_v2_relay` tests | IMPLEMENTED_AND_TESTED; the flood residual decided (§10.3) |
 | 3 | root on an accepted REAL claim; prefix = admitted canonical work; no whole-session work to the root | `apply_root_declared_v2` | F `a_root_opens_on_an_accepted_claim_and_earns_nothing`, `every_refused_declaration_is_named_and_writes_nothing`, `a_root_declaration_is_signed_by_the_claims_bond...`; P1 (opened through a signed 0x4b carrier, prefix == claim pwu) | IMPLEMENTED_AND_TESTED |
 | 3 | plan is a partition with no gap or overlap | `palw_work_plan_range_v2` | `a_plan_is_a_partition_with_no_gap_and_no_overlap`; F `a_session_opens_once_and_a_job_is_worked_once` | IMPLEMENTED_AND_TESTED |
 | 3 | six admission rules in order, refusal named, no write on refusal | `exec_v2_admit_slice_v1`, `apply_covered_slices_v2` | F `each_admission_rule_refuses_by_name_in_the_specs_order...`, `a_used_index_a_skip_an_overlap_and_a_replay_credit_nothing`, `a_correct_slice_borrowed_from_another_root_or_job_is_refused_by_binding`; P4 unauthorised / skipping / borrowed slice anchored and credited nothing | IMPLEMENTED_AND_TESTED |
 | 3 | pending depth allows the next slice before verification; bounded | depth 4, per bond 16, 8 per block | F `the_pending_depth_and_the_per_bond_quota_bound...`, `two_slices_in_one_block_see_each_other_in_order...` | IMPLEMENTED_AND_TESTED |
 | 3 | slice binds root/class/kernel/plan/job/range/predecessor/result/input/output/evidence/DA/executor/identity | `PalwWorkSliceV1::slice_id`, `challenge_binding` | `the_challenge_subject_is_a_pure_function_of_the_slice...`; sdk test: flipping any of the 14 fields moves the contract's `ChallengeSubjectV1::id()` | IMPLEMENTED_AND_TESTED |
 | 4 | separate permit / work / root / job ledgers; branch-local; atomic restore | `PalwExecV2StateV1`, journaled `ExecV2Row` | F `two_branches_hold_independent_ledgers_and_each_credits_a_slice_once`, `the_exec_v2_tail_is_pinned_at_0xee...`, `a_corrupted_ledger_is_caught_by_the_consistency_check`; P10 reorg at the pipeline | IMPLEMENTED_AND_TESTED |
-| 4 | checked ints; conservation; one settlement per root; no re-escrow; no carrier subsidy | `settle_root_v2`, `settle_root_partial_v2`, `settle_at_final_v2` | `settlement_conserves_the_allocation_exactly...`, `splitting_a_range_into_more_slices_pays_no_more`; F `the_root_settles_once_at_final_and_the_allocation_is_conserved_against_a_session_free_twin` (fold level; the Verified marker is test-only) | IMPLEMENTED_AND_TESTED at fold level; through the real pipeline EXTERNAL_GATE_PENDING (no verification door) |
+| 4 | checked ints; conservation; one settlement per root; no re-escrow; no carrier subsidy | `settle_root_v2`, `settle_root_partial_v2`, `settle_at_final_v2` (+ the leg cap, §10.5) | `settlement_conserves_the_allocation_exactly...`, `splitting_a_range_into_more_slices_pays_no_more`; F `the_root_settles_once_at_final...`; **F `amendment_1::a_final_kernel_claim_verifies_its_slice_and_the_root_settles_once_with_capped_legs`, `a_slice_leg_is_capped_at_what_the_route_still_holds_on_its_claims`** (verification through kernel claim rows, no test door) | IMPLEMENTED_AND_TESTED at fold level; the composed real-node run is section 12 |
 | 4 | root Final held while not ready; expiry voids uncharged; rows retire with the claim | `final_is_held_v2`, `sweep_expired_roots_v2`, `on_claim_voided_v2`, `on_claim_retired_v2` | F `a_licensed_claim_with_an_unready_session_owes_no_final_deadline...`, `an_unfinished_session_voids_its_claim_uncharged_at_its_expiry`, `the_rows_retire_with_their_claim...` | IMPLEMENTED_AND_TESTED (fold) |
 | 4 | EXEC_TX permit use unchanged; one consumption per key; fee accepted and paid once | `palw_round_verdicts_v1` (canonical order, `taken`, `payees`) | P6: permitted spend accepted, fee to the bond's registered payout once; duplicate permit and ungranted round covered and refused | IMPLEMENTED_AND_TESTED |
-| 4 | one credit, no N+1 finalized attempts; slice work is not extra reward | slices create no attempt, no permit, no credit; settlement only re-divides the root claim's own producer leg by work share | F `the_root_settles_once_at_final_and_the_allocation_is_conserved_against_a_session_free_twin` (producer leg + slice legs == the session-free twin's leg; the root claim's Final is the only one); whether settled slice work should *raise* the root's schedule credit is not decided by the spec (section 6) | IMPLEMENTED_AND_TESTED (fold level); the raise is a DESIGN_GAP |
+| 4 | one credit, no N+1 finalized attempts; slice work is not extra reward | slices create no attempt, no permit, no credit; settlement only re-divides the root claim's own producer leg by work share | F the session-free twin comparisons (producer leg + slice legs == the twin's leg; the root claim's Final is the only one) | IMPLEMENTED_AND_TESTED; the schedule-credit question decided: **no raise** (amendment 1, §10.4) |
 | 5 | lane edges are execution data; a chain block names no lane parent; same classifier for both subtypes | header processor, `round_lane_members_v2` | P3 | IMPLEMENTED_AND_TESTED |
 | 5 | header/body-committed head/closure commitment, canonical order with subtype, bounds, window | `palw_exec_v2_anchor.rs`, `check_exec_v2_shape`, `palw_exec_v2_anchor_verify` | 16 anchor module tests; P1, P3 (lying count/root disqualified, heartbeat still anchors), P2 | IMPLEMENTED_AND_TESTED |
 | 5 | template filters stale heads, resumes from the lane checkpoint; invalid carrier skipped by verdict, not by chain fault | `palw_exec_v2_pick_heads`, `palw_exec_v2_virtual`, `exec_v2_slice_adapt_block_template`, `heartbeat_adapt_block_template` keeps the trailer | P1, P9 (health view), P10 (stale head skipped, republished block anchored) | IMPLEMENTED_AND_TESTED |
 | 5 | sync, pruning-proof, IBD, template, orphan pool treat the lane alike | `services.rs` hooks, `SyncManager::with_exec_hooks`, `deps_manager.rs`, `orphans.rs::block_deps`, body-stage head dependency (`MissingParents`, retryable) | P8 (headers and bodies through both hooks; the un-hooked list lands every header and is refused the anchoring body by name), P7 (arrival order), `orphans::an_anchoring_block_waits_for_its_lane_heads_as_for_its_parents` | IMPLEMENTED_AND_TESTED |
 | 5 | legacy v1 coexistence defined; no double acceptance | v1 refused past the fence (section 3) | P2, P5 | IMPLEMENTED_AND_TESTED |
-| 6 | `WORK_SLICE` challenge under RFC-0007 Part VI; positive verification of the whole root | `challenge_subject()` / `PalwWorkSliceSubjectV1` map onto `ChallengeSubjectV1` | sdk test (mapping only); the route itself does not exist | the mapping IMPLEMENTED_AND_TESTED; the route EXTERNAL_GATE_PENDING |
-| 6 | public-bond prosecution of a slice or boundary; exact court; DA default; false Valid; localization | none | none | EXTERNAL_GATE_PENDING (RFC-0014 / RFC-0015 / DA) |
-| 6 | a proved false predecessor voids the dependent suffix; no prefix payment | suffix void is not implemented (no conviction can arrive) | none | CODE_GAP behind the verification gate |
+| 6 | `WORK_SLICE` challenge under RFC-0007 Part VI; positive verification of the whole root | the slice's kernel-route claim is its verification (`palw_exec_v2_verify`, amendment 1 §10.1): admission binds it; `sync_slice_verification_v2` reads its Final after the route's tick; the root is ready only when every slice is verified; the `WORK_SLICE` subject binding stays on the slice | F `amendment_1::*` (binding refusals by name; Final verifies; Final at admission verifies at once); `palw_exec_v2_verify` module tests (token state, nonce) | IMPLEMENTED_AND_TESTED at fold level |
+| 6 | public-bond prosecution of a slice or boundary; exact court; DA default; false Valid; localization | the kernel route's own (G14): an outside bond files `FileProof` / `FileDemand` on the slice's kernel claim from public rows and DA; a conviction or default reaches the slice through the sync | the route's real-node G14 cases (`g14_kernel_route_*`, `g14_opv_*`: covered lie convicted by an outsider pre- and post-Final, withheld material defaulted); F `amendment_1::a_convicted_slice_voids_*`, `a_defaulted_slice_voids_*` | IMPLEMENTED_AND_TESTED per component; one composed real-node run (REAL root on a kernel-bound class → kernel-claimed slices → outsider conviction) not built: section 12 |
+| 6 | a proved false predecessor voids the dependent suffix; no prefix payment | `void_suffix_v2` (amendment 1, §10.2); void reasons 131/132, uncharged at V2 | F `a_convicted_slice_voids_its_suffix_and_the_root_and_charges_the_root_nothing`, `a_defaulted_slice_voids_*_and_a_verified_one_convicted_later_still_voids_an_unsettled_root` | IMPLEMENTED_AND_TESTED (fold) |
 | 6 | EXEC_TX acceptance independent of a co-located session | verdicts are per member | P6 (a TX block is judged with no session state) | IMPLEMENTED_AND_TESTED |
-| 7 | per-root/bond/lane quotas, closure walk bound, independent slice queue; deterministic under every arrival order | constants in section 2; closure leaf bound = lane `max_per_mergeset`; heads 8 | F quota test; anchor `a_lane_longer_than_the_bound_is_refused...`, `heads_are_bounded_and_a_diamond_is_covered_once`; P7, P9 | IMPLEMENTED_AND_TESTED; relay/production backpressure CODE_GAP |
+| 7 | per-root/bond/lane quotas, closure walk bound, independent slice queue; deterministic under every arrival order | constants in section 2; closure leaf bound = lane `max_per_mergeset`; heads 8; relay admission and the producer's one-carrier-per-slice rule (§10.3) | F quota test; anchor `a_lane_longer_than_the_bound_is_refused...`, `heads_are_bounded_and_a_diamond_is_covered_once`; P7, P9; `palw_exec_v2_relay` tests; `palw_exec_slice_producer` decision-table test | IMPLEMENTED_AND_TESTED (relay and production node-local) |
 | 7 | bounded dedup checkpoint after pruning | `anchored` window drop; rows retire with the claim; the carriage tail travels in pruned import | F `an_anchor_records_what_it_covered_once_and_the_window_drops_the_old`; carriage round trip | pipeline pruned import not run: EXTERNAL_GATE_PENDING (drill) |
-| 8 | observability: subtype, pending/verified/voided, root state, evidence, backlog, the reason for a lane refusal | `exec_v2_state_v1`, `exec_v2_counts_v1`, node-local `palw_exec_v2_health` (used in P9, P10); the fold returns each slice's admission verdict by name | P9, P10 read the health view; the verdicts are dropped by the caller (`let _verdicts = ...`) and `palw_block_lane_v1` / the round telemetry see only PXR1 permits (a PXE2 header decodes as no envelope) | DORMANT_NOT_INTEGRATED: no RPC field, no explorer, no refusal record (no RPC op numbers were allocated to this lane) |
+| 8 | observability: subtype, pending/verified/voided, root state, evidence, backlog, the reason for a lane refusal | RPC op 240 `getPalwExecV2Status` (`palw_exec_v2_observation_v1`): roots, slices, each verification claim's state, a block's refusal record (delta note 181), lane health; refusal codes pinned | F `a_slice_whose_claim_is_final_at_admission_*_and_the_refusal_record_names_every_carrier`, `refusal_codes_are_distinct_and_named`; gRPC `op_240_round_trips_on_the_grpc_wire`; rpc-core mock round trips | IMPLEMENTED_AND_TESTED (read model); an explorer page reads op 240 (none written) |
 | - | restart reopens the same database with the lane state intact | store tip + delta rows | P7 | IMPLEMENTED_AND_TESTED |
 | - | reorg across slice acceptance | per-block state | P10 (node 1 reorganises onto a longer branch; credit exists on neither branch until republished; a third node agrees) | IMPLEMENTED_AND_TESTED |
 | - | the operator's `EXEC_TX` producer signs `PXE2` from the fence (the v1 producer would stop the permit lane at it) | `kaspad/src/palw_round_producer.rs` (`signed_round_commitment`, `PalwRoundProducerConfig::exec_v2_fence` from `Params::palw_exec_payload_v2_fence()` in `daemon.rs`) | unit test `the_round_commitment_is_pxr1_below_the_fence_and_a_valid_pxe2_exec_tx_from_it`: PXR1 byte for byte below the fence; from it a `PXE2` envelope the header stage's stateless check accepts and a different nonce does not; the node-side half (template, verdicts, payout) is P6 | IMPLEMENTED_AND_TESTED at the signing unit; the running kaspad producer across a fence is a drill (EXTERNAL_GATE_PENDING) |
-| - | an `EXEC_SLICE` producer (execute the planned range, build evidence/DA material, sign, submit) | `exec_v2_slice_adapt_block_template` is a processor method; the tests build slices through it | none beyond P1..P10 | DORMANT_NOT_INTEGRATED: no kaspad service, no RPC, no remote-miner flow; the execution and evidence engine belongs with the verification route |
+| - | an `EXEC_SLICE` producer | `kaspad/src/palw_exec_slice_producer.rs`: intents name `(root, index, kernel claim)`; the statement is derived from public rows (`palw_exec_v2_slice_statement_v1`); template → adapt → PoW → `PXE2` slice signature → submit; republish of a carrier that left the window uncovered (§10.7). The computation and its kernel claim are the kernel route's own producer path | `palw_exec_slice_producer` tests (decision table, intent parsing) | IMPLEMENTED_AND_TESTED at the unit; the running service across a fence is a drill |
 
 ## 5. Section 9 gates
 
 | gate | evidence now | open | status |
 | --- | --- | --- | --- |
-| Root lifecycle / REAL eligibility | root opens on a really admitted REAL claim through the pipeline (P1); prefix is the claim's canonical work; session open earns nothing; the hold, expiry void and single settlement at fold level | positive verification, root `Final` and funded settlement through the real pipeline: no door marks a slice `Verified`, so a real root never settles (it voids at expiry) | EXTERNAL_GATE_PENDING |
-| Wire / compatibility | golden vectors, domains, strict decode, fence below / at / above activation (P5, P2), v1 refused past the fence, fingerprints unchanged | old-node behaviour against a v2 header is not drilled; registry audit of tags 130-139 / delta 180-189 against the merged lanes (RFC-0010 etc.) still to be repeated at integration | IMPLEMENTED_AND_TESTED for the unit/pipeline part; drill EXTERNAL_GATE_PENDING |
+| Root lifecycle / REAL eligibility | root opens on a really admitted REAL claim through the pipeline (P1); prefix is the claim's canonical work; session open earns nothing; the hold, expiry void; **verification by kernel claims, root `Final` and the one capped settlement at fold level without a test door** (F `amendment_1::*`) | one composed real-node run (section 12, item 1) | CODE (one E2E) + EXTERNAL (drill) |
+| Wire / compatibility | golden vectors, domains, strict decode, fence below / at / above activation (P5, P2, **P11: unarmed and armed-far nodes agree byte for byte**), v1 refused past the fence, fingerprints unchanged, **registry re-audited at both integration merges** (section 11) | old-node behaviour against a v2 header across a real fence is a drill | IMPLEMENTED_AND_TESTED for the unit/pipeline part; drill EXTERNAL_GATE_PENDING |
 | Lane isolation | twin-chain numeric equality, mergeset absence, forged headers refused, 14-block burst (P1, P2, P3, P9) | burst at lane width (hundreds), paired baseline/v2 DAG runs | IMPLEMENTED_AND_TESTED for the cases listed; capacity EXTERNAL_GATE_PENDING |
-| Accounting | duplicate, overlap, skip, cross-root/job replay, checked overflow, repeated Final, prefix conservation, branch independence (F, module tests, P4, P9, P10) | settled slice work raising the schedule credit (DESIGN_GAP, section 6.6); post-Final reward liability for slice legs (section 6.2) | IMPLEMENTED_AND_TESTED with the named DESIGN_GAPs |
-| Public verification | challenge-subject mapping only | everything else | EXTERNAL_GATE_PENDING |
-| Liveness / capacity | not run | stopped producer / verifier / DA / court; no TX starvation under slice flood; identical heartbeat/BASE-0/clock/anchor-duty outcomes | EXTERNAL_GATE_PENDING |
-| Deterministic state / recovery | restart (P7), shuffled arrival and head-before-body (P7, orphans), IBD through both lists (P8), reorg (P10), fold branch independence | pruned import and archival-vs-fresh-vs-pruned comparison, property tests over event histories, stale head wedge drill | partly IMPLEMENTED_AND_TESTED; drills EXTERNAL_GATE_PENDING |
+| Accounting | duplicate, overlap, skip, cross-root/job replay, checked overflow, repeated Final, prefix conservation, branch independence (F, module tests, P4, P9, P10); the leg cap; no schedule-credit raise (§10.4) | — | IMPLEMENTED_AND_TESTED |
+| Public verification | the kernel route's G14 cases (outsider conviction pre/post Final, DA default, OPV windows) carry over by the binding; suffix void and both void reasons at fold level | the composed real-node run (section 12, item 1); the kernel route's own external soundness review | CODE (one E2E) + EXTERNAL |
+| Liveness / capacity | relay admission and production backpressure built (node-local) | stopped producer / verifier / DA / court; no TX starvation under slice flood; identical heartbeat/BASE-0/clock/anchor-duty outcomes | EXTERNAL_GATE_PENDING |
+| Deterministic state / recovery | restart (P7), shuffled arrival and head-before-body (P7, orphans), IBD through both lists (P8), reorg (P10), fold branch independence, P11 replays | pruned import and archival-vs-fresh-vs-pruned comparison, property tests over event histories, stale head wedge drill | partly IMPLEMENTED_AND_TESTED; drills EXTERNAL_GATE_PENDING |
 
-## 6. Gaps, named
+## 6. Gaps, named (as X8 left them, with X8R's resolution)
 
-1. **No verification route (EXTERNAL_GATE_PENDING).** `Verified` has no production writer; `mark_slice_verified_for_tests` is `#[cfg(test)]`.
-   Arming without the route would make every opened session void its own claim at expiry. The route is RFC-0007 Part VI `WORK_SLICE`
-   plus RFC-0014 prosecution plus DA; the subject mapping is done and cross-checked, nothing else.
-2. **Slice legs are unvested and carry no post-Final liability** (`add_panel_payout`); a collectible-liability window after Final is a
-   DESIGN_GAP tied to gap 1.
-3. **Suffix void on a proved false predecessor** is not implemented (no conviction can reach it): CODE_GAP.
-4. **Flood residual (DESIGN_GAP).** Any key can mint an algo-10 lane block at the constant target. Consensus bounds what is *covered*
-   (8 heads, the lane leaf bound, 8 folded slices per block, quotas) and a flood cannot move any number (P9), but unanchored lane
-   blocks occupy relay and storage until pruned. Relay admission / production backpressure for lane blocks is not written (CODE_GAP);
-   spec section 7 asks for it as node-local policy.
-5. **A reorg can strand a lane block** (section 3): by the window's design; the executor republishes. If a longer window is wanted it
-   is a parameter, not new code, but it widens the closure walk.
-6. **Schedule credit from settled slice work (DESIGN_GAP).** By construction a root claim earns the one credit its REAL Final earns
-   under the existing rules, and its slices add none (spec 1: no import of slice work as weight; settlement only re-divides the
-   claim's own producer leg). Spec 4's last paragraph ("derive one aggregate credit from the root") can be read as asking for more;
-   nothing is built beyond the single existing credit, and a larger credit would need the existing eligibility/credit/cap rules.
-7. **Repeated jobs** follow the existing ticket rules, not a new semantic: the job-work identity binds the REAL claim's own job
-   identity (different per attempt), one live session per identity, freed when the claim retires. Recorded so the choice is visible;
-   not a gap unless review wants a stricter rule.
-8. **No RPC, explorer, `EXEC_SLICE` producer or remote-miner flow** for lane v2 (DORMANT_NOT_INTEGRATED); no RPC op numbers were requested.
-   The slice admission verdicts are not recorded anywhere (the fold returns them, the caller drops them), and the existing readers
-   (`palw_block_lane_v1`, `PalwRoundRelayV1`) decode only `PXR1`, so a `PXE2` header is `NotRound` to them: harmless (no panic, no
-   mislabel as a permit), but also no equivocation evidence for a v2 permit double-sign. Whether that needs an evidence-bound offence
-   is spec 6 ("do not invent heuristic equivocation slashing"): DESIGN_GAP.
-9. **Pre-existing, not this lane:** `fork_id_v1::tests::{the_fork_id_gate_names_every_scheduled_palw_fence,
-   every_scheduled_palw_fence_moves_the_fingerprint_and_the_schedule_and_never_the_identity}` fail at the base commit because the probe
-   has no arm for RFC-0010's `palw_permissionless_panel_v1` (it panics on the first unknown fence). Because it panics there, the arm
-   this lane added for `palw_exec_payload_v2` is unexercised by that probe until its owner fixes theirs; this lane's own
-   `palw_exec_payload_v2_fence` tests cover the same properties.
+1. **Verification route** — X8: none. **X8R: built** (amendment 1 §10.1): a slice is verified, convicted or defaulted only through its
+   kernel-route claim; the binding refuses by name; the sync runs after the route's tick. The test door `mark_slice_verified_for_tests`
+   remains for chains with no kernel route (the arithmetic tests). Pipeline-class slices are refused (`VerificationKindUnsupported`)
+   until a segment state is defined for them.
+2. **Post-Final liability of slice legs** — **decided and built** (§10.5): the kernel reservation is the liability; each leg is capped
+   at it.
+3. **Suffix void** — **built** (§10.2).
+4. **Flood residual** — **decided** (§10.3) and the relay admission / production backpressure **built** (node-local).
+5. **Anchoring-window strand** — **decided** (§10.7): the window stays two spans; the producer republishes.
+6. **Schedule credit of settled slice work** — **decided** (§10.4): no raise in the first release.
+7. **Repeated jobs** follow the existing ticket rules (unchanged).
+8. **RPC, refusal record, producer, permit equivocation** — RPC op 240, delta note 181 and the `EXEC_SLICE` producer **built**; v2
+   permit double-signing **decided** (§10.6): no offence (honest reattachment re-signs a permit), the canonical order makes a second
+   block `PermitAlreadyUsed`, relay keeps it un-announced.
+9. **The fork-id probe** — the integration line's own (unchanged here).
 
-## 7. To arm at testnet-12 DAA 9,000
+## 7. What arming still needs
 
-The fence is an ordinary schedule entry the day the gates pass; nothing else needs writing in `validate_palw_exec_payload_v2` (its
-prerequisites are enforced already). In order:
+There is no DAA-9,000 flag day (user, 2026-10-08): the fence rides the one full-activation release, after every RFC is implemented.
+The code gates of this fence are closed except one (section 12, item 1). In order:
 
-1. Land the verification route (gap 1) or decide that a root declaration is not opened in the first release, because a session
-   without a route voids its own claim. Spec section 9 still lists the route as required evidence.
-2. Settle gaps 2 and 6 (design decisions), and gap 4's relay policy.
-3. Flip `PALW_EXEC_PAYLOAD_V2_ARMABLE` in the same change that sets the height, after review; add the height to the flag-day list and to
-   `t12-repin.sh`; re-pin the goldens (the schedule id changes because the fence is a schedule entry). Do not set it earlier: the ruleset
-   id changes with the height and peers on another value split at the handshake.
-4. Prerequisites at or below the height on that ruleset: ConsensusV2, execution lane, `palw_lane_accept_parents_first`, `palw_rcore_plus`,
-   `palw_canonical_work`.
-5. Drills across the fence, with the shipped binary (the operators' round producers included: they sign `PXE2` from the fence, and the lane watch counts round blocks from stored mergesets, so it shows none past it): below / at / above activation including the `PXR1` cutoff (an old EXEC block in the
-   window at the fence), a root opened before the fence (dropped, by name), restart and pruned import across the fence, the two sync
-   lists with an un-upgraded peer, a slice flood against the baseline DAG with equal heartbeat/BASE-0/clock/anchor-duty outcomes, a
-   stopped verifier / DA / court run, and a reorg across the fence.
-6. Fix the RFC-0010 fork-id probe arm (gap 9) so the fork-id gate test covers this fence too.
-
-Whether the lane is armed at DAA 9,000 is the Lead's decision against these gates; this record is the evidence that the consensus
-carriage is built and that its remaining gates are about verification and capacity, not about the carriage.
+1. **Code:** the composed real-node E2E (section 12, item 1). **Owner dependency:** the kernel route (`palw_probabilistic_constraints_v1`)
+   is a prerequisite and is itself refused by its own validation; the fence can be armed — on a drill or a release — only together with
+   it.
+2. **Drill path (done here):** `palw_exec_payload_v2_armable_on` lifts the gates' refusal on a salted testnet-12 drill; every other refusal
+   applies, so a drill arms it only together with the kernel route, the OPV / onboarding fences its classes use, and the five structural
+   prerequisites.
+3. **Release:** flip `PALW_EXEC_PAYLOAD_V2_ARMABLE` in the change that sets the height, after review; add the height to the release's
+   fence list and to `t12-repin.sh`; re-pin the goldens (a schedule entry moves the schedule id). Prerequisites at or below the height:
+   ConsensusV2, execution lane, `palw_lane_accept_parents_first`, `palw_rcore_plus`, `palw_canonical_work`, `palw_probabilistic_constraints_v1`,
+   and `palw_audit_2026_09_11` declared.
+4. **EXTERNAL drills** (spec section 9), with the shipped binary — the operators' round producers sign `PXE2` from the fence and the slice
+   producer publishes from intents: below / at / above activation including the `PXR1` cutoff (an old EXEC block in the window at the
+   fence); a root opened before the fence (dropped by name); restart and pruned import across the fence; the two sync lists with an
+   un-upgraded peer; a slice flood against the baseline DAG with equal heartbeat/BASE-0/clock/anchor-duty outcomes and no EXEC_TX
+   starvation; a stopped verifier / DA / court run (slices stay pending, roots expire uncharged); an outsider convicting and defaulting a
+   slice through the kernel route on the drill chain; a reorg across the fence; archival-vs-fresh-vs-pruned state comparison.
 
 ## 8. Tests and how to run them
 
@@ -252,3 +250,34 @@ integration line every object kind appended after int-12 whose may-ride arm refu
 same reason (int-12 tolerates the undecodable payload): `KernelRouteV1` (110: unsigned or oversized), `KernelConstraintReceiptV1` (111:
 unsigned), the onboarding objects 104–107 and 109 (unsigned), `SignedRegistrationV1` (108), `PanelBeaconProofV3` (120: oversized). The
 row-1 class likewise applies to RFC-0009's `PFS4` arm of the same shape gate (int-12's gate has no `PFS4` arm), on the pruning-proof path.
+
+## 11. Integration (X8R)
+
+* **Merges.** `ad1f609ed` merged the integration line at `9ea89994b` (past `86dbc1fc2`); `fd9a7f22e` merged it again at `35a9ae1c8`,
+  which carries the UNSCHED reset (`f9c263d3e`): no DAA-9,000 schedule, the shipped testnet-12 ids back to the live int-12 release's.
+  Conflicts were both-added arms only (RFC-0010's void reasons, the G14 / RFC-0010 objects, deltas and tails beside this lane's; one
+  registry row in the remaining-RFC matrix) and were resolved as the union, the integration line's blocks first.
+* **Allocation audit** (after both merges, against the whole tree): object tags — 130 is the only one of 130–139 in use and no other
+  lane uses the range; deltas — 180 and 181 are this lane's, no duplicate discriminant anywhere in `PalwDeltaEntryV2` (160–161 G14, 170–173
+  RFC-0010); carriage tails — `0xEE` is unique (`0xEC` kernel route, `0xED` RFC-0010); void reasons — **`WorkRootExpired` was X8's
+  implicit 11 and is now the explicit 130**, 131/132 added by amendment 1, beside RFC-0010's 120–122; RPC — op 240 (gRPC 1294/1295) in
+  this lane's 240–249. The registry (`remaining-rfc-integration-matrix.md` section 2) records all of it.
+* **The shipped ids.** No change of this branch moves a params, schedule or identity id (the fence is `None` on every preset, Some-only in
+  every hasher); `scripts/t12-repin.sh --shipping --drift-only` is the check (its result is in section 8).
+
+## 12. What remains (code), and the cross-lane finding
+
+1. **One composed real-node E2E**: a REAL root claim on a kernel-bound V2 class → its slices backed by kernel-route claims on the same
+   chain → an outside bond convicting one slice (and defaulting another) through the route → the suffix void and the root void, plus the
+   honest twin reaching `Final` and the capped settlement. Every link is tested — the route's G14 cases on the real node, the binding,
+   sync, suffix void and settlement at fold level, the carriage in P1–P11 — but not in one run. **Blocker:** the testnet-12 harness
+   produces REAL attempts only on the genesis card classes, which are not TIR registrant classes and so cannot be kernel-bound (tag 106
+   requires the registrant's TIR class with the kernel class's program); a harness for an attempt on an onboarded TIR class is the
+   missing piece (shared with the onboarding lanes).
+2. **Pipeline-class slices**: refused by name until the K2-at-scale lane defines a segment state for pipeline (K2-TIR-v3) claims.
+3. **The initial boundary** (`initial_state_root`) is the root bond's declaration; its link to the REAL claim's verified output is not
+   checked (every slice after it is verified as a continuation of it).
+4. **Cross-lane (routed by the Lead to A2U, `fix/a2-uniform-new-tags`):** every lifecycle object kind appended after int-12 whose
+   may-ride arm refuses anything (110, 111, 104–109, 120) splits a mixed testnet-12 fleet before its fence, as tag 130 did; the `PFS4` arm
+   of the commitment shape gate is ungated on the pruning-proof path. This lane's tag-130 arm is the pattern A2U's kind→fence table
+   generalises.

@@ -474,7 +474,7 @@ fn each_admission_rule_refuses_by_name_in_the_specs_order_and_a_refusal_writes_n
     let a = bond_key(20);
     let good = slice_of(&s, claim, 0, a);
     let admit = |c: &PalwExecV2CoveredSliceV1| s.exec_v2_admit_slice_v1(&p, 120, c, 0);
-    assert_eq!(admit(&good), Ok(PalwSliceAdmissionV2 { work: 240 }));
+    assert_eq!(admit(&good), Ok(PalwSliceAdmissionV2 { work: 240, verified_at: None }));
     let mutated = |f: &dyn Fn(&mut PalwExecV2CoveredSliceV1)| {
         let mut c = good.clone();
         f(&mut c);
@@ -483,7 +483,11 @@ fn each_admission_rule_refuses_by_name_in_the_specs_order_and_a_refusal_writes_n
     // ---- 1: the root ----
     assert_eq!(mutated(&|c| c.slice.root_claim_id = h64(0xBAD)), Err(R::NoRoot));
     assert_eq!(s.exec_v2_admit_slice_v1(&p, 5_000, &good, 0), Err(R::RootExpired), "at and past the expiry");
-    assert_eq!(s.exec_v2_admit_slice_v1(&p, 4_999, &good, 0), Ok(PalwSliceAdmissionV2 { work: 240 }), "the last DAA before it");
+    assert_eq!(
+        s.exec_v2_admit_slice_v1(&p, 4_999, &good, 0),
+        Ok(PalwSliceAdmissionV2 { work: 240, verified_at: None }),
+        "the last DAA before it"
+    );
     // ---- 2: the bond ----
     assert_eq!(
         mutated(&|c| c.slice.executor_bond = bond_key(2)),
