@@ -100,4 +100,14 @@ skeleton first; lanes build on that commit.
 
 ## 4. Change log
 
+* 2026-10-08 — C1 milestone 1 (`rfc9/c1-remote` d7f206a58, a8e073c5f; not yet integrated): detached registration —
+  `model add --export-bundle` (no key read, ≥2 agreeing quote nodes unless `--allow-single-rpc`), offline `model sign` (bond key ≠
+  payer key allowed; tampered change recipient/fee/class root/owner refused; `--yes` needs expect flags), `model submit` (verifies
+  bytes alone; same-bytes resend idempotent; another carrier for the same class refused); registry rows show REGISTERED_DORMANT.
+  Fixed: terms digest included `tip_daa`, tripping the pre-sign gate every block. 51 remote + 8 CLI tests; no real-node run yet.
+  **Consensus gaps recorded (Lead, need a fence):** G-EXPIRY — the owner signature covers no expiry and lock time is not evaluated
+  for the lifecycle input, so a leaked signed bundle stays valid until its funding input is spent (needs signed
+  `valid_until_daa` + fence); G-RULESET — `consensus_params_id` is not signed (client-side check only). Approved: additive
+  `registrant_bond` in the class-row RPC.
+
 * 2026-10-08 — created from two code inventories; contract `fcde1e3dc`.

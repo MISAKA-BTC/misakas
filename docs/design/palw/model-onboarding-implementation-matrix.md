@@ -75,12 +75,12 @@ Each fix records **before N / after M** here.
 1. frontend vs semantic gaps distinguished (`FRONTEND_REQUIRED` ≠ `KERNEL_EXTENSION_REQUIRED`) — partly (outcome codes exist); census re-run pending.
 2. known-semantics models register without model-name consensus code — GAP (no real registration E2E yet).
 3. exact layout preserved pack → preflight → registration — GAP (D parity test).
-4. runtime pack bounded on large artifacts — GAP (C).
+4. runtime pack bounded on large artifacts — PARTIAL: streamed authentication of a 1.87 GB artifact (3 s hash pass) + sampled leaves; vector checks O(positions) heavy (GAP: tiled range evaluator, stored Merkle index).
 5. static admission not replaced by beacon — PASS by construction (contract: beacon only after `StaticAdmitted`; tests).
-6. challenge entropy fixed only after commitment — PASS (contract tests); wiring GAP (C/D).
+6. challenge entropy fixed only after commitment — PASS (contract + pack tests, real checkpoint on synthetic facts); chain wiring GAP (on-chain commitment, facts RPC).
 7. beacon PALW-native, no BFT/validator — PASS (contract); wiring GAP.
 8. heartbeat/BASE-0 never entropy — PASS (contract tests).
-9. fresh node replays beacon evidence — PASS (contract `verify_work_beacon_v1`); node wiring GAP.
+9. fresh node replays beacon evidence — PASS (contract; `verify-conformance` fresh process re-derives beacon/seed/selection and re-executes); node facts RPC GAP.
 10. registered vs active separated — PASS (lifecycle); consensus state GAP (D).
 11. Active profiles PUBLIC_PROSECUTION_COMPLETE — reference PASS (gate at class registration); real node GAP.
 12. fresh outsider prosecution from public material — reference PASS; real node GAP.
@@ -89,6 +89,14 @@ Each fix records **before N / after M** here.
 15. adversarial registration tests — GAP (D).
 
 ## 6. Change log
+
+* 2026-10-08 — lane C final integrated (`8906aa73b..d059e8fef` as `…aaad290ac`): `pack commit-conformance` / `run-conformance` /
+  `verify-conformance` over the shared contract; real SmolLM2-1.7B (1.87 GB class file): commit 5.5 s → WAITING_RANDOMNESS with
+  2/3 works → locked → PASSED 771/771 checks (577 s, 4.1 GB RSS) → fresh-process verify re-executing everything PASS (627 s);
+  `--no-rerun` never a pass; one flipped evidence bit → `EVIDENCE_FORGED`. Facts are SYNTHETIC (no node RPC for canonical beacon
+  facts yet), policy is the unapproved reference policy, derived −log2 ε = 4 (conditional), legacy calibration stats, no HF source
+  fidelity. Gaps: tiled range evaluator for 40-bit policies (≈56 vector draws ≈ 3 h), stored Merkle index, on-chain conformance
+  commitment + beacon-facts RPC (lane D / Lead), contract proposals 1–8 (record §5).
 
 * 2026-10-08 — lane A milestone 1 (branch `onboard/a-frontend`, not yet integrated): census gate results carry a machine class (`misaka-palw-sdk/src/census/onboarding.rs`; `NOT_RUN_*` never a semantic gap; PROFILE_REQUIRED = task profile, lifecycle KERNEL_EXTENSION_REQUIRED "task profile"); KERNEL_EXTENSION_REQUIRED list empty (845/847 sampled decoders ELIGIBLE_AT, 2 BOUNDS_EXCEEDED ≥70B); GGUF `rope_freqs.weight` → ROPE_FREQ_FACTORS_V1 (NOT_RUN_NEEDS_TENSOR_DATA headers pass est 5,715 → 440; GGUF frame 18 members → shape-ready); tokenizer file table (TOKENIZER_MISSING est 32,517 → 27,443); GGUF LoRA relabelled ADAPTER_REFUSED; pre-existing `adapter_pins` failure (16 adapters) recorded.
 
