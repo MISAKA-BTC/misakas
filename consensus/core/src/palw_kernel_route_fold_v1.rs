@@ -500,7 +500,10 @@ pub(super) fn charge_route_budget_v1(
         Some((blue_score, a, w)) if blue_score == ctx.blue_score => (a, w),
         _ => (0, 0),
     };
-    if adjudications >= policy.max_adjudications_per_block || work.saturating_add(court_work) > policy.max_court_work_per_block {
+    // C4 F-C4R4-10: an onboarding object stops short of the runs only a `FileProof` may spend, as every kernel object but a
+    // `FileProof` does (the kernel's own `charge`) — a free dismissed refutation never takes a run reserved for a proof.
+    let runs = policy.max_adjudications_per_block.saturating_sub(policy.prosecution_reserved_runs());
+    if adjudications >= runs || work.saturating_add(court_work) > policy.max_court_work_per_block {
         return Ok(false);
     }
     builder.write_kernel_row(
