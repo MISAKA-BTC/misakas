@@ -1684,6 +1684,14 @@ pub struct PalwStateParamsV2 {
     /// `held_close_chunks_from_daa`'s reason (the acceptance path reads the bundle). `None` on every shipped preset.
     #[borsh(skip)]
     gen_range_twin_from_daa: Option<u64>,
+    /// **`Params::palw_task_heads_v1`'s height** (the `Head` profile, `crate::palw_task_heads_v1`), mirrored by
+    /// `Params::sync_palw_task_heads_v1` for `gen_from_daa`'s reason (the fold's second lock and its claim branch read it). `None` on
+    /// every shipped preset.
+    #[borsh(skip)]
+    task_heads_from_daa: Option<u64>,
+    /// The `Head` profile's cap on claims one class holds in flight (the head fence's ceiling), mirrored likewise; 0 where it is not armed.
+    #[borsh(skip)]
+    task_heads_max_inflight_claims: u32,
     /// **RFC-0007 Part I: `Params::palw_verification_vertex_v1`'s height**, mirrored by
     /// `Params::sync_palw_verification_vertex_v1` for `held_close_chunks_from_daa`'s reason (the fold's vertex arms and the
     /// tally read it). `None` on every shipped preset.
@@ -1961,6 +1969,8 @@ impl PalwStateParamsV2 {
             improve_lifecycle_base_daa: None,
             held_close_chunks_from_daa: None,
             gen_range_twin_from_daa: None,
+            task_heads_from_daa: None,
+            task_heads_max_inflight_claims: 0,
             vertex_from_daa: None,
             witness_manifest_from_daa: None,
             audit_mesh_from_daa: None,
@@ -2198,6 +2208,10 @@ impl PalwStateParamsV2 {
     /// The cap on one class's claims in flight for `profile` (`Image`, `Embedding`, `Audio`, `Video`; 0
     /// for any other, and where the fence is not armed).
     pub fn gen_max_inflight_claims(&self, profile: crate::palw_gen_v1::PalwGenProfileV1) -> u32 {
+        // The `Head` profile's cap is its own fence's (`palw_task_heads_v1`), not one of `palw_gen_v1`'s four.
+        if profile == crate::palw_gen_v1::PalwGenProfileV1::Head {
+            return self.task_heads_max_inflight_claims;
+        }
         (profile as usize).checked_sub(1).and_then(|i| self.gen_max_inflight_claims.get(i)).copied().unwrap_or(0)
     }
 
@@ -2391,6 +2405,33 @@ impl PalwStateParamsV2 {
     /// `Params::palw_gen_range_twin_v1`'s height, if the network arms it (the mirror).
     pub fn gen_range_twin_from_daa(&self) -> Option<u64> {
         self.gen_range_twin_from_daa
+    }
+
+    /// **The task-head fence's mirror** — written by `Params::sync_palw_task_heads_v1` and by nothing else (and by fixtures).
+    pub fn with_task_heads_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.task_heads_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_task_heads_v1`'s height, if the network arms it (the mirror).
+    pub fn task_heads_from_daa(&self) -> Option<u64> {
+        self.task_heads_from_daa
+    }
+
+    /// **Is the `Head` profile in force at `daa_score`?** `false` on every shipped preset.
+    pub fn task_heads_active_at(&self, daa_score: u64) -> bool {
+        self.task_heads_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// The `Head` profile's in-flight cap's mirror (written by `Params::sync_palw_task_heads_v1`).
+    pub fn with_task_heads_max_inflight_claims(mut self, cap: u32) -> Self {
+        self.task_heads_max_inflight_claims = cap;
+        self
+    }
+
+    /// The `Head` profile's cap on claims one class holds in flight (0 where the fence is not armed).
+    pub fn task_heads_max_inflight_claims(&self) -> u32 {
+        self.task_heads_max_inflight_claims
     }
 
     /// **Does the generative range twin size closes at `daa_score`?** `false` on every shipped preset.
@@ -34114,6 +34155,13 @@ fn apply_object(
     if palw_object_is_gen_v1(object) && !builder.params.gen_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::GenObjectRefused("a generative object before palw_gen_v1 is in force (RFC-0003)"));
     }
+    // **The task-head profile, likewise** (`crate::palw_task_heads_v1`): an object carrying a `Head` variant is bytes the int-12 build
+    // cannot decode; below `palw_task_heads_v1` it is refused by name (the acceptance walk dropped it first).
+    if crate::palw_task_heads_v1::palw_object_needs_task_heads_v1(object) && !builder.params.task_heads_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::GenObjectRefused(
+            "a task-head object before palw_task_heads_v1 is in force (a Head variant the int-12 build cannot decode)",
+        ));
+    }
     // **ADR-0096 Decision 7, likewise**: below `palw_fp_decode_constraint` a constrained decode close is refused by name.
     if palw_object_is_constrained_decode_v1(object) && !builder.params.fp_decode_constraint_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::AdapterClassRefused(
@@ -35632,6 +35680,12 @@ fn apply_object(
                 }
                 let inner: PalwConsensusObjectV2 =
                     borsh::from_slice(&whole).map_err(|e| PalwStateV2Error::ChunkedObjectUndecodable(e.to_string()))?;
+                // Below `palw_task_heads_v1` a `Head` variant does not decode on the int-12 build: here it is the same error, first.
+                if crate::palw_task_heads_v1::palw_object_needs_task_heads_v1(&inner)
+                    && !builder.params.task_heads_active_at(ctx.daa_score)
+                {
+                    return Err(PalwStateV2Error::ChunkedObjectUndecodable("a Head variant below palw_task_heads_v1".into()));
+                }
                 if !palw_chunked_object_kind_admitted_v1(&inner) {
                     return Err(PalwStateV2Error::ChunkedObjectKindNotAllowed);
                 }
@@ -36460,6 +36514,11 @@ fn apply_object(
                 .filter(|object| {
                     !matches!(object, PalwConsensusObjectV2::CourtClosed { proof, .. }
                         if proof.is_gen_v1() && !builder.params.gen_active_at(ctx.daa_score))
+                })
+                // The task-head profile: likewise a proof carrying a `Head` job below `palw_task_heads_v1`.
+                .filter(|object| {
+                    !(crate::palw_task_heads_v1::palw_object_needs_task_heads_v1(object)
+                        && !builder.params.task_heads_active_at(ctx.daa_score))
                 })
                 // RFC-0004 A6: likewise an evaluation proof below `palw_improvement_v1`.
                 .filter(|object| {

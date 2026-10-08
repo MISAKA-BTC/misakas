@@ -133,8 +133,17 @@ pub(super) fn apply_gen_tensor_commitment_v1(
     // the class's offers, one image reference per slot at its size), and — where the ids ride — their count
     // and the class's token bound (their hashes were the walk's).
     let accepted = palw_gen_job_resolve_class_v1(c.job, &row).map_err(|e| refused(format!("the job is not the class's: {e}")))?;
-    if !matches!(accepted.profile, crate::palw_gen_v1::PalwGenProfileV1::Image | crate::palw_gen_v1::PalwGenProfileV1::Embedding) {
-        return Err(refused("a tensor claim's class is an image or an embedding class"));
+    if !matches!(
+        accepted.profile,
+        crate::palw_gen_v1::PalwGenProfileV1::Image
+            | crate::palw_gen_v1::PalwGenProfileV1::Embedding
+            | crate::palw_gen_v1::PalwGenProfileV1::Head
+    ) {
+        return Err(refused("a tensor claim's class is an image, an embedding or a task-head class"));
+    }
+    // A task head's claim only past `palw_task_heads_v1` (its class exists only past it; this is the second lock).
+    if accepted.profile == crate::palw_gen_v1::PalwGenProfileV1::Head && !builder.params.task_heads_active_at(daa) {
+        return Err(refused("a task-head claim before palw_task_heads_v1 is in force"));
     }
     if accepted.public_da {
         let (prompt, negative) = palw_gen_split_ids_v1(c.prompt_token_ids, accepted.prompt_tokens);

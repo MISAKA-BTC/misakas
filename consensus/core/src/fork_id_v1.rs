@@ -772,6 +772,10 @@ mod tests {
             // FP Job V5 (RFC-0003 §II.2.1): a bare height.
             "palw_fp_job_v5" => params.palw_fp_job_v5 = Some(at),
             "palw_gen_range_twin_v1" => params.palw_gen_range_twin_v1 = Some(at),
+            // The task-head profile (HFX): a fence with a value — testnet-12's, at the probed height.
+            "palw_task_heads_v1" => {
+                params.palw_task_heads_v1 = Some(crate::palw_task_heads_v1::PalwTaskHeadsFenceV1::testnet12_v1(at))
+            }
             // RFC-0011 §15.7's dormant kernel-route fence: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_probabilistic_constraints_v1" => params.palw_probabilistic_constraints_v1 = Some(at),
             "palw_panel_free_v1" => params.palw_panel_free_v1 = Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(at)),

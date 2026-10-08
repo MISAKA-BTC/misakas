@@ -44,12 +44,12 @@ use misaka_palw_sdk::lineages::generative::GenBackendV1;
 
 use super::{PALW_PANEL, PalwSeatRDutyV1, PalwSeatReplayPollV1, PalwSeatReplayStepV1, PalwSeatReplaysV1, palw_seat_replay_step_v1};
 
-/// **Is this a TENSOR class** — an image or an embedding: its claims are `PalwGenJobV1`s on the free-prompt lane
-/// (job version 10) and its material is `FPG1`. A text pipeline class's claims are FP Job V4/V5's, which this
-/// module does not touch.
+/// **Is this a TENSOR class** — an image, an embedding or a task head (`palw_task_heads_v1`): its claims are `PalwGenJobV1`s on
+/// the free-prompt lane (job version 10) and its material is `FPG1`. A text pipeline class's claims are FP Job V4/V5's, which this
+/// module does not touch. (A task-head row exists only on a chain past its fence: the registration is dropped below it.)
 pub(super) fn gen_class_is_tensor_v1(tensor: &GenBackendV1) -> bool {
     let profile = tensor.entry().row.profile;
-    profile == PalwGenProfileV1::Image as u8 || profile == PalwGenProfileV1::Embedding as u8
+    profile == PalwGenProfileV1::Image as u8 || profile == PalwGenProfileV1::Embedding as u8 || profile == PalwGenProfileV1::Head as u8
 }
 
 /// A payload's identity, for the replay slots' key: a keyed digest of its bytes (two payloads of one job with

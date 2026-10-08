@@ -160,7 +160,14 @@ impl TransactionValidator {
         if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
             return Ok(());
         }
-        match kaspa_consensus_core::palw_gen_claim_v1::palw_fp_gen_refusal_at_v1(&tx.payload, fence.is_active(ctx_daa_score)) {
+        if let Some(why) =
+            kaspa_consensus_core::palw_gen_claim_v1::palw_fp_gen_refusal_at_v1(&tx.payload, fence.is_active(ctx_daa_score))
+        {
+            return Err(TxRuleError::PalwFpJobVersionAtHeight(why, ctx_daa_score));
+        }
+        // The task-head profile: a `Head` job below `palw_task_heads_v1` — bytes the int-12 build refuses at its isolation door.
+        let heads_active = self.palw_task_heads_fence.is_some_and(|f| f.is_active(ctx_daa_score));
+        match kaspa_consensus_core::palw_task_heads_v1::palw_fp_head_job_refusal_at_v1(&tx.payload, heads_active) {
             Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why, ctx_daa_score)),
             None => Ok(()),
         }

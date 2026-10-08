@@ -490,6 +490,7 @@ pub mod palw_gen_worker_v1;
 /// RFC-0003 §II.2.1 (RFC-0001's lane): FP Job V5 — a V4 job with image inputs, for a vision-language class; dormant behind `palw_fp_job_v5`.
 pub mod palw_fp_job_v5;
 pub mod palw_gen_range_twin_v1;
+pub mod palw_task_heads_v1;
 /// RFC-0011 §15.7: the kernel route's fence `palw_probabilistic_constraints_v1` — dormant, no height, refused when armed.
 pub mod palw_probabilistic_constraints_v1;
 /// G14 lane D: the kernel route's consensus state, messages and interim policy (fence `palw_probabilistic_constraints_v1`).

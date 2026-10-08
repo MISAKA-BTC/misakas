@@ -103,9 +103,16 @@ pub enum PalwGenProfileV1 {
     /// program over the text job's stream; with image slots, a vision-language class. Its output is
     /// the committed generated ids, with no output root.
     Text = 5,
+    /// **A task head** (`crate::palw_task_heads_v1`, HFX 2026-10-08): a classifier, a token or span head, a masked-LM head or a vision
+    /// head as a complete task — its output one `EmbeddingI32 [rows, labels]` of logits. **Not one of [`Self::ALL`]**: `palw_gen_v1`
+    /// carries no ceilings for it (its own fence, `palw_task_heads_v1`, does), so the generative fence's fingerprint — which iterates
+    /// `ALL` — is byte-identical to a build without it, and [`Self::from_tag`] resolves tag 6 as `None` exactly as the int-12 build
+    /// does. Only [`Self::from_tag_with_heads`] resolves it, where the head fence is in force.
+    Head = 6,
 }
 
 impl PalwGenProfileV1 {
+    /// The profiles `palw_gen_v1` carries ceilings for (hashed into its fingerprint in this order). `Head` is not one of them.
     pub const ALL: [PalwGenProfileV1; 5] = [
         PalwGenProfileV1::Image,
         PalwGenProfileV1::Embedding,
@@ -118,6 +125,12 @@ impl PalwGenProfileV1 {
         Self::ALL.iter().copied().find(|p| *p as u8 == tag)
     }
 
+    /// [`Self::from_tag`] with the `Head` profile (tag 6) resolved: only where `palw_task_heads_v1` is in force — or for a registered
+    /// class's row, which can be a `Head` row only if the class was registered past it.
+    pub fn from_tag_with_heads(tag: u8) -> Option<Self> {
+        if tag == PalwGenProfileV1::Head as u8 { Some(PalwGenProfileV1::Head) } else { Self::from_tag(tag) }
+    }
+
     /// The output kind a class of the profile must produce (RFC-0003 §I.3.3).
     pub const fn output_kind(self) -> misaka_palw_gen::OutputKindV1 {
         match self {
@@ -126,6 +139,8 @@ impl PalwGenProfileV1 {
             PalwGenProfileV1::Audio => misaka_palw_gen::OutputKindV1::PcmI16,
             PalwGenProfileV1::Video => misaka_palw_gen::OutputKindV1::VideoRgb8,
             PalwGenProfileV1::Text => misaka_palw_gen::OutputKindV1::Tokens,
+            // A head's logits are `[rows, labels]` of `i32` in the class's unit: the embedding kind's header and digest.
+            PalwGenProfileV1::Head => misaka_palw_gen::OutputKindV1::EmbeddingI32,
         }
     }
 }
@@ -220,7 +235,7 @@ impl PalwGenProfileCeilingsV1 {
         Ok(())
     }
 
-    fn write_into(&self, h: &mut kaspa_hashes::ConsensusParamsId) {
+    pub(crate) fn write_into(&self, h: &mut kaspa_hashes::ConsensusParamsId) {
         h.write(self.max_position_macs.to_le_bytes());
         h.write(self.max_position_step_leaves.to_le_bytes());
         h.write(self.max_state_bytes.to_le_bytes());
@@ -252,6 +267,10 @@ impl PalwGenCeilingsV1 {
             PalwGenProfileV1::Audio => &self.audio,
             PalwGenProfileV1::Video => &self.video,
             PalwGenProfileV1::Text => &self.text,
+            // Never asked for a `Head` class: the class preflight reads a head's ceilings from `palw_task_heads_v1`
+            // (`crate::palw_gen_class_v1::palw_gen_class_preflight_with_heads_v1`). The arm is the embedding's — the profile the head
+            // fence's testnet-12 ceilings copy — so it is total without a panic; `ALL` (the fingerprint) never visits it.
+            PalwGenProfileV1::Head => &self.embedding,
         }
     }
 

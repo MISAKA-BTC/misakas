@@ -635,6 +635,9 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_gen_v1` (RFC-0003): may a class be a pipeline of PALW-TIR version-2 programs on
     /// this chain. Resolved in ONE place, [`Self::palw_gen_at`], at the block.
     pub(super) palw_gen_v1: Option<kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1>,
+    /// `Params::palw_task_heads_v1` (the `Head` profile, `kaspa_consensus_core::palw_task_heads_v1`): may a generative class be a task
+    /// head. Resolved in ONE place, [`Self::palw_task_heads_at`]. `None` on every shipped preset.
+    pub(super) palw_task_heads_v1: Option<kaspa_consensus_core::palw_task_heads_v1::PalwTaskHeadsFenceV1>,
     /// `Params::palw_tir_only_v1` (RFC-0002 Phase H): is a new class admitted only as an IR program or pipeline. Resolved in ONE place,
     /// [`Self::palw_tir_only_at`], at the block the registration is judged in. `None` on every shipped preset.
     pub(super) palw_tir_only_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1254,6 +1257,7 @@ impl VirtualStateProcessor {
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_signed_registration_v1: params.palw_signed_registration_v1,
             palw_gen_v1: params.palw_gen_v1_fence(),
+            palw_task_heads_v1: params.palw_task_heads_v1_fence(),
             palw_tir_only_v1: params.palw_tir_only_fence(),
             palw_gdn_key_heads: params.palw_gdn_key_heads_fence(),
             palw_fused_dissectable: params.palw_fused_dissectable_fence(),
@@ -7752,6 +7756,14 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a generative object was dropped by name below palw_gen_v1, and the block stands (RFC-0003)");
                 continue;
             }
+            // **The task-head profile: below `palw_task_heads_v1` an object carrying a `Head` variant is dropped by name**, first and
+            // charged nothing — the int-12 build cannot decode its bytes and skipped it at extraction (A-2).
+            if kaspa_consensus_core::palw_task_heads_v1::palw_object_needs_task_heads_v1(&object)
+                && !self.palw_task_heads_at(point.daa_score)
+            {
+                info!("Block {block}: a task-head object was dropped by name below palw_task_heads_v1, and the block stands (A-2)");
+                continue;
+            }
             // **ADR-0096 Decision 7: below `palw_fp_decode_constraint` a constrained decode close is dropped by name**, first
             // and charged nothing, for the generative objects' reason above.
             if kaspa_consensus_core::palw_state_v2::palw_object_is_constrained_decode_v1(&object)
@@ -10150,6 +10162,11 @@ impl VirtualStateProcessor {
                             .filter(|object| {
                                 !matches!(object, Obj::CourtClosed { proof, .. }
                                     if proof.is_gen_v1() && !self.palw_gen_at(point.daa_score))
+                            })
+                            // The task-head profile: likewise a proof carrying a `Head` job below `palw_task_heads_v1`.
+                            .filter(|object| {
+                                !(kaspa_consensus_core::palw_task_heads_v1::palw_object_needs_task_heads_v1(object)
+                                    && !self.palw_task_heads_at(point.daa_score))
                             })
                             // RFC-0004 A6: likewise an evaluation proof below `palw_improvement_v1`.
                             .filter(|object| {
@@ -12763,6 +12780,8 @@ impl VirtualStateProcessor {
                         } else {
                             kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1::Element
                         },
+                        // The task-head profile at the block: tag 6 is a `Head` class only where it is in force.
+                        heads: self.palw_task_heads_v1.filter(|fence| fence.activation.is_active(point.daa_score)),
                     };
                     kaspa_consensus_core::palw_gen_admission_v1::verify_gen_class_admission_v1(bundle, &rules, object)
                         .map_err(|e| format!("generative class {class_id} is not admissible: {e}"))?;
@@ -15127,6 +15146,11 @@ impl VirtualStateProcessor {
     /// **RFC-0003, resolved in exactly one place.**
     fn palw_gen_at(&self, daa_score: u64) -> bool {
         self.palw_gen_v1.is_some_and(|fence| fence.activation.is_active(daa_score))
+    }
+
+    /// **Is the task-head profile in force at `daa_score`?** (`Params::palw_task_heads_v1`) — never on a shipped preset.
+    fn palw_task_heads_at(&self, daa_score: u64) -> bool {
+        self.palw_task_heads_v1.is_some_and(|fence| fence.activation.is_active(daa_score))
     }
 
     /// **RFC-0003 §I.4: is the free-prompt lane open for tensor claims at `daa_score`?** Both fences in

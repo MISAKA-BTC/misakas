@@ -1001,6 +1001,13 @@ pub fn validate_palw_lifecycle_tx(payload: &[u8], tolerate_undecodable: bool) ->
         Err(_) if tolerate_undecodable => return Ok(()),
         Err(_) => return Err(PalwLifecycleTxError::Undecodable),
     };
+    // **A `Head` variant (`crate::palw_task_heads_v1`) is bytes the int-12 build cannot decode**: this isolation gate, which holds no
+    // height, reads it exactly as int-12 does — tolerated on an audit-armed ruleset, refused as undecodable elsewhere. (Every ruleset that
+    // will arm `palw_task_heads_v1` declares the audit: arming needs `palw_gen_v1`, which needs `palw_audit_2026_09_11`. The acceptance
+    // walk drops it below the fence's height and admits it past it.)
+    if crate::palw_task_heads_v1::palw_object_needs_task_heads_v1(&payload.object) {
+        return if tolerate_undecodable { Ok(()) } else { Err(PalwLifecycleTxError::Undecodable) };
+    }
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
         // A wire version this build does not know: extraction skips it, so tolerate it too — on an
         // audit-armed ruleset; below that, refuse it exactly as every build in the field does.
