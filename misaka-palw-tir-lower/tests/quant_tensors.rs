@@ -513,9 +513,25 @@ fn a_bitsandbytes_configuration_picks_nf4_fp4_or_int8_by_its_own_keys() {
     let mut v = bnb_cfg(true, "nf4", false);
     v["load_in_4bit"] = json!(false);
     assert!(refusal(read(&v)).contains("no quant-format descriptor"));
-    // The head is stored in float unless the checkpoint says otherwise (here it is not skipped: the format would read it, and falls back to the plain tensor).
-    let c = read(&bnb_cfg(true, "nf4", true)).unwrap();
-    assert!(c.lm_head);
+    // The head is stored in float unless the quantiser was given a skip list that does not name it: transformers' bitsandbytes
+    // integration keeps the output embedding in float when `llm_int8_skip_modules` is absent (its default skip), and quantises it only
+    // when an explicit list replaces that default and leaves it out.
+    for cfg in [bnb_cfg(true, "nf4", true), bnb_cfg(true, "fp4", false), bnb_cfg(false, "fp4", false)] {
+        let c = read(&cfg).unwrap();
+        assert!(!c.lm_head, "no skip list given: the head stays in float ({})", name_of(&c));
+        let mut with_null = cfg.clone();
+        with_null["llm_int8_skip_modules"] = serde_json::Value::Null;
+        assert!(!read(&with_null).unwrap().lm_head, "a null list is no list");
+        let mut other = cfg.clone();
+        other["llm_int8_skip_modules"] = json!(["down_proj"]);
+        assert!(read(&other).unwrap().lm_head, "a list that does not name the head replaces the default skip");
+        let mut empty = cfg.clone();
+        empty["llm_int8_skip_modules"] = json!([]);
+        assert!(read(&empty).unwrap().lm_head, "an empty list names nothing");
+        let mut named = cfg.clone();
+        named["llm_int8_skip_modules"] = json!(["lm_head"]);
+        assert!(!read(&named).unwrap().lm_head, "a list that names it");
+    }
 }
 
 /// `llm_int8_skip_modules` is read as transformers reads it: a module's last component, its whole name, or a path prefix.

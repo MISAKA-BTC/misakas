@@ -42,7 +42,7 @@
    "_load_in_4bit",
    "_load_in_8bit"
   ],
-  "lm_head": "unless_skipped",
+  "lm_head": "when_skip_given",
   "skip": "llm_int8_skip_modules",
   "skip_match": "path"
  },

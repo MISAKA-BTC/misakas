@@ -182,7 +182,16 @@ impl ConfigReader {
         let lm_head = match cfg.lm_head.as_deref() {
             None | Some("never") => false,
             Some("unless_skipped") => !crate::prequant::skip_matches(&skip, "lm_head"),
-            Some(o) => return Err(DslError(format!("{}: config.lm_head `{o}` (never or unless_skipped)", self.name))),
+            // bitsandbytes: an absent (or null) `llm_int8_skip_modules` means the library's own default skip, which keeps the
+            // output embedding in float; a list the quantiser was given replaces the default, and the head is quantised
+            // unless the list names it (an empty list names nothing).
+            Some("when_skip_given") => {
+                let given = cfg.skip.as_ref().is_some_and(|k| matches!(obj.get(k), Some(v) if !v.is_null()));
+                given && !crate::prequant::skip_matches(&skip, "lm_head")
+            }
+            Some(o) => {
+                return Err(DslError(format!("{}: config.lm_head `{o}` (never, unless_skipped or when_skip_given)", self.name)));
+            }
         };
         Ok(ConfigRead { params, skip, lm_head })
     }
