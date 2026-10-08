@@ -1217,7 +1217,11 @@ impl<'a> PalwTirClosePriceV1<'a> {
             };
             for k in pieces {
                 let len = row_bytes.saturating_sub(k * PALW_TIR_ROW_PIECE_BYTES_V1).min(PALW_TIR_ROW_PIECE_BYTES_V1);
-                lens[side].push(palw_artifact_operand_borsh_len_v1(d.name.len() + self.name_extra() as usize, layer.is_some(), len as usize));
+                lens[side].push(palw_artifact_operand_borsh_len_v1(
+                    d.name.len() + self.name_extra() as usize,
+                    layer.is_some(),
+                    len as usize,
+                ));
             }
             siblings[side] += run_siblings(side, pieces.len() as u64);
         }
@@ -1382,7 +1386,21 @@ pub fn palw_tir_worst_closes_work_v1(
     sizing: &PalwTirCloseSizingV1,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
-    worst_closes_priced(space, inventory, job_ctx, sizing, price, None)
+    worst_closes_priced(space, inventory, job_ctx, sizing, price, None, None)
+}
+
+/// **Diagnostics only** (RFC-0011 §4.A, `cap_exceeded_at`): [`palw_tir_worst_closes_work_v1`], recording after each commit point
+/// `(block, node, work done so far)` into `trace` — so a refusal past the cap names the commit point that crossed it and, with the cap
+/// lifted, the true work. Decides nothing: the bounds and the work are [`palw_tir_worst_closes_work_v1`]'s.
+pub fn palw_tir_worst_closes_trace_v1(
+    space: &PalwTirStepSpaceV1,
+    inventory: &PalwTirInventoryIndexV1,
+    job_ctx: &PalwJobContextV2,
+    sizing: &PalwTirCloseSizingV1,
+    trace: &mut Vec<(u8, u16, u64)>,
+) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
+    let price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
+    worst_closes_priced(space, inventory, job_ctx, sizing, price, None, Some(trace))
 }
 
 /// **The worst terminal close of every commit point of pipeline stage `stage`** (RFC-0003 PALW-GEN-20): the stage's version-1 view
@@ -1402,7 +1420,7 @@ pub fn palw_gen_worst_closes_v1(
     pricing: PalwGenClosePricingV1,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let price = PalwTirClosePriceV1::generative(space, inventory, stage, class_inventory_leaves, pricing)?;
-    worst_closes_priced(space, inventory, job_ctx, sizing, price, Some(model))
+    worst_closes_priced(space, inventory, job_ctx, sizing, price, Some(model), None)
 }
 
 fn worst_closes_priced(
@@ -1412,6 +1430,7 @@ fn worst_closes_priced(
     sizing: &PalwTirCloseSizingV1,
     price: PalwTirClosePriceV1<'_>,
     gen_stage: Option<&PalwGenTwinStageV1>,
+    mut trace: Option<&mut Vec<(u8, u16, u64)>>,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let program = &space.program;
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
@@ -1507,8 +1526,17 @@ fn worst_closes_priced(
                             pattern: bool| {
                     let request =
                         PalwTirCloseRequestV1 { ctx: DemandContext { pos, occurrence: occ }, target, elements, supplied, range, both };
-                    let split =
-                        close_reads_split(space, job_ctx, inventory, &request, budget.get(), hist_only, pattern, leaf_cost, gen_stage)?;
+                    let split = close_reads_split(
+                        space,
+                        job_ctx,
+                        inventory,
+                        &request,
+                        budget.get(),
+                        hist_only,
+                        pattern,
+                        leaf_cost,
+                        gen_stage,
+                    )?;
                     budget.set(budget.get().saturating_sub(split.work));
                     Ok::<_, String>(split)
                 };
@@ -1815,6 +1843,9 @@ fn worst_closes_priced(
             let past = sizing
                 .stop_above
                 .is_some_and(|(close, root)| worst.close_bytes > close || (worst.dissected && worst.root_claim_bytes > root));
+            if let Some(t) = trace.as_deref_mut() {
+                t.push((bi8, ni16, sizing.cap - budget.get()));
+            }
             out.push(worst);
             if past {
                 return Ok((out, sizing.cap - budget.get()));
@@ -1859,8 +1890,7 @@ fn worst_closes_priced(
                     range: None,
                     both: false,
                 };
-                let split =
-                    close_reads_split(space, job_ctx, inventory, &request, budget.get(), false, false, leaf_cost, gen_stage)?;
+                let split = close_reads_split(space, job_ctx, inventory, &request, budget.get(), false, false, leaf_cost, gen_stage)?;
                 budget.set(budget.get().saturating_sub(split.work));
                 let mut reads = split.reads;
                 reads.merge(&split.hist);

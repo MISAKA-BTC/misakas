@@ -1,0 +1,256 @@
+//! **Coverage P1 — `huihui-ai/Huihui-Qwen3.5-9B-abliterated` @`05b9e7c9`, retested on the IR route from its headers** (COV-P1P2,
+//! 2026-10-08; record `docs/design/palw/coverage-p1p2-record.md`).
+//!
+//! An ignored probe, not a regression test: it needs a header-only snapshot of the repository (`config.json`, the index, the four
+//! shard headers in sparse files of their real length, `tokenizer.json` — no weight byte), read the way the SDK preflight reads a
+//! repository (`preflight::source`). For each declared context it lowers the text decoder shape-only, then asks the registration gate
+//! (`palw_tir_registration_preflight_at_v1`) under `palw_t12_shipped_params()` at the judged heights:
+//!
+//! 1. the DEFAULT layout (tile 64, history tile 64, logits tile 4,096, the court's checkpoint interval) — refusal 3's layout;
+//! 2. the layout search the SDK runs (`tir_choose_layout_judged_v1`), at the same gate;
+//! 3. the close sizing of the widest layout the search tried, by BOTH twins, with the cap lifted: the true work and the commit point
+//!    at which it crosses `PALW_TIR_CLOSE_SIZING_WORK_CAP_V1` (refusal 2's `cap + 1` is a sentinel, this is the measurement).
+//!
+//! Run: `COV_P1_DIR=<snapshot> [COV_P1_CONTEXTS=8192,512] [COV_P1_DAA=5585,9000] [COV_P1_SIZE=1]
+//! cargo test --offline -p misaka-palw-sdk --test coverage_p1_huihui_9b -- --ignored --nocapture`
+use kaspa_consensus_core::config::params::{Params, palw_t12_shipped_params};
+use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
+use kaspa_consensus_core::palw_tir_attempt_v1::{
+    PalwTirJobFactsV1, palw_tir_attempt_canonical_of_v1, palw_tir_attempt_canonical_v1, palw_tir_job_context_v1,
+};
+use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PalwTirClassV1};
+use kaspa_hashes::Hash64;
+use misaka_palw_sdk::preflight::{Options, model, source};
+use misaka_palw_sdk::tir_layout::{
+    TirLayoutChoiceV1, tir_choose_layout_judged_v1, tir_court_checkpoint_interval_v1, tir_layout_tiles_v1, tir_program_with_scheme_v1,
+};
+use std::path::PathBuf;
+
+fn env_list<T: std::str::FromStr>(key: &str, default: &[T]) -> Vec<T>
+where
+    T: Clone,
+{
+    std::env::var(key).map(|v| v.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_else(|_| default.to_vec())
+}
+
+/// The object the gate judges: the formula's canonical job, a placeholder bond, weightless (the SDK preflight's).
+fn probe_object(
+    bundle: &PalwConsensusParamsV2,
+    class: &PalwTirClassV1,
+    root: Hash64,
+) -> Result<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2, String> {
+    let program = class.decode_program().map_err(|e| e.to_string())?;
+    let canonical = palw_tir_attempt_canonical_v1(class).ok_or("a context too narrow for a canonical job")?;
+    let facts = PalwTirJobFactsV1::of(class, &program, class.class_id(&root));
+    let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+        kaspa_consensus_core::tx::TransactionId::from_bytes([0; 64]),
+        0,
+    ));
+    kaspa_consensus_core::palw_tir_admission_v1::palw_tir_post_genesis_registration_v1(
+        class.clone(),
+        palw_tir_job_context_v1(&facts, canonical),
+        root,
+        0,
+        u128::MAX,
+        1,
+        0,
+        bond,
+        Vec::new(),
+        bundle.court.max_step_leaf_count(),
+    )
+    .map_err(|e| format!("{} ({e})", e.code()))
+}
+
+/// The gate at `daa`, as code + the structured refusal.
+fn judge(params: &Params, bundle: &PalwConsensusParamsV2, class: &PalwTirClassV1, root: Hash64, daa: u64) -> Result<(), String> {
+    use kaspa_consensus_core::palw_tir_admission_v1::palw_tir_registration_preflight_at_v1;
+    let object = probe_object(bundle, class, root)?;
+    palw_tir_registration_preflight_at_v1(params, bundle, &object, daa, &[]).map(|_| ()).map_err(|e| {
+        let decided = kaspa_consensus_core::palw_refusal_v1::palw_refusal_decided_by_v1(
+            params.palw_held_context_active_at(daa),
+            Some(daa),
+            params.palw_held_context.map(|f| f.daa_score()),
+        );
+        format!("{} ({e}) [refusal {}]", e.code(), e.refusal_v1(&decided).to_json())
+    })?;
+    misaka_palw_sdk::tir_layout::tir_canonical_job_answerable_at_v1(params, class, daa)
+}
+
+/// Both close-sizing twins over `class`, with the cap lifted to `cap`: `(twin, work, elapsed, worst close, per-point work)`.
+fn size_both(class: &PalwTirClassV1, court: bool, cap: u64) {
+    use kaspa_consensus_core::palw_tir_close_size_v1 as z;
+    let program = class.decode_program().expect("decodes");
+    let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(class).expect("a step space");
+    let inventory = kaspa_consensus_core::palw_tir_court_v1::PalwTirInventoryIndexV1::new(&program).expect("an inventory");
+    let facts = PalwTirJobFactsV1::of(class, &program, Hash64::default());
+    let formula = palw_tir_attempt_canonical_of_v1(class.layout.max_context).expect("a canonical job");
+    let expected = palw_tir_job_context_v1(&facts, formula);
+    let deepest = kaspa_consensus_core::palw_v2::PalwJobContextV2 {
+        declared_prefill_tokens: 1,
+        exact_decode_tokens: class.layout.max_context,
+        max_context_tokens: u32::MAX,
+        ..expected
+    };
+    let sizing = z::PalwTirCloseSizingV1 { form: z::PalwTirParamFormV1::Multiproof, court, cap, stop_above: None };
+    let twins: [(&str, bool); 2] =
+        [("range (palw_tir_fence2, live from DAA 3,600)", true), ("element (below palw_tir_fence2)", false)];
+    for (name, range) in twins {
+        if !range && std::env::var("COV_P1_ELEMENT").is_err() {
+            println!("    sizing {name}: skipped (COV_P1_ELEMENT unset)");
+            continue;
+        }
+        let t = std::time::Instant::now();
+        let mut trace = Vec::new();
+        let out = if range {
+            kaspa_consensus_core::palw_tir_close_range_v1::palw_tir_worst_closes_range_trace_v1(
+                &space, &inventory, &deepest, &sizing, &mut trace,
+            )
+        } else {
+            z::palw_tir_worst_closes_trace_v1(&space, &inventory, &deepest, &sizing, &mut trace)
+        };
+        let elapsed = t.elapsed();
+        match out {
+            Ok((bounds, work)) => {
+                let worst = bounds.iter().map(|b| b.close_bytes).max().unwrap_or(0);
+                let worst_root = bounds.iter().map(|b| b.root_claim_bytes).max().unwrap_or(0);
+                println!(
+                    "    sizing {name}: work {work} steps ({:.3}x the 2^26 cap) in {elapsed:?}; {} commit points; worst close {worst} B, worst root claim {worst_root} B",
+                    work as f64 / (1u64 << 26) as f64,
+                    bounds.len()
+                );
+            }
+            Err(e) => println!("    sizing {name}: {e} (cap {cap}) after {elapsed:?}"),
+        }
+        let cap26 = 1u64 << 26;
+        let mut before = 0u64;
+        for (b, n, after) in &trace {
+            let marker = if before <= cap26 && *after > cap26 { "  <== crosses 2^26" } else { "" };
+            if std::env::var("COV_P1_TRACE_ALL").is_ok() || !marker.is_empty() {
+                println!("      point ({b}, {n}): {} steps, cumulative {after}{marker}", after - before);
+            }
+            before = *after;
+        }
+        if let Some((b, n, w)) = trace
+            .iter()
+            .zip(std::iter::once(&(0, 0, 0)).chain(trace.iter()))
+            .map(|(cur, prev)| (cur.0, cur.1, cur.2 - prev.2))
+            .max_by_key(|x| x.2)
+        {
+            println!("      the costliest point: ({b}, {n}) at {w} steps");
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn huihui_qwen35_9b_ir_route_from_headers() {
+    let dir = PathBuf::from(std::env::var("COV_P1_DIR").expect("COV_P1_DIR names the header-only snapshot"));
+    let reg = misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin();
+    let kind = source::detect(&dir).expect("a HF directory");
+    let src = source::open(&dir, kind, None, reg).expect("the headers");
+    let tokenizer_bytes = std::fs::read(dir.join("tokenizer.json")).unwrap_or_default();
+    let tokenizer_id = Hash64::from_bytes(misaka_palw_tir_lower::artifact::tokenizer_id_of(&tokenizer_bytes));
+    let config_bytes = std::fs::read(dir.join("config.json")).expect("config.json");
+    let root = {
+        let mut st = blake2b_simd::Params::new().hash_length(64).key(b"g14-synthetic-artifact-root/v1").to_state();
+        st.update(&config_bytes);
+        st.update(&tokenizer_bytes);
+        let mut b = [0u8; 64];
+        b.copy_from_slice(st.finalize().as_bytes());
+        Hash64::from_bytes(b)
+    };
+    let params = palw_t12_shipped_params();
+    let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("testnet-12 is a V2 network") };
+    let contexts: Vec<u32> = env_list("COV_P1_CONTEXTS", &[8_192, 512]);
+    let heights: Vec<u64> = env_list("COV_P1_DAA", &[5_585, 9_000]);
+    for &ctx in &contexts {
+        let opts = Options { max_context: Some(ctx), ..Options::default() };
+        let analysis = model::analyze(&src, &opts, reg, None);
+        println!("== context {ctx}");
+        for b in &analysis.blockers {
+            println!(
+                "  blocker {}{} — {} {:?}",
+                b.code,
+                b.arg.as_deref().map(|a| format!("({a})")).unwrap_or_default(),
+                b.what.chars().take(400).collect::<String>(),
+                b.evidence.iter().take(4).collect::<Vec<_>>()
+            );
+        }
+        for n in analysis.notes.iter().take(12) {
+            println!("  note: {}", n.chars().take(300).collect::<String>());
+        }
+        let Some(program) = analysis.program.clone() else {
+            println!("  no program");
+            continue;
+        };
+        let program = tir_program_with_scheme_v1(&program, None).expect("the tiled scheme");
+        let fixed = program.states.iter().filter(|s| matches!(s.kind, misaka_palw_tir::program::StateKind::Fixed { .. })).count();
+        let commits: usize = program.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum();
+        println!(
+            "  program {} B, {} blocks, {} params, {} states ({fixed} fixed), {commits} commit points, history bound {}",
+            program.encode().len(),
+            program.blocks.len(),
+            program.params.len(),
+            program.states.len(),
+            program.history_bound
+        );
+        let leaves =
+            analysis.artifact.as_ref().map(|a| a.inventory_leaves_estimate.min(u32::MAX as u64) as u32).unwrap_or(1 << 16).max(2);
+        for &daa in &heights {
+            println!("  -- DAA {daa}");
+            // 1. The default layout: tile 64, history tile 64, logits tile 4,096, the court's interval.
+            let choice = TirLayoutChoiceV1 { max_context: Some(ctx), ..Default::default() };
+            let mut layout = tir_layout_tiles_v1(&params, &program, &choice).expect("tiles");
+            match tir_court_checkpoint_interval_v1(&params, bundle, &program, &layout) {
+                Ok(c) => layout.checkpoint_interval = c,
+                Err(e) => println!("    default layout: no checkpoint interval: {e}"),
+            }
+            let class =
+                PalwTirClassV1 { version: PALW_TIR_CLASS_VERSION_V1, program: program.encode(), layout: layout.clone(), tokenizer_id };
+            println!(
+                "    default layout (tile {}, h_tile {}, logits tile {:?}, interval {}): {}",
+                choice.tile_len,
+                layout.h_tile,
+                layout.commit_tiles.last(),
+                layout.checkpoint_interval,
+                match judge(&params, bundle, &class, root, daa) {
+                    Ok(()) => "ADMITTED".to_string(),
+                    Err(e) => e,
+                }
+            );
+            // 2. The SDK's layout search, at this gate.
+            let t = std::time::Instant::now();
+            let judged = |c: &PalwTirClassV1| judge(&params, bundle, c, root, daa);
+            let chosen = tir_choose_layout_judged_v1(&params, bundle, &program, tokenizer_id, leaves, &choice, true, &judged);
+            match &chosen {
+                Ok(c) => println!(
+                    "    search ({:?}): logits tile {:?}, h_tile {}, interval {} -> {}",
+                    t.elapsed(),
+                    c.layout.commit_tiles.last(),
+                    c.layout.h_tile,
+                    c.layout.checkpoint_interval,
+                    match &c.admission {
+                        Ok(()) => "ADMITTED".to_string(),
+                        Err(e) => e.clone(),
+                    }
+                ),
+                Err(e) => println!("    search: {e}"),
+            }
+            // 3. The sizing at the searched layout, cap lifted.
+            if std::env::var("COV_P1_SIZE").is_ok()
+                && let Ok(c) = &chosen
+            {
+                let class = PalwTirClassV1 {
+                    version: PALW_TIR_CLASS_VERSION_V1,
+                    program: program.encode(),
+                    layout: c.layout.clone(),
+                    tokenizer_id,
+                };
+                let court = kaspa_consensus_core::palw_tir_admission_v1::PalwTirAdmissionRulesV1::at(&params, daa)
+                    .is_some_and(|r| r.court.is_some());
+                let cap: u64 = std::env::var("COV_P1_SIZE_CAP").ok().and_then(|v| v.parse().ok()).unwrap_or(1 << 32);
+                size_both(&class, court, cap);
+            }
+        }
+    }
+}
