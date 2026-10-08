@@ -755,6 +755,11 @@ pub struct VirtualStateProcessor {
     /// ([`Self::palw_reorg_shallow_ghostdag_win_v1`]), so honest slot races converge.
     pub(super) palw_reorg_strict_economic_win: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
+    /// **ADR-0175: rule E** (`Params::palw_fork_choice_rule_e_v1`), `None` on every preset. Past it — at the incumbent's DAA — the
+    /// deep-reorg gate weighs the two tips' exclusive pasts ([`Self::palw_rule_e_gate_v1`]) and the sink search takes the best of the
+    /// candidates it admits rather than the first ([`Self::sink_search_algorithm`]).
+    pub(super) palw_fork_choice_rule_e: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
     /// **ADR-0018 §E's payout bounds** (mainnet audit 2026-09-06 — H-2/H-3/M-1), mode folded in.
     /// `None` on testnet-11, devnet and simnet; `always()` on a card. Resolved at the BLOCK's DAA
     /// on both the coinbase construction and the validation path — they must agree, or every node
@@ -1282,6 +1287,7 @@ impl VirtualStateProcessor {
             palw_anchor_at_ceiling: params.palw_anchor_at_ceiling_fence(),
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_reorg_strict_economic_win: params.palw_reorg_strict_economic_win,
+            palw_fork_choice_rule_e: params.palw_fork_choice_rule_e_v1,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             palw_slashing_evidence_utxo_genuine: params.palw_slashing_evidence_utxo_genuine,
             palw_lane_accept_parents_first: params.palw_lane_accept_parents_first_fence(),
@@ -18021,7 +18027,11 @@ impl VirtualStateProcessor {
                     // `PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1`), so wherever F-W is active this
                     // branch runs, with the check.
                     let incumbent_daa = self.headers_store.get_daa_score(prev_sink).unwrap_or(0);
-                    let decision = if self.palw_reorg_strict_economic_win.is_some_and(|f| f.is_active(incumbent_daa)) {
+                    // **ADR-0175: past rule E's fence the two tips' EXCLUSIVE pasts decide** — bonded participation first once
+                    // the fork is `W_p` deep, then the economic keys over those pasts; a claim both tips hold decides nothing.
+                    let decision = if self.palw_rule_e_active_at(incumbent_daa) {
+                        self.palw_rule_e_gate_v1(candidate, prev_sink, incumbent_daa)
+                    } else if self.palw_reorg_strict_economic_win.is_some_and(|f| f.is_active(incumbent_daa)) {
                         kaspa_consensus_core::palw_fork_authority_v2::palw_reorg_strict_economic_win_v1(
                             &incumbent,
                             &challenger,
@@ -18275,6 +18285,105 @@ impl VirtualStateProcessor {
     ///
     /// [`PALW_REORG_SHALLOW_TIE_DAA_V1`]: kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1
     /// [`PALW_REORG_SHALLOW_TIE_WALK_V1`]: kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_WALK_V1
+    /// Whether rule E (ADR-0175) is in force at `daa_score` — the incumbent's DAA at every reader.
+    pub(crate) fn palw_rule_e_active_at(&self, daa_score: u64) -> bool {
+        self.palw_fork_choice_rule_e.is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(daa_score))
+    }
+
+    /// **Whether participation counts between `a` and the incumbent `s`**: `s`'s selected chain above its common chain ancestor
+    /// with `a` spans at least `W_p` DAA. Walks `s`'s chain down while its DAA is within `W_p` of `s`'s, so the walk is bounded by
+    /// the blocks of `W_p` DAA (and a hard cap, past which the fork is deep).
+    pub(crate) fn palw_rule_e_participation_counts_v1(&self, a: BlockHash, s: BlockHash) -> bool {
+        use kaspa_consensus_core::palw_fork_choice_rule_e_v1::PALW_RULE_E_PARTICIPATION_DEPTH_DAA_V1 as W_P;
+        let Ok(s_daa) = self.headers_store.get_daa_score(s) else { return false };
+        let floor = s_daa.saturating_sub(W_P);
+        let mut block = s;
+        for _ in 0..4_096 {
+            match self.reachability_service.try_is_chain_ancestor_of(block, a) {
+                Ok(true) => return false,
+                Ok(false) => {}
+                Err(_) => return true,
+            }
+            let Ok(daa) = self.headers_store.get_daa_score(block) else { return true };
+            if daa < floor {
+                return true;
+            }
+            match self.ghostdag_store.get_selected_parent(block) {
+                Ok(parent) if parent != block && parent != kaspa_consensus_core::blockhash::ORIGIN => block = parent,
+                _ => return true,
+            }
+        }
+        true
+    }
+
+    /// **Rule E's two sides for tips `a` and `b`** (ADR-0175): each tip's claims accepted in blocks outside the other tip's past
+    /// (reachability; a block this node cannot place is common history — it is below the pruning point), weighed by the fold's
+    /// expressions; participation over the bonds both registries hold. `None` where either tip cannot be weighed or a side
+    /// exceeds `PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1` (fail closed: the caller keeps its incumbent).
+    pub(crate) fn palw_rule_e_sides_v1(
+        &self,
+        a: BlockHash,
+        b: BlockHash,
+    ) -> Option<(kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleESideV1, kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleESideV1, u32)>
+    {
+        use kaspa_consensus_core::palw_fork_choice_rule_e_v1::{palw_rule_e_common_bonds_v1, palw_rule_e_even_split_min_v1};
+        let params = self.palw_state_params_v2.as_ref()?;
+        let (state_a, state_b) = (self.palw_candidate_state_v2(a)?, self.palw_candidate_state_v2(b)?);
+        let common = palw_rule_e_common_bonds_v1(&state_a, &state_b);
+        let outside = |other: BlockHash| {
+            move |_: &Hash64, claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2| {
+                matches!(self.reachability_service.try_is_dag_ancestor_of(claim.accepted_block, other), Ok(false))
+            }
+        };
+        let daa = |h: BlockHash| self.headers_store.get_daa_score(h).unwrap_or(0);
+        let side_a = state_a
+            .palw_rule_e_side_v1(params, self.palw_uncertified_weightless_at(daa(a)), self.palw_canonical_work_daa, outside(b), |k| {
+                common.contains(k)
+            })
+            .ok()?;
+        let side_b = state_b
+            .palw_rule_e_side_v1(params, self.palw_uncertified_weightless_at(daa(b)), self.palw_canonical_work_daa, outside(a), |k| {
+                common.contains(k)
+            })
+            .ok()?;
+        Some((side_a, side_b, palw_rule_e_even_split_min_v1(common.len())))
+    }
+
+    /// **Rule E's deep-reorg gate** (ADR-0175): may `candidate` replace the incumbent `prev_sink`? Unweighable refuses.
+    pub(crate) fn palw_rule_e_gate_v1(
+        &self,
+        candidate: BlockHash,
+        prev_sink: BlockHash,
+        incumbent_daa: u64,
+    ) -> kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2 {
+        use kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2;
+        let Some((challenger, incumbent, even_split_min)) = self.palw_rule_e_sides_v1(candidate, prev_sink) else {
+            info!("rule E: candidate {candidate} or the incumbent {prev_sink} cannot be weighed over their exclusive pasts; keeping the incumbent");
+            return PalwDeepReorgV2::Refuse;
+        };
+        let counts = self.palw_rule_e_participation_counts_v1(candidate, prev_sink);
+        let heavier = || match (self.ghostdag_store.get_blue_work(candidate), self.ghostdag_store.get_blue_work(prev_sink)) {
+            (Ok(c), Ok(p)) => SortableBlock::new(candidate, c) > SortableBlock::new(prev_sink, p),
+            _ => false,
+        };
+        kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_decide_v1(
+            &incumbent,
+            &challenger,
+            counts,
+            even_split_min,
+            heavier,
+            || self.palw_reorg_shallow_ghostdag_win_v1(candidate, prev_sink, incumbent_daa),
+        )
+    }
+
+    /// **Rule E's order between two admitted candidates** (the search's choice among them): `true` iff `challenger` ranks strictly
+    /// above `best` in [`palw_rule_e_order_v1`] over their exclusive pasts. Unweighable never ranks above.
+    pub(crate) fn palw_rule_e_prefers_v1(&self, challenger: BlockHash, best: BlockHash) -> bool {
+        let Some((c, b, _)) = self.palw_rule_e_sides_v1(challenger, best) else { return false };
+        let counts = self.palw_rule_e_participation_counts_v1(challenger, best);
+        kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_order_v1(&c, &b, counts) == std::cmp::Ordering::Greater
+    }
+
     pub(crate) fn palw_reorg_shallow_ghostdag_win_v1(&self, candidate: BlockHash, prev_sink: BlockHash, incumbent_daa: u64) -> bool {
         use kaspa_consensus_core::palw_fork_authority_v2::{
             PALW_REORG_SHALLOW_TIE_DAA_V1, PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1, PALW_REORG_SHALLOW_TIE_WALK_V1,

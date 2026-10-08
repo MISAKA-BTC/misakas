@@ -147,7 +147,22 @@ pub(super) fn parts_custom(
         });
     }
     edit(&mut params);
-    params.validate_palw_v2().expect("a test retirement validates on testnet-12");
+    // ADR-0175 (FINX): an armed retirement needs rule E at or below it, and rule E is refused in this binary — so a COPY is validated
+    // with rule E at the retirement's height and must meet that one refusal, which `validate_palw_v2` checks LAST (every other check
+    // passed). The config is built from the params as they were, so these tests run exactly the rules they ran before.
+    if params.palw_dns_retirement.is_some() {
+        let mut with_rule_e = params.clone();
+        with_rule_e.palw_fork_choice_rule_e_v1 = params.palw_dns_retirement.map(|r| r.activation);
+        assert_eq!(
+            with_rule_e.validate_palw_v2(),
+            Err(kaspa_consensus_core::palw_mode_v2::PalwModeV2Error::Invalid(
+                kaspa_consensus_core::palw_fork_choice_rule_e_v1::PALW_FORK_CHOICE_RULE_E_UNARMABLE_V1
+            )),
+            "a test retirement validates on testnet-12 but for rule E's own refusal"
+        );
+    } else {
+        params.validate_palw_v2().expect("a test retirement validates on testnet-12");
+    }
     (ConfigBuilder::new(params).skip_proof_of_work().build(), bundle, premine, floats)
 }
 
