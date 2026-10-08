@@ -50,11 +50,17 @@ fn test_scope() -> ConformanceScopeV1 {
 /// The onboarding network with RFC-0015's OPV fence (armed WITHOUT its validation, as everywhere in this file). The beacon's source
 /// class and the candidate's kernel class are treated as eligible through the processor's `cfg(test)` seam: these conformance
 /// MECHANICS predate derived eligibility; the bootstrap that derives it is `opv_bootstrap.rs`.
-fn conformance_config(eligible: Vec<Hash64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+///
+/// The fence also arms G14-for-rewards (`palw_reward_gate_v1`), whose E6 compares the passed attempt's EFFECTIVE bits with
+/// `min_effective_bits`: the interim sampled policy is 2 bits (0 effective), so these mechanics run with the DRILL floor `floor`
+/// (0 here; [`Cw::over_floor`] states another) — the ruled 128 is asserted where it decides (`g14_rewards_*`).
+fn conformance_config(eligible: Vec<Hash64>, floor: u16) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, bundle, premine, floats) = kernel_config_onboarding();
     opv_test_eligible(&eligible);
     let mut params = config.params.clone();
-    params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new()));
+    let mut fence = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new());
+    fence.min_effective_bits = floor;
+    params.palw_panel_free_v1 = Some(fence);
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fences");
     (Config::new(params), bundle, premine, floats)
 }
@@ -105,13 +111,19 @@ impl Cw {
     }
 
     async fn over(make: impl FnOnce(&Config) -> TestConsensus) -> Cw {
+        Cw::over_floor(make, 0).await
+    }
+
+    /// [`Cw::over`] on a network whose OPV fence states the effective-bits floor `floor` (the ruled value is 128).
+    async fn over_floor(make: impl FnOnce(&Config) -> TestConsensus, floor: u16) -> Cw {
         use super::super::g14_registration_e2e::Tensors;
         use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_operands_v1;
         let src = fixture();
         let f = onb_fixture(11);
         let src_class = opv_class_id(&src.program, &src.plan, &src.pc);
         let kernel_class = opv_class_id(&f.program, &f.plan, &f.pc);
-        let mut net = Net::over_cfg(conformance_config(vec![Hash64::from_bytes(src_class), Hash64::from_bytes(kernel_class)]), make);
+        let mut net =
+            Net::over_cfg(conformance_config(vec![Hash64::from_bytes(src_class), Hash64::from_bytes(kernel_class)], floor), make);
         net.beat_to(1).await;
         // ---- the beacon's source: a pre-existing OPV class (its artifact attested by the harness hook, §3) ----
         let d = k2_tir_v2_descriptor();
@@ -963,4 +975,143 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
     assert_eq!(importer.ctx.consensus.palw_kernel_route_v1(), cw.net.api(), "the same route, rows and aux");
     let z = cw.net.replay().await;
     cw.net.assert_same(&z, "a node replaying the whole chain");
+}
+
+// ---- G14-for-rewards (`docs/PRINCIPLES.md` §6; `palw_opv_bootstrap_v1::palw_reward_gate_v1`) ----------------------------------
+
+impl Cw {
+    /// The producer facts a REAL attempt's pre-check reads for `class`, for card `card`'s bond.
+    fn facts(&self, class: Hash64, card: usize) -> kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2 {
+        self.net.chain.ctx.consensus.palw_producer_facts_v2(class, Some(self.net.bond(card).0)).expect("producer facts")
+    }
+
+    /// The conformance path to its end: commit, two future OPV Finals of the source class lock the beacon, the evidence (chunked),
+    /// the window closes unrefuted, the artifact binding reaches Final, and one more block runs the activation step.
+    async fn pass_conformance(&mut self) {
+        self.commit(0x22).await;
+        self.source_claims(2).await;
+        self.until_locked().await;
+        let post = self.post(|_, _| {});
+        self.send_post(post, Some(1024)).await;
+        let posted = self.attempt().evidence.expect("the fold accepted the evidence");
+        self.net.beat_to(posted.window_end_daa + 1).await;
+        assert!(
+            matches!(self.attempt().record.state, S::G14Eligible | S::ActiveRewardable),
+            "CONFORMANCE_PASSED: {:?}",
+            self.attempt().record.state
+        );
+        let binding = self.net.api().unwrap().artifact_binding_v1(&self.v2_class, &self.kernel_root).unwrap();
+        self.net.beat_to(binding.final_daa.max(self.net.daa()) + 2).await;
+    }
+
+    /// **X8R's helper: the onboarded (Cw) class Active and admitting REAL attempts.** Runs [`Self::pass_conformance`] on a drill-floor
+    /// network ([`Cw::over`]), then asserts what a REAL attempt of the class needs and the pre-gate route did not give it: the class
+    /// Active and ACTIVE_REWARDABLE, holding at least the minimum grantable share (an onboarding registration asks for none) — so it
+    /// bears weight and is budgeted — and `producer`'s REAL-attempt pre-check passing (`ready_to_produce`: no lifecycle, Panel
+    /// room, verify-deadline, seating or bond-share refusal, an epoch budget), none of it from Panel seat readiness. Returns the class.
+    pub(super) async fn active_admitting_real(&mut self, producer: usize) -> Hash64 {
+        self.pass_conformance().await;
+        let state = self.net.chain.tip_state().1;
+        assert!(matches!(state.class(&self.v2_class).unwrap().status, PalwClassStatusV2::Active), "the class activated");
+        assert_eq!(self.attempt().record.state, S::ActiveRewardable);
+        assert!(
+            state.class_share_permille(&self.v2_class).is_some_and(|s| s > 0),
+            "a passed class bears share (at least the minimum grantable): {:?}",
+            state.class_share_permille(&self.v2_class)
+        );
+        let facts = self.facts(self.v2_class, producer);
+        assert_eq!(facts.class_admission_refusal, None, "the claim gate, seating and the bond share admit the class");
+        let key = TestConsensus::palw_v2_registry_keypair(producer as u64).verification_key.as_ref().to_vec();
+        assert_eq!(facts.ready_to_produce(&key), Ok(()), "a REAL attempt of the onboarded class is admitted");
+        self.v2_class
+    }
+}
+
+/// **A class that passed the onboarding/G14 path earns through it** (the drill floor: the interim sampled policy is 0 effective
+/// bits, so only a floor of 0 lets a SAMPLED conformance pass E6 here). Before the pass the class is Registered and earns nothing
+/// (its claims refused by the reward gate); after it, X8R's helper holds: Active, share, a REAL attempt admitted. A replay agrees.
+#[tokio::test]
+async fn g14_rewards_an_onboarded_class_is_active_and_admits_real_attempts() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut cw = Cw::new().await;
+    let refusal = cw.facts(cw.v2_class, PRODUCERS[0]).class_admission_refusal.unwrap_or_default();
+    assert!(refusal.contains("earns no reward"), "before its conformance the class earns nothing: {refusal}");
+    cw.active_admitting_real(PRODUCERS[0]).await;
+    let z = cw.net.replay().await;
+    cw.net.assert_same(&z, "replay");
+}
+
+/// **Under the ruled floor of 128 effective bits a 2-bit sampled conformance earns nothing**: the conformance passes (the record is
+/// G14_ELIGIBLE, the onboarding gate Ready), but E6 refuses (`POLICY_NOT_VERIFIED`) — the class stays Registered, holds no share,
+/// and every claim of it is refused by the reward gate.
+#[tokio::test]
+async fn g14_rewards_under_the_ruled_floor_a_two_bit_conformance_earns_nothing() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut cw = Cw::over_floor(|c| TestConsensus::new(c), 128).await;
+    cw.pass_conformance().await;
+    assert_eq!(cw.gate(), PalwOnboardingGateV1::Ready, "the onboarding gate alone would activate it");
+    assert_eq!(cw.attempt().record.state, S::G14Eligible, "never ACTIVE_REWARDABLE");
+    let state = cw.net.chain.tip_state().1;
+    assert!(matches!(state.class(&cw.v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }), "held Registered");
+    assert_eq!(state.class_share_permille(&cw.v2_class), None, "no share");
+    let refusal = cw.facts(cw.v2_class, PRODUCERS[0]).class_admission_refusal.unwrap_or_default();
+    assert!(refusal.contains("POLICY_NOT_VERIFIED"), "E6: {refusal}");
+}
+
+/// **A class that never began onboarding never earns**: registered on a network with the gate armed, it passes its activation DAA
+/// and stays Registered (no share), and its claims are refused `NOT_ONBOARDED` — whatever seats it gathers.
+#[tokio::test]
+async fn g14_rewards_a_class_that_never_began_onboarding_never_activates() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut cw = Cw::new().await;
+    let f = onb_fixture(13);
+    let o = cw.net.v2_registration(&f, OUTSIDER, cw.net.daa() + 3);
+    let Obj::ClassRegisteredTirV1 { class_id, activation_daa, .. } = &o else { unreachable!() };
+    let (class, activation) = (*class_id, *activation_daa);
+    cw.net.send(vec![(OUTSIDER, o)]).await;
+    cw.net.beat_to(activation + 3).await;
+    let state = cw.net.chain.tip_state().1;
+    assert!(matches!(state.class(&class).unwrap().status, PalwClassStatusV2::Registered { .. }), "past its activation, still held");
+    assert_eq!(state.class_share_permille(&class), None);
+    let refusal = cw.facts(class, OUTSIDER).class_admission_refusal.unwrap_or_default();
+    assert!(refusal.contains("NOT_ONBOARDED"), "{refusal}");
+}
+
+/// **Grandfathering is a fence parameter, off by default** (a user decision). A Panel-route class registered and Active BEFORE the
+/// fence: with the default, from the fence on its claims are refused `NOT_ONBOARDED`; with the parameter set, the reward gate
+/// exempts it (whatever else the class's own lifecycle says). The parameter is identity (`rfc0015_*`).
+#[tokio::test]
+async fn g14_rewards_grandfathering_live_panel_route_classes_is_a_fence_parameter_default_off() {
+    kaspa_core::log::try_init_logger("warn");
+    for grandfather in [false, true] {
+        let (config, bundle, premine, floats) = kernel_config_onboarding();
+        let mut params = config.params.clone();
+        let mut fence = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(60), Vec::new());
+        fence.grandfather_panel_route_classes = grandfather;
+        params.palw_panel_free_v1 = Some(fence);
+        let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new);
+        net.beat_to(1).await;
+        let f = onb_fixture(15);
+        let o = net.v2_registration(&f, REGISTRANT, net.daa() + 3);
+        let Obj::ClassRegisteredTirV1 { class_id, activation_daa, .. } = &o else { unreachable!() };
+        let (class, activation) = (*class_id, *activation_daa);
+        assert!(activation < 60);
+        net.send(vec![(REGISTRANT, o)]).await;
+        net.beat_to(activation + 1).await;
+        assert!(matches!(net.chain.tip_state().1.class(&class).unwrap().status, PalwClassStatusV2::Active), "Active before the fence");
+        net.beat_to(61).await;
+        let refusal = net
+            .chain
+            .ctx
+            .consensus
+            .palw_producer_facts_v2(class, Some(net.bond(REGISTRANT).0))
+            .expect("facts")
+            .class_admission_refusal
+            .unwrap_or_default();
+        if grandfather {
+            assert!(!refusal.contains("earns no reward"), "grandfathered: the reward gate exempts it ({refusal})");
+        } else {
+            assert!(refusal.contains("NOT_ONBOARDED"), "not grandfathered (the default): {refusal}");
+        }
+    }
 }

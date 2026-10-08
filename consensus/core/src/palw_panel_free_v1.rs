@@ -46,6 +46,11 @@ pub struct PalwPanelFreeFenceV1 {
     /// SAMPLED conformance under the interim 2-bit policy can make a class eligible — only a complete check can. A drill lowers it
     /// explicitly through the harness's `Config` seam.
     pub min_effective_bits: u16,
+    /// **G14-for-rewards (`docs/PRINCIPLES.md` §6): whether a V2 class registered BEFORE this fence's activation, and never kernel-bound
+    /// (a live Panel-route class), keeps the pre-gate rules.** From the activation on, every other class earns reward or consensus work
+    /// weight only through the onboarding/G14 path (`palw_opv_bootstrap_v1::palw_reward_gate_v1`: the onboarding gate and E1–E7
+    /// through its own kernel binding). A USER decision; the default is `false` — not grandfathered.
+    pub grandfather_panel_route_classes: bool,
     pub window: OpvWindowV1,
     pub budgets: OpvBudgetsV1,
     pub economics: OpvEconomicsV1,
@@ -72,6 +77,7 @@ impl PalwPanelFreeFenceV1 {
             activation,
             denied_classes,
             min_effective_bits: PALW_OPV_MIN_EFFECTIVE_BITS_V1,
+            grandfather_panel_route_classes: false,
             window: OpvWindowV1 { base_challenge_window_daa: 40, verification_horizon_daa: 10 },
             budgets: OpvBudgetsV1 {
                 cold_material_daa: 10,
@@ -120,7 +126,8 @@ impl PalwPanelFreeFenceV1 {
         self.opv_policy().validate(&ledger)
     }
 
-    /// The value as the identity hashers write it: the denied ids, the floor and the terms (Borsh), after the activation. (A domain
+    /// The value as the identity hashers write it: the denied ids, the floor, the grandfathering flag and the terms (Borsh), after the
+    /// activation. (A domain
     /// tag separates this layout from the retired admission-list one, so no value of either can collide with the other.)
     pub(crate) fn write_value_into(&self, h: &mut kaspa_hashes::ConsensusParamsId) {
         h.write(b"palw_panel_free_v1/derived-eligibility/v2");
@@ -129,6 +136,7 @@ impl PalwPanelFreeFenceV1 {
             h.write(class.as_byte_slice());
         }
         h.write(self.min_effective_bits.to_le_bytes());
+        h.write([u8::from(self.grandfather_panel_route_classes)]);
         h.write(borsh::to_vec(&(self.window, self.budgets, self.economics, self.carrier)).expect("the terms serialize"));
     }
 }

@@ -616,6 +616,27 @@ impl PalwKernelRouteStateV1 {
         Ok(())
     }
 
+    /// **E1–E7 for a V2 class, through its OWN kernel binding** (G14-for-rewards): the bound kernel class's facts, the deny-list under
+    /// either mode's id, the kernel Active, then [`Self::opv_eligibility_v1`]'s E2–E6 through exactly this binding (never another
+    /// V2 class's conformance of the same kernel class).
+    pub fn v2_class_reward_eligibility_v1(
+        &self,
+        ledger: &KernelLedgerV1,
+        v2_class: &Hash64,
+        daa: u64,
+        view: &OpvEligibilityViewV1<'_>,
+    ) -> Result<(), OpvIneligibleV1> {
+        let binding = self.kernel_binding_v1(v2_class).ok_or(OpvIneligibleV1::NotOnboarded)?;
+        let facts = OpvClassFactsV1::of_registered(ledger, &binding.kernel_class.as_bytes()).ok_or(OpvIneligibleV1::NotG14Complete)?;
+        if [facts.opv_id, facts.legacy_id].iter().any(|id| view.denied.contains(&Hash64::from_bytes(*id))) {
+            return Err(OpvIneligibleV1::Denied);
+        }
+        if ledger.schedule.standing_at(&facts.descriptor, daa) != KernelStandingV1::Active {
+            return Err(OpvIneligibleV1::KernelNotActive);
+        }
+        self.opv_eligibility_through_v1(ledger, &facts, daa, view, v2_class, &binding)
+    }
+
     /// **Eligibility of an OPV class by id** (registered single-program or pipeline): a pipeline class is eligible only through the
     /// test seam (no onboarding path).
     pub fn opv_class_eligibility_v1(
@@ -705,6 +726,83 @@ impl PalwKernelRouteStateV1 {
 }
 
 // =================================================================================================================================
+// V. G14-for-rewards (`docs/PRINCIPLES.md` §6)
+// =================================================================================================================================
+
+/// **Whether a V2 class may earn reward or consensus work weight at a block** — the one predicate every reward door asks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwRewardGateV1 {
+    /// The gate is not armed at this block (no `palw_panel_free_v1` in force): the pre-gate rules, byte for byte.
+    Unarmed,
+    /// Not gated: the base class (the bonded BASE-0 fallback, never useful-computation reward), or a live Panel-route class the fence
+    /// grandfathers (registered before its activation, never kernel-bound).
+    Exempt(&'static str),
+    /// The class passed the onboarding/G14 path: the onboarding gate is `Ready` and E1–E7 hold through its own kernel binding. Its
+    /// REAL work is admitted on that ground, never on Panel seat readiness.
+    Passed,
+    /// Registered, perhaps even Active, but earning nothing: `code` names the first unmet condition.
+    Refused { code: &'static str, why: String },
+}
+
+/// **G14-for-rewards** (the Lead's 2026-10-09 scope; `docs/PRINCIPLES.md` §6). From the fence's activation on, a class earns reward or
+/// consensus work weight only through the onboarding/G14 path:
+///
+/// 1. unarmed (`reward_gate` is `None`) → [`PalwRewardGateV1::Unarmed`];
+/// 2. the base class → exempt (the BASE-0 fallback);
+/// 3. a class registered before the activation and never kernel-bound, where the fence grandfathers → exempt (a user decision;
+///    default: not grandfathered);
+/// 4. the onboarding gate (`onboarding_gate_v1`) must be `Ready`: the artifact binding Final, the kernel class standing (registered
+///    only after PUBLIC_PROSECUTION_COMPLETE), the conformance record at G14_ELIGIBLE or ACTIVE_REWARDABLE for this artifact;
+/// 5. E1–E7 through its own kernel binding ([`PalwKernelRouteStateV1::v2_class_reward_eligibility_v1`]): the kernel Active, the
+///    conformance about this statement, live public DA, bounded prosecution (carriers, court budget, censorship cost above the
+///    claim's gain), a verified policy at the effective-bits floor, not denied.
+///
+/// The seven conditions of §6 map onto 4–5: coverage (the kernel class's plan, PUBLIC_PROSECUTION_COMPLETE), approved soundness and
+/// grinding resistance (E6's effective bits), public material (E4), one-verifier localization and objective adjudication (E3, E5's
+/// court budget), collectable collateral above the gain (E5), honest verifiers' resources (E5's carriers and the OPV budgets), and
+/// dispute/DA/Final/reorg consistency (the route's bounded deadlines; reorg consistency is the fork-choice fence's, ordered by
+/// validation). Cost: the ledger is rebuilt from the rows per call (GAP-B8).
+pub fn palw_reward_gate_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    base_class: &Hash64,
+    route_extras: Option<&crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1>,
+    class_id: &Hash64,
+    daa: u64,
+) -> PalwRewardGateV1 {
+    use crate::palw_onboarding_v1::PalwOnboardingGateV1 as G;
+    let refused = |code: &'static str, why: String| PalwRewardGateV1::Refused { code, why };
+    let Some(opv) = route_extras.and_then(|e| e.opv.as_ref()) else { return PalwRewardGateV1::Unarmed };
+    let Some(terms) = opv.reward_gate else { return PalwRewardGateV1::Unarmed };
+    if class_id == base_class {
+        return PalwRewardGateV1::Exempt("BASE_FLOOR");
+    }
+    let Some(class) = state.class(class_id) else { return refused("NOT_REGISTERED", "no such V2 class".into()) };
+    let route = state.kernel_route();
+    let bound = route.is_some_and(|r| r.kernel_binding_v1(class_id).is_some());
+    if !bound && terms.grandfathered_before_daa.is_some_and(|activation| class.registered_daa < activation) {
+        return PalwRewardGateV1::Exempt("GRANDFATHERED_PANEL_ROUTE");
+    }
+    let Some(route) = route else {
+        return refused("NOT_ONBOARDED", "no kernel route state: the class never began onboarding".into());
+    };
+    match route.onboarding_gate_v1(class_id, &class.artifact_root, daa) {
+        G::NotKernelBound => {
+            return refused("NOT_ONBOARDED", "the class has no artifact or kernel binding: it never began onboarding".into());
+        }
+        G::Held { code, why } => return refused(code, why.to_string()),
+        G::Ready => {}
+    }
+    let ledger = match route.ledger() {
+        Ok(l) => l,
+        Err(e) => return refused("ROUTE_ROWS", e),
+    };
+    match route.v2_class_reward_eligibility_v1(&ledger, class_id, daa, &OpvEligibilityViewV1::of(opv)) {
+        Ok(()) => PalwRewardGateV1::Passed,
+        Err(why) => refused(why.code(), format!("{why:?}")),
+    }
+}
+
+// =================================================================================================================================
 // IV. The dependency graph
 // =================================================================================================================================
 
@@ -728,6 +826,8 @@ pub enum PalwOpvNodeV1 {
     ConformancePassed,
     G14Eligible,
     V2Active,
+    /// G14-for-rewards: the V2 class earns reward or consensus work weight ([`palw_reward_gate_v1`]).
+    V2Rewardable,
     BoundsFit,
     PolicyVerified,
     NotDenied,
@@ -784,6 +884,11 @@ pub const PALW_OPV_DEPENDENCIES_V1: &[PalwOpvDependencyV1] = &[
     dep(N::ConformancePassed, &[N::CompleteEvidence], "apply_complete_check_v1: a pass at once"),
     dep(N::G14Eligible, &[N::ConformancePassed, N::KernelClassStands], "OnboardingStepV1::PublicProsecutionGate"),
     dep(N::V2Active, &[N::G14Eligible, N::ArtifactFinal], "onboarding_gate_v1 / activate_due_classes"),
+    dep(
+        N::V2Rewardable,
+        &[N::V2Active, N::KernelActive, N::ArtifactMatured, N::BoundsFit, N::PolicyVerified, N::NotDenied],
+        "palw_reward_gate_v1: onboarding gate Ready and E1-E7 through the class's own binding (activation, claims, seating, share)",
+    ),
     dep(N::BoundsFit, &[N::KernelClassStands], "opv_eligibility_v1 E5"),
     dep(N::PolicyVerified, &[N::ConformancePassed], "opv_eligibility_v1 E6: attempt_effective_bits_v1 >= min_effective_bits"),
     dep(N::NotDenied, &[N::Genesis], "opv_eligibility_v1 E7: the fence's denied_classes"),
@@ -827,14 +932,22 @@ mod tests {
     #[test]
     fn the_graph_reaches_opv_from_genesis_only_through_the_complete_check() {
         let all = reachable_v1(PALW_OPV_DEPENDENCIES_V1, &[]);
-        for n in [N::OpvEligible, N::OpvFinal, N::BeaconLocked, N::SampledEvidence, N::V2Active, N::WorkSliceBeacon] {
+        for n in [N::OpvEligible, N::OpvFinal, N::BeaconLocked, N::SampledEvidence, N::V2Active, N::V2Rewardable, N::WorkSliceBeacon] {
             assert!(all.contains(&n), "{n:?} is reachable with the bootstrap");
         }
         for n in [N::ApprovedPanelScheme, N::PanelAssignmentBeacon, N::V3PanelBound] {
             assert!(!all.contains(&n), "{n:?} needs an approved Panel beacon scheme (none)");
         }
         let without = reachable_v1(PALW_OPV_DEPENDENCIES_V1, &[N::CompleteEvidence]);
-        for n in [N::ConformancePassed, N::G14Eligible, N::OpvEligible, N::OpvFinal, N::EligibleSourcesNonEmpty, N::BeaconLocked] {
+        for n in [
+            N::ConformancePassed,
+            N::G14Eligible,
+            N::OpvEligible,
+            N::OpvFinal,
+            N::EligibleSourcesNonEmpty,
+            N::BeaconLocked,
+            N::V2Rewardable,
+        ] {
             assert!(!without.contains(&n), "{n:?} must be unreachable without the bootstrap: the cycle");
         }
         assert!(without.contains(&N::CommittedSampled), "a sampled commitment is still made — and waits forever (BEACON_UNAVAILABLE)");

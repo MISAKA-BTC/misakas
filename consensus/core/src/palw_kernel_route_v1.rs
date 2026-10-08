@@ -144,6 +144,17 @@ pub struct PalwKernelOpvExtrasV1 {
     /// eligible (the processor fills it only under `cfg(test)`, from `kernel_route_test_opv_eligible_v1`, exactly as it fills
     /// `attested_artifacts`). The bootstrap E2E uses none.
     pub test_eligible: Vec<Hash64>,
+    /// **G14-for-rewards**: `Some` from the fence's activation on (`None` below it, and the gate is unarmed). See
+    /// `crate::palw_opv_bootstrap_v1::palw_reward_gate_v1`.
+    pub reward_gate: Option<PalwRewardGateTermsV1>,
+}
+
+/// The terms of the G14-for-rewards gate at one block (from `Params::palw_panel_free_v1`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRewardGateTermsV1 {
+    /// `Some(activation)` iff the fence grandfathers live Panel-route classes: a class registered below this DAA and never
+    /// kernel-bound keeps the pre-gate rules. `None` (the default): nothing is grandfathered.
+    pub grandfathered_before_daa: Option<u64>,
 }
 
 /// **The INTERIM ledger policy.** Windows are short so a drill crosses them; the amounts are sompi. Values are consensus constants

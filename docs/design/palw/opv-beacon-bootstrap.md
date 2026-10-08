@@ -1,6 +1,6 @@
 # OPV ↔ PALW Work Beacon: the startup cycle, a non-circular bootstrap, derived eligibility, grinding
 
-Agent OPV-BOOT, branch `opv/bootstrap-beacon` (from the Lead's `9f777c3ca`). Everything here is **dormant** behind the existing fences
+Agents OPV-BOOT, then OPVB (§6.3, §6.4, §12), branch `opv/bootstrap-beacon` (from the Lead's `9f777c3ca`). Everything here is **dormant** behind the existing fences
 `palw_probabilistic_constraints_v1`, `palw_panel_free_v1` and `palw_signed_registration_v1`, which `validate_palw_v2` refuses at every
 real height; no testnet-12 params or schedule id moves (every fence is `None` on every preset and hashed Some-only). Amounts are BILI
 (ADR-0174; `SOMPI_PER_KASPA` is the legacy name of 1 BILI = 10^8 sompi).
@@ -107,7 +107,7 @@ no list, no registrant flag):
 1. a single TIR program (no pipeline);
 2. **stateless**: no declared state, no `Ref::State` — so position `p`'s output depends only on `(token_p, p)`, never on the prefix;
 3. an enumerable input domain `N = token_bound × (plan.max_positions if any node reads Input(POS), else 1) ≤ 1,024`;
-4. the artifact is small enough to carry whole: `≤ 4,096` inventory leaves and `≤ 512 KiB`;
+4. the artifact is small enough to carry whole in ONE carrier: `≤ 1,024` inventory leaves and `≤ 64 KiB`;
 5. the complete check fits the fold: `N × forward work (§8 node costs at h = 1) ≤ 2^26`, charged to the block's adjudication budget.
 
 Under (2) a greedy job's whole output is determined by the per-input map, so a check of every input is a check of **every job the class
@@ -115,15 +115,17 @@ can ever serve** (with or without position); a class with history has `Σ T^l` p
 
 **The complete check** (`ConformanceEvidenceActionV1::PostComplete`, tag 109, judged in the fold by `judge_complete_check_v1`):
 
-* the post carries **the whole inventory** (every leaf, in inventory order) and, per input, the reference / independent / backend
-  results (logits digest, greedy next token) and, per leaf, each implementation's decoded-values digest;
+* the post carries **the whole inventory** (every leaf, in inventory order) and six result roots: the reference / independent / backend
+  implementations' roots over every input (`(token, position, logits digest, greedy next)`) and over every leaf (its decoded-values
+  digest);
 * the fold re-roots every leaf to the V2 class's registered `artifact_root` (public DA of the whole artifact, on chain), rebuilds the
   tensors, recomputes `ParamCommitmentsV1` and requires its root to be the kernel binding's `kernel_param_root` — **binding equality
   proven, not bonded** (closes onboarding GAP 1 for this class);
 * it runs the chain's reference TIR interpreter on every input and requires every posted implementation result, and every leaf's
   decoded digest, to equal the chain's own; anything else is `CONFORMANCE_FAILED` (counted);
 * a pass is `CONFORMANCE_PASSED` at once (nothing is left to refute: the chain computed every check) and then the public-prosecution
-  step; no window, no seed, no beacon. A commitment with no evidence by commit + 60 DAA is a default (`Withheld`, counted).
+  step; no window, no seed, no beacon. A commitment with no evidence by commit + 60 DAA is a default (`Withheld`, counted). Its
+  in-fold cost and carriage: §8.
 
 The network's complete-check policy (`palw_onboarding_complete_check_policy_v1`) is a `PostCommitChallengePolicyV1` whose randomness
 source is `randomness/none-complete-check/v1` and sampler `sampler/complete-enumeration/v1` (k = delay = window = D = 0, one
@@ -186,29 +188,151 @@ their worlds. The bootstrap E2E (§8) uses **no** hook.
 ## 6. Grinding analysis
 
 A beacon of a subject committed at `c` mixes the first `k` eligible Finals (canonical order: settlement position, occurrence, work id)
-accepted at or after `S = c + anchor_delay_slots` and settled in `[S, S + beacon_window_slots)`; it locks `settlement_depth_d` past the
-`k`-th settlement. Every source is an OPV claim: it costs a reservation (1,000 BILI interim) from Final until its liability horizon,
-occupies one of `max_live_claims_total` (32) ledger-wide live slots (3 per producer), and is withheld only by a default (penalty 100
-BILI, 10 % burned) or a conviction (the reservation). Because `beacon_window_slots ≤ OPV window + liability` (120 ≤ 50 + 200), every
-work that can settle in one window is live at once, so **at most `C = max_live_claims_total` works can ever compete for one beacon**.
+accepted at or after `S = c + anchor_delay_slots` and settled in `[S, S + beacon_window_slots)`, chosen under the policy's **source
+rule**, and locks `settlement_depth_d` past the `k`-th settlement. Every source is an OPV claim: it costs a reservation (1,000 BILI
+interim) from commitment until its liability horizon, occupies one of `max_live_claims_total` (32) ledger-wide live slots (3 per
+producer), and is withheld only by a default (penalty 100 BILI, 10 % burned) or a conviction (the reservation). Because
+`beacon_window_slots ≤ OPV window + liability` (120 ≤ 50 + 200), every work that can settle in one window is live at once.
 
-| Lever | Attacker's choices per beacon | Bits lost (interim k = 2, C = 32, R = 2) | Bounded by |
-| --- | --- | --- | --- |
-| Output selection (which of its works settle first) | ≤ `P(C, k) = C!/(C−k)!` ordered source lists | `⌈log2 992⌉ = 10` | `work_count_k` (exponent); `anchor_delay_slots` (no work committed before the subject is fixed can count — no precomputation); `beacon_window_slots` (with the OPV window and liability, the live cap applies) |
-| Withholding / withdrawing a Final | before the lock: a different list, inside `P(C, k)`; after the lock: a veto that ends the attempt `BEACON_CHANGED`, counted | inside the retry term | `settlement_depth_d` (when the lock is final on the branch), `retry_limit`, `abort_policy_id` (counted retry); each veto costs a default penalty or a reservation |
-| Choosing Final timing | reorders works: inside `P(C, k)` (order is by settlement position) | 0 extra | `beacon_window_slots`, canonical order |
-| Fork choice (mine the branch whose beacon suits) | `F` branches that can win before `lock` | `⌈log2 F⌉`; `F = 1` under the settlement assumption (no reorg past `k`-th settlement + D) | `settlement_depth_d`, `reorg_policy_id` (branch-relative recompute, dependents roll back) |
-| Work concentration (one party owns most sources) | the full-control worst case is the `P(C, k)` row; a party with share `ρ` of qualifying work controls ~`ρk` positions | ≤ `⌈log2 P(C, k)⌉` | `work_count_k`, live-claim caps, collateral |
-| Retries (abandon and re-commit) | `R + 1` attempts per class | `⌈log2 3⌉ = 2` | `retry_limit` |
-| Many subjects (adaptive: Sybil classes of one model) | `Q` registrations over the policy's life | `⌈log2 Q⌉` | registration price and binding reservation; stated in the approved tuple |
+### 6.1 Source rules (implemented)
 
-`grinding_budget_policy_id` names the stated `(C, F)` behind `G = P(C, k)·F` that the effective accounting uses
-(`beacon_grinding_choices_bound_v1`). **Interim conformance: 2 scope bits − 1 (two relation families) − 2 (retries) − 10 (grinding) =
-0 effective bits**: the interim policy is a drill. A production sampled policy needs, per relation family and with these `k` and `C`,
-`r·s ≥ 128 + 1 + 2 + 10 + ⌈log2 Q⌉`. A complete check has nothing to grind (`ε = 0`).
+| Rule (`source_eligibility_policy_id`) | What a source must satisfy beside eligibility | Used by |
+| --- | --- | --- |
+| `…/v1` (plain) | nothing | the contract's reference policy, RFC-0010's (unapproved) panel scheme |
+| `…/distinct-producer-consumer/v2` | its producer bond differs from every source already taken; its consumer (job payer) too, where the route records one | **the interim onboarding policy** |
+| `…/distinct-producer-consumer-class-capped/v2` | the distinct rule, and at most `⌈k/2⌉` sources from one class | available; not interim (it needs two bootstrap classes) |
 
-Residual (stated): a party that controls every block of a window can also censor honest source claims on its branch — that is the
-`F`/settlement assumption, not something the beacon removes; and the live cap bounds choices only while the OPV caps stand (F-C4R3-05).
+Attribution (`AttributedWorkV1 { event, attribution: { producer_id, consumer_id } }`) is built by the consumer from authenticated state
+(`finals_read_v1`: the Final claim's producer bond; the consumer is `Absent` until G14-R4's user-pays escrow records a job's payer, so
+the consumer clause is a no-op until then — GAP-B2). The plain collector refuses a policy whose rule needs attribution.
+
+### 6.2 The levers, in bits
+
+Interim terms: `k = 2`, `C = 32`, `R = 2`, `F = 1`. "Bits" is what the lever subtracts from a sampled conformance's effective bound.
+
+| Lever | Plain rule | Distinct rule (interim) | Sealed-source beacon v3 (§6.3; needs salted seals) | Bounded by |
+| --- | --- | --- | --- | --- |
+| **Last contributor** — after `k − 1` sources are public (an OPV claim's execution commitment is public at commitment, 50 DAA before it settles), post ONE job and grind its nonce offline (`canonical_work_id = H(class, job)`; a few hashes per try), then let it settle `k`-th | `h` bits (all offline work; unbounded by any on-chain count) | `h` bits — one work needs one bond and one payer | 0: every mixed contribution is sealed, with a secret salt, before any mixed salt is public | v3: the seal window; today nothing |
+| Output selection among works whose inputs are fixed | `⌈log2 P(C, k)⌉ = 10` | 10 (and `k` distinct bonds) | 0: every qualifying seal of the window is mixed (no selection exists) | `work_count_k`, `anchor_delay_slots` (nothing committed before the subject counts), `beacon_window_slots` with the live cap |
+| Withholding / withdrawing a Final | before the lock: inside the selection count; after: a veto ending the attempt `BEACON_CHANGED` | same | a veto (`BEACON_VETOED`, a counted retry): a withheld seal or an abandoned source is never dropped | `retry_limit` (counted), `settlement_depth_d`, `abort_policy_id`; a default penalty or a reservation per veto |
+| Final timing | ordering, inside the selection count | same | 0: the mix is in seal order, fixed before any reveal | canonical order, `beacon_window_slots` |
+| Fork choice | `⌈log2 F⌉`; `F = 1` under the settlement assumption | same | same | `settlement_depth_d`, `reorg_policy_id` |
+| Work concentration — one party owns `j` of `k` sources | one bond can own every position (3 live claims per producer ≥ k) | `j` bonds and `j` payers | irrelevant to bias (one honest salt suffices); `k` is a quorum of distinct producers | `work_count_k`, the live caps, collateral, the distinct rule |
+| Retries | `⌈log2 (R+1)⌉ = 2` | 2 | 2 | `retry_limit` |
+| Adaptive statements (Sybil classes of one model) | `⌈log2 Q⌉` | same | same | registration price, binding reservation |
+
+**Effective bits of the interim conformance** (two families of 2.885 bits, one repetition): `2 − 1 − 2 − h → 0` under every rule — and
+`0` even with `G = 992` (no last contributor). The interim policy is a drill. `misaka-palw-challenge/tests/grinding.rs` demonstrates the
+last contributor: with one honest source settled, 4,096 offline nonces of ONE attacker job give 4,096 distinct beacons (an 8-bit target
+is hit), under the distinct rule — far past the live-cap bound of 32.
+
+**What reaches 128 effective bits.** (a) Against the last contributor as it stands, a sampled scope must out-bit the adversary's
+offline work: `−log2 ε ≥ 128 + h + ⌈log2 m⌉ + ⌈log2 (R+1)⌉`; with `h = 128` and the chain's whole check bound (4,096 leaves at scope
+v1's 62,500 ppm) a single family reaches `369 − 2 − 128 = 239` bits (golden vector), but any family with fewer bits (vectors at 50 %)
+caps the bound. (b) With the sealed-source beacon v3 (§6.3), `G = F` and the same target needs `128 + ⌈log2 m⌉ + ⌈log2 (R+1)⌉ +
+⌈log2 Q⌉` algorithmic bits, AND `ε_src` must reach 128 bits on its own (the union of the two costs one bit). v3 is written as a pure
+collector; it is a **DESIGN blocker for any sampled approval and for Panel=0 activation** until the ledger seals a secret salt
+(GAP-B1a). A complete check has nothing to grind (`ε = 0`).
+
+**Cost to own `j` of `k` sources** (interim numbers; `f_job` is G14-R4's non-refundable fee of a self-posted job, not yet fixed):
+`j · (f_job + 3 carrier fees ≈ 0.06 BILI)` burned, `j · 1,000 BILI` reserved for ~250 DAA (refunded if honest), `j` bonds (distinct rule),
+`j` payers once recorded, and with the class cap `⌈2j/k⌉` classes (each a registration burn, a 100 BILI binding reservation for 200
+DAA, a 1 BILI complete-check fee). A post-lock veto costs a default penalty (100 BILI; 90 recoverable through one's own demander, 10
+burned) or a reservation. None of this prices the last contributor, which needs `j = 1`.
+
+### 6.3 The sealed-source beacon v3 (SOUND SG-01, SG-01a)
+
+`misaka-palw-challenge::sealed` (`collect_sealed_work_beacon_v3`, randomness source `palw-work-beacon/sealed-source/v3`, the
+distinct source rule only). Pure: it reads seal facts a consumer derives from authenticated state and has no consensus caller yet.
+
+```text
+S = commitment + anchor delay;  W = beacon_window_slots
+seal window   [S, S + W)      a claim seal binds a SECRET salt (claim seal = H(claim id ‖ salt)), bonded by seal_deposit
+reveal window [S + W, S + 2W) the claim and its salt
+mixed         EVERY seal in the seal window on a profile frozen eligible (never the candidate or an excluded profile), except one
+              revealed before S + W; then, in seal order, the first seal of each producer and of each known consumer
+quorum        fewer than k mixed at S + W  → BEACON_UNAVAILABLE (known when the seal window closes)
+veto          a mixed seal not revealed in [S + W, S + 2W), or a mixed source that ends without a standing Final
+              → BEACON_VETOED: the beacon never locks without it; the attempt ends as a counted retry
+lock          every mixed source Final (real useful work of the sealed profile, revealed after S + W, standing, DA-satisfied,
+              independent, Panel-independent for a Panel draw) and the last settlement D deep; output = the accumulator over
+              (seal position, seal, producer, profile, work id, execution commitment, salt) in seal order
+```
+
+**Why each SG-01a lever is closed or bounded.**
+
+* **Last contributor (SG-01).** Every mixed contribution is fixed when it is sealed, and no mixed salt is public before `S + W`: a
+  reveal earlier than that is not a source. So no contribution is chosen after another mixed one is seen.
+* **(i) Withholding.** After the reveals, the adversary's only move is to withhold or abandon, and either one vetoes. Its choice per
+  attempt is {lock, veto}. That is the retry term `⌈log2 (R + 1)⌉`, with vetoes counted, and not `2^a`. So `G = F`
+  (`sealed_beacon_grinding_choices_v3`). The test `after_the_reveals_the_adversary_can_only_veto_never_choose` runs all 2^3 subsets
+  of three attacker seals: one lockable output, seven vetoes.
+* **(ii) First-`k` capture.** Nothing is "the first `k`": every qualifying seal is mixed, and `k` is only a quorum. Sealing early or
+  sealing many cannot push an honest seal out. The test is `sealing_first_or_sealing_many_never_pushes_an_honest_seal_out`.
+* **(ii) Censorship.** A censored honest **reveal** is a veto, never an exclusion. The one path to a LOCKED beacon without an honest
+  salt is to keep every honest **seal** out of the seal window.
+* **(iii) Fork choice.** Unchanged: `F`, bounded by `D` under the settlement assumption.
+
+**`ε_src`, quantified** (`sealed_source_censorship_bits_v3`). An honest producer broadcasts its seal at the window's start. The seal
+is accepted in the window unless every block that could carry it before `S + W − δ` is the adversary's. Here `δ` bounds how late a
+carrying block is merged. With `b` blocks per DAA and an adversary block share `ρ`:
+
+```text
+ε_src ≤ ρ^((W − δ)·b)        bits_src = ⌊(W − δ)·b·(−log2 ρ)⌋
+```
+
+The bound holds under three assumptions (A-B2): an honest producer seals an eligible source in the window (participation), honest
+blocks are not filled by fee-paying spam, and `2W ≤` the ledger's seal TTL, so every in-window reveal is legal. An honest producer
+reveals exactly `W` after sealing, which makes its seal a source of every subject whose seal window contains it.
+
+The union with the algorithmic bound costs one bit (`combine_failure_bits_v1`). Golden vectors:
+
+* the interim window `W = 40`, `δ = 10`, `b = 1`, `ρ = ½` gives **30 bits**;
+* 128 bits needs `W − δ ≥ 128` blocks at `ρ = ½` (81 at `ρ = ⅓`), and so a seal TTL of at least `2W`. G14-R4's interim TTL of 100
+  allows `W ≤ 50`;
+* a production-shaped tuple (4 × 64 bits × 3 reps, `R = 2`, `Q = 2^10`) gives 178 algorithmic bits, 29 combined at the interim
+  window, and 129 at `W − δ = 130`.
+
+**Liveness, the price of the veto** (GAP-B12). Anyone who seals in the window and withholds vetoes the attempt. The cost is one
+forfeited `seal_deposit` (1 BILI interim). Vetoes are counted, so `R + 1` vetoes exhaust a class's attempts. That is a cheap DoS on
+onboarding, and it is traded for soundness: if vetoes were uncounted, a registrant colluding with a sealer would re-roll at the price
+of a deposit each.
+
+Options, a policy decision:
+* a deposit for beacon-mixed seals priced for the DoS;
+* uncounted vetoes bounded by time, each attempt taking at least `2W` DAA, stated as `R_eff = ⌈T_life / 2W⌉` in the retry term.
+
+**GAP-B1a — the salt (DESIGN, blocks v3 on chain).** G14-R4's claim seal is `claim_seal_v1(claim id)`. A claim of a deterministic
+class is a function of its public job and its producer: `KernelClaimV1 { job_id, producer_bond, generated, evidence_root }`, greedy
+decode, no producer randomness. Anyone who can run the model can therefore compute the seal's preimage when it is posted, so the seal
+hides nothing. A v3 beacon over those seals is the v2 last contributor again.
+
+v3 on chain needs two changes. Both are in the kernel ledger and route (G14-R4's) and need a Lead allocation:
+* `claim_seal_v2(claim id, salt) = H("misaka-palw/kernel/claim-seal/v2"; claim id ‖ salt)` with a 64-byte salt from the producer's
+  CSPRNG;
+* a reveal that carries the salt: a salted `CommitClaim` / `CommitPipelineClaim`, or one new inner kind. The ledger checks the salted
+  seal and keeps `beacon_salt` and `sealed_daa` on `ClaimRowV1`.
+
+The route then serves each seal fact for op 212: `SealedSourceV3` from the seal rows (live and forfeited) and the claim rows.
+
+### 6.4 SG-05: the per-claim check's coins are private, stated
+
+No public-coin per-claim check is wired, and this branch does not wire one. It states the dependence instead. **OPV detection
+soundness rests entirely on outsiders' private salts:**
+
+* `misaka-palw-kernel` `OutsiderV1` draws its vectors from `FreshVerifierV1::check_salted(…, salt)`. The salt is chosen after the
+  claim is committed and is never published before a filing, so the producer's commitment is independent of it. A fault on a fraction
+  `f` of a relation's draws escapes `n` salted draws with probability `(1 − f)^n`, per outsider.
+* The unsalted entry points use the record's public `beacon`, which is `[0; 64]`, so their coins are predictable and they have
+  **no soundness**. These are `FreshVerifierV1::check` and `PipelineFreshVerifierV1::check`. They are called only by tests
+  (`k2_public.rs`, `k2_adversarial.rs`); no outsider, seat, SDK or node path reaches them. SOUND's Q-13 recommends making them
+  unreachable outside tests; that change is the kernel owner's.
+* The interim Panel route's seats are seeded by the claim id (`palw_kernel_interim_seed_v1`, grindable, stated). They are a
+  Panel=1 path and give no OPV soundness.
+* A claim is therefore caught only if at least one honest outsider runs a salted check inside the window (A-WATCH). The per-claim
+  detection probability is `p_watch · (1 − (1 − f)^n)`, the deterrence-only regime of SG-06. A public-coin per-claim seed would need a beacon
+  per claim, drawn from sources after the claim. With v3 that is a `ClaimVerification` subject whose seal window opens at the
+  claim's commitment, which costs the claim `2W + D` DAA of latency. It is not wired.
 
 ## 7. Effective false-accept accounting
 
@@ -220,14 +344,152 @@ eff = min_i (r · s_i)  −  ⌈log2 m⌉  −  ⌈log2 (R+1)⌉  −  β · ⌈
 
 `s_i` the per-repetition soundness of relation family `i` (or `Complete`), `m` the sampled families (union bound), `r` =
 `repetition_count`, `R` = `retry_limit`, `G` the grinding choices per beacon, `β` beacons per attempt (1 non-interactive; rounds for a
-staged beacon), `Q` adaptive statements. All relations complete ⇒ `Complete`. `approved_v1` now requires the tuple's effective bits ≥
-the policy's `security_bits` **and** `security_bits ≥ 128`; the shipped registry (`shipped_registry_v1`) stays empty. Golden vectors pin
-the function (§8).
+staged beacon), `Q` adaptive statements. All relations complete ⇒ `Complete`. Every logarithm is rounded up and charged separately,
+so the result never overstates the bound.
 
-## 8. Proof (tests)
+* **Approval** (`approved_v1`): a matching tuple now also carries the reviewed statement (`relations`, `grinding_choices_per_beacon`,
+  `beacons_per_attempt`, `adaptive_queries`); the policy's `security_bits` must be ≥ 128 (`TargetBelowFloor`) and the effective bits ≥
+  `security_bits` (`BelowTarget`). The shipped registry (`shipped_registry_v1`) is empty; nothing is approved.
+* **Eligibility** (E6): a passed attempt's effective bits (`attempt_effective_bits_v1`) — `Complete` for a complete check; for a sampled
+  one the committed scope's families under the policy's repetitions and retries, `G = 2^128` (the last contributor,
+  `palw_onboarding_grinding_choices_v1`), one beacon, one statement — must reach the fence's `min_effective_bits` (interim 128).
+* Golden vectors (`misaka-palw-challenge/tests/soundness.rs`): the interim drill = 0; a production-shaped tuple (4 × 64 bits × 3 reps,
+  `G = 992`, `Q = 2^20`) = 158; exactly 128 at the target and 127 one statement later; complete = `Complete`; a staged beacon of three
+  rounds at `G = 2^10` loses 30; the chain's whole check bound against `h = 128` = 239; saturation never wraps.
 
-_Filled in after implementation._
+## 8. In-fold cost and carriage of the complete check
 
-## 9. GAPs
+* **Bounds** (interim): ≤ 1,024 inputs, ≤ 1,024 leaves, ≤ 64 KiB of artifact, ≤ 2^26 work units (§8 node costs at `h = 1` × inputs +
+  artifact bytes). The post carries the whole inventory and six result roots (reference / independent / backend over every input and
+  over every leaf), never per-input lists, so it is ≤ 90,000 bytes: **one carrier, no chunk lane** — a junk flood of the legacy chunk
+  lane (F-C4R3-03) cannot keep a bootstrap from completing.
+* **Order in the fold** (`apply_complete_check_v1`): free structural checks (`Err`, dropped: the registrant, an open complete-check
+  attempt with nothing judged, the post bound to THIS attempt's statement root, one carrier's size, the class still qualifies, the fee in
+  free collateral) → the block's cap of **2 judged complete checks** (counted from the attempt rows; the rest wait uncharged) → the
+  class's whole work charged to the block's adjudication budget **before the post is read** (a function of the program: junk costs what
+  a real check costs) → a **1 BILI fee** burned from the registrant's bond → the judgement, cheap checks first, every path a `Result`. A
+  judged check always closes its attempt (pass, or a counted failure), so an attempt is judged once and a class at most `R + 1 = 3`
+  times; each attempt also sits behind a class registration and a 100 BILI binding reservation. `2 × 2^26 = 2^27` of the block's
+  `2^30` court work is the most complete checks can take, so prosecutions always have room.
+* **Sampled evidence** (tag 109 `Post`) still needs multi-part carriage for production-sized scopes; it rides the legacy chunk lane
+  today. Requested from G14-R4 through the Lead: a target kind "conformance attempt of V2 class C" on the capture-proof tag-113 lane
+  (opener = C's registrant, TTL ≤ the attempt's evidence deadline or refutation window, refused at the first chunk when the attempt is
+  not open) — GAP-B5.
 
-_Filled in after implementation._
+## 9. Proof (tests)
+
+Real node (`consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/opv_bootstrap.rs`; fences test-armed through
+`Config::new`, **no eligibility hook**, fixtures not attested by any hook):
+
+| Case | Test |
+| --- | --- |
+| From zero Finals: nothing eligible, an early OPV registration refused; B's complete check passes in the fold (fee burned, work charged); B eligible by the derived rule (drill floor and 128); B registers, its claims reach OPV Final from distinct producers; C's sampled commitment freezes exactly `[B]` as sources (C under every mode excluded); the beacon locks on B's Finals; C passes its window; C eligible (drill floor) and NOT under 128 (`PolicyNotVerified`, 0 effective bits); C registers and its own claim reaches OPV Final, attributed to its producer; the eligible set is `{B, C}`; replay | `g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_and_a_sampled_class_becomes_eligible` |
+| No bootstrap class: the sources are empty, BEACON_UNAVAILABLE (counted), a re-commitment again freezes nothing, C never eligible, its OPV registration refused; the chain keeps producing blocks and moving state; replay | `g14_opv_bootstrap_without_a_complete_check_class_the_beacon_never_comes_and_the_chain_lives` |
+| A stateless class with 1,100 inputs: 106 under the complete-check policy refused (rows untouched), the sampled policy accepted; a PostComplete for a sampled attempt dropped | `g14_opv_bootstrap_a_class_that_cannot_be_checked_whole_is_refused_the_complete_check` |
+| A block of hostile complete checks (late-failing result roots, a junk inventory, an honest one, an outsider's): the outsider's dropped free, exactly 2 judged, each charged its whole work and the fee, the third waits uncharged; failures counted; the waiting one judged next block; a failed class re-commits and passes; replay | `g14_opv_bootstrap_a_block_of_hostile_complete_checks_spends_budget_and_never_stops_the_chain` |
+| Loss: C on a FALSE binding passes a sampled conformance, becomes eligible, registers; the binding is refuted (two disagreeing openings) → `DaLapsed`, C's next claim dropped at the door; B (binding proven by its complete check) stays eligible; another plan of the program is `NotOnboarded`; replay | `g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refuted` |
+| The deny-list takes eligibility away (a passed bootstrap is not eligible, its registration refused) | `g14_opv_bootstrap_the_deny_list_takes_eligibility_away_and_never_grants_it` |
+| The test seam exists only under `cfg(test)` and is `Vec::new()` otherwise | `opv_test_eligibility_hook_is_test_only` |
+| Qualification (stateless small class qualifies; history never) and the complete check's judgement on every lie | `opv_bootstrap_a_stateless_small_class_qualifies_…`, `opv_bootstrap_the_complete_check_passes_the_truth_…` |
+
+Pure: the graph (`palw_opv_bootstrap_v1::tests`: reachable only through the complete check; a bootstrap that needs the beacon closes
+the cycle; every eligibility reason is an edge and every edge a reason; the complete-check policy draws no beacon); the effective
+bound, approval and the complete-check shape (`misaka-palw-challenge/tests/soundness.rs`); the grinding attacks
+(`misaka-palw-challenge/tests/grinding.rs`); the sealed-source beacon v3 against SG-01/SG-01a and its accounting
+(`misaka-palw-challenge/tests/sealed_beacon.rs`); the fence (`consensus/core/tests/rfc0015_panel_free.rs`). The pre-derivation OPV and
+conformance worlds (`g14_opv_*`, `g14_conformance_*`, `g14_c4r3_opv_*`) run on the `cfg(test)` seam, and the conformance worlds on the
+drill floor (§12).
+
+## 10. GAPs
+
+* **GAP-B1 (DESIGN, blocker for any sampled approval and Panel=0): the last contributor.** §6.2. The v3 collector is written and
+  tested (§6.3); the onboarding fold still collects v2.
+* **GAP-B1a (DESIGN, needs the kernel owner and a Lead allocation): the salt.** G14-R4's bonded seals (`seal_deposit`, `sealed_daa`)
+  hide nothing over a deterministic claim (§6.3); v3 on chain needs `claim_seal_v2(claim id, salt)` and a reveal that carries the salt.
+* **GAP-B12 (POLICY): v3's liveness price.** A withheld seal vetoes, counted; `R + 1` seal deposits exhaust a class's attempts (§6.3).
+* **GAP-B2: consumer distinctness is a no-op** until the route records a job's payer (G14-R4's user-pays escrow); then `finals_read_v1`
+  fills `consumer_id`.
+* **GAP-B3: RFC-0010 V3** does not read the route's OPV Finals or the derived eligible set (`ChainPanelBeaconHistoryV1` serves V2-lattice
+  Finals and `eligible_profiles = ∅`), and no panel scheme is approved: V3 stays unavailable.
+* **GAP-B4: pipelines** have no onboarding path, so no OPV pipeline class is ever derived-eligible (only the test seam names one).
+* **GAP-B5: sampled evidence carriage** — the tag-113 target kind (§8).
+* **GAP-B6: vector refutations of a new class.** An OPV class cannot have Finals before it is eligible, and a Panel-licensed sibling has
+  no Panel under Panel=0, so a `VectorTokens` refutation of a NEW class's sampled evidence has no Final to cite; vectors rest on
+  off-chain re-execution (OB-P0 GAPs 2 and 9, widened). The complete check has no such residual (the fold runs every input).
+* **GAP-B7: implementation results are self-reported** in both paths (the registrant posts its independent and backend results); the
+  complete check makes the chain's REFERENCE check complete and proves the binding, which the sampled path cannot.
+* **GAP-B8: cost** — eligibility is evaluated by rebuilding the ledger from the rows (onboarding GAP 8) and scanning the kernel bindings
+  at every OPV registration, claim and commitment.
+* **GAP-B9: INTERIM numbers** — the complete check's bounds, fee, deadline and per-block cap; 2^26 units must be measured on reference
+  hardware against the block validation budget.
+* **GAP-B10: the SDK's fresh verifier** refuses a complete-check attempt (nothing to re-derive); a fresh complete verifier (the artifact
+  re-run off chain) is a small SDK addition.
+* **GAP-B11: no switch, by design** — bootstrap classes stay sources; the class-capped rule exists if the network wants no single class
+  to own a beacon once two bootstrap classes exist.
+* **GAP-B13: a public-coin per-claim check is not wired** (SG-05): OPV soundness rests on outsiders' private salts, stated in §6.4.
+* **GAP-B14 (G14-for-rewards): the REAL attempt's Final.** §12 opens admission; an admitted attempt of a G14 class still reaches
+  Final (and pays) only through its verification route: a Panel licence, or the RFC-0008 slice to the kernel route (X8R). A class
+  with no seats has no Panel licence.
+* **GAP-B15 (G14-for-rewards): what is not gated.** The market (seed / buy) and the work price unit read the registry lifecycle, not
+  the reward gate. A non-G14 class past the fence is Registered with no share, so it bears no weight and holds no budget, but a
+  pre-fence Active class that is not grandfathered keeps its share; it only takes no new claim.
+
+## 11. Allocations and identity
+
+No new consensus object tag, delta entry, carriage tail, root block or aux table: `PostComplete` is a variant of tag 109's action; the
+complete-check judgement lives in the attempt row (aux 39); eligibility is derived, never stored. `PalwPanelFreeFenceV1` changes shape
+(`admitted_classes` → `denied_classes` + `min_effective_bits`) and its identity bytes take a domain tag; it is `None` on every preset and
+hashed Some-only, so **no testnet-12 params or schedule id moves** (`palw_t12_flag_day_9000`, `rfc0015_*`). The interim onboarding
+challenge policy's id changes (its source rule is now the distinct one); it is a constant of the never-armed route, in no params.
+
+The fence also gains `grandfather_panel_route_classes` (identity, default `false`). The v3 beacon is a new randomness-source id in
+the challenge crate; it uses no tag. On chain, v3 needs the allocations named in GAP-B1a. `PalwStateV2Error::ClassNotRewardable` is a
+new error (not encoded).
+
+## 12. G14-for-rewards (`docs/PRINCIPLES.md` §6)
+
+**The gap** (H1's devnet; the Lead's 2026-10-09 scope). The V2 lifecycle let a class with `KERNEL_NOT_ACTIVE` and no
+PUBLIC_PROSECUTION_COMPLETE move Candidate → Probation once eight seats proved readiness. `activate_due_classes` asked the onboarding
+gate only of classes that began onboarding, and the registry's lifecycle reads seats and readiness alone. In the other direction, an
+onboarded class (registered with share 0) could take no REAL attempt: there was no epoch budget, and the registry lifecycle, the
+Panel room, the verify deadline, seating and the bond share all stood in the way.
+
+**The gate** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`). It is armed from `palw_panel_free_v1`'s activation on, through
+`PalwKernelOpvExtrasV1::reward_gate`; below that it is `Unarmed` and the fold is byte-identical. Its verdicts:
+
+* `Exempt`: the base class (BASE-0 is the bonded fallback, not useful-computation reward), or a grandfathered Panel-route class;
+* `Passed`: the onboarding gate is `Ready` and E1–E7 hold through the class's own kernel binding
+  (`v2_class_reward_eligibility_v1`);
+* `Refused { code }` otherwise, naming the first unmet condition: `NOT_ONBOARDED`, the onboarding hold's code, or an E code.
+
+§6's seven conditions map onto these checks as the function's doc states. The graph gains `V2Rewardable`, which is unreachable
+without the bootstrap.
+
+| Door | Armed behaviour |
+| --- | --- |
+| Registration (`apply_class_registration_v1`) | every post-fence class is written `Registered` (no share written at registration) |
+| Activation (`activate_due_classes`) | `Refused` stays `Registered` (no share, no weight, no budget). `Passed` activates with at least `min_grantable_share_permille` and re-derives the epoch's budgets now (the mid-epoch defect, closed under the fence only) |
+| Claim gate (`check_class_admits_claim`; fold and producer pre-check) | `Refused`: `ClassNotRewardable { code }` on every lane. `Passed`: the registry lifecycle, the Panel verify deadline and the Panel room are not asked; only the class's in-flight cap is |
+| Seating (`check_class_seated_root_v1`) | `Passed`: not seated by Panel possession (public DA, E4; one-outsider adjudication) |
+| Bond share (`check_bond_class_share`) | `Passed`: not split by Panel licence |
+
+**Grandfathering is a user decision**, implemented as a fence parameter: `grandfather_panel_route_classes`, default `false`. With
+`true`, a class registered before the activation and never kernel-bound keeps the pre-gate rules. With the default, every such
+class earns nothing from the fence on, until it onboards.
+
+**The drill floor.** E6 compares the passed attempt's effective bits with `min_effective_bits`. The interim sampled policy is 0
+effective bits, so under the ruled 128 only a complete-check class passes. The conformance mechanics worlds (and X8R's helper)
+therefore run with the floor at 0, which states the drill. `g14_rewards_under_the_ruled_floor_a_two_bit_conformance_earns_nothing`
+asserts what 128 decides.
+
+**X8R's helper.** `Cw::active_admitting_real(producer)` is in `g14_kernel_route_e2e/conformance.rs`. It runs the conformance path to
+its end and asserts five things: the class is Active and ACTIVE_REWARDABLE, it holds a share, the claim gate, seating and the bond
+share admit it (`class_admission_refusal = None`), and `ready_to_produce` is `Ok` for the producer.
+
+| Case | Test |
+| --- | --- |
+| Before its conformance the class's claims are refused; after it, Active with a share and a REAL attempt admitted; replay | `g14_rewards_an_onboarded_class_is_active_and_admits_real_attempts` |
+| Under the ruled floor (128) a 2-bit sampled conformance passes yet earns nothing (`POLICY_NOT_VERIFIED`, held Registered, no share) | `g14_rewards_under_the_ruled_floor_a_two_bit_conformance_earns_nothing` |
+| A class that never began onboarding never activates (`NOT_ONBOARDED`) | `g14_rewards_a_class_that_never_began_onboarding_never_activates` |
+| Grandfathering: a pre-fence Active class is refused by default and exempt with the parameter | `g14_rewards_grandfathering_live_panel_route_classes_is_a_fence_parameter_default_off` |
+| The graph: `V2Rewardable` reachable only through the bootstrap | `palw_opv_bootstrap_v1::tests` |

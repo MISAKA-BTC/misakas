@@ -14867,6 +14867,11 @@ impl VirtualStateProcessor {
                     test_eligible: kernel_route_test_opv_eligible_list_v1(),
                     #[cfg(not(test))]
                     test_eligible: Vec::new(),
+                    reward_gate: fence.activation.is_active(daa_score).then(|| {
+                        kaspa_consensus_core::palw_kernel_route_v1::PalwRewardGateTermsV1 {
+                            grandfathered_before_daa: fence.grandfather_panel_route_classes.then(|| fence.activation.daa_score()),
+                        }
+                    }),
                 }),
             }
         })
