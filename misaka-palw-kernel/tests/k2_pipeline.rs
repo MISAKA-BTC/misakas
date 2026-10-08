@@ -318,6 +318,64 @@ fn a_false_edge_or_a_false_draw_of_r_is_convicted_by_the_edge_court() {
 }
 
 #[test]
+fn a_lie_in_every_stage_input_of_every_reference_pipeline_is_an_edge_fault_the_edge_court_convicts() {
+    use std::collections::BTreeSet;
+    // The media-pipeline family's review row: every edge (job scalar / tokens / counts / image, an earlier stage's rows or final
+    // value, R) of every reference pipeline, lied at its first and last position, is localized to exactly that edge and convicted
+    // by the public edge court; the honest claim, accused of the same, is cleared.
+    let mut kinds = BTreeSet::new();
+    let pipelines = [
+        ("text-to-image", toy()),
+        ("vision", PClaim::new(vision_pipeline(), vision_job(), 300)),
+        (
+            "vision-language",
+            PClaim::new(vlm_pipeline(), PipelineJob { prompt: vec![3, PLACEHOLDER, PLACEHOLDER, 5], ..vision_job() }, 400),
+        ),
+        ("encoder-decoder", PClaim::new(encdec_pipeline(), encdec_job(), 500)),
+        (
+            "exact-match evaluation",
+            PClaim::new(
+                eval_exact_match_pipeline(),
+                PipelineJob { prompt: vec![3, 5, 7], scalars: vec![-1, -1], ..PipelineJob::default() },
+                600,
+            ),
+        ),
+    ];
+    let mut checked = 0usize;
+    for (name, c) in &pipelines {
+        for e in &c.plan.edges {
+            let positions = c.trace.stages[e.stage as usize].inputs.len();
+            for p in [0, positions.saturating_sub(1)] {
+                let Some(t) = c.trace.stages[e.stage as usize].inputs.get(p).and_then(|r| r.get(e.input as usize)) else { continue };
+                if t.data.is_empty() {
+                    continue;
+                }
+                let mut lie = c.trace.clone();
+                let x = &mut lie.stages[e.stage as usize].inputs[p][e.input as usize];
+                x.data[0] += if x.dtype.contains(x.data[0] + 1) { 1 } else { -1 };
+                let (verdict, courts) = c.check(&lie, None);
+                let PipelineVerdictV1::EdgeFault(proof) = verdict else { panic!("{name}: edge {e:?} at {p}: {verdict:?}") };
+                assert_eq!((proof.stage, proof.input, proof.position as usize), (e.stage, e.input, p), "{name}: {e:?}");
+                assert!((courts.edge)(&proof).is_ok(), "{name}: the public edge court dismissed a true lie at {e:?}");
+                let (_, honest) = c.check(&c.trace, None);
+                assert!((honest.edge)(&proof).is_err(), "{name}: the honest claim, accused of the same, is cleared");
+                kinds.insert(e.kind);
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked >= 30, "{checked} lies");
+    assert_eq!(
+        kinds.iter().copied().collect::<Vec<_>>(),
+        EDGE_KINDS_WITH_A_NEGATIVE_TEST,
+        "binding tags: 0 JobScalar … 6 JobImage, 7 R"
+    );
+}
+
+/// Binding kinds some reference pipeline has an edge of (the rest — if any — are a GAP, not a PASS).
+const EDGE_KINDS_WITH_A_NEGATIVE_TEST: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+
+#[test]
 fn a_false_image_edge_is_convicted_and_withheld_upstream_rows_are_unavailable() {
     let c = PClaim::new(vlm_pipeline(), PipelineJob { prompt: vec![3, PLACEHOLDER, PLACEHOLDER, 5], ..vision_job() }, 400);
     // The vision stage's committed image is not the job's canonical pixels.
