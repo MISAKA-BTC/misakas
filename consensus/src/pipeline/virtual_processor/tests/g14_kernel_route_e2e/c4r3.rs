@@ -312,7 +312,6 @@ fn restart_as_next_release(w: World, db: std::sync::Arc<kaspa_database::prelude:
 /// swap, not at any height. SAFE property asserted: a release that schedules an unrelated future fence keeps folding the route and
 /// the outsider still convicts.
 #[tokio::test]
-#[ignore = "FAIL F-C4R3-01: the upgraded node disqualifies the next block (the stored kernel route was folded under another policy)"]
 async fn g14_c4r3_a_release_that_schedules_an_unrelated_fence_keeps_the_route_folding() {
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     kaspa_core::log::try_init_logger("warn");
