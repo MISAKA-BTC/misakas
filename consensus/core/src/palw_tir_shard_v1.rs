@@ -1,5 +1,6 @@
 //! **RFC-0006 — layer-sharded panels for IR classes** (`docs/rfc/0006-palw-layer-sharded-panels.md`, adopted
-//! 2026-10-03; dormant under `Params::palw_tir_shard_v1`, `None` on every preset and in no flag-day list).
+//! 2026-10-03; **armed on testnet-12 at the int-11/12 flag day, DAA 5,300** — `PALW_DRILL_TIR_SHARD_ENTRY` is in
+//! `PALW_T12_INT11_FENCES_V1` — under `Params::palw_tir_shard_v1`, which is `None` (dormant) on every other preset).
 //!
 //! A seat of an IR class verifies a **cell** of a claim — a contiguous range of layers (a *shard*) crossed with a
 //! position segment — from the claim's committed boundary rows and only that shard's weights. This module is the pure
@@ -1057,15 +1058,17 @@ pub fn palw_tir_shard_readiness_message_v1(
 }
 
 // ---------------------------------------------------------------------------------------------
-// The fence (RFC-0006 §10): dormant everywhere, four writes, a mirror, a drill entry
+// The fence (RFC-0006 §10): armed on testnet-12 at DAA 5,300 (the int-11/12 list), dormant elsewhere; four writes, a mirror, an entry
 // ---------------------------------------------------------------------------------------------
 
 use crate::config::params::{ForkActivation, PalwPostLaunchFenceV1, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 
-/// **The entry a drill arms layer-sharded panels with** (`--palw-drill-tir-shard-at`,
-/// [`crate::config::drill::palw_drill_tir_shard_at_v1`]). In NO testnet-12 flag-day list: dormant on every network until
-/// the node-only shadow period (decision 1) has run and the user names a height. Its `set` writes the bundle's mirror.
+/// **The entry that arms layer-sharded panels** — a drill's (`--palw-drill-tir-shard-at`,
+/// [`crate::config::drill::palw_drill_tir_shard_at_v1`]) and the int-11/12 flag day's: it is in
+/// [`crate::config::params::PALW_T12_INT11_FENCES_V1`], so testnet-12 arms it at DAA 5,300; every other preset leaves it dormant.
+/// Any change to an ARMED rule of RFC-0006 needs a new versioned fence — this one's height is on a network. Its `set` writes the
+/// bundle's mirror.
 pub const PALW_DRILL_TIR_SHARD_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
     name: "palw_tir_shard_v1",
     set: |params, at| {

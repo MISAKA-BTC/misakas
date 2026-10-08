@@ -3007,8 +3007,8 @@ pub struct Params {
     /// class's registrant may declare a layer-shard plan (`TirShardPlanDeclared`), the chain draws a panel per
     /// shard with an outsider per shard, a seat attests cells (`ReceiptV4`), the recount runs over cells, a
     /// claim licenses by parts (`TirShardReceiptLicensed`), `TirStepRun` is a DA unit and the class room is the
-    /// binding shard's. A bare height; `None` on every preset (testnet-12 included) and in no flag-day list
-    /// (adopted 2026-10-03, armed only after a node-only shadow period). Hashed Some-only in every writer with the
+    /// binding shard's. A bare height; `None` on every preset except **testnet-12, which arms it at the int-11/12
+    /// flag day (DAA 5,300, `PALW_T12_INT11_FENCES_V1`)** — adopted 2026-10-03. Hashed Some-only in every writer with the
     /// `never()` collapse. Refused by [`Self::validate_palw_tir_shard_v1`] off ConsensusV2, without `palw_tir_v1`,
     /// `palw_tir_fence2`, `palw_verification_v2`, `palw_rcore_plus` and `palw_admission_independence` in force at
     /// or below it, or with the bundle's mirror unsynced.
