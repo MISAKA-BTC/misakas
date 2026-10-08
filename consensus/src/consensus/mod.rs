@@ -2513,6 +2513,10 @@ impl ConsensusApi for Consensus {
         self.palw_state_v2_tip()?.kernel_route().cloned()
     }
 
+    fn palw_onboarding_v1(&self, class_id: kaspa_hashes::Hash64) -> Option<kaspa_consensus_core::palw_onboarding_v1::OnboardingReadV1> {
+        self.palw_state_v2_tip()?.onboarding_read_v1(&class_id, self.get_virtual_daa_score())
+    }
+
     fn palw_adopt_class_carriage_v1(&self, class_id: kaspa_hashes::Hash64, carriage: &[u8]) -> Result<(), String> {
         self.virtual_processor.palw_adopt_class_carriage_v1_impl(class_id, carriage)
     }

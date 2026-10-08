@@ -2830,6 +2830,56 @@ mod mockery {
     }
     test!(GetPalwKernelFinalsResponse);
 
+    impl Mock for GetPalwOnboardingRequest {
+        fn mock() -> Self {
+            GetPalwOnboardingRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwOnboardingRequest);
+
+    impl Mock for RpcPalwOnboardingBinding {
+        fn mock() -> Self {
+            RpcPalwOnboardingBinding {
+                kernel_param_root: mock_hex(),
+                state: "Matured".to_string(),
+                binder: format!("{}:{}", mock_hex(), mock::<u32>()),
+                bound_daa: mock(),
+                matures_daa: mock(),
+                final_daa: mock(),
+                reserved_sompi: mock(),
+            }
+        }
+    }
+    test!(RpcPalwOnboardingBinding);
+
+    impl Mock for GetPalwOnboardingResponse {
+        fn mock() -> Self {
+            GetPalwOnboardingResponse {
+                available: mock(),
+                found: mock(),
+                tip_daa: mock(),
+                class_id: mock_hex(),
+                status: "Registered".to_string(),
+                artifact_root: mock_hex(),
+                registrant: format!("{}:{}", mock_hex(), mock::<u32>()),
+                artifact_bindings: mock(),
+                kernel_bound: mock(),
+                kernel_class: mock_hex(),
+                kernel_plan_root: mock_hex(),
+                challenge_policy_id: mock_hex(),
+                conformance_committed: mock(),
+                conformance_statement_root: mock_hex(),
+                conformance_daa: mock(),
+                gate: "Held".to_string(),
+                gate_code: "REGISTERED_DORMANT".to_string(),
+                gate_reason: "no conformance commitment".to_string(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwOnboardingResponse);
+
     // ADR-0152 P2-10: op 199 and its parts round-trip.
     impl Mock for GetPalwVestingRequest {
         fn mock() -> Self {

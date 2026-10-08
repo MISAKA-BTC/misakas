@@ -3167,6 +3167,45 @@ message GetPalwKernelFinalsResponseMessage {
   RPCError error = 1000;
 }
 
+// G14 lane D phase 3: where a V2 class stands on the onboarding path (op 230).
+message GetPalwOnboardingRequestMessage {
+  string classId = 1;
+}
+
+message RpcPalwOnboardingBinding {
+  string kernelParamRoot = 1;
+  string state = 2;
+  string binder = 3;
+  uint64 boundDaa = 4;
+  uint64 maturesDaa = 5;
+  uint64 finalDaa = 6;
+  uint64 reservedSompi = 7;
+}
+
+message GetPalwOnboardingResponseMessage {
+  bool available = 1;
+  bool found = 2;
+  uint64 tipDaa = 3;
+  string classId = 4;
+  string status = 5;
+  string artifactRoot = 6;
+  string registrant = 7;
+  repeated RpcPalwOnboardingBinding artifactBindings = 8;
+  bool kernelBound = 9;
+  string kernelClass = 10;
+  string kernelPlanRoot = 11;
+  string challengePolicyId = 12;
+  bool conformanceCommitted = 13;
+  string conformanceStatementRoot = 14;
+  uint64 conformanceDaa = 15;
+  string gate = 16;
+  string gateCode = 17;
+  string gateReason = 18;
+  string ledgerRoot = 19;
+  string auxRoot = 20;
+  RPCError error = 1000;
+}
+
 // RFC-0009 stage D: one PALW state collection proven against the header that commits it (op 202).
 message GetPalwStateProofRequestMessage {
   string blockHash = 1;

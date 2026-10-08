@@ -56,7 +56,7 @@ fn unhex(s: &str) -> Vec<u8> {
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect()
 }
 
-struct Tensors(BTreeMap<(u16, Option<u16>), Vec<u8>>);
+pub(super) struct Tensors(pub(super) BTreeMap<(u16, Option<u16>), Vec<u8>>);
 impl PalwTirTensorSourceV1 for Tensors {
     fn tensor_bytes(&self, param: u16, layer: Option<u16>) -> Option<Cow<'_, [u8]>> {
         self.0.get(&(param, layer)).map(|b| Cow::Borrowed(b.as_slice()))
@@ -65,7 +65,7 @@ impl PalwTirTensorSourceV1 for Tensors {
 
 /// The layout the court fixture declares (ragged commit tiles, a 4,096-lane logits tile, two-position
 /// checkpoints) for `class`'s program at `positions` — the layout `declare-layout` would write.
-fn layout_of(class: &PalwTirClassV1, positions: u32) -> PalwTirLayoutV1 {
+pub(super) fn layout_of(class: &PalwTirClassV1, positions: u32) -> PalwTirLayoutV1 {
     let p = class.decode_program().expect("canonical");
     let mut tiles = Vec::new();
     let mut k = 0u32;

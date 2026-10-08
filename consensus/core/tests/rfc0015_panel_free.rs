@@ -111,3 +111,28 @@ fn rfc0015_the_fence_carries_the_admission_list_and_the_terms_and_both_are_ident
     assert_eq!(policy.activation_daa, Some(9_137));
     assert_eq!(PalwPanelFreeFenceV1::at(ForkActivation::never()).opv_policy().activation_daa, None);
 }
+
+/// RFC-0009 G-EXPIRY / G-RULESET (lane D phase 3): the signed-registration envelope's own fence is dormant on every preset, invisible to
+/// the handshake identity while `None` or `Some(never())`, committed to the fingerprints with a height, and refused when armed.
+#[test]
+fn the_signed_registration_fence_is_dormant_hashed_when_set_and_refused_when_armed() {
+    for p in presets() {
+        assert!(p.palw_signed_registration_v1.is_none() && !p.palw_signed_registration_active_at(u64::MAX));
+        p.validate_palw_signed_registration_v1().unwrap();
+        let mut armed = p.clone();
+        armed.palw_signed_registration_v1 = Some(ForkActivation::new(1_000));
+        assert!(armed.validate_palw_signed_registration_v1().is_err() && armed.validate_palw_v2().is_err());
+    }
+    let p = palw_t12_shipped_params();
+    let mut never = p.clone();
+    never.palw_signed_registration_v1 = Some(ForkActivation::never());
+    never.validate_palw_signed_registration_v1().unwrap();
+    assert_eq!(p.consensus_identity_id(), never.consensus_identity_id(), "Some(never()) collapses whole in the handshake identity");
+    let mut armed = p.clone();
+    armed.palw_signed_registration_v1 = Some(ForkActivation::new(9_000));
+    let mut other = p.clone();
+    other.palw_signed_registration_v1 = Some(ForkActivation::new(9_001));
+    assert_ne!(p.consensus_params_id(), armed.consensus_params_id());
+    assert_ne!(armed.consensus_params_id(), other.consensus_params_id());
+    assert_ne!(p.consensus_schedule_id(), armed.consensus_schedule_id());
+}

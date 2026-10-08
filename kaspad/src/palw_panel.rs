@@ -14240,6 +14240,11 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         // G14 lane D (tags 110, 111): the kernel route.
         PalwConsensusObjectV2::KernelRouteV1 { .. } => "KernelRouteV1",
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. } => "KernelConstraintReceiptV1",
+        PalwConsensusObjectV2::ArtifactBoundV1 { .. } => "ArtifactBoundV1",
+        PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. } => "ArtifactBindingChallengedV1",
+        PalwConsensusObjectV2::KernelBoundV1 { .. } => "KernelBoundV1",
+        PalwConsensusObjectV2::ConformanceCommittedV1 { .. } => "ConformanceCommittedV1",
+        PalwConsensusObjectV2::SignedRegistrationV1 { .. } => "SignedRegistrationV1",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

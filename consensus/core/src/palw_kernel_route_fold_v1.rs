@@ -74,7 +74,7 @@ impl PalwChainStateV2 {
 impl TransitionBuilder<'_> {
     /// **The one writer of the kernel route's rows**, journaled `KernelRouteRow` (the ledger's tables below 32, the consensus tables
     /// from 32). The route's header must exist.
-    fn write_kernel_row(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) {
+    pub(super) fn write_kernel_row(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) {
         let Some(kernel) = self.state.kernel_route.as_mut() else { return };
         let map = if table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 { &mut kernel.rows } else { &mut kernel.aux };
         let old = match &new {
@@ -103,7 +103,7 @@ impl TransitionBuilder<'_> {
     }
 
     /// A kernel payee's pay joins its one row in the coinbase queue.
-    fn add_kernel_payout(&mut self, payload: Hash64, amount: u64) -> Result<(), PalwStateV2Error> {
+    pub(super) fn add_kernel_payout(&mut self, payload: Hash64, amount: u64) -> Result<(), PalwStateV2Error> {
         if amount == 0 {
             return Ok(());
         }
@@ -133,9 +133,10 @@ impl TransitionBuilder<'_> {
     }
 }
 
-/// **The ledger the block's kernel moves run on**: the route's header created on first use (under the interim policy the processor
-/// resolved), the ledger rebuilt from the rows, the block begun.
-fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<KernelLedgerV1, PalwStateV2Error> {
+/// The ledger policy and the OPV policy this block's rules put the route under (both genesis constants of the network).
+fn route_policies(
+    builder: &TransitionBuilder<'_>,
+) -> Result<(misaka_palw_kernel::ledger::LedgerPolicyV1, Option<misaka_palw_kernel::opv::OpvPolicyV1>), PalwStateV2Error> {
     let Some(extras) = builder.extras.kernel_route.as_ref() else {
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
     };
@@ -143,15 +144,20 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
     if let Some(cap) = extras.max_adjudications_per_block {
         policy.max_adjudications_per_block = cap;
     }
-    let attested = extras.attested_artifacts.clone();
-    // RFC-0015: the OPV policy is a genesis constant of the network — present at every block of a chain or at none.
     let opv_policy = extras.opv.as_ref().map(|o| o.policy);
-    let admitted: Vec<Hash64> = extras.opv.as_ref().map(|o| o.admitted_classes.clone()).unwrap_or_default();
     // A policy that violates the kernel's own relations never creates a ledger (Params validation refuses it at startup; this is the
     // fold's own guard, so a bad value fails the block loudly instead of panicking inside the ledger constructor).
     if let Some(p) = &opv_policy {
         p.validate(&policy).map_err(refused)?;
     }
+    Ok((policy, opv_policy))
+}
+
+/// **The route's header, created on first use** under the policies the processor resolved (and refused if the stored route was folded
+/// under others). Every object that writes a row — a kernel object or an onboarding one — starts here, so the rows always have a
+/// header to live under.
+pub(super) fn ensure_route_header(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    let (policy, opv_policy) = route_policies(builder)?;
     match builder.state.kernel_route.as_ref() {
         None => {
             let created =
@@ -162,6 +168,22 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
             return Err(refused("the stored kernel route was folded under another policy"));
         }
         Some(_) => {}
+    }
+    Ok(())
+}
+
+/// **The ledger the block's kernel moves run on**: the route's header created on first use (under the interim policy the processor
+/// resolved), the ledger rebuilt from the rows, the block begun.
+fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<KernelLedgerV1, PalwStateV2Error> {
+    ensure_route_header(builder, ctx)?;
+    let extras = builder.extras.kernel_route.as_ref().expect("checked by the header");
+    // The artifact roots the route may attest: the test hook's list (empty outside a test) and every Matured or Final onboarding
+    // binding — the least-trust source (`palw_onboarding_v1`).
+    let mut attested = extras.attested_artifacts.clone();
+    let admitted: Vec<Hash64> = extras.opv.as_ref().map(|o| o.admitted_classes.clone()).unwrap_or_default();
+    let opv_declared = extras.opv.is_some();
+    if let Some(route) = builder.state.kernel_route.as_ref() {
+        attested.extend(route.onboarding_attested_roots_v1(ctx.daa_score));
     }
     let mut ledger = builder.state.kernel_route.as_ref().expect("created above").ledger().map_err(refused)?;
     ledger.begin_block(ctx.daa_score).map_err(|r| refused(r.to_string()))?;
@@ -175,11 +197,11 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
     {
         ledger.restore_budget(misaka_palw_kernel::ledger::BlockBudgetV1 { adjudications, court_work });
     }
-    for root in attested {
-        ledger.attest_artifact(root.as_bytes());
-    }
+    // The attested set IS the derived set (not a growing one): a binding refuted after a root was attested stops attesting it for the
+    // next kernel class, and the stale row goes with it.
+    ledger.attested_artifacts = attested.iter().map(|root| root.as_bytes()).collect();
     // The network policy's admissions (consensus, not a registrant's choice); idempotent, so an admitted class is one row.
-    if opv_policy.is_some() {
+    if opv_declared {
         for class in admitted {
             ledger.admit_optimistic_class(class.as_bytes()).map_err(|r| refused(r.to_string()))?;
         }
@@ -468,6 +490,8 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     if builder.extras.kernel_route.is_none() {
         return Ok(());
     }
+    // The onboarding bindings whose refutation horizon ends release their reservation, whatever the ledger is doing.
+    super::palw_onboarding_fold_v1::tick_onboarding_v1(builder, ctx);
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let busy = kernel.rows.keys().any(|(table, _)| {
         matches!(*table, misaka_palw_kernel::rows::TABLE_CLAIMS_V1 | misaka_palw_kernel::rows::TABLE_DEMANDS_V1)

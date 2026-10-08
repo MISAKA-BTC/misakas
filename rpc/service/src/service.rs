@@ -3377,6 +3377,64 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         Ok(GetPalwKernelFinalsResponse { available: true, tip_daa, finals: rows, total, ledger_root: ledger_root.to_string() })
     }
 
+    async fn get_palw_onboarding_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwOnboardingRequest,
+    ) -> RpcResult<GetPalwOnboardingResponse> {
+        // A malformed class id is an error before any state is read, on every network.
+        let class = parse_hash64(request.class_id.trim(), "class id")?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwOnboardingResponse { class_id: class.to_string(), ..Default::default() });
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let tip_daa = session.get_virtual_daa_score();
+        let Some(read) = session.spawn_blocking(move |c| c.palw_onboarding_v1(class)).await else {
+            return Ok(GetPalwOnboardingResponse { available: true, class_id: class.to_string(), tip_daa, ..Default::default() });
+        };
+        use kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1;
+        let bond = |b: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| format!("{}:{}", b.0.transaction_id, b.0.index);
+        let (gate, gate_code, gate_reason) = match read.gate {
+            PalwOnboardingGateV1::NotKernelBound => ("NotKernelBound", "", ""),
+            PalwOnboardingGateV1::Ready => ("Ready", "", ""),
+            PalwOnboardingGateV1::Held { code, why } => ("Held", code, why),
+        };
+        Ok(GetPalwOnboardingResponse {
+            available: true,
+            found: true,
+            tip_daa,
+            class_id: class.to_string(),
+            status: read.status,
+            artifact_root: read.artifact_root.to_string(),
+            registrant: read.registrant.as_ref().map(bond).unwrap_or_default(),
+            artifact_bindings: read
+                .artifact_bindings
+                .iter()
+                .map(|(root, row, state)| RpcPalwOnboardingBinding {
+                    kernel_param_root: root.to_string(),
+                    state: state.to_string(),
+                    binder: bond(&row.binder),
+                    bound_daa: row.bound_daa,
+                    matures_daa: row.matures_daa,
+                    final_daa: row.final_daa,
+                    reserved_sompi: row.reserved,
+                })
+                .collect(),
+            kernel_bound: read.kernel_binding.is_some(),
+            kernel_class: read.kernel_binding.map(|b| b.kernel_class.to_string()).unwrap_or_default(),
+            kernel_plan_root: read.kernel_binding.map(|b| b.plan_root.to_string()).unwrap_or_default(),
+            challenge_policy_id: read.kernel_binding.map(|b| b.challenge_policy_id.to_string()).unwrap_or_default(),
+            conformance_committed: read.conformance.is_some(),
+            conformance_statement_root: read.conformance.map(|c| c.statement_root.to_string()).unwrap_or_default(),
+            conformance_daa: read.conformance.map(|c| c.committed_daa).unwrap_or(0),
+            gate: gate.to_string(),
+            gate_code: gate_code.to_string(),
+            gate_reason: gate_reason.to_string(),
+            ledger_root: read.ledger_root.to_string(),
+            aux_root: read.aux_root.to_string(),
+        })
+    }
+
     // ------------------------------------------------------------------------------------------
     // ADR-0152 P2-10 — the vesting table (op 199)
     // ------------------------------------------------------------------------------------------

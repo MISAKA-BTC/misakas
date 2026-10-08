@@ -13212,6 +13212,157 @@ impl Deserializer for GetPalwKernelFinalsResponse {
     }
 }
 
+
+/// **`getPalwOnboarding` (op 230)**: where one V2 class stands on the onboarding path.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwOnboardingRequest {
+    /// The V2 class id: 128 hex.
+    pub class_id: String,
+}
+
+impl Serializer for GetPalwOnboardingRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwOnboardingRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { class_id: load!(String, reader)? })
+    }
+}
+
+/// One artifact binding of the class.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwOnboardingBinding {
+    pub kernel_param_root: String,
+    /// `Pending`, `Matured`, `Final` or `Refuted` at the tip.
+    pub state: String,
+    pub binder: String,
+    pub bound_daa: u64,
+    pub matures_daa: u64,
+    pub final_daa: u64,
+    pub reserved_sompi: u64,
+}
+
+impl Serializer for RpcPalwOnboardingBinding {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.kernel_param_root, writer)?;
+        store!(String, &self.state, writer)?;
+        store!(String, &self.binder, writer)?;
+        store!(u64, &self.bound_daa, writer)?;
+        store!(u64, &self.matures_daa, writer)?;
+        store!(u64, &self.final_daa, writer)?;
+        store!(u64, &self.reserved_sompi, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwOnboardingBinding {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            kernel_param_root: load!(String, reader)?,
+            state: load!(String, reader)?,
+            binder: load!(String, reader)?,
+            bound_daa: load!(u64, reader)?,
+            matures_daa: load!(u64, reader)?,
+            final_daa: load!(u64, reader)?,
+            reserved_sompi: load!(u64, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwOnboardingResponse {
+    /// The node answered from a V2 state.
+    pub available: bool,
+    pub found: bool,
+    pub tip_daa: u64,
+    pub class_id: String,
+    pub status: String,
+    pub artifact_root: String,
+    /// The class's registrant bond, `txid:index`.
+    pub registrant: String,
+    pub artifact_bindings: Vec<RpcPalwOnboardingBinding>,
+    pub kernel_bound: bool,
+    pub kernel_class: String,
+    pub kernel_plan_root: String,
+    pub challenge_policy_id: String,
+    pub conformance_committed: bool,
+    pub conformance_statement_root: String,
+    pub conformance_daa: u64,
+    /// `NotKernelBound` (the legacy path), `Ready` or `Held`.
+    pub gate: String,
+    /// The RFC-0011 §17 failure / state that names the wait (empty unless `Held`).
+    pub gate_code: String,
+    pub gate_reason: String,
+    pub ledger_root: String,
+    pub aux_root: String,
+}
+
+impl Serializer for GetPalwOnboardingResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(bool, &self.found, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.status, writer)?;
+        store!(String, &self.artifact_root, writer)?;
+        store!(String, &self.registrant, writer)?;
+        serialize!(Vec<RpcPalwOnboardingBinding>, &self.artifact_bindings, writer)?;
+        store!(bool, &self.kernel_bound, writer)?;
+        store!(String, &self.kernel_class, writer)?;
+        store!(String, &self.kernel_plan_root, writer)?;
+        store!(String, &self.challenge_policy_id, writer)?;
+        store!(bool, &self.conformance_committed, writer)?;
+        store!(String, &self.conformance_statement_root, writer)?;
+        store!(u64, &self.conformance_daa, writer)?;
+        store!(String, &self.gate, writer)?;
+        store!(String, &self.gate_code, writer)?;
+        store!(String, &self.gate_reason, writer)?;
+        store!(String, &self.ledger_root, writer)?;
+        store!(String, &self.aux_root, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwOnboardingResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            found: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            class_id: load!(String, reader)?,
+            status: load!(String, reader)?,
+            artifact_root: load!(String, reader)?,
+            registrant: load!(String, reader)?,
+            artifact_bindings: deserialize!(Vec<RpcPalwOnboardingBinding>, reader)?,
+            kernel_bound: load!(bool, reader)?,
+            kernel_class: load!(String, reader)?,
+            kernel_plan_root: load!(String, reader)?,
+            challenge_policy_id: load!(String, reader)?,
+            conformance_committed: load!(bool, reader)?,
+            conformance_statement_root: load!(String, reader)?,
+            conformance_daa: load!(u64, reader)?,
+            gate: load!(String, reader)?,
+            gate_code: load!(String, reader)?,
+            gate_reason: load!(String, reader)?,
+            ledger_root: load!(String, reader)?,
+            aux_root: load!(String, reader)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod palw_model_market_wire_tests {
     use super::*;

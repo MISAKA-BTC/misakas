@@ -133,6 +133,9 @@ mod palw_vertex_fold_v1;
 mod palw_mesh_fold_v1;
 #[path = "palw_kernel_route_fold_v1.rs"]
 mod palw_kernel_route_fold_v1;
+// G14 lane D phase 3: the onboarding objects' fold arms (artifact binding and refutation, kernel binding, conformance commitment).
+#[path = "palw_onboarding_fold_v1.rs"]
+mod palw_onboarding_fold_v1;
 // RFC-0001 §2.10 (ADR-0163): the adapter class listing's fold arm — a child module for the same reason.
 #[path = "palw_adapter_class_fold_v1.rs"]
 mod palw_adapter_class_fold_v1;
@@ -3787,7 +3790,7 @@ pub fn palw_anchor_ring_prune_count_v1(ring: &[u64], now_daa: u64, horizon_daa: 
 /// delay elapsed while that lock was still live: up to a whole seat's collateral of liability
 /// that nothing could recover (`dos_l1_q4b`).
 pub fn palw_bond_backs_live_duty_v1(state: &PalwChainStateV2, key: &PalwBondKeyV2, now_daa: u64, depth: Option<u64>) -> bool {
-    if state.reserved_exposure(key) > 0 || state.kernel_reserved(key) > 0 {
+    if state.reserved_exposure(key) > 0 || state.kernel_reserved(key) > 0 || state.onboarding_reserved(key) > 0 {
         return true;
     }
     let settled_now = state.settled_attempt_finals;
@@ -3824,7 +3827,7 @@ pub fn palw_bond_backs_live_duty_v2(
     depth: Option<u64>,
     window_court: u64,
 ) -> bool {
-    if state.reserved_exposure(key) > 0 || state.kernel_reserved(key) > 0 {
+    if state.reserved_exposure(key) > 0 || state.kernel_reserved(key) > 0 || state.onboarding_reserved(key) > 0 {
         return true;
     }
     let settled_now = state.settled_attempt_finals;
@@ -4088,6 +4091,7 @@ pub fn palw_bond_committed_v1(
         .saturating_add(lock_excess)
         // G14 lane D: what the kernel route has reserved against the bond (a claim's collateral, a demand bond); 0 with no route.
         .saturating_add(state.kernel_reserved(bond))
+        .saturating_add(state.onboarding_reserved(bond))
 }
 
 /// **[`palw_bond_committed_v1`]'s per-lock term: does `lock` on `claim_id` still hold its seat's
@@ -8414,6 +8418,59 @@ pub enum PalwConsensusObjectV2 {
     /// `signing_message()` under the receipt context, checked at acceptance. Admitted structurally by the kernel
     /// (`admit_receipt_v1`) against the claim's INTERIM assignment. **Tag 111, declared explicitly.**
     KernelConstraintReceiptV1 { receipt: Box<misaka_palw_kernel::receipt::PalwConstraintReceiptV1>, signature: Vec<u8> } = 111,
+    // Tags 104–108 are lane D's onboarding objects (phase 3; the lead's allocation of 2026-10-08), 109 reserved. Dropped by name below
+    // `palw_probabilistic_constraints_v1` (the envelope, 108, below `palw_signed_registration_v1`); rows in the route's aux tables.
+    /// **G14 phase 3 (tag 104): the registrant of an existing V2 class states that its artifact has kernel root `kernel_param_root`**
+    /// (`ParamCommitmentsV1::root`). Bonded (a slice of the signer's free collateral is reserved) and refutable by tag 105; the root is
+    /// attested to the kernel route only after a challenge window. `signature`: the signer's ML-DSA-87 over
+    /// [`crate::palw_onboarding_v1::palw_onboarding_message_v1`]. **Tag 104, declared explicitly.**
+    ArtifactBoundV1 { v2_class: Hash64, kernel_param_root: Hash64, signer: PalwBondKeyV2, signature: Vec<u8> } = 104,
+    /// **(tag 105): the fraud proof of a binding** — two openings of the same coordinates, the V2 inventory's and the kernel's,
+    /// that disagree ([`crate::palw_onboarding_v1::verify_artifact_mismatch_v1`]). Slashes the binder's reservation. **Tag 105.**
+    ArtifactBindingChallengedV1 {
+        v2_class: Hash64,
+        kernel_param_root: Hash64,
+        challenger: PalwBondKeyV2,
+        proof: Box<crate::palw_onboarding_v1::ArtifactMismatchProofV1>,
+        signature: Vec<u8>,
+    } = 105,
+    /// **(tag 106): a V2 class is bound to a kernel class of the route** — the same program bytes, the artifact of a live binding, the
+    /// network's challenge policy. The kernel class stands only because the route registered it after `PUBLIC_PROSECUTION_COMPLETE`.
+    /// One binding per class: a plan or program cannot be substituted afterwards. **Tag 106.**
+    KernelBoundV1 { v2_class: Hash64, kernel_class: Hash64, challenge_policy_id: Hash64, signer: PalwBondKeyV2, signature: Vec<u8> } = 106,
+    /// **(tag 107): the RFC-0013 conformance commitment** for `(class, artifact root)`, accepted on chain before the beacon that will
+    /// select its checks. A new artifact root is a new class and needs a new commitment; `statement_root` excludes provenance.
+    /// **Tag 107.**
+    ConformanceCommittedV1 { commitment: Box<misaka_palw_challenge::ConformanceCommitmentV1>, signer: PalwBondKeyV2, signature: Vec<u8> } = 107,
+    /// **(tag 108): a class registration with a SIGNED expiry and ruleset** (RFC-0009 G-EXPIRY, G-RULESET). The owner's signature on a
+    /// registration covers neither a last-valid DAA nor the ruleset, so a leaked signed bundle stays valid until its funding input is
+    /// spent. This envelope signs both: it is accepted only at a block with `daa ≤ valid_until_daa` on the ruleset whose
+    /// `consensus_params_id` it names, and is then replaced by the registration it wraps — every rule of the wrapped object applies
+    /// unchanged. Dropped by name below `palw_signed_registration_v1`. **Tag 108.**
+    SignedRegistrationV1 {
+        registration: Box<PalwConsensusObjectV2>,
+        valid_until_daa: u64,
+        consensus_params_id: crate::Hash,
+        signer: PalwBondKeyV2,
+        signature: Vec<u8>,
+    } = 108,
+}
+
+/// **Is this object an onboarding object (tags 104–107)** — a variant an older build cannot decode and skips (A-2)? Below
+/// `Params::palw_probabilistic_constraints_v1` the acceptance walk drops it by name; the fold refuses it as the second lock.
+pub fn palw_object_is_onboarding_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(
+        object,
+        PalwConsensusObjectV2::ArtifactBoundV1 { .. }
+            | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. }
+            | PalwConsensusObjectV2::KernelBoundV1 { .. }
+            | PalwConsensusObjectV2::ConformanceCommittedV1 { .. }
+    )
+}
+
+/// **Is this object the signed registration envelope (tag 108)?**
+pub fn palw_object_is_signed_registration_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::SignedRegistrationV1 { .. })
 }
 
 /// **Is this object the permissionless Panel's certified output (RFC-0010, tag 120)** — a variant an older build cannot decode and
@@ -31610,6 +31667,17 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         })
         .collect();
     for (class_id, share) in due {
+        // **G14 lane D phase 3: a kernel-bound class leaves `Registered` only through the onboarding gate** — its artifact binding past the
+        // refutation horizon, the kernel class standing (registered only after PUBLIC_PROSECUTION_COMPLETE) and a conformance commitment
+        // on chain. A class with no kernel binding follows the legacy path unchanged. Held, it stays Registered and is asked again at
+        // every block; the gate's reason is readable (`getPalwOnboarding`).
+        if let Some(route) = builder.state.kernel_route.as_ref()
+            && let Some(class) = builder.state.classes.get(&class_id)
+            && let crate::palw_onboarding_v1::PalwOnboardingGateV1::Held { .. } =
+                route.onboarding_gate_v1(&class_id, &class.artifact_root, ctx.daa_score)
+        {
+            continue;
+        }
         // **A grant that cannot be made freezes the CLASS, not the chain.**
         //
         // This was `?`, and the error propagated out of a transition that is a pure function of
@@ -34463,6 +34531,25 @@ fn apply_object(
         }
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { receipt, signature } => {
             palw_kernel_route_fold_v1::apply_kernel_receipt_v1(builder, ctx, receipt, signature)?;
+        }
+        // **G14 lane D phase 3 (tags 104–107): model onboarding** — rows in the route's aux tables (`palw_onboarding_fold_v1`).
+        PalwConsensusObjectV2::ArtifactBoundV1 { v2_class, kernel_param_root, signer, signature: _ } => {
+            palw_onboarding_fold_v1::apply_artifact_bound_v1(builder, ctx, v2_class, kernel_param_root, signer)?;
+        }
+        PalwConsensusObjectV2::ArtifactBindingChallengedV1 { v2_class, kernel_param_root, challenger, proof, signature: _ } => {
+            palw_onboarding_fold_v1::apply_artifact_challenged_v1(builder, ctx, v2_class, kernel_param_root, challenger, proof)?;
+        }
+        PalwConsensusObjectV2::KernelBoundV1 { v2_class, kernel_class, challenge_policy_id, signer, signature: _ } => {
+            palw_onboarding_fold_v1::apply_kernel_bound_v1(builder, ctx, v2_class, kernel_class, challenge_policy_id, signer)?;
+        }
+        PalwConsensusObjectV2::ConformanceCommittedV1 { commitment, signer, signature: _ } => {
+            palw_onboarding_fold_v1::apply_conformance_committed_v1(builder, ctx, commitment, signer)?;
+        }
+        // (tag 108): the acceptance walk replaces the envelope by the registration it wraps, so the fold never meets one.
+        PalwConsensusObjectV2::SignedRegistrationV1 { .. } => {
+            return Err(PalwStateV2Error::KernelRouteRefused(
+                "a signed registration envelope is unwrapped by the acceptance walk; the fold folds the registration it wraps".to_string(),
+            ));
         }
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {

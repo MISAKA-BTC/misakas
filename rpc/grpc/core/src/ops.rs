@@ -147,6 +147,7 @@ pub enum KaspadPayloadOps {
     GetPalwKernelClaim,
     GetPalwKernelRows,
     GetPalwKernelFinals,
+    GetPalwOnboarding,
     GetTokenSupply,
     GetTokenEmissionInfo,
 

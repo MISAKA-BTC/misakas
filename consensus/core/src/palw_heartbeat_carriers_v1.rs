@@ -198,6 +198,12 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         // G14 lane D (tags 110, 111): kernel route traffic is in the fee market; no halt waits on it.
         | O::KernelRouteV1 { .. }
         | O::KernelConstraintReceiptV1 { .. }
+        // G14 phase 3 (tags 104-108): onboarding traffic is registry traffic like a candidate's.
+        | O::ArtifactBoundV1 { .. }
+        | O::ArtifactBindingChallengedV1 { .. }
+        | O::KernelBoundV1 { .. }
+        | O::ConformanceCommittedV1 { .. }
+        | O::SignedRegistrationV1 { .. }
         | O::LineageHeadRolledBack { .. }
         | O::ImprovementPoolFunded { .. }
         // RFC-0007 Part I (tags 91, 92): a vertex is verification traffic, in the fee market beside the licence it replaces; the

@@ -1575,6 +1575,45 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwKernelFinalsResponse>, protowire::
         error: None,
     }
 });
+from!(item: &kaspa_rpc_core::RpcPalwOnboardingBinding, protowire::RpcPalwOnboardingBinding, {
+    Self {
+        kernel_param_root: item.kernel_param_root.clone(),
+        state: item.state.clone(),
+        binder: item.binder.clone(),
+        bound_daa: item.bound_daa,
+        matures_daa: item.matures_daa,
+        final_daa: item.final_daa,
+        reserved_sompi: item.reserved_sompi,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwOnboardingRequest, protowire::GetPalwOnboardingRequestMessage, {
+    Self { class_id: item.class_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwOnboardingResponse>, protowire::GetPalwOnboardingResponseMessage, {
+    Self {
+        available: item.available,
+        found: item.found,
+        tip_daa: item.tip_daa,
+        class_id: item.class_id.clone(),
+        status: item.status.clone(),
+        artifact_root: item.artifact_root.clone(),
+        registrant: item.registrant.clone(),
+        artifact_bindings: item.artifact_bindings.iter().map(protowire::RpcPalwOnboardingBinding::from).collect(),
+        kernel_bound: item.kernel_bound,
+        kernel_class: item.kernel_class.clone(),
+        kernel_plan_root: item.kernel_plan_root.clone(),
+        challenge_policy_id: item.challenge_policy_id.clone(),
+        conformance_committed: item.conformance_committed,
+        conformance_statement_root: item.conformance_statement_root.clone(),
+        conformance_daa: item.conformance_daa,
+        gate: item.gate.clone(),
+        gate_code: item.gate_code.clone(),
+        gate_reason: item.gate_reason.clone(),
+        ledger_root: item.ledger_root.clone(),
+        aux_root: item.aux_root.clone(),
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::RpcPalwCapacityStep, protowire::RpcPalwCapacityStep, {
     Self { from_daa: item.from_daa, rho: item.rho, q_credit_permille: item.q_credit_permille }
 });
@@ -3881,6 +3920,44 @@ try_from!(item: &protowire::GetPalwKernelFinalsResponseMessage, RpcResult<kaspa_
         ledger_root: item.ledger_root.clone(),
     }
 });
+try_from!(item: &protowire::RpcPalwOnboardingBinding, kaspa_rpc_core::RpcPalwOnboardingBinding, {
+    Self {
+        kernel_param_root: item.kernel_param_root.clone(),
+        state: item.state.clone(),
+        binder: item.binder.clone(),
+        bound_daa: item.bound_daa,
+        matures_daa: item.matures_daa,
+        final_daa: item.final_daa,
+        reserved_sompi: item.reserved_sompi,
+    }
+});
+try_from!(item: &protowire::GetPalwOnboardingRequestMessage, kaspa_rpc_core::GetPalwOnboardingRequest, {
+    Self { class_id: item.class_id.clone() }
+});
+try_from!(item: &protowire::GetPalwOnboardingResponseMessage, RpcResult<kaspa_rpc_core::GetPalwOnboardingResponse>, {
+    Self {
+        available: item.available,
+        found: item.found,
+        tip_daa: item.tip_daa,
+        class_id: item.class_id.clone(),
+        status: item.status.clone(),
+        artifact_root: item.artifact_root.clone(),
+        registrant: item.registrant.clone(),
+        artifact_bindings: item.artifact_bindings.iter().map(kaspa_rpc_core::RpcPalwOnboardingBinding::try_from).collect::<RpcResult<Vec<_>>>()?,
+        kernel_bound: item.kernel_bound,
+        kernel_class: item.kernel_class.clone(),
+        kernel_plan_root: item.kernel_plan_root.clone(),
+        challenge_policy_id: item.challenge_policy_id.clone(),
+        conformance_committed: item.conformance_committed,
+        conformance_statement_root: item.conformance_statement_root.clone(),
+        conformance_daa: item.conformance_daa,
+        gate: item.gate.clone(),
+        gate_code: item.gate_code.clone(),
+        gate_reason: item.gate_reason.clone(),
+        ledger_root: item.ledger_root.clone(),
+        aux_root: item.aux_root.clone(),
+    }
+});
 try_from!(item: &protowire::RpcPalwCapacityStep, kaspa_rpc_core::RpcPalwCapacityStep, {
     Self { from_daa: item.from_daa, rho: item.rho, q_credit_permille: item.q_credit_permille }
 });
@@ -5379,6 +5456,43 @@ mod palw_kernel_route_grpc_tests {
         };
         let wire: protowire::GetPalwKernelFinalsResponseMessage = RpcResult::Ok(&response).into();
         let back: kaspa_rpc_core::GetPalwKernelFinalsResponse = (&wire).try_into().unwrap();
+        assert_eq!(back, response);
+
+        let request = kaspa_rpc_core::GetPalwOnboardingRequest { class_id: "ab".repeat(64) };
+        let wire: protowire::GetPalwOnboardingRequestMessage = (&request).into();
+        assert_eq!(kaspa_rpc_core::GetPalwOnboardingRequest::try_from(&wire).unwrap().class_id, request.class_id);
+        let response = kaspa_rpc_core::GetPalwOnboardingResponse {
+            available: true,
+            found: true,
+            tip_daa: 300,
+            class_id: "ab".repeat(64),
+            status: "Registered { activation_daa: 40, pending_share_permille: 0 }".to_string(),
+            artifact_root: "01".repeat(64),
+            registrant: format!("{}:0", "ee".repeat(64)),
+            artifact_bindings: vec![kaspa_rpc_core::RpcPalwOnboardingBinding {
+                kernel_param_root: "02".repeat(64),
+                state: "Matured".to_string(),
+                binder: format!("{}:0", "ee".repeat(64)),
+                bound_daa: 10,
+                matures_daa: 50,
+                final_daa: 210,
+                reserved_sompi: 10_000_000_000,
+            }],
+            kernel_bound: true,
+            kernel_class: "03".repeat(64),
+            kernel_plan_root: "04".repeat(64),
+            challenge_policy_id: "05".repeat(64),
+            conformance_committed: true,
+            conformance_statement_root: "06".repeat(64),
+            conformance_daa: 120,
+            gate: "Held".to_string(),
+            gate_code: "AVAILABILITY_REQUIRED".to_string(),
+            gate_reason: "the artifact binding is inside its refutation horizon".to_string(),
+            ledger_root: "07".repeat(64),
+            aux_root: "08".repeat(64),
+        };
+        let wire: protowire::GetPalwOnboardingResponseMessage = RpcResult::Ok(&response).into();
+        let back: kaspa_rpc_core::GetPalwOnboardingResponse = (&wire).try_into().unwrap();
         assert_eq!(back, response);
     }
 }

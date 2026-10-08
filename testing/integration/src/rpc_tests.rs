@@ -1221,6 +1221,22 @@ async fn sanity_test() {
                     assert!(!read.available && read.finals.is_empty() && read.total == 0);
                 })
             }
+            KaspadPayloadOps::GetPalwOnboarding => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // G14 phase 3 (op 230): a malformed class id is an error before any state is read; a well-formed read on a network
+                    // that holds no such class answers `found: false`.
+                    assert!(rpc_client
+                        .get_palw_onboarding_call(None, GetPalwOnboardingRequest { class_id: "not-hex".to_string() })
+                        .await
+                        .is_err());
+                    let read = rpc_client
+                        .get_palw_onboarding_call(None, GetPalwOnboardingRequest { class_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!read.found && read.artifact_bindings.is_empty() && !read.kernel_bound);
+                })
+            }
             KaspadPayloadOps::GetPalwFreePromptClaim => {
                 let rpc_client = client.clone();
                 tst!(op, {

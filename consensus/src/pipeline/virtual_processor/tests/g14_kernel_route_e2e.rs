@@ -1890,3 +1890,692 @@ async fn g14_opv_survives_a_node_restart_and_finalizes_after_it() {
     let z = w.net.replay().await;
     w.net.assert_same(&z, "a node replaying the whole chain");
 }
+
+
+// ---- phase 3: model onboarding on the real node --------------------------------------------------------------------------
+//
+// A V2 IR class is registered by card 1 over the sketch program and its weights; the kernel route learns the artifact ONLY through the
+// registrant's bonded, refutable binding (tag 104) — the cfg(test) attestation hook is never told about these weights.
+
+/// testnet-12 as launched with the route's fence, the IR fence and the signed-registration fence armed at genesis (all WITHOUT their
+/// validation, which refuses them by design).
+fn kernel_config_onboarding() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    kernel_config_onboarding_with(true)
+}
+
+/// [`kernel_config_onboarding`] with or without the signed-registration envelope's fence.
+fn kernel_config_onboarding_with(envelope_fence: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    use kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1;
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    let mut params = config.params.clone();
+    params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
+    params.palw_tir_v1 = Some(PalwTirFenceV1::testnet12_v1(ForkActivation::new(0)));
+    params.sync_palw_tir_v1();
+    params.palw_signed_registration_v1 = envelope_fence.then(|| ForkActivation::new(0));
+    params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
+    params.skip_proof_of_work = true;
+    assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fences; only this harness bypasses it");
+    (Config::new(params), bundle, premine, floats)
+}
+
+/// A fixture whose weights exist BOTH as a V2 inventory (the class's registered `artifact_root`) and as kernel commitments (`pc`).
+struct OnbFixture {
+    program: TirProgramV1,
+    params: MapParams,
+    plan: misaka_palw_kernel::VerificationPlanV1,
+    pc: ParamCommitmentsV1,
+    class: kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1,
+    artifact_root: Hash64,
+}
+
+fn onb_fixture(seed: u64) -> OnbFixture {
+    use super::g14_registration_e2e::{Tensors, layout_of};
+    use kaspa_consensus_core::palw_artifact::{artifact_leaf_v1, artifact_root_v1};
+    use kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1;
+    use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_operands_v1;
+    use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PalwTirClassV1};
+    let fx = wide128_v1(seed);
+    let mut program = fx.program.clone();
+    program.logits_scheme_id.copy_from_slice(tiled_logits_scheme_id_v1().as_byte_slice());
+    let d = k2_tir_v2_descriptor();
+    let plan = plan_for_tir_program_v1(&d, &program, program_root_v1(&program.encode()), MAX_POSITIONS).expect("a K2-TIR-v2 plan");
+    let pc = ParamCommitmentsV1::of(&fx.params);
+    let mut class = PalwTirClassV1 {
+        version: PALW_TIR_CLASS_VERSION_V1,
+        program: program.encode(),
+        layout: kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1 {
+            version: kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_LAYOUT_VERSION_V1,
+            max_context: MAX_POSITIONS,
+            checkpoint_interval: 2,
+            h_tile: 2,
+            commit_tiles: Vec::new(),
+            state_tiles: Vec::new(),
+        },
+        tokenizer_id: Hash64::from_bytes([0x70; 64]),
+    };
+    class.layout = layout_of(&class, MAX_POSITIONS);
+    let tensors = fx.params.tensors.iter().map(|(k, t)| (*k, t.to_le_bytes())).collect();
+    let ops = palw_tir_inventory_operands_v1(&program, &Tensors(tensors)).expect("the inventory");
+    let artifact_root = artifact_root_v1(&ops.iter().map(artifact_leaf_v1).collect::<Vec<_>>()).expect("a root");
+    OnbFixture { program, params: fx.params, plan, pc, class, artifact_root }
+}
+
+impl Net {
+    /// **A V2 IR class registration for `f`**, signed by card `card` (the SDK's `build_tir_registration_v1`, over the chain's own pricing).
+    fn v2_registration(&self, f: &OnbFixture, card: usize, activation_daa: u64) -> Obj {
+        use kaspa_consensus_core::palw_tir_admission_v1::palw_tir_post_genesis_registration_v1;
+        use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_canonical_v1, palw_tir_job_context_v1};
+        use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1, palw_tir_class_registration_message_v1};
+        let state = self.chain.tip_state().1;
+        let floor = self.bundle.base_class_id;
+        let (target, slash, ladder) =
+            (state.class_target(&floor).unwrap().target, state.class(&floor).unwrap().slash_value_per_pwu, self.bundle.court.max_step_leaf_count());
+        let facts = PalwTirJobFactsV1::of_class(&f.class, f.class.class_id(&f.artifact_root)).expect("decodes");
+        let canonical = palw_tir_job_context_v1(&facts, palw_tir_attempt_canonical_v1(&f.class).expect("wide enough"));
+        let mut o = palw_tir_post_genesis_registration_v1(
+            f.class.clone(),
+            canonical,
+            f.artifact_root,
+            0,
+            target,
+            slash,
+            activation_daa,
+            self.bond(card),
+            Vec::new(),
+            ladder,
+        )
+        .expect("the builder counts the canonical job");
+        let Obj::ClassRegisteredTirV1 { class_id, share_permille, activation_daa, artifact_root, slash_value_per_pwu, initial_target, pwu_rule, admission } =
+            &mut o
+        else {
+            unreachable!()
+        };
+        let message = palw_tir_class_registration_message_v1(
+            self.domain,
+            *class_id,
+            *share_permille,
+            *activation_daa,
+            &admission.registrant_bond,
+            *artifact_root,
+            *slash_value_per_pwu,
+            *initial_target,
+            pwu_rule,
+            &admission.canonical,
+            &admission.class,
+        );
+        let key = TestConsensus::palw_v2_registry_keypair(card as u64);
+        admission.signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &key.signing_key,
+            message.as_byte_slice(),
+            PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1,
+            [0x61u8; 32],
+        )
+        .expect("ML-DSA-87 signs")
+        .as_ref()
+        .to_vec();
+        o
+    }
+
+    /// An onboarding object signed by card `card` (`kind` is the object's tag; `payload` its Borsh without the signature).
+    fn onboarding_signature(&mut self, card: usize, kind: u8, payload: &[u8]) -> Vec<u8> {
+        self.rnd = self.rnd.wrapping_add(1);
+        let signer = self.bond(card);
+        let message = kaspa_consensus_core::palw_onboarding_v1::palw_onboarding_message_v1(self.domain, kind, &signer, payload);
+        let key = TestConsensus::palw_v2_registry_keypair(card as u64);
+        libcrux_ml_dsa::ml_dsa_87::sign(
+            &key.signing_key,
+            message.as_byte_slice(),
+            kaspa_consensus_core::palw_onboarding_v1::PALW_ONBOARDING_MLDSA87_CONTEXT_V1,
+            [self.rnd; 32],
+        )
+        .expect("ML-DSA-87 signs")
+        .as_ref()
+        .to_vec()
+    }
+
+    fn artifact_bound(&mut self, card: usize, v2_class: Hash64, kernel_param_root: Hash64) -> Obj {
+        let payload = borsh::to_vec(&(v2_class, kernel_param_root)).unwrap();
+        let signature = self.onboarding_signature(card, 104, &payload);
+        Obj::ArtifactBoundV1 { v2_class, kernel_param_root, signer: self.bond(card), signature }
+    }
+
+    fn artifact_challenged(
+        &mut self,
+        card: usize,
+        v2_class: Hash64,
+        kernel_param_root: Hash64,
+        proof: kaspa_consensus_core::palw_onboarding_v1::ArtifactMismatchProofV1,
+    ) -> Obj {
+        let payload = borsh::to_vec(&(v2_class, kernel_param_root, &proof)).unwrap();
+        let signature = self.onboarding_signature(card, 105, &payload);
+        Obj::ArtifactBindingChallengedV1 { v2_class, kernel_param_root, challenger: self.bond(card), proof: Box::new(proof), signature }
+    }
+
+    fn kernel_bound(&mut self, card: usize, v2_class: Hash64, kernel_class: Hash64) -> Obj {
+        let policy = Hash64::from_bytes(self.api().expect("the route").header.policy.challenge_policy_id);
+        let payload = borsh::to_vec(&(v2_class, kernel_class, policy)).unwrap();
+        let signature = self.onboarding_signature(card, 106, &payload);
+        Obj::KernelBoundV1 { v2_class, kernel_class, challenge_policy_id: policy, signer: self.bond(card), signature }
+    }
+
+    fn conformance_committed(&mut self, card: usize, commitment: misaka_palw_challenge::ConformanceCommitmentV1) -> Obj {
+        let payload = borsh::to_vec(&commitment).unwrap();
+        let signature = self.onboarding_signature(card, 107, &payload);
+        Obj::ConformanceCommittedV1 { commitment: Box::new(commitment), signer: self.bond(card), signature }
+    }
+}
+
+/// The RFC-0013 statement of the bound class (what the SDK's pack writes), over the chain's own roots.
+fn conformance_of(net: &Net, f: &OnbFixture, v2_class: Hash64) -> misaka_palw_challenge::ConformanceCommitmentV1 {
+    use misaka_palw_challenge::{ConformanceCommitmentV1, RootV1, SubjectKindV1};
+    let route = net.api().expect("the route");
+    let binding = route.kernel_binding_v1(&v2_class).expect("the class is kernel-bound");
+    let policy = &route.header.policy;
+    ConformanceCommitmentV1 {
+        version: 1,
+        chain_genesis: net.config.params.genesis.hash.as_bytes(),
+        ruleset_id: policy.ruleset_digest,
+        subject_kind: SubjectKindV1::ModelConformance,
+        candidate_id: v2_class.as_bytes(),
+        kernel_descriptor_id: k2_tir_v2_descriptor().digest(),
+        challenge_policy_id: binding.challenge_policy_id.as_bytes(),
+        artifact_root: f.artifact_root.as_bytes(),
+        program_root: program_root_v1(&f.program.encode()),
+        source_root: RootV1::Absent,
+        tokenizer_or_input_schema_root: RootV1::Absent,
+        layout_root: [0x11; 64],
+        verification_plan_root: f.plan.root(),
+        constraint_root: RootV1::Absent,
+        implementation_set_root: [0x22; 64],
+        test_scope_root: [0x33; 64],
+        calibration_id: RootV1::Absent,
+        input_and_state_binding_root: RootV1::Absent,
+        resource_profile_id: [0x44; 64],
+        commitment_object_id: None,
+        canonical_commitment_position: None,
+    }
+}
+
+/// **The whole onboarding path, no hook**: the V2 class registers; its registrant binds the artifact (bonded); the kernel route refuses
+/// a class over the root while the binding is Pending and registers one when it has matured; the registrant binds the V2 class to
+/// that kernel class and commits the RFC-0013 statement; the class — due to activate long before — stays Registered until the
+/// binding passes its refutation horizon, and then leaves it.
+#[tokio::test]
+async fn g14_onboarding_a_class_is_bound_attested_registered_and_released_by_the_gate() {
+    use kaspa_consensus_core::palw_onboarding_v1::ArtifactBindingStateV1;
+    use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
+    kaspa_core::log::try_init_logger("warn");
+    let f = onb_fixture(11);
+    let mut net = Net::over_cfg(kernel_config_onboarding(), TestConsensus::new);
+    net.beat_to(1).await;
+    let (registrant, collateral) = (1usize, net.collateral(1));
+
+    // ---- the V2 class registers (due to activate 30 DAA after it lands) ----
+    let class_obj = net.v2_registration(&f, registrant, net.daa() + 30);
+    let Obj::ClassRegisteredTirV1 { class_id: v2_class, .. } = &class_obj else { unreachable!() };
+    let v2_class = *v2_class;
+    net.send(vec![(registrant, class_obj)]).await;
+    let state = net.chain.tip_state().1;
+    assert!(matches!(state.class(&v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }), "the V2 class registered");
+    assert_eq!(state.class(&v2_class).unwrap().artifact_root, f.artifact_root);
+    let kernel_root = Hash64::from_bytes(f.pc.root());
+
+    // ---- no binding: the route will not register a class over this artifact ----
+    let d = k2_tir_v2_descriptor();
+    let register = |f: &OnbFixture| K::RegisterClass {
+        descriptor: d.digest(),
+        program_bytes: f.program.encode(),
+        plan: f.plan.clone(),
+        param_commitments: f.pc.clone(),
+    };
+    let o = net.route(registrant, &register(&f));
+    net.send(vec![(registrant, o)]).await;
+    assert!(net.ledger().classes.is_empty(), "no hook, no binding: the artifact is not attested");
+
+    // ---- the registrant binds the artifact (bonded) ----
+    let o = net.artifact_bound(registrant, v2_class, kernel_root);
+    net.send(vec![(registrant, o)]).await;
+    let route = net.api().unwrap();
+    let row = route.artifact_binding_v1(&v2_class, &kernel_root).expect("the binding row");
+    assert_eq!(row.reserved, kaspa_consensus_core::palw_onboarding_v1::PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1);
+    assert_eq!(row.state_at(net.daa()), ArtifactBindingStateV1::Pending);
+    assert!(route.onboarding_attested_roots_v1(net.daa()).is_empty(), "Pending attests nothing");
+    assert_eq!(net.chain.tip_state().1.onboarding_reserved(&net.bond(registrant)), u128::from(row.reserved), "V2 sees the reservation");
+    let o = net.route(registrant, &register(&f));
+    net.send(vec![(registrant, o)]).await;
+    assert!(net.ledger().classes.is_empty(), "a Pending binding attests nothing: still no kernel class");
+
+    // ---- the window passes: the root is attested and the kernel class registers ----
+    net.beat_to(row.matures_daa).await;
+    let o = net.route(registrant, &register(&f));
+    net.send(vec![(registrant, o)]).await;
+    let kernel_class = *net.ledger().classes.keys().next().expect("the kernel class registered over the matured binding");
+    assert_eq!(net.api().unwrap().onboarding_attested_roots_v1(net.daa()), vec![kernel_root]);
+
+    // ---- bound to the V2 class; the statement committed ----
+    let o = net.kernel_bound(registrant, v2_class, Hash64::from_bytes(kernel_class));
+    net.send(vec![(registrant, o)]).await;
+    let kb = net.api().unwrap().kernel_binding_v1(&v2_class).expect("kernel-bound");
+    assert_eq!((kb.kernel_class, kb.kernel_param_root), (Hash64::from_bytes(kernel_class), kernel_root));
+    // The class was due 30 DAA after registration and the window has passed: the gate holds it (binding not Final, no commitment).
+    assert!(matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }));
+    let commitment = conformance_of(&net, &f, v2_class);
+    let statement = Hash64::from_bytes(commitment.statement_root());
+    let o = net.conformance_committed(registrant, commitment);
+    net.send(vec![(registrant, o)]).await;
+    assert_eq!(net.api().unwrap().conformance_v1(&v2_class, &f.artifact_root).unwrap().statement_root, statement);
+    // Still Registered: the binding is inside its refutation horizon.
+    assert!(matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }));
+    assert!(matches!(
+        net.api().unwrap().onboarding_gate_v1(&v2_class, &f.artifact_root, net.daa()),
+        kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1::Held { .. }
+    ));
+
+    // The read (RPC op 230's source) says where the class stands and why it waits.
+    let read = net.chain.ctx.consensus.palw_onboarding_v1(v2_class).expect("the class is known");
+    assert_eq!((read.artifact_bindings.len(), read.kernel_binding.is_some(), read.conformance.is_some()), (1, true, true));
+    assert_eq!(read.artifact_bindings[0].2, "Matured");
+    assert!(matches!(read.gate, kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1::Held { code: "AVAILABILITY_REQUIRED", .. }), "{:?}", read.gate);
+
+    // ---- the horizon ends: the reservation is released and the class leaves Registered ----
+    net.beat_to(row.final_daa + 1).await;
+    let read = net.chain.ctx.consensus.palw_onboarding_v1(v2_class).unwrap();
+    assert_eq!(read.artifact_bindings[0].2, "Final");
+    assert_eq!(read.gate, kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1::Ready);
+    assert!(read.status.starts_with("Active"), "{}", read.status);
+    assert_eq!(net.chain.tip_state().1.onboarding_reserved(&net.bond(registrant)), 0, "released at the horizon");
+    assert!(
+        matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, PalwClassStatusV2::Active),
+        "{:?}",
+        net.chain.tip_state().1.class(&v2_class).unwrap().status
+    );
+    assert_eq!(net.collateral(registrant), collateral - kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, "only the registration burn left the bond");
+    let z = net.replay().await;
+    net.assert_same(&z, "replay");
+}
+
+/// A refutation of the binding of `wrong`'s kernel commitments to `truth`'s V2 class: a row of the wrong tensor opened against its
+/// commitment, and the V2 inventory leaf of the TRUE bytes at the same coordinates — two authenticated answers that disagree.
+fn row_mismatch_proof(truth: &OnbFixture, wrong: &OnbFixture) -> kaspa_consensus_core::palw_onboarding_v1::ArtifactMismatchProofV1 {
+    use super::g14_registration_e2e::Tensors;
+    use kaspa_consensus_core::palw_onboarding_v1::ArtifactMismatchProofV1;
+    use kaspa_consensus_core::palw_tir_artifact_v1::{palw_tir_leaf_index_v1, palw_tir_open_leaf_v1};
+    use misaka_palw_kernel::merkle::{LayoutV1, TensorOpeningV1};
+    assert_eq!(truth.program, wrong.program, "the two artifacts are weights of one program");
+    let source = Tensors(truth.params.tensors.iter().map(|(k, t)| (*k, t.to_le_bytes())).collect());
+    for ((j, layer), wrong_t) in &wrong.params.tensors {
+        let true_t = &truth.params.tensors[&(*j, *layer)];
+        let l = LayoutV1::of(&true_t.shape);
+        let w = true_t.dtype.width() as u64;
+        let (tb, wb) = (true_t.to_le_bytes(), wrong_t.to_le_bytes());
+        for r in 0..l.rows {
+            let (a, b) = ((r * l.row_len * w) as usize, ((r + 1) * l.row_len * w) as usize);
+            if tb[a..b] != wb[a..b] {
+                let index = palw_tir_leaf_index_v1(&truth.program, *j, *layer, a as u64).expect("a leaf holds the bytes");
+                return ArtifactMismatchProofV1::Row {
+                    commitments: wrong.pc.clone(),
+                    param: *j,
+                    layer: *layer,
+                    kernel_row: TensorOpeningV1::row(wrong_t, r).unwrap(),
+                    v2_opening: palw_tir_open_leaf_v1(&truth.program, &source, index).expect("an opening"),
+                };
+            }
+        }
+    }
+    panic!("the two artifacts are identical")
+}
+
+/// The V2 class of `f` registered by card 1 and its artifact bound (by `bind_pc`'s root) in the same go; returns `(class id, root)`.
+async fn registered_and_bound(net: &mut Net, f: &OnbFixture, bind_pc: &ParamCommitmentsV1) -> (Hash64, Hash64) {
+    let registrant = 1usize;
+    let class_obj = net.v2_registration(f, registrant, net.daa() + 30);
+    let Obj::ClassRegisteredTirV1 { class_id, .. } = &class_obj else { unreachable!() };
+    let v2_class = *class_id;
+    net.send(vec![(registrant, class_obj)]).await;
+    let root = Hash64::from_bytes(bind_pc.root());
+    let o = net.artifact_bound(registrant, v2_class, root);
+    net.send(vec![(registrant, o)]).await;
+    assert!(net.api().unwrap().artifact_binding_v1(&v2_class, &root).is_some(), "the binding row exists");
+    (v2_class, root)
+}
+
+/// **A false binding is refuted by two disagreeing openings** — the binder binds the kernel commitments of OTHER weights to its class;
+/// an outsider (another operator) opens the same row under both roots; the binder's reservation is slashed, the challenger paid, the
+/// root is never attested, and the V2 class cannot leave Registered. The same proof against an HONEST binding proves nothing.
+#[tokio::test]
+async fn g14_onboarding_a_false_artifact_binding_is_refuted_by_two_disagreeing_openings() {
+    use kaspa_consensus_core::palw_onboarding_v1::{
+        ArtifactBindingStateV1, ArtifactMismatchProofV1, PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1 as RESERVED,
+        PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1 as REWARD, verify_artifact_mismatch_v1,
+    };
+    kaspa_core::log::try_init_logger("warn");
+    let (truth, wrong) = (onb_fixture(11), onb_fixture(12));
+    assert_ne!(truth.artifact_root, wrong.artifact_root);
+    let proof = row_mismatch_proof(&truth, &wrong);
+
+    // The proof against the TRUE binding proves nothing (the verifier is pure; it is the fold's gate).
+    let program = &truth.program;
+    let honest_rows = {
+        use super::g14_registration_e2e::Tensors;
+        use kaspa_consensus_core::palw_tir_artifact_v1::{palw_tir_leaf_index_v1, palw_tir_open_leaf_v1};
+        let source = Tensors(truth.params.tensors.iter().map(|(k, t)| (*k, t.to_le_bytes())).collect());
+        let (&(j, layer), t) = truth.params.tensors.iter().next().unwrap();
+        let index = palw_tir_leaf_index_v1(program, j, layer, 0).unwrap();
+        ArtifactMismatchProofV1::Row {
+            commitments: truth.pc.clone(),
+            param: j,
+            layer,
+            kernel_row: misaka_palw_kernel::merkle::TensorOpeningV1::row(t, 0).unwrap(),
+            v2_opening: palw_tir_open_leaf_v1(program, &source, index).unwrap(),
+        }
+    };
+    assert_eq!(
+        verify_artifact_mismatch_v1(program, truth.artifact_root, Hash64::from_bytes(truth.pc.root()), &honest_rows),
+        Err("the two openings agree on every byte they share"),
+        "an honest binding cannot be refuted"
+    );
+    assert_eq!(
+        verify_artifact_mismatch_v1(program, truth.artifact_root, Hash64::from_bytes(wrong.pc.root()), &proof),
+        Ok(()),
+        "the false binding is refuted by the proof"
+    );
+
+    // ---- on the chain ----
+    let mut net = Net::over_cfg(kernel_config_onboarding(), TestConsensus::new);
+    net.beat_to(1).await;
+    let (binder, challenger) = (1usize, 3usize);
+    let before = net.collateral(binder);
+    let (v2_class, wrong_root) = registered_and_bound(&mut net, &truth, &wrong.pc).await;
+    let burn = kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1;
+    assert_eq!(net.chain.tip_state().1.onboarding_reserved(&net.bond(binder)), u128::from(RESERVED));
+
+    // The binder cannot refute itself for the bounty.
+    let o = net.artifact_challenged(binder, v2_class, wrong_root, proof.clone());
+    net.send(vec![(binder, o)]).await;
+    assert!(!net.api().unwrap().artifact_binding_v1(&v2_class, &wrong_root).unwrap().refuted, "not by its own operator");
+    // A proof that does not hold is dropped (the honest rows against this binding's root do not root to it).
+    let o = net.artifact_challenged(challenger, v2_class, wrong_root, honest_rows.clone());
+    net.send(vec![(challenger, o)]).await;
+    assert!(!net.api().unwrap().artifact_binding_v1(&v2_class, &wrong_root).unwrap().refuted);
+
+    // The genuine refutation.
+    let o = net.artifact_challenged(challenger, v2_class, wrong_root, proof);
+    net.send(vec![(challenger, o)]).await;
+    let row = net.api().unwrap().artifact_binding_v1(&v2_class, &wrong_root).unwrap();
+    assert!(row.refuted && row.reserved == 0);
+    assert_eq!(row.state_at(net.daa()), ArtifactBindingStateV1::Refuted);
+    assert_eq!(net.collateral(binder), before - burn - RESERVED, "the binder lost its reservation (and paid the registration burn)");
+    assert_eq!(net.slashed(binder), burn + RESERVED);
+    assert_eq!(net.owed(challenger), RESERVED * REWARD / 1000, "the challenger is paid its share");
+    assert_eq!(net.chain.tip_state().1.onboarding_reserved(&net.bond(binder)), 0);
+
+    // The root is never attested: not even after the window, and the V2 class stays Registered.
+    let d = k2_tir_v2_descriptor();
+    net.beat_to(row.matures_daa + 1).await;
+    assert!(net.api().unwrap().onboarding_attested_roots_v1(net.daa()).is_empty());
+    let o = net.route(
+        binder,
+        &K::RegisterClass { descriptor: d.digest(), program_bytes: wrong.program.encode(), plan: wrong.plan.clone(), param_commitments: wrong.pc.clone() },
+    );
+    net.send(vec![(binder, o)]).await;
+    assert!(net.ledger().classes.is_empty(), "no kernel class over a refuted root");
+    net.beat_to(row.final_daa + 40).await;
+    assert!(
+        matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Registered { .. }),
+        "the class never left Registered: it began onboarding and its binding is refuted"
+    );
+    // A second refutation of the same binding is refused.
+    let again = row_mismatch_proof(&truth, &wrong);
+    let o = net.artifact_challenged(challenger, v2_class, wrong_root, again);
+    net.send(vec![(challenger, o)]).await;
+    assert_eq!(net.slashed(binder), burn + RESERVED, "slashed once");
+    let z = net.replay().await;
+    net.assert_same(&z, "replay");
+}
+
+/// A binding whose commitments miss (or add) a tensor the program declares is refuted by the instance-set proof alone.
+#[tokio::test]
+async fn g14_onboarding_a_binding_over_the_wrong_set_of_tensors_is_refuted_without_any_opening() {
+    use kaspa_consensus_core::palw_onboarding_v1::ArtifactMismatchProofV1;
+    kaspa_core::log::try_init_logger("warn");
+    let truth = onb_fixture(11);
+    let mut short = truth.pc.clone();
+    short.by_instance.pop_first();
+    let mut net = Net::over_cfg(kernel_config_onboarding(), TestConsensus::new);
+    net.beat_to(1).await;
+    let (v2_class, root) = registered_and_bound(&mut net, &truth, &short).await;
+    // The honest commitments (the full set) are not a refutation of THEIR OWN binding.
+    let o = net.artifact_challenged(3, v2_class, root, ArtifactMismatchProofV1::Instances { commitments: truth.pc.clone() });
+    net.send(vec![(3, o)]).await;
+    assert!(!net.api().unwrap().artifact_binding_v1(&v2_class, &root).unwrap().refuted, "commitments that do not root to the bound root prove nothing");
+    let o = net.artifact_challenged(3, v2_class, root, ArtifactMismatchProofV1::Instances { commitments: short });
+    net.send(vec![(3, o)]).await;
+    assert!(net.api().unwrap().artifact_binding_v1(&v2_class, &root).unwrap().refuted, "a missing tensor refutes the binding");
+}
+
+/// The onboarding objects refuse what they should: a non-registrant, a program that is not the class's, a policy the network did not
+/// fix, a second kernel binding, a statement under another plan, a duplicate statement.
+#[tokio::test]
+async fn g14_onboarding_refusals_leave_the_rows_untouched() {
+    kaspa_core::log::try_init_logger("warn");
+    let f = onb_fixture(11);
+    let mut net = Net::over_cfg(kernel_config_onboarding(), TestConsensus::new);
+    net.beat_to(1).await;
+    let registrant = 1usize;
+    let class_obj = net.v2_registration(&f, registrant, net.daa() + 400);
+    let Obj::ClassRegisteredTirV1 { class_id, .. } = &class_obj else { unreachable!() };
+    let v2_class = *class_id;
+    net.send(vec![(registrant, class_obj)]).await;
+    let kernel_root = Hash64::from_bytes(f.pc.root());
+    let route_rows = |net: &Net| net.api().map(|r| r.aux).unwrap_or_default();
+
+    // A bond that is not the class's registrant cannot speak for its artifact; neither can anyone bind an unknown class.
+    let before = route_rows(&net);
+    let o = net.artifact_bound(2, v2_class, kernel_root);
+    net.send(vec![(2, o)]).await;
+    let o = net.artifact_bound(registrant, Hash64::from_bytes([0x99; 64]), kernel_root);
+    net.send(vec![(registrant, o)]).await;
+    assert_eq!(route_rows(&net), before, "not the registrant / no such class: nothing written");
+
+    // The registrant binds; a second, different root is refused while the first stands.
+    let o = net.artifact_bound(registrant, v2_class, kernel_root);
+    net.send(vec![(registrant, o)]).await;
+    let bound = route_rows(&net);
+    let o = net.artifact_bound(registrant, v2_class, Hash64::from_bytes([0x55; 64]));
+    net.send(vec![(registrant, o)]).await;
+    let o = net.artifact_bound(registrant, v2_class, kernel_root);
+    net.send(vec![(registrant, o)]).await;
+    assert_eq!(route_rows(&net), bound, "one live binding per class; a duplicate is refused");
+
+    // Mature, register the kernel class, then the kernel binding's refusals.
+    let matures = net.api().unwrap().artifact_binding_v1(&v2_class, &kernel_root).unwrap().matures_daa;
+    net.beat_to(matures).await;
+    let d = k2_tir_v2_descriptor();
+    let o = net.route(
+        registrant,
+        &K::RegisterClass { descriptor: d.digest(), program_bytes: f.program.encode(), plan: f.plan.clone(), param_commitments: f.pc.clone() },
+    );
+    net.send(vec![(registrant, o)]).await;
+    let kernel_class = Hash64::from_bytes(*net.ledger().classes.keys().next().expect("registered over the matured binding"));
+    let before = route_rows(&net);
+    // another operator's bond cannot bind; an unknown kernel class; a policy the network did not fix
+    let o = net.kernel_bound(2, v2_class, kernel_class);
+    net.send(vec![(2, o)]).await;
+    let o = net.kernel_bound(registrant, v2_class, Hash64::from_bytes([0x77; 64]));
+    net.send(vec![(registrant, o)]).await;
+    let policy_payload = borsh::to_vec(&(v2_class, kernel_class, Hash64::from_bytes([0xEE; 64]))).unwrap();
+    let signature = net.onboarding_signature(registrant, 106, &policy_payload);
+    let bad_policy = Obj::KernelBoundV1 {
+        v2_class,
+        kernel_class,
+        challenge_policy_id: Hash64::from_bytes([0xEE; 64]),
+        signer: net.bond(registrant),
+        signature,
+    };
+    net.send(vec![(registrant, bad_policy)]).await;
+    assert_eq!(route_rows(&net), before, "wrong signer / unknown kernel class / another challenge policy: nothing written");
+    // No statement before the kernel binding.
+    let early = conformance_of_unbound(&net, &f, v2_class);
+    let o = net.conformance_committed(registrant, early);
+    net.send(vec![(registrant, o)]).await;
+    assert_eq!(route_rows(&net), before, "a conformance statement needs the kernel binding first");
+
+    // The kernel binding lands; a second one (a plan or program substitution) is refused.
+    let o = net.kernel_bound(registrant, v2_class, kernel_class);
+    net.send(vec![(registrant, o)]).await;
+    let bound = route_rows(&net);
+    let o = net.kernel_bound(registrant, v2_class, kernel_class);
+    net.send(vec![(registrant, o)]).await;
+    assert_eq!(route_rows(&net), bound, "one kernel binding per class: a plan cannot be substituted afterwards");
+
+    // Statements under another plan root / another artifact root / another policy are refused; the right one lands once.
+    let good = conformance_of(&net, &f, v2_class);
+    for edit in [
+        (|c: &mut misaka_palw_challenge::ConformanceCommitmentV1| c.verification_plan_root = [9; 64]) as fn(&mut _),
+        |c| c.challenge_policy_id = [8; 64],
+        |c| c.artifact_root = [7; 64],
+        |c| c.program_root = [6; 64],
+        |c| c.kernel_descriptor_id = [5; 64],
+        |c| c.chain_genesis = [4; 64],
+        |c| c.ruleset_id = [3; 64],
+    ] {
+        let mut bad = good.clone();
+        edit(&mut bad);
+        let o = net.conformance_committed(registrant, bad);
+        net.send(vec![(registrant, o)]).await;
+        assert_eq!(route_rows(&net), bound, "a statement that is not the chain's own roots is refused");
+    }
+    let o = net.conformance_committed(registrant, good.clone());
+    net.send(vec![(registrant, o)]).await;
+    let committed = route_rows(&net);
+    assert_ne!(committed, bound);
+    let o = net.conformance_committed(registrant, good);
+    net.send(vec![(registrant, o)]).await;
+    assert_eq!(route_rows(&net), committed, "one statement per (class, artifact root)");
+    let z = net.replay().await;
+    net.assert_same(&z, "replay");
+}
+
+/// A conformance statement for a class that is not kernel-bound yet: [`conformance_of`] needs the binding, this does not.
+fn conformance_of_unbound(net: &Net, f: &OnbFixture, v2_class: Hash64) -> misaka_palw_challenge::ConformanceCommitmentV1 {
+    use misaka_palw_challenge::{ConformanceCommitmentV1, RootV1, SubjectKindV1};
+    let route = net.api().expect("the route");
+    ConformanceCommitmentV1 {
+        version: 1,
+        chain_genesis: net.config.params.genesis.hash.as_bytes(),
+        ruleset_id: route.header.policy.ruleset_digest,
+        subject_kind: SubjectKindV1::ModelConformance,
+        candidate_id: v2_class.as_bytes(),
+        kernel_descriptor_id: k2_tir_v2_descriptor().digest(),
+        challenge_policy_id: route.header.policy.challenge_policy_id,
+        artifact_root: f.artifact_root.as_bytes(),
+        program_root: program_root_v1(&f.program.encode()),
+        source_root: RootV1::Absent,
+        tokenizer_or_input_schema_root: RootV1::Absent,
+        layout_root: [0x11; 64],
+        verification_plan_root: f.plan.root(),
+        constraint_root: RootV1::Absent,
+        implementation_set_root: [0x22; 64],
+        test_scope_root: [0x33; 64],
+        calibration_id: RootV1::Absent,
+        input_and_state_binding_root: RootV1::Absent,
+        resource_profile_id: [0x44; 64],
+        commitment_object_id: None,
+        canonical_commitment_position: None,
+    }
+}
+
+// ---- the signed-registration envelope (RFC-0009 G-EXPIRY / G-RULESET) ---------------------------------------------------------
+
+impl Net {
+    /// An envelope around `registration`, signed by card `card` for the ruleset `params_id` and valid until `valid_until_daa`.
+    fn envelope(&mut self, card: usize, registration: Obj, valid_until_daa: u64, params_id: kaspa_consensus_core::Hash) -> Obj {
+        self.rnd = self.rnd.wrapping_add(1);
+        let signer = self.bond(card);
+        let bytes = borsh::to_vec(&registration).unwrap();
+        let message = kaspa_consensus_core::palw_onboarding_v1::palw_signed_registration_message_v1(
+            self.domain,
+            params_id,
+            valid_until_daa,
+            &signer,
+            &bytes,
+        );
+        let key = TestConsensus::palw_v2_registry_keypair(card as u64);
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &key.signing_key,
+            message.as_byte_slice(),
+            kaspa_consensus_core::palw_onboarding_v1::PALW_SIGNED_REGISTRATION_MLDSA87_CONTEXT_V1,
+            [self.rnd; 32],
+        )
+        .expect("ML-DSA-87 signs")
+        .as_ref()
+        .to_vec();
+        Obj::SignedRegistrationV1 { registration: Box::new(registration), valid_until_daa, consensus_params_id: params_id, signer, signature }
+    }
+}
+
+/// **A signed expiry and a signed ruleset**: a leaked signed registration dies at its `valid_until_daa`; one signed for another ruleset
+/// is not valid here; one signed by a bond that is not the registrant is not a registration; the fence off, there is no envelope. The
+/// good one lands as the registration it wraps.
+#[tokio::test]
+async fn g14_onboarding_a_signed_registration_envelope_expires_and_binds_its_ruleset() {
+    use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
+    kaspa_core::log::try_init_logger("warn");
+    let f = onb_fixture(11);
+    let mut net = Net::over_cfg(kernel_config_onboarding(), TestConsensus::new);
+    net.beat_to(1).await;
+    let registrant = 1usize;
+    let params_id = net.config.params.consensus_params_id();
+    let registered = |net: &Net, c: &Hash64| net.chain.tip_state().1.class(c).is_some();
+    let class_obj = net.v2_registration(&f, registrant, net.daa() + 30);
+    let Obj::ClassRegisteredTirV1 { class_id, .. } = &class_obj else { unreachable!() };
+    let v2_class = *class_id;
+
+    // expired: valid until a DAA already behind the chain
+    let expired = net.envelope(registrant, class_obj.clone(), net.daa().saturating_sub(1), params_id);
+    net.send(vec![(registrant, expired)]).await;
+    assert!(!registered(&net, &v2_class), "G-EXPIRY: an expired envelope is dropped");
+    // another ruleset
+    let mut other = *params_id.as_bytes().as_slice().first().unwrap_or(&0);
+    other ^= 0xFF;
+    let mut other_id = params_id.as_bytes();
+    other_id[0] = other;
+    let wrong_ruleset = net.envelope(registrant, class_obj.clone(), net.daa() + 200, kaspa_consensus_core::Hash::from_bytes(other_id));
+    net.send(vec![(registrant, wrong_ruleset)]).await;
+    assert!(!registered(&net, &v2_class), "G-RULESET: an envelope signed for another ruleset is dropped");
+    // a signer that is not the registrant of the wrapped registration
+    let wrong_signer = net.envelope(2, class_obj.clone(), net.daa() + 200, params_id);
+    net.send(vec![(2, wrong_signer)]).await;
+    assert!(!registered(&net, &v2_class), "the envelope's signer must be the wrapped registration's registrant");
+    // a tampered signature
+    let mut tampered = net.envelope(registrant, class_obj.clone(), net.daa() + 200, params_id);
+    if let Obj::SignedRegistrationV1 { signature, .. } = &mut tampered {
+        let last = signature.len() - 1;
+        signature[last] ^= 1;
+    }
+    net.send(vec![(registrant, tampered)]).await;
+    assert!(!registered(&net, &v2_class), "a forged envelope is dropped");
+    // a tampered expiry (the signature covers it)
+    let mut extended = net.envelope(registrant, class_obj.clone(), net.daa() + 3, params_id);
+    if let Obj::SignedRegistrationV1 { valid_until_daa, .. } = &mut extended {
+        *valid_until_daa += 1_000;
+    }
+    net.send(vec![(registrant, extended)]).await;
+    assert!(!registered(&net, &v2_class), "an extended expiry breaks the signature");
+
+    // the good one
+    let good = net.envelope(registrant, class_obj, net.daa() + 200, params_id);
+    net.send(vec![(registrant, good)]).await;
+    assert!(matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }), "registered through the envelope");
+
+    // and with the fence off the envelope is no object at all
+    let mut plain = Net::over_cfg(kernel_config_onboarding_with(false), TestConsensus::new);
+    plain.beat_to(1).await;
+    let class_obj = plain.v2_registration(&f, registrant, plain.daa() + 30);
+    let params_id = plain.config.params.consensus_params_id();
+    let envelope = plain.envelope(registrant, class_obj, plain.daa() + 200, params_id);
+    plain.send(vec![(registrant, envelope)]).await;
+    assert!(!registered(&plain, &v2_class), "without palw_signed_registration_v1 an envelope is dropped by name");
+    let z = net.replay().await;
+    net.assert_same(&z, "replay");
+}

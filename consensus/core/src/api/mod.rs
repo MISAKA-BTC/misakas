@@ -1310,6 +1310,12 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **G14 phase 3: where a V2 class stands on the onboarding path** (artifact bindings, kernel binding, conformance commitment, the
+    /// activation gate's verdict and reason) at the virtual's DAA. `None` for an unknown class and off ConsensusV2.
+    fn palw_onboarding_v1(&self, _class_id: kaspa_hashes::Hash64) -> Option<crate::palw_onboarding_v1::OnboardingReadV1> {
+        None
+    }
+
     /// RFC-0004 (spec 17): every open improvement epoch at the tip, as a node reads it — the line,
     /// its policy, the epoch's header, candidates and items. Empty off ConsensusV2 and below the fence.
     fn palw_improvement_open_epochs_v1(&self) -> Vec<crate::palw_improve_state_v1::PalwImprovementEpochViewV1> {

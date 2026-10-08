@@ -343,6 +343,32 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // (tag 111): a seat's receipt carries its signature; everything else is the kernel's structural admission.
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. } => Err("a kernel constraint receipt must carry the seat's signature"),
+        // G14 phase 3 (tags 104-108): onboarding objects ride at every height (A-2) and carry their signer's signature; the bonds, the
+        // fences, the rows and the proofs are the acceptance layer's and the fold's. The envelope must wrap a registration.
+        PalwConsensusObjectV2::ArtifactBoundV1 { signature, .. }
+        | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { signature, .. }
+        | PalwConsensusObjectV2::KernelBoundV1 { signature, .. }
+        | PalwConsensusObjectV2::ConformanceCommittedV1 { signature, .. }
+            if signature.is_empty() =>
+        {
+            Err("an onboarding object must carry its signer's signature")
+        }
+        PalwConsensusObjectV2::ArtifactBoundV1 { .. }
+        | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. }
+        | PalwConsensusObjectV2::KernelBoundV1 { .. }
+        | PalwConsensusObjectV2::ConformanceCommittedV1 { .. } => Ok(()),
+        PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
+            if signature.is_empty() {
+                Err("a signed registration envelope must carry its signer's signature")
+            } else if matches!(
+                registration.as_ref(),
+                PalwConsensusObjectV2::ClassRegistered { .. } | PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }
+            ) {
+                Ok(())
+            } else {
+                Err("a signed registration envelope wraps a class registration (ClassRegistered or ClassRegisteredTirV1) and nothing else")
+            }
+        }
         // RFC-0002 Phase F (tag 62): an IR one-move accusation rides signed and shaped (its proof
         // an IR close about the roots it names) at every height, as the registration does; the
         // ruleset's close ceiling and the verdict are the acceptance layer's.

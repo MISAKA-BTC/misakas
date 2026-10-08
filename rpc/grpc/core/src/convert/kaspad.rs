@@ -108,6 +108,7 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(GetPalwKernelClaim);
     impl_into_kaspad_request!(GetPalwKernelRows);
     impl_into_kaspad_request!(GetPalwKernelFinals);
+    impl_into_kaspad_request!(GetPalwOnboarding);
     impl_into_kaspad_request!(GetTokenSupply);
     impl_into_kaspad_request!(GetTokenEmissionInfo);
     impl_into_kaspad_request!(GetValidatorStatus);
@@ -301,6 +302,7 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(GetPalwKernelClaim);
     impl_into_kaspad_response!(GetPalwKernelRows);
     impl_into_kaspad_response!(GetPalwKernelFinals);
+    impl_into_kaspad_response!(GetPalwOnboarding);
     impl_into_kaspad_response!(GetTokenSupply);
     impl_into_kaspad_response!(GetTokenEmissionInfo);
     impl_into_kaspad_response!(GetValidatorStatus);

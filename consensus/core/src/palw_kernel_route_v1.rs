@@ -114,6 +114,8 @@ pub fn palw_kernel_route_message_v1(network_domain: Hash64, signer: &PalwBondKey
 pub struct PalwKernelRouteExtrasV1 {
     pub network_domain: Hash64,
     pub ruleset_digest: Hash64,
+    /// The chain's genesis hash: what an RFC-0013 conformance commitment names as `chain_genesis`.
+    pub chain_genesis: Hash64,
     /// Artifact roots the consumer attests public (`KernelLedgerV1::attest_artifact`). **There is no on-chain artifact
     /// availability or conformance fact yet**, so this is empty in production and a test-only hook fills it in the E2E
     /// (`kernel_route_test_attest_artifact_v1` in the processor, `cfg(test)`): GAP — onboarding conformance + availability.
