@@ -89,6 +89,13 @@ pub trait EvidenceProvider: ChunkProvider {
     fn put_chunk(&self, manifest_id: Hash64, index: u32, bytes: &[u8]) -> Result<(), ProviderError>;
     /// Written LAST: a reader must never see a manifest whose chunks are not all there.
     fn put_manifest(&self, claim_hex: &str, manifest: &EvidenceManifestV1) -> Result<(), ProviderError>;
+
+    // ---- the redemption board (RFC-0009 stage C): where a miner leaves its `RDA4` authorizations and a builder finds them ----
+
+    /// The claims this provider holds a redemption authorization for.
+    fn list_redemptions(&self) -> Result<Vec<String>, ProviderError>;
+    fn get_redemption(&self, claim_hex: &str) -> Result<Option<Vec<u8>>, ProviderError>;
+    fn put_redemption(&self, claim_hex: &str, bundle: &[u8]) -> Result<(), ProviderError>;
 }
 
 fn decode_manifest(bytes: &[u8]) -> Result<EvidenceManifestV1, ProviderError> {
@@ -117,6 +124,40 @@ impl EvidenceProvider for crate::evidence::fs::FsProvider {
         let path = crate::evidence::fs::manifest_path(&self.root, claim_hex);
         write_atomic(&path, &borsh::to_vec(manifest).expect("borsh-serializable")).map_err(|e| ProviderError(e.to_string()))
     }
+    fn list_redemptions(&self) -> Result<Vec<String>, ProviderError> {
+        match std::fs::read_dir(self.root.join("redemptions")) {
+            Ok(entries) => Ok(entries
+                .flatten()
+                .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".rda4")).map(str::to_string))
+                .filter(|n| is_hex128_text(n))
+                .take(REDEMPTION_INDEX_CAP)
+                .collect()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(ProviderError(e.to_string())),
+        }
+    }
+    fn get_redemption(&self, claim_hex: &str) -> Result<Option<Vec<u8>>, ProviderError> {
+        match std::fs::read(redemption_path(&self.root, claim_hex)) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(ProviderError(e.to_string())),
+        }
+    }
+    fn put_redemption(&self, claim_hex: &str, bundle: &[u8]) -> Result<(), ProviderError> {
+        write_atomic(&redemption_path(&self.root, claim_hex), bundle).map_err(|e| ProviderError(e.to_string()))
+    }
+}
+
+const REDEMPTION_INDEX_CAP: usize = 10_000;
+/// A redemption bundle is a few kilobytes (one authorization, one key, one signature); a provider takes no more than this.
+const REDEMPTION_MAX_BYTES: usize = 16 * 1024;
+
+fn is_hex128_text(s: &str) -> bool {
+    s.len() == 128 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn redemption_path(root: &Path, claim_hex: &str) -> PathBuf {
+    root.join("redemptions").join(format!("{claim_hex}.rda4"))
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -363,6 +404,34 @@ impl EvidenceProvider for HttpProvider {
         }
         Ok(())
     }
+    fn list_redemptions(&self) -> Result<Vec<String>, ProviderError> {
+        let url = format!("{}/redemptions/index", self.base);
+        let r = self.http.request("GET", &url, None, REDEMPTION_INDEX_CAP * 130).map_err(ProviderError)?;
+        match r.status {
+            200 => {
+                Ok(String::from_utf8_lossy(&r.body).lines().map(str::trim).filter(|l| is_hex128_text(l)).map(str::to_string).collect())
+            }
+            404 => Ok(Vec::new()),
+            other => Err(ProviderError(format!("HTTP {other}"))),
+        }
+    }
+    fn get_redemption(&self, claim_hex: &str) -> Result<Option<Vec<u8>>, ProviderError> {
+        let url = format!("{}/redemptions/{claim_hex}.rda4", self.base);
+        let r = self.http.request("GET", &url, None, REDEMPTION_MAX_BYTES).map_err(ProviderError)?;
+        match r.status {
+            200 => Ok(Some(r.body)),
+            404 => Ok(None),
+            other => Err(ProviderError(format!("HTTP {other}"))),
+        }
+    }
+    fn put_redemption(&self, claim_hex: &str, bundle: &[u8]) -> Result<(), ProviderError> {
+        let url = format!("{}/redemptions/{claim_hex}.rda4", self.base);
+        let r = self.http.request("PUT", &url, Some(bundle), 4096).map_err(ProviderError)?;
+        if !(200..300).contains(&r.status) {
+            return Err(ProviderError(format!("HTTP {}: {}", r.status, String::from_utf8_lossy(&r.body))));
+        }
+        Ok(())
+    }
 }
 
 /// The providers a list names, as trait objects.
@@ -485,6 +554,128 @@ pub fn publish_to_providers_v1(
     }
     let report = PublishReportV1 { manifest_id, per_provider };
     if report.verified_copies() >= min_verified.max(1) { Ok(report) } else { Err(report) }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Redemption authorizations: discovery and relay (RFC-0009 stage C)
+// ---------------------------------------------------------------------------------------------------------------------------------
+//
+// A miner signs an `RDA4` bundle once (`misaka-palw-fp-rail --redeem-auth-out`) and may then switch off; a block builder spends a winning quantum
+// with it. Nothing carried it from one to the other. The providers already in this module are the carrier: the miner PUTs the bundle under its claim
+// id, a builder lists and GETs them, and mirrors the valid ones into the directory the node's builder mode reads (`--palw-redemption-auth-dir`).
+// No gossip, no new RPC, no consensus change. A provider and this sync check only what a bundle proves BY ITSELF (versions, the beacon rule, the
+// fee cap, the executor's signature over the authorization); that the executor bond exists, holds that key and owns the claim is the chain's — the
+// node's admission checks it again when a block is built. A bundle on a provider is a hint to a builder, never an authority over a claim.
+
+/// The self-contained checks of a published `RDA4` bundle. `network_domain`: the network the caller is on, or `None` to check the bundle against its
+/// own (a provider has no chain: it can only say the bundle is internally sound).
+pub fn check_redemption_bundle_v1(
+    bytes: &[u8],
+    claim_hex: &str,
+    network_domain: Option<Hash64>,
+) -> Result<kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4, String> {
+    use kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4;
+    if bytes.len() > REDEMPTION_MAX_BYTES {
+        return Err(format!("a redemption bundle is at most {REDEMPTION_MAX_BYTES} bytes"));
+    }
+    let bundle = PalwRedemptionAuthBundleV4::decode(bytes).map_err(|e| e.to_string())?;
+    if bundle.authorization.claim_id.to_string() != claim_hex {
+        return Err("the bundle authorizes another claim than the one it is filed under".into());
+    }
+    let domain = network_domain.unwrap_or(bundle.authorization.network_domain);
+    bundle
+        .validate_v4(domain, |pk, msg, sig, ctx| matches!(kaspa_txscript::verify_mldsa87_with_context(pk, msg, sig, ctx), Ok(true)))
+        .map_err(|e| e.to_string())?;
+    Ok(bundle)
+}
+
+/// **File a redemption authorization with several providers** (the miner's last act, with the evidence): each PUT is read back and must return the
+/// same bytes. `Err` when the bundle is unsound or fewer than `min_verified` providers hold it.
+pub fn publish_redemption_v1(
+    bundle_bytes: &[u8],
+    providers: &[&dyn EvidenceProvider],
+    min_verified: usize,
+) -> Result<Vec<PublishOutcomeV1>, Vec<PublishOutcomeV1>> {
+    let local = |why: String| vec![PublishOutcomeV1 { provider: "(local check)".into(), result: Err(why) }];
+    let bundle =
+        kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4::decode(bundle_bytes).map_err(|e| local(e.to_string()))?;
+    let claim_hex = bundle.authorization.claim_id.to_string();
+    check_redemption_bundle_v1(bundle_bytes, &claim_hex, None).map_err(local)?;
+    let outcomes: Vec<PublishOutcomeV1> = providers
+        .iter()
+        .map(|p| {
+            let result =
+                p.put_redemption(&claim_hex, bundle_bytes).map_err(|e| e.0).and_then(|()| match p.get_redemption(&claim_hex) {
+                    Ok(Some(back)) if back == bundle_bytes => Ok(()),
+                    Ok(_) => Err("read-back: the provider serves other bytes".to_string()),
+                    Err(e) => Err(format!("read-back: {e}")),
+                });
+            PublishOutcomeV1 { provider: p.provider_id().to_string(), result }
+        })
+        .collect();
+    if outcomes.iter().filter(|o| o.result.is_ok()).count() >= min_verified.max(1) { Ok(outcomes) } else { Err(outcomes) }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RedemptionSyncV1 {
+    /// Files written (claim, file name).
+    pub written: Vec<(String, String)>,
+    pub already_present: usize,
+    /// `(provider, claim, why)` — invalid bundles, expired ones, silent providers. Recorded, never acted on.
+    pub skipped: Vec<(String, String, String)>,
+}
+
+/// **Mirror every valid authorization the providers hold into a builder's directory** (what `--palw-redemption-auth-dir` reads). The file is named
+/// `<claim>-<authorization id prefix>.rda4`, so two different authorizations of one claim (different fee, different range) coexist and the builder
+/// chooses; an expired one (against `now_daa`, when given) is skipped.
+pub fn sync_redemptions_v1(
+    providers: &[&dyn EvidenceProvider],
+    into: &Path,
+    network_domain: Option<Hash64>,
+    now_daa: Option<u64>,
+) -> std::io::Result<RedemptionSyncV1> {
+    std::fs::create_dir_all(into)?;
+    let mut report = RedemptionSyncV1::default();
+    for p in providers {
+        let claims = match p.list_redemptions() {
+            Ok(c) => c,
+            Err(e) => {
+                report.skipped.push((p.provider_id().to_string(), String::new(), format!("silent: {e}")));
+                continue;
+            }
+        };
+        for claim in claims {
+            let bytes = match p.get_redemption(&claim) {
+                Ok(Some(b)) => b,
+                Ok(None) => continue,
+                Err(e) => {
+                    report.skipped.push((p.provider_id().to_string(), claim, format!("silent: {e}")));
+                    continue;
+                }
+            };
+            let bundle = match check_redemption_bundle_v1(&bytes, &claim, network_domain) {
+                Ok(b) => b,
+                Err(why) => {
+                    report.skipped.push((p.provider_id().to_string(), claim, why));
+                    continue;
+                }
+            };
+            if now_daa.is_some_and(|now| now > bundle.authorization.expiry_daa) {
+                report.skipped.push((p.provider_id().to_string(), claim, "expired".into()));
+                continue;
+            }
+            let id = kaspa_consensus_core::palw_receipt_v4::redeem_auth_id_v4(&bundle.authorization).to_string();
+            let name = format!("{claim}-{}.rda4", &id[..16]);
+            let path = into.join(&name);
+            if std::fs::read(&path).is_ok_and(|existing| existing == bytes) {
+                report.already_present += 1;
+                continue;
+            }
+            write_atomic(&path, &bytes)?;
+            report.written.push((claim, name));
+        }
+    }
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -855,6 +1046,8 @@ pub mod server {
     enum Target {
         Manifest(String),
         Chunk(Hash64, u32),
+        Redemption(String),
+        RedemptionIndex,
     }
 
     fn is_hex128(s: &str) -> bool {
@@ -864,6 +1057,13 @@ pub mod server {
     /// Strict: nothing but the two content-addressed shapes ever reaches the filesystem (no `..`, no extra segments, no odd names).
     fn parse_target(path: &str) -> Option<Target> {
         let path = path.split('?').next().unwrap_or("");
+        if path == "/redemptions/index" {
+            return Some(Target::RedemptionIndex);
+        }
+        if let Some(rest) = path.strip_prefix("/redemptions/") {
+            let claim = rest.strip_suffix(".rda4")?;
+            return is_hex128(claim).then(|| Target::Redemption(claim.to_ascii_lowercase()));
+        }
         if let Some(rest) = path.strip_prefix("/claims/") {
             let claim = rest.strip_suffix(".manifest")?;
             return is_hex128(claim).then(|| Target::Manifest(claim.to_ascii_lowercase()));
@@ -941,7 +1141,16 @@ pub mod server {
         let file = match &target {
             Target::Manifest(claim) => crate::evidence::fs::manifest_path(root, claim),
             Target::Chunk(id, index) => crate::evidence::fs::chunk_path(root, *id, *index),
+            Target::Redemption(claim) => redemption_path(root, claim),
+            Target::RedemptionIndex => root.join("redemptions"),
         };
+        if target == Target::RedemptionIndex {
+            if method != "GET" {
+                return respond(&mut stream, 405, b"GET only");
+            }
+            let listing = crate::evidence::fs::FsProvider::new(root.to_path_buf()).list_redemptions().unwrap_or_default().join("\n");
+            return respond(&mut stream, 200, listing.as_bytes());
+        }
         match method {
             "GET" | "HEAD" => match std::fs::read(&file) {
                 Ok(bytes) if method == "HEAD" => respond(&mut stream, 200, &[]).map(|_| drop(bytes)),
@@ -952,6 +1161,7 @@ pub mod server {
                 let cap = match &target {
                     Target::Manifest(_) => MANIFEST_MAX_BYTES,
                     Target::Chunk(..) => cfg.limits.max_chunk_bytes as usize,
+                    Target::Redemption(_) | Target::RedemptionIndex => REDEMPTION_MAX_BYTES,
                 };
                 if content_length > cap {
                     // Drain (a bounded amount of) what the client is still sending before answering: closing on unread data resets the
@@ -981,6 +1191,16 @@ pub mod server {
                     return respond(&mut stream, 507, b"this provider is full");
                 }
                 match target {
+                    // A redemption bundle is filed only if it is sound BY ITSELF: this provider has no chain, so it cannot judge the bond, but it
+                    // will not serve bytes that are not an authorization, that name another claim, or whose executor signature does not verify.
+                    Target::Redemption(ref claim) => match check_redemption_bundle_v1(&body, claim, None) {
+                        Ok(_) => match write_atomic(&file, &body) {
+                            Ok(()) => respond(&mut stream, 201, b"stored"),
+                            Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
+                        },
+                        Err(why) => respond(&mut stream, 400, why.as_bytes()),
+                    },
+                    Target::RedemptionIndex => respond(&mut stream, 405, b"GET only"),
                     Target::Chunk(..) => match write_atomic(&file, &body) {
                         Ok(()) => respond(&mut stream, 201, b"stored"),
                         Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
@@ -1320,5 +1540,113 @@ mod tests {
         assert!(parse_response(b"garbage", 100).is_err());
         // https is not spoken by the std transport.
         assert!(StdHttp::default().request("GET", "https://example.test/x", None, 10).unwrap_err().contains("http://"));
+    }
+
+    // ---- the redemption board ----
+
+    fn rda4(claim_byte: u8, fee_bps: u16, expiry_daa: u64, signer_seed: u8) -> (Vec<u8>, String) {
+        use kaspa_consensus_core::palw_receipt_v4::{
+            PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT, PALW_RECEIPT_V4_BEACON_RULE_SLOT, PALW_RECEIPT_V4_VERSION,
+            PalwRedemptionAuthBundleV4, PalwRedemptionAuthV4, redeem_auth_id_v4,
+        };
+        let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([signer_seed; 32]);
+        let authorization = PalwRedemptionAuthV4 {
+            version: PALW_RECEIPT_V4_VERSION,
+            network_domain: h(9),
+            claim_id: h(claim_byte),
+            executor_bond: TransactionOutpoint::new(h(0xB0), 0),
+            quantum_lo: 0,
+            quantum_hi: 4,
+            beacon_rule: PALW_RECEIPT_V4_BEACON_RULE_SLOT,
+            builder_fee_bps: fee_bps,
+            expiry_daa,
+        };
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &kp.signing_key,
+            redeem_auth_id_v4(&authorization).as_byte_slice(),
+            PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT,
+            [0u8; 32],
+        )
+        .unwrap()
+        .as_ref()
+        .to_vec();
+        let executor_pubkey: &[u8] = kp.verification_key.as_ref();
+        let bytes = PalwRedemptionAuthBundleV4 { authorization, executor_pubkey: executor_pubkey.to_vec(), signature }.encode();
+        (bytes, h(claim_byte).to_string())
+    }
+
+    #[test]
+    fn a_miner_files_its_authorization_and_a_builder_on_another_machine_mirrors_it_into_its_node_directory() {
+        let (handle, http_dir, http) = up("rda-http");
+        let dir_provider = FsProvider::new(scratch("rda-dir"));
+        let providers: Vec<&dyn EvidenceProvider> = vec![&http, &dir_provider];
+        let (bundle, claim) = rda4(0x21, 500, u64::MAX, 3);
+        // The miner files it with both providers; each is read back.
+        let outcomes = publish_redemption_v1(&bundle, &providers, 2).expect("both hold it");
+        assert!(outcomes.iter().all(|o| o.result.is_ok()));
+        assert_eq!(http.list_redemptions().unwrap(), vec![claim.clone()]);
+        // The provider refuses what is not an authorization, what is filed under another claim, and a forged executor signature.
+        let other_claim = h(0x22).to_string();
+        assert!(http.put_redemption(&other_claim, &bundle).unwrap_err().0.contains("400"), "filed under another claim");
+        assert!(http.put_redemption(&claim, b"RDA4 junk").unwrap_err().0.contains("400"));
+        let mut forged = bundle.clone();
+        let n = forged.len();
+        forged[n - 10] ^= 1;
+        assert!(http.put_redemption(&claim, &forged).unwrap_err().0.contains("400"), "a forged signature is not stored");
+        assert!(check_redemption_bundle_v1(&forged, &claim, None).is_err());
+        assert!(http.put_redemption(&claim, &vec![0u8; REDEMPTION_MAX_BYTES + 1]).unwrap_err().0.contains("413"));
+        // The builder's machine: mirror into the directory `--palw-redemption-auth-dir` reads.
+        let into = scratch("rda-builder");
+        let report = sync_redemptions_v1(&providers, &into, None, Some(100)).unwrap();
+        assert_eq!(report.written.len(), 1, "the same bytes from two providers are one file: {report:?}");
+        assert_eq!(report.already_present, 1);
+        let read_like_the_node = || {
+            std::fs::read_dir(&into)
+                .unwrap()
+                .flatten()
+                .filter_map(|e| std::fs::read(e.path()).ok())
+                .filter_map(|b| kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4::decode(&b).ok())
+                .collect::<Vec<_>>()
+        };
+        let read = read_like_the_node();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].authorization.claim_id, h(0x21));
+        // A second sync changes nothing.
+        let again = sync_redemptions_v1(&providers, &into, None, Some(100)).unwrap();
+        assert!(again.written.is_empty() && again.already_present == 2);
+        // Two DIFFERENT authorizations of one claim (another fee) coexist: the builder chooses.
+        let (cheaper, _) = rda4(0x21, 100, u64::MAX, 3);
+        dir_provider.put_redemption(&claim, &cheaper).unwrap();
+        sync_redemptions_v1(&[&dir_provider as &dyn EvidenceProvider], &into, None, None).unwrap();
+        assert_eq!(read_like_the_node().len(), 2);
+        // An expired authorization, an invalid one a careless provider holds, and a dead provider are recorded and not mirrored.
+        let (soon, soon_claim) = rda4(0x23, 500, 50, 4);
+        dir_provider.put_redemption(&soon_claim, &soon).unwrap();
+        let rotten_claim = h(0x24).to_string();
+        let (mut rotten, _) = rda4(0x24, 500, u64::MAX, 5);
+        let k = rotten.len() - 5;
+        rotten[k] ^= 1;
+        dir_provider.put_redemption(&rotten_claim, &rotten).unwrap();
+        handle.stop();
+        let into2 = scratch("rda-builder-2");
+        let report = sync_redemptions_v1(&providers, &into2, None, Some(100)).unwrap();
+        assert!(report.skipped.iter().any(|(_, c, why)| *c == soon_claim && why == "expired"), "{report:?}");
+        assert!(report.skipped.iter().any(|(_, c, _)| *c == rotten_claim), "an unsound bundle is skipped: {report:?}");
+        assert!(
+            report.skipped.iter().any(|(p, c, why)| p.starts_with("http://") && c.is_empty() && why.starts_with("silent")),
+            "a dead provider is silence: {report:?}"
+        );
+        let files: Vec<String> =
+            std::fs::read_dir(&into2).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(files.iter().all(|f| !f.starts_with(&soon_claim) && !f.starts_with(&rotten_claim)), "{files:?}");
+        assert_eq!(
+            files.len(),
+            1,
+            "the directory provider's one authorization of claim 0x21 (a provider keeps one per claim) and nothing else: {files:?}"
+        );
+        // The network a builder is on binds the bundle: another network's authorization is not mirrored.
+        let into3 = scratch("rda-builder-3");
+        let wrong = sync_redemptions_v1(&[&dir_provider as &dyn EvidenceProvider], &into3, Some(h(0x77)), None).unwrap();
+        assert!(wrong.written.is_empty() && !wrong.skipped.is_empty());
     }
 }

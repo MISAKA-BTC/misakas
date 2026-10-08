@@ -119,3 +119,57 @@ fn publish_status_repair_and_fetch_through_the_command_line() {
     a.stop();
     b.stop();
 }
+
+#[test]
+fn a_miner_files_a_redemption_authorization_and_a_builder_mirrors_it_into_its_node_directory() {
+    use kaspa_consensus_core::palw_receipt_v4::{
+        PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT, PALW_RECEIPT_V4_BEACON_RULE_SLOT, PALW_RECEIPT_V4_VERSION, PalwRedemptionAuthBundleV4,
+        PalwRedemptionAuthV4, redeem_auth_id_v4,
+    };
+    let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x42; 32]);
+    let authorization = PalwRedemptionAuthV4 {
+        version: PALW_RECEIPT_V4_VERSION,
+        network_domain: h(9),
+        claim_id: h(0x31),
+        executor_bond: TransactionOutpoint::new(h(0xB0), 0),
+        quantum_lo: 0,
+        quantum_hi: 4,
+        beacon_rule: PALW_RECEIPT_V4_BEACON_RULE_SLOT,
+        builder_fee_bps: 500,
+        expiry_daa: u64::MAX,
+    };
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &kp.signing_key,
+        redeem_auth_id_v4(&authorization).as_byte_slice(),
+        PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT,
+        [0u8; 32],
+    )
+    .unwrap()
+    .as_ref()
+    .to_vec();
+    let pk: &[u8] = kp.verification_key.as_ref();
+    let bundle = PalwRedemptionAuthBundleV4 { authorization, executor_pubkey: pk.to_vec(), signature }.encode();
+    let file = scratch("rda-file").join("claim.rda4");
+    std::fs::write(&file, &bundle).unwrap();
+    let (dir, node_dir) = (scratch("rda-provider"), scratch("rda-node"));
+    let provider = server::start("127.0.0.1:0", dir, Default::default()).unwrap();
+    let (code, v, err) = run(&["redemption-publish", "--file", file.to_str().unwrap(), "--providers", &provider.url()]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(v["filed_with"], 1);
+    let (code, v, err) =
+        run(&["redemption-sync", "--providers", &provider.url(), "--into", node_dir.to_str().unwrap(), "--now-daa", "100"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(v["written"].as_array().unwrap().len(), 1);
+    let name = v["written"][0]["file"].as_str().unwrap();
+    assert!(name.starts_with(&h(0x31).to_string()) && name.ends_with(".rda4"));
+    assert_eq!(std::fs::read(node_dir.join(name)).unwrap(), bundle, "byte for byte what the miner signed");
+    // An unsound bundle is refused by the publisher before any provider is asked.
+    let mut forged = bundle.clone();
+    let n = forged.len();
+    forged[n - 3] ^= 1;
+    let bad = scratch("rda-bad").join("forged.rda4");
+    std::fs::write(&bad, forged).unwrap();
+    let (code, _, _) = run(&["redemption-publish", "--file", bad.to_str().unwrap(), "--providers", &provider.url()]);
+    assert_eq!(code, 2);
+    provider.stop();
+}

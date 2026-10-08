@@ -6,6 +6,8 @@
 //!   palw-evidence status  --claim <hex> --roots <claim.json> --providers <list> [--now-daa N] [--min-copies K]
 //!   palw-evidence fetch   --claim <hex> --roots <claim.json> --providers <list> --out <file>
 //!   palw-evidence repair  --claim <hex> --roots <claim.json> --providers <list>
+//!   palw-evidence redemption-publish --file <RDA4 bundle> --providers <list> [--min-verified N]       (the miner, once, before switching off)
+//!   palw-evidence redemption-sync    --providers <list> --into <dir> [--network-domain <hex>] [--now-daa N]   (a builder: fills --palw-redemption-auth-dir)
 //! ```
 //!
 //! `--providers` is a file (one provider per line) or a comma-separated list: a directory, `dir:<path>`, `http://host:port[/prefix]`, `https://…`
@@ -25,7 +27,7 @@ use kaspa_hashes::Hash64;
 use misaka_palw_remote::evidence::{ClaimRoots, EvidenceManifestV1, ManifestLimits, manifest_id_v1};
 use misaka_palw_remote::transport::{
     EvidenceProvider, ProbeMode, ProviderSpecV1, check_availability_v1, fetch_claim_material_any, open_providers_v1,
-    parse_provider_list_v1, publish_to_providers_v1, repair_v1, server,
+    parse_provider_list_v1, publish_redemption_v1, publish_to_providers_v1, repair_v1, server, sync_redemptions_v1,
 };
 
 fn die(msg: impl std::fmt::Display) -> ! {
@@ -85,6 +87,7 @@ fn main() {
     let command = args.next().unwrap_or_else(|| die("usage: palw-evidence <serve|publish|status|fetch|repair> …"));
     let (mut claim, mut roots, mut providers, mut out, mut from, mut root, mut listen) = (None, None, None, None, None, None, None);
     let (mut min_verified, mut min_copies, mut now_daa, mut max_store_gb) = (1usize, 2usize, None::<u64>, 64u64);
+    let (mut file, mut into, mut network_domain) = (None::<PathBuf>, None::<PathBuf>, None::<String>);
     while let Some(flag) = args.next() {
         let mut value = |name: &str| args.next().unwrap_or_else(|| die(format!("{name} needs a value")));
         match flag.as_str() {
@@ -100,6 +103,9 @@ fn main() {
             }
             "--min-copies" => min_copies = value("--min-copies").parse().unwrap_or_else(|_| die("--min-copies is not a number")),
             "--now-daa" => now_daa = Some(value("--now-daa").parse().unwrap_or_else(|_| die("--now-daa is not a number"))),
+            "--file" => file = Some(PathBuf::from(value("--file"))),
+            "--into" => into = Some(PathBuf::from(value("--into"))),
+            "--network-domain" => network_domain = Some(value("--network-domain")),
             "--max-store-gb" => {
                 max_store_gb = value("--max-store-gb").parse().unwrap_or_else(|_| die("--max-store-gb is not a number"))
             }
@@ -161,6 +167,49 @@ fn main() {
             if !ok {
                 std::process::exit(2);
             }
+        }
+        "redemption-publish" => {
+            let file = file.unwrap_or_else(|| die("--file <the RDA4 bundle> is required"));
+            let bytes = std::fs::read(&file).unwrap_or_else(|e| die(format!("{}: {e}", file.display())));
+            let specs = providers_of(&need(&providers, "--providers"));
+            let opened = open_providers_v1(&specs);
+            let refs: Vec<&dyn EvidenceProvider> = opened.iter().map(|b| b.as_ref()).collect();
+            let (ok, outcomes) = match publish_redemption_v1(&bytes, &refs, min_verified) {
+                Ok(o) => (true, o),
+                Err(o) => (false, o),
+            };
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": "misaka.palw.redemption-publish.v1",
+                    "filed_with": outcomes.iter().filter(|o| o.result.is_ok()).count(),
+                    "required": min_verified,
+                    "per_provider": outcomes.iter().map(|o| serde_json::json!({ "provider": o.provider, "result": o.result.clone().map(|()| "read back".to_string()).unwrap_or_else(|e| e) })).collect::<Vec<_>>(),
+                    "note": "a bundle on a provider is a hint to a builder: the chain's admission decides whether it redeems anything",
+                })
+            );
+            if !ok {
+                std::process::exit(2);
+            }
+        }
+        "redemption-sync" => {
+            let into = into.unwrap_or_else(|| die("--into <the node's --palw-redemption-auth-dir> is required"));
+            let specs = providers_of(&need(&providers, "--providers"));
+            let opened = open_providers_v1(&specs);
+            let refs: Vec<&dyn EvidenceProvider> = opened.iter().map(|b| b.as_ref()).collect();
+            let domain = network_domain.map(|d| hash("--network-domain", &serde_json::Value::String(d)));
+            let report =
+                sync_redemptions_v1(&refs, &into, domain, now_daa).unwrap_or_else(|e| die(format!("{}: {e}", into.display())));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": "misaka.palw.redemption-sync.v1",
+                    "into": into.display().to_string(),
+                    "written": report.written.iter().map(|(c, f)| serde_json::json!({ "claim": c, "file": f })).collect::<Vec<_>>(),
+                    "already_present": report.already_present,
+                    "skipped": report.skipped.iter().map(|(p, c, why)| serde_json::json!({ "provider": p, "claim": c, "why": why })).collect::<Vec<_>>(),
+                })
+            );
         }
         "status" | "fetch" | "repair" => {
             let claim = need(&claim, "--claim");
