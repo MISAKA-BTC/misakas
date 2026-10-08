@@ -204,14 +204,134 @@ time bomb (a public licence the court voids later, while the private branch carr
 conflicting chains — permanent. `seal1`: sealed on one side. `held`: rule F/E+F held a finality point. `crossed`: rule K crossed one.
 `T_seal` = 200 DAA for a 3-blue side, 300 for a 2-blue side.
 
-MODEL TABLE — FILLED FROM `finx_p1_model_table`.
+**Applied challenge window 120** (earliest `Final` 146 DAA after acceptance):
+
+| honest partition | SQ | C1 | C2 | C3 | F | C1+C3 | E' | E | E+F | K |
+|---|---|---|---|---|---|---|---|---|---|---|
+| HeartbeatOnly 5:3 D=2 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1,held | ok+1 |
+| HeartbeatOnly 5:3 D=3 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed |
+| HeartbeatOnly 5:3 D=20 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed |
+| HeartbeatOnly 5:3 D=150 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed |
+| HeartbeatOnly 5:3 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| AttemptsNoLicence 5:3 D=2 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 |
+| AttemptsNoLicence 5:3 D=3 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | ok+22 | ok+22 | ok+22 | ok+22 |
+| AttemptsNoLicence 5:3 D=20 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | ok+5 | ok+5 | ok+5 | ok+5 |
+| AttemptsNoLicence 5:3 D=150 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | ok+1 | ok+1 | ok+1 | ok+1 |
+| AttemptsNoLicence 5:3 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| AttemptsNoLicence 4:4 D=2 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 |
+| AttemptsNoLicence 4:4 D=3 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed,held | SPLIT/sealed | ok+22 | ok+22 | ok+22 | ok+22 |
+| AttemptsNoLicence 4:4 D=20 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed,held | SPLIT/sealed | ok+5 | ok+5 | ok+5 | ok+5 |
+| AttemptsNoLicence 4:4 D=150 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed,held | SPLIT/sealed | ok+1 | ok+1 | ok+1 | ok+1 |
+| AttemptsNoLicence 4:4 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| PortableOnMinority 5:3 D=20 | SPLIT/sealed | ok+1 | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | ok+5 | ok+5 | ok+5 | ok+5 |
+| PortableOnMinority 5:3 D=150 | SPLIT/sealed | ok+1 | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | ok+1 | ok+1 | ok+1 | ok+1 |
+| PortableOnMinority 5:3 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| PortableOnMinority 4:4 D=20 | ok+1 | ok+1 | ok+1 | SPLIT/sealed | ok+1 | SPLIT/sealed | ok+5 | ok+5 | ok+5 | ok+5 |
+| PortableOnMinority 4:4 D=150 | ok+1 | ok+1 | ok+1 | SPLIT/sealed | ok+1 | SPLIT/sealed | ok+1 | ok+1 | ok+1 | ok+1 |
+| PortableOnMinority 4:4 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| PortableOnMajority 5:3 D=20 | ok+1 | ok+1 | ok+1 | SPLIT/sealed | ok+1 | SPLIT/sealed | ok+5 | ok+5 | ok+5 | ok+5 |
+| PortableOnMajority 5:3 D=150 | ok+1 | ok+1 | ok+1 | SPLIT/sealed | ok+1 | SPLIT/sealed | ok+1 | ok+1 | ok+1 | ok+1 |
+| PortableOnMajority 5:3 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| PortableOnMajority 4:4 D=20 | ok+1 | ok+1 | ok+1 | SPLIT/sealed | ok+1 | SPLIT/sealed | ok+5 | ok+5 | ok+5 | ok+5 |
+| PortableOnMajority 4:4 D=150 | ok+2 | ok+1 | ok+2 | SPLIT/sealed | ok+2 | SPLIT/sealed | ok+1 | ok+1 | ok+1 | ok+1 |
+| PortableOnMajority 4:4 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| FullLicensing 5:3 D=20 | ok+1 | ok+1 | ok+1 | ok+8 | ok+1 | ok+8 | ok+5 | ok+5 | ok+5 | ok+5 |
+| FullLicensing 5:3 D=150 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 |
+| FullLicensing 5:3 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| FullLicensing 4:4 D=20 | ok+1 | ok+1 | ok+1 | ok+8 | ok+1 | ok+8 | ok+5 | ok+5 | ok+5 | ok+5 |
+| FullLicensing 4:4 D=150 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 |
+| FullLicensing 4:4 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| AttemptsNoLicence 6:2 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | ok+1,crossed |
+
+**Applied challenge window 1200** (earliest `Final` 1226 DAA after acceptance):
+
+| honest partition | SQ | C1 | C2 | C3 | F | C1+C3 | E' | E | E+F | K |
+|---|---|---|---|---|---|---|---|---|---|---|
+| HeartbeatOnly 5:3 D=2 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1,held | ok+1 |
+| HeartbeatOnly 5:3 D=3 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed |
+| HeartbeatOnly 5:3 D=20 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed |
+| HeartbeatOnly 5:3 D=150 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed |
+| HeartbeatOnly 5:3 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| AttemptsNoLicence 5:3 D=2 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 |
+| AttemptsNoLicence 5:3 D=3 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | ok+22 | ok+22 | ok+22 | ok+22 |
+| AttemptsNoLicence 5:3 D=20 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | ok+5 | ok+5 | ok+5 | ok+5 |
+| AttemptsNoLicence 5:3 D=150 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | ok+1 | ok+1 | ok+1 | ok+1 |
+| AttemptsNoLicence 5:3 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| AttemptsNoLicence 4:4 D=2 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 |
+| AttemptsNoLicence 4:4 D=3 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed,held | SPLIT/sealed | ok+22 | ok+22 | ok+22 | ok+22 |
+| AttemptsNoLicence 4:4 D=20 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed,held | SPLIT/sealed | ok+5 | ok+5 | ok+5 | ok+5 |
+| AttemptsNoLicence 4:4 D=150 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed,held | SPLIT/sealed | ok+1 | ok+1 | ok+1 | ok+1 |
+| AttemptsNoLicence 4:4 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| PortableOnMinority 5:3 D=20 | SPLIT/sealed | ok+1 | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | ok+5 | ok+5 | ok+5 | ok+5 |
+| PortableOnMinority 5:3 D=150 | SPLIT/sealed | ok+1 | SPLIT/sealed | SPLIT/sealed | SPLIT/seal1,held | SPLIT/sealed | ok+1 | ok+1 | ok+1 | ok+1 |
+| PortableOnMinority 5:3 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| PortableOnMinority 4:4 D=20 | ok+1 | ok+1 | ok+1 | SPLIT/sealed | ok+1 | SPLIT/sealed | ok+5 | ok+5 | ok+5 | ok+5 |
+| PortableOnMinority 4:4 D=150 | ok+1 | ok+1 | ok+1 | SPLIT/sealed | ok+1 | SPLIT/sealed | ok+1 | ok+1 | ok+1 | ok+1 |
+| PortableOnMinority 4:4 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| PortableOnMajority 5:3 D=20 | ok+1 | ok+1 | ok+1 | SPLIT/sealed | ok+1 | SPLIT/sealed | ok+5 | ok+5 | ok+5 | ok+5 |
+| PortableOnMajority 5:3 D=150 | ok+1 | ok+1 | ok+1 | SPLIT/sealed | ok+1 | SPLIT/sealed | ok+1 | ok+1 | ok+1 | ok+1 |
+| PortableOnMajority 5:3 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| PortableOnMajority 4:4 D=20 | ok+1 | ok+1 | ok+1 | SPLIT/sealed | ok+1 | SPLIT/sealed | ok+5 | ok+5 | ok+5 | ok+5 |
+| PortableOnMajority 4:4 D=150 | ok+2 | ok+1 | ok+2 | SPLIT/sealed | ok+2 | SPLIT/sealed | ok+1 | ok+1 | ok+1 | ok+1 |
+| PortableOnMajority 4:4 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| FullLicensing 5:3 D=20 | ok+1 | ok+1 | ok+1 | ok+8 | ok+1 | ok+8 | ok+5 | ok+5 | ok+5 | ok+5 |
+| FullLicensing 5:3 D=150 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 |
+| FullLicensing 5:3 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| FullLicensing 4:4 D=20 | ok+1 | ok+1 | ok+1 | ok+8 | ok+1 | ok+8 | ok+5 | ok+5 | ok+5 | ok+5 |
+| FullLicensing 4:4 D=150 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 | ok+1 |
+| FullLicensing 4:4 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed |
+| AttemptsNoLicence 6:2 D=320 | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | SPLIT/sealed | ok+1,crossed |
+
 
 ### 5.2 Results — adversaries (safety: the merchant's X on the victim)
 
 `ok`: X stands (or was reversed inside the shallow window — the stated price). `REV@d`: reversed `d` DAA deep. `/bw`: decided by blue
 work alone.
 
-MODEL TABLE — FILLED FROM `finx_p1_model_table`.
+**Applied challenge window 120** (earliest `Final` 146 DAA after acceptance):
+
+| adversary (release depth) | SQ | C1 | C2 | C3 | F | C1+C3 | E' | E | E+F | K |
+|---|---|---|---|---|---|---|---|---|---|---|
+| PrivateHeartbeats @3 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| PrivateHeartbeats @4 | REV@4 | REV@4 | REV@4 | ok | REV@4 | ok | ok | ok | ok | ok |
+| PrivateHeartbeats @40 | REV@86 | REV@86 | REV@86 | ok | REV@86 | ok | ok | ok | ok | ok |
+| PrivateHeartbeats @295 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| PrivateHeartbeats @305 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| PrivateJunkAttempts @3 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| PrivateJunkAttempts @4 | REV@4 | REV@4 | REV@3/bw | ok | REV@4 | ok | ok | ok | ok | ok |
+| PrivateJunkAttempts @40 | REV@86 | REV@86 | REV@39/bw | ok | REV@86 | ok | ok | ok | ok | ok |
+| PrivateJunkAttempts @295 | ok | ok | REV@294/bw | ok | ok | ok | ok | ok | ok | ok |
+| PrivateJunkAttempts @305 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| PanelCollusion @3 | ok | ok | ok | REV@24 | ok | REV@24 | REV@24 | ok | ok | ok |
+| PanelCollusion @4 | REV@3 | REV@3 | REV@3 | REV@24 | REV@3 | REV@24 | REV@24 | ok | ok | ok |
+| PanelCollusion @40 | REV@39 | REV@39 | REV@39 | REV@39 | REV@39 | REV@39 | REV@39 | ok | ok | ok |
+| PanelCollusion @295 | REV@294 | REV@294 | REV@294 | REV@294 | REV@294 | REV@294 | REV@294 | ok | ok | ok |
+| PanelCollusion @305 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| DaTimeBomb @40 | REV@120 | REV@120 | REV@120 | ok | REV@120 | ok | ok | ok | ok | ok |
+| SybilFreshNode @40 | REV@440 | REV@440 | REV@440 | REV@440 | REV@440 | ok | ok | ok | ok | ok |
+
+**Applied challenge window 1200** (earliest `Final` 1226 DAA after acceptance):
+
+| adversary (release depth) | SQ | C1 | C2 | C3 | F | C1+C3 | E' | E | E+F | K |
+|---|---|---|---|---|---|---|---|---|---|---|
+| PrivateHeartbeats @3 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| PrivateHeartbeats @4 | REV@4 | REV@4 | REV@4 | ok | REV@4 | ok | ok | ok | ok | ok |
+| PrivateHeartbeats @40 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| PrivateHeartbeats @295 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| PrivateHeartbeats @305 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| PrivateJunkAttempts @3 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| PrivateJunkAttempts @4 | REV@4 | REV@4 | REV@3/bw | ok | REV@4 | ok | ok | ok | ok | ok |
+| PrivateJunkAttempts @40 | ok | ok | REV@39/bw | ok | ok | ok | ok | ok | ok | ok |
+| PrivateJunkAttempts @295 | ok | ok | REV@294/bw | ok | ok | ok | ok | ok | ok | ok |
+| PrivateJunkAttempts @305 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| PanelCollusion @3 | ok | ok | ok | REV@24 | ok | REV@24 | REV@24 | ok | ok | ok |
+| PanelCollusion @4 | REV@3 | REV@3 | REV@3 | REV@24 | REV@3 | REV@24 | REV@24 | ok | ok | ok |
+| PanelCollusion @40 | REV@39 | REV@39 | REV@39 | REV@39 | REV@39 | REV@39 | REV@39 | ok | ok | ok |
+| PanelCollusion @295 | REV@294 | REV@294 | REV@294 | REV@294 | REV@294 | REV@294 | REV@294 | ok | ok | ok |
+| PanelCollusion @305 | ok | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| DaTimeBomb @40 | ok | ok | ok | ok | REV@359 | ok | ok | ok | ok | ok |
+| SybilFreshNode @40 | REV@440 | ok | REV@440 | REV@440 | REV@440 | ok | ok | ok | ok | ok |
+
 
 ### 5.3 Reading
 
