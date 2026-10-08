@@ -1757,6 +1757,28 @@ Do you confirm? (y/n)";
         Err(_) => None,
     };
 
+    // RFC-0008 v2 amendment 1: the EXEC_SLICE producer — the round lane's bond identity, where the EXEC v2 payload is armed. Publishes
+    // only the slices an operator's intents name (`<state dir>/exec-slices/*.json`) and nothing below the fence; not started on any
+    // network that does not arm it (every shipped preset).
+    let palw_exec_slice_producer_service = match (&palw_duty_plan.round_lane, config.params.palw_exec_payload_v2_fence()) {
+        (Ok(crate::palw_duties::PalwBondIdentityV1 { key_path, bond }), Some(exec_v2_fence)) => {
+            Some(Arc::new(crate::palw_exec_slice_producer::PalwExecSliceProducerService::new(
+                crate::palw_exec_slice_producer::PalwExecSliceProducerConfig {
+                    key_path: key_path.clone(),
+                    bond: bond.clone(),
+                    network_id: config.params.net,
+                    genesis_hash: config.params.genesis.hash,
+                    exec_v2_fence,
+                    intents_dir: palw_panel_state_dir(&app_dir, network).join("exec-slices"),
+                },
+                consensus_manager.clone(),
+                mining_manager.clone(),
+                flow_context.clone(),
+            )))
+        }
+        _ => None,
+    };
+
     // kaspa-pq Phase 11 (ADR-0010): expose the in-process validator service's status via
     // the `getValidatorStatus` RPC (None when `--enable-validator` is off).
     let validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>> = match &validator_service {
@@ -2222,6 +2244,9 @@ Do you confirm? (y/n)";
     }
     if let Some(palw_panel_service) = palw_panel_service {
         async_runtime.register(palw_panel_service);
+    }
+    if let Some(palw_exec_slice_producer_service) = palw_exec_slice_producer_service {
+        async_runtime.register(palw_exec_slice_producer_service);
     }
     if let Some(palw_round_producer_service) = palw_round_producer_service {
         async_runtime.register(palw_round_producer_service);

@@ -362,6 +362,8 @@ pub fn palw_void_reason_name_v1(reason: &PalwVoidReasonV2) -> &'static str {
         PalwVoidReasonV2::BeaconUnavailable => "beacon_unavailable",
         PalwVoidReasonV2::PermissionlessNoCapablePanel => "permissionless_no_capable_panel",
         PalwVoidReasonV2::WorkRootExpired => "work_root_expired",
+        PalwVoidReasonV2::WorkSliceProvenFalse => "work_slice_proven_false",
+        PalwVoidReasonV2::WorkSliceDefaulted => "work_slice_defaulted",
     }
 }
 

@@ -5979,6 +5979,14 @@ pub enum PalwVoidReasonV2 {
     /// written; a proven false slice is the verification route's conviction, not this reason. Explicit Borsh number **130**
     /// (RFC-0008 v2's range 130–139); written only past `Params::palw_exec_payload_v2`.
     WorkRootExpired = 130,
+    /// **RFC-0008 v2 amendment 1 (spec §10.2): a slice of the claim's work session was proven false** — its kernel claim was convicted
+    /// through the G14 route. The slice and every later slice are void and the session never settles. Not a V2 charge: the evidence-bound
+    /// slash is the kernel route's, on the slice executor's kernel reservation. Explicit Borsh number **131**.
+    WorkSliceProvenFalse = 131,
+    /// **RFC-0008 v2 amendment 1: a slice of the claim's work session defaulted** — its kernel claim is unavailable (withheld material)
+    /// or timed out, so the slice can never be verified. Same terms as [`Self::WorkSliceProvenFalse`]; the route's default penalty is the
+    /// charge. Explicit Borsh number **132**.
+    WorkSliceDefaulted = 132,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -16494,6 +16502,11 @@ pub enum PalwDeltaEntryV2 {
     /// tables, so a table added later takes a table id and not a delta discriminant. Dormant: `palw_exec_payload_v2` is armed on no
     /// network, so no stored delta carries this variant.
     ExecV2Row { table: u8, key: Vec<u8>, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 180,
+    /// **RFC-0008 v2's refusal record (delta number 181, a note)**: one per covered `EXEC_SLICE` carrier, in the fold's order — `code` 0
+    /// for an admitted slice, else [`crate::palw_work_slice_v2::PalwSliceRefusalV2::code`]. Applies and reverts as a no-op (like
+    /// `VestingNote`): it moves no state and no root; it makes each block's slice verdicts durable on the node that folded it and
+    /// branch-local by construction (the X8R review: the verdicts were computed and dropped).
+    ExecV2Verdict { carrier: Hash64, code: u8 } = 181,
 }
 
 /// RFC-0008 v2: the table ids of [`PalwDeltaEntryV2::ExecV2Row`].
@@ -27359,6 +27372,8 @@ impl<'a> TransitionBuilder<'a> {
                 | PalwVoidReasonV2::BeaconUnavailable
                 | PalwVoidReasonV2::PermissionlessNoCapablePanel
                 | PalwVoidReasonV2::WorkRootExpired
+                | PalwVoidReasonV2::WorkSliceProvenFalse
+                | PalwVoidReasonV2::WorkSliceDefaulted
         ) {
             return Ok(0);
         }
@@ -27395,8 +27410,9 @@ impl<'a> TransitionBuilder<'a> {
             PalwVoidReasonV2::SealUnavailable
             | PalwVoidReasonV2::BeaconUnavailable
             | PalwVoidReasonV2::PermissionlessNoCapablePanel => false,
-            // RFC-0008 v2: an expired work session is a timeout, never a charge (the guard above returns first).
-            PalwVoidReasonV2::WorkRootExpired => false,
+            // RFC-0008 v2: an expired work session is a timeout, never a charge (the guard above returns first); a slice proven false or
+            // defaulted is the kernel route's charge, never a second one here.
+            PalwVoidReasonV2::WorkRootExpired | PalwVoidReasonV2::WorkSliceProvenFalse | PalwVoidReasonV2::WorkSliceDefaulted => false,
         };
         // A free-prompt claim's receipt rights (#5) are its fraud gain as the escrow is an attempt's,
         // so they go on the same reasons. The escrow slot is the ledger's (ADR-0160 E-5): past
@@ -27443,7 +27459,9 @@ impl<'a> TransitionBuilder<'a> {
                 | PalwVoidReasonV2::SealUnavailable
                 | PalwVoidReasonV2::BeaconUnavailable
                 | PalwVoidReasonV2::PermissionlessNoCapablePanel
-                | PalwVoidReasonV2::WorkRootExpired => 0,
+                | PalwVoidReasonV2::WorkRootExpired
+                | PalwVoidReasonV2::WorkSliceProvenFalse
+                | PalwVoidReasonV2::WorkSliceDefaulted => 0,
             }
         };
         let nominal = claim.reserved.saturating_add(escrow).saturating_add(action);
@@ -29470,6 +29488,14 @@ pub fn apply_palw_transition_v7(
     // 3″. G14 lane D: the kernel route's closing step — demand deadlines, windows, Final, liability release, and the settlements
     //     they decide — after every object of the block. A no-op for a route with no claim and no demand (and on every network).
     palw_kernel_route_fold_v1::tick_kernel_route_v1(&mut builder, ctx)?;
+    #[cfg(test)]
+    for (table, key, row) in &extras.exec_v2_test_kernel_rows {
+        builder.write_kernel_row(*table, key.clone(), row.clone());
+    }
+    // 3‴. RFC-0008 v2 amendment 1: every work slice follows its kernel claim — Final verifies it, a conviction or a default voids its
+    //     suffix and its root — read right after the route's closing step, so what the route decided in this block counts in it. A
+    //     no-op with no root or no kernel route (every network).
+    palw_exec_v2_fold::sync_slice_verification_v2(&mut builder, ctx)?;
     // 3′. The 2026-09-23 Position route matrix, P-B1: the carrier-borne market moves acceptance
     //     refused are paid back — after every object, so no object of this block is quoted against
     //     a queue its own refunds changed (the acceptance rehearsal folds objects only, and must
@@ -29840,7 +29866,7 @@ pub fn apply_palw_transition_v7(
     //     take a slice) and after the permits (the two ledgers never read each other). Each is judged against the running state; a
     //     refused carrier is a lane verdict and writes nothing. A no-op on every chain below the fence.
     if !extras.exec_v2_covered.is_empty() {
-        let _verdicts = palw_exec_v2_fold::apply_covered_slices_v2(&mut builder, ctx, &extras.exec_v2_covered);
+        palw_exec_v2_fold::apply_covered_slices_v2(&mut builder, ctx, &extras.exec_v2_covered)?;
     }
     // 7c. **RFC-0008 v2: record what the anchor covered** — the carriers' own ledgers have spoken, so the covered set itself is
     //     written last, at a fixed place. Drops the entries the window has passed.
@@ -38414,6 +38440,11 @@ pub struct PalwTransitionExtrasV1 {
     /// does not exist in any build that is not a test, and no node can name it.
     #[cfg(test)]
     pub exec_v2_test_verified: Vec<(Hash64, u32)>,
+    /// **TEST ONLY — kernel route rows written as the route's own closing step would write them** (`(table, key, row)`), right after
+    /// the route's tick and before the work slices follow their kernel claims (amendment 1), so the fold's tests can drive a slice's
+    /// claim to Final, a conviction or a default without the kernel's prover. No node can name it.
+    #[cfg(test)]
+    pub exec_v2_test_kernel_rows: Vec<(u8, Vec<u8>, Option<Vec<u8>>)>,
     /// **RFC-0008 v2: the EXEC blocks the accepting block's anchor covered** (every covered carrier, whatever the fold decides about
     /// it — a covered block is covered once), with the span clock the window is read at. `None` where the block anchors nothing,
     /// which is `Default` and every chain below the fence.
@@ -40625,6 +40656,8 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             }
         }
         PalwDeltaEntryV2::VestingNote(_) => {}
+        // RFC-0008 v2's refusal record: a note, inert on apply and revert.
+        PalwDeltaEntryV2::ExecV2Verdict { .. } => {}
         PalwDeltaEntryV2::VestingCounters { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if state.vesting_counters != *expected {
@@ -59920,6 +59953,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::KernelRouteHeader { .. } => "kernel_route_header",
                     // RFC-0008 v2: its round trip is `exec_v2_fold_v1`'s.
                     PalwDeltaEntryV2::ExecV2Row { .. } => "exec_v2_row",
+                    PalwDeltaEntryV2::ExecV2Verdict { .. } => "exec_v2_verdict",
                     PalwDeltaEntryV2::RealWork { .. } => "floor_state",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
@@ -60337,6 +60371,7 @@ pub(crate) mod tests {
             (161, PalwDeltaEntryV2::KernelRouteHeader { old: None, new: None }),
             // RFC-0008 v2 (the lead's allocation 180–189), declared explicitly: the work-slice tables' one generic entry.
             (180, PalwDeltaEntryV2::ExecV2Row { table: PALW_EXEC_V2_TABLE_ROOTS_V1, key: Vec::new(), old: None, new: None }),
+            (181, PalwDeltaEntryV2::ExecV2Verdict { carrier: key, code: 0 }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -70740,6 +70775,8 @@ pub(crate) mod tests {
                 exec_v2_covered: Vec::new(),
                 #[cfg(test)]
                 exec_v2_test_verified: Vec::new(),
+                #[cfg(test)]
+                exec_v2_test_kernel_rows: Vec::new(),
                 exec_v2_anchor: None,
                 escrow_carve: None,
                 objective_offence_daa: None,
@@ -71001,6 +71038,8 @@ pub(crate) mod tests {
                 exec_v2_covered: Vec::new(),
                 #[cfg(test)]
                 exec_v2_test_verified: Vec::new(),
+                #[cfg(test)]
+                exec_v2_test_kernel_rows: Vec::new(),
                 exec_v2_anchor: None,
                 escrow_carve: None,
                 objective_offence_daa: None,
@@ -73374,7 +73413,10 @@ pub(crate) mod tests {
             // RFC-0008 v2: `WorkRootExpired`, explicit 130 (RFC-0008 v2's range 130–139; RFC-0010 holds 120–122), so the order the
             // branches merge in cannot move it.
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::WorkRootExpired).unwrap(), vec![130]);
-            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[131]).is_err(), "nothing else in RFC-0008 v2's range");
+            // Amendment 1 (spec §10.2): a slice proven false (131) or defaulted (132).
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::WorkSliceProvenFalse).unwrap(), vec![131]);
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::WorkSliceDefaulted).unwrap(), vec![132]);
+            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[133]).is_err(), "nothing else in RFC-0008 v2's range");
             assert_eq!(
                 crate::palw_economics_ledger_v1::palw_void_reason_name_v1(&PalwVoidReasonV2::CourtHeldVerdict),
                 "court_held_verdict"

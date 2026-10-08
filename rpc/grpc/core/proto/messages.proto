@@ -123,6 +123,7 @@ message KaspadRequest {
     GetPalwCapacityShadowRequestMessage getPalwCapacityShadowRequest = 1216;
     GetPalwStateProofRequestMessage getPalwStateProofRequest = 1218;
     GetPalwPanelV3StatusRequestMessage getPalwPanelV3StatusRequest = 1254;
+    GetPalwExecV2StatusRequestMessage getPalwExecV2StatusRequest = 1294;
     GetPalwKernelClaimRequestMessage getPalwKernelClaimRequest = 1234;
     GetPalwKernelRowsRequestMessage getPalwKernelRowsRequest = 1236;
     GetPalwKernelFinalsRequestMessage getPalwKernelFinalsRequest = 1238;
@@ -250,6 +251,7 @@ message KaspadResponse {
     GetPalwCapacityShadowResponseMessage getPalwCapacityShadowResponse = 1217;
     GetPalwStateProofResponseMessage getPalwStateProofResponse = 1219;
     GetPalwPanelV3StatusResponseMessage getPalwPanelV3StatusResponse = 1255;
+    GetPalwExecV2StatusResponseMessage getPalwExecV2StatusResponse = 1295;
     GetPalwKernelClaimResponseMessage getPalwKernelClaimResponse = 1235;
     GetPalwKernelRowsResponseMessage getPalwKernelRowsResponse = 1237;
     GetPalwKernelFinalsResponseMessage getPalwKernelFinalsResponse = 1239;

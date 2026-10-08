@@ -144,3 +144,43 @@ fn a_mirror_without_the_field_is_refused() {
     assert_eq!(mirror(&p), None);
     assert!(p.validate_palw_exec_payload_v2().is_ok());
 }
+
+/// **The test/drill path (the X8R review's step 5): a salted drill of testnet-12 may arm the fence, a public ruleset may not.** On the
+/// drill the "gates are open" refusal is lifted and every other refusal still applies — the first one named is a prerequisite the drill
+/// does not arm (the kernel route, whose own validation refuses every height), and with every prerequisite forced in, the fence's own
+/// validator passes. The public twin with the same fields is still refused by the gates.
+#[test]
+fn a_salted_drill_may_arm_the_fence_and_a_public_ruleset_may_not() {
+    use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1};
+    use kaspa_consensus_core::config::params::palw_t12_drill_params_v1;
+    use kaspa_consensus_core::palw_exec_v2::palw_exec_payload_v2_armable_on;
+    let salt = PalwDrillSaltV1::from_bytes([0x5A; PALW_DRILL_SALT_LEN_V1]).expect("a salt");
+    let drill = palw_t12_drill_params_v1(&salt);
+    assert!(palw_exec_payload_v2_armable_on(&drill), "a salted drill");
+    assert!(!palw_exec_payload_v2_armable_on(&palw_t12_shipped_params()), "public testnet-12");
+    for (name, p) in rulesets() {
+        assert!(!palw_exec_payload_v2_armable_on(&p), "{name}: no public ruleset");
+    }
+    let at = 9_000;
+    let mut armed = drill.clone();
+    armed.palw_exec_payload_v2 = Some(ForkActivation::new(at));
+    armed.sync_palw_exec_payload_v2();
+    let why = armed.validate_palw_exec_payload_v2().expect_err("a prerequisite is missing on the drill").to_string();
+    assert!(!why.contains("section 9"), "the gates' refusal is lifted on a drill: {why}");
+    // Every prerequisite forced in at or below the height (the kernel route's own validation is its owner's gate, not asked here).
+    let mut ready = armed.clone();
+    let below = Some(ForkActivation::new(at - 1));
+    ready.palw_lane_accept_parents_first = ready.palw_lane_accept_parents_first.or(below);
+    ready.palw_rcore_plus = ready.palw_rcore_plus.or(below);
+    ready.palw_canonical_work = ready.palw_canonical_work.or(below);
+    ready.palw_probabilistic_constraints_v1 = below;
+    if ready.palw_execution_lane_at(at).is_some() && ready.palw_audit_2026_09_11_fence().is_some() {
+        ready.validate_palw_exec_payload_v2().unwrap_or_else(|e| panic!("the drill's fence validates with its prerequisites: {e}"));
+    }
+    // The same fields on public testnet-12: still the gates.
+    let mut public = palw_t12_shipped_params();
+    public.palw_exec_payload_v2 = Some(ForkActivation::new(at));
+    public.palw_probabilistic_constraints_v1 = below;
+    public.sync_palw_exec_payload_v2();
+    assert!(public.validate_palw_exec_payload_v2().unwrap_err().to_string().contains("section 9"));
+}

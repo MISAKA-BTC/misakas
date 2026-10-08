@@ -552,6 +552,18 @@ impl PalwExecV2Envelope {
 /// identity). The prerequisites below are enforced regardless, so the day this flips nothing else needs to be written.
 pub const PALW_EXEC_PAYLOAD_V2_ARMABLE: bool = false;
 
+/// **Is the fence armable on THIS ruleset?** On a public network only once [`PALW_EXEC_PAYLOAD_V2_ARMABLE`] flips (never, today). On
+/// a **salted drill of testnet-12** — the network id is testnet-12's and the genesis is not public testnet-12's, which only
+/// `--palw-drill-genesis-salt` produces (`config::drill`) — yes: the spec's section 9 drills are what the drill exists to run, and a drill
+/// chain is one nobody else is on. The X8R review's "flip only in the test/drill path": the constant stays `false`, and every other
+/// refusal of [`Params::validate_palw_exec_payload_v2`] (the prerequisites, the mirror) still applies on a drill — so a drill arms the
+/// payload only where the kernel route it is verified through is itself armed.
+pub fn palw_exec_payload_v2_armable_on(params: &Params) -> bool {
+    PALW_EXEC_PAYLOAD_V2_ARMABLE
+        || (params.net == crate::config::drill::palw_drill_network_v1()
+            && params.genesis.hash != crate::config::genesis::PALW_T12_GENESIS.hash)
+}
+
 use crate::config::params::{ForkActivation, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 
@@ -587,7 +599,11 @@ impl Params {
     /// * arming without, at or below its height, the fences the lane leans on — `palw_execution_lane` (the lane being widened),
     ///   `palw_lane_accept_parents_first` (parent hygiene the closure carriage extends), `palw_rcore_plus` (the committed
     ///   collateral ledger executor exposure joins, and the deadline function the root holds `Final` through) and
-    ///   `palw_canonical_work` (the root's prefix is the claim's chain-derived canonical work) — each named in the refusal.
+    ///   `palw_canonical_work` (the root's prefix is the claim's chain-derived canonical work) — each named in the refusal;
+    /// * arming without `palw_probabilistic_constraints_v1` (the G14 kernel route, the slices' only verification route — amendment 1) in
+    ///   force at or below it;
+    /// * arming on a ruleset that does not declare `palw_audit_2026_09_11` (A-2's tolerance of undecodable lifecycle payloads, which is
+    ///   what keeps a tag-130 carrier block-valid on builds with and without RFC-0008 v2 alike — the X8R review).
     ///
     /// A `Some(never())` value is dormant and passes.
     pub fn validate_palw_exec_payload_v2(&self) -> Result<(), PalwModeV2Error> {
@@ -603,7 +619,7 @@ impl Params {
             ));
         }
         let Some(at) = armed else { return Ok(()) };
-        if !PALW_EXEC_PAYLOAD_V2_ARMABLE {
+        if !palw_exec_payload_v2_armable_on(self) {
             return Err(PalwModeV2Error::Invalid(
                 "palw_exec_payload_v2 cannot be armed: RFC-0008 v2's section 9 gates (root lifecycle, wire and compatibility, lane \
                  isolation, accounting, public verification, liveness and capacity, deterministic recovery) are open",
@@ -631,6 +647,21 @@ impl Params {
         if !in_force(self.palw_canonical_work) {
             return Err(PalwModeV2Error::Invalid(
                 "palw_exec_payload_v2 needs palw_canonical_work in force at or below it: a root's prefix is the claim's derived work",
+            ));
+        }
+        // Amendment 1 (spec §10.1): a slice is verified only through the G14 kernel route, so the route must be in force with the lane.
+        if !in_force(self.palw_probabilistic_constraints_v1) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_exec_payload_v2 needs palw_probabilistic_constraints_v1 in force at or below it: a slice is verified, convicted \
+                 or defaulted only through the kernel route",
+            ));
+        }
+        // The X8R review: a work-session root declaration (tag 130) is a payload the build before RFC-0008 v2 cannot decode, and the two
+        // builds agree on its carrier only where undecodable lifecycle payloads are tolerated (A-2) — the audit fence's declaration.
+        if self.palw_audit_2026_09_11_fence().is_none() {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_exec_payload_v2 needs palw_audit_2026_09_11 declared: only there does a tag-130 carrier ride as an undecodable \
+                 payload on a fleet that mixes builds with and without RFC-0008 v2",
             ));
         }
         Ok(())
@@ -734,13 +765,37 @@ mod tests {
     }
 
     /// A slice envelope (an ML-DSA-87 key and signature beside twelve roots) is over the 8 KiB v1 carriage cap, so `PXE2` has its own
-    /// cap — the way `PFS4` does — and the shape gate accepts it for algo 10 and nothing else.
+    /// cap — the way `PFS4` does — and the shape gate accepts it for algo 10 and nothing else, **where the fence is in force**. Below it
+    /// (and on every network that does not arm it) the gate judges the bytes exactly as the build before RFC-0008 v2: a `PXE2` payload
+    /// is refused with the error that build gave (the X8R review: the pruning-proof path runs only this gate).
     #[test]
     fn a_slice_envelope_exceeds_the_v1_cap_and_fits_its_own_and_the_shape_gate_takes_it_for_the_lane_only() {
         use crate::pow_layer0::{
-            PALW_COMMITMENT_MAX_BYTES, POW_ALGO_ID_PALW_ROUND_V1, PalwAttemptLaneV1, check_palw_commitment_shape_at,
+            PALW_COMMITMENT_MAX_BYTES, POW_ALGO_ID_PALW_ROUND_V1, PalwAttemptLaneV1, PowLayer0Error,
+            check_palw_commitment_shape_exec_at,
         };
+        let check_palw_commitment_shape_at =
+            |algo, bytes: &[u8], bound, lane| check_palw_commitment_shape_exec_at(algo, bytes, bound, lane, true);
         let bytes = slice_envelope(slice(0, 0, 10)).encode();
+        // Fence not in force: the pre-RFC-0008-v2 verdict and error, byte for byte — too long for the v1 cap (a slice), malformed as
+        // a v1 envelope (a permit, under the cap).
+        let below = |bytes: &[u8]| {
+            crate::pow_layer0::check_palw_commitment_shape_at(POW_ALGO_ID_PALW_ROUND_V1, bytes, false, PalwAttemptLaneV1::Unfenced)
+        };
+        // The pre-RFC-0008-v2 gate for algo 10, spelled out: the 8,192-byte cap, then the v1 decode and shape.
+        let pre_v2 = |bytes: &[u8]| -> Result<(), PowLayer0Error> {
+            if bytes.len() > PALW_COMMITMENT_MAX_BYTES {
+                return Err(PowLayer0Error::PalwCommitmentTooLong { got: bytes.len(), cap: PALW_COMMITMENT_MAX_BYTES });
+            }
+            crate::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(bytes)
+                .and_then(|envelope| envelope.validate_shape())
+                .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id: POW_ALGO_ID_PALW_ROUND_V1, reason: e.to_string() })
+        };
+        for pxe2 in [bytes.clone(), tx_envelope(h(77)).encode()] {
+            assert!(below(&pxe2).is_err(), "a PXE2 payload is no carrier where the fence is not in force");
+            assert_eq!(below(&pxe2), pre_v2(&pxe2), "the same error the build before RFC-0008 v2 gave");
+        }
+        assert!(matches!(below(&bytes), Err(PowLayer0Error::PalwCommitmentTooLong { .. })), "a slice is over the v1 cap");
         assert!(bytes.len() > PALW_COMMITMENT_MAX_BYTES, "that is why the PXE2 cap exists: {} bytes", bytes.len());
         assert!(bytes.len() <= PALW_EXEC_V2_MAX_ENVELOPE_BYTES);
         check_palw_commitment_shape_at(POW_ALGO_ID_PALW_ROUND_V1, &bytes, false, PalwAttemptLaneV1::Unfenced)

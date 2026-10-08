@@ -609,6 +609,10 @@ pub fn palw_capacity_void_attribution_v1(reason: PalwVoidReasonV2) -> PalwCapaci
         | PalwVoidReasonV2::PermissionlessNoCapablePanel => PalwCapacityVoidAttributionV1::Undetected,
         // RFC-0008 v2: a timeout is not a detected fraud.
         PalwVoidReasonV2::WorkRootExpired => PalwCapacityVoidAttributionV1::Undetected,
+        // RFC-0008 v2 amendment 1: a conviction on a slice's kernel claim ended the claim, whose own outcome was never observed; a slice
+        // default convicts nobody.
+        PalwVoidReasonV2::WorkSliceProvenFalse => PalwCapacityVoidAttributionV1::Censored,
+        PalwVoidReasonV2::WorkSliceDefaulted => PalwCapacityVoidAttributionV1::Undetected,
     }
 }
 

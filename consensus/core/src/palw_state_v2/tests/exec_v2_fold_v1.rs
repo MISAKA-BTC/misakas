@@ -903,6 +903,41 @@ fn the_exec_v2_tail_is_pinned_at_0xee_and_the_empty_carriage_is_unchanged() {
     assert!(borsh::from_slice::<PalwStateCarriageV2>(&bytes[..bytes.len() - 3]).is_err(), "a truncated tail is refused");
 }
 
+/// **A tag-130 carrier is judged at admission exactly as the build without RFC-0008 v2 judges its bytes** (the X8R review). That build —
+/// the live testnet-12 release — cannot decode tag 130: it tolerates the payload where the ruleset tolerates undecodable lifecycle
+/// payloads (testnet-12 declares the audit fence) and refuses it where it does not. A well-formed and a malformed declaration alike: a
+/// ride-time shape check would refuse a block the older build accepts, a split before the fence. Modelled here by the same payload with
+/// its object tag replaced by one no build decodes.
+#[test]
+fn a_tag_130_carrier_rides_exactly_as_an_undecodable_payload() {
+    use crate::palw_lifecycle_objects_v2::{
+        PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxError, PalwLifecycleTxPayloadV2, palw_lifecycle_object_may_ride_v2,
+        validate_palw_lifecycle_tx,
+    };
+    let mut malformed = decl(h64(1));
+    malformed.boundaries.clear();
+    assert!(malformed.validate_shape().is_err(), "a declaration with no plan is malformed");
+    let tag_at = borsh::to_vec(&PALW_LIFECYCLE_TX_VERSION_V2).unwrap().len();
+    for declaration in [decl(h64(1)), malformed] {
+        let object = open_object(declaration);
+        assert_eq!(palw_lifecycle_object_may_ride_v2(&object), Ok(()), "rides unjudged");
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+        assert_eq!(payload[tag_at], 130);
+        let mut unknown = payload.clone();
+        unknown[tag_at] = 0xFF;
+        assert!(borsh::from_slice::<PalwLifecycleTxPayloadV2>(&unknown).is_err(), "an object tag no build decodes");
+        for tolerate in [true, false] {
+            assert_eq!(
+                validate_palw_lifecycle_tx(&payload, tolerate),
+                validate_palw_lifecycle_tx(&unknown, tolerate),
+                "tolerate = {tolerate}: the older build's verdict"
+            );
+        }
+        assert_eq!(validate_palw_lifecycle_tx(&payload, true), Ok(()));
+        assert_eq!(validate_palw_lifecycle_tx(&payload, false), Err(PalwLifecycleTxError::Undecodable));
+    }
+}
+
 #[test]
 fn the_object_and_delta_numbers_are_the_allocated_ones() {
     let declaration = decl(h64(1));
@@ -996,4 +1031,484 @@ fn an_anchor_records_what_it_covered_once_and_the_window_drops_the_old() {
     let (pd, sd, _) = world(None);
     let err = anchor_step(&pd, &sd, 50, 120, anchor_fold(5, &[(0xA1, 5)])).expect_err("dormant");
     assert!(err.to_string().contains("before palw_exec_payload_v2"), "{err}");
+}
+
+// =============================================================================================
+// Amendment 1 (spec §10): the verification route is the G14 kernel route
+// =============================================================================================
+
+mod amendment_1 {
+    use super::*;
+    use crate::palw_exec_v2_verify::{palw_exec_v2_kernel_key_v1, palw_exec_v2_slice_job_nonce_v1, palw_exec_v2_token_state_root_v1};
+    use crate::palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1, palw_kernel_route_policy_v1};
+    use crate::palw_onboarding_v1::{KernelBindingRowV1, PALW_ONBOARDING_TABLE_KERNEL_BINDINGS_V1};
+    use misaka_palw_kernel::job::{DecodeRuleV1, KernelClaimV1, KernelJobV1};
+    use misaka_palw_kernel::ledger::{ClaimBodyV1, ClaimRowV1};
+    use misaka_palw_kernel::lifecycle::{ClaimLifecycleV1, ClaimStateV1, LifecyclePolicyV1};
+    use misaka_palw_kernel::rows::{TABLE_CLAIMS_V1, TABLE_JOBS_V1};
+
+    /// The kernel class the claim's V2 class is bound to (onboarding tag 106).
+    const KERNEL_CLASS: u64 = 0x4C1A55;
+    /// The plan root of that binding: `decl`'s.
+    const PLAN: u64 = 0x32;
+
+    /// The route state, with (`bind`) or without the claim's class bound to [`KERNEL_CLASS`] under `plan`.
+    fn with_route(s: &mut PalwChainStateV2, claim: Hash64, bind: Option<u64>) {
+        let class = s.claim(&claim).unwrap().class_id;
+        let mut route = PalwKernelRouteStateV1::new(palw_kernel_route_policy_v1(h64(0xE7), h64(0xE8)), None, Default::default());
+        if let Some(plan) = bind {
+            let binding = KernelBindingRowV1 {
+                kernel_class: h64(KERNEL_CLASS),
+                kernel_param_root: h64(0xE9),
+                plan_root: h64(plan),
+                challenge_policy_id: h64(0xEA),
+                binder: bond_key(20),
+                bound_daa: 100,
+            };
+            route
+                .aux
+                .insert((PALW_ONBOARDING_TABLE_KERNEL_BINDINGS_V1, borsh::to_vec(&class).unwrap()), borsh::to_vec(&binding).unwrap());
+        }
+        s.kernel_route = Some(route);
+    }
+
+    fn bound_opened() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+        let (p, mut s, claim) = world(Some(0));
+        with_route(&mut s, claim, Some(PLAN));
+        let s = open(&p, &s, decl(claim)).expect("a session on a kernel-bound class opens");
+        (p, s, claim)
+    }
+
+    fn digest(h: Hash64) -> [u8; 64] {
+        h.as_bytes()
+    }
+
+    /// One slice's kernel claim, as the route would hold it: the job (the slice's nonce, `prompt`), the program claim by `executor`'s
+    /// kernel bond generating `generated`, in `state`, holding `reserved`. Returns the covered slice (bound to it) and the two rows.
+    struct KernelSlice {
+        covered: PalwExecV2CoveredSliceV1,
+        claim_id: Hash64,
+        job: KernelJobV1,
+        row: ClaimRowV1,
+    }
+
+    impl KernelSlice {
+        fn new(
+            s: &PalwChainStateV2,
+            root: Hash64,
+            index: u32,
+            executor: PalwBondKeyV2,
+            prompt: &[u32],
+            generated: &[u32],
+            reserved: u64,
+        ) -> Self {
+            let mut covered = slice_of(s, root, index, executor);
+            let job = KernelJobV1 {
+                class_binding_id: digest(h64(KERNEL_CLASS)),
+                prompt: prompt.to_vec(),
+                max_new_tokens: generated.len() as u32,
+                decode: DecodeRuleV1::Greedy,
+                nonce: digest(palw_exec_v2_slice_job_nonce_v1(&covered.slice)),
+            };
+            let kernel_bond = palw_kernel_bond_id_v1(&executor);
+            let claim = KernelClaimV1 {
+                job_id: job.id(),
+                producer_bond: kernel_bond,
+                generated: generated.to_vec(),
+                evidence_root: digest(h64(0xE0 + index as u64)),
+            };
+            let row = ClaimRowV1 {
+                producer: kernel_bond,
+                class_binding_id: digest(h64(KERNEL_CLASS)),
+                job_id: job.id(),
+                body: ClaimBodyV1::Program { claim: claim.clone(), evidence: evidence(), commitments: Vec::new() },
+                committed_daa: 100,
+                life: ClaimLifecycleV1 {
+                    policy: LifecyclePolicyV1 { check_window_daa: 10, challenge_window_daa: 10 },
+                    state: ClaimStateV1::Challengeable { since_daa: 100, window_end_daa: 200 },
+                    retention_met: true,
+                    final_hold_until: 0,
+                },
+                reserved,
+                liability_until: None,
+                convicted: false,
+                rewarded: false,
+            };
+            let claim_id = Hash64::from_bytes(claim.id());
+            let slice = &mut covered.slice;
+            slice.evidence_root = claim_id;
+            slice.predecessor_state_root = palw_exec_v2_token_state_root_v1(&[prompt]);
+            slice.result_state_root = palw_exec_v2_token_state_root_v1(&[prompt, generated]);
+            slice.output_root = palw_exec_v2_token_state_root_v1(&[generated]);
+            slice.da_root = Hash64::from_bytes(claim.evidence_root);
+            KernelSlice { covered, claim_id, job, row }
+        }
+
+        /// Put the job and the claim (as it now stands) into the route — state surgery for the setup, outside any block.
+        fn install(&self, s: &mut PalwChainStateV2) {
+            let route = s.kernel_route.as_mut().expect("a route");
+            route.rows.insert((TABLE_JOBS_V1, borsh::to_vec(&self.job.id()).unwrap()), borsh::to_vec(&self.job).unwrap());
+            route.rows.insert((TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&self.claim_id)), borsh::to_vec(&self.row).unwrap());
+        }
+
+        /// The claim row with `state` (and `convicted`), as a kernel row write of a block.
+        fn write(&self, state: ClaimStateV1, convicted: bool) -> (u8, Vec<u8>, Option<Vec<u8>>) {
+            let mut row = self.row.clone();
+            row.life.state = state;
+            row.convicted = convicted;
+            (TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&self.claim_id), Some(borsh::to_vec(&row).unwrap()))
+        }
+    }
+
+    fn evidence() -> misaka_palw_kernel::evidence::VerificationEvidenceV1 {
+        use misaka_palw_kernel::evidence::{EvidenceHeaderV1, SuiteParamsV1, VerificationEvidenceV1};
+        VerificationEvidenceV1 {
+            version: 1,
+            header: EvidenceHeaderV1 {
+                network_domain: [1; 64],
+                ruleset_digest: [2; 64],
+                class_binding_id: digest(h64(KERNEL_CLASS)),
+                program_root: [3; 64],
+                artifact_root: [4; 64],
+                plan_root: digest(h64(PLAN)),
+            },
+            job_input_root: [5; 64],
+            positions: 1,
+            initial_state_root: [6; 64],
+            final_state_root: [7; 64],
+            trace_root: [8; 64],
+            output_root: [9; 64],
+            segments: Vec::new(),
+            suite: SuiteParamsV1 {
+                descriptor_digest: [10; 64],
+                checker_suite_id: 1,
+                challenge_policy_id: 1,
+                repetitions: 1,
+                target_bits: 2,
+                field_bits: 61,
+            },
+        }
+    }
+
+    /// The token stream of the session: the prompt and each slice's run.
+    const PROMPT: [u32; 3] = [11, 12, 13];
+    const RUNS: [[u32; 2]; 3] = [[21, 22], [31, 32], [41, 42]];
+
+    fn prompt_of(index: usize) -> Vec<u32> {
+        let mut prompt = PROMPT.to_vec();
+        for run in RUNS.iter().take(index) {
+            prompt.extend_from_slice(run);
+        }
+        prompt
+    }
+
+    /// The three slices of the session, chained through one token stream, executed by 20, 21, 20, each claim holding `reserved`.
+    /// The root's initial boundary must be the prompt's token state: the declaration says so.
+    fn session(reserved: u64) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Vec<KernelSlice>) {
+        let (p, mut s, claim) = world(Some(0));
+        with_route(&mut s, claim, Some(PLAN));
+        let mut d = decl(claim);
+        d.initial_state_root = palw_exec_v2_token_state_root_v1(&[&PROMPT]);
+        let mut s = open(&p, &s, d).expect("the session opens");
+        let executors = [bond_key(20), bond_key(21), bond_key(20)];
+        let mut slices = Vec::new();
+        for (i, executor) in executors.iter().enumerate() {
+            let k = KernelSlice::new(&s, claim, i as u32, *executor, &prompt_of(i), &RUNS[i], reserved);
+            k.install(&mut s);
+            slices.push(k);
+        }
+        // Chain: slice i+1's predecessor is slice i's result, so `slice_of`'s placeholder predecessor is replaced by the token state.
+        for (i, k) in slices.iter().enumerate() {
+            assert_eq!(k.covered.slice.predecessor_state_root, palw_exec_v2_token_state_root_v1(&[&prompt_of(i)]));
+        }
+        (p, s, claim, slices)
+    }
+
+    fn carry_all(p: &PalwStateParamsV2, s: &PalwChainStateV2, slices: &[KernelSlice]) -> PalwChainStateV2 {
+        fold_slices(p, s, 50, 120, slices.iter().map(|k| k.covered.clone()).collect())
+    }
+
+    fn kernel_block(
+        p: &PalwStateParamsV2,
+        s: &PalwChainStateV2,
+        word: u64,
+        daa: u64,
+        rows: Vec<(u8, Vec<u8>, Option<Vec<u8>>)>,
+    ) -> PalwChainStateV2 {
+        let extras = PalwTransitionExtrasV1 { exec_v2_test_kernel_rows: rows, ..xx() };
+        step_with(s, p, word, daa, &[], &extras).expect("the block folds").0
+    }
+
+    #[test]
+    fn a_session_opens_only_on_a_kernel_bound_class_under_its_plan() {
+        let (p, mut s, claim) = world(Some(0));
+        with_route(&mut s, claim, None);
+        let refused = open(&p, &s, decl(claim)).expect_err("no kernel binding");
+        assert!(refused.to_string().contains("not bound to a kernel class"), "{refused}");
+        let (p, mut s, claim) = world(Some(0));
+        with_route(&mut s, claim, Some(0x99));
+        let refused = open(&p, &s, decl(claim)).expect_err("another plan");
+        assert!(refused.to_string().contains("kernel verification plan"), "{refused}");
+        let (p, mut s, claim) = world(Some(0));
+        with_route(&mut s, claim, Some(PLAN));
+        open(&p, &s, decl(claim)).expect("bound, under its plan");
+        // (control) with no kernel route the pre-amendment rule stands: the fixture chains of the other tests open as before.
+        let (p, s, claim) = world(Some(0));
+        open(&p, &s, decl(claim)).expect("no route: the binding is not asked");
+    }
+
+    #[test]
+    fn a_slice_must_name_a_kernel_claim_that_binds_it_and_each_mismatch_is_named() {
+        let (p, s, claim, slices) = session(1_000);
+        let k = &slices[0];
+        assert_eq!(s.exec_v2_admit_slice_v1(&p, 120, &k.covered, 0).map(|a| a.verified_at), Ok(None), "the honest slice, pending");
+        let named = |edit: &dyn Fn(&mut PalwExecV2CoveredSliceV1)| {
+            let mut covered = k.covered.clone();
+            edit(&mut covered);
+            s.exec_v2_admit_slice_v1(&p, 120, &covered, 0).expect_err("refused")
+        };
+        use PalwSliceRefusalV2::*;
+        assert_eq!(named(&|c| c.slice.evidence_root = h64(0xBAD)), VerificationClaimMissing);
+        assert_eq!(named(&|c| c.slice.result_state_root = h64(0xBAD)), VerificationClaimNotBound("result"));
+        assert_eq!(named(&|c| c.slice.output_root = h64(0xBAD)), VerificationClaimNotBound("output"));
+        assert_eq!(named(&|c| c.slice.da_root = h64(0xBAD)), VerificationClaimNotBound("evidence"));
+        // Another executor's claim: the slice names bond 21, the claim is 20's.
+        let mut other = k.covered.clone();
+        other.slice.executor_bond = bond_key(21);
+        other.pubkey = s.bond(&bond_key(21)).unwrap().pubkey.clone();
+        assert_eq!(s.exec_v2_admit_slice_v1(&p, 120, &other, 0), Err(VerificationClaimNotBound("executor")));
+        // A claim of slice 1's job named by slice 0: its nonce is another slice's.
+        let mut borrowed = k.covered.clone();
+        borrowed.slice.evidence_root = slices[1].claim_id;
+        borrowed.slice.executor_bond = bond_key(21);
+        borrowed.pubkey = s.bond(&bond_key(21)).unwrap().pubkey.clone();
+        assert_eq!(s.exec_v2_admit_slice_v1(&p, 120, &borrowed, 0), Err(VerificationClaimNotBound("job nonce")));
+        // A predecessor that is not the root's boundary is rule 4's, before the binding.
+        assert_eq!(named(&|c| c.slice.predecessor_state_root = h64(0xBAD)), PredecessorMismatch);
+        // A failed claim backs nothing.
+        let mut failed = s.clone();
+        let mut row = k.row.clone();
+        row.convicted = true;
+        failed
+            .kernel_route
+            .as_mut()
+            .unwrap()
+            .rows
+            .insert((TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&k.claim_id)), borsh::to_vec(&row).unwrap());
+        assert_eq!(failed.exec_v2_admit_slice_v1(&p, 120, &k.covered, 0), Err(VerificationClaimFailed));
+        // A claim of another kernel class.
+        let mut foreign = s.clone();
+        let mut row = k.row.clone();
+        row.class_binding_id = digest(h64(0xF0));
+        foreign
+            .kernel_route
+            .as_mut()
+            .unwrap()
+            .rows
+            .insert((TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&k.claim_id)), borsh::to_vec(&row).unwrap());
+        assert_eq!(foreign.exec_v2_admit_slice_v1(&p, 120, &k.covered, 0), Err(VerificationClaimNotBound("class")));
+        let _ = claim;
+    }
+
+    #[test]
+    fn a_final_kernel_claim_verifies_its_slice_and_the_root_settles_once_with_capped_legs() {
+        let (p, s, claim, slices) = session(1_000_000_000);
+        let s = license(&p, &s, claim, 45, 111);
+        let s = carry_all(&p, &s, &slices);
+        let root = s.exec_v2_root_v1(&claim).unwrap();
+        assert_eq!((root.next_index, root.pending, root.verified_work), (3, 3, 0), "three pending, none verified");
+        assert!(deadline_of(&s, claim).is_none(), "the claim's Final is held");
+        // The route finalizes slices 0 and 1 in one block: both verified, the root still waits.
+        let s = kernel_block(
+            &p,
+            &s,
+            60,
+            130,
+            vec![
+                slices[0].write(ClaimStateV1::Final { final_daa: 130 }, false),
+                slices[1].write(ClaimStateV1::Final { final_daa: 130 }, false),
+            ],
+        );
+        assert!(matches!(s.exec_v2_slice_v1(&claim, 0).unwrap().stage, PalwWorkSliceStageV2::Verified { verified_daa: 130 }));
+        assert!(matches!(s.exec_v2_slice_v1(&claim, 1).unwrap().stage, PalwWorkSliceStageV2::Verified { .. }));
+        assert!(matches!(s.exec_v2_slice_v1(&claim, 2).unwrap().stage, PalwWorkSliceStageV2::Pending));
+        assert!(s.exec_v2_holds_final_v1(&claim));
+        // A block that writes no claim row moves nothing (the sync is event-driven).
+        let quiet = step(&s, &p, 61, 131, &[]).unwrap().0;
+        assert_eq!(quiet.exec_v2_root_v1(&claim), s.exec_v2_root_v1(&claim));
+        // The last one: the root is ready, the hold released, and the claim reaches Final and settles once.
+        let s = kernel_block(&p, &quiet, 62, 132, vec![slices[2].write(ClaimStateV1::Final { final_daa: 132 }, false)]);
+        let root = s.exec_v2_root_v1(&claim).unwrap();
+        assert!(root.ready_for_final(), "{root:?}");
+        assert!(deadline_of(&s, claim).is_some_and(|at| at >= 132));
+        let s = run_to_terminal(&p, s, claim, 70, 133);
+        assert!(matches!(s.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+        assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Settled { .. }));
+    }
+
+    #[test]
+    fn a_slice_leg_is_capped_at_what_the_route_still_holds_on_its_claims() {
+        // Bond 20's two claims hold 7 each, bond 21's a billion: 20's leg is capped at 14 and the rest stays with the root executor.
+        let (p, s, claim, mut slices) = session(1_000_000_000);
+        for k in slices.iter_mut().filter(|k| k.covered.slice.executor_bond == bond_key(20)) {
+            k.row.reserved = 7;
+        }
+        let mut s = s;
+        for k in &slices {
+            k.install(&mut s);
+        }
+        let s = license(&p, &s, claim, 45, 111);
+        let s = carry_all(&p, &s, &slices);
+        let finals = slices.iter().map(|k| k.write(ClaimStateV1::Final { final_daa: 130 }, false)).collect();
+        let s = kernel_block(&p, &s, 60, 130, finals);
+        let s = run_to_terminal(&p, s, claim, 70, 131);
+        let payee_of = |bond: PalwBondKeyV2| s.bond(&bond).unwrap().payout_payload;
+        let paid_to = |bond: PalwBondKeyV2| {
+            s.pending_payouts_iter().filter(|(_, row)| row.payload == payee_of(bond)).map(|(_, row)| row.amount).sum::<u64>()
+        };
+        let producer = s.vesting_row(&claim).expect("the vested row").producer.amount;
+        let (leg_a, leg_b) = (paid_to(bond_key(20)), paid_to(bond_key(21)));
+        assert_eq!(leg_a, 14, "capped at the collateral the route holds on 20's two claims");
+        // The twin's whole producer leg is conserved: what 20 could not be paid stayed with the root executor.
+        let (pt, st, claim_t) = world(Some(0));
+        let twin = run_to_terminal(&pt, license(&pt, &st, claim_t, 45, 111), claim_t, 70, 111);
+        let twin_leg = twin.vesting_row(&claim_t).unwrap().producer.amount;
+        assert_eq!(producer + leg_a + leg_b, twin_leg, "nothing minted, nothing lost");
+        assert_eq!(leg_b, (twin_leg as u128 * 240 / 800) as u64, "21's leg is under its cap");
+    }
+
+    #[test]
+    fn a_convicted_slice_voids_its_suffix_and_the_root_and_charges_the_root_nothing() {
+        let (p, s, claim, slices) = session(1_000);
+        let s = license(&p, &s, claim, 45, 111);
+        let s = carry_all(&p, &s, &slices);
+        let s = kernel_block(&p, &s, 60, 130, vec![slices[0].write(ClaimStateV1::Final { final_daa: 130 }, false)]);
+        let collateral: Vec<(PalwBondKeyV2, u64)> = s.bonds.iter().map(|(k, b)| (*k, b.collateral)).collect();
+        assert!(s.reserved_exposure(&bond_key(20)) > 0);
+        // An outsider's proof convicted slice 1's claim (the route's own G14 case): the slice is proven false, 2 depends on it.
+        let s = kernel_block(&p, &s, 61, 131, vec![slices[1].write(ClaimStateV1::Convicted { daa: 131 }, true)]);
+        assert!(
+            matches!(s.exec_v2_slice_v1(&claim, 0).unwrap().stage, PalwWorkSliceStageV2::Verified { .. }),
+            "the prefix of the suffix stands"
+        );
+        assert_eq!(s.exec_v2_slice_v1(&claim, 1).unwrap().stage, PalwWorkSliceStageV2::ProvenFalse { daa: 131 });
+        assert_eq!(s.exec_v2_slice_v1(&claim, 2).unwrap().stage, PalwWorkSliceStageV2::Voided { voided_daa: 131 });
+        assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { from_index: 1, voided_daa: 131 }));
+        assert!(
+            matches!(
+                s.claim(&claim).unwrap().phase,
+                PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkSliceProvenFalse, voided_daa: 131 }
+            ),
+            "{:?}",
+            s.claim(&claim).unwrap().phase
+        );
+        let after: Vec<(PalwBondKeyV2, u64)> = s.bonds.iter().map(|(k, b)| (*k, b.collateral)).collect();
+        assert_eq!(after, collateral, "no V2 charge: the evidence-bound slash is the route's");
+        assert_eq!(s.reserved_exposure(&bond_key(20)), 0, "the extra executors' exposure returns");
+        assert!(s.vesting_row(&claim).is_none(), "no prefix or partial payment");
+        // Later Finals of the void suffix change nothing.
+        let s2 = kernel_block(&p, &s, 62, 132, vec![slices[2].write(ClaimStateV1::Final { final_daa: 132 }, false)]);
+        assert_eq!(s2.exec_v2_slice_v1(&claim, 2), s.exec_v2_slice_v1(&claim, 2));
+    }
+
+    #[test]
+    fn a_defaulted_slice_voids_its_suffix_as_a_default_and_a_verified_one_convicted_later_still_voids_an_unsettled_root() {
+        let (p, s, claim, slices) = session(1_000);
+        let s = license(&p, &s, claim, 45, 111);
+        let s = carry_all(&p, &s, &slices);
+        let defaulted = kernel_block(
+            &p,
+            &s,
+            60,
+            130,
+            vec![slices[0].write(ClaimStateV1::Unavailable { daa: 130, producer_defaulted: true }, false)],
+        );
+        assert_eq!(defaulted.exec_v2_slice_v1(&claim, 0).unwrap().stage, PalwWorkSliceStageV2::Defaulted { daa: 130 });
+        assert!(matches!(
+            defaulted.claim(&claim).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkSliceDefaulted, .. }
+        ));
+        // Verified, then convicted inside the route's liability horizon, before the root settled: proven false.
+        let s = kernel_block(
+            &p,
+            &s,
+            61,
+            131,
+            slices.iter().take(2).map(|k| k.write(ClaimStateV1::Final { final_daa: 131 }, false)).collect(),
+        );
+        assert!(matches!(s.exec_v2_slice_v1(&claim, 0).unwrap().stage, PalwWorkSliceStageV2::Verified { .. }));
+        let s = kernel_block(&p, &s, 62, 132, vec![slices[0].write(ClaimStateV1::Final { final_daa: 131 }, true)]);
+        assert_eq!(s.exec_v2_slice_v1(&claim, 0).unwrap().stage, PalwWorkSliceStageV2::ProvenFalse { daa: 132 });
+        assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { from_index: 0, .. }));
+    }
+
+    #[test]
+    fn a_slice_whose_claim_is_final_at_admission_is_verified_at_once_and_the_refusal_record_names_every_carrier() {
+        let (p, mut s, claim, mut slices) = session(1_000);
+        slices[0].row.life.state = ClaimStateV1::Final { final_daa: 115 };
+        slices[0].install(&mut s);
+        // Slice 0 (Final already) and a copy of slice 0 by the wrong executor in the same block.
+        let mut wrong = slices[0].covered.clone();
+        wrong.carrier = h64(0x5FFF);
+        wrong.slice.executor_bond = bond_key(21);
+        wrong.pubkey = s.bond(&bond_key(21)).unwrap().pubkey.clone();
+        let (after, delta) = step_with(&s, &p, 50, 120, &[], &xx_slices(vec![slices[0].covered.clone(), wrong.clone()])).unwrap();
+        assert!(matches!(after.exec_v2_slice_v1(&claim, 0).unwrap().stage, PalwWorkSliceStageV2::Verified { verified_daa: 120 }));
+        let root = after.exec_v2_root_v1(&claim).unwrap();
+        assert_eq!((root.pending, root.verified_work), (0, 400 - PWU), "verified at once: never pending");
+        let record: Vec<(Hash64, u8)> = delta
+            .entries
+            .iter()
+            .filter_map(|e| match e {
+                PalwDeltaEntryV2::ExecV2Verdict { carrier, code } => Some((*carrier, *code)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            record,
+            vec![(slices[0].covered.carrier, 0), (wrong.carrier, PalwSliceRefusalV2::IndexUsed.code())],
+            "every covered carrier, in the fold's order, admitted or refused by name"
+        );
+        assert_eq!(PalwSliceRefusalV2::name_of_code(PalwSliceRefusalV2::IndexUsed.code()), "index_used");
+    }
+
+    #[test]
+    fn refusal_codes_are_distinct_and_named() {
+        use PalwSliceRefusalV2::*;
+        let all = [
+            Dormant,
+            NoRoot,
+            RootNotOpen,
+            RootExpired,
+            RootClaimNotLive,
+            ExecutorNotAuthorized,
+            ExecutorNotActive,
+            ExecutorKeyMismatch,
+            IndexUsed,
+            SkippedSlice,
+            IndexPastPlan,
+            RangeOverlap,
+            RangeNotPlan,
+            PredecessorMismatch,
+            ClassMismatch,
+            JobMismatch,
+            KernelMismatch,
+            PlanMismatch,
+            RootPendingDepth,
+            BondPendingDepth,
+            BlockQuota,
+            Overflow,
+            NotKernelBound,
+            VerificationClaimMissing,
+            VerificationKindUnsupported,
+            VerificationClaimNotBound("x"),
+            VerificationClaimFailed,
+        ];
+        let codes: std::collections::BTreeSet<u8> = all.iter().map(|r| r.code()).collect();
+        assert_eq!(codes.len(), all.len());
+        assert!(!codes.contains(&0), "0 is an admitted slice");
+        for r in &all {
+            assert_ne!(PalwSliceRefusalV2::name_of_code(r.code()), "unknown", "{r:?}");
+        }
+    }
 }

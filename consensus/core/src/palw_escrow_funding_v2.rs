@@ -417,6 +417,8 @@ pub fn palw_void_reason_keeps_obligation_v1(reason: PalwVoidReasonV2) -> bool {
         | PalwVoidReasonV2::PermissionlessNoCapablePanel => false,
         // RFC-0008 v2: an expired work session charges nothing; the reservation returns at once.
         PalwVoidReasonV2::WorkRootExpired => false,
+        // RFC-0008 v2 amendment 1: the kernel route charges the slice executor; the root holds nothing.
+        PalwVoidReasonV2::WorkSliceProvenFalse | PalwVoidReasonV2::WorkSliceDefaulted => false,
     }
 }
 

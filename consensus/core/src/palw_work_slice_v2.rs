@@ -27,13 +27,13 @@
 //! every EXEC chain-position term = 0                                        (nothing here touches fork choice, the DAA or the clock)
 //! ```
 //!
-//! # What is *not* here
+//! # Verification (amendment 1, spec §10.1)
 //!
-//! A slice becomes `Verified` only through a verification route that does not exist yet (the RFC-0007 Part VI `WORK_SLICE`
-//! challenge, public-bond prosecution of a slice or a boundary, the DA court — gates of spec §9). Nothing in this crate can
-//! mark a slice verified from a carrier, a receipt or a harness signature: the stage exists, the transition's *writer* exists
-//! ([`crate::palw_state_v2`]'s fold-private `mark_slice_verified`, reachable by tests alone), and the **production door to it is
-//! closed by name** until the route lands. The root therefore cannot reach settlement on a real chain.
+//! A slice becomes `Verified` only when the G14 kernel route finalizes the kernel claim the slice names
+//! ([`crate::palw_exec_v2_verify`]): the route an ordinary outside bond can stop from public material — a conviction makes the slice
+//! `ProvenFalse`, a default (withheld material, a timeout) `Defaulted`, and either voids the slice's suffix and the root. Nothing here
+//! marks a slice verified from a carrier, a receipt or a harness signature; the test-only writer `mark_slice_verified_for_tests`
+//! remains for the fold's arithmetic tests on chains with no kernel route.
 
 use crate::palw_exec_v2::{PALW_EXEC_V2_MAX_SLICES_PER_ROOT, PalwWorkRangeV1};
 use crate::palw_state_v2::PalwBondKeyV2;
@@ -271,6 +271,13 @@ pub enum PalwWorkRootRefusalV2 {
     RootQuota,
     #[error("checked arithmetic overflowed")]
     Overflow,
+    /// Amendment 1 (spec §10.1): where the kernel route is in force a session opens only on a G14-complete class — one bound to a kernel
+    /// class (onboarding tag 106), so every slice can be verified, convicted or defaulted through that route.
+    #[error("the root claim's class is not bound to a kernel class: its slices would have no verification route")]
+    ClassNotKernelBound,
+    /// Amendment 1: the session's plan root is the bound kernel class's verification plan.
+    #[error("the root's plan root is not its class's kernel verification plan")]
+    PlanNotKernels,
 }
 
 /// **Validate a plan**: `boundaries` is a strictly increasing list of at least two values whose first is the (positive) root
@@ -405,6 +412,11 @@ pub enum PalwWorkSliceStageV2 {
     Verified { verified_daa: u64 },
     /// Void: the root failed from this slice back (a false predecessor voids its dependents), or the root expired.
     Voided { voided_daa: u64 },
+    /// **Amendment 1: its kernel claim was convicted** — the slice is proven false; it and every later slice of its root are void.
+    ProvenFalse { daa: u64 },
+    /// **Amendment 1: its kernel claim defaulted** (withheld material, a timeout) — the slice can never be verified; it and every later
+    /// slice of its root are void.
+    Defaulted { daa: u64 },
 }
 
 /// **`WorkSliceUse`**: one accepted slice.
@@ -466,10 +478,12 @@ pub struct PalwExecV2CoveredSliceV1 {
     pub pubkey: Vec<u8>,
 }
 
-/// What an admitted slice contributes: the work its range credits.
+/// What an admitted slice contributes: the work its range credits, and — where its kernel claim is already Final when the slice is
+/// admitted (amendment 1) — the Final that verifies it at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwSliceAdmissionV2 {
     pub work: u64,
+    pub verified_at: Option<u64>,
 }
 
 /// **The named refusals of slice admission, in the spec's order** (§3 rules 1–6). A refused carrier writes nothing.
@@ -525,6 +539,89 @@ pub enum PalwSliceRefusalV2 {
     BlockQuota,
     #[error("checked arithmetic overflowed")]
     Overflow,
+    // ---- 5 (amendment 1, spec §10.1): the verification binding — the kernel claim the slice names ----
+    #[error("5: the root's class has no kernel binding, so no verification route")]
+    NotKernelBound,
+    #[error("5: the kernel route holds no claim with the id the slice names")]
+    VerificationClaimMissing,
+    #[error("5: the named kernel claim is a pipeline claim: pipeline-class slices await a segment state")]
+    VerificationKindUnsupported,
+    #[error("5: the named kernel claim does not bind the slice ({0})")]
+    VerificationClaimNotBound(&'static str),
+    #[error("5: the named kernel claim already failed (convicted, unavailable or timed out)")]
+    VerificationClaimFailed,
+}
+
+impl PalwSliceRefusalV2 {
+    /// **The refusal's pinned code** — what the refusal record (`PalwDeltaEntryV2::ExecV2Verdict`) and the RPC carry. `0` is an admitted
+    /// slice; codes are never reused or renumbered.
+    pub fn code(&self) -> u8 {
+        use PalwSliceRefusalV2 as R;
+        match self {
+            R::Dormant => 1,
+            R::NoRoot => 2,
+            R::RootNotOpen => 3,
+            R::RootExpired => 4,
+            R::RootClaimNotLive => 5,
+            R::ExecutorNotAuthorized => 6,
+            R::ExecutorNotActive => 7,
+            R::ExecutorKeyMismatch => 8,
+            R::IndexUsed => 9,
+            R::SkippedSlice => 10,
+            R::IndexPastPlan => 11,
+            R::RangeOverlap => 12,
+            R::RangeNotPlan => 13,
+            R::PredecessorMismatch => 14,
+            R::ClassMismatch => 15,
+            R::JobMismatch => 16,
+            R::KernelMismatch => 17,
+            R::PlanMismatch => 18,
+            R::RootPendingDepth => 19,
+            R::BondPendingDepth => 20,
+            R::BlockQuota => 21,
+            R::Overflow => 22,
+            R::NotKernelBound => 23,
+            R::VerificationClaimMissing => 24,
+            R::VerificationKindUnsupported => 25,
+            R::VerificationClaimNotBound(_) => 26,
+            R::VerificationClaimFailed => 27,
+        }
+    }
+
+    /// The name a code stands for (`admitted` for 0), for a reader of the refusal record.
+    pub fn name_of_code(code: u8) -> &'static str {
+        match code {
+            0 => "admitted",
+            1 => "dormant",
+            2 => "no_root",
+            3 => "root_not_open",
+            4 => "root_expired",
+            5 => "root_claim_not_live",
+            6 => "executor_not_authorized",
+            7 => "executor_not_active",
+            8 => "executor_key_mismatch",
+            9 => "index_used",
+            10 => "skipped_slice",
+            11 => "index_past_plan",
+            12 => "range_overlap",
+            13 => "range_not_plan",
+            14 => "predecessor_mismatch",
+            15 => "class_mismatch",
+            16 => "job_mismatch",
+            17 => "kernel_mismatch",
+            18 => "plan_mismatch",
+            19 => "root_pending_depth",
+            20 => "bond_pending_depth",
+            21 => "block_quota",
+            22 => "overflow",
+            23 => "not_kernel_bound",
+            24 => "verification_claim_missing",
+            25 => "verification_kind_unsupported",
+            26 => "verification_claim_not_bound",
+            27 => "verification_claim_failed",
+            _ => "unknown",
+        }
+    }
 }
 
 /// **One root's single settlement** (spec §4): the claim's funded allocation `allocation` (the root executor's leg of the reward)

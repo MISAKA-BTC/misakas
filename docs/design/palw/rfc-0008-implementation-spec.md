@@ -263,3 +263,111 @@ Property-test event histories and compare archival/fresh/pruned nodes; drill the
 The v0 tests describe a different branch design and prove none of these v1 gates. Keep unresolved items named;
 do not substitute a placeholder or harness-signed receipt for implemented verification. Choose activation and capacity
 parameters only after independent review, measured evidence and a separate coordinated release.
+
+## 10. Amendment 1 (X8R, 2026-10-08): the slice verification route and the five design decisions
+
+This amendment closes the choices sections 1–7 left open. It is normative for the implementation on `rfc8/x8r-review`; it changes no
+activation height, preset or fingerprint (the fence stays unarmable on every shipped ruleset). Each decision states its rationale; none
+needed a policy value from the user (the numbers it touches are existing protocol constants or the G14 route's own policy, whose
+production values stay on hold per the 2026-10-08 Panel=0 rulings).
+
+### 10.1 The verification route is the G14 kernel route (closes the section-6 route and gap "no production writer of `Verified`")
+
+**A slice is verified only through a claim of the probabilistic-constraint kernel route (`palw_probabilistic_constraints_v1`, tag 110),
+and only that route can verify, convict or default it.** Concretely:
+
+1. **The root's class must be kernel-bound.** A root declaration is refused (`ClassNotKernelBound`) unless the root claim's V2 class
+   has a kernel binding (onboarding tag 106: the V2 class bound to a kernel class that registered after `PUBLIC_PROSECUTION_COMPLETE`),
+   and its `plan_root` must be that binding's `plan_root` (the kernel class's `VerificationPlanV1` root; `PlanNotKernels`). So a work
+   session exists only for a G14-complete class — the class whose claims an ordinary outside bond can already convict or default from
+   public material (the kernel route's G14 cases, `g14-node-e2e-record.md`).
+2. **Each slice names its verification claim.** `slice.evidence_root` is the id of a kernel-route *program* claim, and admission rule
+   5 gains the **verification binding** (refused by name, no write): the route holds that claim; it is not failed (convicted,
+   unavailable, timed out); its producer is the slice executor's kernel bond (`palw_kernel_bond_id_v1`); its job's class is the
+   bound kernel class; its job's `nonce` is the **slice job nonce** `H("misaka-palw/exec-v2/slice-job-nonce/v1"; root claim ‖ index ‖
+   range ‖ canonical job ‖ plan root)` — so one kernel job, hence one kernel claim, can back exactly one
+   `(root, index, range)`; `slice.predecessor_state_root` is the **token state** `H("misaka-palw/exec-v2/token-state/v1"; n ‖ tokens)`
+   of the job's prompt; `slice.result_state_root` is the token state of the prompt followed by the claim's generated tokens;
+   `slice.output_root` is the token state of the generated tokens alone; and `slice.da_root` is the kernel claim's own evidence root.
+   Rule 4 then makes consecutive slices one token stream: slice `i+1`'s prompt is slice `i`'s prompt and output.
+3. **The slice's stage follows its claim, every block, after the kernel route's closing tick** (so a Final, conviction or default the
+   route decided in the block is read the same block): a kernel claim **Final** makes its slice `Verified` (a root whose every slice is
+   verified releases its claim's `Final` hold); a claim **convicted** makes its slice *proven false*; a claim **unavailable or timed
+   out** (withheld material, no timely check) makes it *defaulted*. A claim the route no longer holds while its slice is pending is
+   treated as defaulted (it cannot be verified).
+4. **Sampled checks** are the kernel claim's own, under its committed subject and the one post-commit challenge contract
+   (`misaka-palw-challenge`); the slice's `WORK_SLICE` subject binding (`challenge_binding`) is recorded with the slice so a future
+   supplemental check has its own seed domain. No seed or court is added for slices.
+
+**Why.** RFC-0008 §6 requires that an ordinary non-Panel bond can verify and prosecute every slice and boundary from public material,
+with an exact court and DA default. The kernel route is the one place this repository has that property on the real node (G14 cases
+PASS: an outsider convicts a covered lie, a withheld position defaults, OPV windows finalize Panel-independently). Binding the slice
+statement to a kernel claim of the same token stream gives every slice that property without a second court, a second seed formula or
+a second DA protocol, which RFC-0007 Part VI and RFC-0014 forbid. **Limits (named, not hidden):** pipeline (K2-TIR-v3) classes are
+refused for slices until the K2-at-scale lane defines a segment state for them (`VerificationKindUnsupported`); the initial boundary
+(`initial_state_root`, slice 0's predecessor) is the root bond's declaration and its link to the REAL claim's verified output is not
+checked — every slice after it is verified as a continuation of it.
+
+### 10.2 Suffix void on a proven-false or defaulted slice (closes the section-6 CODE gap)
+
+A proven-false or defaulted slice voids **itself and every later accepted slice of its root** (they chain from its result), the root
+becomes `Voided { from_index }` and the root claim is voided — `WorkSliceProvenFalse` (void reason 131) or `WorkSliceDefaulted` (132).
+Neither reason charges at the V2 level: the evidence-bound liability is the kernel route's conviction or default penalty on the slice
+executor's kernel reservation, already collected; a second V2 forfeit would charge the root bond for another bond's lie. No prefix or
+partial payment is made (section 6: "no independent prefix payment"); the extra executors' exposure returns; the job's one-use
+tombstone stays until the claim retires. A slice that was `Verified` and whose claim is convicted later (inside the route's liability
+horizon) is handled the same way while its root has not settled.
+
+### 10.3 Flood residual (DESIGN gap 4) — decided: bounded by relay admission, not by a consensus rule
+
+Consensus already bounds what is *covered* (8 heads, the lane leaf bound, 8 slices folded per block, the pending and root quotas) and
+a flood moves no consensus number (P9). The residual — unanchored lane blocks occupying relay and storage until pruned — is bounded
+**node-locally**, as section 7 requires ("node-local backpressure controls production and relay only"): past the fence a node relays an
+`EXEC_SLICE` block only when, against its sink state, the root is open, the executor is authorised, the index is in
+`[next_index, next_index + PALW_EXEC_V2_MAX_PENDING_DEPTH)`, the named verification claim exists, and the executor has relayed fewer
+than `PALW_EXEC_V2_MAX_PENDING_PER_BOND` slice blocks in the anchor's span; it relays the first `EXEC_TX` block per
+`(span, round, permit index)` and keeps (does not announce) a second. A block outside these rules is still validated and stored if a peer
+sends it — validity never depends on relay policy. **Why:** the price of a lane header is the constant algo-10 PoW plus one ML-DSA-87
+check, both paid by the sender; the only unpriced cost was gossip amplification, which the state-aware filter removes for every
+non-executor and the per-bond quota bounds for an authorised one.
+
+### 10.4 Schedule credit of settled slice work (DESIGN gap 6) — decided: no raise in the initial release
+
+The root claim's REAL `Final` earns exactly the credit the existing eligibility/credit/cap rules give its own admitted work, snapshot
+once; settled slice work adds **no** schedule credit, weight or permit. Section 4's "derive one aggregate credit from the root" is read
+as this single existing credit (section 1: a REAL root "does not import its EXEC slices' work as additional weight"). **Why:** the plan's
+boundaries are the root bond's declaration and slice work is verified as kernel claims that themselves earn no fork-choice or schedule
+credit; raising the root's credit by declared slice work would let a root bond mint schedule credit by declaring a longer plan. A raise
+needs a measured, verified work unit for slices — a later versioned rule.
+
+### 10.5 Post-Final liability for slice legs (DESIGN gap 2) — decided: the kernel reservation is the collectible liability, and caps the leg
+
+Each slice's liability after the root's `Final` is its kernel claim's: the route holds the slice executor's reservation until the claim's
+liability horizon, and a post-Final conviction slashes it (G14 case "convicted after Final within the liability horizon"). So the leg is
+always collectible, **each slice executor's leg paid at the root's settlement is capped at the reservation the route holds on that
+slice's claim at that moment**; the excess stays with the root executor's leg (nothing minted, `sum(paid) == allocation` still holds).
+**Why:** section 6 requires retention "to cover … collectible liability after Final"; an uncapped leg larger than the collateral that
+backs it would be an uncollectible gain. The legs stay unvested (`add_panel_payout`): vesting would add a second, V2-side forfeiture
+path for a fault the kernel route already convicts.
+
+### 10.6 Permit equivocation evidence (DESIGN gap 8) — decided: no offence for v2 permits
+
+A `PXE2` `EXEC_TX` permit signed twice is not slashable. The covered set is judged in the canonical order `(round, permit index, hash)`:
+the first block of a permit takes it, every other is `PermitAlreadyUsed`, so a double-signed permit can never be spent twice. **Why:**
+v2 binds the carrier's anchor into the signature, so an honest executor whose carrier was stranded by a reorg *must* re-sign the same
+permit at a new anchor; section 6 forbids "heuristic equivocation slashing for honest reattachment". The v1 evidence path
+(`round_equivocated`) is not extended to `PXE2`; relay keeps the second block un-announced (10.3).
+
+### 10.7 Anchoring-window strand (DESIGN gap 5) — decided: keep the two-span window; the producer republishes
+
+The covered set stays bounded by the two-span window (a span is one DAA on testnet-12). A lane block anchored on a branch that is
+reorganised away and outside the window on the new branch is not covered there; nothing is invalidated or double-credited (P10). The
+node's `EXEC_SLICE` producer republishes a slice whose carrier is not anchored on its sink chain once the carrier has left the window —
+re-signed at the current anchor, the honest reattachment 10.6 protects. **Why:** a longer window is a parameter, not code, but it
+lengthens the consensus closure walk for every anchoring block; republishing costs the executor one header.
+
+### 10.8 Fence prerequisites added
+
+`validate_palw_exec_payload_v2` additionally requires, at or below the fence: `palw_probabilistic_constraints_v1` (the verification
+route, 10.1) and the declaration of `palw_audit_2026_09_11` (A-2's tolerance of undecodable lifecycle payloads, which keeps a tag-130
+carrier block-valid on a fleet that mixes builds — the X8R review, record section 10).

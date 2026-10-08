@@ -25,6 +25,9 @@
 
 use super::*;
 use crate::palw_exec_v2::PalwWorkRangeV1;
+use crate::palw_exec_v2_verify::{
+    PalwSliceVerificationV1, palw_exec_v2_claim_outcome_v1, palw_exec_v2_kernel_key_v1, palw_exec_v2_verification_binding_v1,
+};
 use crate::palw_work_slice_v2::{
     PALW_EXEC_V2_MAX_OPEN_ROOTS, PALW_EXEC_V2_MAX_OPEN_ROOTS_PER_BOND, PALW_EXEC_V2_MAX_PENDING_DEPTH,
     PALW_EXEC_V2_MAX_PENDING_PER_BOND, PALW_EXEC_V2_MAX_ROOT_LIFETIME_DAA, PALW_EXEC_V2_MAX_SLICES_PER_BLOCK,
@@ -162,6 +165,35 @@ impl PalwChainStateV2 {
         if slice.plan_root != root.plan_root {
             return Err(R::PlanMismatch);
         }
+        // ---- 5 (amendment 1, spec §10.1): the verification binding — where the kernel route is in force (every armable ruleset: the
+        //      route's fence is a prerequisite of this one), the kernel claim the slice names is a claim of the root class's kernel
+        //      class, by this executor, of this slice's job, over this slice's token states and evidence, and has not failed ----
+        let verified_at = match self.kernel_route.as_ref() {
+            Some(kernel) => {
+                let binding = kernel.kernel_binding_v1(&root.class_id).ok_or(R::NotKernelBound)?;
+                let row = kernel
+                    .rows
+                    .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&slice.evidence_root)))
+                    .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::ledger::ClaimRowV1>(bytes).ok())
+                    .ok_or(R::VerificationClaimMissing)?;
+                let job = kernel
+                    .rows
+                    .get(&(misaka_palw_kernel::rows::TABLE_JOBS_V1, borsh::to_vec(&row.job_id).expect("a digest serializes")))
+                    .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::job::KernelJobV1>(bytes).ok());
+                palw_exec_v2_verification_binding_v1(
+                    slice,
+                    &binding,
+                    &row,
+                    job.as_ref(),
+                    &crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&slice.executor_bond),
+                )?;
+                match palw_exec_v2_claim_outcome_v1(&row) {
+                    PalwSliceVerificationV1::Verified { final_daa } => Some(final_daa),
+                    _ => None,
+                }
+            }
+            None => None,
+        };
         // ---- 6: per-root, per-bond and per-block depth and quota ----
         if root.pending >= PALW_EXEC_V2_MAX_PENDING_DEPTH {
             return Err(R::RootPendingDepth);
@@ -173,7 +205,7 @@ impl PalwChainStateV2 {
             return Err(R::BlockQuota);
         }
         let work = planned.work().ok_or(R::Overflow)?;
-        Ok(PalwSliceAdmissionV2 { work })
+        Ok(PalwSliceAdmissionV2 { work, verified_at })
     }
 
     /// **The consistency of the work-slice ledgers** against each other and against the claims, checked with the rest of
@@ -220,7 +252,9 @@ impl PalwChainStateV2 {
                         verified = verified.checked_add(work).ok_or(PalwStateV2Error::Overflow("exec v2 verified work"))?;
                         accepted = accepted.checked_add(work).ok_or(PalwStateV2Error::Overflow("exec v2 accepted work"))?;
                     }
-                    PalwWorkSliceStageV2::Voided { .. } => {}
+                    PalwWorkSliceStageV2::Voided { .. }
+                    | PalwWorkSliceStageV2::ProvenFalse { .. }
+                    | PalwWorkSliceStageV2::Defaulted { .. } => {}
                 }
             }
             let voided = matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. });
@@ -398,6 +432,14 @@ pub(super) fn apply_root_declared_v2(
     if builder.state.exec_v2.roots.contains_key(&claim_id) {
         return Err(no(R::RootExists));
     }
+    // Amendment 1 (spec §10.1): where the kernel route is in force, a session opens only on a G14-complete class — bound to a kernel
+    // class — and its plan root is that class's verification plan, so every slice has a route an outside bond can prosecute.
+    if let Some(kernel) = builder.state.kernel_route.as_ref() {
+        let binding = kernel.kernel_binding_v1(&claim.class_id).ok_or_else(|| no(R::ClassNotKernelBound))?;
+        if declaration.plan_root != binding.plan_root {
+            return Err(no(R::PlanNotKernels));
+        }
+    }
     // The job is the claim's own: a declaration cannot name another job than the execution this claim answered.
     if claim.job_identity == Hash64::default() || claim.job_identity != declaration.canonical_job_id {
         return Err(no(R::ClaimBindingMismatch));
@@ -486,20 +528,27 @@ pub(super) fn apply_covered_slices_v2(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     covered: &[PalwExecV2CoveredSliceV1],
-) -> Vec<(BlockHash, Result<(), PalwSliceRefusalV2>)> {
+) -> Result<Vec<(BlockHash, Result<(), PalwSliceRefusalV2>)>, PalwStateV2Error> {
     let mut verdicts = Vec::with_capacity(covered.len());
     let mut folded = 0usize;
     for carrier in covered {
-        match builder.state.exec_v2_admit_slice_v1(builder.params, ctx.daa_score, carrier, folded) {
+        let verdict = match builder.state.exec_v2_admit_slice_v1(builder.params, ctx.daa_score, carrier, folded) {
             Ok(admission) => {
-                accept_slice_v2(builder, ctx, carrier, admission);
+                accept_slice_v2(builder, ctx, carrier, admission)?;
                 folded += 1;
-                verdicts.push((carrier.carrier, Ok(())));
+                Ok(())
             }
-            Err(refusal) => verdicts.push((carrier.carrier, Err(refusal))),
-        }
+            Err(refusal) => Err(refusal),
+        };
+        // **The refusal record** (the X8R review: the verdicts were dropped): one note per covered carrier, in the fold's order, in the
+        // block's delta — node-durable, branch-local, read by RPC op 240, and inert on apply and revert (no state moves).
+        builder.entries.push(PalwDeltaEntryV2::ExecV2Verdict {
+            carrier: carrier.carrier,
+            code: verdict.as_ref().err().map(PalwSliceRefusalV2::code).unwrap_or(0),
+        });
+        verdicts.push((carrier.carrier, verdict));
     }
-    verdicts
+    Ok(verdicts)
 }
 
 /// The writes of one admitted slice (checked arithmetic cannot fail here: the admission derived `work` from the plan and the root's
@@ -509,7 +558,7 @@ fn accept_slice_v2(
     ctx: &PalwBlockContextV2,
     carrier: &PalwExecV2CoveredSliceV1,
     admission: PalwSliceAdmissionV2,
-) {
+) -> Result<(), PalwStateV2Error> {
     let slice = &carrier.slice;
     let mut root = builder.state.exec_v2.roots.get(&slice.root_claim_id).expect("admission found the root").clone();
     builder.write_exec_slice(
@@ -524,17 +573,30 @@ fn accept_slice_v2(
             result_state_root: slice.result_state_root,
             evidence_root: slice.evidence_root,
             da_root: slice.da_root,
-            stage: PalwWorkSliceStageV2::Pending,
+            stage: match admission.verified_at {
+                Some(_) => PalwWorkSliceStageV2::Verified { verified_daa: ctx.daa_score },
+                None => PalwWorkSliceStageV2::Pending,
+            },
         }),
     );
     root.next_index += 1;
     root.last_state_root = slice.result_state_root;
     root.accepted_work = root.accepted_work.saturating_add(admission.work);
-    root.pending += 1;
+    // Amendment 1: a slice whose kernel claim is already Final is verified at once (it never counts against the pending depth).
+    match admission.verified_at {
+        Some(_) => root.verified_work = root.verified_work.saturating_add(admission.work),
+        None => root.pending += 1,
+    }
     if root.next_index == root.slice_count() {
         root.phase = PalwWorkRootPhaseV2::Complete;
     }
+    let ready = root.ready_for_final();
     builder.write_exec_root(slice.root_claim_id, Some(root));
+    if ready {
+        // The last slice arrived verified: the claim's `Final` hold is released now, as a verification in a later block would.
+        release_final_hold_v2(builder, slice.root_claim_id, ctx.daa_score)?;
+    }
+    Ok(())
 }
 
 /// **Record what one anchoring block covered.** After the permits and the slices (steps 7 and 7b), at a fixed place. Drops the
@@ -620,10 +682,36 @@ pub(super) fn settle_at_final_v2(
             .collect::<Result<_, _>>()?;
         (settle_root_partial_v2(amount, root.total_work, root.prefix_work(), &verified, root.root_bond), false)
     };
-    let settlement = settlement.ok_or(PalwStateV2Error::Overflow("exec v2 settlement"))?;
+    let mut settlement = settlement.ok_or(PalwStateV2Error::Overflow("exec v2 settlement"))?;
     if !settled {
         // Unreachable by construction; recorded loudly in debug builds and degraded safely in release.
         debug_assert!(false, "a root reached Final without being ready");
+    }
+    // **Amendment 1, §10.5: a slice executor's leg is capped at the collateral the kernel route still holds on its slices' claims** —
+    // the post-Final liability of a slice is its kernel claim's, so a leg is never larger than what a post-Final conviction could
+    // collect. The excess stays with the root executor (`sum(paid) == allocation` still holds; nothing is minted or lost).
+    if let Some(kernel) = builder.state.kernel_route.as_ref() {
+        let mut held: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+        for row in &rows {
+            let reserved = kernel
+                .rows
+                .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&row.evidence_root)))
+                .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::ledger::ClaimRowV1>(bytes).ok())
+                .map(|claim| claim.reserved)
+                .unwrap_or(0);
+            let entry = held.entry(row.executor).or_insert(0);
+            *entry = entry.saturating_add(reserved);
+        }
+        let mut excess: u64 = 0;
+        for (bond, amount) in settlement.slice_legs.iter_mut() {
+            let cap = held.get(bond).copied().unwrap_or(0);
+            if *amount > cap {
+                excess = excess.checked_add(*amount - cap).ok_or(PalwStateV2Error::Overflow("exec v2 leg cap"))?;
+                *amount = cap;
+            }
+        }
+        settlement.slice_legs.retain(|(_, amount)| *amount > 0);
+        settlement.root_leg = settlement.root_leg.checked_add(excess).ok_or(PalwStateV2Error::Overflow("exec v2 leg cap"))?;
     }
     // Release the extra executors' exposure and mark the root settled: the marker and the payments are one journaled step.
     release_executor_exposure_v2(builder, &root)?;
@@ -735,6 +823,130 @@ pub(super) fn release_final_hold_v2(
 ) -> Result<(), PalwStateV2Error> {
     if builder.state.exec_v2.roots.get(&claim_id).is_some_and(|root| root.ready_for_final()) {
         builder.rearm_claim_deadline_dl1_v1(claim_id, now_daa)?;
+    }
+    Ok(())
+}
+
+/// **Amendment 1 (spec §10.1–10.2): every slice follows its kernel claim.** Run each block after the kernel route's closing tick, so a
+/// Final, a conviction or a default the route decided in this block is read in this block. Event-driven: only the kernel claim rows
+/// this block's transition wrote are read (the route's own journal, `KernelRouteRow` of the claims table), so the cost is bounded by
+/// the route's per-block adjudication budget, not by the size of the lane. For each slice that names one of them —
+///
+/// * a pending slice whose claim is **Final** becomes `Verified`; a root whose last slice is verified releases its claim's `Final` hold;
+/// * a pending or verified slice of a root that has not settled whose claim is **convicted** is *proven false*, one whose claim
+///   **defaulted** (unavailable, timed out, or no longer held) is *defaulted*: the slice and every later slice of its root are void,
+///   the root is `Voided`, and the root claim is voided (`WorkSliceProvenFalse` / `WorkSliceDefaulted`, uncharged here — the
+///   evidence-bound charge is the route's, on the executor's kernel reservation).
+///
+/// A no-op on a chain with no root or no kernel route (every chain below the fence).
+pub(super) fn sync_slice_verification_v2(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+) -> Result<(), PalwStateV2Error> {
+    if builder.state.exec_v2.roots.is_empty() || builder.state.kernel_route.is_none() {
+        return Ok(());
+    }
+    let written: std::collections::BTreeSet<Vec<u8>> = builder
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            PalwDeltaEntryV2::KernelRouteRow { table, key, .. } if *table == misaka_palw_kernel::rows::TABLE_CLAIMS_V1 => {
+                Some(key.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    if written.is_empty() {
+        return Ok(());
+    }
+    let touched: Vec<((Hash64, u32), PalwWorkSliceRowV2)> = builder
+        .state
+        .exec_v2
+        .slices
+        .iter()
+        .filter(|(_, row)| matches!(row.stage, PalwWorkSliceStageV2::Pending | PalwWorkSliceStageV2::Verified { .. }))
+        .filter(|(_, row)| written.contains(&palw_exec_v2_kernel_key_v1(&row.evidence_root)))
+        .map(|(key, row)| (*key, row.clone()))
+        .collect();
+    for ((root_id, index), row) in touched {
+        let Some(root) = builder.state.exec_v2.roots.get(&root_id).cloned() else { continue };
+        if !matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
+            continue; // settled, or voided earlier in this loop
+        }
+        let outcome = builder
+            .state
+            .kernel_route
+            .as_ref()
+            .and_then(|kernel| {
+                kernel.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&row.evidence_root)))
+            })
+            .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::ledger::ClaimRowV1>(bytes).ok())
+            .map(|claim| palw_exec_v2_claim_outcome_v1(&claim))
+            .unwrap_or(PalwSliceVerificationV1::Defaulted);
+        let pending = matches!(row.stage, PalwWorkSliceStageV2::Pending);
+        match outcome {
+            PalwSliceVerificationV1::Verified { .. } if pending => {
+                let work = row.range.work().ok_or(PalwStateV2Error::Overflow("exec v2 slice work"))?;
+                let mut verified = row;
+                verified.stage = PalwWorkSliceStageV2::Verified { verified_daa: ctx.daa_score };
+                builder.write_exec_slice((root_id, index), Some(verified));
+                let mut next = root;
+                next.pending = next.pending.checked_sub(1).ok_or(PalwStateV2Error::Overflow("exec v2 pending"))?;
+                next.verified_work = next.verified_work.checked_add(work).ok_or(PalwStateV2Error::Overflow("exec v2 verified"))?;
+                builder.write_exec_root(root_id, Some(next));
+                release_final_hold_v2(builder, root_id, ctx.daa_score)?;
+            }
+            PalwSliceVerificationV1::ProvenFalse => {
+                void_suffix_v2(builder, root_id, index, PalwWorkSliceStageV2::ProvenFalse { daa: ctx.daa_score }, ctx.daa_score)?;
+            }
+            PalwSliceVerificationV1::Defaulted if pending => {
+                void_suffix_v2(builder, root_id, index, PalwWorkSliceStageV2::Defaulted { daa: ctx.daa_score }, ctx.daa_score)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// **The suffix void** (amendment 1, §10.2): slice `from_index` of `root_id` takes `cause` (`ProvenFalse` or `Defaulted`), every later
+/// accepted slice is `Voided` (each chains from its predecessor's result), the root becomes `Voided { from_index }` with its extra
+/// executors' exposure returned, and the root claim is voided by the matching reason — uncharged here: the evidence-bound charge is the
+/// kernel route's. No prefix or partial payment (spec §6). Earlier slices keep their stage; the rows stay until the claim retires.
+pub(super) fn void_suffix_v2(
+    builder: &mut TransitionBuilder<'_>,
+    root_id: Hash64,
+    from_index: u32,
+    cause: PalwWorkSliceStageV2,
+    daa: u64,
+) -> Result<(), PalwStateV2Error> {
+    let Some(root) = builder.state.exec_v2.roots.get(&root_id).cloned() else { return Ok(()) };
+    if !matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
+        return Ok(());
+    }
+    let suffix: Vec<((Hash64, u32), PalwWorkSliceRowV2)> = builder
+        .state
+        .exec_v2
+        .slices
+        .range((root_id, from_index)..=(root_id, u32::MAX))
+        .map(|(key, row)| (*key, row.clone()))
+        .collect();
+    for ((_, index), mut row) in suffix {
+        row.stage = if index == from_index { cause } else { PalwWorkSliceStageV2::Voided { voided_daa: daa } };
+        builder.write_exec_slice((root_id, index), Some(row));
+    }
+    release_executor_exposure_v2(builder, &root)?;
+    let mut voided = root;
+    voided.phase = PalwWorkRootPhaseV2::Voided { from_index, voided_daa: daa };
+    builder.write_exec_root(root_id, Some(voided));
+    let reason = match cause {
+        PalwWorkSliceStageV2::ProvenFalse { .. } => PalwVoidReasonV2::WorkSliceProvenFalse,
+        _ => PalwVoidReasonV2::WorkSliceDefaulted,
+    };
+    // The root is already `Voided`, so the void hook (`on_claim_voided_v2`) finds nothing open and leaves it as written here.
+    if let Some(claim) = builder.state.claims.get(&root_id).cloned()
+        && !claim.phase.is_terminal()
+    {
+        builder.void_claim(root_id, &claim, daa, reason)?;
     }
     Ok(())
 }
