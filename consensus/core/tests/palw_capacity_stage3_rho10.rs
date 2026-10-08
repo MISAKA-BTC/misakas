@@ -154,7 +154,8 @@ fn the_rho10_list_is_the_capacity_list_with_f_l_at_a_fixed_rho10() {
 /// dormant — the flag day's build flips exactly this assertion), and no entry is on a shipped list.
 #[test]
 fn testnet12_ships_the_package_armed_at_1700_over_the_daa1300_release() {
-    // The int-12 release (the int-13 list, DAA 9,000, rides on top of it and has its own suite: palw_t12_flag_day_9000).
+    // The int-12 release (testnet-12 as shipped: the int-13 list is unscheduled — no DAA-9,000 flag day, user 2026-10-08 — and has its own
+    // suite: palw_t12_flag_day_9000).
     let shipped = palw_t12_release_v6_params();
     // The third post-launch flag day (2026-09-27): testnet-12 as shipped IS the package armed at 1,700 over
     // the DAA-1,300 release, entry by entry, and nothing else differs.

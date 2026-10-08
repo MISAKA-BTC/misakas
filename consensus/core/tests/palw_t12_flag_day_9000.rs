@@ -1,18 +1,21 @@
-//! **testnet-12's int-13 flag day, DAA 9,000: the code-change-only fences that waited on a height** (release line `release/t12-daa9000`,
-//! the coordinator's brief of 2026-10-08).
+//! **testnet-12's int-13 list: the code-change-only fences that WAIT for the full-activation release** (written for the coordinator's
+//! brief of 2026-10-08, a DAA-9,000 flag day; **the user cancelled that flag day the same day**: there is no DAA-9,000 flag day on
+//! testnet-12, and the list takes a fresh height with the one future release that also enables RFC-0008, RFC-0010, RFC-0011's K2
+//! route, RFC-0012, RFC-0014 and RFC-0015). The file keeps its name; `H` below is a TEST height, not a shipped one.
 //!
-//! * **the list** — [`PALW_T12_INT13_FENCES_V1`] arms, at ONE height ([`PALW_T12_INT13_DAA`], 9,000), `palw_audit_1004_v1` (the
-//!   2026-10-04 audit's consensus fixes), `palw_gen_range_twin_v1` (the range twin that sizes a generative class's closes),
-//!   `palw_model_court_window` (the per-model court window, which on the held clock moves no verdict) and `palw_receipt_spend_v4`
-//!   (RFC-0009 stage C). Tier 1: each one's prerequisites are already in force on testnet-12 (genesis rules, or the int-11 list's
-//!   `palw_gen_v1` at 5,300). A height no other fence uses: the fork id names heights, not fences;
+//! * **the list** — [`PALW_T12_INT13_FENCES_V1`] arms, at ONE height (the future release's; [`PALW_T12_INT13_DAA`] is `None` today),
+//!   `palw_audit_1004_v1` (the 2026-10-04 audit's consensus fixes), `palw_gen_range_twin_v1` (the range twin that sizes a generative
+//!   class's closes), `palw_model_court_window` (the per-model court window, which on the held clock moves no verdict) and
+//!   `palw_receipt_spend_v4` (RFC-0009 stage C). Tier 1: each one's prerequisites are already in force on testnet-12 (genesis rules, or
+//!   the int-11 list's `palw_gen_v1` at 5,300). The fork id names heights, not fences, so the height must be one no other fence uses;
 //! * **the baseline** — [`palw_t12_release_v6_params`] (the shipped ruleset with the list dormant) IS the int-12 release (the DAA-5,300
-//!   flag day, the fleet's): its params, identity and schedule ids are pinned here by value, so this release's re-pin cannot move them;
-//! * **the release** — testnet-12 as shipped IS that baseline with the list at 9,000: params and schedule ids move, the identity does
-//!   not, and no other fence moves;
-//! * **the fork id** — an int-12 node is kept below 9,000 in both directions and refused from 9,000;
+//!   flag day, the fleet's): its params, identity and schedule ids are pinned here by value, so a re-pin cannot move them;
+//! * **the shipped ruleset** — testnet-12 as shipped arms the list NOWHERE: every entry is dormant at every height and the shipped ids
+//!   ARE the baseline's, byte for byte (no node runs an int-13 binary);
+//! * **if armed** (explicitly, at a test height, through [`palw_t12_arm_int13_flag_day_at_v1`]) — the list moves the params id and the
+//!   schedule, not the identity, the genesis or any other fence; the fork id keeps an int-12 node below the height and refuses it from it;
 //! * **the prerequisites** — each entry's, refused by name where it is out of order; and the list as a whole needs the int-11 list below it;
-//! * **the drill** — `--palw-drill-int13-at` ([`palw_drill_int13_at_v1`]) moves exactly the list on a salted drill chain, on a copy,
+//! * **the drill** — `--palw-drill-int13-at` ([`palw_drill_int13_at_v1`]) ARMS exactly the list on a salted drill chain, on a copy,
 //!   after the flag days (and the int-11 list) it needs below it;
 //! * **the next entry is one line** — a list entry added later is armed through the same `set`, and the checks below read the list's
 //!   own names, so adding one changes `LIST` and the re-pin, nothing else.
@@ -37,7 +40,8 @@ use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
-/// The flag day's height.
+/// **A test height** for arming the list explicitly: the height of the cancelled DAA-9,000 flag day, which no other fence uses and which
+/// no shipped ruleset names any more.
 const H: u64 = 9_000;
 
 /// The names of the list, in the order the entries' prerequisites need. **Adding an entry to the release is one line here, one line in
@@ -87,8 +91,8 @@ fn refused(p: &Params) -> Option<String> {
 }
 
 #[test]
-fn the_flag_day_is_the_tier_one_list_at_9000_a_height_no_other_fence_uses() {
-    assert_eq!(PALW_T12_INT13_DAA, Some(H), "the int-13 flag day's height");
+fn the_list_is_tier_one_and_armed_nowhere_on_the_shipped_ruleset() {
+    assert_eq!(PALW_T12_INT13_DAA, None, "no DAA-9,000 flag day on testnet-12 (user, 2026-10-08): the list waits for the full-activation release");
     let names: Vec<&str> = PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect();
     assert_eq!(names, LIST, "the int-13 list, in the order its prerequisites need");
     // On no earlier flag day's list — the court window has a list of its own (a drill's and a later release's), which holds the same entry.
@@ -117,28 +121,50 @@ fn the_flag_day_is_the_tier_one_list_at_9000_a_height_no_other_fence_uses() {
     ] {
         assert!(!LIST.contains(&left_out), "{left_out} is not tier 1");
     }
-    assert_eq!(PALW_T12_MODEL_COURT_WINDOW_DAA, None, "the court window's own list stays heightless: the int-13 list arms its entry");
+    assert_eq!(PALW_T12_MODEL_COURT_WINDOW_DAA, None, "the court window's own list stays heightless: the int-13 list carries its entry");
 
+    // **The shipped ruleset arms the list nowhere.**
     let shipped = palw_t12_shipped_params();
     for name in LIST {
-        assert_eq!(fence_at(&shipped, name), Some(H), "{name} arms at 9,000");
-    }
-    // A height no other fence uses.
-    for (name, fence) in shipped.palw_fences_v1() {
-        if !LIST.contains(&name) {
-            assert_ne!(fence.map(|f| f.daa_score()), Some(H), "{name}: 9,000 is the int-13 list's alone");
-        }
+        assert_eq!(fence_at(&shipped, name), None, "{name} is dormant on the shipped ruleset");
     }
     let schedule = shipped.fence_schedule_v1();
+    assert!(!schedule.contains(&H), "the cancelled 9,000 is not on the shipped schedule ({schedule:?})");
     for earlier in [750, 1_000, 1_300, 1_700, 2_000, 3_600] {
         assert!(schedule.contains(&earlier), "{earlier}: an earlier flag day, still scheduled ({schedule:?})");
     }
     assert_eq!(
-        &schedule[schedule.len() - 5..],
-        [PALW_T12_INT11_FLAG_DAY_DAA.unwrap(), PALW_T12_INT11_RHO100_DAA.unwrap(), PALW_T12_INT11_RHO250_DAA.unwrap(), PALW_T12_INT11_RHO1000_DAA.unwrap(), H],
-        "the int-11 flag day's four heights then 9,000 are the schedule's last ({schedule:?})"
+        &schedule[schedule.len() - 4..],
+        [
+            PALW_T12_INT11_FLAG_DAY_DAA.unwrap(),
+            PALW_T12_INT11_RHO100_DAA.unwrap(),
+            PALW_T12_INT11_RHO250_DAA.unwrap(),
+            PALW_T12_INT11_RHO1000_DAA.unwrap()
+        ],
+        "the int-11 flag day's four heights are the schedule's last ({schedule:?})"
     );
-    assert_eq!(schedule.iter().filter(|h| **h == H).count(), 1, "one height for the whole list");
+    assert_eq!(schedule, palw_t12_release_v6_params().fence_schedule_v1(), "the shipped schedule is the int-12 release's");
+    // Every entry is dormant at every height.
+    for daa in [0, 1, 749, 750, 5_300, H - 1, H, H + 1, 1_000_000, u64::MAX - 1] {
+        assert!(!shipped.palw_audit_1004_active_at(daa), "audit 1004 at {daa}");
+        assert!(!shipped.palw_gen_range_twin_active_at(daa), "the range twin at {daa}");
+        assert!(!shipped.palw_model_court_window_active_at(daa), "the court window at {daa}");
+        assert!(!shipped.palw_receipt_spend_v4_active_at(daa), "V4 receipt redemption at {daa}");
+    }
+
+    // **Armed explicitly** at a test height, the list is at ONE height, and a height no other fence uses.
+    let armed = with_list(shipped.clone(), Some(H));
+    for name in LIST {
+        assert_eq!(fence_at(&armed, name), Some(H), "{name} arms at the test height when armed");
+    }
+    for (name, fence) in armed.palw_fences_v1() {
+        if !LIST.contains(&name) {
+            assert_ne!(fence.map(|f| f.daa_score()), Some(H), "{name}: {H} is the int-13 list's alone");
+        }
+    }
+    let armed_schedule = armed.fence_schedule_v1();
+    assert_eq!(armed_schedule.last(), Some(&H), "the int-13 height is the armed schedule's last ({armed_schedule:?})");
+    assert_eq!(armed_schedule.iter().filter(|h| **h == H).count(), 1, "one height for the whole list");
 }
 
 #[test]
@@ -156,7 +182,9 @@ fn the_release_v6_baseline_is_int12s_ruleset_to_the_id() {
     // …and it is int-10's with the int-11 flag day armed (the chain of baselines is unbroken).
     let mut armed = palw_t12_release_v5_params();
     palw_t12_arm_int11_flag_day_at_v1(&mut armed, PALW_T12_INT11_FLAG_DAY_DAA);
-    assert_eq!(ids(&armed), (params, identity, schedule), "int-12 = int-10 + the int-11 flag day at 5,300");
+    assert_eq!(ids(&armed), (params.clone(), identity.clone(), schedule.clone()), "int-12 = int-10 + the int-11 flag day at 5,300");
+    // **The shipped ruleset IS the int-12 release** while the list is unscheduled: the same three ids, to the byte.
+    assert_eq!(ids(&palw_t12_shipped_params()), (params, identity, schedule), "testnet-12 as shipped = the fleet's int-12 ruleset");
     // Every older baseline carries the list dormant too.
     for (name, p) in [
         ("palw_t12_launch_params_v1", palw_t12_launch_params_v1()),
@@ -174,58 +202,68 @@ fn the_release_v6_baseline_is_int12s_ruleset_to_the_id() {
 }
 
 #[test]
-fn testnet12_ships_the_list_armed_at_9000_over_the_int12_release() {
+fn testnet12_ships_the_list_dormant_and_arming_it_moves_the_fingerprint_and_nothing_else() {
     let baseline = palw_t12_release_v6_params();
     let shipped = palw_t12_shipped_params();
     shipped.validate_palw_v2().expect("testnet-12 as shipped validates");
-    assert_eq!(ids(&shipped), ids(&with_list(baseline.clone(), Some(H))), "testnet-12 as shipped arms the list at 9,000 over int-12");
+    assert_eq!(ids(&shipped), ids(&baseline), "testnet-12 as shipped arms the list nowhere: it IS the int-12 release");
     assert_eq!(ids(&Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))), ids(&shipped), "the node's door");
-    let (bp, bi, bs) = ids(&baseline);
-    let (sp, si, ss) = ids(&shipped);
-    assert_ne!(sp, bp, "the ruleset names the fences");
-    assert_ne!(ss, bs, "the schedule names 9,000");
-    assert_eq!(si, bi, "the identity does not move: a future height is not an identity");
+    assert_eq!(shipped.palw_fences_v1(), baseline.palw_fences_v1(), "no fence differs from int-12's");
     assert_eq!(shipped.genesis.hash, baseline.genesis.hash, "the genesis does not move");
+
+    // **Armed at a test height** over int-12 — the shape the future release's re-pin will take.
+    let armed = with_list(baseline.clone(), Some(H));
+    armed.validate_palw_v2().expect("the list armed over int-12 validates");
+    let (bp, bi, bs) = ids(&baseline);
+    let (sp, si, ss) = ids(&armed);
+    assert_ne!(sp, bp, "arming the list moves the params id: the ruleset names the fences");
+    assert_ne!(ss, bs, "…and the schedule names the height");
+    assert_eq!(si, bi, "the identity does not move: a future height is not an identity");
+    assert_eq!(armed.genesis.hash, baseline.genesis.hash, "the genesis does not move");
     // No other fence moved.
-    for ((name, now), (was_name, was)) in shipped.palw_fences_v1().into_iter().zip(baseline.palw_fences_v1()) {
+    for ((name, now), (was_name, was)) in armed.palw_fences_v1().into_iter().zip(baseline.palw_fences_v1()) {
         assert_eq!(name, was_name);
         if LIST.contains(&name) {
             assert_eq!(was, None, "{name} is dormant on the int-12 baseline");
-            assert_eq!(now.map(|f| f.daa_score()), Some(H), "{name} is armed at 9,000");
+            assert_eq!(now.map(|f| f.daa_score()), Some(H), "{name} is armed at the test height");
         } else {
-            assert_eq!(now, was, "{name}: moved by the int-13 flag day");
+            assert_eq!(now, was, "{name}: moved by arming the int-13 list");
         }
     }
     // `set(None)` gives int-12 back, to the id; `set(Some(never()))` keeps the identity and is dormant.
-    assert_eq!(ids(&with_list(shipped.clone(), None)), ids(&baseline), "set(None): the int-12 ruleset");
-    let mut never = shipped.clone();
+    assert_eq!(ids(&with_list(armed.clone(), None)), ids(&baseline), "set(None): the int-12 ruleset");
+    let mut never = armed.clone();
     for f in PALW_T12_INT13_FENCES_V1.iter().rev() {
         (f.set)(&mut never, Some(ForkActivation::never()));
     }
     never.validate_palw_v2().expect("never() is dormant");
     assert_eq!(ids(&never).1, bi, "never(): the identity");
-    assert_ne!(ids(&never).0, sp, "never(): not the armed release");
+    assert_ne!(ids(&never).0, sp, "never(): not the armed ruleset");
     // Each entry alone is a different ruleset (each is a fence of the params id, none is shadowed by another).
     for name in LIST {
-        let mut without = shipped.clone();
+        let mut without = armed.clone();
         (entry(name).set)(&mut without, None);
         assert_ne!(ids(&without).0, sp, "{name}: the params id names it");
+        assert_ne!(ids(&without).0, bp, "{name}: the others are still armed");
         without.validate_palw_v2().unwrap_or_else(|e| panic!("the list without {name} still validates: {e}"));
     }
 }
 
 #[test]
-fn the_rules_are_live_from_9000_and_not_below() {
+fn once_armed_the_rules_are_live_from_the_test_height_and_not_below() {
+    // The shipped ruleset answers none of them at any height (the list is unscheduled); armed explicitly, each answers from `H`.
     let shipped = palw_t12_shipped_params();
-    assert!(!shipped.palw_audit_1004_active_at(H - 1) && shipped.palw_audit_1004_active_at(H), "audit 1004");
-    assert!(!shipped.palw_gen_range_twin_active_at(H - 1) && shipped.palw_gen_range_twin_active_at(H), "the range twin");
-    assert!(!shipped.palw_model_court_window_active_at(H - 1) && shipped.palw_model_court_window_active_at(H), "the court window");
-    assert!(!shipped.palw_receipt_spend_v4_active_at(H - 1) && shipped.palw_receipt_spend_v4_active_at(H), "V4 receipt redemption");
+    assert!(!shipped.palw_audit_1004_active_at(H) && !shipped.palw_receipt_spend_v4_active_at(H), "unscheduled");
+    let armed = with_list(shipped, Some(H));
+    assert!(!armed.palw_audit_1004_active_at(H - 1) && armed.palw_audit_1004_active_at(H), "audit 1004");
+    assert!(!armed.palw_gen_range_twin_active_at(H - 1) && armed.palw_gen_range_twin_active_at(H), "the range twin");
+    assert!(!armed.palw_model_court_window_active_at(H - 1) && armed.palw_model_court_window_active_at(H), "the court window");
+    assert!(!armed.palw_receipt_spend_v4_active_at(H - 1) && armed.palw_receipt_spend_v4_active_at(H), "V4 receipt redemption");
     use kaspa_consensus_core::palw_tir_close_range_v1::PalwTirCloseTwinV1;
-    assert_eq!(shipped.palw_gen_close_twin_at(H - 1), PalwTirCloseTwinV1::Element);
-    assert_eq!(shipped.palw_gen_close_twin_at(H), PalwTirCloseTwinV1::Range);
+    assert_eq!(armed.palw_gen_close_twin_at(H - 1), PalwTirCloseTwinV1::Element);
+    assert_eq!(armed.palw_gen_close_twin_at(H), PalwTirCloseTwinV1::Range);
     // The bundle's mirrors, which the fold reads, follow the fences.
-    let PalwConsensusMode::ConsensusV2(bundle) = &shipped.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
+    let PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
     assert_eq!(bundle.state.audit_1004_from_daa(), Some(H), "audit 1004's fold mirror");
     assert_eq!(bundle.state.gen_range_twin_from_daa(), Some(H), "the range twin's fold mirror");
     // The baseline answers none of them at any height.
@@ -236,18 +274,28 @@ fn the_rules_are_live_from_9000_and_not_below() {
     }
     let PalwConsensusMode::ConsensusV2(b) = &baseline.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
     assert_eq!((b.state.audit_1004_from_daa(), b.state.gen_range_twin_from_daa()), (None, None), "no mirror on the baseline");
-    // The int-11 rules the range twin stands on are in force at 9,000 (and before it, from 5,300).
-    assert!(shipped.palw_gen_v1_active_at(H) && shipped.palw_gen_v1_active_at(5_300));
+    // The int-11 rules the range twin stands on are in force at the test height (and before it, from 5,300).
+    assert!(armed.palw_gen_v1_active_at(H) && armed.palw_gen_v1_active_at(5_300));
 }
 
 #[test]
-fn the_fork_id_keeps_an_int12_node_below_9000_and_refuses_it_from_9000() {
+fn the_fork_id_of_the_shipped_ruleset_is_int12s_and_an_armed_list_is_refused_from_its_height() {
     let old = palw_t12_release_v6_params();
-    let new = palw_t12_shipped_params();
+    // **Shipped = int-12**: the fork id cannot tell the two apart at any height (no node runs an int-13 binary).
+    let shipped = palw_t12_shipped_params();
+    for daa in [0, 5_585, 7_000, H - 1, H, H + 1, 12_000] {
+        let (o, s) = (fork_id_v1(&old, daa), fork_id_v1(&shipped, daa));
+        assert_eq!(o, s, "the fork id of shipped and int-12 agree at {daa}");
+        assert!(!evaluate_fork_id_v1(&shipped, daa, o.fired.as_bytes().as_slice(), o.next).refuses(), "shipped keeps int-12 at {daa}");
+    }
+    assert!(!fork_id_gate_fences_v1(&shipped).contains(&H), "9,000 is not a gate of the shipped ruleset");
+
+    // **If armed** at a test height: an int-12 node is kept below it in both directions and refused from it.
+    let new = with_list(shipped, Some(H));
     for daa in [5_585, 7_000, H - 1] {
         let o = fork_id_v1(&old, daa);
         let n = fork_id_v1(&new, daa);
-        assert_eq!(n.next, H, "the new build announces 9,000 next at {daa}");
+        assert_eq!(n.next, H, "the armed build announces the height next at {daa}");
         assert!(!evaluate_fork_id_v1(&new, daa, o.fired.as_bytes().as_slice(), o.next).refuses(), "new keeps old at {daa}");
         assert!(!evaluate_fork_id_v1(&old, daa, n.fired.as_bytes().as_slice(), n.next).refuses(), "old keeps new at {daa}");
     }
@@ -257,7 +305,7 @@ fn the_fork_id_keeps_an_int12_node_below_9000_and_refuses_it_from_9000() {
         assert!(evaluate_fork_id_v1(&new, daa, o.fired.as_bytes().as_slice(), o.next).refuses(), "new refuses old at {daa}");
         assert!(evaluate_fork_id_v1(&old, daa, n.fired.as_bytes().as_slice(), n.next).refuses(), "old refuses new at {daa}");
     }
-    assert!(fork_id_gate_fences_v1(&new).contains(&H) && !fork_id_gate_fences_v1(&old).contains(&H), "the fork id gates on 9,000");
+    assert!(fork_id_gate_fences_v1(&new).contains(&H) && !fork_id_gate_fences_v1(&old).contains(&H), "the fork id gates on the height");
     // A build that arms only part of the list is a different ruleset by the params id (the handshake's fingerprint), even where the fork
     // id — which names heights — cannot tell the two apart.
     let mut partial = old.clone();
@@ -334,7 +382,7 @@ fn the_list_holds_its_prerequisites_by_name() {
     for name in LIST {
         let mut one = baseline.clone();
         (entry(name).set)(&mut one, at(H));
-        one.validate_palw_v2().unwrap_or_else(|e| panic!("{name} alone at 9,000 over int-12: {e}"));
+        one.validate_palw_v2().unwrap_or_else(|e| panic!("{name} alone at the test height over int-12: {e}"));
     }
 }
 
@@ -351,15 +399,17 @@ fn drill_with_the_earlier_flag_days_low() -> Params {
 }
 
 #[test]
-fn the_drill_crosses_the_whole_list_at_a_low_height_and_moves_nothing_else() {
+fn the_drill_arms_the_whole_list_at_a_low_height_and_moves_nothing_else() {
     let before = drill_with_the_earlier_flag_days_low();
-    // The drill ruleset arms the release's list at 9,000 like every ruleset: the move is a MOVE.
-    assert_eq!(fence_at(&before, "palw_audit_1004_v1"), Some(H));
+    // The drill ruleset carries the list dormant like every shipped ruleset (no DAA-9,000 flag day): the drill ARMS it.
+    for name in LIST {
+        assert_eq!(fence_at(&before, name), None, "{name}: dormant on the drill ruleset before the flag");
+    }
     let mut moved = before.clone();
     let moves = palw_drill_int13_at_v1(&mut moved, 60).expect("a salted drill crosses the int-13 flag day low");
     assert_eq!(moves.iter().map(|m| m.name).collect::<Vec<_>>(), LIST, "exactly the list, in its order");
     for m in &moves {
-        assert_eq!((m.at, m.was), (60, Some(H)), "{} moves from the release's height to 60", m.name);
+        assert_eq!((m.at, m.was), (60, None), "{} is armed at 60 (it was dormant)", m.name);
     }
     moved.validate_palw_v2().expect("the result validates");
     for ((name, was), (_, now)) in before.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
@@ -384,10 +434,11 @@ fn the_drill_crosses_the_whole_list_at_a_low_height_and_moves_nothing_else() {
     let why = palw_drill_int13_at_v1(&mut same, 24).expect_err("another fence's height (the second IR fence's)");
     assert!(why.contains("fork id"), "{why}");
     assert_eq!(ids(&same), ids(&before), "refused untouched");
-    // A move to the height the release already has moves nothing.
-    let mut nothing = before.clone();
-    let why = palw_drill_int13_at_v1(&mut nothing, H).expect_err("the release's own height moves nothing");
+    // A move to the height the list already has moves nothing.
+    let mut nothing = moved.clone();
+    let why = palw_drill_int13_at_v1(&mut nothing, 60).expect_err("the list's own height moves nothing");
     assert!(why.contains("move nothing"), "{why}");
+    assert_eq!(ids(&nothing), ids(&moved), "refused untouched");
     // The range twin needs palw_gen_v1 below it: with the int-11 list still at 5,300 a low int-13 is refused, by name, untouched.
     let mut no_int11 = palw_t12_drill_params_v1(&salt());
     palw_drill_post_launch_fences_at_v1(&mut no_int11, 6).unwrap();
@@ -407,19 +458,20 @@ fn the_drill_crosses_the_whole_list_at_a_low_height_and_moves_nothing_else() {
 }
 
 #[test]
-fn the_per_fence_court_window_flag_moves_its_entry_and_keeps_the_rest_of_the_list_armed() {
-    // `--palw-drill-model-court-at` is the one per-fence flag of the list: it moves the window alone and the rest stays at 9,000.
+fn the_per_fence_court_window_flag_arms_its_entry_and_leaves_the_rest_of_the_list_dormant() {
+    // `--palw-drill-model-court-at` is the one per-fence flag of the list: it arms the window alone and the rest stays dormant.
     let mut p = drill_with_the_earlier_flag_days_low();
     palw_drill_model_court_window_at_v1(&mut p, 36).expect("--palw-drill-model-court-at=36");
     assert_eq!(fence_at(&p, "palw_model_court_window"), Some(36));
     for name in ["palw_audit_1004_v1", "palw_gen_range_twin_v1", "palw_receipt_spend_v4"] {
-        assert_eq!(fence_at(&p, name), Some(H), "{name} stays at the release's height");
+        assert_eq!(fence_at(&p, name), None, "{name} stays dormant");
     }
     p.validate_palw_v2().expect("validates");
 }
 
 /// **The release's fence table, printed for the review and the report** (`--nocapture`): every testnet-12 fence with a height past genesis,
-/// by height, the three ids of the shipped ruleset and of the int-12 baseline, and the fork id's schedule.
+/// by height, the three ids of the shipped ruleset and of the int-12 baseline (the same, while the int-13 list is unscheduled), and the
+/// fork id's schedule.
 #[test]
 fn print_the_release_fence_table() {
     let shipped = palw_t12_shipped_params();
@@ -441,5 +493,7 @@ fn print_the_release_fence_table() {
     println!("SHIPPED  params {sp}\n         identity {si}\n         schedule {ss}");
     println!("INT-12   params {bp}\n         identity {bi}\n         schedule {bs}");
     println!("SCHEDULE {:?}", shipped.fence_schedule_v1());
-    assert!(rows.iter().any(|(at, name)| *at == H && *name == "palw_audit_1004_v1"));
+    // The shipped table is the int-12 release's: no int-13 row, nothing at the cancelled 9,000.
+    assert!(rows.iter().all(|(at, name)| *at != H && !LIST.contains(name)), "no int-13 row on the shipped ruleset ({rows:?})");
+    assert_eq!(ids(&shipped), ids(&baseline), "the shipped table IS the int-12 release's");
 }

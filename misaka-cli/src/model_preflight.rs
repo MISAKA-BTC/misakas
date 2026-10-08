@@ -154,6 +154,7 @@ pub async fn model_preflight(ctx: &Ctx, input: &Path, a: &ModelPreflightArgs) ->
         node,
         full: misaka_palw_sdk::preflight::full::FullInputs { pack: a.pack.clone(), artifact: a.artifact_file.clone() },
         lora: None,
+        pipeline_admission: true,
     };
     // A repository id or an http(s) base URL is read by ranges (the headers only); anything else is a local model.
     let spelled = input.to_string_lossy().to_string();

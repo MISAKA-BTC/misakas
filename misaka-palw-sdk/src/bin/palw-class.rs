@@ -538,6 +538,7 @@ fn model_preflight(network: Option<&str>, args: &mut Vec<String>) -> Result<bool
         node,
         full,
         lora: None,
+        pipeline_admission: true,
     };
     // A repository: `http(s)://…/<base>` (a mirror, a fixture server) or `hf://org/name[@revision]`, read by ranges.
     let remote_base = if let Some(rest) = input.strip_prefix("hf://") {

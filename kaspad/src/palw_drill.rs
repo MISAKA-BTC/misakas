@@ -1996,8 +1996,9 @@ mod tests {
             parse(&v.iter().map(String::as_str).collect::<Vec<_>>())
         };
         let release = config_of(&parsed(&[]));
-        // The int-13 flag day arms the window with its list, at the release's height, on every testnet-12 ruleset — a drill's included.
-        assert_eq!(release.params.palw_model_court_window, Some(ForkActivation::new(9_000)), "armed at the int-13 height on the release drill");
+        // The int-13 list (the window's carrier) has no height — the user cancelled the DAA-9,000 flag day on 2026-10-08 — so the window is
+        // dormant on every testnet-12 ruleset, a drill's included, until a flag arms it.
+        assert_eq!(release.params.palw_model_court_window, None, "dormant on the release drill: the int-13 list is unscheduled");
         assert_eq!(release.params.palw_tir_fence2, Some(ForkActivation::new(3_600)), "and fence2 alone is the DAA-3,600 flag day");
         // The DAA-3,600 flag day's drill flag moves fence2 alone and leaves the window dormant.
         let crossing = config_of(&parsed(&["--palw-drill-tir2-at=30"]));
@@ -2508,8 +2509,8 @@ mod tests {
     }
 
     /// **The int-13 flag day is ONE drill flag** (`--palw-drill-int13-at`): refused without the salt; with it MOVES `palw_audit_1004_v1`,
-    /// `palw_gen_range_twin_v1`, `palw_model_court_window` and `palw_receipt_spend_v4` from the release's DAA 9,000 to its height (mirrors
-    /// included) and moves nothing else; refused, by the ruleset's own check and never a panic, while the int-11 list's `palw_gen_v1` is
+    /// `palw_gen_range_twin_v1`, `palw_model_court_window` and `palw_receipt_spend_v4` ARMS them at its height (they are dormant on the
+    /// release: the user cancelled the DAA-9,000 flag day on 2026-10-08), mirrors included, and moves nothing else; refused, by the ruleset's own check and never a panic, while the int-11 list's `palw_gen_v1` is
     /// above it (`--palw-drill-int11-at` below it); refused beside the per-fence `--palw-drill-model-court-at`, which would move one of its
     /// entries a second time; the marker keeps its own line (`int13_at=`, `none` where a marker written before it has none) and a stored
     /// chain is never reopened under another height; the keyring's manifest names it and announces the fingerprint the node on the same
@@ -2544,7 +2545,7 @@ mod tests {
         let list = ["palw_audit_1004_v1", "palw_gen_range_twin_v1", "palw_model_court_window", "palw_receipt_spend_v4"];
         let height = |c: &Config, name: &str| c.params.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, f)| f);
         for name in list {
-            assert_eq!(height(&without, name), Some(ForkActivation::new(9_000)), "{name}: armed at the release's height on the release drill");
+            assert_eq!(height(&without, name), None, "{name}: dormant on the release drill (the int-13 list is unscheduled)");
             assert_eq!(height(&with, name), Some(ForkActivation::new(60)), "{name}: moved to the drill's height");
         }
         assert!(!with.params.palw_audit_1004_active_at(59) && with.params.palw_audit_1004_active_at(60));

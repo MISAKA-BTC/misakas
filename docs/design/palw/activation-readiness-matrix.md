@@ -23,11 +23,14 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 
 | RFC | Open | Kind |
 | --- | --- | --- |
+| RFC-0004 Part II (2026-10-08, in the gate by the user) | computation specification with typed roots (`Weights` / `Memory` + update rule / `Retrieval` snapshot + deterministic rule / `Composite`); real-node E2E per kind with outsider conviction and DA default; bounds; census counting | CODE + DESIGN |
 | RFC-0009 | L2 PALW fork-choice verification for remote clients (needs a state-root version bump and transition verification); the provider court (objective DA responsibility transfer); rail auto-resubmit; the RDA4 `SigningPurpose` | DESIGN / CODE |
 | RFC-0006 | non-seat watcher, per-segment pricing, per-shard V3 draw | CODE / DESIGN |
 | RFC-0013 | tiled range evaluator, Merkle index | CODE |
 | RFC-0002 / 0011 | the HF-majority acceptance bar (RFC-0011: one-sided 95% lower bound ≥ 90% over all public repos); census re-measurement running (COV-P4) | CODE + measurement |
 | RFC-0001 | proposals P1–P4 | CODE |
+| G14-for-rewards (lane D GAP 6/3) | H1 on a running devnet: a class whose kernel is KERNEL_NOT_ACTIVE and that has no PUBLIC_PROSECUTION_COMPLETE moved Candidate → Probation once 8 seats proved readiness — the V2 lifecycle consults seats/readiness only, and only classes that began onboarding are gated. From the full-activation release every NEW class must pass the onboarding/G14 gate before it can earn; whether live Panel-route classes are grandfathered is a user decision | CODE + POLICY |
+| fork-choice safety + partition healing (FINX, ADR-0175) | **rule E adopted (user, 2026-10-09)**: search every tip, count claims over each tip's exclusive past, bonded participation first once the fork is deep; details internal (FINX branch). Ships in the full-activation release and is a **hard prerequisite for arming `palw_dns_retirement_v1`** | CODE (fence; FINX implementing) |
 | liveness | a minority that was partitioned ~41 min never rejoins (DNS reorg gate DominanceViolation) and one node deadlocks after "Chain participation held" — found by H1 on the devnet; the code is in int-12 too (LIVE-R1 investigating) | CODE (HIGH) |
 
 ## 3. Decisions for the user (collected, not urgent until the code is ready)
@@ -35,7 +38,8 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 1. RFC-0012: D1 and the policy values (D, W, caps, horizon).
 2. RFC-0015: the OPV admission list and terms.
 3. RFC-0007 Part VI: the challenge policy's security level; approval of a beacon scheme for RFC-0010.
-4. GAP-5: the FinalReward funding source.
+4. GAP-5: the FinalReward funding source (decided: user-pays escrow; subsidy carves later).
+4a. The claim seal deposit size versus an honest producer's race-loss cost (a losing seal is forfeited by design: a refund would let free Sybil seals choose a beacon claim id).
 5. The activation height of the single release, once every row above is clear.
 
 ## 3a. User rulings on the Panel=0 parameters (2026-10-08 ~20:30)
@@ -67,10 +71,43 @@ small class whose conformance is a complete deterministic check (no sampling, so
 own activation needs no beacon — and its grinding surface analysed (output selection, withdrawal, Final timing, fork choice, work
 concentration).
 
+**Beacon grinding finding (OPV-BOOT, 2026-10-08).** With today's PALW Work Beacon the LAST contributor can steer the output: once
+k−1 sources are public, one funded job's nonce is ground offline (`canonical_work_id` changes per nonce) and committed as source k, so a
+sampled conformance keeps only `scope bits − h` against an adversary with 2^h offline hashes. Fix (DESIGN blocker for any sampled
+approval and for Panel=0): a sealed-source beacon v3 — sources ordered by their claim SEAL position, sealed inside the window, revealed
+after it closes, seals bonded (ledger primitives from G14-R4; beacon from OPV-BOOT). The complete-check bootstrap is unaffected (ε = 0,
+no randomness).
+
 **Order:** (1) GAP-5 by escrow + coinbase/escrow/reorg accounting tests (G14-R4); (2) the dependency graph and an explicit non-circular
 bootstrap path; (3) fresh-verifier time per class measured on real hardware → window and collateral recomputed; (4) C4: grinding,
 watcher absence, 32-slot capture, Final race, economic attacks; (5) the production challenge policy and the Panel=0 activation decided
 separately.
+
+## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
+
+Waves, because the Mac (32 GiB, ~40 GB free disk) cannot build a dozen targets at once, and builds are batched (user rule): each lane
+designs and writes first and builds at milestones with one cargo invocation; a new wave starts as a running lane ends.
+
+| Wave | Lane | Model | Covers |
+| --- | --- | --- | --- |
+| running | G14-R4 | opus | RFC-0014/0015: escrow Final reward (GAP-5), 32-slot capture (Sybil-robust), accuser seal (GAP-R7), GAP-11; arming-blocker list |
+| running | OPV-BOOT | opus | RFC-0015/0010/0007: dependency graph, non-circular beacon bootstrap, derived OPV eligibility, grinding table, effective-bits function |
+| running | LIVE-R1 | opus | liveness: the IBD-candidates lock deadlock (in int-12 → node-only hotfix) and the post-partition economic-comparator split |
+| running | UNSCHED | sonnet | no DAA-9,000 flag day; ids back to int-12 |
+| running | COV-P4 | sonnet | RFC-0002/0011 census (two denominators, eight buckets); T5 preflight verdict |
+| running | H1 | — | real-checkpoint devnet loop (9B, Llama, Mitsuba …) |
+| 1 | X8R | opus | RFC-0008: review every un-gated pipeline path of `rfc8/x8-exec-v2`, integrate it, then the slice verification route (G14 on slices), suffix void, relay backpressure, the five design gaps |
+| 1 | K2S | opus | RFC-0011 K2 at real scale: per-position roots, segments, per-prosecution public-byte bound, row-tiled court openings, authenticated prompt tiles (262k / 2M), cached ledger per block, mempool gate, pipeline header wire |
+| 2 | X12 (resume) | opus | RFC-0012 C1–C11 code items |
+| 2 | DA16 | opus | RFC-0014 §16 transport (artifact availability → binding equality, held 8k) and RFC-0009's provider court (objective DA responsibility transfer) |
+| 2 | SMALL | sonnet | RFC-0001 P1–P4, RFC-0013 tiled range evaluator + Merkle index, RFC-0009 rail auto-resubmit and the RDA4 SigningPurpose |
+| 3 | SHARD | opus | RFC-0006 non-seat watcher, per-segment pricing, per-shard V3 draw; RFC-0010 V3 receipt/retry-vs-DA-default guard |
+| 3 | L2FC | opus | RFC-0009 L2: verifiable PALW fork choice for remote clients (state-root version, transition verification) |
+| 3 | MEAS | sonnet | RFC-0015 fresh-verifier timings per class on real hardware → window and collateral formulas |
+| 3 | HFX | opus | RFC-0002/0011 the census's top software-closable blockers as generic features |
+| 2 | R4X | opus | RFC-0004 Part II: typed-root computation specifications — `Memory`, `Retrieval`, `Composite` classes end to end under G14 |
+| 4 | C4R4 | opus | independent attack round: grinding, watcher absence, 32-slot capture, Final race, economics, partition rejoin |
+| 4 | SOUND | opus | RFC-0007/0015 review dossier for the external soundness review (the review itself stays EXTERNAL) |
 
 ## 4. Change log
 

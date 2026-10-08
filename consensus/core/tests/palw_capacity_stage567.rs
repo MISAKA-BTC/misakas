@@ -123,7 +123,8 @@ fn the_release_arms_the_package_at_h_and_the_two_steps_at_the_directed_heights()
     for name in NAMES {
         assert!(names.contains(&name), "{name} is on the int-11 list");
     }
-    // The int-12 release (the int-13 list, DAA 9,000, rides on top of it and has its own suite: palw_t12_flag_day_9000).
+    // The int-12 release (testnet-12 as shipped: the int-13 list is unscheduled — no DAA-9,000 flag day, user 2026-10-08 — and has its own
+    // suite: palw_t12_flag_day_9000).
     let shipped = palw_t12_release_v6_params();
     shipped.validate_palw_v2().expect("testnet-12 as the int-12 release ships it validates");
     for name in NAMES {

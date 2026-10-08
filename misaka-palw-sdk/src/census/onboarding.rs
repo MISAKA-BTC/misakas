@@ -388,6 +388,7 @@ mod tests {
             "READY_SEATS_INSUFFICIENT",
             "INDEPENDENT_OPERATORS",
             "PACK_NOT_VERIFIED",
+            "PIPELINE_CLASS_UNDECLARED",
         ];
         for c in published_preflight {
             let b = Blocker::new(crate::preflight::Stage::Convert, c, "x");
