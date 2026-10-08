@@ -369,6 +369,8 @@ pub fn config(outbox: &Path) -> Config {
         sidecar: Some(passthrough_template()),
         cancel_on_disconnect: true,
         finality_depth: crate::status::DEFAULT_FINALITY_DEPTH,
+        evidence_providers: Vec::new(),
+        evidence_min_copies: 1,
     }
 }
 
@@ -434,6 +436,6 @@ pub fn chat(
     })?;
     let budget = Mutex::new(crate::PublicJobBudget::new());
     let mut sink = crate::BufferedSink;
-    let ctx = crate::RequestCtx { link };
+    let ctx = crate::RequestCtx { link, request_digest: crate::idempotency::request_digest(&serde_json::to_vec(body).unwrap()).ok() };
     crate::handle_chat(config, identity, worker, &budget, facts, source, &chat_request, &admitted, admitted.sampling, &mut sink, &ctx)
 }

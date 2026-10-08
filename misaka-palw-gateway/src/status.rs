@@ -82,7 +82,7 @@ pub struct LocalFacts {
     pub rail_relayed: bool,
 }
 
-fn parse_hash(hex: &str) -> Option<Hash64> {
+pub fn parse_hash(hex: &str) -> Option<Hash64> {
     let mut out = [0u8; 64];
     (hex.len() == 128 && faster_hex::hex_decode(hex.as_bytes(), &mut out).is_ok()).then(|| Hash64::from_bytes(out))
 }

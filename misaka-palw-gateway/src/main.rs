@@ -82,6 +82,10 @@ mod idempotency;
 mod status;
 // RFC-0001 + RFC-0003: where each fact a claim must pin enters the job; the worker's result held to its manifest.
 mod binding;
+// RFC-0009 stage B: the claim's evidence placed with independent providers before the commitment is queued.
+mod evidence;
+// The output receipt: what a user keeps, and how it is checked against the chain.
+mod receipt;
 // Test support: an in-process worker over the floor engine, and the e2e suites that drive the whole chat path against it.
 #[cfg(test)]
 mod testkit;
@@ -285,6 +289,10 @@ struct Config {
     cancel_on_disconnect: bool,
     /// How deep (DAA) a `Final`/void claim row must be before `GET /v1/requests/<id>` calls it settled.
     finality_depth: u64,
+    /// **RFC-0009 stage B: where a committed claim's evidence is placed** (`--evidence-provider <dir|http://…>`, repeatable), and how
+    /// many of them must hold a copy that was read back and verified (`--evidence-min-copies`, default 1) before the commitment is queued.
+    evidence_providers: Vec<misaka_palw_remote::transport::ProviderSpecV1>,
+    evidence_min_copies: usize,
 }
 
 /// A loaded, verified sidecar and the two template ids it runs under (leaked once at boot: the
@@ -1127,6 +1135,8 @@ impl JobRunner for WorkerSupervisor {
 /// What a request carries besides its content: whether its client is still there, and where its status is recorded.
 struct RequestCtx<'a> {
     link: &'a dyn serving::ClientLink,
+    /// The canonical digest of the request body ([`idempotency::request_digest`]): which request a receipt answers.
+    request_digest: Option<Hash64>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1769,6 +1779,17 @@ fn handle_chat(
         price = exact;
     }
 
+    // **Evidence first** (RFC-0009 stage B): with providers configured, the claim's material is placed with them — and read back — BEFORE
+    // the commitment is queued for the rail. A claim whose only copy of the evidence is on this machine is a claim that defaults the day
+    // this machine goes away; one whose copies could not be placed is answered and not committed, and says why.
+    let mut evidence_json = serde_json::Value::Null;
+    if commit_refusal.is_none() && !config.evidence_providers.is_empty() {
+        match publish_job_evidence(config, &commitment, &result) {
+            Ok(report) => evidence_json = report,
+            Err(why) => commit_refusal = Some(why),
+        }
+    }
+
     // The outbox artifact: the framed result (borsh) + a JSON summary. Everything the executor
     // rail needs to assemble, sign and submit the commitment — and an honest list of what is
     // still pending (see the module doc).
@@ -1863,6 +1884,19 @@ fn handle_chat(
             })
         })
         .collect();
+    // **The output receipt** (committed answers only): what the user keeps to check this answer against the chain later.
+    let receipt_json = commit_refusal.is_none().then(|| {
+        let context_hash = job_context_hash.as_deref().and_then(status::parse_hash).unwrap_or_default();
+        receipt::ReceiptV1::seal(
+            &commitment,
+            &result.output_token_ids,
+            shown.as_bytes(),
+            ctx.request_digest.unwrap_or_default(),
+            plan.template_id,
+            context_hash,
+        )
+        .to_json()
+    });
     let summary = serde_json::json!({
         "schema": "misaka.palw.fp-v3-gateway-artifact.v1",
         "fp_job_id": hex(job_id),
@@ -1909,6 +1943,9 @@ fn handle_chat(
         "commit_by_anchor_daa": commitment.job.anchor_daa.saturating_add(COMMITMENT_ANCHOR_TTL_DAA),
         "committed": commit_refusal.is_none(),
         "not_committed_because": commit_refusal.clone(),
+        // RFC-0009 stage B: where the evidence was placed (null without --evidence-provider, or when nothing was committed).
+        "evidence": evidence_json,
+        "receipt": receipt_json,
         // ADR-0096: what the entrance made of the shown answer — presentation, never commitment.
         "tool_calls_parsed": parsed.calls.len(),
         "tool_calls_unparsed": parsed.unparsed_blocks,
@@ -2033,6 +2070,10 @@ fn handle_chat(
         // operator staked on it.
         "committed": commit_refusal.is_none(),
         "not_committed_because": commit_refusal,
+        "evidence": evidence_json,
+        // The output receipt: committed answers only (null otherwise) — see `receipt` for what it does and does not establish.
+        "receipt": receipt_json,
+        "receipt_route": format!("/v1/receipts/{}{}", status::COMPLETION_PREFIX, &hex(job_id)[..24]),
         // ADR-0096 Decision 2: the shown answer before any `<tool_call>` block was lifted out of
         // it — the text the model actually said, whole.
         "answer_untrimmed": rendered_string,
@@ -2460,6 +2501,8 @@ fn main() {
     let mut sidecar_path: Option<PathBuf> = None;
     let mut cancel_on_disconnect = true;
     let mut finality_depth = status::DEFAULT_FINALITY_DEPTH;
+    let mut evidence_specs = String::new();
+    let mut evidence_min_copies: usize = 1;
     while let Some(arg) = args.pop_front() {
         let mut value = |what: &str| args.pop_front().unwrap_or_else(|| die(format!("{what} needs a value")));
         match arg.as_str() {
@@ -2513,6 +2556,13 @@ fn main() {
             }
             "--no-answer-fast-path" => answer_fast_path = false,
             "--no-cancel-on-disconnect" => cancel_on_disconnect = false,
+            "--evidence-provider" => {
+                evidence_specs.push_str(&value("--evidence-provider"));
+                evidence_specs.push('\n');
+            }
+            "--evidence-min-copies" => {
+                evidence_min_copies = value("--evidence-min-copies").parse().unwrap_or_else(|e| die(format!("{e}")))
+            }
             "--finality-depth" => finality_depth = value("--finality-depth").parse().unwrap_or_else(|e| die(format!("{e}"))),
             // RFC-0001 §2.9: the artifact sidecar — read here for its chat template and defaults,
             // and forwarded to every worker for its tokenizer.
@@ -2529,7 +2579,7 @@ fn main() {
                 per_source_jobs_per_window = value("--per-source-jobs-per-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
             other => die(format!(
-                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--worker-processes n] [--kv-cache-budget-mib n [--kv-cache-verify-every n]] [--no-answer-fast-path] [--sidecar <file>] [--no-cancel-on-disconnect] [--finality-depth n] [--max-connections-per-source n] [--max-jobs-per-source n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
+                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--worker-processes n] [--kv-cache-budget-mib n [--kv-cache-verify-every n]] [--no-answer-fast-path] [--sidecar <file>] [--no-cancel-on-disconnect] [--finality-depth n] [--evidence-provider <dir|http://…> ... [--evidence-min-copies n]] [--max-connections-per-source n] [--max-jobs-per-source n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
             )),
         }
     }
@@ -2570,7 +2620,12 @@ fn main() {
         sidecar: sidecar_path.as_deref().map(|p| SidecarRuntime::load(p).unwrap_or_else(|e| die(e))),
         cancel_on_disconnect,
         finality_depth,
+        evidence_providers: misaka_palw_remote::transport::parse_provider_list_v1(&evidence_specs).unwrap_or_else(|e| die(e)),
+        evidence_min_copies: evidence_min_copies.max(1),
     };
+    if let Err(e) = evidence::boot_check(&config) {
+        die(e);
+    }
 
     // -----------------------------------------------------------------------------------------
     // ADR-0079 Decision 4 / S5 — this process parses a stranger's bytes, so it holds no key. It
@@ -2810,6 +2865,28 @@ fn streaming_requested(body: &[u8]) -> bool {
     serde_json::from_slice::<serde_json::Value>(body).ok().and_then(|v| v.get("stream").and_then(serde_json::Value::as_bool)).unwrap_or(false)
 }
 
+/// **Place a committed claim's evidence with the configured providers** (see [`evidence`]): `Ok` carries the placement report; `Err` is the
+/// sentence that becomes the job's `not_committed_because`.
+fn publish_job_evidence(
+    config: &Config,
+    commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    result: &PalwFpWorkerResultV3,
+) -> Result<serde_json::Value, String> {
+    let job_id = fp_job_id_v3(&result.job);
+    let capture = evidence::read_capture(&config.outbox, &job_id).map_err(|e| format!("evidence could not be built: {e}"))?;
+    let built = evidence::build(commitment, &result.prompt_token_ids, &capture).map_err(|e| format!("evidence could not be built: {e}"))?;
+    let opened = misaka_palw_remote::transport::open_providers_v1(&config.evidence_providers);
+    let refs: Vec<&dyn misaka_palw_remote::transport::EvidenceProvider> = opened.iter().map(|b| b.as_ref()).collect();
+    match evidence::publish(&built, &refs, config.evidence_min_copies) {
+        Ok(report) => Ok(evidence::report_json(&built, &report)),
+        Err(report) => Err(format!(
+            "evidence could not be placed with {} verified provider(s) (placed {}): the claim would default the day this machine goes away",
+            config.evidence_min_copies,
+            report.verified_copies()
+        )),
+    }
+}
+
 /// **The idempotency decision** (see [`idempotency`]): no header → `Ok(None)` (the request runs as it always did); a fresh key →
 /// `Ok(Some(reservation))`; a finished request → `Early::Replay`; anything else a refusal that says why.
 fn begin_idempotent<'a>(services: &'a Services, request: &HttpRequest) -> Result<Option<idempotency::Reservation<'a>>, Early> {
@@ -2838,6 +2915,15 @@ fn status_of_completion(config: &Config, chain_source: &chain::ChainSource, id: 
     let observer: Option<&dyn status::ClaimObserver> = chain_source.can_submit().then_some(chain_source as &dyn status::ClaimObserver);
     let report = status::status_with_chain(&local, observer, config.finality_depth, None);
     Some((report, local))
+}
+
+/// The receipt of a committed answer, from the outbox summary it was filed in, with the rail's submission txid if there is one.
+fn receipt_of_completion(config: &Config, id: &str) -> Option<receipt::ReceiptV1> {
+    let stem = status::stem_of_completion_id(id)?;
+    let summary: serde_json::Value = serde_json::from_slice(&std::fs::read(config.outbox.join(format!("{stem}.json"))).ok()?).ok()?;
+    let sealed = receipt::ReceiptV1::from_json(summary.get("receipt").filter(|r| !r.is_null())?).ok()?;
+    let local = status::read_local_facts(&config.outbox, &stem)?;
+    Some(sealed.with_txid(local.rail_txid))
 }
 
 /// **Serve a stored response again** — the same claim, no inference — with its status recomputed NOW (a replay a day later may
@@ -3061,7 +3147,7 @@ fn serve_connection(
                 Some(link) if config.cancel_on_disconnect => Box::new(link),
                 _ => Box::new(serving::AlwaysPresent),
             };
-            let ctx = RequestCtx { link: link.as_ref() };
+            let ctx = RequestCtx { link: link.as_ref(), request_digest: idempotency::request_digest(&request.body).ok() };
             if streaming {
                 // **A slow reader must not wedge the one job slot.** The deltas are written from
                 // inside the worker's mutex, so a client that stops reading would otherwise block
@@ -3214,6 +3300,25 @@ fn serve_connection(
                 respond(stream, "404 Not Found", &error_body("no request under that id: it is neither streaming here nor in this gateway's outbox"));
             }
         }
+        // **The output receipt of a committed answer** (see `receipt`): sealed when the answer was committed, with the carrier txid added
+        // once the rail has recorded a submission. Verified by the holder against the chain, not trusted from here.
+        ("GET", path) if path.starts_with("/v1/receipts/") => {
+            if let Some(source) = source
+                && !sources.lock().expect("the source lock is never poisoned").admit_fetch(source)
+            {
+                respond(stream, "429 Too Many Requests", &error_body("per-source receipt fetch rate exceeded"));
+                return;
+            }
+            let id = &path["/v1/receipts/".len()..];
+            match receipt_of_completion(config, id) {
+                Some(receipt) => respond(stream, "200 OK", &receipt.to_json()),
+                None => respond(
+                    stream,
+                    "404 Not Found",
+                    &error_body("no receipt under that id: the answer was not committed (no claim, no receipt) or this gateway never issued it"),
+                ),
+            }
+        }
         // ADR-0078 Decision 6's fetch handle: a derived artifact too large to ride inline is
         // served by its derived id. A GET with no side effects, so it needs neither the job slot
         // nor the in-flight reservation — but it is dispatched HERE, inside the bounded accept
@@ -3253,7 +3358,7 @@ fn serve_connection(
             stream,
             "404 Not Found",
             &error_body(
-                "this gateway serves POST /v1/chat/completions, POST /v1/embeddings, GET /v1/models, GET /health, GET /v1/requests/<id> and GET /v1/artifacts/<derived-id>",
+                "this gateway serves POST /v1/chat/completions, POST /v1/embeddings, GET /v1/models, GET /health, GET /v1/requests/<id>, GET /v1/receipts/<id> and GET /v1/artifacts/<derived-id>",
             ),
         ),
     }
@@ -3372,6 +3477,8 @@ mod tests {
             sidecar: None,
             cancel_on_disconnect: true,
             finality_depth: status::DEFAULT_FINALITY_DEPTH,
+            evidence_providers: Vec::new(),
+            evidence_min_copies: 1,
         }
     }
 

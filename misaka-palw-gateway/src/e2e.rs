@@ -424,3 +424,30 @@ fn the_status_route_reports_committed_then_submitted_and_never_final_without_a_c
     assert_eq!(replayed["misaka"]["request"]["status"], "committed");
     assert_eq!(replayed["misaka"]["request"]["claim_id"], claim_of(&keyed).as_str());
 }
+
+/// **The receipt over HTTP**: the response carries it, the route re-serves it with the rail's txid, and a hand-edited copy no longer verifies.
+#[test]
+fn the_receipt_route_serves_the_sealed_receipt_and_adds_the_txid_the_rail_recorded() {
+    let h = Harness::new("e2e-receipt");
+    let body = h.call(&post(&chat("receipt"), None)).json();
+    let id = body["id"].as_str().unwrap().to_string();
+    let in_response = crate::receipt::ReceiptV1::from_json(&body["misaka"]["receipt"]).expect("the response carries the receipt");
+    assert_eq!(body["misaka"]["receipt_route"], format!("/v1/receipts/{id}").as_str());
+    assert!(in_response.submission_txid.is_none());
+    let served = h.call(&get(&format!("/v1/receipts/{id}")));
+    assert_eq!(served.status(), 200);
+    let served = crate::receipt::ReceiptV1::from_json(&served.json()).unwrap();
+    assert_eq!(served.receipt_id, in_response.receipt_id, "the same sealed body");
+    // The rail submits; the route now names the carrier — and the seal is untouched.
+    let stem = crate::status::stem_of_completion_id(&id).unwrap();
+    std::fs::write(h.dir.join(format!("{stem}.rail.json")), serde_json::json!({ "submitted": "cd".repeat(64) }).to_string()).unwrap();
+    let after = crate::receipt::ReceiptV1::from_json(&h.call(&get(&format!("/v1/receipts/{id}"))).json()).unwrap();
+    assert_eq!((after.submission_txid.as_deref(), after.receipt_id), (Some("cd".repeat(64).as_str()), in_response.receipt_id));
+    // An answer that was not committed has no claim and so no receipt.
+    h.budget.lock().unwrap().spent_sompi = u64::MAX / 2;
+    let refused = h.call(&post(&chat("nocommit"), None)).json();
+    assert_eq!(refused["misaka"]["committed"], false);
+    assert!(refused["misaka"]["receipt"].is_null());
+    let rid = refused["id"].as_str().unwrap();
+    assert_eq!(h.call(&get(&format!("/v1/receipts/{rid}"))).status(), 404);
+}
