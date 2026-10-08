@@ -1430,3 +1430,36 @@ async fn rfc12_x12_the_retired_share_is_never_minted_and_an_old_escrow_is_not_ra
         "attempts on both sides of the fence ({legacy_rows} legacy, {retired_rows} retired)"
     );
 }
+
+
+/// **EXPECTED.** The mempool's coinbase-settlement policy reads the DNS-confirmed anchor below the fence and **not** past it: a frozen
+/// historical anchor no longer releases coinbases early once the virtual is retired (the wallet clears the same shortcut), while the
+/// long fallback still applies. Policy only; no block rule reads it.
+#[tokio::test]
+async fn rfc12_x13_the_mempool_stops_reading_a_frozen_dns_anchor_past_the_fence() {
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0d00_0000);
+    let b = a.beat();
+    let b0 = a.take(b, "b0").await;
+    let anchor_daa = 5;
+    plant_dns(&a, b0.header.hash, anchor_daa, b0.header.hash, 0);
+    let legacy = a.vp().dns_coinbase_settlement().expect("the long fallback is configured");
+    assert_eq!(legacy.confirmed_anchor_daa, Some(anchor_daa), "below the fence the policy reads the anchor");
+    prefix_rest(&mut a).await;
+    let daa = a.api().get_virtual_daa_score();
+    assert!(a.config.params.palw_dns_retired_at(daa), "the virtual is past the fence (daa {daa})");
+    // The row is still there, frozen; the policy no longer reads it.
+    assert_eq!(a.vp().dns_state_store.read().get().ok().map(|s| s.last_dns_confirmed_anchor_daa_score), Some(anchor_daa));
+    let retired = a.vp().dns_coinbase_settlement().expect("the long fallback still applies");
+    assert_eq!((retired.confirmed_anchor_daa, retired.long_maturity_daa), (None, legacy.long_maturity_daa));
+}
+
+/// The rest of [`prefix`] after b0 (e1, b1, e2).
+async fn prefix_rest(rig: &mut Rig) {
+    let e = rig.attempt(0, Vec::new(), no_evm());
+    rig.take(e, "e1").await;
+    let b = rig.beat();
+    rig.take(b, "b1").await;
+    let e = rig.attempt(1, Vec::new(), no_evm());
+    rig.take(e, "e2").await;
+}

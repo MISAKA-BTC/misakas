@@ -17996,12 +17996,19 @@ impl VirtualStateProcessor {
         if long_maturity_daa == 0 {
             return None;
         }
-        let confirmed_anchor_daa = self
-            .dns_state_store
-            .read()
-            .get()
-            .ok()
-            .and_then(|s| (s.last_dns_confirmed_anchor != BlockHash::default()).then_some(s.last_dns_confirmed_anchor_daa_score));
+        // RFC-0012: once the virtual is past the retirement the DNS row is a frozen historical fact (nothing writes it any more),
+        // and an anchor frozen below the fence must not keep releasing coinbases early in the mempool while the wallet — which
+        // clears the shortcut when the node reports none — shows them pending. The long fallback still releases them by the DAA alone.
+        let retired = self.virtual_stores.read().state.get().ok().is_some_and(|v| self.dns_retired_at(v.daa_score));
+        let confirmed_anchor_daa = if retired {
+            None
+        } else {
+            self.dns_state_store
+                .read()
+                .get()
+                .ok()
+                .and_then(|s| (s.last_dns_confirmed_anchor != BlockHash::default()).then_some(s.last_dns_confirmed_anchor_daa_score))
+        };
         // **DAA-based maturity only** (the user's Mainnet Decision A, 2026-09-24): no second clock
         // on a coinbase. The long fallback matures it by the DAA alone, or a DNS-final anchor
         // releases it early; the attempt lane's settled anchors are not asked (they still gate
