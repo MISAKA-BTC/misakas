@@ -4,10 +4,11 @@
 > This draft and its record live on the unpushed branch `fin/palw-finality-consistency`. V6 is named here only as "the stale-incumbent
 > comparison"; its mechanics are in the internal record, §3.
 
-**Status:** DRAFT 2026-10-08 (lane FINX). **For the user's decision: C3 alone or rule E.** Nothing is implemented in a shipping path.
-The candidates exist only in the executable model; the status quo's defects are pinned by pipeline tests that change no rule. User
-decisions already taken (2026-10-08): no public advisory; no early dedicated fence; **the fix ships in the single full-activation
-release**. Record: [`docs/design/palw/finality-palw-consistency.md`](../design/palw/finality-palw-consistency.md).
+**Status:** ACCEPTED — the user adopted rule E (2026-10-09). Implemented behind the dormant fence `palw_fork_choice_rule_e_v1`
+(lane FINX successor, 2026-10-09; §9), refused when armed in this binary; it ships armed only in the single full-activation release,
+which assigns its height. User decisions already taken (2026-10-08): no public advisory; no early dedicated fence; **the fix ships in
+the single full-activation release**; `palw_dns_retirement_v1` may be armed only with rule E at or below it. Record:
+[`docs/design/palw/finality-palw-consistency.md`](../design/palw/finality-palw-consistency.md).
 
 **Builds on / amends (if accepted):** ADR-0042 Decision 9 (one comparator), the strict-win reorg rule (`palw_reorg_strict_economic_win`,
 lane rcore/f1-strictwin-tie), the pruning-proof strict-economic commit (rcore/hf-pptake2), ADR-0065 D2 (frontier provenance — its "bonds
@@ -87,23 +88,41 @@ partitions P0 is about. Since the fix ships in one full-activation release eithe
 fence. Choose C3 alone only if the release must carry the smallest possible fork-choice change; then accept that partitions stay as
 today or worse, and that panel collusion stays open.
 
-## 4. Decision (PROPOSED: rule E)
+## 4. Decision (ACCEPTED: rule E; as implemented)
 
-Under one dormant fence, `Params::palw_fork_choice_participation_v1` (a height), past which:
+Under one dormant fence, `Params::palw_fork_choice_rule_e_v1` (a height, read at the INCUMBENT's DAA), past which:
 
-1. **One search.** The sink search weighs every fully validated tip in the finality point's future, and takes the best of the
-   incumbent's own extension and every tip the gate admits, in the order below. The relay fetches a branch below the merge-depth root
-   when its header-level participation (point 3) could rank it above the node's sink, which also bounds the work a junk branch costs.
-2. **Exclusive-past economic keys.** Both sides' `(safe frontier, safe weight, live total)` count only claims accepted in blocks of that
-   tip's exclusive past (in its past and not in the other tip's). A claim both tips hold — licensed, `Final` or voided on either — decides
-   nothing. The frontier compared as a DAA rather than a blue score is a follow-up (heartbeat density inflates blue scores).
-3. **Participation first, once the incumbent's exclusive past spans at least `W_p` DAA.** Compare the number of distinct bonds registered
-   in both tips' common past that signed an attempt header in each tip's exclusive past (stake-weighted where bonds differ); then point
-   2's keys; then, where participation ties at no fewer than ⌈n/3⌉ bonds on each side, GHOSTDAG's order; else the incumbent. Below
-   `W_p`: strict-win as armed today, on point 2's keys. `W_p` lies between the longest interval an active honest bond goes without an
-   attempt and the licence delay (testnet-12: anchor delay 20); the model uses 24.
-4. **IBD commits by the same order** (`validate_staging_palw_order` asks point 3's comparison of the staged and the local chain).
-5. **Finality is unchanged.** `finality_depth` stays `window_challenge / 2`; no freeze.
+1. **One order.** For two tips `a`, `b` with common selected-chain ancestor `F` (chain reachability): each side's **exclusive
+   claims** are the claims its own chain accepted above `F` (accepted blue score above `F`'s) whose id the other tip's state does not
+   hold — so a claim both tips hold, or one accepted at or below `F`, decides nothing (this equals "carrying block outside the other
+   tip's past" except where the other tip's fold refused a merged attempt this tip accepted; it is the form a header-verified
+   client can check). **Participation** is the number of distinct executor bonds of the side's exclusive attempt claims that are
+   registered in `F`'s registry — the common past (a losing draw and an unbonded header make no claim; a bond registered after `F`
+   never counts). The **economic keys** `(frontier, safe, live)` are the fold's own per-claim expressions, priced at each tip, summed
+   over the exclusive claims (F-W's per-bond cap applied over that set; the frontier by the resolved-prefix rule restricted to it).
+   Every side is computed from per-claim records by one function, the one a client reading the fork-choice leaf v2 calls. Order:
+   participation first **once the lower tip stands at least `W_p` = 20 DAA above `F`** (symmetric in the pair; for an incumbent
+   facing a branch at least as long, its own history since the fork), then the economic keys.
+2. **The gate.** A non-extension candidate replaces the incumbent on a strict win; a tie goes to GHOSTDAG's order where
+   participation counts and each side reaches `max(1, ⌈n/3⌉)` of `F`'s `n` bonds, else to strict-win's shallow question, else
+   the incumbent. Unweighable refuses. ADR-0065 D2 still applies after an allow. The absolute orders are not read.
+3. **One search.** After its first acceptable candidate (GHOSTDAG's heaviest the gate admits), the sink search goes on: up to 256
+   heap entries are ranked by **header-level participation** (registered bonds' attempt headers above the fork and outside the first
+   candidate's past — headers and reachability only); entries with none, slot races of the first (both within 2 DAA of the fork) and
+   entries in its past are passed over without a validation; the top 8 are UTXO-validated, gated, and each admitted one replaces
+   the best on a win in the order of point 1 (the gate's tie rule). Where the first stays best the answer is byte-identical to the
+   status quo's; where a lighter tip wins, the virtual merges only what is lighter than it.
+4. **Relay below the merge-depth root.** A non-heartbeat block below the virtual's merge-depth root is validated rather than skipped
+   (never announced), within a per-peer budget (16 at once, one per 15 s); its missing ancestors arrive as orphan roots. A heartbeat
+   below the root is still skipped.
+5. **IBD commits by the same order.** `validate_staging_palw_order` asks `palw_rule_e_ibd_commit_v1`: the claim-set difference of
+   the local sink's state and the staged pruning point's state (a claim older than the other state's retirement horizon plus a
+   600-DAA merge slack is neither side's), participation over the bonds both states register (no fork block is known there) and
+   counted (the headers-proof path's entry conditions put the fork far deeper than `W_p`), ties keep the incumbent. Fail closed as
+   before.
+6. **The ordering rule.** `validate_palw_v2` refuses `palw_dns_retirement_v1` unless rule E is armed at or below it, and refuses
+   rule E armed at all in this binary — last, after every other refusal.
+7. **Finality is unchanged.** `finality_depth` stays `window_challenge / 2`; no freeze.
 
 ## 5. Consequences
 
@@ -149,7 +168,8 @@ post-payment claims, ≈ 21–25 DAA while attempts flow; the clock form stays o
 
 ## 7. What this ADR does not decide
 
-C3 or E (the user's). `W_p`'s value. K. The frontier-by-DAA follow-up. Bonded slot clocks.
+`W_p` beyond testnet-12 (20 there; it must stay between the longest interval an active honest bond goes without an attempt and the
+licence delay). K. The frontier-by-DAA follow-up. Bonded slot clocks. Stake-weighted participation (bonds count one each here).
 
 ## 8. Until the release (PROPOSED, node-local, no fence)
 
@@ -157,3 +177,34 @@ C3 or E (the user's). `W_p`'s value. K. The frontier-by-DAA follow-up. Bonded sl
 * The operator runbook for a sealed node: resync from an empty datadir **with `--checkpoint=<daa>:<hash>` of the network's chain**, so the
   fresh IBD cannot land on whichever side serves it first (V5).
 * Internal operational guidance for the stale-incumbent comparison is in the record, §3 (not for publication).
+
+## 9. Implementation and verification (2026-10-09)
+
+Code (all behind the fence; below it the build is byte-identical):
+
+* `consensus/core/src/palw_fork_choice_rule_e_v1.rs` — the fence's validation and the ordering rule, the side computation over a
+  caller's exclusivity predicate, the order and the decision, the IBD commit over the claim-set difference, the relay's policy and
+  its per-peer budget; unit tests.
+* `consensus/src/pipeline/virtual_processor/palw_rule_e.rs` — the node's inputs (states, reachability exclusivity, the fork span,
+  the slot-race test, header-level participation), the gate and the search's continuation. `dns_reorg_outcome` and
+  `sink_search_algorithm` call them past the fence.
+* `protocol/flows`: the IBD commit and the relay below the merge-depth root; `ConsensusApi::get_palw_rule_e_weighing_v1`.
+* `consensus/core/src/palw_fork_choice_rule_e_leaf_v2.rs` — the fork-choice leaf v2 (agreed with lane L2FC2; the envelope and the
+  header sites are theirs): window and registry trees, openings, provers and verifiers, and the client's pair. Note:
+  `docs/design/palw/rule-e-leaf-v2-note.md`.
+* Tests armed through the real pipeline: `hb_fork_choice_probe::finality_consistency::rule_e` (V1–V6 flipped, V7 by the relay
+  policy's unit test, the merge-past attacker, a Sybil peer flood, the bounded search cost); the seven status-quo tests are
+  unchanged and still pass unarmed. Results: the record, §10.
+
+Residuals, named (in addition to §5's):
+
+* **Merged work counts for neither side.** The GHOSTDAG-heavier side merges the lighter side's blocks while they are within its
+  merge depth (≈ 16 slots of divergence on testnet-12's shapes), so those attempts become common and the merging side wins a short
+  partition on its own exclusive attempts — the right chain (it holds both sides' work), but not "the bond majority" the model
+  (which does not merge) reports for short partitions.
+* **The continuation's bounds.** A lighter branch with no registered bond's attempt above the fork is never UTXO-validated, so a
+  lighter branch whose only advantage would be exclusive free-prompt `Final`s is not weighed by the search (the gate still weighs
+  it when it is the heavier). A flood can take the eight validations only with header-level participation at least the honest
+  branch's — an attacker's own registered bonds (losing draws included, at the price of a signature each).
+* **IBD ties keep the incumbent**, even at an even split (the relay decides those once the blocks arrive), and a network with no
+  claims inside the retirement horizon cannot be told apart by the claim-set difference.

@@ -38,6 +38,11 @@ type Utxos = Vec<(TransactionOutpoint, UtxoEntry)>;
 /// testnet-12's fork-choice set past DAA 1,700 armed from DAA 1 (strict-win, lane A + F1's seed, F-W —
 /// LIVE-R1's reproduction runs the same), optionally with `finality_depth` lowered.
 fn parts(finality_depth: Option<u64>) -> (Config, PalwConsensusParamsV2, Utxos, Utxos) {
+    parts_ruled(finality_depth, false)
+}
+
+/// [`parts`], and — when `rule_e` — ADR-0175's rule E armed from DAA 1 on top ([`armed_rule_e`]).
+fn parts_ruled(finality_depth: Option<u64>, rule_e: bool) -> (Config, PalwConsensusParamsV2, Utxos, Utxos) {
     let (config, _, premine, floats) = t12_with_harness_cards();
     let mut params: Params = config.params.clone();
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(1));
@@ -52,11 +57,27 @@ fn parts(finality_depth: Option<u64>) -> (Config, PalwConsensusParamsV2, Utxos, 
     }
     let config = ConfigBuilder::new(params).skip_proof_of_work().build();
     config.params.validate_palw_v2().expect("a runnable testnet-12 ruleset");
+    let config = if rule_e { armed_rule_e(config) } else { config };
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
         unreachable!("ConsensusV2")
     };
     let bundle = bundle.clone();
     (config, bundle, premine, floats)
+}
+
+/// **ADR-0175's rule E armed from DAA 1** on a ruleset that validated without it. Arming it is refused in this
+/// binary (`PALW_FORK_CHOICE_RULE_E_ARMABLE_V1`), so the Config is set directly — after asserting that rule E's own
+/// refusal is the only one the armed ruleset meets (`validate_palw_v2` asks it last).
+fn armed_rule_e(mut config: Config) -> Config {
+    config.params.palw_fork_choice_rule_e_v1 = Some(ForkActivation::new(1));
+    assert_eq!(
+        config.params.validate_palw_v2(),
+        Err(kaspa_consensus_core::palw_mode_v2::PalwModeV2Error::Invalid(
+            kaspa_consensus_core::palw_fork_choice_rule_e_v1::PALW_FORK_CHOICE_RULE_E_UNARMABLE_V1
+        )),
+        "rule E armed is refused by its own name only"
+    );
+    config
 }
 
 /// Two nodes on one ruleset, and the payments X (to the merchant) and Y (back to the payer) that spend
@@ -91,7 +112,11 @@ fn pay(config: &Config, floats: &Utxos, to: ScriptPublicKey) -> Transaction {
 }
 
 fn net(finality_depth: Option<u64>) -> Net {
-    let (config, bundle, premine, floats) = parts(finality_depth);
+    net_ruled(finality_depth, false)
+}
+
+fn net_ruled(finality_depth: Option<u64>, rule_e: bool) -> Net {
+    let (config, bundle, premine, floats) = parts_ruled(finality_depth, rule_e);
     let heavy = t12_genesis_chain(&config, &bundle, &premine, &floats);
     let light = t12_genesis_chain(&config, &bundle, &premine, &floats);
     let (x, y) = (pay(&config, &floats, card_payout_spk(5)), pay(&config, &floats, card_payout_spk(6)));
@@ -310,7 +335,12 @@ async fn finx_p0_facts_depths_windows_fences_and_blue_per_slot() {
 /// as the light side, a symmetric split), one on the light side, heartbeats only — heal, and play three
 /// more exchanged rounds. Returns whether the sinks agreed after the heal and after each round.
 async fn tie_partition(tag: &str, k: usize, heavy_m: usize) -> Vec<bool> {
-    let mut n = net(None);
+    tie_partition_ruled(tag, k, heavy_m, false).await
+}
+
+/// [`tie_partition`] on a ruleset with rule E armed or not.
+async fn tie_partition_ruled(tag: &str, k: usize, heavy_m: usize, rule_e: bool) -> Vec<bool> {
+    let mut n = net_ruled(None, rule_e);
     let fork = shared_prefix(&mut n).await;
     let (mut hblocks, mut lblocks) = (Vec::new(), Vec::new());
     for _ in 0..k {
@@ -878,3 +908,6 @@ async fn finx_p0_f_a_branch_one_tick_ahead_crosses_a_pre_fork_final_first_and_re
     );
     assert!(!has_x && has_y, "{tag}: the branch one tick ahead reverses X — no bond, no carrier, no collusion");
 }
+
+/// ADR-0175's rule E against every violation above, armed — and the attacks it is built to hold.
+mod rule_e;
