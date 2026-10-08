@@ -89,6 +89,12 @@ pub enum Op {
         /// `[x, W, (b), A, B]`, value `W·x (+ b) + (num/den)·B·(A·x)`, unmerged.
         lora: Option<LoraOp>,
     },
+    /// **`WEIGHT_ROTATION_HADAMARD_V1`**: a block-diagonal linear map with one matrix per block, `y[k·B + i] = Σ_j P[k·B + i, j] ·
+    /// x[k·B + j]` (`B = block`). In: `[x, P]`, `P` is `[n, block]` (block `k`'s matrix is rows `k·B .. (k+1)·B`). The activation-side
+    /// rotation `R = blockdiag(H·diag(s_k))` of a checkpoint whose weights are stored rotated, and its inverse after a table lookup.
+    BlockLinear {
+        block: usize,
+    },
     /// Elementwise; an operand of one element broadcasts.
     Add,
     Sub,
@@ -474,6 +480,7 @@ impl Op {
             Op::Concat => "Concat",
             Op::Zeros => "Zeros",
             Op::Linear { .. } => "Linear",
+            Op::BlockLinear { .. } => "BlockLinear",
             Op::Add => "Add",
             Op::Sub => "Sub",
             Op::Mul => "Mul",

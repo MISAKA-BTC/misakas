@@ -68,6 +68,7 @@ pack!(
     "dbrx",
     "deepseek-v3",
     "deepseek-v32",
+    "glm-moe-dsa",
     "longcat-flash",
     "jetmoe",
     "mllama",

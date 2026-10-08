@@ -136,6 +136,16 @@ impl GValue {
     pub fn as_str(&self) -> Option<&str> {
         if let GValue::Str(s) = self { Some(s) } else { None }
     }
+    /// A signed integer of any width.
+    pub fn as_i64(&self) -> Option<i64> {
+        match *self {
+            GValue::I8(v) => Some(v as i64),
+            GValue::I16(v) => Some(v as i64),
+            GValue::I32(v) => Some(v as i64),
+            GValue::I64(v) => Some(v),
+            _ => self.as_u64().and_then(|v| i64::try_from(v).ok()),
+        }
+    }
     pub fn as_arr(&self) -> Option<&[GValue]> {
         if let GValue::Arr(a) = self { Some(a) } else { None }
     }
@@ -754,6 +764,139 @@ pub struct GgufModel {
     /// Tensors left out BY DESIGN, named: the multi-token-prediction draft layers (`{arch}.nextn_predict_layers`), which the
     /// model's own forward pass never reads (transformers ignores Qwen3.5's `mtp.*`). Not unread, not consumed.
     dropped: Vec<String>,
+    /// **`WEIGHT_ROTATION_HADAMARD_V1`**: the weight-space rotation the file declares (`prism.hadamard.*`), when it does.
+    rotation: Option<WeightRotation>,
+}
+
+/// **A weight-space block-Hadamard rotation a GGUF declares beside its weights** (`prism.hadamard.*`, PrismML-Eng/llama.cpp
+/// @`7dffb158`: `llama_model::load_hparams` reads it, `build_lora_mm` applies it): each listed weight `W'` is read as
+/// `W'·(R·x)` with `R = blockdiag_k(H_B·diag(s_k))` on its input axis (`H_B` the normalised Sylvester–Hadamard matrix,
+/// `H[i, j] = (−1)^popcount(i & j) / √B`, `s` the sign vector of the input's width, all ones in the identity sign mode), and the
+/// token-embedding table's looked-up row `z` is restored as `diag(s_k)·H_B·z`. Validated exactly as the producer validates it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeightRotation {
+    pub block: usize,
+    /// Explicit sign vectors by width (`±1`); empty in the identity sign mode.
+    pub signs: BTreeMap<usize, Vec<i8>>,
+    pub explicit: bool,
+    /// GGUF names of the weights stored rotated on their input axis.
+    pub weights: std::collections::BTreeSet<String>,
+    /// GGUF names of the tables stored rotated (rows restored after the lookup): only `token_embd.weight`.
+    pub inverse: std::collections::BTreeSet<String>,
+    /// A GDN output projection's fold was computed in grouped value-head order (Hugging Face's), not llama.cpp's tiled order.
+    pub gdn_v_grouped: bool,
+}
+
+impl WeightRotation {
+    /// The sign of input feature `f` of a `width`-wide activation.
+    fn sign(&self, width: usize, f: usize) -> f32 {
+        if self.explicit { self.signs.get(&width).map_or(1.0, |v| v[f] as f32) } else { 1.0 }
+    }
+
+    /// `[width, block]` rows of `blockdiag_k(H·diag(s_k))` (`inverse: false`) or `blockdiag_k(diag(s_k)·H)` (`inverse: true`): row
+    /// `k·B + i` is block `k`'s row `i`. The normaliser is `1 / √B` in `f32`, as the producer computes it.
+    pub fn blocks(&self, width: usize, inverse: bool) -> Vec<f32> {
+        let b = self.block;
+        let scale = 1.0f32 / (b as f32).sqrt();
+        let mut out = Vec::with_capacity(width * b);
+        for r in 0..width {
+            let (k, i) = (r / b, r % b);
+            for j in 0..b {
+                let h = if (i & j).count_ones() % 2 == 1 { -scale } else { scale };
+                let sgn = if inverse { self.sign(width, k * b + i) } else { self.sign(width, k * b + j) };
+                out.push(h * sgn);
+            }
+        }
+        out
+    }
+}
+
+/// The prefix of the virtual tensors that hold a rotation's blocks (`rotation.fwd.{B}.{width}`, `rotation.inv.{B}.{width}`), the
+/// names `RotationRef::{fwd_param, inv_param}` give the params.
+const ROTATION_TENSOR_PREFIX: &str = "rotation.";
+
+/// Parse and validate `prism.hadamard.*` (None when the file declares no rotation). Every check the producer makes is made here, so
+/// a file it would refuse is refused, and nothing it would read differently is read.
+fn parse_weight_rotation(meta: &BTreeMap<String, GValue>, arch: &str) -> Result<Option<WeightRotation>> {
+    let Some(version) = meta.get("prism.hadamard.version") else {
+        if meta.keys().any(|k| k.starts_with("prism.")) {
+            let k = meta.keys().find(|k| k.starts_with("prism.")).expect("one");
+            return Err(LowerError::not_lowerable(unmodelled_namespace_refusal(meta, k, "prism")));
+        }
+        return Ok(None);
+    };
+    let refuse = |why: String| LowerError::not_lowerable(format!("GGUF prism.hadamard: {why} (WEIGHT_ROTATION_HADAMARD_V1)"));
+    if version.as_u64() != Some(1) {
+        return Err(refuse(format!("version {:?}, only 1 is modelled", version.as_u64())));
+    }
+    for k in meta.keys().filter(|k| k.starts_with("prism.")) {
+        let known = ["version", "block_size", "transform", "axis", "sign_mode", "weight_names", "sign_widths", "sign_values", "inverse_weight_names", "gdn_v_grouped"];
+        if !k.strip_prefix("prism.hadamard.").is_some_and(|r| known.contains(&r)) {
+            return Err(refuse(format!("`{k}` is not a key of the modelled version")));
+        }
+    }
+    if !matches!(arch, "qwen35" | "llama" | "qwen3" | "qwen2") {
+        return Err(refuse(format!("a rotation on architecture `{arch}` is not modelled (qwen35, llama, qwen3, qwen2 are)")));
+    }
+    let s = |k: &str| meta.get(&format!("prism.hadamard.{k}")).and_then(GValue::as_str).map(str::to_string);
+    let block = meta.get("prism.hadamard.block_size").and_then(GValue::as_u64).ok_or_else(|| refuse("no block_size".into()))? as usize;
+    if block == 0 || !block.is_power_of_two() {
+        return Err(refuse(format!("block size {block} is not a power of two")));
+    }
+    if s("transform").as_deref() != Some("normalized-sylvester-walsh-hadamard") {
+        return Err(refuse(format!("transform {:?}", s("transform"))));
+    }
+    if s("axis").as_deref() != Some("input-last-dimension") {
+        return Err(refuse(format!("axis {:?}", s("axis"))));
+    }
+    let explicit = match s("sign_mode").as_deref() {
+        Some("explicit") => true,
+        Some("identity") => false,
+        other => return Err(refuse(format!("sign mode {other:?}"))),
+    };
+    let names = |k: &str| -> Vec<String> {
+        meta.get(&format!("prism.hadamard.{k}")).and_then(GValue::as_arr).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default()
+    };
+    let weights: std::collections::BTreeSet<String> = names("weight_names").into_iter().collect();
+    if weights.is_empty() {
+        return Err(refuse("no weight is listed".into()));
+    }
+    let inverse: std::collections::BTreeSet<String> = names("inverse_weight_names").into_iter().collect();
+    if inverse.iter().any(|n| n != "token_embd.weight") || inverse.iter().any(|n| weights.contains(n)) {
+        return Err(refuse(format!("inverse-after-lookup tables {inverse:?}: only token_embd.weight, never also a folded weight")));
+    }
+    let mut signs = BTreeMap::new();
+    if explicit {
+        let ints = |k: &str| -> Vec<i64> {
+            meta.get(&format!("prism.hadamard.{k}"))
+                .and_then(GValue::as_arr)
+                .map(|a| a.iter().map(|v| v.as_i64().unwrap_or(i64::MIN)).collect())
+                .unwrap_or_default()
+        };
+        let (widths, values) = (ints("sign_widths"), ints("sign_values"));
+        if widths.is_empty() {
+            return Err(refuse("explicit sign mode with no sign widths (it would read as identity)".into()));
+        }
+        let mut off = 0usize;
+        for w in widths {
+            if w <= 0 || (w as usize) % block != 0 || off + w as usize > values.len() {
+                return Err(refuse(format!("sign width {w}")));
+            }
+            let v = &values[off..off + w as usize];
+            if v.iter().any(|x| *x != 1 && *x != -1) {
+                return Err(refuse("a sign value is not ±1".into()));
+            }
+            if signs.insert(w as usize, v.iter().map(|x| *x as i8).collect::<Vec<i8>>()).is_some() {
+                return Err(refuse(format!("sign width {w} twice")));
+            }
+            off += w as usize;
+        }
+        if off != values.len() {
+            return Err(refuse("sign values length mismatch".into()));
+        }
+    }
+    let gdn_v_grouped = meta.get("prism.hadamard.gdn_v_grouped").map(|v| matches!(v, GValue::Bool(true))).unwrap_or(false);
+    Ok(Some(WeightRotation { block, signs, explicit, weights, inverse, gdn_v_grouped }))
 }
 
 /// `llama`'s q/k rows: llama.cpp's converter permutes Hugging Face's `[heads, 2, d/2]` rows to
@@ -939,10 +1082,23 @@ impl GgufModel {
                 return Err(LowerError::not_lowerable(format!("GGUF metadata `{k}` is not mapped (it may change the math)")));
             }
         }
+        let rotation = parse_weight_rotation(&file.meta, &arch)?;
         for k in file.meta.keys() {
             let ns = k.split('.').next().unwrap_or("");
-            if ns != arch && !PROVENANCE_NAMESPACES.contains(&ns) {
+            if ns != arch && !PROVENANCE_NAMESPACES.contains(&ns) && !(rotation.is_some() && k.starts_with("prism.hadamard.")) {
                 return Err(LowerError::not_lowerable(unmodelled_namespace_refusal(&file.meta, k, ns)));
+            }
+        }
+        if let Some(r) = &rotation {
+            for n in r.weights.iter().chain(&r.inverse) {
+                let t = file.tensors.get(n).ok_or_else(|| LowerError::not_lowerable(format!("GGUF prism.hadamard: weight `{n}` not found")))?;
+                let inp = t.dims.first().copied().unwrap_or(0) as usize;
+                if inp % r.block != 0 || (r.explicit && !r.signs.contains_key(&inp)) {
+                    return Err(LowerError::not_lowerable(format!(
+                        "GGUF prism.hadamard: `{n}`'s input dimension {inp} has no block of {} or no sign vector",
+                        r.block
+                    )));
+                }
             }
         }
         let get = |k: &str| file.meta.get(&format!("{pre}{k}"));
@@ -1328,7 +1484,21 @@ impl GgufModel {
                 put(format!("{la}A_log.neg_exp"), format!("{b}ssm_a"), head_axis(1), None);
                 put(format!("{la}dt_bias"), format!("{b}ssm_dt.bias"), head_axis(1), None);
                 put(format!("{la}norm.weight"), format!("{b}ssm_norm.weight"), None, None);
-                put(format!("{la}out_proj.weight"), format!("{b}ssm_out.weight"), None, head_axis(dv));
+                // A rotated output projection was folded in grouped value-head order (Hugging Face's, what this view serves): its
+                // columns are the rotated basis of that order, never llama.cpp's tiled one, so they are not untiled. A fold in tiled
+                // order would need the rotation applied to a permuted activation: not modelled, refused.
+                let out_cols = match &rotation {
+                    Some(r) if r.weights.contains(&format!("{b}ssm_out.weight")) => {
+                        if !r.gdn_v_grouped && tiled {
+                            return Err(LowerError::not_lowerable(
+                                "GGUF prism.hadamard: a GDN output projection folded in tiled value-head order (gdn_v_grouped false) is not modelled",
+                            ));
+                        }
+                        None
+                    }
+                    _ => head_axis(dv),
+                };
+                put(format!("{la}out_proj.weight"), format!("{b}ssm_out.weight"), None, out_cols);
             }
             if experts > 0 {
                 let (moe, names): (&str, [&str; 3]) = if arch == "llama" {
@@ -1363,7 +1533,12 @@ impl GgufModel {
             }
             consumed.insert(s.gguf.clone());
         }
-        Ok(GgufModel { file, arch, config: cfg, map, consumed, pending, dropped })
+        if let Some(r) = &rotation
+            && let Some(n) = r.weights.iter().chain(&r.inverse).find(|n| !map.values().any(|s| s.gguf == **n && s.expert.is_none()))
+        {
+            return Err(LowerError::not_lowerable(format!("GGUF prism.hadamard: weight `{n}` is not a projection this view serves (an expert or an unmapped tensor)")));
+        }
+        Ok(GgufModel { file, arch, config: cfg, map, consumed, pending, dropped, rotation })
     }
 
     /// Tensors whose values the mapping reads and this (header-only) view could not: the program's structure does not depend on
@@ -1496,7 +1671,122 @@ impl GgufModel {
         if !q.per_module.is_empty() {
             crate::hf_config::attach_quant(&mut spec, q)?;
         }
+        if self.rotation.is_some() {
+            self.attach_rotation(&mut spec)?;
+        }
         Ok(spec)
+    }
+
+    /// The rotation the file declares, if any.
+    pub fn rotation(&self) -> Option<&WeightRotation> {
+        self.rotation.as_ref()
+    }
+
+    /// **The model's first `n` decoder layers, then its final norm and head** — a staged verification of a large file (its
+    /// frontend, quantisation and transforms checked end to end on a prefix that fits a test's memory) and never a class: the
+    /// prefix is another function than the model. Every tensor of a later block is dropped by name.
+    pub fn with_prefix_layers(mut self, n: usize) -> Result<Self> {
+        let layers = self.config["num_hidden_layers"].as_u64().unwrap_or(0) as usize;
+        if n == 0 || n > layers {
+            return Err(LowerError::bad(format!("a prefix of {n} of {layers} layers")));
+        }
+        self.config["num_hidden_layers"] = json!(n);
+        if let Some(t) = self.config.get_mut("layer_types").and_then(Value::as_array_mut) {
+            t.truncate(n);
+        }
+        let later = |g: &str| {
+            g.strip_prefix("blk.").and_then(|r| r.split('.').next()).and_then(|i| i.parse::<usize>().ok()).is_some_and(|i| i >= n)
+        };
+        let gone: Vec<String> = self.map.iter().filter(|(_, s)| later(&s.gguf)).map(|(hf, _)| hf.clone()).collect();
+        for hf in gone {
+            if let Some(s) = self.map.remove(&hf) {
+                self.consumed.remove(&s.gguf);
+            }
+        }
+        let names: Vec<String> = self.file.tensors.keys().filter(|g| later(g)).cloned().collect();
+        for g in names {
+            if !self.dropped.contains(&g) {
+                self.dropped.push(g);
+            }
+        }
+        if let Some(r) = self.rotation.as_mut() {
+            r.weights.retain(|g| !later(g));
+        }
+        Ok(self)
+    }
+
+    /// **`WEIGHT_ROTATION_HADAMARD_V1` onto the spec**: the HL projections whose weights the file stores rotated, found by the
+    /// binding itself (the spec built without rotations, its program and its binding: a `Linear`'s weight param reads a rotated
+    /// tensor), each with its input width — never by a table of role names. A role rotated in some layers and not others, a rotated
+    /// weight that no projection reads, and a rotated table under a tied head are refused by name.
+    fn attach_rotation(&self, spec: &mut ArchSpec) -> Result<()> {
+        let r = self.rotation.as_ref().expect("a rotation");
+        let refuse = |why: String| LowerError::not_lowerable(format!("GGUF prism.hadamard: {why} (WEIGHT_ROTATION_HADAMARD_V1)"));
+        let prog = crate::hl::build_program(spec)?;
+        let binding = crate::hf_weights::bind(spec, &prog)?;
+        let hf_of: BTreeMap<&str, &str> = self.map.iter().filter(|(_, s)| s.expert.is_none()).map(|(hf, s)| (s.gguf.as_str(), hf.as_str())).collect();
+        let rotated: std::collections::BTreeSet<String> = r.weights.iter().filter_map(|g| hf_of.get(g.as_str()).map(|h| h.to_string())).collect();
+        let linear_params: std::collections::BTreeSet<u32> = prog
+            .blocks
+            .iter()
+            .flat_map(|b| b.nodes.iter())
+            .filter(|n| matches!(n.op, crate::hl::Op::Linear { .. }))
+            .filter_map(|n| if let Some(crate::hl::Ref::Param(p)) = n.inputs.get(1) { Some(*p) } else { None })
+            .collect();
+        let layers = spec.layers.len();
+        let mut covered: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut roles: BTreeMap<String, crate::spec::RotationRef> = BTreeMap::new();
+        for (pi, d) in prog.params.iter().enumerate() {
+            if !linear_params.contains(&(pi as u32)) {
+                continue;
+            }
+            let Some(role) = d.name.strip_suffix(".w") else { continue };
+            let mut names = Vec::new();
+            src_tensor_names(&binding.srcs[pi], &mut names);
+            for t in names {
+                let (inst, rot): (Vec<String>, Vec<String>) = if t.contains("{L}") {
+                    let inst: Vec<String> = (0..layers).map(|l| t.replace("{L}", &l.to_string())).filter(|n| self.map.contains_key(n)).collect();
+                    let rot = inst.iter().filter(|n| rotated.contains(*n)).cloned().collect();
+                    (inst, rot)
+                } else {
+                    (vec![t.clone()], if rotated.contains(&t) { vec![t.clone()] } else { vec![] })
+                };
+                if rot.is_empty() {
+                    continue;
+                }
+                if rot.len() != inst.len() {
+                    return Err(refuse(format!("`{role}` is rotated in {} of its {} layers: a projection is rotated in every layer or none", rot.len(), inst.len())));
+                }
+                let width = d.shape.get(1).copied().unwrap_or(0);
+                if width % r.block != 0 || (r.explicit && !r.signs.contains_key(&width)) {
+                    return Err(refuse(format!("`{role}` reads {width} values: no block of {} or no sign vector", r.block)));
+                }
+                roles.insert(role.to_string(), crate::spec::RotationRef { block: r.block, width });
+                covered.extend(rot);
+            }
+        }
+        if let Some(n) = rotated.difference(&covered).next() {
+            return Err(refuse(format!("the rotated weight `{n}` is read by no projection of the lowering (only `Linear` inputs are rotated)")));
+        }
+        if r.inverse.contains("token_embd.weight") {
+            if spec.head.tied {
+                return Err(refuse("a rotated embedding table under a tied head (the head would read the rotated rows)".into()));
+            }
+            let width = spec.embedding.dim;
+            if r.explicit && !r.signs.contains_key(&width) {
+                return Err(refuse(format!("no sign vector for the {width}-wide embedding")));
+            }
+            spec.hf.embed_rotation = Some(crate::spec::RotationRef { block: r.block, width });
+        }
+        spec.hf.input_rotations = roles;
+        spec.notes.push(format!(
+            "GGUF prism.hadamard: {} projection role(s) read a block-Hadamard-rotated activation (block {}, {} signs){}",
+            spec.hf.input_rotations.len(),
+            r.block,
+            if r.explicit { "explicit" } else { "identity" },
+            if spec.hf.embed_rotation.is_some() { "; the embedding rows are restored after the lookup" } else { "" }
+        ));
+        Ok(())
     }
 
     /// Bind the params as this file stores them: Qwen3.5's `A = −exp(A_log)` is stored as `A`, so
@@ -1536,13 +1826,49 @@ fn permute_rows_cols(t: Tensor, rows: Option<&[usize]>, cols: Option<&[usize]>) 
     Tensor::new(t.shape, data)
 }
 
+/// The checkpoint tensor names a weight expression reads (a quantised module's `.weight`), templates kept (`{L}`).
+fn src_tensor_names(src: &crate::weights::Src, out: &mut Vec<String>) {
+    use crate::weights::Src;
+    match src {
+        Src::Tensor(n) => out.push(n.clone()),
+        Src::Quant { module, .. } => out.push(format!("{module}.weight")),
+        Src::Combine { srcs, .. } => srcs.iter().for_each(|s| src_tensor_names(s, out)),
+        Src::Take { src, .. } | Src::Transpose(src) | Src::Stack { src, .. } | Src::Map { src, .. } | Src::Reshape { src, .. } | Src::PadRows { src, .. } => {
+            src_tensor_names(src, out)
+        }
+    }
+}
+
+impl GgufModel {
+    /// A rotation's virtual tensor (`rotation.fwd.{B}.{width}` / `rotation.inv.{B}.{width}`): `(width, inverse)`.
+    fn rotation_tensor(&self, name: &str) -> Option<(usize, bool)> {
+        let r = self.rotation.as_ref()?;
+        let rest = name.strip_prefix(ROTATION_TENSOR_PREFIX)?;
+        let (dir, rest) = rest.split_once('.')?;
+        let (b, w) = rest.split_once('.')?;
+        let (b, w): (usize, usize) = (b.parse().ok()?, w.parse().ok()?);
+        (b == r.block && w % b == 0 && (!r.explicit || r.signs.contains_key(&w))).then_some(())?;
+        match dir {
+            "fwd" => Some((w, false)),
+            "inv" => Some((w, true)),
+            _ => None,
+        }
+    }
+}
+
 impl TensorSource for GgufModel {
     fn shape(&self, name: &str) -> Option<Vec<usize>> {
+        if let Some((w, _)) = self.rotation_tensor(name) {
+            return Some(vec![w, self.rotation.as_ref()?.block]);
+        }
         let s = self.map.get(name)?;
         let sh = self.file.tensors.get(&s.gguf).map(GgufTensorInfo::shape)?;
         Some(if s.expert.is_some() { sh[1..].to_vec() } else { sh })
     }
     fn load(&self, name: &str) -> Result<Tensor> {
+        if let (Some((w, inverse)), Some(r)) = (self.rotation_tensor(name), self.rotation.as_ref()) {
+            return Ok(Tensor::new(vec![w, r.block], r.blocks(w, inverse)));
+        }
         let s = self.map.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}`")))?;
         let t = match s.expert {
             Some(e) => self.file.tensor_f32_expert(&s.gguf, e)?,
@@ -1553,6 +1879,20 @@ impl TensorSource for GgufModel {
     fn names(&self) -> Vec<String> {
         let mut v: Vec<String> = self.map.keys().cloned().collect();
         v.extend(self.unmapped());
+        // A rotation's blocks, for every width a rotated weight or table reads.
+        if let Some(r) = &self.rotation {
+            let widths: std::collections::BTreeSet<usize> = r
+                .weights
+                .iter()
+                .chain(&r.inverse)
+                .filter_map(|n| self.file.tensors.get(n).and_then(|t| t.dims.first().copied()).map(|d| d as usize))
+                .collect();
+            for w in widths {
+                let rr = crate::spec::RotationRef { block: r.block, width: w };
+                v.push(rr.fwd_param());
+                v.push(rr.inv_param());
+            }
+        }
         v
     }
     fn load_qweight(&self, name: &str) -> Result<QWeight> {

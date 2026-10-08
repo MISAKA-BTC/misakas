@@ -48,6 +48,12 @@ G14 · availability · active status · exact blocker · owner. `—` = not yet 
 | W1 recurrent / SSM (mamba-370m, Jamba-tiny hybrid real) | safetensors | text-generation | PASS | existing | shape-ready @2048/@8192 | — | — | — | — | ELIGIBLE_AT (hyp.) | — | Dormant | RWKV not yet exercised | A→B |
 | W1 VLM or encoder-decoder | safetensors | image-text-to-text / seq2seq | — | — | — | — | — | — | — | — | — | Dormant | `PARTIAL_TASK_ONLY` | A→B |
 | kernel route fixtures (`dense_moe_v1`, pipeline VLM) | synthetic | text / VLM | n/a | K2 families | PASS | n/a | — | reference ledger only | not wired | reference PASS | n/a | Dormant | real-node carriage (G14 matrix) | B, D |
+| **Huihui-Qwen3.5-9B — 9B-8k text** (COV-P1P2) | safetensors (HF), headers | text-generation (text stage of a VLM) | PASS (headers; `vlm-qwen3-5` = `vlm-generic`) | existing (24 GDN + 8 attention) | K2: `check_plan_v1` PASS, node refuses: artifact not attested, then public bytes 12.6 TB / retained 6.99 GB / sessions 8,192 (design: per-position roots, segments ≤ 1,024, per-prosecution bytes) | tile 64 / logits 256 / h_tile 32 / C 298 | — | **IR gate ADMITS at 8,192 (and 32,783) at DAA 5,585 / 7,000 / 9,000; dormant registration on the real node path (lane D E2E, synthetic root)** | — | — | — | Dormant | real artifact (H1), calibration ≥ 8,192 tokens; past refusals pinned (`coverage_p1_huihui_refusals`) | COV-P1P2→H1 |
+| Huihui-Qwen3.5-9B — full source (vision + 262,144) | safetensors | image-text-to-text | text PASS; vision = RFC-0003 stage | — | K2 BOUNDS_EXCEEDED (claim evidence 1.29e15 > 2^50) | — | — | **refused**: `CLASS_NOT_ATTRIBUTABLE` (32,767-id canonical prompt > J5b 4,096; admission v10 step 6) | — | — | — | — | authenticated IR prompt tiles (fence) + vision stage | design |
+| Huihui-Qwen3.5-9B — validated 2M | — | — | not a source property (262,144 declared) | — | K2 BOUNDS_EXCEEDED | — | — | **refused**: `TIR_CLASS_REFUSED` (held history bound in IR v1), then max_context 2^18, then J5b | — | — | — | — | RFC-0011 §4.B together + K2 segments (fence) | design |
+| SmolVLM-256M (Idefics3) text decoder | safetensors | image-text-to-text (text-only class) | **PASS via `vlm-generic`** (273 text tensors bound, 198 vision/connector unread by design) | existing (Llama) | K2 @512: gate PASS, `carrier_fit_v1` REFUSED (filing 113.6 MB > 1,583,616: head opening) | logits 512 @512 | — | **IR gate ADMITS at 512, DAA 7,000** (synthetic root) | — | — | — | Dormant | partial task (vision stage); row-tiled court openings for K2 | COV-P1P2→H1 |
+| Mitsuba 27B PTQ1_0 (Qwen3.8, GGUF) text decoder | GGUF, type 143 + `prism.hadamard` | image-text-to-text (text-only) | **PASS**: qwen35 mapped, MTP dropped by name, PTQ1_0 decoded by data (= independent reader on real rows), rotation as `Op::BlockLinear`; real 4-layer prefix integer vs float top-1 0.958 / KL 0.0037 | existing + `WEIGHT_ROTATION_HADAMARD_V1` (frontend) | — | logits 256 / h_tile 32 / C 136 @8,192 | — | **IR gate ADMITS the full 27 B text class at 8,192, DAA 7,000** (headers, synthetic root; sizing 0.844× cap) | — | — | repo now 401 (local verified copy) | — | real artifact (29 GB, a byte per ternary code), calibration, conformance | COV-P1P2→H1 |
+| DSA: `deepseek_v32`, `glm_moe_dsa` (fixtures) | safetensors | text-generation | PASS (one indexer; GLM rotaries interleaved, data) | ATTN_TOKEN_INDEXER_V1 | K2-TIR-v1 ELIGIBLE_AT (hyp.) | logits 4096 / h_tile 64 @128 | — | IR gate ADMITS the fixtures @128 at DAA 7,000 | — | — | — | Dormant | real models ≥ 321 B (resources); GLM-5.1+/HY-V4 need ATTN_TOKEN_INDEXER_SHARED_V1; V3.2 FP8 `scale_fmt` | COV-P1P2 |
 
 ## 4. Blocker families (census update 1, 2026-10-04; technical view, estimated repositories of `D_all` = 3,117,871)
 
@@ -89,6 +95,15 @@ Each fix records **before N / after M** here.
 15. adversarial registration tests — PASS for everything the current wire can express (27 adversarial + mutation differential, replay on another network, below-fence, duplicate, cap); GAP for challenge-policy substitution, conformance after artifact change, beacon reorder, heartbeat/self beacon, G14-incomplete activation, plan substitution (no consensus objects yet — lane D phase 3).
 
 ## 6. Change log
+
+* 2026-10-08 — COV-P1P2 (`cov/p1p2-huihui-features`; record `coverage-p1p2-record.md`): the four past Huihui-9B refusals pinned
+  (refusal 2 was the offline gate judging below `palw_tir_fence2` — fixed); 9B-8k text ADMITTED by the IR gate at DAA 7,000 and carried
+  through lane D's real-node E2E (dormant, synthetic root); full-source / 2M refusals named with their general fixes (design); K2
+  route numbers and fixes (design); `vlm-generic` wrapper route; GGUF unmodelled-namespace refusal and MTP drop; PTQ1_0 / PQ2_0
+  descriptors from PrismML @`7dffb158` checked against an independent reader; `WEIGHT_ROTATION_HADAMARD_V1` (online block-Hadamard as
+  an activation op); FR-09 GLM-MoE-DSA adapter (one indexer, data), DSA fixtures admitted @128 and K2 ELIGIBLE_AT;
+  `ATTN_TOKEN_INDEXER_SHARED_V1` and the cheaper selection checker reported (design); the full Mitsuba 27 B text class and
+  SmolVLM's text class ADMITTED by the IR gate (8,192 / 512, DAA 7,000, headers, synthetic root). No allocation used.
 
 * 2026-10-08 — lane D phase 1 integrated (…`0bf26024f`): `docs/design/palw/registration-e2e-record.md`; fixed registration-status
   readers missing `ClassRegisteredTirV1` carriers. Findings F2 (mempool admits IR registrations the chain drops → fee lost; propose
