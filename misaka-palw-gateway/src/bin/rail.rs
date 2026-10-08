@@ -54,7 +54,8 @@ use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
 use kaspa_pq_validator_core::{
-    ATTESTATION_TX_FEE_FLOOR_SOMPI, FpCommitmentPriceV1, MessageSigner, VALIDATOR_SEED_LEN, ValidatorKey, build_fp_commitment_tx_with, estimate_overlay_fee_with,
+    ATTESTATION_TX_FEE_FLOOR_SOMPI, FpCommitmentPriceV1, MessageSigner, VALIDATOR_SEED_LEN, ValidatorKey, build_fp_commitment_tx_with,
+    estimate_overlay_fee_with,
 };
 use kaspa_txscript::{pay_to_address_script, script_class::ScriptClass};
 
@@ -204,7 +205,9 @@ fn main() {
             "--bond-pubkey" => bond_pubkey_hex = Some(value("--bond-pubkey")),
             "--relay-signed" => relay_signed = Some(PathBuf::from(value("--relay-signed"))),
             "--redeem-auth-out" => redeem_auth_out = Some(PathBuf::from(value("--redeem-auth-out"))),
-            "--redeem-fee-bps" => redeem_fee_bps = value("--redeem-fee-bps").parse().unwrap_or_else(|e| die(format!("--redeem-fee-bps: {e}"))),
+            "--redeem-fee-bps" => {
+                redeem_fee_bps = value("--redeem-fee-bps").parse().unwrap_or_else(|e| die(format!("--redeem-fee-bps: {e}")))
+            }
             "--redeem-expiry-daa" => {
                 redeem_expiry_daa = value("--redeem-expiry-daa").parse().unwrap_or_else(|e| die(format!("--redeem-expiry-daa: {e}")))
             }
@@ -213,7 +216,9 @@ fn main() {
             "--evidence-panel-only" => evidence_panel_only = true,
             "--track" => track_claim = Some(value("--track")),
             "--tx-id" => track_tx_id = Some(value("--tx-id")),
-            "--finality-depth" => finality_depth = value("--finality-depth").parse().unwrap_or_else(|e| die(format!("--finality-depth: {e}"))),
+            "--finality-depth" => {
+                finality_depth = value("--finality-depth").parse().unwrap_or_else(|e| die(format!("--finality-depth: {e}")))
+            }
             "--relay-min-accept" => {
                 relay_min_accept = value("--relay-min-accept").parse().unwrap_or_else(|e| die(format!("--relay-min-accept: {e}")))
             }
@@ -262,7 +267,9 @@ fn main() {
         } else {
             relay_endpoints.clone()
         };
-        let bond = parse_outpoint(bond_flag.as_deref().unwrap_or_else(|| die("--track needs --bond <txid:index> (the executor bond)".into())));
+        let bond = parse_outpoint(
+            bond_flag.as_deref().unwrap_or_else(|| die("--track needs --bond <txid:index> (the executor bond)".into())),
+        );
         track_once(&endpoints, &claim_hex, track_tx_id.as_deref(), bond, finality_depth);
         return;
     }
@@ -308,6 +315,16 @@ fn main() {
             pass_through.extend(["--retention-dir".to_string(), dir.display().to_string()]);
         }
         pass_through.extend(["--anchor-ttl-daa".to_string(), anchor_ttl_daa.to_string()]);
+        // RFC-0009: the one-shot run of a watched job also files the claim's evidence and its V4 redemption authorization (the drill's
+        // fence-4 leg, `audit-combined/rfc9-v4-leg.sh`, runs the rail this way with `--once`: one job, one authorization file).
+        if let Some(dir) = &evidence_out {
+            pass_through.extend(["--evidence-out".to_string(), dir.display().to_string()]);
+        }
+        if let Some(path) = &redeem_auth_out {
+            pass_through.extend(["--redeem-auth-out".to_string(), path.display().to_string()]);
+            pass_through.extend(["--redeem-fee-bps".to_string(), redeem_fee_bps.to_string()]);
+            pass_through.extend(["--redeem-expiry-daa".to_string(), redeem_expiry_daa.to_string()]);
+        }
         watch::run(watch::WatchConfig {
             outbox,
             seed_path: seed,
@@ -441,7 +458,9 @@ fn main() {
         (Some(_), Some(_)) => die("--bond-key-seed and --signer-socket are two custodies of one key: pick one".into()),
         (Some(path), None) => BondSigner::Seed(ValidatorKey::from_seed(read_seed(&path))),
         (None, Some(socket)) => {
-            let hex_text = bond_pubkey_hex.unwrap_or_else(|| die("--signer-socket needs --bond-pubkey <hex>: the public key the sidecar's validator holds".into()));
+            let hex_text = bond_pubkey_hex.unwrap_or_else(|| {
+                die("--signer-socket needs --bond-pubkey <hex>: the public key the sidecar's validator holds".into())
+            });
             let mut pubkey = vec![0u8; hex_text.len() / 2];
             if hex_text.len() % 2 != 0 || faster_hex::hex_decode(hex_text.as_bytes(), &mut pubkey).is_err() {
                 die("--bond-pubkey is not hex".into());
@@ -451,7 +470,10 @@ fn main() {
                 .unwrap_or_else(|e| die(format!("cannot reach the signer sidecar at {}: {e}", socket.display())));
             BondSigner::Sidecar(sidecar)
         }
-        (None, None) => die("--bond-key-seed <file>, or --signer-socket <path> with --bond-pubkey <hex>, is required to sign (or use --print-claim)".into()),
+        (None, None) => die(
+            "--bond-key-seed <file>, or --signer-socket <path> with --bond-pubkey <hex>, is required to sign (or use --print-claim)"
+                .into(),
+        ),
     };
     let signer: &dyn MessageSigner = bond.signer();
     if signer.public_key() != commitment.job.executor_pubkey.as_slice() {
@@ -912,7 +934,9 @@ fn track_once(endpoints: &[String], claim_hex: &str, tx_id_hex: Option<&str>, ou
                     other => return Err(format!("the node reports a claim phase this client does not know: {other:?}")),
                 };
                 let mut accepted = [0u8; 64];
-                let accepted_block = if claim.accepted_block.len() == 128 && faster_hex::hex_decode(claim.accepted_block.as_bytes(), &mut accepted).is_ok() {
+                let accepted_block = if claim.accepted_block.len() == 128
+                    && faster_hex::hex_decode(claim.accepted_block.as_bytes(), &mut accepted).is_ok()
+                {
                     Hash64::from_bytes(accepted)
                 } else {
                     Hash64::default()
@@ -1027,7 +1051,8 @@ fn relay_signed_carrier(path: &Path, funding_amount: u64, endpoints: &[String], 
     let tx: kaspa_consensus_core::tx::Transaction = read_borsh(path, "signed carrier");
     let checked = misaka_palw_remote::relay::check_fp_carrier_v1(&tx).unwrap_or_else(|e| die(format!("nothing is relayed: {e}")));
     let claim = checked.claim_id;
-    let funding = UtxoEntry::new(funding_amount, misaka_palw_remote::bundle::funding_spk_of_pubkey_v1(&checked.funding_pubkey), 0, false);
+    let funding =
+        UtxoEntry::new(funding_amount, misaka_palw_remote::bundle::funding_spk_of_pubkey_v1(&checked.funding_pubkey), 0, false);
     let relayed = relay_through_many(endpoints, &tx, &funding, min_accept, checkpoint);
     println!(
         "{}",
@@ -1040,7 +1065,6 @@ fn relay_signed_carrier(path: &Path, funding_amount: u64, endpoints: &[String], 
         })
     );
 }
-
 
 /// **RFC-0009 stage A: relay a locally signed carrier through several nodes.** The funding signature is verified first (the same
 /// check the script engine will make), the id is recomputed from the bytes, and each node's reply is judged against it.
@@ -1094,7 +1118,8 @@ fn relay_through_many(
             }
         }
     };
-    let refs: Vec<&dyn misaka_palw_remote::relay::RelayNode> = nodes.iter().map(|n| n as &dyn misaka_palw_remote::relay::RelayNode).collect();
+    let refs: Vec<&dyn misaka_palw_remote::relay::RelayNode> =
+        nodes.iter().map(|n| n as &dyn misaka_palw_remote::relay::RelayNode).collect();
     let verdict = misaka_palw_remote::relay::broadcast_signed_tx(tx, Some(funding), &refs, min_accept);
     for node in &nodes {
         use kaspa_rpc_core::api::rpc::RpcApi;

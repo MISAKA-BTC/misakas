@@ -44,7 +44,7 @@ type Premine = Vec<(TransactionOutpoint, UtxoEntry)>;
 
 /// The int-13 list's height in this harness (the release's is 9,000); the int-11 list the range twin stands on is at 40, and its ρ = 100 step
 /// (H + 95 = 135) lies past the end of the script (`H + 2 × anchor_delay + 6 = 126`), so the capacity regime is ρ = 25 throughout.
-const H: u64 = 80;
+pub(super) const H: u64 = 80;
 /// The compressed release's int-11 height.
 const INT11: u64 = 40;
 
@@ -71,7 +71,7 @@ fn compressed_int12() -> Params {
 }
 
 /// The compressed release with — when `armed` — the int-13 list at `H`, each fence through its own entry (mirrors included).
-fn t12_release(armed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+pub(super) fn t12_release(armed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let mut params = compressed_int12();
     for name in LIST {
         let (_, at) = params.palw_fences_v1().into_iter().find(|(n, _)| *n == name).expect("a fence of the ruleset");
