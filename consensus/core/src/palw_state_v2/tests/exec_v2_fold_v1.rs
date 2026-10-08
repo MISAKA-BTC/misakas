@@ -954,7 +954,10 @@ fn a_root_declaration_is_signed_by_the_claims_bond_for_this_network_and_by_no_ot
 // =============================================================================================
 
 fn anchor_fold(span_now: u64, members: &[(u64, u64)]) -> crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1 {
-    crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1 { members: members.iter().map(|(b, span)| (h64(*b), *span)).collect(), span_now }
+    crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1 {
+        members: members.iter().map(|(b, span)| (h64(*b), *span)).collect(),
+        span_now,
+    }
 }
 
 fn anchor_step(
@@ -978,7 +981,12 @@ fn an_anchor_records_what_it_covered_once_and_the_window_drops_the_old() {
     let again = anchor_step(&p, &s1, 51, 121, anchor_fold(5, &[(0xA1, 4)])).expect_err("covered once");
     assert!(again.to_string().contains("earlier anchor"), "{again}");
     // A block outside the window is refused by the ledger's own guard (the closure never offers one).
-    assert!(anchor_step(&p, &s1, 51, 121, anchor_fold(8, &[(0xA3, 5)])).expect_err("outside the window").to_string().contains("outside the window"));
+    assert!(
+        anchor_step(&p, &s1, 51, 121, anchor_fold(8, &[(0xA3, 5)]))
+            .expect_err("outside the window")
+            .to_string()
+            .contains("outside the window")
+    );
     // Two spans on, the older entries are dropped by the next anchoring block; the newer one stays inside the window.
     let s2 = anchor_step(&p, &s1, 51, 130, anchor_fold(6, &[(0xA4, 6)])).unwrap();
     assert!(!s2.exec_v2_anchored_v1(&h64(0xA1)), "span 4 is outside the window of span 6");

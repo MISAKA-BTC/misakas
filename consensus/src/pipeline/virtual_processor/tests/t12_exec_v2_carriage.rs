@@ -17,7 +17,8 @@
 //!   re-hung anchor, a forged payload commitment, a trailer on a lane block and a lying trailer are each refused by name; below the fence
 //!   a `PXE2` header is refused and a root declaration is dropped.
 use super::t12_round_lane_e2e::{
-    T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards,
+    AtTheTargetSpan, SeedDraw, T12Chain, a_floor_final_scheduled_with, card_payout_spk, sign_spend, stamp_harness_time,
+    t12_genesis_chain, t12_with_harness_cards,
 };
 use super::{OnetimeTxSelector, new_miner_data};
 use crate::model::stores::ghostdag::GhostdagStoreReader;
@@ -30,12 +31,11 @@ use kaspa_consensus_core::blockstatus::BlockStatus;
 use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_exec_v2::{
-    PALW_EXEC_V2_WIRE_VERSION, PalwExecSubtypeV2, PalwExecV2Envelope, PalwWorkRangeV1, PalwWorkSliceV1,
-    palw_work_slice_payload_root_v2,
+    PALW_EXEC_V2_WIRE_VERSION, PalwExecSubtypeV2, PalwExecV2Envelope, PalwWorkSliceV1, palw_work_slice_payload_root_v2,
 };
 use kaspa_consensus_core::palw_exec_v2_anchor::{PalwExecV2AnchorV1, palw_exec_v2_anchor_append, palw_exec_v2_anchor_split};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2 as Obj};
+use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
 use kaspa_consensus_core::palw_work_slice_v2::{PALW_EXEC_V2_ROOT_MLDSA87_CONTEXT, PalwWorkRootDeclarationV2, PalwWorkRootPhaseV2};
 use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_hashes::Hash64;
@@ -164,7 +164,12 @@ struct Session {
 async fn open_session(fence: Option<u64>) -> Session {
     kaspa_core::log::try_init_logger("warn");
     let (config, premine, floats) = config_with(fence);
-    let mut chain = chain_of(&config, &premine, &floats);
+    let chain = chain_of(&config, &premine, &floats);
+    open_session_on(config, floats, chain).await
+}
+
+/// [`open_session`] over a chain the caller built (a database it keeps, to reopen it).
+async fn open_session_on(config: Config, floats: Vec<(TransactionOutpoint, UtxoEntry)>, mut chain: T12Chain) -> Session {
     let ttpb = config.params.target_time_per_block();
     // Cross the fence with heartbeats (the clock testnet-12 runs on), then card 0's attempt: a REAL claim.
     for _ in 0..400 {
@@ -708,4 +713,527 @@ async fn t12_exec_v2_below_the_fence_a_pxe2_header_is_refused_and_a_root_declara
     // And a chain block's coinbase carries no trailer, with or without lane blocks around.
     let (attempt, _) = chain.attempt(2, ttpb, Vec::new(), &|_| true).await;
     assert!(palw_exec_v2_anchor_split(&attempt.transactions[0].payload).unwrap().1.is_none());
+}
+
+// =============================================================================================
+// EXEC_TX: the existing permit lane, carried by the same anchor
+// =============================================================================================
+
+/// A signed `PXE2` `EXEC_TX` block for `(round, permit_index)` by card 0 (the executor), carrying `spends`, hung from the sink's selected
+/// parent. Not inserted.
+fn tx_block(at: &mut AtTheTargetSpan, config: &Config, round: u64, permit_index: u16, spends: Vec<Transaction>) -> MutableBlock {
+    let template = at
+        .chain
+        .ctx
+        .consensus
+        .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(spends.clone())), TemplateBuildMode::Standard)
+        .expect("a template carrying the spends");
+    let adapted = at.chain.vp().round_adapt_block_template(template, round, card_payout_spk(0)).expect("the lane adapts a template");
+    let anchor = adapted.selected_parent_hash;
+    let mut block = adapted.block;
+    for spend in &spends {
+        assert!(block.transactions.iter().any(|tx| tx.id() == spend.id()), "the lane block carries the spend");
+    }
+    block.header.nonce = 0;
+    block.header.palw_commitment = Vec::new();
+    let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
+    let mut envelope = PalwExecV2Envelope {
+        version: PALW_EXEC_V2_WIRE_VERSION,
+        network_domain: network_domain(config),
+        anchor,
+        subtype: PalwExecSubtypeV2::Tx,
+        tx_permit: Some(kaspa_consensus_core::palw_exec_v2::PalwExecTxPermitV2 { round, permit_index }),
+        work_slice: None,
+        // The existing transaction batch: the header's own merkle root.
+        payload_root: block.header.hash_merkle_root,
+        executor_bond: at.executor,
+        pubkey: pubkey(0),
+        signature: vec![0; kaspa_consensus_core::palw_execution_lane_v1::PALW_EXEC_MLDSA87_SIGNATURE_LEN],
+    };
+    let message = envelope.signing_message(pre_pow, block.header.timestamp, block.header.nonce).expect("a permit payload");
+    envelope.signature = sign(0, &message, envelope.mldsa87_context());
+    block.header.palw_commitment = envelope.encode();
+    block.header.finalize();
+    block
+}
+
+/// **An `EXEC_TX` block carried by the anchor**: the permit is judged against the parent state's schedule and spent once; its spend is
+/// accepted and its fee paid to the bond's payout by the anchoring chain block's coinbase — the existing lane's money, through the new
+/// carriage — and the block is in no stored mergeset. A second block of the SAME permit, and a block for a round the schedule does not
+/// grant, are covered and refused as lane verdicts (never as an error of the chain block): one spend, one fee, one permit.
+#[tokio::test]
+async fn t12_exec_v2_a_permitted_tx_block_is_anchored_its_fee_paid_once_and_a_duplicate_permit_or_an_ungranted_round_is_refused() {
+    use kaspa_consensus_core::palw_execution_lane_v1::{PALW_EXEC_ROUND_MS, palw_execution_permits_v1};
+    use kaspa_consensus_core::palw_execution_quanta_v1::PALW_EXEC_TICKET_LEAD_ROUNDS_V1;
+    const FEE: u64 = 500_000;
+    const FEE_OTHER: u64 = 400_000;
+    const FENCE_TX: u64 = 50;
+    let mut at = a_floor_final_scheduled_with(SeedDraw::MintsATicket, Some(FENCE_TX)).await;
+    let config = at.chain.config.clone();
+    assert!(config.params.palw_exec_payload_v2_active_at(at.chain.daa_of(at.chain.sink())), "the fence is crossed");
+    let mine: Vec<_> = at.schedule.quanta.iter().filter(|q| q.final_id == at.claim_id).copied().collect();
+    let ticket = mine.iter().min_by_key(|q| q.scheduled_round).copied().expect("the Final minted a ticket");
+    let round = ticket.scheduled_round;
+    let width = at.lane.width_of_span_len(at.target, at.span_daa);
+    let permit = palw_execution_permits_v1(&at.schedule, round, width).into_iter().find(|p| p.bond == at.executor).expect("a permit");
+    let untended = at.open_round + PALW_EXEC_TICKET_LEAD_ROUNDS_V1 + at.window + 5;
+    assert!(palw_execution_permits_v1(&at.schedule, untended, width).is_empty(), "a round no ticket holds has no permit");
+
+    // The anchor beneath the sink is the opening block.
+    at.chain.attempt(3, 1_000, Vec::new(), &|_| true).await;
+    let opening = at.opening;
+    assert_eq!(at.chain.vp().ghostdag_store.get_selected_parent(at.chain.sink()).unwrap(), opening);
+
+    // Three spends: the permitted block's, a duplicate permit's, an ungranted round's.
+    let utxos: std::collections::HashMap<_, _> =
+        at.chain.ctx.consensus.get_virtual_utxos(None, 1_000_000, false).into_iter().collect();
+    let change = TransactionOutpoint::new(at.carrier.id(), 0);
+    let change_entry = utxos.get(&change).cloned().expect("the carrier's change is unspent");
+    let (_, _, _, floats) = {
+        let (c, b, p, f) = t12_with_harness_cards();
+        (c, b, p, f)
+    };
+    let spend_from = |outpoint: TransactionOutpoint, entry: UtxoEntry, card: usize, fee: u64| {
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(outpoint, vec![], 0, 1)],
+            vec![TransactionOutput::new(entry.amount - fee, card_payout_spk(card))],
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        sign_spend(&mut tx, entry, card, config.params.storage_mass_parameter);
+        tx
+    };
+    let paying = spend_from(change, change_entry, 0, FEE);
+    let (f1_out, f1_entry) = floats[1].clone();
+    let duplicate_spend = spend_from(f1_out, f1_entry, 1, FEE_OTHER);
+    let (f2_out, f2_entry) = floats[2].clone();
+    let ungranted_spend = spend_from(f2_out, f2_entry, 2, FEE_OTHER);
+
+    let sink_before = at.chain.sink();
+    let numbers_before = numbers_of(&at.chain, sink_before);
+    let good = tx_block(&mut at, &config, round, permit.index, vec![paying.clone()]);
+    let duplicate = tx_block(&mut at, &config, round, permit.index, vec![duplicate_spend.clone()]);
+    let ungranted = tx_block(&mut at, &config, untended, 0, vec![ungranted_spend.clone()]);
+    assert_ne!(good.header.hash, duplicate.header.hash, "two blocks of one permit");
+    for (what, block) in [
+        ("the permitted TX block", &good),
+        ("a duplicate of its permit", &duplicate),
+        ("a TX block for a round with no permit", &ungranted),
+    ] {
+        let hash = block.header.hash;
+        at.chain
+            .ctx
+            .consensus
+            .validate_and_insert_block(block.clone().to_immutable())
+            .virtual_state_task
+            .await
+            .unwrap_or_else(|e| panic!("{what} {hash} was refused at the door: {e}"));
+        assert_eq!(at.chain.sink(), sink_before, "{what} never moves the sink");
+    }
+    // The node's own verdict view, before anything anchors them: the virtual covers them.
+    at.chain.ctx.simulated_time =
+        at.chain.ctx.simulated_time.max(config.params.genesis.timestamp + (untended + 1) * PALW_EXEC_ROUND_MS);
+    let (merging, _) = at.chain.attempt(2, 1_000, Vec::new(), &|_| true).await;
+    let trailer = palw_exec_v2_anchor_split(&merging.transactions[0].payload).unwrap().1.expect("the chain block anchors the lane");
+    assert_eq!(trailer.count, 3, "all three EXEC blocks are covered");
+
+    let vp = at.chain.vp();
+    let data = vp.ghostdag_store.get_data(merging.header.hash).unwrap();
+    for block in [&good, &duplicate, &ungranted] {
+        assert!(
+            !data.mergeset_blues.contains(&block.header.hash) && !data.mergeset_reds.contains(&block.header.hash),
+            "in no stored mergeset"
+        );
+    }
+    // Weightless: the chain block is the next block, one blue score on, by the attempt lane's own constant work.
+    let numbers_after = numbers_of(&at.chain, merging.header.hash);
+    assert_eq!(numbers_after.mergeset_size, 1, "the stored mergeset is the selected parent alone");
+    assert!(numbers_after.blue_score > numbers_before.blue_score);
+
+    // The permit is spent once, the permitted spend is accepted and paid, the others are not.
+    let (_, state) = at.chain.tip_state();
+    assert!(state.round_permit_used(at.target, round, permit.index), "the permit is recorded as used");
+    assert!(!state.round_permit_used(at.target, untended, 0));
+    assert_eq!(state.round_permits_accepted(at.target), 1, "one permit accepted in the span");
+    for block in [&good, &duplicate, &ungranted] {
+        assert!(state.exec_v2_anchored_v1(&block.header.hash), "covered once");
+    }
+    let accepted: Vec<_> = at
+        .chain
+        .ctx
+        .consensus
+        .get_block_acceptance_data(merging.header.hash)
+        .unwrap()
+        .iter()
+        .flat_map(|m| m.accepted_transactions.iter().map(|e| e.transaction_id).collect::<Vec<_>>())
+        .collect();
+    // Two blocks claim ONE permit: the covered set is judged in canonical order — (key, block hash) — so the LOWER hash takes it, on
+    // every node, whichever the miner called the "permitted" one (the signatures are randomised, so the hashes differ run to run).
+    let (winner_spend, winner_fee, loser_spend, loser_fee) = if good.header.hash < duplicate.header.hash {
+        (&paying, FEE, &duplicate_spend, FEE_OTHER)
+    } else {
+        (&duplicate_spend, FEE_OTHER, &paying, FEE)
+    };
+    assert!(accepted.contains(&winner_spend.id()), "the block that sorts first takes the permit: its spend is accepted");
+    assert!(!accepted.contains(&loser_spend.id()), "the other block of the permit has its spend refused");
+    assert!(!accepted.contains(&ungranted_spend.id()), "the ungranted round's spend is not");
+    let payout = card_payout_spk(0);
+    let paid: u64 = merging.transactions[0].outputs.iter().filter(|o| o.script_public_key == payout).map(|o| o.value).sum();
+    assert!(
+        merging.transactions[0].outputs.iter().any(|o| o.value == winner_fee && o.script_public_key == payout),
+        "the fee is paid to the bond's registered payout (paid {paid}): {:?}",
+        merging.transactions[0].outputs.iter().map(|o| o.value).collect::<Vec<_>>()
+    );
+    assert!(
+        !merging.transactions[0].outputs.iter().any(|o| o.value == loser_fee && o.script_public_key == payout),
+        "and the fee of the permit's other block is not paid"
+    );
+    assert!(
+        !merging.transactions[0].outputs.iter().any(|o| o.value == FEE_OTHER && o.script_public_key == card_payout_spk(1)),
+        "nor any fee for the ungranted round"
+    );
+}
+
+// =============================================================================================
+// Restart, replay and IBD: the lane survives what a node goes through
+// =============================================================================================
+
+/// What `anchor_two_slices` built: the chain block beneath the lane, the two EXEC blocks, and the chain block that anchors them.
+struct TwoAnchored {
+    mid: Block,
+    s0: MutableBlock,
+    s1: MutableBlock,
+    anchoring: Block,
+}
+
+/// The main scenario's blocks: a quiet chain block, slice 0 (card 1) and slice 1 (card 2) as EXEC blocks, then card 2's attempt, which
+/// anchors both.
+async fn anchor_two_slices(lane: &mut Session) -> TwoAnchored {
+    let (mid, _) = lane.chain.attempt(3, 1_000, Vec::new(), &|_| true).await;
+    let s0 = lane.slice_block(1, 0, |_| {});
+    lane.insert_lane_block(&s0, "slice 0").await;
+    // The predecessor of slice 1 is slice 0's result, which nothing has folded yet: it is supplied by hand.
+    let s1 = lane.slice_block(2, 1, |slice| slice.predecessor_state_root = Hash64::from_u64_word(0x6000));
+    lane.insert_lane_block(&s1, "slice 1").await;
+    let (anchoring, _) = lane.chain.attempt(2, 1_000, Vec::new(), &|_| true).await;
+    let (_, after) = lane.chain.tip_state();
+    assert!(after.exec_v2_anchored_v1(&s0.header.hash) && after.exec_v2_anchored_v1(&s1.header.hash), "both are anchored");
+    TwoAnchored { mid, s0, s1, anchoring }
+}
+
+/// The selected chain from genesis (exclusive) to `upto` (inclusive), as full blocks.
+fn selected_chain_blocks(chain: &T12Chain, upto: BlockHash) -> Vec<Block> {
+    let vp = chain.vp();
+    let genesis = chain.config.params.genesis.hash;
+    let mut hashes = Vec::new();
+    let mut at = upto;
+    while at != genesis {
+        hashes.push(at);
+        at = vp.ghostdag_store.get_selected_parent(at).expect("a chain block has a selected parent");
+    }
+    hashes.reverse();
+    hashes.into_iter().map(|h| chain.ctx.consensus.get_block(h).expect("the node holds its chain")).collect()
+}
+
+/// **A real restart over the same database, then a replay by a second node.** The first node carries a root, two anchored slices and the
+/// chain blocks around them; it is stopped; a new `Consensus` opens the SAME database. What it knows of the lane — the sink, the PALW tip
+/// with its `exec_v2` tables, the lane blocks' bodies — came off disk. It then carries on (a third slice, a new anchor), and a node that
+/// replays the whole chain agrees with every root: a chain block that reaches it BEFORE the lane blocks it anchors is held back with a
+/// retryable `MissingParents` naming the head, and lands once they are in.
+#[tokio::test]
+async fn t12_exec_v2_lane_state_survives_a_restart_and_a_replaying_node_agrees_whatever_the_arrival_order() {
+    use kaspa_consensus_core::errors::block::RuleError;
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    kaspa_core::log::try_init_logger("warn");
+    let (config, premine, floats) = config_with(Some(FENCE));
+    let PalwConsensusMode::ConsensusV2(bundle) = config.params.palw_consensus_mode.clone() else { unreachable!("testnet-12 is V2") };
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _rx) = async_channel::unbounded();
+    let first = crate::consensus::test_consensus::TestConsensus::with_db(db.clone(), &config, sender);
+    let chain = super::t12_round_lane_e2e::t12_genesis_chain_on(first, &config, &bundle, &premine, &floats);
+    let mut lane = open_session_on(config.clone(), floats.clone(), chain).await;
+    let claim = lane.claim;
+    let a = anchor_two_slices(&mut lane).await;
+
+    let sink = lane.chain.sink();
+    assert_eq!(sink, a.anchoring.header.hash);
+    let (_, state_before) = lane.chain.tip_state();
+    let (root_before, s0_row, s1_row) = (
+        state_before.exec_v2_root_v1(&claim).cloned().expect("the root"),
+        state_before.exec_v2_slice_v1(&claim, 0).cloned().expect("slice 0"),
+        state_before.exec_v2_slice_v1(&claim, 1).cloned().expect("slice 1"),
+    );
+    let (simulated_time, nonce) = (lane.chain.ctx.simulated_time, lane.chain.nonce_for_reopen());
+
+    // ---- stop the node ----
+    drop(lane.chain);
+    // ---- start it again on the same database (as a restarting node is configured: its genesis is already in) ----
+    let mut resumed = config.clone();
+    resumed.process_genesis = false;
+    let (sender, _rx2) = async_channel::unbounded();
+    let second = crate::consensus::test_consensus::TestConsensus::with_db(db.clone(), &resumed, sender);
+    let r = super::t12_round_lane_e2e::t12_reopened_chain(second, &resumed, &bundle, simulated_time, nonce);
+    assert_eq!(r.sink(), sink, "the restarted node's sink is the stopped node's");
+    let (tip, state) = r.tip_state();
+    assert_eq!((tip, state.state_root()), (sink, state_before.state_root()), "the PALW tip it loads off disk");
+    assert_eq!(state.exec_v2_root_v1(&claim), Some(&root_before), "the work root, off disk");
+    assert_eq!(state.exec_v2_slice_v1(&claim, 0), Some(&s0_row));
+    assert_eq!(state.exec_v2_slice_v1(&claim, 1), Some(&s1_row));
+    assert!(state.exec_v2_anchored_v1(&a.s0.header.hash) && state.exec_v2_anchored_v1(&a.s1.header.hash), "the covered set, off disk");
+    for lane_block in [&a.s0, &a.s1] {
+        let held = r.ctx.consensus.get_block(lane_block.header.hash).expect("the lane block's body is on disk");
+        assert_eq!(held.header.pow_algo_id, kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1);
+        assert_ne!(r.ctx.consensus.block_status(lane_block.header.hash), BlockStatus::StatusInvalid);
+    }
+
+    // ---- it carries on: slice 2, then a chain block that anchors it ----
+    let mut resumed_lane = Session { chain: r, config: resumed.clone(), claim, declaration: lane.declaration, floats: lane.floats };
+    let s2 = resumed_lane.slice_block(1, 2, |_| {});
+    resumed_lane.insert_lane_block(&s2, "slice 2 after the restart").await;
+    let (anchoring2, _) = resumed_lane.chain.attempt(2, 1_000, Vec::new(), &|_| true).await;
+    let (_, later) = resumed_lane.chain.tip_state();
+    assert!(later.exec_v2_anchored_v1(&s2.header.hash), "the restarted node anchors the new lane block");
+    let trailer = palw_exec_v2_anchor_split(&anchoring2.transactions[0].payload).unwrap().1.expect("anchors");
+    assert_eq!(trailer.count, 1, "only the new block: the two before the restart are not covered again");
+    let root_after = later.exec_v2_root_v1(&claim).unwrap();
+    assert_eq!((root_after.next_index, root_after.accepted_work, root_after.pending), (3, 3 * SLICE_WORK, 3), "{root_after:?}");
+
+    // ---- a node replaying the whole chain agrees ----
+    let z = chain_of(&config, &premine, &floats);
+    let chain_blocks = selected_chain_blocks(&resumed_lane.chain, resumed_lane.chain.sink());
+    let (first_anchor, second_anchor) = (a.anchoring.header.hash, anchoring2.header.hash);
+    let mut replayed_early = false;
+    for block in chain_blocks {
+        let hash = block.header.hash;
+        if hash == first_anchor {
+            // The chain block ahead of the lane blocks it anchors: held back by name, retryable.
+            let err = z
+                .ctx
+                .consensus
+                .validate_and_insert_block(block.clone())
+                .virtual_state_task
+                .await
+                .expect_err("its anchored heads are not here yet");
+            match err {
+                RuleError::MissingParents(missing) => assert!(missing.contains(&a.s1.header.hash), "names the head: {missing:?}"),
+                other => panic!("expected a retryable MissingParents, got {other:?}"),
+            }
+            replayed_early = true;
+            for lane_block in [&a.s0, &a.s1] {
+                z.ctx
+                    .consensus
+                    .validate_and_insert_block(lane_block.clone().to_immutable())
+                    .virtual_state_task
+                    .await
+                    .expect("a lane block arrives");
+            }
+        }
+        if hash == second_anchor {
+            z.ctx.consensus.validate_and_insert_block(s2.clone().to_immutable()).virtual_state_task.await.expect("slice 2 arrives");
+        }
+        z.ctx
+            .consensus
+            .validate_and_insert_block(block)
+            .virtual_state_task
+            .await
+            .unwrap_or_else(|e| panic!("chain block {hash}: {e}"));
+    }
+    assert!(replayed_early);
+    assert_eq!(z.sink(), resumed_lane.chain.sink(), "the replaying node reaches the restarted node's sink");
+    let (_, z_state) = z.tip_state();
+    assert_eq!(z_state.state_root(), later.state_root(), "and its PALW state root");
+    assert_eq!(z_state.exec_v2_root_v1(&claim), later.exec_v2_root_v1(&claim));
+    for index in 0..3 {
+        assert_eq!(z_state.exec_v2_slice_v1(&claim, index), later.exec_v2_slice_v1(&claim, index), "slice {index}");
+    }
+    for chain_block in [a.mid.header.hash, first_anchor, second_anchor] {
+        assert_eq!(numbers_of(&z, chain_block), numbers_of(&resumed_lane.chain, chain_block), "the numbers of {chain_block}");
+    }
+}
+
+/// **IBD of a lane the chain anchors.** No block names an EXEC block as a parent, so the two sync lists carry hooks: the syncer's
+/// header list puts the blocks a chain block anchors beside its mergeset (before it), and the syncee's body list requests the
+/// header-only lane blocks hanging off what it holds (before the chain block that anchors them). A syncee fed the list WITHOUT the
+/// lane — what an un-hooked node serves — lands every header but is refused the anchoring body by name; fed as this build serves it,
+/// it lands every body and reaches the source's sink and roots.
+#[tokio::test]
+async fn t12_exec_v2_ibd_carries_the_anchored_lane_blocks_through_both_sync_lists() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader as _;
+    use kaspa_consensus_core::errors::block::RuleError;
+    use kaspa_consensus_core::topological_order::is_parent_first;
+    use std::ops::Deref;
+    kaspa_core::log::try_init_logger("warn");
+    let mut lane = open_session(Some(FENCE)).await;
+    let claim = lane.claim;
+    let a = anchor_two_slices(&mut lane).await;
+    let (config, premine, floats) = config_with(Some(FENCE));
+    let source = &lane.chain.ctx.consensus;
+    let genesis = config.params.genesis.hash;
+    let sink = lane.chain.sink();
+    let (s0, s1) = (a.s0.header.hash, a.s1.header.hash);
+
+    // The syncer's header list: parents-first, with the lane blocks in it, ahead of the chain block that anchors them.
+    let (served, highest) = source.get_hashes_between(genesis, sink, 1 << 20).unwrap();
+    assert_eq!(highest, sink);
+    let position = |hash: BlockHash| served.iter().position(|h| *h == hash);
+    let (p0, p1, pa) = (position(s0).expect("slice 0 is listed"), position(s1).expect("slice 1 is listed"), position(sink).unwrap());
+    assert!(p0 < pa && p1 < pa, "the lane blocks are listed before the chain block that anchors them");
+    assert!(
+        is_parent_first(&served, |h| *h, |h| source.get_header(*h).unwrap().direct_parents().to_vec()),
+        "parents-first throughout"
+    );
+
+    // What an un-hooked syncer serves: each chain block's mergeset, in consensus order, and nothing else.
+    let store = source.ghostdag_store();
+    let mut selected = Vec::new();
+    let mut at = sink;
+    while at != genesis {
+        selected.push(at);
+        at = store.get_selected_parent(at).unwrap();
+    }
+    selected.reverse();
+    let mut unhooked: Vec<BlockHash> = Vec::new();
+    for chain_block in &selected {
+        unhooked.extend(store.get_data(*chain_block).unwrap().consensus_ordered_mergeset(store.deref()).filter(|h| *h != genesis));
+    }
+    unhooked.push(sink);
+    assert!(!unhooked.contains(&s0) && !unhooked.contains(&s1), "a mergeset lists no EXEC block: nothing names it");
+
+    // 1. The un-hooked list: every header lands; the anchoring block's body is refused by name, retryably.
+    let before = chain_of(&config, &premine, &floats);
+    for hash in &unhooked {
+        let header = source.get_header(*hash).unwrap();
+        before
+            .ctx
+            .consensus
+            .validate_and_insert_block(Block::from_header_arc(header))
+            .virtual_state_task
+            .await
+            .expect("a header lands");
+    }
+    let bodies = before.ctx.consensus.get_missing_block_body_hashes(sink).unwrap();
+    // The body list this build serves already carries the lane blocks it can see (headers only: none were listed), so it stops
+    // short of them; the anchoring block alone is what cannot land.
+    let mut refused = None;
+    for hash in bodies {
+        let block = source.get_block(hash).unwrap();
+        match before.ctx.consensus.validate_and_insert_block(block).virtual_state_task.await {
+            Ok(_) => {}
+            Err(RuleError::MissingParents(missing)) => {
+                refused = Some((hash, missing));
+                break;
+            }
+            Err(other) => panic!("body of {hash}: {other:?}"),
+        }
+    }
+    let (refused_at, missing) = refused.expect("the anchoring body cannot land without its lane blocks");
+    assert_eq!(refused_at, sink, "it is the anchoring chain block");
+    assert!(missing.contains(&s0) || missing.contains(&s1), "names a lane head: {missing:?}");
+
+    // 2. As this build serves and requests it.
+    let after = chain_of(&config, &premine, &floats);
+    for hash in &served {
+        let header = source.get_header(*hash).unwrap();
+        after
+            .ctx
+            .consensus
+            .validate_and_insert_block(Block::from_header_arc(header))
+            .virtual_state_task
+            .await
+            .expect("a header lands");
+    }
+    let missing_bodies = after.ctx.consensus.get_missing_block_body_hashes(sink).unwrap();
+    let (b0, b1, bs) = (
+        missing_bodies.iter().position(|h| *h == s0).expect("slice 0's body is requested"),
+        missing_bodies.iter().position(|h| *h == s1).expect("slice 1's body is requested"),
+        missing_bodies.iter().position(|h| *h == sink).expect("the sink's body is requested"),
+    );
+    assert!(b0 < bs && b1 < bs, "the lane bodies are requested before the chain block that anchors them");
+    assert!(
+        is_parent_first(&missing_bodies, |h| *h, |h| source.get_header(*h).unwrap().direct_parents().to_vec()),
+        "the body list is parents-first"
+    );
+    for hash in &missing_bodies {
+        let block = source.get_block(*hash).unwrap();
+        after
+            .ctx
+            .consensus
+            .validate_and_insert_block(block)
+            .virtual_state_task
+            .await
+            .unwrap_or_else(|e| panic!("body of {hash}: {e:?}"));
+    }
+    assert_eq!(after.sink(), sink, "the synced node's sink is the source's");
+    assert_eq!(after.ctx.consensus.block_status(sink), BlockStatus::StatusUTXOValid);
+    let (_, synced) = after.tip_state();
+    let (_, original) = lane.chain.tip_state();
+    assert_eq!(synced.state_root(), original.state_root(), "the synced PALW state is the source's");
+    assert_eq!(synced.exec_v2_root_v1(&claim), original.exec_v2_root_v1(&claim));
+    assert!(synced.exec_v2_anchored_v1(&s0) && synced.exec_v2_anchored_v1(&s1), "the covered set is folded the same");
+    assert_eq!(numbers_of(&after, sink), numbers_of(&lane.chain, sink), "and the numbers");
+}
+
+/// **A burst of EXEC blocks moves nothing.** Fourteen lane blocks arrive back to back, every one claiming slice 0 of the same root
+/// with a different result (a flood — any key can mint a lane block at the constant target): each is accepted into the DAG as a tip
+/// without moving the sink, a chain block anchors the whole burst in one trailer, the fold credits exactly ONE of them (one accepted use
+/// per `(root, index)`) and the root books exactly one slice's work, and every number on the chain — blue score, blue work, DAA score,
+/// bits, pruning point, mergeset size — is what it is on a twin that never saw the burst.
+#[tokio::test]
+async fn t12_exec_v2_a_burst_of_competing_slice_blocks_is_anchored_once_credited_once_and_weightless() {
+    const BURST: u64 = 14;
+    let mut lane = open_session(Some(FENCE)).await;
+    let mut twin = open_session(Some(FENCE)).await;
+    let (mid, _) = lane.chain.attempt(3, 1_000, Vec::new(), &|_| true).await;
+    let (twin_mid, _) = twin.chain.attempt(3, 1_000, Vec::new(), &|_| true).await;
+    let mut burst = Vec::new();
+    for i in 0..BURST {
+        // Cards 1 and 2 are both authorised; each submits a different result for slice 0.
+        let block = lane.slice_block(1 + (i % 2) as usize, 0, |slice| slice.result_state_root = Hash64::from_u64_word(0xF000 + i));
+        lane.insert_lane_block(&block, "a burst block").await;
+        burst.push(block.header.hash);
+    }
+    assert_eq!(lane.chain.sink(), mid.header.hash, "fourteen lane blocks, and the sink is where it was");
+    // The node's own view of its lane, before anything anchors it: the whole burst is pending under a live head.
+    {
+        let (tip, state) = lane.chain.tip_state();
+        let health = lane.chain.vp().palw_exec_v2_health(&state, tip, lane.chain.daa_of(tip) + 1).expect("the payload is in force");
+        assert_eq!((health.pending, health.stale), (BURST, false), "{health:?}");
+        assert!(health.latest_head.is_some_and(|head| burst.contains(&head)));
+    }
+    let (anchoring, _) = lane.chain.attempt(2, 1_000, Vec::new(), &|_| true).await;
+    let (twin_anchoring, _) = twin.chain.attempt(2, 1_000, Vec::new(), &|_| true).await;
+
+    let (_, after) = lane.chain.tip_state();
+    let trailer = palw_exec_v2_anchor_split(&anchoring.transactions[0].payload).unwrap().1.expect("the chain block anchors the burst");
+    assert_eq!(trailer.count as u64, BURST, "the whole burst is covered by the one trailer");
+    assert!(trailer.heads.len() <= kaspa_consensus_core::palw_exec_v2_anchor::PALW_EXEC_V2_MAX_HEADS);
+    for hash in &burst {
+        assert!(after.exec_v2_anchored_v1(hash), "{hash} is in the covered set");
+    }
+    let root = after.exec_v2_root_v1(&lane.claim).unwrap();
+    assert_eq!((root.next_index, root.accepted_work, root.pending), (1, SLICE_WORK, 1), "one credit for the whole burst: {root:?}");
+    let credited = after.exec_v2_slice_v1(&lane.claim, 0).unwrap().carrier;
+    assert!(burst.contains(&credited), "the credited slice is one of the burst's");
+
+    let data = lane.chain.vp().ghostdag_store.get_data(anchoring.header.hash).unwrap();
+    assert!(burst.iter().all(|h| !data.mergeset_blues.contains(h) && !data.mergeset_reds.contains(h)), "in no stored mergeset");
+    assert_eq!(numbers_of(&lane.chain, mid.header.hash), numbers_of(&twin.chain, twin_mid.header.hash));
+    assert_eq!(
+        numbers_of(&lane.chain, anchoring.header.hash),
+        numbers_of(&twin.chain, twin_anchoring.header.hash),
+        "no number on the chain moved for the burst"
+    );
+    let (_, twin_after) = twin.chain.tip_state();
+    assert_eq!(after.safe_weight(), twin_after.safe_weight(), "no PALW weight");
+    {
+        let (tip, state) = lane.chain.tip_state();
+        let health = lane.chain.vp().palw_exec_v2_health(&state, tip, lane.chain.daa_of(tip) + 1).expect("in force");
+        assert_eq!(health.pending, 0, "nothing is left to anchor: {health:?}");
+    }
+    // A second chain block anchors nothing new: the covered set is not covered twice.
+    let (next, _) = lane.chain.attempt(1, 1_000, Vec::new(), &|_| true).await;
+    assert!(palw_exec_v2_anchor_split(&next.transactions[0].payload).unwrap().1.is_none(), "the burst is anchored once");
 }

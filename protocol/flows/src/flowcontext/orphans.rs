@@ -426,4 +426,102 @@ mod tests {
         try_join_all(batch.virtual_state_tasks.unwrap()).await.expect("every lane block lands behind its parent");
         assert_eq!(*processed.read(), (1u64..=6).map(BlockHash::from).collect::<Vec<_>>());
     }
+
+    /// A pipeline that, like the real body stage, refuses a block whose lane heads (RFC-0008 v2) are not in yet, as it does a block whose
+    /// parent is not.
+    #[derive(Default)]
+    struct DependencyCheckingProcessor {
+        processed: Arc<RwLock<Vec<BlockHash>>>,
+    }
+
+    impl ConsensusApi for DependencyCheckingProcessor {
+        fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
+            let mut processed = self.processed.write();
+            let missing: Vec<BlockHash> = block_deps(&block).into_iter().filter(|dep| !processed.contains(dep)).collect();
+            let result: BlockProcessResult<BlockStatus> = if missing.is_empty() {
+                processed.push(block.hash());
+                Ok(BlockStatus::StatusUTXOPendingVerification)
+            } else {
+                Err(kaspa_consensus_core::errors::block::RuleError::MissingParents(missing))
+            };
+            BlockValidationFutures {
+                block_task: Box::pin(std::future::ready(result.clone())),
+                virtual_state_task: Box::pin(std::future::ready(result)),
+            }
+        }
+
+        fn get_block_status(&self, hash: BlockHash) -> Option<BlockStatus> {
+            self.processed.read().contains(&hash).then_some(BlockStatus::StatusUTXOPendingVerification)
+        }
+    }
+
+    /// A chain block `hash` hung from `parent` whose coinbase anchors the lane heads `heads` (ascending), which it does NOT name as parents.
+    fn anchoring_block(hash: u64, parent: u64, heads: &[u64]) -> Block {
+        use kaspa_consensus_core::palw_exec_v2_anchor::{PalwExecV2AnchorV1, palw_exec_v2_anchor_append};
+        let anchor = PalwExecV2AnchorV1 {
+            heads: heads.iter().map(|head| BlockHash::from(*head)).collect(),
+            count: heads.len() as u32,
+            root: kaspa_hashes::Hash64::from_u64_word(7),
+        };
+        let payload = palw_exec_v2_anchor_append(&[0u8; 10], &anchor).expect("a well-formed trailer");
+        let coinbase = kaspa_consensus_core::tx::Transaction::new(
+            0,
+            Vec::new(),
+            Vec::new(),
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_COINBASE,
+            0,
+            payload,
+        );
+        let mut block = Block::from_precomputed_hash(hash.into(), vec![parent.into()]);
+        block.transactions = Arc::new(vec![coinbase]);
+        block
+    }
+
+    /// **An anchoring block waits for the lane heads it names** (RFC-0008 v2) exactly as it waits for a parent. The heads are no parent of
+    /// anything, so a pool that looked only at direct parents would hand the block to consensus the moment its parent landed — and
+    /// consensus would refuse it, `MissingParents`, with nothing to retry it — or, past a restart, lose the lane for good. Here the
+    /// block is an orphan whose roots are the missing heads (so the node requests them), it stays an orphan while ONE head is in, and
+    /// it is released the moment the last arrives.
+    #[tokio::test]
+    async fn an_anchoring_block_waits_for_its_lane_heads_as_for_its_parents() {
+        let processor = DependencyCheckingProcessor::default();
+        let processed = processor.processed.clone();
+        let ci = ConsensusInstance::new(SessionLock::new(), Arc::new(processor));
+        let consensus = ci.session().await;
+        let mut pool = OrphanBlocksPool::new(16);
+
+        // The chain block 1 is known; the lane 20 <- 21 hangs from it; block 30 builds on 1 and anchors the lane's head set {20, 21}.
+        let chain = Block::from_precomputed_hash(1.into(), vec![]);
+        let head_a = Block::from_precomputed_hash(20.into(), vec![1.into()]);
+        let head_b = Block::from_precomputed_hash(21.into(), vec![1.into()]);
+        let anchoring = anchoring_block(30, 1, &[20, 21]);
+        assert_eq!(block_deps(&anchoring), vec![BlockHash::from(1u64), 20.into(), 21.into()], "parents, then the heads");
+        consensus.validate_and_insert_block(chain).virtual_state_task.await.unwrap();
+
+        // Its parent is known, its heads are not: an orphan, and the pool names the heads as what to request.
+        let Some(OrphanOutput::Roots(roots)) = pool.add_orphan(&consensus, anchoring.clone()).await else {
+            panic!("the anchoring block is an orphan until its heads are known");
+        };
+        let roots: HashSet<BlockHash> = roots.into_iter().collect();
+        assert_eq!(roots, HashSet::from([20.into(), 21.into()]), "the missing heads are the roots");
+        assert!(pool.orphans.contains_key(&anchoring.hash()));
+
+        // One head in: still waiting for the other.
+        consensus.validate_and_insert_block(head_a).virtual_state_task.await.unwrap();
+        let (blocks, _, _) = pool.unorphan_blocks(&consensus, 20.into()).await;
+        assert!(blocks.is_empty(), "one head is not both");
+        assert!(pool.orphans.contains_key(&anchoring.hash()));
+
+        // The second head: the block is released, and consensus takes it.
+        consensus.validate_and_insert_block(head_b).virtual_state_task.await.unwrap();
+        let (blocks, _, tasks) = pool.unorphan_blocks(&consensus, 21.into()).await;
+        assert_eq!(blocks.iter().map(|block| block.hash()).collect::<Vec<_>>(), vec![anchoring.hash()]);
+        try_join_all(tasks).await.expect("with its heads in, the anchoring block lands");
+        assert!(pool.orphans.is_empty());
+        assert!(processed.read().contains(&anchoring.hash()));
+
+        // A block with no trailer names no head: its dependencies are its parents alone.
+        assert_eq!(block_deps(&Block::from_precomputed_hash(40.into(), vec![1.into()])), vec![BlockHash::from(1u64)]);
+    }
 }

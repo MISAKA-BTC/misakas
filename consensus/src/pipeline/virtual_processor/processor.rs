@@ -14172,10 +14172,10 @@ impl VirtualStateProcessor {
         ghostdag_data: &GhostdagData,
         daa_score: u64,
     ) -> Option<super::utxo_validation::PalwRoundVerdictsV1> {
+        use kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope;
         use kaspa_consensus_core::palw_execution_lane_v1::{
             PalwExecEnvelopeV1, PalwExecPermitUseV1, palw_execution_permit_of_v2, palw_execution_span_v1,
         };
-        use kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope;
         let lane = self.palw_execution_lane_at(daa_score)?;
         // Route-matrix #2: past ADR-0151's bundle with the quanta armed, a permit is a ticket.
         let tickets_only = self.palw_round_permits_are_tickets_at(daa_score);
@@ -14185,8 +14185,27 @@ impl VirtualStateProcessor {
             round_blocks: self.palw_round_blocks_of(ghostdag_data),
             ..Default::default()
         };
+        // **RFC-0008 v2: the covered set is judged in the canonical order — `(round, permit index, hash)` — so two blocks of one permit,
+        // or more payees than a coinbase may pay, have a deterministic winner** (the header rule that bounds a v1 mergeset does not bound
+        // an anchor's closure). Slices carry no round and sort last; they are skipped below. For a v1 mergeset the header rule already
+        // forbids a duplicate, so the order changes nothing there.
         let mut ordered: Vec<BlockHash> = verdicts.round_blocks.iter().copied().collect();
-        ordered.sort();
+        ordered.sort_by_key(|block| {
+            let coords = self
+                .headers_store
+                .get_header(*block)
+                .ok()
+                .and_then(|header| kaspa_consensus_core::palw_exec_v2::palw_exec_lane_coords_v1(&header.palw_commitment).ok());
+            match coords {
+                Some(kaspa_consensus_core::palw_exec_v2::PalwExecLaneCoordsV1::Permit { round, permit_index, .. }) => {
+                    (0u8, round, permit_index, *block)
+                }
+                _ => (1u8, 0, 0, *block),
+            }
+        });
+        let mut taken: std::collections::BTreeSet<(u64, u64, u16)> = std::collections::BTreeSet::new();
+        let mut payees: std::collections::BTreeSet<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> =
+            std::collections::BTreeSet::new();
         for block in ordered {
             use kaspa_consensus_core::palw_exec_view_v1::{PalwRoundLineageV1, PalwRoundRefusalV1 as Refusal};
             // **RFC-0008 v2: an `EXEC_SLICE` carrier holds no permit and is judged by no permit verdict** — the fold judges it, by the
@@ -14258,14 +14277,35 @@ impl VirtualStateProcessor {
                 {
                     return Err(Refusal::PayoutMismatch);
                 }
-                if state.round_permit_used(span, envelope.round, envelope.permit_index) {
+                if state.round_permit_used(span, envelope.round, envelope.permit_index)
+                    || taken.contains(&(span, envelope.round, envelope.permit_index))
+                {
                     return Err(Refusal::PermitAlreadyUsed);
+                }
+                // The coinbase pays each permitted bond one aggregate output, so the distinct payees one block may pay are bounded.
+                if !payees.contains(&envelope.bond)
+                    && payees.len() >= kaspa_consensus_core::palw_execution_lane_v1::PALW_EXEC_MAX_BONDS_PER_MERGESET_V1
+                {
+                    return Err(Refusal::PayeeBound);
                 }
                 let lineage = kaspa_consensus_core::palw_exec_view_v1::palw_round_lineage_v1(state, schedule, permit.quantum_id);
                 Ok((PalwExecPermitUseV1 { span, round: envelope.round, permit_index: envelope.permit_index }, lineage))
             })();
             match judged {
                 Ok((used, lineage)) => {
+                    taken.insert((used.span, used.round, used.permit_index));
+                    if let Some(bond) = self
+                        .headers_store
+                        .get_header(block)
+                        .ok()
+                        .and_then(|header| kaspa_consensus_core::palw_exec_v2::palw_exec_lane_coords_v1(&header.palw_commitment).ok())
+                        .and_then(|coords| match coords {
+                            kaspa_consensus_core::palw_exec_v2::PalwExecLaneCoordsV1::Permit { bond, .. } => Some(bond),
+                            _ => None,
+                        })
+                    {
+                        payees.insert(bond);
+                    }
                     verdicts.permitted.insert(block);
                     verdicts.uses.push(used);
                     verdicts.judged.push((block, Ok(lineage)));
@@ -21480,7 +21520,6 @@ pub(super) fn first_locked_input(
     tx.inputs.iter().map(|input| input.previous_outpoint).find(|outpoint| locked.contains(outpoint))
 }
 
-
 // ---------------------------------------------------------------------------------------------
 // RFC-0008 v2: the weightless carriage
 // ---------------------------------------------------------------------------------------------
@@ -21507,7 +21546,8 @@ impl kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2DagV1 for ExecV2DagVie
         use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1;
         let p = self.processor;
         let header = p.headers_store.get_header(*hash).ok()?;
-        let chain = PalwExecV2NodeV1 { is_lane: false, legacy: false, key: None, anchor_span: 0, anchor_on_chain: true, parents: Vec::new() };
+        let chain =
+            PalwExecV2NodeV1 { is_lane: false, legacy: false, key: None, anchor_span: 0, anchor_on_chain: true, parents: Vec::new() };
         let is_lane = header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
             && p.palw_execution_lane.is_some_and(|lane| lane.activation.is_active(header.daa_score));
         if !is_lane {
@@ -21593,7 +21633,9 @@ impl VirtualStateProcessor {
         (std::sync::Arc<GhostdagData>, Option<PalwExecV2ResolvedV1>),
         kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorErrorV1,
     > {
-        use kaspa_consensus_core::palw_exec_v2_anchor::{PalwExecV2AnchorErrorV1, palw_exec_v2_anchor_split, palw_exec_v2_anchor_verify};
+        use kaspa_consensus_core::palw_exec_v2_anchor::{
+            PalwExecV2AnchorErrorV1, palw_exec_v2_anchor_split, palw_exec_v2_anchor_verify,
+        };
         if !self.palw_exec_v2_active_at(header.daa_score) {
             return Ok((mergeset_data, None));
         }
