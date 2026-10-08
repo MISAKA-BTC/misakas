@@ -61,9 +61,12 @@ fn floor_backend(form: PalwPromptIdsFormV1) -> Base0Backend {
     use kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
     use misaka_palw_base0::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
     let court = PalwCourtParamsV2::new(PALW_STEP_MAX_LEAVES, 4, 2).unwrap_or_else(|e| die(format!("the court: {e:?}")));
-    let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").unwrap_or_else(|| die("the floor class is not registered in this build"));
-    let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().unwrap_or_else(|e| die(format!("the floor's pinned root: {e:?}")));
-    let class = resolve_class_v1(&court, entry.class_id(), root, &[]).unwrap_or_else(|e| die(format!("the floor resolves from nothing: {e:?}")));
+    let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc")
+        .unwrap_or_else(|| die("the floor class is not registered in this build"));
+    let root =
+        misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().unwrap_or_else(|e| die(format!("the floor's pinned root: {e:?}")));
+    let class = resolve_class_v1(&court, entry.class_id(), root, &[])
+        .unwrap_or_else(|e| die(format!("the floor resolves from nothing: {e:?}")));
     Base0Backend::new(class).with_step_ladder_cap(court.max_step_leaf_count()).with_prompt_ids_form(form)
 }
 
@@ -71,6 +74,9 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (mut kind, mut identity, mut outbox, mut rpc, mut anchor_block, mut anchor_daa, mut table_out, mut network_id) =
         (None, None, None, None, None, None, None, b"misaka-palw-rc".to_vec());
+    // The network's prompt-ids form (`Params::palw_prompt_ids_form_v1`): flat on the RFC-0001 drill's chain, the tiled Merkle root where a
+    // genesis armed it. A commitment under the wrong form is refused at the door.
+    let mut prompt_form = PalwPromptIdsFormV1::Flat;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = |name: &str| it.next().cloned().unwrap_or_else(|| die(format!("{name} needs a value")));
@@ -80,21 +86,70 @@ fn main() {
             "--outbox" => outbox = Some(PathBuf::from(value("--outbox"))),
             "--rpc" => rpc = Some(value("--rpc")),
             "--anchor-block" => anchor_block = Some(hex64(&value("--anchor-block"), "--anchor-block")),
-            "--anchor-daa" => anchor_daa = Some(value("--anchor-daa").parse::<u64>().unwrap_or_else(|e| die(format!("--anchor-daa: {e}")))),
+            "--anchor-daa" => {
+                anchor_daa = Some(value("--anchor-daa").parse::<u64>().unwrap_or_else(|e| die(format!("--anchor-daa: {e}"))))
+            }
             "--emit-token-table" => table_out = Some(PathBuf::from(value("--emit-token-table"))),
             "--network-id" => network_id = value("--network-id").into_bytes(),
+            "--prompt-form" => {
+                prompt_form = match value("--prompt-form").as_str() {
+                    "flat" => PalwPromptIdsFormV1::Flat,
+                    "merkle" => PalwPromptIdsFormV1::MerkleV1,
+                    other => die(format!("--prompt-form {other:?} is not flat or merkle")),
+                }
+            }
             other => die(format!(
-                "unknown argument {other:?}\nusage: misaka-palw-rfc1-drill-claim --kind constraint|constraint2|prefix|inherit --identity <identity.json> \
-                 --outbox <dir> (--rpc <host:port> | --anchor-block <128hex> --anchor-daa <n>) [--emit-token-table <file>] [--network-id <s>]"
+                "unknown argument {other:?}\nusage: misaka-palw-rfc1-drill-claim --kind plain|constraint|constraint2|prefix|inherit --identity <identity.json> \
+                 --outbox <dir> (--rpc <host:port> | --anchor-block <128hex> --anchor-daa <n>) [--emit-token-table <file>] [--network-id <s>] \
+                 [--prompt-form flat|merkle]"
             )),
         }
     }
     let kind = kind.unwrap_or_else(|| die("--kind is required"));
+    // **`--kind fp-certification`: the floor's free-prompt lane, certified ON CHAIN** (RFC-0009's fence-4 drill leg). A testnet-12 genesis
+    // names the floor free-prompt-certified in its params but holds no certified free-prompt family in state, and ADR-0145's derived-work
+    // fence skips every commitment on a class whose graph is unpublished: the drill files the floor's FP drill evidence (`FamilyCertified`,
+    // above one carrier, so as `ObjectChunk`s) and the class's lane binding (`ClassLaneCertified`) with `misaka palw submit-object`, in
+    // that order, before the first claim. Writes `<outbox>/fp-family.obj.chunkN` and `<outbox>/fp-lane.obj`; prints the paths.
+    if kind == "fp-certification" {
+        use kaspa_consensus_core::palw_state_v2::{PalwCertificationEvidenceV1, PalwCertifiedLaneV1, PalwConsensusObjectV2 as Obj};
+        let outbox = outbox.unwrap_or_else(|| die("--outbox is required"));
+        std::fs::create_dir_all(&outbox).unwrap_or_else(|e| die(format!("{}: {e}", outbox.display())));
+        let backend = floor_backend(prompt_form);
+        let evidence = misaka_palw_base0::e2e_drill::rc_free_prompt_evidence_v1(misaka_palw_base0::e2e_drill::PalwRcFamilyV1::Base0)
+            .unwrap_or_else(|e| die(format!("the floor's free-prompt drill: {e:?}")));
+        let family = Obj::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::FreePrompt(evidence)) };
+        let lane = Obj::ClassLaneCertified {
+            class_id: backend.profile().shape_profile_id(),
+            lane: PalwCertifiedLaneV1::FreePrompt,
+            profile: Box::new(backend.profile().clone()),
+        };
+        let parts = kaspa_consensus_core::palw_state_v2::palw_object_chunks_v1(&family)
+            .unwrap_or_else(|e| die(format!("the family evidence does not chunk: {e:?}")))
+            .unwrap_or_else(|| vec![family.clone()]);
+        for (i, part) in parts.iter().enumerate() {
+            let path = outbox.join(format!("fp-family.obj.chunk{i}"));
+            std::fs::write(&path, borsh::to_vec(part).unwrap_or_else(|e| die(e)))
+                .unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
+            println!("{}", path.display());
+        }
+        // The floor's class id, for `misaka-palw-fp-rail --print-identity --class-id` (the leg's executor serves this class).
+        let class_path = outbox.join("floor.class");
+        std::fs::write(&class_path, hex_of(backend.profile().shape_profile_id())).unwrap_or_else(|e| die(format!("{}: {e}", class_path.display())));
+        let path = outbox.join("fp-lane.obj");
+        std::fs::write(&path, borsh::to_vec(&lane).unwrap_or_else(|e| die(e)))
+            .unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
+        println!("{}", path.display());
+        return;
+    }
     let identity: serde_json::Value = {
         let path = identity.unwrap_or_else(|| die("--identity <identity.json> is required (misaka-palw-fp-rail --print-identity)"));
-        serde_json::from_slice(&std::fs::read(&path).unwrap_or_else(|e| die(format!("{}: {e}", path.display())))).unwrap_or_else(|e| die(format!("identity: {e}")))
+        serde_json::from_slice(&std::fs::read(&path).unwrap_or_else(|e| die(format!("{}: {e}", path.display()))))
+            .unwrap_or_else(|e| die(format!("identity: {e}")))
     };
-    let field = |name: &str| identity.get(name).and_then(|v| v.as_str()).unwrap_or_else(|| die(format!("identity.json has no {name}"))).to_string();
+    let field = |name: &str| {
+        identity.get(name).and_then(|v| v.as_str()).unwrap_or_else(|| die(format!("identity.json has no {name}"))).to_string()
+    };
     let outbox = outbox.unwrap_or_else(|| die("--outbox is required"));
     std::fs::create_dir_all(&outbox).unwrap_or_else(|e| die(format!("{}: {e}", outbox.display())));
 
@@ -113,7 +168,8 @@ fn main() {
     let (anchor_block, anchor_daa) = match (anchor_block, anchor_daa, rpc) {
         (Some(b), Some(d), _) => (b, d),
         (_, _, Some(endpoint)) => {
-            let src = chain::RpcChainSource::new(&endpoint, hex_of(class_id), hex_of(bond_txid), bond_index, 10).unwrap_or_else(|e| die(e));
+            let src =
+                chain::RpcChainSource::new(&endpoint, hex_of(class_id), hex_of(bond_txid), bond_index, 10).unwrap_or_else(|e| die(e));
             let facts = src.read();
             if let Some(why) = facts.read_error {
                 die(format!("cannot read the anchor from {endpoint}: {why}"));
@@ -123,7 +179,7 @@ fn main() {
         _ => die("give --rpc <host:port> or both --anchor-block and --anchor-daa"),
     };
 
-    let backend = floor_backend(PalwPromptIdsFormV1::Flat);
+    let backend = floor_backend(prompt_form);
     let floor = backend.profile().shape_profile_id();
     if class_id != floor {
         eprintln!("note: identity class {} is not the floor {}; the job names the identity's class", hex_of(class_id), hex_of(floor));
@@ -131,10 +187,13 @@ fn main() {
     let vocab = backend.profile().vocab_size;
 
     let (prompt, version, limit): (Vec<u32>, u16, u32) = match kind.as_str() {
+        // RFC-0009's fence-4 drill leg: a plain V3 job (no tail) — the free-prompt claim a builder redeems after the miner is gone. The
+        // context's worth of decode, so the claim earns several quanta (more draws at the receipt lottery).
+        "plain" => (vec![3, 5, 8, 13], PALW_FP_V3_VERSION, backend.profile().n_ctx - 4),
         "constraint" | "constraint2" => (vec![17, 3, 91, 4], PALW_FP_CONSTRAINT_VERSION, 8),
         "prefix" => (vec![17, 3, 911, 44, 5], PALW_FP_PREFIX_VERSION, 6),
         "inherit" => (vec![17, 3, 911, 44, 5], PALW_FP_PREFIX_INHERIT_VERSION, 6),
-        other => die(format!("--kind {other:?} is not constraint, constraint2, prefix or inherit")),
+        other => die(format!("--kind {other:?} is not plain, constraint, constraint2, prefix or inherit")),
     };
     let mut nonce = [0u8; 32];
     for (i, b) in nonce.iter_mut().enumerate() {
@@ -144,14 +203,17 @@ fn main() {
         version: PALW_FP_V3_VERSION,
         network_domain,
         class_id,
-        executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_bytes(bond_txid.as_bytes()), bond_index),
+        executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+            kaspa_consensus_core::tx::TransactionId::from_bytes(bond_txid.as_bytes()),
+            bond_index,
+        ),
         executor_pubkey,
         operator_id,
         anchor_block,
         anchor_daa,
         job_nonce: nonce,
         tokenizer_id: Hash64::default(),
-        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::Flat, &prompt)
+        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(prompt_form, &prompt)
             .unwrap_or_else(|e| die(format!("the ids do not commit: {e:?}"))),
         prompt_tokens: prompt.len() as u32,
         decode_token_limit: limit,
@@ -166,6 +228,11 @@ fn main() {
 
     let mut table: Option<Arc<PalwTokenTableV1>> = None;
     match kind.as_str() {
+        "plain" => {
+            use kaspa_consensus_core::palw_decode_select_v2::{PALW_DECODE_SEED_GREEDY, PALW_DECODE_TEMPERATURE_GREEDY};
+            job.sampling_seed = PALW_DECODE_SEED_GREEDY;
+            job.temperature_q = PALW_DECODE_TEMPERATURE_GREEDY;
+        }
         "constraint" | "constraint2" => {
             use kaspa_consensus_core::palw_decode_select_v2::{PALW_DECODE_SEED_GREEDY, PALW_DECODE_TEMPERATURE_GREEDY};
             let mut t = PalwTokenTableV1 {
@@ -215,7 +282,8 @@ fn main() {
     let prompt_usize: Vec<usize> = prompt.iter().map(|t| *t as usize).collect();
     let run = match &table {
         Some(t) => {
-            let mask = PalwConstraintMaskV1::for_job(&job, t.clone()).unwrap_or_else(|e| die(format!("the table is not the job's: {e:?}")));
+            let mask =
+                PalwConstraintMaskV1::for_job(&job, t.clone()).unwrap_or_else(|e| die(format!("the table is not the job's: {e:?}")));
             palw_fp_with_constraint_scope_v1(Some(mask), || backend.execute_free_prompt(&job, &prompt_usize))
         }
         None => backend.execute_free_prompt(&job, &prompt_usize),
