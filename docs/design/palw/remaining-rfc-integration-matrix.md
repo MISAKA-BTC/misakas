@@ -51,10 +51,10 @@ wire/fence impact · test · real-node result · status.
 | Requirement | Status | Missing |
 |---|---|---|
 | canonical cell identity, carry-in, history/checkpoints, shard weights, cell assignment, coverage, receipts by parts, exact court (`TirShardCourtAccused`, any Active bond) | IMPLEMENTED_AND_TESTED (fold + kaspad e2e) | hashed cell id only if RFC-0007 scope receipts need it |
-| per-cell readiness / resource pricing per segment | IMPLEMENTED_AND_TESTED at shard granularity (work share per cell already prices position growth) | per-segment *residency* pricing: DESIGN_GAP — proposal for a new versioned fence in `rfc-0010-production-path-record.md` §6; the armed fence (DAA 5,300) is unchanged |
-| boundary/state fraud localization by a NON-seat public watcher | CODE_GAP (seat duty / shadow only; `TirShardCourtAccused` is already open to any Active bond) | public watcher path (shares A's fresh-verifier engine and the public material read) |
+| per-cell readiness / resource pricing per segment | IMPLEMENTED_AND_TESTED at shard granularity (work share per cell already prices position growth) | per-segment *residency* pricing: IMPLEMENTED, dormant behind `palw_tir_shard_segment_v2` (lock/pay = max(work, resident), keyed on `accepted_daa`) — was DESIGN_GAP — proposal for a new versioned fence in `rfc-0010-production-path-record.md` §6; the armed fence (DAA 5,300) is unchanged |
+| boundary/state fraud localization by a NON-seat public watcher | IMPLEMENTED_AND_TESTED, dormant (`--palw-tir-shard-watch`, `palw_tir_shard_watch_duties_v1`; SHARD 7b3c0b306) — was CODE_GAP (seat duty / shadow only; `TirShardCourtAccused` is already open to any Active bond) | public watcher path (shares A's fresh-verifier engine and the public material read) |
 | processor/T12Chain-level reorg + duplicate receipt test | fold level IMPLEMENTED_AND_TESTED (`palw_tir_shard_fold.rs`: parts are branch-local, reverted exactly, the same receipts fold again on the other branch, duplicate part refused by name); processor level CODE_GAP | needs an IR class with a shard plan and a signed `ReceiptV4` chain in the T12 harness; D-S1…D-S6 drill evidence: EXTERNAL_GATE_PENDING |
-| V3 per-shard draw (stratified seats) | DESIGN_GAP | depends on RFC-0010 beacon |
+| V3 per-shard draw (stratified seats) | IMPLEMENTED_AND_TESTED, dormant (strata in misaka-palw-panel; per-shard records at bind; G14 pre-emption guard; SHARD ae92729bf/d37419308) | depends on RFC-0010 beacon |
 | stale "dormant" docs | DONE (RFC-0006 status note, `palw_tir_shard_v1.rs`, `palw_tir_shard_fold_v1.rs`, `params.rs` comments) | — |
 
 ### RFC-0001 inference surface / RFC-0003 generative classes (C3)

@@ -25,7 +25,7 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 | --- | --- | --- |
 | RFC-0004 Part II (2026-10-08, in the gate by the user) | computation specification with typed roots (`Weights` / `Memory` + update rule / `Retrieval` snapshot + deterministic rule / `Composite`); real-node E2E per kind with outsider conviction and DA default; bounds; census counting | CODE + DESIGN |
 | RFC-0009 | L2 PALW fork-choice verification for remote clients (needs a state-root version bump and transition verification); the provider court (objective DA responsibility transfer); rail auto-resubmit; the RDA4 `SigningPurpose` | DESIGN / CODE |
-| RFC-0006 | non-seat watcher, per-segment pricing, per-shard V3 draw | CODE / DESIGN |
+| RFC-0006 | non-seat watcher, per-segment pricing, per-shard V3 draw — implemented, dormant (SHARD, merged 3c3c25e7b); left: the `palw_tir_shard_segment_v2` height at the release, the PL part C hold (SHARD2) | FENCE |
 | RFC-0013 | tiled range evaluator, Merkle index | CODE |
 | RFC-0002 / 0011 | the HF-majority acceptance bar (RFC-0011: one-sided 95% lower bound ≥ 90% over all public repos); census re-measurement running (COV-P4) | CODE + measurement |
 | RFC-0001 | proposals P1–P4 | CODE |
