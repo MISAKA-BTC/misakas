@@ -14,6 +14,7 @@ pub mod build;
 pub mod cli;
 pub mod commit;
 pub mod conformance;
+pub mod facts;
 pub mod hfref;
 pub mod manifest;
 pub mod provenance;
