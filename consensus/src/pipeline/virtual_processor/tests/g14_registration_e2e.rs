@@ -22,6 +22,7 @@
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::config::{Config, ConfigBuilder};
 use kaspa_consensus_core::palw_artifact::{artifact_leaf_v1, artifact_root_v1};
@@ -843,7 +844,6 @@ async fn mine_registration(case_name: &str, card: usize) -> Mined {
 
 #[tokio::test]
 async fn g14_registration_mined_end_to_end_on_the_real_node_path() {
-    use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
     kaspa_core::log::try_init_logger("warn");
     let mut m = mine_registration("moe-top2-shared", 2).await;
@@ -904,4 +904,198 @@ async fn g14_registration_mined_end_to_end_on_the_real_node_path() {
         mempool_verdict(env, &m.carrier),
         Err(kaspa_consensus_core::errors::tx::TxRuleError::MissingTxOutpoints)
     ), "the mempool refuses a replay of the spent carrier");
+}
+
+// ---- more than one node: replay, reorg, pruned import ---------------------------------------------------
+
+use crate::model::stores::ghostdag::GhostdagStoreReader;
+use kaspa_consensus_core::block::Block;
+
+/// Every selected-chain block of `chain` from genesis (exclusive) to `upto`, oldest first.
+fn chain_blocks(chain: &T12Chain, upto: BlockHash) -> Vec<Block> {
+    let vp = chain.vp();
+    let genesis = chain.config.params.genesis.hash;
+    let mut hashes = Vec::new();
+    let mut at = upto;
+    while at != genesis {
+        hashes.push(at);
+        at = vp.ghostdag_store.get_selected_parent(at).expect("a chain block has a selected parent");
+    }
+    hashes.reverse();
+    hashes.into_iter().map(|h| chain.ctx.consensus.get_block(h).expect("the node holds its chain")).collect()
+}
+
+/// `block` arrives at `chain` as a peer's block does.
+async fn arrive(chain: &T12Chain, block: Block, what: &str) {
+    let hash = block.header.hash;
+    chain
+        .ctx
+        .consensus
+        .validate_and_insert_block(block)
+        .virtual_state_task
+        .await
+        .unwrap_or_else(|e| panic!("{what} {hash} was refused: {e}"));
+}
+
+fn fresh_node(m: &Mined) -> T12Chain {
+    t12_genesis_chain(&m.env.config, &m.env.bundle, &m.env.premine, &m.env.floats)
+}
+
+fn root_at(chain: &T12Chain, block: BlockHash) -> Hash64 {
+    chain.vp().palw_state_v2_store.read().state_root_of(block).expect("a delta row")
+}
+
+/// A's chain to a block past the activation, returning every block after the warm-up.
+async fn extend_past_activation(m: &mut Mined, extra: u64) {
+    let ttpb = m.env.config.params.target_time_per_block();
+    while m.env.chain.daa_of(m.env.chain.sink()) < m.activation + extra {
+        let b = m.env.chain.heartbeat(ttpb, Vec::new()).await;
+        m.blocks.push(b);
+    }
+}
+
+#[tokio::test]
+async fn g14_registration_replay_on_a_second_node_and_across_a_reorg() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut a = mine_registration("moe-top2-shared", 2).await;
+    let (h1, carrying, folding) = (a.blocks[0].clone(), a.blocks[1].clone(), a.blocks[2].clone());
+    let float_outpoint = a.env.floats[a.card].0;
+    let change = TransactionOutpoint::new(a.carrier.id(), 0);
+    let bond = a.env.chain.bonds[a.card];
+
+    // ---- Z replays A's chain (the way a syncing node does): same sink, same roots, same row ----
+    let mut z = fresh_node(&a);
+    for b in chain_blocks(&a.env.chain, a.env.chain.sink()) {
+        arrive(&z, b, "A's block").await;
+    }
+    assert_eq!(z.sink(), a.env.chain.sink());
+    let (_, at_a) = a.env.chain.tip_state();
+    let (_, z_a) = z.tip_state();
+    assert_eq!(z_a.state_root(), at_a.state_root(), "Z on A: A's root");
+    assert_eq!(z_a.class(&a.class_id), at_a.class(&a.class_id), "Z on A: A's class row");
+    assert_eq!(z_a.tir_class_v1(&a.class_id), Some(&a.record), "Z on A: the gate's record");
+    for blk in [&h1, &carrying, &folding] {
+        assert_eq!(root_at(&z, blk.header.hash), root_at(&a.env.chain, blk.header.hash), "per-block delta root {}", blk.header.hash);
+    }
+    assert!(z.ctx.consensus.get_virtual_utxo_entry(change).is_some() && z.ctx.consensus.get_virtual_utxo_entry(float_outpoint).is_none());
+    let collateral_on_a = z_a.bond(&bond).unwrap().collateral;
+    assert_eq!(collateral_on_a, a.collateral_before - kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1);
+
+    // ---- B, from the same h1, mines a heavier chain that never saw the carrier ----
+    let mut b = fresh_node(&a);
+    arrive(&b, h1.clone(), "h1").await;
+    b.ctx.simulated_time = h1.header.timestamp;
+    let ttpb = a.env.config.params.target_time_per_block();
+    let mut b_blocks = Vec::new();
+    for _ in 0..4 {
+        b_blocks.push(b.heartbeat(ttpb, Vec::new()).await);
+    }
+    assert!(b.tip_state().1.class(&a.class_id).is_none(), "B never registered it");
+    for blk in &b_blocks {
+        arrive(&z, blk.clone(), "B's block").await;
+    }
+    assert_eq!(z.sink(), b.sink(), "B out-works A's two blocks: Z reorgs onto B");
+    let (_, z_b) = z.tip_state();
+    assert_eq!(z_b.state_root(), b.tip_state().1.state_root(), "Z on B: the root of B's fresh replay");
+    assert!(z_b.class(&a.class_id).is_none() && z_b.tir_class_v1(&a.class_id).is_none(), "the reorged-out registration left no row");
+    assert_eq!(z_b.bond(&bond).unwrap().collateral, a.collateral_before, "its burn is returned with it");
+    assert_eq!(z_b.registration_exposure(&bond), 0, "and its exposure");
+    // **The sink's PALW state is the sink chain's; the virtual's UTXO view also merges A's blue blocks.** The carrier
+    // (in A's carrying block) is therefore accepted by the VIRTUAL — its float is spent, its change stands — while the
+    // class row exists only once a chain block folds that acceptance.
+    assert!(z.ctx.consensus.get_virtual_utxo_entry(change).is_some() && z.ctx.consensus.get_virtual_utxo_entry(float_outpoint).is_none());
+    assert!(z.ctx.consensus.palw_v2_class_table().iter().all(|r| r.class_id != a.class_id), "getPalwClasses no longer lists it");
+    assert_eq!(z.ctx.consensus.palw_tir_class_record_v1(a.class_id), None);
+    assert!(
+        matches!(mempool_verdict_on(&z, &a.carrier), Err(kaspa_consensus_core::errors::tx::TxRuleError::MissingTxOutpoints)),
+        "the float is spent in the virtual (merged), so the pool refuses a second carrier"
+    );
+    for blk in &b_blocks {
+        assert_eq!(root_at(&z, blk.header.hash), root_at(&b, blk.header.hash), "Z keeps B's delta row");
+    }
+    // A's delta rows are kept on Z, reverted (the reorg walk needs them again).
+    assert_eq!(root_at(&z, folding.header.hash), root_at(&a.env.chain, folding.header.hash));
+
+    // ---- the next chain block on B's side MERGES A's blue blocks and folds the carrier: the registration is not lost
+    // by the reorg, it is re-folded (at that block's DAA, under the same signature and the same gate) ----
+    z.ctx.simulated_time = b.ctx.simulated_time;
+    let z1 = z.heartbeat(ttpb, Vec::new()).await;
+    let (_, z_merged) = z.tip_state();
+    let merged = z_merged.class(&a.class_id).expect("the merged carrier is folded by Z's next chain block");
+    assert_eq!(merged.registered_daa, z.daa_of(z1.header.hash), "registered at the folding block's DAA");
+    assert_eq!(z_merged.tir_class_v1(&a.class_id), Some(&a.record), "with the gate's record");
+    assert_eq!(z_merged.bond(&bond).unwrap().collateral, collateral_on_a, "and the burn is taken again, once");
+
+    // ---- A out-works B again: Z reorgs back, the row returns identically ----
+    extend_past_activation(&mut a, 3).await;
+    let a_tail: Vec<Block> = a.blocks[3..].to_vec();
+    assert!(a_tail.len() > 5, "A's tail ({}) out-works B's four blocks and Z's merge block", a_tail.len());
+    for blk in &a_tail {
+        arrive(&z, blk.clone(), "A's block").await;
+    }
+    assert_eq!(z.sink(), a.env.chain.sink(), "Z back on A");
+    let (_, z_again) = z.tip_state();
+    let (_, a_end) = a.env.chain.tip_state();
+    assert_eq!(z_again.state_root(), a_end.state_root(), "Z on A again: A's fresh-replay root");
+    assert_eq!(z_again.class(&a.class_id), a_end.class(&a.class_id), "the same class row, now Active");
+    assert_eq!(z_again.tir_class_v1(&a.class_id), Some(&a.record));
+    assert_eq!(z_again.bond(&bond).unwrap().collateral, collateral_on_a);
+    assert!(matches!(mempool_verdict_on(&z, &a.carrier), Err(kaspa_consensus_core::errors::tx::TxRuleError::MissingTxOutpoints)));
+    for blk in &a.blocks {
+        assert_eq!(root_at(&z, blk.header.hash), root_at(&a.env.chain, blk.header.hash), "Z on A again: delta root {}", blk.header.hash);
+    }
+}
+
+fn mempool_verdict_on(chain: &T12Chain, tx: &Transaction) -> Result<(), kaspa_consensus_core::errors::tx::TxRuleError> {
+    chain.vp().validate_mempool_transaction(&mut kaspa_consensus_core::tx::MutableTransaction::from_tx(tx.clone()), &Default::default())
+}
+
+/// **A pruned join inside the registration's life**: the importer follows A through P (after the fold, before the
+/// activation), sees the header of P's child, is left as a pruned join leaves a node (no PALW tip, no delta below P),
+/// and installs the carriage A serves. Everything it knows of the class then came through the carriage — and the
+/// activation clock, the folds that follow and A's blocks all give A's roots.
+#[tokio::test]
+async fn g14_registration_survives_a_pruned_import() {
+    use kaspa_consensus_core::palw_state_v2::{PalwClassStatusV2, PalwStateCarriageV2};
+    kaspa_core::log::try_init_logger("warn");
+    let mut a = mine_registration("sliding-global", 4).await;
+    extend_past_activation(&mut a, 3).await;
+    let all = chain_blocks(&a.env.chain, a.env.chain.sink());
+    // P: the folding block + 2 (the class is Registered, activation is ~28 DAA away).
+    let k = all.iter().position(|b| b.header.hash == a.blocks[2].header.hash).unwrap() + 2;
+    let (p, t) = (all[k].header.hash, all[k + 1].clone());
+    let importer = fresh_node(&a);
+    for b in &all[..=k] {
+        arrive(&importer, b.clone(), "a block through the pruning point").await;
+    }
+    arrive(&importer, Block::from_header_arc(t.header.clone()), "T's header").await;
+    let vp = a.env.chain.vp();
+    vp.capture_pruning_point_palw_state(p);
+    let wire = borsh::to_vec(&vp.pruning_point_palw_state(p).expect("servable")).expect("serializes");
+    let carriage: PalwStateCarriageV2 = borsh::from_slice(&wire).expect("the wire bytes decode");
+    {
+        let ivp = importer.vp();
+        let mut store = ivp.palw_state_v2_store.write();
+        store.delete_tip_for_tests().expect("no PALW tip");
+        for blk in std::iter::once(importer.config.params.genesis.hash).chain(all[..=k].iter().map(|b| b.header.hash)) {
+            store.delete_delta_for_tests(blk).expect("no delta row at or below the pruning point");
+        }
+    }
+    importer.vp().import_pruning_point_palw_state(p, carriage).expect("the served carriage installs against T's committed root");
+    let (at, imported) = importer.tip_state();
+    assert_eq!(at, p);
+    assert_eq!(imported.state_root(), root_at(&a.env.chain, p), "the imported state is P's, root for root");
+    let row = imported.class(&a.class_id).expect("the class came through the carriage");
+    assert!(matches!(row.status, PalwClassStatusV2::Registered { .. }), "still dormant at P: {:?}", row.status);
+    assert_eq!(imported.tir_class_v1(&a.class_id), Some(&a.record), "with its program");
+    assert!(imported.tir_class_v1(&a.class_id).unwrap().check_program_v1().is_ok());
+    assert!(importer.ctx.consensus.palw_v2_class_table().iter().any(|r| r.class_id == a.class_id), "and it is served");
+    // The rest of A's chain, folded by the importer from the imported state: the activation flip included.
+    for blk in &all[k + 1..] {
+        arrive(&importer, blk.clone(), "A's block after P").await;
+        assert_eq!(importer.sink(), blk.header.hash);
+        assert_eq!(importer.tip_state().1.state_root(), root_at(&a.env.chain, blk.header.hash), "the importer folds to A's root at {}", blk.header.hash);
+    }
+    let (_, end) = importer.tip_state();
+    assert_eq!(end.class(&a.class_id).map(|c| c.status.clone()), Some(PalwClassStatusV2::Active), "the importer flipped the class Active itself");
 }
