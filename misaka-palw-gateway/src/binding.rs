@@ -76,6 +76,10 @@ pub const AUDIT: &[BindingRow] = &[
     BindingRow { fact: "FP Job V5 images / source", enters: "PalwFpV5TailV1 inside the V5 job's borsh -> fp_job_id_v5", test: "gen_a_v5_job_binds_each_image_reference_and_the_source", bound: Bound::InClaim },
     BindingRow { fact: "tensor job envelope, seed (R), image / embedding body", enters: "PalwGenJobV1 borsh -> gen_job_id_v1", test: "gen_every_tensor_job_field_changes_the_job_id", bound: Bound::InClaim },
     BindingRow { fact: "pipeline stages and edges, state transitions, generated ids / output digest", enters: "stage roots -> step root -> execution root (with the job id, class id, leaf count)", test: "gen_the_execution_roots_bind_every_stage_the_count_the_job_and_the_output", bound: Bound::InClaim },
+    // ---- the vision-language path (RFC-0003 §II.4) ----
+    BindingRow { fact: "raw picture bytes (before preprocessing)", enters: "NOT in the claim (resampling is outside consensus): PreprocessRecordV1.source_digest in the VLM receipt — a byte the sampler never reads is in neither the pixels nor the job", test: "changing_the_picture_the_fit_or_the_prompt_moves_the_job_the_stage_roots_and_the_execution_root", bound: Bound::NotBound },
+    BindingRow { fact: "canonical pixels (slot size, tile length)", enters: "images[k].input_root inside the V5 job -> fp_job_id_v5 -> the claim id; the vision stage's root reads them", test: "a_picture_of_another_size_is_preprocessed_run_through_both_stages_and_judged_valid", bound: Bound::InClaim },
+    BindingRow { fact: "preprocessing algorithm, fit, pad, placement", enters: "the PreprocessRecordV1 digest sealed in the VLM receipt; pixels produced another way are refused by the worker and the seat", test: "the_receipt_binds_the_preprocessing_the_job_and_the_output_and_refuses_each_forgery", bound: Bound::CheckedNotCommitted },
     // ---- the evidence ----
     BindingRow { fact: "evidence / DA root", enters: "EvidenceManifestV1 header must equal the claim's roots, chunk count and retention", test: "evidence_a_manifest_that_differs_from_the_claim_in_any_root_is_refused", bound: Bound::CheckedNotCommitted },
 ];
@@ -963,8 +967,15 @@ mod tests {
     #[test]
     fn the_audit_table_names_only_tests_that_exist() {
         let source = std::include_str!("binding.rs");
+        // Rows may be proven in a sibling module's tests (the vision-language path lives in `vlm`).
+        let siblings = [source, std::include_str!("vlm.rs"), std::include_str!("preprocess.rs")];
         for row in AUDIT {
-            assert!(source.contains(&format!("fn {}(", row.test)), "the audit row `{}` names a test that does not exist: {}", row.fact, row.test);
+            assert!(
+                siblings.iter().any(|s| s.contains(&format!("fn {}(", row.test))),
+                "the audit row `{}` names a test that does not exist: {}",
+                row.fact,
+                row.test
+            );
         }
         // Every link-numbered test is in the table (a test the table forgot is a binding nobody reads).
         let in_table: BTreeSet<&str> = AUDIT.iter().map(|r| r.test).collect();
@@ -977,7 +988,7 @@ mod tests {
         }
         // The findings are rows, not footnotes: the not-bound ones are named.
         let not_bound: Vec<_> = AUDIT.iter().filter(|r| r.bound == Bound::NotBound).collect();
-        assert_eq!(not_bound.len(), 2, "presentation fields and the rendered text are the two things a claim does not contain");
+        assert_eq!(not_bound.len(), 3, "presentation fields, the rendered text and the raw picture are what a claim does not contain");
         let _ = serving::CANCELLED_BY_CLIENT;
     }
 }

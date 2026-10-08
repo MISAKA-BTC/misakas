@@ -86,6 +86,9 @@ mod binding;
 mod evidence;
 // The output receipt: what a user keeps, and how it is checked against the chain.
 mod receipt;
+// RFC-0003 §II.4: deterministic integer image preprocessing, and the vision-language job built over it.
+mod preprocess;
+mod vlm;
 // Test support: an in-process worker over the floor engine, and the e2e suites that drive the whole chat path against it.
 #[cfg(test)]
 mod testkit;
