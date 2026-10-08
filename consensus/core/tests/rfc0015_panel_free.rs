@@ -24,7 +24,7 @@ fn rfc0015_every_preset_is_dormant_and_every_real_activation_is_refused() {
         assert!(p.palw_panel_free_v1.is_none());
         assert!(!p.palw_panel_free_active_at(u64::MAX));
         p.validate_palw_panel_free_v1().unwrap();
-        for at in [0, 900, 1234, 9_000, u64::MAX - 1] {
+        for at in [0, 900, 1234, 9_137, u64::MAX - 1] {
             let mut armed = p.clone();
             armed.palw_panel_free_v1 = Some(ForkActivation::new(at));
             assert!(armed.validate_palw_panel_free_v1().is_err(), "{at}");
@@ -53,7 +53,7 @@ fn rfc0015_dormant_and_never_leave_the_handshake_identity_and_fork_ids_unchanged
 fn rfc0015_a_height_is_committed_to_the_fingerprints_and_a_node_without_it_would_refuse_the_fork() {
     let p = palw_t12_shipped_params();
     let mut armed = p.clone();
-    armed.palw_panel_free_v1 = Some(ForkActivation::new(9_000));
+    armed.palw_panel_free_v1 = Some(ForkActivation::new(9_137));
     assert_ne!(p.consensus_params_id(), armed.consensus_params_id());
     assert_ne!(p.consensus_schedule_id(), armed.consensus_schedule_id());
     let mut other = p.clone();
@@ -64,6 +64,6 @@ fn rfc0015_a_height_is_committed_to_the_fingerprints_and_a_node_without_it_would
     let future = fork_id_v1(&armed, 8_999);
     assert_eq!(before.fired, future.fired);
     assert!(!evaluate_fork_id_v1(&armed, 8_999, &before.fired.as_bytes(), before.next).refuses());
-    let unupgraded = fork_id_v1(&p, 9_000);
-    assert!(evaluate_fork_id_v1(&armed, 9_000, &unupgraded.fired.as_bytes(), unupgraded.next).refuses());
+    let unupgraded = fork_id_v1(&p, 9_137);
+    assert!(evaluate_fork_id_v1(&armed, 9_137, &unupgraded.fired.as_bytes(), unupgraded.next).refuses());
 }
