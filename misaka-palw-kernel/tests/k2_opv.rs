@@ -182,7 +182,23 @@ fn the_network_policy_admits_a_class_for_the_optimistic_mode_a_registrant_never_
     let obj = |o: O| misaka_palw_kernel::ledger::LedgerTxV1::Object { auth: auth(PRODUCER), object: o };
     let ev = w.block_raw(2, vec![attest.clone(), obj(register.clone())]);
     assert!(refused(&ev).unwrap().contains("has not admitted"), "{ev:?}");
-    assert!(w.l.opv.classes.len() == 1, "only the admitted class registered");
+    // Admitted but never attested public: still refused (the weights must be publicly obtainable, by the consumer's fact).
+    let empty = ParamCommitmentsV1 { by_instance: Default::default() };
+    let unattested = misaka_palw_kernel::ledger::single_class_id_v1(d.digest(), &w.program.encode(), &plan, &empty, OPV);
+    let ev = w.block_raw(
+        2,
+        vec![
+            misaka_palw_kernel::ledger::LedgerTxV1::AdmitOptimisticClass { class: unattested },
+            obj(O::RegisterClassV2 {
+                mode: OPV,
+                descriptor: d.digest(),
+                program_bytes: w.program.encode(),
+                plan: plan.clone(),
+                param_commitments: empty,
+            }),
+        ],
+    );
+    assert!(refused(&ev).unwrap().contains("not attested public"), "{ev:?}");
     // Admitting another id does not admit this one; admitting this one does.
     let ev =
         w.block_raw(3, vec![misaka_palw_kernel::ledger::LedgerTxV1::AdmitOptimisticClass { class: [7; 64] }, obj(register.clone())]);
@@ -232,7 +248,7 @@ fn a_copied_optimistic_claim_is_always_refused_because_the_first_reveal_holds_th
     // The copyist sees the reveal at 10: it can seal its copy no earlier than 10 and reveal no earlier than 11 — and the job is held.
     let ev = w.block(11, vec![copy.tx.clone()]);
     assert!(refused(&ev).unwrap().contains("holds the job") || refused(&ev).unwrap().contains("one claim per job"), "{ev:?}");
-    assert!(w.l.claims.get(&copy.claim.id()).is_none());
+    assert!(!w.l.claims.contains_key(&copy.claim.id()));
     let ev = w.block(60, vec![]);
     assert_eq!(ev, vec![E::Final { claim: id, reward: 7 }]);
     assert_eq!(w.consumer.paid(&SQUATTER), 0, "the copy was never paid");
@@ -650,7 +666,7 @@ fn the_reservation_is_the_policys_not_a_panel_lock_and_concurrent_claims_never_r
     assert!(!w.l.claims.contains_key(&ids[2]), "the refused claim left nothing behind");
     // The Panel claim, with no tally, times out and returns its reservation; the OPV claims are untouched by it.
     w.block(111, vec![]);
-    assert_eq!(w.l.bonds[&PRODUCER].reserved, 1500 * 2 - 0, "{:?}", w.l.bonds[&PRODUCER]);
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, 1500 * 2, "{:?}", w.l.bonds[&PRODUCER]);
 }
 
 #[test]
