@@ -1781,10 +1781,16 @@ async fn g14_real_checkpoint_class_at_its_widest_context_across_the_shipped_sche
 /// rule the shipped schedule has in force at DAA 5,585 governs admission (the corpus sweep above shows no verdict moves between
 /// the real heights, so the compression moves none).
 fn t12_release_compressed() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    t12_release_compressed_over(None)
+}
+
+/// [`t12_release_compressed`] with — when `int13` is `Some(at)` — the int-13 flag day's list (`PALW_T12_INT13_FENCES_V1`: audit 1004, the
+/// range twin, the model court window, V4 receipt redemption) at `at`, over the int-11 list at 40.
+fn t12_release_compressed_over(int13: Option<u64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     use super::t12_round_lane_e2e::t12_with_harness_cards_over;
     use kaspa_consensus_core::config::params::{
         PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1,
-        PALW_T12_TIR_FLAG_DAY_FENCES_V1, palw_t12_arm_int11_flag_day_at_v1, palw_t12_launch_params_v1,
+        PALW_T12_TIR_FLAG_DAY_FENCES_V1, palw_t12_arm_int11_flag_day_at_v1, palw_t12_arm_int13_flag_day_at_v1, palw_t12_launch_params_v1,
     };
     let mut params = palw_t12_launch_params_v1();
     for (list, at) in [
@@ -1799,6 +1805,9 @@ fn t12_release_compressed() -> (Config, PalwConsensusParamsV2, Premine, Premine)
         }
     }
     palw_t12_arm_int11_flag_day_at_v1(&mut params, Some(40));
+    if let Some(at) = int13 {
+        palw_t12_arm_int13_flag_day_at_v1(&mut params, Some(at));
+    }
     params.validate_palw_v2().expect("the whole release, compressed, is a runnable ruleset");
     t12_with_harness_cards_over(params, false)
 }
@@ -1850,4 +1859,56 @@ async fn g14_real_checkpoints_at_32783_positions_mined_under_the_whole_release()
     assert_eq!(z.sink(), a.env.chain.sink());
     assert_eq!(z.tip_state().1.state_root(), a.env.chain.tip_state().1.state_root(), "the replaying node's root");
     assert_eq!(z.tip_state().1.tir_class_v1(&a.class_id), Some(&a.record));
+}
+
+/// **The int-13 flag day's `palw_model_court_window`, on the real node path** (the coordinator's brief of 2026-10-08: it is armed at DAA 9,000
+/// with the other tier-1 fences, and no processor test had ever registered a class under it). A class that needs a dissection (fused
+/// attention) registered PAST the fence commits its own finite window — the node derives it (`palw_class_court_windows_for_objects`) and
+/// the fold stores it — and on testnet-12's held clock that is the network window; registered BELOW the fence, on the same armed ruleset,
+/// it commits none (the table is empty below the fence); on the ruleset with the list dormant it commits none at any height. A second node
+/// replaying the chain folds the same root, window and all.
+#[tokio::test]
+async fn g14_a_dissected_class_registered_past_the_int13_court_window_commits_the_network_window() {
+    const FENCE: u64 = 60;
+    kaspa_core::log::try_init_logger("warn");
+    let c = case("sliding-global");
+
+    // Below the fence on the armed ruleset: registered, no window row.
+    let mut env = Env::over(t12_release_compressed_over(Some(FENCE)));
+    warm_to(&mut env, 41).await;
+    let below = mine_registration_on(env, &c, 2).await;
+    let (tip, state) = below.env.chain.tip_state();
+    assert!(below.env.chain.daa_of(tip) < FENCE, "the control is registered below the fence");
+    assert!(state.class(&below.class_id).is_some(), "the class is registered");
+    assert_eq!(state.class_model_court_window_v1(&below.class_id), None, "registered below the fence: the network window, no row");
+
+    // Past the fence: the same class commits its window.
+    let mut env = Env::over(t12_release_compressed_over(Some(FENCE)));
+    warm_to(&mut env, FENCE + 1).await;
+    let past = mine_registration_on(env, &c, 3).await;
+    let (tip, state) = past.env.chain.tip_state();
+    assert!(past.env.chain.daa_of(tip) > FENCE, "registered past the fence");
+    let network = past.env.bundle.state.window_court();
+    let window = state.class_model_court_window_v1(&past.class_id).expect("a dissected class registered past the fence commits its window");
+    assert!(window >= network, "never below the network window ({window} < {network})");
+    assert_eq!(window, network, "on the held clock the derived window IS the network window for this class");
+    assert_eq!(state.tir_class_v1(&past.class_id), Some(&past.record), "the class row is what the gate derived");
+    eprintln!("[g14] past palw_model_court_window ({FENCE}): {} commits window {window} (network {network})", c.name);
+
+    // A second node replays the chain to the same root, window included.
+    let z = fresh_node(&past);
+    for b in chain_blocks(&past.env.chain, past.env.chain.sink()) {
+        arrive(&z, b, "the armed chain's block").await;
+    }
+    assert_eq!(z.sink(), past.env.chain.sink());
+    assert_eq!(z.tip_state().1.state_root(), state.state_root(), "the replaying node's root");
+    assert_eq!(z.tip_state().1.class_model_court_window_v1(&past.class_id), Some(window));
+
+    // The ruleset with the list dormant: the same registration past the same height commits no window.
+    let mut env = Env::over(t12_release_compressed_over(None));
+    warm_to(&mut env, FENCE + 1).await;
+    let dormant = mine_registration_on(env, &c, 3).await;
+    let (_, dstate) = dormant.env.chain.tip_state();
+    assert!(dstate.class(&dormant.class_id).is_some());
+    assert_eq!(dstate.class_model_court_window_v1(&dormant.class_id), None, "dormant: no window row at any height");
 }

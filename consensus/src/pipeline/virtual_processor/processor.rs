@@ -7255,7 +7255,9 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for(point),
+            // The extras the BLOCK fold builds for its objects (the per-model court windows included): under an armed
+            // `palw_model_court_window` a registration the node accepts needs the window the node derives for it.
+            &self.palw_transition_extras_for_objects(point, objects),
         )
         .map(|(next, _, _)| next)
     }
