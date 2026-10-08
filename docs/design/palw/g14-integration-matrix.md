@@ -75,6 +75,21 @@ Status 2026-10-08 (lane B, integrated `9e0cce365..0211b2cad`, 109 kernel tests g
   `default_penalty`, while conviction takes the reservation. Pre-Final this is harmless (no reward), post-Final a fraudulent
   producer keeps the reward if `claim_reward > default_penalty`. Track under lane B; resolve with lane D's real collateral.
 
+## 2a. Lane B final (integrated through `b68676bdc`, 113 kernel tests green)
+
+* **Family review PASS (reference):** a lie at every node of the reference classes (all 25 TIR v1 primitives, a new fixture for the
+  five no fixture had) and at every edge of five reference pipelines (all 8 binding kinds) is localized to that node/edge and
+  convicted by the public court (`k2_family_review`).
+* **Carrier fit is part of G14 on the real node.** A class the gate calls complete can still be unprosecutable if its declared worst
+  opening/filing/response/commitment exceeds what a carrier can hold (the toy fixture declares ≈33 MB per opening and ≈193 MB per
+  position response). Lane D must refuse kernel-class registration unless `carrier_fit_v1(bounds, filing_cap, response_cap,
+  commit_cap)` passes with the node's real caps (chunked carriage counted). No policy/root change.
+* **Bond mapping constraints (lane D):** sync at block start after the previous block's settlements; synced collateral = real
+  collateral − every non-kernel reservation (kernel reservations stay inside it); keep `kernel reserved ≤ synced collateral`;
+  kernel `Withdraw` = the route forgets the bond (not a V2 exit); sync only bonds that sign kernel objects or carry kernel exposure.
+* Still open: ledger restore from row bytes (snapshot/IBD carriage), incremental per-collection hashing, chunked `CommitClaim`
+  carriage + pruning at liability end, artifact shape/dtype vs program (onboarding conformance before Active).
+
 ## 3. Real-node integration plan (lane D, Lead owns the shared parts)
 
 1. **Lead (shared):** `PalwConsensusObjectV2` variants with declared tags ≥ 110 for kernel-route objects, may-ride entries,

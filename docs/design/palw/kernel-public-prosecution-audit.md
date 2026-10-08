@@ -1,6 +1,8 @@
 # Public prosecution on the kernel route — repository-level audit (G14)
 
-Status: **repository-level G14/public prosecution implementation complete; external validation gates remain.**
+Status (revised 2026-10-08): **reference level only.** The in-process ledger below is not wired into the node; the real-node
+path, the carrier-size fit of every bound and the shared exposure ledger are tracked as GAP in
+[`g14-integration-matrix.md`](g14-integration-matrix.md), which supersedes the earlier "repository-level complete" line.
 
 This audit traces the property ADR-0173 and RFC-0015 §1.1 (G14) ask of the kernel route, as code in this repository:
 
