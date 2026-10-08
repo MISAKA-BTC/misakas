@@ -241,3 +241,6 @@ refused at the handshake by every upgraded node, exactly as DAA 750 did).
 4. **The undecided/other-lane fences** (`palw_tir_only_v1`, `palw_model_virtual_v1`, `palw_dns_retirement_v1`, `palw_exec_payload_v2`,
    `palw_permissionless_panel_v1`, `palw_probabilistic_constraints_v1`, `palw_panel_free_v1`) join `PALW_T12_INT13_FENCES_V1` by one line and the
    re-pin; each added fence adds its own leg to §3 and moves every id of §4 (so the drill and the fleet staging are repeated).
+   **Only before the code freeze.** After the int-13 build is cut the list is frozen (C4 round 3, F-C4R3-04, pinned by
+   `c4r3_fork_id_at_int13.rs`): a fence joining 9,000 after an int-13 binary is deployed is invisible to the fork id, so the two builds
+   would stay peers past 9,000 while disagreeing. A later fence takes a fresh height.
