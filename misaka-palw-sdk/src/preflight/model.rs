@@ -218,7 +218,17 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         }
         (None, why) => {
             let why = why.clone().unwrap_or_else(|| "no configuration".into());
-            if src.kind == InputKind::Gguf {
+            if src.kind == InputKind::Gguf && why.contains("GGUF LoRA adapter") {
+                // The file is not a model: it is an adapter over one (llama.cpp's `convert_lora_to_gguf`). Composing a GGUF adapter with its
+                // base is not built; it is not an architecture the frontend failed to map.
+                blockers.push(
+                    Blocker::new(Stage::Convert, "ADAPTER_REFUSED", "the GGUF is a LoRA adapter, which this build does not compose with a base")
+                        .evidence([short(&why)])
+                        .safe([
+                            "a PEFT adapter (adapter_config.json and adapter_model.safetensors) over its Hugging Face base is composed".to_string(),
+                        ]),
+                );
+            } else if src.kind == InputKind::Gguf {
                 blockers.push(
                     Blocker::new(
                         Stage::Convert,

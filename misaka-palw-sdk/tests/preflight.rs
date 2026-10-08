@@ -456,3 +456,23 @@ fn a_sentencepiece_wordpiece_or_tiktoken_file_is_a_tokenizer_and_nothing_else_is
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// **A GGUF LoRA is an adapter, not a model whose hidden size is missing.** llama.cpp's `convert_lora_to_gguf` writes
+/// `general.type = adapter` and low-rank pairs; the mapping used to call it "the GGUF's architecture has no mapping" with
+/// `GGUF: no llama.embedding_length` — an estimated 6,080 repositories of the census filed under `ARCH_REFUSED`.
+#[test]
+fn a_gguf_lora_is_named_as_an_adapter_and_not_as_an_architecture_the_frontend_failed_to_map() {
+    let dir = scratch("gguf-lora");
+    let bytes = gguf_bytes(
+        &[("general.architecture", Ok("llama")), ("general.type", Ok("adapter")), ("adapter.type", Ok("lora"))],
+        &[("blk.0.attn_q.weight.lora_a", vec![64, 8], 0, 2048), ("blk.0.attn_q.weight.lora_b", vec![8, 64], 0, 2048)],
+        false,
+    );
+    std::fs::write(dir.join("lora.gguf"), &bytes).expect("gguf");
+    let r = run(&dir.join("lora.gguf"), &opts(Depth::Headers)).expect("preflight");
+    let c = codes(&r);
+    assert!(c.iter().any(|x| x == "ADAPTER_REFUSED") && !c.iter().any(|x| x == "ARCH_REFUSED"), "{c:?}\n{}", r.render());
+    let b = r.verdict.convert.blockers.iter().find(|b| b.code == "ADAPTER_REFUSED").expect("blocker");
+    assert!(b.evidence.iter().any(|e| e.contains("LoRA adapter")), "{:?}", b.evidence);
+    let _ = std::fs::remove_dir_all(dir);
+}

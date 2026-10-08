@@ -860,6 +860,13 @@ impl GgufModel {
     }
 
     pub fn from_file(file: GgufFile) -> Result<Self> {
+        // A GGUF LoRA (`convert_lora_to_gguf`) carries `general.type = adapter` and low-rank pairs (`*.lora_a`, `*.lora_b`): no model of
+        // its own, so none of the model keys below exist in it. It is named for what it is, not refused as a missing hidden size.
+        if file.meta.get("general.type").and_then(GValue::as_str) == Some("adapter") {
+            return Err(LowerError::not_lowerable(
+                "GGUF LoRA adapter (general.type = adapter): low-rank deltas to be composed with a base model, not a model",
+            ));
+        }
         let arch = file.meta.get("general.architecture").and_then(GValue::as_str).unwrap_or("").to_string();
         let (hf_arch, model_type) = match arch.as_str() {
             "llama" => ("LlamaForCausalLM", "llama"),
