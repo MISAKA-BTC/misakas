@@ -275,6 +275,20 @@ fn huihui_qwen35_9b_ir_route_from_headers() {
         for n in analysis.notes.iter().take(12) {
             println!("  note: {}", n.chars().take(300).collect::<String>());
         }
+        if let Some(a) = &analysis.artifact {
+            println!(
+                "  artifact estimate: {} B (params {} B, program {} B, tokenizer {} B), ~{} inventory leaves; download needed {:?} of {:?} B, left out {} B — {}",
+                a.estimate_bytes,
+                a.params_bytes,
+                a.program_bytes,
+                a.tokenizer_bytes,
+                a.inventory_leaves_estimate,
+                a.download_bytes_needed,
+                a.download_bytes_total,
+                a.left_out_bytes,
+                a.note
+            );
+        }
         let Some(program) = analysis.program.clone() else {
             println!("  no program");
             continue;
@@ -369,6 +383,36 @@ fn huihui_qwen35_9b_ir_route_from_headers() {
                     }
                 ),
                 Err(e) => println!("    search: {e}"),
+            }
+            // `COV_P1_WRITE_G14=<dir>`: the admitted class as a lane-D fixture (`fixtures/g14/shipped/*.json`, the format
+            // `g14_registration_fixture.rs` writes), so the consensus E2E carries it through the real node path.
+            if let (Ok(out), Ok(c)) = (std::env::var("COV_P1_WRITE_G14"), &chosen)
+                && c.admission.is_ok()
+            {
+                let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+                let class = PalwTirClassV1 {
+                    version: PALW_TIR_CLASS_VERSION_V1,
+                    program: program.encode(),
+                    layout: c.layout.clone(),
+                    tokenizer_id,
+                };
+                let name = format!("huihui-qwen3.5-9b-{}", if ctx % 1024 == 0 { format!("{}k", ctx / 1024) } else { ctx.to_string() });
+                let json = serde_json::json!({
+                    "name": name,
+                    "checkpoint": "huihui-ai/Huihui-Qwen3.5-9B-abliterated@05b9e7c9b978ba29bdb8f50a49c30e4b91183339 (text decoder; headers only)",
+                    "generator": "misaka-palw-sdk/tests/coverage_p1_huihui_9b.rs (COV-P1P2)",
+                    "weights_loaded": false,
+                    "artifact_root_synthetic": true,
+                    "artifact_root_hex": hex(root.as_byte_slice()),
+                    "tokenizer_id_hex": hex(tokenizer_id.as_byte_slice()),
+                    "max_context": ctx,
+                    "program_borsh_hex": hex(&class.program),
+                    "layout_borsh_hex": hex(&borsh::to_vec(&class.layout).unwrap()),
+                    "class_id_hex": hex(class.class_id(&root).as_byte_slice()),
+                    "ruleset": format!("palw_t12_shipped_params, judged at DAA {daa}"),
+                });
+                std::fs::write(PathBuf::from(&out).join(format!("{name}.json")), serde_json::to_vec_pretty(&json).unwrap()).unwrap();
+                println!("    wrote {out}/{name}.json");
             }
             // 3. The sizing at the searched layout, cap lifted.
             if std::env::var("COV_P1_SIZE").is_ok()

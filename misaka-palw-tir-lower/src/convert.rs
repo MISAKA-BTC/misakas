@@ -267,6 +267,10 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
             }
         }
     };
+    // **The calibration-length record** (RFC-0011 §1, §3; COV-P1P2): what `palw-tir-fidelity` writes, written here too, so a
+    // recurrent artifact from the streamed converter can show the context it is calibrated for (declare-layout refuses one that
+    // cannot). Sequences give it; statistics read back (`stats_in`) carry no coverage, so none is recorded — never a guess.
+    let mut coverage: Option<(Option<usize>, serde_json::Value)> = None;
     let (stats, calib_source): (BTreeMap<String, SiteStat>, serde_json::Value) = match (&req.stats_in, &req.calib) {
         (Some(p), None) => {
             let text = std::fs::read_to_string(p).map_err(|e| LowerError::Io(format!("{}: {e}", p.display())))?;
@@ -291,8 +295,12 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
             }
             let longest = seqs.iter().map(Vec::len).max();
             let context = req.context.or(longest).unwrap_or(0);
-            crate::fidelity::check_calibration_length(&prep.hl, &seqs, context)
+            let met = crate::fidelity::check_calibration_length(&prep.hl, &seqs, context)
                 .map_err(|e| LowerError::bad(format!("{e}; pass a context to declare the context served")))?;
+            coverage = Some((
+                longest,
+                serde_json::json!({ "rule": if met.is_some() { "met" } else { "not recurrent" }, "longest": met, "context": context }),
+            ));
             log(format!("calibrating on {} sequences, {} positions", seqs.len(), seqs.iter().map(Vec::len).sum::<usize>()));
             let s = crate::fidelity::calibrate(&prep.hl, &loader, &seqs, &progress("calibration"))?;
             (s, c.source.clone())
@@ -336,6 +344,8 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
             "logits_scale": m.logits_scale,
             "policy": { "headroom16": policy.headroom16, "headroom32": policy.headroom32, "headroom_resid": policy.headroom_resid },
             "calibration": { "schema": "misaka.palw.calib-stats.v1", "digest": stats_digest },
+            "calibrated_context": coverage.as_ref().and_then(|c| c.0),
+            "calibration_length_rule": coverage.as_ref().map(|c| c.1.clone()),
             "max_window": req.max_window,
             "quant": { "descriptors": descriptors.iter().map(|(n, d)| serde_json::json!({ "name": n, "digest": d })).collect::<Vec<_>>() },
             "frontend": {
