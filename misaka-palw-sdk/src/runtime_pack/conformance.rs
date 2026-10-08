@@ -67,7 +67,7 @@ impl StepSink for Collect {
     }
 }
 
-fn ref2_dtype(d: misaka_palw_tir::DType) -> misaka_palw_tir_ref2::DType {
+pub(crate) fn ref2_dtype(d: misaka_palw_tir::DType) -> misaka_palw_tir_ref2::DType {
     use misaka_palw_tir::DType as A;
     use misaka_palw_tir_ref2::DType as B;
     match d {
@@ -480,4 +480,226 @@ pub fn run_streamed_with_progress(
             independent_peak_tensor_bytes: params2.as_ref().map_or(0, |p| p.peak.get()),
         },
     ))
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// The per-implementation runner (beacon conformance)
+// ---------------------------------------------------------------------------------------------------------------------------
+
+/// What one implementation computed for one job: BLAKE2b-256 (keyed, the same keys as the pack's vectors) over ITS OWN logits and ITS
+/// OWN commit points, position by position — not a copy of the reference's. Two implementations that agree give equal digests; one that
+/// disagrees gives a different digest at the position it disagrees at, which is also where the job stops.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImplRunV1 {
+    pub logits_digest: [u8; 32],
+    pub commits_digest: [u8; 32],
+    /// The tokens this implementation's arg-max chose after the prompt.
+    pub tokens: Vec<u32>,
+    pub positions: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImplOutcomeV1 {
+    Ran(ImplRunV1),
+    /// The implementation refused or failed: the message is part of the record.
+    Error(String),
+    /// Not asked to run (`ImplSet` switched it off): a skipped check, never a pass.
+    NotRun,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TripleResult {
+    pub reference: ImplOutcomeV1,
+    pub independent: ImplOutcomeV1,
+    pub backend: ImplOutcomeV1,
+    /// The first position at which two implementations differed (logits or commit points), or the first refusal.
+    pub disagreement: Option<String>,
+}
+
+struct Acc {
+    logits: blake2b_simd::State,
+    commits: blake2b_simd::State,
+    tokens: Vec<u32>,
+    positions: u32,
+}
+
+impl Acc {
+    fn new() -> Self {
+        let key = |k: &[u8]| blake2b_simd::Params::new().hash_length(32).key(k).to_state();
+        Acc { logits: key(LOGITS_DIGEST_KEY), commits: key(COMMITS_DIGEST_KEY), tokens: Vec::new(), positions: 0 }
+    }
+
+    fn push(&mut self, logits: &[i128], commits: &[Commit]) {
+        self.logits.update(&logits_chunk(logits));
+        for c in commits {
+            self.commits.update(&commit_chunk(c));
+        }
+        self.positions += 1;
+    }
+
+    fn finish(self) -> ImplRunV1 {
+        let mut a = [0u8; 32];
+        a.copy_from_slice(self.logits.finalize().as_bytes());
+        let mut b = [0u8; 32];
+        b.copy_from_slice(self.commits.finalize().as_bytes());
+        ImplRunV1 { logits_digest: a, commits_digest: b, tokens: self.tokens, positions: self.positions }
+    }
+}
+
+/// **The three implementations open over one artifact, for many jobs.** The reference reads each tensor when asked (lazily), the typed
+/// backend runs over the mapped file, the independent implementation decodes the canonical bytes with its own codec and reads each
+/// tensor when asked — no executor holds the artifact whole. Memory is the largest expanded tensor plus activations and the mapping's
+/// residency, as RFC-0013 §5 says: not a universal bound.
+pub struct TripleRunner {
+    artifact: misaka_palw_tir_exec::node::TirArtifactV1,
+    p2: Option<misaka_palw_tir_ref2::program::Program>,
+    impls: ImplSet,
+}
+
+impl TripleRunner {
+    pub fn open(path: &Path, impls: ImplSet) -> Result<Self, String> {
+        let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(path)?;
+        let p2 = if impls.ref2 {
+            Some(
+                misaka_palw_tir_ref2::codec::decode_canonical(&artifact.container().program.encode())
+                    .map_err(|e| format!("ref2 refuses the program: {e:?}"))?,
+            )
+        } else {
+            None
+        };
+        Ok(Self { artifact, p2, impls })
+    }
+
+    pub fn program(&self) -> &TirProgramV1 {
+        &self.artifact.container().program
+    }
+
+    /// Run one job on every enabled implementation, comparing logits and every commit point at every position.
+    pub fn run_job(&self, job: &ConformanceJob) -> Result<TripleResult, String> {
+        let container = self.artifact.container();
+        let p = &container.program;
+        let vocab = p.token_bound as usize;
+        if job.prompt.is_empty() || job.prompt.iter().any(|t| *t >= vocab) {
+            return Err(format!("{}: the prompt is empty or has a token outside the vocabulary of {vocab}", job.label));
+        }
+        let lazy = misaka_palw_tir_exec::node::LazyContainerParams::new(container);
+        let interp = Interpreter::new(p).map_err(|e| e.to_string())?;
+        let params2 = self.p2.as_ref().map(|program| LazyIndependentParams { container, program, peak: std::cell::Cell::new(0) });
+        let mut st1 = RunState::default();
+        let mut st2 = self.p2.as_ref().map(misaka_palw_tir_ref2::eval::initial_state);
+        let mut exec = if self.impls.exec {
+            Some(TirExecutor::new(self.artifact.plan(), self.artifact.params()).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+        let (mut a1, mut a2, mut a3) = (Acc::new(), Acc::new(), Acc::new());
+        let (mut e2, mut e3): (Option<String>, Option<String>) = (None, None);
+        let mut disagreement = None;
+        let total = job.prompt.len() + job.decode;
+        let mut tok = job.prompt[0];
+        'positions: for pos in 0..total {
+            let o1 = match interp.step(&lazy, &mut st1, tok as u32) {
+                Ok(o) => o,
+                Err(e) => {
+                    return Ok(TripleResult {
+                        reference: ImplOutcomeV1::Error(format!("position {pos}: {e}")),
+                        independent: if self.impls.ref2 { ImplOutcomeV1::Ran(a2.finish()) } else { ImplOutcomeV1::NotRun },
+                        backend: if self.impls.exec { ImplOutcomeV1::Ran(a3.finish()) } else { ImplOutcomeV1::NotRun },
+                        disagreement: Some(format!("the reference evaluator refused at position {pos}: {e}")),
+                    });
+                }
+            };
+            let c1: Vec<Commit> =
+                o1.commits.iter().map(|c| (c.slot as u64, c.block, c.layer.map(u32::from), c.node, c.value.data.clone())).collect();
+            a1.push(&o1.logits.data, &c1);
+            let mut stop = false;
+            if let (Some(p2), Some(params2), Some(st)) = (self.p2.as_ref(), params2.as_ref(), st2.as_mut()) {
+                match misaka_palw_tir_ref2::eval::step(p2, params2, &*st, tok as u64) {
+                    Ok((o2, next)) => {
+                        *st = next;
+                        let c2: Vec<Commit> =
+                            o2.commits.iter().map(|c| (c.slot, c.block, c.layer, c.node, c.value.data.clone())).collect();
+                        a2.push(&o2.logits.data, &c2);
+                        if pos + 1 >= job.prompt.len() {
+                            a2.tokens.push(argmax(&o2.logits.data) as u32);
+                        }
+                        if o1.logits.data != o2.logits.data {
+                            disagreement.get_or_insert(format!(
+                                "position {pos}: the logits differ between the reference evaluator and the independent implementation"
+                            ));
+                            stop = true;
+                        } else if c1 != c2 {
+                            disagreement.get_or_insert(format!(
+                                "position {pos}: the reference evaluator and the independent implementation commit differently ({} vs {} commits)",
+                                c1.len(),
+                                c2.len()
+                            ));
+                            stop = true;
+                        }
+                    }
+                    Err(e) => {
+                        e2 = Some(format!("position {pos}: {e:?}"));
+                        disagreement.get_or_insert(format!("the independent implementation refused at position {pos}: {e:?}"));
+                        stop = true;
+                    }
+                }
+            }
+            if let Some(ex) = exec.as_mut() {
+                let mut sink = Collect(Vec::new());
+                match ex.step(tok as u32, &mut sink) {
+                    Ok(()) => {
+                        let (_, xl) = ex.logits();
+                        let xl = xl.to_i128s();
+                        let mut c3 = sink.0;
+                        c3.sort_by_key(|c| c.0);
+                        a3.push(&xl, &c3);
+                        if pos + 1 >= job.prompt.len() {
+                            a3.tokens.push(argmax(&xl) as u32);
+                        }
+                        if o1.logits.data != xl {
+                            disagreement.get_or_insert(format!(
+                                "position {pos}: the logits differ between the reference evaluator and the typed backend"
+                            ));
+                            stop = true;
+                        } else if c1 != c3 {
+                            disagreement.get_or_insert(format!(
+                                "position {pos}: the reference evaluator and the typed backend commit differently ({} vs {} commits)",
+                                c1.len(),
+                                c3.len()
+                            ));
+                            stop = true;
+                        }
+                    }
+                    Err(e) => {
+                        e3 = Some(format!("position {pos}: {e}"));
+                        disagreement.get_or_insert(format!("the typed backend refused at position {pos}: {e}"));
+                        stop = true;
+                    }
+                }
+            }
+            if pos + 1 >= job.prompt.len() {
+                a1.tokens.push(argmax(&o1.logits.data) as u32);
+            }
+            if stop {
+                break 'positions;
+            }
+            tok = if pos + 1 < job.prompt.len() { job.prompt[pos + 1] } else { argmax(&o1.logits.data) };
+        }
+        // The last decoded token is chosen after the last position computed; it is recorded, not run.
+        for a in [&mut a1, &mut a2, &mut a3] {
+            a.tokens.truncate(job.decode);
+        }
+        let outcome = |enabled: bool, err: Option<String>, a: Acc| match (enabled, err) {
+            (false, _) => ImplOutcomeV1::NotRun,
+            (true, Some(e)) => ImplOutcomeV1::Error(e),
+            (true, None) => ImplOutcomeV1::Ran(a.finish()),
+        };
+        Ok(TripleResult {
+            reference: ImplOutcomeV1::Ran(a1.finish()),
+            independent: outcome(self.impls.ref2, e2, a2),
+            backend: outcome(self.impls.exec, e3, a3),
+            disagreement,
+        })
+    }
 }
