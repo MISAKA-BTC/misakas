@@ -18,10 +18,19 @@ use crate::constants::SOMPI_PER_KASPA;
 use crate::palw_mode_v2::PalwModeV2Error;
 use misaka_palw_kernel::opv::{CarrierCapsV1, OpvBudgetsV1, OpvEconomicsV1, OpvPolicyV1, OpvWindowV1};
 
-/// **`Params::palw_panel_free_v1`'s value (RFC-0015): the fence and everything the network's OPV policy is.** Phase 3 of lane D gave the
-/// fence a home for what was a test seam: the activation, the class ids the NETWORK admits for `OptimisticPublicVerification`
-/// (consensus — a registrant never chooses the lighter mode for its own program) and the policy's terms, a genesis constant of the
-/// kernel route ([`OpvPolicyV1`]).
+/// **The interim effective-bits floor of OPV eligibility**: the user's ruled 128-bit effective false-accept target
+/// (`misaka_palw_challenge::APPROVAL_MIN_TARGET_BITS_V1`).
+pub const PALW_OPV_MIN_EFFECTIVE_BITS_V1: u16 = misaka_palw_challenge::APPROVAL_MIN_TARGET_BITS_V1;
+
+/// **`Params::palw_panel_free_v1`'s value (RFC-0015): the fence and everything the network's OPV policy is** — the activation, the
+/// policy's terms (a genesis constant of the kernel route, [`OpvPolicyV1`]) and the two network-side knobs of the DERIVED eligibility
+/// (`docs/design/palw/opv-beacon-bootstrap.md` §5): a deny-list and the effective-bits floor.
+///
+/// **OPV eligibility is never read from this value.** A class may use `OptimisticPublicVerification` only while
+/// `opv_eligibility_v1` derives it from chain state (Active kernel, conformance passed, G14-complete, live public DA, bounded
+/// resources, a verified challenge policy). The fence can only take eligibility AWAY: `denied_classes` (an incident brake the
+/// network coordinates, auditable, no code change) and `min_effective_bits` (the effective false-accept floor a class's conformance
+/// policy must reach; a complete check meets any floor). The manual `admitted_classes` list it replaces is gone.
 ///
 /// Some-only everywhere: `None` on every preset, hashed into the params fingerprint and the schedule id only when `Some`, collapsed
 /// whole from `Some(never())`, its ACTIVATION alone visited by `for_each_fence`. Arming it is refused by
@@ -29,8 +38,14 @@ use misaka_palw_kernel::opv::{CarrierCapsV1, OpvBudgetsV1, OpvEconomicsV1, OpvPo
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwPanelFreeFenceV1 {
     pub activation: ForkActivation,
-    /// The (mode-bound) class ids the network's policy admits for OPV, **strictly ascending** (canonical: the list is hashed as given).
-    pub admitted_classes: Vec<Hash64>,
+    /// (Mode-bound) class ids the network DENIES OPV whatever chain state derives, **strictly ascending** (canonical: hashed as given).
+    /// A restriction only — never a source of eligibility. Initial value: empty.
+    pub denied_classes: Vec<Hash64>,
+    /// The effective false-accept floor (bits, `misaka-palw-challenge::effective_false_accept_bits_v1`) a class's conformance policy
+    /// must reach for the class to be OPV-eligible. Interim: [`PALW_OPV_MIN_EFFECTIVE_BITS_V1`] (128, the user's ruled target), so no
+    /// SAMPLED conformance under the interim 2-bit policy can make a class eligible — only a complete check can. A drill lowers it
+    /// explicitly through the harness's `Config` seam.
+    pub min_effective_bits: u16,
     pub window: OpvWindowV1,
     pub budgets: OpvBudgetsV1,
     pub economics: OpvEconomicsV1,
@@ -38,7 +53,7 @@ pub struct PalwPanelFreeFenceV1 {
 }
 
 impl PalwPanelFreeFenceV1 {
-    /// A bare height with the INTERIM terms and no admitted class (what a fence probe builds from a height alone).
+    /// A bare height with the INTERIM terms and nothing denied (what a fence probe builds from a height alone).
     pub fn at(activation: ForkActivation) -> Self {
         Self::interim_v1(activation, Vec::new())
     }
@@ -47,15 +62,16 @@ impl PalwPanelFreeFenceV1 {
     /// here. The window is 50 DAA (40 base + 10 horizon); a fresh verifier's budgets fit it and the court deadline and proof grace;
     /// the reservation covers the claim's maximum gain (reward + work credit + a stated external bound) plus the default penalty and
     /// the gain over the assumed detection probability. A real activation would revisit every number and measure the budgets on real
-    /// hardware (an external gate). `admitted_classes` is sorted and de-duplicated.
-    pub fn interim_v1(activation: ForkActivation, mut admitted_classes: Vec<Hash64>) -> Self {
+    /// hardware (an external gate). `denied_classes` is sorted and de-duplicated; the floor is [`PALW_OPV_MIN_EFFECTIVE_BITS_V1`].
+    pub fn interim_v1(activation: ForkActivation, mut denied_classes: Vec<Hash64>) -> Self {
         use misaka_palw_kernel::route::{MAX_COMMIT_CLAIM_BYTES_V1, MAX_FILE_PROOF_BYTES_V1, MAX_RESPOND_BYTES_V1};
-        admitted_classes.sort();
-        admitted_classes.dedup();
+        denied_classes.sort();
+        denied_classes.dedup();
         let carrier = crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 as u64;
         Self {
             activation,
-            admitted_classes,
+            denied_classes,
+            min_effective_bits: PALW_OPV_MIN_EFFECTIVE_BITS_V1,
             window: OpvWindowV1 { base_challenge_window_daa: 40, verification_horizon_daa: 10 },
             budgets: OpvBudgetsV1 {
                 cold_material_daa: 10,
@@ -94,22 +110,25 @@ impl PalwPanelFreeFenceV1 {
         }
     }
 
-    /// The value's own refusals: the admitted list canonical, and the terms satisfying every relation the kernel validates against the
+    /// The value's own refusals: the deny-list canonical, and the terms satisfying every relation the kernel validates against the
     /// route's interim ledger policy (the relations do not read the network's digests).
     pub fn validate_value(&self) -> Result<(), String> {
-        if self.admitted_classes.windows(2).any(|w| w[0] >= w[1]) {
-            return Err("the admitted class list must be strictly ascending (canonical, unique)".to_string());
+        if self.denied_classes.windows(2).any(|w| w[0] >= w[1]) {
+            return Err("the denied class list must be strictly ascending (canonical, unique)".to_string());
         }
         let ledger = crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default());
         self.opv_policy().validate(&ledger)
     }
 
-    /// The value as the identity hashers write it: the admitted ids and the terms (Borsh), after the activation.
+    /// The value as the identity hashers write it: the denied ids, the floor and the terms (Borsh), after the activation. (A domain
+    /// tag separates this layout from the retired admission-list one, so no value of either can collide with the other.)
     pub(crate) fn write_value_into(&self, h: &mut kaspa_hashes::ConsensusParamsId) {
-        h.write((self.admitted_classes.len() as u64).to_le_bytes());
-        for class in &self.admitted_classes {
+        h.write(b"palw_panel_free_v1/derived-eligibility/v2");
+        h.write((self.denied_classes.len() as u64).to_le_bytes());
+        for class in &self.denied_classes {
             h.write(class.as_byte_slice());
         }
+        h.write(self.min_effective_bits.to_le_bytes());
         h.write(borsh::to_vec(&(self.window, self.budgets, self.economics, self.carrier)).expect("the terms serialize"));
     }
 }
@@ -129,7 +148,7 @@ impl Params {
             && f.validate_value().is_err()
         {
             return Err(PalwModeV2Error::Invalid(
-                "palw_panel_free_v1's value is invalid: the admitted class list must be strictly ascending and the OPV terms must satisfy \
+                "palw_panel_free_v1's value is invalid: the denied class list must be strictly ascending and the OPV terms must satisfy \
                  every relation OpvPolicyV1::validate states (PalwPanelFreeFenceV1::validate_value names the one that fails)",
             ));
         }

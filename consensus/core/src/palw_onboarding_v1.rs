@@ -303,6 +303,20 @@ impl ConformanceAttemptRowV1 {
     pub fn open(&self) -> bool {
         self.record.state == OnboardingStateV1::ChallengePending
     }
+
+    /// Whether the attempt was committed under the network's complete-check policy (no beacon: the bootstrap path).
+    pub fn is_complete_check(&self) -> bool {
+        self.commitment.challenge_policy_id == crate::palw_opv_bootstrap_v1::palw_onboarding_complete_check_policy_v1().id()
+    }
+
+    /// The network policy the attempt was committed under: the complete-check one, or the sampled one.
+    pub fn policy(&self) -> misaka_palw_challenge::PostCommitChallengePolicyV1 {
+        if self.is_complete_check() {
+            crate::palw_opv_bootstrap_v1::palw_onboarding_complete_check_policy_v1()
+        } else {
+            crate::palw_conformance_evidence_v1::palw_onboarding_challenge_policy_v1()
+        }
+    }
 }
 
 /// What stops a class from leaving `Registered`, or that nothing does.
@@ -464,6 +478,10 @@ pub fn conformance_gate_v1(attempt: &ConformanceAttemptRowV1) -> PalwOnboardingG
             code: OnboardingFailureV1::PublicProsecutionIncomplete.code(),
             why: "conformance passed; the bound kernel class's public-prosecution step has not",
         },
+        S::ChallengePending if attempt.is_complete_check() => PalwOnboardingGateV1::Held {
+            code: S::ChallengePending.code(),
+            why: "a complete-check commitment awaits its PostComplete (no randomness: the fold checks every input and leaf)",
+        },
         S::ChallengePending if attempt.evidence.is_some() => PalwOnboardingGateV1::Held {
             code: S::ChallengePending.code(),
             why: "evidence posted and verified in the fold; its challenge window is open (it passes only unrefuted)",
@@ -548,10 +566,11 @@ impl crate::palw_state_v2::PalwChainStateV2 {
 // ---- the beacon's facts and the conformance read (RPC op 231) ---------------------------------------------------------------
 
 impl PalwKernelRouteStateV1 {
-    /// **The beacon's facts**: every Final the route serves (op 212) that carries a `WorkFinalEventV1` — an OPV Final,
-    /// `FinalPathV1::PanelIndependent`; a Panel-licensed Final exports none. The fold and every reader derive the beacon from exactly
-    /// these (the contract filters, sorts and de-duplicates them). `Err` only if the stored rows do not rebuild (corruption).
-    pub fn beacon_events_v1(&self) -> Result<Vec<misaka_palw_challenge::WorkFinalEventV1>, String> {
+    /// **The beacon's facts**: every Final the route serves (op 212) that carries an attributed `WorkFinalEventV1` — an OPV Final,
+    /// `FinalPathV1::PanelIndependent`, with its producer; a Panel-licensed Final exports none. The fold and every reader derive the
+    /// beacon from exactly these (the contract filters, sorts, de-duplicates and applies the policy's distinct source rule). `Err`
+    /// only if the stored rows do not rebuild (corruption).
+    pub fn beacon_events_v1(&self) -> Result<Vec<misaka_palw_challenge::AttributedWorkV1>, String> {
         let mut out = Vec::new();
         for f in self.finals_read_v1()? {
             if let Some(bytes) = f.event {
@@ -559,6 +578,41 @@ impl PalwKernelRouteStateV1 {
             }
         }
         Ok(out)
+    }
+}
+
+/// **The capture-proof chunk lane's target for conformance evidence** (G14-R4's tag-113 lane, `PalwKernelChunkTargetV1::Conformance
+/// { v2_class }`): the LAST DAA at which a part of a tag-109 object naming `v2_class` may arrive, or `None` when the class has no
+/// attempt that can still take one. The lane bounds a group's life by `min(64 DAA, this)`; its opener must be the class's registrant
+/// (a Post) — the lane checks that, this function only says until when.
+///
+/// * an open SAMPLED attempt with no evidence — a Post: `lock + PALW_CONFORMANCE_EVIDENCE_DEADLINE_DAA_V1` once the beacon locked (a
+///   Post in that block is applied before the closing step defaults the attempt); before the lock, the latest lock the collection
+///   window allows (`S + W − 1 + D`) plus the deadline; `None` once the beacon is unavailable;
+/// * an open sampled attempt with evidence — a Refute: `window_end − 1` (a refutation is taken while `daa < window_end`), `None` after;
+/// * a complete-check attempt: `None` — a `PostComplete` rides one carrier by construction and never needs a chunk lane;
+/// * no attempt, or a closed one: `None`.
+pub fn palw_conformance_chunk_target_v1(route: &PalwKernelRouteStateV1, v2_class: &Hash64, daa: u64) -> Option<u64> {
+    let attempt = route.conformance_attempt_v1(v2_class)?;
+    if !attempt.open() || attempt.is_complete_check() {
+        return None;
+    }
+    if let Some(posted) = attempt.evidence {
+        return (daa < posted.window_end_daa).then(|| posted.window_end_daa - 1);
+    }
+    let policy = attempt.policy();
+    let ctx = attempt.beacon_context(&policy);
+    let deadline = crate::palw_conformance_evidence_v1::PALW_CONFORMANCE_EVIDENCE_DEADLINE_DAA_V1;
+    use misaka_palw_challenge::WorkBeaconStateV1 as B;
+    match misaka_palw_challenge::collect_attributed_work_beacon_v1(&ctx, &route.beacon_events_v1().ok()?, daa).ok()? {
+        B::Locked(b) => {
+            let last = b.lock_position.saturating_add(deadline);
+            (daa <= last).then_some(last)
+        }
+        B::Collecting { .. } | B::Candidate { .. } => {
+            Some(ctx.window_end().saturating_sub(1).saturating_add(policy.settlement_depth_d).saturating_add(deadline))
+        }
+        B::Unavailable { .. } => None,
     }
 }
 
@@ -595,14 +649,20 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let key = borsh::to_vec(class).expect("a digest serializes");
         let raw = |table: u8| route.and_then(|r| r.aux.get(&(table, key.clone())).cloned());
         let attempt = route.and_then(|r| r.conformance_attempt_v1(class));
-        let policy = crate::palw_conformance_evidence_v1::palw_onboarding_challenge_policy_v1();
+        let policy = attempt
+            .as_ref()
+            .map(|a| a.policy())
+            .unwrap_or_else(crate::palw_conformance_evidence_v1::palw_onboarding_challenge_policy_v1);
         let (mut beacon, mut have, mut need, mut lock, mut output) = ("", 0u32, policy.work_count_k, None, None);
-        if let (Some(route), Some(a)) = (route, attempt.as_ref())
+        if attempt.as_ref().is_some_and(|a| a.open() && a.is_complete_check()) {
+            // A complete check draws no randomness: there is no beacon to wait for.
+            beacon = "COMPLETE_CHECK";
+        } else if let (Some(route), Some(a)) = (route, attempt.as_ref())
             && a.open()
             && let Ok(events) = route.beacon_events_v1()
         {
             use misaka_palw_challenge::WorkBeaconStateV1 as B;
-            match misaka_palw_challenge::collect_work_beacon_v1(&a.beacon_context(&policy), &events, daa) {
+            match misaka_palw_challenge::collect_attributed_work_beacon_v1(&a.beacon_context(&policy), &events, daa) {
                 Ok(B::Collecting { have: h, need: n }) => (beacon, have, need) = ("COLLECTING", h, n),
                 Ok(B::Candidate { have: h, lock_position }) => (beacon, have, lock) = ("CANDIDATE", h, Some(lock_position)),
                 Ok(B::Locked(b)) => {
@@ -837,8 +897,16 @@ mod tests {
         }
         let g = Hash64::from_bytes([3; 64]);
         let (now, later) = ([10u64, 20], [10u64, 20, 5_000_000]);
-        assert_eq!(palw_envelope_fork_digest_v1(g, &now, 15), palw_envelope_fork_digest_v1(g, &later, 15), "a future fence moves nothing");
-        assert_ne!(palw_envelope_fork_digest_v1(g, &now, 15), palw_envelope_fork_digest_v1(g, &now, 25), "a fence fired since signing");
+        assert_eq!(
+            palw_envelope_fork_digest_v1(g, &now, 15),
+            palw_envelope_fork_digest_v1(g, &later, 15),
+            "a future fence moves nothing"
+        );
+        assert_ne!(
+            palw_envelope_fork_digest_v1(g, &now, 15),
+            palw_envelope_fork_digest_v1(g, &now, 25),
+            "a fence fired since signing"
+        );
         assert_ne!(
             palw_envelope_fork_digest_v1(g, &now, 15),
             palw_envelope_fork_digest_v1(Hash64::from_bytes([4; 64]), &now, 15),

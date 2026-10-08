@@ -240,6 +240,29 @@ pub(crate) fn kernel_route_test_attest_artifact_v1(artifact_root: kaspa_hashes::
     }
 }
 
+/// **OPV-BOOT, TEST ONLY: the OPV classes a pre-derivation mechanics test treats as eligible.** RFC-0015 eligibility is DERIVED from
+/// chain state (`palw_opv_bootstrap_v1::opv_eligibility_v1`); the OPV mechanics worlds written against the retired manual admission
+/// list (`g14_opv_*`, `g14_conformance_*`) name their classes here instead. Like the attestation hook it exists only under
+/// `cfg(test)`: the extras field it fills is `Vec::new()` in every build that can run a network (pinned by
+/// `opv_test_eligibility_hook_is_test_only`). Append-only and process-wide, so every node of one test folds the same set.
+#[cfg(test)]
+static KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1: std::sync::Mutex<Vec<kaspa_hashes::Hash64>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn kernel_route_test_opv_eligible_v1(class: kaspa_hashes::Hash64) {
+    let mut list = KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1.lock().unwrap();
+    if !list.contains(&class) {
+        list.push(class);
+    }
+}
+
+#[cfg(test)]
+fn kernel_route_test_opv_eligible_list_v1() -> Vec<kaspa_hashes::Hash64> {
+    let mut list = KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1.lock().unwrap().clone();
+    list.sort();
+    list
+}
+
 #[cfg(test)]
 fn kernel_route_test_attestations_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64> {
     let mut roots: Vec<_> =
@@ -14838,7 +14861,12 @@ impl VirtualStateProcessor {
                 max_adjudications_per_block: None,
                 opv: self.palw_kernel_opv_fence().map(|fence| kaspa_consensus_core::palw_kernel_route_v1::PalwKernelOpvExtrasV1 {
                     policy: fence.opv_policy(),
-                    admitted_classes: fence.admitted_classes.clone(),
+                    denied_classes: fence.denied_classes.clone(),
+                    min_effective_bits: fence.min_effective_bits,
+                    #[cfg(test)]
+                    test_eligible: kernel_route_test_opv_eligible_list_v1(),
+                    #[cfg(not(test))]
+                    test_eligible: Vec::new(),
                 }),
             }
         })

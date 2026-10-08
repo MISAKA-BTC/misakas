@@ -54,7 +54,12 @@ fn key_bytes(d: &misaka_palw_kernel::hash::Digest) -> Vec<u8> {
 /// signature has verified under the seat bond's registered key, so the kernel's structural admission is asked with this.
 struct SignatureAlreadyVerified;
 impl ReceiptSignatureVerifier for SignatureAlreadyVerified {
-    fn verify(&self, _seat_bond: &misaka_palw_kernel::hash::Digest, _message: &misaka_palw_kernel::hash::Digest, _signature: &[u8]) -> bool {
+    fn verify(
+        &self,
+        _seat_bond: &misaka_palw_kernel::hash::Digest,
+        _message: &misaka_palw_kernel::hash::Digest,
+        _signature: &[u8],
+    ) -> bool {
         true
     }
 }
@@ -128,7 +133,11 @@ impl TransitionBuilder<'_> {
     /// Record that the route has seen `bond` (its kernel digest maps back to it).
     fn note_kernel_bond(&mut self, bond: &PalwBondKeyV2) -> misaka_palw_kernel::hash::Digest {
         let kid = palw_kernel_bond_id_v1(bond);
-        self.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, key_bytes(&kid), Some(borsh::to_vec(bond).expect("a bond key serializes")));
+        self.write_kernel_row(
+            PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1,
+            key_bytes(&kid),
+            Some(borsh::to_vec(bond).expect("a bond key serializes")),
+        );
         kid
     }
 }
@@ -160,8 +169,11 @@ pub(super) fn ensure_route_header(builder: &mut TransitionBuilder<'_>, ctx: &Pal
     let (policy, opv_policy) = route_policies(builder)?;
     match builder.state.kernel_route.as_ref() {
         None => {
-            let created =
-                PalwKernelRouteStateV1::new(policy, opv_policy, misaka_palw_kernel::rows::LedgerScalarsV1 { daa: ctx.daa_score, burned: 0 });
+            let created = PalwKernelRouteStateV1::new(
+                policy,
+                opv_policy,
+                misaka_palw_kernel::rows::LedgerScalarsV1 { daa: ctx.daa_score, burned: 0 },
+            );
             builder.write_kernel_header(created.header);
         }
         Some(kernel) if kernel.header.policy != policy || kernel.header.opv != opv_policy => {
@@ -180,19 +192,14 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
     // The artifact roots the route may attest: the test hook's list (empty outside a test) and every Matured or Final onboarding
     // binding — the least-trust source (`palw_onboarding_v1`).
     let mut attested = extras.attested_artifacts.clone();
-    let admitted: Vec<Hash64> = extras.opv.as_ref().map(|o| o.admitted_classes.clone()).unwrap_or_default();
-    let opv_declared = extras.opv.is_some();
     if let Some(route) = builder.state.kernel_route.as_ref() {
         attested.extend(route.onboarding_attested_roots_v1(ctx.daa_score));
     }
     let mut ledger = builder.state.kernel_route.as_ref().expect("created above").ledger().map_err(refused)?;
     ledger.begin_block(ctx.daa_score).map_err(|r| refused(r.to_string()))?;
     // The budget bounds the BLOCK: what the block's earlier objects already spent comes back (they were folded one at a time).
-    if let Some((blue_score, adjudications, court_work)) = builder
-        .state
-        .kernel_route
-        .as_ref()
-        .and_then(|k| k.aux_row::<(u64, u32, u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]))
+    if let Some((blue_score, adjudications, court_work)) =
+        builder.state.kernel_route.as_ref().and_then(|k| k.aux_row::<(u64, u32, u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]))
         && blue_score == ctx.blue_score
     {
         ledger.restore_budget(misaka_palw_kernel::ledger::BlockBudgetV1 { adjudications, court_work });
@@ -200,13 +207,66 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
     // The attested set IS the derived set (not a growing one): a binding refuted after a root was attested stops attesting it for the
     // next kernel class, and the stale row goes with it.
     ledger.attested_artifacts = attested.iter().map(|root| root.as_bytes()).collect();
-    // The network policy's admissions (consensus, not a registrant's choice); idempotent, so an admitted class is one row.
-    if opv_declared {
-        for class in admitted {
-            ledger.admit_optimistic_class(class.as_bytes()).map_err(|r| refused(r.to_string()))?;
-        }
-    }
+    // RFC-0015 admission is no longer a list read here: a class is admitted to the mode at its own registration, and only while
+    // DERIVED-eligible (`opv_gate_v1`), so the ledger's admitted rows are exactly the classes that were eligible when they registered.
     Ok(ledger)
+}
+
+/// What the derived-eligibility gate decides for one kernel object.
+enum OpvGateV1 {
+    /// Apply the object as it is.
+    Pass,
+    /// Admit these (mode-bound) ids to the mode first: the registration of an eligible class.
+    Admit(Vec<misaka_palw_kernel::hash::Digest>),
+    /// Drop the object, nothing written: an OPV registration or claim of a class that is not eligible at this block.
+    Drop,
+}
+
+/// **The derived OPV eligibility at the kernel route's door** (`docs/design/palw/opv-beacon-bootstrap.md` §5.3): a registration under
+/// `OptimisticPublicVerification` is admitted only for a class `opv_eligibility_v1` derives eligible now (or that the test seam names),
+/// and every claim of an OPV class commits only while its class is eligible. A claim keeps what it was admitted with; a class that
+/// loses eligibility (its binding refuted, its kernel retired, the network's deny-list) takes no new claim.
+fn opv_gate_v1(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    ledger: &KernelLedgerV1,
+    object: &KernelRouteObjectV1,
+) -> OpvGateV1 {
+    use crate::palw_opv_bootstrap_v1::{OpvClassFactsV1, OpvEligibilityViewV1};
+    let (Some(opv), Some(route)) =
+        (builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()), builder.state.kernel_route.as_ref())
+    else {
+        return OpvGateV1::Pass;
+    };
+    let view = OpvEligibilityViewV1::of(opv);
+    let eligible =
+        |class: &misaka_palw_kernel::hash::Digest| route.opv_class_eligibility_v1(ledger, class, ctx.daa_score, &view).is_ok();
+    match object {
+        KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } if mode.is_optimistic() => {
+            let facts = OpvClassFactsV1::of_registration(*descriptor, program_bytes, plan, param_commitments);
+            match route.opv_eligibility_v1(ledger, &facts, ctx.daa_score, &view) {
+                Ok(_) => OpvGateV1::Admit(vec![facts.opv_id]),
+                // Not admitted: the kernel refuses the registration by its own rule ("not admitted"), budget and all.
+                Err(_) => OpvGateV1::Pass,
+            }
+        }
+        KernelRouteObjectV1::RegisterPipelineClassV2 { mode, .. } if mode.is_optimistic() => {
+            // No onboarding path exists for a pipeline (GAP-B4): only the test seam names one. Its ids are admitted ahead and the
+            // kernel matches the registration's own id against them (a refused registration flushes nothing).
+            OpvGateV1::Admit(view.test_eligible.iter().filter(|id| !view.denied.contains(id)).map(|id| id.as_bytes()).collect())
+        }
+        KernelRouteObjectV1::CommitClaim { claim, .. } => match ledger.jobs.get(&claim.job_id).map(|j| j.class_binding_id) {
+            Some(class) if ledger.opv.classes.contains(&class) && !eligible(&class) => OpvGateV1::Drop,
+            _ => OpvGateV1::Pass,
+        },
+        KernelRouteObjectV1::CommitPipelineClaim { claim, .. } => {
+            match ledger.pipeline_jobs.get(&claim.job_id).map(|j| j.class_binding_id) {
+                Some(class) if ledger.opv.classes.contains(&class) && !eligible(&class) => OpvGateV1::Drop,
+                _ => OpvGateV1::Pass,
+            }
+        }
+        _ => OpvGateV1::Pass,
+    }
 }
 
 /// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them.
@@ -337,12 +397,22 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     let mut ledger = load_ledger(builder, ctx)?;
     let before = ledger.to_rows();
+    match opv_gate_v1(builder, ctx, &ledger, &object) {
+        OpvGateV1::Drop => return Ok(()),
+        OpvGateV1::Admit(classes) => {
+            for class in classes {
+                ledger.admit_optimistic_class(class).map_err(|r| refused(r.to_string()))?;
+            }
+        }
+        OpvGateV1::Pass => {}
+    }
     let kid = palw_kernel_bond_id_v1(signer);
     ledger.sync_bond(kid, builder.kernel_synced_collateral(signer, ctx.daa_score));
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
     // an earlier object of this block (or another lane's slash) can never leave the ledger believing the bond holds more than it does.
-    if let KernelRouteObjectV1::FileProof { claim, .. } | KernelRouteObjectV1::FileDemand { claim, .. } | KernelRouteObjectV1::Respond { claim, .. } =
-        &object
+    if let KernelRouteObjectV1::FileProof { claim, .. }
+    | KernelRouteObjectV1::FileDemand { claim, .. }
+    | KernelRouteObjectV1::Respond { claim, .. } = &object
         && let Some(producer) = ledger.claims.get(claim).map(|row| row.producer)
         && let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&producer))
     {
@@ -522,9 +592,10 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // The onboarding bindings whose refutation horizon ends release their reservation, whatever the ledger is doing.
     super::palw_onboarding_fold_v1::tick_onboarding_v1(builder, ctx);
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
-    let busy = kernel.rows.keys().any(|(table, _)| {
-        matches!(*table, misaka_palw_kernel::rows::TABLE_CLAIMS_V1 | misaka_palw_kernel::rows::TABLE_DEMANDS_V1)
-    });
+    let busy = kernel
+        .rows
+        .keys()
+        .any(|(table, _)| matches!(*table, misaka_palw_kernel::rows::TABLE_CLAIMS_V1 | misaka_palw_kernel::rows::TABLE_DEMANDS_V1));
     if !busy {
         return Ok(());
     }

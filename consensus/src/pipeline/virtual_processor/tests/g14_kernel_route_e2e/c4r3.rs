@@ -350,7 +350,8 @@ async fn g14_c4r3_a_release_that_schedules_an_unrelated_fence_keeps_the_route_fo
 #[ignore = "FAIL F-C4R3-05: two bonds' self-posted honest claims hold the OPV lane's global cap; a third producer is refused"]
 async fn g14_c4r3_opv_two_bonds_must_not_be_able_to_hold_the_whole_opv_lane() {
     kaspa_core::log::try_init_logger("warn");
-    let mut fence = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), opv_admitted());
+    opv_test_eligible(&opv_admitted());
+    let mut fence = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new());
     fence.economics.max_live_claims_total = 6;
     fence.economics.max_live_claims_per_producer = 3;
     let mut w = World::on_opv(Net::over_cfg(kernel_config_with(Some(fence)), TestConsensus::new)).await;

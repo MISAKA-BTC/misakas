@@ -27,7 +27,7 @@ use kaspa_consensus_core::palw_onboarding_v1::{
 use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
 use misaka_palw_challenge::{
     ConformanceCommitmentV1, OnboardingFailureV1 as F, OnboardingStateV1 as S, RootV1, SubjectKindV1, WorkBeaconStateV1,
-    WorkFinalEventV1, challenge_seed_v1, collect_work_beacon_v1,
+    challenge_seed_v1, collect_attributed_work_beacon_v1,
 };
 use misaka_palw_sdk::onboarding_chain::{
     EnvelopeSigner, PublicConformanceReadsV1, SignedRegistrationRequestV1, conformance_evidence_object_v1, fresh_verify_from_reads_v1,
@@ -47,12 +47,14 @@ fn test_scope() -> ConformanceScopeV1 {
     s
 }
 
-/// The onboarding network with RFC-0015's OPV fence admitting the beacon's source class and the candidate's kernel class (both
-/// armed WITHOUT their validation, as everywhere in this file).
-fn conformance_config(admitted: Vec<Hash64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+/// The onboarding network with RFC-0015's OPV fence (armed WITHOUT its validation, as everywhere in this file). The beacon's source
+/// class and the candidate's kernel class are treated as eligible through the processor's `cfg(test)` seam: these conformance
+/// MECHANICS predate derived eligibility; the bootstrap that derives it is `opv_bootstrap.rs`.
+fn conformance_config(eligible: Vec<Hash64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, bundle, premine, floats) = kernel_config_onboarding();
+    opv_test_eligible(&eligible);
     let mut params = config.params.clone();
-    params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), admitted));
+    params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new()));
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fences");
     (Config::new(params), bundle, premine, floats)
 }
@@ -265,7 +267,8 @@ impl Cw {
             let read = self.read();
             // Locked at the sink (what the next block's fold sees), not only at the virtual's DAA the read is taken at.
             let policy = palw_onboarding_challenge_policy_v1();
-            let at_sink = collect_work_beacon_v1(&self.attempt().beacon_context(&policy), &self.events(), self.net.daa()).unwrap();
+            let at_sink =
+                collect_attributed_work_beacon_v1(&self.attempt().beacon_context(&policy), &self.events(), self.net.daa()).unwrap();
             if let (WorkBeaconStateV1::Locked(b), "LOCKED") = (at_sink, read.beacon) {
                 return b.lock_position;
             }
@@ -279,8 +282,8 @@ impl Cw {
         self.net.chain.ctx.consensus.palw_conformance_evidence_v1(self.v2_class).expect("the class is known")
     }
 
-    /// The Final facts the route serves (op 212's source), decoded.
-    fn events(&self) -> Vec<WorkFinalEventV1> {
+    /// The Final facts the route serves (op 212's source), decoded: attributed events (the producer stands behind each).
+    fn events(&self) -> Vec<misaka_palw_challenge::AttributedWorkV1> {
         self.net
             .api()
             .expect("the route")
@@ -296,7 +299,8 @@ impl Cw {
         let attempt = self.attempt();
         let policy = palw_onboarding_challenge_policy_v1();
         let ctx = attempt.beacon_context(&policy);
-        let WorkBeaconStateV1::Locked(beacon) = collect_work_beacon_v1(&ctx, &self.events(), self.net.daa()).unwrap() else {
+        let WorkBeaconStateV1::Locked(beacon) = collect_attributed_work_beacon_v1(&ctx, &self.events(), self.net.daa()).unwrap()
+        else {
             panic!("the beacon is locked")
         };
         let seed = challenge_seed_v1(&ctx, &attempt.commitment.subject(), &beacon).expect("a seed");
@@ -477,8 +481,8 @@ async fn g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_
     let attempt = cw.attempt();
     assert_eq!(
         (attempt.challenge_epoch, attempt.excluded_profiles.len()),
-        (0, 2),
-        "the candidate and its own kernel class are excluded"
+        (0, 3),
+        "the candidate, its own kernel class and that class under the other mode are excluded (OPV-BOOT)"
     );
     assert_eq!(attempt.eligible_profiles, vec![Hash64::from_bytes(cw.src_class)], "the source class, frozen at the commitment");
     // The gate names its first unmet condition (here the binding's horizon); the conformance record's own hold is the contract's
@@ -491,7 +495,8 @@ async fn g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_
     cw.source_claims(2).await;
     let lock = cw.until_locked().await;
     assert!(cw.read().beacon_output.is_some());
-    let sources: Vec<WorkFinalEventV1> = cw.events().into_iter().filter(|e| e.source_profile_id == cw.src_class).collect();
+    let sources: Vec<misaka_palw_challenge::WorkFinalEventV1> =
+        cw.events().into_iter().map(|w| w.event).filter(|e| e.source_profile_id == cw.src_class).collect();
     assert_eq!(sources.len(), 2);
     assert!(
         sources.iter().all(|e| e.final_path == misaka_palw_challenge::FinalPathV1::PanelIndependent

@@ -129,14 +129,21 @@ pub struct PalwKernelRouteExtrasV1 {
     pub opv: Option<PalwKernelOpvExtrasV1>,
 }
 
-/// What the processor hands the fold for the OPV mode (RFC-0015): the network's policy and its admission list, both read from
-/// `Params::palw_panel_free_v1` ([`crate::palw_panel_free_v1::PalwPanelFreeFenceV1`]).
+/// What the processor hands the fold for the OPV mode (RFC-0015): the network's policy and the two restrictions of the DERIVED
+/// eligibility, all read from `Params::palw_panel_free_v1` ([`crate::palw_panel_free_v1::PalwPanelFreeFenceV1`]). Eligibility itself is
+/// derived in the fold from chain state (`crate::palw_opv_bootstrap_v1`), never handed in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwKernelOpvExtrasV1 {
     /// The OPV policy, a genesis constant of the route (the fence's terms, activating at the fence's height).
     pub policy: OpvPolicyV1,
-    /// **The class ids (mode-bound) the NETWORK'S policy admits for OPV** — consensus, never a registrant's choice.
-    pub admitted_classes: Vec<Hash64>,
+    /// Mode-bound class ids the network denies OPV (a restriction only).
+    pub denied_classes: Vec<Hash64>,
+    /// The effective-bits floor a class's conformance policy must reach.
+    pub min_effective_bits: u16,
+    /// **TEST SEAM, empty in every build that can run a network**: mode-bound class ids a pre-derivation mechanics test treats as
+    /// eligible (the processor fills it only under `cfg(test)`, from `kernel_route_test_opv_eligible_v1`, exactly as it fills
+    /// `attested_artifacts`). The bootstrap E2E uses none.
+    pub test_eligible: Vec<Hash64>,
 }
 
 /// **The INTERIM ledger policy.** Windows are short so a drill crosses them; the amounts are sompi. Values are consensus constants
@@ -447,14 +454,15 @@ pub struct KernelRowsPageV1 {
 }
 
 /// One Final of the route, for a reader and for the beacon: the kernel's receipt, how the work reached Final, and — where the route
-/// knows every fact the beacon needs — the borsh `WorkFinalEventV1` (RFC-0010's `BeaconFactSource` input).
+/// knows every fact the beacon needs — the borsh `AttributedWorkV1` (the `WorkFinalEventV1` and who stands behind it).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KernelFinalReadV1 {
     pub receipt: misaka_palw_kernel::opv::FinalReceiptV1,
     /// `PanelIndependent` (an OPV Final, never anything else) or `PanelLicensed` (the interim route does not know the licensing
     /// Panel's seed and epoch, so it exports no beacon event for it).
     pub final_path: &'static str,
-    /// Borsh of `misaka_palw_challenge::WorkFinalEventV1`; `None` for a Panel-licensed Final.
+    /// Borsh of `misaka_palw_challenge::AttributedWorkV1` (the event, then the producer bond and the consumer — `Absent` until the
+    /// route records a job's payer); `None` for a Panel-licensed Final.
     pub event: Option<Vec<u8>>,
     pub statement: &'static str,
 }
@@ -488,7 +496,17 @@ impl PalwKernelRouteStateV1 {
                         panel: None,
                     };
                     let event = receipt.to_work_final_event(&ctx)?;
-                    ("PanelIndependent", Some(borsh::to_vec(&event).map_err(|e| e.to_string())?))
+                    // Who stands behind the work: the producer bond of the Final claim (the route keeps no job poster yet, so the
+                    // consumer is Absent and the distinct rule's consumer clause is a no-op until it does).
+                    let producer = ledger.claims.get(&receipt.claim).map(|r| r.producer).unwrap_or([0u8; 64]);
+                    let attributed = misaka_palw_challenge::AttributedWorkV1 {
+                        event,
+                        attribution: misaka_palw_challenge::SourceAttributionV1 {
+                            producer_id: producer,
+                            consumer_id: misaka_palw_challenge::RootV1::Absent,
+                        },
+                    };
+                    ("PanelIndependent", Some(borsh::to_vec(&attributed).map_err(|e| e.to_string())?))
                 }
                 VerificationModeV1::PanelLicensed => ("PanelLicensed", None),
             };
@@ -601,11 +619,7 @@ impl PalwKernelRouteStateV1 {
         }
         // `next` is a resume point only if something follows it.
         if let Some(cursor) = &next {
-            let after_last = self
-                .rows
-                .range((Excluded(cursor.clone()), Unbounded))
-                .next()
-                .is_some()
+            let after_last = self.rows.range((Excluded(cursor.clone()), Unbounded)).next().is_some()
                 || self.aux.range((Excluded(cursor.clone()), Unbounded)).next().is_some();
             if !after_last {
                 next = None;
@@ -639,7 +653,11 @@ mod tests {
         small.max_adjudications_per_block = 4;
         opv.validate(&small).unwrap();
         let state = PalwKernelRouteStateV1::new(p, Some(opv), LedgerScalarsV1::default());
-        assert_eq!(state.ledger().unwrap().root(), state.ledger_root().as_bytes(), "an empty OPV state roots like an empty OPV ledger");
+        assert_eq!(
+            state.ledger().unwrap().root(),
+            state.ledger_root().as_bytes(),
+            "an empty OPV state roots like an empty OPV ledger"
+        );
         let plain = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
         assert_ne!(state.ledger_root(), plain.ledger_root(), "the OPV root form is not the historical one");
     }

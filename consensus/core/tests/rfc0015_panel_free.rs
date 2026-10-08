@@ -70,15 +70,19 @@ fn rfc0015_a_height_is_committed_to_the_fingerprints_and_a_node_without_it_would
     assert!(evaluate_fork_id_v1(&armed, 9_137, &unupgraded.fired.as_bytes(), unupgraded.next).refuses());
 }
 
-/// Phase 3 (lane D): the fence carries the network's admission list and the OPV terms. Both are identity (a node with another list or
-/// other terms is on another network), the value is checked before the arming refusal names itself, and the kernel ledger's policy is
-/// the fence's terms activating at its height.
+/// OPV-BOOT: the fence carries the network's DENY-list, the effective-bits floor and the OPV terms — never an admission list (OPV
+/// eligibility is derived from chain state, `palw_opv_bootstrap_v1`). All three are identity (a node with another list, floor or
+/// terms is on another network), the value is checked before the arming refusal names itself, the interim floor is the ruled 128
+/// effective bits, and the kernel ledger's policy is the fence's terms activating at its height.
 #[test]
-fn rfc0015_the_fence_carries_the_admission_list_and_the_terms_and_both_are_identity() {
+fn rfc0015_the_fence_carries_the_deny_list_the_floor_and_the_terms_and_all_are_identity() {
     let p = palw_t12_shipped_params();
     let (a, b) = (Hash64::from_u64_word(3), Hash64::from_u64_word(9));
     let fence = |classes: Vec<Hash64>| PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(9_137), classes);
-    assert!(fence(vec![b, a]).admitted_classes == vec![a, b], "the constructor canonicalizes the list");
+    assert!(fence(vec![b, a]).denied_classes == vec![a, b], "the constructor canonicalizes the list");
+    assert!(fence(vec![]).denied_classes.is_empty(), "the initial deny-list is empty");
+    assert_eq!(fence(vec![]).min_effective_bits, 128, "the interim floor is the ruled effective 128 bits");
+    assert_eq!(PalwPanelFreeFenceV1::at(ForkActivation::new(1)).min_effective_bits, 128);
     fence(vec![a, b]).validate_value().unwrap();
 
     let id = |f: PalwPanelFreeFenceV1| {
@@ -86,8 +90,11 @@ fn rfc0015_the_fence_carries_the_admission_list_and_the_terms_and_both_are_ident
         q.palw_panel_free_v1 = Some(f);
         (q.consensus_params_id(), q.consensus_schedule_id())
     };
-    assert_ne!(id(fence(vec![a])), id(fence(vec![a, b])), "another admission list is another network");
+    assert_ne!(id(fence(vec![a])), id(fence(vec![a, b])), "another deny-list is another network");
     assert_ne!(id(fence(vec![a])), id(fence(vec![b])));
+    let mut floor = fence(vec![a]);
+    floor.min_effective_bits = 2;
+    assert_ne!(id(fence(vec![a])), id(floor), "another floor is another network");
     let mut terms = fence(vec![a]);
     terms.economics.default_burn_permille += 1;
     assert_ne!(id(fence(vec![a])), id(terms), "other terms are another network");
@@ -95,7 +102,7 @@ fn rfc0015_the_fence_carries_the_admission_list_and_the_terms_and_both_are_ident
 
     // The value is checked, in the params validation, before the arming refusal.
     let mut bad_order = fence(vec![a, b]);
-    bad_order.admitted_classes = vec![b, a];
+    bad_order.denied_classes = vec![b, a];
     assert!(bad_order.validate_value().is_err());
     let mut bad_terms = fence(vec![a]);
     bad_terms.economics.reservation_per_claim = 1;

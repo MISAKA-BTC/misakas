@@ -272,3 +272,20 @@ to `REGISTERED_DORMANT` with its failure code and is counted.
    deterministic decode).
 10. **The fresh verifier trusts op 231's frozen eligible/excluded sets** (chain state under the aux root, checkable through op 211's rows)
    rather than re-deriving the route's OPV classes at the commitment's height.
+
+## 8. OPV-BOOT — derived OPV eligibility and the beacon's bootstrap
+
+Branch `opv/bootstrap-beacon`; the design, graph, grinding table and test list are `opv-beacon-bootstrap.md`. What changed on this path:
+
+* **OPV admission is derived** (`palw_opv_bootstrap_v1::opv_eligibility_v1`, E1–E7), never read from a list: a tag-13 registration is
+  admitted into the kernel ledger only for a class eligible at the block, and every OPV claim commits only while its class is eligible
+  (`palw_kernel_route_fold_v1::opv_gate_v1`). `PalwPanelFreeFenceV1.admitted_classes` is gone; the fence carries `denied_classes` (a
+  restriction only) and `min_effective_bits` (interim 128).
+* **The beacon's sources** (107) are the eligible set at the commitment, minus the candidate under every mode (§7's "the route's OPV
+  classes" before). Op 212's event bytes are an `AttributedWorkV1` (the event and its producer bond); the interim onboarding policy's
+  source rule is the DISTINCT one (its id changed).
+* **The bootstrap**: tag 106 also accepts the network's complete-check policy for a class the fold can check whole; tag 109's new
+  `PostComplete` is judged in the fold (no seed, no beacon, no window) — §8 of the design for its cost bounds and carriage.
+* **Test seam**: the §2 OPV and §7 conformance worlds predate derivation and name their classes through the processor's `cfg(test)`
+  hook `kernel_route_test_opv_eligible_v1` (empty in every non-test build, pinned by `opv_test_eligibility_hook_is_test_only`). The
+  §7 happy path's excluded set is now 3 (the candidate, its kernel class, that class's sibling under the other mode).
