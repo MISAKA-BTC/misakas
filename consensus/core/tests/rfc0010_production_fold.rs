@@ -867,3 +867,99 @@ fn the_observation_json_is_pinned_and_a_legacy_claim_reads_as_lane_a() {
         ]
     );
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Task 8 (fold level): a participant who is NOT in genesis
+// ---------------------------------------------------------------------------------------------------------------------------
+
+/// **A bond registered after genesis, by anyone, is a public candidate and is seated with no operator named.** The registration is
+/// the ordinary `BondRegistered` (the harness folds it without the acceptance layer's ML-DSA check, like every test here); once it
+/// has matured by the policy's `bond_maturity_daa` it is in the sealed snapshot, and with the seat count equal to the population
+/// the draw MUST seat it. Nothing here names an operator: the population is the chain's bonds.
+#[test]
+fn a_bond_registered_after_genesis_is_in_the_snapshot_and_is_seated_with_no_operator_named() {
+    let genesis_bonds: Vec<_> = V3::with(engine_policy(), FENCE).c.s.bonds_iter().map(|(key, _)| *key).collect();
+    assert!(genesis_bonds.len() >= 6, "testnet-12 starts with its genesis bonds: {}", genesis_bonds.len());
+    let mut policy = engine_policy();
+    policy.seat_count = genesis_bonds.len() as u16; // the producer is excluded, the newcomer added: every candidate is seated
+    let mut w = V3::with(policy, FENCE);
+    let template = w.c.s.bonds_iter().next().map(|(_, record)| record.clone()).expect("a genesis bond");
+    let newcomer = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint {
+        transaction_id: kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0_0001),
+        index: 0,
+    });
+    let register = PalwConsensusObjectV2::BondRegistered {
+        bond: newcomer,
+        pubkey: vec![0x5A; template.pubkey.len().max(32)],
+        operator_pubkey: vec![0x6B; 32],
+        collateral: template.collateral,
+        payout_payload: Hash64::from_u64_word(0x9A77),
+        capable_classes: template.capable_classes.clone(),
+        signature: Vec::new(), // the acceptance layer's check; the harness folds the transition only
+    };
+    w.step_at(5, &[register], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(w.c.s.bond(&newcomer).is_some(), "registered");
+    w.c.daa = FENCE;
+    let (id, _) = w.run_to_bound(70);
+    let snapshot = w.record(&id).snapshot.expect("the sealed snapshot");
+    assert!(
+        snapshot.candidates.iter().any(|c| c.bond == kaspa_consensus_core::palw_permissionless_panel_v1::BondIdV1::from(newcomer)),
+        "the newcomer is in the frozen population"
+    );
+    let seats = seats_of_panel(&w.c.s, &id);
+    assert_eq!(seats.len(), genesis_bonds.len());
+    assert!(seats.contains(&newcomer), "seated: the population is the chain's bonds, not a named operator list");
+    let panel = w.c.s.panel(&id).unwrap();
+    let operators: BTreeSet<_> = panel.seats.iter().map(|seat| seat.operator_id).collect();
+    assert_eq!(operators.len(), seats.len(), "distinct operators");
+}
+
+/// **A wrong snapshot is refused wherever it could enter.** In the fold the snapshot is host-derived — the producer carries none —
+/// so the only door left is a stored/imported engine (a carriage, a checkpoint import): a frozen population whose candidate list, root,
+/// policy, class or exclusion was touched does not reload under the committed state root, and the engine's own check names it.
+#[test]
+fn a_tampered_snapshot_does_not_reload_and_the_engine_refuses_it() {
+    let mut w = V3::new();
+    let id = w.floor_claim(71);
+    w.step();
+    w.step();
+    assert_eq!(w.record(&id).phase, ClaimPhaseV3::Sealed);
+    let committed = w.c.s.state_root();
+    let intact = PalwStateCarriageV2::from_state(&w.c.s).into_state(&w.c.sp, Some(committed)).expect("the untouched carriage reloads");
+    assert_eq!(intact, w.c.s);
+
+    let tamper = |edit: &dyn Fn(&mut kaspa_consensus_core::palw_permissionless_panel_v1::ClaimRecordV3)| {
+        let mut carriage = PalwStateCarriageV2::from_state(&w.c.s);
+        let engine = carriage.panel_v3.as_mut().expect("the engine rides the carriage");
+        let mut record = engine.claim_rows().get(&id).unwrap().clone();
+        edit(&mut record);
+        engine.put_claim_row(id, Some(record));
+        // The engine's own consistency check refuses it…
+        let own = carriage.panel_v3.as_ref().unwrap().check_consistency();
+        // …and the carriage does not reload under the committed root.
+        let reloaded = carriage.into_state(&w.c.sp, Some(committed));
+        (own, reloaded)
+    };
+    let cases: Vec<(&str, Box<dyn Fn(&mut kaspa_consensus_core::palw_permissionless_panel_v1::ClaimRecordV3)>)> = vec![
+        ("a candidate removed", Box::new(|r| {
+            r.snapshot.as_mut().unwrap().candidates.pop();
+        })),
+        ("a candidate's collateral raised", Box::new(|r| {
+            r.snapshot.as_mut().unwrap().candidates[0].collateral += 1;
+        })),
+        ("the root replaced", Box::new(|r| {
+            r.snapshot.as_mut().unwrap().root = Hash64::from_u64_word(5);
+        })),
+        ("the policy id replaced", Box::new(|r| {
+            r.snapshot.as_mut().unwrap().policy_id = Hash64::from_u64_word(6);
+        })),
+        ("the excluded producer replaced", Box::new(|r| {
+            r.snapshot.as_mut().unwrap().excluded_operator = Hash64::from_u64_word(7);
+        })),
+    ];
+    for (name, edit) in &cases {
+        let (own, reloaded) = tamper(edit.as_ref());
+        assert!(own.is_err(), "{name}: the engine's own check accepted it");
+        assert!(reloaded.is_err(), "{name}: the carriage reloaded");
+    }
+}

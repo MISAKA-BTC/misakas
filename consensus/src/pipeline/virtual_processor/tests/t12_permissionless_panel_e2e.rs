@@ -449,3 +449,32 @@ async fn t12_the_bind_survives_a_reorg_and_the_carrier_does_not_change_the_panel
     assert_eq!(binding_of(&state_of(&r), &run.v3).binding_block, a_binding.binding_block);
     assert_eq!(binding_of(&state_of(&r), &run.v3).panel_seed_v3, a_binding.panel_seed_v3);
 }
+
+/// **A certified-output object below the fence is dropped by name and the block stands.** The gate refuses it by name for the mempool
+/// (an older build could not decode it either); a block that nonetheless carries it is accepted whole — its object is dropped first
+/// and charged nothing — and no engine exists. Past the fence the gate lets the same object through to the fold.
+#[tokio::test]
+async fn t12_a_certified_output_carried_below_the_fence_is_dropped_by_name_and_the_block_stands() {
+    let (config, bundle, premine, floats) = armed(Some(FENCE));
+    let mut a = node(&config, &bundle, &premine, &floats);
+    beat_to(&mut a, 6).await;
+    let proof = proof_for(&bundle, 1);
+    let object = Obj::PanelBeaconProofV3 { proof: Box::new(proof.clone()) };
+    let gate_at = |chain: &T12Chain, daa: u64| {
+        let (tip, state) = chain.tip_state();
+        let point = PalwBlockContextV2 { block: tip, daa_score: daa, blue_score: 1_000_000, subsidy: 0 };
+        chain.vp().palw_v2_validate_objects(&state, &bundle.state, &point, std::slice::from_ref(&object))
+    };
+    let tip_daa = a.daa_of(a.sink());
+    assert!(tip_daa + 1 < FENCE);
+    let refused = gate_at(&a, tip_daa + 1).expect_err("the gate names the fence");
+    assert!(refused.contains("palw_permissionless_panel_v1"), "{refused}");
+    assert!(gate_at(&a, FENCE).is_ok(), "past the fence the fold judges the proof, not the gate");
+
+    let carried = a.heartbeat(ttpb(&a), vec![carrier(&config, &floats, object.clone())]).await;
+    assert_eq!(carried.transactions.len(), 2, "the carrier rides the heartbeat");
+    let child = a.heartbeat(ttpb(&a), Vec::new()).await;
+    assert_eq!(a.sink(), child.header.hash, "the block that accepts the carrier stands");
+    assert!(state_of(&a).panel_v3().is_none(), "no engine below the fence; the dropped object left no trace");
+    assert!(a.daa_of(child.header.hash) < FENCE);
+}
