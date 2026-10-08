@@ -495,9 +495,29 @@ pub struct JudgeCache {
     file: Option<std::sync::Mutex<std::fs::File>>,
 }
 
+/// **The judged ruleset's identity** for a cache key: the network's `consensus_params_id` and `consensus_schedule_id` as this build
+/// states them. A network NAME and a height are not enough: two builds can schedule different fences at the same height of one
+/// network (the 2026-10-08 withdrawal of testnet-12's DAA 9,000 schedule did exactly that), and a judgment cached under the old
+/// schedule must not answer under the new one. Memoised per network name.
+fn ruleset_tag(network: &Option<String>) -> String {
+    static TAGS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+    let Some(name) = network else { return "no-network".to_string() };
+    let tags = TAGS.get_or_init(Default::default);
+    if let Some(t) = tags.lock().expect("ruleset tags").get(name) {
+        return t.clone();
+    }
+    let tag = match chain::PreflightNetwork::parse(name) {
+        Ok(net) => format!("{}|{}", net.params.consensus_params_id(), net.params.consensus_schedule_id()),
+        Err(e) => format!("unparsed:{e}"),
+    };
+    tags.lock().expect("ruleset tags").insert(name.clone(), tag.clone());
+    tag
+}
+
 impl JudgeCache {
     pub fn key(program: &misaka_palw_tir::TirProgramV1, analysis: &model::Analysis, opts: &Options) -> String {
         let mut st = blake2b_simd::Params::new().hash_length(32).key(b"misaka-palw/preflight-judge-cache/v1").to_state();
+        st.update(ruleset_tag(&opts.network).as_bytes());
         st.update(&program.encode());
         let a = analysis.artifact.as_ref().map(|a| (a.params_bytes, a.inventory_leaves_estimate));
         st.update(
@@ -521,6 +541,7 @@ impl JudgeCache {
     /// The key of a pipeline class's judgment: its programs' bytes, its lengths, its template and every option the judgment reads.
     pub fn pipeline_key(routed: &model::RoutedClass, opts: &Options) -> String {
         let mut st = blake2b_simd::Params::new().hash_length(32).key(b"misaka-palw/preflight-judge-cache/pipeline/v1").to_state();
+        st.update(ruleset_tag(&opts.network).as_bytes());
         match routed {
             model::RoutedClass::EncDec(e) => {
                 st.update(&e.encoder.encode());
@@ -766,4 +787,21 @@ fn run_on_source_cached(
         notes,
         registries: registries(reg),
     })
+}
+
+#[cfg(test)]
+mod judge_cache_key_tests {
+    use super::*;
+
+    /// A judgment is keyed by the ruleset it was judged on, not by the network's name: testnet-12's key carries this build's params and
+    /// schedule ids (the live int-12 ones), so a cache written by a build with another schedule never answers here.
+    #[test]
+    fn the_cache_key_names_the_ruleset_not_only_the_network() {
+        let tag = ruleset_tag(&Some("testnet-12".to_string()));
+        let net = chain::PreflightNetwork::parse("testnet-12").expect("testnet-12");
+        assert_eq!(tag, format!("{}|{}", net.params.consensus_params_id(), net.params.consensus_schedule_id()));
+        assert!(tag.starts_with("5ee7fd8ee019968c"), "{tag}");
+        assert_eq!(ruleset_tag(&None), "no-network");
+        assert_eq!(ruleset_tag(&Some("testnet-12".to_string())), tag, "memoised");
+    }
 }

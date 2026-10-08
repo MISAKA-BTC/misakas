@@ -123,6 +123,27 @@ pub enum RoutedClass {
     Encoder(Box<misaka_palw_tir_lower::model::route::BidirClassShapeV1>),
 }
 
+/// **Why a bidirectional encoder's class did not lower at `lmax` padded positions, as a blocker.** The IR's element cap (no node holds
+/// more than 2^28 elements: an 8,192-position encoder's attention scores) is a SIZE limit of the declared context, `SHAPE_OVER_CAP`
+/// (the census's `CONTEXT_BOUND`, a resource refusal) — not the architecture's; any other failure is `ARCH_REFUSED`.
+pub fn encoder_lowering_blocker(error: &str, lmax: u32) -> Blocker {
+    if error.contains("more than 2^28 elements") {
+        return Blocker::new(
+            Stage::Convert,
+            "SHAPE_OVER_CAP",
+            "the bidirectional encoder's class at the declared context has a node over the IR's 2^28-element cap",
+        )
+        .arg("2^28 elements")
+        .evidence([format!("{lmax} padded positions: {}", short(error))])
+        .safe([
+            "a narrower context (--max-context) lowers; the class then declares that context, not the model's".to_string(),
+            "a tiled encoder court (one close per tile of rows) would not hold the whole score matrix in one node".to_string(),
+        ]);
+    }
+    Blocker::new(Stage::Convert, "ARCH_REFUSED", "the bidirectional encoder's class cannot be lowered at the declared context")
+        .evidence([format!("{lmax} padded positions: {}", short(error))])
+}
+
 /// Everything the convert stage learned.
 pub struct Analysis {
     pub model: Option<ModelInfo>,
@@ -629,14 +650,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
                 routed = Some(RoutedClass::Encoder(Box::new(shape)));
                 encoder_routed = true;
             }
-            Err(e) => blockers.push(
-                Blocker::new(
-                    Stage::Convert,
-                    "ARCH_REFUSED",
-                    "the bidirectional encoder's class cannot be lowered at the declared context",
-                )
-                .evidence([format!("{lmax} padded positions: {}", short(&e.to_string()))]),
-            ),
+            Err(e) => blockers.push(encoder_lowering_blocker(&e.to_string(), lmax)),
         }
     }
 
