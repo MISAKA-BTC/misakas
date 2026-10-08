@@ -43,9 +43,9 @@ G14 · availability · active status · exact blocker · owner. `—` = not yet 
 
 | Model / family | Source | Task | Frontend | Semantics | Plan | Layout | Conformance | Registration | Beacon | G14 | Availability | Active | Exact blocker | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| W1 Llama / dense decoder | safetensors (HF) | text-generation | — | — | — | — | — | — | — | — | — | Dormant | first real-checkpoint E2E not run | A→C→D |
-| W1 Qwen GQA / MoE | safetensors (HF) | text-generation | — | — | — | — | — | — | — | — | — | Dormant | same | A→C→D |
-| W1 recurrent / SSM (GDN, Mamba, RWKV) | safetensors | text-generation | — | — | — | — | — | — | — | — | — | Dormant | recurrent state relation coverage unmeasured | A→B |
+| W1 Llama / dense decoder (SmolLM2-1.7B, phi-1_5 real) | safetensors (HF) | text-generation | PASS (headers, tensors bound 0 missing) | existing | shape-ready @2048/@8192 | — | — | — | — | K2-TIR-v1 ELIGIBLE_AT (KERNEL_NOT_ACTIVE shipped) | — | Dormant | pack/weights-depth/conformance not yet run | A→C→D |
+| W1 Qwen GQA / MoE (Qwen3.5-0.8B, granite-3.1-1b-a400m real) | safetensors (HF) | text-generation | PASS (Qwen3.5 vision tower reported text-only scope) | existing | shape-ready @2048/@8192 | — | — | — | — | ELIGIBLE_AT (hyp.) | — | Dormant | same | A→C→D |
+| W1 recurrent / SSM (mamba-370m, Jamba-tiny hybrid real) | safetensors | text-generation | PASS | existing | shape-ready @2048/@8192 | — | — | — | — | ELIGIBLE_AT (hyp.) | — | Dormant | RWKV not yet exercised | A→B |
 | W1 VLM or encoder-decoder | safetensors | image-text-to-text / seq2seq | — | — | — | — | — | — | — | — | — | Dormant | `PARTIAL_TASK_ONLY` | A→B |
 | kernel route fixtures (`dense_moe_v1`, pipeline VLM) | synthetic | text / VLM | n/a | K2 families | PASS | n/a | — | reference ledger only | not wired | reference PASS | n/a | Dormant | real-node carriage (G14 matrix) | B, D |
 
@@ -89,5 +89,7 @@ Each fix records **before N / after M** here.
 15. adversarial registration tests — GAP (D).
 
 ## 6. Change log
+
+* 2026-10-08 — lane A milestone 1 (branch `onboard/a-frontend`, not yet integrated): census gate results carry a machine class (`misaka-palw-sdk/src/census/onboarding.rs`; `NOT_RUN_*` never a semantic gap; PROFILE_REQUIRED = task profile, lifecycle KERNEL_EXTENSION_REQUIRED "task profile"); KERNEL_EXTENSION_REQUIRED list empty (845/847 sampled decoders ELIGIBLE_AT, 2 BOUNDS_EXCEEDED ≥70B); GGUF `rope_freqs.weight` → ROPE_FREQ_FACTORS_V1 (NOT_RUN_NEEDS_TENSOR_DATA headers pass est 5,715 → 440; GGUF frame 18 members → shape-ready); tokenizer file table (TOKENIZER_MISSING est 32,517 → 27,443); GGUF LoRA relabelled ADAPTER_REFUSED; pre-existing `adapter_pins` failure (16 adapters) recorded.
 
 * 2026-10-08 — matrix created; contract `misaka-palw-challenge` landed.
