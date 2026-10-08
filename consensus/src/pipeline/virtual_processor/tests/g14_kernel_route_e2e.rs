@@ -1668,6 +1668,60 @@ fn minted_and_owed(net: &Net, chain: &T12Chain, card: usize) -> (u64, u64) {
     (minted, owed)
 }
 
+/// **The money the kernel route moves, read off a node** (the user's conservation ruling, 2026-10-09): Σ collateral of the cards'
+/// bonds (reservations, escrows and seal deposits are inside it), Σ their `slashed` (debited; burned at release unless paid), Σ kernel
+/// payouts to them minted by a coinbase or still queued, and the route ledger's burn checksum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct KernelMoneyV1 {
+    pub collateral: u128,
+    pub slashed: u128,
+    pub paid: u128,
+    pub burned: u128,
+}
+
+pub(super) fn kernel_money_v1(chain: &T12Chain) -> KernelMoneyV1 {
+    let state = chain.tip_state().1;
+    let blocks = chain_blocks(chain, chain.sink());
+    let mut m = KernelMoneyV1 { collateral: 0, slashed: 0, paid: 0, burned: 0 };
+    for bond in &chain.bonds {
+        let b = state.bond(bond).expect("a card's bond");
+        m.collateral += u128::from(b.collateral);
+        m.slashed += u128::from(b.slashed);
+        let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&b.payout_payload.as_bytes());
+        for blk in &blocks {
+            let Some(cb) = blk.transactions.first() else { continue };
+            for (i, o) in cb.outputs.iter().enumerate() {
+                if o.script_public_key == spk
+                    && chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(cb.id(), i as u32)).is_some()
+                {
+                    m.paid += u128::from(o.value);
+                }
+            }
+        }
+        let key = palw_kernel_payout_key_v1(&b.payout_payload);
+        m.paid += state.pending_payouts_iter().find(|(k, _)| **k == key).map_or(0, |(_, p)| u128::from(p.amount));
+    }
+    m.burned = chain.ctx.consensus.palw_kernel_route_v1().map_or(0, |r| u128::from(r.header.scalars.burned));
+    m
+}
+
+/// **Conservation across a window of folds**: a bond's collateral falls by exactly what it is debited, and every debited unit is
+/// paid (by a coinbase or the queue) or burned — `Δcollateral = −Δslashed` and `Δslashed = Δpaid + Δburned`: escrow, burn and
+/// coinbase agree, nothing is minted but the payouts the debits fund. (A window must not hold a debit outside the kernel ledger,
+/// such as a chunk group's forfeited deposit or a registration burn.)
+pub(super) fn assert_kernel_conserved_v1(before: KernelMoneyV1, after: KernelMoneyV1, what: &str) {
+    assert_eq!(
+        before.collateral + before.slashed,
+        after.collateral + after.slashed,
+        "{what}: Δcollateral = −Δslashed ({before:?} → {after:?})"
+    );
+    assert_eq!(
+        after.slashed - before.slashed,
+        (after.paid - before.paid) + (after.burned - before.burned),
+        "{what}: every debit is paid or burned ({before:?} → {after:?})"
+    );
+}
+
 /// **GAP-5 on the real node (the user's ruling: user-pays escrow).** The poster's escrow is a reservation on its REAL bond and the
 /// posting fee a real slash; the Final debits the escrow (a slash of the poster) and queues exactly that for the producer; the coinbase
 /// mints it once. Across a replay, a reorg that undoes the Final (B re-finalizes the claim on its own branch) and back, a re-applied
@@ -1946,15 +2000,99 @@ async fn g14_opv_a_claim_commits_only_over_its_salted_seal_and_its_salt_is_kept(
     w.net.send(vec![(0, o)]).await;
     assert!(!w.net.ledger().claims.contains_key(&id), "a salt that does not open the seal commits nothing");
     // (3) The salted reveal commits; the salt is kept in the route's rows and roots like the ledger.
+    let (money0, slashed0) = (kernel_money_v1(&w.net.chain), w.net.slashed(0));
     let o = w.net.route(0, &reveal);
     w.net.send(vec![(0, o)]).await;
     let ledger = w.net.ledger();
     assert!(ledger.claims.contains_key(&id), "the salted reveal commits");
+    // The non-refundable OPV admission fee is collected from the producer's real bond and burned; nothing else moves.
+    let fee = w.net.api().unwrap().header.opv.unwrap().economics.admission_fee;
+    assert_eq!(w.net.slashed(0), slashed0 + fee, "the admission fee is debited from the producer");
+    let money1 = kernel_money_v1(&w.net.chain);
+    assert_eq!(money1.burned - money0.burned, u128::from(fee), "and burned");
+    assert_kernel_conserved_v1(money0, money1, "a salted reveal");
     assert_eq!(ledger.claim_beacon_salt(&id), Some(salt));
     assert!(ledger.job_poster(&job.id()).is_some(), "past the fence the job's poster is on record (C4R4 F-C4R4-08)");
     let route = w.net.api().expect("the route state");
     assert!(route.rows.keys().any(|(t, _)| *t == misaka_palw_kernel::rows::TABLE_CLAIM_BEACON_SALTS_V1), "table 25 holds the salt");
     assert_eq!(route.ledger_root().as_bytes(), ledger.root(), "the route's rows root like its ledger, extension included");
+}
+
+/// **The salted seal's rows across replay and reorg** (the user's "verified", 2026-10-09: Final / reorg consistency for the new
+/// objects). On an OPV network a job is posted (its poster: table 18), a claim commits through its salted reveal (inner kind 20; its
+/// salt: table 25) and goes Final, and another producer's salted seal of a second job expires unrevealed (its forfeited row: table
+/// 26). A second node replays the chain to the same route; a branch from before the first post that out-works the chain takes that
+/// node back to a route with none of the three rows (exactly the branch's own); and the original chain out-working the branch
+/// re-applies all three identically (rows, aux, roots, collateral and payout queue — `assert_same`).
+#[tokio::test]
+async fn g14_opv_the_salted_seal_rows_roll_back_and_reapply_identically_across_a_reorg() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::opv().await;
+    let fork = w.net.chain.sink();
+    let job = w.job().await;
+    let claim = w.claim(0, &job, false).await;
+    let job2 = w.job().await;
+    let ledger = w.net.ledger();
+    let generated = greedy(&w.fx, &ledger, &w.class, &job2.prompt, job2.max_new_tokens as usize);
+    let kid = w.net.kid(2);
+    let produced = produce(&w.fx, &ledger, &w.class, &job2, kid, generated, |_| {});
+    let (seal, withheld) = seal_and_reveal(&ledger, kid, &produced.object);
+    assert!(matches!(withheld, K::CommitClaimSalted { .. }), "past the fence: a salted reveal, withheld");
+    let o = w.net.route(2, &seal);
+    w.net.send(vec![(2, o)]).await;
+    let sealed = w.net.ledger().seals[&(job2.id(), kid)].daa;
+    w.net.beat_to(sealed + w.policy().seal_ttl_daa + 2).await;
+    let l = w.net.ledger();
+    assert!(matches!(l.claims[&claim.id].life.state, ClaimStateV1::Final { .. }), "the salted claim went Final");
+    assert!(l.job_poster(&job.id()).is_some() && l.job_poster(&job2.id()).is_some(), "table 18");
+    assert!(l.claim_beacon_salt(&claim.id).is_some(), "table 25");
+    assert!(l.forfeited_claim_seals.contains_key(&(job2.id(), kid, sealed)), "table 26");
+    let tables = |l: &KernelLedgerV1| (l.job_posters.clone(), l.claim_beacon_salts.clone(), l.forfeited_claim_seals.clone());
+    let on_a = tables(&l);
+
+    // A second node replays to the same route.
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "Z replays A");
+    let mut zn = w.net.on_chain(z);
+
+    // B, from before the first post, out-works A: Z reorgs onto B and none of the three rows is left.
+    let b = t12_genesis_chain(&w.net.config, &w.net.bundle, &w.net.premine, &w.net.floats);
+    let up_to_fork = chain_blocks(&w.net.chain, fork);
+    let fork_timestamp = up_to_fork.last().unwrap().header.timestamp;
+    let a_after_fork = chain_blocks(&w.net.chain, w.net.chain.sink()).len() - up_to_fork.len();
+    for blk in up_to_fork {
+        arrive(&b, blk, "a block up to the fork").await;
+    }
+    let mut b = b;
+    b.ctx.simulated_time = fork_timestamp;
+    let ttpb = w.net.ttpb();
+    let mut b_blocks = Vec::new();
+    for _ in 0..a_after_fork + 4 {
+        b_blocks.push(b.heartbeat(ttpb, Vec::new()).await);
+    }
+    for blk in &b_blocks {
+        arrive(&zn.chain, blk.clone(), "B's block").await;
+    }
+    assert_eq!(zn.chain.sink(), b.sink(), "B out-works A: Z reorgs onto B");
+    assert_eq!(zn.chain.ctx.consensus.palw_kernel_route_v1(), b.ctx.consensus.palw_kernel_route_v1(), "Z's route is B's own");
+    let lz = zn.ledger();
+    assert!(
+        lz.job_posters.is_empty() && lz.claim_beacon_salts.is_empty() && lz.forfeited_claim_seals.is_empty(),
+        "the reorg rolled tables 18, 25 and 26 back"
+    );
+    assert!(!lz.claims.contains_key(&claim.id), "and the salted claim with them");
+
+    // A out-works B again: Z returns to A and re-applies all three rows identically.
+    let old_len = chain_blocks(&w.net.chain, w.net.chain.sink()).len();
+    for _ in 0..8 {
+        w.net.chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    for blk in chain_blocks(&w.net.chain, w.net.chain.sink()).into_iter().skip(old_len) {
+        arrive(&zn.chain, blk, "A's later block").await;
+    }
+    w.net.assert_same(&zn.chain, "Z back on A");
+    assert_eq!(tables(&zn.ledger()), on_a, "tables 18, 25 and 26 re-applied identically");
+    assert_eq!(tables(&w.net.ledger()), on_a);
 }
 
 #[tokio::test]
@@ -2021,7 +2159,7 @@ async fn g14_opv_withheld_material_defaults_the_producer_burns_a_share_and_frees
     kaspa_core::log::try_init_logger("warn");
     let mut w = World::opv().await;
     let job = w.job().await;
-    let before = w.net.collateral(0);
+    let (before, money0) = (w.net.collateral(0), kernel_money_v1(&w.net.chain));
     let lie = w.claim(0, &job, true).await;
     let outsider = w.outsiders(&lie, &[], 1)[0];
     let da = lie.published(&w.fx, &[lie.at]);
@@ -2034,6 +2172,7 @@ async fn g14_opv_withheld_material_defaults_the_producer_burns_a_share_and_frees
     assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Unavailable { producer_defaulted: true, .. }));
     assert!(!w.net.ledger().claims[&lie.id].convicted);
     assert_eq!(w.net.collateral(0), before - pol.default_penalty - opv.economics.admission_fee, "the penalty and the admission fee");
+    assert_kernel_conserved_v1(money0, kernel_money_v1(&w.net.chain), "an OPV default (the penalty, the demander's share, the fee)");
     assert_eq!(w.net.owed(outsider), default_share(&pol, Some(&opv)), "the demander is paid what the default did not burn");
     // C4 F-C4R3-02: the rest of the reservation is held through the default's liability horizon.
     assert_eq!(w.net.kernel_reserved(0), u128::from(opv.economics.reservation_per_claim - pol.default_penalty));

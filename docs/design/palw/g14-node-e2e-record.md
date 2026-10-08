@@ -393,7 +393,23 @@ salt that does not open the seal refused, the salted reveal commits, the salt in
 `past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists_every_seal_in_seal_order`; the golden roots
 (k2_ledger_route, k2_opv) and core `the_interim_opv_policy_validates_…` assert the empty tables add no extension; node
 `g14_opv_a_claim_commits_only_over_its_salted_seal_and_its_salt_is_kept`. Every OPV node test now seals and reveals salted
-(`seal_and_reveal`), and the kernel harness salts every reveal past the fence (`common::chain::salted`).
+(`seal_and_reveal`), and the kernel harness salts every reveal past the fence (`common::chain::salted`). Final / reorg (the user's
+"verified", 2026-10-09): node `g14_opv_the_salted_seal_rows_roll_back_and_reapply_identically_across_a_reorg` — a job's poster row,
+a salted claim that goes Final and a forfeited seal, replayed by a second node, rolled back by a branch from before the first post
+(the node's route equals the branch's own, none of tables 18 / 25 / 26 left) and re-applied identically when the original chain
+out-works it.
+
+**Conservation (the user's ruling, 2026-10-09).** Every fee, escrow and slash is asserted collected from its payer, and the books
+balance with no mint but the payouts the debits fund:
+* *kernel, every ledger test*: the test consumer checks after every block that Σ collateral + Σ paid + burned + withdrawn = Σ declared
+  (the `SyncBond` deltas), beside the existing "slashed = routed", "the ledger's burn = the burn instructions'" and "no Final reward
+  without a spent escrow" checks;
+* *node*: `kernel_money_v1` reads Σ collateral and Σ `slashed` of every card's bond, Σ kernel payouts minted by a coinbase or still
+  queued, and the ledger's burn; `assert_kernel_conserved_v1` checks `Δcollateral = −Δslashed` and `Δslashed = Δpaid + Δburned` across
+  a window — asserted for the OPV admission fee of a salted reveal, an OPV default (penalty, demander share, fee), and R4X's typed
+  claims (a commit and its conviction, a commit and its default), each with the payer's `slashed` checked to rise by exactly the fee
+  plus the slash or penalty. (A window must not hold a debit outside the kernel ledger: a chunk group's forfeited deposit or a
+  registration burn.)
 
 **Served demands (K2S's DA griefing).** A served position's demand bonds stay reserved: refunded the moment the claim is convicted,
 defaults or times out; burned only when its liability horizon ends with no conviction — a true demand that leads to a conviction (even
@@ -412,7 +428,7 @@ priced above — but an honest verifier who finds the same lie is never first an
 so condition 6 (an incentive for honest verifiers) is not met by the slash alone. No rule keyed on time after the commit fixes this
 (the liar can always be first); the bounty must instead be bound to something the liar cannot know or cannot pre-empt.
 
-*Sketch (not built; a new inner kind and a class-level sampler, so after this lane):*
+*Sketch (not built — **superseded**: the user showed attacks on both parts, see item 14; lane ECON owns the question):*
 1. **Pre-committed watcher salts.** A verifier bonds a watch commitment `c_v = H(salt_v)` (a new route object, bonded, one per bond)
    at any DAA before the claims it will watch. For a claim, its sample `S_v(claim) = PRF(salt_v, claim id)` selects the positions /
    relations of that claim it checks. A proof is **bounty-eligible** for `v` only if it opens `c_v` (reveals `salt_v`) and the
@@ -501,8 +517,9 @@ refuse any armed height unconditionally. What has to be true before they can be 
 13. The prune horizon of table 26 (forfeited claim seals), once OPV-BOOT's v3 policy is a ledger constant (see "Retention" above);
     until then the rows are kept and their growth is priced in forfeited deposits.
 14. DESIGN_GAP, PRINCIPLES §6 condition 6: an honest verifier's bounty can always be pre-empted by the liar's own Sybil (proof bytes
-    do not depend on the verifier's salt). Sketch above ("the honest verifier's incentive"): pre-committed watcher salts and a split
-    among every covering watcher, priced against MEAS's check cost.
+    do not depend on the verifier's salt). **Moved to lane ECON (the user, 2026-10-09)**: both sketches above are attacked — (A) a
+    producer that knows its fault grinds watcher salts or registers many watcher bonds; (B) Sybil watcher bonds dilute the honest
+    share — so neither is to be built; ECON first proves that self-dealing does not pay and that honest verifiers recover their costs.
 12. The FileProof-over-budget gap (accepted by the lead, bounded here): a proof refused over budget is not "accepted", so Final can pass
     and post-Final liability convicts. Junk FileProofs can fill every run of a block (the prosecution reserve is theirs too), each
     dismissed at `dismissed_proof_fee`: holding ONE valid proof out costs `max_adjudications × fee` per block = 64 × 0.1 = 6.4 BILI per

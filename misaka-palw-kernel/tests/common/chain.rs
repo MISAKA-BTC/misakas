@@ -227,6 +227,10 @@ pub fn block_of(daa: u64, txs: Vec<T>, signer: Digest) -> LedgerBlockV1 {
 pub struct Consumer {
     pub book: SettlementBookV1,
     pub settlements: Vec<(u64, SettlementInstructionV1)>,
+    /// The conservation identity's inputs (the user's ruling, 2026-10-09): Σ collateral the consumer declared through `SyncBond`
+    /// (deltas), and Σ collateral that left the route by a `Withdraw`.
+    pub declared: i128,
+    pub withdrawn: i128,
 }
 
 impl Consumer {
@@ -239,6 +243,9 @@ impl Consumer {
         for e in ev {
             if let LedgerEventV1::Settlement(s) = e {
                 self.settlements.push((l.daa, *s));
+                if s.kind == misaka_palw_kernel::settle::SettlementKindV1::Withdraw {
+                    self.withdrawn += i128::from(s.amount);
+                }
             }
         }
         self.book.apply_events(ev).unwrap_or_else(|why| panic!("a settlement the bond book refuses: {why}"));
@@ -252,6 +259,19 @@ impl Consumer {
         }
         assert_eq!(l.burned, self.book.burned, "the burn checksum is the burn instructions'");
         self.book.balanced().unwrap();
+        // **Conservation** (the user's ruling, 2026-10-09): every unit the consumer declared is still a bond's collateral (reserved or
+        // free), was paid out (rewards, shares, Final rewards — each out of a debit), was burned, or left by a withdrawal. Nothing is
+        // minted: escrow, burn and payouts agree in every ledger test.
+        let collateral: i128 = self.book.collateral.values().map(|c| i128::from(*c)).sum();
+        let paid: i128 = self.book.paid.values().map(|p| i128::from(*p)).sum();
+        assert_eq!(
+            collateral + paid + i128::from(self.book.burned) + self.withdrawn,
+            self.declared,
+            "conservation: collateral {collateral} + paid {paid} + burned {} + withdrawn {} ≠ declared {}",
+            self.book.burned,
+            self.withdrawn,
+            self.declared
+        );
     }
 
     /// Apply one block as a consensus fold would; returns the receipts without the settlement instructions (those are in the book
@@ -266,6 +286,8 @@ impl Consumer {
             let r = match tx {
                 LedgerTxV1::SyncBond { bond, collateral } => {
                     l.sync_bond(*bond, *collateral);
+                    let old = self.book.collateral.get(bond).copied().unwrap_or(0);
+                    self.declared += i128::from(*collateral) - i128::from(old);
                     self.book.set_collateral(*bond, *collateral);
                     Ok(Vec::new())
                 }
