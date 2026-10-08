@@ -43,7 +43,7 @@ pub enum WorkSourceKindV1 {
 }
 
 /// One settlement event of the canonical history, with the facts the consumer derived for it from authenticated state.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 pub struct WorkFinalEventV1 {
     pub kind: WorkSourceKindV1,
     pub source_profile_id: Digest,
@@ -103,6 +103,11 @@ pub struct BeaconContextV1 {
 }
 
 impl BeaconContextV1 {
+    /// The context's identity: a verified beacon carries it, so a seed is never minted from a beacon of another context.
+    pub fn id(&self) -> Digest {
+        object_id(crate::hash::DOMAIN_BEACON_CONTEXT, self)
+    }
+
     /// `S`: the first position a source's commitment may be accepted at.
     pub fn start(&self) -> u64 {
         self.commitment_position.saturating_add(self.policy.anchor_delay_slots)
@@ -197,6 +202,33 @@ pub struct WorkBeaconV1 {
     pub lock_position: u64,
 }
 
+/// **A beacon this node derived itself** for one context (from [`collect_work_beacon_v1`] or [`verify_work_beacon_v1`]). It cannot
+/// be decoded from bytes or assembled by a caller, so a seed ([`crate::seed::challenge_seed_v1`]) is never minted from a presented,
+/// stale or invented beacon, and it names the context it was collected for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedWorkBeaconV1 {
+    beacon: WorkBeaconV1,
+    context_id: Digest,
+}
+
+impl VerifiedWorkBeaconV1 {
+    pub fn beacon(&self) -> &WorkBeaconV1 {
+        &self.beacon
+    }
+
+    pub fn context_id(&self) -> Digest {
+        self.context_id
+    }
+}
+
+impl std::ops::Deref for VerifiedWorkBeaconV1 {
+    type Target = WorkBeaconV1;
+
+    fn deref(&self) -> &WorkBeaconV1 {
+        &self.beacon
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkBeaconStateV1 {
     /// The window is open and fewer than `k` sources settled.
@@ -209,7 +241,7 @@ pub enum WorkBeaconStateV1 {
         have: u32,
         lock_position: u64,
     },
-    Locked(WorkBeaconV1),
+    Locked(VerifiedWorkBeaconV1),
     /// `BEACON_UNAVAILABLE`: the window closed with fewer than `k`. Not fraud, not a pass.
     Unavailable {
         have: u32,
@@ -246,12 +278,11 @@ pub fn challenge_anchor_v1(ctx: &BeaconContextV1, sources: &[BeaconSourceV1]) ->
 /// The canonical, eligible, de-duplicated source list from `events` (any order).
 pub fn canonical_sources_v1(ctx: &BeaconContextV1, events: &[WorkFinalEventV1]) -> Vec<BeaconSourceV1> {
     let mut sorted: Vec<&WorkFinalEventV1> = events.iter().collect();
+    // The canonical key, then the whole event: events that tie on the key are never ordered by arrival.
     sorted.sort_by(|a, b| {
-        (a.settlement_position, a.occurrence_index, a.canonical_work_id).cmp(&(
-            b.settlement_position,
-            b.occurrence_index,
-            b.canonical_work_id,
-        ))
+        (a.settlement_position, a.occurrence_index, a.canonical_work_id)
+            .cmp(&(b.settlement_position, b.occurrence_index, b.canonical_work_id))
+            .then_with(|| a.cmp(b))
     });
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
@@ -311,7 +342,10 @@ pub fn collect_work_beacon_v1(
     }
     let output = *accumulators.last().expect("acc_k");
     let challenge_anchor = challenge_anchor_v1(ctx, &sources);
-    Ok(WorkBeaconStateV1::Locked(WorkBeaconV1 { sources, accumulators, output, challenge_anchor, lock_position }))
+    Ok(WorkBeaconStateV1::Locked(VerifiedWorkBeaconV1 {
+        beacon: WorkBeaconV1 { sources, accumulators, output, challenge_anchor, lock_position },
+        context_id: ctx.id(),
+    }))
 }
 
 /// Why a presented beacon is not the one this node derives.
@@ -335,7 +369,7 @@ pub fn verify_work_beacon_v1(
     presented: &WorkBeaconV1,
     events: &[WorkFinalEventV1],
     tip_position: u64,
-) -> Result<(), BeaconEvidenceRefusalV1> {
+) -> Result<VerifiedWorkBeaconV1, BeaconEvidenceRefusalV1> {
     let derived = match collect_work_beacon_v1(ctx, events, tip_position).map_err(BeaconEvidenceRefusalV1::Policy)? {
         WorkBeaconStateV1::Locked(b) => b,
         other => return Err(BeaconEvidenceRefusalV1::NotLocked(other)),
@@ -344,8 +378,8 @@ pub fn verify_work_beacon_v1(
     if let Some(at) = (0..n).find(|i| derived.sources.get(*i) != presented.sources.get(*i)) {
         return Err(BeaconEvidenceRefusalV1::Mismatch { at });
     }
-    if derived != *presented {
+    if *derived.beacon() != *presented {
         return Err(BeaconEvidenceRefusalV1::Derivation);
     }
-    Ok(())
+    Ok(derived)
 }

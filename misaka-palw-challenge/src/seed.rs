@@ -9,7 +9,7 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use crate::beacon::{BeaconContextV1, WorkBeaconV1};
+use crate::beacon::{BeaconContextV1, VerifiedWorkBeaconV1};
 use crate::hash::{DOMAIN_CHALLENGE, DOMAIN_FS_ROUND, DOMAIN_STAGED_ROUND, DOMAIN_STREAM_BLOCK, DOMAIN_STREAM_KEY, Digest, object_id};
 use crate::policy::InteractiveModeV1;
 use crate::subject::ChallengeSubjectV1;
@@ -22,10 +22,19 @@ pub enum SeedRefusalV1 {
     SubjectMismatch,
     #[error("the subject's chain or ruleset is not the beacon's")]
     ChainMismatch,
+    #[error("the beacon was collected for another context")]
+    BeaconContextMismatch,
 }
 
 /// **`challenge_seed`**, from a committed subject and a locked beacon of the same context.
-pub fn challenge_seed_v1(ctx: &BeaconContextV1, subject: &ChallengeSubjectV1, beacon: &WorkBeaconV1) -> Result<Digest, SeedRefusalV1> {
+pub fn challenge_seed_v1(
+    ctx: &BeaconContextV1,
+    subject: &ChallengeSubjectV1,
+    beacon: &VerifiedWorkBeaconV1,
+) -> Result<Digest, SeedRefusalV1> {
+    if beacon.context_id() != ctx.id() {
+        return Err(SeedRefusalV1::BeaconContextMismatch);
+    }
     if subject.challenge_policy_id != ctx.policy.id() {
         return Err(SeedRefusalV1::PolicyMismatch);
     }
@@ -184,7 +193,7 @@ pub fn staged_round_challenge_v1(
     round: u32,
     message_root: &Digest,
     message_position: u64,
-    round_beacon: &WorkBeaconV1,
+    round_beacon: &VerifiedWorkBeaconV1,
     round_window_start: u64,
 ) -> Result<Digest, TranscriptRefusalV1> {
     if mode != InteractiveModeV1::StagedBeacon {
@@ -209,7 +218,7 @@ pub struct FiatShamirTranscriptV1 {
 }
 
 impl FiatShamirTranscriptV1 {
-    pub fn new(statement_root: Digest, challenge_policy_id: Digest, beacon: &WorkBeaconV1) -> Self {
+    pub fn new(statement_root: Digest, challenge_policy_id: Digest, beacon: &VerifiedWorkBeaconV1) -> Self {
         let source_binding = object_id(DOMAIN_FS_ROUND, &(u32::MAX, beacon.challenge_anchor, beacon.output));
         Self { statement_root, challenge_policy_id, source_binding, rounds: Vec::new() }
     }

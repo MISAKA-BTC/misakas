@@ -1220,7 +1220,7 @@ pub fn run_conformance(inp: &RunInput<'_>, log: &dyn Fn(String)) -> Result<RunOu
         )
         .map_err(io)?;
     }
-    write_atomic(&seed_dir.join("beacon.borsh"), &borsh::to_vec(&beacon).map_err(|e| io(e.to_string()))?).map_err(io)?;
+    write_atomic(&seed_dir.join("beacon.borsh"), &borsh::to_vec(beacon.beacon()).map_err(|e| io(e.to_string()))?).map_err(io)?;
     write_atomic(&seed_dir.join("facts.borsh"), &borsh::to_vec(&facts).map_err(|e| io(e.to_string()))?).map_err(io)?;
     write_atomic(
         &seed_dir.join("facts.json"),

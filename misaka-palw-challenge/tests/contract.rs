@@ -3,9 +3,11 @@
 
 use std::collections::BTreeSet;
 
+use misaka_palw_challenge::beacon::VerifiedWorkBeaconV1;
 use misaka_palw_challenge::beacon::{BeaconEvidenceRefusalV1, IneligibleV1, eligibility_v1};
 use misaka_palw_challenge::conformance::ConformanceRefusalV1;
 use misaka_palw_challenge::hash::{Digest, hex, named_id};
+use misaka_palw_challenge::lifecycle;
 use misaka_palw_challenge::policy::{ImplementedV1, PolicyRefusalV1};
 use misaka_palw_challenge::seed::{P127, SeedRefusalV1, TranscriptRefusalV1};
 use misaka_palw_challenge::*;
@@ -58,7 +60,7 @@ fn three_good() -> Vec<WorkFinalEventV1> {
     vec![work(1, ACTIVE_A, 103, 110), work(2, ACTIVE_B, 104, 111), work(3, ACTIVE_A, 105, 112)]
 }
 
-fn locked(ctx: &BeaconContextV1, events: &[WorkFinalEventV1], tip: u64) -> WorkBeaconV1 {
+fn locked(ctx: &BeaconContextV1, events: &[WorkFinalEventV1], tip: u64) -> VerifiedWorkBeaconV1 {
     match collect_work_beacon_v1(ctx, events, tip).unwrap() {
         WorkBeaconStateV1::Locked(b) => b,
         other => panic!("not locked: {other:?}"),
@@ -229,14 +231,14 @@ fn a_fresh_node_refuses_reordered_substituted_or_forged_beacon_evidence_and_a_re
     let c = ctx(SubjectKindV1::ModelConformance);
     let events = three_good();
     let b = locked(&c, &events, 117);
-    verify_work_beacon_v1(&c, &b, &events, 200).unwrap();
-    let mut reordered = b.clone();
+    verify_work_beacon_v1(&c, b.beacon(), &events, 200).unwrap();
+    let mut reordered = b.beacon().clone();
     reordered.sources.swap(0, 1);
     assert!(matches!(verify_work_beacon_v1(&c, &reordered, &events, 200), Err(BeaconEvidenceRefusalV1::Mismatch { at: 0 })));
-    let mut substituted = b.clone();
+    let mut substituted = b.beacon().clone();
     substituted.sources[2].canonical_work_id = [0x77; 64];
     assert!(matches!(verify_work_beacon_v1(&c, &substituted, &events, 200), Err(BeaconEvidenceRefusalV1::Mismatch { at: 2 })));
-    let mut forged = b.clone();
+    let mut forged = b.beacon().clone();
     forged.output = [0x42; 64];
     assert_eq!(verify_work_beacon_v1(&c, &forged, &events, 200), Err(BeaconEvidenceRefusalV1::Derivation));
     // A reorg that replaces a source before (or after) the lock: the new branch derives its own beacon, and the old one is refused.
@@ -244,9 +246,9 @@ fn a_fresh_node_refuses_reordered_substituted_or_forged_beacon_evidence_and_a_re
     branch[2] = work(8, ACTIVE_B, 106, 112);
     let b2 = locked(&c, &branch, 117);
     assert_ne!(b2.output, b.output);
-    assert!(verify_work_beacon_v1(&c, &b, &branch, 200).is_err());
+    assert!(verify_work_beacon_v1(&c, b.beacon(), &branch, 200).is_err());
     // A reorg that removes a source after lock rolls the lock back on that branch.
-    assert!(matches!(verify_work_beacon_v1(&c, &b, &events[..2], 130), Err(BeaconEvidenceRefusalV1::NotLocked(_))));
+    assert!(matches!(verify_work_beacon_v1(&c, b.beacon(), &events[..2], 130), Err(BeaconEvidenceRefusalV1::NotLocked(_))));
     // Restart / IBD: the same events give the same beacon.
     assert_eq!(locked(&c, &events.clone(), 117), b);
 }
@@ -387,7 +389,7 @@ fn the_lifecycle_separates_every_stage_and_classifies_failures() {
     use OnboardingFailureV1 as F;
     use OnboardingStateV1 as S;
     use OnboardingStepV1 as P;
-    let mut r = OnboardingRecordV1::new();
+    let mut r = OnboardingRecordV1::new(4);
     // Converted is not registered, registered is not active.
     assert!(r.apply(P::Registered { class_id: [1; 64] }).is_err());
     r.apply(P::Frontend(Err(F::FrontendRequired))).unwrap();
@@ -478,7 +480,7 @@ fn conformance_evidence_is_recomputed_and_skipped_missing_forged_or_substituted_
         challenge_policy_id: com.challenge_policy_id,
         challenge_anchor: b.challenge_anchor,
         qualifying_source_evidence_root: [0; 64],
-        lock_evidence_root: lock_evidence_root_v1(&b),
+        lock_evidence_root: lock_evidence_root_v1(b.beacon()),
         lock_position: b.lock_position,
         beacon_output: b.output,
         challenge_seed: seed,
@@ -517,4 +519,59 @@ fn conformance_evidence_is_recomputed_and_skipped_missing_forged_or_substituted_
     assert_eq!(judge(|e| e.derived_epsilon_bits = 39), Err(ConformanceRefusalV1::WeakEpsilon));
     assert_eq!(judge(|e| e.lock_evidence_root = [0x13; 64]), Err(ConformanceRefusalV1::Beacon), "a forged lock");
     assert_eq!(judge(|e| e.soundness_assumptions_root = [0; 64]), Err(ConformanceRefusalV1::Assumptions));
+    assert!(
+        matches!(judge(|e| e.failures = vec!["vector 3: logits differ".into()]), Err(ConformanceRefusalV1::Incomplete { .. })),
+        "a Passed status listing failures (F-C4-08)"
+    );
+}
+
+// ── C4 round 2 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn a_seed_is_minted_only_from_a_beacon_this_node_collected_for_this_context() {
+    let c = ctx(SubjectKindV1::ModelConformance);
+    let b = locked(&c, &three_good(), 117);
+    challenge_seed_v1(&c, &subject(&c), &b).unwrap();
+    // A beacon collected for another epoch (another context) cannot seed this one (F-C4-05).
+    let mut other = c.clone();
+    other.challenge_epoch = 8;
+    let b_other = locked(&other, &three_good(), 117);
+    assert_eq!(challenge_seed_v1(&c, &subject(&c), &b_other), Err(SeedRefusalV1::BeaconContextMismatch));
+    // `verify_work_beacon_v1` hands back the node's own verified beacon (a presented one is only compared).
+    let v = verify_work_beacon_v1(&c, b.beacon(), &three_good(), 200).unwrap();
+    assert_eq!(challenge_seed_v1(&c, &subject(&c), &v), challenge_seed_v1(&c, &subject(&c), &b));
+}
+
+#[test]
+fn events_that_tie_on_the_canonical_key_are_never_ordered_by_arrival() {
+    let c = ctx(SubjectKindV1::ModelConformance);
+    // Two events with the same (settlement, occurrence, work id) but different commitments: whichever arrives first, one canonical
+    // choice (F-C4-06).
+    let a = work(1, ACTIVE_A, 103, 110);
+    let mut b = a.clone();
+    b.execution_commitment = [0x01; 64];
+    b.source_profile_id = ACTIVE_B;
+    let rest = vec![work(2, ACTIVE_B, 104, 111), work(3, ACTIVE_A, 105, 112)];
+    let x = locked(&c, &[vec![a.clone(), b.clone()], rest.clone()].concat(), 117);
+    let y = locked(&c, &[vec![b, a], rest].concat(), 117);
+    assert_eq!(x, y);
+}
+
+#[test]
+fn listed_failures_never_pass_and_conformance_attempts_are_bounded() {
+    use OnboardingFailureV1 as F;
+    use OnboardingStepV1 as P;
+    let mut r = OnboardingRecordV1::new(2);
+    for step in [P::Frontend(Ok([2; 64])), P::StaticAdmission(Ok([3; 64])), P::Registered { class_id: [4; 64] }] {
+        r.apply(step).unwrap();
+    }
+    r.apply(P::ConformanceCommitted { commitment_root: [5; 64] }).unwrap();
+    r.apply(P::ConformanceChecked(Err(F::ConformanceFailed))).unwrap();
+    r.apply(P::ConformanceCommitted { commitment_root: [6; 64] }).unwrap();
+    r.apply(P::BeaconUnavailable).unwrap();
+    assert_eq!(r.attempts(), 2);
+    assert!(matches!(
+        r.apply(P::ConformanceCommitted { commitment_root: [7; 64] }),
+        Err(lifecycle::OnboardingRefusalV1::AttemptsExhausted(2))
+    ));
 }

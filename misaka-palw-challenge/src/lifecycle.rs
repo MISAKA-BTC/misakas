@@ -120,8 +120,12 @@ pub struct OnboardingRecordV1 {
     pub class_id: Option<Digest>,
     pub commitment_root: Option<Digest>,
     pub conformance_evidence_id: Option<Digest>,
-    /// Beacon-unavailable windows so far (each counts against the policy's retry limit).
+    /// Beacon-unavailable windows so far (each counts against the attempt limit).
     pub beacon_retries: u32,
+    /// Failed conformance runs so far (each needed a new commitment; each counts against the attempt limit).
+    pub conformance_failures: u32,
+    /// The policy's bound on conformance attempts (commitments that ended unavailable or failed); then the record refuses another.
+    pub attempt_limit: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -130,16 +134,13 @@ pub enum OnboardingRefusalV1 {
     OutOfOrder { from: &'static str, step: &'static str },
     #[error("the failure {0} cannot come from this step")]
     WrongFailure(&'static str),
-}
-
-impl Default for OnboardingRecordV1 {
-    fn default() -> Self {
-        Self::new()
-    }
+    #[error("{0} conformance attempts spent: the policy's limit")]
+    AttemptsExhausted(u32),
 }
 
 impl OnboardingRecordV1 {
-    pub const fn new() -> Self {
+    /// A new record whose conformance attempts are bounded by `attempt_limit` (the challenge policy's `retry_limit` + 1).
+    pub const fn new(attempt_limit: u32) -> Self {
         Self {
             state: OnboardingStateV1::SourceDiscovered,
             last_failure: None,
@@ -149,7 +150,14 @@ impl OnboardingRecordV1 {
             commitment_root: None,
             conformance_evidence_id: None,
             beacon_retries: 0,
+            conformance_failures: 0,
+            attempt_limit,
         }
+    }
+
+    /// Conformance attempts that ended without a pass.
+    pub const fn attempts(&self) -> u32 {
+        self.beacon_retries.saturating_add(self.conformance_failures)
     }
 
     fn step_name(step: &OnboardingStepV1) -> &'static str {
@@ -203,6 +211,9 @@ impl OnboardingRecordV1 {
                 self.state = S::RegisteredDormant;
                 self.last_failure = None;
             }
+            (S::RegisteredDormant, P::ConformanceCommitted { .. }) if self.attempts() >= self.attempt_limit => {
+                return Err(OnboardingRefusalV1::AttemptsExhausted(self.attempts()));
+            }
             (S::RegisteredDormant, P::ConformanceCommitted { commitment_root }) => {
                 self.commitment_root = Some(*commitment_root);
                 self.state = S::ChallengePending;
@@ -225,6 +236,7 @@ impl OnboardingRecordV1 {
                     allowed(*f, &[F::ConformanceFailed])?;
                     // A failed conformance needs a new commitment (changed artifact/layout/plan/implementation): dormant again.
                     self.state = S::RegisteredDormant;
+                    self.conformance_failures += 1;
                     self.commitment_root = None;
                     self.last_failure = Some(*f);
                 }

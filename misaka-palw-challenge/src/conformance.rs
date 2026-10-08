@@ -208,7 +208,7 @@ pub enum ConformanceRefusalV1 {
 /// never computed) are detectable only by re-executing the selected checks, which a verifier must do before trusting a pass.
 pub fn verify_conformance_evidence_v1(
     commitment: &ConformanceCommitmentV1,
-    beacon: &crate::beacon::WorkBeaconV1,
+    beacon: &crate::beacon::VerifiedWorkBeaconV1,
     derived_seed: &Digest,
     required_security_bits: u16,
     ev: &BeaconConformanceEvidenceV1,
@@ -226,7 +226,7 @@ pub fn verify_conformance_evidence_v1(
     if ev.beacon_output != beacon.output
         || ev.challenge_anchor != beacon.challenge_anchor
         || ev.lock_position != beacon.lock_position
-        || ev.lock_evidence_root != crate::beacon::lock_evidence_root_v1(beacon)
+        || ev.lock_evidence_root != crate::beacon::lock_evidence_root_v1(beacon.beacon())
     {
         return Err(R::Beacon);
     }
@@ -239,7 +239,12 @@ pub fn verify_conformance_evidence_v1(
     if ev.status != ConformanceStatusV1::Passed {
         return Err(R::NotPassed(ev.status));
     }
-    if ev.checks_required == 0 || ev.checks_run != ev.checks_required || ev.checks_failed != 0 || !ev.missing_checks.is_empty() {
+    if ev.checks_required == 0
+        || ev.checks_run != ev.checks_required
+        || ev.checks_failed != 0
+        || !ev.missing_checks.is_empty()
+        || !ev.failures.is_empty()
+    {
         return Err(R::Incomplete {
             required: ev.checks_required,
             run: ev.checks_run,
