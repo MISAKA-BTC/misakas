@@ -273,8 +273,9 @@ from acceptance instead, subtract 123 from the shorter ones; nothing below chang
 grows at least as fast as DAA) behind the tip, which is months, not days. D1 is about `safe`.
 
 **Why `Final + 3,000` is the only anchored value below 5,400.** Both ways the chain can take back a `Final` close at the same instant by
-construction: the court (a prosecution opened at `Final` completes in ≤ 2,988 ≤ 3,000, `W_court`) and DA (the last accusation that can default
-before the claim retires is at `retirement − W_disclose = F + 1,800`; default lands at `F + 3,000`). Retirement removes the claim, so a later
+construction: the court (a prosecution opened at `Final` completes in ≤ 2,988 ≤ 3,000, `W_court`) and DA (a `Final` claim is accusable only while it
+is held and its vesting row is unmatured — `da_admission_v1` palw_state_v2.rs:≈16560, released by the DAA clock at `F + 3,000` — and a session
+is cut off when the claim retires, so the last accusation that can default is at `retirement − W_disclose = F + 1,800` and a default lands by `F + 3,000`). Retirement removes the claim, so a later
 conviction can slash but cannot reverse (`reverse_convicted_final` returns). Counting evidence at `F + C` therefore never counts work the chain
 can still un-count, so `safe` cannot retreat because of a conviction — the property v1 buys with 5,400. The rest of v1's margin (2,277 DAA) protects
 the producer's *unenforced* retention after retirement, which no chain rule can use, and the slash-only tail, which v1 does not cover either (it
