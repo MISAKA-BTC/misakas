@@ -3118,6 +3118,17 @@ pub struct Params {
     /// Claims whose panels bound below the height license on the receipt path until they are licensed or void (spec 18 §18.6).
     pub palw_verification_vertex_v1: Option<ForkActivation>,
 
+    /// **RFC-0008 v2 (EXEC lane, `docs/design/palw/rfc-0008-implementation-spec.md`): the unified EXEC payload** ([`crate::palw_exec_v2`],
+    /// [`crate::palw_work_slice_v2`]) — one versioned envelope (`PXE2`) carrying `EXEC_TX` or `EXEC_SLICE`, the root/slice ledgers, and
+    /// the weightless closure carriage (EXEC is never a selected parent and adds no raw work, PALW weight, blue score, DAA tick or
+    /// k-anticone term). A bare height; `None` on every preset, testnet-12 included; Some-only in every hash with the `never()`
+    /// collapse, so a build without the field and a dormant network fingerprint alike. Mirrored on the V2 bundle's state params
+    /// (`exec_v2_from_daa`, written by [`Self::sync_palw_exec_payload_v2`]) because the fold holds only the bundle.
+    /// [`Self::validate_palw_exec_payload_v2`] **refuses any armed height** until the spec's section 9 gates pass
+    /// ([`crate::palw_exec_v2::PALW_EXEC_PAYLOAD_V2_ARMABLE`]); its structural prerequisites are enforced beside that refusal so the
+    /// day the gates pass is a one-constant change with every other rule already pinned.
+    pub palw_exec_payload_v2: Option<ForkActivation>,
+
     /// **RFC-0007 Part II (spec 18): the witness root in the trace manifest** ([`crate::palw_mesh_v1`]) — a class registered at or past the height pins a witness profile; its attempts commit `1 + witness_chunks` trace chunks under the v2 manifest root, so an `Unavailable` verdict can name a witness chunk. A bare height; `None` on every preset until a later flag day arms it; Some-only in every hash with the `never()` collapse; mirrored on the V2 bundle (`witness_manifest_from_daa`).
     pub palw_witness_manifest_v1: Option<ForkActivation>,
 
@@ -4163,6 +4174,8 @@ impl Params {
         self.validate_palw_held_close_chunks_v1()?;
         // **RFC-0007 Part I: the verification vertex's refusals** (`crate::palw_vertex_v1`).
         self.validate_palw_verification_vertex_v1()?;
+        // **RFC-0008 v2: the EXEC payload's refusals** (`crate::palw_exec_v2`): armable on no ruleset until the section 9 gates pass.
+        self.validate_palw_exec_payload_v2()?;
         self.validate_palw_witness_manifest_v1()?;
         self.validate_palw_audit_mesh_v1()?;
         self.validate_palw_capped_onboarding_v1()?;
@@ -6540,6 +6553,10 @@ impl Params {
         // RFC-0007's verification vertex, likewise.
         if self.palw_verification_vertex_v1 == Some(ForkActivation::never()) {
             self.palw_verification_vertex_v1 = None;
+        }
+        // RFC-0008 v2's EXEC payload, likewise.
+        if self.palw_exec_payload_v2 == Some(ForkActivation::never()) {
+            self.palw_exec_payload_v2 = None;
         }
         if self.palw_witness_manifest_v1 == Some(ForkActivation::never()) {
             self.palw_witness_manifest_v1 = None;
@@ -10174,6 +10191,7 @@ impl Params {
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
+            palw_exec_payload_v2,
             palw_witness_manifest_v1,
             palw_audit_mesh_v1,
             palw_capped_onboarding_v1,
@@ -10442,6 +10460,7 @@ impl Params {
             ("palw_improvement_v1", palw_improvement_v1.map(|fence| fence.activation)),
             ("palw_held_close_chunks_v1", *palw_held_close_chunks_v1),
             ("palw_verification_vertex_v1", *palw_verification_vertex_v1),
+            ("palw_exec_payload_v2", *palw_exec_payload_v2),
             ("palw_witness_manifest_v1", *palw_witness_manifest_v1),
             ("palw_audit_mesh_v1", *palw_audit_mesh_v1),
             ("palw_capped_onboarding_v1", *palw_capped_onboarding_v1),
@@ -10806,6 +10825,11 @@ impl Params {
         // RFC-0007's verification vertex, NAMED likewise: it changes which objects a block accepts and how a claim licenses.
         if let Some(activation) = self.palw_verification_vertex_v1 {
             h.write(b"palw_verification_vertex_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0008 v2's EXEC payload, NAMED likewise: it changes which carrier an EXEC block may be and what a chain block accepts.
+        if let Some(activation) = self.palw_exec_payload_v2.filter(|activation| *activation != ForkActivation::never()) {
+            h.write(b"palw_exec_payload_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(activation) = self.palw_witness_manifest_v1 {
@@ -11400,6 +11424,7 @@ impl Params {
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
+            palw_exec_payload_v2,
             palw_witness_manifest_v1,
             palw_audit_mesh_v1,
             palw_capped_onboarding_v1,
@@ -12194,6 +12219,11 @@ impl Params {
         if let Some(activation) = palw_verification_vertex_v1.as_mut() {
             fork(activation, visit);
         }
+        // RFC-0008 v2's EXEC payload. Some-only, a bare height.
+        // (`Some(never())` is not visited: it is the dormant spelling, so the schedule reports it as it reports `None`.)
+        if let Some(activation) = palw_exec_payload_v2.as_mut().filter(|activation| **activation != ForkActivation::never()) {
+            fork(activation, visit);
+        }
         if let Some(activation) = palw_witness_manifest_v1.as_mut() {
             fork(activation, visit);
         }
@@ -12677,6 +12707,7 @@ impl Params {
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
+            palw_exec_payload_v2,
             palw_witness_manifest_v1,
             palw_audit_mesh_v1,
             palw_capped_onboarding_v1,
@@ -13558,6 +13589,11 @@ impl Params {
             h.write(b"palw_verification_vertex_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // RFC-0008 v2's EXEC payload, Some-only for the same reason.
+        if let Some(activation) = palw_exec_payload_v2.filter(|activation| *activation != ForkActivation::never()) {
+            h.write(b"palw_exec_payload_v2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         if let Some(activation) = palw_witness_manifest_v1 {
             h.write(b"palw_witness_manifest_v1");
             h.write(activation.daa_score().to_le_bytes());
@@ -14265,6 +14301,7 @@ impl Params {
             palw_improvement_v1: self.palw_improvement_v1,
             palw_held_close_chunks_v1: self.palw_held_close_chunks_v1,
             palw_verification_vertex_v1: self.palw_verification_vertex_v1,
+            palw_exec_payload_v2: self.palw_exec_payload_v2,
             palw_witness_manifest_v1: self.palw_witness_manifest_v1,
             palw_audit_mesh_v1: self.palw_audit_mesh_v1,
             palw_capped_onboarding_v1: self.palw_capped_onboarding_v1,
@@ -15357,6 +15394,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
+    palw_exec_payload_v2: None,
     palw_witness_manifest_v1: None,
     palw_audit_mesh_v1: None,
     palw_capped_onboarding_v1: None,
@@ -15645,6 +15683,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
+    palw_exec_payload_v2: None,
     palw_witness_manifest_v1: None,
     palw_audit_mesh_v1: None,
     palw_capped_onboarding_v1: None,
@@ -15915,6 +15954,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
+    palw_exec_payload_v2: None,
     palw_witness_manifest_v1: None,
     palw_audit_mesh_v1: None,
     palw_capped_onboarding_v1: None,
@@ -23152,6 +23192,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_gen_range_twin_v1();
     // RFC-0007's verification vertex, likewise.
     params.sync_palw_verification_vertex_v1();
+    // RFC-0008 v2's EXEC payload, likewise.
+    params.sync_palw_exec_payload_v2();
     // RFC-0007 Parts II and IV, likewise.
     params.sync_palw_witness_manifest_v1();
     params.sync_palw_audit_mesh_v1();
@@ -23445,6 +23487,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
+    palw_exec_payload_v2: None,
     palw_witness_manifest_v1: None,
     palw_audit_mesh_v1: None,
     palw_capped_onboarding_v1: None,

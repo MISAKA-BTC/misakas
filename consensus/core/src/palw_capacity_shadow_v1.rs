@@ -603,6 +603,8 @@ pub fn palw_capacity_void_attribution_v1(reason: PalwVoidReasonV2) -> PalwCapaci
         PalwVoidReasonV2::AggregateForfeit => PalwCapacityVoidAttributionV1::Censored,
         // Lane PL part C (ADR-0166): nobody is convicted of an expiry the verifiers caused or the chain cannot attribute.
         PalwVoidReasonV2::PanelUnavailable => PalwCapacityVoidAttributionV1::Undetected,
+        // RFC-0008 v2: a timeout is not a detected fraud.
+        PalwVoidReasonV2::WorkRootExpired => PalwCapacityVoidAttributionV1::Undetected,
     }
 }
 

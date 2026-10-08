@@ -7963,6 +7963,12 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a verification vertex move was dropped by name below palw_verification_vertex_v1, and the block stands (RFC-0007)");
                 continue;
             }
+            // **RFC-0008 v2, likewise**: below `palw_exec_payload_v2` a work-session root declaration is a payload an older build
+            // cannot decode and skips (A-2), so it is dropped here, first, and charged nothing; the fold refuses it too.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_exec_v2(&object) && !self.palw_exec_v2_at(point.daa_score) {
+                info!("Block {block}: a work-session root declaration was dropped by name below palw_exec_payload_v2, and the block stands (RFC-0008 v2)");
+                continue;
+            }
             // **RFC-0007 Part IV.1, likewise**: a trap commitment or reveal below `palw_audit_mesh_v1` is a payload an older build
             // cannot decode and skips; dropped by name, first, and charged nothing.
             if kaspa_consensus_core::palw_state_v2::palw_object_is_mesh_v1(&object) && !self.palw_audit_mesh_at(point.daa_score) {
@@ -9825,6 +9831,25 @@ impl VirtualStateProcessor {
                         vertex.leaves.len(),
                         vertex.leaves_root,
                         &vertex.signature,
+                        Self::verify_mldsa87_with_context_bool,
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                // **RFC-0008 v2: a work-session root declaration** (tag 130): the fence, its shape (a valid plan partition, set roots,
+                // canonical executors), then the ONE ML-DSA-87 signature of the root claim's bond over the declaration bound to this
+                // network. The claim's phase, prefix, job and quotas are the fold's.
+                Obj::ExecWorkRootOpenedV2 { declaration } => {
+                    if !state_params.exec_v2_active_at(point.daa_score) {
+                        return Err(kaspa_consensus_core::palw_work_slice_v2::PalwWorkRootRefusalV2::Dormant.to_string());
+                    }
+                    declaration.validate_shape().map_err(|e| e.to_string())?;
+                    kaspa_consensus_core::palw_work_slice_v2::palw_work_root_verify_signature_v2(
+                        state,
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        declaration,
                         Self::verify_mldsa87_with_context_bool,
                     )
                     .map_err(|e| e.to_string())?;
@@ -14414,6 +14439,8 @@ impl VirtualStateProcessor {
                 }
             }),
             round_permit_uses: Vec::new(),
+            // RFC-0008 v2: the slice carriers the covered set holds (empty until the closure carriage fills it).
+            exec_v2_covered: Vec::new(),
             // ADR-0126 Decision 3: the carve this block's own attempt escrows at — the block that
             // carried it is this one, and the block that pays it is its selected-chain child, always
             // later, so the lower score is this one's. Explicit for the reason every line above
@@ -14908,6 +14935,11 @@ impl VirtualStateProcessor {
 
     fn palw_vertex_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.vertex_active_at(daa_score))
+    }
+
+    /// **RFC-0008 v2's unified EXEC payload, read off the bundle's mirror** (`exec_v2_from_daa`). `false` on every shipped preset.
+    fn palw_exec_v2_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.exec_v2_active_at(daa_score))
     }
 
     /// **RFC-0007 Part IV.1's audit mesh, read off the bundle's mirror** (`audit_mesh_from_daa`).
@@ -21114,6 +21146,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         O::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         O::VerificationVertexV1 { .. } => "VerificationVertexV1",
+        O::ExecWorkRootOpenedV2 { .. } => "ExecWorkRootOpenedV2",
         O::VertexEquivocationV1 { .. } => "VertexEquivocationV1",
         O::TrapCommittedV1 { .. } => "TrapCommittedV1",
         O::TrapRevealedV1 { .. } => "TrapRevealedV1",

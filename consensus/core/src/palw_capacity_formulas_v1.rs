@@ -637,6 +637,8 @@ pub fn palw_capacity_void_reason_keeps_obligation_v1(reason: crate::palw_state_v
         // Lane PL part C (ADR-0166): verifier unavailability is nobody's abandonment — the reservation returns at once, so the
         // obligation is neither held nor charged.
         PalwVoidReasonV2::PanelUnavailable => false,
+        // RFC-0008 v2: an expired work session is nobody's abandonment that a conviction proves — the reservation returns at once.
+        PalwVoidReasonV2::WorkRootExpired => false,
     }
 }
 

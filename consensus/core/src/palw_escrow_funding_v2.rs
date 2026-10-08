@@ -411,6 +411,8 @@ pub fn palw_void_reason_keeps_obligation_v1(reason: PalwVoidReasonV2) -> bool {
         // Lane PL part C (ADR-0166): verifier unavailability is nobody's abandonment — the reservation returns at once, so the
         // obligation is neither held nor charged.
         PalwVoidReasonV2::PanelUnavailable => false,
+        // RFC-0008 v2: an expired work session charges nothing; the reservation returns at once.
+        PalwVoidReasonV2::WorkRootExpired => false,
     }
 }
 
