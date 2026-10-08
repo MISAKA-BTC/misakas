@@ -172,3 +172,34 @@ EVM state), C3 (market fills), C4 (re-measure D1 with 0008 / 0010 / 0011-K2 / 00
 
 See the commands at the end of policy proposal §10.3 (10.3.6). Pre-existing and unrelated: `misaka-cli`'s `cli_surface_tests::palw_settlement_parses_and_says_the_depth_is_anchors`
 needs `RUST_MIN_STACK=33554432` (§4).
+
+## 7. Wave 2 - the code items C1-C11 (lane X12c, branch `rfc12/x12-c-items`, 2026-10-08)
+
+Policy proposal section 12 is the narrative; this is requirement -> code -> test -> status. **All of it is written and none of it has been compiled or run: the Lead put every
+cargo build on hold (disk and RAM pressure) after the code was written.** The statuses below say `WRITTEN - NOT RUN` until the one batched invocation is made; nothing is claimed
+that a run has not shown. No params / schedule / identity id moves.
+
+| # | Requirement | Code | Test | Status |
+|---|---|---|---|---|
+| C1 | A claim reaches `Final` through the processor with the EVM lane on | `VirtualStateProcessor::template_clock` / `template_now` (`cfg(test)`); `T12Chain::arm_clock`; `stamp_harness_time` checks instead of re-stamping on an EVM-active network; `native_relabel_class` (`cfg(test)`) | `rfc12_c1_a` (floor claim; the node reads its delta: `skipped.baseClass == 1`), `rfc12_c1_b` (read as REAL: one pending fact, the exact instant and countdown), `rfc12_c1_c` (`#[ignore]`, ~5,400 DAA: `safe` flips at the v1 instant) | WRITTEN - NOT RUN |
+| C2 | A pruned join with EVM state | none new (the import functions are the node's own) | `rfc12_c2` | WRITTEN - NOT RUN; partial: UTXO set, overlay snapshot and P2P not exercised |
+| C3 | Market fills | none | `rfc12_c3` (80 MSK deposit, 50 MSK buy, two one-unit sells; ADR-0162 armed in a TEST copy) | WRITTEN - NOT RUN |
+| C4 | Re-measure D1 with the other lanes armed | fixture: `ExtrasEdit`, `live_life_with`, `try_step_with`, `try_step_for` | `d1_g` (tripwire) | WRITTEN - NOT RUN; OPV / permissionless panel / kernel route / RFC-0008 slices / K2 classes are not armable in the fixture: **redo at integration** |
+| C5 | The maturity rule v2 | - | - | SKIPPED (no D1 other than v1 chosen) |
+| C6 | A class's own court window extends retention | `palw_native_settlement_v1.rs`: `live_retention` in `native_facts_and_skips_v1` | `d1_h` | WRITTEN - NOT RUN |
+| C7 | Preset and release wiring | none (checklist only) | - | READY-TO-APPLY CHECKLIST (policy proposal 12.8) |
+| C8 | Explorer renders `nativeReadiness` | `contrib/misakascan-t12/app.js` | `tests/native-settlement.cjs` | **PASS** |
+| C9 | Release-build cost at 100k+ blocks | none | `rfc0012_c9_release_cost.rs` (two `#[ignore]`d tests) | DESIGNED, NOT RUN (by order) |
+| C10 | DNS all-equivocating case | none | `rfc12_x16` | WRITTEN - NOT RUN |
+| C11 | May a published `finalized` retreat | `note_finalized_withdrawal`, `FinalizedReadinessV1::withdrawn_from`, CLI, explorer, TypeScript | `rfc12_r5` (extended), core/rpc/gRPC/CLI/explorer fixtures | DECIDED (policy proposal 12.7), WRITTEN - NOT RUN |
+
+### 7.1 The one batched invocation (to run on the Lead's go)
+
+```
+cd /Users/wata/Downloads/MISAKA-wt-b/wc-x12c && export CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432
+cargo test --offline -p kaspa-consensus-core -p kaspa-consensus -p kaspa-rpc-core -p kaspa-grpc-core -p misaka-cli --features kaspa-consensus/evm \
+  --lib --bins --test rfc0012_safe_maturity_attacks --test rfc0012_native_evidence_fold --test rfc0012_c9_release_cost \
+  -- --test-threads=2 rfc0012 rfc12_ palw_settlement GetPalwSettlement            > target/x12c-batch.log 2>&1
+node contrib/misakascan-t12/tests/native-settlement.cjs
+# once, on the release candidate:  cargo test ... rfc12_c1_c --ignored   (~5,400 DAA)   and the C9 measurement (release profile, idle fleet-class machine)
+```
