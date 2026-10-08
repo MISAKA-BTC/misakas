@@ -24,7 +24,8 @@ use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::palw_kernel_route_v1::{
-    PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1, PalwKernelRouteStateV1, palw_kernel_bond_id_v1, palw_kernel_payout_key_v1,
+    PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1, PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1, PalwKernelChunkTargetV1, PalwKernelChunkV1,
+    PalwKernelRouteStateV1, palw_kernel_bond_id_v1, palw_kernel_chunk_message_v1, palw_kernel_chunks_v1, palw_kernel_payout_key_v1,
     palw_kernel_route_message_v1,
 };
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2;
@@ -183,6 +184,30 @@ impl Net {
         .as_ref()
         .to_vec();
         Obj::KernelRouteV1 { bytes, signer, signature }
+    }
+
+    /// **A chunk of the route's own chunk lane (tag 113)**, signed by card `card`'s bond as its opener.
+    fn sign_chunk(&mut self, card: usize, chunk: PalwKernelChunkV1) -> Obj {
+        let message = palw_kernel_chunk_message_v1(self.domain, &chunk);
+        self.rnd = self.rnd.wrapping_add(1);
+        let key = TestConsensus::palw_v2_registry_keypair(card as u64);
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &key.signing_key,
+            message.as_byte_slice(),
+            PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1,
+            [self.rnd; 32],
+        )
+        .expect("ML-DSA-87 signs")
+        .as_ref()
+        .to_vec();
+        Obj::KernelRouteChunkV1 { chunk: Box::new(chunk), signature }
+    }
+
+    /// **`object` through the route's own chunk lane** (C4 F-C4R3-03): cut into chunks of at most `cap` bytes for `target`, each signed
+    /// by card `card`'s bond as the group's opener.
+    fn kernel_chunks(&mut self, card: usize, object: &Obj, target: PalwKernelChunkTargetV1, cap: usize) -> Vec<Obj> {
+        let chunks = palw_kernel_chunks_v1(object, self.bond(card), target, cap).expect("the object cuts into the lane's chunks");
+        chunks.into_iter().map(|c| self.sign_chunk(card, c)).collect()
     }
 
     /// A seat's signed constraint receipt (tag 111).
@@ -1571,6 +1596,112 @@ async fn g14_kernel_route_hostile_objects_are_dropped_or_dismissed_and_never_sto
     let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x77);
     w.proof(c, &lie.id, proof).await;
     assert!(w.net.ledger().claims[&lie.id].convicted, "the outsider still convicts after the noise");
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+// ---- C4 F-C4R3-03: the route's own chunk lane (tag 113, aux table 41) ---------------------------------------------------------
+
+/// **The route's own chunk lane, end to end** (C4 F-C4R3-03): a group keyed by its SIGNING opener, the per-bond limit, the deposit
+/// held from free collateral (V2 sees it) and returned at completion, a group's TTL bounded by its target's deadline, a group whose
+/// assembled object is not a prosecution of its target dropped, an unsigned or mis-signed chunk dropped at acceptance, and an
+/// abandoned group's deposit forfeited at its TTL — while the colluders' own groups never touch the outsider's room.
+#[tokio::test]
+async fn g14_kernel_route_the_routes_own_chunk_lane_is_per_bond_deposit_backed_and_bounded_by_its_target() {
+    use kaspa_consensus_core::palw_kernel_route_v1::{
+        PALW_KERNEL_CHUNK_DEPOSIT_PER_PART_SOMPI_V1, PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1, PALW_KERNEL_CHUNK_TTL_MAX_DAA_V1,
+        PalwKernelChunkTargetV1 as Target,
+    };
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::new().await;
+    let job = w.job().await;
+    let lie = w.claim(0, &job, true).await;
+    let seats = w.seats(&lie.id);
+    w.cover(&lie.id).await;
+    let cards = w.outsiders(&lie, &seats, 2);
+    let (colluder, outsider) = (cards[0], cards[1]);
+    let route = |w: &World| w.net.chain.tip_state().1.kernel_route().cloned().expect("the route");
+
+    // The colluder opens its two groups (junk: one part of two each) for the lie — its own room, and only its own.
+    let junk: Vec<Obj> = (0..PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1 as u64 + 1)
+        .map(|g| {
+            let chunk = PalwKernelChunkV1 {
+                opener: w.net.bond(colluder),
+                group: Hash64::from_u64_word(0x113_0000 + g),
+                target: Target::Claim(lie.id),
+                index: 0,
+                count: 2,
+                bytes: vec![g as u8; 64],
+            };
+            w.net.sign_chunk(colluder, chunk)
+        })
+        .collect();
+    let collateral = w.net.collateral(colluder);
+    w.net.send(junk.into_iter().map(|o| (colluder, o)).collect()).await;
+    let r = route(&w);
+    assert_eq!(
+        r.chunk_groups_of_v1(&w.net.bond(colluder)),
+        PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1,
+        "the per-bond limit refused the third"
+    );
+    let deposit = 2 * PALW_KERNEL_CHUNK_DEPOSIT_PER_PART_SOMPI_V1;
+    assert_eq!(r.chunk_deposits_of_v1(&w.net.bond(colluder)), PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1 as u64 * deposit);
+    assert_eq!(
+        w.net.kernel_reserved(colluder),
+        u128::from(PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1 as u64 * deposit),
+        "V2's committed-collateral ledger holds the deposits"
+    );
+    let groups = r.chunk_groups_v1();
+    let horizon_bound = groups.iter().map(|(_, _, g)| g.expires_daa).max().unwrap();
+    assert!(
+        groups.iter().all(|(_, _, g)| g.expires_daa <= g.opened_daa + PALW_KERNEL_CHUNK_TTL_MAX_DAA_V1),
+        "a group lives at most the lane's TTL"
+    );
+
+    // A chunk signed by another key than its opener's is dropped at acceptance; so is a group for a decided target (below).
+    let forged = PalwKernelChunkV1 {
+        opener: w.net.bond(outsider),
+        group: Hash64::from_u64_word(0xF0F0),
+        target: Target::Claim(lie.id),
+        index: 0,
+        count: 2,
+        bytes: vec![1; 32],
+    };
+    let Obj::KernelRouteChunkV1 { signature, .. } = w.net.sign_chunk(colluder, forged.clone()) else { unreachable!() };
+    w.net.send(vec![(colluder, Obj::KernelRouteChunkV1 { chunk: Box::new(forged), signature })]).await;
+    assert_eq!(route(&w).chunk_groups_of_v1(&w.net.bond(outsider)), 0, "a chunk the opener did not sign opens nothing");
+
+    // A group whose assembled object is not a prosecution of its target (a demand, here) is dropped at its completing chunk.
+    let other = w.net.route(outsider, &K::FileDemand { demander: w.net.kid(outsider), claim: lie.id, stage: 0, position: 0 });
+    let wrong = w.net.kernel_chunks(outsider, &other, Target::Claim(lie.id), 1024);
+    assert!(wrong.len() >= 2);
+    w.net.send(wrong.into_iter().map(|c| (outsider, c)).collect()).await;
+    assert!(w.net.ledger().demands.is_empty(), "the assembled demand was never applied");
+    assert_eq!(route(&w).chunk_groups_of_v1(&w.net.bond(outsider)), 1, "the incomplete group stands (its deposit at stake)");
+
+    // The outsider's genuine chunked proof, in its own room, convicts while the colluder's groups sit in theirs.
+    let outsider_before = w.net.collateral(outsider);
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x13);
+    let o = w.net.route(outsider, &K::FileProof { accuser: w.net.kid(outsider), claim: lie.id, proof });
+    let chunks = w.net.kernel_chunks(outsider, &o, Target::Claim(lie.id), 1024);
+    assert!(chunks.len() >= 2, "a genuinely multi-chunk proof: {}", chunks.len());
+    w.net.send(chunks.into_iter().map(|c| (outsider, c)).collect()).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted, "the chunked proof convicts");
+    assert_eq!(w.net.collateral(outsider), outsider_before, "the completed group's deposit came back (and the proof was true)");
+
+    // A group for a decided target opens nothing (the claim is convicted: nothing a chunk could carry matters any more).
+    let late = w.net.kernel_chunks(outsider, &o, Target::Claim(lie.id), 1024);
+    w.net.send(vec![(outsider, late[0].clone())]).await;
+    assert_eq!(route(&w).chunk_groups_of_v1(&w.net.bond(outsider)), 1, "only the abandoned demand group is open");
+
+    // At their TTL the abandoned groups are dropped and their deposits FORFEITED: junk pays.
+    let last_expiry = route(&w).chunk_groups_v1().iter().map(|(_, _, g)| g.expires_daa).max().unwrap();
+    assert!(last_expiry >= horizon_bound);
+    w.net.beat_to(last_expiry + 1).await;
+    let r = route(&w);
+    assert!(r.chunk_groups_v1().is_empty(), "every abandoned group expired");
+    assert_eq!(w.net.collateral(colluder), collateral - PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1 as u64 * deposit, "the junk's deposits");
+    assert_eq!(w.net.kernel_reserved(colluder), 0);
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }

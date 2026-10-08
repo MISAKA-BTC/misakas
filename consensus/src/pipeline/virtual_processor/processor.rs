@@ -13022,6 +13022,23 @@ impl VirtualStateProcessor {
                 Obj::KernelRouteV1 { bytes, signer, signature } => {
                     self.palw_kernel_route_object_is_signed(state, point.daa_score, bytes, signer, signature)?;
                 }
+                // **G14 (tag 113, C4 F-C4R3-03): a chunk of the route's own chunk lane** — the fence, the opener's Active bond and its
+                // ML-DSA-87 signature over the chunk; at the chunk that COMPLETES its group, the assembled object's own signature,
+                // judged exactly as the direct object's arm judges it (an inner the fence or the signature refuses drops the completing
+                // chunk, and the group's deposit is forfeited at its TTL). The group's rows, target and deposit are the fold's.
+                Obj::KernelRouteChunkV1 { chunk, signature } => {
+                    self.palw_kernel_chunk_is_signed(state, point.daa_score, chunk, signature)?;
+                    match state.kernel_route().and_then(|k| k.chunk_completion_v1(chunk)) {
+                        Some(Obj::KernelRouteV1 { bytes, signer, signature }) => {
+                            self.palw_kernel_route_object_is_signed(state, point.daa_score, &bytes, &signer, &signature)?;
+                        }
+                        Some(Obj::ArtifactBindingChallengedV1 { v2_class, kernel_param_root, challenger, proof, signature }) => {
+                            let payload = borsh::to_vec(&(v2_class, kernel_param_root, proof.as_ref())).map_err(|e| e.to_string())?;
+                            self.palw_onboarding_signature_ok(state, point.daa_score, 105, &challenger, &payload, &signature)?;
+                        }
+                        _ => {}
+                    }
+                }
                 // **G14 lane D phase 3 (tags 104-107): the onboarding objects** — the fence, an Active signer, the signer's signature over
                 // the object's payload; the rows, the proofs and the V2 class's own facts are the fold's.
                 Obj::ArtifactBoundV1 { v2_class, kernel_param_root, signer, signature } => {
@@ -13404,6 +13421,37 @@ impl VirtualStateProcessor {
             return None;
         }
         borsh::from_slice::<Obj>(&whole).ok()
+    }
+
+    /// **G14 (tag 113, C4 F-C4R3-03): is this chunk of the route's own lane signed by the Active bond that opens its group?**
+    fn palw_kernel_chunk_is_signed(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa_score: u64,
+        chunk: &kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkV1,
+        signature: &[u8],
+    ) -> Result<(), String> {
+        if !self.palw_kernel_route_at(daa_score) {
+            return Err(
+                "a kernel route chunk is refused: palw_probabilistic_constraints_v1 is not in force at this block (G14)".to_string()
+            );
+        }
+        let record = state
+            .bond(&chunk.opener)
+            .ok_or_else(|| "a kernel route chunk is signed by a bond this chain does not have".to_string())?;
+        if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err("a kernel route chunk is signed by a bond that is not Active".to_string());
+        }
+        let message = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_chunk_message_v1(self.palw_network_domain_v2(), chunk);
+        if !Self::verify_mldsa87_with_context_bool(
+            &record.pubkey,
+            message.as_byte_slice(),
+            signature,
+            kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1,
+        ) {
+            return Err("a kernel route chunk carries a signature its opener's key does not verify".to_string());
+        }
+        Ok(())
     }
 
     /// **G14 lane D (tag 110): is this kernel route object signed by the bond it names, and is the kernel willing to decode it?**
@@ -21412,6 +21460,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::AdapterClassListed { .. } => "AdapterClassListed",
         O::KernelRouteV1 { .. } => "KernelRouteV1",
         O::KernelConstraintReceiptV1 { .. } => "KernelConstraintReceiptV1",
+        O::KernelRouteChunkV1 { .. } => "KernelRouteChunkV1",
         O::ArtifactBoundV1 { .. } => "ArtifactBoundV1",
         O::ArtifactBindingChallengedV1 { .. } => "ArtifactBindingChallengedV1",
         O::KernelBoundV1 { .. } => "KernelBoundV1",

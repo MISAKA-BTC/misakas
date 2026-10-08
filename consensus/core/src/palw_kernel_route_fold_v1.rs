@@ -118,7 +118,9 @@ impl TransitionBuilder<'_> {
     /// kernel's own reservation and never above the collateral (module doc).
     fn kernel_synced_collateral(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u64 {
         let Some(record) = self.state.bonds.get(bond) else { return 0 };
-        let kernel = self.state.kernel_reserved(bond);
+        // The LEDGER's own reservation: a chunk group's deposit (also the route's, also in `committed`) is outside the ledger, so the
+        // ledger is synced net of it like any other non-kernel reservation and never lends it to a claim.
+        let kernel = self.state.kernel_route.as_ref().map(|k| k.ledger_reserved_of(bond) as u128).unwrap_or(0);
         let committed = self.committed_at(bond, now_daa);
         let non_kernel = committed.saturating_sub(kernel);
         let free = (record.collateral as u128).saturating_sub(non_kernel);
@@ -492,6 +494,8 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     }
     // The onboarding bindings whose refutation horizon ends release their reservation, whatever the ledger is doing.
     super::palw_onboarding_fold_v1::tick_onboarding_v1(builder, ctx);
+    // The route's chunk groups past their TTL are dropped and their deposits forfeited, whatever the ledger is doing.
+    forfeit_expired_chunk_groups_v1(builder, ctx);
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     let busy = kernel.rows.keys().any(|(table, _)| {
         matches!(*table, misaka_palw_kernel::rows::TABLE_CLAIMS_V1 | misaka_palw_kernel::rows::TABLE_DEMANDS_V1)
@@ -530,4 +534,132 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     }
     flush(builder, &ledger, &before);
     Ok(())
+}
+
+// ---- tag 113: the route's own chunk lane (C4 F-C4R3-03) ------------------------------------------------------------------------
+
+/// **Tag 113: one chunk of a prosecution object in the route's own chunk lane** (C4 F-C4R3-03).
+///
+/// The certification lane's `ObjectChunk` table is ONE network-wide table of eight groups, opened by unsigned chunks for a flat rent
+/// and held for 4,000 DAA: eight junk chunks (1.6 KAS) held every chunked prosecution off the chain past the lie's window and its
+/// whole liability horizon. Here:
+///
+/// * a group is keyed `(opener, group)` and every chunk is SIGNED by the opener's Active bond (checked at acceptance), so a bond's
+///   room is its own — no bond, and no set of bonds, can occupy another's;
+/// * a bond holds at most [`PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1`] open groups, each backed by a deposit of
+///   [`PALW_KERNEL_CHUNK_DEPOSIT_PER_PART_SOMPI_V1`] per declared part from its FREE collateral (V2's committed-collateral ledger and
+///   both withdrawal gates read it), returned when the group completes and forfeited when it expires — junk pays, honesty is refunded;
+/// * a group lives at most [`PALW_KERNEL_CHUNK_TTL_MAX_DAA_V1`] and never past its target's deadline (a proof group that cannot
+///   complete before the claim's horizon is worthless), and one whose target can no longer use it is refused at its first chunk;
+/// * the completing chunk assembles the object (its bytes must hash to the group id), which must be a prosecution of the group's
+///   target ([`palw_kernel_chunk_inner_matches_target_v1`]); the object is then applied by its own arm, exactly as if carried bare.
+///
+/// Every refusal is an error: the walk's rehearsal drops the chunk and the block stands. The lane is the kernel route's; other lanes'
+/// chunked objects keep the certification lane, unchanged.
+pub(super) fn apply_kernel_route_chunk_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    chunk: &PalwKernelChunkV1,
+) -> Result<(), PalwStateV2Error> {
+    if builder.extras.kernel_route.is_none() {
+        return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
+    }
+    if chunk.count == 0 || chunk.count > PALW_OBJECT_CHUNK_MAX_COUNT {
+        return Err(PalwStateV2Error::ChunkCountOutOfRange { count: chunk.count, max: PALW_OBJECT_CHUNK_MAX_COUNT });
+    }
+    if chunk.index >= chunk.count {
+        return Err(PalwStateV2Error::ChunkIndexOutOfRange { index: chunk.index, count: chunk.count });
+    }
+    if chunk.bytes.is_empty() || chunk.bytes.len() > PALW_OBJECT_CHUNK_MAX_BYTES {
+        return Err(PalwStateV2Error::ChunkTooLarge { bytes: chunk.bytes.len(), max: PALW_OBJECT_CHUNK_MAX_BYTES });
+    }
+    if !builder.state.bonds.get(&chunk.opener).is_some_and(|b| matches!(b.status, PalwBondStatusV2::Active)) {
+        return Err(refused("a kernel chunk's opener is not an Active bond"));
+    }
+    // A target lives in the route's state (a claim's rows, a binding's aux row): no route, nothing to prosecute.
+    let Some(route) = builder.state.kernel_route.as_ref() else {
+        return Err(refused("no kernel route state: a kernel chunk has no target"));
+    };
+    let key = palw_kernel_chunk_group_key_v1(&chunk.opener, &chunk.group);
+    let mut group = match route.chunk_group_v1(&chunk.opener, &chunk.group) {
+        Some(stored) => {
+            if stored.count != chunk.count || stored.target != chunk.target {
+                return Err(PalwStateV2Error::ChunkGroupIncoherent { group: chunk.group });
+            }
+            if stored.parts.contains_key(&chunk.index) {
+                return Err(PalwStateV2Error::ChunkDuplicate { group: chunk.group, index: chunk.index });
+            }
+            if ctx.daa_score > stored.expires_daa {
+                return Err(refused("a kernel chunk group past its TTL takes no more parts (its deposit is forfeited)"));
+            }
+            stored
+        }
+        None => {
+            // The opener's own room: a bound per bond, never a network-wide table.
+            if route.chunk_groups_of_v1(&chunk.opener) >= PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1 {
+                return Err(refused(format!(
+                    "the opener already holds {PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1} open kernel chunk groups (the per-bond limit)"
+                )));
+            }
+            // Never longer than the target can use it.
+            let Some(deadline) = route.chunk_target_deadline_v1(&chunk.target).filter(|d| *d >= ctx.daa_score) else {
+                return Err(refused("a kernel chunk group's target can no longer use it (decided, unknown, or past its horizon)"));
+            };
+            let deposit = PALW_KERNEL_CHUNK_DEPOSIT_PER_PART_SOMPI_V1.saturating_mul(u64::from(chunk.count));
+            let collateral = builder.state.bonds.get(&chunk.opener).map(|b| b.collateral as u128).unwrap_or(0);
+            if collateral.saturating_sub(builder.committed_at(&chunk.opener, ctx.daa_score)) < deposit as u128 {
+                return Err(refused("the opener's free collateral does not cover the kernel chunk group's deposit"));
+            }
+            PalwKernelChunkGroupV1 {
+                target: chunk.target,
+                count: chunk.count,
+                opened_daa: ctx.daa_score,
+                expires_daa: ctx.daa_score.saturating_add(PALW_KERNEL_CHUNK_TTL_MAX_DAA_V1).min(deadline),
+                deposit,
+                parts: BTreeMap::new(),
+            }
+        }
+    };
+    group.parts.insert(chunk.index, chunk.bytes.clone());
+    if group.parts.len() < group.count as usize {
+        builder.write_kernel_row(
+            PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1,
+            key,
+            Some(borsh::to_vec(&group).expect("a group serializes")),
+        );
+        return Ok(());
+    }
+    // Complete: the object it carried is applied HERE, by the arm a directly carried one goes through.
+    let mut whole = Vec::with_capacity(group.parts.values().map(Vec::len).sum());
+    for i in 0..group.count {
+        whole.extend_from_slice(&group.parts[&i]);
+    }
+    let computed = palw_object_chunk_group_id_v1(&whole);
+    if computed != chunk.group {
+        return Err(PalwStateV2Error::ChunkGroupHashMismatch { group: chunk.group, computed });
+    }
+    let inner: PalwConsensusObjectV2 =
+        borsh::from_slice(&whole).map_err(|e| PalwStateV2Error::ChunkedObjectUndecodable(e.to_string()))?;
+    if !palw_kernel_chunk_inner_matches_target_v1(&inner, &chunk.target) {
+        return Err(refused("the assembled object is not a prosecution of its group's target"));
+    }
+    // The group delivered: its row (and with it the deposit) goes before the object is applied.
+    builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, key, None);
+    super::apply_object(builder, ctx, &inner)
+}
+
+/// **The closing step's chunk sweep**: every group past its TTL is dropped and its opener's deposit forfeited (a real slash, burned
+/// at release). Lenient (it runs after the rehearsal): a deposit the bond can no longer pay is taken as far as it goes.
+fn forfeit_expired_chunk_groups_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
+    let Some(route) = builder.state.kernel_route.as_ref() else { return };
+    let expired: Vec<(PalwBondKeyV2, Hash64, u64)> = route
+        .chunk_groups_v1()
+        .into_iter()
+        .filter(|(_, _, g)| ctx.daa_score > g.expires_daa)
+        .map(|(opener, group, g)| (opener, group, g.deposit))
+        .collect();
+    for (opener, group, deposit) in expired {
+        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, palw_kernel_chunk_group_key_v1(&opener, &group), None);
+        let _ = builder.slash_bond(opener, deposit as u128);
+    }
 }

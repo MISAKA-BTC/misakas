@@ -8418,6 +8418,17 @@ pub enum PalwConsensusObjectV2 {
     /// `signing_message()` under the receipt context, checked at acceptance. Admitted structurally by the kernel
     /// (`admit_receipt_v1`) against the claim's INTERIM assignment. **Tag 111, declared explicitly.**
     KernelConstraintReceiptV1 { receipt: Box<misaka_palw_kernel::receipt::PalwConstraintReceiptV1>, signature: Vec<u8> } = 111,
+    /// **G14 (tag 113, C4 F-C4R3-03): one chunk of a prosecution object in the kernel route's OWN chunk lane** — a `FileProof` or a
+    /// position `Respond` (tag 110) or an onboarding refutation (tag 105) too large for one carrier. The certification lane's
+    /// `ObjectChunk` table is ONE network-wide table of eight groups that eight junk chunks hold for 4,000 DAA; here a group is
+    /// keyed by the bond that SIGNS its chunks (`signature`: the opener's ML-DSA-87 over
+    /// [`crate::palw_kernel_route_v1::palw_kernel_chunk_message_v1`]), each bond holds at most
+    /// [`crate::palw_kernel_route_v1::PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1`] groups backed by a deposit forfeited if the group never
+    /// completes, and a group never outlives its target's deadline — so no set of bonds can hold another's prosecution off the chain.
+    /// The assembled object's own signature is checked at the completing chunk; the object is then applied by its own arm. Rows in
+    /// the route's aux table 41. Dropped by name below `palw_probabilistic_constraints_v1`. **Tag 113, declared explicitly** (the
+    /// lead's allocation of 2026-10-08; 112 unallocated).
+    KernelRouteChunkV1 { chunk: Box<crate::palw_kernel_route_v1::PalwKernelChunkV1>, signature: Vec<u8> } = 113,
     // Tags 104–108 are lane D's onboarding objects (phase 3; the lead's allocation of 2026-10-08), 109 reserved. Dropped by name below
     // `palw_probabilistic_constraints_v1` (the envelope, 108, below `palw_signed_registration_v1`); rows in the route's aux tables.
     /// **G14 phase 3 (tag 104): the registrant of an existing V2 class states that its artifact has kernel root `kernel_param_root`**
@@ -8480,11 +8491,16 @@ pub fn palw_object_is_panel_v3_v1(object: &PalwConsensusObjectV2) -> bool {
     matches!(object, PalwConsensusObjectV2::PanelBeaconProofV3 { .. })
 }
 
-/// **Is this object a kernel route object (tag 110 or 111)** — a variant an older build cannot decode and skips (A-2)? Below
+/// **Is this object a kernel route object (tag 110, 111 or 113)** — a variant an older build cannot decode and skips (A-2)? Below
 /// `Params::palw_probabilistic_constraints_v1` the acceptance walk drops it by name before any slot, rent or budget is charged
 /// for it, and the fold refuses it as the second lock.
 pub fn palw_object_is_kernel_route_v1(object: &PalwConsensusObjectV2) -> bool {
-    matches!(object, PalwConsensusObjectV2::KernelRouteV1 { .. } | PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. })
+    matches!(
+        object,
+        PalwConsensusObjectV2::KernelRouteV1 { .. }
+            | PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. }
+            | PalwConsensusObjectV2::KernelRouteChunkV1 { .. }
+    )
 }
 
 /// **Is this object an RFC-0007 audit-mesh move** (tag 102 or 103) — a variant an older build cannot decode and skips (A-2)? Below
@@ -34537,6 +34553,10 @@ fn apply_object(
         }
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { receipt, signature } => {
             palw_kernel_route_fold_v1::apply_kernel_receipt_v1(builder, ctx, receipt, signature)?;
+        }
+        // (tag 113, C4 F-C4R3-03): a chunk of a prosecution object in the route's own chunk lane.
+        PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, signature: _ } => {
+            palw_kernel_route_fold_v1::apply_kernel_route_chunk_v1(builder, ctx, chunk)?;
         }
         // **G14 lane D phase 3 (tags 104–107): model onboarding** — rows in the route's aux tables (`palw_onboarding_fold_v1`).
         PalwConsensusObjectV2::ArtifactBoundV1 { v2_class, kernel_param_root, signer, signature: _ } => {

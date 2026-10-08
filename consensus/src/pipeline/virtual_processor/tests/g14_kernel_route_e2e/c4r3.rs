@@ -430,19 +430,22 @@ async fn g14_c4r3_an_envelope_in_flight_must_not_split_builds_that_differ_only_i
 
 // ---- censorship: the chunk lane ---------------------------------------------------------------------------------------------
 
-/// **F-C4R3-03 (P1 wherever the route is armed): the colluders hold every chunked prosecution off the chain for 4,000 DAA with 8
+/// **F-C4R3-03 (P1 wherever the route is armed): the colluders held every chunked prosecution off the chain for 4,000 DAA with 8
 /// junk chunks.** Every kernel object larger than one carrier — a real class's `FileProof`, a position `Respond`, an onboarding
-/// refutation — rides `ObjectChunk`s, and the chunk lane is ONE network-wide table of `PALW_OBJECT_CHUNK_MAX_GROUPS` = 8 half-assembled
+/// refutation — rode `ObjectChunk`s, and the chunk lane is ONE network-wide table of `PALW_OBJECT_CHUNK_MAX_GROUPS` = 8 half-assembled
 /// groups, each held until `PALW_OBJECT_CHUNK_TTL_DAA` = 4,000 DAA unless completed. A chunk is unsigned and anyone may open a group:
 /// eight one-part junk groups (8 × the flat 0.2 KAS slot rent, ADR-0075 SA-1 — a price, not the deposit SA-1 asked for) and no new
-/// group opens anywhere. The lie's window (50 DAA) and its whole liability horizon (200 DAA) pass inside that; the outsider's chunked
-/// proof never opens a group, and after the horizon even a proof that fits one carrier is "past the liability horizon". (The fixture's
-/// proof fits one carrier, so it is cut at 1 KiB here to stand for a real class's.) The same 1.6 KAS makes an HONEST producer default
-/// on a demanded position whose response needs chunks — and a pre-Final default pays the demander the penalty. SAFE property asserted:
-/// a chunked proof filed inside the horizon convicts.
+/// group opens anywhere. The lie's window (50 DAA) and its whole liability horizon (200 DAA) passed inside that; the outsider's chunked
+/// proof never opened a group. (The fixture's proof fits one carrier, so it is cut at 1 KiB here to stand for a real class's.)
+///
+/// **Fixed (G14-R4): G14 prosecution objects have the route's OWN chunk lane** (`KernelRouteChunkV1`, tag 113, aux table 41): a group
+/// is keyed by the bond that SIGNS its chunks, each bond holds at most two groups backed by a deposit forfeited if the group never
+/// completes, and a group never outlives its target's deadline. The colluders still fill the certification lane's eight slots AND
+/// their own bonds' rooms in the new lane; the outsider's proof rides its own room and convicts. SAFE property asserted: a chunked
+/// proof filed inside the horizon convicts.
 #[tokio::test]
-#[ignore = "FAIL F-C4R3-03: eight junk chunk groups hold the network's chunk lane past the lie's window and liability horizon"]
 async fn g14_c4r3_eight_junk_chunk_groups_must_not_hold_a_chunked_proof_off_the_chain() {
+    use kaspa_consensus_core::palw_kernel_route_v1::{PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1, PalwKernelChunkTargetV1, PalwKernelChunkV1};
     kaspa_core::log::try_init_logger("warn");
     let mut w = World::new().await;
     let job = w.job().await;
@@ -459,17 +462,35 @@ async fn g14_c4r3_eight_junk_chunk_groups_must_not_hold_a_chunked_proof_off_the_
         let card = [0usize, 1, 2, 3][i % 4]; // any funded key: a chunk is unsigned
         junk.push((card, Obj::ObjectChunk { group: *group, index: 0, count: 2, bytes: vec![i as u8; 32] }));
     }
+    // ... and every colluding bond (the producer and the Panel's seats) fills its own room in the route's lane too.
+    let colluders: Vec<usize> = std::iter::once(0).chain(seats.iter().copied()).collect();
+    for (k, card) in colluders.iter().enumerate() {
+        for g in 0..PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1 as u64 {
+            let chunk = PalwKernelChunkV1 {
+                opener: w.net.bond(*card),
+                group: Hash64::from_u64_word(0xC4C4_1000 + 16 * k as u64 + g),
+                target: PalwKernelChunkTargetV1::Claim(lie.id),
+                index: 0,
+                count: 2,
+                bytes: vec![g as u8; 32],
+            };
+            junk.push((*card, w.net.sign_chunk(*card, chunk)));
+        }
+    }
     w.net.send(junk).await;
     let held = junk_groups.iter().filter(|g| w.net.chain.tip_state().1.pending_chunk_group(g).is_some()).count();
     assert_eq!(held, 8, "the junk holds every pending-chunk slot");
+    let route = w.net.chain.tip_state().1.kernel_route().cloned().expect("the route");
+    assert!(colluders.iter().all(|c| route.chunk_groups_of_v1(&w.net.bond(*c)) == PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1));
 
-    // The outsider's (chunked) proof, sent at once and again each 40 DAA, freshly signed each time (a new group id).
+    // The outsider's (chunked) proof, through the route's own lane, in its own room; sent at once and again each 40 DAA if need be.
     let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x3C);
     let horizon = window_end_daa + pol.liability_daa;
     let mut attempts = 0;
     while w.net.daa() <= horizon && !w.net.ledger().claims[&lie.id].convicted {
         let o = w.net.route(outsider, &K::FileProof { accuser: w.net.kid(outsider), claim: lie.id, proof: proof.clone() });
-        let chunks = kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&o, 1024).unwrap().expect("chunked");
+        let chunks = w.net.kernel_chunks(outsider, &o, PalwKernelChunkTargetV1::Claim(lie.id), 1024);
+        assert!(chunks.len() >= 2, "a genuinely chunked proof");
         w.net.send(chunks.into_iter().map(|c| (outsider, c)).collect()).await;
         attempts += 1;
         let target = w.net.daa() + 40;
@@ -482,6 +503,7 @@ async fn g14_c4r3_eight_junk_chunk_groups_must_not_hold_a_chunked_proof_off_the_
         w.net.claim_state(&lie.id)
     );
     assert!(w.net.ledger().claims[&lie.id].convicted, "a chunked proof filed inside the horizon convicts");
+    assert_eq!(attempts, 1, "at the first attempt: the junk never touched the outsider's room");
 }
 
 /// Control for F-C4R3-03: the same 1 KiB-chunked proof convicts when the chunk lane is free (so the failure above is the lane's).
