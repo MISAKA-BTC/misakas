@@ -24,6 +24,9 @@ fn rows_round_trip_and_root_at_every_stage_of_a_prosecution() {
     let before = w.l.to_rows();
     let (id, at, da, _trace) = final_lying_claim(&mut w);
     check(&w);
+    // The one-claim-per-job index is a table of its own and rooted (C4 F-C4-03).
+    assert!(!w.l.job_claims.is_empty());
+    assert!(w.l.to_rows().keys().any(|(t, _)| *t == misaka_palw_kernel::rows::TABLE_JOB_CLAIMS_V1));
     // A demand and a service in the mix (numeric order of the position key matters for the root).
     let _ = (at, da);
     let after = w.l.to_rows();
