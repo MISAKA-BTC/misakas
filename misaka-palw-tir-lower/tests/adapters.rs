@@ -142,9 +142,22 @@ fn outcome(id: &str, name: &str, cfg: &Value) -> Outcome {
         (Ok(Err(_)), Err(_)) => Outcome::Agree { read: false },
         (Ok(Ok(_)), Err(e)) if STRICTER.iter().any(|m| e.to_string().contains(m)) => Outcome::Stricter(format!("adapter `{id}` refuses {name} ({e}) but the Rust parser reads it")),
         (Ok(Ok(_)), Err(e)) => Outcome::Differ(format!("adapter `{id}` refuses {name} ({e}) but the Rust parser reads it")),
+        // The adapter reads where the Rust parser refused ONLY unknown keys that the transformers class never reads
+        // (`hf_schema::hf_keys`, `tests/hf_keys_ignored.rs`): looser on purpose, by the class's own source.
+        (Ok(Err(e)), Ok(_)) if refused_only_keys_the_class_never_reads(cfg, &e.to_string()) => Outcome::Agree { read: true },
         (Ok(Err(e)), Ok(_)) => Outcome::Differ(format!("adapter `{id}` reads {name} but the Rust parser refuses it ({e})")),
         (Err(_), _) => Outcome::LegacyPanicked,
     }
+}
+
+/// The Rust parser's refusal names unknown keys, all of which the configuration's own transformers class never reads.
+fn refused_only_keys_the_class_never_reads(cfg: &Value, refusal: &str) -> bool {
+    let Some(rest) = refusal.split("config key(s) this lowerer does not model: ").nth(1) else { return false };
+    let keys: Vec<String> = rest.split(" — ").next().unwrap_or("").split(", ").map(str::to_string).collect();
+    let (Some(mt), arch) = (cfg.get("model_type").and_then(Value::as_str), arch_of(cfg)) else { return false };
+    cfg.get("auto_map").is_none_or(Value::is_null)
+        && !keys.is_empty()
+        && misaka_palw_tir_lower::hf_schema::hf_keys::never_read(Some(&arch), mt, &keys).len() == keys.len()
 }
 
 fn outcome_diff(id: &str, name: &str, cfg: &Value) -> Option<String> {

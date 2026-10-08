@@ -518,3 +518,33 @@ fn a_pytorch_file_the_reader_refuses_is_format_unsupported_with_its_reason() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// **An ignored key is withdrawn when the checkpoint says the model is not that class.** `depth_alpha_enabled` is a key transformers'
+/// Llama never reads: a Llama config carrying it reads (`tir-lower/tests/hf_keys_ignored.rs`), and the preflight says which keys it
+/// ignored. But a `use_qk_norm` beside q/k-norm tensors that no Llama has is an author's different model: refused as it always was.
+#[test]
+fn a_key_ignored_for_a_transformers_class_is_refused_again_when_the_checkpoint_carries_tensors_the_class_does_not_have() {
+    // Junk keys, the plain Llama tensors: reads, and the ignored keys are in the report.
+    let dir = with_config(&fixture("hf/llama"), "ignored-ok", &|c| {
+        c["depth_alpha_enabled"] = serde_json::json!(true);
+        c["organization"] = serde_json::json!("x");
+    });
+    std::fs::write(dir.join("tokenizer.json"), "{}").expect("tokenizer");
+    let r = run(&dir, &opts(Depth::Headers)).expect("preflight");
+    assert_eq!(r.verdict.convert.status, StageStatus::Ok, "{}", r.render());
+    let said = r.model.as_ref().expect("model").assumed_defaults.join("|");
+    assert!(said.contains("ignored `depth_alpha_enabled`") && said.contains("ignored `organization`"), "{said}");
+    let _ = std::fs::remove_dir_all(dir);
+    // The same keys and a q_norm tensor no Llama has: refused.
+    let dir = edited_header_copy(&fixture("hf/llama"), "ignored-withdrawn", &|h| {
+        h.insert("model.layers.0.self_attn.q_norm.weight".into(), serde_json::json!({"dtype": "BF16", "shape": [8], "data_offsets": [0, 16]}));
+    });
+    let text = std::fs::read_to_string(dir.join("config.json")).expect("config");
+    let mut c: serde_json::Value = serde_json::from_str(&text).expect("json");
+    c["use_qk_norm"] = serde_json::json!(true);
+    std::fs::write(dir.join("config.json"), c.to_string()).expect("config");
+    let r = run(&dir, &opts(Depth::Headers)).expect("preflight");
+    let c = codes(&r);
+    assert!(c.iter().any(|x| x == "CONFIG_KEY_UNREAD(use_qk_norm)"), "{c:?}\n{}", r.render());
+    let _ = std::fs::remove_dir_all(dir);
+}

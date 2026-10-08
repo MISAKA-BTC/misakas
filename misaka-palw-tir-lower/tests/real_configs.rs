@@ -517,8 +517,15 @@ fn a_gptq_checkpoint_lowers_from_its_integers() {
 fn an_unknown_key_or_unimplemented_value_is_refused_not_ignored() {
     let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/llama-3.1-8b.json")).unwrap();
     let mut v: serde_json::Value = serde_json::from_str(&base).unwrap();
+    // `use_qk_norm` is a Llama-4 key: transformers' LlamaConfig does not define it and `modeling_llama` never reads it, so the
+    // configuration reads (`tests/hf_keys_ignored.rs`); a checkpoint that carries the q/k norm tensors it implies is refused by the
+    // preflight (`misaka-palw-sdk/tests/preflight.rs`), because those tensors say the model is not that class. Another architecture's
+    // key — one the class DOES read — stays refused here:
     v["use_qk_norm"] = serde_json::json!(true);
-    assert!(matches!(misaka_palw_tir_lower::parse_config(&v), Err(LowerError::NotLowerable(s)) if s.contains("use_qk_norm")));
+    assert!(misaka_palw_tir_lower::parse_config(&v).is_ok());
+    let mut v: serde_json::Value = serde_json::from_str(&base).unwrap();
+    v["sliding_window"] = serde_json::json!(4096);
+    assert!(matches!(misaka_palw_tir_lower::parse_config(&v), Err(LowerError::NotLowerable(s)) if s.contains("sliding_window")));
     let mut v: serde_json::Value = serde_json::from_str(&base).unwrap();
     v["hidden_act"] = serde_json::json!("xielu");
     assert!(matches!(misaka_palw_tir_lower::parse_config(&v), Err(LowerError::NotLowerable(s)) if s.contains("xielu")));

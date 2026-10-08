@@ -19,6 +19,7 @@
 //! `palw-class check-architecture` prints.
 
 pub mod diffusers;
+pub mod hf_keys;
 pub mod tensors;
 
 pub use diffusers::{DiffusersRead, DiffusersRoute, diffusers_class, is_diffusers, read_diffusers};

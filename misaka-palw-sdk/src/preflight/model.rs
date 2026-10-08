@@ -454,6 +454,29 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
             Vec::new(),
         ),
     };
+    // **A key ignored because the transformers class never reads it must not be a sign of a different model.** The reader ignored these
+    // keys on the strength of the reference being that class (`hf_schema::hf_keys`); a checkpoint that carries tensors the class does
+    // not have (a `q_norm` beside `use_qk_norm`, an expert stack beside `moe_intermediate_size`) says its author's model is not that
+    // class, so the ignoring is withdrawn: the key is refused as it always was.
+    let ignored_keys: Vec<String> = model
+        .as_ref()
+        .map(|m| m.assumed_defaults.iter().filter_map(|a| a.strip_prefix("ignored `").and_then(|r| r.split('`').next()).map(str::to_string)).collect())
+        .unwrap_or_default();
+    if !ignored_keys.is_empty() && tensors.unused_total > 0 {
+        blockers.push(
+            Blocker::new(
+                Stage::Convert,
+                "CONFIG_KEY_UNREAD",
+                "a configuration key the transformers class never reads was ignored, and the checkpoint carries tensors the class does not have: it is not that class",
+            )
+            .arg(ignored_keys[0].clone())
+            .evidence(
+                std::iter::once(format!("ignored keys: {}", ignored_keys.join(", ")))
+                    .chain(std::iter::once(format!("{} tensor(s) no parameter of the program reads, the first {}", tensors.unused_total, tensors.unused.first().cloned().unwrap_or_default()))),
+            )
+            .safe(["a data adapter (--adapter) that models the key and its tensors".to_string()]),
+        );
+    }
     let mut storage = storage;
     // A weight stored as a type no descriptor claims: the bound tensors of an `other` row.
     if prepared.is_some() && tensors.checked != "none" {
