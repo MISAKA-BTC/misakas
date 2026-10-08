@@ -109,6 +109,18 @@ activation height.
 
 ## 5. Change log
 
+* 2026-10-08 14:30 — **Real node (lane D, branch `g14/d-node-e2e`, not yet integrated; 44 `g14_` tests green):** kernel route folded into
+  `PalwChainStateV2` (tags 110/111, deltas 160/161, tail 0xEC, root block `kernel-route/v1`; fence armed only by harness bypass;
+  interim grindable seats). Through mempool → node template → fold, with a fresh verifier built only from read-API rows + public DA:
+  pre-Final and post-Final conviction under full Panel collusion; withheld position → signed demand → default; malformed / wrong-root /
+  fake-opening responses; court pre-emption; simultaneous challengers (one conviction, one duplicate, one slash); proof grace; spam
+  bound; duplicate proof after replay; bond exit refused while liable; chunked kernel objects; second-node replay, reorg, restart,
+  pruned import. RFC-0015 OPV on the node: an honest claim finalizes with no Panel (beacon event `PanelIndependent`), a lying one is
+  convicted pre/post Final, withheld → default, spam bound, reorg/restart. **Real-node cells for families 1, 4, 8, 12–14, 16–20 move
+  to PASS once integrated**; still GAP: artifact attestation source (cfg(test) hook), OPV admission home in Params, FinalReward
+  funding, pipeline claims/receipts on the node, RPC over a running service, GAP-R7 proof front-running (bounty theft by a mempool
+  copyist — accuser seal-then-reveal, after the 9,000 freeze).
+
 * 2026-10-08 — C4 round 1 on the kernel ledger, fixed by the Lead (116 → 117 kernel tests green):
   * F-C4-03 (HIGH) copied claim paid twice → one claim per job (`job_claims`, `fffaf74ec`); F-C4-09 job squatting by
     shape-correct junk → a claim holds its job from the Panel's coverage, not its commit (`592ab3382`).
