@@ -372,9 +372,13 @@ pub fn attempt_effective_bits_v1(
     }
     use crate::palw_conformance_evidence_v1::{
         PALW_ONBOARDING_SEALED_ADVERSARY_NEG_LOG2_MILLIBITS_V1 as RHO, PALW_ONBOARDING_SEALED_MERGE_DELAY_DAA_V1 as DELTA,
+        PALW_ONBOARDING_SEALED_PARTICIPATION_BITS_V1 as PARTICIPATION,
     };
-    let src = misaka_palw_challenge::sealed_source_censorship_bits_v3(policy.beacon_window_slots, DELTA, 1, RHO);
-    misaka_palw_challenge::combine_failure_bits_v1(algorithmic, EffectiveBitsV1::Bits(src.min(u16::MAX as u64) as u16))
+    use misaka_palw_challenge::combine_failure_bits_v1 as union;
+    // ε_src = censorship of every honest seal ∪ no honest PARTY sealing at all (bonds are not parties, F-C4R4-01): both charged.
+    let censorship = misaka_palw_challenge::sealed_source_censorship_bits_v3(policy.beacon_window_slots, DELTA, 1, RHO);
+    let src = union(EffectiveBitsV1::Bits(censorship.min(u16::MAX as u64) as u16), EffectiveBitsV1::Bits(PARTICIPATION));
+    union(algorithmic, src)
 }
 
 // =================================================================================================================================
@@ -447,8 +451,9 @@ pub enum OpvIneligibleV1 {
     ConformanceNotPassed,
     /// E2: the passed statement names another program, plan, kernel or artifact (another class needs its own conformance).
     ConformanceOfAnotherStatement,
-    /// E3: the bound kernel class does not stand in the route.
-    NotG14Complete,
+    /// E3: G14 does not fully hold — the bound kernel class does not stand in the route, its PLAN is not publicly prosecutable over
+    /// its whole context now, or (a V2 class) it serves a task/context past the one G14 was proven for.
+    NotG14Complete(String),
     /// E4: the artifact binding is refuted, missing, still Pending, or of other commitments.
     DaLapsed,
     /// E5: its prosecution bounds do not fit the OPV carriers, the block's court, or out-cost the claim's gain.
@@ -466,7 +471,7 @@ impl OpvIneligibleV1 {
         match self {
             Self::Denied => N::NotDenied,
             Self::KernelNotActive => N::KernelActive,
-            Self::NotOnboarded | Self::ConformanceNotPassed | Self::ConformanceOfAnotherStatement | Self::NotG14Complete => {
+            Self::NotOnboarded | Self::ConformanceNotPassed | Self::ConformanceOfAnotherStatement | Self::NotG14Complete(_) => {
                 N::G14Eligible
             }
             Self::PipelineNotOnboardable => N::G14Eligible,
@@ -484,7 +489,7 @@ impl OpvIneligibleV1 {
             Self::NotOnboarded,
             Self::ConformanceNotPassed,
             Self::ConformanceOfAnotherStatement,
-            Self::NotG14Complete,
+            Self::NotG14Complete(String::new()),
             Self::DaLapsed,
             Self::ResourceUnbounded(String::new()),
             Self::PolicyNotVerified(String::new()),
@@ -499,7 +504,7 @@ impl OpvIneligibleV1 {
             Self::NotOnboarded => "NOT_ONBOARDED",
             Self::ConformanceNotPassed => "CONFORMANCE_NOT_PASSED",
             Self::ConformanceOfAnotherStatement => "CONFORMANCE_OF_ANOTHER_STATEMENT",
-            Self::NotG14Complete => "NOT_G14_COMPLETE",
+            Self::NotG14Complete(_) => "NOT_G14_COMPLETE",
             Self::DaLapsed => "DA_LAPSED",
             Self::ResourceUnbounded(_) => "RESOURCE_UNBOUNDED",
             Self::PolicyNotVerified(_) => "POLICY_NOT_VERIFIED",
@@ -591,7 +596,28 @@ impl PalwKernelRouteStateV1 {
         }
         // E3: the bound kernel class stands (registered only after PUBLIC_PROSECUTION_COMPLETE).
         if self.kernel_class_record_v1(&binding.kernel_class).is_none() {
-            return Err(I::NotG14Complete);
+            return Err(I::NotG14Complete("the bound kernel class does not stand in the route".into()));
+        }
+        // E3, plan and task/context (the user's ruling of 2026-10-09: OPV only for a class, plan AND task/context for which G14 fully
+        // holds): PUBLIC_PROSECUTION_COMPLETE re-derived NOW for the bound class's plan — over its whole context (`plan.max_positions`:
+        // every position a job of the class can touch; a job past it is refused at posting), under the public kernel-route profile
+        // and the route's prosecution policy — and equal to the bounds the class registered with. The kernel route's task is its one
+        // decode rule (greedy), which the plan's courts adjudicate.
+        let row = ledger
+            .classes
+            .get(&binding.kernel_class.as_bytes())
+            .ok_or_else(|| I::NotG14Complete("the bound class is not in the ledger".into()))?;
+        let nodes: u64 = row.program.occurrences().iter().map(|(b, _)| row.program.blocks[*b as usize].nodes.len() as u64).sum();
+        let proven = misaka_palw_kernel::gate::public_prosecution_complete_v1(
+            &row.descriptor,
+            &row.plan,
+            nodes,
+            &misaka_palw_kernel::public::ProfileMaterialV1::kernel_route(true),
+            &ledger.policy.prosecution,
+        )
+        .map_err(|gaps| I::NotG14Complete(format!("the plan is not publicly prosecutable over its context: {gaps:?}")))?;
+        if proven != row.bounds {
+            return Err(I::NotG14Complete("the plan's prosecution bounds are not the ones the class registered with".into()));
         }
         // E4: public DA — a live binding of the V2 artifact to exactly these commitments.
         if binding.kernel_param_root.as_bytes() != facts.param_root
@@ -640,7 +666,8 @@ impl PalwKernelRouteStateV1 {
         view: &OpvEligibilityViewV1<'_>,
     ) -> Result<(), OpvIneligibleV1> {
         let binding = self.kernel_binding_v1(v2_class).ok_or(OpvIneligibleV1::NotOnboarded)?;
-        let facts = OpvClassFactsV1::of_registered(ledger, &binding.kernel_class.as_bytes()).ok_or(OpvIneligibleV1::NotG14Complete)?;
+        let facts = OpvClassFactsV1::of_registered(ledger, &binding.kernel_class.as_bytes())
+            .ok_or_else(|| OpvIneligibleV1::NotG14Complete("the bound kernel class is not registered".into()))?;
         if [facts.opv_id, facts.legacy_id].iter().any(|id| view.denied.contains(&Hash64::from_bytes(*id))) {
             return Err(OpvIneligibleV1::Denied);
         }
@@ -747,8 +774,9 @@ impl PalwKernelRouteStateV1 {
 pub enum PalwRewardGateV1 {
     /// The gate is not armed at this block (no `palw_panel_free_v1` in force): the pre-gate rules, byte for byte.
     Unarmed,
-    /// Not gated: the base class (the bonded BASE-0 fallback, never useful-computation reward), or a live Panel-route class the fence
-    /// grandfathers (registered before its activation, never kernel-bound).
+    /// Not gated: the base class (the bonded BASE-0 fallback, never useful-computation reward), or a class registered BEFORE the
+    /// fence (`LEGACY_PANEL_ROUTE`): it keeps earning through the OLD Panel route, whose verification stays in force in full — no
+    /// G14 bypass applies to it, and its OPV rewards (kernel-route OPV claims) still require E1–E7 (`opv_gate_v1`).
     Exempt(&'static str),
     /// The class passed the onboarding/G14 path: the onboarding gate is `Ready` and E1–E7 hold through its own kernel binding. Its
     /// REAL work is admitted on that ground, never on Panel seat readiness.
@@ -762,8 +790,9 @@ pub enum PalwRewardGateV1 {
 ///
 /// 1. unarmed (`reward_gate` is `None`) → [`PalwRewardGateV1::Unarmed`];
 /// 2. the base class → exempt (the BASE-0 fallback);
-/// 3. a class registered before the activation and never kernel-bound, where the fence grandfathers → exempt (a user decision;
-///    default: not grandfathered);
+/// 3. a class registered before the activation → exempt on the OLD Panel route, in full (the user's ruling of 2026-10-09: past
+///    rights are protected; the NEW reward channel — this gate's `Passed`, and the kernel route's OPV claims — always requires the new
+///    gate; the two never mix);
 /// 4. the onboarding gate (`onboarding_gate_v1`) must be `Ready`: the artifact binding Final, the kernel class standing (registered
 ///    only after PUBLIC_PROSECUTION_COMPLETE), the conformance record at G14_ELIGIBLE or ACTIVE_REWARDABLE for this artifact;
 /// 5. E1–E7 through its own kernel binding ([`PalwKernelRouteStateV1::v2_class_reward_eligibility_v1`]): the kernel Active, the
@@ -790,11 +819,10 @@ pub fn palw_reward_gate_v1(
         return PalwRewardGateV1::Exempt("BASE_FLOOR");
     }
     let Some(class) = state.class(class_id) else { return refused("NOT_REGISTERED", "no such V2 class".into()) };
-    let route = state.kernel_route();
-    let bound = route.is_some_and(|r| r.kernel_binding_v1(class_id).is_some());
-    if !bound && terms.grandfathered_before_daa.is_some_and(|activation| class.registered_daa < activation) {
-        return PalwRewardGateV1::Exempt("GRANDFATHERED_PANEL_ROUTE");
+    if class.registered_daa < terms.fence_activation_daa {
+        return PalwRewardGateV1::Exempt("LEGACY_PANEL_ROUTE");
     }
+    let route = state.kernel_route();
     let Some(route) = route else {
         return refused("NOT_ONBOARDED", "no kernel route state: the class never began onboarding".into());
     };
@@ -809,9 +837,22 @@ pub fn palw_reward_gate_v1(
         Ok(l) => l,
         Err(e) => return refused("ROUTE_ROWS", e),
     };
-    match route.v2_class_reward_eligibility_v1(&ledger, class_id, daa, &OpvEligibilityViewV1::of(opv)) {
-        Ok(()) => PalwRewardGateV1::Passed,
-        Err(why) => refused(why.code(), format!("{why:?}")),
+    if let Err(why) = route.v2_class_reward_eligibility_v1(&ledger, class_id, daa, &OpvEligibilityViewV1::of(opv)) {
+        return refused(why.code(), format!("{why:?}"));
+    }
+    // Task/context: every job the V2 class takes (its TIR layout's `max_context`) must lie inside the context G14 was proven for (the
+    // bound kernel plan's `max_positions`).
+    let proven_context = route
+        .kernel_binding_v1(class_id)
+        .and_then(|b| route.kernel_class_record_v1(&b.kernel_class))
+        .map(|record| record.plan.max_positions);
+    match (state.tir_class_v1(class_id).map(|tir| tir.facts.max_context), proven_context) {
+        (Some(served), Some(proven)) if served <= proven => PalwRewardGateV1::Passed,
+        (Some(served), Some(proven)) => refused(
+            "NOT_G14_COMPLETE",
+            format!("the class serves contexts of {served} positions; G14 was proven for {proven} (the bound plan)"),
+        ),
+        _ => refused("NOT_G14_COMPLETE", "the class's IR record or its bound kernel class is missing".into()),
     }
 }
 

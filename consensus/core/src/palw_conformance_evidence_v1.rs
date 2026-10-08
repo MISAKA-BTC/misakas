@@ -614,6 +614,11 @@ pub const PALW_ONBOARDING_SEALED_WINDOW_DAA_V1: u64 = 40;
 /// block share as `−log2 ρ` in millibits (1,000: ½). With `W = 40` that is 30 bits (`sealed_source_censorship_bits_v3`).
 pub const PALW_ONBOARDING_SEALED_MERGE_DELAY_DAA_V1: u64 = 10;
 pub const PALW_ONBOARDING_SEALED_ADVERSARY_NEG_LOG2_MILLIBITS_V1: u64 = 1_000;
+/// **v3's participation term, in bits: `−log2 P(no honest PARTY seals an eligible source in a seal window)`** (C4 F-C4R4-01: bonds
+/// are not parties — no count of sealing bonds, producers or posters raises it). A stated network assumption a review must supply
+/// (A-B2); INTERIM **0: nothing is assumed**, so a v3 attempt's effective bits are 0 until it is stated — the bound never credits
+/// distinctness.
+pub const PALW_ONBOARDING_SEALED_PARTICIPATION_BITS_V1: u16 = 0;
 
 /// **The network's sealed-source (v3) onboarding policy** (`docs/design/palw/opv-beacon-bootstrap.md` §6.3): the sampled policy's
 /// numbers under `palw-work-beacon/sealed-source/v3` — commit-reveal over salted claim seals, every qualifying seal of the window

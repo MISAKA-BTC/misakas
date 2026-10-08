@@ -17349,7 +17349,7 @@ impl PalwFoldReadV1<'_> {
         // **G14-for-rewards** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`, past the OPV fence): a class earns reward or consensus
         // work weight only through the onboarding/G14 path. Refused, it takes no claim on any lane; passed, its claims are admitted on
         // that ground — the registry lifecycle, the Panel verify deadline and the Panel room (seat readiness) are not asked, only its
-        // in-flight cap. Unarmed or exempt (the base class; a grandfathered Panel-route class): the rules below, byte for byte.
+        // in-flight cap. Unarmed or exempt (the base class; a legacy, pre-fence Panel-route class): the rules below, byte for byte.
         let g14 = self.reward_gate_v1(class_id, now_daa);
         if let crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { code, why } = &g14 {
             return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why: why.clone() });

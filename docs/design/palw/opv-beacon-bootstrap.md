@@ -307,7 +307,9 @@ The union with the algorithmic bound costs one bit (`combine_failure_bits_v1`). 
 * a production-shaped tuple (4 × 64 bits × 3 reps, `R = 2`, `Q = 2^10`) gives 178 algorithmic bits, 29 combined at the interim
   window, and 129 at `W − δ = 130`.
 
-**Liveness, the price of the veto** (GAP-B12). Anyone who seals in the window and withholds vetoes the attempt. The cost is one
+**Liveness, the price of the veto** (GAP-B12; the user's ruling of 2026-10-09: the deposit is not chosen here — lane ECON derives it
+from the maximum stall `R + 1` abandonments buy, the attack cost and the damage value, and demonstrates the attack cost against this
+collector; the deposit stays a named parameter, G14-R4's `LedgerPolicyV1::seal_deposit`). Anyone who seals in the window and withholds vetoes the attempt. The cost is one
 forfeited `seal_deposit` (1 BILI interim). Vetoes are counted, so `R + 1` vetoes exhaust a class's attempts. That is a cheap DoS on
 onboarding, and it is traded for soundness: if vetoes were uncounted, a registrant colluding with a sealer would re-roll at the price
 of a deposit each.
@@ -330,6 +332,14 @@ v3 on chain needs two changes. Both are in the kernel ledger and route (G14-R4's
 The route then serves each seal fact for op 212: `SealedSourceV3` from the seal rows (live and forfeited) and the claim rows.
 
 ### 6.4 SG-05: the per-claim check's coins are private, stated
+
+**What 128 bits means** (the user's ruling of 2026-10-09):
+
+* An effective 128 bits is the DESIGN TARGET. A scheme is approved only after external review, and nothing is approved until its
+  effective soundness is audited.
+* The 128 bits bound the mathematical check and the manipulation of its challenges: the false-accept probability given that a check
+  runs on unpredictable coins. They are NOT a 128-bit guarantee that an honest watcher exists or checks in time. That is the
+  environment assumption A-WATCH below, with its own probability, and deterrence prices it (SG-06).
 
 No public-coin per-claim check is wired, and this branch does not wire one. It states the dependence instead. **OPV detection
 soundness rests entirely on outsiders' private salts:**
@@ -447,8 +457,8 @@ drill floor (§12).
   Final (and pays) only through its verification route: a Panel licence, or the RFC-0008 slice to the kernel route (X8R). A class
   with no seats has no Panel licence.
 * **GAP-B15 (G14-for-rewards): what is not gated.** The market (seed / buy) and the work price unit read the registry lifecycle, not
-  the reward gate. A non-G14 class past the fence is Registered with no share, so it bears no weight and holds no budget, but a
-  pre-fence Active class that is not grandfathered keeps its share; it only takes no new claim.
+  the reward gate. A non-G14 class past the fence is Registered with no share, so it bears no weight and holds no budget. A pre-fence
+  class stays on the OLD Panel route in full (§12).
 
 ## 11. Allocations and identity
 
@@ -458,7 +468,7 @@ complete-check judgement lives in the attempt row (aux 39); eligibility is deriv
 hashed Some-only, so **no testnet-12 params or schedule id moves** (`palw_t12_flag_day_9000`, `rfc0015_*`). The interim onboarding
 challenge policy's id changes (its source rule is now the distinct one); it is a constant of the never-armed route, in no params.
 
-The fence also gains `grandfather_panel_route_classes` (identity, default `false`). The v3 beacon is a new randomness-source id in
+The v3 beacon is a new randomness-source id in
 the challenge crate; it uses no tag. On chain, v3 needs the allocations named in GAP-B1a. `PalwStateV2Error::ClassNotRewardable` is a
 new error (not encoded).
 
@@ -473,9 +483,11 @@ Panel room, the verify deadline, seating and the bond share all stood in the way
 **The gate** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`). It is armed from `palw_panel_free_v1`'s activation on, through
 `PalwKernelOpvExtrasV1::reward_gate`; below that it is `Unarmed` and the fold is byte-identical. Its verdicts:
 
-* `Exempt`: the base class (BASE-0 is the bonded fallback, not useful-computation reward), or a grandfathered Panel-route class;
-* `Passed`: the onboarding gate is `Ready` and E1–E7 hold through the class's own kernel binding
-  (`v2_class_reward_eligibility_v1`);
+* `Exempt`: the base class (BASE-0 is the bonded fallback, not useful-computation reward), or a class registered before the fence
+  (`LEGACY_PANEL_ROUTE`);
+* `Passed`: three conditions hold. The onboarding gate is `Ready`. E1–E7 hold through the class's own kernel binding
+  (`v2_class_reward_eligibility_v1`), and E3 now re-derives the bound plan's PUBLIC_PROSECUTION_COMPLETE over its whole context, equal
+  to the registered bounds. The class's task/context (its IR layout's `max_context`) lies inside the plan's `max_positions`;
 * `Refused { code }` otherwise, naming the first unmet condition: `NOT_ONBOARDED`, the onboarding hold's code, or an E code.
 
 §6's seven conditions map onto these checks as the function's doc states. The graph gains `V2Rewardable`, which is unreachable
@@ -489,9 +501,19 @@ without the bootstrap.
 | Seating (`check_class_seated_root_v1`) | `Passed`: not seated by Panel possession (public DA, E4; one-outsider adjudication) |
 | Bond share (`check_bond_class_share`) | `Passed`: not split by Panel licence |
 
-**Grandfathering is a user decision**, implemented as a fence parameter: `grandfather_panel_route_classes`, default `false`. With
-`true`, a class registered before the activation and never kernel-bound keeps the pre-gate rules. With the default, every such
-class earns nothing from the fence on, until it onboards.
+**Existing Panel classes: two channels that never mix** (the user's ruling of 2026-10-09, replacing a grandfathering flag).
+
+* **Past rights are protected.** A class registered before the fence keeps earning through the OLD Panel route, whose verification
+  stays in force in full: the gate exempts it, and no G14 bypass applies to it.
+* **New rewards need the new gate.** Earning the NEW rewards requires the gate, always: a post-fence class's V2 work (`Passed`), and
+  every kernel-route OPV claim (`opv_gate_v1`, E1–E7), whoever registered the class.
+* **Tested both ways** (`g14_rewards_a_legacy_panel_route_class_keeps_the_old_route_and_never_earns_opv_without_the_gate`):
+  * a legacy class is not refused by the gate, and its program under OPV is `NOT_ONBOARDED` and its OPV registration refused;
+  * a post-fence class that never onboarded stays Registered, `NOT_ONBOARDED`.
+
+**OPV scope and the interim window** (the same rulings). OPV holds only for a class, plan and task/context for which G14 fully holds
+(E3 above). The 50-DAA OPV window (`PalwPanelFreeFenceV1::interim_v1`) is INTERIM and NOT approved for production. Nothing for
+rewards, consensus weight or Panel=0 is armed.
 
 **The drill floor.** E6 compares the passed attempt's effective bits with `min_effective_bits`. The interim sampled policy is 0
 effective bits, so under the ruled 128 only a complete-check class passes. The conformance mechanics worlds (and X8R's helper)
@@ -507,7 +529,7 @@ share admit it (`class_admission_refusal = None`), and `ready_to_produce` is `Ok
 | Before its conformance the class's claims are refused; after it, Active with a share and a REAL attempt admitted; replay | `g14_rewards_an_onboarded_class_is_active_and_admits_real_attempts` |
 | Under the ruled floor (128) a 2-bit sampled conformance passes yet earns nothing (`POLICY_NOT_VERIFIED`, held Registered, no share) | `g14_rewards_under_the_ruled_floor_a_two_bit_conformance_earns_nothing` |
 | A class that never began onboarding never activates (`NOT_ONBOARDED`) | `g14_rewards_a_class_that_never_began_onboarding_never_activates` |
-| Grandfathering: a pre-fence Active class is refused by default and exempt with the parameter | `g14_rewards_grandfathering_live_panel_route_classes_is_a_fence_parameter_default_off` |
+| The channels never mix: a legacy class keeps the old route, and its OPV needs the gate; a post-fence class needs the gate | `g14_rewards_a_legacy_panel_route_class_keeps_the_old_route_and_never_earns_opv_without_the_gate` |
 | The graph: `V2Rewardable` reachable only through the bootstrap | `palw_opv_bootstrap_v1::tests` |
 
 ## 13. C4 round 4 (C4R4b) findings in this lane
@@ -544,6 +566,17 @@ Sybil posters own every v2 source position and grind all of them offline (`misak
 - v3's `G = F` assumes nothing about who holds the positions. It rests on one honest seal's salt staying secret until the seal
   window closes (`ε_src`, §6.3).
 - The distinct rules are a cost to an attacker, never a bit.
+
+**Closed inside the bound** (the user's ruling of 2026-10-09: F-01 and F-08 must be closed inside the bound before any audit).
+
+* **v2 (sampled):** E6 charges `G = 2^128` (`palw_onboarding_grinding_choices_v1`). That subsumes any number of competing works
+  (F-08) and any party structure (F-01).
+* **v3 (sealed):** E6 charges `G = F = 1`, and `ε_src` is the union of two terms. The first is censorship of every honest seal
+  (`sealed_source_censorship_bits_v3`). The second is that no honest PARTY seals at all, `PALW_ONBOARDING_SEALED_PARTICIPATION_BITS_V1`.
+  That second term is a stated network assumption which no count of bonds can raise. Its interim value is 0, so a v3 attempt is 0
+  effective bits until a review supplies it.
+* **Never a bit:** the distinct rules and the consumer clause are a cost to an attacker, never a bit.
+* **Selection lever:** any statement of a tuple's selection lever must use `competing_works_bound_v1` (96), never the live cap (32).
 
 **F-C4R4-08 (P2, with G14R): re-derived, and the poster agreed.**
 

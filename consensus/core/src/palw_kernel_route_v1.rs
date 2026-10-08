@@ -177,9 +177,9 @@ pub struct PalwKernelOpvExtrasV1 {
 /// The terms of the G14-for-rewards gate at one block (from `Params::palw_panel_free_v1`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwRewardGateTermsV1 {
-    /// `Some(activation)` iff the fence grandfathers live Panel-route classes: a class registered below this DAA and never
-    /// kernel-bound keeps the pre-gate rules. `None` (the default): nothing is grandfathered.
-    pub grandfathered_before_daa: Option<u64>,
+    /// The fence's activation: a class registered below it keeps earning through the OLD Panel route, in full; one registered at or
+    /// past it earns only through the onboarding/G14 path (the user's ruling of 2026-10-09: the two reward channels never mix).
+    pub fence_activation_daa: u64,
 }
 
 /// **The INTERIM ledger policy.** Windows are short so a drill crosses them; the amounts are sompi. Values are consensus constants

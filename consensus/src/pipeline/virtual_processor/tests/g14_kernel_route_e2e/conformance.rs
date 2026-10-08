@@ -1103,43 +1103,69 @@ async fn g14_rewards_a_class_that_never_began_onboarding_never_activates() {
     assert!(refusal.contains("NOT_ONBOARDED"), "{refusal}");
 }
 
-/// **Grandfathering is a fence parameter, off by default** (a user decision). A Panel-route class registered and Active BEFORE the
-/// fence: with the default, from the fence on its claims are refused `NOT_ONBOARDED`; with the parameter set, the reward gate
-/// exempts it (whatever else the class's own lifecycle says). The parameter is identity (`rfc0015_*`).
+/// **The two reward channels never mix** (the user's ruling of 2026-10-09, replacing a grandfathering flag). A class registered and
+/// Active BEFORE the fence keeps earning through the OLD Panel route, whose verification stays in force in full: the reward gate does
+/// not touch it (no G14 refusal — and no G14 bypass either). Its NEW, OPV rewards still require the gate: its program under OPV is
+/// not eligible (`NOT_ONBOARDED`) and its OPV registration is refused. In the other direction, a class registered past the fence that
+/// never onboarded earns nothing through the Panel route's rules: it stays Registered and its claims are refused `NOT_ONBOARDED`.
 #[tokio::test]
-async fn g14_rewards_grandfathering_live_panel_route_classes_is_a_fence_parameter_default_off() {
+async fn g14_rewards_a_legacy_panel_route_class_keeps_the_old_route_and_never_earns_opv_without_the_gate() {
+    use kaspa_consensus_core::palw_opv_bootstrap_v1::{OpvClassFactsV1, OpvEligibilityViewV1, OpvIneligibleV1};
     kaspa_core::log::try_init_logger("warn");
-    for grandfather in [false, true] {
-        let (config, bundle, premine, floats) = kernel_config_onboarding();
-        let mut params = config.params.clone();
-        let mut fence = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(60), Vec::new());
-        fence.grandfather_panel_route_classes = grandfather;
-        params.palw_panel_free_v1 = Some(fence);
-        let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new);
-        net.beat_to(1).await;
-        let f = onb_fixture(15);
-        let o = net.v2_registration(&f, REGISTRANT, net.daa() + 3);
-        let Obj::ClassRegisteredTirV1 { class_id, activation_daa, .. } = &o else { unreachable!() };
-        let (class, activation) = (*class_id, *activation_daa);
-        assert!(activation < 60);
-        net.send(vec![(REGISTRANT, o)]).await;
-        net.beat_to(activation + 1).await;
-        assert!(matches!(net.chain.tip_state().1.class(&class).unwrap().status, PalwClassStatusV2::Active), "Active before the fence");
-        net.beat_to(61).await;
-        let refusal = net
-            .chain
+    let (config, bundle, premine, floats) = kernel_config_onboarding();
+    let mut params = config.params.clone();
+    params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(60), Vec::new()));
+    let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new);
+    net.beat_to(1).await;
+    let refusal = |net: &Net, class: Hash64, card: usize| {
+        net.chain
             .ctx
             .consensus
-            .palw_producer_facts_v2(class, Some(net.bond(REGISTRANT).0))
+            .palw_producer_facts_v2(class, Some(net.bond(card).0))
             .expect("facts")
             .class_admission_refusal
-            .unwrap_or_default();
-        if grandfather {
-            assert!(!refusal.contains("earns no reward"), "grandfathered: the reward gate exempts it ({refusal})");
-        } else {
-            assert!(refusal.contains("NOT_ONBOARDED"), "not grandfathered (the default): {refusal}");
-        }
-    }
+            .unwrap_or_default()
+    };
+    // ---- a legacy Panel-route class: registered and Active before the fence ----
+    let legacy = onb_fixture(15);
+    let o = net.v2_registration(&legacy, REGISTRANT, net.daa() + 3);
+    let Obj::ClassRegisteredTirV1 { class_id, activation_daa, .. } = &o else { unreachable!() };
+    let (legacy_class, activation) = (*class_id, *activation_daa);
+    assert!(activation < 60);
+    net.send(vec![(REGISTRANT, o)]).await;
+    net.beat_to(activation + 1).await;
+    assert!(matches!(net.chain.tip_state().1.class(&legacy_class).unwrap().status, PalwClassStatusV2::Active));
+    net.beat_to(61).await;
+    let r = refusal(&net, legacy_class, REGISTRANT);
+    assert!(!r.contains("earns no reward"), "the legacy class keeps the OLD Panel route, in full (no G14 refusal): {r}");
+    // ---- its NEW (OPV) rewards still need the gate ----
+    let d = k2_tir_v2_descriptor();
+    let register = K::RegisterClassV2 {
+        mode: VerificationModeV1::OptimisticPublicVerification,
+        descriptor: d.digest(),
+        program_bytes: legacy.program.encode(),
+        plan: legacy.plan.clone(),
+        param_commitments: legacy.pc.clone(),
+    };
+    let o = net.route(REGISTRANT, &register);
+    net.send(vec![(REGISTRANT, o)]).await;
+    let facts = OpvClassFactsV1::of_registration(d.digest(), &legacy.program.encode(), &legacy.plan, &legacy.pc);
+    assert!(!net.ledger().opv.classes.contains(&facts.opv_id), "its OPV registration is refused");
+    let route = net.api().expect("the route");
+    let ledger = route.ledger().unwrap();
+    let policy = route.header.opv.expect("the OPV policy");
+    let view = OpvEligibilityViewV1 { policy: &policy, denied: &[], min_effective_bits: 0, test_eligible: &[] };
+    assert_eq!(route.opv_eligibility_v1(&ledger, &facts, net.daa(), &view), Err(OpvIneligibleV1::NotOnboarded), "OPV needs the gate");
+    // ---- a class past the fence: the Panel route's rules alone open nothing ----
+    let fresh = onb_fixture(16);
+    let o = net.v2_registration(&fresh, OUTSIDER, net.daa() + 3);
+    let Obj::ClassRegisteredTirV1 { class_id, activation_daa, .. } = &o else { unreachable!() };
+    let (fresh_class, activation) = (*class_id, *activation_daa);
+    net.send(vec![(OUTSIDER, o)]).await;
+    net.beat_to(activation + 3).await;
+    assert!(matches!(net.chain.tip_state().1.class(&fresh_class).unwrap().status, PalwClassStatusV2::Registered { .. }));
+    let r = refusal(&net, fresh_class, OUTSIDER);
+    assert!(r.contains("NOT_ONBOARDED"), "a post-fence class earns only through the G14 path: {r}");
 }
 
 // C4 round 4 (independent adversarial review): the onboarding court's share of the block's adjudication budget.

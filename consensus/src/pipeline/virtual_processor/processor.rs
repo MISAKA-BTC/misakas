@@ -14962,7 +14962,7 @@ impl VirtualStateProcessor {
                     test_eligible: Vec::new(),
                     reward_gate: fence.activation.is_active(daa_score).then(|| {
                         kaspa_consensus_core::palw_kernel_route_v1::PalwRewardGateTermsV1 {
-                            grandfathered_before_daa: fence.grandfather_panel_route_classes.then(|| fence.activation.daa_score()),
+                            fence_activation_daa: fence.activation.daa_score(),
                         }
                     }),
                 }),
