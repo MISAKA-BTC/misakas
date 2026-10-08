@@ -73,6 +73,14 @@ pub const fn palw_receipt_spend_v4_value_v1() -> [u64; 1] {
     [PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS as u64]
 }
 
+/// **The fence's entry for a flag-day list** (testnet-12's int-13 list, `PALW_T12_INT13_FENCES_V1`): the fence is a bare height — no
+/// bundle mirror, the processor reads `Params::palw_receipt_spend_v4_active_at` — so the entry sets that one field. Its prerequisites
+/// (`palw_audit_2026_09_11`, `palw_audit_2026_09_23`) are asked by [`Params::validate_palw_receipt_spend_v4`].
+pub const PALW_T12_RECEIPT_SPEND_V4_ENTRY: crate::config::params::PalwPostLaunchFenceV1 = crate::config::params::PalwPostLaunchFenceV1 {
+    name: "palw_receipt_spend_v4",
+    set: |params, at| params.palw_receipt_spend_v4 = at,
+};
+
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwReceiptV4Error {
     #[error("the V4 receipt carriage is undecodable: {0}")]

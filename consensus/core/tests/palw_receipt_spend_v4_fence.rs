@@ -1,12 +1,13 @@
-//! **RFC-0009 stage C — `palw_receipt_spend_v4`** — dormant on every ruleset a node can run (NOT on the DAA-5,300 list), fingerprinted
+//! **RFC-0009 stage C — `palw_receipt_spend_v4`** — dormant on every ruleset a node can run but testnet-12 as shipped (NOT on the
+//! DAA-5,300 list; on the int-13 list, DAA 9,000: `palw_t12_flag_day_9000.rs`), fingerprinted
 //! where armed (its fee cap with it), invisible to the identity until it fires, named by the fork id, refused without its
 //! prerequisites, and byte-identical below its height.
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_receipt_spend_v4_fence`
 
 use kaspa_consensus_core::config::params::{
-    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
-    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v5_params, palw_t12_shipped_params,
+    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FENCES_V1, PALW_T12_INT13_DAA, PALW_T12_INT13_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
+    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v5_params, palw_t12_release_v6_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_receipt_v4::{
@@ -27,8 +28,9 @@ fn armed(at: Option<ForkActivation>) -> Params {
 }
 
 #[test]
-fn it_is_in_no_release_and_dormant_on_every_ruleset() {
+fn it_is_only_in_the_int13_release_and_dormant_on_every_other_ruleset() {
     assert!(PALW_T12_INT11_FENCES_V1.iter().all(|f| f.name != "palw_receipt_spend_v4"), "lane R9 is not in the DAA-5,300 flag day");
+    assert!(PALW_T12_INT13_FENCES_V1.iter().any(|f| f.name == "palw_receipt_spend_v4"), "…it is in the DAA-9,000 flag day");
     for (name, p) in [
         ("MAINNET_PARAMS", MAINNET_PARAMS),
         ("TESTNET_PARAMS", TESTNET_PARAMS),
@@ -39,14 +41,19 @@ fn it_is_in_no_release_and_dormant_on_every_ruleset() {
         ("devnet_shipped_params", devnet_shipped_params()),
         ("palw_rc_shipped_params", palw_rc_shipped_params()),
         ("palw_t12_release_v5_params", palw_t12_release_v5_params()),
-        ("palw_t12_shipped_params", palw_t12_shipped_params()),
+        ("palw_t12_release_v6_params", palw_t12_release_v6_params()),
     ] {
         assert_eq!(p.palw_receipt_spend_v4, None, "{name}");
         assert!(!p.palw_receipt_spend_v4_active_at(u64::MAX - 1), "{name}");
         assert!(p.palw_fences_v1().contains(&("palw_receipt_spend_v4", None)), "{name}: the exhaustive list names it");
         p.validate_palw_receipt_spend_v4().unwrap_or_else(|e| panic!("{name}: dormant validates: {e:?}"));
     }
-    palw_t12_shipped_params().validate_palw_v2().expect("the shipped testnet-12 ruleset still validates");
+    // Testnet-12 as shipped arms it with the int-13 list, at 9,000 and nowhere else, and still validates.
+    let shipped = palw_t12_shipped_params();
+    assert_eq!(shipped.palw_receipt_spend_v4, PALW_T12_INT13_DAA.map(ForkActivation::new), "the int-13 flag day arms it at 9,000");
+    let at = PALW_T12_INT13_DAA.expect("the int-13 flag day");
+    assert!(!shipped.palw_receipt_spend_v4_active_at(at - 1) && shipped.palw_receipt_spend_v4_active_at(at));
+    shipped.validate_palw_v2().expect("the shipped testnet-12 ruleset still validates");
 }
 
 #[test]
