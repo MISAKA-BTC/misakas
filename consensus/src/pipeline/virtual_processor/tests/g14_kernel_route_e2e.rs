@@ -1261,10 +1261,11 @@ async fn g14_kernel_route_a_chunked_object_is_signature_checked_at_the_completin
     assert!(!w.net.ledger().claims.contains_key(&bad.id), "a chunked object whose signature does not verify commits nothing");
     // (only its bonded seal's deposit stays held, until that seal is revealed or expires: OPV-BOOT's bonded seals)
     assert_eq!(w.net.kernel_reserved(0), u128::from(w.net.ledger().policy.seal_deposit), "and reserves nothing for the claim");
+    assert!(w.net.ledger().seals.contains_key(&(job.id(), w.net.kid(0))), "the seal is live, unrevealed");
     let good = w.claim_with(0, &job, true, Delivery::Chunked(cap)).await;
     assert_eq!(good.id, bad.id, "the same claim");
     assert!(w.net.ledger().claims.contains_key(&good.id), "the genuine chunked object commits");
-    assert_eq!(w.net.kernel_reserved(0), u128::from(w.policy().claim_collateral));
+    assert_eq!(w.net.kernel_reserved(0), u128::from(w.policy().claim_collateral), "the seal's deposit released at the reveal");
     // The chunked claim is as prosecutable as a direct one.
     let seats = w.seats(&good.id);
     w.cover(&good.id).await;
@@ -1272,6 +1273,21 @@ async fn g14_kernel_route_a_chunked_object_is_signature_checked_at_the_completin
     let proof = w.prosecution(&good.id, &good.published(&w.fx, &[]), 0x66);
     w.proof(outsider, &good.id, proof).await;
     assert!(w.net.ledger().claims[&good.id].convicted);
+    // A tampered reveal never followed by a genuine one (OPV-BOOT #2's bonded seals): the unrevealed seal's deposit stays reserved
+    // through the seal's TTL and is then forfeited (slashed, burned) — withholding a sealed reveal is never free.
+    let c = w.outsiders(&good, &seats, 2)[1];
+    let job2 = w.job().await;
+    let stuck = w.claim_with(c, &job2, false, Delivery::ChunkedTampered(cap)).await;
+    assert!(!w.net.ledger().claims.contains_key(&stuck.id), "the tampered reveal commits nothing");
+    let (deposit, ttl) = (w.policy().seal_deposit, w.policy().seal_ttl_daa);
+    let sealed = w.net.ledger().seals[&(job2.id(), w.net.kid(c))].daa;
+    assert_eq!(w.net.kernel_reserved(c), u128::from(deposit), "the unrevealed seal holds its deposit");
+    let before = w.net.collateral(c);
+    w.net.beat_to(sealed + ttl - 5).await;
+    assert_eq!(w.net.kernel_reserved(c), u128::from(deposit), "held through the seal's TTL");
+    w.net.beat_to(sealed + ttl + 2).await;
+    assert!(!w.net.ledger().seals.contains_key(&(job2.id(), w.net.kid(c))), "the seal expired");
+    assert_eq!((w.net.kernel_reserved(c), w.net.collateral(c)), (0, before - deposit), "and its deposit was forfeited");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }
