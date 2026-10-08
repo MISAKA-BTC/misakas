@@ -1,0 +1,382 @@
+{
+ "schema": "misaka.h1.conversion.v1",
+ "cache_key": "f03cec68202dc546",
+ "cache_dir": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/qwen25-0.5b/f03cec68202dc546",
+ "clean_source": false,
+ "build_exit": 0,
+ "wall_seconds_this_invocation": 89,
+ "artifact_file": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/qwen25-0.5b/f03cec68202dc546/class.palwtir.testnet-12.palwtir",
+ "lowered_file": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/qwen25-0.5b/f03cec68202dc546/class.palwtir",
+ "lowered_bytes": 660665920,
+ "artifact_bytes": 660666048,
+ "artifact_sha256": "9af80e4e459cc2334519295fb100c58291382e3e4b4a5ee3e7098e7d1d8a17b6",
+ "max_rss_bytes_seen": [
+  3469934592
+ ],
+ "pack_digest": "72c046533ff1ba3449b5d80fe3195af4962b95ac2c1552261b0149d7b4f63b36",
+ "pack": {
+  "name": "qwen25-0.5b",
+  "model": {
+   "architectures": [
+    "Qwen2ForCausalLM"
+   ],
+   "config_digest": "48d6858a172b0c184333b49bd0b98b689f7f9207d6f5c0d0ec7afe692feeb918",
+   "files": [
+    {
+     "bytes": 659,
+     "path": "config.json",
+     "sha256": "18e18afcaccafade98daf13a54092927904649e1dd4eba8299ab717d5d94ff45"
+    },
+    {
+     "bytes": 988097824,
+     "path": "model.safetensors",
+     "sha256": "fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe"
+    },
+    {
+     "bytes": 7031645,
+     "path": "tokenizer.json",
+     "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"
+    },
+    {
+     "bytes": 2776833,
+     "path": "vocab.json",
+     "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+    }
+   ],
+   "format": "safetensors",
+   "label": "Qwen/Qwen2.5-0.5B-Instruct",
+   "model_type": "qwen2",
+   "revision": "7ae557604adf67be50417f59c2c2f167def9a775"
+  },
+  "frontend": {
+   "adapter": {
+    "hash": "76777c6779beb7920af9a4e6a16351819be790429f37f2bd952d7e12b6c4c8a21e9038b271aa9be42a544a1a9b95b7ca4387993b18b6e8156cce7b2b2a0e8ef0",
+    "id": "qwen2",
+    "kind": "built-in"
+   },
+   "assumed_defaults": [],
+   "builtin_pack_hash": "20437c8e4a8e759f21715b1b993ce5fea032e9f79f00410b859f12f2b871664a01d2489577e40d38794efbe65eefbc4753b06a6601a556668292f974a091aafb",
+   "level": "B",
+   "spec_digest": "e0b3e03aae456035acc8d512d64c21a1aeeda9041b258eb58f3fa09c44423a47"
+  },
+  "features": {
+   "registry_digest": "cb891cf3dbe05fcd93a81a1fa468022d9d9ab192ac1f720f3f468e372eb28f78",
+   "scope": {
+    "excluded": [],
+    "input": "token ids",
+    "output": "next-token logits",
+    "schema": "misaka.palw.feature-scope.v1",
+    "task": "text-generation",
+    "text_only": false
+   },
+   "used": [
+    {
+     "detail": "",
+     "id": "ATTN_BIAS_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+     ]
+    },
+    {
+     "detail": "14q/2kv \u00d7 64 (group 7)",
+     "id": "ATTN_GQA_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+     ]
+    },
+    {
+     "detail": "151936 \u00d7 896",
+     "id": "EMBED_TOKEN_V1",
+     "layers": []
+    },
+    {
+     "detail": "",
+     "id": "HEAD_TIED_V1",
+     "layers": []
+    },
+    {
+     "detail": "4864",
+     "id": "MLP_DENSE_GATED_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+     ]
+    },
+    {
+     "detail": "",
+     "id": "NORM_RMS_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+     ]
+    },
+    {
+     "detail": "",
+     "id": "OUTPUT_LOGITS_V1",
+     "layers": []
+    },
+    {
+     "detail": "",
+     "id": "RESIDUAL_PRE_NORM_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+     ]
+    },
+    {
+     "detail": "",
+     "id": "ROPE_DEFAULT_V1",
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+     ]
+    }
+   ]
+  },
+  "quant": {
+   "descriptors": []
+  },
+  "profile": {
+   "calibration": {
+    "schema": "misaka.palw.calib-stats.v1",
+    "sequences_file": "calib-tokens.json",
+    "sites": 460,
+    "source": {
+     "files": [
+      {
+       "chunks": 1,
+       "file": "docs/archival.md",
+       "sha256": "71c3c4e1386b8eaa8def15c0640277008a0a77b0691a387f3e340f23c1609909",
+       "tokens": 3482
+      },
+      {
+       "chunks": 1,
+       "file": "docs/crescendo-guide.md",
+       "sha256": "e7f4ab8be58c9715f1aff83832a80889f772ff1c5e8c75b1b7e81bbe903d9965",
+       "tokens": 1199
+      },
+      {
+       "chunks": 1,
+       "file": "CONTRIBUTING.md",
+       "sha256": "1f11326094038a50e4823bc73ff0a6e96cbf5502ab78ec737c5d969eb3ada651",
+       "tokens": 1184
+      },
+      {
+       "chunks": 1,
+       "file": "SECURITY.md",
+       "sha256": "1a4219d71ba1a6f705f502b64da01539afffa59183b4cb786dd90a6cc175a6f8",
+       "tokens": 4046
+      }
+     ],
+     "len": 512,
+     "tokenizer": "/Users/wata/Downloads/MISAKA-wt-b/hf-ckpt/Qwen/Qwen2.5-0.5B-Instruct/tokenizer.json"
+    },
+    "stats_digest": "699c5f6a99095a24c3cd928188b13e188ae77a746703cc2d508d70a2cd0379c7",
+    "stats_file": "stats.json"
+   },
+   "context": 512,
+   "policy": {
+    "headroom16": "4000000000000000",
+    "headroom32": "4010000000000000",
+    "headroom_resid": "4010000000000000"
+   }
+  },
+  "converter": {
+   "crate_version": "1.1.0",
+   "lowering": "misaka.palw.lowering.v1",
+   "math": {
+    "mode": "libm-v1"
+   },
+   "name": "palw-tir-convert"
+  },
+  "declared": [
+   {
+    "checkpoint_interval": 65536,
+    "class_id": "55b32ae12c8fa0031ea8d78b826f75632a6863585f2d3b5efc906c856460324a640591f69bc1ed1cb9160f878f64fd62bfa98b3ad577fb626b36d24ba787cb1c",
+    "exact_layout": {
+     "commit_tiles": [
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      64,
+      512
+     ],
+     "logits_scheme_id": "e0532a21545ebcdee3e6bc9c65b963ba123667fe60b4aaf5e56a0f4378f3ca1fc58e58937e9863341a67dcbb0f000af1d77333f8dfd48135e0ebf95e71d5f5a1",
+     "state_tiles": [
+      64,
+      64
+     ],
+     "version": 1
+    },
+    "file_digest": "21747420f7bb2877ea0e677256d0db6dde05c047f2b36e8430d83d87b5afae03104f150a2c0b55569f2c2bb3e4f08cf0c4f1d57cd4de3c1a821cdadfdb8a16a6",
+    "h_tile": 64,
+    "layout_digest": "ab74303999ff006ed1517d9aa25379847de070782b6198fa19fd81f62c416c36a769116b56fc53325f35ff78d315f2e4ea8bb665532f913c0c6761eb8e955efc",
+    "max_context": 512,
+    "network": "testnet-12"
+   }
+  ],
+  "conformance": {
+   "vectors": [
+    {
+     "commits_digest": "8bcf5ba6b070c81058643eb21efff83728840d4fe9412471e952b5960a5da599",
+     "decode": 1,
+     "label": "random 0 (1+1)",
+     "logits_digest": "1a4ed79173e5b8fe297a656d04b8de3ba56c675fbc4b7eee242943bd12d1a654",
+     "positions": 2,
+     "prompt": [
+      58083
+     ],
+     "tokens": [
+      287
+     ]
+    }
+   ]
+  }
+ }
+}

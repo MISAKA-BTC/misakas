@@ -1,0 +1,70 @@
+{
+ "schema": "misaka.h1.pack-verification.v1",
+ "command": "palw-class pack verify <pack> --model <checkpoint> --artifact <declared class file> --rebuild --strict --json",
+ "exit": 0,
+ "verified": true,
+ "ok": true,
+ "pack": "5c127d732e8353bc41f297752ca440945b425784b16311127c75e64c0fd33d08",
+ "checks": [
+  {
+   "check": "manifest",
+   "detail": "smollm2-1.7b (5c127d732e8353bc), schema misaka.palw.runtime-pack.v1",
+   "status": "PASS"
+  },
+  {
+   "check": "sidecars",
+   "detail": "4 file(s) match their hashes",
+   "status": "PASS"
+  },
+  {
+   "check": "adapter",
+   "detail": "built-in `llama` 72f42bf13844d406",
+   "status": "PASS"
+  },
+  {
+   "check": "descriptors",
+   "detail": "none (a float checkpoint)",
+   "status": "PASS"
+  },
+  {
+   "check": "converter",
+   "detail": "built by palw-tir-convert 1.1.0 (misaka.palw.lowering.v1); this build 1.1.0 (misaka.palw.lowering.v1) \u2014 the same converter; math libm-v1: the same bytes on every platform",
+   "status": "PASS"
+  },
+  {
+   "check": "source",
+   "detail": "4 file(s) match their SHA-256",
+   "status": "PASS"
+  },
+  {
+   "check": "frontend",
+   "detail": "level B, spec d34288b7fa5bad83, 8 feature uses, scope: text-generation: token ids \u2192 next-token logits; nothing left out",
+   "status": "PASS"
+  },
+  {
+   "check": "artifact",
+   "detail": "file 5f7d8812c0ea8923 \u00b7 inventory root 6b3399022d27c009 \u00b7 graph root 1e08ea73f0515f9a",
+   "status": "PASS"
+  },
+  {
+   "check": "declared",
+   "detail": "testnet-12: exact class 585bbe2e35f47861 (context 512, interval 65536); identity verification, not live admission",
+   "status": "PASS"
+  },
+  {
+   "check": "conformance",
+   "detail": "1 vector(s), 2 positions, equal on reference, typed-backend, independent",
+   "status": "PASS"
+  },
+  {
+   "check": "hf-reference",
+   "detail": "legacy greedy-only: tool scale: slope 0.9776, corr 0.99257, top-1 0.938, KL 0.07914 over 32 positions (pack recorded top-1 0.938, KL 0.07914)",
+   "status": "PASS"
+  }
+ ],
+ "skipped": [],
+ "failed": [],
+ "max_rss_bytes": [
+  12266045440
+ ]
+}

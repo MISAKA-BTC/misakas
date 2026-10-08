@@ -1,0 +1,38 @@
+[
+ {
+  "schema": "misaka.h1.failure.v1",
+  "recorded_at": "2026-10-08T17:10:24+0900",
+  "model": "qwen25-0.5b",
+  "stage": "register",
+  "category": "REGISTRATION_QUOTE_INVALID",
+  "code": "E-MODEL-UNKNOWN (no one-command HF/IR registration)",
+  "command": "misaka model add hf://Qwen/Qwen2.5-0.5B-Instruct@7ae55760\u2026 --quote; misaka model add --artifact <declared .palwtir> --pack <pack> --quote",
+  "expected": "ONE misaka model add from an HF repo/revision: source/preflight -> cost quote -> artifact/pack verify -> owner signature -> relay -> registration -> status",
+  "observed": "model add hf://\u2026 exits 34 E-MODEL-UNKNOWN ('this build's catalog has no model matching \u2026'); model add --artifact <IR> with no catalog model ignores the artifact and lists the legacy catalog. model add / --export-bundle / model sign / model submit build only legacy ClassRegistered (catalog or ADR-0108 manifest); an IR class (ClassRegisteredTirV1) is registrable only through misaka palw tir-registration + misaka palw submit-object (the user copies nothing by hand: the class id/root are derived from the declared artifact), and there is no detached export/sign/submit or quote for it",
+  "model_revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+  "integration_sha": "89ffb1fb717166ccc9810464605939f95d8acc2f",
+  "failing_fixture": null,
+  "owner": "A (HF source->artifact in model add) / C1 (quote, detached sign/submit for ClassRegisteredTirV1) / Lead (UX contract)",
+  "security_consequence": "none for consensus; UX: no cost quote before paying for an IR registration, no detached (offline-signer) path for IR classes",
+  "reproduction": "ucli model add hf://Qwen/Qwen2.5-0.5B-Instruct@7ae557604adf67be50417f59c2c2f167def9a775 --quote --allow-single-rpc",
+  "log": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261008-qwen25-0.5b-r1/register/model-add-hf.err"
+ },
+ {
+  "schema": "misaka.h1.failure.v1",
+  "recorded_at": "2026-10-08T17:10:24+0900",
+  "model": "qwen25-0.5b",
+  "stage": "register",
+  "category": "SIGNATURE_OR_RELAY_FAILED",
+  "code": "NODELESS_BOND_REGISTRATION_ABSENT",
+  "command": "devnet.sh user (kaspad --palw-register-bond as a transient registrar)",
+  "expected": "client U creates its own bond without running a node (CLI/remote builder for BondRegistered, signed locally, relayed)",
+  "observed": "no misaka command builds or submits BondRegistered; the only path is kaspad --palw-register-bond, i.e. a full node that syncs and then keeps running as the bond's node until stopped. U ran it once (60 s, own datadir) and stopped it. On a salted drill kaspad also refuses any non-keyring producer key, so U's key is keyring bond 8 (not a genesis seat key, not the main key).",
+  "model_revision": "n/a",
+  "integration_sha": "89ffb1fb717166ccc9810464605939f95d8acc2f",
+  "failing_fixture": null,
+  "owner": "C1 (remote wallet: node-less bond registration)",
+  "security_consequence": "none for consensus; a node-less client cannot become a registrant without running kaspad once",
+  "reproduction": "RUN_ID=r1 bash tests/hf-onboarding/devnet.sh user",
+  "log": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/logs/user-bond-r1.log"
+ }
+]

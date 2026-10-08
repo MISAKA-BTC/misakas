@@ -1,0 +1,100 @@
+{
+ "schema": "misaka.h1.pack-verification.v1",
+ "command": "palw-class pack verify <pack> --model <checkpoint> --artifact <declared class file> --rebuild --strict --json",
+ "exit": 0,
+ "verified": true,
+ "ok": true,
+ "pack": "72c046533ff1ba3449b5d80fe3195af4962b95ac2c1552261b0149d7b4f63b36",
+ "checks": [
+  {
+   "check": "manifest",
+   "detail": "qwen25-0.5b (72c046533ff1ba34), schema misaka.palw.runtime-pack.v1",
+   "status": "PASS"
+  },
+  {
+   "check": "sidecars",
+   "detail": "4 file(s) match their hashes",
+   "status": "PASS"
+  },
+  {
+   "check": "adapter",
+   "detail": "built-in `qwen2` 76777c6779beb792",
+   "status": "PASS"
+  },
+  {
+   "check": "descriptors",
+   "detail": "none (a float checkpoint)",
+   "status": "PASS"
+  },
+  {
+   "check": "converter",
+   "detail": "built by palw-tir-convert 1.1.0 (misaka.palw.lowering.v1); this build 1.1.0 (misaka.palw.lowering.v1) \u2014 the same converter; math libm-v1: the same bytes on every platform",
+   "status": "PASS"
+  },
+  {
+   "check": "source",
+   "detail": "4 file(s) match their SHA-256",
+   "status": "PASS"
+  },
+  {
+   "check": "frontend",
+   "detail": "level B, spec e0b3e03aae456035, 9 feature uses, scope: text-generation: token ids \u2192 next-token logits; nothing left out",
+   "status": "PASS"
+  },
+  {
+   "check": "artifact",
+   "detail": "file 333d977f35cee55f \u00b7 inventory root 3c458f9988b7ae33 \u00b7 graph root fa1e2c63760f91da",
+   "status": "PASS"
+  },
+  {
+   "check": "declared",
+   "detail": "testnet-12: exact class 55b32ae12c8fa003 (context 512, interval 65536); identity verification, not live admission",
+   "status": "PASS"
+  },
+  {
+   "check": "conformance",
+   "detail": "1 vector(s), 2 positions, equal on reference, typed-backend, independent",
+   "status": "PASS"
+  },
+  {
+   "check": "hf-reference",
+   "detail": "legacy greedy-only: tool scale: slope 0.9985, corr 0.99944, top-1 0.969, KL 0.00236 over 32 positions (pack recorded top-1 0.969, KL 0.00236)",
+   "status": "PASS"
+  }
+ ],
+ "skipped": [],
+ "failed": [],
+ "max_rss_bytes": [
+  12024856576
+ ],
+ "beacon_conformance": {
+  "facts": "SYNTHETIC (no canonical beacon-facts RPC exists)",
+  "policy": "reference_policy_v1 with caller numbers \u2014 UNAPPROVED",
+  "policy_args": "--k 3 --delay 2 --window 40 --depth 5 --repetitions 3 --security-bits 4",
+  "scope_args": "--vectors 1 --prompt-len 2 --decode 1 --leaves 256 --vector-fault-ppm 1000000 --leaf-fault-ppm 62500",
+  "statement_root_prefix": "9a477b4d398984d69676f1cb9376194070ee96e3eac40ff38171a281a0a3173978e7496ea167ab45346c41228f82f7b8d23e4c1cecfdee713e973cf97090fdcb",
+  "waiting_exit": 3,
+  "run_exit": 0,
+  "verify_exit": 0,
+  "verify_no_rerun_exit": 3,
+  "label": "SYNTHETIC_BEACON_CONFORMANCE_PASS",
+  "evidence": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261008-qwen25-0.5b-r1/conformance/state/9a477b4d398984d69676f1cb93761940/seed-b2bde1046aece5ddd512d40210fa14fb/evidence.borsh",
+  "commit": "9a477b4d398984d69676f1cb9376194070ee96e3eac40ff38171a281a0a3173978e7496ea167ab45346c41228f82f7b8d23e4c1cecfdee713e973cf97090fdcb\n",
+  "run": "evidence      /Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261008-qwen25-0.5b-r1/conformance/state/9a477b4d398984d69676f1cb93761940/seed-b2bde1046aece5ddd512d40210fa14fb/evidence.borsh\nevidence id   5f63897861f1739d9a97961b6d451f7031945edd29d8d7b931f210e94ad2968f9fa5f021002dcd77dee8448fd57037cc030e1491c9b87942e5105548a7c40931\nchallenge seed b2bde1046aece5ddd512d40210fa14fb955c57b8a48f52b443d60291ccbce992b75b3bc5155f3205a063528c572bb7299e50cb96ba35364f20bda1e414e421ff\nfacts         synthetic:h1-20261008-qwen25-0.5b-r1\nstatus        PASSED \u2014 771 of 771 required checks run, 0 failed, 0 missing; derived -log2(eps) >= 4\nmeasured      {\"checks_executed\":0,\"checks_reused\":771,\"leaf_bytes_compared\":0,\"leaf_checks_ms\":0,\"note\":\"peak RSS is the process's lifetime maximum (getrusage), mapped file pages included; hashed bytes are the authentication read of the whole artifact, compared bytes are the sampled leaves\",\"open_pass_hashed_bytes\":0,\"open_pass_ms\":0,\"peak_rss_bytes\":48332800,\"vector_checks_ms\":0,\"vector_positions\":0,\"wall_ms\":103}\nlocal judgement: the contract accepts this evidence for the beacon this process derived (a fresh `verify-conformance` is what counts)\n",
+  "run_stderr_tail": "[    0.0s] deriving the artifact's roots (streamed: one pass for the inventory root, one for the file digest)\n[    2.0s] static semantic admission (reference kernels, hypothetically armed)\n        2.13 real         1.89 user         0.14 sys\n            48529408  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                3180  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                 890  voluntary context switches\n                1269  involuntary context switches\n         24068344638  instructions retired\n          6265614207  cycles elapsed\n            40075696  peak memory footprint\n",
+  "verify": "PASS: every derivable field recomputed from public inputs, every selected check re-executed, the evidence reproduced exactly\nevidence id   5f63897861f1739d9a97961b6d451f7031945edd29d8d7b931f210e94ad2968f9fa5f021002dcd77dee8448fd57037cc030e1491c9b87942e5105548a7c40931\nfacts         synthetic:h1-20261008-qwen25-0.5b-r1  (SYNTHETIC: this exercises the pipeline; it says nothing about any chain's history)\nscope         a SAMPLED conditional check \u2014 not full-scope fidelity, not semantic admission, not a statement that the beacon is unbiased\nmeasured      {\"checks_executed\":771,\"checks_reused\":0,\"leaf_bytes_compared\":606656,\"leaf_checks_ms\":0,\"note\":\"peak RSS is the process's lifetime maximum (getrusage), mapped file pages included; hashed bytes are the authentication read of the whole artifact, compared bytes are the sampled leaves\",\"open_pass_hashed_bytes\":660615904,\"open_pass_ms\":1307,\"peak_rss_bytes\":3338141696,\"vector_checks_ms\":224007,\"vector_positions\":8,\"wall_ms\":225379}\n",
+  "verify_no_rerun": "NOT A PASS (results not re-executed): the challenge, selection and evidence are consistent with the canonical facts (synthetic:h1-20261008-qwen25-0.5b-r1), but --no-rerun leaves the result roots unverified\n",
+  "max_rss_bytes": {
+   "commit": [
+    45809664
+   ],
+   "run": [
+    48529408
+   ],
+   "verify": [
+    3338141696
+   ]
+  },
+  "status": "002dcd77dee8448fd57037cc030e1491c9b87942e5105548a7c40931\",\n        \"seed\": \"b2bde1046aece5ddd512d40210fa14fb955c57b8a48f52b443d60291ccbce992b75b3bc5155f3205a063528c572bb7299e50cb96ba35364f20bda1e414e421ff\",\n        \"status\": \"PASSED\"\n      },\n      \"event\": \"EVIDENCE\",\n      \"seq\": 4,\n      \"statement_root\": \"9a477b4d398984d69676f1cb9376194070ee96e3eac40ff38171a281a0a3173978e7496ea167ab45346c41228f82f7b8d23e4c1cecfdee713e973cf97090fdcb\",\n      \"unix\": 1791444592\n    },\n    {\n      \"candidate_id\": \"55b32ae12c8fa0031ea8d78b826f75632a6863585f2d3b5efc906c856460324a640591f69bc1ed1cb9160f878f64fd62bfa98b3ad577fb626b36d24ba787cb1c\",\n      \"detail\": {\n        \"pack\": \"72c046533ff1ba3449b5d80fe3195af4962b95ac2c1552261b0149d7b4f63b36\",\n        \"policy_label\": \"UNAPPROVED TEST POLICY (reference_policy_v1 numbers; not an approved checker-suite/policy/soundness tuple)\",\n        \"retries_before\": 0\n      },\n      \"event\": \"COMMITTED\",\n      \"seq\": 5,\n      \"statement_root\": \"9a477b4d398984d69676f1cb9376194070ee96e3eac40ff38171a281a0a3173978e7496ea167ab45346c41228f82f7b8d23e4c1cecfdee713e973cf97090fdcb\",\n      \"unix\": 1791444827\n    },\n    {\n      \"candidate_id\": \"55b32ae12c8fa0031ea8d78b826f75632a6863585f2d3b5efc906c856460324a640591f69bc1ed1cb9160f878f64fd62bfa98b3ad577fb626b36d24ba787cb1c\",\n      \"detail\": {\n        \"beacon\": {\n          \"have\": 2,\n          \"need\": 3,\n          \"state\": \"COLLECTING\"\n        },\n        \"tip\": 1011\n      },\n      \"event\": \"WAITING_RANDOMNESS\",\n      \"seq\": 6,\n      \"statement_root\": \"9a477b4d398984d69676f1cb9376194070ee96e3eac40ff38171a281a0a3173978e7496ea167ab45346c41228f82f7b8d23e4c1cecfdee713e973cf97090fdcb\",\n      \"unix\": 1791444829\n    },\n    {\n      \"candidate_id\": \"55b32ae12c8fa0031ea8d78b826f75632a6863585f2d3b5efc906c856460324a640591f69bc1ed1cb9160f878f64fd62bfa98b3ad577fb626b36d24ba787cb1c\",\n      \"detail\": {\n        \"evidence_id\": \"5f63897861f1739d9a97961b6d451f7031945edd29d8d7b931f210e94ad2968f9fa5f021002dcd77dee8448fd57037cc030e1491c9b87942e5105548a7c40931\",\n        \"seed\": \"b2bde1046aece5ddd512d40210fa14fb955c57b8a48f52b443d60291ccbce992b75b3bc5155f3205a063528c572bb7299e50cb96ba35364f20bda1e414e421ff\",\n        \"status\": \"PASSED\"\n      },\n      \"event\": \"EVIDENCE\",\n      \"seq\": 7,\n      \"statement_root\": \"9a477b4d398984d69676f1cb9376194070ee96e3eac40ff38171a281a0a3173978e7496ea167ab45346c41228f82f7b8d23e4c1cecfdee713e973cf97090fdcb\",\n      \"unix\": 1791444832\n    }\n  ],\n  \"schema\": \"misaka.palw.beacon-conformance-ledger.v1\"\n}"
+ }
+}
