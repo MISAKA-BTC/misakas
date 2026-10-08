@@ -29,6 +29,8 @@ pub mod checkpoint;
 pub mod evidence;
 pub mod miner;
 pub mod proof;
+/// Lane DA16: the public material transport — artifacts (both roots of a binding) and claim material (kernel positions, V2 held units).
+pub mod public_material;
 pub mod register;
 pub mod relay;
 pub mod template;

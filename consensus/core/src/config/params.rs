@@ -2979,6 +2979,14 @@ pub struct Params {
     /// its height; needs `palw_tir_shard_v1` in force at or below it.
     pub palw_tir_shard_segment_v2: Option<ForkActivation>,
 
+    /// **Lane DA16 (RFC-0009 §4.2, RFC-0014 §16): the provider court** ([`crate::palw_provider_court_v1`]). Past this height bonded
+    /// providers lease a subject's public material (an artifact under both roots of its binding, a kernel claim's positions), anyone
+    /// challenges one unit on chain, an unanswered challenge slashes the provider, and a claim's producer may move its DA responsibility
+    /// to its leases (tags 150–153; rows in the kernel route's aux tables 43–45). **Dormant, with no activation height**: `None` on every
+    /// preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed
+    /// ([`Self::validate_palw_provider_court_v1`]) with the kernel route it ships beside.
+    pub palw_provider_court_v1: Option<ForkActivation>,
+
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
     /// context ([`crate::palw_v2::PalwJobContextV2::prefix_context_hash_v1`], context version 3), so every claim over the same prefix
@@ -4177,6 +4185,7 @@ impl Params {
         self.validate_palw_signed_registration_v1()?;
         // **RFC-0006 per-segment pricing** (`crate::palw_tir_shard_segment_v2`): refused when armed.
         self.validate_palw_tir_shard_segment_v2()?;
+        self.validate_palw_provider_court_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **palw_fp_prefix_inherit** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_inherit_v1()?;
@@ -6536,6 +6545,10 @@ impl Params {
         // RFC-0006 per-segment pricing's fence, likewise.
         if self.palw_tir_shard_segment_v2 == Some(ForkActivation::never()) {
             self.palw_tir_shard_segment_v2 = None;
+        }
+        // The provider court's fence (DA16), likewise.
+        if self.palw_provider_court_v1 == Some(ForkActivation::never()) {
+            self.palw_provider_court_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -10215,6 +10228,7 @@ impl Params {
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
+            palw_provider_court_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -10487,6 +10501,7 @@ impl Params {
             ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
             ("palw_tir_shard_segment_v2", *palw_tir_shard_segment_v2),
+            ("palw_provider_court_v1", *palw_provider_court_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -10789,6 +10804,11 @@ impl Params {
         // RFC-0006 per-segment pricing's fence, NAMED likewise (Some-only: every preset leaves it None).
         if let Some(at) = self.palw_tir_shard_segment_v2 {
             h.write(b"palw_tir_shard_segment_v2");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // The provider court's fence (DA16), NAMED likewise.
+        if let Some(at) = self.palw_provider_court_v1 {
+            h.write(b"palw_provider_court_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
@@ -11470,6 +11490,7 @@ impl Params {
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
+            palw_provider_court_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -12233,6 +12254,10 @@ impl Params {
         if let Some(activation) = palw_tir_shard_segment_v2.as_mut() {
             fork(activation, visit);
         }
+        // The provider court's fence (DA16). Some-only.
+        if let Some(activation) = palw_provider_court_v1.as_mut() {
+            fork(activation, visit);
+        }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
             fork(activation, visit);
@@ -12767,6 +12792,7 @@ impl Params {
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
+            palw_provider_court_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -13587,6 +13613,11 @@ impl Params {
             h.write(b"palw_tir_shard_segment_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The provider court's fence (DA16), Some-only for the same reason.
+        if let Some(activation) = palw_provider_court_v1 {
+            h.write(b"palw_provider_court_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // palw_fp_prefix_inherit, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_inherit {
             h.write(b"palw_fp_prefix_inherit");
@@ -14380,6 +14411,7 @@ impl Params {
             palw_panel_free_v1: self.palw_panel_free_v1.clone(),
             palw_signed_registration_v1: self.palw_signed_registration_v1,
             palw_tir_shard_segment_v2: self.palw_tir_shard_segment_v2,
+            palw_provider_court_v1: self.palw_provider_court_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -15476,6 +15508,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
+    palw_provider_court_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15768,6 +15801,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
+    palw_provider_court_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -16042,6 +16076,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
+    palw_provider_court_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -23670,6 +23705,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
+    palw_provider_court_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
