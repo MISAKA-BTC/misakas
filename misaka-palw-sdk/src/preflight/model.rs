@@ -212,6 +212,14 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
                 "{p}: its values are read at conversion; the program's structure does not depend on them (ROPE_FREQ_FACTORS_V1), so this verdict stands for any table"
             ));
         }
+        if !g.inert_keys().is_empty() {
+            notes.push(format!(
+                "GGUF_INERT_PROVENANCE_V1: {} metadata key(s) ignored as a publisher's bookkeeping ({}); the registry's digest {}",
+                g.inert_keys().len(),
+                g.inert_keys().join(", "),
+                &misaka_palw_tir_lower::gguf::gguf_inert_registry_digest_v1()[..16]
+            ));
+        }
     }
 
     // A weight file the frontend refuses by its FORM (a PyTorch pickle that is not a plain state dict, a global off the allowlist, a
