@@ -100,6 +100,32 @@ skeleton first; lanes build on that commit.
 
 ## 4. Change log
 
+* 2026-10-08 — **C3 final integrated** (10 commits, `rfc-0001-0003-delivery-record.md`; gateway 158 + rail 7 + drill 8 + DSL 3 +
+  fp-submit 12 tests; no real node / real weights):
+  * Binding audit generated from `binding::AUDIT`, one mutation test per field, destructuring without `..` (a new field fails to
+    compile until audited): **no unbound claim field**; frozen FP V4 untouched. Fixed in the gateway: F1 tokenizer/class/context
+    held to the worker's manifest; F2 user stop strings must be spelled. By design: original request + chat template id are not in
+    the claim (ids are; receipt carries request digest + template id) — consensus binding = DESIGN_GAP (versioned FP amendment).
+  * Serving: Idempotency-Key + RFC 8785 digest (retry = same claim, no second inference/charge; conflicting request → 409); cancel
+    on disconnect (queued never runs; mid-run drains and is discarded — worker `Cancel` frame CODE_GAP, proposal P1); CAS bounded
+    queue; Retry-After bug fixed; status route with `final`/`voided` only from chain via ClaimTracker labelled
+    UNVERIFIED_REMOTE_STATE; SSE chunks `streaming`, `final:false` — IMPLEMENTED_AND_TESTED.
+  * Evidence: `--evidence-provider` (dir/HTTP) + `--evidence-min-copies`, placed and read back before commit; fetched after all
+    producer state is deleted — IMPLEMENTED_AND_TESTED (local providers).
+  * Receipt `GET /v1/receipts/<id>` authenticated by the chain (re-derives identities, recomputes `output_root`) —
+    IMPLEMENTED_AND_TESTED (in-process chain).
+  * VLM: integer stretch/letterbox preprocessing with golden vectors from an independent implementation, V5 job over canonical pixels,
+    seat judges Valid — DORMANT_NOT_INTEGRATED (`palw_fp_job_v5` unarmed; fold does not open version-8 claims). Image generation:
+    request → `PalwGenJobV1` → tiny SD3 run → payload, seat replay — library only; `/v1/images/generations` answers 501. Audio/video
+    DESIGN_GAP. FP V4 G8–G10 EXTERNAL_GATE_PENDING.
+  * Real path: gateway request on t12 shipped params → admission → worker → fp-submit → extraction walk → fold → claim under the
+    gateway's bond → seat replay → receipt matches the node's row (in-process; also with decode rules test-armed) —
+    IMPLEMENTED_AND_TESTED in-process; wRPC `observe_claim` against a node not run.
+  * **F8 (privacy, rail):** `misaka-palw-fp-rail --evidence-out` has no `PanelDa` guard and writes private prompt ids to the evidence
+    dir (a publicly served dir would disclose them); the gateway refuses `PanelDa` with public providers — rail guard CODE_GAP.
+  * Proposals: P1 worker Cancel frame; P2 hoist F1/F2 into `validate_against_request`; P3 DA trio/output_root for version-8 claims
+    before a V5 fold; P4 `Text` arm in the generative worker frame.
+
 * 2026-10-08 — **C1 final integrated** (11 commits, `rfc-0009-remote-record.md`). Status by row (tests: remote 71 lib + 2 CLI e2e,
   CLI 8, pq-validator-core 48, pq-signer 17, rpc op-202, real processor `t12_state_proof` 1 + `rfc9_redemption_v4` 5; nothing run
   against a live node/network):
