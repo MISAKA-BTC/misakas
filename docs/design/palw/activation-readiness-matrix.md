@@ -38,7 +38,8 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 1. RFC-0012: D1 and the policy values (D, W, caps, horizon).
 2. RFC-0015: the OPV admission list and terms.
 3. RFC-0007 Part VI: the challenge policy's security level; approval of a beacon scheme for RFC-0010.
-4. GAP-5: the FinalReward funding source.
+4. GAP-5: the FinalReward funding source (decided: user-pays escrow; subsidy carves later).
+4a. The claim seal deposit size versus an honest producer's race-loss cost (a losing seal is forfeited by design: a refund would let free Sybil seals choose a beacon claim id).
 5. The activation height of the single release, once every row above is clear.
 
 ## 3a. User rulings on the Panel=0 parameters (2026-10-08 ~20:30)
