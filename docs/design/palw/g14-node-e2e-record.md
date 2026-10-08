@@ -38,6 +38,7 @@ cargo test --offline -p kaspa-grpc-core --lib palw_kernel_route_grpc
 | Fence | `Params::palw_probabilistic_constraints_v1` — validation REFUSES every real height; the harness builds `Config` directly (and asserts the refusal still holds) |
 | Reads | `ConsensusApi::palw_kernel_route_v1()`; RPC **210** `getPalwKernelClaim`, **211** `getPalwKernelRows` (paged), **212** `getPalwKernelFinals` |
 | Mode (RFC-0015) | tags 13 / 14 ride inside tag-110 bytes; dropped at the gate unless the OPV fence is in force; OPV policy = genesis constant in the route header |
+| G14-R4 additions | consensus tag **113** `KernelRouteChunkV1` (the route's own chunk lane, F-C4R3-03; 112 unallocated); aux tables **41** chunk groups, **42** allocated and unused (both ride delta 160 / tail 0xEC / the root); kernel route tag **15** `SealProof` (inside tag 110, GAP-R7); kernel ledger tables **15** proof seals and **16** job escrows (GAP-5); settlement kinds **13** `AdmissionFee` (F-C4R3-05), **14–17** `ReserveJobEscrow` / `ReleaseJobEscrow` / `PayJobEscrow` / `JobFee` (GAP-5); policy fields `job_fee`, `job_escrow_ttl_daa` |
 
 Fold shape: **eager per object** — each object loads the ledger from the rows, runs the kernel's own per-object API, applies every
 `SettlementInstructionV1` exactly, writes back the rows that changed. A kernel refusal DROPS the object (nothing written, block stands);
@@ -81,6 +82,11 @@ The per-block adjudication budget bounds the BLOCK across eager objects: what ea
 | OPV spam bound: Final within the hard deadline | | `g14_opv_spam_demands_cannot_hold_final_...` | PASS |
 | OPV registration dropped without the fence / unadmitted class / PanelLicensed by tag 13; legacy class coexists with a Panel-covered conviction | | `g14_opv_registration_is_dropped_...` | PASS |
 | OPV reorg (rows and aux exactly restored) and restart (finalizes after it) | | `g14_opv_replay_and_reorg_...`, `g14_opv_survives_a_node_restart_...` | PASS |
+| **G14-R4**: a self-inflicted default (the colluders' own demand, the producer silent) never erases a provable fraud: the reservation is held through `default + liability_daa`, the outsider's later proof convicts with no fee and an undiluted bounty; with no valid proof the reservation is released at the horizon | demand → default → proof | `g14_c4r3_a_self_inflicted_default_…` (Panel and OPV), `…_a_withheld_position_is_a_demand_then_a_default_never_a_conviction` | PASS |
+| **G14-R4**: the route's own chunk lane — per-bond signed rooms, deposit held (V2-visible) and forfeited at TTL, TTL bounded by the target, wrong-kind / mis-signed / decided-target groups dropped; a chunked proof convicts while junk fills the legacy table and the colluders' own rooms | tag 113 | `g14_kernel_route_the_routes_own_chunk_lane_…`, `g14_c4r3_eight_junk_chunk_groups_…` | PASS |
+| **G14-R4**: OPV lane capture — only pre-Final claims hold slots, a fresh producer is admitted past the total, a fee per admission | | `g14_c4r3_opv_two_bonds_must_not_be_able_to_hold_the_whole_opv_lane` | PASS |
+| **G14-R4**: a lifted proof pays its earliest sealer (the producer's own bond lifts it: the sealer is paid, the colluders lose the whole reservation) | seal → reveal → lifted copy first | `g14_c4r3_gap_r7_a_lifted_proof_pays_its_earliest_sealer_not_the_copyist` | PASS |
+| **G14-R4**: the Final reward is paid once out of the poster's escrow — across replay, a reorg that undoes the Final, a re-applied claim and the coinbase's redemption | | `g14_kernel_route_the_final_reward_is_paid_once_out_of_the_posters_escrow_…`, `…_a_covered_lie_is_convicted_after_final_…` | PASS |
 
 ## 3. Harness seams (all `cfg(test)`, none in a build that can run a network)
 
@@ -160,14 +166,83 @@ rule it would meet carried bare. **The SDK must sign the envelope** (a second si
 4. **A kernel class registered over a root later refuted stays registered** (its claims continue under the kernel route); only the V2
    class cannot activate. Rewardability of kernel claims does not yet depend on the V2 class being Active (the `FinalReward` is unfunded
    anyway — GAP-3).
-5. **The Final reward is unfunded.** `FinalReward` joins the coinbase queue like the accuser reward; nothing carves it from the subsidy.
+5. ~~**The Final reward is unfunded.**~~ **Funded (G14-R4, user-pays escrow)**: the poster pre-funds an escrow at posting (plus a
+   non-refundable fee); the job's first Final pays the producer out of it, once (§7). RFC-0015's `work_credit_per_claim` is still not
+   released by anything — it must come from the same escrow before it is.
 6. **Pipeline claims have no Panel on the real node** (legacy mode) and the pipeline header has no wire form: `getPalwKernelClaim` returns
    an empty `recordHeader` for it. OPV pipeline classes need no Panel.
 7. **Interim seats are grindable.** G14 does not rest on them: every seat colluding is the tested case.
 8. **Per-object cost is O(rows).** Each kernel object rebuilds the ledger from the rows. A production fold needs a cached ledger per block.
 9. **Verdict / settlement events are not stored**; `getPalwKernelClaim` serves the state they decided and replay reproduces them.
 10. **The mempool does not run the acceptance gate** (as for every `0x4b` object); a chunk group's opener pays the slot rent.
-11. The phase-1 reorg test runs without the strict-win fence; it passed in every run so far but is subject to the same tie-by-hash race on
-    a deeper fork.
+11. ~~The phase-1 reorg test runs without the strict-win fence.~~ **Fixed (G14-R4, `39e4ea441`)**: the registration replay-and-reorg
+    case arms strict-win (a shallow tie is GHOSTDAG's) and makes the deep reorg back a strict economic win (an attempt on A's tail).
 12. `getPalwOnboarding` and the other new ops are exercised over the grpc conversion and the model round trips, not through a running RPC
     service (the integration crate compiles with them; the daemon test asserts the not-found / malformed paths).
+
+## 7. G14-R4 (2026-10-08): the round-3 fixes, and the Final reward's funding (GAP-5)
+
+Branch `g14/r4-fixes` (base `4d3baa0c5`). Per-finding detail, commits and tests: `adversarial-e2e-record.md`, "G14-R4 fixes". All of it
+is dormant behind `palw_probabilistic_constraints_v1` (OPV parts behind `palw_panel_free_v1`); no t12 identity moves.
+
+**Defaults keep the liability (F-C4R3-02).** A pre-Final default slashes the penalty — split like a slash: the demanders take
+`accuser_reward_permille` of it (an OPV claim's at most `1000 − default_burn_permille`), the rest is burned — and keeps the rest of the
+reservation until `default + liability_daa`. A valid proof in that horizon convicts (`Convicted`), paying the accuser its share of the
+whole admitted reservation. A proof past any horizon, or against a timed-out claim (it never passed and never paid), is refused before
+any court runs and charges no fee. What a self-inflicted default still buys the colluders is bounded by their demanders' share of the
+penalty (50 KAS of 1,000 at the interim terms).
+
+**The route's own chunk lane (F-C4R3-03).** A prosecution object larger than one carrier rides `KernelRouteChunkV1` (tag 113): every
+chunk signed by the opener's Active bond, groups keyed `(opener, group)` in aux table 41, ≤ 2 open per bond, a deposit of 1 KAS per
+declared part held from free collateral (in `reserved_of`, so V2's committed ledger and both exit gates see it; the kernel ledger is
+synced net of it), returned at completion and forfeited (slashed) at TTL; TTL `min(64 DAA, the target's deadline)` where the target is
+a kernel claim (its liability horizon, or the latest Final its clock allows plus the horizon) or an onboarding binding (its
+`final_daa`); the assembled object must be a `FileProof` / `Respond` naming the target claim or a refutation of the target binding,
+and its own signature is checked at the completing chunk. The certification lane (`ObjectChunk`) is unchanged.
+
+**OPV admission (F-C4R3-05).** Only pre-Final claims hold admission slots; a bond with no pre-Final OPV claim is always admitted past
+the total; each admission burns `admission_fee` (interim 1 KAS).
+
+**Accuser seals (GAP-R7).** `SealProof` (kernel tag 15) commits `H(claim ‖ accuser ‖ H(proof))`; the bounty of a conviction goes to the
+earliest seal of the convicting bytes at least `claim_seal_delay_daa` old, whoever files them. Self-recoup (the colluders' own first
+proof) is priced, not prevented: `claim_collateral × (1 − accuser‰) > claim_reward`, and RFC-0015's required reservation is divided
+by `1 − accuser‰`.
+
+### GAP-5: the Final reward's funding — user-pays escrow (the user's ruling, option A)
+
+*Problem.* `SettlementKindV1::FinalReward` joined the coinbase queue as newly issued money while `PostJob` was free: a bond answering
+its own jobs minted `claim_reward` per job (unbounded on the Panel route).
+
+*Ruling.* Option A, user-pays escrow: the job's poster pre-funds an escrow of at least the claim reward; Final pays the producer out
+of it; nothing is minted. Subsidy-funded rewards (options B/C) are out of scope and get their own design later. (Amounts below are
+BILI, ADR-0174; `SOMPI_PER_KASPA` is the legacy name of 1 BILI.)
+
+*Implementation (kernel `misaka-palw-kernel`, node fold; dormant).*
+* `PostJob` / `PostPipelineJob` reserve `claim_reward` of the POSTER's free collateral as the job's escrow
+  (`SettlementKindV1::ReserveJobEscrow`, row `job_escrows[job] = { poster, amount, posted_daa }`, ledger table 16, in the state root)
+  and burn `job_fee` (`JobFee` + `Burn`; a real `slash_bond` on the node). A poster that cannot cover escrow + fee posts nothing.
+  The reservation is the ledger's row, so V2's committed-collateral ledger and both exit gates hold it.
+* The job's first Final debits the escrow (`PayJobEscrow`: a real `slash_bond` of the poster, burned at release) and pays exactly the
+  debited amount as `FinalReward` (a payout row the coinbase queue mints). The escrow row is removed: an escrow pays once. A later
+  claim of the same job (after a post-Final conviction freed it) finalizes with reward 0.
+* **There is no unfunded reward path.** The ledger emits `FinalReward` only from `pay_from_job_escrow`; the node fold pays a
+  `FinalReward` only up to what the `PayJobEscrow` before it in the same batch actually debited; the reference consumer's book refuses
+  a `FinalReward` beyond the escrow spent (checked in every ledger test).
+* An escrow no claim can still use goes back to its poster (`ReleaseJobEscrow`, receipt `JobEscrowReturned`) once
+  `job_escrow_ttl_daa` has passed since posting, no live claim holds the job and no producer's seal of it is live.
+* Interim values: `claim_reward` (the escrow) 5 BILI, `job_fee` 1 BILI, `job_escrow_ttl_daa` 300 DAA (validated: `job_fee > 0`,
+  TTL ≥ the seal TTL) — policy values like every other interim term.
+
+*Invariants and their tests.*
+* Money identity: within every receipt batch Σ debits (slashes, fees, spent escrows) = Σ (accuser rewards + demander shares + Final
+  rewards + burns); hence Σ payouts ≤ Σ collected fees + slashes + pre-funded escrow, each source counted once —
+  `k2_ledger_route::a_final_reward_is_paid_once_out_of_the_posters_escrow_and_nothing_is_ever_issued` (and the book's check in every
+  ledger test).
+* Self-posted job: the producer is paid its own escrow back and is down `job_fee` — never a gain (same test).
+* Reorg / re-application / redemption: `g14_kernel_route_the_final_reward_is_paid_once_out_of_the_posters_escrow_across_reorg_replay
+  _and_redemption` — a second node replays; a heavier branch from just before the Final undoes A's Final and re-finalizes on B (one
+  reward minted-or-owed, one escrow debited); A out-works B again (one reward, redeemed by one coinbase, one debit); the same claim
+  carried again is dropped; the virtual UTXO set holds exactly one reward output for the producer's payee.
+
+*Not covered.* RFC-0015's `work_credit_per_claim` (nothing releases it; it must come from the same escrow before it does); the price
+level (escrow = `claim_reward`) is a policy value.
