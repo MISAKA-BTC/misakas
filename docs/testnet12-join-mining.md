@@ -92,7 +92,7 @@ Check the startup log for these lines:
 
 ```text
 Consensus params fingerprint: 5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6 (network testnet-12)
-Consensus fence schedule: 750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585 (schedule id 1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9)
+Consensus fence schedule: 750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585, 9000 (schedule id 1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9)
 ```
 
 A datadir from the first testnet-12 deployment (genesis `a8cabac4…`) is refused at startup with a
@@ -495,3 +495,28 @@ testnet-12 arms ADR-0123's `palw_epoch_budget_release` from DAA 0. A class whose
 borrows the epoch slots that other classes are not filling. On testnet-11 this is still dormant. A
 class registered mid-epoch has budget 0 until the next boundary. `kaspad --palw-dump-classes` logs
 every class's share and budget.
+
+## 11. The DAA-9,000 flag day (int-13)
+
+The fence schedule gains **9000**. At that one height the release arms four changes that were finished and waiting for a height; none of
+them needs anything else to be switched on first (each stands on rules testnet-12 has had since genesis, or on the DAA-5,300 flag day):
+
+| fence | from DAA 9,000 |
+|---|---|
+| `palw_audit_1004_v1` | the 2026-10-04 audit's consensus fixes: a trap commitment must precede its audit draw and cover at least two tiles; an improvement draw and an audit seed read a block four deep, not the drawing block's own hash; fee, bond and licence-life floors on improvement objects; only a class's registrant bond may submit its candidate or dataset; a tensor claim's token binding is bounded. A panel seat also proves **every root** a class has in force that it holds (the registered root as before, plus a line's current version, a preview and a superseded root inside its grace) |
+| `palw_gen_range_twin_v1` | a generative class's closes are sized with the range twin instead of the element twin: the same reads and the same bounds, far fewer steps of the same cap, so a real-size image stage is no longer refused at the cap before its closes are sized |
+| `palw_model_court_window` | a class registered from 9,000 stores its own court window. On testnet-12 (the held clock) that is the network window for every admissible class, so no admission verdict changes |
+| `palw_receipt_spend_v4` | public receipt redemption (RFC-0009 stage C): an executor signs a position-free redemption authorization once, and any bonded builder may spend the winning quantum of its `Final` free-prompt claim into a receipt block; the chain pays the worker reward to the executor's registered payout, less the builder's fee (at most 10 %). The miner's machine no longer has to stay on until the claim is redeemed |
+
+**Why now.** They are code changes. The first three are fixes and a cost reduction; the fourth opens the receipt lane to nodes that did
+not produce the claim. A height gives every node time to upgrade before the rules change.
+
+**What you must do.** Run the new `kaspad` before DAA 9,000 — about 24 DAA an hour, so check `getBlockDagInfo` rather than the clock. The
+new build prints a new consensus params fingerprint (above); the genesis and the consensus identity do not change, so the datadir is kept
+and old and new nodes peer below 9,000. A node still on the DAA-5,300 build is refused at the handshake from 9,000, by the fork id, naming
+the height. Upgrade in place; do not wipe the datadir. A seat should expect a little more readiness-proof work from 9,000 (one proof per
+root in force, not per class).
+
+**What is not armed.** `palw_tir_only_v1`, `palw_model_virtual_v1` and the fences whose lanes are not finished
+(`palw_dns_retirement_v1`, `palw_exec_payload_v2`, `palw_permissionless_panel_v1`, `palw_probabilistic_constraints_v1`, `palw_panel_free_v1`)
+stay dormant. Each would arrive with a height of its own in a later release; none is part of 9,000.
