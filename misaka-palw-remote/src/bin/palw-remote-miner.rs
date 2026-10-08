@@ -618,6 +618,8 @@ fn main() {
                 },
             }),
             accept_unverified: args.accept_unverified,
+            // Non-custodial: every template must pay this miner's own --pay-address.
+            pay_to: Some(kaspa_txscript::pay_to_address_script(&pay_address)),
         },
     };
     say(

@@ -126,6 +126,9 @@ pub struct MinerTrustV1 {
     pub own_full_node: bool,
     pub verification: Option<RemoteVerificationV1>,
     pub accept_unverified: Option<ModeLabelV1>,
+    /// The miner's own pay script. When set, a template whose coinbase pays anyone else — a pool offering custody of the reward — is
+    /// refused (RFC-0009 mode C: a pool is a job service, relay, provider or builder; non-custodial by default).
+    pub pay_to: Option<kaspa_consensus_core::tx::ScriptPublicKey>,
 }
 
 #[derive(Clone, Debug)]
@@ -160,6 +163,10 @@ pub enum MinerHalt {
     Verify(#[from] VerifyErrorV1),
     #[error("{0}")]
     Gate(#[from] GateRefusalV1),
+    #[error(
+        "the template pays its block reward to {got}, not to this miner ({want}): a custodial job — refused (non-custodial by default)"
+    )]
+    Custodial { got: String, want: String },
 }
 
 #[derive(Clone, Debug)]
@@ -247,6 +254,13 @@ pub fn step(
         .expect("an accepted template has at least one agreeing node, and every agreeing node answered");
     let template_header: &Header = &chosen.block.header;
 
+    // **Non-custodial by default**: the template's own reward must be paid to this miner, whoever served the job.
+    if let Some(want) = &cfg.trust.pay_to {
+        let got = crate::template::template_pays_v1(&chosen.block);
+        if got.as_ref() != Some(want) {
+            return Err(MinerHalt::Custodial { got: format!("{got:?}"), want: format!("{want:?}") });
+        }
+    }
     // **The security class, before any inference** (L1/L3/L2 when configured; the quorum alone is UNVERIFIED_REMOTE), and the gate.
     let job = NodeJobFactsV1 {
         class_id: accepted.observation.facts.class_id,
@@ -991,7 +1005,21 @@ mod tests {
             let mut x = header(tip.daa_score + 1, 0);
             x.parents_by_level = vec![vec![tip.hash]].try_into().unwrap();
             x.finalize();
-            t.block = Block::from_header(x);
+            // A coinbase paying the miner's script (what getBlockTemplate with the miner's pay address returns).
+            let mut payload = vec![0u8; 16];
+            payload.extend_from_slice(&0u16.to_le_bytes());
+            payload.push(34);
+            payload.extend_from_slice(&[0x5A; 34]);
+            let coinbase = kaspa_consensus_core::tx::Transaction::new(
+                0,
+                vec![],
+                vec![],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_COINBASE,
+                0,
+                payload,
+            );
+            t.block = Block::new(x, vec![coinbase]);
             Ok(t)
         }
         fn submit_block(&self, block: &Block) -> Reply {
@@ -1044,6 +1072,7 @@ mod tests {
                 now_ms: vnow,
             }),
             accept_unverified: accept,
+            pay_to: None,
         };
         c
     }
@@ -1129,5 +1158,43 @@ mod tests {
         assert!(matches!(&out, Err(MinerHalt::Attempt(AttemptError::Signer(why))) if why.contains("re-check")), "{out:?}");
         assert_eq!(exec.calls.get(), 1, "the inference ran");
         assert!(a.inner.submitted.borrow().is_empty() && b.inner.submitted.borrow().is_empty(), "nothing signed, nothing sent");
+    }
+
+    /// **RFC-0009 mode C — a pool is a job service, nothing more.** A job a "pool" serves goes through exactly the checks a node's does
+    /// (here: two pool endpoints serving the verified chain and proofs land in the same class as two nodes would, and a pool that lies
+    /// about the class row is stopped the same way); a pool template that pays the POOL is refused as custodial; and a miner with no pool
+    /// at all mines (every other test in this module). There is no pool concept in consensus or in this driver — only nodes.
+    #[test]
+    fn a_pool_is_only_a_job_service_it_gets_no_trust_and_no_custody() {
+        let signer = keypair();
+        let accept = Some(ModeLabelV1::HeaderVerifiedForkChoiceUnverified);
+        let (p1, p2) = (VFake::new("pool-1", &pk(&signer), h(31), 1), VFake::new("pool-2", &pk(&signer), h(31), 1));
+        let checkpoint = p1.chain.borrow()[0].clone();
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        // the same class a pair of nodes gives
+        let mut c = vcfg(pk(&signer), &checkpoint, accept);
+        let pays_us = crate::template::template_pays_v1(&p1.fetch_template().unwrap().block);
+        assert_eq!(
+            pays_us,
+            Some(kaspa_consensus_core::tx::ScriptPublicKey::new(0, vec![0x5A; 34].into())),
+            "the coinbase payload parses"
+        );
+        c.trust.pay_to = pays_us.clone();
+        let out = vrun(&[&p1, &p2], &c, &mut state, &mut exec, &signer).unwrap();
+        assert!(matches!(out, StepOutcome::Published(_)));
+        assert_eq!(state.last_mode, Some(ModeLabelV1::HeaderVerifiedForkChoiceUnverified));
+        // a pool lying about the class row is stopped exactly as a node would be
+        let (l1, l2) = (VFake::new("pool-1", &pk(&signer), h(0x99), 1), VFake::new("pool-2", &pk(&signer), h(0x99), 1));
+        let checkpoint = l1.chain.borrow()[0].clone();
+        let calls = exec.calls.get();
+        let out = vrun(&[&l1, &l2], &vcfg(pk(&signer), &checkpoint, accept), &mut state, &mut exec, &signer);
+        assert!(matches!(out, Err(MinerHalt::Verify(VerifyErrorV1::ContradictsProof { .. }))), "{out:?}");
+        assert_eq!(exec.calls.get(), calls, "no inference");
+        // a pool template paying the pool: custodial, refused before any work
+        let mut c = vcfg(pk(&signer), &p1.chain.borrow()[0].clone(), accept);
+        c.trust.pay_to = Some(kaspa_consensus_core::tx::ScriptPublicKey::new(0, vec![0xAB; 34].into()));
+        let out = vrun(&[&p1, &p2], &c, &mut state, &mut exec, &signer);
+        assert!(matches!(out, Err(MinerHalt::Custodial { .. })), "{out:?}");
+        assert_eq!(exec.calls.get(), calls);
     }
 }
