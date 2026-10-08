@@ -16834,6 +16834,9 @@ mod t12_model_sink_bound_fence;
 // RFC-0002 Phase F: one IR class registration a block reaches admission v10 — the walk drops a second
 // by name before any slot or fee, and the fold refuses a second as its second lock.
 mod t12_tir_registration_cap;
+// G14 lane D: a model registration on the REAL consensus path against the offline gate (preflight parity, adversarial
+// registrations, mempool -> template -> fold -> persisted tip -> ConsensusApi reads, replay and reorg).
+mod g14_registration_e2e;
 // RFC-0002 Phase F's second IR fence: the IR step-leaf DA demand at the gate.
 mod t12_tir_da_step_gate;
 // RFC-0004 A4/A5: the material objects' and the candidate's signatures at the gate, and a licence
