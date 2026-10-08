@@ -216,27 +216,17 @@ pub mod fs {
         limits: &ManifestLimits,
         order_seed: Hash64,
     ) -> Result<(Vec<u8>, FetchReport), ClaimFetchError> {
+        // One implementation for every transport: this is [`crate::transport::fetch_claim_material_any`] over directories, so the node's
+        // `--palw-evidence-provider-dir`, a Panel seat and a public verifier on HTTP providers read the same bytes under the same checks.
         let providers: Vec<FsProvider> = roots.iter().map(FsProvider::new).collect();
-        let mut refusals = Vec::new();
-        let mut offered = 0usize;
-        let mut chosen = None;
-        for p in &providers {
-            let Some(m) = p.manifest_for(claim_hex) else { continue };
-            offered += 1;
-            match m.validate_shape(limits).and_then(|()| m.verify_claim_binding(claim)) {
-                Ok(()) => {
-                    chosen = Some(m);
-                    break;
-                }
-                Err(e) => refusals.push(format!("{}: {e}", p.id)),
+        let refs: Vec<&dyn crate::transport::EvidenceProvider> = providers.iter().map(|p| p as &dyn crate::transport::EvidenceProvider).collect();
+        crate::transport::fetch_claim_material_any(&refs, claim_hex, claim, limits, order_seed).map_err(|e| match e {
+            crate::transport::ClaimFetchErrorV1::NoAdmissibleManifest { offered, mut refusals, silent } => {
+                refusals.extend(silent);
+                ClaimFetchError::NoAdmissibleManifest { offered, refusals }
             }
-        }
-        let Some(manifest) = chosen else {
-            return Err(ClaimFetchError::NoAdmissibleManifest { offered, refusals });
-        };
-        let refs: Vec<&dyn ChunkProvider> = providers.iter().map(|p| p as &dyn ChunkProvider).collect();
-        let (chunks, report) = fetch_material_any(&manifest, claim, limits, &refs, order_seed).map_err(ClaimFetchError::Fetch)?;
-        Ok((chunks.concat(), report))
+            crate::transport::ClaimFetchErrorV1::Fetch(f) => ClaimFetchError::Fetch(f),
+        })
     }
 }
 

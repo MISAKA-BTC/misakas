@@ -1,0 +1,212 @@
+//! `palw-evidence` — the independent DA transport for a PALW claim's evidence (RFC-0009 stage B, the network half). Std only; no node, no key.
+//!
+//! ```text
+//!   palw-evidence serve   --root <dir> --listen 0.0.0.0:8088            a reference provider: verifies what it is given, serves the layout over HTTP
+//!   palw-evidence publish --claim <hex> --from <rail --evidence-out dir> --providers <list> [--min-verified N]
+//!   palw-evidence status  --claim <hex> --roots <claim.json> --providers <list> [--now-daa N] [--min-copies K]
+//!   palw-evidence fetch   --claim <hex> --roots <claim.json> --providers <list> --out <file>
+//!   palw-evidence repair  --claim <hex> --roots <claim.json> --providers <list>
+//! ```
+//!
+//! `--providers` is a file (one provider per line) or a comma-separated list: a directory, `dir:<path>`, `http://host:port[/prefix]`, `https://…`
+//! (through `curl`). There is no on-chain provider discovery: you choose where to place evidence and where to look.
+//!
+//! `--roots` is the CLAIM's commitments as the chain holds them (`getPalwFreePromptClaim`): `{"network_domain","trace_root","output_root",
+//! "execution_root","trace_chunk_count","retention_deadline"}`, hashes 128-hex. A manifest that disagrees with them is another execution's evidence
+//! and is never used, whoever serves it.
+//!
+//! **What a "healthy" line means.** It is `LOCAL_OBSERVATION`: this machine fetched bytes and they verified. It is not a proof for anyone else, a
+//! storage receipt is a promise, an infohash or an HTTP 200 is not availability, and nothing here moves a slash. Run `status`/`repair` from cron
+//! (with `--now-daa` from a node) to keep a claim's evidence alive after the miner's PC is off.
+
+use std::path::{Path, PathBuf};
+
+use kaspa_hashes::Hash64;
+use misaka_palw_remote::evidence::{ClaimRoots, EvidenceManifestV1, ManifestLimits, manifest_id_v1};
+use misaka_palw_remote::transport::{
+    EvidenceProvider, ProbeMode, ProviderSpecV1, check_availability_v1, fetch_claim_material_any, open_providers_v1,
+    parse_provider_list_v1, publish_to_providers_v1, repair_v1, server,
+};
+
+fn die(msg: impl std::fmt::Display) -> ! {
+    eprintln!("[palw-evidence] fatal: {msg}");
+    std::process::exit(1);
+}
+
+fn hash(what: &str, v: &serde_json::Value) -> Hash64 {
+    v.as_str().and_then(|s| s.parse::<Hash64>().ok()).unwrap_or_else(|| die(format!("{what} is not a 128-hex hash")))
+}
+
+fn read_roots(path: &Path) -> ClaimRoots {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
+    ClaimRoots {
+        network_domain: hash("network_domain", &v["network_domain"]),
+        trace_root: hash("trace_root", &v["trace_root"]),
+        output_root: hash("output_root", &v["output_root"]),
+        execution_root: hash("execution_root", &v["execution_root"]),
+        trace_chunk_count: v["trace_chunk_count"].as_u64().unwrap_or_else(|| die("trace_chunk_count is not a number")) as u32,
+        retention_deadline: v["retention_deadline"].as_u64().unwrap_or_else(|| die("retention_deadline is not a number")),
+    }
+}
+
+fn providers_of(arg: &str) -> Vec<ProviderSpecV1> {
+    let text = if Path::new(arg).is_file() {
+        std::fs::read_to_string(arg).unwrap_or_else(|e| die(format!("{arg}: {e}")))
+    } else {
+        arg.to_string()
+    };
+    let specs = parse_provider_list_v1(&text).unwrap_or_else(|e| die(e));
+    if specs.is_empty() {
+        die("--providers names no provider");
+    }
+    specs
+}
+
+/// The manifest for a claim: the first provider whose manifest is admissible against the CLAIM's roots.
+fn admissible_manifest(providers: &[&dyn EvidenceProvider], claim_hex: &str, roots: &ClaimRoots) -> EvidenceManifestV1 {
+    let limits = ManifestLimits::default();
+    let mut why = Vec::new();
+    for p in providers {
+        match p.manifest_for(claim_hex) {
+            Ok(Some(m)) => match m.validate_shape(&limits).and_then(|()| m.verify_claim_binding(roots)) {
+                Ok(()) => return m,
+                Err(e) => why.push(format!("{}: {e}", p.provider_id())),
+            },
+            Ok(None) => {}
+            Err(e) => why.push(format!("{}: {e}", p.provider_id())),
+        }
+    }
+    die(format!("no provider holds a manifest for this claim that agrees with the claim's roots ({why:?})"))
+}
+
+fn main() {
+    let mut args = std::env::args().skip(1);
+    let command = args.next().unwrap_or_else(|| die("usage: palw-evidence <serve|publish|status|fetch|repair> …"));
+    let (mut claim, mut roots, mut providers, mut out, mut from, mut root, mut listen) = (None, None, None, None, None, None, None);
+    let (mut min_verified, mut min_copies, mut now_daa, mut max_store_gb) = (1usize, 2usize, None::<u64>, 64u64);
+    while let Some(flag) = args.next() {
+        let mut value = |name: &str| args.next().unwrap_or_else(|| die(format!("{name} needs a value")));
+        match flag.as_str() {
+            "--claim" => claim = Some(value("--claim").to_ascii_lowercase()),
+            "--roots" => roots = Some(PathBuf::from(value("--roots"))),
+            "--providers" => providers = Some(value("--providers")),
+            "--out" => out = Some(PathBuf::from(value("--out"))),
+            "--from" => from = Some(PathBuf::from(value("--from"))),
+            "--root" => root = Some(PathBuf::from(value("--root"))),
+            "--listen" => listen = Some(value("--listen")),
+            "--min-verified" => {
+                min_verified = value("--min-verified").parse().unwrap_or_else(|_| die("--min-verified is not a number"))
+            }
+            "--min-copies" => min_copies = value("--min-copies").parse().unwrap_or_else(|_| die("--min-copies is not a number")),
+            "--now-daa" => now_daa = Some(value("--now-daa").parse().unwrap_or_else(|_| die("--now-daa is not a number"))),
+            "--max-store-gb" => {
+                max_store_gb = value("--max-store-gb").parse().unwrap_or_else(|_| die("--max-store-gb is not a number"))
+            }
+            other => die(format!("unknown flag {other}")),
+        }
+    }
+    let need = |v: &Option<String>, name: &str| v.clone().unwrap_or_else(|| die(format!("{name} is required")));
+    match command.as_str() {
+        "serve" => {
+            let root = root.unwrap_or_else(|| die("--root is required"));
+            std::fs::create_dir_all(&root).unwrap_or_else(|e| die(format!("{}: {e}", root.display())));
+            let listen = listen.unwrap_or_else(|| "127.0.0.1:8088".to_string());
+            let cfg = server::ServerConfig { max_store_bytes: max_store_gb << 30, ..Default::default() };
+            let handle = server::start(&listen, root.clone(), cfg).unwrap_or_else(|e| die(format!("cannot listen on {listen}: {e}")));
+            println!(
+                "{}",
+                serde_json::json!({ "event": "serving", "url": handle.url(), "root": root.display().to_string(), "note": "verifies manifests against their chunks; a storage promise is not availability" })
+            );
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(3600));
+            }
+        }
+        "publish" => {
+            let claim = need(&claim, "--claim");
+            let from = from.unwrap_or_else(|| die("--from <the rail's --evidence-out directory> is required"));
+            let local = misaka_palw_remote::evidence::fs::FsProvider::new(from.clone());
+            let manifest =
+                local.manifest_for(&claim).unwrap_or_else(|| die(format!("{} holds no manifest for claim {claim}", from.display())));
+            let id = manifest_id_v1(&manifest);
+            let mut chunks = Vec::new();
+            for entry in &manifest.chunks {
+                let bytes = std::fs::read(misaka_palw_remote::evidence::fs::chunk_path(&from, id, entry.index))
+                    .unwrap_or_else(|e| die(format!("chunk {}: {e}", entry.index)));
+                manifest
+                    .verify_chunk(entry.index, &bytes)
+                    .unwrap_or_else(|e| die(format!("the local chunk {} does not match its manifest: {e}", entry.index)));
+                chunks.push(bytes);
+            }
+            let specs = providers_of(&need(&providers, "--providers"));
+            let opened = open_providers_v1(&specs);
+            let refs: Vec<&dyn EvidenceProvider> = opened.iter().map(|b| b.as_ref()).collect();
+            let (ok, report) = match publish_to_providers_v1(&claim, &manifest, &chunks, &refs, min_verified) {
+                Ok(r) => (true, r),
+                Err(r) => (false, r),
+            };
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": "misaka.palw.evidence-publish.v1",
+                    "claim": claim,
+                    "manifest_id": report.manifest_id.to_string(),
+                    "verified_copies": report.verified_copies(),
+                    "required": min_verified,
+                    "per_provider": report.per_provider.iter().map(|o| serde_json::json!({ "provider": o.provider, "result": o.result.clone().map(|()| "read back and verified".to_string()).unwrap_or_else(|e| e) })).collect::<Vec<_>>(),
+                    "safe_to_switch_off": ok,
+                    "note": "an ACK is the provider's word; each copy above was read back and hashed against the manifest by this machine. nobody but you is slashed for withholding until a provider court is armed",
+                })
+            );
+            if !ok {
+                std::process::exit(2);
+            }
+        }
+        "status" | "fetch" | "repair" => {
+            let claim = need(&claim, "--claim");
+            let roots =
+                read_roots(&roots.unwrap_or_else(|| die("--roots <claim.json> is required: the claim's commitments from the chain")));
+            let specs = providers_of(&need(&providers, "--providers"));
+            let opened = open_providers_v1(&specs);
+            let refs: Vec<&dyn EvidenceProvider> = opened.iter().map(|b| b.as_ref()).collect();
+            if command == "fetch" {
+                let out = out.unwrap_or_else(|| die("--out is required"));
+                match fetch_claim_material_any(&refs, &claim, &roots, &ManifestLimits::default(), claim.parse().unwrap_or_default()) {
+                    Ok((bytes, report)) => {
+                        std::fs::write(&out, &bytes).unwrap_or_else(|e| die(format!("{}: {e}", out.display())));
+                        println!(
+                            "{}",
+                            serde_json::json!({ "schema": "misaka.palw.evidence-fetch.v1", "claim": claim, "bytes": bytes.len(), "out": out.display().to_string(), "served_by": report.served_by, "failed_attempts": report.failures.len(), "note": "every chunk verified against a manifest that agrees with the claim's roots; the Panel's own re-execution still judges the material" })
+                        );
+                    }
+                    Err(e) => die(e),
+                }
+                return;
+            }
+            let manifest = admissible_manifest(&refs, &claim, &roots);
+            if command == "repair" {
+                let r = repair_v1(&claim, &manifest, &refs);
+                println!(
+                    "{}",
+                    serde_json::json!({ "schema": "misaka.palw.evidence-repair.v1", "claim": claim, "copied": r.copied.len(), "failed": r.failed, "unrepairable_chunks": r.unrepairable })
+                );
+                return;
+            }
+            let a = check_availability_v1(&claim, &manifest, &refs, ProbeMode::Verify);
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": "misaka.palw.evidence-status.v1",
+                    "claim": claim,
+                    "manifest_id": a.manifest_id.to_string(),
+                    "retention_until_daa": a.retention_until_daa,
+                    "copies_per_chunk": a.copies,
+                    "verdict": format!("{:?}", a.verdict(min_copies, now_daa)),
+                    "per_provider": a.per_provider.iter().map(|p| serde_json::json!({ "provider": p.provider, "manifest": format!("{:?}", p.manifest), "verified_chunks": p.verified_chunks(), "chunks": p.chunks.len() })).collect::<Vec<_>>(),
+                    "observation": a.line(min_copies, now_daa),
+                })
+            );
+        }
+        other => die(format!("unknown command {other:?}")),
+    }
+}
