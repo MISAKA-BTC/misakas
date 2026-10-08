@@ -492,6 +492,14 @@ pub fn adapter_source_of(
     let base_listing =
         ListingV1 { id: base.repo.clone(), siblings: base.inventory.iter().map(|x| x.path.clone()).collect(), ..Default::default() };
     let base_sel = super::listing::select(&base_listing);
+    if super::listing::torch_checkpoint_only(&base_listing, &base_sel) {
+        // The base is a transformers PyTorch checkpoint: the frontend reads it, the census never fetched its zip directory.
+        return Err(vec![problem(
+            codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY,
+            &format!("base:{}", base.repo),
+            "the base is a pytorch_model.bin checkpoint (read without running its pickle) whose zip directory was not fetched",
+        )]);
+    }
     if !matches!(base_sel.kind, ArtifactKind::Safetensors) {
         // The base is pinned and readable, but not in a form this build lowers (its weights only as a pickle, a GGUF, …): a lower-gate
         // fact about the composite, not a source failure.

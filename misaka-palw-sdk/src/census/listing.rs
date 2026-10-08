@@ -461,6 +461,21 @@ pub struct SelectedV1 {
     pub rule: String,
 }
 
+/// Whether the repository's only weights are a transformers PyTorch checkpoint (`config.json` beside `pytorch_model.bin`, its
+/// `.index.json` or its `pytorch_model-0000k-of-0000n.bin` shards) — the form the frontend reads without running the pickle.
+/// A listing of `training_args.bin` or a `.pt` file beside a configuration is not one.
+pub fn torch_checkpoint_only(l: &ListingV1, sel: &SelectedV1) -> bool {
+    sel.kind == ArtifactKind::Other
+        && sel.formats.iter().any(|f| f == "pytorch")
+        && sel.formats.iter().all(|f| f == "pytorch" || !matches!(f.as_str(), "safetensors" | "gguf"))
+        && l.siblings.iter().any(|s| s == "config.json")
+        && l.siblings.iter().any(|s| {
+            s == "pytorch_model.bin"
+                || s == "pytorch_model.bin.index.json"
+                || (s.starts_with("pytorch_model-") && s.contains("-of-") && s.ends_with(".bin"))
+        })
+}
+
 /// The weight format of a file name, or `None` for a file that holds no weights.
 pub fn weight_format(path: &str) -> Option<&'static str> {
     let name = path.rsplit('/').next().unwrap_or(path);

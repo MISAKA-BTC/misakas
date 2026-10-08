@@ -75,6 +75,10 @@ pub const NOT_RUN_PIPELINE_ADMISSION: &str = "NOT_RUN_PIPELINE_ADMISSION";
 /// The frontend reads the data of a small tensor (a GGUF's `rope_freqs.weight`) to build the configuration; the census reads headers
 /// only (the network policy of this census), so the gate is not run rather than failed.
 pub const NOT_RUN_NEEDS_TENSOR_DATA: &str = "NOT_RUN_NEEDS_TENSOR_DATA";
+/// The checkpoint is a PyTorch `pytorch_model.bin` (a zip of a pickle and its storages). The frontend reads it without running the
+/// pickle (`weights::torchzip`), but the census fetches safetensors headers only: the zip's central directory and `data.pkl` of this
+/// repository were never read, so the gate is not run rather than failed as an unsupported format.
+pub const NOT_RUN_NEEDS_PICKLE_DIRECTORY: &str = "NOT_RUN_NEEDS_PICKLE_DIRECTORY";
 
 // ---- source ------------------------------------------------------------------------------------------------------------------------
 

@@ -234,6 +234,7 @@ mod tests {
             codes::NOT_RUN_DEPTH_HEADERS,
             codes::NOT_RUN_PIPELINE_ADMISSION,
             codes::NOT_RUN_NEEDS_TENSOR_DATA,
+            codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY,
             "NOT_RUN_AFTER_SOURCE",
             "NOT_RUN_AFTER_LOWER",
             "NOT_RUN_AFTER_ADMIT",

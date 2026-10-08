@@ -10,7 +10,7 @@
 
 use super::codes::{self, Gate, GateStatus};
 use super::onboarding::{GapClassV1, classify_census_code_v1};
-use super::listing::{ArtifactKind, ListingV1, SelectedV1, StrataV1, TaskV1, select, strata_of, task_of};
+use super::listing::{ArtifactKind, ListingV1, SelectedV1, StrataV1, TaskV1, select, strata_of, task_of, torch_checkpoint_only};
 use super::rights::{RightsPolicy, RightsV1, rights_of};
 use super::store::{self, Fetched};
 use super::tasks::Profile;
@@ -489,6 +489,9 @@ fn lower_listing(l: &ListingV1, task: &TaskV1, sel: &SelectedV1) -> Vec<Found> {
         ));
     }
     match sel.kind {
+        // A transformers `pytorch_model.bin` is read by the frontend (without running its pickle); the census has not read this
+        // repository's zip directory, which the lower gate reports as not run (`needs_pickle`), never as an unsupported format.
+        ArtifactKind::Other if torch_checkpoint_only(l, sel) => {}
         ArtifactKind::Other => f.push(found(
             codes::FORMAT_UNSUPPORTED,
             Some(sel.formats.join("+")),
@@ -747,6 +750,8 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
     let mut lower_evidence: Vec<String> = Vec::new();
     let mut route_needs_weights = false;
     let mut needs_tensor_data: Option<String> = None;
+    // A PyTorch checkpoint whose zip directory the census never fetched (its own, or its adapter's base).
+    let mut needs_pickle: Option<String> = torch_checkpoint_only(l, &sel).then(|| "the repository's weights".to_string());
     let mut image_stage_probe: Option<serde_json::Value> = None;
     let mut context: Option<ContextV1> = None;
     let mut admit_retry: Option<GateResultV1> = None;
@@ -830,7 +835,9 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                 }
                 Err(ps) => {
                     for p in ps {
-                        if p.code == codes::FORMAT_UNSUPPORTED {
+                        if p.code == codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY {
+                            needs_pickle = Some(p.path);
+                        } else if p.code == codes::FORMAT_UNSUPPORTED {
                             lower_extra.push(found(p.code, Some(p.path), vec![p.detail]));
                         } else {
                             store_problems.push(found(p.code, Some(p.path), vec![p.detail]));
@@ -912,6 +919,17 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
         }
         if !f.is_empty() {
             return fail(Gate::Lower, f, depth);
+        }
+        if let Some(what) = &needs_pickle {
+            let mut r = not_run(
+                Gate::Lower,
+                codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY,
+                vec![format!(
+                    "{what} is a PyTorch checkpoint (pytorch_model.bin): the frontend reads it without running its pickle, but the census reads safetensors headers only"
+                )],
+            );
+            r.arg = Some("pytorch".into());
+            return r;
         }
         if fetched.is_none() {
             return not_run(Gate::Lower, codes::NOT_RUN_NOT_SAMPLED, vec![]);
@@ -1141,7 +1159,7 @@ mod tests {
         // The strict view's rights failure is the source's, not the importer's.
         assert_eq!(gate(&r.gates, Gate::Source).class, Some(GapClassV1::ExternalBlocker));
         // A format with no reader is the importer's; missing weights are the source's.
-        let r = evaluate(&listing(Some("text-generation"), &["config.json", "pytorch_model.bin"]), None, &ctx());
+        let r = evaluate(&listing(Some("text-generation"), &["config.json", "model.onnx"]), None, &ctx());
         assert_eq!(gate(&r.technical, Gate::Lower).class, Some(GapClassV1::FrontendRequired));
         let r = evaluate(&listing(Some("text-generation"), &["README.md"]), None, &ctx());
         assert_eq!(gate(&r.technical, Gate::Source).class, Some(GapClassV1::ExternalBlocker));
@@ -1167,11 +1185,40 @@ mod tests {
         assert!(!r.shape_ready);
     }
 
+    /// **A `pytorch_model.bin` is no longer "an unsupported format".** The frontend reads it without running its pickle
+    /// (`weights::torchzip`); the census has fetched safetensors headers only, so the lower gate of such a repository is NOT_RUN
+    /// (not a verdict, not a gap of any kind) with its own code — and a pytorch file that is not a transformers checkpoint, or a task
+    /// with no profile, keeps its own, earlier answer.
+    #[test]
+    fn a_pytorch_checkpoint_is_not_run_never_an_unsupported_format() {
+        for sib in [
+            vec!["config.json", "pytorch_model.bin"],
+            vec!["config.json", "pytorch_model.bin.index.json", "pytorch_model-00001-of-00002.bin", "pytorch_model-00002-of-00002.bin"],
+            vec!["config.json", "pytorch_model-00001-of-00002.bin"],
+        ] {
+            let r = evaluate(&listing(Some("text-generation"), &sib), None, &ctx());
+            let lo = gate(&r.technical, Gate::Lower);
+            assert_eq!((lo.status, lo.blocking.as_deref(), lo.arg.as_deref()), (GateStatus::NotRun, Some(codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY), Some("pytorch")), "{sib:?}");
+            assert_eq!(lo.class, Some(GapClassV1::NotRun));
+            assert!(!lo.class.unwrap().is_semantic_gap());
+            assert!(!r.shape_ready, "unmeasured is not ready");
+        }
+        // Not a transformers checkpoint: a configuration beside `training_args.bin` alone is no weights; a bare `.pt` has no reader.
+        let r = evaluate(&listing(Some("text-generation"), &["config.json", "model.pt"]), None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::FORMAT_UNSUPPORTED));
+        // An earlier answer stands: a task with no profile is the profile's, whatever the weights are.
+        let r = evaluate(&listing(Some("text-classification"), &["config.json", "pytorch_model.bin"]), None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::MODALITY_PROFILE_MISSING));
+        // Another format beside it (onnx, tensorflow) changes nothing: the transformers checkpoint is the one the frontend reads.
+        let r = evaluate(&listing(Some("text-generation"), &["config.json", "pytorch_model.bin", "model.onnx"]), None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY));
+    }
+
     #[test]
     fn the_format_the_adapter_and_the_missing_weights_are_named() {
-        let r = evaluate(&listing(Some("text-generation"), &["config.json", "pytorch_model.bin"]), None, &ctx());
+        let r = evaluate(&listing(Some("text-generation"), &["config.json", "model.onnx"]), None, &ctx());
         assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::FORMAT_UNSUPPORTED));
-        assert_eq!(gate(&r.technical, Gate::Lower).arg.as_deref(), Some("pytorch"));
+        assert_eq!(gate(&r.technical, Gate::Lower).arg.as_deref(), Some("onnx"));
         let r = evaluate(&listing(Some("text-generation"), &["README.md"]), None, &ctx());
         assert_eq!(gate(&r.technical, Gate::Source).blocking.as_deref(), Some(codes::MISSING_WEIGHTS));
         let mut l = listing(None, &["adapter_config.json", "adapter_model.safetensors"]);
