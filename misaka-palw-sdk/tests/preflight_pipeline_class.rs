@@ -344,6 +344,14 @@ fn the_census_admit_gate_reads_the_pipeline_verdict_for_an_encoder_decoder() {
     assert!(row.shape_ready, "a tiny T5 is shape-ready under the pipeline admission");
     assert!(!row.registration_ready, "shape-ready is not registered");
 
+    // An encoder–decoder whose configuration declares no positions (T5's relative attention has no table) is declared at 512 under the
+    // default context rule, not at the 8,192 an IR decoder is assumed at — a source of 8,192 ids has attention scores no node holds.
+    let ctx = CensusContext::new("p4", "testnet-12", None, RightsPolicy::None, "test");
+    let row = evaluate(&l, Some(&fx), &ctx);
+    let cx = row.context.as_ref().expect("a context record");
+    assert_eq!((cx.primary, cx.source.as_str(), cx.declared), (512, "assumed", None), "{cx:?}");
+    assert_eq!(gate(&row, Gate::Lower).status, GateStatus::Pass, "{:?}", gate(&row, Gate::Lower));
+
     // flan-t5-small at 512: refused by the chain's code, a resource outcome — not a gate that was not run.
     let flan = flan_t5_small_headers("census-flan");
     let (fx, l) = fetched_store(&flan, "flan");

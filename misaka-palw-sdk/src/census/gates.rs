@@ -206,11 +206,14 @@ impl ContextRule {
         match self {
             ContextRule::Fixed(c) => format!("fixed {c}"),
             ContextRule::ModelCapped { cap, retry } => format!(
-                "primary min(declared max positions, {cap}); judged at {retry} first, the primary only when {retry} admits (or refuses on a code a wider context could change); a class admitted at {retry} only is its own stratum"
+                "primary min(declared max positions, {cap}; {ENCDEC_ASSUMED_CONTEXT} for an encoder–decoder that declares none); judged at {retry} first, the primary only when {retry} admits (or refuses on a code a wider context could change); a class admitted at {retry} only is its own stratum"
             ),
         }
     }
 }
+
+/// The context an encoder–decoder (RFC-0003 text pipeline) is declared at when its configuration declares no positions.
+pub const ENCDEC_ASSUMED_CONTEXT: u32 = 512;
 
 /// The declared context of a row.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -359,6 +362,10 @@ fn judge_at_contexts(
         ContextRule::Fixed(c) => (c, "fixed".to_string(), None),
         ContextRule::ModelCapped { cap, .. } => match cs.source.config.as_ref().and_then(declared_positions) {
             Some((d, at)) => (d.min(u64::from(cap)) as u32, at, Some(d)),
+            // An encoder–decoder's attention is quadratic in its source: a registrant of a T5-family model whose configuration declares
+            // no positions (relative attention has no table) declares the family's 512, not the 8,192 an IR decoder is assumed at
+            // (whose scores no node holds: `more than 2^28 elements`). Said in the context rule and the row (`assumed`).
+            None if task.profile == Profile::GenText => (ENCDEC_ASSUMED_CONTEXT.min(cap), "assumed".to_string(), None),
             None => (cap, "assumed".to_string(), None),
         },
     };
