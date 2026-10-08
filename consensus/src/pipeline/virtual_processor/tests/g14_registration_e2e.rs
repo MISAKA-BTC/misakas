@@ -107,8 +107,11 @@ fn corpus() -> Vec<Case> {
 /// [`corpus`] declared at `positions` of context.
 fn corpus_at(positions: u32) -> Vec<Case> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../consensus-vectors/tir-v1/programs");
-    let mut files: Vec<PathBuf> =
-        std::fs::read_dir(dir).expect("vectors").map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .expect("vectors")
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
     files.sort();
     files
         .into_iter()
@@ -619,9 +622,12 @@ async fn g14_adversarial_registrations_gate_and_chain_agree() {
         ),
         (
             "plan: pwu_per_inference one more than counted",
-            edit_raw(&env, &state, &s, |o| {
-                reg!(o, { pwu_rule } => *pwu_rule = PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted + 1 })
-            }),
+            edit_raw(
+                &env,
+                &state,
+                &s,
+                |o| reg!(o, { pwu_rule } => *pwu_rule = PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted + 1 }),
+            ),
             Want::Refuse("PWU_PER_INFERENCE_MISMATCH"),
         ),
         // ---- the family / share claim ----
@@ -678,11 +684,7 @@ async fn g14_adversarial_registrations_gate_and_chain_agree() {
             },
             Want::StatefulDrop("is not signed by the bond it names"),
         ),
-        (
-            "signature: none (unsigned)",
-            build(&env, &state, &s),
-            Want::StatefulDrop("is not signed by the bond it names"),
-        ),
+        ("signature: none (unsigned)", build(&env, &state, &s), Want::StatefulDrop("is not signed by the bond it names")),
         (
             "registrant: a bond this chain does not have",
             edit_raw(&env, &state, &s, |o| {
@@ -739,8 +741,12 @@ async fn g14_duplicate_registrations() {
     check("duplicate: the same object again", &again, Want::StatefulDrop("already")).unwrap();
     let by_another = signed(&env, &after, &spec_of(&dense, 3, 0));
     assert_eq!(class_id_of(&by_another), class_id_of(&o), "one class id");
-    check("duplicate: the same class by another registrant", &judge(&env, &after, block, 0, &by_another), Want::StatefulDrop("already"))
-        .unwrap();
+    check(
+        "duplicate: the same class by another registrant",
+        &judge(&env, &after, block, 0, &by_another),
+        Want::StatefulDrop("already"),
+    )
+    .unwrap();
 }
 
 /// **A differential over mutated programs**: every sampled single-byte mutation of the dense and the MoE corpus
@@ -791,8 +797,8 @@ async fn g14_program_mutation_differential() {
 /// A 0x4b lifecycle carrier for `object`, spending `funding` (owned by card `card`'s payout key) and signed by that card.
 fn carrier_from(env: &Env, object: &Obj, card: usize, funding: (TransactionOutpoint, UtxoEntry), fee: u64) -> Transaction {
     use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
-    let payload =
-        borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).expect("serializes");
+    let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() })
+        .expect("serializes");
     let (outpoint, entry) = funding;
     let mut tx = Transaction::new(
         crate::constants::TX_VERSION,
@@ -855,6 +861,18 @@ async fn mine_registration_on(mut env: Env, c: &Case, card: usize) -> Mined {
     let spec = spec_of(c, card, daa + ACTIVATION_AHEAD);
     let object = signed(&env, &state, &spec);
     let class_id = class_id_of(&object);
+    // The terms a registrant builds from (`getPalwRegistrationTerms`) are the chain's own pricing — the numbers `build` used —
+    // and do not yet list the class.
+    {
+        let terms = env.chain.ctx.consensus.palw_v2_registration_terms().expect("the chain serves registration terms");
+        let (target, slash, _) = env.terms(&state);
+        assert_eq!(
+            (terms.initial_target, terms.slash_value_per_pwu),
+            (target, slash),
+            "the served terms are the pricing the object carries"
+        );
+        assert!(!terms.registered_class_ids.contains(&class_id) && !terms.registered_artifact_roots.contains(&spec.root));
+    }
     let collateral_before = state.bond(&env.chain.bonds[card]).expect("the registrant bond").collateral;
     // The gate, before the fee is spent.
     let certified = state.chain_certified_families(PalwCertifiedLaneV1::Attempt);
@@ -866,7 +884,17 @@ async fn mine_registration_on(mut env: Env, c: &Case, card: usize) -> Mined {
     let carrying = env.chain.heartbeat(ttpb, vec![carrier.clone()]).await;
     assert!(carrying.transactions.iter().any(|tx| tx.id() == carrier.id()), "the node's own template carries the registration");
     let folding = env.chain.heartbeat(ttpb, Vec::new()).await;
-    Mined { env, object, class_id, card, carrier, blocks: vec![h1, carrying, folding], record, activation: daa + ACTIVATION_AHEAD, collateral_before }
+    Mined {
+        env,
+        object,
+        class_id,
+        card,
+        carrier,
+        blocks: vec![h1, carrying, folding],
+        record,
+        activation: daa + ACTIVATION_AHEAD,
+        collateral_before,
+    }
 }
 
 #[tokio::test]
@@ -876,9 +904,14 @@ async fn g14_registration_mined_end_to_end_on_the_real_node_path() {
 
 /// The whole pipeline for one class, `c`, registered by card `card`'s bond (see the module doc).
 async fn mined_end_to_end(c: &Case, card: usize) {
+    mined_end_to_end_on(Env::new(0), c, card).await;
+}
+
+/// [`mined_end_to_end`] on a chain the caller built (the ruleset it likes, warmed up as far as it likes).
+async fn mined_end_to_end_on(env: Env, c: &Case, card: usize) {
     use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
     kaspa_core::log::try_init_logger("warn");
-    let mut m = mine_registration(c, card).await;
+    let mut m = mine_registration_on(env, c, card).await;
     let env = &mut m.env;
     let bond = env.chain.bonds[m.card];
     let consensus = &env.chain.ctx.consensus;
@@ -887,16 +920,30 @@ async fn mined_end_to_end(c: &Case, card: usize) {
     let (fold_block, state) = env.chain.tip_state();
     assert_eq!(fold_block, m.blocks[2].header.hash, "the tip is the folding block");
     let row = state.class(&m.class_id).expect("the folding block wrote the class row");
-    assert_eq!(row.status, PalwClassStatusV2::Registered { activation_daa: m.activation, pending_share_permille: 0 }, "dormant until its activation");
+    assert_eq!(
+        row.status,
+        PalwClassStatusV2::Registered { activation_daa: m.activation, pending_share_permille: 0 },
+        "dormant until its activation"
+    );
     assert_eq!(row.registrant_bond, Some(bond), "whose bond paid");
-    assert_eq!(row.artifact_root, match &m.object { Obj::ClassRegisteredTirV1 { artifact_root, .. } => *artifact_root, _ => unreachable!() });
+    assert_eq!(
+        row.artifact_root,
+        match &m.object {
+            Obj::ClassRegisteredTirV1 { artifact_root, .. } => *artifact_root,
+            _ => unreachable!(),
+        }
+    );
     assert_eq!(state.tir_class_v1(&m.class_id), Some(&m.record), "the tir_classes row is exactly what the gate derived");
     assert!(state.tir_class_v1(&m.class_id).unwrap().check_program_v1().is_ok(), "and the program travels with it");
     let (target, ..) = env.terms(&state);
     assert_eq!(state.class_target(&m.class_id).map(|t| t.target), Some(target), "at the chain's target");
     let b = state.bond(&bond).expect("the bond");
     assert!(state.registration_exposure(&bond) > 0, "the registration exposure is reserved on the registrant's bond");
-    assert_eq!(b.collateral, m.collateral_before - kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, "1 MSK burned");
+    assert_eq!(
+        b.collateral,
+        m.collateral_before - kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1,
+        "1 MSK burned"
+    );
     // The carrying block's own tip state (one block earlier) did not hold it: the fold is the chain block's.
     // ---- the node's reads (what the RPC serves) ----
     let rows = consensus.palw_v2_class_table();
@@ -928,7 +975,8 @@ async fn mined_end_to_end(c: &Case, card: usize) {
 
     // ---- the registration-status reads the RPC builds a verdict from ----
     let accepting_daa = row.registered_daa;
-    let found = kaspa_consensus_core::palw_model_registration_v1::palw_registration_row_written_by_v1(&m.carrier, accepting_daa, &rows);
+    let found =
+        kaspa_consensus_core::palw_model_registration_v1::palw_registration_row_written_by_v1(&m.carrier, accepting_daa, &rows);
     assert_eq!(
         found.map(|r| r.class_id),
         Some(m.class_id),
@@ -947,10 +995,10 @@ async fn mined_end_to_end(c: &Case, card: usize) {
     let (_, later) = env.chain.tip_state();
     assert_eq!(later.class(&m.class_id).map(|c| c.status.clone()), Some(PalwClassStatusV2::Active), "Active past its activation");
     assert_eq!(later.class_share_permille(&m.class_id), Some(0), "a registered class earns nothing by registering");
-    assert!(matches!(
-        mempool_verdict(env, &m.carrier),
-        Err(kaspa_consensus_core::errors::tx::TxRuleError::MissingTxOutpoints)
-    ), "the mempool refuses a replay of the spent carrier");
+    assert!(
+        matches!(mempool_verdict(env, &m.carrier), Err(kaspa_consensus_core::errors::tx::TxRuleError::MissingTxOutpoints)),
+        "the mempool refuses a replay of the spent carrier"
+    );
 }
 
 // ---- more than one node: replay, reorg, pruned import ---------------------------------------------------
@@ -1024,7 +1072,9 @@ async fn g14_registration_replay_on_a_second_node_and_across_a_reorg() {
     for blk in [&h1, &carrying, &folding] {
         assert_eq!(root_at(&z, blk.header.hash), root_at(&a.env.chain, blk.header.hash), "per-block delta root {}", blk.header.hash);
     }
-    assert!(z.ctx.consensus.get_virtual_utxo_entry(change).is_some() && z.ctx.consensus.get_virtual_utxo_entry(float_outpoint).is_none());
+    assert!(
+        z.ctx.consensus.get_virtual_utxo_entry(change).is_some() && z.ctx.consensus.get_virtual_utxo_entry(float_outpoint).is_none()
+    );
     let collateral_on_a = z_a.bond(&bond).unwrap().collateral;
     assert_eq!(collateral_on_a, a.collateral_before - kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1);
 
@@ -1050,7 +1100,9 @@ async fn g14_registration_replay_on_a_second_node_and_across_a_reorg() {
     // **The sink's PALW state is the sink chain's; the virtual's UTXO view also merges A's blue blocks.** The carrier
     // (in A's carrying block) is therefore accepted by the VIRTUAL — its float is spent, its change stands — while the
     // class row exists only once a chain block folds that acceptance.
-    assert!(z.ctx.consensus.get_virtual_utxo_entry(change).is_some() && z.ctx.consensus.get_virtual_utxo_entry(float_outpoint).is_none());
+    assert!(
+        z.ctx.consensus.get_virtual_utxo_entry(change).is_some() && z.ctx.consensus.get_virtual_utxo_entry(float_outpoint).is_none()
+    );
     assert!(z.ctx.consensus.palw_v2_class_table().iter().all(|r| r.class_id != a.class_id), "getPalwClasses no longer lists it");
     assert_eq!(z.ctx.consensus.palw_tir_class_record_v1(a.class_id), None);
     assert!(
@@ -1089,12 +1141,19 @@ async fn g14_registration_replay_on_a_second_node_and_across_a_reorg() {
     assert_eq!(z_again.bond(&bond).unwrap().collateral, collateral_on_a);
     assert!(matches!(mempool_verdict_on(&z, &a.carrier), Err(kaspa_consensus_core::errors::tx::TxRuleError::MissingTxOutpoints)));
     for blk in &a.blocks {
-        assert_eq!(root_at(&z, blk.header.hash), root_at(&a.env.chain, blk.header.hash), "Z on A again: delta root {}", blk.header.hash);
+        assert_eq!(
+            root_at(&z, blk.header.hash),
+            root_at(&a.env.chain, blk.header.hash),
+            "Z on A again: delta root {}",
+            blk.header.hash
+        );
     }
 }
 
 fn mempool_verdict_on(chain: &T12Chain, tx: &Transaction) -> Result<(), kaspa_consensus_core::errors::tx::TxRuleError> {
-    chain.vp().validate_mempool_transaction(&mut kaspa_consensus_core::tx::MutableTransaction::from_tx(tx.clone()), &Default::default())
+    chain
+        .vp()
+        .validate_mempool_transaction(&mut kaspa_consensus_core::tx::MutableTransaction::from_tx(tx.clone()), &Default::default())
 }
 
 /// **A pruned join inside the registration's life**: the importer follows A through P (after the fold, before the
@@ -1141,10 +1200,19 @@ async fn g14_registration_survives_a_pruned_import() {
     for blk in &all[k + 1..] {
         arrive(&importer, blk.clone(), "A's block after P").await;
         assert_eq!(importer.sink(), blk.header.hash);
-        assert_eq!(importer.tip_state().1.state_root(), root_at(&a.env.chain, blk.header.hash), "the importer folds to A's root at {}", blk.header.hash);
+        assert_eq!(
+            importer.tip_state().1.state_root(),
+            root_at(&a.env.chain, blk.header.hash),
+            "the importer folds to A's root at {}",
+            blk.header.hash
+        );
     }
     let (_, end) = importer.tip_state();
-    assert_eq!(end.class(&a.class_id).map(|c| c.status.clone()), Some(PalwClassStatusV2::Active), "the importer flipped the class Active itself");
+    assert_eq!(
+        end.class(&a.class_id).map(|c| c.status.clone()),
+        Some(PalwClassStatusV2::Active),
+        "the importer flipped the class Active itself"
+    );
 }
 
 // ---- mined: what the node does with a registration the gate would refuse --------------------------------------
@@ -1179,7 +1247,8 @@ async fn g14_registration_mined_below_the_fence_is_dropped_by_name_then_accepted
     );
     // The mempool does not run the gate (it runs the lifecycle shape and the funding): the carrier is admitted.
     let first = carrier_of(&env, &object, 3, CARRIER_FEE);
-    mempool_verdict(&env, &first).expect("the mempool admits a registration the gate refuses (node policy asks nothing of an IR registration)");
+    mempool_verdict(&env, &first)
+        .expect("the mempool admits a registration the gate refuses (node policy asks nothing of an IR registration)");
     let (carrying, folding) = mine_carrier(&mut env.chain, &first).await;
     assert!(env.chain.daa_of(folding.header.hash) < FENCE);
     let _ = &carrying;
@@ -1189,11 +1258,18 @@ async fn g14_registration_mined_below_the_fence_is_dropped_by_name_then_accepted
     assert!(env.chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(first.id(), 0)).is_some(), "but the fee is spent");
     // The status readers: mined, change stands, no row, two DAA on — a dropped carrier, and the gate's reason is re-derivable.
     let change_daa = env.chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(first.id(), 0)).unwrap().block_daa_score;
-    while env.chain.ctx.consensus.get_virtual_daa_score() < change_daa + kaspa_consensus_core::palw_model_registration_v1::PALW_REGISTRATION_DROP_SETTLE_DAA_V1
+    while env.chain.ctx.consensus.get_virtual_daa_score()
+        < change_daa + kaspa_consensus_core::palw_model_registration_v1::PALW_REGISTRATION_DROP_SETTLE_DAA_V1
     {
         env.chain.heartbeat(ttpb, Vec::new()).await; // the settle margin: the fold of the accepting block has certainly run
     }
-    eprintln!("[g14] change entry daa {change_daa}, virtual daa {}, sink daa {}, carrying {} folding {}", env.chain.ctx.consensus.get_virtual_daa_score(), env.chain.daa_of(env.chain.sink()), env.chain.daa_of(carrying.header.hash), env.chain.daa_of(folding.header.hash));
+    eprintln!(
+        "[g14] change entry daa {change_daa}, virtual daa {}, sink daa {}, carrying {} folding {}",
+        env.chain.ctx.consensus.get_virtual_daa_score(),
+        env.chain.daa_of(env.chain.sink()),
+        env.chain.daa_of(carrying.header.hash),
+        env.chain.daa_of(folding.header.hash)
+    );
     assert!(
         kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_dropped_v1(
             false,
@@ -1203,7 +1279,8 @@ async fn g14_registration_mined_below_the_fence_is_dropped_by_name_then_accepted
         )
         .is_some()
     );
-    let reread = kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_object_v1(&first).expect("an IR carrier re-reads");
+    let reread =
+        kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_object_v1(&first).expect("an IR carrier re-reads");
     assert_eq!(reread, object);
     assert_eq!(
         palw_tir_registration_preflight_at_v1(&env.config.params, &env.bundle, &reread, change_daa, &[]).map(|_| ()),
@@ -1241,8 +1318,16 @@ async fn g14_refused_registrations_cost_a_fee_and_write_nothing() {
     let genesis = env.config.params.genesis.hash;
     let refused: Vec<(&str, Obj, Option<&str>)> = vec![
         ("unknown op tag", mutate_class(&env, &state, &s, |c| c.program[40] = 0xFE), Some("TIR_PROGRAM_REFUSED")),
-        ("stale id (tokenizer)", stale_id(&env, &state, &s, |c, _| c.tokenizer_id = Hash64::from_bytes([1; 64])), Some("TIR_CLASS_ID_IS_NOT_DERIVED")),
-        ("share claim", edit_raw(&env, &state, &s, |o| reg!(o, { share_permille } => *share_permille = 1)), Some("NOT_END_TO_END_CERTIFIED")),
+        (
+            "stale id (tokenizer)",
+            stale_id(&env, &state, &s, |c, _| c.tokenizer_id = Hash64::from_bytes([1; 64])),
+            Some("TIR_CLASS_ID_IS_NOT_DERIVED"),
+        ),
+        (
+            "share claim",
+            edit_raw(&env, &state, &s, |o| reg!(o, { share_permille } => *share_permille = 1)),
+            Some("NOT_END_TO_END_CERTIFIED"),
+        ),
         (
             "replayed from another network",
             {
@@ -1263,18 +1348,31 @@ async fn g14_refused_registrations_cost_a_fee_and_write_nothing() {
         let mined_daa = env.chain.daa_of(carrying.header.hash);
         let (_, after) = env.chain.tip_state();
         assert!(after.class(&class_id_of(&object)).is_none(), "{name}: no class row");
-        assert_eq!(after.bond(&env.chain.bonds[1]).unwrap().collateral, before.bond(&env.chain.bonds[1]).unwrap().collateral, "{name}: no burn");
-        assert_eq!(after.registration_exposure(&env.chain.bonds[1]), before.registration_exposure(&env.chain.bonds[1]), "{name}: no exposure");
+        assert_eq!(
+            after.bond(&env.chain.bonds[1]).unwrap().collateral,
+            before.bond(&env.chain.bonds[1]).unwrap().collateral,
+            "{name}: no burn"
+        );
+        assert_eq!(
+            after.registration_exposure(&env.chain.bonds[1]),
+            before.registration_exposure(&env.chain.bonds[1]),
+            "{name}: no exposure"
+        );
         assert_eq!(env.chain.sink(), folding.header.hash, "{name}: the block stands");
         // The RPC's diagnosis of a dropped carrier: the gate re-asked at the accepting DAA. It names the gate's reasons;
         // for the chain-state ones (signature, target) it can only say the gate admits.
         let reread = kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_object_v1(&tx).expect("re-read");
         let rediagnosed = palw_tir_registration_preflight_at_v1(&env.config.params, &env.bundle, &reread, mined_daa, &[]);
         match gate_code {
-            Some(code) => assert_eq!(rediagnosed.as_ref().err().map(|e| e.code()), Some(code), "{name}: the diagnosis names the gate's code"),
+            Some(code) => {
+                assert_eq!(rediagnosed.as_ref().err().map(|e| e.code()), Some(code), "{name}: the diagnosis names the gate's code")
+            }
             None => assert!(rediagnosed.is_ok(), "{name}: the diagnosis cannot see a chain-state refusal ({rediagnosed:?})"),
         }
-        eprintln!("[g14] mined+dropped {name:<32} mempool=Ok block stands, class absent, gate re-diagnosis={:?}", rediagnosed.map(|_| ()).map_err(|e| e.code()));
+        eprintln!(
+            "[g14] mined+dropped {name:<32} mempool=Ok block stands, class absent, gate re-diagnosis={:?}",
+            rediagnosed.map(|_| ()).map_err(|e| e.code())
+        );
         funding = change_of(&tx, 5);
     }
 }
@@ -1302,10 +1400,17 @@ async fn g14_gate_and_chain_agree_across_the_shipped_fence_schedule() {
     heights.sort_unstable();
     heights.dedup();
     let tir_at = env.config.params.palw_tir_v1_fence().map(|f| f.activation.daa_score());
-    eprintln!("[g14] shipped schedule: {} fence heights {:?}; palw_tir_v1 at {:?}; judging at {} heights", schedule.len(), schedule, tir_at, heights.len());
+    eprintln!(
+        "[g14] shipped schedule: {} fence heights {:?}; palw_tir_v1 at {:?}; judging at {} heights",
+        schedule.len(),
+        schedule,
+        tir_at,
+        heights.len()
+    );
     // Wider contexts bite the court's window, the ladder and the dissection fences; they are the classes whose verdict can
     // move with the height.
-    let corpus: Vec<Case> = [64, 512, 4_096, 32_000].into_iter().flat_map(corpus_at).collect();
+    let mut corpus: Vec<Case> = [64, 512, 4_096, 32_000].into_iter().flat_map(corpus_at).collect();
+    corpus.extend(real_cases());
     let mut bad = Vec::new();
     let mut verdicts: BTreeMap<u64, (u32, u32)> = BTreeMap::new();
     let mut moved: BTreeMap<String, Vec<(u64, bool)>> = BTreeMap::new();
@@ -1317,7 +1422,10 @@ async fn g14_gate_and_chain_agree_across_the_shipped_fence_schedule() {
             moved.entry(format!("{}@{}", c.name, c.class.layout.max_context)).or_default().push((daa, j.preflight.is_ok()));
             match (&j.preflight, &j.validate) {
                 (Ok(()), Ok(())) if j.fold.as_ref().is_some_and(|f| f.is_ok()) && j.accepted => entry.0 += 1,
-                (Err(e), Err(why)) if why.contains(&e.to_string()) || (matches!(e, E::TirNeedsItsFence) && why.contains("palw_tir_v1 is not in force")) => {
+                (Err(e), Err(why))
+                    if why.contains(&e.to_string())
+                        || (matches!(e, E::TirNeedsItsFence) && why.contains("palw_tir_v1 is not in force")) =>
+                {
                     entry.1 += 1
                 }
                 _ => bad.push(format!("daa {daa} {}: {j:?}", c.name)),
@@ -1340,7 +1448,6 @@ async fn g14_gate_and_chain_agree_across_the_shipped_fence_schedule() {
     }
 }
 
-
 // ---- classes lowered from REAL local checkpoints (shape-only: headers, no weights) --------------------------
 
 /// The classes `misaka-palw-sdk/tests/g14_registration_fixture.rs` lowered from the local Hugging Face checkpoints: the
@@ -1348,7 +1455,15 @@ async fn g14_gate_and_chain_agree_across_the_shipped_fence_schedule() {
 /// layout search chose under THIS harness's ruleset, the tokenizer id of the checkpoint's `tokenizer.json`. The artifact
 /// root is synthetic (no weights were loaded) — registration never reads weights.
 fn real_cases() -> Vec<Case> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/pipeline/virtual_processor/tests/fixtures/g14");
+    real_cases_in("")
+}
+
+/// [`real_cases`] from `fixtures/g14/<sub>` (`shipped`: lowered and judged under `palw_t12_shipped_params()` at DAA 5,585).
+fn real_cases_in(sub: &str) -> Vec<Case> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/pipeline/virtual_processor/tests/fixtures/g14").join(sub);
+    if !dir.is_dir() {
+        return Vec::new();
+    }
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
         .expect("the fixtures directory")
         .map(|e| e.unwrap().path())
@@ -1391,16 +1506,39 @@ async fn g14_real_checkpoint_classes_parity_and_mined() {
         let s = spec_of(c, 1 + i % 6, daa);
         let o = signed(&env, &state, &s);
         let j = judge(&env, &state, block, daa, &o);
-        eprintln!("[g14] {:<34} context {:>6} program {:>6} B: gate {:?} chain_accepted {}", c.name, c.class.layout.max_context, c.class.program.len(), j.preflight, j.accepted);
+        eprintln!(
+            "[g14] {:<34} context {:>6} program {:>6} B: gate {:?} chain_accepted {}",
+            c.name,
+            c.class.layout.max_context,
+            c.class.program.len(),
+            j.preflight,
+            j.accepted
+        );
         check(&c.name, &j, Want::Accept).unwrap();
         // The same edits as the corpus table, on a real class.
         let mamba = case("mamba2");
         let cases: Vec<(&str, Obj, Want)> = vec![
             ("real: a trailing byte", mutate_class(&env, &state, &s, |k| k.program.push(0)), Want::Refuse("TIR_PROGRAM_REFUSED")),
-            ("real: tokenizer swapped, id stale", stale_id(&env, &state, &s, |k, _| k.tokenizer_id = Hash64::from_bytes([1; 64])), Want::Refuse("TIR_CLASS_ID_IS_NOT_DERIVED")),
-            ("real: root swapped, id stale", stale_id(&env, &state, &s, |_, r| *r = Hash64::from_bytes([2; 64])), Want::Refuse("TIR_CLASS_ID_IS_NOT_DERIVED")),
-            ("real: another program's layout", mutate_class(&env, &state, &s, |k| k.layout = layout_of(&mamba.class, 64)), Want::Refuse("TIR_CLASS_REFUSED")),
-            ("real: share claim", edit_raw(&env, &state, &s, |o| reg!(o, { share_permille } => *share_permille = 1)), Want::Refuse("NOT_END_TO_END_CERTIFIED")),
+            (
+                "real: tokenizer swapped, id stale",
+                stale_id(&env, &state, &s, |k, _| k.tokenizer_id = Hash64::from_bytes([1; 64])),
+                Want::Refuse("TIR_CLASS_ID_IS_NOT_DERIVED"),
+            ),
+            (
+                "real: root swapped, id stale",
+                stale_id(&env, &state, &s, |_, r| *r = Hash64::from_bytes([2; 64])),
+                Want::Refuse("TIR_CLASS_ID_IS_NOT_DERIVED"),
+            ),
+            (
+                "real: another program's layout",
+                mutate_class(&env, &state, &s, |k| k.layout = layout_of(&mamba.class, 64)),
+                Want::Refuse("TIR_CLASS_REFUSED"),
+            ),
+            (
+                "real: share claim",
+                edit_raw(&env, &state, &s, |o| reg!(o, { share_permille } => *share_permille = 1)),
+                Want::Refuse("NOT_END_TO_END_CERTIFIED"),
+            ),
             ("real: unsigned", build(&env, &state, &s), Want::StatefulDrop("is not signed by the bond it names")),
         ];
         run_table(&env, &state, block, daa, cases);
@@ -1422,7 +1560,8 @@ async fn g14_same_weights_under_another_class_id_are_accepted_by_chain_and_gate(
     let first = signed(&env, &state, &spec_of(&dense, 1, 0));
     let vp = env.chain.vp();
     let point = env.point(block, 0);
-    let after = vp.palw_v2_fold_accepted_for_tests(&state, &env.bundle.state, &point, std::slice::from_ref(&first)).expect("the first folds");
+    let after =
+        vp.palw_v2_fold_accepted_for_tests(&state, &env.bundle.state, &point, std::slice::from_ref(&first)).expect("the first folds");
     assert!(after.classes_iter().any(|(_, c)| c.artifact_root == dense.root));
     let mut other = spec_of(&dense, 2, 0);
     other.class.tokenizer_id = Hash64::from_bytes([0x44; 64]);
@@ -1450,7 +1589,8 @@ async fn g14_a_model_alias_is_a_free_claim_on_an_active_class() {
     let (founder_card, name) = (6usize, b"Meta-Llama-3-70B-Instruct".to_vec());
     let root = Hash64::from_bytes([0xA1; 64]);
     let founder = env.chain.bonds[founder_card];
-    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_line_founded_message_v1(env.domain, &m.class_id, &name, &founder, &root);
+    let message =
+        kaspa_consensus_core::palw_model_lines_v1::palw_model_line_founded_message_v1(env.domain, &m.class_id, &name, &founder, &root);
     let key = TestConsensus::palw_v2_registry_keypair(founder_card as u64);
     let signature = libcrux_ml_dsa::ml_dsa_87::sign(
         &key.signing_key,
@@ -1471,9 +1611,15 @@ async fn g14_a_model_alias_is_a_free_claim_on_an_active_class() {
     match (&verdict, &folded) {
         (Ok(()), Ok(after)) => {
             let line = kaspa_consensus_core::palw_model_lines_v1::model_line_id_v1(&m.class_id, &founder, &name);
-            assert!(after.model_line(&line).is_some_and(|l| l.name == name), "the chain stores the spoofed alias against a class it has no relation to");
+            assert!(
+                after.model_line(&line).is_some_and(|l| l.name == name),
+                "the chain stores the spoofed alias against a class it has no relation to"
+            );
         }
-        _ => eprintln!("[g14] the alias object is not expressible on this ruleset: {verdict:?} / {:?}", folded.as_ref().err().map(|e| e.to_string())),
+        _ => eprintln!(
+            "[g14] the alias object is not expressible on this ruleset: {verdict:?} / {:?}",
+            folded.as_ref().err().map(|e| e.to_string())
+        ),
     }
 }
 
@@ -1522,7 +1668,10 @@ async fn g14_registration_survives_a_node_restart_over_the_same_database() {
     assert!(state.tir_class_v1(&class_id).unwrap().check_program_v1().is_ok());
     assert!(r.ctx.consensus.palw_v2_class_table().iter().any(|row| row.class_id == class_id), "getPalwClasses");
     assert_eq!(r.ctx.consensus.palw_tir_class_record_v1(class_id).as_ref(), Some(&record), "getPalwTirClass");
-    assert!(r.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(carrier_id, 0)).is_some(), "the carrier's change, off disk");
+    assert!(
+        r.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(carrier_id, 0)).is_some(),
+        "the carrier's change, off disk"
+    );
     for (b, want) in chain_before.iter().zip(&delta_roots) {
         assert_eq!(root_at(&r, b.header.hash), *want, "the delta row of {} survived", b.header.hash);
     }
@@ -1545,4 +1694,160 @@ async fn g14_registration_survives_a_node_restart_over_the_same_database() {
     for b in chain_before.iter().chain(&after) {
         assert_eq!(root_at(&z, b.header.hash), root_at(&r, b.header.hash), "delta {} across the restart", b.header.hash);
     }
+}
+
+/// **Two registrations in one template: the walk keeps one** (`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`) through the whole
+/// pipeline — both carriers pass the mempool and ride the node's own block, the first in the block's transaction order is
+/// folded, the second is dropped by name, the block stands, and both fees are spent.
+#[tokio::test]
+async fn g14_two_registrations_in_one_block_one_is_folded() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut env = Env::new(0);
+    let ttpb = env.config.params.target_time_per_block();
+    env.chain.heartbeat(ttpb, Vec::new()).await;
+    let (block, state) = env.chain.tip_state();
+    let daa = env.chain.daa_of(block);
+    let (a, b) = (
+        signed(&env, &state, &spec_of(&case("dense-gqa-2layer"), 1, daa)),
+        signed(&env, &state, &spec_of(&case("moe-top2-shared"), 2, daa)),
+    );
+    let (ca, cb) = (carrier_of(&env, &a, 1, CARRIER_FEE), carrier_of(&env, &b, 2, CARRIER_FEE));
+    mempool_verdict(&env, &ca).expect("a");
+    mempool_verdict(&env, &cb).expect("b");
+    let carrying = env.chain.heartbeat(ttpb, vec![ca.clone(), cb.clone()]).await;
+    let order: Vec<_> = carrying.transactions.iter().map(|t| t.id()).filter(|id| *id == ca.id() || *id == cb.id()).collect();
+    assert_eq!(order.len(), 2, "both carriers ride the block");
+    env.chain.heartbeat(ttpb, Vec::new()).await;
+    let (_, after) = env.chain.tip_state();
+    let (first, second) = if order[0] == ca.id() { (&a, &b) } else { (&b, &a) };
+    assert!(after.class(&class_id_of(first)).is_some(), "the first in the block's order is folded");
+    assert!(after.class(&class_id_of(second)).is_none(), "the second is dropped by name");
+    assert!(env.chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(ca.id(), 0)).is_some());
+    assert!(env.chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(cb.id(), 0)).is_some(), "both fees are spent");
+}
+
+/// **The widest class the SDK's preflight registers under the shipped ruleset, on the chain.** `palw-class preflight` judges a
+/// real checkpoint at DAA 5,585 (every fence in force) and prints `register ok` at the widest context the gate admits; the
+/// fixtures under `fixtures/g14/shipped` are those classes (shape-only lowering, synthetic root). The chain's processor, with the
+/// rules it resolves at each height of the schedule, must agree with the gate everywhere and keep them from `palw_tir_v1` on.
+#[tokio::test]
+async fn g14_real_checkpoint_class_at_its_widest_context_across_the_shipped_schedule() {
+    use super::t12_round_lane_e2e::t12_with_harness_cards_over;
+    let cases = real_cases_in("shipped");
+    if cases.is_empty() {
+        eprintln!("[g14] no shipped-ruleset fixtures present");
+        return;
+    }
+    let env = Env::over(t12_with_harness_cards_over(kaspa_consensus_core::config::params::palw_t12_shipped_params(), false));
+    let (block, state) = env.chain.tip_state();
+    let schedule = env.config.params.fence_schedule_v1();
+    let mut heights: Vec<u64> = vec![0];
+    for h in &schedule {
+        heights.extend([h.saturating_sub(1), *h, h + 1]);
+    }
+    heights.sort_unstable();
+    heights.dedup();
+    let tir_at = env.config.params.palw_tir_v1_fence().map(|f| f.activation.daa_score()).expect("armed");
+    let mut bad = Vec::new();
+    for (i, c) in cases.iter().enumerate() {
+        let mut flips = Vec::new();
+        let mut last = None;
+        for &daa in &heights {
+            let j = judge(&env, &state, block, daa, &signed(&env, &state, &spec_of(c, 1 + i % 6, daa)));
+            match (&j.preflight, &j.validate) {
+                (Ok(()), Ok(())) if j.fold.as_ref().is_some_and(|f| f.is_ok()) && j.accepted => {}
+                (Err(e), Err(why))
+                    if why.contains(&e.to_string()) || (matches!(e, E::TirNeedsItsFence) && why.contains("not in force")) => {}
+                _ => bad.push(format!("{} daa {daa}: {j:?}", c.name)),
+            }
+            if last != Some(j.preflight.is_ok()) {
+                flips.push((daa, j.preflight.is_ok()));
+                last = Some(j.preflight.is_ok());
+            }
+        }
+        eprintln!("[g14] {} at context {}: verdict by height (daa, admitted) {flips:?}", c.name, c.class.layout.max_context);
+        let at_end = judge(&env, &state, block, 5_585, &signed(&env, &state, &spec_of(c, 1 + i % 6, 5_585)));
+        check(&format!("{} at DAA 5,585", c.name), &at_end, Want::Accept).unwrap();
+        assert!(5_585 >= tir_at);
+    }
+    assert!(bad.is_empty(), "the gate and the chain disagree:\n{}", bad.join("\n"));
+}
+
+// ---- the whole release armed (compressed), real checkpoints at 32,783 positions, MINED -----------------------
+
+/// **testnet-12 with every release flag day armed, in the release's order, at heights a test can reach**: the launch ruleset
+/// with the DAA-750 list at 20, the second at 24, the capacity list at 28, `palw_tir_v1` at 32, `palw_tir_fence2` at 36 and the
+/// int-11 list at 40 (its ρ steps at +95, +190, +285) — each fence through its own `set` so every mirror follows. After DAA 40 every
+/// rule the shipped schedule has in force at DAA 5,585 governs admission (the corpus sweep above shows no verdict moves between
+/// the real heights, so the compression moves none).
+fn t12_release_compressed() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    use super::t12_round_lane_e2e::t12_with_harness_cards_over;
+    use kaspa_consensus_core::config::params::{
+        PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1,
+        PALW_T12_TIR_FLAG_DAY_FENCES_V1, palw_t12_arm_int11_flag_day_at_v1, palw_t12_launch_params_v1,
+    };
+    let mut params = palw_t12_launch_params_v1();
+    for (list, at) in [
+        (PALW_T12_POST_LAUNCH_FENCES_V1, 20),
+        (PALW_T12_POST_LAUNCH_FENCES_V2, 24),
+        (PALW_T12_POST_LAUNCH_FENCES_V3, 28),
+        (PALW_T12_TIR_FLAG_DAY_FENCES_V1, 32),
+        (PALW_T12_TIR_FENCE2_FENCES_V1, 36),
+    ] {
+        for fence in list {
+            (fence.set)(&mut params, Some(ForkActivation::new(at)));
+        }
+    }
+    palw_t12_arm_int11_flag_day_at_v1(&mut params, Some(40));
+    params.validate_palw_v2().expect("the whole release, compressed, is a runnable ruleset");
+    t12_with_harness_cards_over(params, false)
+}
+
+/// Heartbeats until the sink's DAA is at least `daa`.
+async fn warm_to(env: &mut Env, daa: u64) {
+    let ttpb = env.config.params.target_time_per_block();
+    while env.chain.daa_of(env.chain.sink()) < daa {
+        env.chain.heartbeat(ttpb, Vec::new()).await;
+    }
+}
+
+/// **The four real checkpoints at 32,783 positions, through the whole pipeline under the whole release.** The classes are the ones
+/// the SDK's preflight registers under `palw_t12_shipped_params()` at DAA 5,585; here the chain is mined past the compressed
+/// release's last IR fence and each class is carried by the node's own template, folded, persisted and read back.
+#[tokio::test]
+async fn g14_real_checkpoints_at_32783_positions_mined_under_the_whole_release() {
+    let cases = real_cases_in("shipped");
+    if cases.is_empty() {
+        eprintln!("[g14] no shipped-ruleset fixtures present");
+        return;
+    }
+    for (i, c) in cases.iter().enumerate() {
+        let mut env = Env::over(t12_release_compressed());
+        warm_to(&mut env, 41).await;
+        let (block, state) = env.chain.tip_state();
+        let daa = env.chain.daa_of(block);
+        let j = judge(&env, &state, block, daa, &signed(&env, &state, &spec_of(c, 1 + i % 6, daa)));
+        eprintln!(
+            "[g14] {:<34} context {:>6} program {:>6} B at DAA {daa}: gate {:?}, chain_accepted {}",
+            c.name,
+            c.class.layout.max_context,
+            c.class.program.len(),
+            j.preflight,
+            j.accepted
+        );
+        check(&c.name, &j, Want::Accept).unwrap();
+        // The whole pipeline (mempool, template, fold, persisted tip, ConsensusApi reads, the activation flip) on this ruleset.
+        mined_end_to_end_on(env, c, 1 + i % 6).await;
+    }
+    // And a second node replaying one such chain reaches the same roots (the follower is built on the same compressed ruleset).
+    let mut env = Env::over(t12_release_compressed());
+    warm_to(&mut env, 41).await;
+    let a = mine_registration_on(env, &cases[0], 3).await;
+    let z = fresh_node(&a);
+    for b in chain_blocks(&a.env.chain, a.env.chain.sink()) {
+        arrive(&z, b, "the release chain's block").await;
+    }
+    assert_eq!(z.sink(), a.env.chain.sink());
+    assert_eq!(z.tip_state().1.state_root(), a.env.chain.tip_state().1.state_root(), "the replaying node's root");
+    assert_eq!(z.tip_state().1.tir_class_v1(&a.class_id), Some(&a.record));
 }
