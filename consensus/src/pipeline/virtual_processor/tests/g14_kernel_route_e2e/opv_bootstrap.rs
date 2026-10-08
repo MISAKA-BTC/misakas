@@ -143,9 +143,10 @@ async fn onboard_all(net: &mut Net, specs: Vec<Spec>) -> Vec<Onb> {
     for s in &specs {
         let o = net.v2_registration(&s.v2, s.card, net.daa() + 30);
         let Obj::ClassRegisteredTirV1 { class_id, .. } = &o else { unreachable!() };
-        v2s.push(*class_id);
+        let class_id = *class_id;
+        v2s.push(class_id);
         net.send(vec![(s.card, o)]).await;
-        assert!(net.chain.tip_state().1.class(class_id).is_some(), "the V2 class registered");
+        assert!(net.chain.tip_state().1.class(&class_id).is_some(), "the V2 class registered");
     }
     let mut items = Vec::new();
     for (s, v2) in specs.iter().zip(&v2s) {
