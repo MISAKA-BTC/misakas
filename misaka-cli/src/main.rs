@@ -781,8 +781,8 @@ enum ModelCmd {
 
 #[derive(Subcommand, Debug)]
 enum OnboardCmd {
-    /// Step 1, no key and no node: wrap a registration object (Borsh) in an UNSIGNED tag-108 request for BOND, valid through
-    /// --valid-until, on this build's network and ruleset.
+    /// Step 1, no key and no node: wrap a registration object (Borsh) in an UNSIGNED tag-108 request for BOND, valid in
+    /// [--valid-from, --valid-until] while the chain's fork digest is this build's at --valid-from.
     EnvelopeExport {
         /// The registration object (Borsh), as `misaka palw tir-registration` writes it.
         #[arg(long, value_name = "FILE")]
@@ -790,14 +790,17 @@ enum OnboardCmd {
         /// The registrant bond, <txid>:<index>.
         #[arg(long)]
         bond: String,
+        /// The first DAA at which the registration may be accepted; the fork digest is this build's at it (G-RULESET).
+        #[arg(long, value_name = "DAA")]
+        valid_from: u64,
         /// The last DAA at which the registration may be accepted (G-EXPIRY).
         #[arg(long, value_name = "DAA")]
         valid_until: u64,
         #[arg(long, value_name = "FILE")]
         out: std::path::PathBuf,
     },
-    /// Step 2, the key and no node: re-derive the request's message, refuse it unless it is for this build's network and ruleset,
-    /// sign it and write the envelope object for `misaka palw submit-object`.
+    /// Step 2, the key and no node: re-derive the request's message, refuse it unless it is for this build's network and fork
+    /// digest, sign it and write the envelope object for `misaka palw submit-object`.
     EnvelopeSign {
         #[arg(long, value_name = "FILE")]
         request: std::path::PathBuf,
@@ -2998,8 +3001,8 @@ async fn main() -> std::process::ExitCode {
             operator::remote_proof::verify(&ctx, operator::remote_proof::VerifyArgs { signed, class, root, owner, pin }).await
         }
         Command::Model(ModelCmd::Onboard(cmd)) => match cmd {
-            OnboardCmd::EnvelopeExport { registration, bond, valid_until, out } => {
-                operator::model_onboard::envelope_export(&ctx, &registration, &bond, valid_until, &out)
+            OnboardCmd::EnvelopeExport { registration, bond, valid_from, valid_until, out } => {
+                operator::model_onboard::envelope_export(&ctx, &registration, &bond, valid_from, valid_until, &out)
             }
             OnboardCmd::EnvelopeSign { request, key, expect_bond, out } => {
                 operator::model_onboard::envelope_sign(&ctx, &request, &key.source(), expect_bond.as_deref(), &out)

@@ -4,24 +4,26 @@
 //! # Detached signing (tag 108)
 //!
 //! ```text
-//! build: SignedRegistrationRequestV1::new(registration, signer bond, valid_until, network, ruleset)  ── no key ──► JSON
-//! sign:  where the key is, the request is RE-DERIVED from its own fields (the exported message is never trusted), checked
-//!        against the signer's expectations, then signed over `palw_signed_registration_message_v1` under its context
+//! build: SignedRegistrationRequestV1::for_network(registration, bond, valid_from, valid_until, &params)  ── no key ──► JSON
+//! sign:  where the key is, the request is RE-DERIVED from its own fields (the exported message is never trusted) and checked
+//!        against THIS build's compiled params (network domain, fork digest), then signed over `palw_signed_registration_message_v1`
 //! file:  the envelope (`PalwConsensusObjectV2::SignedRegistrationV1`) is an ordinary onboarding object: `misaka palw submit-object`
 //! ```
 //!
 //! The library never holds a seed: signing goes through [`EnvelopeSigner`] (the CLI's key, a hardware signer, a remote one).
-//! The envelope dies at `valid_until_daa` and is valid on exactly one ruleset (`consensus_params_id`) — RFC-0009 G-EXPIRY /
-//! G-RULESET.
+//! The envelope is valid in `[valid_from_daa, valid_until_daa]` and only while the chain's fork-id fired digest is the one it
+//! names — computed HERE from the client's own compiled params at `valid_from_daa` ([`envelope_fork_digest_v1`]), never from an
+//! RPC answer (RFC-0009 G-EXPIRY / G-RULESET; F-C4R3-01(b): never `consensus_params_id`, which a merely scheduled fence moves).
 //!
 //! # The fresh verifier
 //!
-//! [`fresh_verify_from_reads_v1`] takes what a node serves publicly — op 231's attempt and evidence rows, op 212's Final facts,
-//! the class's program and registered artifact root — plus, optionally, the artifact from its public source, and re-derives the
-//! beacon, the seed, the selection and the evidence exactly as the chain's fold does (consensus-core's one implementation), then
-//! re-reads every selected leaf from the artifact. It needs no node-private state and no producer state.
+//! [`fresh_verify_from_reads_v1`] takes what a node serves publicly — op 231's attempt and evidence rows and the class's program,
+//! op 212's Final facts — plus, optionally, the artifact from its public source, and re-derives the beacon, the seed, the selection
+//! and the evidence exactly as the chain's fold does (consensus-core's one implementation), then re-reads every selected leaf from
+//! the artifact. It needs no node-private state and no producer state.
 
 use crate::runtime_pack::commit::{Refusal, hex};
+use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::palw_conformance_evidence_v1::{
     ConformanceEvidenceActionV1, ConformanceEvidencePostV1, FreshInputV1, FreshVerdictV1, SelectedLeafV1, fresh_verify_v1,
     palw_onboarding_challenge_policy_v1,
@@ -38,7 +40,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 /// The JSON schema of an unsigned envelope request.
-pub const SIGNED_REGISTRATION_REQUEST_SCHEMA_V1: &str = "misaka.palw.signed-registration-request.v1";
+pub const SIGNED_REGISTRATION_REQUEST_SCHEMA_V1: &str = "misaka.palw.signed-registration-request.v2";
 
 /// **Whoever holds the bond's key.** ML-DSA-87 over `message` under `context`; the library never sees the seed.
 pub trait EnvelopeSigner {
@@ -46,28 +48,40 @@ pub trait EnvelopeSigner {
     fn sign_with_context(&self, message: &[u8], context: &[u8]) -> Result<Vec<u8>, String>;
 }
 
-/// **An unsigned tag-108 envelope**: the wrapped registration, its signer, the last DAA it may be accepted at, and the network and
-/// ruleset it is for. Its message is a function of these fields alone ([`Self::message`]).
+/// **The fork digest an envelope names** — `fork_id_v1(params, daa).fired` of THESE (the caller's own, compiled) params.
+pub fn envelope_fork_digest_v1(params: &Params, daa: u64) -> Hash {
+    kaspa_consensus_core::fork_id_v1::fork_id_v1(params, daa).fired
+}
+
+/// The network domain every PALW signature on `params`' chain is made under.
+pub fn network_domain_v1(params: &Params) -> Hash64 {
+    kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(params.net.to_string().as_bytes(), Some(params.genesis.hash))
+}
+
+/// **An unsigned tag-108 envelope**: the wrapped registration, its signer, its validity window, and the network and fork digest it
+/// is for. Its message is a function of these fields alone ([`Self::message`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SignedRegistrationRequestV1 {
     pub registration: PalwConsensusObjectV2,
     pub signer: PalwBondKeyV2,
+    pub valid_from_daa: u64,
     pub valid_until_daa: u64,
     /// `palw_network_domain_v2_for(network name, genesis)`.
     pub network_domain: Hash64,
-    /// The ruleset's `Params::consensus_params_id()`.
-    pub consensus_params_id: Hash,
+    /// `fork_id_v1(params, valid_from_daa).fired` ([`envelope_fork_digest_v1`]).
+    pub fork_digest: Hash,
 }
 
 impl SignedRegistrationRequestV1 {
     /// **The one envelope builder.** Refuses a wrapped object that is not a bought class registration of `signer`'s own bond (the
-    /// acceptance walk would drop it).
+    /// acceptance walk would drop it) and an empty or inverted window.
     pub fn new(
         registration: PalwConsensusObjectV2,
         signer: PalwBondKeyV2,
+        valid_from_daa: u64,
         valid_until_daa: u64,
         network_domain: Hash64,
-        consensus_params_id: Hash,
+        fork_digest: Hash,
     ) -> Result<Self, Refusal> {
         if palw_class_registration_buyer_v1(&registration) != Some(signer) {
             return Err(Refusal::new(
@@ -75,21 +89,66 @@ impl SignedRegistrationRequestV1 {
                 "the envelope wraps a bought class registration (ClassRegistered / ClassRegisteredTirV1) of the signer's own bond",
             ));
         }
-        Ok(Self { registration, signer, valid_until_daa, network_domain, consensus_params_id })
+        if valid_until_daa < valid_from_daa {
+            return Err(Refusal::new("ENVELOPE_WINDOW", "valid_until_daa is before valid_from_daa"));
+        }
+        Ok(Self { registration, signer, valid_from_daa, valid_until_daa, network_domain, fork_digest })
+    }
+
+    /// The builder over the caller's own compiled `params`: the network domain and the fork digest at `valid_from_daa` are computed
+    /// here, never taken from a node.
+    pub fn for_network(
+        registration: PalwConsensusObjectV2,
+        signer: PalwBondKeyV2,
+        valid_from_daa: u64,
+        valid_until_daa: u64,
+        params: &Params,
+    ) -> Result<Self, Refusal> {
+        Self::new(
+            registration,
+            signer,
+            valid_from_daa,
+            valid_until_daa,
+            network_domain_v1(params),
+            envelope_fork_digest_v1(params, valid_from_daa),
+        )
+    }
+
+    /// Whether this request is for `params`' chain: the same network domain and the fork digest `params` computes at its
+    /// `valid_from_daa` (what a signer checks before signing a request someone else built).
+    pub fn check_for_network(&self, params: &Params) -> Result<(), Refusal> {
+        if self.network_domain != network_domain_v1(params) {
+            return Err(Refusal::new("ENVELOPE_OTHER_NETWORK", "the request is for another network than these params"));
+        }
+        if self.fork_digest != envelope_fork_digest_v1(params, self.valid_from_daa) {
+            return Err(Refusal::new(
+                "ENVELOPE_OTHER_FORK",
+                "the request names another fork digest than these params compute at its valid_from_daa (G-RULESET)",
+            ));
+        }
+        Ok(())
     }
 
     /// The message the bond signs (`palw_signed_registration_message_v1`).
     pub fn message(&self) -> Hash64 {
         let bytes = borsh::to_vec(&self.registration).expect("an object serializes");
-        palw_signed_registration_message_v1(self.network_domain, self.consensus_params_id, self.valid_until_daa, &self.signer, &bytes)
+        palw_signed_registration_message_v1(
+            self.network_domain,
+            self.fork_digest,
+            self.valid_from_daa,
+            self.valid_until_daa,
+            &self.signer,
+            &bytes,
+        )
     }
 
     /// The envelope with `signature` attached (no check: see [`Self::sign`] and [`verify_signed_registration_v1`]).
     pub fn with_signature(&self, signature: Vec<u8>) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::SignedRegistrationV1 {
             registration: Box::new(self.registration.clone()),
+            valid_from_daa: self.valid_from_daa,
             valid_until_daa: self.valid_until_daa,
-            consensus_params_id: self.consensus_params_id,
+            fork_digest: self.fork_digest,
             signer: self.signer,
             signature,
         }
@@ -102,7 +161,7 @@ impl SignedRegistrationRequestV1 {
             .sign_with_context(message.as_byte_slice(), PALW_SIGNED_REGISTRATION_MLDSA87_CONTEXT_V1)
             .map_err(|e| Refusal::new("SIGNER_FAILED", e))?;
         let envelope = self.with_signature(signature);
-        verify_signed_registration_v1(&envelope, self.network_domain, self.consensus_params_id, &signer.public_key())?;
+        verify_signed_registration_v1(&envelope, self.network_domain, &signer.public_key())?;
         Ok(envelope)
     }
 
@@ -110,12 +169,13 @@ impl SignedRegistrationRequestV1 {
     pub fn to_json(&self) -> Value {
         json!({
             "schema": SIGNED_REGISTRATION_REQUEST_SCHEMA_V1,
-            "note": "UNSIGNED. The signer re-derives the message from these fields; `message` is shown, never trusted.",
+            "note": "UNSIGNED. The signer re-derives the message from these fields and checks the network and fork digest against its own build; `message` is shown, never trusted.",
             "registration_borsh": hex(&borsh::to_vec(&self.registration).expect("an object serializes")),
             "signer": format!("{}:{}", self.signer.0.transaction_id, self.signer.0.index),
+            "valid_from_daa": self.valid_from_daa,
             "valid_until_daa": self.valid_until_daa,
             "network_domain": self.network_domain.to_string(),
-            "consensus_params_id": self.consensus_params_id.to_string(),
+            "fork_digest": self.fork_digest.to_string(),
             "message": self.message().to_string(),
         })
     }
@@ -131,35 +191,31 @@ impl SignedRegistrationRequestV1 {
         let raw = unhex(field("registration_borsh")?).map_err(bad)?;
         let registration: PalwConsensusObjectV2 = borsh::from_slice(&raw).map_err(|e| bad(format!("registration_borsh: {e}")))?;
         let signer = parse_bond(field("signer")?).map_err(bad)?;
+        let valid_from_daa = v["valid_from_daa"].as_u64().ok_or_else(|| bad("valid_from_daa is missing".into()))?;
         let valid_until_daa = v["valid_until_daa"].as_u64().ok_or_else(|| bad("valid_until_daa is missing".into()))?;
         let network_domain: Hash64 = field("network_domain")?.parse().map_err(|_| bad("network_domain".into()))?;
-        let consensus_params_id: Hash = field("consensus_params_id")?.parse().map_err(|_| bad("consensus_params_id".into()))?;
-        Self::new(registration, signer, valid_until_daa, network_domain, consensus_params_id)
+        let fork_digest: Hash = field("fork_digest")?.parse().map_err(|_| bad("fork_digest".into()))?;
+        Self::new(registration, signer, valid_from_daa, valid_until_daa, network_domain, fork_digest)
     }
 }
 
-/// **Check a signed envelope** as the acceptance walk will (minus the chain-state parts: the fence, the bond being Active, the
-/// expiry against the block): the wrapped object is a registration of the signer, it names `consensus_params_id`, and the signature
-/// verifies under `pubkey` over the message re-derived from its fields.
-pub fn verify_signed_registration_v1(
-    envelope: &PalwConsensusObjectV2,
-    network_domain: Hash64,
-    consensus_params_id: Hash,
-    pubkey: &[u8],
-) -> Result<(), Refusal> {
-    let PalwConsensusObjectV2::SignedRegistrationV1 { registration, valid_until_daa, consensus_params_id: named, signer, signature } =
+/// **Check a signed envelope's own consistency** as the acceptance walk will (minus the chain-state parts: the fence, the bond being
+/// Active, the window and the fork digest against the inclusion block): the wrapped object is a registration of the signer, the
+/// window is not inverted, and the signature verifies under `pubkey` over the message re-derived from its fields.
+pub fn verify_signed_registration_v1(envelope: &PalwConsensusObjectV2, network_domain: Hash64, pubkey: &[u8]) -> Result<(), Refusal> {
+    let PalwConsensusObjectV2::SignedRegistrationV1 { registration, valid_from_daa, valid_until_daa, fork_digest, signer, signature } =
         envelope
     else {
         return Err(Refusal::new("ENVELOPE_MALFORMED", "not a signed registration envelope (tag 108)"));
     };
-    if *named != consensus_params_id {
-        return Err(Refusal::new("ENVELOPE_OTHER_RULESET", "the envelope names another ruleset (G-RULESET)"));
+    if valid_until_daa < valid_from_daa {
+        return Err(Refusal::new("ENVELOPE_WINDOW", "valid_until_daa is before valid_from_daa"));
     }
     if palw_class_registration_buyer_v1(registration) != Some(*signer) {
         return Err(Refusal::new("ENVELOPE_NOT_A_REGISTRATION", "the envelope wraps no bought class registration of its signer"));
     }
     let bytes = borsh::to_vec(registration.as_ref()).expect("an object serializes");
-    let message = palw_signed_registration_message_v1(network_domain, *named, *valid_until_daa, signer, &bytes);
+    let message = palw_signed_registration_message_v1(network_domain, *fork_digest, *valid_from_daa, *valid_until_daa, signer, &bytes);
     match kaspa_txscript::verify_mldsa87_with_context(
         pubkey,
         message.as_byte_slice(),
@@ -379,41 +435,54 @@ mod tests {
         }
     }
 
-    /// The envelope is built, exported unsigned, re-read where the key is, signed, and verifies; every field the message covers
-    /// changes the message; a forged signature, another ruleset and another signer's object are refused.
+    /// The envelope is built over THIS build's params, exported unsigned, re-read where the key is, checked against the params,
+    /// signed, and verifies; every field the message covers changes it; a forged signature, an inverted window, another fork digest
+    /// and another signer's object are refused; a fence scheduled in the future does not move the digest (F-C4R3-01(b)).
     #[test]
     fn the_envelope_round_trips_through_detached_signing_and_binds_every_field() {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        let params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
         let key = TestKey(kaspa_pq_validator_core::ValidatorKey::from_seed([0x5A; 32]));
         let bond = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(9), 0));
-        let (domain, ruleset) = (Hash64::from_bytes([3; 64]), Hash::from_bytes([4; 32]));
-        let req = SignedRegistrationRequestV1::new(registration(bond), bond, 500, domain, ruleset).unwrap();
+        let req = SignedRegistrationRequestV1::for_network(registration(bond), bond, 100, 500, &params).unwrap();
+        req.check_for_network(&params).unwrap();
         let exported = req.to_json().to_string();
         let reread = SignedRegistrationRequestV1::from_json(&exported).unwrap();
         assert_eq!(reread, req, "the detached record round-trips");
+        reread.check_for_network(&params).unwrap();
         let envelope = reread.sign(&key).unwrap();
-        verify_signed_registration_v1(&envelope, domain, ruleset, &key.public_key()).unwrap();
+        verify_signed_registration_v1(&envelope, req.network_domain, &key.public_key()).unwrap();
+        // A build that differs only in a fence far in the future computes the same digest and accepts the request.
+        let mut next = params.clone();
+        next.palw_receipt_spend_v4 = Some(ForkActivation::new(5_000_000));
+        assert_ne!(next.consensus_params_id(), params.consensus_params_id(), "the scheduled fence moves consensus_params_id");
+        req.check_for_network(&next).expect("but not the fork digest: the rollout does not split on the envelope");
         // Every covered field moves the message.
         let m = req.message();
         for other in [
+            SignedRegistrationRequestV1 { valid_from_daa: 101, ..req.clone() },
             SignedRegistrationRequestV1 { valid_until_daa: 501, ..req.clone() },
             SignedRegistrationRequestV1 { network_domain: Hash64::from_bytes([5; 64]), ..req.clone() },
-            SignedRegistrationRequestV1 { consensus_params_id: Hash::from_bytes([6; 32]), ..req.clone() },
+            SignedRegistrationRequestV1 { fork_digest: Hash::from_bytes([6; 32]), ..req.clone() },
         ] {
             assert_ne!(other.message(), m);
         }
-        assert!(
-            verify_signed_registration_v1(&envelope, domain, Hash::from_bytes([6; 32]), &key.public_key()).is_err(),
-            "another ruleset"
-        );
+        let forged_fork = SignedRegistrationRequestV1 { fork_digest: Hash::from_bytes([6; 32]), ..req.clone() };
+        assert!(forged_fork.check_for_network(&params).is_err(), "another fork digest is refused before signing");
         let PalwConsensusObjectV2::SignedRegistrationV1 { mut signature, .. } = envelope.clone() else { unreachable!() };
         signature[0] ^= 1;
-        assert!(verify_signed_registration_v1(&req.with_signature(signature), domain, ruleset, &key.public_key()).is_err(), "forged");
+        assert!(
+            verify_signed_registration_v1(&req.with_signature(signature), req.network_domain, &key.public_key()).is_err(),
+            "forged"
+        );
         let stranger = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(10), 0));
         assert!(
-            SignedRegistrationRequestV1::new(registration(bond), stranger, 500, domain, ruleset).is_err(),
-            "not the signer's registration"
+            SignedRegistrationRequestV1::for_network(registration(bond), stranger, 100, 500, &params).is_err(),
+            "not the signer's"
         );
-        // A tampered export: the message is recomputed, so editing it changes nothing; editing a field changes what is signed.
+        assert!(SignedRegistrationRequestV1::for_network(registration(bond), bond, 500, 100, &params).is_err(), "inverted window");
+        // A tampered export: the message is recomputed, so editing it changes nothing.
         let mut v: Value = serde_json::from_str(&exported).unwrap();
         v["message"] = Value::String("00".repeat(64));
         assert_eq!(SignedRegistrationRequestV1::from_json(&v.to_string()).unwrap().message(), m, "the shown message is never trusted");

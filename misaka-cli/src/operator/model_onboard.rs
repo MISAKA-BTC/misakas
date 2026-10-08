@@ -2,8 +2,9 @@
 //! chain's conformance record read back and re-verified from public material.
 //!
 //! ```text
-//! envelope-export   registration object + bond + last valid DAA  ── no key, no node ──►  request.json (UNSIGNED)
-//! envelope-sign     request.json, re-derived and checked against THIS build's network  ── the key ──►  envelope.borsh
+//! envelope-export   registration object + bond + validity window  ── no key, no node ──►  request.json (UNSIGNED)
+//!                   (the fork digest is THIS build's `fork_id_v1(params, valid_from).fired`, never a node's answer)
+//! envelope-sign     request.json, re-derived and checked against THIS build's network and fork digest  ── the key ──►  envelope.borsh
 //!                   (file it: `misaka palw submit-object --object envelope.borsh`)
 //! status            op 231: the lifecycle state, the attempt, the beacon, the posted evidence, the gate
 //! verify            ops 231 + 212 (+ the artifact): the fresh verifier rebuilds the verdict and says whether it agrees with the chain
@@ -14,7 +15,6 @@
 
 use crate::node::Ctx;
 use crate::{CliError, CliResult, OutputFormat, exit};
-use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_rpc_core::{GetPalwConformanceEvidenceRequest, GetPalwKernelFinalsRequest};
@@ -24,14 +24,11 @@ use misaka_palw_sdk::onboarding_chain::{
 use std::path::Path;
 use std::str::FromStr;
 
-/// The network this CLI signs for: its domain and ruleset id, from this build's own parameters (never from a node or a file).
-fn network_of(ctx: &Ctx) -> Result<(Hash64, kaspa_consensus_core::Hash), CliError> {
+/// The chain this CLI signs for: this build's own compiled parameters for `--network` (never a node's or a file's answer).
+fn params_of(ctx: &Ctx) -> Result<kaspa_consensus_core::config::params::Params, CliError> {
     let net = kaspa_consensus_core::network::NetworkId::from_str(&ctx.network)
         .map_err(|e| CliError::new(exit::CONFIG, format!("'{}' is not a network id: {e}", ctx.network)))?;
-    let (params, _salt) = crate::wallet::chain_params(ctx, net)?;
-    let domain =
-        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(net.to_string().as_bytes(), Some(params.genesis.hash));
-    Ok((domain, params.consensus_params_id()))
+    Ok(crate::wallet::chain_params(ctx, net)?.0)
 }
 
 fn parse_bond(text: &str) -> Result<PalwBondKeyV2, CliError> {
@@ -47,13 +44,22 @@ fn refusal(e: misaka_palw_sdk::runtime_pack::commit::Refusal) -> CliError {
 }
 
 /// **Step 1 (no key, no node):** wrap a registration object (Borsh, as `misaka palw tir-registration` writes it) in an UNSIGNED
-/// tag-108 request for `bond`, valid through `valid_until_daa`, on this build's network and ruleset.
-pub(crate) fn envelope_export(ctx: &Ctx, registration: &Path, bond: &str, valid_until_daa: u64, out: &Path) -> CliResult {
+/// tag-108 request for `bond`, valid in `[valid_from_daa, valid_until_daa]` while the chain's fork digest is the one this build
+/// computes at `valid_from_daa` (F-C4R3-01(b)).
+pub(crate) fn envelope_export(
+    ctx: &Ctx,
+    registration: &Path,
+    bond: &str,
+    valid_from_daa: u64,
+    valid_until_daa: u64,
+    out: &Path,
+) -> CliResult {
     let bytes = std::fs::read(registration).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", registration.display())))?;
     let object: PalwConsensusObjectV2 = borsh::from_slice(&bytes)
         .map_err(|e| CliError::new(exit::GENERIC, format!("{}: not a consensus object: {e}", registration.display())))?;
-    let (domain, ruleset) = network_of(ctx)?;
-    let request = SignedRegistrationRequestV1::new(object, parse_bond(bond)?, valid_until_daa, domain, ruleset).map_err(refusal)?;
+    let params = params_of(ctx)?;
+    let request = SignedRegistrationRequestV1::for_network(object, parse_bond(bond)?, valid_from_daa, valid_until_daa, &params)
+        .map_err(refusal)?;
     let text = serde_json::to_string_pretty(&request.to_json()).expect("json serializes");
     std::fs::write(out, text).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", out.display())))?;
     match ctx.output {
@@ -62,7 +68,7 @@ pub(crate) fn envelope_export(ctx: &Ctx, registration: &Path, bond: &str, valid_
             serde_json::json!({"schema": "misaka.palw.onboard.envelope-export.v1", "out": out.display().to_string(), "signed": false})
         ),
         _ => {
-            println!("wrote {} (UNSIGNED tag-108 request, valid through DAA {valid_until_daa})", out.display());
+            println!("wrote {} (UNSIGNED tag-108 request, valid in DAA [{valid_from_daa}, {valid_until_daa}])", out.display());
             println!(
                 "sign it where the key is: misaka model onboard envelope-sign --request {} --key-file <0600 file> --out <envelope>",
                 out.display()
@@ -83,9 +89,9 @@ impl EnvelopeSigner for KeySigner {
     }
 }
 
-/// **Step 2 (the key, no node):** re-read the request, refuse it unless it is for THIS build's network and ruleset and (when given)
-/// for `expect_bond`, re-derive the message from its fields, sign, verify, and write the envelope object (Borsh) for
-/// `misaka palw submit-object`.
+/// **Step 2 (the key, no node):** re-read the request, refuse it unless it is for THIS build's network and fork digest at its
+/// `valid_from_daa` and (when given) for `expect_bond`, re-derive the message from its fields, sign, verify, and write the envelope
+/// object (Borsh) for `misaka palw submit-object`.
 pub(crate) fn envelope_sign(
     ctx: &Ctx,
     request: &Path,
@@ -95,12 +101,9 @@ pub(crate) fn envelope_sign(
 ) -> CliResult {
     let text = std::fs::read_to_string(request).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", request.display())))?;
     let req = SignedRegistrationRequestV1::from_json(&text).map_err(refusal)?;
-    let (domain, ruleset) = network_of(ctx)?;
-    if req.network_domain != domain || req.consensus_params_id != ruleset {
-        return Err(CliError::new(
-            exit::NETWORK_MISMATCH,
-            format!("the request is for another network or ruleset than {} in this build: nothing was signed", ctx.network),
-        ));
+    let params = params_of(ctx)?;
+    if let Err(e) = req.check_for_network(&params) {
+        return Err(CliError::new(exit::NETWORK_MISMATCH, format!("{e} — for {} in this build: nothing was signed", ctx.network)));
     }
     if let Some(expect) = expect_bond
         && parse_bond(expect)? != req.signer
@@ -109,7 +112,7 @@ pub(crate) fn envelope_sign(
     }
     let signer = KeySigner(key.load_key()?);
     let envelope = req.sign(&signer).map_err(refusal)?;
-    verify_signed_registration_v1(&envelope, domain, ruleset, &signer.public_key()).map_err(refusal)?;
+    verify_signed_registration_v1(&envelope, req.network_domain, &signer.public_key()).map_err(refusal)?;
     let bytes = borsh::to_vec(&envelope).expect("an object serializes");
     std::fs::write(out, &bytes).map_err(|e| CliError::new(exit::HOST, format!("{}: {e}", out.display())))?;
     match ctx.output {

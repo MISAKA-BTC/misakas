@@ -71,7 +71,8 @@ pub const PALW_ONBOARDING_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/onboarding/o
 const PALW_ONBOARDING_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/onboarding/object-message/v1";
 /// The envelope's own message domain and context (RFC-0009 G-EXPIRY / G-RULESET).
 pub const PALW_SIGNED_REGISTRATION_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/onboarding/signed-registration/v1";
-const PALW_SIGNED_REGISTRATION_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/onboarding/signed-registration-message/v1";
+/// v2 (F-C4R3-01(b)): the preimage names the fork-id fired digest and the validity window's start, never `consensus_params_id`.
+const PALW_SIGNED_REGISTRATION_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/onboarding/signed-registration-message/v2";
 
 /// **INTERIM onboarding terms** — consensus constants of the (never-armed) route fence, written once here; a real activation would
 /// revisit every one. The reservation is what a refuted binding costs; the window is how long a binding is Pending (not yet
@@ -97,19 +98,22 @@ pub fn palw_onboarding_message_v1(network_domain: Hash64, kind: u8, signer: &Pal
     Hash64::from_bytes(out)
 }
 
-/// **The message the envelope's signer signs** (RFC-0009 G-EXPIRY, G-RULESET): the network, the ruleset's `consensus_params_id`,
-/// the last DAA at which the registration may be accepted, the signer and the wrapped registration's Borsh. A leaked signed bundle
-/// therefore dies at `valid_until_daa`, and one signed for another ruleset is not valid on this one.
+/// **The message the envelope's signer signs** (RFC-0009 G-EXPIRY, G-RULESET): the network, the fork-id fired digest the signer
+/// computed at `valid_from_daa` from its own compiled params ([`palw_envelope_fork_digest_v1`]), the validity window, the signer and
+/// the wrapped registration's Borsh. A leaked signed bundle therefore dies at `valid_until_daa` (or at the next fence that fires),
+/// and one signed under another fork schedule is not valid on this one.
 pub fn palw_signed_registration_message_v1(
     network_domain: Hash64,
-    consensus_params_id: crate::Hash,
+    fork_digest: crate::Hash,
+    valid_from_daa: u64,
     valid_until_daa: u64,
     signer: &PalwBondKeyV2,
     registration_bytes: &[u8],
 ) -> Hash64 {
     let mut s = blake2b_simd::Params::new().hash_length(64).key(PALW_SIGNED_REGISTRATION_MESSAGE_DOMAIN_V1).to_state();
     s.update(network_domain.as_byte_slice());
-    s.update(consensus_params_id.as_bytes().as_slice());
+    s.update(fork_digest.as_bytes().as_slice());
+    s.update(&valid_from_daa.to_le_bytes());
     s.update(&valid_until_daa.to_le_bytes());
     s.update(signer.0.transaction_id.as_byte_slice());
     s.update(&signer.0.index.to_le_bytes());
@@ -118,6 +122,14 @@ pub fn palw_signed_registration_message_v1(
     let mut out = [0u8; 64];
     out.copy_from_slice(s.finalize().as_bytes());
     Hash64::from_bytes(out)
+}
+
+/// **The fork-id fired digest at `daa`** from a fence schedule already computed (`Params::fence_schedule_v1`) — exactly
+/// `fork_id_v1(params, daa).fired` (genesis and the fences at or below `daa`), without cloning the params per envelope. What tag 108
+/// names and is checked against (F-C4R3-01(b)): two builds that differ only in a fence not yet fired compute the same digest.
+pub fn palw_envelope_fork_digest_v1(genesis: Hash64, schedule: &[u64], daa: u64) -> crate::Hash {
+    let crossed = schedule.partition_point(|&fence| fence <= daa);
+    crate::fork_id_v1::fired_fences_digest_v1(genesis, &schedule[..crossed])
 }
 
 // ---- the envelope's fence (RFC-0009 G-EXPIRY / G-RULESET) ------------------------------------------------------------------
@@ -778,8 +790,9 @@ mod tests {
             (
                 O::SignedRegistrationV1 {
                     registration: Box::new(bound),
+                    valid_from_daa: 1,
                     valid_until_daa: 9,
-                    consensus_params_id: crate::Hash::from_bytes([2; 32]),
+                    fork_digest: crate::Hash::from_bytes([2; 32]),
                     signer: bond,
                     signature: vec![1],
                 },
@@ -807,6 +820,30 @@ mod tests {
             assert_eq!(crate::palw_state_v2::palw_object_is_onboarding_v1(&object), (104..=107).contains(&tag) || tag == 109);
             assert_eq!(crate::palw_state_v2::palw_object_is_signed_registration_v1(&object), tag == 108);
         }
+    }
+
+    /// **F-C4R3-01(b)**: the envelope's digest is the fork id's fired digest; a fence not yet fired does not move it, a fence that
+    /// fires between signing and inclusion does (the envelope expires across it).
+    #[test]
+    fn the_envelope_names_the_fork_id_fired_digest_which_a_future_fence_does_not_move() {
+        let params = Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
+        let schedule = params.fence_schedule_v1();
+        for daa in [0u64, 1, 500, 9_000, 1_000_000] {
+            assert_eq!(
+                palw_envelope_fork_digest_v1(params.genesis.hash, &schedule, daa),
+                crate::fork_id_v1::fork_id_v1(&params, daa).fired,
+                "exactly fork_id_v1's fired digest at {daa}"
+            );
+        }
+        let g = Hash64::from_bytes([3; 64]);
+        let (now, later) = ([10u64, 20], [10u64, 20, 5_000_000]);
+        assert_eq!(palw_envelope_fork_digest_v1(g, &now, 15), palw_envelope_fork_digest_v1(g, &later, 15), "a future fence moves nothing");
+        assert_ne!(palw_envelope_fork_digest_v1(g, &now, 15), palw_envelope_fork_digest_v1(g, &now, 25), "a fence fired since signing");
+        assert_ne!(
+            palw_envelope_fork_digest_v1(g, &now, 15),
+            palw_envelope_fork_digest_v1(Hash64::from_bytes([4; 64]), &now, 15),
+            "another chain"
+        );
     }
 
     #[test]

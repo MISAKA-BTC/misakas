@@ -2052,7 +2052,8 @@ impl Net {
     }
 
     fn kernel_bound(&mut self, card: usize, v2_class: Hash64, kernel_class: Hash64) -> Obj {
-        let policy = Hash64::from_bytes(self.api().expect("the route").header.policy.challenge_policy_id);
+        // The network's post-commit challenge policy (onboarding P0): the one the beacon and seed are derived under.
+        let policy = Hash64::from_bytes(kaspa_consensus_core::palw_conformance_evidence_v1::palw_onboarding_challenge_policy_v1().id());
         let payload = borsh::to_vec(&(v2_class, kernel_class, policy)).unwrap();
         let signature = self.onboarding_signature(card, 106, &payload);
         Obj::KernelBoundV1 { v2_class, kernel_class, challenge_policy_id: policy, signer: self.bond(card), signature }
@@ -2098,8 +2099,9 @@ fn conformance_of(net: &Net, f: &OnbFixture, v2_class: Hash64) -> misaka_palw_ch
 
 /// **The whole onboarding path, no hook**: the V2 class registers; its registrant binds the artifact (bonded); the kernel route refuses
 /// a class over the root while the binding is Pending and registers one when it has matured; the registrant binds the V2 class to
-/// that kernel class and commits the RFC-0013 statement; the class — due to activate long before — stays Registered until the
-/// binding passes its refutation horizon, and then leaves it.
+/// that kernel class and commits the RFC-0013 statement; the class — due to activate long before — stays Registered through the
+/// binding's refutation horizon and past it: a commitment alone never passes (onboarding P0 — on a network with no Panel-independent
+/// Final the attempt ends BEACON_UNAVAILABLE, counted; the passing path is `g14_kernel_route_e2e/conformance.rs`).
 #[tokio::test]
 async fn g14_onboarding_a_class_is_bound_attested_registered_and_released_by_the_gate() {
     use kaspa_consensus_core::palw_onboarding_v1::ArtifactBindingStateV1;
@@ -2164,7 +2166,7 @@ async fn g14_onboarding_a_class_is_bound_attested_registered_and_released_by_the
     let o = net.conformance_committed(registrant, commitment);
     net.send(vec![(registrant, o)]).await;
     assert_eq!(net.api().unwrap().conformance_v1(&v2_class, &f.artifact_root).unwrap().statement_root, statement);
-    // Still Registered: the binding is inside its refutation horizon.
+    // Still Registered: the binding is inside its refutation horizon (and the commitment waits for randomness).
     assert!(matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }));
     assert!(matches!(
         net.api().unwrap().onboarding_gate_v1(&v2_class, &f.artifact_root, net.daa()),
@@ -2177,15 +2179,26 @@ async fn g14_onboarding_a_class_is_bound_attested_registered_and_released_by_the
     assert_eq!(read.artifact_bindings[0].2, "Matured");
     assert!(matches!(read.gate, kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1::Held { code: "AVAILABILITY_REQUIRED", .. }), "{:?}", read.gate);
 
-    // ---- the horizon ends: the reservation is released and the class leaves Registered ----
+    // ---- the horizon ends: the reservation is released — and a COMMITMENT ALONE never passes (onboarding P0) ----
+    // This network has no Panel-independent Final, so the beacon never locks: the attempt waits for randomness, the collection window
+    // closes BEACON_UNAVAILABLE (counted, pending, never a pass) and the class stays Registered with the binding Final.
     net.beat_to(row.final_daa + 1).await;
     let read = net.chain.ctx.consensus.palw_onboarding_v1(v2_class).unwrap();
     assert_eq!(read.artifact_bindings[0].2, "Final");
-    assert_eq!(read.gate, kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1::Ready);
-    assert!(read.status.starts_with("Active"), "{}", read.status);
+    assert!(
+        matches!(read.gate, kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1::Held { code: "BEACON_UNAVAILABLE", .. }),
+        "{:?}",
+        read.gate
+    );
+    assert!(read.status.starts_with("Registered"), "{}", read.status);
+    let attempt = read.conformance_attempt.expect("the commitment opened an attempt");
+    assert_eq!(attempt.record.state, misaka_palw_challenge::OnboardingStateV1::RegisteredDormant);
+    assert_eq!(attempt.record.last_failure, Some(misaka_palw_challenge::OnboardingFailureV1::BeaconUnavailable));
+    assert_eq!((attempt.record.attempts(), attempt.record.attempt_limit), (1, 3), "counted against the policy's limit");
+    assert!(matches!(attempt.last_end, Some((kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptEndV1::BeaconUnavailable, _))));
     assert_eq!(net.chain.tip_state().1.onboarding_reserved(&net.bond(registrant)), 0, "released at the horizon");
     assert!(
-        matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, PalwClassStatusV2::Active),
+        matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }),
         "{:?}",
         net.chain.tip_state().1.class(&v2_class).unwrap().status
     );
@@ -2471,7 +2484,7 @@ fn conformance_of_unbound(net: &Net, f: &OnbFixture, v2_class: Hash64) -> misaka
         subject_kind: SubjectKindV1::ModelConformance,
         candidate_id: v2_class.as_bytes(),
         kernel_descriptor_id: k2_tir_v2_descriptor().digest(),
-        challenge_policy_id: route.header.policy.challenge_policy_id,
+        challenge_policy_id: kaspa_consensus_core::palw_conformance_evidence_v1::palw_onboarding_challenge_policy_v1().id(),
         artifact_root: f.artifact_root.as_bytes(),
         program_root: program_root_v1(&f.program.encode()),
         source_root: RootV1::Absent,
@@ -2492,14 +2505,27 @@ fn conformance_of_unbound(net: &Net, f: &OnbFixture, v2_class: Hash64) -> misaka
 // ---- the signed-registration envelope (RFC-0009 G-EXPIRY / G-RULESET) ---------------------------------------------------------
 
 impl Net {
-    /// An envelope around `registration`, signed by card `card` for the ruleset `params_id` and valid until `valid_until_daa`.
-    fn envelope(&mut self, card: usize, registration: Obj, valid_until_daa: u64, params_id: kaspa_consensus_core::Hash) -> Obj {
+    /// The fork digest the envelope names: `fork_id_v1(params, daa).fired` of this network's own params (F-C4R3-01(b)).
+    fn fork_digest_at(&self, daa: u64) -> kaspa_consensus_core::Hash {
+        kaspa_consensus_core::fork_id_v1::fork_id_v1(&self.config.params, daa).fired
+    }
+
+    /// An envelope around `registration`, signed by card `card`, naming `fork_digest`, valid in `[valid_from_daa, valid_until_daa]`.
+    fn envelope(
+        &mut self,
+        card: usize,
+        registration: Obj,
+        valid_from_daa: u64,
+        valid_until_daa: u64,
+        fork_digest: kaspa_consensus_core::Hash,
+    ) -> Obj {
         self.rnd = self.rnd.wrapping_add(1);
         let signer = self.bond(card);
         let bytes = borsh::to_vec(&registration).unwrap();
         let message = kaspa_consensus_core::palw_onboarding_v1::palw_signed_registration_message_v1(
             self.domain,
-            params_id,
+            fork_digest,
+            valid_from_daa,
             valid_until_daa,
             &signer,
             &bytes,
@@ -2514,13 +2540,14 @@ impl Net {
         .expect("ML-DSA-87 signs")
         .as_ref()
         .to_vec();
-        Obj::SignedRegistrationV1 { registration: Box::new(registration), valid_until_daa, consensus_params_id: params_id, signer, signature }
+        Obj::SignedRegistrationV1 { registration: Box::new(registration), valid_from_daa, valid_until_daa, fork_digest, signer, signature }
     }
 }
 
-/// **A signed expiry and a signed ruleset**: a leaked signed registration dies at its `valid_until_daa`; one signed for another ruleset
-/// is not valid here; one signed by a bond that is not the registrant is not a registration; the fence off, there is no envelope. The
-/// good one lands as the registration it wraps.
+/// **A signed validity window and a signed fork** (G-EXPIRY / G-RULESET, F-C4R3-01(b)): a leaked signed registration dies at its
+/// `valid_until_daa` and is nothing before its `valid_from_daa`; one naming another fork digest (another chain, or a fence this chain
+/// has not fired) is not valid here; one signed by a bond that is not the registrant is not a registration; the fence off, there is no
+/// envelope. The good one lands as the registration it wraps.
 #[tokio::test]
 async fn g14_onboarding_a_signed_registration_envelope_expires_and_binds_its_ruleset() {
     use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
@@ -2529,30 +2556,37 @@ async fn g14_onboarding_a_signed_registration_envelope_expires_and_binds_its_rul
     let mut net = Net::over_cfg(kernel_config_onboarding(), TestConsensus::new);
     net.beat_to(1).await;
     let registrant = 1usize;
-    let params_id = net.config.params.consensus_params_id();
     let registered = |net: &Net, c: &Hash64| net.chain.tip_state().1.class(c).is_some();
     let class_obj = net.v2_registration(&f, registrant, net.daa() + 30);
     let Obj::ClassRegisteredTirV1 { class_id, .. } = &class_obj else { unreachable!() };
     let v2_class = *class_id;
+    let now = net.daa();
+    let fork = net.fork_digest_at(now);
 
     // expired: valid until a DAA already behind the chain
-    let expired = net.envelope(registrant, class_obj.clone(), net.daa().saturating_sub(1), params_id);
+    let expired = net.envelope(registrant, class_obj.clone(), 0, now.saturating_sub(1), net.fork_digest_at(0));
     net.send(vec![(registrant, expired)]).await;
     assert!(!registered(&net, &v2_class), "G-EXPIRY: an expired envelope is dropped");
-    // another ruleset
-    let mut other = *params_id.as_bytes().as_slice().first().unwrap_or(&0);
-    other ^= 0xFF;
-    let mut other_id = params_id.as_bytes();
-    other_id[0] = other;
-    let wrong_ruleset = net.envelope(registrant, class_obj.clone(), net.daa() + 200, kaspa_consensus_core::Hash::from_bytes(other_id));
-    net.send(vec![(registrant, wrong_ruleset)]).await;
-    assert!(!registered(&net, &v2_class), "G-RULESET: an envelope signed for another ruleset is dropped");
+    // not yet valid
+    let early = net.envelope(registrant, class_obj.clone(), now + 1_000, now + 2_000, fork);
+    net.send(vec![(registrant, early)]).await;
+    assert!(!registered(&net, &v2_class), "an envelope is nothing before its valid_from_daa");
+    // another fork digest: another chain's genesis, or a fence this chain has not fired
+    let mut other = fork.as_bytes();
+    other[0] ^= 0xFF;
+    let wrong_fork = net.envelope(registrant, class_obj.clone(), now, now + 200, kaspa_consensus_core::Hash::from_bytes(other));
+    net.send(vec![(registrant, wrong_fork)]).await;
+    assert!(!registered(&net, &v2_class), "G-RULESET: an envelope naming another fork digest is dropped");
+    let unfired = kaspa_consensus_core::fork_id_v1::fired_fences_digest_v1(net.config.params.genesis.hash, &[now + 1]);
+    let wrong_fence = net.envelope(registrant, class_obj.clone(), now, now + 200, unfired);
+    net.send(vec![(registrant, wrong_fence)]).await;
+    assert!(!registered(&net, &v2_class), "G-RULESET: an envelope signed under a fence this chain has not fired is dropped");
     // a signer that is not the registrant of the wrapped registration
-    let wrong_signer = net.envelope(2, class_obj.clone(), net.daa() + 200, params_id);
+    let wrong_signer = net.envelope(2, class_obj.clone(), now, now + 200, fork);
     net.send(vec![(2, wrong_signer)]).await;
     assert!(!registered(&net, &v2_class), "the envelope's signer must be the wrapped registration's registrant");
     // a tampered signature
-    let mut tampered = net.envelope(registrant, class_obj.clone(), net.daa() + 200, params_id);
+    let mut tampered = net.envelope(registrant, class_obj.clone(), now, now + 200, fork);
     if let Obj::SignedRegistrationV1 { signature, .. } = &mut tampered {
         let last = signature.len() - 1;
         signature[last] ^= 1;
@@ -2560,7 +2594,7 @@ async fn g14_onboarding_a_signed_registration_envelope_expires_and_binds_its_rul
     net.send(vec![(registrant, tampered)]).await;
     assert!(!registered(&net, &v2_class), "a forged envelope is dropped");
     // a tampered expiry (the signature covers it)
-    let mut extended = net.envelope(registrant, class_obj.clone(), net.daa() + 3, params_id);
+    let mut extended = net.envelope(registrant, class_obj.clone(), now, now + 3, fork);
     if let Obj::SignedRegistrationV1 { valid_until_daa, .. } = &mut extended {
         *valid_until_daa += 1_000;
     }
@@ -2568,7 +2602,8 @@ async fn g14_onboarding_a_signed_registration_envelope_expires_and_binds_its_rul
     assert!(!registered(&net, &v2_class), "an extended expiry breaks the signature");
 
     // the good one
-    let good = net.envelope(registrant, class_obj, net.daa() + 200, params_id);
+    let now = net.daa();
+    let good = net.envelope(registrant, class_obj, now, now + 200, net.fork_digest_at(now));
     net.send(vec![(registrant, good)]).await;
     assert!(matches!(net.chain.tip_state().1.class(&v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }), "registered through the envelope");
 
@@ -2576,8 +2611,8 @@ async fn g14_onboarding_a_signed_registration_envelope_expires_and_binds_its_rul
     let mut plain = Net::over_cfg(kernel_config_onboarding_with(false), TestConsensus::new);
     plain.beat_to(1).await;
     let class_obj = plain.v2_registration(&f, registrant, plain.daa() + 30);
-    let params_id = plain.config.params.consensus_params_id();
-    let envelope = plain.envelope(registrant, class_obj, plain.daa() + 200, params_id);
+    let now = plain.daa();
+    let envelope = plain.envelope(registrant, class_obj, now, now + 200, plain.fork_digest_at(now));
     plain.send(vec![(registrant, envelope)]).await;
     assert!(!registered(&plain, &v2_class), "without palw_signed_registration_v1 an envelope is dropped by name");
     let z = net.replay().await;
@@ -2586,3 +2621,6 @@ async fn g14_onboarding_a_signed_registration_envelope_expires_and_binds_its_rul
 
 // C4 round 3 (independent adversarial review on the real node): `g14_kernel_route_e2e/c4r3.rs`.
 mod c4r3;
+// Onboarding P0 (OB-P0): conformance evidence on chain (tag 109) — the beacon from FUTURE Panel-independent Finals, the evidence judged
+// in the fold, an optimistic window with outsider refutations, the lifecycle to ACTIVE_REWARDABLE: `g14_kernel_route_e2e/conformance.rs`.
+mod conformance;

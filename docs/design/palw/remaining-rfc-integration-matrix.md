@@ -84,8 +84,8 @@ wire/fence impact · test · real-node result · status.
 | Kernel route (A, G14) | 110–119 | 160–169 | 0xEC | `palw_probabilistic_constraints_v1` (refused) |
 | RFC-0010 V3 production fold (C2) | 120–129 (120 = `PanelBeaconProofV3`) | 170–179 (170–173 used) | 0xED | `palw_permissionless_panel_v1` (refused); `PalwVoidReasonV2` 120–129 (120–122 used; 0–10 implicit unchanged) |
 | EXEC payload v2 (A, later) | 130–139 | 180–189 | 0xEE | `palw_exec_payload_v2` (not yet declared) |
-| Onboarding objects (D phase 3) | 104–108 used (104 ArtifactBound, 105 refutation, 106 KernelBound, 107 ConformanceCommitted, 108 SignedRegistrationV1), 109 **reserved for OB-P0** `ConformanceEvidenceV1` (2026-10-08 18:10; aux tables 39–40 reserved with it) | none (rows in the kernel route's aux tables 36–38, journalled by deltas 160/161) | none (tail 0xEC) | `palw_signed_registration_v1` (108; refused) |
-| RPC ops | C1 202–209 (202 used; 203–209 reserved for C1r2), D 210–219 (210, 211, 212 used) and 230–239 (230 used; 231–232 reserved for OB-P0 `getPalwConformanceEvidence`), C2 220–229 (220 used) | — | — | — |
+| Onboarding objects (D phase 3) | 104–108 used (104 ArtifactBound, 105 refutation, 106 KernelBound, 107 ConformanceCommitted, 108 SignedRegistrationV1), 109 **used by OB-P0** `ConformanceEvidenceV1` (2026-10-08 18:10; aux tables 39 attempts / 40 evidence material used with it) | none (rows in the kernel route's aux tables 36–38, journalled by deltas 160/161) | none (tail 0xEC) | `palw_signed_registration_v1` (108; refused) |
+| RPC ops | C1 202–209 (202 used; 203–209 reserved for C1r2), D 210–219 (210, 211, 212 used) and 230–239 (230 used; 231 used by OB-P0 `getPalwConformanceEvidence`, 232 unused), C2 220–229 (220 used) | — | — | — |
 | `PalwVoidReasonV2` | C2 120–122; X8 one variant (assign an explicit number ≥ 130 at merge) | — | — | — |
 
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the

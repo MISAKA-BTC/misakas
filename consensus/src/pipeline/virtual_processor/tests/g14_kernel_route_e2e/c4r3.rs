@@ -381,8 +381,8 @@ async fn g14_c4r3_opv_two_bonds_must_not_be_able_to_hold_the_whole_opv_lane() {
 /// as peers, M1-6): an envelope signed for the old build's id is registered by old nodes and dropped by upgraded ones, so the two
 /// compute different PALW roots for the same block and the upgraded node disqualifies it — a split at the binary swap, at no height.
 /// SAFE property asserted: a node of the next release (one more fence, far in the future) follows the same chain.
+/// **Fixed (OB-P0)**: the envelope names the fork-id fired digest at a DAA its signer states, never `consensus_params_id`.
 #[tokio::test]
-#[ignore = "FAIL F-C4R3-01 (G-RULESET): an envelope in flight during a rollout splits builds that differ only in a future fence"]
 async fn g14_c4r3_an_envelope_in_flight_must_not_split_builds_that_differ_only_in_a_future_fence() {
     kaspa_core::log::try_init_logger("warn");
     let f = onb_fixture(11);
@@ -393,7 +393,8 @@ async fn g14_c4r3_an_envelope_in_flight_must_not_split_builds_that_differ_only_i
     let class_obj = net.v2_registration(&f, registrant, net.daa() + 30);
     let Obj::ClassRegisteredTirV1 { class_id: v2_class, .. } = &class_obj else { unreachable!() };
     let v2_class = *v2_class;
-    let envelope = net.envelope(registrant, class_obj, net.daa() + 200, params_id);
+    let now = net.daa();
+    let envelope = net.envelope(registrant, class_obj, now, now + 200, net.fork_digest_at(now));
     net.send(vec![(registrant, envelope)]).await;
     assert!(net.chain.tip_state().1.class(&v2_class).is_some(), "the old build registered the class through the envelope");
     // The next chain block commits the root of that state (a header commits its selected parent's root).

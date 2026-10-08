@@ -8442,15 +8442,20 @@ pub enum PalwConsensusObjectV2 {
     /// select its checks. A new artifact root is a new class and needs a new commitment; `statement_root` excludes provenance.
     /// **Tag 107.**
     ConformanceCommittedV1 { commitment: Box<misaka_palw_challenge::ConformanceCommitmentV1>, signer: PalwBondKeyV2, signature: Vec<u8> } = 107,
-    /// **(tag 108): a class registration with a SIGNED expiry and ruleset** (RFC-0009 G-EXPIRY, G-RULESET). The owner's signature on a
-    /// registration covers neither a last-valid DAA nor the ruleset, so a leaked signed bundle stays valid until its funding input is
-    /// spent. This envelope signs both: it is accepted only at a block with `daa ≤ valid_until_daa` on the ruleset whose
-    /// `consensus_params_id` it names, and is then replaced by the registration it wraps — every rule of the wrapped object applies
-    /// unchanged. Dropped by name below `palw_signed_registration_v1`. **Tag 108.**
+    /// **(tag 108): a class registration with a SIGNED validity window and fork** (RFC-0009 G-EXPIRY, G-RULESET). The owner's
+    /// signature on a registration covers neither a last-valid DAA nor the rules, so a leaked signed bundle stays valid until its
+    /// funding input is spent. This envelope signs both: it is accepted only at a block with `valid_from_daa ≤ daa ≤ valid_until_daa`
+    /// whose fork-id fired digest (`fork_id_v1(params, daa).fired`: genesis and every fence crossed so far) equals `fork_digest`, the
+    /// digest the signer computed at `valid_from_daa` from its own compiled params — then it is replaced by the registration it wraps,
+    /// every rule of the wrapped object applying unchanged. **Not `consensus_params_id`** (F-C4R3-01(b)): that id moves when a release
+    /// merely SCHEDULES a fence, so an envelope in flight during a rollout split old and upgraded builds before any fence height; builds
+    /// that agree on every fence fired so far agree on the envelope, and one signed before a fence crosses expires across it.
+    /// Dropped by name below `palw_signed_registration_v1`. **Tag 108.**
     SignedRegistrationV1 {
         registration: Box<PalwConsensusObjectV2>,
+        valid_from_daa: u64,
         valid_until_daa: u64,
-        consensus_params_id: crate::Hash,
+        fork_digest: crate::Hash,
         signer: PalwBondKeyV2,
         signature: Vec<u8>,
     } = 108,
@@ -9318,11 +9323,14 @@ pub fn palw_chunked_object_kind_admitted_v1(object: &PalwConsensusObjectV2) -> b
     // G14 lane D: a kernel route object (a class registration, a claim's commitments, a response) may exceed one carrier; its
     // signature is checked on the assembled whole at the completing chunk (the acceptance walk).
     // G14 phase 3: a binding's refutation carries a whole commitment map and two openings — it may exceed one carrier too.
+    // Onboarding P0: conformance evidence carries every selected check's outcome (and a refutation an artifact opening) — judged on
+    // the assembled whole, its signature checked at the completing chunk, like the two above.
     matches!(
         object,
         PalwConsensusObjectV2::FamilyCertified { .. }
             | PalwConsensusObjectV2::KernelRouteV1 { .. }
             | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. }
+            | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. }
     )
 }
 
