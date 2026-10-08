@@ -269,7 +269,7 @@ impl PalwWorkSliceV1 {
 /// **The slice-determined half of `misaka_palw_challenge::ChallengeSubjectV1` for `SubjectKindV1::WorkSlice`.** The other half
 /// (`chain_genesis`, `ruleset_id`, `challenge_policy_id`, the program/artifact/schema/layout roots) comes from the network and
 /// the root's class/plan, so it is the root's to add; this struct names the part a slice fixes, with the same field names, so
-/// the mapping is checked against the contract crate in its own test rather than restated here.
+/// the mapping is checked against the contract crate in `misaka-palw-sdk/tests/exec_v2_work_slice_subject.rs` rather than restated here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwWorkSliceSubjectV1 {
     /// The slice identity.
