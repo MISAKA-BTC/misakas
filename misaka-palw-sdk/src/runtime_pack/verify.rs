@@ -223,6 +223,17 @@ pub fn verify(opts: &VerifyOpts, log: &dyn Fn(String)) -> Result<VerifyReport, S
                 let out = out_dir.join("rebuild.palwtir");
                 let mut req = ConvertRequest::new(model, &out);
                 req.stats_in = Some(dir.join(&pack.profile.calibration.stats_file));
+                // A recurrent artifact records the longest calibration sequence (`calibrated_context`); the pack carries the
+                // sequences beside the statistics, so the rebuild records the same value the build did.
+                req.calibrated_context = pack
+                    .profile
+                    .calibration
+                    .sequences_file
+                    .as_ref()
+                    .and_then(|f| std::fs::read(dir.join(f)).ok())
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                    .and_then(|v| v["sequences"].as_array().and_then(|a| a.iter().filter_map(|q| q.as_array().map(Vec::len)).max()))
+                    .filter(|n| *n > 0);
                 req.policy = misaka_palw_tir_lower::quant::QuantPolicy {
                     headroom16: pack.profile.policy.headroom16,
                     headroom32: pack.profile.policy.headroom32,
