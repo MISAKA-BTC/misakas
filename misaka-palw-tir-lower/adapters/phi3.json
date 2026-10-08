@@ -18,7 +18,7 @@
     {"name": "mbias", "value": false},
     {"name": "qkv_layout", "value": "FusedConcat"},
     {"name": "mlp_layout", "value": "FusedGateFirst"},
-    {"name": "names", "value": {"embed": "{p}embed_tokens", "final_norm": "{p}norm", "lm_head": {"$if": [{"$var": "tied"}, "{p}embed_tokens", "lm_head"]}, "norm.mix": "{p}layers.{L}.input_layernorm", "norm.ffn": "{p}layers.{L}.post_attention_layernorm", "attn.qkv": "{p}layers.{L}.self_attn.qkv_proj", "attn.o": "{p}layers.{L}.self_attn.o_proj", "mlp.gate_up": "{p}layers.{L}.mlp.gate_up_proj", "mlp.down": "{p}layers.{L}.mlp.down_proj"}},
+    {"name": "names", "value": {"embed": "{p}embed_tokens", "final_norm": "{p}norm", "lm_head": {"$if": [{"$var": "tied"}, "{p}embed_tokens", {"$var": "lm_head_name"}]}, "norm.mix": "{p}layers.{L}.input_layernorm", "norm.ffn": "{p}layers.{L}.post_attention_layernorm", "attn.qkv": "{p}layers.{L}.self_attn.qkv_proj", "attn.o": "{p}layers.{L}.self_attn.o_proj", "mlp.gate_up": "{p}layers.{L}.mlp.gate_up_proj", "mlp.down": "{p}layers.{L}.mlp.down_proj"}},
     {"name": "model_type", "value": "phi3"}
   ]
 }

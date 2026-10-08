@@ -30,9 +30,10 @@ const INTENDED: &[(&str, &str)] = &[
     // The census lane's key fixes of 2026-10-04 moved these after the last regeneration (455364f0d) without recording them here; the
     // test failed at `febc07f24` (the model-onboarding base) before any change of lane A. Recorded, with their commits.
     ("llama", "6b082bef7: Llama reads its positional-limit aliases as inert and accepts rope_interleaved / sliding_window only absent, false or null (census CONFIG_KEY_UNREAD)"),
-    ("gpt2", "6b082bef7: GPT-2 accepts n_special only when 0 (census CONFIG_KEY_UNREAD)"),
+    ("gpt2", "6b082bef7: GPT-2 accepts n_special only when 0 (census CONFIG_KEY_UNREAD); model-onboarding: its lm_head tensor name is the `lm_head_name` variable (the sequence-classification mixin renames it `score`)"),
     ("mixtral", "23f8a9feb: Mixtral reads attention_bias (absent or false only)"),
-    ("phi3", "23f8a9feb: Phi-3 reads attention_bias (absent or false only)"),
+    ("phi3", "23f8a9feb: Phi-3 reads attention_bias (absent or false only); model-onboarding: its lm_head tensor name is the `lm_head_name` variable (the sequence-classification mixin renames it `score`)"),
+    ("opt", "model-onboarding: OPT's lm_head tensor name is the `lm_head_name` variable (the sequence-classification mixin renames it `score`)"),
     ("mixin-vlm", "42faa5b55: a chat model's wrapper keys that shadow its decoder's are inert (`root_shadows_decoder`), the decoder's image token ids are inert"),
     ("vlm", "42faa5b55: as mixin-vlm (the wrapper adapter extends it)"),
     ("vlm-gemma", "42faa5b55 / 1472a300c: as mixin-vlm; the Gemma wrapper's own keys"),

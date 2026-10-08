@@ -1291,6 +1291,17 @@ pub enum OutputSpec {
     /// An encoder's embedding: the hidden row after `final_norm`, then an optional projection
     /// (`width`, `bias`: CLIP's `text_projection`), then an optional L2 normalisation.
     Embedding { proj: Option<(usize, bool)>, normalize: bool },
+    /// **A sequence classifier / reranker / reward head** (`OUTPUT_CLASSIFY_V1`): the pooled row (the last token of a decoder, `[CLS]`
+    /// of an encoder) through an optional dense layer with an activation (`pre`: BERT's pooler, RoBERTa's `dense` + tanh,
+    /// DistilBERT's `pre_classifier` + ReLU), then a linear layer to `labels` logits. The output is the `labels` logits, unnormalised.
+    Classify { labels: usize, bias: bool, pre: Option<ClassifyPre> },
+}
+
+/// The dense layer and activation between the pooled row and the classification layer.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ClassifyPre {
+    pub bias: bool,
+    pub act: Act,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

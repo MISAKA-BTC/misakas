@@ -140,6 +140,19 @@ pack!(
     "vlm-qwen2-vl",
     "vlm-qwen3-5",
     "vlm-qwen3-5-moe",
+    "mixin-seqcls",
+    "llama-seqcls",
+    "qwen2-seqcls",
+    "qwen3-seqcls",
+    "mistral-seqcls",
+    "gemma-seqcls",
+    "gemma2-seqcls",
+    "phi3-seqcls",
+    "mixtral-seqcls",
+    "qwen3-moe-seqcls",
+    "olmo2-seqcls",
+    "gpt2-seqcls",
+    "opt-seqcls",
 );
 
 /// The text of a built-in adapter, by id.
