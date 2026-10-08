@@ -332,3 +332,136 @@ fn rfc0012_a_void_entry_is_extracted_and_a_resumed_final_is_not_evidence_twice()
     // A removal (retirement) is neither.
     assert!(native_delta_evidence_v1(&delta(vec![entry(Some(&final_claim), None)])).is_empty());
 }
+
+
+// =====================================================================================================================
+// Measurements for the policy proposal (docs/design/palw/rfc-0012-policy-proposal.md): every number comes from the fold or
+// from the certification code, on testnet-12's own Params. They are printed; the assertions pin the facts the proposal quotes.
+// =====================================================================================================================
+
+/// Drive a floor claim from acceptance until it is `Voided` or `Final`; `bind` / `receipts` choose how far honest verification gets.
+/// Returns `(accepted, terminal_phase, terminal_daa)`.
+fn run_claim(bind: bool, receipts: bool) -> (u64, PalwClaimPhaseV2, u64) {
+    let p = t12();
+    let b = bundle(&p);
+    let sp = b.state.clone();
+    let (floor, leaves, target, _) = genesis_classes(&p)[0];
+    let pwu = palw_pwu_v1(target, leaves);
+    let bonds = genesis_bonds(&p);
+    let (exec_bond, exec_pk, exec_op) = b
+        .genesis_objects
+        .iter()
+        .find_map(|o| match o {
+            PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, .. } => Some((*bond, pubkey.clone(), operator_pubkey.clone())),
+            _ => None,
+        })
+        .expect("a genesis bond");
+    let seats: Vec<(PalwBondKeyV2, Hash64)> = bonds[1..6].iter().map(|(k, o, _)| (*k, *o)).collect();
+    let valid_seats: Vec<PalwBondKeyV2> = seats.iter().map(|s| s.0).collect();
+    let s = with_floor_lifecycle(&p, &genesis_state(&p));
+    let (mut env, _, _) = junk_attempt(floor, exec_bond, exec_pk, &exec_op, pwu, 77, 0x6077);
+    let accepted = 1_001u64;
+    env.attempt.trace_retention_daa = accepted + palw_min_trace_retention_daa_v1(&sp);
+    let anchor = execution_anchor_v3(h(NET), h(0x6077), floor, &exec_bond.0, 7);
+    let key = execution_commitment_v3(&env.attempt, anchor);
+    let id = attempt_id_v2(&env.attempt);
+    let (mut s, _) = step(&p, &sp, &s, accepted, &[], PalwBlockWorkV3::Attempt(&env), key, T12_BLOCK_SUBSIDY_SOMPI, true);
+    let mut daa = accepted;
+    if bind {
+        daa += 1;
+        s = step(&p, &sp, &s, daa, &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0x6A), seats: seats_of(&seats) }], PalwBlockWorkV3::None, Hash64::default(), 0, true).0;
+        if receipts {
+            daa += 1;
+            s = step(&p, &sp, &s, daa, &[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: valid_receipts(id, &valid_seats) }], PalwBlockWorkV3::None, Hash64::default(), 0, true).0;
+        }
+    }
+    loop {
+        daa += 1;
+        assert!(daa < 30_000);
+        s = step(&p, &sp, &s, daa, &[], PalwBlockWorkV3::None, Hash64::default(), 0, true).0;
+        match s.claim(&id).map(|c| c.phase.clone()) {
+            Some(phase @ PalwClaimPhaseV2::Final { final_daa: t }) => return (accepted, phase, t),
+            Some(phase @ PalwClaimPhaseV2::Voided { voided_daa: t, .. }) => return (accepted, phase, t),
+            _ => {}
+        }
+    }
+}
+
+/// **How long can one claim hold the lifecycle open?** A claim is open from its acceptance until it is `Final` (and its retention
+/// lapses or it retires) or `Voided`. The lifecycle rule holds every effect at or after an open claim, so this is the longest a
+/// claim the producer simply does not get verified can hold `safe` back.
+#[test]
+fn rfc0012_measure_how_long_an_unverified_claim_holds_the_lifecycle_open() {
+    let (a0, phase0, t0) = run_claim(false, false);
+    let (a1, phase1, t1) = run_claim(true, false);
+    let (a2, phase2, t2) = run_claim(true, true);
+    eprintln!("[rfc0012-measure] never bound:           {phase0:?} at +{} DAA after acceptance", t0 - a0);
+    eprintln!("[rfc0012-measure] bound, no receipts:    {phase1:?} at +{} DAA after acceptance", t1 - a1);
+    eprintln!("[rfc0012-measure] bound, licensed:       {phase2:?} at +{} DAA after acceptance", t2 - a2);
+    let sp = bundle(&t12()).state;
+    assert!(matches!(phase0, PalwClaimPhaseV2::Voided { .. }) && matches!(phase1, PalwClaimPhaseV2::Voided { .. }));
+    assert!(matches!(phase2, PalwClaimPhaseV2::Final { .. }));
+    assert!(t0 - a0 <= sp.window_bind() + 2, "an unbound claim voids at the bind window");
+    assert!(t1 - a1 <= sp.window_bind() + sp.window_receipt() + 4, "a bound claim with no receipts voids at bind + receipt");
+}
+
+/// **What each REAL class's claim is worth in `pwu`** — the unit W is measured in. Printed from the shipped genesis registry.
+#[test]
+fn rfc0012_measure_the_work_a_genesis_claim_carries() {
+    let p = t12();
+    for (class, leaves, target, slash) in genesis_classes(&p) {
+        let pwu = palw_pwu_v1(target, leaves);
+        eprintln!("[rfc0012-measure] class {} leaves {leaves} -> pwu per claim {pwu} (slash value per pwu {slash})", &class.to_string()[..12]);
+        assert!(pwu > 0);
+    }
+}
+
+/// **How the concentration caps bite**, through `certify_native_effect_v1` itself: `k` operators supplying shares of one unit of
+/// work (equal; 60/40-style skew; Zipf), against caps. Printed as a table; asserts only the arithmetic the proposal relies on
+/// (a cap of c permille needs at least ceil(1000 / c) operators).
+#[test]
+fn rfc0012_measure_which_operator_caps_certify_which_distributions() {
+    use kaspa_consensus_core::palw_native_settlement_v1::MatureUsefulWorkV1;
+    let fact = |i: u64, operator: u64, work: u128| MatureUsefulWorkV1 {
+        identity: h(0x100 + i),
+        anchor: h(0x200 + i),
+        operator: h(0x300 + operator),
+        class: h(0x400 + (i % 3)),
+        anchor_blue: 10,
+        accepted_blue: 10,
+        anchor_daa: 10,
+        accepted_daa: 10,
+        matured_daa: 0,
+        work,
+    };
+    let distributions: Vec<(&str, Vec<u128>)> = vec![
+        ("1 operator", vec![1000]),
+        ("2 equal", vec![500, 500]),
+        ("60/40", vec![600, 400]),
+        ("3 equal", vec![334, 333, 333]),
+        ("4 equal", vec![250; 4]),
+        ("8 equal", vec![125; 8]),
+        ("zipf over 8", vec![368, 184, 123, 92, 74, 61, 53, 45]),
+    ];
+    let caps = [300u16, 400, 500, 600, 800, 1000];
+    eprintln!("[rfc0012-measure] operator cap (permille): {caps:?}  (ok = certifies, X = ConcentratedWork)");
+    for (name, shares) in &distributions {
+        let facts: Vec<_> = shares.iter().enumerate().map(|(i, w)| fact(i as u64, i as u64, *w)).collect();
+        let row: Vec<&str> = caps
+            .iter()
+            .map(|cap| {
+                let policy = PalwSettlementPolicyV1 { settled_anchor_depth: 1, unique_mature_work: 1, max_operator_permille: *cap, max_class_permille: 1000 };
+                match certify_native_effect_v1(policy, (10, 10), 20, true, true, true, true, &facts) {
+                    Ok(_) => "ok",
+                    Err(SettlementStopV1::ConcentratedWork) => "X",
+                    Err(other) => panic!("{other:?}"),
+                }
+            })
+            .collect();
+        eprintln!("[rfc0012-measure]   {name:<12} {row:?}");
+        let top = *shares.iter().max().unwrap() as u32;
+        for (cap, outcome) in caps.iter().zip(&row) {
+            assert_eq!(*outcome == "ok", top <= *cap as u32, "{name} at {cap}: the largest share is {top}");
+        }
+    }
+}

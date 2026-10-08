@@ -295,9 +295,10 @@ impl UtxoProcessor {
         if let Ok(confirmation) = rpc.get_dns_confirmation().await {
             // Retirement/unavailability must clear a cached DNS shortcut. The long maturity
             // fallback remains available without a validator observation.
-            params.set_dns_confirmed_anchor_daa(if confirmation.available {
-                confirmation.last_dns_confirmed_anchor_daa_score
-            } else { 0 });
+            params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(
+                confirmation.available,
+                confirmation.last_dns_confirmed_anchor_daa_score,
+            ));
         }
     }
 
@@ -878,4 +879,12 @@ pub(crate) mod mock {
         //     self.inner.is_connected.store(connected, Ordering::SeqCst);
         // }
     }
+}
+
+/// **RFC-0012: what the wallet keeps of the DNS coinbase shortcut after polling `get_dns_confirmation`.** The anchor the node
+/// reports while its DNS overlay is live; `0` — no shortcut — when the node reports none (the overlay is retired, or has no state),
+/// so a previously cached anchor can never keep accelerating coinbases after the node stopped vouching for it. The long maturity
+/// fallback (`coinbase_settlement_long_maturity_daa`) needs no observation and still applies.
+pub(crate) fn dns_shortcut_after_poll(available: bool, last_confirmed_anchor_daa: u64) -> u64 {
+    if available { last_confirmed_anchor_daa } else { 0 }
 }

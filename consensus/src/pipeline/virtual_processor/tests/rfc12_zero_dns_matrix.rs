@@ -124,10 +124,12 @@ pub(super) fn parts(fence: Option<u64>) -> Parts {
 /// [`parts`], with — when `bft` — the DNS BFT gate (ADR-0128) armed from DAA 0 in the same copy, so the veto the retirement
 /// removes exists to be removed. The gate's numbers are the existing unit test's, and are test values.
 pub(super) fn parts_with(fence: Option<u64>, bft: bool) -> Parts {
+    parts_custom(fence, bft, |_| {})
+}
+
+/// [`parts_with`] and then `edit` on the params copy (a test value, never a preset).
+pub(super) fn parts_custom(fence: Option<u64>, bft: bool, edit: impl FnOnce(&mut kaspa_consensus_core::config::params::Params)) -> Parts {
     let (config, bundle, premine, floats) = t12_with_harness_cards_and_evm(true);
-    if fence.is_none() && !bft {
-        return (config, bundle, premine, floats);
-    }
     let mut params = config.params.clone();
     if let Some(at) = fence {
         params.palw_dns_retirement = Some(test_retirement(at));
@@ -140,6 +142,7 @@ pub(super) fn parts_with(fence: Option<u64>, bft: bool) -> Parts {
             min_retained_validators: 4,
         });
     }
+    edit(&mut params);
     params.validate_palw_v2().expect("a test retirement validates on testnet-12");
     (ConfigBuilder::new(params).skip_proof_of_work().build(), bundle, premine, floats)
 }
@@ -251,10 +254,14 @@ impl Rig {
 
     /// **The node's own heartbeat** (the H1 miner's pass): its template at this host's clock, a nonce, the lane's adapter.
     pub fn beat(&mut self) -> MutableBlock {
+        self.beat_with(Vec::new())
+    }
+
+    pub fn beat_with(&mut self, txs: Vec<Transaction>) -> MutableBlock {
         self.nonce += 1;
         let mut t = self
             .api()
-            .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(Vec::new())), TemplateBuildMode::Standard)
+            .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard)
             .expect("a template");
         t.block.header.nonce = self.nonce;
         t.block.header.finalize();
@@ -320,6 +327,12 @@ impl Rig {
         t.block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire();
         t.block.header.finalize();
         t.block
+    }
+
+    /// Build with `make` and take: the shape every scripted step has.
+    pub async fn take_block_of(&mut self, make: impl FnOnce(&mut Self) -> MutableBlock, what: &str) -> Block {
+        let block = make(self);
+        self.take(block, what).await
     }
 
     /// Record what every reader says about the current sink, after `block`.
@@ -1205,4 +1218,78 @@ async fn rfc12_x10_an_unresolved_claim_holds_the_prefix_at_open_lifecycle() {
     assert_eq!(s.finalized, None, "the pruning point is genesis (no EVM result): pruning alone finalizes nothing");
     let h = heads_of(&a).expect("heads");
     assert_eq!((h.safe_head(), h.finalized_head()), (Some(pre[0].header.hash), None));
+}
+
+
+// =====================================================================================================================
+// MATRIX 8 — a legacy validator's bond: it can exit after retirement, and nothing new can enter
+// =====================================================================================================================
+
+/// The ML-DSA-87 seed of harness card `i` (`TestConsensus::palw_v2_registry_keypair`'s own derivation).
+fn card_seed(i: usize) -> [u8; 32] {
+    let mut seed = [0xB0u8; 32];
+    seed[0] = 0xB0u8.wrapping_add(i as u8);
+    seed
+}
+
+/// **EXPECTED.** A funded DNS stake bond created below the fence exits through an owner-signed unbond request **after** the fence: the
+/// block is the UTXO-valid sink and the bond is `Unbonding` and not slashed — retirement never confiscates principal and never asks
+/// a now-impossible attestation or quorum. A NEW stake bond (0x10) after the fence is refused by name before it can reach a
+/// template, so nobody can join a role that has no duties. (The release after `unbonding_period_blocks` is the apply path's, covered
+/// by its own tests.) The bond is funded from a harness card's fee float, with the DNS minimum bond lowered in the TEST copy to fit it.
+#[tokio::test]
+async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_refused() {
+    use super::dns_harness;
+    const BOND: u64 = 40 * 100_000_000;
+    let p = parts_custom(Some(FENCE), false, |params| {
+        params.dns_params.as_mut().expect("testnet-12 runs the DNS overlay").min_bond_amount_sompi = BOND;
+    });
+    let mut rig = Rig::new(&p, 0x12_0b00_0000);
+    let mass = rig.config.params.storage_mass_parameter;
+    let (owner, spare) = (7usize, 6usize);
+    let net_id = rig.config.params.genesis.hash;
+
+    rig.take_block_of(|r| r.beat(), "b0").await;
+    // card 7's float is split in two (funding for the bond and for the exit) by a plain native transaction.
+    let (float_out, float_entry) = rig.wallets.remove(&owner).expect("the owner's float");
+    let spk = card_payout_spk(owner);
+    let half = (float_entry.amount - CARRIER_FEE) / 2;
+    let mut split = Transaction::new(
+        crate::constants::TX_VERSION,
+        vec![TransactionInput::new(float_out, vec![], 0, 1)],
+        vec![TransactionOutput::new(half, spk.clone()), TransactionOutput::new(float_entry.amount - CARRIER_FEE - half, spk.clone())],
+        0,
+        SUBNETWORK_ID_NATIVE,
+        0,
+        Vec::new(),
+    );
+    sign_spend(&mut split, float_entry.clone(), owner, mass);
+    let e = rig.attempt(0, vec![split.clone()], no_evm());
+    rig.take(e, "the attempt carrying the split").await;
+    let (bond_tx, _, _) = dns_harness::funded_signed_bond_tx(card_seed(owner), TransactionOutpoint::new(split.id(), 0), half, 0, BOND, 0, mass);
+    let bond_outpoint = TransactionOutpoint::new(bond_tx.id(), 0);
+    let e = rig.attempt(1, vec![bond_tx], no_evm());
+    let bond_block = rig.take(e, "the attempt carrying the stake bond").await;
+    assert!(!rig.config.params.palw_dns_retired_at(bond_block.header.daa_score), "the bond is created below the fence");
+    let b1 = rig.beat();
+    rig.take(b1, "b1").await;
+    assert!(rig.api().get_stake_bond(bond_outpoint).is_some(), "the bond is on record");
+
+    let rest = TransactionOutpoint::new(split.id(), 1);
+    let unbond = dns_harness::funded_signed_unbond_tx(card_seed(owner), net_id.as_byte_slice(), rest, split.outputs[1].value, 0, bond_outpoint, mass);
+    let e = rig.attempt(2, vec![unbond], no_evm());
+    let exit_block = rig.take(e, "the attempt carrying the owner's unbond request").await;
+    assert!(rig.config.params.palw_dns_retired_at(exit_block.header.daa_score), "the exit is requested past the fence (daa {})", exit_block.header.daa_score);
+    let e = rig.attempt(3, Vec::new(), no_evm());
+    rig.take(e, "the block after the exit").await;
+    let record = rig.api().get_stake_bond(bond_outpoint).expect("the bond is still on record");
+    assert!(record.unbond_request_daa_score.is_some() && record.slashed_at_daa_score.is_none(), "Unbonding, not slashed or confiscated: {:?}", record.status);
+
+    // A NEW bond cannot be created: funded from another card's float.
+    let (spare_out, spare_entry) = rig.wallets.remove(&spare).expect("a spare float");
+    let (late, _, _) = dns_harness::funded_signed_bond_tx(card_seed(spare), spare_out, spare_entry.amount, 0, BOND, 0, mass);
+    let refused = rig.api().build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(vec![late])), TemplateBuildMode::Standard);
+    let err = format!("{:?}", refused.err().expect("a stake bond after the fence cannot be mined"));
+    eprintln!("[x11] a new bond after the fence: {err}");
+    assert!(err.contains("DnsParticipationRetired"), "refused by name: {err}");
 }
