@@ -34,8 +34,8 @@ use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::{Block, MutableBlock, TemplateBuildMode};
 use kaspa_consensus_core::blockstatus::BlockStatus;
 use kaspa_consensus_core::coinbase::MinerData;
+use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::config::params::ForkActivation;
-use kaspa_consensus_core::config::{Config, ConfigBuilder};
 use kaspa_consensus_core::evm::model_market::{
     MISAKA_MODEL_WRITER, PALW_EVM_ACTION_SELL, PalwEvmSettlementOutcomeV1, refusal, send_action_sell_calldata,
 };
@@ -128,6 +128,12 @@ pub(super) fn parts_with(fence: Option<u64>, bft: bool) -> Parts {
 }
 
 /// [`parts_with`] and then `edit` on the params copy (a test value, never a preset).
+///
+/// **Built as a `Config` directly, never through `ConfigBuilder::build`.** The copy (the harness cards, the EVM lane as shipped,
+/// the BFT gate when `bft`, then `edit`) is validated by `validate_palw_v2` WITHOUT the retirement, so everything else in it is
+/// still a validated ruleset; the retirement is set afterwards. The release's validation requires `palw_fork_choice_rule_e_v1`
+/// armed at or below the retirement (ADR-0175), a fence this harness does not arm: these tests exercise the retirement's own
+/// behaviour and must not depend on it.
 pub(super) fn parts_custom(
     fence: Option<u64>,
     bft: bool,
@@ -135,9 +141,6 @@ pub(super) fn parts_custom(
 ) -> Parts {
     let (config, bundle, premine, floats) = t12_with_harness_cards_and_evm(true);
     let mut params = config.params.clone();
-    if let Some(at) = fence {
-        params.palw_dns_retirement = Some(test_retirement(at));
-    }
     if bft {
         params.dns_bft_gate = Some(kaspa_consensus_core::config::params::DnsBftGateV1 {
             activation: ForkActivation::new(0),
@@ -147,8 +150,14 @@ pub(super) fn parts_custom(
         });
     }
     edit(&mut params);
-    params.validate_palw_v2().expect("a test retirement validates on testnet-12");
-    (ConfigBuilder::new(params).skip_proof_of_work().build(), bundle, premine, floats)
+    params.validate_palw_v2().expect("testnet-12 with the harness cards and the test edits validates");
+    if let Some(at) = fence {
+        let retirement = test_retirement(at);
+        assert!(retirement.settlement.valid() && retirement.legacy_evidence_horizon_daa > 0, "a complete test retirement");
+        params.palw_dns_retirement = Some(retirement);
+    }
+    params.skip_proof_of_work = true;
+    (Config::new(params), bundle, premine, floats)
 }
 
 /// The combined ledger in wei: the virtual UTXO set, the EVM state, the wei burned by base fees.

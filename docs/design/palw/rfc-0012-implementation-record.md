@@ -187,7 +187,7 @@ that a run has not shown. No params / schedule / identity id moves.
 | C4 | Re-measure D1 with the other lanes armed | fixture: `ExtrasEdit`, `live_life_with`, `try_step_with`, `try_step_for` | `d1_g` (tripwire) | WRITTEN - NOT RUN; OPV / permissionless panel / kernel route / RFC-0008 slices / K2 classes are not armable in the fixture: **redo at integration** |
 | C5 | The maturity rule v2 | - | - | SKIPPED (no D1 other than v1 chosen) |
 | C6 | A class's own court window extends retention | `palw_native_settlement_v1.rs`: `live_retention` in `native_facts_and_skips_v1` | `d1_h` | WRITTEN - NOT RUN |
-| C7 | Preset and release wiring | none (checklist only) | - | READY-TO-APPLY CHECKLIST (policy proposal 12.8) |
+| C7 | Preset and release wiring; **requires `palw_fork_choice_rule_e_v1` (ADR-0175) armed at or below** the retirement height (Lead, 2026-10-09) | none (checklist only) | - | READY-TO-APPLY CHECKLIST (policy proposal 12.8, step 3) |
 | C8 | Explorer renders `nativeReadiness` | `contrib/misakascan-t12/app.js` | `tests/native-settlement.cjs` | **PASS** |
 | C9 | Release-build cost at 100k+ blocks | none | `rfc0012_c9_release_cost.rs` (two `#[ignore]`d tests) | DESIGNED, NOT RUN (by order) |
 | C10 | DNS all-equivocating case | none | `rfc12_x16` | WRITTEN - NOT RUN |
