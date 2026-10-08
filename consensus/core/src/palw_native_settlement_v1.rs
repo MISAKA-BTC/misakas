@@ -444,6 +444,33 @@ pub fn certify_native_effect_v1(
     acc.evidence(policy)
 }
 
+/// **The lifecycle question, answered once for the whole chain.** An effect at blue score `b` is *closed* iff every claim
+/// accepted at or before `b` is resolved — `Voided`, or `Final` with its trace retention lapsed — and no data-availability session
+/// names a claim accepted at or before `b` (a session whose claim the state no longer holds is open for every effect: the dispute it
+/// records cannot be located, and an unlocatable dispute is not a closed one). A claim already retired is absent from the state and
+/// therefore closed.
+///
+/// Returns the first blue score at which an effect is NOT closed: `b` is closed iff `b < result` (`u64::MAX` when nothing is open).
+/// The O(chain x claims) form this replaces asked the question once per effect; this is one pass over the claims.
+///
+/// `claims` is `(accepted_blue_score, phase, trace_retention_daa)` for every claim the sink's state holds; `sessions` is, for every
+/// open DA session, the `accepted_blue_score` of its claim (`None` when the claim is not in the state).
+pub fn native_open_from_v1(
+    claims: impl IntoIterator<Item = (u64, PalwClaimPhaseV2, u64)>,
+    sessions: impl IntoIterator<Item = Option<u64>>,
+    sink_daa: u64,
+) -> u64 {
+    let open_claims = claims
+        .into_iter()
+        .filter(|(_, phase, retention)| {
+            !(matches!(phase, PalwClaimPhaseV2::Voided { .. }) || (matches!(phase, PalwClaimPhaseV2::Final { .. }) && *retention <= sink_daa))
+        })
+        .map(|(blue, _, _)| blue)
+        .min();
+    let open_sessions = sessions.into_iter().map(|claim_blue| claim_blue.unwrap_or(0)).min();
+    open_claims.into_iter().chain(open_sessions).min().unwrap_or(u64::MAX)
+}
+
 /// One executed effect on the selected chain, for [`certify_native_prefix_v1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NativeEffectV1 {
@@ -791,6 +818,44 @@ mod tests {
         assert_eq!(order(&[a, b, dup]), Err(SettlementStopV1::DuplicateWork));
         assert_eq!(order(&[dup, a, b]), Err(SettlementStopV1::DuplicateWork));
         assert_eq!(order(&[a, b]), Err(SettlementStopV1::ArithmeticOverflow));
+    }
+
+    /// The one-pass lifecycle answer equals the per-effect question it replaced, over random claim sets and DA sessions.
+    #[test]
+    fn rfc0012_open_from_equals_the_per_effect_lifecycle_question() {
+        use crate::palw_state_v2::PalwVoidReasonV2;
+        let mut seed = 0xD1B5_4A32_D192_ED03u64;
+        let mut next = move |m: u64| -> u64 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % m
+        };
+        for case in 0..5_000u32 {
+            let sink_daa = 50 + next(100);
+            let claims: Vec<(u64, PalwClaimPhaseV2, u64)> = (0..next(9))
+                .map(|_| {
+                    let phase = match next(5) {
+                        0 => PalwClaimPhaseV2::Provisional,
+                        1 => PalwClaimPhaseV2::PanelBound { bound_daa: 1 },
+                        2 => PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1 },
+                        3 => PalwClaimPhaseV2::Final { final_daa: 1 },
+                        _ => PalwClaimPhaseV2::Voided { voided_daa: 1, reason: PalwVoidReasonV2::BindTimeout },
+                    };
+                    (1 + next(40), phase, 30 + next(140))
+                })
+                .collect();
+            let sessions: Vec<Option<u64>> = (0..next(3)).map(|_| if next(4) == 0 { None } else { Some(1 + next(40)) }).collect();
+            let open_from = native_open_from_v1(claims.iter().cloned(), sessions.iter().cloned(), sink_daa);
+            for blue in 0..45u64 {
+                let reference = claims.iter().all(|(accepted, phase, retention)| {
+                    *accepted > blue
+                        || (matches!(phase, PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. })
+                            && (matches!(phase, PalwClaimPhaseV2::Voided { .. }) || *retention <= sink_daa))
+                }) && sessions.iter().all(|claim| claim.is_some_and(|accepted| accepted > blue));
+                assert_eq!(blue < open_from, reference, "case {case}: blue {blue}, open_from {open_from}, claims {claims:?}, sessions {sessions:?}");
+            }
+        }
     }
 
     #[test]

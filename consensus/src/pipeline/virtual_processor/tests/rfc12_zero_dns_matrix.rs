@@ -1183,3 +1183,26 @@ async fn rfc12_x9_lost_history_stops_certification_and_never_certifies_around_th
     let back = snapshot_of(&a).expect("a snapshot");
     assert_eq!((back.generation, back.safe, back.finalized, back.depth, back.unique_work.clone()), (tip2.header.hash, want.safe, want.finalized, want.depth, want.unique_work));
 }
+
+/// **EXPECTED (open court / unresolved dispute).** With the safe frontier planted past every effect and work placed after them,
+/// the prefix still stops at the first effect that a claim accepted at or before it keeps open: e1's claim is `Provisional`, so
+/// `safe` is b0 (accepted before any claim) and the stop is `OpenLifecycle` — an unresolved claim (and, by the same rule, an open DA
+/// session) cannot be treated as success, and no heartbeat or later work buys the effect back.
+#[tokio::test]
+async fn rfc12_x10_an_unresolved_claim_holds_the_prefix_at_open_lifecycle() {
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_1000_0000);
+    let pre = prefix(&mut a).await;
+    // The frontier at e2: it covers every effect up to e2, so only the lifecycle can stop the prefix.
+    plant_frontier(&a, pre[3].header.blue_score, pre[3].header.hash);
+    let e3 = extend(&mut a, &[2]).await.remove(0);
+    place_fact(&a, &e3, 10);
+    extend(&mut a, &[3]).await;
+    let s = snapshot_of(&a).expect("a snapshot");
+    eprintln!("[x10] {s:?}");
+    assert_eq!(s.safe, Some(pre[0].header.hash), "b0 precedes every claim: closed, covered, buried");
+    assert_eq!(s.stop, Some(SettlementStopV1::OpenLifecycle), "e1 is held by its own unresolved claim");
+    assert_eq!(s.finalized, None, "the pruning point is genesis (no EVM result): pruning alone finalizes nothing");
+    let h = heads_of(&a).expect("heads");
+    assert_eq!((h.safe_head(), h.finalized_head()), (Some(pre[0].header.hash), None));
+}

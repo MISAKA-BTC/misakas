@@ -27,9 +27,8 @@ use kaspa_consensus_core::{
     BlockHash, Hash64,
     palw_native_settlement_v1::{
         MatureUsefulWorkV1, NativeDeltaEvidenceV1, NativeEffectV1, NativeFactRulesV1, NativeSettlementSnapshotV1, SettlementStopV1,
-        certify_native_prefix_v1, native_delta_evidence_v1, native_facts_of_block_v1,
+        certify_native_prefix_v1, native_delta_evidence_v1, native_facts_of_block_v1, native_open_from_v1,
     },
-    palw_state_v2::PalwClaimPhaseV2,
 };
 use kaspa_core::error;
 use kaspa_database::prelude::StoreError;
@@ -262,16 +261,11 @@ impl VirtualStateProcessor {
         // resolved (Voided, or Final with its trace retention lapsed) and no DA session names a claim at or before it
         // (a session whose claim is gone is open for every effect). Claims already retired are absent from state and
         // therefore closed.
-        let open_claims = state
-            .claims_iter()
-            .filter(|(_, c)| {
-                !(matches!(c.phase, PalwClaimPhaseV2::Voided { .. })
-                    || (matches!(c.phase, PalwClaimPhaseV2::Final { .. }) && c.trace_retention_daa <= sink_daa))
-            })
-            .map(|(_, c)| c.accepted_blue_score)
-            .min();
-        let open_sessions = state.da_sessions_iter().map(|((claim, _), _)| state.claim(claim).map_or(0, |c| c.accepted_blue_score)).min();
-        let open_from = open_claims.into_iter().chain(open_sessions).min().unwrap_or(u64::MAX);
+        let open_from = native_open_from_v1(
+            state.claims_iter().map(|(_, c)| (c.accepted_blue_score, c.phase.clone(), c.trace_retention_daa)),
+            state.da_sessions_iter().map(|((claim, _), _)| state.claim(claim).map(|c| c.accepted_blue_score)),
+            sink_daa,
+        );
 
         // 7. The longest contiguous certified prefix, oldest first.
         let effects: Vec<NativeEffectV1> = rows
@@ -306,5 +300,19 @@ impl VirtualStateProcessor {
             cache.rows.retain(|hash, _| keep.contains(hash));
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cache's per-block footprint without evidence, for the record: evidence is a handful of claim records only in blocks
+    /// that finalize or spend work.
+    #[test]
+    fn rfc0012_a_row_without_evidence_is_small() {
+        let bytes = std::mem::size_of::<NativeChainRow>() + std::mem::size_of::<Arc<NativeChainRow>>() + std::mem::size_of::<BlockHash>();
+        eprintln!("[rfc0012-cost] NativeChainRow: {} bytes (+ map entry): about {bytes} bytes per chain block", std::mem::size_of::<NativeChainRow>());
+        assert!(bytes < 512);
     }
 }
