@@ -161,10 +161,10 @@ const GOLDEN_PARTS: [&str; 10] = [
     "c46a4586dcf73c2d",
     "b7a5cb38db702693",
 ];
-/// The root moved with the G14-R4 fixes of GAP-R7, GAP-5 and F-C4R3-05 (the accusers' proof seals and the posters' job escrows joined the root
+/// The root moved with the G14-R4 fixes of GAP-R7, GAP-5, F-C4R3-05, the bonded seals and the served-demand bonds (the accusers' proof seals and the posters' job escrows joined the root
 /// as their own collections, and the policy in the header gained the job fee and the escrow TTL).
 const GOLDEN_ROOT: &str =
-    "c05e2fcb9a778faae354296efae75a9ecce793e13bc6e31df65187b12772ba9c08cb677950ee0a0aec856ef7fccaa1abf28c9dfb73c74d976a3343a19df7f1df";
+    "f0dcae31c547757c6ef7329d6e382be012d4618fe82f39fe232510075d0d7bef4403616fd5f481f2430b2faf424d4f13050f35cca405dd325bf1b88984359fa5";
 
 #[test]
 fn each_collection_has_its_own_root_and_the_root_covers_the_state_and_nothing_else() {

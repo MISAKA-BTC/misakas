@@ -57,6 +57,8 @@ pub const TABLE_OPV_CLAIMS_V1: u8 = 14;
 pub const TABLE_PROOF_SEALS_V1: u8 = 15;
 /// GAP-5: `job → its poster's escrow` (the Final reward's funding; in the state root since the G14-R4 fix).
 pub const TABLE_JOB_ESCROWS_V1: u8 = 16;
+/// `(claim, stage, position) → the demand bonds of a served position awaiting their fate` (in the state root since G14-R4).
+pub const TABLE_SERVED_DEMAND_BONDS_V1: u8 = 17;
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -90,6 +92,7 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_OPV_CLAIMS_V1 => "opv-claims",
         TABLE_PROOF_SEALS_V1 => "proof-seals",
         TABLE_JOB_ESCROWS_V1 => "job-escrows",
+        TABLE_SERVED_DEMAND_BONDS_V1 => "served-demand-bonds",
         _ => "attested-artifacts",
     };
     format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes()
@@ -142,6 +145,9 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.job_escrows {
             rows.insert((TABLE_JOB_ESCROWS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.served_demands {
+            rows.insert((TABLE_SERVED_DEMAND_BONDS_V1, bytes_of(k)), bytes_of(v));
         }
         for k in &self.opv.admitted {
             rows.insert((TABLE_OPV_ADMITTED_V1, bytes_of(k)), Vec::new());
@@ -208,6 +214,9 @@ impl KernelLedgerV1 {
                 }
                 TABLE_PROOF_SEALS_V1 => {
                     l.proof_seals.insert(dec(key, "proof seal key")?, dec(row, "proof seal")?);
+                }
+                TABLE_SERVED_DEMAND_BONDS_V1 => {
+                    l.served_demands.insert(dec::<DemandKeyV1>(key, "served demand key")?, dec(row, "served demand bonds")?);
                 }
                 TABLE_JOB_ESCROWS_V1 => {
                     l.job_escrows.insert(dec(key, "job escrow key")?, dec::<crate::ledger::JobEscrowRowV1>(row, "job escrow")?);
@@ -304,7 +313,7 @@ fn pipeline_class_row_of(l: &KernelLedgerV1, r: &PipelineClassRecordV1) -> Resul
 /// is not the order of the Borsh bytes (the position is little-endian). Every other table's key is a 64-byte digest, whose byte
 /// order is its order.
 fn sort_key(table: u8, key: &[u8]) -> (Vec<u8>, u8, u32) {
-    if matches!(table, TABLE_DEMANDS_V1 | TABLE_SERVED_V1) && key.len() == 64 + 1 + 4 {
+    if matches!(table, TABLE_DEMANDS_V1 | TABLE_SERVED_V1 | TABLE_SERVED_DEMAND_BONDS_V1) && key.len() == 64 + 1 + 4 {
         let stage = key[64];
         let mut p = [0u8; 4];
         p.copy_from_slice(&key[65..69]);
@@ -363,6 +372,7 @@ pub fn root_of_rows(
         seals: coll(TABLE_SEALS_V1),
         proof_seals: coll(TABLE_PROOF_SEALS_V1),
         job_escrows: coll(TABLE_JOB_ESCROWS_V1),
+        served_demands: coll(TABLE_SERVED_DEMAND_BONDS_V1),
     };
     let _ = LEDGER_ROOT_DOMAIN_V1;
     let v1 = parts.root();

@@ -1122,4 +1122,4 @@ const GOLDEN_OPV_PARTS: [&str; 4] = ["c80c0cd94e6c9465", "557931bf322541c3", "b0
 /// Moved with the G14-R4 fixes: GAP-R7 and GAP-5 (the historical root inside it gained the proof-seal and job-escrow collections and
 /// its policy the job fee and escrow TTL) and F-C4R3-05 (the OPV policy's admission fee).
 const GOLDEN_OPV_ROOT: &str =
-    "0a86f5a86c73c7b842531879ce9a8bf1ec3d8f791de2ced391e53343c9af26eb5a4668876a0931d0ee3bff1fc257df3398abd175acb259698b79f722fef9d1da";
+    "2be2a83576f67a33ef9a441d2d9dd263b14b63b7ef140080e9e5cd30b003e79a178dc93552523b394fe367cdd93fb54a32b3f290fb0d607e4c7079236fc603e5";

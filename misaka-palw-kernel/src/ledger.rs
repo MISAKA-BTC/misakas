@@ -522,6 +522,11 @@ pub enum LedgerEventV1 {
         producer: Digest,
         forfeited: u64,
     } = 23,
+    /// A Final claim's liability horizon ended with no conviction: the bonds of the positions served on demand were burned.
+    ServedDemandBondsBurned {
+        claim: Digest,
+        burned: u64,
+    } = 24,
 }
 
 /// One block.
@@ -646,6 +651,10 @@ pub struct KernelLedgerV1 {
     pub proof_seals: BTreeMap<(Digest, Digest), SealRowV1>,
     /// GAP-5: `job → its poster's escrow` — reserved at posting, paid out (once) as the job's Final reward, or returned.
     pub job_escrows: BTreeMap<Digest, JobEscrowRowV1>,
+    /// **The demand bonds of SERVED positions, awaiting their fate** (K2S's producer-side DA griefing, G14-R4): a position served on
+    /// chain keeps its demanders' bonds reserved; they are refunded the moment the claim is convicted, defaults or times out, and
+    /// burned only when its liability horizon ends with no conviction — a true demand that leads to a conviction is never penalised.
+    pub served_demands: BTreeMap<DemandKeyV1, Vec<(Digest, u64)>>,
     /// Cumulative amount burned (derived from the settlement instructions; kept as a checksum).
     pub burned: u64,
     /// RFC-0015: the OPV policy, classes and claim rows. Dormant (no policy) = the historical ledger, root included.
@@ -712,6 +721,7 @@ impl KernelLedgerV1 {
             seals: BTreeMap::new(),
             proof_seals: BTreeMap::new(),
             job_escrows: BTreeMap::new(),
+            served_demands: BTreeMap::new(),
             burned: 0,
             opv: OpvStateV1::default(),
             budget: BlockBudgetV1::default(),
@@ -1878,12 +1888,63 @@ impl KernelLedgerV1 {
         settle(out, *accuser, reward, SettlementKindV1::AccuserReward, Some(*claim));
         settle(out, producer, slashed - reward, SettlementKindV1::Burn, Some(*claim));
         self.settle_demands_moot(claim, out);
+        // The demands that led here are never penalised: the bonds of every served position of the claim return now.
+        self.settle_served_demand_bonds(claim, false, out);
         self.opv_sync_live(claim);
         // A convicted claim takes no further filing: its proof seals are spent.
         let spent: Vec<(Digest, Digest)> =
             self.proof_seals.range((*claim, [0u8; 64])..=(*claim, [0xFFu8; 64])).map(|(k, _)| *k).collect();
         for k in spent {
             self.proof_seals.remove(&k);
+        }
+    }
+
+    /// **Settle the bonds of a claim's SERVED positions**: refunded (`burn == false`: the claim was convicted, defaulted or timed out),
+    /// or burned (`burn == true`: its liability horizon ended with no conviction — the demand only made an honest producer serve).
+    fn settle_served_demand_bonds(&mut self, claim: &Digest, burn: bool, out: &mut Vec<LedgerEventV1>) {
+        let keys: Vec<DemandKeyV1> =
+            self.served_demands.range((*claim, 0u8, 0u32)..=(*claim, u8::MAX, u32::MAX)).map(|(k, _)| *k).collect();
+        let mut burned = 0u64;
+        for k in keys {
+            let Some(bonds) = self.served_demands.remove(&k) else { continue };
+            for (bond, amount) in bonds {
+                let collateral = self.bonds.get(&bond).map_or(0, |b| b.collateral);
+                let taken = if burn { amount.min(collateral) } else { 0 };
+                if let Some(b) = self.bonds.get_mut(&bond) {
+                    b.reserved = b.reserved.saturating_sub(amount);
+                    b.collateral -= taken;
+                }
+                self.burned += taken;
+                burned += taken;
+                settle(out, bond, taken, SettlementKindV1::ForfeitDemandBond, Some(*claim));
+                settle(out, bond, amount - taken, SettlementKindV1::ReleaseDemand, Some(*claim));
+                settle(out, bond, taken, SettlementKindV1::Burn, Some(*claim));
+            }
+        }
+        if burned > 0 {
+            out.push(LedgerEventV1::ServedDemandBondsBurned { claim: *claim, burned });
+        }
+    }
+
+    /// The served positions' bonds whose fate the claim's state now decides (the closing tick): refunded once the claim is decided
+    /// without a Final standing (timed out, defaulted, convicted, or gone), burned once a Final claim's liability horizon has passed
+    /// unconvicted; held otherwise.
+    fn settle_due_served_demand_bonds(&mut self, out: &mut Vec<LedgerEventV1>) {
+        let daa = self.daa;
+        let claims: BTreeSet<Digest> = self.served_demands.keys().map(|(c, _, _)| *c).collect();
+        for claim in claims {
+            let fate = match self.claims.get(&claim) {
+                None => Some(false),
+                Some(r) if r.convicted => Some(false),
+                Some(r) => match &r.life.state {
+                    ClaimStateV1::TimedOut { .. } | ClaimStateV1::Unavailable { .. } | ClaimStateV1::Convicted { .. } => Some(false),
+                    ClaimStateV1::Final { .. } if r.liability_until.is_some_and(|u| daa > u) => Some(true),
+                    _ => None,
+                },
+            };
+            if let Some(burn) = fate {
+                self.settle_served_demand_bonds(&claim, burn, out);
+            }
         }
     }
 
@@ -1976,9 +2037,13 @@ impl KernelLedgerV1 {
         Ok(())
     }
 
+    /// A SERVED demand closes: its bonds stay reserved, their fate decided later (`served_demands`).
     fn close_demand(&mut self, k: DemandKeyV1, out: &mut Vec<LedgerEventV1>) {
         let Some(d) = self.demands.remove(&k) else { return };
-        self.refund(&k.0, &d, out);
+        let _ = out;
+        if !d.demanders.is_empty() {
+            self.served_demands.insert(k, d.demanders);
+        }
         let daa = self.daa;
         if let Some(row) = self.claims.get_mut(&k.0)
             && matches!(row.life.state, ClaimStateV1::Disputed { .. })
@@ -2123,8 +2188,9 @@ impl KernelLedgerV1 {
                 settle(out, producer, burn, SettlementKindV1::Burn, Some(claim));
             }
             self.refund(&claim, &d, out);
-            // An unavailable claim never finalizes; its other open demands are moot.
+            // An unavailable claim never finalizes; its other open demands are moot, and the bonds of its served positions return.
             self.settle_demands_moot(&claim, out);
+            self.settle_served_demand_bonds(&claim, false, out);
             if post_final && let Some(o) = self.opv.claims.get_mut(&claim) {
                 o.forfeited_after_final = true;
             }
@@ -2166,6 +2232,8 @@ impl KernelLedgerV1 {
                 _ => {}
             }
         }
+        // The served positions' demand bonds whose claim is now decided (after this block's defaults, Finals and releases).
+        self.settle_due_served_demand_bonds(out);
     }
 
     fn release(&mut self, claim: &Digest, producer: Digest, amount: u64, out: &mut Vec<LedgerEventV1>) {

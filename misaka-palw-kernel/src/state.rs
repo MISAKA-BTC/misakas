@@ -107,6 +107,8 @@ pub struct StateRootPartsV1 {
     pub proof_seals: Digest,
     /// GAP-5: the posters' job escrows that fund Final rewards (in the root since the G14-R4 fix).
     pub job_escrows: Digest,
+    /// The demand bonds of served positions awaiting their fate (in the root since G14-R4).
+    pub served_demands: Digest,
 }
 
 impl StateRootPartsV1 {
@@ -179,6 +181,7 @@ impl KernelLedgerV1 {
             seals: collection_root(&d("seals"), self.seals.len(), self.seals.iter()),
             proof_seals: collection_root(&d("proof-seals"), self.proof_seals.len(), self.proof_seals.iter()),
             job_escrows: collection_root(&d("job-escrows"), self.job_escrows.len(), self.job_escrows.iter()),
+            served_demands: collection_root(&d("served-demand-bonds"), self.served_demands.len(), self.served_demands.iter()),
         }
     }
 

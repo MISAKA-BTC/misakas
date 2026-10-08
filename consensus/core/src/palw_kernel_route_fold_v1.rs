@@ -245,7 +245,8 @@ fn apply_settlements(builder: &mut TransitionBuilder<'_>, events: &[LedgerEventV
             | SettlementKindV1::AdmissionFee
             | SettlementKindV1::JobFee
             | SettlementKindV1::PayJobEscrow
-            | SettlementKindV1::ForfeitSealDeposit => {
+            | SettlementKindV1::ForfeitSealDeposit
+            | SettlementKindV1::ForfeitDemandBond => {
                 let Some(key) = key else {
                     if strict {
                         return Err(refused("a slash names a bond the route never saw"));

@@ -270,12 +270,17 @@ fn withheld_positions_are_demanded_in_one_round_and_the_served_values_convict_or
         ],
     );
     assert_eq!(ev, vec![E::Served { claim: id, stage: 0, position: 1 }, E::Served { claim: id, stage: 0, position: 3 }]);
-    assert_eq!(w.l.bonds[&OUTSIDER].reserved, 0, "the demand bonds return");
+    assert_eq!(w.l.bonds[&OUTSIDER].reserved, 20, "the served positions' demand bonds stay reserved until the claim's fate");
     let ev = w.block(14, vec![T::FileDemand { demander: SPAM1, claim: id, stage: 0, position: 1 }]);
     assert_eq!(refused(&ev).as_deref(), Some("already served: it is public"));
     let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!("the served values complete the check") };
     let ev = w.block(15, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
     assert_eq!(convicted(&ev), Some((1000, 500, false)));
+    assert_eq!(
+        (w.l.bonds[&OUTSIDER].reserved, w.l.bonds[&OUTSIDER].collateral),
+        (0, 1000),
+        "a true demand: refunded at the conviction"
+    );
 
     // The same lie, and the producer stays silent: an availability default, never the fraud slash.
     let job = w.post_job(20, &[3, 17, 9], 3, 2);
@@ -792,6 +797,68 @@ fn a_lifted_proof_pays_its_earliest_sealer_and_self_conviction_still_costs_more_
     let mut p = policy();
     p.claim_reward = 500;
     assert!(p.validate().is_err(), "a reward a self-convicted producer could still profit from is refused");
+}
+
+// ── K2S's producer-side DA griefing: the fate of a served position's demand bond ───────────────────────────────────────────
+
+/// **The demand bond of a SERVED position** (K2S's producer-side DA griefing; G14-R4): a demander can force an honest producer to
+/// serve committed values on chain, so the bond of a position that was served stays reserved and is BURNED only when the claim's
+/// liability horizon ends with no conviction. It is refunded the moment the claim is convicted (whenever the proof lands — inside the
+/// grace or long after it, post-Final), defaults (another position withheld) or times out: a true demand that leads to a conviction is
+/// never penalised, and G14 does not rest on the burn.
+#[test]
+fn a_served_demand_bond_is_refunded_on_conviction_or_default_and_burned_only_at_an_unconvicted_horizon() {
+    let serve = |w: &mut World, daa: u64, id: Digest, trace: &misaka_palw_kernel::trace::TraceV1, p: u32| {
+        let ev = w.block(daa, vec![T::Respond { claim: id, stage: 0, position: p, bytes: position(trace, p, |_| {}) }]);
+        assert!(ev.contains(&E::Served { claim: id, stage: 0, position: p }), "{ev:?}");
+    };
+    // An HONEST claim: a demand only made the producer serve. Final, then its liability horizon ends unconvicted: the bond burns.
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let h = w.honest(&job, 3);
+    let (id, trace) = (h.claim.id(), h.trace.clone());
+    w.block(10, vec![h.tx, T::PanelCovered { claim: id }]);
+    w.block(11, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: 1 }]);
+    serve(&mut w, 12, id, &trace, 1);
+    assert_eq!(w.l.bonds[&OUTSIDER].reserved, 10, "held, its fate pending");
+    assert!(w.block(60, vec![]).contains(&E::Final { claim: id, reward: 7 }));
+    assert_eq!(w.l.bonds[&OUTSIDER].reserved, 10, "Final is not the fate: the claim stays convictable through its horizon");
+    let ev = w.block(261, vec![]);
+    assert!(ev.contains(&E::ServedDemandBondsBurned { claim: id, burned: 10 }), "{ev:?}");
+    assert_eq!((w.l.bonds[&OUTSIDER].reserved, w.l.bonds[&OUTSIDER].collateral), (0, 990));
+
+    // A LYING claim whose proof lands only after Final (the grace long gone): the bond held all along is refunded at the conviction.
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let (at, lie) = w.lying(&job, 3);
+    let (id, da, trace) = (lie.claim.id(), Da::publishing(&lie.trace, &[at]), lie.trace.clone());
+    w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
+    w.block(11, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
+    serve(&mut w, 12, id, &trace, at.0);
+    assert!(w.block(60, vec![]).contains(&E::Final { claim: id, reward: 7 }));
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!("the served values complete the check") };
+    let ev = w.block(100, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+    assert_eq!(convicted(&ev), Some((1000, 500, true)), "{ev:?}");
+    assert_eq!((w.l.bonds[&OUTSIDER].reserved, w.l.bonds[&OUTSIDER].collateral), (0, 1000), "a true demand is never penalised");
+
+    // A claim that DEFAULTS on another position: the served position's bond is refunded with the default.
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let h = w.honest(&job, 3);
+    let (id, trace) = (h.claim.id(), h.trace.clone());
+    w.block(10, vec![h.tx, T::PanelCovered { claim: id }]);
+    w.block(
+        11,
+        vec![
+            T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: 1 },
+            T::FileDemand { demander: SPAM1, claim: id, stage: 0, position: 2 },
+        ],
+    );
+    serve(&mut w, 12, id, &trace, 1);
+    let ev = w.block(31, vec![]);
+    assert!(ev.iter().any(|e| matches!(e, E::ProducerDefault { position: 2, .. })), "{ev:?}");
+    assert_eq!((w.l.bonds[&OUTSIDER].reserved, w.l.bonds[&OUTSIDER].collateral), (0, 1000), "refunded with the default");
+    assert!(w.l.served_demands.is_empty());
 }
 
 // ── Duplicates, reorg, restart, IBD; collateral double use and exit ──────────────────────────────────────────────────────

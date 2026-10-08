@@ -987,11 +987,14 @@ async fn g14_kernel_route_a_served_position_completes_the_check_and_convicts() {
     w.demand(outsider, &lie.id, lie.at.0).await;
     w.serve(0, &lie, lie.at.0).await; // the producer answers (it must, or it defaults)
     assert!(w.net.ledger().served.contains_key(&(lie.id, 0, lie.at.0)), "served on chain: public from then on");
-    assert_eq!(w.net.kernel_reserved(outsider), 0, "the demand bond returns on service");
+    // A served position's demand bond stays reserved until the claim's fate: refunded at a conviction, burned only at an
+    // unconvicted liability horizon (K2S's producer-side DA griefing, G14-R4).
+    assert_eq!(w.net.kernel_reserved(outsider), u128::from(w.policy().demand_bond), "held until the claim's fate");
     let proof = w.prosecution(&lie.id, &da, 0x11);
     w.proof(outsider, &lie.id, proof).await;
     assert!(w.net.ledger().claims[&lie.id].convicted, "the served values convicted the claim");
     assert_eq!(w.net.slashed(0), w.policy().claim_collateral);
+    assert_eq!(w.net.kernel_reserved(outsider), 0, "a true demand: its bond returns at the conviction, never burned");
 }
 
 /// **Court pre-emption**: a crowd of demand sessions opened by the producer's friends on most positions never pre-empts a direct

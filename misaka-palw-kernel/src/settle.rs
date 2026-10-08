@@ -76,6 +76,9 @@ pub enum SettlementKindV1 {
     ReleaseSealDeposit = 19,
     /// An unrevealed seal expired: its deposit is forfeited (routed by the burn after it).
     ForfeitSealDeposit = 20,
+    /// The demand bond of a position served on chain, burned because the claim's liability horizon ended with no conviction (routed
+    /// by the burn after it). Refunded instead (`ReleaseDemand`) on conviction, default or timeout.
+    ForfeitDemandBond = 21,
 }
 
 impl SettlementKindV1 {
@@ -89,6 +92,7 @@ impl SettlementKindV1 {
                 | Self::JobFee
                 | Self::PayJobEscrow
                 | Self::ForfeitSealDeposit
+                | Self::ForfeitDemandBond
         )
     }
 
@@ -153,7 +157,7 @@ impl SettlementBookV1 {
                 }
                 self.reserved.insert(b, r - a);
             }
-            K::SlashFraud | K::SlashDefault | K::PayJobEscrow | K::ForfeitSealDeposit => {
+            K::SlashFraud | K::SlashDefault | K::PayJobEscrow | K::ForfeitSealDeposit | K::ForfeitDemandBond => {
                 if a > r || a > c {
                     return Err(format!("slash {a} of a {r} reservation / {c} collateral"));
                 }
