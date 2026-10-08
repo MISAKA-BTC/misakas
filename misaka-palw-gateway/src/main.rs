@@ -80,6 +80,13 @@ mod serving;
 mod idempotency;
 // RFC-0001 §2.7: streaming → committed → submitted → final | voided, and what each is worth.
 mod status;
+// RFC-0001 + RFC-0003: where each fact a claim must pin enters the job; the worker's result held to its manifest.
+mod binding;
+// Test support: an in-process worker over the floor engine, and the e2e suites that drive the whole chat path against it.
+#[cfg(test)]
+mod testkit;
+#[cfg(test)]
+mod e2e;
 
 use surface::{AdmittedRequest, ChatRequest};
 use wire::{AnswerStream, PromptPlan};
@@ -1666,6 +1673,10 @@ fn handle_chat(
         let _ = std::fs::remove_dir_all(config.outbox.join("traces").join(hex(fp_job_id_v3(&result.job))));
         return Err(serving::CANCELLED_BY_CLIENT.to_string());
     }
+    // **The result against the worker's own manifest** (the binding audit's link 2): the request fixes every other field of the job,
+    // but it carries no tokenizer, and no consensus rule compares the job's `tokenizer_id` to anything.
+    binding::check_result_against_manifest(&result, manifest)?;
+    binding::check_stop_texts_were_spelled(&request, &result)?;
     // RFC-0001 §A.3 step 7: where the job's own stop rule ended the answer — derived from the job
     // the worker bound and the ids it committed, never taken from the worker's word.
     let v4_stop = result.job.decode.as_ref().filter(|_| result.job.is_v4()).map(|decode| {
