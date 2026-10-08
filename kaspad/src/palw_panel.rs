@@ -14237,6 +14237,9 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         // RFC-0003 decision 22 (tag 90): a named-leaf challenge with the declaration of its close.
         PalwConsensusObjectV2::HeldLeafChallengeDeclared { .. } => "HeldLeafChallengeDeclared",
         PalwConsensusObjectV2::AdapterClassListed { .. } => "AdapterClassListed",
+        // G14 lane D (tags 110, 111): the kernel route.
+        PalwConsensusObjectV2::KernelRouteV1 { .. } => "KernelRouteV1",
+        PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. } => "KernelConstraintReceiptV1",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

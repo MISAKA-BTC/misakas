@@ -62,6 +62,8 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # ADR-0135: the canonical class table describes a genesis class to the registry fold.
 misaka-palw-base0.workspace = true
+# G14 lane D: the kernel route's object decoder and receipt context (the fold itself is in consensus-core).
+misaka-palw-kernel.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
@@ -74,6 +76,10 @@ kaspa-addresses.workspace = true
 # testnet-12 block can be produced at all needs both halves in one process. Dev-only — a node's
 # consensus never links a model runtime (ADR-0042 Decision 4).
 misaka-palw-base0.workspace = true
+# G14 lane D: the E2E builds a producer, seats and a fresh verifier from the kernel's public API, over the sketch's tiny fixtures.
+misaka-palw-kernel.workspace = true
+misaka-palw-tir.workspace = true
+misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }
 
 [[bench]]
 name = "parallel_muhash"

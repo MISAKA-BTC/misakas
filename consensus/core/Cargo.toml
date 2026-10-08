@@ -71,6 +71,9 @@ misaka-palw-tir.workspace = true
 misaka-palw-gen.workspace = true
 misaka-palw-panel.workspace = true
 misaka-palw-challenge.workspace = true
+# G14 lane D: the kernel route's consensus-embeddable ledger (`KernelLedgerV1`, `KernelRouteObjectV1`, receipts, settlement instructions) —
+# folded into `PalwChainStateV2` behind the dormant fence `palw_probabilistic_constraints_v1` (`palw_kernel_route_v1`).
+misaka-palw-kernel.workspace = true
 wasm-bindgen.workspace = true
 workflow-core.workspace = true
 workflow-log.workspace = true

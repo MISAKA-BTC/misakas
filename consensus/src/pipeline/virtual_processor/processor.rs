@@ -224,6 +224,30 @@ struct PalwChainAnchorV1 {
     operator_attempts: Option<Vec<(u64, BlockHash)>>,
 }
 
+/// **G14 lane D, TEST ONLY: the artifact attestations a kernel route E2E supplies.** There is no on-chain artifact availability or
+/// conformance fact yet — a kernel class registers only over an artifact the consumer attests public, and the consumer has nothing
+/// to attest from (GAP: onboarding conformance + availability) — so under `cfg(test)` a test names the roots it treats as public,
+/// each from a DAA. Height-gated and append-only so every node of one test, replaying the same blocks, folds the same attestation
+/// at the same block; never derived from a declaration.
+#[cfg(test)]
+static KERNEL_ROUTE_TEST_ATTESTATIONS_V1: std::sync::Mutex<Vec<(kaspa_hashes::Hash64, u64)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn kernel_route_test_attest_artifact_v1(artifact_root: kaspa_hashes::Hash64, from_daa: u64) {
+    let mut list = KERNEL_ROUTE_TEST_ATTESTATIONS_V1.lock().unwrap();
+    if !list.iter().any(|(root, _)| *root == artifact_root) {
+        list.push((artifact_root, from_daa));
+    }
+}
+
+#[cfg(test)]
+fn kernel_route_test_attestations_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64> {
+    let mut roots: Vec<_> =
+        KERNEL_ROUTE_TEST_ATTESTATIONS_V1.lock().unwrap().iter().filter(|(_, from)| *from <= daa_score).map(|(root, _)| *root).collect();
+    roots.sort();
+    roots
+}
+
 pub struct VirtualStateProcessor {
     // Channels
     receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
@@ -579,6 +603,10 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_tir_v1` (RFC-0002 Phase F): may a class be a PALW-TIR program on this chain, and
     /// may the IR court arms be filed. Resolved in ONE place, [`Self::palw_tir_at`], at the block.
     pub(super) palw_tir_v1: Option<kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1>,
+    /// `Params::palw_probabilistic_constraints_v1` (RFC-0011 §15.7; G14 lane D): may a kernel route object be folded on this chain.
+    /// Resolved in ONE place, [`Self::palw_kernel_route_at`]. Never armable by a real network (its validation refuses every
+    /// height); a test builds the config without that validation.
+    pub(super) palw_probabilistic_constraints_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_gen_v1` (RFC-0003): may a class be a pipeline of PALW-TIR version-2 programs on
     /// this chain. Resolved in ONE place, [`Self::palw_gen_at`], at the block.
     pub(super) palw_gen_v1: Option<kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1>,
@@ -1191,6 +1219,7 @@ impl VirtualStateProcessor {
             palw_token_lift: params.palw_token_lift_fence(),
             palw_kimi_k3: params.palw_kimi_k3_fence(),
             palw_tir_v1: params.palw_tir_v1_fence(),
+            palw_probabilistic_constraints_v1: params.palw_probabilistic_constraints_v1,
             palw_gen_v1: params.palw_gen_v1_fence(),
             palw_tir_only_v1: params.palw_tir_only_fence(),
             palw_gdn_key_heads: params.palw_gdn_key_heads_fence(),
@@ -7866,6 +7895,12 @@ impl VirtualStateProcessor {
                 info!("Block {block}: an IR object was dropped by name below palw_tir_v1, and the block stands (RFC-0002 Phase F)");
                 continue;
             }
+            // **G14 lane D: below `palw_probabilistic_constraints_v1` a kernel route object is dropped by name**, first and charged
+            // nothing, for the IR objects' reason above (an older build cannot decode it and skips it, A-2).
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(&object) && !self.palw_kernel_route_at(point.daa_score) {
+                info!("Block {block}: a kernel route object was dropped by name below palw_probabilistic_constraints_v1, and the block stands (G14)");
+                continue;
+            }
             // **RFC-0003: below `palw_gen_v1` a generative object is dropped by name**, first and
             // charged nothing, for the IR objects' reason above (an older build skips it undecoded).
             if kaspa_consensus_core::palw_state_v2::palw_object_is_gen_v1(&object) && !self.palw_gen_at(point.daa_score) {
@@ -13123,6 +13158,34 @@ impl VirtualStateProcessor {
                 // **RFC-0001 §2.10 (ADR-0163): an adapter class's listing** — the lister's signature, then the same
                 // acceptance half a composite candidate meets (the parent's family, the composite rule, the
                 // reference, every terminal close carriable in the composite form).
+                // **G14 lane D (tag 110): a kernel route object** — the fence, the signer's ML-DSA-87 signature over
+                // `H(network ‖ signer ‖ bytes)`, then the kernel's strict decode. A well-signed encoding the ledger then refuses is the
+                // fold's drop, not an invalid block.
+                Obj::KernelRouteV1 { bytes, signer, signature } => {
+                    self.palw_kernel_route_object_is_signed(state, point.daa_score, bytes, signer, signature)?;
+                }
+                // (tag 111): the seat's signature over the receipt's signing message, under the receipt context.
+                Obj::KernelConstraintReceiptV1 { receipt, signature } => {
+                    if !self.palw_kernel_route_at(point.daa_score) {
+                        return Err("a kernel constraint receipt is refused: palw_probabilistic_constraints_v1 is not in force at this block (G14)".to_string());
+                    }
+                    let record = state
+                        .kernel_route()
+                        .and_then(|k| k.bond_key_of(&receipt.seat_bond))
+                        .and_then(|key| state.bond(&key))
+                        .ok_or_else(|| "a kernel receipt is signed by a bond the route never assigned".to_string())?;
+                    if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                        return Err("a kernel receipt is signed by a bond that is not Active".to_string());
+                    }
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        &receipt.signing_message(),
+                        signature,
+                        misaka_palw_kernel::receipt::CONSTRAINT_RECEIPT_MLDSA87_CONTEXT_V1,
+                    ) {
+                        return Err("a kernel receipt carries a signature the seat's key does not verify".to_string());
+                    }
+                }
                 Obj::AdapterClassListed { payload, lister, signature } => {
                     if !self.palw_adapter_class_at(point.daa_score) {
                         return Err("an adapter class listing is refused: palw_adapter_class_v1 is not in force at this block (RFC-0001 §2.10)".to_string());
@@ -13426,6 +13489,35 @@ impl VirtualStateProcessor {
             return Err(format!("{what} carries a signature the attributed bond's key does not verify"));
         }
         Ok(())
+    }
+
+    /// **G14 lane D (tag 110): is this kernel route object signed by the bond it names, and is the kernel willing to decode it?**
+    fn palw_kernel_route_object_is_signed(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa_score: u64,
+        bytes: &[u8],
+        signer: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        signature: &[u8],
+    ) -> Result<(), String> {
+        if !self.palw_kernel_route_at(daa_score) {
+            return Err("a kernel route object is refused: palw_probabilistic_constraints_v1 is not in force at this block (G14)".to_string());
+        }
+        let record = state.bond(signer).ok_or_else(|| "a kernel route object is signed by a bond this chain does not have".to_string())?;
+        if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err("a kernel route object is signed by a bond that is not Active".to_string());
+        }
+        let message =
+            kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_message_v1(self.palw_network_domain_v2(), signer, bytes);
+        if !Self::verify_mldsa87_with_context_bool(
+            &record.pubkey,
+            message.as_byte_slice(),
+            signature,
+            kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
+        ) {
+            return Err("a kernel route object carries a signature its bond's key does not verify".to_string());
+        }
+        misaka_palw_kernel::route::KernelRouteObjectV1::decode(bytes).map(|_| ()).map_err(|refusal| format!("{refusal}"))
     }
 
     fn verify_mldsa87_with_context_bool(key: &[u8], message: &[u8], sig: &[u8], context: &[u8]) -> bool {
@@ -14652,7 +14744,33 @@ impl VirtualStateProcessor {
             class_court_windows: std::collections::BTreeMap::new(),
             // RFC-0010: the permissionless Panel's draw inputs, resolved at the pre-entropy checkpoint (None while the fence is off).
             panel_v3: self.palw_panel_v3_inputs_for(point),
+            // G14 lane D: the kernel route, where its (never armable) fence is in force. Explicit, like every fence above: a default
+            // here would fold nothing at a block that must.
+            kernel_route: self.palw_kernel_route_extras_at(daa_score),
         }
+    }
+
+    /// **G14 lane D: `Params::palw_probabilistic_constraints_v1` resolved at the block's DAA**, in exactly one place.
+    pub(super) fn palw_kernel_route_at(&self, daa_score: u64) -> bool {
+        self.palw_probabilistic_constraints_v1.is_some_and(|fence| fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score))
+    }
+
+    /// What the kernel route's fold is handed where the fence is in force: the network, the ruleset and the artifact attestations.
+    /// **There is no on-chain artifact attestation yet** (onboarding conformance + availability: GAP), so outside a test the list is
+    /// empty and a kernel class can never register; a test's hook (`kernel_route_test_attest_artifact_v1`, `cfg(test)`) fills it.
+    fn palw_kernel_route_extras_at(&self, daa_score: u64) -> Option<kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteExtrasV1> {
+        self.palw_kernel_route_at(daa_score).then(|| {
+            let mut ruleset = [0u8; 64];
+            ruleset[..32].copy_from_slice(&self.palw_native_ruleset_id.as_bytes());
+            kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+                network_domain: self.palw_network_domain_v2(),
+                ruleset_digest: kaspa_hashes::Hash64::from_bytes(ruleset),
+                #[cfg(test)]
+                attested_artifacts: kernel_route_test_attestations_v1(daa_score),
+                #[cfg(not(test))]
+                attested_artifacts: Vec::new(),
+            }
+        })
     }
 
     /// Derive each carried fused class's exact finite window before the block fold. Missing or
@@ -21247,6 +21365,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::GenShardCourtAccused { .. } => "GenShardCourtAccused",
         O::HeldLeafChallengeDeclared { .. } => "HeldLeafChallengeDeclared",
         O::AdapterClassListed { .. } => "AdapterClassListed",
+        O::KernelRouteV1 { .. } => "KernelRouteV1",
+        O::KernelConstraintReceiptV1 { .. } => "KernelConstraintReceiptV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

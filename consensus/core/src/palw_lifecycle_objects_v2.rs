@@ -328,6 +328,21 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // registrations do (A-2); the acceptance walk drops it by name below `palw_adapter_class_v1`, and its
         // form (state-free) is checked here so a malformed listing is refused before any slot is charged.
         PalwConsensusObjectV2::AdapterClassListed { payload, .. } => crate::palw_adapter_class_v1::palw_adapter_listing_shape_v1(payload),
+        // G14 lane D (tag 110): a kernel route object rides at every height (A-2) and carries its signer's signature; the bytes'
+        // strict decode, the signer's bond and the kernel's own rules are the acceptance layer's and the ledger's. Only the shape is
+        // stateless: a signature is present and the kernel's encoding fits the largest carriage.
+        PalwConsensusObjectV2::KernelRouteV1 { bytes, signature, .. } => {
+            if signature.is_empty() {
+                Err("a kernel route object must carry its signer's signature — unsigned, anyone could act as any bond")
+            } else if bytes.is_empty() || bytes.len() > crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 {
+                Err("a kernel route object's encoding is empty or past the largest carriage")
+            } else {
+                Ok(())
+            }
+        }
+        // (tag 111): a seat's receipt carries its signature; everything else is the kernel's structural admission.
+        PalwConsensusObjectV2::KernelConstraintReceiptV1 { signature, .. } if !signature.is_empty() => Ok(()),
+        PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. } => Err("a kernel constraint receipt must carry the seat's signature"),
         // RFC-0002 Phase F (tag 62): an IR one-move accusation rides signed and shaped (its proof
         // an IR close about the roots it names) at every height, as the registration does; the
         // ruleset's close ceiling and the verdict are the acceptance layer's.
