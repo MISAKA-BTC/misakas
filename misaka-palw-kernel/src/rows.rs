@@ -59,7 +59,9 @@ pub const TABLE_PROOF_SEALS_V1: u8 = 15;
 pub const TABLE_JOB_ESCROWS_V1: u8 = 16;
 /// `(claim, stage, position) → the demand bonds of a served position awaiting their fate` (in the state root since G14-R4).
 pub const TABLE_SERVED_DEMAND_BONDS_V1: u8 = 17;
-// 18–19 are G14-R4's (unused), 20–21 K2S's.
+/// C4R4 F-C4R4-08: `job → the bond that posted it`, written past `palw_panel_free_v1` and kept (in the beacon-seal extension). 19 is
+/// G14-R4's (unused), 20–21 K2S's.
+pub const TABLE_JOB_POSTERS_V1: u8 = 18;
 /// RFC-0004 Part II: `class → ComputationSpecV1` (typed classes), `job → SpecJobV1`, `memory class → MemoryLineV1`. Each table is in
 /// the root only when non-empty ([`crate::spec::typed_root_v1`]), so every ledger without a typed row roots as before.
 pub const TABLE_SPEC_CLASSES_V1: u8 = 22;
@@ -71,7 +73,7 @@ pub const TYPED_TABLES_V1: [u8; 3] = [TABLE_SPEC_CLASSES_V1, TABLE_SPEC_JOBS_V1,
 pub const TABLE_CLAIM_BEACON_SALTS_V1: u8 = 25;
 /// OPV-BOOT GAP-B1a: `(job, producer, sealed_daa) → a claim seal that expired unrevealed past `palw_panel_free_v1``.
 pub const TABLE_FORFEITED_CLAIM_SEALS_V1: u8 = 26;
-/// The domain of the root extension tables 25 and 26 add (absent while both are empty: every older root is unchanged).
+/// The domain of the root extension tables 25, 26 and 18 add (absent while all are empty: every older root is unchanged).
 pub const BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-beacon-seal-extension/v1";
 
 /// `(table, borsh(key)) → borsh(row)`.
@@ -108,6 +110,7 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_JOB_ESCROWS_V1 => "job-escrows",
         TABLE_SERVED_DEMAND_BONDS_V1 => "served-demand-bonds",
         TABLE_CLAIM_BEACON_SALTS_V1 => "claim-beacon-salts",
+        TABLE_JOB_POSTERS_V1 => "job-posters",
         TABLE_FORFEITED_CLAIM_SEALS_V1 => "forfeited-claim-seals",
         TABLE_SPEC_CLASSES_V1 => "spec-classes",
         TABLE_SPEC_JOBS_V1 => "spec-jobs",
@@ -170,6 +173,9 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.claim_beacon_salts {
             rows.insert((TABLE_CLAIM_BEACON_SALTS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.job_posters {
+            rows.insert((TABLE_JOB_POSTERS_V1, bytes_of(k)), bytes_of(v));
         }
         for (k, v) in &self.forfeited_claim_seals {
             rows.insert((TABLE_FORFEITED_CLAIM_SEALS_V1, bytes_of(k)), bytes_of(v));
@@ -255,6 +261,9 @@ impl KernelLedgerV1 {
                 }
                 TABLE_CLAIM_BEACON_SALTS_V1 => {
                     l.claim_beacon_salts.insert(dec(key, "claim id")?, dec(row, "claim beacon salt")?);
+                }
+                TABLE_JOB_POSTERS_V1 => {
+                    l.job_posters.insert(dec(key, "job id")?, dec(row, "job poster")?);
                 }
                 TABLE_FORFEITED_CLAIM_SEALS_V1 => {
                     l.forfeited_claim_seals.insert(
@@ -454,18 +463,23 @@ pub fn root_of_rows(
     };
     // RFC-0004 Part II: the typed tables, each only when non-empty (an untyped ledger's root is unchanged).
     let base = crate::spec::typed_root_v1(base, &typed);
-    // OPV-BOOT GAP-B1a: tables 25 and 26 extend the root only once either holds a row.
-    if by_table.contains_key(&TABLE_CLAIM_BEACON_SALTS_V1) || by_table.contains_key(&TABLE_FORFEITED_CLAIM_SEALS_V1) {
-        beacon_seal_root_extension_v1(&base, &coll(TABLE_CLAIM_BEACON_SALTS_V1), &coll(TABLE_FORFEITED_CLAIM_SEALS_V1))
+    // OPV-BOOT GAP-B1a / C4R4 F-C4R4-08: tables 25, 26 and 18 extend the root only once any of them holds a row.
+    if [TABLE_CLAIM_BEACON_SALTS_V1, TABLE_FORFEITED_CLAIM_SEALS_V1, TABLE_JOB_POSTERS_V1].iter().any(|t| by_table.contains_key(t)) {
+        beacon_seal_root_extension_v1(
+            &base,
+            &coll(TABLE_CLAIM_BEACON_SALTS_V1),
+            &coll(TABLE_FORFEITED_CLAIM_SEALS_V1),
+            &coll(TABLE_JOB_POSTERS_V1),
+        )
     } else {
         base
     }
 }
 
-/// `H(extension; base root ‖ claim beacon salts ‖ forfeited claim seals)` (OPV-BOOT GAP-B1a).
-pub fn beacon_seal_root_extension_v1(base: &Digest, salts: &Digest, forfeited: &Digest) -> Digest {
+/// `H(extension; base root ‖ claim beacon salts ‖ forfeited claim seals ‖ job posters)` (OPV-BOOT GAP-B1a, C4R4 F-C4R4-08).
+pub fn beacon_seal_root_extension_v1(base: &Digest, salts: &Digest, forfeited: &Digest, posters: &Digest) -> Digest {
     let mut s = keyed(BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1);
-    s.update(base).update(salts).update(forfeited);
+    s.update(base).update(salts).update(forfeited).update(posters);
     finish(s)
 }
 

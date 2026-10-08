@@ -374,6 +374,8 @@ pub struct ClaimBeaconSealV1 {
     pub sealed_daa: u64,
     pub revealed: Option<(Digest, u64, Digest)>,
     pub forfeited_daa: Option<u64>,
+    /// The bond that posted the seal's job (`job_posters`; `None` for a job posted below the fence) — the beacon's consumer.
+    pub poster: Option<Digest>,
 }
 
 /// **The v3 beacon's window against the seal TTL**: every in-window reveal is legal only if `2·W ≤ seal_ttl_daa` (a seal made at
@@ -725,6 +727,10 @@ pub struct KernelLedgerV1 {
     /// `palw_panel_free_v1` for a seal accepted at or after the fence, and kept, so a withheld seal stays in the v3 beacon's mix and
     /// vetoes it rather than silently dropping out of it (SOUND SG-01a(i)). Every row cost a forfeited `seal_deposit`.
     pub forfeited_claim_seals: BTreeMap<(Digest, Digest, u64), ForfeitedSealRowV1>,
+    /// **C4R4 F-C4R4-08: `job → the bond that posted it`** (table 18), written at every job post past `palw_panel_free_v1` and kept
+    /// as long as the job row (never removed): the escrow that names the poster is spent at the job's Final, and the sealed-source
+    /// beacon v3's distinct-consumer rule must read the same poster at every later tip. Empty below the fence.
+    pub job_posters: BTreeMap<Digest, Digest>,
     /// Cumulative amount burned (derived from the settlement instructions; kept as a checksum).
     pub burned: u64,
     /// RFC-0015: the OPV policy, classes and claim rows. Dormant (no policy) = the historical ledger, root included.
@@ -801,6 +807,7 @@ impl KernelLedgerV1 {
             served_demands: BTreeMap::new(),
             claim_beacon_salts: BTreeMap::new(),
             forfeited_claim_seals: BTreeMap::new(),
+            job_posters: BTreeMap::new(),
             burned: 0,
             opv: OpvStateV1::default(),
             typed: crate::spec::TypedStateV1::default(),
@@ -1190,7 +1197,12 @@ impl KernelLedgerV1 {
     }
 
     /// **GAP-5: open a job's escrow** — reserve `claim_reward` of the poster's free collateral against the job and burn `job_fee`.
+    /// Every job post opens its escrow here (single-program, pipeline and typed jobs alike), so past `palw_panel_free_v1` the poster
+    /// is recorded here too (`job_posters`, C4R4 F-C4R4-08): it outlives the escrow.
     fn open_job_escrow(&mut self, poster: &Digest, job: Digest, out: &mut Vec<LedgerEventV1>) {
+        if self.salted_seals_in_force() {
+            self.job_posters.insert(job, *poster);
+        }
         let (amount, fee) = (self.policy.claim_reward, self.policy.job_fee);
         if let Some(b) = self.bonds.get_mut(poster) {
             b.reserved += amount;
@@ -1613,6 +1625,11 @@ impl KernelLedgerV1 {
         self.salted_seals_from().is_some_and(|at| self.daa >= at)
     }
 
+    /// The bond that posted `job`, past `palw_panel_free_v1` (C4R4 F-C4R4-08; `None`: posted below the fence, or unknown).
+    pub fn job_poster(&self, job: &Digest) -> Option<Digest> {
+        self.job_posters.get(job).copied()
+    }
+
     /// The salt a claim's seal was made with (`None`: the claim was revealed unsalted, or is unknown).
     pub fn claim_beacon_salt(&self, claim: &Digest) -> Option<Digest> {
         self.claim_beacon_salts.get(claim).copied()
@@ -1632,6 +1649,7 @@ impl KernelLedgerV1 {
                 sealed_daa: row.daa,
                 revealed: None,
                 forfeited_daa: None,
+                poster: self.job_poster(job),
             })
             .collect();
         for (id, salt) in &self.claim_beacon_salts {
@@ -1643,6 +1661,7 @@ impl KernelLedgerV1 {
                     sealed_daa: row.sealed_daa,
                     revealed: Some((*id, row.committed_daa, *salt)),
                     forfeited_daa: None,
+                    poster: self.job_poster(&row.job_id),
                 });
             }
         }
@@ -1654,6 +1673,7 @@ impl KernelLedgerV1 {
                 sealed_daa: *sealed_daa,
                 revealed: None,
                 forfeited_daa: Some(row.forfeited_daa),
+                poster: self.job_poster(job),
             });
         }
         out.sort_by(|a, b| (a.sealed_daa, a.seal).cmp(&(b.sealed_daa, b.seal)));

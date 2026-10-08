@@ -970,7 +970,11 @@ mod tests {
         assert_ne!(state.ledger_root(), plain.ledger_root(), "the OPV root form is not the historical one");
         // OPV-BOOT GAP-B1a: with tables 25 and 26 empty there is no root extension — both forms are what they were before them.
         let (opv_ledger, plain_ledger) = (state.ledger().unwrap(), plain.ledger().unwrap());
-        assert!(opv_ledger.claim_beacon_salts.is_empty() && opv_ledger.forfeited_claim_seals.is_empty());
+        assert!(
+            opv_ledger.claim_beacon_salts.is_empty()
+                && opv_ledger.forfeited_claim_seals.is_empty()
+                && opv_ledger.job_posters.is_empty()
+        );
         assert_eq!(state.ledger_root().as_bytes(), opv_ledger.root_parts_v2().root(), "the OPV form, unextended");
         assert_eq!(plain.ledger_root().as_bytes(), plain_ledger.root_parts().root(), "the historical form, unextended");
         // The v3 beacon's window against the interim seal TTL: OPV-BOOT's interim W = 40 needs 2·W ≤ 100.

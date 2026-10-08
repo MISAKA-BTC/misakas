@@ -606,8 +606,10 @@ async fn r4x_memory_class_end_to_end_a_lie_in_one_step_is_convicted_and_memory_i
     m.net.file(outsider, c2, fault).await;
     let l = m.net.ledger();
     assert!(l.claims[&c2].convicted && matches!(l.claims[&c2].life.state, ClaimStateV1::Convicted { .. }));
-    let slashed = m.net.api().unwrap().header.opv.unwrap().economics.reservation_per_claim;
-    assert_eq!(m.net.collateral(4), before - slashed, "the real bond lost the OPV reservation");
+    let economics = m.net.api().unwrap().header.opv.unwrap().economics;
+    let slashed = economics.reservation_per_claim;
+    // (and the non-refundable OPV admission fee burned at the commit: G14-R4's F-C4R3-05)
+    assert_eq!(m.net.collateral(4), before - slashed - economics.admission_fee, "the real bond lost the OPV reservation");
     assert_eq!(m.net.owed(outsider), slashed * u64::from(l.policy.accuser_reward_permille) / 1000, "the outsider's reward is queued");
     assert_eq!(m.head(), root1, "a convicted claim never moves the line");
 
@@ -661,7 +663,9 @@ async fn r4x_memory_a_withheld_pre_state_is_classified_as_a_default() {
         l.claims[&c2].life.state
     );
     assert!(!l.claims[&c2].convicted, "withholding is a default, never fraud");
-    assert_eq!(m.net.collateral(4), before - l.policy.default_penalty, "the fixed default penalty, not the fraud slash");
+    // (and the non-refundable OPV admission fee burned at the commit: G14-R4's F-C4R3-05)
+    let fee = m.net.api().unwrap().header.opv.unwrap().economics.admission_fee;
+    assert_eq!(m.net.collateral(4), before - l.policy.default_penalty - fee, "the fixed default penalty, not the fraud slash");
     assert_eq!(m.head(), *p1.claim.step_roots.last().unwrap(), "a defaulted claim never moves the line");
     m.net.assert_replays().await;
 }

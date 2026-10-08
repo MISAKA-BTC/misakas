@@ -141,7 +141,7 @@ fn the_state_root_is_versioned_canonical_and_pinned_by_a_golden_vector() {
     assert_eq!(hex(&l.root()), GOLDEN_ROOT);
     assert_eq!(l.root(), parts.root());
     // OPV-BOOT GAP-B1a: tables 25 and 26 are empty below `palw_panel_free_v1`, so they add nothing — this golden is the int-12-era root.
-    assert!(l.claim_beacon_salts.is_empty() && l.forfeited_claim_seals.is_empty());
+    assert!(l.claim_beacon_salts.is_empty() && l.forfeited_claim_seals.is_empty() && l.job_posters.is_empty());
     // Deterministic: the same fold twice, and a clone, agree.
     assert_eq!(small_state().root(), l.root());
     assert_eq!(l.clone().root(), l.root());

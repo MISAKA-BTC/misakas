@@ -194,8 +194,9 @@ impl KernelLedgerV1 {
         let base = if self.opv.is_dormant() { self.root_parts().root() } else { self.root_parts_v2().root() };
         // RFC-0004 Part II: the typed tables, each only when non-empty.
         let base = crate::spec::typed_root_v1(base, &self.typed_root_parts());
-        // OPV-BOOT GAP-B1a (tables 25 and 26): an extension only once either holds a row, so every older root is unchanged.
-        if self.claim_beacon_salts.is_empty() && self.forfeited_claim_seals.is_empty() {
+        // OPV-BOOT GAP-B1a / C4R4 F-C4R4-08 (tables 25, 26 and 18): an extension only once any holds a row, so every older root is
+        // unchanged.
+        if self.claim_beacon_salts.is_empty() && self.forfeited_claim_seals.is_empty() && self.job_posters.is_empty() {
             return base;
         }
         let d = |name: &str| format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes();
@@ -203,6 +204,7 @@ impl KernelLedgerV1 {
             &base,
             &collection_root(&d("claim-beacon-salts"), self.claim_beacon_salts.len(), self.claim_beacon_salts.iter()),
             &collection_root(&d("forfeited-claim-seals"), self.forfeited_claim_seals.len(), self.forfeited_claim_seals.iter()),
+            &collection_root(&d("job-posters"), self.job_posters.len(), self.job_posters.iter()),
         )
     }
 
