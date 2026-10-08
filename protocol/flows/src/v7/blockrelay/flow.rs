@@ -156,8 +156,9 @@ impl HandleRelayInvsFlow {
                     return Err(ProtocolError::OtherOwned(format!("sent inv of an invalid block {}", inv.hash)));
                 }
                 _ => {
-                    // Block is already known, skip to next inv
+                    // Block is already known, skip to next inv — but its announcer is noted (C4 F-C4R4-09: credit is not a race).
                     debug!("Relay block {} already exists, continuing...", inv.hash);
+                    self.ctx.observe_relay_for_partition(&session, self.router.key(), inv.hash).await;
                     continue;
                 }
             }
@@ -255,6 +256,7 @@ impl HandleRelayInvsFlow {
             // We keep the request scope alive until consensus processes the block
             let Some((block, request_scope)) = self.request_block(inv.hash, self.msg_route.id(), self.header_format).await? else {
                 debug!("Relay block {} was already requested from another peer, continuing...", inv.hash);
+                self.ctx.note_partition_announcement(self.router.key(), inv.hash);
                 continue;
             };
             request_scope.report_obtained();

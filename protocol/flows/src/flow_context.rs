@@ -1507,14 +1507,24 @@ impl FlowContext {
     /// whether `block` (relayed by `peer`) extends this node's chain, then holds or releases chain
     /// participation on the verdict — see `flowcontext::partition_watch` for the threat model. Holding
     /// changes participation only (no mining, no attesting, unsynced), never the sink.
+    ///
+    /// Asked too for every announcement of a block this node already has (C4 F-C4R4-09: credit is not a race). A block is "ours" on
+    /// this node's selected chain (either side of the sink) and "other" only when it extends the refused branch's chain; a sibling
+    /// the chain merges notes nobody.
     pub async fn observe_relay_for_partition(&self, session: &ConsensusSessionOwned, peer: PeerKey, block: BlockHash) {
-        use crate::flowcontext::partition_watch::{PartitionVerdict, PeerView, RelayedRelation};
+        use crate::flowcontext::partition_watch::{BlockPlace, PartitionVerdict, PeerView};
         let sink = session.async_get_sink().await;
-        let relation = match session.async_is_chain_ancestor_of(sink, block).await {
-            Ok(true) => RelayedRelation::ExtendsOurs,
-            Ok(false) => RelayedRelation::Other,
-            Err(_) => return,
+        let refusal = session.palw_partition_refusal_v1();
+        let (Ok(down), Ok(up)) =
+            (session.async_is_chain_ancestor_of(sink, block).await, session.async_is_chain_ancestor_of(block, sink).await)
+        else {
+            return;
         };
+        let extends_refused = match refusal {
+            Some(r) => session.async_is_chain_ancestor_of(r.refused, block).await.unwrap_or(false),
+            None => false,
+        };
+        let place = BlockPlace { on_our_chain: down || up, extends_refused };
         let now = std::time::Instant::now();
         let peers: Vec<PeerView> = self
             .hub()
@@ -1526,13 +1536,12 @@ impl FlowContext {
                 connected_for: std::time::Duration::from_millis(p.time_connected()),
             })
             .collect();
-        let refusal = session.palw_partition_refusal_v1();
         let pending_resync = self.verified_resync.lock().clone();
         if let Some(reporter) = pending_resync {
             use crate::flowcontext::partition_watch::ResyncVerdict;
             let resync = {
                 let mut watch = self.partition_watch.lock();
-                watch.note_relay(peer, relation, now);
+                watch.note_placed(block, peer, place, now);
                 watch.resync_verdict(refusal, &peers, now)
             };
             if let ResyncVerdict::Confirmed { on_ours, eligible } = resync {
@@ -1557,7 +1566,7 @@ impl FlowContext {
         }
         let verdict = {
             let mut watch = self.partition_watch.lock();
-            watch.note_relay(peer, relation, now);
+            watch.note_placed(block, peer, place, now);
             watch.verdict(refusal, &peers, now)
         };
         match verdict {
@@ -1585,6 +1594,12 @@ impl FlowContext {
                 }
             }
         }
+    }
+
+    /// **C4 F-C4R4-09**: `peer` announced `block`, which this node already requested from another peer: it is noted with the block's
+    /// deliverer once the block is processed.
+    pub fn note_partition_announcement(&self, peer: PeerKey, block: BlockHash) {
+        self.partition_watch.lock().note_announced(block, peer);
     }
 
     pub fn is_ibd_running(&self) -> bool {

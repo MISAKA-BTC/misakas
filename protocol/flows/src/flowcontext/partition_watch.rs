@@ -44,6 +44,7 @@
 //! ticks; at least [`PARTITION_MIN_OUTBOUND_ON_OTHER`] eligible outbound peers on the other chain; and
 //! they are a strict majority of ALL eligible outbound peers (a silent peer counts against the hold).
 //! Release: the moment any of it stops being true — the evaluation runs on every relayed block.
+use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::PalwPartitionRefusalV1;
 use kaspa_p2p_lib::PeerKey;
 use std::collections::HashMap;
@@ -116,9 +117,35 @@ pub enum ResyncVerdict {
     Pending { on_ours: usize, on_other: usize, eligible: usize, refusing: bool },
 }
 
+/// **Where a relayed block stands** (C4 F-C4R4-09), read once consensus has it: on this node's selected chain (either side of the
+/// sink), or extending the refused branch's chain. A block that is neither — a sibling this node's chain merges, a stale block — is no
+/// evidence about which chain its relayer is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockPlace {
+    pub on_our_chain: bool,
+    pub extends_refused: bool,
+}
+
+impl BlockPlace {
+    pub fn relation(self) -> Option<RelayedRelation> {
+        if self.on_our_chain {
+            Some(RelayedRelation::ExtendsOurs)
+        } else if self.extends_refused {
+            Some(RelayedRelation::Other)
+        } else {
+            None
+        }
+    }
+}
+
+/// How many blocks may wait for their place with announcers queued (blocks in flight; past it the queue starts over).
+pub const PARTITION_MAX_PENDING_BLOCKS: usize = 4096;
+
 #[derive(Debug, Default)]
 pub struct PartitionWatch {
     peers: HashMap<PeerKey, Observation>,
+    /// Peers that announced a block this node had already requested from another peer, noted once the block is placed.
+    pending: HashMap<BlockHash, Vec<PeerKey>>,
 }
 
 impl PartitionWatch {
@@ -127,6 +154,26 @@ impl PartitionWatch {
         match relation {
             RelayedRelation::ExtendsOurs => o.last_ours = Some(now),
             RelayedRelation::Other => o.last_other = Some(now),
+        }
+    }
+
+    /// **Credit is not a race** (C4 F-C4R4-09): a peer that announces a block this node already requested from another peer is
+    /// noted exactly as its deliverer is, once the block is placed ([`Self::note_placed`]).
+    pub fn note_announced(&mut self, block: BlockHash, peer: PeerKey) {
+        if self.pending.len() >= PARTITION_MAX_PENDING_BLOCKS && !self.pending.contains_key(&block) {
+            self.pending.clear();
+        }
+        self.pending.entry(block).or_default().push(peer);
+    }
+
+    /// A block's place is known: note `peer` (its deliverer, or an announcer of a block this node already has) and every peer that
+    /// announced it while it was in flight. A block that is neither on this node's chain nor on the refused branch notes nobody.
+    pub fn note_placed(&mut self, block: BlockHash, peer: PeerKey, place: BlockPlace, now: Instant) {
+        let announcers = self.pending.remove(&block).unwrap_or_default();
+        if let Some(relation) = place.relation() {
+            for p in announcers.into_iter().chain(std::iter::once(peer)) {
+                self.note_relay(p, relation, now);
+            }
         }
     }
 
