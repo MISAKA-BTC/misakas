@@ -12,7 +12,8 @@
 //! * the **binding check** ([`palw_exec_v2_verification_binding_v1`]): the kernel claim the slice names (`slice.evidence_root`) is a
 //!   program claim of the root class's bound kernel class, by the slice's executor, of the slice's job, whose prompt, run and evidence
 //!   are the slice's predecessor, result, output and DA roots, and that has not failed;
-//! * the **outcome** a kernel claim's row says for its slice ([`palw_exec_v2_claim_outcome_v1`]).
+//! * the **outcome** a kernel claim's row says for its slice ([`palw_exec_v2_claim_outcome_v1`]), and the **leg cap** a verified slice
+//!   takes from it ([`palw_exec_v2_leg_cap_v1`]).
 //!
 //! The fold (`palw_exec_v2_fold`) reads the rows (the route's tables, the onboarding binding) and applies the outcome; nothing here
 //! reads state. Integer and hash only.
@@ -81,13 +82,22 @@ pub enum PalwSliceVerificationV1 {
     Defaulted,
 }
 
-/// The outcome of a kernel claim row (a conviction wins over a Final: the route flips `convicted` on a lie convicted inside its
-/// liability horizon).
-pub fn palw_exec_v2_claim_outcome_v1(row: &ClaimRowV1) -> PalwSliceVerificationV1 {
+/// The outcome of a kernel claim row at `daa` (a conviction wins over a Final: the route flips `convicted` on a lie convicted inside
+/// its liability horizon).
+///
+/// **A Final claim that forfeited its reservation inside its liability horizon is a default** (the X8R round-2 review): the route
+/// answers a demand the producer leaves unserved after `Final` by taking the WHOLE remaining reservation and leaving the state `Final`
+/// (`PostFinalDefault`), so the state alone would still say "verified" of a claim whose material was withheld. Inside the horizon the
+/// route holds a Final claim's reservation in full — it is released only once the horizon has passed (`daa > liability_until`) — so a
+/// Final row reserving nothing at or before its horizon is exactly that forfeit. Past the horizon a released row is still verified.
+pub fn palw_exec_v2_claim_outcome_v1(row: &ClaimRowV1, daa: u64) -> PalwSliceVerificationV1 {
     if row.convicted {
         return PalwSliceVerificationV1::ProvenFalse;
     }
     match row.life.state {
+        ClaimStateV1::Final { .. } if row.reserved == 0 && row.liability_until.is_none_or(|until| daa <= until) => {
+            PalwSliceVerificationV1::Defaulted
+        }
         ClaimStateV1::Final { final_daa } => PalwSliceVerificationV1::Verified { final_daa },
         ClaimStateV1::Convicted { .. } => PalwSliceVerificationV1::ProvenFalse,
         ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. } => PalwSliceVerificationV1::Defaulted,
@@ -95,21 +105,37 @@ pub fn palw_exec_v2_claim_outcome_v1(row: &ClaimRowV1) -> PalwSliceVerificationV
     }
 }
 
+/// **The most a verified slice's executor may be paid for it at the root's settlement** (spec §10.5, as revised by the X8R round-2
+/// review): the reservation its kernel claim holds when the slice verifies, less the `Final` reward the route paid on that same claim.
+///
+/// * **Why net of the route's reward.** The route's own invariant is `claim_reward < claim_collateral` ("the Final reward is smaller
+///   than the reservation a post-Final default forfeits"): what one claim can gain stays below what it puts at risk. A slice leg is a
+///   second gain on the same claim, so the two together are held under the same reservation.
+/// * **Why fixed at verification.** Read at settlement instead (the first amendment), the cap fell to zero for every slice whose
+///   claim's liability horizon had passed — the route releases the reservation then — so a root bond that held back the LAST slice
+///   until the earlier executors' horizons passed kept their whole legs. The liability the cap stands for is the one that existed while
+///   the claim could still be convicted; its later release changes neither the risk nor the work.
+pub fn palw_exec_v2_leg_cap_v1(row: &ClaimRowV1, claim_reward: u64) -> u64 {
+    let reward = if row.rewarded { claim_reward } else { 0 };
+    row.reserved.saturating_sub(reward)
+}
+
 /// **The verification binding** (admission rule 5, amendment 1): does the kernel claim `row` (the claim `slice.evidence_root` names, its
 /// job `job` as the route holds it) verify exactly this slice, for the root class's kernel `binding`, executed by the bond whose kernel
-/// digest is `executor_kernel_bond`? Each mismatch is named; nothing is written by a caller on a refusal.
+/// digest is `executor_kernel_bond`, judged at `daa`? Each mismatch is named; nothing is written by a caller on a refusal.
 pub fn palw_exec_v2_verification_binding_v1(
     slice: &PalwWorkSliceV1,
     binding: &KernelBindingRowV1,
     row: &ClaimRowV1,
     job: Option<&KernelJobV1>,
     executor_kernel_bond: &[u8; 64],
+    daa: u64,
 ) -> Result<(), PalwSliceRefusalV2> {
     use PalwSliceRefusalV2::{VerificationClaimFailed, VerificationClaimNotBound, VerificationKindUnsupported};
     let ClaimBodyV1::Program { claim, .. } = &row.body else {
         return Err(VerificationKindUnsupported);
     };
-    if matches!(palw_exec_v2_claim_outcome_v1(row), PalwSliceVerificationV1::ProvenFalse | PalwSliceVerificationV1::Defaulted) {
+    if matches!(palw_exec_v2_claim_outcome_v1(row, daa), PalwSliceVerificationV1::ProvenFalse | PalwSliceVerificationV1::Defaulted) {
         return Err(VerificationClaimFailed);
     }
     if Hash64::from_bytes(row.class_binding_id) != binding.kernel_class {
@@ -359,7 +385,11 @@ pub fn palw_exec_v2_observation_v1(
                         r.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&row.evidence_root)))
                     })
                     .and_then(|bytes| borsh::from_slice::<ClaimRowV1>(bytes).ok())
-                    .map(|claim| if claim.convicted { "Convicted".to_string() } else { format!("{:?}", claim.life.state) }),
+                    .map(|claim| match (claim.convicted, &claim.life.state, palw_exec_v2_claim_outcome_v1(&claim, tip_daa)) {
+                        (true, _, _) => "Convicted".to_string(),
+                        (false, ClaimStateV1::Final { .. }, PalwSliceVerificationV1::Defaulted) => "ForfeitedAfterFinal".to_string(),
+                        (false, state, _) => format!("{state:?}"),
+                    }),
             })
             .collect();
         observed.push(PalwExecV2RootObservationV1 {

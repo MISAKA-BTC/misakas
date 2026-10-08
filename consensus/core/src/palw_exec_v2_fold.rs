@@ -18,15 +18,17 @@
 //! * **It settles once** ([`settle_at_final_v2`]): at the claim's `Final` the root executor's reward leg is split by work share —
 //!   `sum(paid) == the allocation`, nothing minted — and the root is marked `Settled`. No slice has its own `Final`, subsidy or
 //!   escrow.
-//! * **It does not verify.** Nothing in this crate can mark a slice `Verified`: the production door (the RFC-0007 Part VI
-//!   `WORK_SLICE` challenge, public-bond prosecution, the DA court) is not wired, so a real chain's root never becomes ready and
-//!   never settles. The test-only writer [`mark_slice_verified_for_tests`] exists so the settlement arithmetic and the hold's
-//!   release can be exercised; it is `#[cfg(test)]` and reachable by no node.
+//! * **It verifies only through the kernel route** (amendment 1, spec §10.1; [`sync_slice_verification_v2`]): a slice names a
+//!   kernel-route claim that binds it, and its stage follows that claim every block after the route's closing tick — `Final`
+//!   verifies it (fixing its leg cap), a conviction proves it false, a default or timeout defaults it, and either failure voids the
+//!   suffix and the root ([`void_suffix_v2`]). The test-only writer [`mark_slice_verified_for_tests`] remains for the arithmetic
+//!   tests of chains with no kernel route; it is `#[cfg(test)]` and reachable by no node.
 
 use super::*;
 use crate::palw_exec_v2::PalwWorkRangeV1;
 use crate::palw_exec_v2_verify::{
-    PalwSliceVerificationV1, palw_exec_v2_claim_outcome_v1, palw_exec_v2_kernel_key_v1, palw_exec_v2_verification_binding_v1,
+    PalwSliceVerificationV1, palw_exec_v2_claim_outcome_v1, palw_exec_v2_kernel_key_v1, palw_exec_v2_leg_cap_v1,
+    palw_exec_v2_verification_binding_v1,
 };
 use crate::palw_work_slice_v2::{
     PALW_EXEC_V2_MAX_OPEN_ROOTS, PALW_EXEC_V2_MAX_OPEN_ROOTS_PER_BOND, PALW_EXEC_V2_MAX_PENDING_DEPTH,
@@ -186,9 +188,12 @@ impl PalwChainStateV2 {
                     &row,
                     job.as_ref(),
                     &crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&slice.executor_bond),
+                    daa_score,
                 )?;
-                match palw_exec_v2_claim_outcome_v1(&row) {
-                    PalwSliceVerificationV1::Verified { final_daa } => Some(final_daa),
+                match palw_exec_v2_claim_outcome_v1(&row, daa_score) {
+                    PalwSliceVerificationV1::Verified { final_daa } => {
+                        Some((final_daa, palw_exec_v2_leg_cap_v1(&row, kernel.header.policy.claim_reward)))
+                    }
                     _ => None,
                 }
             }
@@ -205,7 +210,11 @@ impl PalwChainStateV2 {
             return Err(R::BlockQuota);
         }
         let work = planned.work().ok_or(R::Overflow)?;
-        Ok(PalwSliceAdmissionV2 { work, verified_at })
+        Ok(PalwSliceAdmissionV2 {
+            work,
+            verified_at: verified_at.map(|(final_daa, _)| final_daa),
+            leg_cap: verified_at.map(|(_, cap)| cap).unwrap_or(0),
+        })
     }
 
     /// **The consistency of the work-slice ledgers** against each other and against the claims, checked with the rest of
@@ -574,7 +583,7 @@ fn accept_slice_v2(
             evidence_root: slice.evidence_root,
             da_root: slice.da_root,
             stage: match admission.verified_at {
-                Some(_) => PalwWorkSliceStageV2::Verified { verified_daa: ctx.daa_score },
+                Some(_) => PalwWorkSliceStageV2::Verified { verified_daa: ctx.daa_score, leg_cap: admission.leg_cap },
                 None => PalwWorkSliceStageV2::Pending,
             },
         }),
@@ -687,20 +696,21 @@ pub(super) fn settle_at_final_v2(
         // Unreachable by construction; recorded loudly in debug builds and degraded safely in release.
         debug_assert!(false, "a root reached Final without being ready");
     }
-    // **Amendment 1, §10.5: a slice executor's leg is capped at the collateral the kernel route still holds on its slices' claims** —
-    // the post-Final liability of a slice is its kernel claim's, so a leg is never larger than what a post-Final conviction could
-    // collect. The excess stays with the root executor (`sum(paid) == allocation` still holds; nothing is minted or lost).
-    if let Some(kernel) = builder.state.kernel_route.as_ref() {
+    // **Amendment 1, §10.5 (revised by the X8R round-2 review): a slice executor's leg is capped at the sum of its slices' leg caps** —
+    // each fixed when the slice verified: the reservation its kernel claim then held, less the route's own Final reward on it
+    // (`palw_exec_v2_leg_cap_v1`). So a leg plus the route's reward never exceeds what a conviction inside the claim's liability
+    // horizon could collect, and no timing of the root's Final moves a cap (read here, at settlement, the reservation of every claim
+    // past its horizon is already released). The excess stays with the root executor (`sum(paid) == allocation`; nothing minted).
+    // Where no kernel route exists (the test door's arithmetic chains) there is no claim to cap by.
+    if builder.state.kernel_route.is_some() {
         let mut held: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
         for row in &rows {
-            let reserved = kernel
-                .rows
-                .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&row.evidence_root)))
-                .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::ledger::ClaimRowV1>(bytes).ok())
-                .map(|claim| claim.reserved)
-                .unwrap_or(0);
+            let cap = match row.stage {
+                PalwWorkSliceStageV2::Verified { leg_cap, .. } => leg_cap,
+                _ => 0,
+            };
             let entry = held.entry(row.executor).or_insert(0);
-            *entry = entry.saturating_add(reserved);
+            *entry = entry.saturating_add(cap);
         }
         let mut excess: u64 = 0;
         for (bond, amount) in settlement.slice_legs.iter_mut() {
@@ -833,8 +843,9 @@ pub(super) fn release_final_hold_v2(
 /// the route's per-block adjudication budget, not by the size of the lane. For each slice that names one of them —
 ///
 /// * a pending slice whose claim is **Final** becomes `Verified`; a root whose last slice is verified releases its claim's `Final` hold;
-/// * a pending or verified slice of a root that has not settled whose claim is **convicted** is *proven false*, one whose claim
-///   **defaulted** (unavailable, timed out, or no longer held) is *defaulted*: the slice and every later slice of its root are void,
+/// * a pending or verified slice of a root that has not settled whose claim is **convicted** is *proven false*; a pending one whose
+///   claim **defaulted** (unavailable, timed out, or no longer held), or a verified one whose claim forfeited its reservation after
+///   `Final` (an unserved post-Final demand), is *defaulted*: the slice and every later slice of its root are void,
 ///   the root is `Voided`, and the root claim is voided (`WorkSliceProvenFalse` / `WorkSliceDefaulted`, uncharged here — the
 ///   evidence-bound charge is the route's, on the executor's kernel reservation).
 ///
@@ -873,22 +884,30 @@ pub(super) fn sync_slice_verification_v2(
         if !matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
             continue; // settled, or voided earlier in this loop
         }
-        let outcome = builder
-            .state
-            .kernel_route
-            .as_ref()
-            .and_then(|kernel| {
-                kernel.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&row.evidence_root)))
-            })
-            .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::ledger::ClaimRowV1>(bytes).ok())
-            .map(|claim| palw_exec_v2_claim_outcome_v1(&claim))
-            .unwrap_or(PalwSliceVerificationV1::Defaulted);
+        let (claim_row, claim_reward) = match builder.state.kernel_route.as_ref() {
+            Some(kernel) => (
+                kernel
+                    .rows
+                    .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&row.evidence_root)))
+                    .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::ledger::ClaimRowV1>(bytes).ok()),
+                kernel.header.policy.claim_reward,
+            ),
+            None => (None, 0),
+        };
         let pending = matches!(row.stage, PalwWorkSliceStageV2::Pending);
+        // A claim the route no longer holds cannot verify a pending slice (a default); a verified slice whose claim the route has
+        // retired keeps its stage and its cap.
+        let outcome = match &claim_row {
+            Some(claim) => palw_exec_v2_claim_outcome_v1(claim, ctx.daa_score),
+            None if pending => PalwSliceVerificationV1::Defaulted,
+            None => continue,
+        };
         match outcome {
             PalwSliceVerificationV1::Verified { .. } if pending => {
                 let work = row.range.work().ok_or(PalwStateV2Error::Overflow("exec v2 slice work"))?;
+                let leg_cap = claim_row.as_ref().map(|claim| palw_exec_v2_leg_cap_v1(claim, claim_reward)).unwrap_or(0);
                 let mut verified = row;
-                verified.stage = PalwWorkSliceStageV2::Verified { verified_daa: ctx.daa_score };
+                verified.stage = PalwWorkSliceStageV2::Verified { verified_daa: ctx.daa_score, leg_cap };
                 builder.write_exec_slice((root_id, index), Some(verified));
                 let mut next = root;
                 next.pending = next.pending.checked_sub(1).ok_or(PalwStateV2Error::Overflow("exec v2 pending"))?;
@@ -899,7 +918,10 @@ pub(super) fn sync_slice_verification_v2(
             PalwSliceVerificationV1::ProvenFalse => {
                 void_suffix_v2(builder, root_id, index, PalwWorkSliceStageV2::ProvenFalse { daa: ctx.daa_score }, ctx.daa_score)?;
             }
-            PalwSliceVerificationV1::Defaulted if pending => {
+            // A pending slice's claim defaulted or timed out — or a verified slice's claim forfeited its reservation after Final
+            // (a demand it left unserved inside its liability horizon, the route's `PostFinalDefault`): the material is withheld, so
+            // the slice is defaulted while its root has not settled, exactly as a conviction after Final proves it false.
+            PalwSliceVerificationV1::Defaulted => {
                 void_suffix_v2(builder, root_id, index, PalwWorkSliceStageV2::Defaulted { daa: ctx.daa_score }, ctx.daa_score)?;
             }
             _ => {}
@@ -967,7 +989,8 @@ pub(crate) fn mark_slice_verified_for_tests(
         return Err(refused("slice is not pending"));
     }
     let work = row.range.work().ok_or_else(|| refused("empty range"))?;
-    row.stage = PalwWorkSliceStageV2::Verified { verified_daa };
+    // No kernel claim backs a test-door verification: the cap is unbounded, and settlement caps only where a kernel route exists.
+    row.stage = PalwWorkSliceStageV2::Verified { verified_daa, leg_cap: u64::MAX };
     builder.write_exec_slice((claim_id, index), Some(row));
     let mut root = builder.state.exec_v2.roots.get(&claim_id).cloned().ok_or_else(|| refused("no such root"))?;
     root.pending = root.pending.checked_sub(1).ok_or(PalwStateV2Error::Overflow("exec v2 pending"))?;

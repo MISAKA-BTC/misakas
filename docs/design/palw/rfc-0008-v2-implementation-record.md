@@ -97,7 +97,8 @@ Pipeline tests are `consensus/src/pipeline/virtual_processor/tests/t12_exec_v2_c
 | 3 | pending depth allows the next slice before verification; bounded | depth 4, per bond 16, 8 per block | F `the_pending_depth_and_the_per_bond_quota_bound...`, `two_slices_in_one_block_see_each_other_in_order...` | IMPLEMENTED_AND_TESTED |
 | 3 | slice binds root/class/kernel/plan/job/range/predecessor/result/input/output/evidence/DA/executor/identity | `PalwWorkSliceV1::slice_id`, `challenge_binding` | `the_challenge_subject_is_a_pure_function_of_the_slice...`; sdk test: flipping any of the 14 fields moves the contract's `ChallengeSubjectV1::id()` | IMPLEMENTED_AND_TESTED |
 | 4 | separate permit / work / root / job ledgers; branch-local; atomic restore | `PalwExecV2StateV1`, journaled `ExecV2Row` | F `two_branches_hold_independent_ledgers_and_each_credits_a_slice_once`, `the_exec_v2_tail_is_pinned_at_0xee...`, `a_corrupted_ledger_is_caught_by_the_consistency_check`; P10 reorg at the pipeline | IMPLEMENTED_AND_TESTED |
-| 4 | checked ints; conservation; one settlement per root; no re-escrow; no carrier subsidy | `settle_root_v2`, `settle_root_partial_v2`, `settle_at_final_v2` (+ the leg cap, §10.5) | `settlement_conserves_the_allocation_exactly...`, `splitting_a_range_into_more_slices_pays_no_more`; F `the_root_settles_once_at_final...`; **F `amendment_1::a_final_kernel_claim_verifies_its_slice_and_the_root_settles_once_with_capped_legs`, `a_slice_leg_is_capped_at_what_the_route_still_holds_on_its_claims`** (verification through kernel claim rows, no test door) | IMPLEMENTED_AND_TESTED at fold level; the composed real-node run is section 12 |
+| 4 | checked ints; conservation; one settlement per root; no re-escrow; no carrier subsidy | `settle_root_v2`, `settle_root_partial_v2`, `settle_at_final_v2` (+ the leg cap, §10.5) | `settlement_conserves_the_allocation_exactly...`, `splitting_a_range_into_more_slices_pays_no_more`; F `the_root_settles_once_at_final...`; **F `amendment_1::a_final_kernel_claim_verifies_its_slice_and_the_root_settles_once_with_capped_legs`, `a_slice_leg_is_capped_at_what_its_claims_held_when_they_verified`, `a_leg_cap_is_fixed_when_the_slice_verifies_so_a_held_back_last_slice_takes_no_earlier_leg`, `a_leg_cap_is_net_of_the_routes_final_reward_on_the_same_claim`** (verification through kernel claim rows, no test door; round 2, section 10b) | IMPLEMENTED_AND_TESTED at fold level; the composed real-node run is section 12 |
+| 4 | a verified slice whose kernel claim forfeits after `Final` (unserved post-Final demand) defaults and voids an unsettled root | `palw_exec_v2_claim_outcome_v1` (a `Final` row reserving nothing at or before its horizon), `sync_slice_verification_v2` | F `amendment_1::a_verified_slice_whose_claim_forfeits_after_final_defaults_and_voids_an_unsettled_root` (round 2) | IMPLEMENTED_AND_TESTED (fold) |
 | 4 | root Final held while not ready; expiry voids uncharged; rows retire with the claim | `final_is_held_v2`, `sweep_expired_roots_v2`, `on_claim_voided_v2`, `on_claim_retired_v2` | F `a_licensed_claim_with_an_unready_session_owes_no_final_deadline...`, `an_unfinished_session_voids_its_claim_uncharged_at_its_expiry`, `the_rows_retire_with_their_claim...` | IMPLEMENTED_AND_TESTED (fold) |
 | 4 | EXEC_TX permit use unchanged; one consumption per key; fee accepted and paid once | `palw_round_verdicts_v1` (canonical order, `taken`, `payees`) | P6: permitted spend accepted, fee to the bond's registered payout once; duplicate permit and ungranted round covered and refused | IMPLEMENTED_AND_TESTED |
 | 4 | one credit, no N+1 finalized attempts; slice work is not extra reward | slices create no attempt, no permit, no credit; settlement only re-divides the root claim's own producer leg by work share | F the session-free twin comparisons (producer leg + slice legs == the twin's leg; the root claim's Final is the only one) | IMPLEMENTED_AND_TESTED; the schedule-credit question decided: **no raise** (amendment 1, §10.4) |
@@ -137,7 +138,7 @@ Pipeline tests are `consensus/src/pipeline/virtual_processor/tests/t12_exec_v2_c
    remains for chains with no kernel route (the arithmetic tests). Pipeline-class slices are refused (`VerificationKindUnsupported`)
    until a segment state is defined for them.
 2. **Post-Final liability of slice legs** — **decided and built** (§10.5): the kernel reservation is the liability; each leg is capped
-   at it.
+   at it. **Revised in round 2** (section 10b): the cap is fixed when the slice verifies and is net of the route's own `Final` reward.
 3. **Suffix void** — **built** (§10.2).
 4. **Flood residual** — **decided** (§10.3) and the relay admission / production backpressure **built** (node-local).
 5. **Anchoring-window strand** — **decided** (§10.7): the window stays two spans; the producer republishes.
@@ -204,6 +205,11 @@ P11 `fence_off_every_lane_object_is_judged_as_before_and_an_armed_node_agrees`.
 
 Not compiled in this run: `testing/integration` (its op-240 arm mirrors op 220's) and the `misaka-palw-sdk` subject test (unchanged).
 
+Round 2 (`x8r-m5`, 2026-10-09): `cargo test -p kaspa-consensus-core --lib -- exec_v2 palw_work_slice_v2 the_v22_void_reasons_are_pinned`,
+71 passed / 0 failed (it includes the three round-2 fold tests, section 10b). In the same invocation,
+`scripts/t12-repin.sh --shipping --drift-only` reported **no drift**: 361 ok, testnet-12 params id `5ee7fd8ee019968c…`, schedule id
+`1678e07359f6727e…` — the live int-12 ids.
+
 ## 10. X8R review of every pipeline path the fence does not guard (2026-10-08)
 
 Lane X8R (branch `rfc8/x8r-review`) reviewed every change of `6176a636a..960f65a42` outside the fold. The bar, from the user's directive:
@@ -260,6 +266,21 @@ same reason (int-12 tolerates the undecodable payload): `KernelRouteV1` (110: un
 unsigned), the onboarding objects 104–107 and 109 (unsigned), `SignedRegistrationV1` (108), `PanelBeaconProofV3` (120: oversized). The
 row-1 class likewise applies to RFC-0009's `PFS4` arm of the same shape gate (int-12's gate has no `PFS4` arm), on the pruning-proof path.
 
+## 10b. X8R round 2 (2026-10-09): the amendment's own code
+
+The successor X8R reviewed `966606811` (amendment 1) against the same bar, plus the design premise (`docs/PRINCIPLES.md`, section 13
+below). Everything it touches outside the fold is node-local and dormant: the relay prefilter returns `true` where the fence is not in
+force; the `EXEC_SLICE` producer is not started where the fence is `None`; op 240 is a read. The virtual processor's review hunks match
+rows 14, 15, 17 and 19 above. One change looked risky and is right: the covered-slice fold went from `let _verdicts = …` to `…?`. Before
+the change, an error inside an admitted slice's writes was dropped after partial writes. Now it fails the transition the same way on
+every node, so no node can diverge on it.
+
+| # | path | finding | verdict | action / pin |
+| --- | --- | --- | --- | --- |
+| R2-1 | `settle_at_final_v2`, the leg cap (§10.5) | The cap read each slice claim's reservation **at the root's settlement**. The route releases a Final claim's reservation once its liability horizon passes, so the cap of every slice verified long enough before the root's `Final` was 0. The root bond is an authorised executor, so it could hold back the LAST slice until the earlier executors' horizons passed and keep their whole legs. That is an economic capture of honest work, and it also breaks the principle's §4 bound by mistake: the cap no longer tracked the liability that existed. | **BUG** (dormant) | `PalwWorkSliceStageV2::Verified { verified_daa, leg_cap }`. The cap is fixed when the slice verifies (the sync, or admission when the claim is already Final), as `palw_exec_v2_leg_cap_v1` = the reservation then held **less the route's own `Final` reward on that claim**. That second part extends the route's invariant `claim_reward < claim_collateral` to the second gain on the same claim. Settlement sums the snapshots. Pins: `amendment_1::a_leg_cap_is_fixed_when_the_slice_verifies_so_a_held_back_last_slice_takes_no_earlier_leg`, `a_leg_cap_is_net_of_the_routes_final_reward_on_the_same_claim`. |
+| R2-2 | `palw_exec_v2_claim_outcome_v1`, `sync_slice_verification_v2` | The route answers a demand left unserved after `Final` (inside the horizon) by forfeiting the WHOLE reservation and leaving the state `Final` (`PostFinalDefault`). The outcome read only the state, so such a slice stayed `Verified` and its root could settle with the withheld slice's leg paid. The settlement-time cap had zeroed that leg incidentally; fixing R2-1 would have exposed it. | **BUG** (dormant) | A `Final` row reserving nothing at or before its `liability_until` is **Defaulted**. Past the horizon it is the release and stays verified. The sync voids the suffix and the unsettled root on it, as on a conviction after `Final` (§10.2). Admission refuses such a claim (`VerificationClaimFailed`). A claim row the route no longer holds still defaults a *pending* slice, and now leaves a *verified* one alone. Op 240 shows the claim as `ForfeitedAfterFinal`. Pin: `amendment_1::a_verified_slice_whose_claim_forfeits_after_final_defaults_and_voids_an_unsettled_root`. |
+| R2-3 | fold module doc, `PalwWorkSliceStageV2::Verified` doc | still said "nothing can mark a slice Verified … not wired" | stale | rewritten |
+
 ## 11. Integration (X8R)
 
 * **Merges.** `ad1f609ed` merged the integration line at `9ea89994b` (past `86dbc1fc2`); `fd9a7f22e` merged it again at `35a9ae1c8`,
@@ -279,10 +300,14 @@ row-1 class likewise applies to RFC-0009's `PFS4` arm of the same shape gate (in
 1. **One composed real-node E2E**: a REAL root claim on a kernel-bound V2 class → its slices backed by kernel-route claims on the same
    chain → an outside bond convicting one slice (and defaulting another) through the route → the suffix void and the root void, plus the
    honest twin reaching `Final` and the capped settlement. Every link is tested — the route's G14 cases on the real node, the binding,
-   sync, suffix void and settlement at fold level, the carriage in P1–P11 — but not in one run. **Blocker:** the testnet-12 harness
-   produces REAL attempts only on the genesis card classes, which are not TIR registrant classes and so cannot be kernel-bound (tag 106
-   requires the registrant's TIR class with the kernel class's program); a harness for an attempt on an onboarded TIR class is the
-   missing piece (shared with the onboarding lanes).
+   sync, suffix void and settlement at fold level, the carriage in P1–P11 — but not in one run. **Blocker (refined by X8R round 2):** the
+   root must be a REAL attempt on a kernel-bound class, so on a TIR registrant class (tag 106 requires the registrant's TIR class with the
+   kernel class's program). The real-node path to such a class exists: g14 `conformance.rs`'s world takes a TIR V2 class through
+   104 → 106 → 107/109 to `Active`. **No REAL attempt on it is admissible on the testnet-12 harness**, though. The class registers with
+   `share_permille` 0, so it has no epoch budget (`ready_to_produce`: `EPOCH_BUDGET`), and the model-registry lifecycle and room, the
+   class verify deadline, seating and the bond share all stand between an onboarded class and a REAL attempt. The only existing
+   pipeline precedent seeds the class row through the carriage (t47), not by blocks. This is the same harness gap as the readiness
+   matrix's "G14-for-rewards" (an onboarded class that can take real work), and it was routed to the Lead.
 2. **Pipeline-class slices**: refused by name until the K2-at-scale lane defines a segment state for pipeline (K2-TIR-v3) claims.
 3. **The initial boundary** (`initial_state_root`) is the root bond's declaration; its link to the REAL claim's verified output is not
    checked (every slice after it is verified as a continuation of it).
@@ -290,3 +315,20 @@ row-1 class likewise applies to RFC-0009's `PFS4` arm of the same shape gate (in
    may-ride arm refuses anything (110, 111, 104–109, 120) splits a mixed testnet-12 fleet before its fence, as tag 130 did; the `PFS4` arm
    of the commitment shape gate is ungated on the pruning-proof path. This lane's tag-130 arm is the pattern A2U's kind→fence table
    generalises.
+
+## 13. The design premise's section 6, for a slice leg (X8R round 2)
+
+`docs/PRINCIPLES.md` section 6 lists seven conditions that must all hold before a computation earns reward or consensus work weight.
+A slice earns no weight (sections 1 and 10.4). Its only reward is its **leg**: a share of the root claim's own producer leg, re-divided
+by work, with nothing minted. Its kernel claim also earns the route's own `Final` reward, which is the route's to justify. Each condition,
+as it stands for the leg:
+
+| # | condition | how the leg meets it | open |
+| --- | --- | --- | --- |
+| 1 | verification coverage of every rewarded relation | Each slice's computation is one kernel-route program claim of the root class's bound kernel class (its plan is the root's `plan_root`). The binding pins executor, job (by the slice job nonce), prompt, run and evidence. Consecutive slices form one token stream (rule 4). | **The initial boundary** (slice 0's predecessor) is the root bond's declaration. "This session continues the REAL claim's job" is a relation no check covers (section 12, item 3). It moves no reward from a third party: legs only re-divide the root bond's own leg, and the root bond chose the boundary. Still, until it is covered, a session cannot be called the REAL job's continuation. DESIGN_GAP. |
+| 2 | approved probabilistic soundness and grinding resistance | Inherited from the kernel class's plan and the one post-commit challenge contract (seal before reveal, `claim_seal_delay_daa`). The slice adds no seed and no court. | The route's soundness bound and beacon review. EXTERNAL. |
+| 3 | public, authenticated material | The kernel claim's evidence. A withheld position defaults the claim before `Final`, and after `Final` forfeits its reservation, which now defaults the slice (R2-2). | DA transport at scale (DA16). EXTERNAL. |
+| 4 | one outside verifier localizes and adjudicates | The kernel route's G14 cases on the real node (outsider conviction before and after `Final`, DA default). A conviction reaches the slice through the sync. | The composed real-node run (section 12, item 1). CODE, blocked as stated there. |
+| 5 | collectible collateral consistent with the maximum gain | Leg ≤ the claim's reservation at verification − the route's reward on it (R2-1). So the claim's total gain stays under what a conviction inside the horizon slashes. | Whether `reservation × detection probability` covers the gain is the route's calibration (MEAS: `opv-measurements.md`). EXTERNAL. |
+| 6 | resources and incentive for an honest verifier in time | The route's own (accuser share, demand bond, deadlines). The slice adds no deadline that is shorter than the route's. | MEAS. EXTERNAL. |
+| 7 | dispute, DA/default, `Final` and reorg consistency | The root claim's `Final` is held while any slice is unverified. A conviction or default before settlement voids the suffix and the root (pre- or post-`Final` of the slice's claim). Restart (P7), reorg (P10) and replay (P11) agree. After settlement a conviction slashes the kernel reservation; the leg is not clawed back, which is why it is capped (5). | The fork-choice rule E release prerequisite (not this lane's). |

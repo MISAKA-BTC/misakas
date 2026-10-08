@@ -408,8 +408,11 @@ impl PalwWorkRootV2 {
 pub enum PalwWorkSliceStageV2 {
     /// Accepted into the lane; not verified, not Final.
     Pending,
-    /// Positively verified by the verification route (not yet wired; see the module doc).
-    Verified { verified_daa: u64 },
+    /// Positively verified: its kernel-route claim reached `Final` (amendment 1, spec §10.1). `leg_cap` is the most its executor may be
+    /// paid for it at the root's settlement — the reservation its kernel claim held when it verified, less the route's own `Final`
+    /// reward on that claim ([`crate::palw_exec_v2_verify::palw_exec_v2_leg_cap_v1`], spec §10.5 as revised by the X8R round-2
+    /// review): fixed when the slice verifies, so no later release of the reservation and no timing of the root's `Final` moves it.
+    Verified { verified_daa: u64, leg_cap: u64 },
     /// Void: the root failed from this slice back (a false predecessor voids its dependents), or the root expired.
     Voided { voided_daa: u64 },
     /// **Amendment 1: its kernel claim was convicted** — the slice is proven false; it and every later slice of its root are void.
@@ -479,11 +482,12 @@ pub struct PalwExecV2CoveredSliceV1 {
 }
 
 /// What an admitted slice contributes: the work its range credits, and — where its kernel claim is already Final when the slice is
-/// admitted (amendment 1) — the Final that verifies it at once.
+/// admitted (amendment 1) — the Final that verifies it at once, with the leg cap that claim gives it (0 when not verified).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwSliceAdmissionV2 {
     pub work: u64,
     pub verified_at: Option<u64>,
+    pub leg_cap: u64,
 }
 
 /// **The named refusals of slice admission, in the spec's order** (§3 rules 1–6). A refused carrier writes nothing.
@@ -946,7 +950,7 @@ mod tests {
         assert_eq!(borsh::from_slice::<PalwExecV2StateV1>(&bytes).unwrap(), state);
         // Stage and phase discriminants are pinned: they are in the state root.
         assert_eq!(borsh::to_vec(&PalwWorkSliceStageV2::Pending).unwrap()[0], 0);
-        assert_eq!(borsh::to_vec(&PalwWorkSliceStageV2::Verified { verified_daa: 1 }).unwrap()[0], 1);
+        assert_eq!(borsh::to_vec(&PalwWorkSliceStageV2::Verified { verified_daa: 1, leg_cap: 0 }).unwrap()[0], 1);
         assert_eq!(borsh::to_vec(&PalwWorkSliceStageV2::Voided { voided_daa: 1 }).unwrap()[0], 2);
         assert_eq!(borsh::to_vec(&PalwWorkRootPhaseV2::Open).unwrap()[0], 0);
         assert_eq!(borsh::to_vec(&PalwWorkRootPhaseV2::Complete).unwrap()[0], 1);

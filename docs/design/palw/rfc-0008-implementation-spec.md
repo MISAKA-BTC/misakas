@@ -316,7 +316,8 @@ Neither reason charges at the V2 level: the evidence-bound liability is the kern
 executor's kernel reservation, already collected; a second V2 forfeit would charge the root bond for another bond's lie. No prefix or
 partial payment is made (section 6: "no independent prefix payment"); the extra executors' exposure returns; the job's one-use
 tombstone stays until the claim retires. A slice that was `Verified` and whose claim is convicted later (inside the route's liability
-horizon) is handled the same way while its root has not settled.
+horizon), or whose claim forfeits its reservation to a post-Final default (10.5's revision), is handled the same way while its root has
+not settled.
 
 ### 10.3 Flood residual (DESIGN gap 4) — decided: bounded by relay admission, not by a consensus rule
 
@@ -344,11 +345,24 @@ needs a measured, verified work unit for slices — a later versioned rule.
 
 Each slice's liability after the root's `Final` is its kernel claim's: the route holds the slice executor's reservation until the claim's
 liability horizon, and a post-Final conviction slashes it (G14 case "convicted after Final within the liability horizon"). So the leg is
-always collectible, **each slice executor's leg paid at the root's settlement is capped at the reservation the route holds on that
-slice's claim at that moment**; the excess stays with the root executor's leg (nothing minted, `sum(paid) == allocation` still holds).
-**Why:** section 6 requires retention "to cover … collectible liability after Final"; an uncapped leg larger than the collateral that
-backs it would be an uncollectible gain. The legs stay unvested (`add_panel_payout`): vesting would add a second, V2-side forfeiture
+always backed. **Each slice's contribution to its executor's leg is capped at its leg cap, fixed when the slice verifies**: the reservation
+its kernel claim holds at that moment, less the route's own `Final` reward on that claim (`palw_exec_v2_leg_cap_v1`). An executor's leg at
+the root's settlement is capped at the sum of its slices' caps; the excess stays with the root executor's leg (nothing minted,
+`sum(paid) == allocation` still holds). **Why:** section 6 requires retention "to cover … collectible liability after Final"; an
+uncapped leg larger than the collateral that backs it would be an uncollectible gain. The route's own invariant is `claim_reward <
+claim_collateral` (what one claim gains stays below what it puts at risk); a slice leg is a second gain on the same claim, so the two
+together are held under the same reservation. The legs stay unvested (`add_panel_payout`): vesting would add a second, V2-side forfeiture
 path for a fault the kernel route already convicts.
+
+**Revision (X8R round 2, 2026-10-09).** The first text capped each leg at the reservation the route held *at the root's settlement*. The
+route releases a Final claim's reservation once its liability horizon passes, so that cap fell to zero for every slice verified long
+enough before the root's `Final` — and a root bond, itself an authorised executor, could hold back the last slice until the earlier
+executors' horizons had passed and keep their whole legs. The cap is now fixed at verification, when the liability it stands for exists;
+its later release changes neither the risk nor the work. The same review found the converse hole: the route answers a demand left
+unserved inside the horizon after `Final` by forfeiting the whole reservation while the claim stays `Final` (`PostFinalDefault`). The
+settlement-time read had zeroed such a leg incidentally; the outcome rule now reads a `Final` claim that reserves nothing at or before
+its horizon as **defaulted** (`palw_exec_v2_claim_outcome_v1`), so the slice is defaulted and, while its root has not settled, voids the
+suffix and the root as 10.2 says. A release *past* the horizon is not a default.
 
 ### 10.6 Permit equivocation evidence (DESIGN gap 8) — decided: no offence for v2 permits
 
