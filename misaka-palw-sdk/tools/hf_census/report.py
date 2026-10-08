@@ -32,6 +32,13 @@ def gate(row: dict, view: str, name: str) -> dict:
 _ARG_RULES = [
     (re.compile(r"GGUF architecture `([^`]+)` has no mapping"), "gguf-arch:{0}"),
     (re.compile(r"GGUF metadata `([^`]+)` is not mapped"), "gguf-meta:{0}"),
+    # 2026-10-08: a namespace the reader does not model is refused (P1: `prism.*`, `mradermacher.*`), and the other refusals of the
+    # lowering that carry no argument of their own
+    (re.compile(r"GGUF metadata `[^`]+` is in a namespace this reader does not model \(`([^`.]+)\.\*`\)"), "gguf-namespace:{0}"),
+    (re.compile(r"GGUF architecture `` has no mapping"), "gguf-arch:(none)"),
+    (re.compile(r"rsLoRA with rank (\d+)"), "lora-rslora-rank"),
+    (re.compile(r"quantised in some layers and not in others"), "quant-mixed-layers"),
+    (re.compile(r"the encoder program is not in normal form"), "encdec-normal-form"),
     (re.compile(r"GGUF rope scaling `([^`]+)` is not mapped"), "gguf-rope:{0}"),
     (re.compile(r"GGUF: no `([^`]+)`"), "gguf-missing:{0}"),
     (re.compile(r"(\w+): trust_remote_code module"), "remote-code:{0}"),

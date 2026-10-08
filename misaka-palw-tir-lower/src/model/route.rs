@@ -118,3 +118,109 @@ pub fn probe_data_route(cfg: &Value, tensors: Option<&TensorIndex>, dir: Option<
         Err(p) => json!({"ok": false, "error": short_msg(&p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default(), 300)}),
     }
 }
+
+/// **An encoder–decoder's two stages, shape-only, at a declared source and target length** (RFC-0003 §II.2.2): the encoder over a
+/// `source_len`-id padded source (`TokenSource::Source`) and the decoder as the text stage over a `target_len`-position stream, with
+/// the decoder's start id as the class's forced prompt prefix. What a pipeline class registers is these two programs under a pipeline
+/// ([`encdec_pipeline_v1`]) — the same programs [`probe_data_route`] admits one by one at a 16-id toy source, here at the length the
+/// class declares.
+#[derive(Clone, Debug)]
+pub struct EncDecStagesV1 {
+    /// The adapter that read the configuration (`t5`, `bart`, …).
+    pub adapter: String,
+    pub encoder: misaka_palw_tir::program_v2::TirProgramV2,
+    pub decoder: misaka_palw_tir::program_v2::TirProgramV2,
+    pub vocab: u32,
+    /// The decoder's start id (the class's forced first prompt id).
+    pub decoder_start: u32,
+    /// The configuration's end-of-sequence id (the source's template suffix), when it declares one.
+    pub eos: Option<u32>,
+    /// The id the padded source is filled with (the configuration's pad id, else 0): the encoder masks by the source's count.
+    pub pad: u32,
+    pub source_len: u32,
+    pub target_len: u32,
+}
+
+/// What an encoder–decoder configuration yields at the shape depth.
+#[derive(Clone, Debug)]
+pub enum EncDecShapeV1 {
+    /// Both stages lowered: the class can be declared shape-only and judged by the pipeline admission.
+    Stages(Box<EncDecStagesV1>),
+    /// A class that cannot be declared from headers in this build, and why (never a pass): a fixed-length feature-frame source (the
+    /// protocol has no audio-frame job binding) or an encoder alone (an embedding-profile class, whose lowering calibrates on weights).
+    NotDeclarable(String),
+}
+
+/// The two-stage pipeline of an encoder–decoder class whose source is the job's `TokenSource::Source` ids, templated `ids ‖ suffix` and
+/// padded with `pad` to `source_len`, then a text stream of at most `target_len` positions (`encoder::encdec_pipeline`).
+pub fn encdec_pipeline_v1(source_len: u32, target_len: u32, pad: u32, suffix: Vec<u32>) -> misaka_palw_tir::pipeline::TirPipelineV1 {
+    use misaka_palw_tir::pipeline::{TokenPad, TokenRule, TokenSource};
+    let rule = TokenRule { prefix: vec![], source: TokenSource::Source, suffix, pad: Some(TokenPad { id: pad, to_len: source_len }) };
+    crate::encoder::encdec_pipeline(rule, target_len)
+}
+
+/// A token id a configuration declares (a number, or the first of a list).
+fn id_of(v: Option<&Value>) -> Option<u32> {
+    match v? {
+        Value::Array(a) => a.first().and_then(Value::as_u64),
+        other => other.as_u64(),
+    }
+    .and_then(|x| u32::try_from(x).ok())
+}
+
+/// Read, lower and lift an encoder–decoder configuration to its two version-2 stage programs at `source_len` / `target_len`.
+/// `Err` is a refusal of the lowering at that length (a source longer than the position table, a feature the adapter lacks).
+pub fn lower_encdec_stages_v1(
+    cfg: &Value,
+    tensors: Option<&TensorIndex>,
+    source_len: u32,
+    target_len: u32,
+) -> Result<EncDecShapeV1, String> {
+    use crate::encoder;
+    use crate::hf_schema::{AdapterSource, read_encdec};
+    use crate::lower::encdec;
+    let r = catch_unwind(AssertUnwindSafe(|| -> Result<EncDecShapeV1, String> {
+        let read = read_encdec(cfg, &ReadOptions { adapter: AdapterChoice::Auto }).map_err(|f| f.error.to_string())?;
+        let s = read.spec;
+        let adapter = match &read.adapter {
+            AdapterSource::BuiltIn { id, .. } => id.clone(),
+            other => format!("{other:?}"),
+        };
+        if s.fixed_source() {
+            return Ok(EncDecShapeV1::NotDeclarable(
+                "its source is a fixed-length feature-frame stack (audio): the protocol has no job binding that supplies frames"
+                    .into(),
+            ));
+        }
+        if s.encoder_only() {
+            return Ok(EncDecShapeV1::NotDeclarable(
+                "an encoder alone is an embedding-profile class, whose lowering calibrates on the checkpoint's weights".into(),
+            ));
+        }
+        let names: BTreeSet<String> = tensors.map(|t| t.names().map(str::to_string).collect()).unwrap_or_default();
+        let has = |n: &str| names.contains(n);
+        let ((ehl, _), (dhl, _)) = encdec::hl_programs(&s, source_len as usize, &has).map_err(|e| format!("hl: {e}"))?;
+        let elw = encdec::lower_encoder(&ehl, &s, source_len).map_err(|e| format!("lower encoder: {e}"))?;
+        let dlw = encdec::lower_decoder(&dhl, &s, source_len, target_len).map_err(|e| format!("lower decoder: {e}"))?;
+        let encoder_v2 = encoder::encdec_encoder_v2(&elw, s.vocab as u32, source_len).map_err(|e| format!("v2: {e}"))?;
+        let decoder_v2 = encoder::encdec_decoder_v2(&dlw, source_len).map_err(|e| format!("v2: {e}"))?;
+        Ok(EncDecShapeV1::Stages(Box::new(EncDecStagesV1 {
+            adapter,
+            encoder: encoder_v2,
+            decoder: decoder_v2,
+            vocab: s.vocab as u32,
+            decoder_start: s.decoder_start,
+            eos: id_of(cfg.get("eos_token_id")),
+            pad: id_of(cfg.get("pad_token_id")).unwrap_or(0),
+            source_len,
+            target_len,
+        })))
+    }));
+    match r {
+        Ok(v) => v,
+        Err(p) => Err(short_msg(
+            &p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default(),
+            300,
+        )),
+    }
+}
