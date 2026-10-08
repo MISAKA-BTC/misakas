@@ -59,7 +59,14 @@ pub const TABLE_PROOF_SEALS_V1: u8 = 15;
 pub const TABLE_JOB_ESCROWS_V1: u8 = 16;
 /// `(claim, stage, position) → the demand bonds of a served position awaiting their fate` (in the state root since G14-R4).
 pub const TABLE_SERVED_DEMAND_BONDS_V1: u8 = 17;
-// 18–19 are G14-R4's (unused), 20–21 K2S's, 22–24 R4X's.
+// 18–19 are G14-R4's (unused), 20–21 K2S's.
+/// RFC-0004 Part II: `class → ComputationSpecV1` (typed classes), `job → SpecJobV1`, `memory class → MemoryLineV1`. Each table is in
+/// the root only when non-empty ([`crate::spec::typed_root_v1`]), so every ledger without a typed row roots as before.
+pub const TABLE_SPEC_CLASSES_V1: u8 = 22;
+pub const TABLE_SPEC_JOBS_V1: u8 = 23;
+pub const TABLE_MEMORY_LINES_V1: u8 = 24;
+/// The typed tables, in root order.
+pub const TYPED_TABLES_V1: [u8; 3] = [TABLE_SPEC_CLASSES_V1, TABLE_SPEC_JOBS_V1, TABLE_MEMORY_LINES_V1];
 /// OPV-BOOT GAP-B1a: `claim id → the salt of its seal` (claim seal v2), written past `palw_panel_free_v1`.
 pub const TABLE_CLAIM_BEACON_SALTS_V1: u8 = 25;
 /// OPV-BOOT GAP-B1a: `(job, producer, sealed_daa) → a claim seal that expired unrevealed past `palw_panel_free_v1``.
@@ -102,6 +109,9 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_SERVED_DEMAND_BONDS_V1 => "served-demand-bonds",
         TABLE_CLAIM_BEACON_SALTS_V1 => "claim-beacon-salts",
         TABLE_FORFEITED_CLAIM_SEALS_V1 => "forfeited-claim-seals",
+        TABLE_SPEC_CLASSES_V1 => "spec-classes",
+        TABLE_SPEC_JOBS_V1 => "spec-jobs",
+        TABLE_MEMORY_LINES_V1 => "memory-lines",
         _ => "attested-artifacts",
     };
     format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes()
@@ -173,6 +183,15 @@ impl KernelLedgerV1 {
         for (k, v) in &self.opv.claims {
             rows.insert((TABLE_OPV_CLAIMS_V1, bytes_of(k)), bytes_of(v));
         }
+        for (k, c) in &self.typed.classes {
+            rows.insert((TABLE_SPEC_CLASSES_V1, bytes_of(k)), bytes_of(&c.spec));
+        }
+        for (k, v) in &self.typed.jobs {
+            rows.insert((TABLE_SPEC_JOBS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.typed.lines {
+            rows.insert((TABLE_MEMORY_LINES_V1, bytes_of(k)), bytes_of(v));
+        }
         rows
     }
 
@@ -190,6 +209,7 @@ impl KernelLedgerV1 {
         fn dec<T: borsh::BorshDeserialize>(b: &[u8], what: &str) -> Result<T, String> {
             borsh::from_slice(b).map_err(|e| format!("a stored {what} does not decode: {e}"))
         }
+        let mut specs: Vec<(Digest, crate::spec::ComputationSpecV1)> = Vec::new();
         for ((table, key), row) in rows {
             match *table {
                 TABLE_BONDS_V1 => {
@@ -254,8 +274,21 @@ impl KernelLedgerV1 {
                 TABLE_OPV_CLAIMS_V1 => {
                     l.opv.claims.insert(dec(key, "opv claim key")?, dec::<OpvClaimRowV1>(row, "opv claim")?);
                 }
+                TABLE_SPEC_CLASSES_V1 => specs.push((dec(key, "spec class key")?, dec(row, "spec class")?)),
+                TABLE_SPEC_JOBS_V1 => {
+                    l.typed.jobs.insert(dec(key, "spec job key")?, dec(row, "spec job")?);
+                }
+                TABLE_MEMORY_LINES_V1 => {
+                    l.typed.lines.insert(dec(key, "memory line key")?, dec(row, "memory line")?);
+                }
                 other => return Err(format!("a stored row names no table ({other})")),
             }
+        }
+        // A composite's derived row reads its components': every other typed class first (a component never is a composite).
+        specs.sort_by_key(|(_, spec)| matches!(spec.roots.first(), Some(crate::spec::TypedRootV1::CompositeV1(_))));
+        for (id, spec) in specs {
+            let row = l.spec_class_row_of(&spec, false).map_err(|e| format!("a stored typed class does not rebuild: {e}"))?;
+            l.typed.classes.insert(id, row);
         }
         // The live-claim index is derived (not committed): rebuilt from the rows, exactly as a restored ledger does.
         l.opv_rebuild_live();
@@ -381,13 +414,8 @@ pub fn root_of_rows(
         }
         finish(s)
     };
-    let header = LedgerHeaderV1 {
-        version: LEDGER_STATE_VERSION_V1,
-        policy: *policy,
-        config_root,
-        daa: scalars.daa,
-        burned: scalars.burned,
-    };
+    let header =
+        LedgerHeaderV1 { version: LEDGER_STATE_VERSION_V1, policy: *policy, config_root, daa: scalars.daa, burned: scalars.burned };
     let parts = StateRootPartsV1 {
         version: LEDGER_STATE_VERSION_V1,
         header: object_id(LEDGER_HEADER_DOMAIN_V1, &header),
@@ -408,6 +436,9 @@ pub fn root_of_rows(
     };
     let _ = LEDGER_ROOT_DOMAIN_V1;
     let v1 = parts.root();
+    // RFC-0004 Part II: the typed tables, each only when non-empty (an untyped ledger's root is unchanged).
+    let typed: Vec<(u8, Digest)> =
+        crate::rows::TYPED_TABLES_V1.iter().filter(|t| by_table.contains_key(*t)).map(|t| (*t, coll(*t))).collect();
     // RFC-0015: with no OPV policy the root is the historical one, byte for byte; with one it is the OPV root form.
     let base = match opv {
         None => v1,
@@ -421,6 +452,8 @@ pub fn root_of_rows(
         }
         .root(),
     };
+    // RFC-0004 Part II: the typed tables, each only when non-empty (an untyped ledger's root is unchanged).
+    let base = crate::spec::typed_root_v1(base, &typed);
     // OPV-BOOT GAP-B1a: tables 25 and 26 extend the root only once either holds a row.
     if by_table.contains_key(&TABLE_CLAIM_BEACON_SALTS_V1) || by_table.contains_key(&TABLE_FORFEITED_CLAIM_SEALS_V1) {
         beacon_seal_root_extension_v1(&base, &coll(TABLE_CLAIM_BEACON_SALTS_V1), &coll(TABLE_FORFEITED_CLAIM_SEALS_V1))

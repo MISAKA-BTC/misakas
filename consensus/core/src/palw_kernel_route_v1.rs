@@ -149,6 +149,9 @@ pub struct PalwKernelRouteExtrasV1 {
     /// **RFC-0015 OptimisticPublicVerification**: `Some` exactly where the network declares the OPV policy (a genesis constant — it is
     /// `Some` at every block of a chain or at none). The processor resolves it from `Params::palw_panel_free_v1`.
     pub opv: Option<PalwKernelOpvExtrasV1>,
+    /// **RFC-0004 Part II**: the `palw_typed_roots_v1` fence's activation (`None`: absent) — a genesis constant of the route, like the
+    /// OPV policy: from this height the route's schedule holds the typed-roots extension `K2-TR-v1` Active.
+    pub typed_roots: Option<u64>,
 }
 
 /// What the processor hands the fold for the OPV mode (RFC-0015): the network's policy and its admission list, both read from
@@ -221,6 +224,17 @@ pub fn palw_kernel_route_template_opv_v1(policy: LedgerPolicyV1, opv: Option<Opv
     }
 }
 
+/// [`palw_kernel_route_template_opv_v1`] with the typed-roots extension `K2-TR-v1` Active from `typed` (RFC-0004 Part II). `None` is the
+/// template byte for byte — the same schedule, the same `config_root`, the same roots.
+pub fn palw_kernel_route_template_typed_v1(policy: LedgerPolicyV1, opv: Option<OpvPolicyV1>, typed: Option<u64>) -> KernelLedgerV1 {
+    let mut template = palw_kernel_route_template_opv_v1(policy, opv);
+    if let Some(since_daa) = typed {
+        let tr = misaka_palw_kernel::spec::k2_tr_v1_descriptor();
+        template.schedule = template.schedule.with(tr.digest(), KernelStatusV1::Active { since_daa });
+    }
+    template
+}
+
 /// The ledger configuration the fold starts every block from (policy, the schedule that arms the K2 descriptors, the descriptors
 /// this binary implements). Rows are loaded over it.
 pub fn palw_kernel_route_template_v1(policy: LedgerPolicyV1) -> KernelLedgerV1 {
@@ -262,6 +276,9 @@ pub struct PalwKernelRouteHeaderV1 {
     pub scalars: LedgerScalarsV1,
     /// RFC-0015: the network's OPV policy, a genesis constant (`None`: the Panel-licensed route alone, and the historical root form).
     pub opv: Option<OpvPolicyV1>,
+    /// RFC-0004 Part II: the typed-roots fence's activation, a genesis constant (`None`: the route without typed roots, its historical
+    /// schedule and roots).
+    pub typed_roots: Option<u64>,
 }
 
 /// **The kernel route state** (module doc). `rows` are the ledger's tables; `aux` the consensus tables.
@@ -274,14 +291,23 @@ pub struct PalwKernelRouteStateV1 {
 
 impl PalwKernelRouteStateV1 {
     pub fn new(policy: LedgerPolicyV1, opv: Option<OpvPolicyV1>, scalars: LedgerScalarsV1) -> Self {
-        let template = palw_kernel_route_template_opv_v1(policy, opv);
-        let config_root = config_root_of(&template.schedule, &template.known);
-        Self { header: PalwKernelRouteHeaderV1 { policy, config_root, scalars, opv }, rows: LedgerRowsV1::new(), aux: BTreeMap::new() }
+        Self::new_typed(policy, opv, None, scalars)
     }
 
-    /// The configuration the rows were folded under (policy, OPV policy, schedule, descriptors).
+    /// [`Self::new`] under the typed-roots fence's activation (RFC-0004 Part II).
+    pub fn new_typed(policy: LedgerPolicyV1, opv: Option<OpvPolicyV1>, typed_roots: Option<u64>, scalars: LedgerScalarsV1) -> Self {
+        let template = palw_kernel_route_template_typed_v1(policy, opv, typed_roots);
+        let config_root = config_root_of(&template.schedule, &template.known);
+        Self {
+            header: PalwKernelRouteHeaderV1 { policy, config_root, scalars, opv, typed_roots },
+            rows: LedgerRowsV1::new(),
+            aux: BTreeMap::new(),
+        }
+    }
+
+    /// The configuration the rows were folded under (policy, OPV policy, typed roots, schedule, descriptors).
     pub fn template(&self) -> KernelLedgerV1 {
-        palw_kernel_route_template_opv_v1(self.header.policy, self.header.opv)
+        palw_kernel_route_template_typed_v1(self.header.policy, self.header.opv, self.header.typed_roots)
     }
 
     /// The ledger's root, computed from the rows alone (equal to [`KernelLedgerV1::root`] of the ledger they describe).
@@ -550,6 +576,15 @@ impl PalwKernelRouteStateV1 {
                     ledger.pipeline_public_record(claim).ok_or("a stored pipeline claim has no public record")?;
                 // A pipeline header has no wire form of its own: a reader rebuilds it from the class record.
                 ("pipeline", record.to_bytes(), Vec::new())
+            }
+            // RFC-0004 Part II: the typed claim's stored body is its public record, and the class's specification its header.
+            misaka_palw_kernel::ledger::ClaimBodyV1::Spec(body) => {
+                let spec = ledger.typed.classes.get(&row.class_binding_id).ok_or("a stored typed claim has no class")?;
+                (
+                    body.claim.kind(),
+                    borsh::to_vec(body).map_err(|e| e.to_string())?,
+                    borsh::to_vec(&spec.spec).map_err(|e| e.to_string())?,
+                )
             }
         };
         let mut served = Vec::new();
@@ -911,6 +946,36 @@ mod tests {
         // The v3 beacon's window against the interim seal TTL: OPV-BOOT's interim W = 40 needs 2·W ≤ 100.
         assert!(misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1(&p, 40));
         assert!(!misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1(&p, p.seal_ttl_daa / 2 + 1));
+    }
+
+    /// **RFC-0004 Part II**: an unarmed route (no `palw_typed_roots_v1`) has the historical schedule, `config_root` and root byte for
+    /// byte; an armed one schedules `K2-TR-v1` from the fence's height and is another configuration.
+    #[test]
+    fn the_unarmed_typed_roots_fence_leaves_the_schedule_config_root_and_root_unchanged() {
+        let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let opv = crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(crate::config::params::ForkActivation::new(7)).opv_policy();
+        for o in [None, Some(opv)] {
+            let historical = palw_kernel_route_template_opv_v1(p, o);
+            let unarmed = PalwKernelRouteStateV1::new(p, o, LedgerScalarsV1::default());
+            assert_eq!(unarmed.header.typed_roots, None);
+            assert_eq!(
+                unarmed.header.config_root,
+                config_root_of(&historical.schedule, &historical.known),
+                "the historical config root"
+            );
+            assert_eq!(unarmed.template().schedule, historical.schedule, "the historical schedule");
+            assert_eq!(unarmed.ledger().unwrap().root(), historical.root(), "the historical root");
+            let armed = PalwKernelRouteStateV1::new_typed(p, o, Some(11), LedgerScalarsV1::default());
+            assert_ne!(armed.header.config_root, unarmed.header.config_root, "arming is another configuration");
+            let l = armed.ledger().unwrap();
+            assert_eq!(armed.ledger_root().as_bytes(), l.root(), "an armed state roots like its ledger");
+            let tr = misaka_palw_kernel::spec::k2_tr_v1_descriptor().digest();
+            assert_eq!(
+                l.schedule.standing_at(&tr, 10),
+                misaka_palw_kernel::descriptor::KernelStandingV1::NotActive(KernelStatusV1::Active { since_daa: 11 })
+            );
+            assert_eq!(l.schedule.standing_at(&tr, 11), misaka_palw_kernel::descriptor::KernelStandingV1::Active);
+        }
     }
 
     #[test]

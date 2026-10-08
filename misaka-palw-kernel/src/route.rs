@@ -51,7 +51,9 @@ pub const TAG_REGISTER_CLASS_V2: u8 = 13;
 pub const TAG_REGISTER_PIPELINE_CLASS_V2: u8 = 14;
 /// GAP-R7: an accuser's seal of its proof (seal, then reveal; the earliest seal of the convicting bytes is paid the bounty).
 pub const TAG_SEAL_PROOF_V1: u8 = 15;
-// 16–18 are K2S's (K2-TIR-v4), 19 R4X's (Spec); 21 and 22 were reserved beside 20 and are not used.
+/// RFC-0004 Part II: a typed-root object (registration, job, claim — versioned inside [`crate::spec::SpecObjectV1`]).
+pub const TAG_SPEC_V1: u8 = 19;
+// 16–18 are K2S's (K2-TIR-v4); 21 and 22 were reserved beside 20 and are released.
 /// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
 pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 
@@ -77,6 +79,9 @@ pub const MAX_SEAL_PROOF_BYTES_V1: usize = 256;
 pub const MAX_COMMIT_CLAIM_SALTED_BYTES_V1: usize = MAX_COMMIT_PIPELINE_CLAIM_BYTES_V1 + SALTED_REVEAL_OVERHEAD_V1;
 /// What a salt adds to the commit it carries: the salt and the commit's own discriminant inside [`SaltedCommitV1`].
 pub const SALTED_REVEAL_OVERHEAD_V1: usize = 64 + 1;
+/// The `Spec` object's one ceiling: its largest sub-object's ([`crate::spec::MAX_SPEC_CLAIM_BYTES_V1`]); each sub-object's own is
+/// checked by the ledger.
+pub const MAX_SPEC_BYTES_V1: usize = MAX_COMMIT_CLAIM_BYTES_V1;
 
 /// **Who signed an object**: the bond whose key the consumer verified. The ledger checks it names the actor the object names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
@@ -95,10 +100,13 @@ pub enum ProsecutionV1 {
     Decode(DecodeFaultV1) = 1,
     /// A pipeline fault's canonical bytes ([`crate::pipeline_public::PipelineFaultWireV1`]: stage, edge or decode).
     Pipeline(Vec<u8>) = 2,
+    /// RFC-0004 Part II: a typed claim's fault (borsh [`crate::spec::SpecFaultV1`]: a memory step, a retrieval item, a composite stage
+    /// or edge).
+    Spec(Vec<u8>) = 4,
 }
 
-/// **The commit a salted reveal carries** (inner kind 20): the commit objects' own fields, under their own discriminants (5 and 6,
-/// the commit tags — pinned by a test). A separate,
+/// **The commit a salted reveal carries** (inner kind 20): the commit objects' own fields, under their own discriminants (5, 6 and
+/// 19, the commit tags — pinned by a test). A separate,
 /// non-recursive enum — a reveal can never carry another reveal. (K2S appends its segmented commit here at integration.)
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
@@ -108,6 +116,9 @@ pub enum SaltedCommitV1 {
     Claim { claim: KernelClaimV1, evidence: VerificationEvidenceV1, commitments: Vec<Vec<Vec<Digest>>> } = 5,
     /// A pipeline claim, as `CommitPipelineClaim` carries it.
     Pipeline { claim: PipelineClaimV1, evidence: PipelineEvidenceV1, stages: Vec<StageCommitmentsV1> } = 6,
+    /// RFC-0004 Part II: a typed-root claim, as `Spec { CommitClaim }` (kind 19) carries it — typed classes are OPV-only, so past
+    /// the fence every typed claim reveals salted. It needs `palw_typed_roots_v1` too (the ledger's schedule, the node's gate).
+    Spec { claim: crate::spec::SpecClaimV1 } = 19,
 }
 
 impl SaltedCommitV1 {
@@ -116,6 +127,7 @@ impl SaltedCommitV1 {
         match self {
             Self::Claim { .. } => TAG_COMMIT_CLAIM_V1,
             Self::Pipeline { .. } => TAG_COMMIT_PIPELINE_CLAIM_V1,
+            Self::Spec { .. } => TAG_SPEC_V1,
         }
     }
 
@@ -124,6 +136,7 @@ impl SaltedCommitV1 {
         match self {
             Self::Claim { claim, .. } => claim.producer_bond,
             Self::Pipeline { claim, .. } => claim.producer_bond,
+            Self::Spec { claim } => claim.producer(),
         }
     }
 }
@@ -235,6 +248,11 @@ pub enum KernelRouteObjectV1 {
         claim: Digest,
         seal: Digest,
     } = 15,
+    /// **RFC-0004 Part II**: a typed-root object. Accepted only while the ledger's schedule has the typed-roots extension `K2-TR-v1`
+    /// Active (the consumer's `palw_typed_roots_v1` fence); a claim is signed by its producer.
+    Spec {
+        object: crate::spec::SpecObjectV1,
+    } = 19,
     /// **A salted claim reveal** (OPV-BOOT GAP-B1a; signed by the commit's producer): the commit and the 64-byte salt its seal was
     /// made with, `seal = claim_seal_v2(claim id, salt)`, in ONE object — the salt is public exactly when the claim is. A claim of a
     /// deterministic class is a function of its public job and producer, so `claim_seal_v1(claim id)` hides nothing and a beacon
@@ -353,6 +371,7 @@ impl KernelRouteObjectV1 {
             Self::RegisterPipelineClassV2 { .. } => TAG_REGISTER_PIPELINE_CLASS_V2,
             Self::SealProof { .. } => TAG_SEAL_PROOF_V1,
             Self::CommitClaimSalted { .. } => TAG_COMMIT_CLAIM_SALTED_V1,
+            Self::Spec { .. } => TAG_SPEC_V1,
         }
     }
 
@@ -441,6 +460,7 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_REGISTER_PIPELINE_CLASS_V2 => "RegisterPipelineClassV2",
         TAG_SEAL_PROOF_V1 => "SealProof",
         TAG_COMMIT_CLAIM_SALTED_V1 => "CommitClaimSalted",
+        TAG_SPEC_V1 => "Spec",
         _ => "Unknown",
     }
 }
@@ -464,6 +484,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_REGISTER_PIPELINE_CLASS_V2 => MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1,
         TAG_SEAL_PROOF_V1 => MAX_SEAL_PROOF_BYTES_V1,
         TAG_COMMIT_CLAIM_SALTED_V1 => MAX_COMMIT_CLAIM_SALTED_BYTES_V1,
+        TAG_SPEC_V1 => MAX_SPEC_BYTES_V1,
         _ => return None,
     })
 }
@@ -517,10 +538,11 @@ mod tests {
             assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
             assert_ne!(o.name(), "Unknown");
         }
-        let tags: Vec<u8> = (1..=15).chain([TAG_COMMIT_CLAIM_SALTED_V1]).collect();
+        let tags: Vec<u8> = (1..=15).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none() && max_encoded_bytes_of_tag(16).is_none());
         assert!((21..=22).all(|t| max_encoded_bytes_of_tag(t).is_none()), "21 and 22 are not used");
+        assert!(max_encoded_bytes_of_tag(TAG_SPEC_V1).is_some() && name_of_tag(TAG_SPEC_V1) == "Spec", "RFC-0004 Part II's tag 19");
     }
 
     /// **Inner kind 20** (OPV-BOOT GAP-B1a): the salted reveal's wire form is `version ‖ 20 ‖ salt ‖ the commit's own tag ‖ fields`,

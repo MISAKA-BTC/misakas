@@ -352,7 +352,9 @@ model computes it when the seal is posted, and a beacon over such seals is groun
   producer's CSPRNG (`SealClaim` is unchanged: it carries the digest);
 * the reveal is ONE object, inner kind 20 `CommitClaimSalted { salt, commit: SaltedCommitV1 }`, so the salt is public exactly when the
   claim is. `SaltedCommitV1` is a separate, non-recursive enum carrying the commit's own fields under its own discriminant (5 single
-  program, 6 pipeline; K2S appends its segmented commit there at integration), held to that commit's own ceiling plus 65 bytes;
+  program, 6 pipeline, 19 a typed-root claim of RFC-0004 Part II — typed classes are OPV-only, so they always reveal salted past the
+  fence, and that variant also needs `palw_typed_roots_v1`; K2S appends its segmented commit at integration), held to that commit's
+  own ceiling plus 65 bytes;
 * a seal accepted at or past the fence opens only salted: an unsalted reveal of it is refused (otherwise a sealer could choose, after
   seeing the honest salts, between "revealed but no beacon source" and a veto), and so is a salt that does not open it. A seal made
   before the fence keeps the historical unsalted reveal;

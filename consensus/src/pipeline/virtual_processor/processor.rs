@@ -629,6 +629,10 @@ pub struct VirtualStateProcessor {
     /// ([`Self::palw_kernel_opv_fence`]). Never armable by a real network (its validation refuses every height); a test builds the
     /// config without that validation.
     pub(super) palw_panel_free_v1: Option<kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1>,
+    /// `Params::palw_typed_roots_v1` (RFC-0004 Part II): may a typed-root route object (inner kind 19) be carried, and from which height
+    /// the route's schedule holds `K2-TR-v1` Active. Resolved in ONE place ([`Self::palw_kernel_typed_roots_at`]). Never armable by a
+    /// real network (its validation refuses every height); a test builds the config without that validation.
+    pub(super) palw_typed_roots_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
     /// (tag 108). Resolved in ONE place, [`Self::palw_signed_registration_at`]. Never armable by a real network.
     pub(super) palw_signed_registration_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1252,6 +1256,7 @@ impl VirtualStateProcessor {
             palw_tir_v1: params.palw_tir_v1_fence(),
             palw_probabilistic_constraints_v1: params.palw_probabilistic_constraints_v1,
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
+            palw_typed_roots_v1: params.palw_typed_roots_v1,
             palw_signed_registration_v1: params.palw_signed_registration_v1,
             palw_gen_v1: params.palw_gen_v1_fence(),
             palw_tir_only_v1: params.palw_tir_only_fence(),
@@ -13525,6 +13530,19 @@ impl VirtualStateProcessor {
                 "a salted claim reveal is refused: palw_panel_free_v1 is not in force at this block (claim seal v2)".to_string()
             );
         }
+        // **RFC-0004 Part II: a typed-root object (inner kind 19) is dropped unless `palw_typed_roots_v1` is in force** (the route's
+        // schedule refuses it too: the second lock).
+        let typed = matches!(
+            object,
+            misaka_palw_kernel::route::KernelRouteObjectV1::Spec { .. }
+                | misaka_palw_kernel::route::KernelRouteObjectV1::CommitClaimSalted {
+                    commit: misaka_palw_kernel::route::SaltedCommitV1::Spec { .. },
+                    ..
+                }
+        );
+        if typed && !self.palw_kernel_typed_roots_at(daa_score) {
+            return Err("a typed-root object is refused: palw_typed_roots_v1 is not in force at this block (RFC-0004 Part II)".into());
+        }
         Ok(())
     }
 
@@ -14878,6 +14896,19 @@ impl VirtualStateProcessor {
         self.palw_kernel_opv_fence().is_some_and(|fence| fence.activation.is_active(daa_score))
     }
 
+    /// **RFC-0004 Part II: the typed-roots fence's activation, resolved in ONE place** — a genesis constant of the route (the height from
+    /// which its schedule holds `K2-TR-v1` Active), `None` where `Params::palw_typed_roots_v1` is absent or `never()`.
+    fn palw_kernel_typed_roots_activation(&self) -> Option<u64> {
+        self.palw_typed_roots_v1
+            .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
+            .map(|fence| fence.daa_score())
+    }
+
+    /// Is the typed-roots fence in force at `daa_score` (a `Spec` object, inner kind 19, may be carried)?
+    pub(super) fn palw_kernel_typed_roots_at(&self, daa_score: u64) -> bool {
+        self.palw_kernel_typed_roots_activation().is_some_and(|at| daa_score >= at)
+    }
+
     /// What the kernel route's fold is handed where the fence is in force: the network, the ruleset and the artifact attestations.
     /// **There is no on-chain artifact attestation yet** (onboarding conformance + availability: GAP), so outside a test the list is
     /// empty and a kernel class can never register; a test's hook (`kernel_route_test_attest_artifact_v1`, `cfg(test)`) fills it.
@@ -14902,6 +14933,7 @@ impl VirtualStateProcessor {
                     policy: fence.opv_policy(),
                     admitted_classes: fence.admitted_classes.clone(),
                 }),
+                typed_roots: self.palw_kernel_typed_roots_activation(),
             }
         })
     }

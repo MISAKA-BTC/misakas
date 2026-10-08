@@ -29,6 +29,8 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 | RFC-0013 | tiled range evaluator, Merkle index | CODE |
 | RFC-0002 / 0011 | the HF-majority acceptance bar (RFC-0011: one-sided 95% lower bound ≥ 90% over all public repos); census re-measurement running (COV-P4) | CODE + measurement |
 | RFC-0001 | proposals P1–P4 | CODE |
+| G14-for-rewards (lane D GAP 6/3) | H1 on a running devnet: a class whose kernel is KERNEL_NOT_ACTIVE and that has no PUBLIC_PROSECUTION_COMPLETE moved Candidate → Probation once 8 seats proved readiness — the V2 lifecycle consults seats/readiness only, and only classes that began onboarding are gated. From the full-activation release every NEW class must pass the onboarding/G14 gate before it can earn; whether live Panel-route classes are grandfathered is a user decision | CODE + POLICY |
+| fork-choice safety + partition healing (FINX, ADR-0175) | **rule E adopted (user, 2026-10-09)**: search every tip, count claims over each tip's exclusive past, bonded participation first once the fork is deep; details internal (FINX branch). Ships in the full-activation release and is a **hard prerequisite for arming `palw_dns_retirement_v1`** | CODE (fence; FINX implementing) |
 | liveness | a minority that was partitioned ~41 min never rejoins (DNS reorg gate DominanceViolation) and one node deadlocks after "Chain participation held" — found by H1 on the devnet; the code is in int-12 too (LIVE-R1 investigating) | CODE (HIGH) |
 
 ## 3. Decisions for the user (collected, not urgent until the code is ready)
@@ -36,7 +38,15 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 1. RFC-0012: D1 and the policy values (D, W, caps, horizon).
 2. RFC-0015: the OPV admission list and terms.
 3. RFC-0007 Part VI: the challenge policy's security level; approval of a beacon scheme for RFC-0010.
-4. GAP-5: the FinalReward funding source.
+4. GAP-5: the FinalReward funding source (decided: user-pays escrow; subsidy carves later).
+4a. The claim seal deposit size versus an honest producer's race-loss cost (a losing seal is forfeited by design: a refund would let free Sybil seals choose a beacon claim id).
+4b. GAP-B12 (OPV beacon v3): anyone can veto one sealed-source attempt by forfeiting one seal deposit, so R+1 deposits exhaust a
+    class's attempts. This is a liveness price set together with 4a. Design: `opv-beacon-bootstrap.md` §6.3.
+4c. `grandfather_panel_route_classes` (G14-for-rewards, under `palw_panel_free_v1`; default false). Should Panel-route classes
+    registered before the fence keep earning without passing the reward gate?
+4d. RFC-0004 Part II memory classes: a lie that reaches Final after the liability horizon taints the memory line permanently,
+    so the collateral bar's max gain must include the line value at risk. Options: a per-class declared cap, or a horizon
+    stretched to match the line. Source: `rfc-0004-part2-typed-roots.md` §10 and §13.
 5. The activation height of the single release, once every row above is clear.
 
 ## 3a. User rulings on the Panel=0 parameters (2026-10-08 ~20:30)

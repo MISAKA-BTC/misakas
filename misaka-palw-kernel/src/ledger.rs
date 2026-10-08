@@ -111,6 +111,10 @@ use crate::settle::{SettlementInstructionV1, SettlementKindV1};
 use crate::trace::{EvidenceV1, ParamCommitmentsV1, derived_mask_v1, tensor_commitment};
 use crate::verify::MaterialV1;
 
+/// RFC-0004 Part II: the typed roots on the ledger (a child module, so it applies the route's own private rules).
+#[path = "spec/ledger_impl.rs"]
+mod spec_impl;
+
 /// The network's ledger policy: a consensus constant the consumer fixes at genesis (chain identity included — an object never
 /// names its own network, ruleset or challenge policy).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -290,8 +294,18 @@ impl PipelineClassRowV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum ClaimBodyV1 {
-    Program { claim: KernelClaimV1, evidence: VerificationEvidenceV1, commitments: Vec<Vec<Vec<Digest>>> } = 0,
-    Pipeline { claim: PipelineClaimV1, evidence: PipelineEvidenceV1, stages: Vec<StageCommitmentsV1> } = 1,
+    Program {
+        claim: KernelClaimV1,
+        evidence: VerificationEvidenceV1,
+        commitments: Vec<Vec<Vec<Digest>>>,
+    } = 0,
+    Pipeline {
+        claim: PipelineClaimV1,
+        evidence: PipelineEvidenceV1,
+        stages: Vec<StageCommitmentsV1>,
+    } = 1,
+    /// RFC-0004 Part II: a typed claim (memory, retrieval, composite).
+    Spec(Box<crate::spec::SpecClaimBodyV1>) = 3,
 }
 
 impl ClaimBodyV1 {
@@ -305,6 +319,7 @@ impl ClaimBodyV1 {
                 let inputs = s.inputs.get(position as usize).map(Vec::as_slice).unwrap_or(&[]);
                 Some((s.commitments.get(position as usize)?, inputs))
             }
+            Self::Spec(b) => b.position(stage, position),
         }
     }
 
@@ -313,6 +328,7 @@ impl ClaimBodyV1 {
         match self {
             Self::Program { commitments, .. } => vec![(0, commitments.len() as u32)],
             Self::Pipeline { stages, .. } => stages.iter().enumerate().map(|(i, s)| (i as u8, s.commitments.len() as u32)).collect(),
+            Self::Spec(b) => b.stages(),
         }
     }
 }
@@ -693,6 +709,8 @@ pub struct KernelLedgerV1 {
     pub burned: u64,
     /// RFC-0015: the OPV policy, classes and claim rows. Dormant (no policy) = the historical ledger, root included.
     pub opv: OpvStateV1,
+    /// RFC-0004 Part II: typed-root classes, their jobs and the memory lines (tables 22–24; empty = the historical ledger).
+    pub typed: crate::spec::TypedStateV1,
     budget: BlockBudgetV1,
 }
 
@@ -760,6 +778,7 @@ impl KernelLedgerV1 {
             forfeited_claim_seals: BTreeMap::new(),
             burned: 0,
             opv: OpvStateV1::default(),
+            typed: crate::spec::TypedStateV1::default(),
             budget: BlockBudgetV1::default(),
         })
     }
@@ -964,6 +983,10 @@ impl KernelLedgerV1 {
                         self.commit_pipeline_claim(claim, evidence, stages, Some(salt), &mut out)?;
                         claim.id()
                     }
+                    SaltedCommitV1::Spec { claim } => {
+                        self.apply_salted_spec_claim(claim, salt, &mut out)?;
+                        claim.id()
+                    }
                 };
                 out.push(LedgerEventV1::ClaimCommitted { claim: id });
             }
@@ -982,7 +1005,7 @@ impl KernelLedgerV1 {
                 _ => return Err(KernelRefusalV1::rule(name, "no such bond, or already exiting")),
             },
             KernelRouteObjectV1::SealClaim { producer, job, seal } => {
-                if !self.jobs.contains_key(job) && !self.pipeline_jobs.contains_key(job) {
+                if !self.jobs.contains_key(job) && !self.pipeline_jobs.contains_key(job) && !self.typed.jobs.contains_key(job) {
                     return Err(KernelRefusalV1::rule(name, "no such job"));
                 }
                 match self.bonds.get(producer) {
@@ -1030,6 +1053,7 @@ impl KernelLedgerV1 {
                 self.proof_seals.insert((*claim, *accuser), SealRowV1 { seal: *seal, daa: self.daa, deposit: 0 });
                 out.push(LedgerEventV1::ProofSealed { claim: *claim, accuser: *accuser });
             }
+            KernelRouteObjectV1::Spec { object } => self.apply_spec(object, auth, &mut out)?,
             KernelRouteObjectV1::Withdraw { bond } => {
                 let (daa, delay) = (self.daa, self.policy.exit_delay_daa);
                 match self.bonds.get(bond) {
@@ -1104,6 +1128,7 @@ impl KernelLedgerV1 {
             O::RequestExit { bond } | O::Withdraw { bond } => Some((*bond, "bond")),
             O::SealClaim { producer, .. } => Some((*producer, "producer")),
             O::SealProof { accuser, .. } => Some((*accuser, "accuser")),
+            O::Spec { object } => object.named_actor(),
             _ => None,
         };
         if let Some((actor, role)) = named {
@@ -1856,11 +1881,17 @@ impl KernelLedgerV1 {
                     Some(derived_mask_v1(&stage_view_v1(c.programs.get(st.program as usize)?).view))
                 })
                 .unwrap_or_default(),
+            ClaimBodyV1::Spec(b) => self.spec_derived_mask(row, b, stage),
         }
     }
 
-    fn bounds_of(&self, class: &Digest) -> Option<ProsecutionBoundsV1> {
-        self.classes.get(class).map(|c| c.bounds).or_else(|| self.pipeline_classes.get(class).map(|c| c.bounds))
+    /// The prosecution bounds of a registered class of any kind (single program, pipeline, typed).
+    pub fn bounds_of(&self, class: &Digest) -> Option<ProsecutionBoundsV1> {
+        self.classes
+            .get(class)
+            .map(|c| c.bounds)
+            .or_else(|| self.pipeline_classes.get(class).map(|c| c.bounds))
+            .or_else(|| self.typed.classes.get(class).map(|c| c.bounds))
     }
 
     /// **The court**, over ledger state only.
@@ -1884,6 +1915,7 @@ impl KernelLedgerV1 {
                 FreshPipelineVerifierV1::from_public_bytes_in_mode(&record.to_bytes(), &self.known, header, &binding, mode)?
                     .try_proof(bytes)
             }
+            (ClaimBodyV1::Spec(_), ProsecutionV1::Spec(bytes)) => self.adjudicate_spec(claim, bytes),
             _ => Err("a filing for another kind of claim".into()),
         }
     }
@@ -2031,6 +2063,9 @@ impl KernelLedgerV1 {
         for k in spent {
             self.proof_seals.remove(&k);
         }
+        if post_final {
+            self.spec_on_post_final_conviction(claim);
+        }
     }
 
     /// **Settle the bonds of a claim's SERVED positions**: refunded (`burn == false`: the claim was convicted, defaulted or timed out),
@@ -2135,7 +2170,7 @@ impl KernelLedgerV1 {
         if !window_open {
             return Err(rule("the challenge window is closed"));
         }
-        if row.body.position(stage, position).is_none() {
+        if row.body.position(stage, position).is_none() && !self.spec_slice_demandable(row, stage, position) {
             return Err(rule("the claim commits no such position"));
         }
         let k = (*claim, stage, position);
@@ -2206,8 +2241,13 @@ impl KernelLedgerV1 {
         } else {
             self.charge(NAME, 0)?;
             let row = self.claims.get(claim).expect("checked");
-            let (values, inputs) = row.body.position(stage, position).expect("a demand names a committed position");
-            classify_position_response_v1(values, &self.derived_mask(row, stage), inputs, bytes)
+            match self.spec_classify_slice(row, stage, position, bytes) {
+                Some(slice) => slice,
+                None => {
+                    let (values, inputs) = row.body.position(stage, position).expect("a demand names a committed position");
+                    classify_position_response_v1(values, &self.derived_mask(row, stage), inputs, bytes)
+                }
+            }
         };
         match verdict {
             Ok(served) => {
@@ -2265,6 +2305,7 @@ impl KernelLedgerV1 {
         self.proof_seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
         // GAP-5: escrows no claim can still use go back to their posters.
         self.release_idle_job_escrows(out);
+        self.spec_prune_lines(daa);
         // Demands past their deadline: the producer's availability default.
         let due: Vec<_> = self.demands.iter().filter(|(_, d)| daa >= d.deadline_daa).map(|(k, _)| *k).collect();
         for (claim, stage, position) in due {
@@ -2356,6 +2397,7 @@ impl KernelLedgerV1 {
                     self.claims.get_mut(&id).expect("listed").rewarded = reward > 0;
                     out.push(LedgerEventV1::Final { claim: id, reward });
                     out.extend(paid);
+                    self.spec_on_final(&id);
                 }
                 (b, ClaimStateV1::TimedOut { .. }) if !matches!(b, ClaimStateV1::TimedOut { .. }) => {
                     self.release(&id, producer, reserved, out);
@@ -2422,6 +2464,8 @@ fn oversized(proof: &ProsecutionV1, b: &ProsecutionBoundsV1) -> Option<String> {
     let (len, limit) = match proof {
         ProsecutionV1::Kernel(bytes) | ProsecutionV1::Pipeline(bytes) => (bytes.len() as u128, b.max_filing_bytes as u128),
         ProsecutionV1::Decode(f) => (f.logits.bytes.len() as u128, b.max_response_bytes),
+        // A typed fault opens at most one kernel instance, one item or one logits vector.
+        ProsecutionV1::Spec(bytes) => (bytes.len() as u128, (b.max_filing_bytes as u128).max(b.max_response_bytes)),
     };
     (len > limit).then(|| format!("a {len}-byte filing past the class's {limit}-byte envelope"))
 }
@@ -2548,6 +2592,7 @@ impl OutsiderV1<'_> {
         match &row.body {
             ClaimBodyV1::Program { claim, .. } => self.check_program(row, claim),
             ClaimBodyV1::Pipeline { .. } => self.check_pipeline(row),
+            ClaimBodyV1::Spec(_) => Err("a typed claim: check it with crate::spec::outsider::SpecOutsiderV1".into()),
         }
     }
 
