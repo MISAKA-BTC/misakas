@@ -200,6 +200,194 @@ pub enum FpCommitmentPriceV1<'a> {
     Leaves { freeprompt: &'a kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3, class_canonical_leaves: u64 },
 }
 
+/// **A signer of ML-DSA-87 messages under a context** — the bond key in this process, or a sidecar (`kaspa-pq-signer`) that holds it in another.
+///
+/// The free-prompt carrier needs exactly two signatures from the bond key: the claim id under [`PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT`] and the
+/// funding input's sighash under [`MLDSA87_TX_CONTEXT`]. [`build_fp_commitment_tx_with`] asks a `MessageSigner` for both, so a rail that must not
+/// hold the key can still build the carrier; [`ValidatorKey::build_fp_commitment_tx`] is the same function with the in-process key.
+pub trait MessageSigner {
+    /// The ML-DSA-87 verification key the signatures verify under (and the funding script commits to).
+    fn public_key(&self) -> &[u8];
+    fn sign_message(&self, message: &[u8], context: &[u8]) -> Result<Vec<u8>, String>;
+}
+
+impl MessageSigner for ValidatorKey {
+    fn public_key(&self) -> &[u8] {
+        ValidatorKey::public_key(self)
+    }
+    fn sign_message(&self, message: &[u8], context: &[u8]) -> Result<Vec<u8>, String> {
+        if context.len() > 255 {
+            return Err(format!("an ML-DSA signing context is at most 255 bytes, got {}", context.len()));
+        }
+        Ok(self.sign_with_context(message, context).to_vec())
+    }
+}
+
+/// A signer that signs nothing: zero-filled signatures of the real length, for MEASURING a carrier (its mass, hence its fee) without a key.
+pub struct LengthOnlySigner {
+    pub public_key: Vec<u8>,
+}
+
+impl MessageSigner for LengthOnlySigner {
+    fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+    fn sign_message(&self, _message: &[u8], _context: &[u8]) -> Result<Vec<u8>, String> {
+        Ok(vec![0u8; MLDSA87_SIG_LEN])
+    }
+}
+
+/// **[`ValidatorKey::build_fp_commitment_tx`]'s body over any [`MessageSigner`]** (ADR-0044 FP-08; RFC-0009 stage A): the identical stateless checks
+/// and price gate before a fee is spent, the claim id signed under [`PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT`] and the funding input's sighash under
+/// [`MLDSA87_TX_CONTEXT`], both through `signer`. A sidecar signer keeps the bond key out of the calling process; the carrier is the same bytes.
+#[allow(clippy::too_many_arguments)]
+pub fn build_fp_commitment_tx_with(
+    signer: &dyn MessageSigner,
+    network_domain: Hash64,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    commitment: PalwFreePromptCommitmentV3,
+    prompt_token_ids: Vec<u32>,
+    price: FpCommitmentPriceV1<'_>,
+    funding_outpoint: TransactionOutpoint,
+    funding: &UtxoEntry,
+    fee: u64,
+) -> Result<Transaction, String> {
+    // Sign the identity first so the payload carries a signature over exactly the bytes the
+    // stateless check will re-derive.
+    let signature = signer
+        .sign_message(fp_claim_id_v3(&commitment).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT)
+        .map_err(|e| format!("the claim signature: {e}"))?;
+    // **Under `PanelDa` the ids never ride the chain** (ADR-0077 Decision 16): the payload
+    // carries the job's commitment to them and nothing else, and the caller stages the ids
+    // beside the material for the executor's node to serve to the claim's readers. A payload
+    // that carried them would be refused by `validate_stateless_v3` as
+    // `PanelDaPayloadCarriesPrompt`; dropping them here is what makes the honest caller's
+    // path and the validator's rule one spelling.
+    let prompt_token_ids = if commitment.job.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA {
+        Vec::new()
+    } else {
+        prompt_token_ids
+    };
+    let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids, signature };
+    // The same stateless rules a peer will apply, applied before spending a fee on them — under
+    // the decode rules' height-free door (RFC-0001 §A.4): a builder holds no height, so a V3 and
+    // a V4 job both pass the shape here and the chain's header-context door decides which one
+    // the block's height takes.
+    payload
+        .validate_stateless_under_ruleset_v4(
+            network_domain,
+            false,
+            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+            None,
+            prompt_ids_form,
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Scheduled,
+        )
+        .map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
+    let (quanta, pwu) = match price {
+        // **The chain's own number, not a re-derivation of it.** The 2026-09-20 Studio drill:
+        // past the bundle a chat of 3,806,528 leaves that the chain priced at 17,883 quanta was
+        // refused here as earning none "against a 83102171136-leaf canonical job" — the leaves
+        // era's question, asked of a claim the ledger prices in compute.
+        FpCommitmentPriceV1::Chain { quanta, pwu } => {
+            if quanta == 0 {
+                return Err(format!(
+                    "free-prompt job earns no quanta by the chain's own price ({} leaves) — it certifies nothing the chain can \
+                     act on",
+                    payload.commitment.work_leaves
+                ));
+            }
+            (quanta, pwu)
+        }
+        FpCommitmentPriceV1::Leaves { freeprompt, class_canonical_leaves } => {
+            freeprompt.derive_quanta_and_pwu(payload.commitment.work_leaves, class_canonical_leaves).ok_or_else(|| {
+                format!(
+                    "free-prompt job earns no quanta at {} leaves against a {class_canonical_leaves}-leaf canonical job — it \
+                     certifies nothing the chain can act on",
+                    payload.commitment.work_leaves
+                )
+            })?
+        }
+    };
+    if quanta == 0 || pwu % (quanta as u64) != 0 || pwu / (quanta as u64) == 0 {
+        return Err(format!("free-prompt derivation is not uniform ({pwu} pwu over {quanta} quanta)"));
+    }
+    let bytes = borsh::to_vec(&payload).map_err(|e| format!("cannot serialize the free-prompt commitment: {e}"))?;
+    if bytes.len() > PALW_FP_COMMITMENT_TX_MAX_BYTES {
+        return Err(format!(
+            "free-prompt commitment payload is {} bytes, above the {PALW_FP_COMMITMENT_TX_MAX_BYTES} cap",
+            bytes.len()
+        ));
+    }
+    build_funded_overlay_tx_with(signer, SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
+}
+
+fn build_funded_overlay_tx_with(
+    signer: &dyn MessageSigner,
+    subnetwork_id: SubnetworkId,
+    payload: Vec<u8>,
+    funding_outpoint: TransactionOutpoint,
+    funding: &UtxoEntry,
+    fee: u64,
+    no_change: bool,
+) -> Result<Transaction, String> {
+    if funding.amount <= fee {
+        return Err(format!("funding UTXO amount {} does not cover fee {}", funding.amount, fee));
+    }
+    let input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
+    let outputs = if no_change {
+        // The whole input beyond the declared fee is burned to fees; consensus mints the
+        // reporter reward separately.
+        vec![]
+    } else {
+        vec![TransactionOutput::new(funding.amount - fee, funding.script_public_key.clone())]
+    };
+    let tx = Transaction::new(TX_VERSION, vec![input], outputs, 0, subnetwork_id, 0, payload);
+
+    let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
+    let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
+    let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
+
+    let mut sig_data = signer.sign_message(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).map_err(|e| format!("the funding signature: {e}"))?;
+    sig_data.push(SIG_HASH_ALL.to_u8());
+    let signature_script = ScriptBuilder::new()
+        .add_data(&sig_data)
+        .map_err(|e| format!("overlay funding sig push failed: {e}"))?
+        .add_data(signer.public_key())
+        .map_err(|e| format!("overlay funding pubkey push failed: {e}"))?
+        .drain();
+
+    let mut tx = mtx.tx;
+    tx.inputs[0].signature_script = signature_script;
+    Ok(tx)
+}
+
+/// **[`ValidatorKey::estimate_overlay_fee`] for any [`MessageSigner`]** — measured with zero-filled signatures of the real length, so a rail that
+/// holds no key (a sidecar signs) sizes its carrier's fee exactly as the in-process key would.
+pub fn estimate_overlay_fee_with(
+    signer: &dyn MessageSigner,
+    mass_calculator: &MassCalculator,
+    prefix: Prefix,
+    payload_len: usize,
+    no_change: bool,
+) -> u64 {
+    let measure = LengthOnlySigner { public_key: signer.public_key().to_vec() };
+    let address = Address::new(prefix, Version::PubKeyHashMlDsa87, &blake2b_512_address_payload(&measure.public_key).as_bytes());
+    let funding = UtxoEntry::new(u64::MAX / 2, pay_to_address_script(&address), 0, false);
+    let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0);
+    match build_funded_overlay_tx_with(
+        &measure,
+        SUBNETWORK_ID_COMPUTE_CERTIFICATE,
+        vec![0u8; payload_len],
+        outpoint,
+        &funding,
+        ATTESTATION_TX_FEE_FLOOR_SOMPI,
+        no_change,
+    ) {
+        Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
+        Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
+    }
+}
+
 impl ValidatorKey {
     pub fn from_seed(seed: [u8; VALIDATOR_SEED_LEN]) -> Self {
         let keypair = ml_dsa_87::generate_key_pair(seed);
@@ -736,35 +924,7 @@ impl ValidatorKey {
         fee: u64,
         no_change: bool,
     ) -> Result<Transaction, String> {
-        if funding.amount <= fee {
-            return Err(format!("funding UTXO amount {} does not cover fee {}", funding.amount, fee));
-        }
-        let input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
-        let outputs = if no_change {
-            // The whole input beyond the declared fee is burned to fees; consensus mints the
-            // reporter reward separately.
-            vec![]
-        } else {
-            vec![TransactionOutput::new(funding.amount - fee, funding.script_public_key.clone())]
-        };
-        let tx = Transaction::new(TX_VERSION, vec![input], outputs, 0, subnetwork_id, 0, payload);
-
-        let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
-        let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
-        let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
-
-        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
-        sig_data.push(SIG_HASH_ALL.to_u8());
-        let signature_script = ScriptBuilder::new()
-            .add_data(&sig_data)
-            .map_err(|e| format!("overlay funding sig push failed: {e}"))?
-            .add_data(self.keypair.verification_key.as_ref())
-            .map_err(|e| format!("overlay funding pubkey push failed: {e}"))?
-            .drain();
-
-        let mut tx = mtx.tx;
-        tx.inputs[0].signature_script = signature_script;
-        Ok(tx)
+        build_funded_overlay_tx_with(self, subnetwork_id, payload, funding_outpoint, funding, fee, no_change)
     }
 
     /// Sign and build a **free-prompt execution commitment** transaction (ADR-0044 FP-08).
@@ -801,72 +961,17 @@ impl ValidatorKey {
         funding: &UtxoEntry,
         fee: u64,
     ) -> Result<Transaction, String> {
-        // Sign the identity first so the payload carries a signature over exactly the bytes the
-        // stateless check will re-derive.
-        let signature =
-            self.sign_with_context(fp_claim_id_v3(&commitment).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT).to_vec();
-        // **Under `PanelDa` the ids never ride the chain** (ADR-0077 Decision 16): the payload
-        // carries the job's commitment to them and nothing else, and the caller stages the ids
-        // beside the material for the executor's node to serve to the claim's readers. A payload
-        // that carried them would be refused by `validate_stateless_v3` as
-        // `PanelDaPayloadCarriesPrompt`; dropping them here is what makes the honest caller's
-        // path and the validator's rule one spelling.
-        let prompt_token_ids = if commitment.job.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA {
-            Vec::new()
-        } else {
-            prompt_token_ids
-        };
-        let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids, signature };
-        // The same stateless rules a peer will apply, applied before spending a fee on them — under
-        // the decode rules' height-free door (RFC-0001 §A.4): a builder holds no height, so a V3 and
-        // a V4 job both pass the shape here and the chain's header-context door decides which one
-        // the block's height takes.
-        payload
-            .validate_stateless_under_ruleset_v4(
-                network_domain,
-                false,
-                kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
-                None,
-                prompt_ids_form,
-                kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Scheduled,
-            )
-            .map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
-        let (quanta, pwu) = match price {
-            // **The chain's own number, not a re-derivation of it.** The 2026-09-20 Studio drill:
-            // past the bundle a chat of 3,806,528 leaves that the chain priced at 17,883 quanta was
-            // refused here as earning none "against a 83102171136-leaf canonical job" — the leaves
-            // era's question, asked of a claim the ledger prices in compute.
-            FpCommitmentPriceV1::Chain { quanta, pwu } => {
-                if quanta == 0 {
-                    return Err(format!(
-                        "free-prompt job earns no quanta by the chain's own price ({} leaves) — it certifies nothing the chain can \
-                         act on",
-                        payload.commitment.work_leaves
-                    ));
-                }
-                (quanta, pwu)
-            }
-            FpCommitmentPriceV1::Leaves { freeprompt, class_canonical_leaves } => {
-                freeprompt.derive_quanta_and_pwu(payload.commitment.work_leaves, class_canonical_leaves).ok_or_else(|| {
-                    format!(
-                        "free-prompt job earns no quanta at {} leaves against a {class_canonical_leaves}-leaf canonical job — it \
-                         certifies nothing the chain can act on",
-                        payload.commitment.work_leaves
-                    )
-                })?
-            }
-        };
-        if quanta == 0 || pwu % (quanta as u64) != 0 || pwu / (quanta as u64) == 0 {
-            return Err(format!("free-prompt derivation is not uniform ({pwu} pwu over {quanta} quanta)"));
-        }
-        let bytes = borsh::to_vec(&payload).map_err(|e| format!("cannot serialize the free-prompt commitment: {e}"))?;
-        if bytes.len() > PALW_FP_COMMITMENT_TX_MAX_BYTES {
-            return Err(format!(
-                "free-prompt commitment payload is {} bytes, above the {PALW_FP_COMMITMENT_TX_MAX_BYTES} cap",
-                bytes.len()
-            ));
-        }
-        self.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
+        build_fp_commitment_tx_with(
+            self,
+            network_domain,
+            prompt_ids_form,
+            commitment,
+            prompt_token_ids,
+            price,
+            funding_outpoint,
+            funding,
+            fee,
+        )
     }
 
     /// **Sign and build an evaluation claim's commitment transaction** (RFC-0004 A6, MIP-17): the FP
@@ -1574,20 +1679,7 @@ impl ValidatorKey {
     /// `no_change` mirrors the output-less evidence-carrier shape
     /// ([`Self::build_slashing_evidence_tx`], [`Self::build_precommit_evidence_tx`]).
     pub fn estimate_overlay_fee(&self, mass_calculator: &MassCalculator, prefix: Prefix, payload_len: usize, no_change: bool) -> u64 {
-        let funding_spk = pay_to_address_script(&self.funding_address(prefix));
-        let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
-        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0);
-        match self.build_funded_overlay_tx(
-            SUBNETWORK_ID_COMPUTE_CERTIFICATE,
-            vec![0u8; payload_len],
-            outpoint,
-            &funding,
-            ATTESTATION_TX_FEE_FLOOR_SOMPI,
-            no_change,
-        ) {
-            Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
-            Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
-        }
+        estimate_overlay_fee_with(self, mass_calculator, prefix, payload_len, no_change)
     }
 
     /// Mass-based fee (sompi) for this validator's `StakeBond` transaction — same approach as
@@ -2316,6 +2408,55 @@ mod tests {
             job,
         };
         (commitment, ids)
+    }
+
+    /// RFC-0009 stage A: the carrier built through ANY [`MessageSigner`] is the one the in-process key builds. A signer that only records what
+    /// it is asked sees exactly two requests, in order — the claim id under the commitment context and the funding sighash under the
+    /// transaction context — and a length-only signer (a key-less measuring stand-in) yields a carrier of the same size.
+    #[test]
+    fn fp_commitment_through_a_message_signer_asks_for_exactly_two_typed_signatures() {
+        use std::cell::RefCell;
+        struct Recording<'a> {
+            key: &'a ValidatorKey,
+            asked: RefCell<Vec<(usize, Vec<u8>)>>,
+        }
+        impl MessageSigner for Recording<'_> {
+            fn public_key(&self) -> &[u8] {
+                self.key.public_key()
+            }
+            fn sign_message(&self, message: &[u8], context: &[u8]) -> Result<Vec<u8>, String> {
+                self.asked.borrow_mut().push((message.len(), context.to_vec()));
+                MessageSigner::sign_message(self.key, message, context)
+            }
+        }
+        let key = compute_key();
+        let bundle = fp_bundle();
+        let network_domain = Hash64::from_bytes([0x4E; 64]);
+        let (commitment, ids) = fp_commitment_fixture(network_domain, &key);
+        let price = || FpCommitmentPriceV1::Leaves { freeprompt: &bundle.freeprompt, class_canonical_leaves: FLOOR_LEAVES };
+        let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let funding = fentry(u64::MAX / 2, 0, false);
+
+        let recording = Recording { key: &key, asked: RefCell::new(Vec::new()) };
+        let tx = build_fp_commitment_tx_with(&recording, network_domain, form, commitment.clone(), ids.clone(), price(), fop(9, 0), &funding, SF_FEE)
+            .expect("builds through a signer");
+        let asked = recording.asked.borrow();
+        assert_eq!(asked.len(), 2, "the claim id and the funding sighash — nothing else is signed");
+        assert_eq!((asked[0].0, asked[0].1.as_slice()), (64, PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT));
+        assert_eq!((asked[1].0, asked[1].1.as_slice()), (64, MLDSA87_TX_CONTEXT));
+
+        // The method is this function with the in-process key.
+        let direct = key
+            .build_fp_commitment_tx(network_domain, form, commitment.clone(), ids.clone(), price(), fop(9, 0), &funding, SF_FEE)
+            .unwrap();
+        assert_eq!(direct.outputs, tx.outputs);
+        assert_eq!(direct.payload.len(), tx.payload.len());
+
+        // A key-less measuring signer: same size, so the same mass and the same fee.
+        let measure = LengthOnlySigner { public_key: key.public_key().to_vec() };
+        let probe = build_fp_commitment_tx_with(&measure, network_domain, form, commitment, ids, price(), fop(9, 0), &funding, SF_FEE).unwrap();
+        assert_eq!(probe.payload.len(), tx.payload.len());
+        assert_eq!(probe.inputs[0].signature_script.len(), tx.inputs[0].signature_script.len());
     }
 
     /// The executor rail's round trip: build → the payload decodes from the transaction → the

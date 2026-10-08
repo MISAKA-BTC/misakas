@@ -835,6 +835,75 @@ pub mod transport {
     }
 }
 
+/// **The sidecar as a [`MessageSigner`]** (RFC-0009 stage A): a rail, a relay or a remote miner builds the free-prompt carrier through
+/// [`kaspa_pq_validator_core::build_fp_commitment_tx_with`] and the bond key never enters its process. Two requests per carrier, each typed:
+/// the claim id as `PalwFpCommitmentV3` and the funding input's sighash as `Transaction`. Any other context is refused HERE, before the wire: this
+/// adapter is not a "sign these bytes" door, the daemon's own purpose/context pinning (`required_ctx`) is the second lock.
+#[cfg(unix)]
+pub mod sidecar {
+    use super::transport::SignerClient;
+    use kaspa_consensus_core::dns_finality::{HostId, SignerMessageDigest, SignerMetadata, SignerRequest, SigningPurpose, validator_id_from_pubkey};
+    use kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT;
+    use kaspa_hashes::Hash64;
+    use kaspa_pq_validator_core::MessageSigner;
+    use kaspa_txscript::MLDSA87_TX_CONTEXT;
+    use std::{io, path::Path, sync::Mutex};
+
+    pub struct SidecarSigner {
+        client: Mutex<SignerClient>,
+        validator_id: Hash64,
+        public_key: Vec<u8>,
+        next_request: std::sync::atomic::AtomicU64,
+    }
+
+    impl SidecarSigner {
+        /// Connect to the daemon at `socket`. `public_key` is the bond key's PUBLIC half (the funding script commits to it); the daemon holds the
+        /// seed and is asked by `validator_id = BLAKE2b-512(public_key)`.
+        pub fn connect(socket: impl AsRef<Path>, public_key: Vec<u8>, client_identity: HostId) -> io::Result<Self> {
+            let validator_id = validator_id_from_pubkey(&public_key);
+            Ok(Self {
+                client: Mutex::new(SignerClient::connect(socket, client_identity)?),
+                validator_id,
+                public_key,
+                next_request: std::sync::atomic::AtomicU64::new(1),
+            })
+        }
+    }
+
+    impl MessageSigner for SidecarSigner {
+        fn public_key(&self) -> &[u8] {
+            &self.public_key
+        }
+
+        fn sign_message(&self, message: &[u8], context: &[u8]) -> Result<Vec<u8>, String> {
+            let digest: [u8; 64] = message.try_into().map_err(|_| format!("the sidecar signs 64-byte digests, this message is {} bytes", message.len()))?;
+            let digest = Hash64::from_bytes(digest);
+            let (purpose, message_digest) = if context == PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT {
+                (SigningPurpose::PalwFpCommitmentV3, SignerMessageDigest::PalwFpCommitmentV3(digest))
+            } else if context == MLDSA87_TX_CONTEXT {
+                (SigningPurpose::Transaction, SignerMessageDigest::Transaction(digest))
+            } else {
+                return Err("this sidecar adapter signs the free-prompt claim id and a transaction input's sighash only".to_string());
+            };
+            let request_id = self.next_request.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let request = SignerRequest {
+                request_id,
+                validator_id: self.validator_id,
+                purpose,
+                context: context.to_vec(),
+                message_digest,
+                metadata: SignerMetadata::None,
+            };
+            let mut client = self.client.lock().map_err(|_| "the sidecar connection is poisoned".to_string())?;
+            let response = client.sign(&request).map_err(|e| format!("the sidecar did not answer: {e}"))?;
+            if response.request_id != request_id {
+                return Err(format!("the sidecar answered request {} for request {request_id}", response.request_id));
+            }
+            response.result.map_err(|e| format!("the sidecar refused: {e:?}"))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1463,6 +1532,148 @@ mod tests {
         assert!(matches!(resp2.result, Err(SignerError::PolicyViolation(_))), "socket refuses the equivocating attestation");
 
         drop(client);
+        server.join().unwrap();
+        let _ = fs::remove_file(&sock);
+    }
+
+    /// **The free-prompt carrier built THROUGH the daemon over a real socket**: the seed lives in the signer thread's state, the builder holds a
+    /// public key and a socket, and the carrier it produces is the one the in-process key makes (same id, same payload), with a funding signature
+    /// that verifies. The daemon's purpose pinning refuses the same adapter asked for anything else.
+    #[cfg(unix)]
+    #[test]
+    fn the_free_prompt_carrier_is_built_through_the_sidecar_and_the_key_never_leaves_it() {
+        use super::sidecar::SidecarSigner;
+        use super::transport::serve_connection;
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptCommitmentV3, PalwFreePromptJobV3, fp_trace_manifest_v3,
+        };
+        use kaspa_consensus_core::tx::UtxoEntry;
+        use kaspa_pq_validator_core::{FpCommitmentPriceV1, MessageSigner, build_fp_commitment_tx_with};
+        use std::os::unix::net::UnixListener;
+        use std::sync::{Arc, Mutex};
+
+        let k = key(0x78);
+        let pubkey = k.public_key().to_vec();
+        let in_process = ValidatorKey::from_seed([0x78; VALIDATOR_SEED_LEN]);
+        let server_id = Hash::from_bytes([0x5e; 32]);
+        let state = Arc::new(Mutex::new(SignerState::new(vec![k], SignerPolicy::Strict, tmp_dir("sidecar-fp"), server_id).unwrap()));
+        let sock = std::env::temp_dir().join("kpq-sidecar-fp-78.sock");
+        let _ = fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        let srv_state = Arc::clone(&state);
+        let server = std::thread::spawn(move || {
+            for stream in listener.incoming().take(1).flatten() {
+                serve_connection(stream, &srv_state, server_id, &[]);
+            }
+        });
+
+        let network_domain = Hash64::from_bytes([0x4E; 64]);
+        let ids: Vec<u32> = (0..96).collect();
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain,
+            class_id: Hash64::from_bytes([0xBA; 64]),
+            executor_bond: TransactionOutpoint::new(Hash64::from_bytes([7; 64]), 0),
+            executor_pubkey: pubkey.clone(),
+            operator_id: Hash64::from_bytes([0xE0; 64]),
+            anchor_block: Hash64::from_bytes([0xA0; 64]),
+            anchor_daa: 5_000,
+            job_nonce: [0x11; 32],
+            tokenizer_id: Hash64::from_bytes([0x70; 64]),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&ids),
+            prompt_tokens: ids.len() as u32,
+            decode_token_limit: 512,
+            max_context_tokens: 4_096,
+            privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            tail: None,
+        };
+        let events: Vec<Hash64> = (0..256u64).map(|i| Hash64::from_u64_word(i + 1)).collect();
+        let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(Hash64::from_bytes([0xB1; 64]), &events);
+        let commitment = PalwFreePromptCommitmentV3 {
+            trace_root: Hash64::from_bytes([0x7A; 64]),
+            output_root: Hash64::from_bytes([0x0B; 64]),
+            schedule_root: Hash64::from_bytes([0x5C; 64]),
+            execution_root: Hash64::from_bytes([0x4E; 64]),
+            decode_tokens_executed: 256,
+            stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+            work_leaves: 16 * (7_708 / 8),
+            trace_manifest_root: manifest_root,
+            trace_chunk_count: chunk_count,
+            trace_retention_daa: 505_000,
+            job,
+        };
+        let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+            Hash64::from_bytes([0xBA; 64]),
+            Hash64::from_u64_word(0xCA7),
+            Hash64::from_u64_word(0xC0757),
+            4_096,
+            Hash64::from_u64_word(0xA7),
+            kaspa_consensus_core::palw_fp_devnet_v3::palw_devnet_bond_registry_v1(
+                kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1(),
+            ),
+        )
+        .expect("the devnet bundle validates");
+        let funding_spk = kaspa_txscript::pay_to_address_script(&in_process.funding_address(kaspa_addresses::Prefix::Mainnet));
+        let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
+        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([9; 64]), 0);
+        let build = |signer: &dyn MessageSigner| {
+            build_fp_commitment_tx_with(
+                signer,
+                network_domain,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                commitment.clone(),
+                ids.clone(),
+                FpCommitmentPriceV1::Leaves { freeprompt: &bundle.freeprompt, class_canonical_leaves: 7_708 },
+                outpoint,
+                &funding,
+                300_000,
+            )
+        };
+
+        let sidecar = SidecarSigner::connect(&sock, pubkey.clone(), Hash::from_bytes([0xc1; 32])).unwrap();
+        let through_sidecar = build(&sidecar).expect("the carrier builds through the sidecar");
+        let in_process_tx = build(&in_process).expect("and in-process");
+        // The same carrier, signature aside (ML-DSA is hedged, so two signatures over one message differ — and the claim signature rides in the
+        // payload, so the ids differ too): same shape, same outputs, same commitment.
+        assert_eq!(through_sidecar.payload.len(), in_process_tx.payload.len());
+        assert_eq!(through_sidecar.outputs, in_process_tx.outputs);
+        assert_eq!(through_sidecar.inputs[0].previous_outpoint, in_process_tx.inputs[0].previous_outpoint);
+        assert_eq!(through_sidecar.inputs[0].signature_script.len(), in_process_tx.inputs[0].signature_script.len());
+        let decoded: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&through_sidecar.payload).unwrap();
+        let in_process_decoded: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 =
+            borsh::from_slice(&in_process_tx.payload).unwrap();
+        assert_eq!(decoded.commitment, in_process_decoded.commitment);
+        assert_eq!(decoded.prompt_token_ids, in_process_decoded.prompt_token_ids);
+        assert_eq!(decoded.claim_id(), kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&commitment));
+        // The claim signature verifies under the bond key in its own context, and the funding signature under the transaction context.
+        assert!(in_process.verify_with_context(
+            decoded.claim_id().as_bytes().as_slice(),
+            &decoded.signature,
+            PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT
+        ));
+        let entry = funding.clone();
+        // (the funding signature's check is the chain's own script engine; here: it verifies over the transaction's sighash)
+        let mtx = kaspa_consensus_core::tx::MutableTransaction::with_entries(through_sidecar.clone(), vec![entry]);
+        let sighash = kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash(
+            &mtx.as_verifiable(),
+            0,
+            kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL,
+            &kaspa_consensus_core::hashing::sighash::Mldsa87SigHashReusedValuesUnsync::new(),
+        );
+        let script = &through_sidecar.inputs[0].signature_script;
+        let sig_len = 4627 + 1;
+        // <push sig‖hashtype> <push pubkey>: skip the 3-byte PUSHDATA2 framing of the signature.
+        let sig = &script[3..3 + sig_len - 1];
+        assert!(in_process.verify_with_context(sighash.as_bytes().as_slice(), sig, MLDSA87_TX_CONTEXT), "the daemon's funding signature verifies");
+
+        // The adapter is not a "sign these bytes" door: another context is refused before the wire, and a wrongly sized message too.
+        assert!(sidecar.sign_message(&[0u8; 64], b"misaka-palw/some-other-context").is_err());
+        assert!(sidecar.sign_message(&[0u8; 63], MLDSA87_TX_CONTEXT).is_err());
+        drop(sidecar);
         server.join().unwrap();
         let _ = fs::remove_file(&sock);
     }

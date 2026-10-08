@@ -40,5 +40,9 @@ clap = { workspace = true, features = ["env"] }
 # Peer-credential check (getpeereid), umask tightening, and geteuid for the socket auth boundary.
 libc = "0.2"
 
+[dev-dependencies]
+# The sidecar adapter test derives the funding address of the bond key.
+kaspa-addresses.workspace = true
+
 [lints]
 workspace = true

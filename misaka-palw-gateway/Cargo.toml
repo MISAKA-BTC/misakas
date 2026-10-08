@@ -28,6 +28,8 @@ kaspa-consensus-core.workspace = true
 kaspa-txscript.workspace = true
 kaspa-hashes.workspace = true
 kaspa-pq-validator-core.workspace = true
+# RFC-0009 stage A: `--signer-socket` builds the carrier through the sidecar, so the bond key never enters the rail's process.
+kaspa-pq-signer = { path = "../kaspa-pq-signer" }
 # ADR-0078: the derivation step — registered grammars and content-named transformers.
 misaka-palw-derive.workspace = true
 # RFC-0009 stage A: `--relay` (idempotent multi-node relay of the locally signed carrier).

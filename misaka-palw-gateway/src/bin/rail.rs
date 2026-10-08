@@ -53,7 +53,9 @@ use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePro
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
-use kaspa_pq_validator_core::{ATTESTATION_TX_FEE_FLOOR_SOMPI, FpCommitmentPriceV1, VALIDATOR_SEED_LEN, ValidatorKey};
+use kaspa_pq_validator_core::{
+    ATTESTATION_TX_FEE_FLOOR_SOMPI, FpCommitmentPriceV1, MessageSigner, VALIDATOR_SEED_LEN, ValidatorKey, build_fp_commitment_tx_with, estimate_overlay_fee_with,
+};
 use kaspa_txscript::{pay_to_address_script, script_class::ScriptClass};
 
 fn die(msg: String) -> ! {
@@ -155,6 +157,12 @@ fn main() {
     // RFC-0009 stage C: the executor's redemption authorization, signed once at claim time so any builder may spend the claim's winning
     // quanta while this PC is off (`palw_receipt_spend_v4`, dormant until its fence opens).
     let mut redeem_auth_out: Option<PathBuf> = None;
+    // RFC-0009 stage A: the bond key stays in a `kaspa-pq-signer` sidecar. `--signer-socket <path> --bond-pubkey <hex>` builds the carrier
+    // through it (two typed requests: the claim id, the funding sighash) and the rail never holds the seed.
+    let mut signer_socket: Option<PathBuf> = None;
+    let mut bond_pubkey_hex: Option<String> = None;
+    // RFC-0009 stage A: relay a carrier somebody else signed. A relay holds no key and no authority; it forwards bytes nodes validate themselves.
+    let mut relay_signed: Option<PathBuf> = None;
     let mut redeem_fee_bps: u16 = 500;
     let mut redeem_expiry_daa: u64 = u64::MAX;
     let mut rpc_endpoint: Option<String> = None;
@@ -190,6 +198,9 @@ fn main() {
             "--relay" => {
                 relay_endpoints = value("--relay").split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect()
             }
+            "--signer-socket" => signer_socket = Some(PathBuf::from(value("--signer-socket"))),
+            "--bond-pubkey" => bond_pubkey_hex = Some(value("--bond-pubkey")),
+            "--relay-signed" => relay_signed = Some(PathBuf::from(value("--relay-signed"))),
             "--redeem-auth-out" => redeem_auth_out = Some(PathBuf::from(value("--redeem-auth-out"))),
             "--redeem-fee-bps" => redeem_fee_bps = value("--redeem-fee-bps").parse().unwrap_or_else(|e| die(format!("--redeem-fee-bps: {e}"))),
             "--redeem-expiry-daa" => {
@@ -227,7 +238,9 @@ fn main() {
                  [--submit --rpc <host:port> [--retention-dir <dir>] [--capture <material.bin>] [--dsl <fpd1>] \
                  [--anchor-ttl-daa <n>]]\n       misaka-palw-fp-rail --artifact <stem> --bond-key-seed <file> --funding-outpoint <txid:index> \
                  --funding-amount <sompi> --relay <host:port,host:port,...> [--relay-min-accept <n>] [--fee <sompi>] \
-                 (RFC-0009: sign here, relay raw bytes through several nodes, stage nothing — the claim's material is still yours to serve)\n       misaka-palw-fp-rail --watch <outbox> --bond-key-seed <file> --rpc <host:port> \
+                 (RFC-0009: sign here, relay raw bytes through several nodes, stage nothing — the claim's material is still yours to serve)\n       misaka-palw-fp-rail --artifact <stem> --signer-socket <path> --bond-pubkey <hex> --funding-outpoint <txid:index> --funding-amount <sompi> --relay <host:port,...> \
+                 (RFC-0009: the bond key stays in a kaspa-pq-signer sidecar; this process holds only the public key)\n       misaka-palw-fp-rail --relay-signed <commitment-tx.borsh> --funding-amount <sompi> --relay <host:port,...> [--checkpoint <daa>:<hash>] \
+                 (RFC-0009: relay a carrier somebody else signed — no key, no authority)\n       misaka-palw-fp-rail --watch <outbox> --bond-key-seed <file> --rpc <host:port> \
                  [--funding-outpoint <txid:index> --funding-amount <sompi>] [--coinbase-funding-only] [--interval <secs>] [--max-attempts <n>] [--once] \
                  [--fee <sompi>] [--class-leaves <u64>] [--retention-dir <dir>] [--anchor-ttl-daa <n>]\
                  \n       misaka-palw-fp-rail --print-identity --bond-key-seed <file> --rpc <host:port> --class-id <128hex> \
@@ -235,6 +248,10 @@ fn main() {
                  \n       misaka-palw-fp-rail --derive-artifact <outbox/fp-job-XXXX> (--bond-key-seed <file> | --print-derived-message)"
             )),
         }
+    }
+    if let Some(path) = relay_signed {
+        relay_signed_carrier(&path, funding_amount, &relay_endpoints, relay_min_accept, view_checkpoint.as_deref());
+        return;
     }
     if let Some(claim_hex) = track_claim {
         let endpoints: Vec<String> = if relay_endpoints.is_empty() {
@@ -415,10 +432,26 @@ fn main() {
         return;
     }
 
-    let seed =
-        read_seed(&seed_path.unwrap_or_else(|| die("--bond-key-seed <file> is required to sign (or use --print-claim)".into())));
-    let key = ValidatorKey::from_seed(seed);
-    if key.public_key() != commitment.job.executor_pubkey.as_slice() {
+    // **Who holds the bond key.** A seed file (this process signs) or a `kaspa-pq-signer` sidecar (this process holds the PUBLIC key and asks for two
+    // typed signatures: the claim id, and the funding input's sighash). Two custodies, never both.
+    let bond = match (seed_path, signer_socket) {
+        (Some(_), Some(_)) => die("--bond-key-seed and --signer-socket are two custodies of one key: pick one".into()),
+        (Some(path), None) => BondSigner::Seed(ValidatorKey::from_seed(read_seed(&path))),
+        (None, Some(socket)) => {
+            let hex_text = bond_pubkey_hex.unwrap_or_else(|| die("--signer-socket needs --bond-pubkey <hex>: the public key the sidecar's validator holds".into()));
+            let mut pubkey = vec![0u8; hex_text.len() / 2];
+            if hex_text.len() % 2 != 0 || faster_hex::hex_decode(hex_text.as_bytes(), &mut pubkey).is_err() {
+                die("--bond-pubkey is not hex".into());
+            }
+            let identity = kaspa_hashes::Hash::from_bytes([0x52; 32]); // how the sidecar's audit log names this rail
+            let sidecar = kaspa_pq_signer::sidecar::SidecarSigner::connect(&socket, pubkey, identity)
+                .unwrap_or_else(|e| die(format!("cannot reach the signer sidecar at {}: {e}", socket.display())));
+            BondSigner::Sidecar(sidecar)
+        }
+        (None, None) => die("--bond-key-seed <file>, or --signer-socket <path> with --bond-pubkey <hex>, is required to sign (or use --print-claim)".into()),
+    };
+    let signer: &dyn MessageSigner = bond.signer();
+    if signer.public_key() != commitment.job.executor_pubkey.as_slice() {
         die("the bond key does not match the commitment's executor_pubkey — this key cannot sign this job".into());
     }
     // **The class's canonical leaves, from the chain whenever a node is named.** The default was
@@ -447,7 +480,7 @@ fn main() {
     // AND produced a change output the mempool refuses as "non-standard script form". The drill's
     // first live stage 5b (2026-09-04) found it that way; the prefix only affects the bech32 text,
     // never the script bytes, so any prefix yields the same entry.
-    let funding_spk = pay_to_address_script(&key.funding_address(Prefix::Mainnet));
+    let funding_spk = misaka_palw_remote::bundle::funding_spk_of_pubkey_v1(signer.public_key());
     if !ScriptClass::from_script(&funding_spk).is_pq_standard() {
         die("the funding entry's script is not a form the mempool relays — the rail derived it wrongly".into());
     }
@@ -498,7 +531,8 @@ fn main() {
         None => FpCommitmentPriceV1::Leaves { freeprompt: &bundle.freeprompt, class_canonical_leaves: class_leaves },
     };
     let build = |fee: u64| {
-        key.build_fp_commitment_tx(
+        build_fp_commitment_tx_with(
+            signer,
             commitment.job.network_domain,
             prompt_ids_form,
             commitment.clone(),
@@ -521,7 +555,7 @@ fn main() {
         let p = &DEVNET_PARAMS;
         let calc =
             MassCalculator::new(p.mass_per_tx_byte, p.mass_per_script_pub_key_byte, p.mass_per_sig_op, p.storage_mass_parameter);
-        key.estimate_overlay_fee(&calc, Prefix::Mainnet, probe.payload.len(), false)
+        estimate_overlay_fee_with(signer, &calc, Prefix::Mainnet, probe.payload.len(), false)
     });
     if funding_amount <= fee {
         die(format!("--funding-amount {funding_amount} does not cover the fee {fee}"));
@@ -620,6 +654,11 @@ fn main() {
     // can spend a winning quantum into its own block once `palw_receipt_spend_v4` is armed; the miner's PC need not be on. The file is not
     // secret and grants nothing beyond what it says (the range, the beacon rule, the fee in basis points, the expiry).
     let redeemed = redeem_auth_out.as_ref().map(|path| {
+        // The sidecar has a signing purpose for the claim and for a spend, and none for the V4 redemption authorization (CODE_GAP: a new
+        // `SigningPurpose`). Signing it needs the seed — on the machine that holds it, once.
+        let key = bond.seed_key().unwrap_or_else(|| {
+            die("--redeem-auth-out needs --bond-key-seed: the sidecar has no signing purpose for the V4 redemption authorization yet".into())
+        });
         let bundle = key
             .build_redemption_bundle_v4(
                 commitment.job.network_domain,
@@ -896,6 +935,8 @@ fn track_once(endpoints: &[String], claim_hex: &str, tx_id_hex: Option<&str>, ou
             "agree": agree,
             "state": if agree { Some(format!("{:?}", states[0])) } else { None },
             "settled": agree && states[0].is_settled(),
+            // Nodes agreeing is not a proof: no header or state proof stands behind any of this (RFC-0009 §6).
+            "provenance": misaka_palw_remote::trust::UNVERIFIED_REMOTE_STATE,
             "note": "a relay accept is not inclusion; Final/void are settled only finality_depth DAA deep; a disagreement is a disagreement, not an average",
         })
     );
@@ -943,6 +984,56 @@ impl misaka_palw_remote::view::ChainView for WrpcViewNode<'_> {
     }
 }
 
+/// The bond key's custodian: a seed this process holds, or a sidecar it asks.
+enum BondSigner {
+    Seed(ValidatorKey),
+    Sidecar(kaspa_pq_signer::sidecar::SidecarSigner),
+}
+
+impl BondSigner {
+    fn signer(&self) -> &dyn MessageSigner {
+        match self {
+            BondSigner::Seed(key) => key,
+            BondSigner::Sidecar(sidecar) => sidecar,
+        }
+    }
+    fn seed_key(&self) -> Option<&ValidatorKey> {
+        match self {
+            BondSigner::Seed(key) => Some(key),
+            BondSigner::Sidecar(_) => None,
+        }
+    }
+}
+
+/// **RFC-0009 stage A: relay a free-prompt carrier somebody else signed.** Needs no key: it checks that the bytes are a free-prompt commitment whose
+/// claim signature verifies under the executor key they name and whose funding signature verifies over the transaction (so a relay cannot be handed
+/// something that would waste a node's time or its own), then fans them out. The funding AMOUNT is public data the sighash commits to; the funding
+/// script is rebuilt from the key the carrier is signed with. A relay is not an authority: the nodes validate the bytes themselves.
+fn relay_signed_carrier(path: &Path, funding_amount: u64, endpoints: &[String], min_accept: usize, checkpoint: Option<&str>) {
+    if endpoints.is_empty() {
+        die("--relay-signed needs --relay <host:port,...>".into());
+    }
+    if funding_amount == 0 {
+        die("--relay-signed needs --funding-amount <sompi>: the funding input's value, which its signature commits to".into());
+    }
+    let tx: kaspa_consensus_core::tx::Transaction = read_borsh(path, "signed carrier");
+    let checked = misaka_palw_remote::relay::check_fp_carrier_v1(&tx).unwrap_or_else(|e| die(format!("nothing is relayed: {e}")));
+    let claim = checked.claim_id;
+    let funding = UtxoEntry::new(funding_amount, misaka_palw_remote::bundle::funding_spk_of_pubkey_v1(&checked.funding_pubkey), 0, false);
+    let relayed = relay_through_many(endpoints, &tx, &funding, min_accept, checkpoint);
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema": "misaka.palw.fp-rail-relay-signed.v1",
+            "fp_claim_id": hex(claim),
+            "tx_id": tx.id().to_string(),
+            "relayed": relayed,
+            "note": "this process held no key and has no authority over the claim; an accept is not inclusion; the claim's material is still the executor's (or a provider's) to serve",
+        })
+    );
+}
+
+
 /// **RFC-0009 stage A: relay a locally signed carrier through several nodes.** The funding signature is verified first (the same
 /// check the script engine will make), the id is recomputed from the bytes, and each node's reply is judged against it.
 fn relay_through_many(
@@ -988,6 +1079,7 @@ fn relay_through_many(
             match misaka_palw_remote::view::agree(&view_refs, &policy) {
                 Ok(agreed) => serde_json::json!({
                     "agreed": true, "nodes": agreed.nodes, "virtual_daa": agreed.virtual_daa, "network": agreed.network_id,
+                    "provenance": agreed.provenance().label(),
                     "pruning_point": agreed.pruning_point.to_string(),
                 }),
                 Err(halt) => die(format!("the nodes do not agree, nothing was sent: {halt}")),
