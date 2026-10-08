@@ -14,6 +14,20 @@
 //! * Missing material is `Unavailable` — an availability outcome, never an arithmetic conviction; whether the producer defaulted on
 //!   a demand is recorded separately and is the only ground the DA path gives for blaming it.
 //!
+//! **RFC-0015's `Challengeable` path** (`OptimisticPublicVerification`, no Panel):
+//!
+//! ```text
+//! Committed → Challengeable{since, window_end} → WindowClosed → Final
+//!                  └─ filed demand / proof → Disputed → Convicted | (dismissed: back to Challengeable)
+//!                  └─ withheld material                → Unavailable
+//! ```
+//!
+//! `Challengeable` is **not** `ProbabilisticPass`: nothing passed it. It is entered by [`ClaimEventV1::OpenChallengeWindow`] alone
+//! and accepts no [`ClaimEventV1::Tally`] (a tally event in it is an error, never a no-op), so no Covered tally and no Panel
+//! binding can ever be fabricated for it. Its Final is the explicit window rule: the window closed, the retention obligation is
+//! met, no accepted dispute is open and the proof grace after the latest service elapsed — "nobody challenged" is displayed as
+//! that, never as "verified".
+//!
 //! [`DisputeBudgetV1`] bounds what disputes can force: per-claim and per-accuser open disputes and the total court work in flight
 //! (§15.5: rate-limit bonded disputes and bound simultaneous court exposure).
 
@@ -59,6 +73,12 @@ pub enum ClaimStateV1 {
     TimedOut {
         daa: u64,
     } = 9,
+    /// **RFC-0015**: the public challenge window is open (no Panel passed this claim; there is no tally to wait for). Ends at
+    /// `window_end_daa`, fixed when the window opened.
+    Challengeable {
+        since_daa: u64,
+        window_end_daa: u64,
+    } = 10,
 }
 
 impl ClaimStateV1 {
@@ -84,6 +104,9 @@ pub enum ClaimEventV1 {
     StartChecking { daa: u64 },
     /// The tally as it stands at `daa`.
     Tally { daa: u64, state: TallyStateV1 },
+    /// **RFC-0015**: open the claim's fixed public challenge window (`challenge_window_daa` from `daa`). Valid only for a freshly
+    /// committed claim; it replaces the Panel's checking and tally for an `OptimisticPublicVerification` claim.
+    OpenChallengeWindow { daa: u64 },
     /// A public bond filed a fault proof or a challenge.
     DisputeFiled { daa: u64 },
     /// The exact court's verdict on one open dispute.
@@ -143,6 +166,9 @@ impl ClaimLifecycleV1 {
                 self.state.clone()
             }
             (S::Committed, E::BindChallenge { anchor_daa }) => S::ChallengeBound { anchor_daa: *anchor_daa },
+            (S::Committed, E::OpenChallengeWindow { daa }) => {
+                S::Challengeable { since_daa: *daa, window_end_daa: daa.saturating_add(self.policy.challenge_window_daa) }
+            }
             (S::ChallengeBound { anchor_daa }, E::StartChecking { daa }) if daa >= anchor_daa => {
                 S::Checking { anchor_daa: *anchor_daa, deadline_daa: anchor_daa + self.policy.check_window_daa }
             }
@@ -156,14 +182,24 @@ impl ClaimLifecycleV1 {
                 _ => self.state.clone(),
             },
             (S::Checking { deadline_daa, .. }, E::Tick { daa }) if daa > deadline_daa => S::TimedOut { daa: *daa },
-            (S::ProbabilisticPass { window_end_daa, .. }, E::Tick { daa }) if daa >= window_end_daa => {
+            (S::ProbabilisticPass { window_end_daa, .. } | S::Challengeable { window_end_daa, .. }, E::Tick { daa })
+                if daa >= window_end_daa =>
+            {
                 S::WindowClosed { window_end_daa: *window_end_daa }
             }
             // A challenge may be filed until the window closes, also against a passed claim.
-            (S::Checking { .. } | S::ProbabilisticPass { .. }, E::DisputeFiled { daa }) if self.window_open(*daa) => {
+            (S::Checking { .. } | S::ProbabilisticPass { .. } | S::Challengeable { .. }, E::DisputeFiled { daa })
+                if self.window_open(*daa) =>
+            {
                 S::Disputed { open: 1, resume: Box::new(self.state.clone()) }
             }
             (S::Disputed { open, resume }, E::DisputeFiled { .. }) => S::Disputed { open: open + 1, resume: resume.clone() },
+            // RFC-0015: a Challengeable claim (or a disputed one that resumes to it) has NO tally. A tally event is an error, never
+            // a no-op: nothing here can be mistaken for coverage, and a consumer feeding tallies to it learns it at once.
+            (S::Challengeable { .. }, E::Tally { .. }) => return Err(self.invalid(&e)),
+            (S::Disputed { resume, .. }, E::Tally { .. }) if matches!(**resume, S::Challengeable { .. }) => {
+                return Err(self.invalid(&e));
+            }
             // The Panel's coverage may land while a dispute is open: it moves the state the dispute resumes to (the pass and its
             // window start now), and Final stays blocked until the dispute's verdict.
             (S::Disputed { open, resume }, E::Tally { daa, state: TallyStateV1::Covered }) => match &**resume {
@@ -185,7 +221,7 @@ impl ClaimLifecycleV1 {
                 }
             }
             (
-                S::Checking { .. } | S::ProbabilisticPass { .. } | S::Disputed { .. },
+                S::Checking { .. } | S::ProbabilisticPass { .. } | S::Challengeable { .. } | S::Disputed { .. },
                 E::MaterialUnavailable { daa, producer_defaulted },
             ) => S::Unavailable { daa: *daa, producer_defaulted: *producer_defaulted },
             (_, E::Tick { .. }) => self.state.clone(),
@@ -202,7 +238,9 @@ impl ClaimLifecycleV1 {
 
     fn window_open(&self, daa: u64) -> bool {
         match &self.state {
-            ClaimStateV1::ProbabilisticPass { window_end_daa, .. } => daa < *window_end_daa,
+            ClaimStateV1::ProbabilisticPass { window_end_daa, .. } | ClaimStateV1::Challengeable { window_end_daa, .. } => {
+                daa < *window_end_daa
+            }
             _ => true,
         }
     }
@@ -424,6 +462,87 @@ mod tests {
         let mut l = checking();
         l.apply(ClaimEventV1::MaterialUnavailable { daa: 40, producer_defaulted: true }).unwrap();
         assert_eq!(l.state, ClaimStateV1::Unavailable { daa: 40, producer_defaulted: true });
+    }
+
+    fn challengeable() -> ClaimLifecycleV1 {
+        let mut l = ClaimLifecycleV1::new(policy());
+        l.apply(ClaimEventV1::OpenChallengeWindow { daa: 10 }).unwrap();
+        l.apply(ClaimEventV1::RetentionMet).unwrap();
+        l
+    }
+
+    #[test]
+    fn an_optimistic_claim_finalizes_by_the_explicit_window_rule_alone_with_no_tally() {
+        let mut l = challengeable();
+        assert_eq!(l.state, ClaimStateV1::Challengeable { since_daa: 10, window_end_daa: 60 });
+        l.apply(ClaimEventV1::Tick { daa: 59 }).unwrap();
+        assert!(matches!(l.state, ClaimStateV1::Challengeable { .. }), "the window is open: no Final");
+        l.apply(ClaimEventV1::Tick { daa: 60 }).unwrap();
+        assert_eq!(l.state, ClaimStateV1::Final { final_daa: 60 });
+        // The Panel states are never visited on this path.
+        let mut seen = challengeable();
+        for daa in 11..60 {
+            seen.apply(ClaimEventV1::Tick { daa }).unwrap();
+            assert!(!matches!(
+                seen.state,
+                ClaimStateV1::ChallengeBound { .. } | ClaimStateV1::Checking { .. } | ClaimStateV1::ProbabilisticPass { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn a_challengeable_claim_has_no_tally_and_a_tally_event_is_an_error_never_a_no_op() {
+        for state in
+            [TallyStateV1::Covered, TallyStateV1::Incomplete { uncovered: vec![] }, TallyStateV1::Unavailable { seat: [1; 64] }]
+        {
+            let mut l = challengeable();
+            assert!(l.apply(ClaimEventV1::Tally { daa: 20, state: state.clone() }).is_err());
+            assert!(matches!(l.state, ClaimStateV1::Challengeable { .. }));
+            // Under an open dispute it resumes to Challengeable: still no tally.
+            l.apply(ClaimEventV1::DisputeFiled { daa: 21 }).unwrap();
+            assert!(l.apply(ClaimEventV1::Tally { daa: 22, state }).is_err());
+        }
+        // It cannot be re-bound to a Panel's checking either.
+        let mut l = challengeable();
+        assert!(l.apply(ClaimEventV1::BindChallenge { anchor_daa: 11 }).is_err());
+        assert!(l.apply(ClaimEventV1::StartChecking { daa: 11 }).is_err());
+        // And a window opens once, for a freshly committed claim only.
+        assert!(l.apply(ClaimEventV1::OpenChallengeWindow { daa: 11 }).is_err());
+        let mut l = checking();
+        assert!(l.apply(ClaimEventV1::OpenChallengeWindow { daa: 20 }).is_err(), "a Panel claim never becomes optimistic");
+    }
+
+    #[test]
+    fn a_dispute_blocks_an_optimistic_final_a_dismissal_resumes_and_a_conviction_voids() {
+        let mut l = challengeable();
+        l.apply(ClaimEventV1::DisputeFiled { daa: 30 }).unwrap();
+        l.apply(ClaimEventV1::Tick { daa: 500 }).unwrap();
+        assert!(matches!(l.state, ClaimStateV1::Disputed { open: 1, .. }), "an open dispute blocks Final whatever the clock");
+        l.apply(ClaimEventV1::CourtVerdict { daa: 501, convicted: false }).unwrap();
+        assert!(matches!(l.state, ClaimStateV1::Challengeable { .. }), "dismissed: back to the window");
+        l.apply(ClaimEventV1::Tick { daa: 502 }).unwrap();
+        assert!(matches!(l.state, ClaimStateV1::Final { .. }), "the window had closed meanwhile");
+        let mut l = challengeable();
+        l.apply(ClaimEventV1::DisputeFiled { daa: 30 }).unwrap();
+        l.apply(ClaimEventV1::CourtVerdict { daa: 31, convicted: true }).unwrap();
+        assert_eq!(l.state, ClaimStateV1::Convicted { daa: 31 });
+        // A challenge after the window is refused, and withheld material is the DA path.
+        let mut l = challengeable();
+        assert!(l.apply(ClaimEventV1::DisputeFiled { daa: 60 }).is_err());
+        l.apply(ClaimEventV1::MaterialUnavailable { daa: 40, producer_defaulted: true }).unwrap();
+        assert_eq!(l.state, ClaimStateV1::Unavailable { daa: 40, producer_defaulted: true });
+    }
+
+    #[test]
+    fn a_service_holds_an_optimistic_final_until_its_proof_grace_has_elapsed() {
+        let mut l = challengeable();
+        l.apply(ClaimEventV1::ProofGrace { until_daa: 75 }).unwrap();
+        l.apply(ClaimEventV1::Tick { daa: 60 }).unwrap();
+        assert_eq!(l.state, ClaimStateV1::WindowClosed { window_end_daa: 60 });
+        l.apply(ClaimEventV1::Tick { daa: 74 }).unwrap();
+        assert!(matches!(l.state, ClaimStateV1::WindowClosed { .. }));
+        l.apply(ClaimEventV1::Tick { daa: 75 }).unwrap();
+        assert_eq!(l.state, ClaimStateV1::Final { final_daa: 75 });
     }
 
     #[test]

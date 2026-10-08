@@ -30,7 +30,7 @@
     {"name": "l_position", "value": "None", "layer": true},
     {"name": "embedding", "value": {"dim": {"$var": "hidden"}, "scale": 1.0, "positions": {"rows": {"$var": "n_pos"}, "offset": 0}}},
     {"name": "qkv_layout", "value": "FusedConcat"},
-    {"name": "names", "value": {"embed": "{p}wte", "pos_embed": "{p}wpe", "final_norm": "{p}ln_f", "lm_head": {"$if": [{"$var": "tied"}, "{p}wte", "lm_head"]}, "norm.mix": "{p}h.{L}.ln_1", "norm.ffn": "{p}h.{L}.ln_2", "attn.qkv": "{p}h.{L}.attn.c_attn", "attn.o": "{p}h.{L}.attn.c_proj", "mlp.up": "{p}h.{L}.mlp.c_fc", "mlp.down": "{p}h.{L}.mlp.c_proj"}},
+    {"name": "names", "value": {"embed": "{p}wte", "pos_embed": "{p}wpe", "final_norm": "{p}ln_f", "lm_head": {"$if": [{"$var": "tied"}, "{p}wte", {"$var": "lm_head_name"}]}, "norm.mix": "{p}h.{L}.ln_1", "norm.ffn": "{p}h.{L}.ln_2", "attn.qkv": "{p}h.{L}.attn.c_attn", "attn.o": "{p}h.{L}.attn.c_proj", "mlp.up": "{p}h.{L}.mlp.c_fc", "mlp.down": "{p}h.{L}.mlp.c_proj"}},
     {"name": "p", "value": "transformer."},
     {"name": "prefix_aliases", "value": [["transformer.", ""]]},
     {"name": "conv1d", "value": true},

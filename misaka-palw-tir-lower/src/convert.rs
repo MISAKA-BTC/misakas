@@ -146,6 +146,9 @@ pub struct ConvertRequest {
     pub stats_out: Option<std::path::PathBuf>,
     /// The longest context the artifact will be served at (default: the longest calibration sequence).
     pub context: Option<usize>,
+    /// **The longest calibration sequence pinned statistics were measured on** (a rebuild from `stats_in`): a recurrent program's
+    /// artifact records it as `calibrated_context`, as the run that measured the statistics did, so the rebuild is the same file.
+    pub calibrated_context: Option<usize>,
     pub policy: QuantPolicy,
     pub max_window: Option<u32>,
     pub chunk_store: Option<std::path::PathBuf>,
@@ -179,6 +182,7 @@ impl ConvertRequest {
             positions: None,
             stats_out: None,
             context: None,
+            calibrated_context: None,
             policy: QuantPolicy::default(),
             max_window: None,
             chunk_store: None,
@@ -267,6 +271,12 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
             }
         }
     };
+    // A recurrent program (a fixed-size state carried across positions) is calibrated on a sequence as long as the context it is
+    // served at (freeze-v1 §5.2); its artifact records the longest one (`calibrated_context`) and the rule as applied
+    // (`calibration_length_rule`), which `declare-layout` checks — the same record `palw-tir-fidelity` writes. A program with no
+    // such state records neither, so its file is unchanged.
+    let recurrent = prep.hl.states.iter().any(|s| matches!(s.kind, crate::hl::StateKind::Fixed));
+    let mut calibrated: Option<(usize, usize)> = None;
     let (stats, calib_source): (BTreeMap<String, SiteStat>, serde_json::Value) = match (&req.stats_in, &req.calib) {
         (Some(p), None) => {
             let text = std::fs::read_to_string(p).map_err(|e| LowerError::Io(format!("{}: {e}", p.display())))?;
@@ -275,6 +285,9 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
                 log(format!("WARNING: {} is in the legacy (decimal float) format — not bit-exact, not for a runtime pack", p.display()));
             }
             log(format!("calibration statistics from {}", p.display()));
+            if recurrent && let Some(longest) = req.calibrated_context {
+                calibrated = Some((longest, req.context.unwrap_or(longest)));
+            }
             (stats, serde_json::json!(p.display().to_string()))
         }
         (None, Some(c)) => {
@@ -291,8 +304,11 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
             }
             let longest = seqs.iter().map(Vec::len).max();
             let context = req.context.or(longest).unwrap_or(0);
-            crate::fidelity::check_calibration_length(&prep.hl, &seqs, context)
-                .map_err(|e| LowerError::bad(format!("{e}; pass a context to declare the context served")))?;
+            if let Some(longest) = crate::fidelity::check_calibration_length(&prep.hl, &seqs, context)
+                .map_err(|e| LowerError::bad(format!("{e}; pass a context to declare the context served")))?
+            {
+                calibrated = Some((longest, context));
+            }
             log(format!("calibrating on {} sequences, {} positions", seqs.len(), seqs.iter().map(Vec::len).sum::<usize>()));
             let s = crate::fidelity::calibrate(&prep.hl, &loader, &seqs, &progress("calibration"))?;
             (s, c.source.clone())
@@ -311,7 +327,13 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
     if let Some(p) = &req.stats_out {
         std::fs::write(p, stats_to_json(&stats)).map_err(|e| LowerError::Io(format!("{}: {e}", p.display())))?;
     }
-    let tokenizer_path = req.tokenizer.clone().unwrap_or_else(|| req.model.join("tokenizer.json"));
+    // The tokenizer the class binds: the one given, else the model directory's first tokenizer file
+    // ([`crate::artifact::TOKENIZER_FILES_V1`]; `tokenizer.json` when it has one), zero when it has none.
+    let tokenizer_path = req
+        .tokenizer
+        .clone()
+        .or_else(|| crate::artifact::tokenizer_path_in(&req.model))
+        .unwrap_or_else(|| req.model.join("tokenizer.json"));
     let (tokenizer_id, tokenizer_file) = match std::fs::read(&tokenizer_path) {
         Ok(bytes) => (crate::artifact::tokenizer_id_of(&bytes), Some(tokenizer_path)),
         Err(_) => ([0u8; 64], None),
@@ -324,7 +346,7 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
     let policy = req.policy.clone();
     let math = req.math;
     let meta = |m: &StreamMaterialised| {
-        serde_json::json!({
+        let mut meta = serde_json::json!({
             "architecture": prep.spec.architecture,
             "resid_scale": m.resid_scale,
             "logits_scale": m.logits_scale,
@@ -341,7 +363,12 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
             "converter": format!("palw-tir-convert {}", env!("CARGO_PKG_VERSION")),
             // The platform is recorded only for `std`: libm-v1 does not depend on it.
             "math": if math == MathMode::Std { serde_json::json!({ "mode": "std", "platform": crate::detmath::platform() }) } else { serde_json::json!({ "mode": "libm-v1" }) },
-        })
+        });
+        if let Some((longest, context)) = calibrated {
+            meta["calibrated_context"] = serde_json::json!(longest);
+            meta["calibration_length_rule"] = serde_json::json!({ "rule": "met", "longest": longest, "context": context });
+        }
+        meta
     };
     let copts = ConvertOpts {
         stream: StreamOpts { defer_min_elems: req.defer_min_mib << 18, block_elems: req.block_mib << 18 },

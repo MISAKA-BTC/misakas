@@ -476,6 +476,23 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
             refuse_leftover(&m)?;
             out.inv_freq = llama3_inv_freq(&out.inv_freq, factor, low, high, old);
         }
+        // **An explicit table of frequency divisors** (`ROPE_FREQ_FACTORS_V1`): `inv_freq_i / factor_i` for `dim / 2` factors, one
+        // static table at every length. This is llama.cpp's `rope_freqs.weight` (a GGUF stores the divisors a Llama-3.x rope scaling
+        // yields, or any other the converter computed) and exactly what ggml's `rope_ext` does with `freq_factors`:
+        // `theta_i = pos · base^(−2i/d) / factor_i`. Any table is admissible — the program's structure does not depend on its
+        // values — so a conversion never refuses a GGUF for the numbers in it.
+        "freq_factors" => {
+            let factors = take_f64_list(&mut m, "factors")?
+                .ok_or_else(|| LowerError::bad(format!("{arch}: freq_factors rope without `factors`")))?;
+            refuse_leftover(&m)?;
+            if factors.len() != dim / 2 {
+                return Err(LowerError::bad(format!("{arch}: freq_factors has {} entries, rotary dim/2 is {}", factors.len(), dim / 2)));
+            }
+            if let Some(f) = factors.iter().find(|f| !f.is_finite() || **f <= 0.0) {
+                return Err(LowerError::bad(format!("{arch}: freq_factors holds {f}: a divisor is finite and positive")));
+            }
+            out.inv_freq = out.inv_freq.iter().zip(&factors).map(|(x, f)| x / *f as f32).collect();
+        }
         "longrope" | "su" => {
             let long = take_f64_list(&mut m, "long_factor")?
                 .ok_or_else(|| LowerError::bad(format!("{arch}: longrope without long_factor")))?;
@@ -766,6 +783,39 @@ mod tests {
         let base = 10000.0 * ((2.0 * 32.0 / 16.0) - 1.0f64).powf(8.0 / 6.0);
         assert_eq!(at, default_inv_freq(base, 8));
         assert!(at[1] < f.inv_freq[1]);
+    }
+
+    /// `freq_factors` is `inv_freq / factor` per dimension, one static table: ggml's `freq_factors`. The Llama-3 divisors a GGUF
+    /// stores (`rope_freqs.weight`) reproduce transformers' `llama3` table to float32 rounding, and any other positive table reads.
+    #[test]
+    fn freq_factors_divide_the_default_frequencies_and_reproduce_llama3_scaling() {
+        let dim = 128;
+        let theta = 500000.0;
+        let llama3 = compute_freqs("t", &rc("llama3", theta, json!({"factor": 8.0, "low_freq_factor": 1.0, "high_freq_factor": 4.0, "original_max_position_embeddings": 8192})), ctx(dim, 131072)).unwrap();
+        // The divisors llama.cpp's converter writes for that scaling (`LlamaModel.generate_extra_tensors`).
+        let plain = default_inv_freq(theta, dim);
+        let factors: Vec<f64> = plain.iter().zip(&llama3.inv_freq).map(|(p, l)| (*p / *l) as f64).collect();
+        let f = compute_freqs("t", &rc("freq_factors", theta, json!({ "factors": factors })), ctx(dim, 131072)).unwrap();
+        assert_eq!(f.inv_freq.len(), dim / 2);
+        assert!(f.dynamic.is_none() && f.longrope.is_none() && (f.attention_factor - 1.0).abs() < 1e-12);
+        for (a, b) in f.inv_freq.iter().zip(&llama3.inv_freq) {
+            assert!((a - b).abs() <= 2e-7 * b.abs(), "{a} vs {b}");
+        }
+        // Any positive table: the divisors apply to the default frequencies one by one.
+        let odd: Vec<f64> = (0..dim / 2).map(|i| 1.0 + (i % 5) as f64 * 0.75).collect();
+        let g = compute_freqs("t", &rc("freq_factors", theta, json!({ "factors": odd })), ctx(dim, 4096)).unwrap();
+        for i in 0..dim / 2 {
+            assert!((g.inv_freq[i] - plain[i] / odd[i] as f32).abs() <= 1e-7 * plain[i].abs());
+        }
+        // Refusals are named: a wrong length, a non-positive divisor, an unknown key, a missing list.
+        for bad in [
+            json!({ "factors": [1.0, 2.0] }),
+            json!({ "factors": vec![0.0; dim / 2] }),
+            json!({ "factors": vec![1.0; dim / 2], "factor": 2.0 }),
+            json!({}),
+        ] {
+            assert!(compute_freqs("t", &rc("freq_factors", theta, bad), ctx(dim, 4096)).is_err());
+        }
     }
 
     #[test]

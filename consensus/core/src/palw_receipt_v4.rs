@@ -1,4 +1,5 @@
-//! **RFC-0009 stage C — public receipt redemption** (`Params::palw_receipt_spend_v4`, DORMANT on every preset).
+//! **RFC-0009 stage C — public receipt redemption** (`Params::palw_receipt_spend_v4`; dormant on every preset but testnet-12 as shipped,
+//! which arms it with the int-13 list at DAA 9,000 — `PALW_T12_INT13_FENCES_V1`).
 //!
 //! Today a free-prompt `Final` claim's winning quantum is spent into a receipt BLOCK, and the block's producer must be the
 //! claim's executor (`ProducerNotExecutor`): the miner's PC has to stay on after the claim to collect the receipt reward. This
@@ -72,6 +73,14 @@ pub const PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/fp-v4/spe
 pub const fn palw_receipt_spend_v4_value_v1() -> [u64; 1] {
     [PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS as u64]
 }
+
+/// **The fence's entry for a flag-day list** (testnet-12's int-13 list, `PALW_T12_INT13_FENCES_V1`): the fence is a bare height — no
+/// bundle mirror, the processor reads `Params::palw_receipt_spend_v4_active_at` — so the entry sets that one field. Its prerequisites
+/// (`palw_audit_2026_09_11`, `palw_audit_2026_09_23`) are asked by [`Params::validate_palw_receipt_spend_v4`].
+pub const PALW_T12_RECEIPT_SPEND_V4_ENTRY: crate::config::params::PalwPostLaunchFenceV1 = crate::config::params::PalwPostLaunchFenceV1 {
+    name: "palw_receipt_spend_v4",
+    set: |params, at| params.palw_receipt_spend_v4 = at,
+};
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwReceiptV4Error {

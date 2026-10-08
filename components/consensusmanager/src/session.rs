@@ -741,6 +741,13 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(|c| c.get_native_settlement_snapshot()).await
     }
 
+    /// RFC-0012 D1: why `safe` stands where it does at the sink, off the async runtime.
+    pub async fn async_get_native_safe_readiness(
+        &self,
+    ) -> ConsensusResult<Option<kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1>> {
+        self.clone().spawn_blocking(|c| c.get_native_safe_readiness()).await
+    }
+
     pub async fn async_palw_settlement_v1(
         &self,
         daa_score: u64,

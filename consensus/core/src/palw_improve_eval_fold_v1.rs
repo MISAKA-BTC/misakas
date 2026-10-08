@@ -716,7 +716,10 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     builder.write_claim(*c.claim_id, Some(claim));
     builder.write_improvement_eval_job(key, Some(row));
     let deadline = daa.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
-    builder.arm_deadline(deadline, *c.claim_id);
+    // RFC-0010: a claim accepted under the permissionless Panel's rule is clocked by its engine, not by V2's bind window.
+    if !builder.params.panel_v3_rule_at(daa) {
+        builder.arm_deadline(deadline, *c.claim_id);
+    }
     Ok(())
 }
 

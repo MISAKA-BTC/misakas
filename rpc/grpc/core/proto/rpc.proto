@@ -2019,6 +2019,8 @@ message GetPalwSettlementResponseMessage {
   uint64 safeFrontierDaa = 9;
   optional uint64 dnsRetiredAt = 10;
   optional string nativeSettlementJson = 11;
+  // RFC-0012 D1: the `safe` readiness explanation (`NativeSafeReadinessV1`) as JSON; absent before the retirement fence.
+  optional string nativeReadinessJson = 12;
   RPCError error = 1000;
 }
 
@@ -2882,6 +2884,20 @@ message GetPalwActivationPoolResponseMessage {
   RPCError error = 1000;
 }
 
+// RFC-0010 (lane C2): the permissionless Panel's observation (op 220; read-only). `json` is the node's versioned
+// PanelV3ObservationV1 (camelCase); fields are only appended.
+message GetPalwPanelV3StatusRequestMessage {
+  repeated string claimIds = 1;
+  uint32 limit = 2;
+}
+
+message GetPalwPanelV3StatusResponseMessage {
+  bool available = 1;
+  uint32 observationVersion = 2;
+  string json = 3;
+  RPCError error = 1000;
+}
+
 // ADR-0160 §7.5 (lane shadow, node-only): the capacity shadow (op 201).
 message RpcPalwCapacityStep {
   uint64 fromDaa = 1;
@@ -3031,6 +3047,204 @@ message GetPalwCapacityShadowResponseMessage {
   repeated RpcPalwCapacityAttributionRow attribution = 35;
   string referenceConvictionTierSompi = 36;
   repeated RpcPalwCapacityAdversaryRow adversary = 37;
+  RPCError error = 1000;
+}
+
+// G14 lane D: the kernel route's public read (ops 210, 211).
+message RpcPalwKernelServed {
+  uint32 stage = 1;
+  uint32 position = 2;
+  string bytes = 3;
+}
+
+message RpcPalwKernelDemand {
+  uint32 stage = 1;
+  uint32 position = 2;
+  uint32 demanders = 3;
+  uint64 filedDaa = 4;
+  uint64 deadlineDaa = 5;
+  string lastRejection = 6;
+}
+
+message RpcPalwKernelSeat {
+  string bond = 1;
+  string kernelBond = 2;
+}
+
+message GetPalwKernelClaimRequestMessage {
+  string claimId = 1;
+}
+
+message GetPalwKernelClaimResponseMessage {
+  bool available = 1;
+  bool found = 2;
+  uint64 tipDaa = 3;
+  string claimId = 4;
+  string kind = 5;
+  string state = 6;
+  uint64 finalDaa = 7;
+  bool convicted = 8;
+  bool rewarded = 9;
+  uint64 reservedSompi = 10;
+  uint64 committedDaa = 11;
+  uint64 liabilityUntil = 12;
+  string producerBond = 13;
+  string jobId = 14;
+  string classId = 15;
+  string publicRecord = 16;
+  string recordHeader = 17;
+  repeated RpcPalwKernelServed served = 18;
+  repeated RpcPalwKernelDemand demands = 19;
+  repeated RpcPalwKernelSeat seats = 20;
+  uint32 quorum = 21;
+  uint64 assignmentDeadlineDaa = 22;
+  uint32 receiptsCounted = 23;
+  string ledgerRoot = 24;
+  string auxRoot = 25;
+  string mode = 26;
+  bool opv = 27;
+  uint64 opvAdmittedDaa = 28;
+  uint64 opvVerifierStartCutoffDaa = 29;
+  uint64 opvFinalFloorDaa = 30;
+  uint64 opvHardDeadlineDaa = 31;
+  uint64 opvReservationSompi = 32;
+  uint64 opvMaxGainSompi = 33;
+  string finalStatement = 34;
+  RPCError error = 1000;
+}
+
+message RpcPalwKernelRow {
+  uint32 table = 1;
+  string key = 2;
+  string row = 3;
+}
+
+message GetPalwKernelRowsRequestMessage {
+  bool hasCursor = 1;
+  uint32 afterTable = 2;
+  string afterKey = 3;
+  uint32 maxBytes = 4;
+}
+
+message GetPalwKernelRowsResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  string ledgerRoot = 3;
+  string auxRoot = 4;
+  string header = 5;
+  repeated RpcPalwKernelRow rows = 6;
+  bool more = 7;
+  uint32 nextTable = 8;
+  string nextKey = 9;
+  uint64 totalRows = 10;
+  RPCError error = 1000;
+}
+
+// G14 lane D / RFC-0015: the kernel route's Finals and the beacon's fact for each (op 212).
+message GetPalwKernelFinalsRequestMessage {
+  uint32 limit = 1;
+}
+
+message RpcPalwKernelFinal {
+  string claimId = 1;
+  string mode = 2;
+  string finalPath = 3;
+  string sourceProfileId = 4;
+  string canonicalWorkId = 5;
+  string executionCommitment = 6;
+  uint64 acceptedDaa = 7;
+  uint64 finalDaa = 8;
+  bool daSatisfied = 9;
+  string standing = 10;
+  string workFinalEvent = 11;
+  string statement = 12;
+}
+
+message GetPalwKernelFinalsResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  repeated RpcPalwKernelFinal finals = 3;
+  uint64 total = 4;
+  string ledgerRoot = 5;
+  RPCError error = 1000;
+}
+
+// G14 lane D phase 3: where a V2 class stands on the onboarding path (op 230).
+message GetPalwOnboardingRequestMessage {
+  string classId = 1;
+}
+
+message RpcPalwOnboardingBinding {
+  string kernelParamRoot = 1;
+  string state = 2;
+  string binder = 3;
+  uint64 boundDaa = 4;
+  uint64 maturesDaa = 5;
+  uint64 finalDaa = 6;
+  uint64 reservedSompi = 7;
+}
+
+message GetPalwOnboardingResponseMessage {
+  bool available = 1;
+  bool found = 2;
+  uint64 tipDaa = 3;
+  string classId = 4;
+  string status = 5;
+  string artifactRoot = 6;
+  string registrant = 7;
+  repeated RpcPalwOnboardingBinding artifactBindings = 8;
+  bool kernelBound = 9;
+  string kernelClass = 10;
+  string kernelPlanRoot = 11;
+  string challengePolicyId = 12;
+  bool conformanceCommitted = 13;
+  string conformanceStatementRoot = 14;
+  uint64 conformanceDaa = 15;
+  string gate = 16;
+  string gateCode = 17;
+  string gateReason = 18;
+  string ledgerRoot = 19;
+  string auxRoot = 20;
+  RPCError error = 1000;
+}
+
+// Onboarding P0: a V2 class's conformance record, current attempt and posted evidence (op 231).
+message GetPalwConformanceEvidenceRequestMessage {
+  string classId = 1;
+}
+
+message GetPalwConformanceEvidenceResponseMessage {
+  bool available = 1;
+  bool found = 2;
+  uint64 tipDaa = 3;
+  string classId = 4;
+  string lifecycleState = 5;
+  string lastFailure = 6;
+  string attemptEnd = 7;
+  uint32 attempts = 8;
+  uint32 attemptLimit = 9;
+  string challengePolicyId = 10;
+  string challengePolicy = 11;
+  string statementRoot = 12;
+  uint64 committedDaa = 13;
+  uint64 challengeEpoch = 14;
+  string beaconState = 15;
+  uint32 beaconHave = 16;
+  uint32 beaconNeed = 17;
+  uint64 lockPosition = 18;
+  string beaconOutput = 19;
+  bool evidencePosted = 20;
+  string evidenceId = 21;
+  uint64 evidenceDaa = 22;
+  uint64 windowEndDaa = 23;
+  string gate = 24;
+  string gateCode = 25;
+  string gateReason = 26;
+  string attemptRow = 27;
+  string evidenceRow = 28;
+  string ledgerRoot = 29;
+  string auxRoot = 30;
+  string program = 31;
   RPCError error = 1000;
 }
 

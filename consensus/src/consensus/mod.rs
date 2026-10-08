@@ -2444,6 +2444,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_capacity_shadow_v1_impl(options)
     }
 
+    fn palw_panel_v3_observation_v1(
+        &self,
+        ids: Vec<kaspa_hashes::Hash64>,
+        limit: usize,
+    ) -> Option<kaspa_consensus_core::palw_permissionless_panel_v1::PanelV3ObservationV1> {
+        self.virtual_processor.palw_panel_v3_observation_v1_impl(ids, limit)
+    }
+
     fn palw_v2_class_table(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {
         self.virtual_processor.palw_v2_class_table_impl()
     }
@@ -2499,6 +2507,21 @@ impl ConsensusApi for Consensus {
         class_id: kaspa_hashes::Hash64,
     ) -> Option<kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1> {
         self.palw_state_v2_tip()?.tir_class_v1(&class_id).cloned()
+    }
+
+    fn palw_kernel_route_v1(&self) -> Option<kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1> {
+        self.palw_state_v2_tip()?.kernel_route().cloned()
+    }
+
+    fn palw_onboarding_v1(&self, class_id: kaspa_hashes::Hash64) -> Option<kaspa_consensus_core::palw_onboarding_v1::OnboardingReadV1> {
+        self.palw_state_v2_tip()?.onboarding_read_v1(&class_id, self.get_virtual_daa_score())
+    }
+
+    fn palw_conformance_evidence_v1(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_onboarding_v1::ConformanceEvidenceReadV1> {
+        self.palw_state_v2_tip()?.conformance_evidence_read_v1(&class_id, self.get_virtual_daa_score())
     }
 
     fn palw_adopt_class_carriage_v1(&self, class_id: kaspa_hashes::Hash64, carriage: &[u8]) -> Result<(), String> {
@@ -2925,6 +2948,16 @@ impl ConsensusApi for Consensus {
             }
         }
         Ok(snapshot)
+    }
+
+    fn get_native_safe_readiness(
+        &self,
+    ) -> ConsensusResult<Option<kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1>> {
+        // The same gate as the snapshot: nothing before the retirement fence is active at the sink.
+        if self.config.params.palw_dns_retirement.is_none_or(|r| !r.activation.is_active(self.get_sink_daa_score_timestamp().daa_score)) {
+            return Ok(None);
+        }
+        Ok(self.virtual_processor.native_safe_readiness(self.get_sink()))
     }
 
     fn get_evm_canonical_heads(&self) -> ConsensusResult<Option<kaspa_consensus_core::evm::CanonicalEvmHeads>> {

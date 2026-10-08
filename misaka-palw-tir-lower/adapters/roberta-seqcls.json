@@ -1,0 +1,68 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "roberta-seqcls",
+  "doc": "RobertaForSequenceClassification / XLMRobertaForSequenceClassification (a classifier, a cross-encoder reranker such as the BGE rerankers): RoBERTa's encoder, then the classification head on the <s> row \u2014 `classifier.dense`, tanh, `classifier.out_proj` \u2014 to num_labels logits (OUTPUT_CLASSIFY_V1).",
+  "extends": [
+    "roberta",
+    "mixin-seqcls-encoder"
+  ],
+  "match": {
+    "architectures": [
+      "RobertaForSequenceClassification",
+      "XLMRobertaForSequenceClassification"
+    ],
+    "model_types": [
+      "roberta",
+      "xlm-roberta"
+    ]
+  },
+  "vars": [
+    {
+      "name": "names",
+      "value": {
+        "embed": "embeddings.word_embeddings",
+        "pos_embed": "embeddings.position_embeddings",
+        "type_embed": "embeddings.token_type_embeddings",
+        "embed_norm": "embeddings.LayerNorm",
+        "attn.q": "encoder.layer.{L}.attention.self.query",
+        "attn.k": "encoder.layer.{L}.attention.self.key",
+        "attn.v": "encoder.layer.{L}.attention.self.value",
+        "attn.o": "encoder.layer.{L}.attention.output.dense",
+        "norm.mix": "encoder.layer.{L}.attention.output.LayerNorm",
+        "mlp.up": "encoder.layer.{L}.intermediate.dense",
+        "mlp.down": "encoder.layer.{L}.output.dense",
+        "norm.ffn": "encoder.layer.{L}.output.LayerNorm",
+        "cls_pre": "classifier.dense",
+        "cls_out": "classifier.out_proj"
+      }
+    },
+    {
+      "name": "cls_act",
+      "value": "Tanh"
+    },
+    {
+      "name": "cls_pre_on",
+      "value": true
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "pooler.",
+        "cls.",
+        "lm_head.",
+        "vocab_transform.",
+        "vocab_layer_norm.",
+        "vocab_projector."
+      ]
+    },
+    {
+      "name": "prefix_aliases",
+      "value": [
+        [
+          "",
+          "roberta."
+        ]
+      ]
+    }
+  ]
+}

@@ -24,6 +24,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::evidence::VerificationEvidenceV1;
 use crate::hash::Digest;
 use crate::job::{DecodeFaultV1, DecodeRuleV1, KernelClaimV1, KernelJobV1};
+use crate::mode::VerificationModeV1;
 use crate::pipeline::{PipelineEvidenceV1, PipelinePlanV1};
 use crate::pipeline_public::{PipelineClaimV1, PipelineJobPostV1, StageCommitmentsV1};
 use crate::plan::VerificationPlanV1;
@@ -45,6 +46,9 @@ pub const TAG_RESPOND_V1: u8 = 9;
 pub const TAG_REQUEST_EXIT_V1: u8 = 10;
 pub const TAG_WITHDRAW_V1: u8 = 11;
 pub const TAG_SEAL_CLAIM_V1: u8 = 12;
+/// RFC-0015: a class registration that carries its verification mode (a non-legacy mode; the mode is bound into the class id).
+pub const TAG_REGISTER_CLASS_V2: u8 = 13;
+pub const TAG_REGISTER_PIPELINE_CLASS_V2: u8 = 14;
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -60,6 +64,8 @@ pub const MAX_RESPOND_BYTES_V1: usize = 128 << 20;
 pub const MAX_REQUEST_EXIT_BYTES_V1: usize = 256;
 pub const MAX_WITHDRAW_BYTES_V1: usize = 256;
 pub const MAX_SEAL_CLAIM_BYTES_V1: usize = 256;
+pub const MAX_REGISTER_CLASS_V2_BYTES_V1: usize = MAX_REGISTER_CLASS_BYTES_V1;
+pub const MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1: usize = MAX_REGISTER_PIPELINE_CLASS_BYTES_V1;
 
 /// **Who signed an object**: the bond whose key the consumer verified. The ledger checks it names the actor the object names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
@@ -156,6 +162,26 @@ pub enum KernelRouteObjectV1 {
         job: Digest,
         seal: Digest,
     } = 12,
+    /// **RFC-0015**: register a single-program class under an explicit non-legacy `mode`. The mode is part of the class id, so the
+    /// same program, plan and artifact under another mode is another class. `PanelLicensed` is refused here (tag 1 is that mode's
+    /// one registration path). A node accepts this tag only once the `palw_panel_free_v1` fence is reached.
+    RegisterClassV2 {
+        mode: VerificationModeV1,
+        descriptor: Digest,
+        program_bytes: Vec<u8>,
+        plan: VerificationPlanV1,
+        param_commitments: ParamCommitmentsV1,
+    } = 13,
+    /// **RFC-0015**: register a pipeline class (K2-TIR-v3) under an explicit non-legacy `mode`.
+    RegisterPipelineClassV2 {
+        mode: VerificationModeV1,
+        descriptor: Digest,
+        pipeline_bytes: Vec<u8>,
+        program_bytes: Vec<Vec<u8>>,
+        plan: PipelinePlanV1,
+        param_commitments: Vec<ParamCommitmentsV1>,
+        decode: Option<DecodeRuleV1>,
+    } = 14,
 }
 
 /// The seal of a claim: `H("misaka-palw/kernel/claim-seal/v1"; claim id)` (the claim id binds the producer, job, output and evidence).
@@ -235,6 +261,8 @@ impl KernelRouteObjectV1 {
             Self::RequestExit { .. } => TAG_REQUEST_EXIT_V1,
             Self::Withdraw { .. } => TAG_WITHDRAW_V1,
             Self::SealClaim { .. } => TAG_SEAL_CLAIM_V1,
+            Self::RegisterClassV2 { .. } => TAG_REGISTER_CLASS_V2,
+            Self::RegisterPipelineClassV2 { .. } => TAG_REGISTER_PIPELINE_CLASS_V2,
         }
     }
 
@@ -305,6 +333,8 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_REQUEST_EXIT_V1 => "RequestExit",
         TAG_WITHDRAW_V1 => "Withdraw",
         TAG_SEAL_CLAIM_V1 => "SealClaim",
+        TAG_REGISTER_CLASS_V2 => "RegisterClassV2",
+        TAG_REGISTER_PIPELINE_CLASS_V2 => "RegisterPipelineClassV2",
         _ => "Unknown",
     }
 }
@@ -324,6 +354,8 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_REQUEST_EXIT_V1 => MAX_REQUEST_EXIT_BYTES_V1,
         TAG_WITHDRAW_V1 => MAX_WITHDRAW_BYTES_V1,
         TAG_SEAL_CLAIM_V1 => MAX_SEAL_CLAIM_BYTES_V1,
+        TAG_REGISTER_CLASS_V2 => MAX_REGISTER_CLASS_V2_BYTES_V1,
+        TAG_REGISTER_PIPELINE_CLASS_V2 => MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1,
         _ => return None,
     })
 }
@@ -376,9 +408,9 @@ mod tests {
             assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
             assert_ne!(o.name(), "Unknown");
         }
-        let tags: Vec<u8> = (1..=12).collect();
+        let tags: Vec<u8> = (1..=14).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
-        assert!(max_encoded_bytes_of_tag(0).is_none() && max_encoded_bytes_of_tag(13).is_none());
+        assert!(max_encoded_bytes_of_tag(0).is_none() && max_encoded_bytes_of_tag(15).is_none());
     }
 
     #[test]
@@ -389,7 +421,7 @@ mod tests {
         assert_eq!(kind(&[2]), RefusalKindV1::Malformed, "another version");
         assert_eq!(kind(&[KERNEL_ROUTE_VERSION_V1]), RefusalKindV1::Malformed, "no variant");
         assert_eq!(kind(&[KERNEL_ROUTE_VERSION_V1, 0]), RefusalKindV1::Malformed, "tag 0 is not declared");
-        assert_eq!(kind(&[KERNEL_ROUTE_VERSION_V1, 13]), RefusalKindV1::Malformed, "an undeclared tag");
+        assert_eq!(kind(&[KERNEL_ROUTE_VERSION_V1, 15]), RefusalKindV1::Malformed, "an undeclared tag");
         assert_eq!(kind(&good[..good.len() - 1]), RefusalKindV1::Malformed, "truncated");
         let mut trailing = good.clone();
         trailing.push(0);

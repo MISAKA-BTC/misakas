@@ -9,7 +9,8 @@
 //!   shape depth for `admit`). `pack` needs the weights and `seat`/`final` a chain: in a census they are never `PASS`.
 
 use super::codes::{self, Gate, GateStatus};
-use super::listing::{ArtifactKind, ListingV1, SelectedV1, StrataV1, TaskV1, select, strata_of, task_of};
+use super::onboarding::{GapClassV1, classify_census_code_v1};
+use super::listing::{ArtifactKind, ListingV1, SelectedV1, StrataV1, TaskV1, select, strata_of, task_of, torch_checkpoint_only};
 use super::rights::{RightsPolicy, RightsV1, rights_of};
 use super::store::{self, Fetched};
 use super::tasks::Profile;
@@ -37,6 +38,14 @@ pub struct GateResultV1 {
     /// The depth the result was established at (`listing`, `headers`, `shape`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<String>,
+    /// **Who has to change something** (`FRONTEND_REQUIRED`, `KERNEL_EXTENSION_REQUIRED`, `LAYOUT_REQUIRED`, `RESOURCE_REFUSED`, …,
+    /// or `NOT_RUN` for a gate that was not run): [`super::onboarding`]. Absent on a PASS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class: Option<GapClassV1>,
+    /// The reason text the lifecycle record of this failure carries (`"task profile"` for a missing job profile, which is recorded
+    /// as `KERNEL_EXTENSION_REQUIRED`); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class_reason: Option<&'static str>,
 }
 
 /// A code found at a gate, with its argument and evidence.
@@ -60,6 +69,7 @@ fn fail(gate: Gate, mut f: Vec<Found>, depth: &str) -> GateResultV1 {
         }
     }
     let first = f.first().cloned().expect("a failure has a code");
+    let class = classify_census_code_v1(gate, &first.code, first.arg.as_deref(), &first.evidence);
     let mut evidence: Vec<String> = first.evidence.clone();
     evidence.truncate(8);
     GateResultV1 {
@@ -70,15 +80,27 @@ fn fail(gate: Gate, mut f: Vec<Found>, depth: &str) -> GateResultV1 {
         codes: cs,
         evidence,
         depth: Some(depth.into()),
+        class: Some(class),
+        class_reason: class.onboarding_reason(),
     }
 }
 
 fn pass(gate: Gate, depth: &str, evidence: Vec<String>) -> GateResultV1 {
-    GateResultV1 { gate, status: GateStatus::Pass, blocking: None, arg: None, codes: vec![], evidence, depth: Some(depth.into()) }
+    GateResultV1 { gate, status: GateStatus::Pass, blocking: None, arg: None, codes: vec![], evidence, depth: Some(depth.into()), class: None, class_reason: None }
 }
 
 fn not_run(gate: Gate, why: &str, evidence: Vec<String>) -> GateResultV1 {
-    GateResultV1 { gate, status: GateStatus::NotRun, blocking: Some(why.into()), arg: None, codes: vec![], evidence, depth: None }
+    GateResultV1 {
+        gate,
+        status: GateStatus::NotRun,
+        blocking: Some(why.into()),
+        arg: None,
+        codes: vec![],
+        evidence,
+        depth: None,
+        class: Some(GapClassV1::NotRun),
+        class_reason: None,
+    }
 }
 
 /// What the preflight said, summarised for the row.
@@ -448,10 +470,20 @@ fn source_listing(l: &ListingV1, sel: &SelectedV1) -> Vec<Found> {
 fn lower_listing(l: &ListingV1, task: &TaskV1, sel: &SelectedV1) -> Vec<Found> {
     let mut f = Vec::new();
     if task.task == "unknown" {
+        // A repository whose configuration names no model class is not one the frontend can read; one that does is a task the
+        // inference could not place (`listing::task_of_architecture_class`).
+        let described = l
+            .config
+            .as_object()
+            .is_some_and(|o| o.contains_key("architectures") || o.contains_key("model_type") || o.contains_key("peft"));
         f.push(found(
             codes::TASK_UNKNOWN,
-            None,
-            vec!["no pipeline_tag, and the configuration does not name a causal language model".into()],
+            (!described).then(|| codes::TASK_UNKNOWN_NO_CONFIG.to_string()),
+            vec![if described {
+                "no pipeline_tag, and the configuration does not name a causal language model".into()
+            } else {
+                "no pipeline_tag, and the repository carries no configuration that names a model class".into()
+            }],
         ));
     } else if task.profile == Profile::None {
         f.push(found(
@@ -467,6 +499,9 @@ fn lower_listing(l: &ListingV1, task: &TaskV1, sel: &SelectedV1) -> Vec<Found> {
         ));
     }
     match sel.kind {
+        // A transformers `pytorch_model.bin` is read by the frontend (without running its pickle); the census has not read this
+        // repository's zip directory, which the lower gate reports as not run (`needs_pickle`), never as an unsupported format.
+        ArtifactKind::Other if torch_checkpoint_only(l, sel) => {}
         ArtifactKind::Other => f.push(found(
             codes::FORMAT_UNSUPPORTED,
             Some(sel.formats.join("+")),
@@ -690,6 +725,14 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
         task = TaskV1 { task: t.clone(), group: r.group.to_string(), profile: r.profile, source: "frame".into() };
     }
     let sel = select(l);
+    // An adapter that declares no task carries its pinned base's (inference v3), where the base was read.
+    if task.task == "unknown"
+        && sel.kind == ArtifactKind::Adapter
+        && let Some(t) = fetched.and_then(store::base_task_of)
+    {
+        let r = super::tasks::task_row(t);
+        task = TaskV1 { task: t.to_string(), group: r.group.to_string(), profile: r.profile, source: "inferred:base-architecture".into() };
+    }
     let strata = strata_of(l, &task, &sel);
     let rights = rights_of(l, ctx.policy);
     let depth = if fetched.is_some() { "headers" } else { "listing" };
@@ -717,6 +760,8 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
     let mut lower_evidence: Vec<String> = Vec::new();
     let mut route_needs_weights = false;
     let mut needs_tensor_data: Option<String> = None;
+    // A PyTorch checkpoint whose zip directory the census never fetched (its own, or its adapter's base).
+    let mut needs_pickle: Option<String> = torch_checkpoint_only(l, &sel).then(|| "the repository's weights".to_string());
     let mut image_stage_probe: Option<serde_json::Value> = None;
     let mut context: Option<ContextV1> = None;
     let mut admit_retry: Option<GateResultV1> = None;
@@ -800,7 +845,9 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                 }
                 Err(ps) => {
                     for p in ps {
-                        if p.code == codes::FORMAT_UNSUPPORTED {
+                        if p.code == codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY {
+                            needs_pickle = Some(p.path);
+                        } else if p.code == codes::FORMAT_UNSUPPORTED {
                             lower_extra.push(found(p.code, Some(p.path), vec![p.detail]));
                         } else {
                             store_problems.push(found(p.code, Some(p.path), vec![p.detail]));
@@ -882,6 +929,17 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
         }
         if !f.is_empty() {
             return fail(Gate::Lower, f, depth);
+        }
+        if let Some(what) = &needs_pickle {
+            let mut r = not_run(
+                Gate::Lower,
+                codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY,
+                vec![format!(
+                    "{what} is a PyTorch checkpoint (pytorch_model.bin): the frontend reads it without running its pickle, but the census reads safetensors headers only"
+                )],
+            );
+            r.arg = Some("pytorch".into());
+            return r;
         }
         if fetched.is_none() {
             return not_run(Gate::Lower, codes::NOT_RUN_NOT_SAMPLED, vec![]);
@@ -972,6 +1030,8 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
                     codes: vec![codes::RIGHTS_UNCONFIRMED.into()],
                     evidence: vec![rights.why.clone()],
                     depth: Some(depth.into()),
+                    class: Some(GapClassV1::ExternalBlocker),
+                    class_reason: None,
                 };
                 for x in g.iter_mut().skip(1) {
                     *x = not_run(x.gate, &Gate::Source.not_run_after(), vec![]);
@@ -1093,6 +1153,36 @@ mod tests {
         assert_eq!((r.stopped_at.as_str(), r.technical_stopped_at.as_str()), ("source", "lower"));
     }
 
+    /// **Every gate of a row carries its onboarding class** (machine-readable, additive to the row): a failure its own class, a gate
+    /// that was not run `NOT_RUN` (never a gap), a PASS none.
+    #[test]
+    fn every_gate_of_a_row_carries_who_has_to_change_something() {
+        let r = evaluate(&listing(Some("image-classification"), &["config.json", "model.safetensors"]), None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Source).class, None);
+        assert_eq!(gate(&r.technical, Gate::Lower).class, Some(GapClassV1::ProfileRequired));
+        assert_eq!(gate(&r.technical, Gate::Lower).class_reason, Some("task profile"));
+        assert_eq!(serde_json::to_value(gate(&r.technical, Gate::Lower)).unwrap()["class_reason"], "task profile");
+        for g in [Gate::Pack, Gate::Admit, Gate::Seat, Gate::Final] {
+            let x = gate(&r.technical, g);
+            assert_eq!((x.status, x.class), (GateStatus::NotRun, Some(GapClassV1::NotRun)), "{g:?}");
+        }
+        // The strict view's rights failure is the source's, not the importer's.
+        assert_eq!(gate(&r.gates, Gate::Source).class, Some(GapClassV1::ExternalBlocker));
+        // A format with no reader is the importer's; missing weights are the source's.
+        let r = evaluate(&listing(Some("text-generation"), &["config.json", "model.onnx"]), None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Lower).class, Some(GapClassV1::FrontendRequired));
+        let r = evaluate(&listing(Some("text-generation"), &["README.md"]), None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Source).class, Some(GapClassV1::ExternalBlocker));
+        // An unsampled model's lower gate is NOT_RUN: not a verdict, not a gap.
+        let r = evaluate(&listing(Some("text-generation"), &["config.json", "model.safetensors"]), None, &ctx());
+        let lo = gate(&r.technical, Gate::Lower);
+        assert_eq!(lo.class, Some(GapClassV1::NotRun));
+        assert!(!lo.class.unwrap().is_semantic_gap());
+        // The serialized row carries the token.
+        let j = serde_json::to_value(lo).unwrap();
+        assert_eq!(j["class"], "NOT_RUN");
+    }
+
     #[test]
     fn an_unsampled_text_model_is_not_run_never_passed() {
         let l = listing(Some("text-generation"), &["config.json", "model.safetensors"]);
@@ -1105,11 +1195,55 @@ mod tests {
         assert!(!r.shape_ready);
     }
 
+    /// **A `pytorch_model.bin` is no longer "an unsupported format".** The frontend reads it without running its pickle
+    /// (`weights::torchzip`); the census has fetched safetensors headers only, so the lower gate of such a repository is NOT_RUN
+    /// (not a verdict, not a gap of any kind) with its own code — and a pytorch file that is not a transformers checkpoint, or a task
+    /// with no profile, keeps its own, earlier answer.
+    /// `TASK_UNKNOWN` says why: a configuration that names a model class (the frontend could place the task) or none at all.
+    #[test]
+    fn an_undeclared_task_says_whether_a_configuration_names_a_model_class() {
+        let mut l = listing(None, &["README.md", "model.bin"]);
+        let r = evaluate(&l, None, &ctx());
+        let lo = gate(&r.technical, Gate::Lower);
+        assert_eq!((lo.blocking.as_deref(), lo.arg.as_deref()), (Some(codes::TASK_UNKNOWN), Some(codes::TASK_UNKNOWN_NO_CONFIG)));
+        assert_eq!(lo.class, Some(GapClassV1::ExternalBlocker));
+        l.config = serde_json::json!({"architectures": ["CustomResearchModel"], "model_type": "custom"});
+        let r = evaluate(&l, None, &ctx());
+        let lo = gate(&r.technical, Gate::Lower);
+        assert_eq!((lo.blocking.as_deref(), lo.arg.as_deref()), (Some(codes::TASK_UNKNOWN), None));
+        assert_eq!(lo.class, Some(GapClassV1::FrontendRequired));
+    }
+
+    #[test]
+    fn a_pytorch_checkpoint_is_not_run_never_an_unsupported_format() {
+        for sib in [
+            vec!["config.json", "pytorch_model.bin"],
+            vec!["config.json", "pytorch_model.bin.index.json", "pytorch_model-00001-of-00002.bin", "pytorch_model-00002-of-00002.bin"],
+            vec!["config.json", "pytorch_model-00001-of-00002.bin"],
+        ] {
+            let r = evaluate(&listing(Some("text-generation"), &sib), None, &ctx());
+            let lo = gate(&r.technical, Gate::Lower);
+            assert_eq!((lo.status, lo.blocking.as_deref(), lo.arg.as_deref()), (GateStatus::NotRun, Some(codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY), Some("pytorch")), "{sib:?}");
+            assert_eq!(lo.class, Some(GapClassV1::NotRun));
+            assert!(!lo.class.unwrap().is_semantic_gap());
+            assert!(!r.shape_ready, "unmeasured is not ready");
+        }
+        // Not a transformers checkpoint: a configuration beside `training_args.bin` alone is no weights; a bare `.pt` has no reader.
+        let r = evaluate(&listing(Some("text-generation"), &["config.json", "model.pt"]), None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::FORMAT_UNSUPPORTED));
+        // An earlier answer stands: a task with no profile is the profile's, whatever the weights are.
+        let r = evaluate(&listing(Some("text-classification"), &["config.json", "pytorch_model.bin"]), None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::MODALITY_PROFILE_MISSING));
+        // Another format beside it (onnx, tensorflow) changes nothing: the transformers checkpoint is the one the frontend reads.
+        let r = evaluate(&listing(Some("text-generation"), &["config.json", "pytorch_model.bin", "model.onnx"]), None, &ctx());
+        assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY));
+    }
+
     #[test]
     fn the_format_the_adapter_and_the_missing_weights_are_named() {
-        let r = evaluate(&listing(Some("text-generation"), &["config.json", "pytorch_model.bin"]), None, &ctx());
+        let r = evaluate(&listing(Some("text-generation"), &["config.json", "model.onnx"]), None, &ctx());
         assert_eq!(gate(&r.technical, Gate::Lower).blocking.as_deref(), Some(codes::FORMAT_UNSUPPORTED));
-        assert_eq!(gate(&r.technical, Gate::Lower).arg.as_deref(), Some("pytorch"));
+        assert_eq!(gate(&r.technical, Gate::Lower).arg.as_deref(), Some("onnx"));
         let r = evaluate(&listing(Some("text-generation"), &["README.md"]), None, &ctx());
         assert_eq!(gate(&r.technical, Gate::Source).blocking.as_deref(), Some(codes::MISSING_WEIGHTS));
         let mut l = listing(None, &["adapter_config.json", "adapter_model.safetensors"]);

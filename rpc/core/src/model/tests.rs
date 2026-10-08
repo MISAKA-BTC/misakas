@@ -1710,7 +1710,7 @@ mod mockery {
     impl Mock for GetPalwSettlementResponse {
         fn mock() -> Self {
             GetPalwSettlementResponse {
-                dns_retired_at: None, native_settlement: None,
+                dns_retired_at: None, native_settlement: None, native_readiness: None,
                 available: mock(),
                 sink_daa: mock(),
                 daa_score: mock(),
@@ -2665,6 +2665,267 @@ mod mockery {
     }
     test!(GetPalwStateProofResponse);
 
+    // RFC-0010 (lane C2): op 220 round-trips.
+    impl Mock for GetPalwPanelV3StatusRequest {
+        fn mock() -> Self {
+            GetPalwPanelV3StatusRequest { claim_ids: vec![mock_hex(), mock_hex()], limit: mock() }
+        }
+    }
+    test!(GetPalwPanelV3StatusRequest);
+
+    impl Mock for GetPalwPanelV3StatusResponse {
+        fn mock() -> Self {
+            GetPalwPanelV3StatusResponse { available: mock(), observation_version: mock(), json: format!("{{\"version\":{}}}", mock::<u32>()) }
+        }
+    }
+    test!(GetPalwPanelV3StatusResponse);
+
+    // G14 lane D: ops 210 and 211 and their parts round-trip.
+    impl Mock for GetPalwKernelClaimRequest {
+        fn mock() -> Self {
+            GetPalwKernelClaimRequest { claim_id: mock_hex() }
+        }
+    }
+    test!(GetPalwKernelClaimRequest);
+
+    impl Mock for RpcPalwKernelServed {
+        fn mock() -> Self {
+            RpcPalwKernelServed { stage: mock(), position: mock(), bytes: mock_hex() }
+        }
+    }
+    test!(RpcPalwKernelServed);
+
+    impl Mock for RpcPalwKernelDemand {
+        fn mock() -> Self {
+            RpcPalwKernelDemand {
+                stage: mock(),
+                position: mock(),
+                demanders: mock(),
+                filed_daa: mock(),
+                deadline_daa: mock(),
+                last_rejection: "fake_opening".to_string(),
+            }
+        }
+    }
+    test!(RpcPalwKernelDemand);
+
+    impl Mock for RpcPalwKernelSeat {
+        fn mock() -> Self {
+            RpcPalwKernelSeat { bond: format!("{}:{}", mock_hex(), mock::<u32>()), kernel_bond: mock_hex() }
+        }
+    }
+    test!(RpcPalwKernelSeat);
+
+    impl Mock for GetPalwKernelClaimResponse {
+        fn mock() -> Self {
+            GetPalwKernelClaimResponse {
+                available: mock(),
+                found: mock(),
+                tip_daa: mock(),
+                claim_id: mock_hex(),
+                kind: "program".to_string(),
+                state: "Final { final_daa: 7 }".to_string(),
+                final_daa: mock(),
+                convicted: mock(),
+                rewarded: mock(),
+                reserved_sompi: mock(),
+                committed_daa: mock(),
+                liability_until: mock(),
+                producer_bond: mock_hex(),
+                job_id: mock_hex(),
+                class_id: mock_hex(),
+                public_record: mock_hex(),
+                record_header: mock_hex(),
+                served: mock(),
+                demands: mock(),
+                seats: mock(),
+                quorum: mock(),
+                assignment_deadline_daa: mock(),
+                receipts_counted: mock(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+                mode: "OptimisticPublicVerification".to_string(),
+                opv: mock(),
+                opv_admitted_daa: mock(),
+                opv_verifier_start_cutoff_daa: mock(),
+                opv_final_floor_daa: mock(),
+                opv_hard_deadline_daa: mock(),
+                opv_reservation_sompi: mock(),
+                opv_max_gain_sompi: mock(),
+                final_statement: "Final under optimistic public verification".to_string(),
+            }
+        }
+    }
+    test!(GetPalwKernelClaimResponse);
+
+    impl Mock for GetPalwKernelRowsRequest {
+        fn mock() -> Self {
+            GetPalwKernelRowsRequest { has_cursor: mock(), after_table: mock(), after_key: mock_hex(), max_bytes: mock() }
+        }
+    }
+    test!(GetPalwKernelRowsRequest);
+
+    impl Mock for RpcPalwKernelRow {
+        fn mock() -> Self {
+            RpcPalwKernelRow { table: mock(), key: mock_hex(), row: mock_hex() }
+        }
+    }
+    test!(RpcPalwKernelRow);
+
+    impl Mock for GetPalwKernelRowsResponse {
+        fn mock() -> Self {
+            GetPalwKernelRowsResponse {
+                available: mock(),
+                tip_daa: mock(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+                header: mock_hex(),
+                rows: mock(),
+                more: mock(),
+                next_table: mock(),
+                next_key: mock_hex(),
+                total_rows: mock(),
+            }
+        }
+    }
+    test!(GetPalwKernelRowsResponse);
+
+    impl Mock for GetPalwKernelFinalsRequest {
+        fn mock() -> Self {
+            GetPalwKernelFinalsRequest { limit: mock() }
+        }
+    }
+    test!(GetPalwKernelFinalsRequest);
+
+    impl Mock for RpcPalwKernelFinal {
+        fn mock() -> Self {
+            RpcPalwKernelFinal {
+                claim_id: mock_hex(),
+                mode: "OptimisticPublicVerification".to_string(),
+                final_path: "PanelIndependent".to_string(),
+                source_profile_id: mock_hex(),
+                canonical_work_id: mock_hex(),
+                execution_commitment: mock_hex(),
+                accepted_daa: mock(),
+                final_daa: mock(),
+                da_satisfied: mock(),
+                standing: "Standing".to_string(),
+                work_final_event: mock_hex(),
+                statement: "Final".to_string(),
+            }
+        }
+    }
+    test!(RpcPalwKernelFinal);
+
+    impl Mock for GetPalwKernelFinalsResponse {
+        fn mock() -> Self {
+            GetPalwKernelFinalsResponse {
+                available: mock(),
+                tip_daa: mock(),
+                finals: mock(),
+                total: mock(),
+                ledger_root: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwKernelFinalsResponse);
+
+    impl Mock for GetPalwOnboardingRequest {
+        fn mock() -> Self {
+            GetPalwOnboardingRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwOnboardingRequest);
+
+    impl Mock for RpcPalwOnboardingBinding {
+        fn mock() -> Self {
+            RpcPalwOnboardingBinding {
+                kernel_param_root: mock_hex(),
+                state: "Matured".to_string(),
+                binder: format!("{}:{}", mock_hex(), mock::<u32>()),
+                bound_daa: mock(),
+                matures_daa: mock(),
+                final_daa: mock(),
+                reserved_sompi: mock(),
+            }
+        }
+    }
+    test!(RpcPalwOnboardingBinding);
+
+    impl Mock for GetPalwOnboardingResponse {
+        fn mock() -> Self {
+            GetPalwOnboardingResponse {
+                available: mock(),
+                found: mock(),
+                tip_daa: mock(),
+                class_id: mock_hex(),
+                status: "Registered".to_string(),
+                artifact_root: mock_hex(),
+                registrant: format!("{}:{}", mock_hex(), mock::<u32>()),
+                artifact_bindings: mock(),
+                kernel_bound: mock(),
+                kernel_class: mock_hex(),
+                kernel_plan_root: mock_hex(),
+                challenge_policy_id: mock_hex(),
+                conformance_committed: mock(),
+                conformance_statement_root: mock_hex(),
+                conformance_daa: mock(),
+                gate: "Held".to_string(),
+                gate_code: "REGISTERED_DORMANT".to_string(),
+                gate_reason: "no conformance commitment".to_string(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwOnboardingResponse);
+
+    impl Mock for GetPalwConformanceEvidenceRequest {
+        fn mock() -> Self {
+            GetPalwConformanceEvidenceRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwConformanceEvidenceRequest);
+
+    impl Mock for GetPalwConformanceEvidenceResponse {
+        fn mock() -> Self {
+            GetPalwConformanceEvidenceResponse {
+                available: mock(),
+                found: mock(),
+                tip_daa: mock(),
+                class_id: mock_hex(),
+                lifecycle_state: "CHALLENGE_PENDING".to_string(),
+                last_failure: "BEACON_UNAVAILABLE".to_string(),
+                attempt_end: "EVIDENCE_WITHHELD".to_string(),
+                attempts: mock(),
+                attempt_limit: mock(),
+                challenge_policy_id: mock_hex(),
+                challenge_policy: mock_hex(),
+                statement_root: mock_hex(),
+                committed_daa: mock(),
+                challenge_epoch: mock(),
+                beacon_state: "LOCKED".to_string(),
+                beacon_have: mock(),
+                beacon_need: mock(),
+                lock_position: mock(),
+                beacon_output: mock_hex(),
+                evidence_posted: mock(),
+                evidence_id: mock_hex(),
+                evidence_daa: mock(),
+                window_end_daa: mock(),
+                gate: "Held".to_string(),
+                gate_code: "CHALLENGE_PENDING".to_string(),
+                gate_reason: "the window is open".to_string(),
+                attempt_row: mock_hex(),
+                evidence_row: mock_hex(),
+                program: mock_hex(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwConformanceEvidenceResponse);
+
     // ADR-0152 P2-10: op 199 and its parts round-trip.
     impl Mock for GetPalwVestingRequest {
         fn mock() -> Self {
@@ -3017,6 +3278,75 @@ mod native_settlement_wire_tests {
         assert!(<GetPrecommitDutyResponse as Deserializer>::deserialize(&mut &duty[..]).unwrap().retired_at.is_none());
     }
 
+    /// A response a pre-RFC-0012 node wrote as JSON (no native keys, plus a key this build has never heard of) is still readable,
+    /// and reads as "no retirement": nothing is inferred from the absent fields.
+    #[test]
+    fn rfc0012_a_json_response_from_an_older_node_is_readable_and_means_no_retirement() {
+        let old = r#"{"available":true,"sinkDaa":9000,"daaScore":8000,"settled":true,"depth":3,"pendingAnchors":0,"depthIsLowerBound":false,
+            "safeFrontierBlueScore":7,"safeFrontierDaa":7990,"someFutureField":{"x":1}}"#;
+        let decoded: GetPalwSettlementResponse = serde_json::from_str(old).unwrap();
+        assert!(decoded.available && decoded.settled && decoded.depth == 3);
+        assert!(decoded.dns_retired_at.is_none() && decoded.native_settlement.is_none());
+        let again = serde_json::to_value(&decoded).unwrap();
+        assert!(again.get("dnsRetiredAt").is_none() && again.get("nativeSettlement").is_none(), "and it re-serialises without them");
+    }
+
+    /// Response v2 is chosen by what is present, per field: either native field alone selects it, neither keeps the v1 bytes, and each
+    /// round-trips with the other absent.
+    #[test]
+    fn rfc0012_response_v2_is_selected_by_either_field_and_never_by_neither() {
+        let native = NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: Default::default(),
+            policy_id: Default::default(),
+            generation: kaspa_hashes::Hash64::from_u64_word(9),
+            retirement_daa: 5,
+            frontier: None,
+            latest: Some(kaspa_hashes::Hash64::from_u64_word(9)),
+            safe: None,
+            finalized: None,
+            depth: 0,
+            unique_work: "0".into(),
+            stop: Some(SettlementStopV1::FinalizedConflict),
+        };
+        let cases = [
+            (GetPalwSettlementResponse::default(), 1u8),
+            (GetPalwSettlementResponse { dns_retired_at: Some(5), ..Default::default() }, 2),
+            (GetPalwSettlementResponse { native_settlement: Some(native.clone()), ..Default::default() }, 2),
+            (GetPalwSettlementResponse { dns_retired_at: Some(5), native_settlement: Some(native.clone()), ..Default::default() }, 2),
+        ];
+        for (value, version) in cases {
+            let mut bytes = Vec::new();
+            Serializer::serialize(&value, &mut bytes).unwrap();
+            assert_eq!(bytes[0], version);
+            let back = <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap();
+            assert_eq!((back.dns_retired_at, back.native_settlement), (value.dns_retired_at, value.native_settlement));
+        }
+    }
+
+    /// The stop reasons are a wire vocabulary: a reader keys on these names, so they are pinned, and the conflict alarm keeps its own.
+    #[test]
+    fn rfc0012_stop_reasons_have_stable_json_names() {
+        use SettlementStopV1::*;
+        let names: Vec<(SettlementStopV1, &str)> = vec![
+            (InvalidPolicy, "invalidPolicy"),
+            (MissingHistory, "missingHistory"),
+            (Unexecuted, "unexecuted"),
+            (FrontierNotCovered, "frontierNotCovered"),
+            (OpenLifecycle, "openLifecycle"),
+            (DuplicateWork, "duplicateWork"),
+            (InsufficientDepth, "insufficientDepth"),
+            (InsufficientWork, "insufficientWork"),
+            (ConcentratedWork, "concentratedWork"),
+            (ArithmeticOverflow, "arithmeticOverflow"),
+            (FinalizedConflict, "finalizedConflict"),
+        ];
+        for (stop, name) in names {
+            assert_eq!(serde_json::to_value(stop).unwrap(), serde_json::Value::String(name.into()));
+            assert_eq!(serde_json::from_value::<SettlementStopV1>(serde_json::Value::String(name.into())).unwrap(), stop);
+        }
+    }
+
     #[test]
     fn rfc0012_v2_wire_preserves_explicit_absent_heads_and_stop_reason() {
         let native = NativeSettlementSnapshotV1 {
@@ -3042,10 +3372,78 @@ mod native_settlement_wire_tests {
         assert_eq!(decoded.native_settlement, Some(native));
         assert_eq!(decoded.dns_retired_at, Some(5));
         assert!(!decoded.settled);
+        bytes[0] = 4;
+        assert!(<GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).is_err(), "a version this build does not know");
         bytes[0] = 3;
-        assert!(<GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).is_err());
+        assert!(
+            <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).is_err(),
+            "version 3 without its readiness field is truncated, not a v2"
+        );
         let mut duty = Vec::new();
         Serializer::serialize(&GetPrecommitDutyResponse { retired_at: Some(5), ..Default::default() }, &mut duty).unwrap();
         assert_eq!(<GetPrecommitDutyResponse as Deserializer>::deserialize(&mut &duty[..]).unwrap().retired_at, Some(5));
+    }
+
+    fn readiness_fixture() -> kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1 {
+        use kaspa_consensus_core::palw_native_readiness_v1::*;
+        use kaspa_consensus_core::palw_native_settlement_v1::{PalwSettlementPolicyV1, SkippedEvidenceV1};
+        let h = kaspa_hashes::Hash64::from_u64_word;
+        native_stopped_readiness_v1(
+            h(9),
+            (100, 90),
+            PalwSettlementPolicyV1 { settled_anchor_depth: 2, unique_mature_work: 20, max_operator_permille: 600, max_class_permille: 600 },
+            native_maturity_report_v1(3_000, 120),
+            SafeWaitV1::MissingHistory { gap: HistoryGapV1::DeltaNotRetained, block: Some(h(4)) },
+            FinalizedReadinessV1 { finalized: None, pruning_point: h(1), pruning_blue: Some(0), wait: Some(FinalizedWaitV1::NoSafePrefix) },
+            SkippedEvidenceV1 { bond_not_held: 2, ..Default::default() },
+        )
+    }
+
+    /// RFC-0012 D1: the readiness rides wire v3 only when present; every older shape keeps its bytes, and v3 is a strict superset of v2.
+    #[test]
+    fn rfc0012_response_v3_carries_the_readiness_and_older_wire_is_byte_identical_without_it() {
+        let readiness = readiness_fixture();
+        let native = NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: Default::default(),
+            policy_id: Default::default(),
+            generation: readiness.generation,
+            retirement_daa: 5,
+            frontier: None,
+            latest: None,
+            safe: None,
+            finalized: None,
+            depth: 0,
+            unique_work: "0".into(),
+            stop: Some(SettlementStopV1::MissingHistory),
+        };
+        // Without the readiness: v1 / v2 exactly as before.
+        let v2 = GetPalwSettlementResponse { dns_retired_at: Some(5), native_settlement: Some(native.clone()), ..Default::default() };
+        let mut v2_bytes = Vec::new();
+        Serializer::serialize(&v2, &mut v2_bytes).unwrap();
+        assert_eq!(&v2_bytes[..2], &[2, 0]);
+        // With it: v3, the v2 body unchanged behind the version, then one optional JSON string.
+        let v3 = GetPalwSettlementResponse { native_readiness: Some(readiness.clone()), ..v2.clone() };
+        let mut v3_bytes = Vec::new();
+        Serializer::serialize(&v3, &mut v3_bytes).unwrap();
+        assert_eq!(&v3_bytes[..2], &[3, 0]);
+        assert_eq!(&v3_bytes[2..v2_bytes.len()], &v2_bytes[2..], "the v2 body is byte-identical inside v3");
+        let back = <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &v3_bytes[..]).unwrap();
+        assert_eq!(back.native_readiness, Some(readiness.clone()));
+        assert_eq!((back.native_settlement, back.dns_retired_at), (Some(native), Some(5)));
+        // The readiness alone selects v3 (a node can hold it without the snapshot never, but the encoding must not lose it).
+        let only = GetPalwSettlementResponse { native_readiness: Some(readiness.clone()), ..Default::default() };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&only, &mut bytes).unwrap();
+        assert_eq!(bytes[0], 3);
+        assert_eq!(<GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap().native_readiness, Some(readiness.clone()));
+        // JSON: the key is absent when there is no readiness and camelCase when there is.
+        let json = serde_json::to_value(&v2).unwrap();
+        assert!(json.get("nativeReadiness").is_none());
+        let json = serde_json::to_value(&v3).unwrap();
+        assert_eq!(json["nativeReadiness"]["stoppedEarly"]["gap"], "deltaNotRetained");
+        assert_eq!(json["nativeReadiness"]["skipped"]["bondNotHeld"], 2);
+        let again: GetPalwSettlementResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(again.native_readiness, Some(readiness));
     }
 }

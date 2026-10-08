@@ -75,6 +75,10 @@ pub const NOT_RUN_PIPELINE_ADMISSION: &str = "NOT_RUN_PIPELINE_ADMISSION";
 /// The frontend reads the data of a small tensor (a GGUF's `rope_freqs.weight`) to build the configuration; the census reads headers
 /// only (the network policy of this census), so the gate is not run rather than failed.
 pub const NOT_RUN_NEEDS_TENSOR_DATA: &str = "NOT_RUN_NEEDS_TENSOR_DATA";
+/// The checkpoint is a PyTorch `pytorch_model.bin` (a zip of a pickle and its storages). The frontend reads it without running the
+/// pickle (`weights::torchzip`), but the census fetches safetensors headers only: the zip's central directory and `data.pkl` of this
+/// repository were never read, so the gate is not run rather than failed as an unsupported format.
+pub const NOT_RUN_NEEDS_PICKLE_DIRECTORY: &str = "NOT_RUN_NEEDS_PICKLE_DIRECTORY";
 
 // ---- source ------------------------------------------------------------------------------------------------------------------------
 
@@ -103,6 +107,9 @@ pub const RIGHTS_UNCONFIRMED: &str = "RIGHTS_UNCONFIRMED";
 
 /// The repository declares no task and none follows from its configuration.
 pub const TASK_UNKNOWN: &str = "TASK_UNKNOWN";
+/// The `arg` of a `TASK_UNKNOWN` whose repository carries no configuration naming a model class (no `architectures`, `model_type` or
+/// PEFT block): not a transformers / diffusers / PEFT repository at all, so nothing in the frontend can be asked to read it.
+pub const TASK_UNKNOWN_NO_CONFIG: &str = "no-config";
 /// The declared task has no canonical job profile (inputs, output, court path, artifact) in any RFC this build carries.
 pub const MODALITY_PROFILE_MISSING: &str = "MODALITY_PROFILE_MISSING";
 /// The declared task needs parts the class this build produces does not compute (a VLM's vision stage): the text class is a
@@ -153,6 +160,8 @@ pub fn gate_code_of_preflight(code: &str) -> Option<(Gate, &'static str)> {
         "TENSOR_SHAPE" => (Gate::Lower, "TENSOR_SHAPE"),
         "TOKENIZER_MISSING" => (Gate::Lower, "TOKENIZER_MISSING"),
         "ADAPTER_REFUSED" => (Gate::Lower, "ADAPTER_REFUSED"),
+        // A weight file the frontend refuses by its form (a PyTorch pickle off the allowlist, a strided view, the legacy format).
+        "FORMAT_UNSUPPORTED" => (Gate::Lower, FORMAT_UNSUPPORTED),
         "SOURCE_INCOMPLETE" => (Gate::Source, WEIGHTS_INCOMPLETE),
         // register stage → admit
         "ADMISSION_EXCEEDS" => (Gate::Admit, "ADMISSION_EXCEEDS"),
@@ -249,6 +258,7 @@ mod tests {
             "TOKENIZER_MISSING",
             "ADAPTER_REFUSED",
             "SOURCE_INCOMPLETE",
+            "FORMAT_UNSUPPORTED",
             "ADMISSION_EXCEEDS",
             "ADMISSION_REFUSED",
             "CLOSE_SIZE_OVER_CAP",

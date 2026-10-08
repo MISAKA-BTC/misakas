@@ -49,6 +49,11 @@
 //!   slashes it (post-Final liability), even if every Panel seat signed the claim covered. A post-Final demand is accepted only
 //!   while its whole path (deadline, service, grace) still fits inside the horizon; one that defaults forfeits the WHOLE
 //!   remaining reservation (the reward was already paid), an availability outcome that is never the fraud conviction.
+//! * **RFC-0015 `OptimisticPublicVerification`** (dormant; [`crate::opv`]): a class registered under that mode (route tags 13 / 14,
+//!   the mode bound into the class id) has no Panel. Its claims are Challengeable from inclusion for a fixed window, hold their
+//!   job from the first reveal, reserve a producer collateral sized to the claim's maximum gain, and reach Final by the explicit
+//!   window rule alone; demands, proofs, default, post-Final liability and the one-claim-per-job and seal-then-reveal rules are
+//!   the Panel-licensed claims' own. A Panel tally for such a claim is refused.
 //! * **Idempotence and replay** (category 18): a claim is convicted at most once (a second proof is `Duplicate`); the state is
 //!   a pure function of the block sequence, so a reorg is a replay of the new branch and a restart or IBD is a replay from
 //!   genesis ([`KernelLedgerV1::replay`]).
@@ -68,6 +73,8 @@ use crate::gate::{ProsecutionBoundsV1, ProsecutionPolicyV1, public_pipeline_pros
 use crate::hash::Digest;
 use crate::job::{BindingFaultV1, DecodeFaultV1, DecodeRuleV1, KernelClaimV1, KernelJobV1, binding_fault_v1, verify_decode_fault_v1};
 use crate::lifecycle::{ClaimEventV1, ClaimLifecycleV1, ClaimStateV1, LifecyclePolicyV1};
+use crate::mode::{VerificationModeV1, class_id_for_mode_v1};
+use crate::opv::OpvStateV1;
 use crate::pipeline::{
     PipelineEvidenceV1, PipelineHeaderV1, PipelinePlanV1, check_pipeline_plan_v1, pipeline_job_root_v1, pipeline_root_v1,
     stage_view_v1,
@@ -327,6 +334,10 @@ pub enum LedgerTxV1 {
     AttestArtifact { artifact_root: Digest },
     /// The Panel's tally reached coverage (an honest Panel, or every seat colluding: the ledger cannot tell, and need not).
     PanelCovered { claim: Digest },
+    /// **RFC-0015 §4.1**: the network's policy admits the class with this id (its mode-bound id) for
+    /// `OptimisticPublicVerification`. A registrant cannot pick the lighter mode for its own program; the consumer derives the
+    /// admission from authenticated chain state (like [`Self::AttestArtifact`]).
+    AdmitOptimisticClass { class: Digest },
     /// A signed public object.
     Object { auth: AuthV1, object: KernelRouteObjectV1 },
 }
@@ -551,7 +562,41 @@ pub struct KernelLedgerV1 {
     pub seals: BTreeMap<(Digest, Digest), SealRowV1>,
     /// Cumulative amount burned (derived from the settlement instructions; kept as a checksum).
     pub burned: u64,
+    /// RFC-0015: the OPV policy, classes and claim rows. Dormant (no policy) = the historical ledger, root included.
+    pub opv: OpvStateV1,
     budget: BlockBudgetV1,
+}
+
+/// **The class binding a single-program registration commits to** (what [`KernelRouteObjectV1::RegisterClass`] and
+/// [`KernelRouteObjectV1::RegisterClassV2`] bind): the kernel descriptor, the plan, the program, the artifact's commitments and the
+/// plan's context bound.
+pub fn single_class_binding_v1(
+    descriptor_digest: Digest,
+    program_bytes: &[u8],
+    plan: &VerificationPlanV1,
+    pc: &ParamCommitmentsV1,
+) -> ModelKernelBindingV1 {
+    ModelKernelBindingV1 {
+        descriptor_digest,
+        plan_root: plan.root(),
+        program_root: program_root_v1(program_bytes),
+        artifact_root: pc.root(),
+        tokenizer_or_input_schema_root: [0; 64],
+        task_output_schema: [0; 64],
+        context_and_state_policy: ContextPolicyV1 { max_positions: plan.max_positions },
+    }
+}
+
+/// **The id a single-program registration will have under `mode`** — what a consumer admits for OPV before the class registers
+/// ([`KernelLedgerV1::admit_optimistic_class`]).
+pub fn single_class_id_v1(
+    descriptor_digest: Digest,
+    program_bytes: &[u8],
+    plan: &VerificationPlanV1,
+    pc: &ParamCommitmentsV1,
+    mode: VerificationModeV1,
+) -> Digest {
+    class_id_for_mode_v1(&single_class_binding_v1(descriptor_digest, program_bytes, plan, pc).class_binding_id(), mode)
 }
 
 fn settle(out: &mut Vec<LedgerEventV1>, bond: Digest, amount: u64, kind: SettlementKindV1, claim: Option<Digest>) {
@@ -580,6 +625,7 @@ impl KernelLedgerV1 {
             job_claims: BTreeMap::new(),
             seals: BTreeMap::new(),
             burned: 0,
+            opv: OpvStateV1::default(),
             budget: BlockBudgetV1::default(),
         })
     }
@@ -596,6 +642,13 @@ impl KernelLedgerV1 {
     /// What the current block has spent of its budget.
     pub fn budget_used(&self) -> BlockBudgetV1 {
         self.budget
+    }
+
+    /// **Resume a block's budget** after [`Self::begin_block`]: a consumer that rebuilds the ledger for every object of one block (rows
+    /// in, rows out) hands back what the earlier objects of that same block already spent, so the budget bounds the BLOCK and not each
+    /// object. Meaningful only straight after `begin_block` of the same block.
+    pub fn restore_budget(&mut self, used: BlockBudgetV1) {
+        self.budget = used;
     }
 
     // ── consumer-derived inputs ──────────────────────────────────────────────────────────────────────────────────────────
@@ -618,6 +671,14 @@ impl KernelLedgerV1 {
         let Some(job) = self.claims.get(claim).map(|r| r.job_id) else {
             return Err(KernelRefusalV1::rule("PanelTally", "no such claim"));
         };
+        // RFC-0015: an OptimisticPublicVerification claim has no Panel. Whatever the tally says — covered, or silence — it is
+        // refused, so nothing can fabricate a coverage for it and nothing reads a missing tally as anything.
+        if self.opv.claims.contains_key(claim) {
+            return Err(KernelRefusalV1::rule(
+                "PanelTally",
+                "an OptimisticPublicVerification claim has no Panel tally (RFC-0015 §4.1)",
+            ));
+        }
         if !covered {
             return Ok(Vec::new());
         }
@@ -667,7 +728,18 @@ impl KernelLedgerV1 {
         let mut out = Vec::new();
         match obj {
             KernelRouteObjectV1::RegisterClass { descriptor, program_bytes, plan, param_commitments } => {
-                let class = self.register_class(descriptor, program_bytes, plan, param_commitments)?;
+                let class =
+                    self.register_class(VerificationModeV1::PanelLicensed, descriptor, program_bytes, plan, param_commitments)?;
+                out.push(LedgerEventV1::ClassRegistered { class });
+            }
+            KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } => {
+                if *mode == VerificationModeV1::PanelLicensed {
+                    return Err(KernelRefusalV1::rule(
+                        name,
+                        "a Panel-licensed class registers by RegisterClass (tag 1), the one path of that mode",
+                    ));
+                }
+                let class = self.register_class(*mode, descriptor, program_bytes, plan, param_commitments)?;
                 out.push(LedgerEventV1::ClassRegistered { class });
             }
             KernelRouteObjectV1::RegisterPipelineClass {
@@ -678,8 +750,34 @@ impl KernelLedgerV1 {
                 param_commitments,
                 decode,
             } => {
+                let class = self.register_pipeline_class(
+                    VerificationModeV1::PanelLicensed,
+                    descriptor,
+                    pipeline_bytes,
+                    program_bytes,
+                    plan,
+                    param_commitments,
+                    *decode,
+                )?;
+                out.push(LedgerEventV1::ClassRegistered { class });
+            }
+            KernelRouteObjectV1::RegisterPipelineClassV2 {
+                mode,
+                descriptor,
+                pipeline_bytes,
+                program_bytes,
+                plan,
+                param_commitments,
+                decode,
+            } => {
+                if *mode == VerificationModeV1::PanelLicensed {
+                    return Err(KernelRefusalV1::rule(
+                        name,
+                        "a Panel-licensed class registers by RegisterPipelineClass (tag 2), the one path of that mode",
+                    ));
+                }
                 let class =
-                    self.register_pipeline_class(descriptor, pipeline_bytes, program_bytes, plan, param_commitments, *decode)?;
+                    self.register_pipeline_class(*mode, descriptor, pipeline_bytes, program_bytes, plan, param_commitments, *decode)?;
                 out.push(LedgerEventV1::ClassRegistered { class });
             }
             KernelRouteObjectV1::PostJob { job } => {
@@ -789,6 +887,7 @@ impl KernelLedgerV1 {
                     Ok(Vec::new())
                 }
                 LedgerTxV1::PanelCovered { claim } => self.apply_panel_tally(claim, true),
+                LedgerTxV1::AdmitOptimisticClass { class } => self.admit_optimistic_class(*class).map(|()| Vec::new()),
                 LedgerTxV1::Object { auth, object } => self.apply_object(object, auth),
             };
             match r {
@@ -853,35 +952,74 @@ impl KernelLedgerV1 {
         self.known.iter().find(|d| d.digest() == *descriptor).cloned().ok_or_else(|| "a kernel this binary does not implement".into())
     }
 
+    /// **RFC-0015 §4.2 at registration**: an OptimisticPublicVerification class registers only where this ledger has an OPV policy and
+    /// the `palw_panel_free_v1` fence is reached. (Checked before any decoding; a refusal leaves the state byte-identical.)
+    fn opv_register_gate(&self, name: &'static str) -> Result<crate::opv::OpvPolicyV1, KernelRefusalV1> {
+        let Some(p) = self.opv.policy else {
+            return Err(KernelRefusalV1::rule(
+                name,
+                "this ledger has no OPV policy: no OptimisticPublicVerification class can register",
+            ));
+        };
+        if !p.allowed_at(self.daa) {
+            return Err(KernelRefusalV1::rule(name, "the palw_panel_free_v1 fence is not reached"));
+        }
+        Ok(p)
+    }
+
+    /// **RFC-0015 §4.2 / §6.3 at registration, for what only the class knows**: its worst filing, response and commitments must fit
+    /// the carriers (or a demand would always default and a proof could never be carried), and saturating the court budget for the
+    /// claim's whole exposure must cost more than the claim's maximum gain (a producer must not be able to buy the censorship of
+    /// its own prosecution).
+    fn opv_class_economics(&self, p: &crate::opv::OpvPolicyV1, bounds: &ProsecutionBoundsV1) -> Result<(), String> {
+        carrier_fit_v1(bounds, p.carrier.filing_cap as usize, p.carrier.response_cap as usize, p.carrier.commit_cap as usize)
+            .map_err(|why| format!("not carriable: {why}"))?;
+        let (cost, gain) = (p.censorship_cost(&self.policy, bounds.max_court_work), p.max_gain_per_claim(&self.policy));
+        if cost <= gain {
+            return Err(format!(
+                "saturating the court budget for the claim's whole exposure costs {cost}, not more than the claim's maximum gain {gain}: \
+                 its prosecution could be censored for less than it pays"
+            ));
+        }
+        Ok(())
+    }
+
+    /// RFC-0015 §4.1: the network's policy admits the class; a registrant never chooses the lighter mode for its own program.
+    fn opv_class_admitted(&self, name: &'static str, class: &Digest) -> Result<(), KernelRefusalV1> {
+        if self.opv.admitted.contains(class) {
+            Ok(())
+        } else {
+            Err(KernelRefusalV1::rule(name, "the network policy has not admitted this class for OptimisticPublicVerification"))
+        }
+    }
+
     fn register_class(
         &mut self,
+        mode: VerificationModeV1,
         descriptor: &Digest,
         program_bytes: &[u8],
         plan: &VerificationPlanV1,
         pc: &ParamCommitmentsV1,
     ) -> Result<Digest, KernelRefusalV1> {
-        const NAME: &str = "RegisterClass";
-        let rule = |why: String| KernelRefusalV1::rule(NAME, why);
+        let name: &'static str = if mode.is_optimistic() { "RegisterClassV2" } else { "RegisterClass" };
+        let rule = |why: String| KernelRefusalV1::rule(name, why);
         let d = self.known_descriptor(descriptor).map_err(rule)?;
         let root = program_root_v1(program_bytes);
-        let binding = ModelKernelBindingV1 {
-            descriptor_digest: d.digest(),
-            plan_root: plan.root(),
-            program_root: root,
-            artifact_root: pc.root(),
-            tokenizer_or_input_schema_root: [0; 64],
-            task_output_schema: [0; 64],
-            context_and_state_policy: ContextPolicyV1 { max_positions: plan.max_positions },
-        };
-        let class = binding.class_binding_id();
+        let binding = single_class_binding_v1(d.digest(), program_bytes, plan, pc);
+        // The mode is part of the class identity: the same program under another mode is another class (RFC-0015 §4.1).
+        let class = class_id_for_mode_v1(&binding.class_binding_id(), mode);
         if self.classes.contains_key(&class) {
             // Re-registering would overwrite the row every court reads; the class id binds everything, so there is nothing to add.
             return Err(rule("the class is already registered".into()));
         }
+        let opv = if mode.is_optimistic() { Some(self.opv_register_gate(name)?) } else { None };
+        if mode.is_optimistic() {
+            self.opv_class_admitted(name, &class)?;
+        }
         if !self.attested_artifacts.contains(&binding.artifact_root) {
             return Err(rule("the artifact is not attested public by the consumer's registry".into()));
         }
-        self.charge(NAME, 0)?;
+        self.charge(name, 0)?;
         let program = TirProgramV1::decode_canonical(program_bytes).map_err(|e| rule(format!("program: {e}")))?;
         check_plan_v1(&self.schedule, &d, &program, root, plan, self.daa).map_err(|o| rule(o.to_string()))?;
         check_commitment_set(
@@ -891,11 +1029,15 @@ impl KernelLedgerV1 {
         )
         .map_err(rule)?;
         let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
-        // The artifact is public by the consumer's attestation (checked above), not by a registrant's flag.
+        // The artifact is public by the consumer's attestation (checked above), not by a registrant's flag. PUBLIC_PROSECUTION_COMPLETE
+        // is derived from code for every class of every mode; an OPV class has no Panel to fall back on, so there is no exception.
         let bounds = public_prosecution_complete_v1(&d, plan, nodes, &ProfileMaterialV1::kernel_route(true), &self.policy.prosecution)
             .map_err(|g| rule(format!("not publicly prosecutable: {g:?}")))?;
         if bounds.max_court_work > self.policy.max_court_work_per_block {
             return Err(rule("the class's worst court does not fit one block's court budget: nobody could prosecute it".into()));
+        }
+        if let Some(p) = opv {
+            self.opv_class_economics(&p, &bounds).map_err(rule)?;
         }
         self.classes.insert(
             class,
@@ -910,11 +1052,16 @@ impl KernelLedgerV1 {
                 bounds,
             },
         );
+        if mode.is_optimistic() {
+            self.opv.classes.insert(class);
+        }
         Ok(class)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn register_pipeline_class(
         &mut self,
+        mode: VerificationModeV1,
         descriptor: &Digest,
         pipeline_bytes: &[u8],
         program_bytes: &[Vec<u8>],
@@ -922,13 +1069,14 @@ impl KernelLedgerV1 {
         pcs: &[ParamCommitmentsV1],
         decode: Option<DecodeRuleV1>,
     ) -> Result<Digest, KernelRefusalV1> {
-        const NAME: &str = "RegisterPipelineClass";
-        let rule = |why: String| KernelRefusalV1::rule(NAME, why);
+        let name: &'static str = if mode.is_optimistic() { "RegisterPipelineClassV2" } else { "RegisterPipelineClass" };
+        let rule = |why: String| KernelRefusalV1::rule(name, why);
         let d = self.known_descriptor(descriptor).map_err(rule)?;
+        let opv = if mode.is_optimistic() { Some(self.opv_register_gate(name)?) } else { None };
         if pcs.iter().any(|p| !self.attested_artifacts.contains(&p.root())) {
             return Err(rule("an artifact is not attested public by the consumer's registry".into()));
         }
-        self.charge(NAME, 0)?;
+        self.charge(name, 0)?;
         let programs = program_bytes
             .iter()
             .map(|b| TirProgramV2::decode_canonical(b).map_err(|e| rule(format!("program: {e}"))))
@@ -968,9 +1116,15 @@ impl KernelLedgerV1 {
             artifact_roots: pcs.iter().map(ParamCommitmentsV1::root).collect(),
             decode,
         };
-        let class = binding.class_binding_id();
+        let class = class_id_for_mode_v1(&binding.class_binding_id(), mode);
         if self.pipeline_classes.contains_key(&class) {
             return Err(rule("the class is already registered".into()));
+        }
+        if mode.is_optimistic() {
+            self.opv_class_admitted(name, &class)?;
+        }
+        if let Some(p) = opv {
+            self.opv_class_economics(&p, &bounds).map_err(rule)?;
         }
         self.pipeline_classes.insert(
             class,
@@ -988,6 +1142,9 @@ impl KernelLedgerV1 {
                 bounds,
             },
         );
+        if mode.is_optimistic() {
+            self.opv.classes.insert(class);
+        }
         Ok(class)
     }
 
@@ -1025,7 +1182,10 @@ impl KernelLedgerV1 {
         if self.claims.contains_key(&id) {
             return Err("an exact duplicate claim".into());
         }
-        let need = self.policy.claim_collateral;
+        // RFC-0015: an OptimisticPublicVerification claim reserves the OPV policy's per-claim reservation (not the Panel route's flat
+        // collateral), subject to the producer's and the ledger's live-claim caps — all decided before the first mutation.
+        let opv_row = if self.opv.classes.contains(&class) { Some(self.opv_admission(&producer)?) } else { None };
+        let need = opv_row.map_or(self.policy.claim_collateral, |(need, _)| need);
         let bond = self.bonds.get_mut(&producer).ok_or("the producer bond is not registered")?;
         if bond.exit_requested.is_some() {
             return Err("the producer bond is exiting".into());
@@ -1034,13 +1194,21 @@ impl KernelLedgerV1 {
             return Err(format!("{} free collateral, the claim needs {need} (no double use)", bond.free()));
         }
         bond.reserved += need;
+        let daa = self.daa;
         let mut life = ClaimLifecycleV1::new(LifecyclePolicyV1 {
             check_window_daa: self.policy.check_window_daa,
-            challenge_window_daa: self.policy.challenge_window_daa,
+            challenge_window_daa: match &opv_row {
+                Some((_, row)) => row.window_end_daa - daa,
+                None => self.policy.challenge_window_daa,
+            },
         });
-        let daa = self.daa;
-        let _ = life.apply(ClaimEventV1::BindChallenge { anchor_daa: daa });
-        let _ = life.apply(ClaimEventV1::StartChecking { daa });
+        if opv_row.is_some() {
+            // No Panel: the fixed public challenge window opens at inclusion, and nothing can pass the claim but the window rule.
+            let _ = life.apply(ClaimEventV1::OpenChallengeWindow { daa });
+        } else {
+            let _ = life.apply(ClaimEventV1::BindChallenge { anchor_daa: daa });
+            let _ = life.apply(ClaimEventV1::StartChecking { daa });
+        }
         // The commitments are on chain from inclusion: the retention obligation for Final is met by the ledger itself.
         let _ = life.apply(ClaimEventV1::RetentionMet);
         self.claims.insert(
@@ -1058,8 +1226,58 @@ impl KernelLedgerV1 {
                 rewarded: false,
             },
         );
+        if let Some((_, row)) = opv_row {
+            // An OPV claim holds its job from its first reveal: it is prosecutable by any bond from this block, so a junk claim
+            // squatting the job is slashed (or defaults) at the squatter's cost, and a well-formed one is the job's answer.
+            self.opv.claims.insert(id, row);
+            self.opv.live.insert((producer, id));
+            self.job_claims.insert(job, id);
+        }
         settle(out, producer, need, SettlementKindV1::ReserveClaim, Some(id));
         Ok(())
+    }
+
+    /// A claim of an OPV class needs its producer's live-claim caps and free collateral to allow it: decided before the adjudication
+    /// budget is spent and before any evidence is verified (a producer at its cap cannot make the ledger verify claims it must refuse).
+    fn opv_claim_capacity(&self, class: &Digest, producer: &Digest) -> Result<(), String> {
+        if !self.opv.classes.contains(class) {
+            return Ok(());
+        }
+        let (need, _) = self.opv_admission(producer)?;
+        match self.bonds.get(producer) {
+            Some(b) if b.free() < need => Err(format!("{} free collateral, the claim needs {need} (no double use)", b.free())),
+            _ => Ok(()),
+        }
+    }
+
+    /// A claim of an OPV class commits only while the fence is reached (a cheap check; nothing is charged).
+    fn opv_claim_gate(&self, class: &Digest) -> Result<(), String> {
+        if self.opv.classes.contains(class) && !self.optimistic_allowed() {
+            return Err("the palw_panel_free_v1 fence is not reached".into());
+        }
+        Ok(())
+    }
+
+    /// **May this claim be revealed now?** No other claim holds its job, its producer bond is ready, and the producer's seal of
+    /// exactly this claim is at least `claim_seal_delay_daa` old.
+    fn reveal_ready(&self, job: &Digest, producer: &Digest, id: &Digest) -> Result<(), String> {
+        if self.job_claims.get(job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job) {
+            return Err("another claim already holds the job (one claim per job)".into());
+        }
+        match self.bonds.get(producer) {
+            None => return Err("the producer bond is not registered".into()),
+            Some(b) if b.exit_requested.is_some() => return Err("the producer bond is exiting".into()),
+            Some(_) => {}
+        }
+        match self.seals.get(&(*job, *producer)) {
+            Some(row) if row.seal == claim_seal_v1(id) && row.daa.saturating_add(self.policy.claim_seal_delay_daa) <= self.daa => {
+                Ok(())
+            }
+            _ => Err(format!(
+                "no seal of this claim by its producer at least {} DAA old (seal, then reveal)",
+                self.policy.claim_seal_delay_daa
+            )),
+        }
     }
 
     fn commit_claim(
@@ -1073,6 +1291,7 @@ impl KernelLedgerV1 {
         let rule = |why: String| KernelRefusalV1::rule(NAME, why);
         let job = self.jobs.get(&claim.job_id).ok_or_else(|| rule("no such job".into()))?;
         let class = self.classes.get(&job.class_binding_id).ok_or_else(|| rule("no such class".into()))?;
+        self.opv_claim_gate(&job.class_binding_id).map_err(rule)?;
         if let Some(f) = binding_fault_v1(job, claim, evidence, class.program.token_bound) {
             return Err(rule(format!("binding fault {f:?}")));
         }
@@ -1087,6 +1306,9 @@ impl KernelLedgerV1 {
         if self.claims.contains_key(&id) {
             return Err(rule("an exact duplicate claim".into()));
         }
+        // Cheap objective checks first: an unsealed or unready reveal never spends the block's adjudication budget (C4 O-C4-14).
+        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id).map_err(rule)?;
+        self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond).map_err(rule)?;
         self.charge(NAME, 0)?;
         let job = self.jobs.get(&claim.job_id).expect("checked");
         let class = self.classes.get(&job.class_binding_id).expect("checked");
@@ -1109,28 +1331,8 @@ impl KernelLedgerV1 {
             .map_err(|why| rule(format!("malformed evidence: {why}")))?;
         let body = ClaimBodyV1::Program { claim: claim.clone(), evidence: evidence.clone(), commitments: commitments.to_vec() };
         let class_id = job.class_binding_id;
-        if let Some(holder) = self.job_claims.get(&claim.job_id).and_then(|c| self.claims.get(c))
-            && holder.holds_job()
-        {
-            return Err(rule("another claim already holds the job (one claim per job)".into()));
-        }
-        match self.bonds.get(&claim.producer_bond) {
-            None => return Err(rule("the producer bond is not registered".into())),
-            Some(b) if b.exit_requested.is_some() => return Err(rule("the producer bond is exiting".into())),
-            Some(_) => {}
-        }
-        let key = (claim.job_id, claim.producer_bond);
-        match self.seals.get(&key) {
-            Some(row) if row.seal == claim_seal_v1(&id) && row.daa.saturating_add(self.policy.claim_seal_delay_daa) <= self.daa => {}
-            _ => {
-                return Err(rule(format!(
-                    "no seal of this claim by its producer at least {} DAA old (seal, then reveal)",
-                    self.policy.claim_seal_delay_daa
-                )));
-            }
-        }
         self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)?;
-        self.seals.remove(&key);
+        self.seals.remove(&(claim.job_id, claim.producer_bond));
         Ok(())
     }
 
@@ -1145,6 +1347,7 @@ impl KernelLedgerV1 {
         let rule = |why: String| KernelRefusalV1::rule(NAME, why);
         let job = self.pipeline_jobs.get(&claim.job_id).ok_or_else(|| rule("no such job".into()))?;
         let class = self.pipeline_classes.get(&job.class_binding_id).ok_or_else(|| rule("no such class".into()))?;
+        self.opv_claim_gate(&job.class_binding_id).map_err(rule)?;
         use BindingFaultV1 as F;
         let fault = |f: F| Err(rule(format!("binding fault {f:?}")));
         if claim.evidence_root != evidence.root() {
@@ -1189,6 +1392,9 @@ impl KernelLedgerV1 {
         if self.claims.contains_key(&id) {
             return Err(rule("an exact duplicate claim".into()));
         }
+        // Cheap objective checks first: an unsealed or unready reveal never spends the block's adjudication budget (C4 O-C4-14).
+        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id).map_err(rule)?;
+        self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond).map_err(rule)?;
         self.charge(NAME, 0)?;
         let job = self.pipeline_jobs.get(&claim.job_id).expect("checked");
         let class = self.pipeline_classes.get(&job.class_binding_id).expect("checked");
@@ -1209,33 +1415,19 @@ impl KernelLedgerV1 {
             generated: claim.generated.clone(),
             beacon: [0; 64],
         };
-        FreshPipelineVerifierV1::from_public_bytes(&record.to_bytes(), &self.known, h, &class.binding)
-            .and_then(|v| v.structure())
-            .map_err(|why| rule(format!("malformed evidence: {why}")))?;
+        FreshPipelineVerifierV1::from_public_bytes_in_mode(
+            &record.to_bytes(),
+            &self.known,
+            h,
+            &class.binding,
+            self.mode_of_class(&job.class_binding_id),
+        )
+        .and_then(|v| v.structure())
+        .map_err(|why| rule(format!("malformed evidence: {why}")))?;
         let body = ClaimBodyV1::Pipeline { claim: claim.clone(), evidence: evidence.clone(), stages: stages.to_vec() };
         let class_id = job.class_binding_id;
-        if let Some(holder) = self.job_claims.get(&claim.job_id).and_then(|c| self.claims.get(c))
-            && holder.holds_job()
-        {
-            return Err(rule("another claim already holds the job (one claim per job)".into()));
-        }
-        match self.bonds.get(&claim.producer_bond) {
-            None => return Err(rule("the producer bond is not registered".into())),
-            Some(b) if b.exit_requested.is_some() => return Err(rule("the producer bond is exiting".into())),
-            Some(_) => {}
-        }
-        let key = (claim.job_id, claim.producer_bond);
-        match self.seals.get(&key) {
-            Some(row) if row.seal == claim_seal_v1(&id) && row.daa.saturating_add(self.policy.claim_seal_delay_daa) <= self.daa => {}
-            _ => {
-                return Err(rule(format!(
-                    "no seal of this claim by its producer at least {} DAA old (seal, then reveal)",
-                    self.policy.claim_seal_delay_daa
-                )));
-            }
-        }
         self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)?;
-        self.seals.remove(&key);
+        self.seals.remove(&(claim.job_id, claim.producer_bond));
         Ok(())
     }
 
@@ -1321,7 +1513,9 @@ impl KernelLedgerV1 {
             }
             (ClaimBodyV1::Pipeline { .. }, ProsecutionV1::Pipeline(bytes)) => {
                 let (record, header, binding) = self.pipeline_public_record(claim).ok_or("no public record")?;
-                FreshPipelineVerifierV1::from_public_bytes(&record.to_bytes(), &self.known, header, &binding)?.try_proof(bytes)
+                let mode = self.mode_of_class(&header.class_binding_id);
+                FreshPipelineVerifierV1::from_public_bytes_in_mode(&record.to_bytes(), &self.known, header, &binding, mode)?
+                    .try_proof(bytes)
             }
             _ => Err("a filing for another kind of claim".into()),
         }
@@ -1414,6 +1608,7 @@ impl KernelLedgerV1 {
         settle(out, *accuser, reward, SettlementKindV1::AccuserReward, Some(*claim));
         settle(out, producer, slashed - reward, SettlementKindV1::Burn, Some(*claim));
         self.settle_demands_moot(claim, out);
+        self.opv_sync_live(claim);
     }
 
     /// Return every demand bond of `d` (the demand is over).
@@ -1585,7 +1780,13 @@ impl KernelLedgerV1 {
             let penalty = taken.min(collateral);
             // Before Final the demanders share the penalty equally. After Final the forfeit is burned whole: a demander may be the
             // producer's own Sybil, and paying it would let the colluders recoup part of their forfeit. Their bonds return either way.
-            let paid = if post_final { 0 } else { penalty };
+            // An OPV claim's pre-Final default also burns `default_burn_permille` of the penalty (RFC-0015 §8.2): a producer cannot
+            // cycle its own penalty through a Sybil demander for nothing.
+            let opv_burn = match (self.opv.claims.contains_key(&claim), post_final, self.opv.policy) {
+                (true, false, Some(p)) => (penalty as u128 * p.economics.default_burn_permille as u128 / 1000) as u64,
+                _ => 0,
+            };
+            let paid = if post_final { 0 } else { penalty - opv_burn };
             let share = if d.demanders.is_empty() { 0 } else { paid / d.demanders.len() as u64 };
             let burn = penalty - share * d.demanders.len() as u64;
             self.burned += burn;
@@ -1617,6 +1818,10 @@ impl KernelLedgerV1 {
             self.refund(&claim, &d, out);
             // An unavailable claim never finalizes; its other open demands are moot.
             self.settle_demands_moot(&claim, out);
+            if post_final && let Some(o) = self.opv.claims.get_mut(&claim) {
+                o.forfeited_after_final = true;
+            }
+            self.opv_sync_live(&claim);
         }
         let ids: Vec<Digest> = self.claims.keys().copied().collect();
         for id in ids {
@@ -1659,6 +1864,7 @@ impl KernelLedgerV1 {
             b.reserved = b.reserved.saturating_sub(amount);
         }
         settle(out, producer, amount, SettlementKindV1::ReleaseClaim, Some(*claim));
+        self.opv_sync_live(claim);
     }
 }
 
@@ -1705,7 +1911,9 @@ fn oversized(proof: &ProsecutionV1, b: &ProsecutionBoundsV1) -> Option<String> {
 pub fn demand_window_open(state: &ClaimStateV1, daa: u64) -> bool {
     match state {
         ClaimStateV1::Checking { deadline_daa, .. } => daa <= *deadline_daa,
-        ClaimStateV1::ProbabilisticPass { window_end_daa, .. } => daa < *window_end_daa,
+        ClaimStateV1::ProbabilisticPass { window_end_daa, .. } | ClaimStateV1::Challengeable { window_end_daa, .. } => {
+            daa < *window_end_daa
+        }
         ClaimStateV1::Disputed { resume, .. } => demand_window_open(resume, daa),
         _ => false,
     }
@@ -1858,7 +2066,8 @@ impl OutsiderV1<'_> {
         let l = self.ledger;
         let class = l.pipeline_classes.get(&row.class_binding_id).ok_or("no such class")?;
         let (record, header, binding) = l.pipeline_public_record(&self.claim).ok_or("no record")?;
-        let fresh = FreshPipelineVerifierV1::from_public_bytes(&record.to_bytes(), &l.known, header, &binding)?;
+        let mode = l.mode_of_class(&header.class_binding_id);
+        let fresh = FreshPipelineVerifierV1::from_public_bytes_in_mode(&record.to_bytes(), &l.known, header, &binding, mode)?;
         let mats: Vec<StageMaterial<'_>> = class
             .pipeline
             .stages

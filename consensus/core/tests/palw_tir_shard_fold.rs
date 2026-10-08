@@ -963,3 +963,65 @@ fn a_sharded_claim_whose_panel_says_nothing_is_redrawn_once_and_then_voided_and_
         None => assert!(run.s.tir_shard_claim(&claim_id).is_none()),
     }
 }
+
+/// **A shard part is branch-local: a reorg reverts it, and the same receipts fold again on the other branch** (RFC-0006 gap row
+/// "reorg + duplicate receipt"; fold level — the processor/T12Chain-level twin needs an IR class chain and is open).
+///
+/// From one bound claim, branch A lands shard 0's part then shard 1's, branch B the other order. Both license the claim with the same
+/// `basis_k`. Walking A's deltas back to the bound state restores it exactly (the parts, the per-shard progress, the cell counts and
+/// every seat lock go), the very receipts A used fold again on B (a receipt is spent per BRANCH, never globally), B's deltas then
+/// reproduce B's states, and inside one branch the same part twice is refused by name.
+#[test]
+fn shard_parts_are_branch_local_a_reorg_reverts_them_and_the_same_receipts_fold_again_on_the_other_branch() {
+    let f = fixture();
+    let x = f.honest();
+    let (mut run, claim_id) = claimed(&f, &x, Some(SHARD_AT));
+    run.at(SHARD_AT, &[plan(f.class_id, 2, 1)], None);
+    let anchor = h64(77);
+    run.step(&[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats: panel_of(2, true) }]);
+    let bound = run.daa;
+    let base = run.s.clone();
+    let branch = || Run { p: run.p.clone(), s: base.clone(), daa: bound, extras: run.extras.clone() };
+    let p0 = |daa: u64| part(claim_id, 0, licensing_receipts(claim_id, 0, 1, anchor, daa));
+    let p1 = |daa: u64| part(claim_id, 1, licensing_receipts(claim_id, 1, 1, anchor, daa));
+
+    // Branch A: shard 0, then shard 1.
+    let mut a = branch();
+    let (a1, da1) = a.try_at(bound + 1, &[p0(bound + 1)], None).expect("A: shard 0 lands");
+    a.s = a1.clone();
+    a.daa = bound + 1;
+    let (a2, da2) = a.try_at(bound + 2, &[p1(bound + 2)], None).expect("A: shard 1 lands");
+    // Inside the branch the same part twice is refused by name.
+    assert!(matches!(a.refused(&[p0(bound + 2)]), PalwStateV2Error::ShardAlreadyLicensed { shard: 0, .. }));
+
+    // Branch B: shard 1, then shard 0.
+    let mut b = branch();
+    let (b1, db1) = b.try_at(bound + 1, &[p1(bound + 1)], None).expect("B: shard 1 lands");
+    b.s = b1.clone();
+    b.daa = bound + 1;
+    let (b2, db2) = b.try_at(bound + 2, &[p0(bound + 2)], None).expect("B: shard 0 lands");
+
+    // Both license the claim, with the same recount; neither order is a different verdict.
+    for s in [&a2, &b2] {
+        let claim = s.claim(&claim_id).unwrap();
+        assert!(matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "{:?}", claim.phase);
+        assert_eq!(claim.rcore.basis_k, 3);
+        assert_eq!(s.tir_shard_claim(&claim_id).unwrap().progress.licensed_count(), 2);
+    }
+
+    // The reorg: A's tip back to the bound state, exactly.
+    let back1 = revert_delta_v2(&a2, &da2, &run.p).expect("reverts A's second block");
+    assert_eq!(back1, a1);
+    let back0 = revert_delta_v2(&back1, &da1, &run.p).expect("reverts A's first block");
+    assert_eq!(back0, base, "no part, no progress, no lock survives the reorg");
+    assert_eq!(back0.tir_shard_claim(&claim_id).unwrap().progress.licensed_count(), 0);
+    assert!((10..18).all(|n| back0.slashable_lock(bond_key(n), claim_id).is_none()));
+
+    // The very receipts A spent fold again on the other branch, and B's deltas reproduce B's states.
+    let again = apply_delta_v2(&back0, &db1, &run.p).expect("B's first block applies to the reverted state");
+    assert_eq!(again, b1);
+    assert_eq!(apply_delta_v2(&again, &db2, &run.p).expect("B's second block"), b2);
+    let mut rerun = Run { p: run.p.clone(), s: back0.clone(), daa: bound, extras: run.extras.clone() };
+    rerun.at(bound + 1, &[p0(bound + 1)], None); // A's own first part, on the reverted state: not a duplicate
+    assert!(rerun.s.tir_shard_claim(&claim_id).unwrap().progress.is_licensed(0));
+}

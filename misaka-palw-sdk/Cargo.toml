@@ -69,6 +69,8 @@ name = "palw-tir-equiv"
 path = "src/bin/palw-tir-equiv.rs"
 
 [dev-dependencies]
+# `census::onboarding`'s tokens are the lifecycle's `OnboardingFailureV1::code()` (a test compares them).
+misaka-palw-challenge.workspace = true
 misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }
 # The IR registration test signs and verifies under a bond's ML-DSA-87 key, as the node does.
 libcrux-ml-dsa.workspace = true

@@ -1,0 +1,17 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mixtral-seqcls",
+  "doc": "MixtralForSequenceClassification: the `mixtral` adapter's decoder with a sequence-classification head instead of the language-model head (mixin-seqcls): the last prompt token's final-norm row through `score` to `num_labels` logits.",
+  "extends": [
+    "mixtral",
+    "mixin-seqcls"
+  ],
+  "match": {
+    "architectures": [
+      "MixtralForSequenceClassification"
+    ],
+    "model_types": [
+      "mixtral"
+    ]
+  }
+}

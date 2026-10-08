@@ -2949,6 +2949,22 @@ pub struct Params {
     /// ([`Self::validate_palw_probabilistic_constraints_v1`]) — the RFC assigns none, and shadow comparison precedes any proposal.
     pub palw_probabilistic_constraints_v1: Option<ForkActivation>,
 
+    /// **RFC-0015: Panel=0 (`OptimisticPublicVerification`) on the kernel route** ([`crate::palw_panel_free_v1`]): the separately named
+    /// fence under which a network admits classes registered under the Panel-free verification mode (a fixed public challenge window,
+    /// objective fraud proofs, producer reservations; `misaka-palw-kernel`'s `OpvPolicyV1`). **Dormant with no activation height**: `None`
+    /// on every preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from `Some(never())`, and refused when
+    /// armed ([`Self::validate_palw_panel_free_v1`]) until RFC-0015 §13.3's `ACTIVATION_ALLOWED` is evidenced (G14 on a real node, the
+    /// new lifecycle / collateral review, a coordinated schedule).
+    pub palw_panel_free_v1: Option<crate::palw_panel_free_v1::PalwPanelFreeFenceV1>,
+
+    /// **RFC-0009 G-EXPIRY / G-RULESET: the signed class-registration envelope** (tag 108, [`crate::palw_onboarding_v1`]). Past this
+    /// height a class registration may arrive wrapped in an object whose signature covers a last-valid DAA and the ruleset's
+    /// `consensus_params_id`; the acceptance walk drops the envelope past its expiry or on another ruleset, and replaces it by the
+    /// registration it wraps. **Dormant, with no activation height**: `None` on every preset and in no testnet-12 flag-day list,
+    /// hashed Some-only in both fingerprints, collapsed from `Some(never())`, refused when armed
+    /// ([`Self::validate_palw_signed_registration_v1`]) with the kernel route it ships beside.
+    pub palw_signed_registration_v1: Option<ForkActivation>,
+
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
     /// context ([`crate::palw_v2::PalwJobContextV2::prefix_context_hash_v1`], context version 3), so every claim over the same prefix
@@ -3007,8 +3023,8 @@ pub struct Params {
     /// class's registrant may declare a layer-shard plan (`TirShardPlanDeclared`), the chain draws a panel per
     /// shard with an outsider per shard, a seat attests cells (`ReceiptV4`), the recount runs over cells, a
     /// claim licenses by parts (`TirShardReceiptLicensed`), `TirStepRun` is a DA unit and the class room is the
-    /// binding shard's. A bare height; `None` on every preset (testnet-12 included) and in no flag-day list
-    /// (adopted 2026-10-03, armed only after a node-only shadow period). Hashed Some-only in every writer with the
+    /// binding shard's. A bare height; `None` on every preset except **testnet-12, which arms it at the int-11/12
+    /// flag day (DAA 5,300, `PALW_T12_INT11_FENCES_V1`)** — adopted 2026-10-03. Hashed Some-only in every writer with the
     /// `never()` collapse. Refused by [`Self::validate_palw_tir_shard_v1`] off ConsensusV2, without `palw_tir_v1`,
     /// `palw_tir_fence2`, `palw_verification_v2`, `palw_rcore_plus` and `palw_admission_independence` in force at
     /// or below it, or with the bundle's mirror unsynced.
@@ -4151,6 +4167,9 @@ impl Params {
         self.validate_palw_gen_range_twin_v1()?;
         // **RFC-0011 §15.7's dormant fence** (`crate::palw_probabilistic_constraints_v1`): refused when armed.
         self.validate_palw_probabilistic_constraints_v1()?;
+        // **RFC-0015's dormant fence** (`crate::palw_panel_free_v1`): refused when armed.
+        self.validate_palw_panel_free_v1()?;
+        self.validate_palw_signed_registration_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **palw_fp_prefix_inherit** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_inherit_v1()?;
@@ -6496,6 +6515,14 @@ impl Params {
         // The probabilistic-constraint fence, likewise.
         if self.palw_probabilistic_constraints_v1 == Some(ForkActivation::never()) {
             self.palw_probabilistic_constraints_v1 = None;
+        }
+        // The Panel-free fence, likewise.
+        if self.palw_panel_free_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_panel_free_v1 = None;
+        }
+        // The signed-registration envelope's fence, likewise.
+        if self.palw_signed_registration_v1 == Some(ForkActivation::never()) {
+            self.palw_signed_registration_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -10175,6 +10202,8 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_panel_free_v1,
+            palw_signed_registration_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -10444,6 +10473,8 @@ impl Params {
             ("palw_fp_job_v5", *palw_fp_job_v5),
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
+            ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
+            ("palw_signed_registration_v1", *palw_signed_registration_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -10726,6 +10757,17 @@ impl Params {
         // The probabilistic-constraint fence, NAMED likewise.
         if let Some(at) = self.palw_probabilistic_constraints_v1 {
             h.write(b"palw_probabilistic_constraints_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // The Panel-free fence, NAMED likewise.
+        if let Some(fence) = &self.palw_panel_free_v1 {
+            h.write(b"palw_panel_free_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
+        // The signed-registration envelope's fence, NAMED likewise.
+        if let Some(at) = self.palw_signed_registration_v1 {
+            h.write(b"palw_signed_registration_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
@@ -11408,6 +11450,8 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_panel_free_v1,
+            palw_signed_registration_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -12156,6 +12200,14 @@ impl Params {
         if let Some(activation) = palw_probabilistic_constraints_v1.as_mut() {
             fork(activation, visit);
         }
+        // The Panel-free fence. Some-only.
+        if let Some(fence) = palw_panel_free_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
+        // The signed-registration envelope's fence. Some-only.
+        if let Some(activation) = palw_signed_registration_v1.as_mut() {
+            fork(activation, visit);
+        }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
             fork(activation, visit);
@@ -12691,6 +12743,8 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_panel_free_v1,
+            palw_signed_registration_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -13491,6 +13545,17 @@ impl Params {
             h.write(b"palw_probabilistic_constraints_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The Panel-free fence, Some-only for the same reason.
+        if let Some(fence) = palw_panel_free_v1 {
+            h.write(b"palw_panel_free_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
+        // The signed-registration envelope's fence, Some-only for the same reason.
+        if let Some(activation) = palw_signed_registration_v1 {
+            h.write(b"palw_signed_registration_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // palw_fp_prefix_inherit, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_inherit {
             h.write(b"palw_fp_prefix_inherit");
@@ -14285,6 +14350,8 @@ impl Params {
             palw_fp_job_v5: self.palw_fp_job_v5,
             palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
+            palw_panel_free_v1: self.palw_panel_free_v1.clone(),
+            palw_signed_registration_v1: self.palw_signed_registration_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -15378,6 +15445,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_panel_free_v1: None,
+    palw_signed_registration_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15667,6 +15736,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_panel_free_v1: None,
+    palw_signed_registration_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15938,6 +16009,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_panel_free_v1: None,
+    palw_signed_registration_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -20886,6 +20959,7 @@ pub fn palw_t12_shipped_params() -> Params {
 /// against the build it replaces.
 pub fn palw_t12_launch_params_v1() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     // The second flag day's list first (its fences ride the DAA-750 ones' prerequisites), then the
     // DAA-750 list: testnet-12 as it launched carries neither.
@@ -21646,22 +21720,23 @@ fn palw_t12_arm_decode_rules_v1(params: &mut Params) {
 pub const PALW_T12_MODEL_COURT_WINDOW_ENTRY: PalwPostLaunchFenceV1 =
     PalwPostLaunchFenceV1 { name: "palw_model_court_window", set: |params, at| params.palw_model_court_window = at };
 
-/// The per-model court window alone — what `--palw-drill-model-court-at` moves. **Armed nowhere on
-/// testnet-12** ([`PALW_T12_MODEL_COURT_WINDOW_DAA`] is `None`): testnet-12 charges every class the held clock
+/// The per-model court window alone — what `--palw-drill-model-court-at` moves. **Armed on testnet-12 only by the int-13 flag day's list
+/// ([`PALW_T12_INT13_FENCES_V1`], DAA 9,000; this list's own height [`PALW_T12_MODEL_COURT_WINDOW_DAA`] is `None`)**, and a no-op for every
+/// verdict there: testnet-12 charges every class the held clock
 /// (`palw_attn_court_admits_row_held_v1` — `held.armed` is the network's regime, from genesis), under which the
 /// window the fence derives is the network window for every admissible class and no admission verdict moves
 /// (`consensus/core/tests/palw_t12_court_window_changes_no_admission.rs`). The code, this list and the drill
-/// flag stay for a ruleset that charges the ladder clock, and the baselines below clear it so arming it later
-/// is a one-line edit.
+/// flag stay for a ruleset that charges the ladder clock, and the baselines below clear it (through this list and through the int-13
+/// list) so each keeps its pinned ids.
 pub const PALW_T12_MODEL_COURT_WINDOW_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_T12_MODEL_COURT_WINDOW_ENTRY];
 
-/// **The model court window's height — `None`: dormant on every testnet-12 ruleset** (the coordinator's
-/// decision of 2026-10-01). See [`PALW_T12_MODEL_COURT_WINDOW_FENCES_V1`]. It must be a height no other
-/// fence uses if it is ever set.
+/// **The model court window's OWN height — `None`** (the coordinator's decision of 2026-10-01: no flag day of its own). Testnet-12 arms the
+/// window with the int-13 list at [`PALW_T12_INT13_DAA`] instead (the coordinator's brief of 2026-10-08). See
+/// [`PALW_T12_MODEL_COURT_WINDOW_FENCES_V1`]. It must be a height no other fence uses if it is ever set.
 pub const PALW_T12_MODEL_COURT_WINDOW_DAA: Option<u64> = None;
 
 /// **The model court window, armed** — every entry of [`PALW_T12_MODEL_COURT_WINDOW_FENCES_V1`] at
-/// [`PALW_T12_MODEL_COURT_WINDOW_DAA`]; a no-op while the height is `None`, which it is.
+/// [`PALW_T12_MODEL_COURT_WINDOW_DAA`]; a no-op while the height is `None`, which it is (the int-13 list arms the entry).
 fn palw_t12_arm_model_court_window_v1(params: &mut Params) {
     let Some(at) = PALW_T12_MODEL_COURT_WINDOW_DAA else { return };
     for fence in PALW_T12_MODEL_COURT_WINDOW_FENCES_V1 {
@@ -21793,7 +21868,8 @@ fn palw_t12_arm_int11_flag_day_v1(params: &mut Params) {
 }
 
 /// **The int-11 flag day at `at`** (`None`: dormant) — the list at `at`, ρ = 100 at `at + 95`; the one body the preset, a drill and the
-/// tests share. Dormant is set in the reverse order, so a step is never the one a later step stands on.
+/// tests share. Dormant is set in the reverse order, so a step is never the one a later step stands on — **and the int-13 list, which
+/// stands on this one (`palw_gen_range_twin_v1` needs `palw_gen_v1`), is set back to dormant first** (arming leaves it alone).
 pub fn palw_t12_arm_int11_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
     match at {
         Some(at) => {
@@ -21811,6 +21887,10 @@ pub fn palw_t12_arm_int11_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
             }
         }
         None => {
+            // **The lists that stand on this one go first** (the reverse order, one level up): the int-13 list's range twin needs this
+            // list's `palw_gen_v1` at or below it, so a ruleset with this list dormant and that one armed does not validate. Setting
+            // the int-11 list back to dormant therefore sets the int-13 list back with it — the int-10 baseline is both dormant.
+            palw_t12_arm_int13_flag_day_at_v1(params, None);
             for fence in PALW_T12_INT11_RHO1000_FENCES_V1
                 .iter()
                 .chain(PALW_T12_INT11_RHO250_FENCES_V1)
@@ -21823,11 +21903,81 @@ pub fn palw_t12_arm_int11_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
     }
 }
 
+/// **testnet-12's int-13 flag day — the code-change-only fences that wait on a height** (release line `release/t12-daa9000`, the
+/// coordinator's brief of 2026-10-08) — the ONE list of what arms at [`PALW_T12_INT13_DAA`] (9,000), through each entry's own `set`
+/// (mirrors included), in the order the entries' prerequisites need. **Tier 1 only: every entry's prerequisites are already in force on
+/// testnet-12 (genesis rules, or the int-11 list at 5,300 for the range twin), so the list is a code change and nothing else:**
+///
+/// * `palw_audit_1004_v1` — the 2026-10-04 audit's consensus fixes (needs the model registry and the economic-safety bundle);
+/// * `palw_gen_range_twin_v1` — RFC-0003 PALW-GEN-20 by the range twin: the pipeline admission sizes a generative class's closes with
+///   the range twin, the same read sets and bounds with far fewer steps of the same cap (needs `palw_gen_v1`, armed at 5,300);
+/// * `palw_model_court_window` — the per-model finite court window, which on testnet-12 (the held clock) moves no admission verdict
+///   (`palw_t12_court_window_changes_no_admission`); it names its own height so the ruleset states what it runs;
+/// * `palw_receipt_spend_v4` — RFC-0009 stage C, public receipt redemption (needs `palw_audit_2026_09_11` and `palw_audit_2026_09_23`).
+///
+/// **Not on this list, by decision:** `palw_tir_only_v1` and `palw_model_virtual_v1` (the user has not decided) and the lanes that are
+/// not ready (`palw_dns_retirement_v1`, `palw_exec_payload_v2`, `palw_permissionless_panel_v1`, `palw_probabilistic_constraints_v1`,
+/// `palw_panel_free_v1`) — each joins by one line here plus the re-pin, when it passes its gates **before the code freeze**.
+/// **Once the int-13 build is cut, this list is frozen** (C4 round 3, F-C4R3-04): a fence that joins DAA 9,000 after an int-13 binary
+/// is deployed is invisible to the fork id (`fork_id_v1` fires it with the others at the same height), so the two builds would stay
+/// peers past 9,000 while disagreeing about blocks. A later fence takes a fresh height on a new list.
+///
+/// * a drill's `--palw-drill-int13-at=<DAA>` moves exactly these to a low height on a salted drill chain;
+/// * every entry is hashed Some-only with the `never()` collapse, so while the height is `None` the list is dormant and every shipped
+///   id is the int-12 release's ([`palw_t12_release_v6_params`]), byte for byte.
+pub const PALW_T12_INT13_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
+    crate::palw_audit_1004_v1::PALW_T12_AUDIT_1004_ENTRY,
+    crate::palw_gen_range_twin_v1::PALW_DRILL_GEN_RANGE_TWIN_ENTRY,
+    PALW_T12_MODEL_COURT_WINDOW_ENTRY,
+    crate::palw_receipt_v4::PALW_T12_RECEIPT_SPEND_V4_ENTRY,
+];
+
+/// **The int-13 flag day's height — DAA 9,000** (the coordinator's brief of 2026-10-08), ONE named constant that the preset, a drill's
+/// `--palw-drill-int13-at` and the deploy kit's copy (`contrib/t12-deploy-kit/fleet.env.example`, pinned to this value by
+/// `t12_deploy_kit_constants`) share. A height no other fence uses — not 750, 1,000, 1,300, 1,700, 2,000, 3,600, 5,300, 5,395, 5,490 or
+/// 5,585: the fork id names heights, not fences. `None` is the dormant release.
+pub const PALW_T12_INT13_DAA: Option<u64> = Some(9_000);
+
+/// **The int-13 flag day, armed** — every entry of [`PALW_T12_INT13_FENCES_V1`] at [`PALW_T12_INT13_DAA`], each through its own `set`,
+/// on the ASSEMBLED ruleset, after the int-11 flag day whose `palw_gen_v1` the range twin needs below it; a no-op while the height is
+/// `None`.
+fn palw_t12_arm_int13_flag_day_v1(params: &mut Params) {
+    palw_t12_arm_int13_flag_day_at_v1(params, PALW_T12_INT13_DAA);
+}
+
+/// **The int-13 flag day at `at`** (`None`: dormant) — the list at `at`; the one body the preset, a drill and the tests share. Dormant is
+/// set in the reverse order, so an entry is never the one a later entry stands on.
+pub fn palw_t12_arm_int13_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
+    match at {
+        Some(at) => {
+            for fence in PALW_T12_INT13_FENCES_V1 {
+                (fence.set)(params, Some(ForkActivation::new(at)));
+            }
+        }
+        None => {
+            for fence in PALW_T12_INT13_FENCES_V1.iter().rev() {
+                (fence.set)(params, None);
+            }
+        }
+    }
+}
+
+/// **testnet-12 as its int-12 release (the DAA-5,300 flag day, `rcore/int-12`) ships it** — [`palw_t12_shipped_params`] with the int-13
+/// flag day's list set back to dormant: the ruleset a node that has not taken the int-13 release runs (the fleet's today, params
+/// `5ee7fd8e…`, schedule `1678e073…`), and the baseline the int-13 flag day is judged against (the fork-id comparison, the "only this
+/// list moved it" twin).
+pub fn palw_t12_release_v6_params() -> Params {
+    let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
+    params
+}
+
 /// **testnet-12 as its DAA-3,600 release (int-10) ships it** — [`palw_t12_shipped_params`] with the int-11 flag day (its list and ρ = 100's
-/// entry) set back to dormant: the ruleset a node that has not taken the int-11 release runs, the fleet's today, and the baseline the
-/// int-11 flag day is judged against (the fork-id comparison, the "only this list moved it" twin).
+/// entry) and the int-13 flag day set back to dormant: the ruleset a node that has not taken the int-11 release runs, int-10's, and the
+/// baseline the int-11 flag day is judged against (the fork-id comparison, the "only this list moved it" twin).
 pub fn palw_t12_release_v5_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     params
 }
@@ -21839,6 +21989,7 @@ pub fn palw_t12_release_v5_params() -> Params {
 /// twin).
 pub fn palw_t12_release_v4_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_POST_LAUNCH_FENCES_V4
         .iter()
@@ -21857,6 +22008,7 @@ pub fn palw_t12_release_v4_params() -> Params {
 /// baseline the IR flag day is judged against.
 pub fn palw_t12_release_v3_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_DECODE_RULES_FENCES_V1
         .iter()
@@ -21875,6 +22027,7 @@ pub fn palw_t12_release_v3_params() -> Params {
 /// against.
 pub fn palw_t12_release_v2_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_POST_LAUNCH_FENCES_V4
         .iter()
@@ -21895,6 +22048,7 @@ pub fn palw_t12_release_v2_params() -> Params {
 /// list's lanes arm ONE fence over. Equal to the shipped ruleset while the list's height is `None`.
 pub fn palw_t12_release_v1_params() -> Params {
     let mut params = palw_t12_shipped_params();
+    palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     for fence in PALW_T12_POST_LAUNCH_FENCES_V4
         .iter()
@@ -21966,6 +22120,9 @@ fn palw_t12_params_with_registry_v1(
     // `PALW_T12_POST_LAUNCH_FENCES_V4` at `PALW_T12_POST_LAUNCH_FENCE_V4_DAA` — dormant while that height
     // is `None` — after the first three lists and every other flag day's.
     palw_t12_arm_post_launch_fences_v4(&mut params);
+    // **The int-13 flag day** (the coordinator's brief of 2026-10-08): `PALW_T12_INT13_FENCES_V1` — the code-change-only fences, tier 1 — at
+    // `PALW_T12_INT13_DAA`, after the int-11 flag day whose `palw_gen_v1` the range twin needs below it; dormant while the height is `None`.
+    palw_t12_arm_int13_flag_day_v1(&mut params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or
@@ -23471,6 +23628,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_panel_free_v1: None,
+    palw_signed_registration_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -32184,8 +32343,8 @@ mod post_launch_fence_arming_tests {
         // The schedule: 750, D1's 1,000, and — on this build — the second and third flag days' own
         // heights (`PALW_T12_POST_LAUNCH_FENCES_V2`/`_V3`), the IR flag day's
         // (`PALW_T12_TIR_FLAG_DAY_FENCES_V1`) and the DAA-3,600 flag day's
-        // (`PALW_T12_TIR_FENCE2_FENCES_V1`) and the int-11 flag day's four (H, ρ = 100's H + 95, ρ = 250's H + 190 and ρ = 1000's H + 285); the DAA-750 release as the fleet
-        // ran it is 750 and 1,000 alone.
+        // (`PALW_T12_TIR_FENCE2_FENCES_V1`), the int-11 flag day's four (H, ρ = 100's H + 95, ρ = 250's H + 190 and ρ = 1000's H + 285)
+        // and the int-13 flag day's one (`PALW_T12_INT13_DAA`); the DAA-750 release as the fleet ran it is 750 and 1,000 alone.
         let mut expected_schedule = vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA];
         expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V2_DAA);
         expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V3_DAA);
@@ -32196,29 +32355,37 @@ mod post_launch_fence_arming_tests {
         expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V4_DAA);
         expected_schedule.extend(PALW_T12_INT11_RHO250_DAA);
         expected_schedule.extend(PALW_T12_INT11_RHO1000_DAA);
+        expected_schedule.extend(PALW_T12_INT13_DAA);
         expected_schedule.sort_unstable();
         expected_schedule.dedup();
         assert_eq!(
             release.fence_schedule_v1(),
             expected_schedule,
-            "750, D1's 1,000, then the second, third, IR, DAA-3,600 and int-11 flag days"
+            "750, D1's 1,000, then the second, third, IR, DAA-3,600, int-11 and int-13 flag days"
         );
         // The DAA-3,600 flag day's one fence: dormant below it, in force from it, on the shipped ruleset only; the
         // model court window rides no flag day (the coordinator's decision of 2026-10-01).
         let flag_day = PALW_T12_TIR_FENCE2_DAA.expect("the DAA-3,600 flag day");
         assert_eq!(flag_day, 3_600, "the user's decision of 2026-10-01");
         assert!(!release.palw_tir_fence2_active_at(flag_day - 1) && release.palw_tir_fence2_active_at(flag_day), "fence2 from 3,600");
-        assert_eq!(PALW_T12_MODEL_COURT_WINDOW_DAA, None, "the model court window is armed nowhere");
+        assert_eq!(PALW_T12_MODEL_COURT_WINDOW_DAA, None, "the model court window has no list-of-its-own height");
+        // Since the int-13 flag day the window is armed with that list's other fences, at its one height and no other.
+        let int13 = PALW_T12_INT13_DAA.expect("the int-13 flag day");
         assert!(
-            !release.palw_model_court_window_active_at(0) && !release.palw_model_court_window_active_at(u64::MAX / 2),
-            "the model-window rule is dormant on the release at every height"
+            !release.palw_model_court_window_active_at(int13 - 1) && release.palw_model_court_window_active_at(int13),
+            "the model-window rule is in force from the int-13 flag day's height"
+        );
+        assert!(
+            !palw_t12_release_v6_params().palw_model_court_window_active_at(u64::MAX / 2),
+            "…and dormant at every height on the int-12 release it is judged against"
         );
         let pre_flag_day = palw_t12_release_v4_params();
         assert!(!pre_flag_day.palw_tir_fence2_active_at(flag_day), "the pre-flag release keeps the release's IR rules");
         let mut pre_flag_schedule = expected_schedule.clone();
-        // The pre-flag release (int-8) omits the DAA-3,600 flag day's height and the int-11 flag day's four.
+        // The pre-flag release (int-8) omits the DAA-3,600 flag day's height, the int-11 flag day's four and the int-13 flag day's one.
         pre_flag_schedule.retain(|height| {
             *height != flag_day
+                && Some(*height) != PALW_T12_INT13_DAA
                 && Some(*height) != PALW_T12_INT11_FLAG_DAY_DAA
                 && Some(*height) != PALW_T12_INT11_RHO100_DAA
                 && Some(*height) != PALW_T12_INT11_RHO250_DAA

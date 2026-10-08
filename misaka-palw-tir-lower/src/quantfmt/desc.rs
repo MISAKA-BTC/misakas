@@ -195,7 +195,8 @@ pub struct ConfigDesc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip_match: Option<String>,
     /// `never`: the language-model head is not stored in this format; `unless_skipped`: it is, unless
-    /// `skip` names it.
+    /// `skip` names it; `when_skip_given`: it is only when the quantiser was given a `skip` list (the key is present and not
+    /// null) that does not name it — bitsandbytes, whose default skip (no list given) keeps the output embedding in float.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lm_head: Option<String>,
     /// Conditions on the configuration; all must hold.

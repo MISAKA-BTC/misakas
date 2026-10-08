@@ -529,6 +529,13 @@ pub struct Args {
     /// capacity flag day below it. Command line only, like the salt.
     #[serde(skip)]
     pub palw_drill_int11_at: Option<u64>,
+    /// **DRILL ONLY: cross the int-13 flag day as the release arms it, at this DAA** (`config::drill::palw_drill_int13_at_v1`): the
+    /// whole list — `palw_audit_1004_v1`, `palw_gen_range_twin_v1`, `palw_model_court_window` and `palw_receipt_spend_v4` — at H', as
+    /// the release arms them at DAA 9,000. The combined crossing, instead of the per-fence flag of its one entry that has one
+    /// (`--palw-drill-model-court-at`), which it excludes. It needs `palw_gen_v1` in force at or below it (the range twin): with the
+    /// release's int-11 list at 5,300 that is `--palw-drill-int11-at` below it. Command line only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_int13_at: Option<u64>,
     /// **DRILL ONLY: arm RFC-0004's improvement fence (`palw_improvement_v1`) at this DAA**
     /// (`config::drill::palw_drill_improve_fence_at_v1`), with the drill's ceilings. It needs
     /// `palw_tir_v1`, `palw_tir_fence2`, `palw_gen_v1`, `palw_kary_court` and `palw_fp_decode_rules` in
@@ -911,6 +918,7 @@ impl Default for Args {
             palw_drill_floor_ignore_policy: false,
             palw_drill_anchor_duty_after_slots: None,
             palw_drill_int11_at: None,
+            palw_drill_int13_at: None,
             palw_drill_improve_at: None,
             palw_drill_tir_shard_at: None,
             palw_improve_evaluate: false,
@@ -2330,6 +2338,18 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-drill-int13-at")
+                .long("palw-drill-int13-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: cross the int-13 flag day as the release arms it — palw_audit_1004_v1, \
+                     palw_gen_range_twin_v1, palw_model_court_window and palw_receipt_spend_v4 at this DAA — on the drill chain. Nothing \
+                     else moves. Excludes --palw-drill-model-court-at. Refused without the salt, at 0, at a height another fence \
+                     uses, and unless palw_gen_v1 is in force at or below it (--palw-drill-int11-at or --palw-drill-gen-at, below it).",
+                ),
+        )
+        .arg(
             Arg::new("palw-drill-improve-at")
                 .long("palw-drill-improve-at")
                 .require_equals(true)
@@ -3651,6 +3671,7 @@ impl Args {
             palw_drill_floor_ignore_policy: m.get_flag("palw-drill-floor-ignore-policy"),
             palw_drill_anchor_duty_after_slots: m.get_one::<u64>("palw-drill-anchor-duty-after-slots").copied(),
             palw_drill_int11_at: m.get_one::<u64>("palw-drill-int11-at").copied(),
+            palw_drill_int13_at: m.get_one::<u64>("palw-drill-int13-at").copied(),
             palw_drill_improve_at: m.get_one::<u64>("palw-drill-improve-at").copied(),
             palw_drill_tir_shard_at: m.get_one::<u64>("palw-drill-tir-shard-at").copied(),
             palw_tir_shard_hold: m.get_many::<u16>("palw-tir-shard-hold").map(|v| v.copied().collect()).unwrap_or_default(),

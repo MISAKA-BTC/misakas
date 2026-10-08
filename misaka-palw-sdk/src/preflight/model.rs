@@ -193,6 +193,33 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         );
     }
 
+    // Tensors whose values the mapping reads and a header-only view cannot hold (a GGUF's `rope_freqs.weight`): the program's structure
+    // — every bound a static admission checks — does not depend on them, so the verdict stands; the values are read at conversion.
+    if let Some(g) = &src.gguf_model {
+        for p in g.pending_tensor_data() {
+            notes.push(format!(
+                "{p}: its values are read at conversion; the program's structure does not depend on them (ROPE_FREQ_FACTORS_V1), so this verdict stands for any table"
+            ));
+        }
+    }
+
+    // A weight file the frontend refuses by its FORM (a PyTorch pickle that is not a plain state dict, a global off the allowlist, a
+    // legacy serialization): named, with the safe path — never "the tensors are missing".
+    if let Some(why) = &src.weights_refusal {
+        blockers.push(
+            Blocker::new(
+                Stage::Convert,
+                "FORMAT_UNSUPPORTED",
+                "the weights are a file form this build does not read (a PyTorch pickle is interpreted, never run)",
+            )
+            .evidence([short(why)])
+            .safe([
+                "re-save the checkpoint with safetensors (`model.save_pretrained(..., safe_serialization=True)`)".to_string(),
+                "a plain `torch.save(model.state_dict())` of contiguous tensors is read; a training checkpoint, a strided view or the legacy format is not".to_string(),
+            ]),
+        );
+    }
+
     // ---- the configuration, the features, the scope -----------------------------------------------------------------
     let mut model: Option<ModelInfo> = None;
     let mut scope: Option<FeatureScope> = None;
@@ -208,7 +235,17 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         }
         (None, why) => {
             let why = why.clone().unwrap_or_else(|| "no configuration".into());
-            if src.kind == InputKind::Gguf {
+            if src.kind == InputKind::Gguf && why.contains("GGUF LoRA adapter") {
+                // The file is not a model: it is an adapter over one (llama.cpp's `convert_lora_to_gguf`). Composing a GGUF adapter with its
+                // base is not built; it is not an architecture the frontend failed to map.
+                blockers.push(
+                    Blocker::new(Stage::Convert, "ADAPTER_REFUSED", "the GGUF is a LoRA adapter, which this build does not compose with a base")
+                        .evidence([short(&why)])
+                        .safe([
+                            "a PEFT adapter (adapter_config.json and adapter_model.safetensors) over its Hugging Face base is composed".to_string(),
+                        ]),
+                );
+            } else if src.kind == InputKind::Gguf {
                 blockers.push(
                     Blocker::new(
                         Stage::Convert,
@@ -417,6 +454,29 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
             Vec::new(),
         ),
     };
+    // **A key ignored because the transformers class never reads it must not be a sign of a different model.** The reader ignored these
+    // keys on the strength of the reference being that class (`hf_schema::hf_keys`); a checkpoint that carries tensors the class does
+    // not have (a `q_norm` beside `use_qk_norm`, an expert stack beside `moe_intermediate_size`) says its author's model is not that
+    // class, so the ignoring is withdrawn: the key is refused as it always was.
+    let ignored_keys: Vec<String> = model
+        .as_ref()
+        .map(|m| m.assumed_defaults.iter().filter_map(|a| a.strip_prefix("ignored `").and_then(|r| r.split('`').next()).map(str::to_string)).collect())
+        .unwrap_or_default();
+    if !ignored_keys.is_empty() && tensors.unused_total > 0 {
+        blockers.push(
+            Blocker::new(
+                Stage::Convert,
+                "CONFIG_KEY_UNREAD",
+                "a configuration key the transformers class never reads was ignored, and the checkpoint carries tensors the class does not have: it is not that class",
+            )
+            .arg(ignored_keys[0].clone())
+            .evidence(
+                std::iter::once(format!("ignored keys: {}", ignored_keys.join(", ")))
+                    .chain(std::iter::once(format!("{} tensor(s) no parameter of the program reads, the first {}", tensors.unused_total, tensors.unused.first().cloned().unwrap_or_default()))),
+            )
+            .safe(["a data adapter (--adapter) that models the key and its tensors".to_string()]),
+        );
+    }
     let mut storage = storage;
     // A weight stored as a type no descriptor claims: the bound tensors of an `other` row.
     if prepared.is_some() && tensors.checked != "none" {
@@ -447,7 +507,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
     // ---- the tokenizer ------------------------------------------------------------------------------------------------------------
     let tokenizer_known = match src.kind {
         InputKind::HfDirectory => {
-            Some(src.files.iter().any(|f| matches!(f.name.as_str(), "tokenizer.json" | "tokenizer.model" | "vocab.json")))
+            Some(src.files.iter().any(|f| misaka_palw_tir_lower::artifact::is_tokenizer_file(&f.name)))
         }
         InputKind::Gguf => src.gguf_file.as_ref().map(|g| g.meta.contains_key("tokenizer.ggml.tokens")),
         _ => None,
@@ -460,7 +520,10 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
                 "TOKENIZER_MISSING",
                 "no tokenizer file beside the checkpoint: the class commits to a tokenizer id",
             )
-            .safe(["download tokenizer.json (a few MB) from the model repository".to_string()]),
+            .safe([
+                "download tokenizer.json (a few MB) from the model repository".to_string(),
+                "or bind the tokenizer of the base model it was fine-tuned from: the class commits to the bytes of one tokenizer file".to_string(),
+            ]),
         );
     }
 
@@ -808,15 +871,8 @@ fn artifact_of(
         .files
         .iter()
         .filter(|f| {
-            matches!(
-                f.name.as_str(),
-                "tokenizer.json"
-                    | "tokenizer.model"
-                    | "tokenizer_config.json"
-                    | "vocab.json"
-                    | "merges.txt"
-                    | "special_tokens_map.json"
-            )
+            misaka_palw_tir_lower::artifact::is_tokenizer_file(&f.name)
+                || matches!(f.name.as_str(), "tokenizer_config.json" | "merges.txt" | "special_tokens_map.json" | "added_tokens.json")
         })
         .map(|f| f.bytes)
         .sum();

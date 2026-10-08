@@ -171,6 +171,8 @@ impl World {
         let ev = self.consumer.apply(&mut self.l, &b);
         self.blocks.push(b);
         self.events.extend(ev.iter().cloned());
+        // RFC-0015: the OPV invariants hold after every block of every ledger test (trivially, where there is no OPV state).
+        self.l.opv_invariants().unwrap_or_else(|why| panic!("OPV invariant broken at {daa}: {why}"));
         ev
     }
 

@@ -310,19 +310,64 @@ fn parse_spk(s: &str) -> Result<ScriptPublicKey, BundleRefusalV1> {
     s.parse::<ScriptPublicKey>().map_err(|_| BundleRefusalV1::Malformed("a script field is not a script".into()))
 }
 
+/// **The registration kinds the detached flow carries** (RFC-0009 A0; H1's routed item 2, 2026-10-08: an IR class registered only through
+/// `palw tir-registration` + `submit-object`, with no detached signer). Each kind names its class, root, registrant and owner signature,
+/// and the message and context the registrant's key signs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegistrationKindV1 {
+    /// `ClassRegistered` with its admission carriage (a catalog / manifest class).
+    Class,
+    /// `ClassRegisteredTirV1` (an IR class: program, layout, tokenizer).
+    TirClass,
+}
+
+/// The ML-DSA-87 context the registrant signs a kind's registration under.
+pub fn owner_context_v1(kind: RegistrationKindV1) -> &'static [u8] {
+    match kind {
+        RegistrationKindV1::Class => PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+        RegistrationKindV1::TirClass => kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1,
+    }
+}
+
 struct Parts<'a> {
+    kind: RegistrationKindV1,
     class_id: Hash64,
     artifact_root: Hash64,
-    activation_daa: u64,
-    share_permille: u16,
-    slash_value_per_pwu: u64,
-    initial_target: u128,
-    pwu_rule: &'a PalwPwuRuleV2,
-    carriage: &'a PalwClassAdmissionCarriageV2,
+    registrant_bond: PalwBondKeyV2,
+    signature: &'a [u8],
+    /// A catalog class's profile must hash to its class id; an IR class's id is the fold's to re-derive (admission v10).
+    profile_consistent: bool,
+    object: &'a PalwConsensusObjectV2,
 }
 
 fn parts_of(obj: &PalwConsensusObjectV2) -> Result<Parts<'_>, BundleRefusalV1> {
     match obj {
+        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, admission: Some(carriage), .. } => Ok(Parts {
+            kind: RegistrationKindV1::Class,
+            class_id: *class_id,
+            artifact_root: *artifact_root,
+            registrant_bond: carriage.registrant_bond,
+            signature: &carriage.signature,
+            profile_consistent: carriage.profile.shape_profile_id() == *class_id,
+            object: obj,
+        }),
+        PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, artifact_root, admission, .. } => Ok(Parts {
+            kind: RegistrationKindV1::TirClass,
+            class_id: *class_id,
+            artifact_root: *artifact_root,
+            registrant_bond: admission.registrant_bond,
+            signature: &admission.signature,
+            profile_consistent: true,
+            object: obj,
+        }),
+        // OB-P0 (the tag-108 `SignedRegistrationV1` envelope): its arm goes HERE — and in `owner_message_of` / `set_owner_signature_v1`
+        // / `RegistrationKindV1` — the one call site the detached flow reads a registration through. No second 108 path.
+        _ => Err(BundleRefusalV1::NotARegistration),
+    }
+}
+
+fn owner_message_of(domain: Hash64, p: &Parts<'_>) -> Hash64 {
+    match p.object {
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
             artifact_root,
@@ -332,42 +377,58 @@ fn parts_of(obj: &PalwConsensusObjectV2) -> Result<Parts<'_>, BundleRefusalV1> {
             share_permille,
             activation_daa,
             admission: Some(carriage),
-        } => Ok(Parts {
-            class_id: *class_id,
-            artifact_root: *artifact_root,
-            activation_daa: *activation_daa,
-            share_permille: *share_permille,
-            slash_value_per_pwu: *slash_value_per_pwu,
-            initial_target: *initial_target,
+        } => palw_class_registration_message_v2(
+            domain,
+            *class_id,
+            *share_permille,
+            *activation_daa,
+            &carriage.registrant_bond,
+            *artifact_root,
+            *slash_value_per_pwu,
+            *initial_target,
             pwu_rule,
-            carriage,
-        }),
-        _ => Err(BundleRefusalV1::NotARegistration),
+            &carriage.canonical,
+        ),
+        PalwConsensusObjectV2::ClassRegisteredTirV1 {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu,
+            pwu_rule,
+            initial_target,
+            share_permille,
+            activation_daa,
+            admission,
+        } => kaspa_consensus_core::palw_tir_class_v1::palw_tir_class_registration_message_v1(
+            domain,
+            *class_id,
+            *share_permille,
+            *activation_daa,
+            &admission.registrant_bond,
+            *artifact_root,
+            *slash_value_per_pwu,
+            *initial_target,
+            pwu_rule,
+            &admission.canonical,
+            &admission.class,
+        ),
+        _ => unreachable!("parts_of admitted only registration kinds"),
     }
 }
 
-fn owner_message_of(domain: Hash64, p: &Parts<'_>) -> Hash64 {
-    palw_class_registration_message_v2(
-        domain,
-        p.class_id,
-        p.share_permille,
-        p.activation_daa,
-        &p.carriage.registrant_bond,
-        p.artifact_root,
-        p.slash_value_per_pwu,
-        p.initial_target,
-        p.pwu_rule,
-        &p.carriage.canonical,
-    )
+/// Put the registrant's signature into a registration object of any carried kind.
+pub fn set_owner_signature_v1(obj: &mut PalwConsensusObjectV2, signature: Vec<u8>) {
+    match obj {
+        PalwConsensusObjectV2::ClassRegistered { admission: Some(c), .. } => c.signature = signature,
+        PalwConsensusObjectV2::ClassRegisteredTirV1 { admission, .. } => admission.signature = signature,
+        _ => {}
+    }
 }
 
 /// The object with its owner signature emptied: the thing a quote names.
 pub fn unsigned_object_of(obj: &PalwConsensusObjectV2) -> Result<PalwConsensusObjectV2, BundleRefusalV1> {
     parts_of(obj)?;
     let mut o = obj.clone();
-    if let PalwConsensusObjectV2::ClassRegistered { admission: Some(c), .. } = &mut o {
-        c.signature = Vec::new();
-    }
+    set_owner_signature_v1(&mut o, Vec::new());
     Ok(o)
 }
 
@@ -437,9 +498,7 @@ pub fn build_bundle_v1(i: BundleInputsV1) -> Result<RegistrationBundleV1, Bundle
     let change = i.funding_entry.amount.checked_sub(fee).ok_or(BundleRefusalV1::CarrierArithmetic)?;
     let signed_len = {
         let mut probe = unsigned.clone();
-        if let PalwConsensusObjectV2::ClassRegistered { admission: Some(c), .. } = &mut probe {
-            c.signature = vec![0u8; MLDSA87_SIG_LEN];
-        }
+        set_owner_signature_v1(&mut probe, vec![0u8; MLDSA87_SIG_LEN]);
         object_bytes(&probe).len() as u64
     };
     let bundle = RegistrationBundleV1 {
@@ -450,13 +509,13 @@ pub fn build_bundle_v1(i: BundleInputsV1) -> Result<RegistrationBundleV1, Bundle
         ruleset_id: i.ruleset_id,
         class_id: p.class_id,
         artifact_root: p.artifact_root,
-        owner_bond: bond_text(&p.carriage.registrant_bond),
+        owner_bond: bond_text(&p.registrant_bond),
         owner_pubkey: hex(&i.owner_pubkey),
         owner_proof: i.owner_proof,
         object_hex: hex(&object_bytes(&unsigned)),
         object_digest: palw_registration_object_id_v1(&object_bytes(&unsigned)),
         owner_message: message,
-        owner_context: String::from_utf8_lossy(PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT).into_owned(),
+        owner_context: String::from_utf8_lossy(owner_context_v1(p.kind)).into_owned(),
         payer: PayerV1 {
             address: i.payer_address,
             spk: spk_text_v1(&i.payer_spk),
@@ -554,12 +613,12 @@ pub fn check_bundle_v1(
     }
     let object = decode_object(&b.object_hex)?;
     let p = parts_of(&object)?;
-    let have = if p.carriage.signature.is_empty() { BundleStageV1::Unsigned } else { BundleStageV1::OwnerSigned };
+    let have = if p.signature.is_empty() { BundleStageV1::Unsigned } else { BundleStageV1::OwnerSigned };
     if have != b.stage {
         // The label says one thing and the object another: the object is what is signed.
         return Err(BundleRefusalV1::Stage { have, need: b.stage });
     }
-    if p.carriage.profile.shape_profile_id() != p.class_id {
+    if !p.profile_consistent {
         return Err(BundleRefusalV1::ClassIsNotItsProfile);
     }
     if p.class_id != b.class_id {
@@ -568,7 +627,7 @@ pub fn check_bundle_v1(
     if p.artifact_root != b.artifact_root {
         return Err(BundleRefusalV1::FieldMismatch("artifact_root"));
     }
-    let owner_bond = bond_text(&p.carriage.registrant_bond);
+    let owner_bond = bond_text(&p.registrant_bond);
     if owner_bond != b.owner_bond {
         return Err(BundleRefusalV1::FieldMismatch("owner_bond"));
     }
@@ -591,7 +650,7 @@ pub fn check_bundle_v1(
     if message != b.owner_message {
         return Err(BundleRefusalV1::OwnerMessage);
     }
-    if b.owner_context.as_bytes() != PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT {
+    if b.owner_context.as_bytes() != owner_context_v1(p.kind) {
         return Err(BundleRefusalV1::OwnerContext);
     }
     let owner_pubkey = unhex(&b.owner_pubkey)?;
@@ -607,7 +666,7 @@ pub fn check_bundle_v1(
                 return Err(BundleRefusalV1::PinMismatch { bundle: proof.block, pinned: pin });
             }
             let (header, fact) = proof.open().map_err(BundleRefusalV1::OwnerProof)?;
-            verify_bond_against_pin(&header, pin, &fact, &p.carriage.registrant_bond, &owner_pubkey)
+            verify_bond_against_pin(&header, pin, &fact, &p.registrant_bond, &owner_pubkey)
                 .map_err(|e| BundleRefusalV1::OwnerProof(e.to_string()))?;
             Provenance::ProvenAtPin { pinned_block: pin, header_daa: header.daa_score }
         }
@@ -670,9 +729,7 @@ pub fn check_bundle_v1(
     }
     let expected_len = {
         let mut probe = unsigned.clone();
-        if let PalwConsensusObjectV2::ClassRegistered { admission: Some(c), .. } = &mut probe {
-            c.signature = vec![0u8; MLDSA87_SIG_LEN];
-        }
+        set_owner_signature_v1(&mut probe, vec![0u8; MLDSA87_SIG_LEN]);
         object_bytes(&probe).len() as u64
     };
     if b.carrier.signed_payload_len != expected_len {
@@ -716,27 +773,16 @@ pub fn owner_sign_v1(
     if signer.public_key() != checked.owner_pubkey {
         return Err(BundleRefusalV1::OwnerKeyMismatch);
     }
-    let sig = signer
-        .sign_with_context(checked.owner_message.as_byte_slice(), PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT)
-        .map_err(BundleRefusalV1::Signer)?;
+    let context = owner_context_v1(parts_of(&checked.object)?.kind);
+    let sig = signer.sign_with_context(checked.owner_message.as_byte_slice(), context).map_err(BundleRefusalV1::Signer)?;
     if sig.len() != MLDSA87_SIG_LEN {
         return Err(BundleRefusalV1::Signer(format!("a signature of {} bytes, not {MLDSA87_SIG_LEN}", sig.len())));
     }
-    if !matches!(
-        verify_mldsa87_with_context(
-            &checked.owner_pubkey,
-            checked.owner_message.as_byte_slice(),
-            &sig,
-            PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT
-        ),
-        Ok(true)
-    ) {
+    if !matches!(verify_mldsa87_with_context(&checked.owner_pubkey, checked.owner_message.as_byte_slice(), &sig, context), Ok(true)) {
         return Err(BundleRefusalV1::OwnerSignature);
     }
     let mut object = checked.object;
-    if let PalwConsensusObjectV2::ClassRegistered { admission: Some(c), .. } = &mut object {
-        c.signature = sig;
-    }
+    set_owner_signature_v1(&mut object, sig);
     let mut out = b.clone();
     out.stage = BundleStageV1::OwnerSigned;
     out.object_hex = hex(&object_bytes(&object));
@@ -800,8 +846,8 @@ pub fn carrier_sign_v1(
         verify_mldsa87_with_context(
             &checked.owner_pubkey,
             checked.owner_message.as_byte_slice(),
-            &p.carriage.signature,
-            PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT
+            p.signature,
+            owner_context_v1(p.kind)
         ),
         Ok(true)
     ) {
@@ -934,24 +980,17 @@ pub fn verify_signed_registration_v1(s: &SignedRegistrationV1, policy: &SubmitPo
     if p.artifact_root != policy.expect.artifact_root {
         return Err(BundleRefusalV1::RootSwapped { bundle: p.artifact_root, expected: policy.expect.artifact_root });
     }
-    let owner_bond = bond_text(&p.carriage.registrant_bond);
+    let owner_bond = bond_text(&p.registrant_bond);
     if owner_bond != policy.expect.owner_bond {
         return Err(BundleRefusalV1::OwnerSwapped { bundle: owner_bond, expected: policy.expect.owner_bond.clone() });
     }
-    if p.carriage.profile.shape_profile_id() != p.class_id {
+    if !p.profile_consistent {
         return Err(BundleRefusalV1::ClassIsNotItsProfile);
     }
     let owner_pubkey = unhex(&s.owner_pubkey)?;
     let message = owner_message_of(policy.network_domain, &p);
-    if !matches!(
-        verify_mldsa87_with_context(
-            &owner_pubkey,
-            message.as_byte_slice(),
-            &p.carriage.signature,
-            PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT
-        ),
-        Ok(true)
-    ) {
+    if !matches!(verify_mldsa87_with_context(&owner_pubkey, message.as_byte_slice(), p.signature, owner_context_v1(p.kind)), Ok(true))
+    {
         return Err(BundleRefusalV1::OwnerSignature);
     }
     // The funding signature, and that its key owns the funded script.
@@ -968,6 +1007,20 @@ pub fn verify_signed_registration_v1(s: &SignedRegistrationV1, policy: &SubmitPo
     }
     if palw_registration_object_id_v1(&object_bytes(&payload.object)) != s.object_id {
         return Err(BundleRefusalV1::NotTheCarrier("the object id is not the declared one"));
+    }
+    // The file's displayed fields are what the CLI shows, journals and checks duplicates by: they must be the payload's (C4 F-C4-12),
+    // or a relay could relabel the file (e.g. as an already registered class) and make `model submit` skip the user's registration.
+    if s.class_id != p.class_id {
+        return Err(BundleRefusalV1::ClassSwapped { bundle: s.class_id, expected: p.class_id });
+    }
+    if s.artifact_root != p.artifact_root {
+        return Err(BundleRefusalV1::RootSwapped { bundle: s.artifact_root, expected: p.artifact_root });
+    }
+    if s.owner_bond != owner_bond {
+        return Err(BundleRefusalV1::OwnerSwapped { bundle: s.owner_bond.clone(), expected: owner_bond });
+    }
+    if s.object_digest != unsigned_object_digest_v1(&payload.object)? {
+        return Err(BundleRefusalV1::NotTheCarrier("the displayed object digest is not the payload's"));
     }
     Ok(VerifiedSignedV1 { tx, tx_id: id, object_id: s.object_id, fee_sompi: fee, object: payload.object })
 }
@@ -1330,7 +1383,7 @@ mod tests {
         assert_eq!(fx.bundle.remote_state, UNVERIFIED_REMOTE_STATE);
         // The unsigned object has an empty owner signature.
         let obj = decode_object(&fx.bundle.object_hex).unwrap();
-        assert!(parts_of(&obj).unwrap().carriage.signature.is_empty());
+        assert!(parts_of(&obj).unwrap().signature.is_empty());
     }
 
     #[test]
@@ -1777,5 +1830,91 @@ mod tests {
             pf.rows[0].1.replace_range(n - 4..n, "ffff");
         }
         assert!(matches!(owner_sign_v1(&forged, &pinned, &fx.owner), Err(BundleRefusalV1::OwnerProof(_))));
+    }
+
+    /// **An IR class registration through the same detached flow** (H1's routed item 2): a `ClassRegisteredTirV1` is exported, owner-
+    /// signed under the IR registration's own message and context, payer-signed and verified from its bytes exactly as a catalog class is;
+    /// a relay that swaps its root is refused. (The program, layout and canonical context here are zero-decoded placeholders: what is
+    /// tested is the carriage and the signatures, not the class — the fold judges that with admission v10.)
+    #[test]
+    fn an_ir_class_registration_rides_the_same_detached_flow() {
+        use kaspa_consensus_core::palw_tir_class_v1::{PalwTirAdmissionCarriageV1, PalwTirClassV1};
+        let zeros = vec![0u8; 4096];
+        let class: PalwTirClassV1 = borsh::BorshDeserialize::deserialize(&mut zeros.as_slice()).expect("a zero class decodes");
+        let canonical: kaspa_consensus_core::palw_v2::PalwJobContextV2 =
+            borsh::BorshDeserialize::deserialize(&mut zeros.as_slice()).expect("a zero context decodes");
+        let root = h(0x78);
+        let object = PalwConsensusObjectV2::ClassRegisteredTirV1 {
+            class_id: h(0x7C),
+            artifact_root: root,
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 1_000 },
+            initial_target: 1u128 << 100,
+            share_permille: 10,
+            activation_daa: 0,
+            admission: Box::new(PalwTirAdmissionCarriageV1 {
+                class,
+                canonical,
+                registrant_bond: PalwBondKeyV2(bond_outpoint()),
+                signature: Vec::new(),
+            }),
+        };
+        let (owner, payer) = (TestKey::new(1), TestKey::new(2));
+        let payer_spk = funding_spk_of_pubkey_v1(&payer.public_key());
+        let quote = quote_registration_v1(facts_for(&object, &owner.public_key(), 200_000), 600, 300_000).unwrap();
+        let bundle = build_bundle_v1(BundleInputsV1 {
+            network: NET.into(),
+            network_domain: domain(),
+            ruleset_id: ruleset(),
+            unsigned_object: object.clone(),
+            owner_pubkey: owner.public_key(),
+            owner_proof: None,
+            payer_address: "kaspatest:payer".into(),
+            payer_spk: payer_spk.clone(),
+            funding_outpoint: TransactionOutpoint::new(h(0x66), 0),
+            funding_entry: UtxoEntry::new(5_000_000, payer_spk, 900, false),
+            quote,
+            sources: vec![QuoteSourceV1 { node: "a".into(), tip_hash: h(0x55), tip_daa: 1_000 }],
+        })
+        .expect("an IR registration bundles");
+        assert_eq!(
+            bundle.owner_context.as_bytes(),
+            kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_CLASS_REGISTRATION_MLDSA87_CONTEXT_V1
+        );
+        let policy = SignerPolicyV1 {
+            network: NET.into(),
+            network_domain: domain(),
+            ruleset_id: ruleset(),
+            registration_exposure_sompi: 40_000,
+            expect: ExpectationsV1 { class_id: h(0x7C), artifact_root: root, owner_bond: bond_str() },
+            max_wallet_sompi: 300_000,
+            now_daa: Some(1_001),
+            pin: None,
+        };
+        let owner_signed = owner_sign_v1(&bundle, &policy, &owner).expect("the owner signs the IR registration");
+        let signed = carrier_sign_v1(&owner_signed, &policy, &payer).expect("the payer signs the carrier");
+        let fx = Fixture { owner, payer, bundle: bundle.clone(), policy: policy.clone() };
+        verify_signed_registration_v1(&signed, &submit_policy(&fx)).expect("the IR registration verifies from its bytes");
+        // The signature in the carried object verifies under the IR message and context — what the fold checks.
+        let carried = decode_object(&owner_signed.object_hex).unwrap();
+        let p = parts_of(&carried).unwrap();
+        assert_eq!(p.kind, RegistrationKindV1::TirClass);
+        assert!(matches!(
+            verify_mldsa87_with_context(
+                &fx.owner.public_key(),
+                owner_message_of(domain(), &p).as_byte_slice(),
+                p.signature,
+                owner_context_v1(p.kind)
+            ),
+            Ok(true)
+        ));
+        // A builder that swapped the root is refused against what the user expects.
+        let mut evil = bundle.clone();
+        let mut swapped = object.clone();
+        if let PalwConsensusObjectV2::ClassRegisteredTirV1 { artifact_root, .. } = &mut swapped {
+            *artifact_root = h(0x99);
+        }
+        evil.object_hex = hex(&object_bytes(&swapped));
+        assert!(owner_sign_v1(&evil, &policy, &fx.owner).is_err());
     }
 }

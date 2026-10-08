@@ -480,3 +480,32 @@ fn binding_preserves_nondefault_layout_without_search_and_refuses_mutations() {
     assert!(!bad.exists());
     let _ = std::fs::remove_dir_all(work);
 }
+
+/// **A recurrent pack records its calibrated context** (H1, 2026-10-08: every recurrent model stopped at `declare-layout` because the
+/// streaming converter behind `pack build` wrote no `calibrated_context`): the artifact records the longest calibration sequence and
+/// the rule as applied, the declaration check admits that context and refuses a longer one, and the rebuild from the pack's pinned
+/// statistics is the same file.
+#[test]
+fn a_recurrent_pack_records_its_calibrated_context_and_rebuilds_the_same_file() {
+    let work = scratch("recurrent");
+    let src = fixture("hf/qwen3_5");
+    let (_, _, pack_dir) = build(&src, &work, 64, true);
+    let c = misaka_palw_tir_artifact::PalwTirContainerV1::open(&work.join("artifact.palwtir")).expect("artifact");
+    assert!(
+        c.program.states.iter().any(|s| matches!(s.kind, misaka_palw_tir::program::StateKind::Fixed { .. })),
+        "the fixture is recurrent"
+    );
+    let meta: serde_json::Value = serde_json::from_str(&c.header.meta).expect("meta");
+    assert_eq!(meta["calibrated_context"], serde_json::json!(12), "{meta}");
+    assert_eq!(meta["calibration_length_rule"]["rule"], "met");
+    misaka_palw_sdk::tir_layout::tir_calibration_covers_context_v1(&c.program, &meta, 12).expect("the calibrated context declares");
+    assert!(misaka_palw_sdk::tir_layout::tir_calibration_covers_context_v1(&c.program, &meta, 13).is_err(), "a longer one does not");
+
+    let mut o = VerifyOpts::new(&pack_dir);
+    o.model = Some(src.clone());
+    o.rebuild = true;
+    let r = verify_pack(&o, &|_| {}).expect("verifies");
+    assert!(r.verified(), "{}", r.render());
+    assert_eq!(r.checks.iter().find(|c| c.name == "artifact").expect("an artifact check").status, Status::Pass);
+    let _ = std::fs::remove_dir_all(work);
+}

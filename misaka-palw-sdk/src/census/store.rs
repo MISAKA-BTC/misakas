@@ -373,6 +373,7 @@ pub fn source_of(l: &ListingV1, sel: &SelectedV1, fx: &Fetched) -> Result<Census
                 gguf_model: model,
                 gguf_truncated: false,
                 gguf_file_bytes: size,
+                weights_refusal: None,
                 bytes_read,
             };
             Ok(CensusSource { source: src, scratch, label, bytes_read, needs_tensor_data })
@@ -417,6 +418,19 @@ pub fn diffusers_components(fx: &Fetched) -> Result<BTreeMap<String, (String, St
         out.insert(k.clone(), (lib, class, cfg));
     }
     Ok(out)
+}
+
+/// **The task of an adapter's pinned base**, from the head class its `config.json` names (`architectures[0]`, read against
+/// transformers' own head classes by [`super::listing::task_of_architecture_class`]): what an adapter that declares no `task_type`
+/// computes — it modifies the base model's layers and keeps its head. `None` when no base was read, its configuration was not
+/// fetched, or its class names no task.
+pub fn base_task_of(fx: &Fetched) -> Option<&'static str> {
+    let b = fx.fetch.base.as_ref().filter(|b| b.info.status == "ok")?;
+    let _ = b;
+    let it = fx.fetch.item("base/config.json").filter(|i| i.status == "ok")?;
+    let bytes = fx.bytes_of(it).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    super::listing::task_of_architecture_class(v.get("architectures")?.get(0)?.as_str()?)
 }
 
 /// **The source of a PEFT adapter over its pinned base** (RFC-0004: a candidate is a parent plus an adapter): the base's checkpoint as
@@ -478,6 +492,14 @@ pub fn adapter_source_of(
     let base_listing =
         ListingV1 { id: base.repo.clone(), siblings: base.inventory.iter().map(|x| x.path.clone()).collect(), ..Default::default() };
     let base_sel = super::listing::select(&base_listing);
+    if super::listing::torch_checkpoint_only(&base_listing, &base_sel) {
+        // The base is a transformers PyTorch checkpoint: the frontend reads it, the census never fetched its zip directory.
+        return Err(vec![problem(
+            codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY,
+            &format!("base:{}", base.repo),
+            "the base is a pytorch_model.bin checkpoint (read without running its pickle) whose zip directory was not fetched",
+        )]);
+    }
     if !matches!(base_sel.kind, ArtifactKind::Safetensors) {
         // The base is pinned and readable, but not in a form this build lowers (its weights only as a pickle, a GGUF, …): a lower-gate
         // fact about the composite, not a source failure.
@@ -518,4 +540,55 @@ pub fn adapter_source_of(
     cs.label = format!("hf://{}@{} over hf://{}@{}", l.id, f.revision, base.repo, base.revision);
     cs.source.label = cs.label.clone();
     Ok(Some((cs, crate::preflight::LoraInput { config, tensors })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fetched adapter whose base's configuration is `base_config` (stored as the fetch tool stores a metadata file).
+    fn adapter_with_base(tag: &str, base_ok: bool, base_config: Option<&str>) -> Fetched {
+        let dir = std::env::temp_dir().join(format!("census-store-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("f")).unwrap();
+        let mut items = Vec::new();
+        if let Some(c) = base_config {
+            std::fs::write(dir.join("f/base__config.json"), c).unwrap();
+            items.push(ItemV1 {
+                path: "base/config.json".into(),
+                kind: "file".into(),
+                status: "ok".into(),
+                store: Some("f/base__config.json".into()),
+                ..Default::default()
+            });
+        }
+        let info = InfoV1 { status: if base_ok { "ok" } else { "error" }.into(), ..Default::default() };
+        let fetch = FetchV1 {
+            schema: FETCH_SCHEMA_V1.into(),
+            repo: "o/adapter".into(),
+            revision: "r".into(),
+            info: InfoV1 { status: "ok".into(), ..Default::default() },
+            items,
+            base: Some(BaseFetchV1 { repo: "b/base".into(), revision: "s".into(), info, inventory: vec![] }),
+            ..Default::default()
+        };
+        Fetched { dir, fetch }
+    }
+
+    /// **An adapter that declares no task computes its pinned base's** — read from the base's own head class, never from a name.
+    #[test]
+    fn an_adapter_with_no_declared_task_carries_the_task_of_its_pinned_bases_head_class() {
+        let ok = |c: &str| base_task_of(&adapter_with_base("a", true, Some(c)));
+        assert_eq!(ok(r#"{"architectures": ["LlamaForCausalLM"]}"#), Some("text-generation"));
+        assert_eq!(ok(r#"{"architectures": ["T5ForConditionalGeneration"]}"#), Some("text2text-generation"));
+        assert_eq!(ok(r#"{"architectures": ["Qwen2_5_VLForConditionalGeneration"]}"#), Some("image-text-to-text"));
+        // A class that names no task is not guessed; a base not read, or without a configuration, says nothing.
+        assert_eq!(ok(r#"{"architectures": ["CustomResearchModel"]}"#), None);
+        assert_eq!(ok(r#"{"hidden_size": 8}"#), None);
+        assert_eq!(ok("not json"), None);
+        assert_eq!(base_task_of(&adapter_with_base("b", false, Some(r#"{"architectures": ["LlamaForCausalLM"]}"#))), None);
+        assert_eq!(base_task_of(&adapter_with_base("c", true, None)), None);
+        let mut no_base = adapter_with_base("d", true, Some(r#"{"architectures": ["LlamaForCausalLM"]}"#));
+        no_base.fetch.base = None;
+        assert_eq!(base_task_of(&no_base), None);
+    }
 }

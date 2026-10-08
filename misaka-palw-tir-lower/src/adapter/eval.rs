@@ -40,6 +40,16 @@ pub fn refusal_of(adapter: &Adapter) -> Option<Vec<(Vec<String>, String)>> {
     )
 }
 
+/// The adapter lists `arch` among the architectures it claims by exact class name (not only by model type).
+fn adapter_claims(adapter: &Adapter, arch: &str) -> bool {
+    adapter
+        .value
+        .get("match")
+        .and_then(|m| m.get("architectures"))
+        .and_then(Value::as_array)
+        .is_some_and(|a| a.iter().any(|x| x.as_str() == Some(arch)))
+}
+
 /// Instantiate `adapter` for `config`.
 pub fn build_spec(adapter: &Adapter, config: &Value, tensors: Option<&TensorIndex>) -> Result<Built> {
     let root = config.as_object().ok_or_else(|| bad("config.json is not an object"))?;
@@ -131,11 +141,39 @@ pub fn build_spec(adapter: &Adapter, config: &Value, tensors: Option<&TensorInde
     if spec.architecture.is_empty() {
         spec.architecture = arch.clone();
     }
+    let mut assumed_defaults: Vec<String> = env.assumed.borrow().iter().cloned().collect();
+    // **A transformers class ignores a key it never reads.** Where the reference IS a transformers class (the adapter claims the
+    // architecture by its exact name, the class is listed for the configuration's own `model_type`, no `auto_map` names remote code), a
+    // key still unaccounted for that the class's configuration does not define and its modelling code never reads cannot change its
+    // forward pass: it is inert, and said so (`hf_schema::hf_keys`). A key the class reads, a storage marker, and any key of an
+    // architecture that is not that class stay refused.
+    let nested = decoder.is_some() && !flat;
+    // A wrapper (a chat model whose decoder is `text_config`) is dispatched to the decoder's adapter, so it is the WRAPPER's class the
+    // table must list for the root `model_type`; a flat configuration is claimed by the adapter by exact class name.
+    let claimed = if nested {
+        root.get("model_type").and_then(Value::as_str).is_some_and(|m| crate::hf_schema::hf_keys::is_transformers_class(Some(&arch), m))
+    } else {
+        adapter_claims(adapter, &arch)
+    };
+    if root.get("auto_map").is_none_or(Value::is_null) && claimed {
+        let (mt, class) = if nested {
+            (dec_map.get("model_type").and_then(Value::as_str), None)
+        } else {
+            (root.get("model_type").and_then(Value::as_str), Some(arch.as_str()))
+        };
+        if let Some(mt) = mt {
+            let ignored = crate::hf_schema::hf_keys::never_read(class, mt, &cfg.unread_names());
+            if !ignored.is_empty() {
+                cfg.inert(&ignored.iter().map(String::as_str).collect::<Vec<_>>());
+                let who = class.unwrap_or(mt);
+                assumed_defaults.extend(ignored.iter().map(|k| format!("ignored `{k}`: never read by transformers' {who}")));
+            }
+        }
+    }
     cfg.finish()?;
     if let Some(r) = &root_cfg {
         r.finish()?;
     }
-    let assumed_defaults = env.assumed.borrow().iter().cloned().collect();
     Ok(Built { spec, assumed_defaults })
 }
 

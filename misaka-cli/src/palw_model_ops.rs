@@ -236,6 +236,56 @@ fn inspect_tir(
 /// `palw_tir_class_registration_message_v1` under the chain's domain (`NodeView::params`, a drill's
 /// genesis with the salt), written to `out`. The gate is not asked: the object may be for a height
 /// the IR fence does not cover yet.
+/// [`tir_registration_object`] behind the two client gates (H1's routed item 2 and the RFC-0009 modes): the class this object is signed in
+/// (a node on this machine is the user's own full node; any other node's terms are its word) and DUPLICATE_CLASS before the object is made.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn tir_registration_object_gated(
+    ctx: &Ctx,
+    key: &crate::keys::KeySource,
+    artifact: &Path,
+    parent: Option<&Path>,
+    bond: &str,
+    out: &Path,
+    model_id: Option<&str>,
+    pack_gate: &crate::pack_gate::PackGateFlags,
+    accept_unverified_state: Option<&str>,
+    allow_duplicate: bool,
+) -> CliResult {
+    use misaka_palw_remote::verify::{ModeLabelV1, signing_gate_v1};
+    let mode = crate::operator::model_remote::add_mode_v1(ctx.rpc.as_deref().unwrap_or("127.0.0.1"));
+    eprintln!("{}", mode.line());
+    let accepted = accept_unverified_state
+        .map(|t| {
+            ModeLabelV1::parse(t)
+                .ok_or_else(|| CliError::new(exit::GENERIC, format!("--accept-unverified-state {t:?} names no class")))
+        })
+        .transpose()?;
+    signing_gate_v1(mode, accepted)
+        .map_err(|g| CliError::new(exit::NOT_READY, format!("E-MODE-UNVERIFIED: nothing was signed — {g}")))?;
+    // DUPLICATE_CLASS, before anything is signed: the class and root this artifact registers, against the node's class rows.
+    let entry = misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(artifact).map_err(|e| CliError::new(exit::MODEL, e))?;
+    if parent.is_none() {
+        let nv = connect(ctx).await?;
+        let rows: Option<Vec<misaka_palw_remote::register::RegistryRowV1>> = nv.client.get_palw_classes().await.ok().map(|t| {
+            t.classes
+                .into_iter()
+                .map(|c| misaka_palw_remote::register::RegistryRowV1 {
+                    class_id: c.class_id.parse().unwrap_or_default(),
+                    artifact_root: c.artifact_root.parse().unwrap_or_default(),
+                    registrant_bond: None,
+                    lifecycle: c.status,
+                })
+                .collect()
+        });
+        if let Some(note) =
+            crate::palw_fp::duplicate_registration_gate_v1(entry.class_id(), entry.artifact_root, rows.as_deref(), allow_duplicate)?
+        {
+            eprintln!("warning: {note}");
+        }
+    }
+    tir_registration_object(ctx, key, artifact, parent, bond, out, model_id, pack_gate).await
+}
+
 pub(crate) async fn tir_registration_object(
     ctx: &Ctx,
     key: &crate::keys::KeySource,

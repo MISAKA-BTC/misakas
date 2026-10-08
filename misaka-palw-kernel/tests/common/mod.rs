@@ -4,6 +4,7 @@
 
 pub mod chain;
 pub mod ledger_world;
+pub mod opv_world;
 
 use misaka_palw_kernel::KernelFaultProofV1;
 use misaka_palw_kernel::challenge::ChallengeBindingV1;

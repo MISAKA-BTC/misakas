@@ -204,3 +204,19 @@ fn the_kit_names_the_int11_flag_day_height_and_offset_the_preset_arms() {
         "{schedule:?}"
     );
 }
+
+/// **The kit's copy of the int-13 flag day's height is the core's** (DAA 9,000, the coordinator's brief of 2026-10-08): `fleet.env.example`
+/// names it, the preset arms exactly that height, and the schedule an operator reads names it.
+#[test]
+fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
+    const FLEET: &str = "contrib/t12-deploy-kit/fleet.env.example";
+    let fleet = repo_file(FLEET);
+    let at = PALW_T12_INT13_DAA.expect("the int-13 flag day has a height");
+    assert_eq!(shell_value(FLEET, &fleet, "INT13_FLAG_DAY_DAA"), at.to_string(), "{FLEET}: INT13_FLAG_DAY_DAA is the preset's");
+    let p = Params::from(t12());
+    assert!(p.fence_schedule_v1().contains(&at), "the public ruleset schedules {at}: {:?}", p.fence_schedule_v1());
+    for fence in PALW_T12_INT13_FENCES_V1 {
+        let armed = p.palw_fences_v1().into_iter().find(|(name, _)| *name == fence.name).and_then(|(_, f)| f).map(|f| f.daa_score());
+        assert_eq!(armed, Some(at), "{}: the preset arms every fence of the list at the kit's height", fence.name);
+    }
+}

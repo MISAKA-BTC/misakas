@@ -149,6 +149,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("ROPE_YARN_V1", Position, "YaRN rope", Implemented, [], NoReq, ["fidelity_tiny::qwen3_yarn"], "Ramp between interpolated and extrapolated frequencies, with an attention factor."),
     feature!("ROPE_LLAMA3_V1", Position, "Llama-3.1 rope scaling", Implemented, [], NoReq, ["fidelity_tiny::llama"], "Smooth interpolation by wavelength."),
     feature!("ROPE_LONGROPE_V1", Position, "LongRoPE (Phi-3)", Implemented, [], NoReq, ["fidelity_tiny::phi3_longrope"], "Short/long factor lists switching at the original length."),
+    feature!("ROPE_FREQ_FACTORS_V1", Position, "an explicit table of frequency divisors", Implemented, [], NoReq, ["gguf_rope_freqs::the_program_does_not_depend_on_the_values_of_the_table", "gguf_rope_freqs::with_the_data_an_arbitrary_table_reads_as_itself_and_a_llama3_table_as_llama3"], "inv_freq / factor per dimension, one static table at every length: llama.cpp's `rope_freqs.weight` (what a GGUF stores for a Llama-3.x scaling, or any table its converter derived) and ggml's `freq_factors`. The table's values are weights, not structure: the program is byte-identical for every table of the right length, so a header-only judgment of a GGUF that has one is a judgment of the file."),
     feature!("ROPE_PROPORTIONAL_V1", Position, "proportional rope", Implemented, [], NoReq, ["fidelity_tiny::gemma4", "fidelity_tiny::gemma4_kvshare"], "Gemma-4's full-attention rope: frequencies on the first `partial_rotary_factor` of the head width, zeros after (those pairs are not rotated), divided by `factor`."),
     feature!("ROPE_PARTIAL_V1", Position, "rotation of a prefix of each head", Implemented, [], NoReq, ["fidelity_tiny::phi", "fidelity_tiny::stablelm_parallel"], "`partial_rotary_factor` < 1: the rest of the head passes through."),
     feature!("ROPE_INTERLEAVED_V1", Position, "interleaved rotary pairs", Implemented, [], NoReq, ["fidelity_tiny::gptj", "fidelity_tiny::glm"], "(2i, 2i+1) pairs instead of (i, i + d/2)."),
@@ -236,6 +237,7 @@ pub static REGISTRY: &[FeatureInfo] = &[
     feature!("HEAD_PROJ_OUT_V1", Head, "projection to the embedding width before the head", Implemented, [], NoReq, ["fidelity_tiny::opt_postln_proj"], "OPT-350m."),
     feature!("HEAD_TRANSFORM_V1", Head, "a prediction head before the vocabulary projection: dense, activation, norm", Implemented, [], NoReq, ["head_transform::a_head_transform_is_dense_act_norm_before_the_head"], "BERT's cls.predictions.transform, ModernBERT-decoder's and RoBERTa's lm_head: h -> norm(act(dense(h))), then the (tied) vocabulary projection and its bias. Roles head.transform.dense and head.transform.norm; no new node kinds."),
     feature!("OUTPUT_LOGITS_V1", Head, "logits output", Implemented, [], NoReq, ["fidelity_tiny::llama"], "Next-token logits."),
+    feature!("OUTPUT_CLASSIFY_V1", Head, "classification output (a sequence classifier, reranker or reward head over the pooled row)", Implemented, [], NoReq, ["seqcls::a_decoder_sequence_classifier_matches_its_hf_logits", "seqcls::an_encoder_sequence_classifier_matches_its_hf_logits_on_three_implementations_and_the_court"], "The last prompt token (decoder) or [CLS] (encoder: BERT's pooler + tanh, RoBERTa/XLM-R's dense + tanh, DistilBERT's pre_classifier + ReLU) through an optional dense + activation, then a linear layer to `labels` logits (transformers' `…ForSequenceClassification`); an Embedding-profile row of unnormalised logits in one power-of-two unit. `num_labels` is the length of `id2label`. transformers picks the last NON-PAD token: this class reads the last token of the prompt, which is the same when the prompt holds no pad token id."),
     feature!("OUTPUT_EMBEDDING_V1", Head, "embedding output (pooled hidden row)", Implemented, [], NoReq, ["encoders::clip_text_encoder_matches_its_hf_fixture"], "RFC-0003 Embedding profile."),
     feature!("ENC_BIDIR_V1", Model, "a bidirectional encoder over a padded token axis (BERT, RoBERTa, XLM-R, DistilBERT, MPNet)", Implemented, [], NoReq, ["encoders::bert_cls_pooled_unnormalised_matches_its_hf_fixture", "encoders::mpnet_with_its_relative_bias_matches_its_hf_fixture"], "ONE position over the padded token axis L: every value is a [L, ...] tensor, attention is full over a Fixed axis with the keys at or past the count masked, pad rows never reach a real row or the pooling. Per layer kind: learned positions or a rotate_half rope table per position (ROPE_DEFAULT_V1 and friends), post-LN or pre-norm placement (a norm absent where the checkpoint has none), optional q/k/v/o and MLP biases, a plain or gated MLP, an optional final norm, optional band window; anything else is refused by name (the lowering reads a strict allow-list of the spec)."),
     feature!("ENC_BAND_WINDOW_V1", Attention, "a bidirectional sliding window: a key is visible iff |i - j| < w", Implemented, [], NoReq, ["encoders::modernbert_matches_its_hf_fixture"], "ModernBERT's local layers (local_attention = 2w - 2 of the checkpoint's own value is the adapter's arithmetic): two Iota/Compare/Select bands over the [L, L] scores, no table; the mask is part of the program, not a parameter."),
@@ -377,6 +379,7 @@ fn rope_features(u: &mut Uses, r: &crate::rope::RopeSpec, head_dim: usize, layer
         "yarn" => "ROPE_YARN_V1",
         "llama3" => "ROPE_LLAMA3_V1",
         "longrope" | "su" => "ROPE_LONGROPE_V1",
+        "freq_factors" => "ROPE_FREQ_FACTORS_V1",
         "proportional" => "ROPE_PROPORTIONAL_V1",
         _ => "ROPE_DEFAULT_V1",
     };
@@ -800,8 +803,13 @@ fn detect(s: &ModelSpec) -> Vec<FeatureUse> {
     // head and output
     match &s.output {
         OutputSpec::Logits => u.add("OUTPUT_LOGITS_V1", None, ""),
-        OutputSpec::Embedding { .. } => {
-            u.add("OUTPUT_EMBEDDING_V1", None, "");
+        OutputSpec::Embedding { .. } | OutputSpec::Classify { .. } => {
+            match &s.output {
+                OutputSpec::Classify { labels, pre, .. } => {
+                    u.add("OUTPUT_CLASSIFY_V1", None, format!("{labels} labels{}", if pre.is_some() { ", dense + activation first" } else { "" }));
+                }
+                _ => u.add("OUTPUT_EMBEDDING_V1", None, ""),
+            }
             // The BERT lineage: post-LN layers under an embedding output (a causal embedder — CLIP's text tower,
             // Qwen3-Embedding — is pre-norm and takes the decoder's route).
             // A pre-norm encoder (ModernBERT, EuroBERT) says so with the encoder family its adapter names.

@@ -940,6 +940,16 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **RFC-0010: the permissionless Panel's observation at the tip** (`getPalwPanelV3Status`, op 220): the engine's overview and
+    /// the status of the named claims (or the first tracked ones). A read: no rule calls it. `None` off `ConsensusV2`.
+    fn palw_panel_v3_observation_v1(
+        &self,
+        _ids: Vec<crate::Hash64>,
+        _limit: usize,
+    ) -> Option<crate::palw_permissionless_panel_v1::PanelV3ObservationV1> {
+        None
+    }
+
     /// The court's half: open sessions this node holds a bond in.
     fn palw_court_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwCourtDutyV2> {
         Vec::new()
@@ -1290,6 +1300,32 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **G14 lane D: the kernel route's state at the tip** — the ledger's public rows (classes with their programs, plans and artifact
+    /// commitments, jobs, committed claims with their evidence and trace commitments, demands, served positions, the bonds' kernel
+    /// view), the interim seat assignments and the receipts counted so far, and the configuration they were folded under. Everything a
+    /// fresh verifier needs and nothing private: it rebuilds the ledger from the rows and checks them against the committed root
+    /// ([`crate::palw_kernel_route_v1::PalwKernelRouteStateV1::ledger_root`]). `None` before the fence's first kernel move and off
+    /// ConsensusV2.
+    fn palw_kernel_route_v1(&self) -> Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1> {
+        None
+    }
+
+    /// **G14 phase 3: where a V2 class stands on the onboarding path** (artifact bindings, kernel binding, conformance commitment, the
+    /// activation gate's verdict and reason) at the virtual's DAA. `None` for an unknown class and off ConsensusV2.
+    fn palw_onboarding_v1(&self, _class_id: kaspa_hashes::Hash64) -> Option<crate::palw_onboarding_v1::OnboardingReadV1> {
+        None
+    }
+
+    /// **Onboarding P0: a V2 class's conformance record and posted evidence** (tables 39 and 40, raw and decoded), the network's
+    /// challenge policy and the beacon state this node derives at the virtual's DAA — RPC op 231's source; with op 212's Finals it is
+    /// everything a fresh verifier needs. `None` for an unknown class and off ConsensusV2.
+    fn palw_conformance_evidence_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+    ) -> Option<crate::palw_onboarding_v1::ConformanceEvidenceReadV1> {
+        None
+    }
+
     /// RFC-0004 (spec 17): every open improvement epoch at the tip, as a node reads it — the line,
     /// its policy, the epoch's header, candidates and items. Empty off ConsensusV2 and below the fence.
     fn palw_improvement_open_epochs_v1(&self) -> Vec<crate::palw_improve_state_v1::PalwImprovementEpochViewV1> {
@@ -1554,6 +1590,12 @@ pub trait ConsensusApi: Send + Sync {
     /// `safe`/`finalized` block tags and to read account state at a non-reorgable
     /// height (holder-gated access). `None` on a non-EVM node / before activation.
     fn get_native_settlement_snapshot(&self) -> ConsensusResult<Option<crate::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
+        Ok(None)
+    }
+
+    /// RFC-0012 D1: why `safe` stands where it does, at the node's sink (`None` before the retirement fence, or when this
+    /// consensus keeps no native-settlement evaluation). Advisory: it decides nothing and is never persisted.
+    fn get_native_safe_readiness(&self) -> ConsensusResult<Option<crate::palw_native_readiness_v1::NativeSafeReadinessV1>> {
         Ok(None)
     }
 

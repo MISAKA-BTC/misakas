@@ -354,6 +354,12 @@ impl<'a> Cfg<'a> {
         }
     }
 
+    /// The keys of this scope no getter has read and none is declared inert, by their own names (no path).
+    pub fn unread_names(&self) -> Vec<String> {
+        let used = self.used.borrow();
+        self.map.keys().filter(|k| !used.contains(*k)).cloned().collect()
+    }
+
     pub fn unknown_keys(&self) -> Vec<String> {
         let used = self.used.borrow();
         self.map.keys().filter(|k| !used.contains(*k)).map(|k| self.key(k)).collect()

@@ -235,6 +235,10 @@ pub(crate) fn own_claim_events_at_v1(
                     // ADR-0160 lane liab (AG-2): voided by its bond's aggregate forfeiture.
                     R::AggregateForfeit => "aggregate_forfeit",
                     R::PanelUnavailable => "panel_unavailable",
+                    // RFC-0010: the permissionless Panel's non-fraud terminations.
+                    R::SealUnavailable => "seal_unavailable",
+                    R::BeaconUnavailable => "beacon_unavailable",
+                    R::PermissionlessNoCapablePanel => "permissionless_no_capable_panel",
                     // RFC-0008 v2: a work session not ready by its expiry voids its claim, uncharged.
                     R::WorkRootExpired => "work_root_expired",
                 };
@@ -14214,6 +14218,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::VertexEquivocationV1 { .. } => "VertexEquivocationV1",
         PalwConsensusObjectV2::TrapCommittedV1 { .. } => "TrapCommittedV1",
         PalwConsensusObjectV2::TrapRevealedV1 { .. } => "TrapRevealedV1",
+        PalwConsensusObjectV2::PanelBeaconProofV3 { .. } => "PanelBeaconProofV3",
         PalwConsensusObjectV2::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         PalwConsensusObjectV2::AttemptRidersV1 { .. } => "AttemptRidersV1",
         PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
@@ -14234,6 +14239,15 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         // RFC-0003 decision 22 (tag 90): a named-leaf challenge with the declaration of its close.
         PalwConsensusObjectV2::HeldLeafChallengeDeclared { .. } => "HeldLeafChallengeDeclared",
         PalwConsensusObjectV2::AdapterClassListed { .. } => "AdapterClassListed",
+        // G14 lane D (tags 110, 111): the kernel route.
+        PalwConsensusObjectV2::KernelRouteV1 { .. } => "KernelRouteV1",
+        PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. } => "KernelConstraintReceiptV1",
+        PalwConsensusObjectV2::ArtifactBoundV1 { .. } => "ArtifactBoundV1",
+        PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. } => "ArtifactBindingChallengedV1",
+        PalwConsensusObjectV2::KernelBoundV1 { .. } => "KernelBoundV1",
+        PalwConsensusObjectV2::ConformanceCommittedV1 { .. } => "ConformanceCommittedV1",
+        PalwConsensusObjectV2::SignedRegistrationV1 { .. } => "SignedRegistrationV1",
+        PalwConsensusObjectV2::ConformanceEvidenceV1 { .. } => "ConformanceEvidenceV1",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

@@ -152,6 +152,7 @@ fn has_key(config: &Value, key: &str) -> bool {
 pub fn scope_of(config: &Value, spec: Option<&ModelSpec>, tensors: Option<&TensorIndex>, files: &[String]) -> FeatureScope {
     let (task, input, output) = match spec.map(|s| &s.output) {
         Some(OutputSpec::Embedding { .. }) => ("text-embedding", "token ids", "a pooled sentence embedding"),
+        Some(OutputSpec::Classify { .. }) => ("text-classification", "token ids", "one logit per label"),
         _ => ("text-generation", "token ids", "next-token logits"),
     };
     let mut excluded = Vec::new();

@@ -1,0 +1,76 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mixin-seqcls-encoder",
+  "doc": "A mixin: `\u2026ForSequenceClassification` over a BERT-lineage encoder (mixin-bert-encoder): the encoder, then the [CLS] row through an optional dense + activation (`cls_pre_on`, `cls_act`) and a linear layer to `labels` logits. `labels` is the length of `id2label` (2 when the configuration names none). The pooler and the classifier are weights of the class, not ignored.",
+  "vars": [
+    {
+      "name": "labels",
+      "value": {
+        "$let": [
+          "m",
+          {
+            "$cfg?": "id2label"
+          },
+          {
+            "$if": [
+              {
+                "$ne": [
+                  {
+                    "$var": "m"
+                  },
+                  null
+                ]
+              },
+              {
+                "$len": {
+                  "$var": "m"
+                }
+              },
+              {
+                "$cfg": [
+                  "num_labels",
+                  2
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "cls_act",
+      "value": "Tanh"
+    },
+    {
+      "name": "cls_pre_on",
+      "value": true
+    }
+  ],
+  "spec": {
+    "output": {
+      "Embedding": {
+        "$unset": true
+      },
+      "Classify": {
+        "labels": {
+          "$var": "labels"
+        },
+        "bias": true,
+        "pre": {
+          "$if": [
+            {
+              "$var": "cls_pre_on"
+            },
+            {
+              "bias": true,
+              "act": {
+                "$var": "cls_act"
+              }
+            },
+            null
+          ]
+        }
+      }
+    }
+  }
+}

@@ -35,11 +35,11 @@ fn ids(p: &Params) -> (String, String, String) {
 ///
 /// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
 /// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
-// re-pin 2026-10-04 @533e62b541f0: audit 1004 G-1: gen max_job_step_leaves 2^30 -> 2^22 (enumeration cap) (was 4db7c459…, cc6dd90f…)
+// re-pin 2026-10-08 @9e1704dab859: int-13 flag day @ DAA 9,000: palw_audit_1004_v1, palw_gen_range_twin_v1, palw_model_court_window, palw_receipt_spend_v4 armed (the shipped params and schedule ids move; genesis and identity do not) (was b272e2f5…, 11ce9af4…)
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "b272e2f5f7adcacc8e3b7ef5121f2223a04ed50a7a0ec6ad5a3ffde3ebb066ad",
+    "d445125cdfc21f728ed667df59a4d9ba30f464fc1395e6c1e75a05aaae1ddaab",
     "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
-    "11ce9af44c0ee06cd645b678f84a80e6a4b06a52e6f2bdbcd8635f0663744934",
+    "27ad3cf4f72e1c8423a18b56b7bb03d10f1747e73e75189dd87d0b5b25d8d480",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the

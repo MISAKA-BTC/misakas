@@ -103,12 +103,15 @@ pub struct ShardHeader {
     pub entries: BTreeMap<String, ShardEntry>,
     /// SHA-256 of the header bytes (the 8-byte length included): what a pack can pin.
     pub header_sha256: String,
+    /// A PyTorch checkpoint's tensors sit at absolute offsets: one past the last byte any needs (else `header_bytes +
+    /// declared_data_bytes`, a safetensors file's end of data).
+    pub data_end: Option<u64>,
 }
 
 impl ShardHeader {
     /// Whether the file holds its whole data region (else it is a header, or a partial download).
     pub fn complete(&self) -> bool {
-        self.file_bytes >= self.header_bytes + self.declared_data_bytes
+        self.file_bytes >= self.data_end.unwrap_or(self.header_bytes + self.declared_data_bytes)
     }
 }
 
@@ -161,7 +164,46 @@ pub fn read_safetensors_header(path: &Path) -> Result<ShardHeader, String> {
         file_bytes,
         entries,
         header_sha256: hex(&h.finalize()),
+        data_end: None,
     })
+}
+
+/// The header of a PyTorch checkpoint as a shard: tensor names, dtypes, shapes and the absolute offsets of their bytes
+/// (`header_bytes` is 0 and each entry's `start` is the offset in the file), read by interpreting the pickle — never running it.
+/// `Err` is the refusal's text (a `FORMAT_UNSUPPORTED` reason); the second value is the bytes read.
+pub fn read_torch_header(path: &Path) -> Result<(ShardHeader, u64), String> {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string();
+    let t = misaka_palw_tir_lower::weights::torchzip::read_header(path).map_err(|e| format!("{name}: {e}"))?;
+    let entries = t
+        .entries
+        .iter()
+        .map(|(n, e)| (n.clone(), ShardEntry { dtype: e.dtype.to_string(), shape: e.shape.clone(), bytes: e.bytes, start: e.begin }))
+        .collect();
+    // The weight bytes: the union of the tensors' byte ranges (tied weights share a storage, views overlap it).
+    let mut ranges: Vec<(u64, u64)> = t.entries.values().filter(|e| e.bytes > 0).map(|e| (e.begin, e.begin + e.bytes)).collect();
+    ranges.sort_unstable();
+    let mut weight_bytes = 0u64;
+    let mut at = 0u64;
+    for (a, b) in ranges {
+        let a = a.max(at);
+        if b > a {
+            weight_bytes += b - a;
+            at = b;
+        }
+    }
+    Ok((
+        ShardHeader {
+            file: name,
+            path: path.to_path_buf(),
+            header_bytes: 0,
+            declared_data_bytes: weight_bytes,
+            file_bytes: t.file_len,
+            entries,
+            header_sha256: t.pickle_digest.clone(),
+            data_end: Some(t.data_end),
+        },
+        t.bytes_read,
+    ))
 }
 
 pub fn hex(b: &[u8]) -> String {
@@ -240,6 +282,9 @@ pub struct Source {
     /// The GGUF's data region is not all in the file (a header alone, or a partial download).
     pub gguf_truncated: bool,
     pub gguf_file_bytes: u64,
+    /// Why the weights of this input could not be read at all, when the reason is the file's form (a PyTorch checkpoint whose pickle
+    /// is not a plain state dict, a legacy serialization, a global off the allowlist): `FORMAT_UNSUPPORTED`. `None` when they read.
+    pub weights_refusal: Option<String>,
     /// Bytes read from disk: the configuration, the indexes and every header.
     pub bytes_read: u64,
 }
@@ -349,8 +394,20 @@ fn open_hf(config_path: &Path, dir: &Path, weights_dir: &Path, kind: InputKind) 
         }
         files.sort_by(|a, b| a.name.cmp(&b.name));
     }
-    // The index names the shards; without one, a lone model.safetensors, else any safetensors file here (a header dump).
-    let index_path = weights_dir.join("model.safetensors.index.json");
+    // The index names the shards; without one, a lone model.safetensors, else any safetensors file here (a header dump). A checkpoint
+    // with no safetensors at all but a PyTorch one (`pytorch_model.bin`, its index and shards) is read through `torchzip`: the pickle
+    // is interpreted, never run.
+    let has_safetensors = weights_dir.join("model.safetensors.index.json").exists()
+        || weights_dir.join("model.safetensors").exists()
+        || files.iter().any(|f| f.name.ends_with(".safetensors"));
+    let torch_index = weights_dir.join("pytorch_model.bin.index.json");
+    let torch_names: Vec<String> = files
+        .iter()
+        .filter(|f| f.name == "pytorch_model.bin" || (f.name.starts_with("pytorch_model-") && f.name.ends_with(".bin")))
+        .map(|f| f.name.clone())
+        .collect();
+    let use_torch = !has_safetensors && (torch_index.exists() || !torch_names.is_empty());
+    let index_path = if use_torch { torch_index } else { weights_dir.join("model.safetensors.index.json") };
     let mut shard_names: Vec<String> = Vec::new();
     let mut index_names: Option<BTreeSet<String>> = None;
     let mut index_total_size = None;
@@ -363,6 +420,8 @@ fn open_hf(config_path: &Path, dir: &Path, weights_dir: &Path, kind: InputKind) 
         index_total_size = v.get("metadata").and_then(|m| m.get("total_size")).and_then(|s| s.as_u64());
         let shards: BTreeSet<String> = wm.values().filter_map(|x| x.as_str().map(str::to_string)).collect();
         shard_names = shards.into_iter().collect();
+    } else if use_torch {
+        shard_names = torch_names;
     } else if weights_dir.join("model.safetensors").exists() {
         shard_names.push("model.safetensors".into());
     } else {
@@ -374,10 +433,25 @@ fn open_hf(config_path: &Path, dir: &Path, weights_dir: &Path, kind: InputKind) 
     }
     let mut shards = Vec::new();
     let mut missing = Vec::new();
+    let mut weights_refusal: Option<String> = None;
     for s in &shard_names {
         let p = weights_dir.join(s);
         if !p.exists() {
             missing.push(s.clone());
+            continue;
+        }
+        if misaka_palw_tir_lower::weights::torchzip::is_torch_path(&p) {
+            match read_torch_header(&p) {
+                Ok((h, n)) => {
+                    bytes_read += n;
+                    shards.push(h);
+                }
+                Err(e) => {
+                    weights_refusal = Some(e);
+                    shards.clear();
+                    break;
+                }
+            }
             continue;
         }
         let h = read_safetensors_header(&p)?;
@@ -405,6 +479,7 @@ fn open_hf(config_path: &Path, dir: &Path, weights_dir: &Path, kind: InputKind) 
         gguf_model: None,
         gguf_truncated: false,
         gguf_file_bytes: 0,
+        weights_refusal,
         bytes_read,
     })
 }
@@ -469,6 +544,7 @@ fn open_gguf(path: &Path, reg: &QuantRegistry) -> Result<Source, String> {
         gguf_model: model,
         gguf_truncated: truncated,
         gguf_file_bytes: len,
+        weights_refusal: None,
         bytes_read,
     })
 }

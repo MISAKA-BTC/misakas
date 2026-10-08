@@ -29,11 +29,11 @@ mod evm_send;
 mod forward;
 mod key_roles;
 mod keys;
+/// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
+mod model_preflight;
 mod node;
 /// ADR-0122: `mining`, `doctor`, `work` — the operator surface over the components.
 mod operator;
-/// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
-mod model_preflight;
 mod pack_gate;
 mod palw_activation_pool;
 mod palw_capacity_shadow;
@@ -52,6 +52,8 @@ mod palw_line;
 mod palw_model;
 mod palw_model_ops;
 mod palw_panel;
+/// RFC-0010: `palw panel-v3` — the permissionless Panel's observation of a claim (op 220).
+mod palw_panel_v3;
 mod palw_registry;
 mod palw_service;
 mod palw_settlement;
@@ -631,6 +633,10 @@ enum ModelCmd {
         /// that block commits and the proof travels in the bundle, so an offline signer with the same --pin checks it too.
         #[arg(long, value_name = "BLOCK_HASH")]
         pin: Option<String>,
+        /// Sign below VERIFIED_REMOTE: name the class you accept (HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED or UNVERIFIED_REMOTE). A node on
+        /// this machine (loopback --rpc) is taken as your own full node (FULL_NODE) and needs no opt-in.
+        #[arg(long, value_name = "LABEL")]
+        accept_unverified_state: Option<String>,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -672,6 +678,13 @@ enum ModelCmd {
         /// the signer checks it offline (without --pin the key is shown as UNVERIFIED_REMOTE_STATE).
         #[arg(long, value_name = "BLOCK_HASH")]
         pin: Option<String>,
+        /// The --pin came from your OWN full node (then a pinned proof is VERIFIED_REMOTE; a pin from elsewhere is
+        /// HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED).
+        #[arg(long, requires = "pin")]
+        pin_from_own_node: bool,
+        /// Sign below VERIFIED_REMOTE: name the class you accept (HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED or UNVERIFIED_REMOTE).
+        #[arg(long, value_name = "LABEL")]
+        accept_unverified_state: Option<String>,
         /// Where to write the result (default: next to the bundle).
         #[arg(long, value_name = "FILE")]
         out: Option<std::path::PathBuf>,
@@ -771,6 +784,58 @@ enum ModelCmd {
     /// A model's market: open it (seed its line up to the least seed).
     #[command(subcommand)]
     Market(MarketCmd),
+    /// G14 onboarding P0: the signed registration envelope (tag 108; export unsigned, sign where the key is, file it) and the chain's
+    /// conformance record (op 231), re-verified from public material.
+    #[command(subcommand)]
+    Onboard(OnboardCmd),
+}
+
+#[derive(Subcommand, Debug)]
+enum OnboardCmd {
+    /// Step 1, no key and no node: wrap a registration object (Borsh) in an UNSIGNED tag-108 request for BOND, valid in
+    /// [--valid-from, --valid-until] while the chain's fork digest is this build's at --valid-from.
+    EnvelopeExport {
+        /// The registration object (Borsh), as `misaka palw tir-registration` writes it.
+        #[arg(long, value_name = "FILE")]
+        registration: std::path::PathBuf,
+        /// The registrant bond, <txid>:<index>.
+        #[arg(long)]
+        bond: String,
+        /// The first DAA at which the registration may be accepted; the fork digest is this build's at it (G-RULESET).
+        #[arg(long, value_name = "DAA")]
+        valid_from: u64,
+        /// The last DAA at which the registration may be accepted (G-EXPIRY).
+        #[arg(long, value_name = "DAA")]
+        valid_until: u64,
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+    /// Step 2, the key and no node: re-derive the request's message, refuse it unless it is for this build's network and fork
+    /// digest, sign it and write the envelope object for `misaka palw submit-object`.
+    EnvelopeSign {
+        #[arg(long, value_name = "FILE")]
+        request: std::path::PathBuf,
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Refuse unless the request names this signer bond.
+        #[arg(long)]
+        expect_bond: Option<String>,
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+    /// A class's conformance record as the chain states it (op 231).
+    Status {
+        #[arg(long)]
+        class: String,
+    },
+    /// Rebuild the conformance verdict from public reads (ops 231, 212) and, with --artifact, re-read every selected leaf.
+    Verify {
+        #[arg(long)]
+        class: String,
+        /// The class's artifact (PALWTIR1), from its public source; its inventory must root to the registered artifact root.
+        #[arg(long, value_name = "FILE")]
+        artifact: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1239,6 +1304,10 @@ enum PalwCmd {
     /// claims, seat capacity, licence queue, attribution). Node-only, no rule reads it. Read-only
     /// (`getPalwCapacityShadow`, op 201: a node built before it drops the connection).
     CapacityShadow(palw_capacity_shadow::CapacityShadowArgs),
+    /// **RFC-0010: the permissionless Panel's observation** — a V3-rule claim's seal, snapshot, certified-beacon state,
+    /// assignment, retries and terminal reason, and the engine's overview. Read-only (`getPalwPanelV3Status`, op 220: a node
+    /// built before it drops the connection). On today's chain no beacon source is approved: `BEACON_UNAVAILABLE`.
+    PanelV3(palw_panel_v3::PanelV3Args),
     /// Submit a free-prompt commitment built by `misaka-palw-fp-rail` (dry-run unless --yes).
     FpSubmit {
         /// The rail's `*.commitment-tx.borsh`.
@@ -1299,6 +1368,12 @@ enum PalwCmd {
         /// A registration needs a runtime pack that verifies against the artifact (`--pack`), unless `--skip-pack-verify`.
         #[command(flatten)]
         pack_gate: pack_gate::PackGateFlags,
+        /// Sign below VERIFIED_REMOTE (the terms are the node's word; a node on this machine is your own full node): name the class.
+        #[arg(long, value_name = "LABEL")]
+        accept_unverified_state: Option<String>,
+        /// Write the object even though the node's class rows already hold this class (DUPLICATE_CLASS).
+        #[arg(long)]
+        allow_duplicate: bool,
     },
     /// **Write a signed generative class registration** (RFC-0003: `ClassRegisteredGenV1`) for a PALWTIR2
     /// artifact (`palw-class declare-layout`'s container for a pipeline class), at the connected chain's live
@@ -1371,6 +1446,10 @@ enum PalwCmd {
         /// Actually broadcast (otherwise a dry-run preview).
         #[arg(long)]
         yes: bool,
+        /// Send a class registration (`ClassRegistered`, `ClassRegisteredTirV1`) even when the node's class rows already hold the class
+        /// (`DUPLICATE_CLASS`) or hold it in conflict (`CLASS_CONFLICT`), or cannot be read. Without it those are refused before any fee.
+        #[arg(long)]
+        allow_duplicate: bool,
     },
     /// **File a court close, whole or in the carriage ADR-0080 gave it** (W13).
     ///
@@ -2200,6 +2279,67 @@ enum KeyCmd {
 /// ADR-0063 D2/D3: the operator's half of the PALW bond lifecycle.
 #[derive(Subcommand, Debug)]
 enum BondCmd {
+    /// RFC-0009 A0, node-less bond registration, step 1 (NO key): the unsigned `BondRegistered` and its carrier, quoted from ≥ 2 nodes
+    /// running this build's ruleset — the floor is this build's, the funding and the DAA are the nodes' word (UNVERIFIED_REMOTE).
+    RegisterExport {
+        /// The bond's ML-DSA-87 public key, hex (`misaka key show`): the key that will sign the registration.
+        #[arg(long, value_name = "HEX")]
+        owner_pubkey: String,
+        /// The collateral to lock, in sompi (at least the network's registration floor).
+        #[arg(long, value_name = "SOMPI")]
+        collateral: u64,
+        /// Where the collateral returns and the rewards go (default: the bond key's own address).
+        #[arg(long, value_name = "ADDRESS")]
+        payout_address: Option<String>,
+        /// The address that funds the carrier (collateral + fee); it may belong to another key.
+        #[arg(long, value_name = "ADDRESS")]
+        payer_address: String,
+        /// More nodes to quote from, beside --rpc (their answers must agree).
+        #[arg(long, value_delimiter = ',', value_name = "HOST:PORT,...")]
+        quote_rpc: Vec<String>,
+        /// Quote from ONE node — only for a node you run.
+        #[arg(long)]
+        allow_single_rpc: bool,
+        /// Where to write the unsigned bundle (never overwritten).
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
+    /// Step 2 (offline): the bond key signs the registration, the payer key the carrier — each refusing a bundle that moved the payout,
+    /// the collateral, the change or the fee. Below VERIFIED_REMOTE it signs only with --accept-unverified-state.
+    RegisterSign {
+        bundle: std::path::PathBuf,
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The payer's seed file, when another key funds the carrier.
+        #[arg(long, value_name = "FILE")]
+        payer_key_file: Option<String>,
+        /// The collateral you mean to lock (refused on any other).
+        #[arg(long, value_name = "SOMPI")]
+        expect_collateral: u64,
+        /// The payout you mean (default: the bond key's own address).
+        #[arg(long, value_name = "ADDRESS")]
+        expect_payout: Option<String>,
+        /// The most the carrier may cost, in sompi.
+        #[arg(long, value_name = "SOMPI")]
+        max_fee_sompi: u64,
+        /// Name the class you accept signing in (an exported bundle is UNVERIFIED_REMOTE).
+        #[arg(long, value_name = "LABEL")]
+        accept_unverified_state: Option<String>,
+        #[arg(long, value_name = "FILE")]
+        out: Option<std::path::PathBuf>,
+    },
+    /// Step 3 (NO key): verify the signed bytes, relay them through any nodes, follow the bond (`<carrier>:0`) to registration.
+    RegisterSubmit {
+        signed: std::path::PathBuf,
+        #[arg(long, value_delimiter = ',', value_name = "HOST:PORT,...", required = true)]
+        relay: Vec<String>,
+        #[arg(long, value_name = "N")]
+        relay_min: Option<usize>,
+        #[arg(long, value_name = "SOMPI")]
+        max_fee_sompi: Option<u64>,
+        #[arg(long)]
+        no_wait: bool,
+    },
     /// Inspect an exact outpoint in the Bond registry, or show the bonds registered to a key.
     Status {
         #[command(flatten)]
@@ -2847,6 +2987,7 @@ async fn main() -> std::process::ExitCode {
             quote_rpc,
             allow_single_rpc,
             pin,
+            accept_unverified_state,
             profile: args,
         }) => match (profile(&args), sponsor.resolve()) {
             (Ok(p), Ok(sponsor)) => {
@@ -2871,6 +3012,7 @@ async fn main() -> std::process::ExitCode {
                         quote_rpc,
                         single_rpc: allow_single_rpc,
                         pin,
+                        accept_unverified_state,
                     },
                 };
                 operator::model_add::run(&ctx, p, a).await
@@ -2889,6 +3031,8 @@ async fn main() -> std::process::ExitCode {
             expect_owner,
             max_fee_sompi,
             pin,
+            pin_from_own_node,
+            accept_unverified_state,
             out,
             yes,
         }) => {
@@ -2904,6 +3048,8 @@ async fn main() -> std::process::ExitCode {
                     expect: operator::model_bundle::ExpectArgs { class: expect_class, root: expect_root, owner: expect_owner },
                     max_fee_sompi,
                     pin,
+                    pin_from_own_node,
+                    accept_unverified_state,
                     out,
                     yes,
                 },
@@ -2942,6 +3088,16 @@ async fn main() -> std::process::ExitCode {
         Command::Model(ModelCmd::Verify { signed, class, root, owner, pin }) => {
             operator::remote_proof::verify(&ctx, operator::remote_proof::VerifyArgs { signed, class, root, owner, pin }).await
         }
+        Command::Model(ModelCmd::Onboard(cmd)) => match cmd {
+            OnboardCmd::EnvelopeExport { registration, bond, valid_from, valid_until, out } => {
+                operator::model_onboard::envelope_export(&ctx, &registration, &bond, valid_from, valid_until, &out)
+            }
+            OnboardCmd::EnvelopeSign { request, key, expect_bond, out } => {
+                operator::model_onboard::envelope_sign(&ctx, &request, &key.source(), expect_bond.as_deref(), &out)
+            }
+            OnboardCmd::Status { class } => operator::model_onboard::status(&ctx, &class).await,
+            OnboardCmd::Verify { class, artifact } => operator::model_onboard::verify(&ctx, &class, artifact.as_deref()).await,
+        },
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => match profile(&args) {
             Ok(p) => operator::market::market_open(&ctx, p, &model, line, seed, yes, no_wait).await,
             Err(e) => Err(e),
@@ -3002,6 +3158,7 @@ async fn main() -> std::process::ExitCode {
             palw_vesting::run(&ctx, bond, address, claim, limit, after, json).await
         }
         Command::Palw(PalwCmd::CapacityShadow(args)) => palw_capacity_shadow::run(&ctx, args).await,
+        Command::Palw(PalwCmd::PanelV3(args)) => palw_panel_v3::run(&ctx, args).await,
         Command::Palw(PalwCmd::Economics {}) => palw_economics::run(&ctx).await,
         Command::Palw(PalwCmd::Registry {}) => palw_registry::run(&ctx).await,
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Status { class })) => palw_panel::status(&ctx, class.as_deref()).await,
@@ -3015,13 +3172,25 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Readiness(PalwPanelReadinessCmd::Prove { class, bond }))) => {
             palw_panel::readiness_prove(&ctx, &class, &bond).await
-        },
+        }
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
-        Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await.map(|_| ()),
-        Command::Palw(PalwCmd::TirRegistration { key, artifact, parent, bond, out, model_id, pack_gate }) => {
-            palw_model_ops::tir_registration_object(
+        Command::Palw(PalwCmd::SubmitObject { key, object, yes, allow_duplicate }) => {
+            palw_fp::submit_objects_v2(&ctx, &key.source(), &object, yes, allow_duplicate).await.map(|_| ())
+        }
+        Command::Palw(PalwCmd::TirRegistration {
+            key,
+            artifact,
+            parent,
+            bond,
+            out,
+            model_id,
+            pack_gate,
+            accept_unverified_state,
+            allow_duplicate,
+        }) => {
+            palw_model_ops::tir_registration_object_gated(
                 &ctx,
                 &key.source(),
                 &artifact,
@@ -3030,6 +3199,8 @@ async fn main() -> std::process::ExitCode {
                 &out,
                 model_id.as_deref(),
                 &pack_gate,
+                accept_unverified_state.as_deref(),
+                allow_duplicate,
             )
             .await
         }
@@ -3060,7 +3231,8 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Preflight { manifest, json })) => {
             palw_extension::preflight(&ctx, &manifest, json).await
         }
-        Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json, sponsor })) => match sponsor.resolve() {
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json, sponsor })) => match sponsor.resolve()
+        {
             Ok(sponsor) => palw_extension::submit(&ctx, &manifest, &key.source(), bond.as_deref(), yes, json, sponsor).await,
             Err(e) => Err(e),
         },
@@ -3256,6 +3428,61 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Bond(BondCmd::Capability { key, bond, class_id, declare, dry_run, yes }) => {
             bond::capability(&ctx, &key.source(), bond.as_deref(), class_id.as_deref(), &declare, dry_run, yes).await
+        }
+        Command::Bond(BondCmd::RegisterExport {
+            owner_pubkey,
+            collateral,
+            payout_address,
+            payer_address,
+            quote_rpc,
+            allow_single_rpc,
+            out,
+        }) => {
+            operator::bond_remote::export(
+                &ctx,
+                operator::bond_remote::ExportArgs {
+                    owner_pubkey,
+                    collateral,
+                    payout_address,
+                    payer_address,
+                    quote_rpc,
+                    allow_single_rpc,
+                    out,
+                },
+            )
+            .await
+        }
+        Command::Bond(BondCmd::RegisterSign {
+            bundle,
+            key,
+            payer_key_file,
+            expect_collateral,
+            expect_payout,
+            max_fee_sompi,
+            accept_unverified_state,
+            out,
+        }) => {
+            operator::bond_remote::sign(
+                &ctx,
+                operator::bond_remote::SignArgs {
+                    bundle,
+                    key: key.source(),
+                    payer_key_file,
+                    expect_collateral,
+                    expect_payout,
+                    max_fee_sompi,
+                    accept_unverified_state,
+                    out,
+                },
+            )
+            .await
+        }
+        Command::Bond(BondCmd::RegisterSubmit { signed, relay, relay_min, max_fee_sompi, no_wait }) => {
+            operator::bond_remote::submit(
+                &ctx,
+                operator::bond_remote::SubmitArgs { signed, relay, relay_min, max_fee_sompi, no_wait },
+            )
+            .await
         }
         Command::Bond(BondCmd::Retire { key, bond, class_id, dry_run, yes }) => {
             bond::retire(&ctx, &key.source(), bond.as_deref(), class_id.as_deref(), dry_run, yes).await

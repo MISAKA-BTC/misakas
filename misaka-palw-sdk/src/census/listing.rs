@@ -164,8 +164,8 @@ pub fn task_of(l: &ListingV1) -> TaskV1 {
     {
         return mk("text-generation", "inferred:architecture");
     }
-    if l.config.get("peft").and_then(|p| p.get("task_type")).and_then(|t| t.as_str()) == Some("CAUSAL_LM") {
-        return mk("text-generation", "inferred:peft");
+    if let Some(t) = l.config.get("peft").and_then(|p| p.get("task_type")).and_then(|t| t.as_str()).and_then(task_of_peft_task_type) {
+        return mk(t, "inferred:peft");
     }
     // Inference v2 (2026-10-04): what the files declare — the configuration's architecture class, the GGUF's `general.architecture` —
     // read against transformers' own head classes and llama.cpp's architecture names. Never the repository's code, name or card text.
@@ -176,6 +176,21 @@ pub fn task_of(l: &ListingV1) -> TaskV1 {
         return mk(t, "inferred:gguf-architecture");
     }
     TaskV1 { task: "unknown".into(), group: "unknown".into(), profile: Profile::None, source: "none".into() }
+}
+
+/// **The task a PEFT adapter declares** (`adapter_config.json`'s `task_type`, a closed enumeration of the PEFT library: the head the
+/// adapter was trained with). `None` for a `task_type` this table does not list, and for an adapter that declares none (it then
+/// carries its pinned base's task, [`super::store::base_task_of`]).
+pub fn task_of_peft_task_type(t: &str) -> Option<&'static str> {
+    Some(match t {
+        "CAUSAL_LM" => "text-generation",
+        "SEQ_2_SEQ_LM" => "text2text-generation",
+        "SEQ_CLS" => "text-classification",
+        "TOKEN_CLS" => "token-classification",
+        "QUESTION_ANS" => "question-answering",
+        "FEATURE_EXTRACTION" => "feature-extraction",
+        _ => return None,
+    })
 }
 
 /// **The task a transformers head class names** (the class transformers' pipelines resolve for that task); `None` for a class
@@ -444,6 +459,21 @@ pub struct SelectedV1 {
     pub components: Vec<String>,
     /// Why this artifact: the rule that chose it.
     pub rule: String,
+}
+
+/// Whether the repository's only weights are a transformers PyTorch checkpoint (`config.json` beside `pytorch_model.bin`, its
+/// `.index.json` or its `pytorch_model-0000k-of-0000n.bin` shards) — the form the frontend reads without running the pickle.
+/// A listing of `training_args.bin` or a `.pt` file beside a configuration is not one.
+pub fn torch_checkpoint_only(l: &ListingV1, sel: &SelectedV1) -> bool {
+    sel.kind == ArtifactKind::Other
+        && sel.formats.iter().any(|f| f == "pytorch")
+        && sel.formats.iter().all(|f| f == "pytorch" || !matches!(f.as_str(), "safetensors" | "gguf"))
+        && l.siblings.iter().any(|s| s == "config.json")
+        && l.siblings.iter().any(|s| {
+            s == "pytorch_model.bin"
+                || s == "pytorch_model.bin.index.json"
+                || (s.starts_with("pytorch_model-") && s.contains("-of-") && s.ends_with(".bin"))
+        })
 }
 
 /// The weight format of a file name, or `None` for a file that holds no weights.
@@ -839,6 +869,25 @@ mod tests {
         assert_eq!(g("nomic-bert"), Some("feature-extraction"));
         assert_eq!(g("flux"), Some("text-to-image"));
         assert_eq!(g("clip"), None);
+    }
+
+    #[test]
+    fn a_peft_adapter_declares_its_task_by_the_head_it_was_trained_with() {
+        use super::task_of_peft_task_type as p;
+        assert_eq!(p("CAUSAL_LM"), Some("text-generation"));
+        assert_eq!(p("SEQ_2_SEQ_LM"), Some("text2text-generation"));
+        assert_eq!(p("SEQ_CLS"), Some("text-classification"));
+        assert_eq!(p("TOKEN_CLS"), Some("token-classification"));
+        assert_eq!(p("QUESTION_ANS"), Some("question-answering"));
+        assert_eq!(p("FEATURE_EXTRACTION"), Some("feature-extraction"));
+        assert_eq!(p("SOMETHING_NEW"), None);
+        let mut l = listing(&["adapter_config.json", "adapter_model.safetensors"]);
+        l.config = serde_json::json!({"peft": {"task_type": "SEQ_CLS"}});
+        let t = task_of(&l);
+        assert_eq!((t.task.as_str(), t.source.as_str(), t.profile), ("text-classification", "inferred:peft", Profile::None));
+        // No declared task: unknown until the pinned base is read.
+        l.config = serde_json::json!({"peft": {"base_model_name_or_path": "b/base"}});
+        assert_eq!(task_of(&l).task, "unknown");
     }
 
     use super::*;

@@ -263,8 +263,20 @@ impl FreshPipelineVerifierV1 {
         header: PipelineHeaderV1,
         class: &PipelineClassV1,
     ) -> Result<Self, String> {
+        Self::from_public_bytes_in_mode(bytes, known, header, class, crate::mode::VerificationModeV1::PanelLicensed)
+    }
+
+    /// [`Self::from_public_bytes`] for a class registered under `mode`: the header's class id is the class binding's id **under
+    /// that mode** (RFC-0015 §4.1 — the mode is part of the class identity).
+    pub fn from_public_bytes_in_mode(
+        bytes: &[u8],
+        known: &[KernelDescriptorV1],
+        header: PipelineHeaderV1,
+        class: &PipelineClassV1,
+        mode: crate::mode::VerificationModeV1,
+    ) -> Result<Self, String> {
         let record = PipelinePublicRecordV1::from_bytes(bytes)?;
-        if header.class_binding_id != class.class_binding_id() {
+        if header.class_binding_id != crate::mode::class_id_for_mode_v1(&class.class_binding_id(), mode) {
             return Err("the header names another class".into());
         }
         let descriptor = known

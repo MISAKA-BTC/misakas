@@ -2519,7 +2519,10 @@ async function readNativeSettlement() {
 }
 function nativeSettlementView(status) {
   const s = status && status.nativeSettlement;
-  return `<div class="note">DNS validator role retired at DAA ${esc(String(status.dnsRetiredAt))}. Consensus and native UTXO ↔ EVM settlement use PALW. Historical bonds and evidence remain readable.</div>` +
+  // A below-finalized conflict is an alarm, not a status: the node withholds every settlement label and says so (RFC-0012 §4.2).
+  const alarm = s && s.stop === "finalizedConflict"
+    ? `<div class="note" style="border-color:#c0392b"><b>Safety alarm:</b> this node's chain abandons a head it had published as finalized. Safe and finalized are withheld until this node is resynced (a validated pruning-point import); do not rely on its settlement labels.</div>` : "";
+  return alarm + `<div class="note">DNS validator role retired at DAA ${esc(String(status.dnsRetiredAt))}. Consensus and native UTXO ↔ EVM settlement use PALW. Historical bonds and evidence remain readable.</div>` +
     (s ? `<div class="cards">${["latest", "safe", "finalized"].map(k => `<div class="card"><div class="k">${k}</div><div class="v sm">${s[k] ? linkBlock(s[k]) : "unavailable"}</div></div>`).join("")}</div><div class="note">Settled anchors: ${esc(String(s.depth))}; unique matured work: ${esc(s.uniqueWork)}${s.stop ? ` · ${esc(s.stop)}` : ""}</div>` : `<div class="note">Native settlement snapshot unavailable; safe/finalized are not inferred from the tip.</div>`);
 }
 

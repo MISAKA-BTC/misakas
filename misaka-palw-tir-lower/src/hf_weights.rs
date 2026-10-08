@@ -226,6 +226,20 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
             }
         }
     }
+    // A sequence classifier: the optional dense layer (`cls_pre`) and the classification layer (`cls_out`, else the role the adapter
+    // names `lm_head` — transformers calls a decoder's classification layer `score`, and an adapter can say so with `lm_head_name`).
+    if let OutputSpec::Classify { bias, pre, .. } = &spec.output {
+        if let Some(p) = pre {
+            m.lin("classifier.pre", "cls_pre", p.bias)?;
+        }
+        let role = if m.st.name("cls_out").is_some() { "cls_out" } else { "lm_head" };
+        // A plain nn.Linear whatever the body's convention (GPT-2's `score` is not a Conv1D): no transpose, like the vocabulary head.
+        let name = m.role(role)?;
+        m.put("classifier.out.w", Src::t(suffixed(&name, ".weight")))?;
+        if *bias {
+            m.put("classifier.out.b", Src::t(suffixed(&name, ".bias")))?;
+        }
+    }
     let logits = matches!(spec.output, OutputSpec::Logits);
     if let OutputSpec::Embedding { proj: Some((_, bias)), .. } = spec.output {
         let w = m.w("embed_proj")?;
@@ -283,6 +297,9 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
     for d in &prog.params {
         srcs.push(match overrides.get(&d.name) {
             Some(expr) => expr.clone(),
+            // `WEIGHT_ROTATION_HADAMARD_V1`: the rotation's blocks are a tensor of the checkpoint's view under the param's own name
+            // (computed from the checkpoint's declared transform and signs, `gguf::GgufModel`), never a model weight.
+            None if d.name.starts_with("rotation.") => Src::t(d.name.clone()),
             None => m
                 .out
                 .get(&d.name)

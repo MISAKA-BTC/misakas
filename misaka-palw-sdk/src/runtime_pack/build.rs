@@ -110,7 +110,10 @@ pub fn source_files(model: &Path) -> Result<Vec<String>, String> {
     let mut v = Vec::new();
     for e in std::fs::read_dir(model).map_err(|e| format!("{}: {e}", model.display()))?.flatten() {
         let n = e.file_name().to_string_lossy().to_string();
-        let keep = n == "config.json" || n == "tokenizer.json" || n == "model.safetensors.index.json" || n.ends_with(".safetensors");
+        let keep = n == "config.json"
+            || misaka_palw_tir_lower::artifact::is_tokenizer_file(&n)
+            || n == "model.safetensors.index.json"
+            || n.ends_with(".safetensors");
         if keep && e.path().is_file() {
             v.push(n);
         }

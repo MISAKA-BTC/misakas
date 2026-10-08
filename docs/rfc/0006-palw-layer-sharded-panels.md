@@ -1,5 +1,7 @@
 # RFC-0006: PALW layer-sharded panels — bounded cell verification from authenticated boundaries, with independent public-verifier localization and exact court on dispute
 
+> **Status update 2026-10-08 (supersedes every "dormant" / "None on every preset" wording below that predates it):** `palw_tir_shard_v1` is **ARMED on testnet-12 at the int-11/12 flag day, DAA 5,300** (`PALW_T12_INT11_FENCES_V1`); it stays dormant on every other preset. Fold, cells, receipts by parts, the exact court (`TirShardCourtAccused`, any Active bond) and the kaspad e2e are IMPLEMENTED_AND_TESTED; per-segment resource pricing, a non-seat public cell watcher, a processor-level reorg/duplicate-receipt test, the V3 per-shard draw and the D-S1…D-S6 drill evidence are open (`docs/design/palw/remaining-rfc-integration-matrix.md`). Any change to an armed rule needs a new versioned fence.
+>
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 

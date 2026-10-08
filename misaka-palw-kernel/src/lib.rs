@@ -46,6 +46,10 @@
 //! * [`public`] — the 2026-10-07 amendments' measure: a fresh non-seat verifier built from a claim's published **bytes**, fault
 //!   proofs and the court as byte-level operations, the withholding path (demand → served | producer default), RFC-0015 §1.1's
 //!   G14 criteria per profile, and the reward gate that stays closed until they are complete and the material is public.
+//! * [`mode`], [`opv`] — RFC-0015 Panel=0 (`OptimisticPublicVerification`), dormant: the verification mode as part of the class identity,
+//!   the `Challengeable` lifecycle with no Panel tally, the window / budget relations and the producer-reservation economics as
+//!   validated policy, job holding from the first reveal, Final receipts for RFC-0010's Panel-independent beacon sources, and a
+//!   state root that stays the historical one until an OPV policy is set.
 //! * [`ledger`], [`route`], [`settle`], [`state`], [`claim_subject`] — the consensus-embeddable shape of the route: signed
 //!   [`route::KernelRouteObjectV1`]s applied one at a time by a transactional ledger (a refusal leaves the state byte-identical,
 //!   a per-block adjudication budget), bonds and the Panel's coverage supplied by the consumer, every money decision an explicit
@@ -83,6 +87,8 @@ pub mod job;
 pub mod ledger;
 pub mod lifecycle;
 pub mod merkle;
+pub mod mode;
+pub mod opv;
 pub mod outcome;
 pub mod pipeline;
 pub mod pipeline_public;
@@ -90,6 +96,7 @@ pub mod plan;
 pub mod public;
 pub mod receipt;
 pub mod route;
+pub mod rows;
 pub mod settle;
 pub mod state;
 pub mod trace;

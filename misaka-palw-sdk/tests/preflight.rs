@@ -434,3 +434,117 @@ fn the_residency_is_read_off_the_program_and_reported_without_judging() {
     let _ = std::fs::remove_dir_all(dir);
     let _ = std::fs::remove_dir_all(dense);
 }
+
+/// **A tokenizer is a file the class commits to the bytes of, whatever algorithm it describes.** `tokenizer.json` was the only name
+/// (with `tokenizer.model` and `vocab.json`) the preflight knew, so a T5/ALBERT/XLNet checkpoint (`spiece.model`), an XLM-R
+/// (`sentencepiece.bpe.model`), a BERT (`vocab.txt`) or a tiktoken model (`*.tiktoken`) was `TOKENIZER_MISSING` beside its own tokenizer.
+/// A directory with none is still missing one, and a file that only looks like one (`merges.txt` alone) is not one.
+#[test]
+fn a_sentencepiece_wordpiece_or_tiktoken_file_is_a_tokenizer_and_nothing_else_is() {
+    let dir = copy_fixture(&fixture("hf/llama"), "tokenizer-names", false);
+    let missing = |d: &Path| codes(&run(d, &opts(Depth::Headers)).expect("preflight")).iter().any(|c| c == "TOKENIZER_MISSING");
+    std::fs::remove_file(dir.join("tokenizer.json")).expect("remove");
+    assert!(missing(&dir), "no tokenizer file at all");
+    std::fs::write(dir.join("merges.txt"), "a b\n").expect("merges");
+    std::fs::write(dir.join("special_tokens_map.json"), "{}").expect("map");
+    assert!(missing(&dir), "merges and a special-token map are not a tokenizer");
+    for name in ["spiece.model", "sentencepiece.bpe.model", "sentencepiece.model", "tokenizer.model", "vocab.txt", "tekken.json", "cl100k_base.tiktoken", "vocab.json", "tokenizer.json"] {
+        std::fs::write(dir.join(name), b"x").expect("tokenizer");
+        assert!(!missing(&dir), "{name} is a tokenizer");
+        std::fs::remove_file(dir.join(name)).expect("remove");
+        assert!(missing(&dir), "back to none");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// **A GGUF LoRA is an adapter, not a model whose hidden size is missing.** llama.cpp's `convert_lora_to_gguf` writes
+/// `general.type = adapter` and low-rank pairs; the mapping used to call it "the GGUF's architecture has no mapping" with
+/// `GGUF: no llama.embedding_length` — an estimated 6,080 repositories of the census filed under `ARCH_REFUSED`.
+#[test]
+fn a_gguf_lora_is_named_as_an_adapter_and_not_as_an_architecture_the_frontend_failed_to_map() {
+    let dir = scratch("gguf-lora");
+    let bytes = gguf_bytes(
+        &[("general.architecture", Ok("llama")), ("general.type", Ok("adapter")), ("adapter.type", Ok("lora"))],
+        &[("blk.0.attn_q.weight.lora_a", vec![64, 8], 0, 2048), ("blk.0.attn_q.weight.lora_b", vec![8, 64], 0, 2048)],
+        false,
+    );
+    std::fs::write(dir.join("lora.gguf"), &bytes).expect("gguf");
+    let r = run(&dir.join("lora.gguf"), &opts(Depth::Headers)).expect("preflight");
+    let c = codes(&r);
+    assert!(c.iter().any(|x| x == "ADAPTER_REFUSED") && !c.iter().any(|x| x == "ARCH_REFUSED"), "{c:?}\n{}", r.render());
+    let b = r.verdict.convert.blockers.iter().find(|b| b.code == "ADAPTER_REFUSED").expect("blocker");
+    assert!(b.evidence.iter().any(|e| e.contains("LoRA adapter")), "{:?}", b.evidence);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// **A PyTorch checkpoint is judged like its safetensors original** (`weights::torchzip`: the pickle is interpreted, never run). The
+/// fixture is `hf/llama` re-saved with `torch.save` as `pytorch_model.bin`, in one file and in two shards with an index: the same
+/// tensors are bound, the same spec digest read, and the verdict is the same.
+#[test]
+fn a_pytorch_model_bin_is_judged_like_the_safetensors_it_was_saved_from() {
+    let st = copy_fixture(&fixture("hf/llama"), "bin-ref", false);
+    let reference = run(&st, &opts(Depth::Headers)).expect("preflight");
+    assert_eq!(reference.verdict.convert.status, StageStatus::Ok, "{}", reference.render());
+    for (name, shards) in [("hf-bin/llama", 1usize), ("hf-bin/llama-sharded", 2)] {
+        let dir = copy_fixture(&fixture(name), &format!("bin-{shards}"), false);
+        let r = run(&dir, &opts(Depth::Headers)).expect("preflight");
+        assert_eq!(r.verdict.convert.status, StageStatus::Ok, "{name}: {}", r.render());
+        assert_eq!(r.tensors.checked, "shapes", "{name}");
+        assert_eq!((r.tensors.bound, r.tensors.missing_total, r.tensors.shape_mismatch_total), (reference.tensors.bound, 0, 0), "{name}");
+        assert_eq!(r.model.as_ref().map(|m| m.spec_digest.clone()), reference.model.as_ref().map(|m| m.spec_digest.clone()), "{name}");
+        assert_eq!(r.source.shards.len(), shards, "{name}");
+        // The same weights, in bytes, and none of the tensor data read.
+        assert_eq!(r.source.weight_bytes, reference.source.weight_bytes, "{name}");
+        assert!(r.input.bytes_read < reference.source.weight_bytes.unwrap_or(0) + 70_000, "{name}: read {}", r.input.bytes_read);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    let _ = std::fs::remove_dir_all(st);
+}
+
+/// A `.bin` the reader refuses by its form is a named `FORMAT_UNSUPPORTED` blocker with its reason and a safe path — not a crash, and
+/// not "tensors missing": the legacy serialization, a strided view and a training checkpoint, each beside a real `config.json`.
+#[test]
+fn a_pytorch_file_the_reader_refuses_is_format_unsupported_with_its_reason() {
+    for (file, why) in [("legacy.bin", "legacy"), ("strided.bin", "strided view"), ("nested.bin", "training checkpoint")] {
+        let dir = scratch(&format!("refused-{file}"));
+        std::fs::copy(fixture("hf/llama").join("config.json"), dir.join("config.json")).expect("config");
+        std::fs::write(dir.join("tokenizer.json"), "{}").expect("tokenizer");
+        std::fs::copy(fixture("torch").join(file), dir.join("pytorch_model.bin")).expect("bin");
+        let r = run(&dir, &opts(Depth::Headers)).expect("preflight");
+        let b = r.verdict.convert.blockers.iter().find(|b| b.code == "FORMAT_UNSUPPORTED").unwrap_or_else(|| panic!("{file}: {}", r.render()));
+        assert!(b.evidence.iter().any(|e| e.contains(why)), "{file}: {:?}", b.evidence);
+        assert!(b.safe_paths.iter().any(|p| p.contains("safetensors")), "{file}: {:?}", b.safe_paths);
+        assert_eq!(r.verdict.convert.status, StageStatus::Blocked);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// **An ignored key is withdrawn when the checkpoint says the model is not that class.** `depth_alpha_enabled` is a key transformers'
+/// Llama never reads: a Llama config carrying it reads (`tir-lower/tests/hf_keys_ignored.rs`), and the preflight says which keys it
+/// ignored. But a `use_qk_norm` beside q/k-norm tensors that no Llama has is an author's different model: refused as it always was.
+#[test]
+fn a_key_ignored_for_a_transformers_class_is_refused_again_when_the_checkpoint_carries_tensors_the_class_does_not_have() {
+    // Junk keys, the plain Llama tensors: reads, and the ignored keys are in the report.
+    let dir = with_config(&fixture("hf/llama"), "ignored-ok", &|c| {
+        c["depth_alpha_enabled"] = serde_json::json!(true);
+        c["organization"] = serde_json::json!("x");
+    });
+    std::fs::write(dir.join("tokenizer.json"), "{}").expect("tokenizer");
+    let r = run(&dir, &opts(Depth::Headers)).expect("preflight");
+    assert_eq!(r.verdict.convert.status, StageStatus::Ok, "{}", r.render());
+    let said = r.model.as_ref().expect("model").assumed_defaults.join("|");
+    assert!(said.contains("ignored `depth_alpha_enabled`") && said.contains("ignored `organization`"), "{said}");
+    let _ = std::fs::remove_dir_all(dir);
+    // The same keys and a q_norm tensor no Llama has: refused.
+    let dir = edited_header_copy(&fixture("hf/llama"), "ignored-withdrawn", &|h| {
+        h.insert("model.layers.0.self_attn.q_norm.weight".into(), serde_json::json!({"dtype": "BF16", "shape": [8], "data_offsets": [0, 16]}));
+    });
+    let text = std::fs::read_to_string(dir.join("config.json")).expect("config");
+    let mut c: serde_json::Value = serde_json::from_str(&text).expect("json");
+    c["use_qk_norm"] = serde_json::json!(true);
+    std::fs::write(dir.join("config.json"), c.to_string()).expect("config");
+    let r = run(&dir, &opts(Depth::Headers)).expect("preflight");
+    let c = codes(&r);
+    assert!(c.iter().any(|x| x == "CONFIG_KEY_UNREAD(use_qk_norm)"), "{c:?}\n{}", r.render());
+    let _ = std::fs::remove_dir_all(dir);
+}

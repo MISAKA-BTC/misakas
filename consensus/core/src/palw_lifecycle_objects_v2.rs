@@ -328,6 +328,49 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // registrations do (A-2); the acceptance walk drops it by name below `palw_adapter_class_v1`, and its
         // form (state-free) is checked here so a malformed listing is refused before any slot is charged.
         PalwConsensusObjectV2::AdapterClassListed { payload, .. } => crate::palw_adapter_class_v1::palw_adapter_listing_shape_v1(payload),
+        // G14 lane D (tag 110): a kernel route object rides at every height (A-2) and carries its signer's signature; the bytes'
+        // strict decode, the signer's bond and the kernel's own rules are the acceptance layer's and the ledger's. Only the shape is
+        // stateless: a signature is present and the kernel's encoding fits the largest carriage.
+        PalwConsensusObjectV2::KernelRouteV1 { bytes, signature, .. } => {
+            if signature.is_empty() {
+                Err("a kernel route object must carry its signer's signature — unsigned, anyone could act as any bond")
+            } else if bytes.is_empty() || bytes.len() > crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 {
+                Err("a kernel route object's encoding is empty or past the largest carriage")
+            } else {
+                Ok(())
+            }
+        }
+        // (tag 111): a seat's receipt carries its signature; everything else is the kernel's structural admission.
+        PalwConsensusObjectV2::KernelConstraintReceiptV1 { signature, .. } if !signature.is_empty() => Ok(()),
+        PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. } => Err("a kernel constraint receipt must carry the seat's signature"),
+        // G14 phase 3 (tags 104-108): onboarding objects ride at every height (A-2) and carry their signer's signature; the bonds, the
+        // fences, the rows and the proofs are the acceptance layer's and the fold's. The envelope must wrap a registration.
+        PalwConsensusObjectV2::ArtifactBoundV1 { signature, .. }
+        | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { signature, .. }
+        | PalwConsensusObjectV2::KernelBoundV1 { signature, .. }
+        | PalwConsensusObjectV2::ConformanceCommittedV1 { signature, .. }
+        | PalwConsensusObjectV2::ConformanceEvidenceV1 { signature, .. }
+            if signature.is_empty() =>
+        {
+            Err("an onboarding object must carry its signer's signature")
+        }
+        PalwConsensusObjectV2::ArtifactBoundV1 { .. }
+        | PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. }
+        | PalwConsensusObjectV2::KernelBoundV1 { .. }
+        | PalwConsensusObjectV2::ConformanceCommittedV1 { .. }
+        | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. } => Ok(()),
+        PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
+            if signature.is_empty() {
+                Err("a signed registration envelope must carry its signer's signature")
+            } else if matches!(
+                registration.as_ref(),
+                PalwConsensusObjectV2::ClassRegistered { .. } | PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }
+            ) {
+                Ok(())
+            } else {
+                Err("a signed registration envelope wraps a class registration (ClassRegistered or ClassRegisteredTirV1) and nothing else")
+            }
+        }
         // RFC-0002 Phase F (tag 62): an IR one-move accusation rides signed and shaped (its proof
         // an IR close about the roots it names) at every height, as the registration does; the
         // ruleset's close ceiling and the verdict are the acceptance layer's.
@@ -365,6 +408,16 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         }
         PalwConsensusObjectV2::TrapRevealedV1 { reveal } => {
             crate::palw_mesh_v1::palw_trap_revealed_shape_v1(reveal).map_err(|_| "a trap reveal is malformed (RFC-0007 Part IV.1)")
+        }
+        // RFC-0010: a certified epoch output rides bounded (its proof is at most `MAX_BEACON_PROOF_BYTES_V1`); whether it verifies
+        // against the branch is the fold's, which drops one that does not, the block standing. Below
+        // `palw_permissionless_panel_v1` the walk drops it by name.
+        PalwConsensusObjectV2::PanelBeaconProofV3 { proof } => {
+            if proof.proof.len() > misaka_palw_panel::MAX_BEACON_PROOF_BYTES_V1 as usize {
+                Err("a certified Panel epoch output exceeds the proof bound (RFC-0010)")
+            } else {
+                Ok(())
+            }
         }
         PalwConsensusObjectV2::ClassRegistered { admission: None, .. } => Err(
             "a class registered on a running chain must carry its shape profile and canonical job —              without them nothing can check its coverage, its ladder depth or its declared pwu",

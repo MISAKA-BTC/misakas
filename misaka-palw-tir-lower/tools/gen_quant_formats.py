@@ -367,7 +367,7 @@ def bnb4(kind):
                 "and this follows the stored table. Decodes to floats, so the weight takes the ordinary W8 path. "
                 "Refused by name: `bnb_4bit_quant_storage` other than uint8 (the packed bytes are stored in another dtype and shape)."),
         "ids": [{"scheme": "config", "method": "bitsandbytes", "when": when}],
-        "config": {"inert": BNB_INERT_4, "skip": "llm_int8_skip_modules", "skip_match": "path", "lm_head": "unless_skipped",
+        "config": {"inert": BNB_INERT_4, "skip": "llm_int8_skip_modules", "skip_match": "path", "lm_head": "when_skip_given",
                    "checks": [
                        {"path": "load_in_4bit", "one_of": [True], "message": "this is the 4-bit format"},
                        {"path": "load_in_8bit", "one_of": [None, False], "message": "8-bit and 4-bit together"},
@@ -413,7 +413,7 @@ F["bnb_int8"] = {
             "measure against the Hugging Face reference says how far the integer program is from the library's own run. Refused by name: a hardware-reordered `weight_format` (col32 / col_turing / "
             "col_ampere)."),
     "ids": [{"scheme": "config", "method": "bitsandbytes", "when": [{"path": "load_in_8bit", "one_of": [True]}]}],
-    "config": {"inert": BNB_INERT_8, "skip": "llm_int8_skip_modules", "skip_match": "path", "lm_head": "unless_skipped",
+    "config": {"inert": BNB_INERT_8, "skip": "llm_int8_skip_modules", "skip_match": "path", "lm_head": "when_skip_given",
                "checks": [
                    {"path": "load_in_8bit", "one_of": [True], "message": "this is the 8-bit format"},
                    {"path": "load_in_4bit", "one_of": [None, False], "message": "4-bit and 8-bit together"}]},

@@ -1,4 +1,4 @@
-//! **RFC-0006: the fold's half of layer-sharded panels** (dormant under `Params::palw_tir_shard_v1`). A child module of
+//! **RFC-0006: the fold's half of layer-sharded panels** (armed on testnet-12 at DAA 5,300 under `Params::palw_tir_shard_v1`; dormant on every other preset). A child module of
 //! `palw_state_v2`, as the improvement lanes' fold modules are, so it reads the builder and the state's tables directly.
 //!
 //! * [`apply_plan_declared_v1`] — `TirShardPlanDeclared` (tag 91): the registrant's plan, checked against the class's own

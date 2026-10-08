@@ -26,6 +26,7 @@ pub use remote::{MemoryFetcher, RangeFetcher, RemoteCheckpoint};
 #[cfg(feature = "remote")]
 pub use remote::CurlFetcher;
 pub mod stream;
+pub mod torchzip;
 
 /// A dense row-major f32 tensor.
 #[derive(Clone, Debug, PartialEq)]
@@ -363,7 +364,24 @@ pub fn parse_header(bytes: &[u8], file_len: u64) -> Result<(BTreeMap<String, Ent
 }
 
 impl SafetensorsFile {
+    /// A PyTorch checkpoint (`.bin`, `.pt`, `.pth`) read as the same thing: its tensors' absolute offsets are the entries' (the data
+    /// region begins at 0). The pickle that names them is *interpreted*, never run ([`torchzip`]); a file it refuses is a
+    /// `FORMAT_UNSUPPORTED` error.
+    pub fn open_torch(path: &Path) -> Result<Self> {
+        let h = torchzip::read_header(path)?;
+        let f = std::fs::File::open(path).map_err(|e| LowerError::Io(format!("{}: {e}", path.display())))?;
+        let entries = h
+            .entries
+            .into_iter()
+            .map(|(n, e)| (n, Entry { dtype: e.dtype.to_string(), shape: e.shape, begin: e.begin, end: e.begin + e.bytes }))
+            .collect();
+        Ok(SafetensorsFile { path: path.to_path_buf(), entries, data_offset: 0, file: Arc::new(f) })
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
+        if torchzip::is_torch_path(path) {
+            return Self::open_torch(path);
+        }
         let mut f = std::fs::File::open(path).map_err(|e| LowerError::Io(format!("{}: {e}", path.display())))?;
         let len = f.metadata().map_err(|e| LowerError::Io(e.to_string()))?.len();
         let mut head = [0u8; 8];
@@ -446,7 +464,18 @@ impl Checkpoint {
     pub fn open(path: &Path) -> Result<Self> {
         let p = if path.is_dir() {
             let idx = path.join("model.safetensors.index.json");
-            if idx.exists() { idx } else { path.join("model.safetensors") }
+            let one = path.join("model.safetensors");
+            let (bidx, bone) = (path.join("pytorch_model.bin.index.json"), path.join("pytorch_model.bin"));
+            // The safetensors checkpoint when there is one; else the PyTorch one (read, never run: `torchzip`).
+            if idx.exists() {
+                idx
+            } else if one.exists() || !(bidx.exists() || bone.exists()) {
+                one
+            } else if bidx.exists() {
+                bidx
+            } else {
+                bone
+            }
         } else {
             path.to_path_buf()
         };
@@ -792,6 +821,13 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
+        // transformers renames `LayerNorm.gamma` / `LayerNorm.beta` of every checkpoint on load (its "legacy" conversion: checkpoints
+        // saved before the rename, BERT-lineage TF exports, spell a LayerNorm's gain and bias that way).
+        if let Some(legacy) = legacy_layer_norm_name(name)
+            && self.names.contains(&legacy)
+        {
+            return Some(legacy);
+        }
         None
     }
 
@@ -810,6 +846,19 @@ impl<'a> Resolver<'a> {
             .cloned()
             .collect()
     }
+}
+
+/// The pre-rename spelling of a LayerNorm tensor (`LayerNorm.weight` → `LayerNorm.gamma`, `LayerNorm.bias` → `LayerNorm.beta`), as
+/// transformers' `legacy` checkpoint conversion reads it; `None` for any other name.
+pub fn legacy_layer_norm_name(name: &str) -> Option<String> {
+    for (new, old) in [("LayerNorm.weight", "LayerNorm.gamma"), ("LayerNorm.bias", "LayerNorm.beta")] {
+        if let Some(i) = name.rfind(new)
+            && i + new.len() == name.len()
+        {
+            return Some(format!("{}{old}", &name[..i]));
+        }
+    }
+    None
 }
 
 /// A **buffer** of a module, not a parameter: rotary frequency tables and position-id ranges that older

@@ -910,7 +910,7 @@ fn the_object_and_delta_numbers_are_the_allocated_ones() {
     assert_eq!(borsh::to_vec(&object).unwrap()[0], 130, "tag 130 (the lead's allocation 130-139)");
     let entry = PalwDeltaEntryV2::ExecV2Row { table: PALW_EXEC_V2_TABLE_ROOTS_V1, key: Vec::new(), old: None, new: None };
     assert_eq!(borsh::to_vec(&entry).unwrap()[0], 180, "delta 180 (the lead's allocation 180-189)");
-    assert_eq!(borsh::to_vec(&PalwVoidReasonV2::WorkRootExpired).unwrap(), vec![11]);
+    assert_eq!(borsh::to_vec(&PalwVoidReasonV2::WorkRootExpired).unwrap(), vec![130], "void reason 130, explicit (the range 130-139)");
     assert_eq!(borsh::to_vec(&PalwVoidReasonV2::PanelUnavailable).unwrap(), vec![10], "(the neighbour did not move)");
 }
 

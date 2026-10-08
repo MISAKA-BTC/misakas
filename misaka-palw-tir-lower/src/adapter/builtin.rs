@@ -68,6 +68,7 @@ pack!(
     "dbrx",
     "deepseek-v3",
     "deepseek-v32",
+    "glm-moe-dsa",
     "longcat-flash",
     "jetmoe",
     "mllama",
@@ -129,6 +130,7 @@ pack!(
     "stablelm",
     "starcoder2",
     "vlm",
+    "vlm-generic",
     "vlm-gemma3",
     "paligemma",
     "vlm-gemma",
@@ -140,6 +142,23 @@ pack!(
     "vlm-qwen2-vl",
     "vlm-qwen3-5",
     "vlm-qwen3-5-moe",
+    "mixin-seqcls",
+    "llama-seqcls",
+    "qwen2-seqcls",
+    "qwen3-seqcls",
+    "mistral-seqcls",
+    "gemma-seqcls",
+    "gemma2-seqcls",
+    "phi3-seqcls",
+    "mixtral-seqcls",
+    "qwen3-moe-seqcls",
+    "olmo2-seqcls",
+    "gpt2-seqcls",
+    "opt-seqcls",
+    "mixin-seqcls-encoder",
+    "bert-seqcls",
+    "roberta-seqcls",
+    "distilbert-seqcls",
 );
 
 /// The text of a built-in adapter, by id.
@@ -188,7 +207,63 @@ pub fn find_tower_in(arch: &str) -> Option<&'static Adapter> {
 /// The built-in CONVOLUTIONAL-NETWORK adapter (kind `cnn`) claiming a configuration, by `architectures[0]`, else by `model_type`.
 pub fn find_cnn_for(arch: &str, model_type: Option<&str>) -> Option<&'static Adapter> {
     let real = || all().iter().filter(|a| a.kind() == "cnn" && a.value.get("match").is_some());
-    real().find(|a| a.architectures().contains(&arch)).or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
+    real()
+        .find(|a| a.architectures().contains(&arch))
+        .or_else(|| model_type.and_then(|m| real().find(|a| a.architectures().is_empty() && a.model_types().contains(&m))))
+}
+
+/// **The generic text-decoder-in-a-wrapper route** (`vlm-generic`, data): a `…ForConditionalGeneration` wrapper no adapter names,
+/// whose decoder lives in a nested `text_config` with its own `model_type`. `None` when the configuration is not such a wrapper
+/// (the caller then keeps its other routes); `Some(Err)` names why a wrapper that IS one cannot be read (its text decoder's
+/// `model_type` is claimed by no decoder adapter). `Some(Ok)` is the effective adapter: the decoder adapter the text `model_type`
+/// selects — the `vlm` dispatch table's entry where it names one (family knowledge: Qwen3.5's `mtp.` head), else the decoder
+/// adapter claiming that `model_type` over `mixin-vlm` — with `vlm-generic`'s overlay merged last (the prefix found in the index,
+/// the head, the tie rule, the non-text components). Never keyed by the wrapper's own name.
+pub fn find_wrapper_for(arch: &str, config: &serde_json::Value) -> Option<std::result::Result<Adapter, String>> {
+    use serde_json::Value;
+    let generic = by_id("vlm-generic")?;
+    let rule = generic.value.pointer("/match/wrapper")?;
+    let suffixes: Vec<&str> = rule.get("suffixes")?.as_array()?.iter().filter_map(Value::as_str).collect();
+    if !suffixes.iter().any(|s| arch.ends_with(s) && arch.len() > s.len()) {
+        return None;
+    }
+    let decoder_key = rule.get("decoder")?.as_str()?;
+    let text = config.get(decoder_key)?.as_object()?;
+    let mt = text.get("model_type").and_then(Value::as_str)?;
+    let dispatched = by_id("vlm")
+        .and_then(|v| v.value.pointer("/dispatch/to").and_then(Value::as_object).and_then(|m| m.get(mt)).and_then(Value::as_str))
+        .and_then(by_id);
+    let base = match dispatched {
+        Some(a) => a.value.clone(),
+        None => {
+            let decoder = all().iter().find(|a| {
+                a.kind() == "decoder"
+                    && (a.value.get("spec").is_some() || a.value.get("dispatch").is_some())
+                    && a.value.get("dispatch").is_none()
+                    && a.model_types().contains(&mt)
+            });
+            let Some(decoder) = decoder else {
+                return Some(Err(format!(
+                    "{arch}: its text decoder (`{decoder_key}.model_type` = `{mt}`) is claimed by no decoder adapter"
+                )));
+            };
+            let vlm = by_id("mixin-vlm")?;
+            super::merge(decoder.value.clone(), vlm.value.clone())
+        }
+    };
+    let mut overlay = generic.value.clone();
+    if let Some(o) = overlay.as_object_mut() {
+        o.remove("match");
+    }
+    let mut value = super::merge(base, overlay);
+    let base_id = dispatched.map(|a| a.id.clone()).unwrap_or_else(|| format!("mixin-vlm+{mt}"));
+    let id = format!("vlm-generic({base_id})");
+    if let Some(o) = value.as_object_mut() {
+        o.insert("id".into(), Value::String(id.clone()));
+        o.remove("dispatch");
+    }
+    let hash = super::hash_value(&value);
+    Some(Ok(Adapter { id, origin: Origin::BuiltIn, value, hash }))
 }
 
 /// A refusal on purpose: the features the architecture would need and the build lacks, and why.

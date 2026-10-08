@@ -722,6 +722,23 @@ mod tests {
     const KNOWN_UNSEPARATED: [(&str, &str, usize); 2] =
         [("palw_state_v2.rs", "PALW_V2_MAX_VALIDATOR_PAYOUTS", 3), ("palw_state_v2.rs", "PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS", 2)];
 
+    /// **RFC-0010's PALW Work Beacon is not the overlay's beacon.** The permissionless Panel's certified epoch output is built from
+    /// `misaka-palw-challenge`'s Work Beacon over PALW useful work (never DNS, BFT, a validator or an operator); its object, delta,
+    /// void reason, fold hooks and beacon-source types are spelled in `palw_state_v2.rs` and the lexical guard cannot tell the two
+    /// beacons apart. These exact identifiers — and only these, only in `palw_state_v2.rs` — are exempt; each must still be spelled
+    /// (the test fails on a stale entry), and any other identifier naming a beacon is a violation as before.
+    const PALW_WORK_BEACON_IDENTIFIERS: [&str; 9] = [
+        "PanelBeaconProofV3",
+        "PanelV3Beacon",
+        "BeaconProofV1",
+        "BeaconUnavailable",
+        "PalwPanelV3BeaconSourceV1",
+        "ChainPanelBeaconHistoryV1",
+        "apply_beacon_entry_v1",
+        "queue_beacon_object_v1",
+        "panel_v3_beacons",
+    ];
+
     /// **ADR-0127 Decision 7: the settlement path names no DNS finality, no DNS parameters or state,
     /// no DNS confirmation, no VLT, no stake attestation or stake bond, no active-bond view, no
     /// validator and no beacon** — in code: comments, strings and test modules are not the path —
@@ -744,9 +761,18 @@ mod tests {
             let occurrences = found.iter().filter(|f| f.file == file && f.identifier == identifier).count();
             assert_eq!(occurrences, expected, "{file}: `{identifier}` is pinned at {expected} uses and the code has {occurrences}");
         }
+        // RFC-0010's PALW Work Beacon vocabulary is not the overlay's beacon: each allowed name must still be spelled by the code (a stale
+        // entry would silently widen the guard), and nothing else that names a beacon is let through.
+        for identifier in PALW_WORK_BEACON_IDENTIFIERS {
+            assert!(
+                found.iter().any(|f| f.file == "palw_state_v2.rs" && f.identifier == identifier),
+                "`{identifier}` is allowed as RFC-0010 vocabulary but the code no longer spells it: drop it from the list"
+            );
+        }
         let violations: Vec<String> = found
             .iter()
             .filter(|f| !KNOWN_UNSEPARATED.iter().any(|(file, identifier, _)| f.file == *file && f.identifier == *identifier))
+            .filter(|f| !(f.file == "palw_state_v2.rs" && PALW_WORK_BEACON_IDENTIFIERS.contains(&f.identifier.as_str())))
             .map(Found::to_string)
             .collect();
         assert!(violations.is_empty(), "the PALW settlement path names the overlay (ADR-0127 Decision 7):\n{}", violations.join("\n"));

@@ -956,6 +956,11 @@ const PALW_DRILL_FLAG_DAY_INT11_RHO250_V1: PalwDrillFlagDayV1 =
 const PALW_DRILL_FLAG_DAY_INT11_RHO1000_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_INT11_RHO1000_FENCES_V1, flag: "--palw-drill-int11-at" };
 
+/// **The int-13 flag day's whole list** (`--palw-drill-int13-at`): `palw_audit_1004_v1`, the range twin, the model court window and
+/// `palw_receipt_spend_v4` — at one height, as the release arms them.
+const PALW_DRILL_FLAG_DAY_INT13_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_INT13_FENCES_V1, flag: "--palw-drill-int13-at" };
+
 /// The model-specific finite court window alone (`--palw-drill-model-court-at`).
 const PALW_DRILL_FLAG_DAY_MODEL_COURT_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, flag: "--palw-drill-model-court-at" };
@@ -1177,6 +1182,16 @@ pub fn palw_drill_int11_at_v1(params: &mut crate::config::params::Params, at: u6
     Ok(moves)
 }
 
+/// **A drill crosses the int-13 flag day as the release arms it** (`--palw-drill-int13-at=H'`): every entry of
+/// [`crate::config::params::PALW_T12_INT13_FENCES_V1`] at `at`, on a salted drill ruleset, each through its entry's own `set` — the
+/// combined crossing, besides the per-fence flag of the list's one entry that has one (`--palw-drill-model-court-at`), which it excludes
+/// (the node refuses the combination by name). Every refusal of the post-launch moves applies, named for this flag, and the prerequisites
+/// it needs below `at` — `palw_gen_v1` for the range twin, which the int-11 list arms at 5,300 on every testnet-12 ruleset, so a drill
+/// moves it first (`--palw-drill-int11-at`) — must be in force. Done on a copy: a refusal leaves `params` exactly as it came.
+pub fn palw_drill_int13_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_INT13_V1)
+}
+
 /// **A drill appends ρ = 100 straight after ρ = 10** (`--palw-drill-capacity-rho100-at`): F-L's second step with
 /// ρ = 100 — the alternative to ρ = 25 then ρ = 100, never combined with it (both are the second step).
 pub fn palw_drill_capacity_rho100_at_v1(
@@ -1341,10 +1356,11 @@ mod tests {
         PalwDrillSaltV1::from_bytes([byte; PALW_DRILL_SALT_LEN_V1]).unwrap()
     }
 
-    /// **The salted drill ruleset with the int-11 flag day set back to dormant** — what the per-fence movers' own tests move from:
-    /// every testnet-12 ruleset (a drill's included) arms the int-11 list at its height, which these tests judge their fence against.
+    /// **The salted drill ruleset with the int-11 and int-13 flag days set back to dormant** — what the per-fence movers' own tests move
+    /// from: every testnet-12 ruleset (a drill's included) arms those lists at their heights, which these tests judge their fence against.
     fn dormant_drill(byte: u8) -> crate::config::params::Params {
         let mut drill = crate::config::params::palw_t12_drill_params_v1(&salt(byte));
+        crate::config::params::palw_t12_arm_int13_flag_day_at_v1(&mut drill, None);
         crate::config::params::palw_t12_arm_int11_flag_day_at_v1(&mut drill, None);
         drill
     }

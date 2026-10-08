@@ -179,3 +179,20 @@ Object tags: 91–93 RFC-0006, 94 the adapter listing, 95 capacity riders (ADR-0
 102–103 shard plan / claim (RFC-0006), 104 `RealWork` (ADR-0165), 105 `CapacityLedger` (ADR-0164), 106 `SeatAvailability` (ADR-0166).
 Carriage tails: `0xE4` vertex, `0xE1` shard, `0xEA` real work, `0xE6` seat availability. Interval-request kinds: bit 29 leaf evidence,
 28 shard rows, 27 shard runs, 26 weight blocks, 25 witness chunks.
+
+
+## int-13 addendum (2026-10-08): row 19, `--palw-drill-int13-at`
+
+The DAA-9,000 flag day (`PALW_T12_INT13_FENCES_V1` at `PALW_T12_INT13_DAA`, `consensus/core/src/config/params.rs`) arms four code-change-only
+fences at one height: `palw_audit_1004_v1`, `palw_gen_range_twin_v1`, `palw_model_court_window` and `palw_receipt_spend_v4`. Like the int-11 list it is
+armed on every testnet-12 ruleset, a drill's included, so a drill flag *moves* an entry.
+
+| # | Flag | Arms or moves | Fence | Needs | Marker line | Manifest key |
+| --- | --- | --- | --- | --- | --- | --- |
+| 19 | `--palw-drill-int13-at=H'` | **moves the flag day's whole list** to H' — the four fences above, each through its own `set` (mirrors included); **instead of** row 6 (`--palw-drill-model-court-at`, which moves one of the same entries — refused by name, never with it) | `PALW_T12_INT13_FENCES_V1` | `palw_gen_v1` at or below H' for the range twin: `--palw-drill-int11-at` (row 18) below it, which itself needs rows 1, 3, 4, 5; `palw_economic_safety`, `palw_model_registry`, `palw_kary_court`, `palw_audit_2026_09_11` and `palw_audit_2026_09_23` are genesis rules | `int13_at=` | `int13_at` |
+
+It is applied after `--palw-drill-int11-at` and before the capacity flags. Heights follow the frozen layout of §3 with one more row: the combined
+drill's proposal is H' = 110 (after the first REAL attempts, before ρ = 100 at 121). The marker's `int13_at=` line reads `none` on a marker written
+before the flag existed, so a chain an earlier binary started reopens under this build. The drill plan is
+[`t12-daa9000-drill-plan.md`](t12-daa9000-drill-plan.md); the same crossing at the processor is
+`consensus/src/pipeline/virtual_processor/tests/t12_int13_flag_day_crossing.rs`.
