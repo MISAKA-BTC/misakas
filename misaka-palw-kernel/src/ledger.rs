@@ -1248,15 +1248,23 @@ impl KernelLedgerV1 {
 
     /// **GAP-5: return the escrows no claim can still use**: past `job_escrow_ttl_daa`, the job held by no live claim and sealed by
     /// no producer. A job whose holder later fails keeps its escrow until this rule returns it.
+    ///
+    /// **A seal holds an escrow for one seal TTL past the escrow's, never longer** (C4 F-C4R4-03): a seal is a promise any bond may
+    /// make on an unclaimed job, and a re-seal restarts its clock on the same deposit, so "no live seal" let a squatter keep the
+    /// escrow — and, through `reserved`, the poster's whole bond exit — for as long as it re-sealed. A producer that sealed by the
+    /// escrow's TTL has `seal_ttl_daa` to reveal (its seal expires then anyway).
     fn release_idle_job_escrows(&mut self, out: &mut Vec<LedgerEventV1>) {
         let ttl = self.policy.job_escrow_ttl_daa;
+        let seal_ttl = self.policy.seal_ttl_daa;
         let idle: Vec<Digest> = self
             .job_escrows
             .iter()
             .filter(|(job, row)| {
-                self.daa > row.posted_daa.saturating_add(ttl)
+                let expired = row.posted_daa.saturating_add(ttl);
+                self.daa > expired
                     && !self.job_claims.get(*job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job)
-                    && self.seals.range((**job, [0u8; 64])..=(**job, [0xFFu8; 64])).next().is_none()
+                    && (self.daa > expired.saturating_add(seal_ttl)
+                        || self.seals.range((**job, [0u8; 64])..=(**job, [0xFFu8; 64])).next().is_none())
             })
             .map(|(job, _)| *job)
             .collect();
