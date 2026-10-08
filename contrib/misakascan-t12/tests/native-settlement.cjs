@@ -53,5 +53,21 @@ vm.runInContext(['readNativeSettlement', 'nativeSettlementView', 'renderOverlay'
   await context.refreshNativeSettlement(context.routeGen);
   assert.match(surface.innerHTML, /status unavailable/);
   assert.doesNotMatch(surface.innerHTML, /executed-result/);
+  // A below-finalized conflict is shown as an alarm that names the resync, never as an ordinary stop reason.
+  context.rpc = async () => context.status;
+  context.status = { dnsRetiredAt: 5, nativeSettlement: { latest: 'executed-result', safe: null, finalized: null,
+    depth: 0, uniqueWork: '0', stop: 'finalizedConflict' } };
+  surface.innerHTML = '';
+  await context.renderOverlay();
+  assert.match(surface.innerHTML, /Safety alarm/);
+  assert.match(surface.innerHTML, /resynced/);
+  assert.equal((surface.innerHTML.match(/unavailable/g) || []).length, 2, 'safe and finalized stay unavailable');
+  // An ordinary stop reason raises no alarm.
+  context.status = { dnsRetiredAt: 5, nativeSettlement: { latest: 'executed-result', safe: null, finalized: null,
+    depth: 0, uniqueWork: '0', stop: 'frontierNotCovered' } };
+  surface.innerHTML = '';
+  await context.renderOverlay();
+  assert.doesNotMatch(surface.innerHTML, /Safety alarm/);
+  assert.match(surface.innerHTML, /frontierNotCovered/);
   console.log('native settlement explorer tests passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -1,5 +1,6 @@
 mod dns_bft;
 pub mod errors;
+mod native_settlement;
 mod processor;
 mod utxo_inquirer;
 mod utxo_validation;

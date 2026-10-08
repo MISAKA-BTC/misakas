@@ -16927,6 +16927,9 @@ mod t12_f2_lock_redate_crossing;
 // carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
 mod t53_drill_isolation;
 
+// RFC-0012: the private zero-DNS acceptance matrix (lane X12).
+mod rfc12_zero_dns_matrix;
+
 /// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
 /// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`
 /// that the honest virtual MERGES (M has lower blue work than the sink, so it is never
