@@ -30,7 +30,14 @@ use crate::relay::{RelayFailure, RelayReport, Reply, fan_out_verdict};
 use crate::template::{
     AcceptedTemplate, ProducerFactsSummary, TemplatePolicy, TemplateRefusal, check_templates, template_observation_v1,
 };
+use crate::verify::{
+    ClientRulesetV1, GateRefusalV1, L2StatusV1, ModeLabelV1, NodeJobFactsV1, NodeRulesetV1, TrustedCheckpointV1, VerifiedChainV1,
+    VerifyErrorV1, VerifyLimitsV1, bond_on_chain_v1, check_job_facts_v1, check_ruleset_v1, check_template_v1, class_on_chain_v1,
+    l2_status_v1, merge_views_v1, mode_label_v1, signing_gate_v1, verify_header_chain_v1,
+};
 use crate::view::{AgreedView, ChainView, CheckpointStatus, Halt as ViewHalt, NodeFacts, QuorumPolicy, ViewError, agree};
+use kaspa_consensus_core::palw_state_proof_v1::PalwFactProofV1;
+use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 
 /// What `getBlockTemplate` + `getPalwProducerFacts` gave for one node.
 #[derive(Clone, Debug)]
@@ -60,6 +67,22 @@ pub trait RemoteNode {
     /// Submit the finished block. `Accepted`/`AlreadyKnown` carry the hash the NODE holds.
     fn submit_block(&self, block: &Block) -> Reply;
     fn observe_block(&self, hash: Hash64) -> Result<BlockObservation, String>;
+    /// **L1's input**: the headers from `from` (the client's checkpoint) to this node's sink along its selected chain, `from` first. Never
+    /// trusted: [`crate::verify::verify_header_chain_v1`] judges them. The default serves none (the client then cannot leave
+    /// `UNVERIFIED_REMOTE`).
+    fn header_chain(&self, from: Hash64) -> Result<Vec<Header>, String> {
+        let _ = from;
+        Err("this node serves no header chain".into())
+    }
+    /// **L3's input** (op 202): the header of `block` and one collection of the state it commits.
+    fn state_proof(&self, block: Hash64, collection: &str) -> Result<(Header, PalwFactProofV1), String> {
+        let _ = (block, collection);
+        Err("this node serves no state proof".into())
+    }
+    /// The ruleset the node says it runs (network, genesis, params id, schedule id).
+    fn ruleset(&self) -> Result<NodeRulesetV1, String> {
+        Err("this node does not say which ruleset it runs".into())
+    }
 }
 
 struct ViewAdapter<'a>(&'a dyn RemoteNode);
@@ -90,6 +113,30 @@ pub struct MinerConfig {
     pub grace_daa: u64,
     /// Chain blocks this deep are settled.
     pub finality_depth: u64,
+    /// The security class this miner may sign in, and how it verifies (RFC-0009 operating modes, 2026-10-08).
+    pub trust: MinerTrustV1,
+}
+
+/// **How a remote miner establishes its view, and which class it accepts.** `verification: None` is the quorum alone
+/// (`UNVERIFIED_REMOTE`); `Some` runs L1 (every node's header chain from the trusted checkpoint, merged by containment), L3 (the bond and
+/// the class proven at the verified tip) and L2 (established only at a trusted checkpoint that is the decision point) — see
+/// [`crate::verify`]. Below `VERIFIED_REMOTE` nothing is executed or signed unless `accept_unverified` names the class.
+#[derive(Clone, Debug, Default)]
+pub struct MinerTrustV1 {
+    pub own_full_node: bool,
+    pub verification: Option<RemoteVerificationV1>,
+    pub accept_unverified: Option<ModeLabelV1>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RemoteVerificationV1 {
+    pub ruleset: ClientRulesetV1,
+    pub checkpoint: TrustedCheckpointV1,
+    pub limits: VerifyLimitsV1,
+    /// The miner's bond (its key is `template.held_pubkey`).
+    pub bond: PalwBondKeyV2,
+    /// The client's clock, in ms.
+    pub now_ms: fn() -> u64,
 }
 
 /// Why a step produced no block. Every one is a STOP with a reason, never a silent retry with another view.
@@ -109,6 +156,10 @@ pub enum MinerHalt {
     Equivocation { challenge: Hash64, earlier: Hash64 },
     #[error("the finished block was not taken: {0}")]
     Publish(#[from] RelayFailure),
+    #[error("verification refused the view, before any inference or signature: {0}")]
+    Verify(#[from] VerifyErrorV1),
+    #[error("{0}")]
+    Gate(#[from] GateRefusalV1),
 }
 
 #[derive(Clone, Debug)]
@@ -138,6 +189,8 @@ pub struct MinerState {
     cursor: Option<(Hash64, u64)>,
     /// `challenge → (attempt id, block)`: one position, one attempt, one block.
     positions: BTreeMap<Hash64, (Hash64, Block)>,
+    /// The security class the last step ran in — every output prints it.
+    pub last_mode: Option<ModeLabelV1>,
 }
 
 impl MinerState {
@@ -194,6 +247,25 @@ pub fn step(
         .expect("an accepted template has at least one agreeing node, and every agreeing node answered");
     let template_header: &Header = &chosen.block.header;
 
+    // **The security class, before any inference** (L1/L3/L2 when configured; the quorum alone is UNVERIFIED_REMOTE), and the gate.
+    let job = NodeJobFactsV1 {
+        class_id: accepted.observation.facts.class_id,
+        artifact_root: accepted.observation.facts.artifact_root,
+        bond: cfg.trust.verification.as_ref().map(|v| v.bond).unwrap_or(PalwBondKeyV2(cfg.attempt.bond)),
+        bond_pubkey: accepted.observation.facts.bond_pubkey.clone(),
+        bond_may_produce: true,
+    };
+    let label = remote_mode_v1(nodes, &cfg.trust, cfg.attempt.network_domain, template_header, &job)?;
+    state.last_mode = Some(label);
+    signing_gate_v1(label, cfg.trust.accept_unverified)?;
+    // …and again RIGHT BEFORE the signature: the inference took time, so the view is re-verified and the template's parent must still be
+    // the verified tip.
+    let recheck = || -> Result<(), String> {
+        let again = remote_mode_v1(nodes, &cfg.trust, cfg.attempt.network_domain, template_header, &job).map_err(|e| e.to_string())?;
+        signing_gate_v1(again, cfg.trust.accept_unverified).map_err(|e| e.to_string())
+    };
+    let gated = GatedSigner { inner: signer, recheck: &recheck };
+
     let mounted: MountedAttempt = match mount_attempt(
         &accepted,
         template_header,
@@ -204,7 +276,7 @@ pub fn step(
         cfg.class_id,
         &mut state.cursor,
         executor,
-        signer,
+        &gated,
         network_draw,
     )? {
         Some(m) => m,
@@ -242,6 +314,72 @@ pub fn step(
         template_digest: accepted.digest,
         material: mounted.material,
     }))
+}
+
+/// A signer that re-verifies the view right before it signs (the second half of the gate).
+struct GatedSigner<'a> {
+    inner: &'a dyn AttemptSigner,
+    recheck: &'a dyn Fn() -> Result<(), String>,
+}
+
+impl AttemptSigner for GatedSigner<'_> {
+    fn public_key(&self) -> Vec<u8> {
+        self.inner.public_key()
+    }
+    fn sign_attempt_id(&self, attempt_id: &Hash64) -> Result<Vec<u8>, String> {
+        (self.recheck)().map_err(|why| format!("not signed — the view did not survive the re-check: {why}"))?;
+        self.inner.sign_attempt_id(attempt_id)
+    }
+    fn sign_attempt(
+        &self,
+        attempt: &kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2,
+        attempt_id: &Hash64,
+    ) -> Result<Vec<u8>, String> {
+        (self.recheck)().map_err(|why| format!("not signed — the view did not survive the re-check: {why}"))?;
+        self.inner.sign_attempt(attempt, attempt_id)
+    }
+}
+
+/// **The class a step runs in.** Without `verification`: the quorum alone, `UNVERIFIED_REMOTE` (or `FULL_NODE` when the one node is the
+/// user's own). With it: every node's ruleset must be ours; every node's header chain from the checkpoint must pass L1, and the views must
+/// not conflict (a conflict STOPS — blue work never decides); the template must stand on the verified tip at a sane target; the bond and the
+/// class must be proven at the tip and agree with the node's facts. Any failure is a STOP, not a downgrade: a node that lies about
+/// something it had to prove is not a node to mine through.
+pub fn remote_mode_v1(
+    nodes: &[&dyn RemoteNode],
+    trust: &MinerTrustV1,
+    network_domain: Hash64,
+    template: &Header,
+    job: &NodeJobFactsV1,
+) -> Result<ModeLabelV1, MinerHalt> {
+    let Some(v) = &trust.verification else {
+        return Ok(mode_label_v1(trust.own_full_node, false, false, &L2StatusV1::Unverified("the quorum alone proves nothing")));
+    };
+    let now = (v.now_ms)();
+    let mut views: Vec<VerifiedChainV1> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for node in nodes.iter().filter(|n| seen.insert(n.node_id().to_string())) {
+        let theirs = node.ruleset().map_err(|why| VerifyErrorV1::WrongRuleset {
+            what: "ruleset (not reported)",
+            ours: v.ruleset.consensus_params_id.clone(),
+            theirs: why,
+        })?;
+        check_ruleset_v1(&v.ruleset, &theirs)?;
+        let headers =
+            node.header_chain(v.checkpoint.block).map_err(|why| VerifyErrorV1::Proof(format!("{}: {why}", node.node_id())))?;
+        views.push(verify_header_chain_v1(&v.checkpoint, &headers, network_domain, now, &v.limits)?);
+    }
+    let chain = merge_views_v1(&views)?;
+    check_template_v1(template, &chain)?;
+    let tip = chain.tip_hash();
+    let node = nodes.first().ok_or(VerifyErrorV1::Empty)?;
+    let (bh, bonds) = node.state_proof(tip, "bonds").map_err(VerifyErrorV1::Proof)?;
+    let (ch, classes) = node.state_proof(tip, "classes").map_err(VerifyErrorV1::Proof)?;
+    let bond = bond_on_chain_v1(&chain, &bh, &bonds, &job.bond)?;
+    let class = class_on_chain_v1(&chain, &ch, &classes, &job.class_id)?;
+    check_job_facts_v1(job, &class, &bond)?;
+    let l2 = l2_status_v1(&v.checkpoint, &chain, Some(bh.hash), &v.limits);
+    Ok(mode_label_v1(trust.own_full_node, true, true, &l2))
 }
 
 /// Give `block` to every node, idempotently: the hash is the miner's own, a node answering with another never counts, "already known" is
@@ -342,9 +480,9 @@ impl BlockTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::tx::TransactionOutpoint;
     use crate::attempt::{ExecutedAttempt, MlDsaAttemptSigner};
     use kaspa_consensus_core::palw_attempt_v2::PalwAttemptExecutionV1;
+    use kaspa_consensus_core::tx::TransactionOutpoint;
     use std::cell::{Cell, RefCell};
 
     fn h(n: u8) -> Hash64 {
@@ -489,6 +627,8 @@ mod tests {
             min_submit: 2,
             grace_daa: 60,
             finality_depth: 60,
+            // These fakes serve no headers or proofs: the quorum alone, explicitly accepted as UNVERIFIED_REMOTE.
+            trust: MinerTrustV1 { accept_unverified: Some(ModeLabelV1::UnverifiedRemote), ..Default::default() },
         }
     }
 
@@ -700,5 +840,294 @@ mod tests {
         assert_eq!(t.observe(&[obs(false, false, 0, 150), obs(false, false, 0, 150)]), &BlockState::Submitted);
         assert_eq!(t.observe(&[obs(false, false, 0, 170), obs(false, false, 0, 170)]), &BlockState::Lost);
         assert!(t.state().is_settled());
+    }
+
+    // ---- RFC-0009 operating modes: the class a step runs in, and the gate (2026-10-08) ------------------------------------------------
+
+    /// **No opt-in, no work**: the quorum alone is UNVERIFIED_REMOTE, and without `--accept-unverified-state` the miner neither executes nor
+    /// signs — and says which class it is in.
+    #[test]
+    fn an_unverified_quorum_neither_executes_nor_signs_without_the_opt_in() {
+        let signer = keypair();
+        let (a, b) = (Fake::new("a", &pk(&signer)), Fake::new("b", &pk(&signer)));
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let mut strict = cfg(pk(&signer));
+        strict.trust.accept_unverified = None;
+        let out = run(&[&a, &b], &strict, &mut state, &mut exec, &signer);
+        assert!(matches!(&out, Err(MinerHalt::Gate(g)) if g.label == ModeLabelV1::UnverifiedRemote), "{out:?}");
+        assert!(out.unwrap_err().to_string().contains("--accept-unverified-state UNVERIFIED_REMOTE"));
+        assert_eq!(exec.calls.get(), 0, "no inference");
+        assert!(a.submitted.borrow().is_empty() && b.submitted.borrow().is_empty(), "nothing signed or sent");
+        assert_eq!(state.last_mode, Some(ModeLabelV1::UnverifiedRemote));
+        // Accepting the header-verified class does not accept the unverified one.
+        strict.trust.accept_unverified = Some(ModeLabelV1::HeaderVerifiedForkChoiceUnverified);
+        assert!(matches!(run(&[&a, &b], &strict, &mut state, &mut exec, &signer), Err(MinerHalt::Gate(_))));
+        assert_eq!(exec.calls.get(), 0);
+    }
+
+    const VNOW: u64 = 1_800_000_000_000;
+    fn vnow() -> u64 {
+        VNOW
+    }
+
+    /// A node that serves a header chain from the checkpoint, the state's proofs at its tip, and its ruleset; its template stands on its tip.
+    struct VFake {
+        inner: Fake,
+        chain: RefCell<Vec<Header>>,
+        /// Served from the second `header_chain` call on (a reorg between the gate and the signature).
+        later: RefCell<Option<Vec<Header>>>,
+        calls: Cell<u32>,
+        state: kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        ruleset: crate::verify::NodeRulesetV1,
+    }
+
+    fn vheader(parent: Hash64, daa: u64, ts: u64, root: Hash64, salt: u64) -> Header {
+        let mut x = Header::new_finalized(
+            1,
+            vec![vec![parent]].try_into().unwrap(),
+            h(2),
+            h(3),
+            h(4),
+            ts,
+            0x1d00ffff,
+            salt,
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1,
+            daa,
+            daa.into(),
+            daa,
+            h(5),
+        )
+        .with_palw_state_root(root);
+        x.finalize();
+        x
+    }
+
+    fn vchain(root: Hash64, salt: u64, n: u64) -> Vec<Header> {
+        let mut out = vec![vheader(h(0xC0), 96, VNOW - 10 * 120_000, root, 0)];
+        for i in 0..n {
+            let p = out.last().unwrap().clone();
+            out.push(vheader(p.hash, p.daa_score + 1, p.timestamp + 120_000, root, salt * 100 + i));
+        }
+        out
+    }
+
+    /// The state the chain commits: class h(30) (the base class) over `root`, and the miner's bond (h(21):0) holding `pubkey`.
+    fn vstate(pubkey: &[u8], root: Hash64) -> kaspa_consensus_core::palw_state_v2::PalwChainStateV2 {
+        use kaspa_consensus_core::palw_state_v2::{
+            PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2 as Obj, PalwPwuRuleV2, PalwStateParamsV2,
+            apply_palw_transition_v2,
+        };
+        let params = PalwStateParamsV2::new(100, 1, 1, 1, 500, 1_000, h(30), 4, 1_000, 100, 1_000, 0).unwrap();
+        let objects = vec![
+            Obj::ClassRegistered {
+                class_id: h(30),
+                artifact_root: root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            Obj::BondRegistered {
+                bond: PalwBondKeyV2(TransactionOutpoint::new(h(21), 0)),
+                pubkey: pubkey.to_vec(),
+                operator_pubkey: vec![8; 8],
+                collateral: 1 << 40,
+                payout_payload: h(0x9A),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            },
+        ];
+        let cx = PalwBlockContextV2 { block: h(10), daa_score: 1, blue_score: 1, subsidy: 0 };
+        apply_palw_transition_v2(&PalwChainStateV2::genesis(), &params, &cx, &objects, None).unwrap().0
+    }
+
+    fn ours() -> crate::verify::ClientRulesetV1 {
+        crate::verify::ClientRulesetV1 {
+            network_id: "testnet-12".into(),
+            genesis: "g".into(),
+            consensus_params_id: "p".into(),
+            consensus_schedule_id: "s".into(),
+        }
+    }
+
+    impl VFake {
+        fn new(id: &str, pubkey: &[u8], proven_root: Hash64, salt: u64) -> Self {
+            let state = vstate(pubkey, proven_root);
+            let chain = vchain(state.state_root(), salt, 3);
+            Self {
+                inner: Fake::new(id, pubkey),
+                chain: RefCell::new(chain),
+                later: RefCell::new(None),
+                calls: Cell::new(0),
+                state,
+                ruleset: crate::verify::NodeRulesetV1 {
+                    network_id: "testnet-12".into(),
+                    genesis: Some("g".into()),
+                    consensus_params_id: "p".into(),
+                    consensus_schedule_id: "s".into(),
+                },
+            }
+        }
+        fn tip(&self) -> Header {
+            self.chain.borrow().last().unwrap().clone()
+        }
+    }
+
+    impl RemoteNode for VFake {
+        fn node_id(&self) -> &str {
+            self.inner.node_id()
+        }
+        fn chain_facts(&self) -> Result<NodeFacts, ViewError> {
+            self.inner.chain_facts()
+        }
+        fn checkpoint_status(&self, c: &Checkpoint) -> Result<CheckpointStatus, ViewError> {
+            self.inner.checkpoint_status(c)
+        }
+        fn fetch_template(&self) -> Result<NodeTemplate, String> {
+            let mut t = self.inner.fetch_template()?;
+            let tip = self.tip();
+            let mut x = header(tip.daa_score + 1, 0);
+            x.parents_by_level = vec![vec![tip.hash]].try_into().unwrap();
+            x.finalize();
+            t.block = Block::from_header(x);
+            Ok(t)
+        }
+        fn submit_block(&self, block: &Block) -> Reply {
+            self.inner.submit_block(block)
+        }
+        fn observe_block(&self, hash: Hash64) -> Result<BlockObservation, String> {
+            self.inner.observe_block(hash)
+        }
+        fn header_chain(&self, from: Hash64) -> Result<Vec<Header>, String> {
+            self.calls.set(self.calls.get() + 1);
+            if self.calls.get() > 1
+                && let Some(later) = self.later.borrow().clone()
+            {
+                *self.chain.borrow_mut() = later;
+            }
+            let chain = self.chain.borrow().clone();
+            if chain.first().map(|h| h.hash) != Some(from) {
+                return Err("not from that checkpoint".into());
+            }
+            Ok(chain)
+        }
+        fn state_proof(&self, block: Hash64, collection: &str) -> Result<(Header, PalwFactProofV1), String> {
+            use kaspa_consensus_core::palw_state_proof_v1::{prove_bonds_v1, prove_classes_v1};
+            let header = self.chain.borrow().iter().find(|x| x.hash == block).cloned().ok_or("unknown block")?;
+            let proof = match collection {
+                "bonds" => prove_bonds_v1(&self.state),
+                "classes" => prove_classes_v1(&self.state),
+                _ => return Err("unknown collection".into()),
+            };
+            Ok((header, proof))
+        }
+        fn ruleset(&self) -> Result<crate::verify::NodeRulesetV1, String> {
+            Ok(self.ruleset.clone())
+        }
+    }
+
+    fn vcfg(pubkey: Vec<u8>, checkpoint: &Header, accept: Option<ModeLabelV1>) -> MinerConfig {
+        let mut c = cfg(pubkey);
+        c.trust = MinerTrustV1 {
+            own_full_node: false,
+            verification: Some(RemoteVerificationV1 {
+                ruleset: ours(),
+                checkpoint: crate::verify::TrustedCheckpointV1 {
+                    block: checkpoint.hash,
+                    daa_score: checkpoint.daa_score,
+                    trust: crate::verify::CheckpointTrustV1::Signed { issued_at_daa: checkpoint.daa_score },
+                },
+                limits: VerifyLimitsV1::default(),
+                bond: PalwBondKeyV2(TransactionOutpoint::new(h(21), 0)),
+                now_ms: vnow,
+            }),
+            accept_unverified: accept,
+        };
+        c
+    }
+
+    fn vrun(
+        nodes: &[&VFake],
+        cfg: &MinerConfig,
+        state: &mut MinerState,
+        exec: &mut Exec,
+        signer: &MlDsaAttemptSigner,
+    ) -> Result<StepOutcome, MinerHalt> {
+        let refs: Vec<&dyn RemoteNode> = nodes.iter().map(|n| *n as &dyn RemoteNode).collect();
+        step(&refs, cfg, state, exec, signer, &|_, _, _| true)
+    }
+
+    /// **Verified remote, honestly labelled**: two nodes serving the same verified chain and proofs put the miner in
+    /// HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED (L2 is not verified past the checkpoint), which mines only on that class's explicit opt-in.
+    #[test]
+    fn a_verified_header_chain_with_proven_rows_is_header_verified_and_mines_only_on_that_opt_in() {
+        let signer = keypair();
+        let (a, b) = (VFake::new("a", &pk(&signer), h(31), 1), VFake::new("b", &pk(&signer), h(31), 1));
+        let checkpoint = a.chain.borrow()[0].clone();
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let out = vrun(&[&a, &b], &vcfg(pk(&signer), &checkpoint, None), &mut state, &mut exec, &signer);
+        assert!(matches!(&out, Err(MinerHalt::Gate(g)) if g.label == ModeLabelV1::HeaderVerifiedForkChoiceUnverified), "{out:?}");
+        assert_eq!(exec.calls.get(), 0);
+        let accept = Some(ModeLabelV1::HeaderVerifiedForkChoiceUnverified);
+        let out = vrun(&[&a, &b], &vcfg(pk(&signer), &checkpoint, accept), &mut state, &mut exec, &signer).unwrap();
+        assert!(matches!(out, StepOutcome::Published(_)), "{out:?}");
+        assert_eq!(state.last_mode, Some(ModeLabelV1::HeaderVerifiedForkChoiceUnverified));
+    }
+
+    /// **Malicious nodes, refused before execution or signing**: a fake class row (the node's facts name an artifact root the proof does
+    /// not hold), a node on another fence schedule, a node whose chain conflicts with another's (a hidden competing tip revealed).
+    #[test]
+    fn a_lying_class_row_a_wrong_schedule_and_a_conflicting_view_stop_the_miner_before_any_work() {
+        let signer = keypair();
+        let accept = Some(ModeLabelV1::UnverifiedRemote);
+        // fake class row: the template facts say root h(31), the chain proves h(0x99)
+        let (a, b) = (VFake::new("a", &pk(&signer), h(0x99), 1), VFake::new("b", &pk(&signer), h(0x99), 1));
+        let checkpoint = a.chain.borrow()[0].clone();
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let out = vrun(&[&a, &b], &vcfg(pk(&signer), &checkpoint, accept), &mut state, &mut exec, &signer);
+        assert!(matches!(out, Err(MinerHalt::Verify(VerifyErrorV1::ContradictsProof { .. }))), "{out:?}");
+        assert_eq!(exec.calls.get(), 0);
+        // another fence schedule
+        let (a, mut b) = (VFake::new("a", &pk(&signer), h(31), 1), VFake::new("b", &pk(&signer), h(31), 1));
+        b.ruleset.consensus_schedule_id = "s-with-another-fence".into();
+        let checkpoint = a.chain.borrow()[0].clone();
+        let out = vrun(&[&a, &b], &vcfg(pk(&signer), &checkpoint, accept), &mut state, &mut exec, &signer);
+        assert!(matches!(out, Err(MinerHalt::Verify(VerifyErrorV1::WrongRuleset { .. }))), "{out:?}");
+        // a second node shows a competing branch from the same checkpoint
+        let (a, b) = (VFake::new("a", &pk(&signer), h(31), 1), VFake::new("b", &pk(&signer), h(31), 2));
+        let checkpoint = a.chain.borrow()[0].clone();
+        assert_eq!(checkpoint.hash, b.chain.borrow()[0].hash);
+        let out = vrun(&[&a, &b], &vcfg(pk(&signer), &checkpoint, accept), &mut state, &mut exec, &signer);
+        assert!(
+            matches!(out, Err(MinerHalt::Verify(VerifyErrorV1::ConflictingForks { .. })) | Err(MinerHalt::Template(_))),
+            "{out:?}"
+        );
+        assert_eq!(exec.calls.get(), 0, "no inference in any of the three");
+        assert!(a.inner.submitted.borrow().is_empty());
+    }
+
+    /// **The re-check right before the signature**: the view moves between the gate and the signature (a reorg to another branch) — the
+    /// inference ran, but nothing is signed or sent.
+    #[test]
+    fn a_reorg_between_the_gate_and_the_signature_leaves_nothing_signed() {
+        let signer = keypair();
+        let (a, b) = (VFake::new("a", &pk(&signer), h(31), 1), VFake::new("b", &pk(&signer), h(31), 1));
+        let checkpoint = a.chain.borrow()[0].clone();
+        let other = vchain(a.state.state_root(), 7, 4);
+        *a.later.borrow_mut() = Some(other.clone());
+        *b.later.borrow_mut() = Some(other);
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let out = vrun(
+            &[&a, &b],
+            &vcfg(pk(&signer), &checkpoint, Some(ModeLabelV1::HeaderVerifiedForkChoiceUnverified)),
+            &mut state,
+            &mut exec,
+            &signer,
+        );
+        assert!(matches!(&out, Err(MinerHalt::Attempt(AttemptError::Signer(why))) if why.contains("re-check")), "{out:?}");
+        assert_eq!(exec.calls.get(), 1, "the inference ran");
+        assert!(a.inner.submitted.borrow().is_empty() && b.inner.submitted.borrow().is_empty(), "nothing signed, nothing sent");
     }
 }

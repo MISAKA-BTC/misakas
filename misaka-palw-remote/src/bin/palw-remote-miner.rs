@@ -220,6 +220,61 @@ impl RemoteNode for WrpcNode<'_> {
             }),
         }
     }
+    /// L1's input: the checkpoint's header, then every block the node's selected chain adds after it (`getVirtualChainFromBlock`), each
+    /// header fetched by hash. Never trusted — `verify_header_chain_v1` judges the bytes.
+    fn header_chain(&self, from: Hash64) -> Result<Vec<kaspa_consensus_core::header::Header>, String> {
+        let first = self.runtime.block_on(self.client.get_block(from, false)).map_err(|e| format!("getBlock({from}): {e}"))?;
+        let mut out = vec![kaspa_consensus_core::header::Header::try_from(&first.header).map_err(|e| e.to_string())?];
+        let added = self
+            .runtime
+            .block_on(self.client.get_virtual_chain_from_block(from, false, None))
+            .map_err(|e| format!("getVirtualChainFromBlock: {e}"))?;
+        if !added.removed_chain_block_hashes.is_empty() {
+            return Err("the checkpoint is not on this node's selected chain".into());
+        }
+        for hash in added.added_chain_block_hashes.iter().take(misaka_palw_remote::verify::VerifyLimitsV1::default().max_headers) {
+            let b = self.runtime.block_on(self.client.get_block(*hash, false)).map_err(|e| format!("getBlock({hash}): {e}"))?;
+            out.push(kaspa_consensus_core::header::Header::try_from(&b.header).map_err(|e| e.to_string())?);
+        }
+        Ok(out)
+    }
+
+    /// L3's input: op 202 at `block`.
+    fn state_proof(
+        &self,
+        block: Hash64,
+        collection: &str,
+    ) -> Result<(kaspa_consensus_core::header::Header, kaspa_consensus_core::palw_state_proof_v1::PalwFactProofV1), String> {
+        let proof = self
+            .runtime
+            .block_on(self.client.get_palw_state_proof(kaspa_rpc_core::GetPalwStateProofRequest {
+                block_hash: block.to_string(),
+                collection: collection.into(),
+            }))
+            .map_err(|e| format!("getPalwStateProof: {e}"))?;
+        if !proof.available {
+            return Err(format!("{} cannot prove {collection} at {block}: {}", self.endpoint, proof.reason));
+        }
+        let header = kaspa_consensus_core::header::Header::try_from(&proof.header.ok_or("the proof carries no header")?)
+            .map_err(|e| e.to_string())?;
+        let fact = misaka_palw_remote::proof::proof_from_parts_v1(
+            proof.state_preimage,
+            collection,
+            proof.rows.into_iter().map(|r| (r.key, r.value)).collect(),
+        );
+        Ok((header, fact))
+    }
+
+    fn ruleset(&self) -> Result<misaka_palw_remote::verify::NodeRulesetV1, String> {
+        let info = self.runtime.block_on(self.client.get_block_dag_info()).map_err(|e| e.to_string())?;
+        let status = self.runtime.block_on(self.client.get_palw_node_status()).map_err(|e| format!("getPalwNodeStatus: {e}"))?;
+        Ok(misaka_palw_remote::verify::NodeRulesetV1 {
+            network_id: info.network.to_string(),
+            genesis: None,
+            consensus_params_id: status.consensus_params_id,
+            consensus_schedule_id: status.consensus_schedule_id,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -323,6 +378,12 @@ struct Args {
     steps: Option<u64>,
     poll_secs: u64,
     min_submit: Option<usize>,
+    /// RFC-0009 operating modes (2026-10-08): run L1/L3 from `--checkpoint` (`--verify-headers`), how that checkpoint is trusted, whether the
+    /// RPCs are the user's own full node, and the class the user accepts below VERIFIED_REMOTE.
+    verify_headers: bool,
+    checkpoint_trust: misaka_palw_remote::verify::CheckpointTrustV1,
+    own_node: bool,
+    accept_unverified: Option<misaka_palw_remote::verify::ModeLabelV1>,
 }
 
 fn parse_args() -> Args {
@@ -331,6 +392,8 @@ fn parse_args() -> Args {
         (None, Vec::new(), None, None, None, None, None, None, None);
     let (mut executor, mut executor_args, mut state_dir, mut steps, mut poll, mut min_submit) =
         (None, Vec::new(), None, None, 5u64, None);
+    let (mut verify_headers, mut checkpoint_trust, mut own_node, mut accept_unverified) =
+        (false, misaka_palw_remote::verify::CheckpointTrustV1::UserPinned, false, None);
     while let Some(flag) = it.next() {
         let mut value = |name: &str| it.next().unwrap_or_else(|| die(format!("{name} needs a value")));
         match flag.as_str() {
@@ -356,6 +419,26 @@ fn parse_args() -> Args {
             "--steps" => steps = Some(value("--steps").parse().unwrap_or_else(|_| die("--steps is not a number"))),
             "--poll-secs" => poll = value("--poll-secs").parse().unwrap_or_else(|_| die("--poll-secs is not a number")),
             "--min-submit" => min_submit = Some(value("--min-submit").parse().unwrap_or_else(|_| die("--min-submit is not a number"))),
+            "--verify-headers" => verify_headers = true,
+            "--checkpoint-trust" => {
+                checkpoint_trust = match value("--checkpoint-trust").as_str() {
+                    // The checkpoint came from the user's own full node (the user's statement about their own machine).
+                    "own-node" => misaka_palw_remote::verify::CheckpointTrustV1::OwnNode,
+                    // Typed in from somewhere the user trusts: an L1 anchor, never an L2 authority. (A signed checkpoint file is not taken
+                    // by this binary yet: `checkpoint::verify_signed_checkpoint` exists, the file format and key distribution do not.)
+                    "pinned" => misaka_palw_remote::verify::CheckpointTrustV1::UserPinned,
+                    other => die(format!("--checkpoint-trust {other:?} is not own-node or pinned")),
+                }
+            }
+            "--own-node" => own_node = true,
+            "--accept-unverified-state" => {
+                let v = value("--accept-unverified-state");
+                accept_unverified = Some(misaka_palw_remote::verify::ModeLabelV1::parse(&v).unwrap_or_else(|| {
+                    die(format!(
+                        "--accept-unverified-state {v:?}: name the class (HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED or UNVERIFIED_REMOTE)"
+                    ))
+                }))
+            }
             other => die(format!("unknown flag {other}")),
         }
     }
@@ -381,6 +464,10 @@ fn parse_args() -> Args {
         steps,
         poll_secs: poll,
         min_submit,
+        verify_headers,
+        checkpoint_trust,
+        own_node,
+        accept_unverified,
     }
 }
 
@@ -515,7 +602,32 @@ fn main() {
         min_submit: args.min_submit.unwrap_or(nodes.len() / 2 + 1),
         grace_daa: 60,
         finality_depth: 60,
+        trust: misaka_palw_remote::miner::MinerTrustV1 {
+            own_full_node: args.own_node,
+            verification: args.verify_headers.then(|| misaka_palw_remote::miner::RemoteVerificationV1 {
+                ruleset: misaka_palw_remote::verify::ClientRulesetV1::of(&params),
+                checkpoint: misaka_palw_remote::verify::TrustedCheckpointV1 {
+                    block: args.checkpoint.block_hash,
+                    daa_score: args.checkpoint.daa_score,
+                    trust: args.checkpoint_trust.clone(),
+                },
+                limits: misaka_palw_remote::verify::VerifyLimitsV1::default(),
+                bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(args.bond),
+                now_ms: || {
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+                },
+            }),
+            accept_unverified: args.accept_unverified,
+        },
     };
+    say(
+        "mode",
+        serde_json::json!({
+            "verification": if args.verify_headers { "L1 header chain + L3 proofs from --checkpoint; L2 established only at a trusted checkpoint that is the decision point" } else { "the quorum alone" },
+            "accepted_below_verified": args.accept_unverified.map(|l| l.as_str()),
+            "note": "every step prints the class it ran in; below VERIFIED_REMOTE nothing is executed or signed without --accept-unverified-state <LABEL>",
+        }),
+    );
     let mut state = MinerState::default();
     let mut trackers: Vec<BlockTracker> = Vec::new();
     // The claim an attempt makes (its attempt id), followed per node: a claim row that names another executor bond is Misattributed, never ours.
@@ -539,7 +651,11 @@ fn main() {
         if let Some(t) = refs.iter().find_map(|r| r.fetch_template().ok()) {
             cfg_step.attempt.class_target = t.facts.class_target;
         }
-        match step(&refs, &cfg_step, &mut state, &mut executor, &signer, &network_draw) {
+        let outcome = step(&refs, &cfg_step, &mut state, &mut executor, &signer, &network_draw);
+        if let Some(mode) = state.last_mode {
+            say("mode", serde_json::json!({ "mode": mode.as_str(), "claim": mode.claim() }));
+        }
+        match outcome {
             Ok(StepOutcome::DrawLost { bucket }) => say("draw-lost", serde_json::json!({ "bucket": bucket })),
             Ok(StepOutcome::Published(p)) => {
                 keep_material(&args.state_dir, &p.attempt_id, &p.material);
