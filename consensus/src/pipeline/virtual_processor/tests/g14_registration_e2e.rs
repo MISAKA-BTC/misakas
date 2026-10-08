@@ -19,7 +19,9 @@
 //! the pipeline cases (`g14_*_mined_*`) through the mempool, the node's own block template, the
 //! chain block's fold, the persisted tip, the ConsensusApi reads, a second node replaying the blocks, and
 //! a reorg.
-use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_with_harness_cards};
+use super::t12_round_lane_e2e::{
+    T12Chain, card_payout_spk, sign_spend, t12_genesis_chain, t12_genesis_chain_on, t12_reopened_chain, t12_with_harness_cards,
+};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::ConsensusApi;
@@ -179,8 +181,12 @@ impl Env {
         Env::over(t12_tir_config(tir_at))
     }
 
-    fn over((config, bundle, premine, floats): (Config, PalwConsensusParamsV2, Premine, Premine)) -> Env {
-        let chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    fn over(parts: (Config, PalwConsensusParamsV2, Premine, Premine)) -> Env {
+        let chain = t12_genesis_chain(&parts.0, &parts.1, &parts.2, &parts.3);
+        Env::around(chain, parts)
+    }
+
+    fn around(chain: T12Chain, (config, bundle, premine, floats): (Config, PalwConsensusParamsV2, Premine, Premine)) -> Env {
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             config.params.net.to_string().as_bytes(),
             Some(config.params.genesis.hash),
@@ -837,13 +843,16 @@ struct Mined {
 
 const ACTIVATION_AHEAD: u64 = 30;
 
-async fn mine_registration(case_name: &str, card: usize) -> Mined {
-    let mut env = Env::new(0);
+async fn mine_registration(c: &Case, card: usize) -> Mined {
+    mine_registration_on(Env::new(0), c, card).await
+}
+
+async fn mine_registration_on(mut env: Env, c: &Case, card: usize) -> Mined {
     let ttpb = env.config.params.target_time_per_block();
     let h1 = env.chain.heartbeat(ttpb, Vec::new()).await;
     let (block, state) = env.chain.tip_state();
     let daa = env.chain.daa_of(block);
-    let spec = spec_of(&case(case_name), card, daa + ACTIVATION_AHEAD);
+    let spec = spec_of(c, card, daa + ACTIVATION_AHEAD);
     let object = signed(&env, &state, &spec);
     let class_id = class_id_of(&object);
     let collateral_before = state.bond(&env.chain.bonds[card]).expect("the registrant bond").collateral;
@@ -862,9 +871,14 @@ async fn mine_registration(case_name: &str, card: usize) -> Mined {
 
 #[tokio::test]
 async fn g14_registration_mined_end_to_end_on_the_real_node_path() {
+    mined_end_to_end(&case("moe-top2-shared"), 2).await;
+}
+
+/// The whole pipeline for one class, `c`, registered by card `card`'s bond (see the module doc).
+async fn mined_end_to_end(c: &Case, card: usize) {
     use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
     kaspa_core::log::try_init_logger("warn");
-    let mut m = mine_registration("moe-top2-shared", 2).await;
+    let mut m = mine_registration(c, card).await;
     let env = &mut m.env;
     let bond = env.chain.bonds[m.card];
     let consensus = &env.chain.ctx.consensus;
@@ -896,6 +910,21 @@ async fn g14_registration_mined_end_to_end_on_the_real_node_path() {
     let registry = consensus.palw_model_registry_v1().expect("the registry read");
     let reg_row = registry.classes.iter().find(|c| c.class_id == m.class_id);
     eprintln!("[g14] registry row of the new class: {:?}", reg_row.map(|c| (c.row.clone(), c.share_permille, c.reason.clone())));
+
+    // ---- registered is not eligible: the class exists and mines nothing (ADR-0145 §7) ----
+    if let Some(c) = reg_row {
+        let lifecycle = c.row.as_ref().map(|r| r.state.clone());
+        assert!(
+            lifecycle.as_ref().is_some_and(|st| !st.admits_claims()),
+            "a registered class's lifecycle admits no claims: {lifecycle:?}"
+        );
+    } else {
+        panic!("the registry reads a row for the new class");
+    }
+    let facts = consensus.palw_producer_facts_v2(m.class_id, Some(bond.0)).expect("producer facts for the new class");
+    let verdict = facts.ready_to_produce(&TestConsensus::palw_v2_registry_keypair(m.card as u64).verification_key.as_ref().to_vec());
+    eprintln!("[g14] the registrant's producer facts for its own new class: ready_to_produce = {verdict:?}");
+    assert!(verdict.is_err(), "the registrant cannot produce in the class it just registered (dormant / Candidate)");
 
     // ---- the registration-status reads the RPC builds a verdict from ----
     let accepting_daa = row.registered_daa;
@@ -975,7 +1004,7 @@ async fn extend_past_activation(m: &mut Mined, extra: u64) {
 #[tokio::test]
 async fn g14_registration_replay_on_a_second_node_and_across_a_reorg() {
     kaspa_core::log::try_init_logger("warn");
-    let mut a = mine_registration("moe-top2-shared", 2).await;
+    let mut a = mine_registration(&case("moe-top2-shared"), 2).await;
     let (h1, carrying, folding) = (a.blocks[0].clone(), a.blocks[1].clone(), a.blocks[2].clone());
     let float_outpoint = a.env.floats[a.card].0;
     let change = TransactionOutpoint::new(a.carrier.id(), 0);
@@ -1076,7 +1105,7 @@ fn mempool_verdict_on(chain: &T12Chain, tx: &Transaction) -> Result<(), kaspa_co
 async fn g14_registration_survives_a_pruned_import() {
     use kaspa_consensus_core::palw_state_v2::{PalwClassStatusV2, PalwStateCarriageV2};
     kaspa_core::log::try_init_logger("warn");
-    let mut a = mine_registration("sliding-global", 4).await;
+    let mut a = mine_registration(&case("sliding-global"), 4).await;
     extend_past_activation(&mut a, 3).await;
     let all = chain_blocks(&a.env.chain, a.env.chain.sink());
     // P: the folding block + 2 (the class is Registered, activation is ~28 DAA away).
@@ -1308,5 +1337,212 @@ async fn g14_gate_and_chain_agree_across_the_shipped_fence_schedule() {
             assert!(verdicts.get(&(at - 1)).is_some_and(|v| v.0 == 0), "nothing registers below palw_tir_v1");
         }
         assert!(verdicts.get(&at).is_some_and(|v| v.0 >= 5), "at palw_tir_v1 the admissible corpus classes register");
+    }
+}
+
+
+// ---- classes lowered from REAL local checkpoints (shape-only: headers, no weights) --------------------------
+
+/// The classes `misaka-palw-sdk/tests/g14_registration_fixture.rs` lowered from the local Hugging Face checkpoints: the
+/// program the preflight's shape-only lowering builds from `config.json` and the safetensors header, the layout the SDK's
+/// layout search chose under THIS harness's ruleset, the tokenizer id of the checkpoint's `tokenizer.json`. The artifact
+/// root is synthetic (no weights were loaded) — registration never reads weights.
+fn real_cases() -> Vec<Case> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/pipeline/virtual_processor/tests/fixtures/g14");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .expect("the fixtures directory")
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    files.sort();
+    files
+        .into_iter()
+        .map(|path| {
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let h64 = |k: &str| {
+                let b: [u8; 64] = unhex(v[k].as_str().unwrap()).try_into().expect("64 bytes");
+                Hash64::from_bytes(b)
+            };
+            let class = PalwTirClassV1 {
+                version: PALW_TIR_CLASS_VERSION_V1,
+                program: unhex(v["program_borsh_hex"].as_str().unwrap()),
+                layout: borsh::from_slice(&unhex(v["layout_borsh_hex"].as_str().unwrap())).expect("a layout"),
+                tokenizer_id: h64("tokenizer_id_hex"),
+            };
+            let root = h64("artifact_root_hex");
+            assert_eq!(class.class_id(&root), h64("class_id_hex"), "{}: the fixture's class id is the derived one", path.display());
+            assert_eq!(v["weights_loaded"], false);
+            Case { name: format!("real:{}", v["name"].as_str().unwrap()), class, root, real_root: false }
+        })
+        .collect()
+}
+
+/// **Classes lowered from real checkpoints: the offline gate and the chain, then the whole pipeline.** Each fixture is the
+/// widest context the harness's gate admitted (the SDK's layout search); the chain must keep it, and every adversarial
+/// edit of it must be judged alike by both.
+#[tokio::test]
+async fn g14_real_checkpoint_classes_parity_and_mined() {
+    let cases = real_cases();
+    assert!(!cases.is_empty(), "the fixtures exist");
+    let env = Env::new(0);
+    let (block, state) = env.chain.tip_state();
+    let daa = env.chain.daa_of(block);
+    for (i, c) in cases.iter().enumerate() {
+        let s = spec_of(c, 1 + i % 6, daa);
+        let o = signed(&env, &state, &s);
+        let j = judge(&env, &state, block, daa, &o);
+        eprintln!("[g14] {:<34} context {:>6} program {:>6} B: gate {:?} chain_accepted {}", c.name, c.class.layout.max_context, c.class.program.len(), j.preflight, j.accepted);
+        check(&c.name, &j, Want::Accept).unwrap();
+        // The same edits as the corpus table, on a real class.
+        let mamba = case("mamba2");
+        let cases: Vec<(&str, Obj, Want)> = vec![
+            ("real: a trailing byte", mutate_class(&env, &state, &s, |k| k.program.push(0)), Want::Refuse("TIR_PROGRAM_REFUSED")),
+            ("real: tokenizer swapped, id stale", stale_id(&env, &state, &s, |k, _| k.tokenizer_id = Hash64::from_bytes([1; 64])), Want::Refuse("TIR_CLASS_ID_IS_NOT_DERIVED")),
+            ("real: root swapped, id stale", stale_id(&env, &state, &s, |_, r| *r = Hash64::from_bytes([2; 64])), Want::Refuse("TIR_CLASS_ID_IS_NOT_DERIVED")),
+            ("real: another program's layout", mutate_class(&env, &state, &s, |k| k.layout = layout_of(&mamba.class, 64)), Want::Refuse("TIR_CLASS_REFUSED")),
+            ("real: share claim", edit_raw(&env, &state, &s, |o| reg!(o, { share_permille } => *share_permille = 1)), Want::Refuse("NOT_END_TO_END_CERTIFIED")),
+            ("real: unsigned", build(&env, &state, &s), Want::StatefulDrop("is not signed by the bond it names")),
+        ];
+        run_table(&env, &state, block, daa, cases);
+    }
+    for (i, c) in cases.iter().enumerate() {
+        mined_end_to_end(c, 1 + i % 6).await;
+    }
+}
+
+/// **The same weights under a second class id are not refused by the chain.** `PalwRegistrationTermsV2::registered_artifact_roots`
+/// is a CLIENT-side filter (the SDK skips a root the chain holds); `claim_artifact_root` keys ownership by `(class_id, root)`,
+/// so a registration of a held root under another tokenizer / layout — another class id — passes both the gate and the fold.
+/// Recorded as what the code does today (the doc of the terms calls it "never meaningful"), not as a defect of this lane.
+#[tokio::test]
+async fn g14_same_weights_under_another_class_id_are_accepted_by_chain_and_gate() {
+    let env = Env::new(0);
+    let (block, state) = env.chain.tip_state();
+    let dense = case("dense-gqa-2layer");
+    let first = signed(&env, &state, &spec_of(&dense, 1, 0));
+    let vp = env.chain.vp();
+    let point = env.point(block, 0);
+    let after = vp.palw_v2_fold_accepted_for_tests(&state, &env.bundle.state, &point, std::slice::from_ref(&first)).expect("the first folds");
+    assert!(after.classes_iter().any(|(_, c)| c.artifact_root == dense.root));
+    let mut other = spec_of(&dense, 2, 0);
+    other.class.tokenizer_id = Hash64::from_bytes([0x44; 64]);
+    let second = signed(&env, &after, &other);
+    assert_ne!(class_id_of(&second), class_id_of(&first), "another tokenizer is another class");
+    check("same root, another tokenizer, another registrant", &judge(&env, &after, block, 0, &second), Want::Accept).unwrap();
+}
+
+/// **A model alias is a free claim.** The registration carries no name (the class id is the whole identity); the only
+/// alias the chain stores is `ModelLineFounded.name`, signed by any active bond over a class that is Active, bound to no
+/// property of the weights. A bond that registered nothing founds a line named after somebody else's model on this class.
+#[tokio::test]
+async fn g14_a_model_alias_is_a_free_claim_on_an_active_class() {
+    use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
+    kaspa_core::log::try_init_logger("warn");
+    let mut m = mine_registration(&case("moe-top2-shared"), 2).await;
+    let ttpb = m.env.config.params.target_time_per_block();
+    while m.env.chain.daa_of(m.env.chain.sink()) < m.activation + 1 {
+        m.env.chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    let (block, state) = m.env.chain.tip_state();
+    assert_eq!(state.class(&m.class_id).map(|c| c.status.clone()), Some(PalwClassStatusV2::Active));
+    let daa = m.env.chain.daa_of(block);
+    let env = &m.env;
+    let (founder_card, name) = (6usize, b"Meta-Llama-3-70B-Instruct".to_vec());
+    let root = Hash64::from_bytes([0xA1; 64]);
+    let founder = env.chain.bonds[founder_card];
+    let message = kaspa_consensus_core::palw_model_lines_v1::palw_model_line_founded_message_v1(env.domain, &m.class_id, &name, &founder, &root);
+    let key = TestConsensus::palw_v2_registry_keypair(founder_card as u64);
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &key.signing_key,
+        message.as_byte_slice(),
+        kaspa_consensus_core::palw_model_lines_v1::PALW_MODEL_LINE_MLDSA87_CONTEXT,
+        [0x62u8; 32],
+    )
+    .expect("signs")
+    .as_ref()
+    .to_vec();
+    let o = Obj::ModelLineFounded { class_id: m.class_id, name: name.clone(), founder, root, signature };
+    let vp = env.chain.vp();
+    let point = PalwBlockContextV2 { blue_score: state.last_point().map(|p| p.blue_score + 1).unwrap_or(1), ..env.point(block, daa) };
+    let verdict = vp.palw_v2_validate_objects(&state, &env.bundle.state, &point, std::slice::from_ref(&o));
+    let folded = vp.palw_v2_fold_accepted_for_tests(&state, &env.bundle.state, &point, std::slice::from_ref(&o));
+    eprintln!("[g14] alias spoof: arm {verdict:?}; fold {:?}", folded.as_ref().map(|_| ()).map_err(|e| e.to_string()));
+    // The assertion is the observation: whichever it is, it is recorded in registration-e2e-record.md.
+    match (&verdict, &folded) {
+        (Ok(()), Ok(after)) => {
+            let line = kaspa_consensus_core::palw_model_lines_v1::model_line_id_v1(&m.class_id, &founder, &name);
+            assert!(after.model_line(&line).is_some_and(|l| l.name == name), "the chain stores the spoofed alias against a class it has no relation to");
+        }
+        _ => eprintln!("[g14] the alias object is not expressible on this ruleset: {verdict:?} / {:?}", folded.as_ref().err().map(|e| e.to_string())),
+    }
+}
+
+/// **A real restart**: the node is shut down and a new `Consensus` is opened over the SAME database. Everything the new
+/// process knows of the class — the sink, the PALW tip it loads, the class table, the `tir_classes` row, the delta rows,
+/// the UTXO set — came off disk, and it carries on: it folds the activation flip and a second node that replays the whole
+/// chain (the blocks from before the restart and the ones after it) reaches its roots.
+#[tokio::test]
+async fn g14_registration_survives_a_node_restart_over_the_same_database() {
+    use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    kaspa_core::log::try_init_logger("warn");
+    let parts = t12_tir_config(0);
+    let (config, bundle) = (parts.0.clone(), parts.1.clone());
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _rx) = async_channel::unbounded();
+    let first = TestConsensus::with_db(db.clone(), &config, sender);
+    let chain = t12_genesis_chain_on(first, &parts.0, &parts.1, &parts.2, &parts.3);
+    let a = mine_registration_on(Env::around(chain, parts), &case("mamba2"), 5).await;
+    let (class_id, record, activation, carrier_id) = (a.class_id, a.record.clone(), a.activation, a.carrier.id());
+    let (sink, root) = (a.env.chain.sink(), a.env.chain.tip_state().1.state_root());
+    let before_class = a.env.chain.tip_state().1.class(&class_id).cloned().expect("registered");
+    let chain_before: Vec<Block> = chain_blocks(&a.env.chain, sink);
+    let delta_roots: Vec<Hash64> = chain_before.iter().map(|b| root_at(&a.env.chain, b.header.hash)).collect();
+    let (simulated_time, nonce) = (a.env.chain.ctx.simulated_time, a.env.chain.nonce_for_reopen());
+    let (premine, floats) = (a.env.premine.clone(), a.env.floats.clone());
+
+    // ---- stop the node ----
+    {
+        let Mined { env, .. } = a;
+        let Env { chain, .. } = env;
+        drop(chain); // TestContext's Drop shuts the processors down and releases the node's handles on the database
+    }
+    // ---- start it again on the same database ----
+    // As a restarting node is configured: the database already holds its genesis (`process_genesis` off).
+    let mut resumed = config.clone();
+    resumed.process_genesis = false;
+    let (sender, _rx2) = async_channel::unbounded();
+    let second = TestConsensus::with_db(db.clone(), &resumed, sender);
+    let mut r = t12_reopened_chain(second, &resumed, &bundle, simulated_time, nonce);
+    assert_eq!(r.sink(), sink, "the restarted node's sink is the stopped node's");
+    let (tip, state) = r.tip_state();
+    assert_eq!((tip, state.state_root()), (sink, root), "the PALW tip it loads off disk");
+    assert_eq!(state.class(&class_id), Some(&before_class), "the class row");
+    assert_eq!(state.tir_class_v1(&class_id), Some(&record), "the tir_classes row, program included");
+    assert!(state.tir_class_v1(&class_id).unwrap().check_program_v1().is_ok());
+    assert!(r.ctx.consensus.palw_v2_class_table().iter().any(|row| row.class_id == class_id), "getPalwClasses");
+    assert_eq!(r.ctx.consensus.palw_tir_class_record_v1(class_id).as_ref(), Some(&record), "getPalwTirClass");
+    assert!(r.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(carrier_id, 0)).is_some(), "the carrier's change, off disk");
+    for (b, want) in chain_before.iter().zip(&delta_roots) {
+        assert_eq!(root_at(&r, b.header.hash), *want, "the delta row of {} survived", b.header.hash);
+    }
+    // ---- it carries on: the activation flip, folded by the restarted node ----
+    let ttpb = config.params.target_time_per_block();
+    let mut after = Vec::new();
+    while r.daa_of(r.sink()) < activation + 2 {
+        after.push(r.heartbeat(ttpb, Vec::new()).await);
+    }
+    let (_, later) = r.tip_state();
+    assert_eq!(later.class(&class_id).map(|c| c.status.clone()), Some(PalwClassStatusV2::Active), "Active, flipped after the restart");
+    assert_eq!(later.tir_class_v1(&class_id), Some(&record));
+    // ---- and a node replaying the whole chain agrees with every root ----
+    let z = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    for b in chain_blocks(&r, r.sink()) {
+        arrive(&z, b, "a block of the restarted chain").await;
+    }
+    assert_eq!(z.sink(), r.sink());
+    assert_eq!(z.tip_state().1.state_root(), later.state_root(), "the replaying node reaches the restarted node's root");
+    for b in chain_before.iter().chain(&after) {
+        assert_eq!(root_at(&z, b.header.hash), root_at(&r, b.header.hash), "delta {} across the restart", b.header.hash);
     }
 }

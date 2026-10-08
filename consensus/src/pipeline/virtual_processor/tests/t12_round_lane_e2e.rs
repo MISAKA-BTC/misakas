@@ -501,7 +501,17 @@ pub(super) fn t12_genesis_chain(
     premine: &[(TransactionOutpoint, UtxoEntry)],
     floats: &[(TransactionOutpoint, UtxoEntry)],
 ) -> T12Chain {
-    let consensus = TestConsensus::new(config);
+    t12_genesis_chain_on(TestConsensus::new(config), config, bundle, premine, floats)
+}
+
+/// [`t12_genesis_chain`] over a `consensus` the caller built (a database it keeps, to reopen it).
+pub(super) fn t12_genesis_chain_on(
+    consensus: TestConsensus,
+    config: &Config,
+    bundle: &PalwConsensusParamsV2,
+    premine: &[(TransactionOutpoint, UtxoEntry)],
+    floats: &[(TransactionOutpoint, UtxoEntry)],
+) -> T12Chain {
     {
         let mut imported = MuHash::new();
         consensus.append_imported_pruning_point_utxos(premine, &mut imported);
@@ -545,6 +555,39 @@ pub(super) fn t12_genesis_chain(
         );
     }
     chain
+}
+
+/// **A node restarted over the database `consensus` was reopened on**: the same chain, nothing re-imported. The bonds are the
+/// genesis registry's; `nonce` and `simulated_time` continue where the stopped node's left off (the caller passes them).
+pub(super) fn t12_reopened_chain(
+    consensus: TestConsensus,
+    config: &Config,
+    bundle: &PalwConsensusParamsV2,
+    simulated_time: u64,
+    nonce: u64,
+) -> T12Chain {
+    let mut ctx = TestContext::new(consensus);
+    ctx.simulated_time = simulated_time;
+    let bonds: Vec<PalwBondKeyV2> = bundle
+        .genesis_objects
+        .iter()
+        .filter_map(|o| match o {
+            Obj::BondRegistered { bond, .. } => Some(*bond),
+            _ => None,
+        })
+        .collect();
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        config.params.net.to_string().as_bytes(),
+        Some(config.params.genesis.hash),
+    );
+    T12Chain { ctx, config: config.clone(), bundle: bundle.clone(), bonds, network_domain, nonce, heartbeats: 0, attempts: 0 }
+}
+
+/// The harness's heartbeat nonce, so a reopened node continues the stopped one's.
+impl T12Chain {
+    pub(super) fn nonce_for_reopen(&self) -> u64 {
+        self.nonce
+    }
 }
 
 /// Which seed anchor the chain is given — see [`a_floor_final_scheduled`].
