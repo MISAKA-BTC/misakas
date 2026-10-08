@@ -38,7 +38,7 @@ use misaka_palw_kernel::evidence::build_evidence_v1;
 use misaka_palw_kernel::hash::Digest;
 use misaka_palw_kernel::job::{DecodeRuleV1, KernelClaimV1, KernelJobV1};
 use misaka_palw_kernel::ledger::{
-    KernelLedgerV1, OutsiderFindingV1, OutsiderV1, ProsecutionV1, PublicSourceV1, claim_seal_v1, single_class_id_v1,
+    KernelLedgerV1, OutsiderFindingV1, OutsiderV1, ProsecutionV1, PublicSourceV1, claim_seal_v1, proof_seal_v1, single_class_id_v1,
 };
 use misaka_palw_kernel::mode::VerificationModeV1;
 use misaka_palw_kernel::lifecycle::ClaimStateV1;

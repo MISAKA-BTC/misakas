@@ -147,13 +147,16 @@ impl OpvPolicyV1 {
     }
 
     /// **The smallest reservation RFC-0015 §8.1 allows**: the maximum gain plus the default penalty, and the maximum gain divided
-    /// by the detection probability the operating assumptions claim (rounded up).
+    /// by the detection probability the operating assumptions claim (rounded up) — **both after self-recoup** (GAP-R7): a colluding
+    /// producer can always convict itself first with a proof of its own and recoup the accuser's share of the slash, so what the
+    /// relation counts on losing is only `reservation × (1 − accuser_reward_permille / 1000)`; the reservation is divided by that.
     pub fn required_reservation(&self, ledger: &LedgerPolicyV1) -> u128 {
         let gain = self.max_gain_per_claim(ledger);
         let by_penalty = gain + ledger.default_penalty as u128;
         let p = self.economics.assumed_detection_permille.max(1) as u128;
         let by_detection = (gain * 1000).div_ceil(p);
-        by_penalty.max(by_detection)
+        let kept = 1000u128.saturating_sub(ledger.accuser_reward_permille as u128).max(1);
+        (by_penalty.max(by_detection) * 1000).div_ceil(kept)
     }
 
     /// The latest DAA by which any claim admitted at `admitted` is Final or decided, whatever is filed: the window's end, a
@@ -783,7 +786,11 @@ mod tests {
         p.validate(&l).unwrap();
         assert_eq!(p.window_daa(), 50);
         assert_eq!(p.max_gain_per_claim(&l), 7 + 13 + 80);
-        assert_eq!(p.required_reservation(&l), 200, "gain 100 over a 50% assumed detection is 200; gain + penalty is also 200");
+        assert_eq!(
+            p.required_reservation(&l),
+            400,
+            "gain 100 over a 50% assumed detection is 200, gain + penalty is also 200; after a self-recouped 50% bounty, 400"
+        );
 
         let mut bad = Vec::new();
         let mut push = |name: &'static str, f: &dyn Fn(&mut OpvPolicyV1, &mut LedgerPolicyV1)| {
@@ -804,6 +811,7 @@ mod tests {
         push("no default burn", &|p, _| p.economics.default_burn_permille = 0);
         push("no detection assumption", &|p, _| p.economics.assumed_detection_permille = 0);
         push("reservation below gain + penalty", &|p, _| p.economics.reservation_per_claim = 199);
+        push("reservation below what self-recoup leaves (GAP-R7)", &|p, _| p.economics.reservation_per_claim = 399);
         push("detection assumption too weak for the reservation", &|p, _| p.economics.assumed_detection_permille = 90);
         push("no per-producer cap", &|p, _| p.economics.max_live_claims_per_producer = 0);
         push("total below per-producer", &|p, _| p.economics.max_live_claims_total = 2);
@@ -841,9 +849,12 @@ mod tests {
         let l = ledger_policy();
         let mut p = example();
         p.economics.assumed_detection_permille = 1000;
-        assert_eq!(p.required_reservation(&l), 200, "certain detection: gain + penalty");
+        assert_eq!(p.required_reservation(&l), 400, "certain detection: gain + penalty, after the self-recouped half (GAP-R7)");
         p.economics.assumed_detection_permille = 250;
-        assert_eq!(p.required_reservation(&l), 400, "a 25% detection assumption quadruples the gain");
+        assert_eq!(p.required_reservation(&l), 800, "a 25% detection assumption quadruples the gain");
+        let mut low = l;
+        low.accuser_reward_permille = 0;
+        assert_eq!(p.required_reservation(&low), 400, "no bounty, nothing to recoup");
         p.economics.external_gain_bound = 1080;
         assert_eq!(p.max_gain_per_claim(&l), 1100, "a stated external gain is never hidden in the reward");
         assert!(p.validate(&l).is_err(), "and the reservation must follow it");

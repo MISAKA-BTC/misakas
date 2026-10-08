@@ -56,6 +56,13 @@
 //!   remaining reservation (the reward was already paid), an availability outcome that is never the fraud conviction. A proof
 //!   past the horizon, or against a claim that ended without passing (timed out), is REFUSED — no court runs and no fee is
 //!   charged: a true proof never costs its filer the dismissal fee.
+//! * **Accuser seals** (GAP-R7): an accuser may seal its proof first ([`KernelRouteObjectV1::SealProof`],
+//!   `seal = proof_seal_v1(claim, accuser, proof)`) and file it once the seal is `claim_seal_delay_daa` old. At a conviction the
+//!   bounty goes to the bond holding the EARLIEST such seal of the convicting proof's exact bytes — whoever filed them — so a
+//!   copyist who lifts a sealed proof from its public carrier and gets it included first pays the sealer, not itself. An
+//!   unsealed filing counts as sealed in its own block (it loses to any older seal of the same bytes). A colluding producer can
+//!   still self-convict with a proof of its own and recoup the bounty; the reservation relations price that
+//!   ([`LedgerPolicyV1::validate`], `OpvPolicyV1::required_reservation`).
 //! * **RFC-0015 `OptimisticPublicVerification`** (dormant; [`crate::opv`]): a class registered under that mode (route tags 13 / 14,
 //!   the mode bound into the class id) has no Panel. Its claims are Challengeable from inclusion for a fixed window, hold their
 //!   job from the first reveal, reserve a producer collateral sized to the claim's maximum gain, and reach Final by the explicit
@@ -96,7 +103,10 @@ use crate::public::{
     program_root_v1,
 };
 use crate::receipt::TallyStateV1;
-pub use crate::route::{AuthV1, KernelRefusalV1, KernelRouteObjectV1, ProsecutionV1, RefusalKindV1, claim_seal_v1};
+pub use crate::route::{
+    AuthV1, KernelRefusalV1, KernelRouteObjectV1, ProsecutionV1, RefusalKindV1, claim_seal_v1, proof_digest_v1,
+    proof_seal_of_digest_v1, proof_seal_v1,
+};
 use crate::settle::{SettlementInstructionV1, SettlementKindV1};
 use crate::trace::{EvidenceV1, ParamCommitmentsV1, derived_mask_v1, tensor_commitment};
 use crate::verify::MaterialV1;
@@ -143,7 +153,7 @@ impl LedgerPolicyV1 {
     /// The relations among the timings and amounts every rule below relies on.
     pub fn validate(&self) -> Result<(), String> {
         let p = self;
-        let checks: [(bool, &str); 13] = [
+        let checks: [(bool, &str); 14] = [
             (p.court_deadline_daa == p.prosecution.court_deadline_daa, "the ledger's court deadline is the gate's"),
             (p.court_deadline_daa > 0 && p.challenge_window_daa > 0 && p.check_window_daa > 0, "every window is non-empty"),
             (p.proof_grace_daa > 0, "a served demand leaves a non-empty grace to file the proof it enables"),
@@ -154,6 +164,13 @@ impl LedgerPolicyV1 {
                 "the liability horizon outlasts a demand's deadline and the proof grace after it",
             ),
             (p.claim_reward < p.claim_collateral, "the Final reward is smaller than the reservation a post-Final default forfeits"),
+            // GAP-R7: a colluding producer can always convict itself first with a proof of its own and recoup the accuser's share of
+            // its slash; what it then loses must still exceed the Final reward it was after.
+            (
+                (p.claim_collateral as u128) * (1000u128.saturating_sub(p.accuser_reward_permille as u128))
+                    > (p.claim_reward as u128) * 1000,
+                "a self-convicted producer (recouping the accuser's share) still loses more than the Final reward",
+            ),
             (p.default_penalty <= p.claim_collateral, "a default never takes more than the reservation"),
             (p.demand_bond > 0 && p.dismissed_proof_fee > 0, "demands and filings are not free"),
             // A slash and a default both burn part of what they take: a 100% share would let a producer's own accuser or demander
@@ -450,6 +467,11 @@ pub enum LedgerEventV1 {
         job: Digest,
         producer: Digest,
     } = 20,
+    /// GAP-R7: an accuser sealed a proof against a claim.
+    ProofSealed {
+        claim: Digest,
+        accuser: Digest,
+    } = 21,
 }
 
 /// One block.
@@ -570,6 +592,8 @@ pub struct KernelLedgerV1 {
     pub job_claims: BTreeMap<Digest, Digest>,
     /// Unrevealed seals, keyed `(job, producer)` (see [`KernelRouteObjectV1::SealClaim`]).
     pub seals: BTreeMap<(Digest, Digest), SealRowV1>,
+    /// GAP-R7: accusers' proof seals, keyed `(claim, accuser)` (see [`KernelRouteObjectV1::SealProof`]).
+    pub proof_seals: BTreeMap<(Digest, Digest), SealRowV1>,
     /// Cumulative amount burned (derived from the settlement instructions; kept as a checksum).
     pub burned: u64,
     /// RFC-0015: the OPV policy, classes and claim rows. Dormant (no policy) = the historical ledger, root included.
@@ -634,6 +658,7 @@ impl KernelLedgerV1 {
             attested_artifacts: BTreeSet::new(),
             job_claims: BTreeMap::new(),
             seals: BTreeMap::new(),
+            proof_seals: BTreeMap::new(),
             burned: 0,
             opv: OpvStateV1::default(),
             budget: BlockBudgetV1::default(),
@@ -849,6 +874,27 @@ impl KernelLedgerV1 {
                 self.seals.insert((*job, *producer), SealRowV1 { seal: *seal, daa: self.daa });
                 out.push(LedgerEventV1::ClaimSealed { job: *job, producer: *producer });
             }
+            KernelRouteObjectV1::SealProof { accuser, claim, seal } => {
+                const NAME: &str = "SealProof";
+                let fee = self.policy.dismissed_proof_fee;
+                match self.bonds.get(accuser) {
+                    None => return Err(KernelRefusalV1::rule(NAME, "the accuser is not a registered bond")),
+                    Some(b) if b.exit_requested.is_some() => return Err(KernelRefusalV1::rule(NAME, "the accuser bond is exiting")),
+                    // A seal is a promise of a filing: the accuser must be able to stand behind it as a filer.
+                    Some(b) if b.free() < fee => {
+                        return Err(KernelRefusalV1::rule(NAME, "the accuser's free collateral does not cover the filing fee"));
+                    }
+                    Some(_) => {}
+                }
+                let row = self.claims.get(claim).ok_or_else(|| KernelRefusalV1::rule(NAME, "no such claim"))?;
+                if row.convicted {
+                    return Err(KernelRefusalV1::rule(NAME, "the claim is already convicted"));
+                }
+                self.proof_open(row).map_err(|why| KernelRefusalV1::rule(NAME, why))?;
+                // One seal per (claim, accuser): a re-seal (another proof) replaces the earlier one and its clock restarts.
+                self.proof_seals.insert((*claim, *accuser), SealRowV1 { seal: *seal, daa: self.daa });
+                out.push(LedgerEventV1::ProofSealed { claim: *claim, accuser: *accuser });
+            }
             KernelRouteObjectV1::Withdraw { bond } => {
                 let (daa, delay) = (self.daa, self.policy.exit_delay_daa);
                 match self.bonds.get(bond) {
@@ -921,6 +967,7 @@ impl KernelLedgerV1 {
             O::FileDemand { demander, .. } => Some((*demander, "demander")),
             O::RequestExit { bond } | O::Withdraw { bond } => Some((*bond, "bond")),
             O::SealClaim { producer, .. } => Some((*producer, "producer")),
+            O::SealProof { accuser, .. } => Some((*accuser, "accuser")),
             _ => None,
         };
         if let Some((actor, role)) = named {
@@ -1558,13 +1605,7 @@ impl KernelLedgerV1 {
         // post-Final default may have forfeited it). Past that horizon, or against a claim that ended without ever passing (timed
         // out), no proof can change anything: the filing is REFUSED before any court runs, and no fee is charged — a TRUE proof never
         // costs its filer the dismissal fee, and a refusal is free for everyone (it is dropped, as an unknown claim is).
-        let liable = is_final || matches!(row.life.state, ClaimStateV1::Unavailable { .. });
-        if liable && row.liability_until.is_none_or(|until| self.daa > until) {
-            return Err(rule("past the liability horizon"));
-        }
-        if !liable && (row.life.state.is_terminal() || row.reserved == 0) {
-            return Err(rule("the claim ended without passing and holds nothing"));
-        }
+        self.proof_open(row).map_err(rule)?;
         let bounds = self.bounds_of(&row.class_binding_id);
         let cheap = bounds.and_then(|b| oversized(proof, &b));
         let verdict = match cheap {
@@ -1584,9 +1625,44 @@ impl KernelLedgerV1 {
                 settle(out, *accuser, fee, SettlementKindV1::SlashFiling, Some(*claim));
                 settle(out, *accuser, fee, SettlementKindV1::Burn, Some(*claim));
             }
-            Ok(()) => self.convict(claim, accuser, is_final, out),
+            Ok(()) => {
+                // GAP-R7: the bounty is the earliest sealer's of these exact bytes (or the filer's, if nobody sealed them earlier).
+                let paid = self.bounty_holder(claim, accuser, proof);
+                self.convict(claim, &paid, is_final, out)
+            }
         }
         Ok(())
+    }
+
+    /// **Can a proof against this claim still change anything?** Live (it has not ended), or in its liability phase — after Final,
+    /// or after a pre-Final availability default (C4 F-C4R3-02) — up to `liability_until`, even with nothing reserved. Past that
+    /// horizon, or for a claim that ended without ever passing (timed out), it cannot: a filing (or a seal) is refused before any
+    /// court runs and no fee is charged.
+    fn proof_open(&self, row: &ClaimRowV1) -> Result<(), &'static str> {
+        let liable = matches!(row.life.state, ClaimStateV1::Final { .. } | ClaimStateV1::Unavailable { .. });
+        if liable && row.liability_until.is_none_or(|until| self.daa > until) {
+            return Err("past the liability horizon");
+        }
+        if !liable && (row.life.state.is_terminal() || row.reserved == 0) {
+            return Err("the claim ended without passing and holds nothing");
+        }
+        Ok(())
+    }
+
+    /// **Who is paid the bounty of a conviction by `proof`** (GAP-R7): the bond holding the EARLIEST seal of these exact proof bytes
+    /// on this claim that is at least `claim_seal_delay_daa` old (ties broken by the bond digest) — whoever filed them; with no such
+    /// seal, the filer (an unsealed filing counts as sealed in its own block). A copyist that lifts a sealed proof from its public
+    /// carrier therefore pays the sealer. O(seals on the claim) hashes of 192 bytes, after one digest of the proof.
+    fn bounty_holder(&self, claim: &Digest, filer: &Digest, proof: &ProsecutionV1) -> Digest {
+        let digest = proof_digest_v1(proof);
+        let delay = self.policy.claim_seal_delay_daa;
+        self.proof_seals
+            .range((*claim, [0u8; 64])..=(*claim, [0xFFu8; 64]))
+            .filter(|((_, accuser), row)| {
+                row.daa.saturating_add(delay) <= self.daa && row.seal == proof_seal_of_digest_v1(claim, accuser, &digest)
+            })
+            .min_by_key(|((_, accuser), row)| (row.daa, *accuser))
+            .map_or(*filer, |((_, accuser), _)| *accuser)
     }
 
     /// What a claim reserved when it was admitted: an OPV claim's policy reservation, else the route's flat collateral.
@@ -1637,6 +1713,12 @@ impl KernelLedgerV1 {
         settle(out, producer, slashed - reward, SettlementKindV1::Burn, Some(*claim));
         self.settle_demands_moot(claim, out);
         self.opv_sync_live(claim);
+        // A convicted claim takes no further filing: its proof seals are spent.
+        let spent: Vec<(Digest, Digest)> =
+            self.proof_seals.range((*claim, [0u8; 64])..=(*claim, [0xFFu8; 64])).map(|(k, _)| *k).collect();
+        for k in spent {
+            self.proof_seals.remove(&k);
+        }
     }
 
     /// Return every demand bond of `d` (the demand is over).
@@ -1789,6 +1871,7 @@ impl KernelLedgerV1 {
         // Unrevealed seals expire (a junk seal holds nothing and lives a bounded time).
         let ttl = self.policy.seal_ttl_daa;
         self.seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
+        self.proof_seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
         // Demands past their deadline: the producer's availability default.
         let due: Vec<_> = self.demands.iter().filter(|(_, d)| daa >= d.deadline_daa).map(|(k, _)| *k).collect();
         for (claim, stage, position) in due {

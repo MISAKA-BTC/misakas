@@ -250,16 +250,19 @@ async fn g14_c4r3_opv_a_self_inflicted_default_must_not_erase_a_provable_fraud()
     assert_eq!(e.outsider_paid, e.reservation / 2, "the honest accuser's bounty is not diluted by the self-inflicted default");
 }
 
-// ---- GAP-R7: proof front-running -----------------------------------------------------------------------------------------
+// ---- GAP-R7: proof front-running (closed by the accuser seal) ------------------------------------------------------------
 
-/// **Observation, GAP-R7 quantified (open by design until the accuser seal).** A `FileProof`'s proof bytes name no accuser: anyone who
-/// sees the honest outsider's carrier (every relay, every block producer) lifts the proof out of the PUBLIC carrier bytes, re-signs it
-/// under its own bond and gets it into a block first. Measured on the real path: the copyist is paid the whole bounty (half the
-/// reservation, 500 KAS), the outsider's own filing is a `Duplicate` worth nothing (it pays only its carrier fee). When the copyist is
-/// the producer's own bond (the colluders mine, or simply pay a higher fee), the lie costs the colluders HALF its reservation and the
-/// honest verifier is never paid — under any rational block producer the outsider's expected bounty is ~0.
+/// **GAP-R7 (closed by the accuser seal, G14-R4; was an observation): a lifted proof pays its earliest sealer, never the copyist.**
+/// A `FileProof`'s proof bytes name no accuser: anyone who sees the honest outsider's carrier (every relay, every block producer)
+/// lifts the proof out of the PUBLIC carrier bytes, re-signs it under its own bond and gets it into a block first. Measured before
+/// the fix: the copyist was paid the whole bounty (500 KAS), the outsider's filing was a worth-0 `Duplicate`, and with the producer's
+/// own bond as the copyist the lie cost the colluders HALF its reservation. Now the outsider SEALS its proof first (kernel route
+/// object `SealProof`, tag 15 inside tag 110: `H(claim ‖ accuser ‖ H(proof))`), then files it; the copy — here lifted by the
+/// PRODUCER'S OWN BOND, the worst case — is included first and convicts, and the bounty goes to the earliest seal of those exact
+/// bytes: the outsider. SAFE property asserted: the sealer is paid the whole bounty, the copyist nothing, and the colluders lose the
+/// whole reservation.
 #[tokio::test]
-async fn g14_c4r3_observation_gap_r7_a_lifted_proof_takes_the_bounty_and_halves_the_colluders_loss() {
+async fn g14_c4r3_gap_r7_a_lifted_proof_pays_its_earliest_sealer_not_the_copyist() {
     kaspa_core::log::try_init_logger("warn");
     let mut w = World::new().await;
     let job = w.job().await;
@@ -267,27 +270,36 @@ async fn g14_c4r3_observation_gap_r7_a_lifted_proof_takes_the_bounty_and_halves_
     let lie = w.claim(0, &job, true).await;
     let seats = w.seats(&lie.id);
     w.cover(&lie.id).await;
-    let cards = w.outsiders(&lie, &seats, 2);
-    let (copyist, outsider) = (cards[0], cards[1]);
+    let outsider = w.outsiders(&lie, &seats, 1)[0];
+    let copyist = 0; // the colluders' own bond: the producer itself lifts the outsider's proof
     let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x7A);
-    let honest = w.net.route(outsider, &K::FileProof { accuser: w.net.kid(outsider), claim: lie.id, proof });
+    // Seal, then reveal: the seal hides the proof and names its accuser.
+    let (kid, claim) = (w.net.kid(outsider), lie.id);
+    let seal = w.net.route(outsider, &K::SealProof { accuser: kid, claim, seal: proof_seal_v1(&claim, &kid, &proof) });
+    w.net.send(vec![(outsider, seal)]).await;
+    assert!(w.net.ledger().proof_seals.contains_key(&(lie.id, kid)), "the seal is on chain");
+    let honest = w.net.route(outsider, &K::FileProof { accuser: kid, claim, proof });
     // What a mempool watcher sees: the honest carrier's object bytes. The proof is lifted from them, nothing else.
     let Obj::KernelRouteV1 { bytes, .. } = &honest else { unreachable!() };
     let K::FileProof { proof: lifted, .. } = K::decode(bytes).expect("public bytes decode") else { panic!("a FileProof") };
-    let copy = w.net.route(copyist, &K::FileProof { accuser: w.net.kid(copyist), claim: lie.id, proof: lifted });
-    let outsider_before = w.net.collateral(outsider);
+    let copy = w.net.route(copyist, &K::FileProof { accuser: w.net.kid(copyist), claim, proof: lifted });
     w.net.send(vec![(copyist, copy)]).await; // the copy wins inclusion
     // (measured in the folding block, before the next coinbase pays the queue out)
-    let copyist_paid = w.net.owed(copyist);
-    w.net.send(vec![(outsider, honest)]).await;
+    let (sealer_paid, copyist_paid) = (w.net.owed(outsider), w.net.owed(copyist));
     let pol = w.policy();
     let bounty = pol.claim_collateral * u64::from(pol.accuser_reward_permille) / 1000;
-    assert!(w.net.ledger().claims[&lie.id].convicted);
-    assert_eq!(copyist_paid, bounty, "the copyist is paid the whole bounty");
-    assert_eq!(w.net.owed(outsider), 0, "the verifier who did the work is paid nothing");
-    assert_eq!(w.net.collateral(outsider), outsider_before, "(its filing is a Duplicate: no fee either)");
-    let colluders_net = (before - w.net.collateral(0)) - bounty;
-    assert_eq!(colluders_net, pol.claim_collateral / 2, "self-prosecution halves the colluders' loss: {colluders_net}");
+    assert!(w.net.ledger().claims[&lie.id].convicted, "the copy convicts");
+    eprintln!("[GAP-R7] sealer paid {sealer_paid}, copyist paid {copyist_paid}, producer lost {}", before - w.net.collateral(0));
+    assert_eq!(sealer_paid, bounty, "the earliest sealer of the convicting bytes is paid the whole bounty");
+    assert_eq!(copyist_paid, 0, "the copyist is paid nothing");
+    assert_eq!(before - w.net.collateral(0), pol.claim_collateral, "the colluders lose the whole reservation (not half)");
+    assert!(w.net.ledger().proof_seals.is_empty(), "the conviction spent the claim's seals");
+    // The outsider's own filing, late, is a Duplicate: no second slash, no fee.
+    let outsider_collateral = w.net.collateral(outsider);
+    w.net.send(vec![(outsider, honest)]).await;
+    assert_eq!(w.net.collateral(outsider), outsider_collateral);
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
 }
 
 // ---- consensus robustness: the route's header and the next release -------------------------------------------------------

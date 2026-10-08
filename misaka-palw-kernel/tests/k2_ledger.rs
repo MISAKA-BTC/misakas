@@ -12,6 +12,7 @@ use common::chain::T;
 use common::ledger_world::*;
 use common::{MAX_POSITIONS, active_for, bump};
 use misaka_palw_kernel::descriptor::k2_tir_v1_descriptor;
+use misaka_palw_kernel::hash::Digest;
 use misaka_palw_kernel::job::{DecodeRuleV1, KernelClaimV1, KernelJobV1};
 use misaka_palw_kernel::ledger::{KernelLedgerV1, LedgerBlockV1, LedgerEventV1 as E, OutsiderFindingV1, ProsecutionV1};
 use misaka_palw_kernel::lifecycle::ClaimStateV1;
@@ -711,6 +712,85 @@ fn a_self_inflicted_default_never_erases_a_provable_fraud_and_a_true_proof_never
     let ev = w.block(403, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
     assert_eq!(refused(&ev).as_deref(), Some("the claim ended without passing and holds nothing"));
     assert_eq!(w.l.bonds[&OUTSIDER].collateral, outsider0, "no fee");
+}
+
+// ── GAP-R7: accuser seals ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+fn seal(accuser: Digest, claim: Digest, proof: &ProsecutionV1) -> T {
+    T::SealProof { accuser, claim, seal: misaka_palw_kernel::ledger::proof_seal_v1(&claim, &accuser, proof) }
+}
+
+/// **GAP-R7 at reference level.** A proof names no accuser in its bytes, so a copyist who lifts it from the honest filer's public
+/// carrier and gets it included first used to take the whole bounty. Now the bounty belongs to the EARLIEST seal of the convicting
+/// bytes that is at least `claim_seal_delay_daa` old, whoever files them: the lifted copy convicts and pays the sealer. A seal in the
+/// same block as the filing proves nothing (the filer is paid); a seal of OTHER bytes takes nothing; an unsealed filing is the filer's.
+/// A colluding producer that convicts itself with its own proof recoups the accuser's share — and still loses more than the Final
+/// reward (the policy's relation).
+#[test]
+fn a_lifted_proof_pays_its_earliest_sealer_and_self_conviction_still_costs_more_than_the_reward() {
+    let mut w = World::new();
+    let post = |w: &mut World, daa: u64, nonce: u8| {
+        let job = w.post_job(daa, &[3, 17, 9], 3, nonce);
+        let (_, lie) = w.lying(&job, 3);
+        let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[]));
+        w.block(daa + 1, vec![lie.tx, T::PanelCovered { claim: id }]);
+        let OutsiderFindingV1::Prosecute(proof) = outsider(w, id, &da) else { panic!() };
+        (id, proof)
+    };
+
+    // The outsider seals, then files; a copyist (SPAM1) lifts the filed bytes and its copy is included FIRST.
+    let (id, proof) = post(&mut w, 2, 1);
+    let ev = w.block(4, vec![seal(OUTSIDER, id, &proof)]);
+    assert_eq!(ev, vec![E::ProofSealed { claim: id, accuser: OUTSIDER }]);
+    let ev = w.block(5, vec![T::FileProof { accuser: SPAM1, claim: id, proof: proof.clone() }]);
+    assert!(
+        ev.contains(&E::Convicted { claim: id, accuser: OUTSIDER, slashed: 1000, accuser_reward: 500, post_final: false }),
+        "{ev:?}"
+    );
+    assert_eq!((w.consumer.paid(&OUTSIDER), w.consumer.paid(&SPAM1)), (500, 0), "the sealer is paid, never the copyist");
+    assert!(w.l.proof_seals.is_empty(), "a conviction spends the claim's seals");
+    assert_eq!(w.block(6, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]), vec![E::Duplicate { claim: id }]);
+
+    // A seal in the same block as the filing proves nothing: the filer (here the copyist) is paid.
+    let (id, proof) = post(&mut w, 10, 2);
+    let paid = w.consumer.paid(&SPAM1);
+    w.block(12, vec![seal(OUTSIDER, id, &proof), T::FileProof { accuser: SPAM1, claim: id, proof }]);
+    assert_eq!(w.consumer.paid(&SPAM1), paid + 500, "a same-block seal is younger than the delay");
+
+    // A seal of OTHER bytes takes nothing; the earliest of two seals of the convicting bytes wins, whoever files.
+    let (id, proof) = post(&mut w, 20, 3);
+    let junk = ProsecutionV1::Kernel(vec![1, 2, 3]);
+    w.block(22, vec![seal(SPAM2, id, &junk)]);
+    w.block(23, vec![seal(OUTSIDER, id, &proof)]);
+    w.block(24, vec![seal(SPAM1, id, &proof)]);
+    let (o, s1, s2) = (w.consumer.paid(&OUTSIDER), w.consumer.paid(&SPAM1), w.consumer.paid(&SPAM2));
+    let ev = w.block(26, vec![T::FileProof { accuser: SPAM1, claim: id, proof }]);
+    assert_eq!(convicted(&ev), Some((1000, 500, false)));
+    assert_eq!((w.consumer.paid(&OUTSIDER) - o, w.consumer.paid(&SPAM1) - s1, w.consumer.paid(&SPAM2) - s2), (500, 0, 0));
+
+    // Seals are refused where a proof would be: no such claim, a convicted claim; and an unrevealed seal expires.
+    let ev = w.block(27, vec![seal(OUTSIDER, [0xEE; 64], &junk), seal(OUTSIDER, id, &junk)]);
+    let why: Vec<&str> = ev.iter().filter_map(|e| if let E::Refused { why, .. } = e { Some(why.as_str()) } else { None }).collect();
+    assert_eq!(why, ["no such claim", "the claim is already convicted"]);
+    let (id, proof) = post(&mut w, 30, 4);
+    w.block(32, vec![seal(SPAM2, id, &proof)]);
+    assert_eq!(w.l.proof_seals.len(), 1);
+    w.block(32 + 100 + 1, vec![]);
+    assert!(w.l.proof_seals.is_empty(), "an unrevealed seal lives seal_ttl_daa");
+    let _ = proof;
+
+    // Self-recoup: the producer convicts itself with its own proof and is paid its own bounty — it still loses half the reservation,
+    // more than the Final reward it lied for (LedgerPolicyV1::validate's relation).
+    w.block(139, vec![T::RegisterBond { bond: PRODUCER, collateral: 10_000 }]); // room for its own filing fee beside two claims
+    let (id, proof) = post(&mut w, 140, 5);
+    let before = w.l.bonds[&PRODUCER].collateral as i128 + w.consumer.paid(&PRODUCER) as i128;
+    w.block(142, vec![T::FileProof { accuser: PRODUCER, claim: id, proof }]);
+    let net = w.l.bonds[&PRODUCER].collateral as i128 + w.consumer.paid(&PRODUCER) as i128 - before;
+    assert_eq!(net, -500);
+    assert!(-net > w.l.policy.claim_reward as i128);
+    let mut p = policy();
+    p.claim_reward = 500;
+    assert!(p.validate().is_err(), "a reward a self-convicted producer could still profit from is refused");
 }
 
 // ── Duplicates, reorg, restart, IBD; collateral double use and exit ──────────────────────────────────────────────────────

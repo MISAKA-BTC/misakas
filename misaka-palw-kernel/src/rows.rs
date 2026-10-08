@@ -53,6 +53,8 @@ pub const TABLE_SEALS_V1: u8 = 11;
 pub const TABLE_OPV_ADMITTED_V1: u8 = 12;
 pub const TABLE_OPV_CLASSES_V1: u8 = 13;
 pub const TABLE_OPV_CLAIMS_V1: u8 = 14;
+/// GAP-R7: `(claim, accuser) → the accuser's unrevealed proof seal` (in the state root since the G14-R4 fix).
+pub const TABLE_PROOF_SEALS_V1: u8 = 15;
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -84,6 +86,7 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_OPV_ADMITTED_V1 => "opv-admitted",
         TABLE_OPV_CLASSES_V1 => "opv-classes",
         TABLE_OPV_CLAIMS_V1 => "opv-claims",
+        TABLE_PROOF_SEALS_V1 => "proof-seals",
         _ => "attested-artifacts",
     };
     format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes()
@@ -130,6 +133,9 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.seals {
             rows.insert((TABLE_SEALS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.proof_seals {
+            rows.insert((TABLE_PROOF_SEALS_V1, bytes_of(k)), bytes_of(v));
         }
         for k in &self.opv.admitted {
             rows.insert((TABLE_OPV_ADMITTED_V1, bytes_of(k)), Vec::new());
@@ -193,6 +199,9 @@ impl KernelLedgerV1 {
                 }
                 TABLE_SEALS_V1 => {
                     l.seals.insert(dec(key, "seal key")?, dec(row, "seal")?);
+                }
+                TABLE_PROOF_SEALS_V1 => {
+                    l.proof_seals.insert(dec(key, "proof seal key")?, dec(row, "proof seal")?);
                 }
                 TABLE_OPV_ADMITTED_V1 => {
                     l.opv.admitted.insert(dec(key, "admitted class")?);
@@ -343,6 +352,7 @@ pub fn root_of_rows(
         attested_artifacts: coll(TABLE_ATTESTED_V1),
         job_claims: coll(TABLE_JOB_CLAIMS_V1),
         seals: coll(TABLE_SEALS_V1),
+        proof_seals: coll(TABLE_PROOF_SEALS_V1),
     };
     let _ = LEDGER_ROOT_DOMAIN_V1;
     let v1 = parts.root();

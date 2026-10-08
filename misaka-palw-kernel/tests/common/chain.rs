@@ -94,6 +94,12 @@ pub enum T {
         job: Digest,
         seal: Digest,
     },
+    /// GAP-R7: an accuser's seal of its proof.
+    SealProof {
+        accuser: Digest,
+        claim: Digest,
+        seal: Digest,
+    },
 }
 
 /// The seals the claims among `txs` need (the harness seals every claim one block before revealing it, as a producer would).
@@ -161,6 +167,7 @@ impl T {
             }
             T::Respond { claim, stage, position, bytes } => vec![obj(signer, O::Respond { claim, stage, position, bytes })],
             T::SealClaim { producer, job, seal } => vec![obj(producer, O::SealClaim { producer, job, seal })],
+            T::SealProof { accuser, claim, seal } => vec![obj(accuser, O::SealProof { accuser, claim, seal })],
         }
     }
 }

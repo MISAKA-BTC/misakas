@@ -159,8 +159,10 @@ const GOLDEN_PARTS: [&str; 10] = [
     "c46a4586dcf73c2d",
     "b7a5cb38db702693",
 ];
+/// The root moved with the G14-R4 fix of GAP-R7 (the accusers' proof seals joined the root as their own collection; the ten
+/// collections above are byte-identical).
 const GOLDEN_ROOT: &str =
-    "d64d45545c9faceb3117b18e6293aee4be780032cbbc8a3b702f4e4af2b0d737776503766d468a42dc6cb6b13d3cf71e972ba5668b7ebc7f54b19f5573568f40";
+    "dab6b6e63d6ec75c163015cc4e4bfe7939f0dd266d53cf6c904b6f88fdee4d3c4f089f110aa12d7511a062b5e68bda06b7a81f2e2562f591224f11c6fbdc8352";
 
 #[test]
 fn each_collection_has_its_own_root_and_the_root_covers_the_state_and_nothing_else() {

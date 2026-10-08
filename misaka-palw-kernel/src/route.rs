@@ -49,6 +49,8 @@ pub const TAG_SEAL_CLAIM_V1: u8 = 12;
 /// RFC-0015: a class registration that carries its verification mode (a non-legacy mode; the mode is bound into the class id).
 pub const TAG_REGISTER_CLASS_V2: u8 = 13;
 pub const TAG_REGISTER_PIPELINE_CLASS_V2: u8 = 14;
+/// GAP-R7: an accuser's seal of its proof (seal, then reveal; the earliest seal of the convicting bytes is paid the bounty).
+pub const TAG_SEAL_PROOF_V1: u8 = 15;
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -66,6 +68,7 @@ pub const MAX_WITHDRAW_BYTES_V1: usize = 256;
 pub const MAX_SEAL_CLAIM_BYTES_V1: usize = 256;
 pub const MAX_REGISTER_CLASS_V2_BYTES_V1: usize = MAX_REGISTER_CLASS_BYTES_V1;
 pub const MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1: usize = MAX_REGISTER_PIPELINE_CLASS_BYTES_V1;
+pub const MAX_SEAL_PROOF_BYTES_V1: usize = 256;
 
 /// **Who signed an object**: the bond whose key the consumer verified. The ledger checks it names the actor the object names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
@@ -182,6 +185,33 @@ pub enum KernelRouteObjectV1 {
         param_commitments: Vec<ParamCommitmentsV1>,
         decode: Option<DecodeRuleV1>,
     } = 14,
+    /// **Seal a proof before filing it** (GAP-R7; signed by `accuser`): `seal = proof_seal_v1(claim, accuser, proof)`. A proof names
+    /// no accuser inside its bytes, so anyone who sees a `FileProof`'s public carrier can lift the proof, re-sign it under its own
+    /// bond and get it included first. At a conviction the bounty goes to the bond holding the EARLIEST seal (at least
+    /// `claim_seal_delay_daa` old) of the convicting proof's exact bytes — whoever filed them — so a copyist that lifts a sealed proof
+    /// pays its sealer, never itself. One seal per `(claim, accuser)` (a re-seal replaces it and restarts its clock); unrevealed
+    /// seals expire after `seal_ttl_daa`.
+    SealProof {
+        accuser: Digest,
+        claim: Digest,
+        seal: Digest,
+    } = 15,
+}
+
+/// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
+pub fn proof_digest_v1(proof: &ProsecutionV1) -> Digest {
+    crate::hash::object_id(b"misaka-palw/kernel/proof-digest/v1", proof)
+}
+
+/// **The seal of a proof** (GAP-R7): `H("misaka-palw/kernel/proof-seal/v1"; borsh(claim, accuser, proof_digest_v1(proof)))` — the
+/// accuser is inside the seal, so a seal can never be re-attributed, and the proof is hidden until it is filed.
+pub fn proof_seal_v1(claim: &Digest, accuser: &Digest, proof: &ProsecutionV1) -> Digest {
+    proof_seal_of_digest_v1(claim, accuser, &proof_digest_v1(proof))
+}
+
+/// [`proof_seal_v1`] from the proof's digest (a ledger checks every seal on a claim against one digest).
+pub fn proof_seal_of_digest_v1(claim: &Digest, accuser: &Digest, proof_digest: &Digest) -> Digest {
+    crate::hash::object_id(b"misaka-palw/kernel/proof-seal/v1", &(*claim, *accuser, *proof_digest))
 }
 
 /// The seal of a claim: `H("misaka-palw/kernel/claim-seal/v1"; claim id)` (the claim id binds the producer, job, output and evidence).
@@ -263,6 +293,7 @@ impl KernelRouteObjectV1 {
             Self::SealClaim { .. } => TAG_SEAL_CLAIM_V1,
             Self::RegisterClassV2 { .. } => TAG_REGISTER_CLASS_V2,
             Self::RegisterPipelineClassV2 { .. } => TAG_REGISTER_PIPELINE_CLASS_V2,
+            Self::SealProof { .. } => TAG_SEAL_PROOF_V1,
         }
     }
 
@@ -335,6 +366,7 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_SEAL_CLAIM_V1 => "SealClaim",
         TAG_REGISTER_CLASS_V2 => "RegisterClassV2",
         TAG_REGISTER_PIPELINE_CLASS_V2 => "RegisterPipelineClassV2",
+        TAG_SEAL_PROOF_V1 => "SealProof",
         _ => "Unknown",
     }
 }
@@ -356,6 +388,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_SEAL_CLAIM_V1 => MAX_SEAL_CLAIM_BYTES_V1,
         TAG_REGISTER_CLASS_V2 => MAX_REGISTER_CLASS_V2_BYTES_V1,
         TAG_REGISTER_PIPELINE_CLASS_V2 => MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1,
+        TAG_SEAL_PROOF_V1 => MAX_SEAL_PROOF_BYTES_V1,
         _ => return None,
     })
 }
@@ -399,6 +432,7 @@ mod tests {
             KernelRouteObjectV1::Withdraw { bond: [7; 64] },
             KernelRouteObjectV1::FileProof { accuser: [1; 64], claim: [2; 64], proof: ProsecutionV1::Kernel(vec![9]) },
             KernelRouteObjectV1::FileProof { accuser: [1; 64], claim: [2; 64], proof: ProsecutionV1::Pipeline(vec![9]) },
+            KernelRouteObjectV1::SealProof { accuser: [1; 64], claim: [2; 64], seal: [3; 64] },
         ];
         for o in objects {
             let bytes = o.encode();
@@ -408,9 +442,9 @@ mod tests {
             assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
             assert_ne!(o.name(), "Unknown");
         }
-        let tags: Vec<u8> = (1..=14).collect();
+        let tags: Vec<u8> = (1..=15).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
-        assert!(max_encoded_bytes_of_tag(0).is_none() && max_encoded_bytes_of_tag(15).is_none());
+        assert!(max_encoded_bytes_of_tag(0).is_none() && max_encoded_bytes_of_tag(16).is_none());
     }
 
     #[test]
@@ -421,7 +455,7 @@ mod tests {
         assert_eq!(kind(&[2]), RefusalKindV1::Malformed, "another version");
         assert_eq!(kind(&[KERNEL_ROUTE_VERSION_V1]), RefusalKindV1::Malformed, "no variant");
         assert_eq!(kind(&[KERNEL_ROUTE_VERSION_V1, 0]), RefusalKindV1::Malformed, "tag 0 is not declared");
-        assert_eq!(kind(&[KERNEL_ROUTE_VERSION_V1, 15]), RefusalKindV1::Malformed, "an undeclared tag");
+        assert_eq!(kind(&[KERNEL_ROUTE_VERSION_V1, 16]), RefusalKindV1::Malformed, "an undeclared tag");
         assert_eq!(kind(&good[..good.len() - 1]), RefusalKindV1::Malformed, "truncated");
         let mut trailing = good.clone();
         trailing.push(0);

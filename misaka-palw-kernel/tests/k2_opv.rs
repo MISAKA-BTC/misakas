@@ -228,7 +228,8 @@ fn a_class_whose_prosecution_could_be_censored_for_less_than_it_pays_is_not_admi
     let w = World::with_opv(narrow, opv);
     assert_ne!(w.class, [0; 64], "a gain of 100 < 250 registers: {:?}", w.events);
     let mut rich = opv_example();
-    rich.economics.external_gain_bound = 400; // gain 420; reservation must follow (max(520, 840)) and does (1000)
+    rich.economics.external_gain_bound = 400; // gain 420; reservation must follow: max(520, 840) after a self-recouped half (GAP-R7)
+    rich.economics.reservation_per_claim = 1680;
     let w = World::with_opv(narrow, rich);
     assert_eq!(w.class, [0; 64]);
     assert!(refused(&w.events).unwrap().contains("could be censored"), "{:?}", w.events);
@@ -1010,5 +1011,6 @@ fn the_optimistic_state_root_form_is_versioned_and_pinned_by_a_golden_vector() {
 }
 
 const GOLDEN_OPV_PARTS: [&str; 4] = ["4ba078148bb34125", "557931bf322541c3", "b018a938b23ad4fb", "3fbfb5902dada353"];
+/// Moved with the G14-R4 fix of GAP-R7: the historical root inside it gained the proof-seal collection (the OPV parts are unchanged).
 const GOLDEN_OPV_ROOT: &str =
-    "c3a41ad9e9d20b50863f06e9554cfcb57af24c0200e0f899d307132e4631267fb6e2ec4e109932fd137e0bce40aa1e9406e50b73ba3734f18ff278aeb46ee34a";
+    "de610a07e15d724905f46eb8e1effed894e12923c5947fb2b1c17e28fdbd65123fb9052a61fdd1d40db595300e42dfcd078c5ce1f73b23adf8c3d603e9df06fd";
