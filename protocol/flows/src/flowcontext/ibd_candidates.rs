@@ -525,6 +525,17 @@ impl IbdCandidateRegistry {
         self.candidates.get(id)
     }
 
+    /// The tip work `id`'s sources claimed, if — and only if — its pruning proof has validated: the
+    /// post-IBD switch's trigger, answered under ONE guard (LIVE-R1, 2026-10-08). The flow used to ask
+    /// the phase and the claim with two `read()`s, the second taken while the first was still held, and
+    /// that recursive read of a parking_lot `RwLock` deadlocked every tokio worker behind a queued
+    /// writer. A caller holds whatever guard it already has and asks once.
+    pub fn proof_validated_claimed_tip_work(&self, id: &CandidateId) -> Option<BlueWorkType> {
+        self.get(id)
+            .filter(|c| matches!(c.validation, CandidateValidation::ProofValidated { .. }))
+            .and_then(|c| c.claimed_tip_blue_work())
+    }
+
     /// Candidates worth checking, most promising first. Rejected ones are omitted.
     pub fn by_verification_priority(&self) -> Vec<&IbdCandidate> {
         let mut out: Vec<_> = self.candidates.values().filter(|c| c.verification_priority().is_some()).collect();
@@ -1878,5 +1889,102 @@ mod switch_persistence_tests {
         assert_eq!(r.switches(), 2, "resuming an older count must not lower the current one");
         r.resume_switches(7);
         assert_eq!(r.switches(), 7, "but a larger carried-over count must win");
+    }
+}
+
+/// **LIVE-R1 (2026-10-08): the D6 deadlock, and the one-guard accessor that replaces it.**
+///
+/// Devnet r1's D6 stopped for good at 19:34:38 with every tokio worker parked on `FlowContext::
+/// ibd_candidates` (two `sample`s, symbolized against a `-Cstrip=none` rebuild of the shipped commit):
+/// one worker in `consider_post_ibd_switch` asking for a second read while holding a first, two relay
+/// flows in `expire_stale_verifications` (one holding the writer bit in `wait_for_readers`), seven
+/// readers queued behind them. parking_lot's `RwLock` is not reentrant: once a writer has set its bit,
+/// a new `read()` parks — including a second read by a thread that already holds one, which the writer
+/// is waiting on. These tests drive exactly that interleaving deterministically: the writer is queued
+/// (its bit observed) between the two reads.
+#[cfg(test)]
+mod live_r1_reentrant_read_tests {
+    use super::{tests::*, *};
+    use parking_lot::RwLock;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// A registry holding one candidate whose proof validated, behind the lock the flow context uses.
+    fn proof_validated_registry() -> (Arc<RwLock<IbdCandidateRegistry>>, CandidateId) {
+        let mut r = IbdCandidateRegistry::default();
+        let id = r.observe_summary(peer(1), &header(7, 500), pp(1), Instant::now());
+        r.set_validated(id, BlueWorkType::from_u64(100), Hash::from_u64_word(9));
+        (Arc::new(RwLock::new(r)), id)
+    }
+
+    /// Queue a writer on `lock` — the relay flows' `expire_stale_verifications` — and return once its bit
+    /// is set, i.e. once it is waiting for the readers already inside.
+    fn queue_writer(lock: &Arc<RwLock<IbdCandidateRegistry>>) -> std::thread::JoinHandle<()> {
+        let writer_lock = Arc::clone(lock);
+        let writer = std::thread::spawn(move || {
+            writer_lock.write().expire_proof_requests(Instant::now(), CHALLENGER_VERIFICATION_LEASE);
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !lock.is_locked_exclusive() {
+            assert!(Instant::now() < deadline, "the writer never queued");
+            std::thread::yield_now();
+        }
+        writer
+    }
+
+    /// **The defect.** The old trigger read the phase under one guard and, still holding it (a match
+    /// scrutinee's temporary), took a second read for the claim. With a writer queued in between, that
+    /// second read cannot be granted: the writer waits for the first guard, the second read waits behind
+    /// the writer. `try_read_for` stands in for the blocking `read()` so the test can say so and end.
+    #[test]
+    fn a_second_read_under_a_held_guard_deadlocks_behind_a_queued_writer() {
+        let (lock, id) = proof_validated_registry();
+        let first = lock.read();
+        assert!(matches!(first.get(&id).map(|c| c.validation), Some(CandidateValidation::ProofValidated { .. })));
+        let writer = queue_writer(&lock);
+        assert!(
+            lock.try_read_for(Duration::from_millis(300)).is_none(),
+            "the arm's read parks behind the writer that waits on the scrutinee's read: a deadlock"
+        );
+        drop(first);
+        writer.join().expect("released by the first guard, the writer completes");
+    }
+
+    /// **The fix.** The trigger is one question answered under the one guard the flow holds; no second
+    /// acquisition exists for a queued writer to stand in front of. The writer completes as soon as the
+    /// guard drops, and the answer is the candidate's claim.
+    #[test]
+    fn the_trigger_is_answered_under_the_guard_a_queued_writer_waits_on() {
+        let (lock, id) = proof_validated_registry();
+        let guard = lock.read();
+        let writer = queue_writer(&lock);
+        let claimed = guard.proof_validated_claimed_tip_work(&id);
+        drop(guard);
+        writer.join().expect("the writer completes once the one guard drops");
+        assert_eq!(claimed, Some(BlueWorkType::from_u64(500)), "the claimed tip work of a proof-validated candidate");
+        // And the flow's own statement form, `lock.read().proof_validated_claimed_tip_work(..)`, drops
+        // its guard at the end of the statement: a writer that queued before it is served first.
+        let writer = {
+            let held = lock.read();
+            let writer = queue_writer(&lock);
+            drop(held);
+            writer
+        };
+        assert_eq!(lock.read().proof_validated_claimed_tip_work(&id), Some(BlueWorkType::from_u64(500)));
+        writer.join().unwrap();
+    }
+
+    /// Only a validated proof triggers: a summary, a requested proof and a rejection all answer `None`.
+    #[test]
+    fn only_a_validated_proof_answers() {
+        let mut r = IbdCandidateRegistry::default();
+        let id = r.observe_summary(peer(1), &header(7, 500), pp(1), Instant::now());
+        assert_eq!(r.proof_validated_claimed_tip_work(&id), None, "a summary is not a validated proof");
+        r.set_validation(id, CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof });
+        assert_eq!(r.proof_validated_claimed_tip_work(&id), None, "nor is a rejection");
+        r.set_validated(id, BlueWorkType::from_u64(100), Hash::from_u64_word(9));
+        assert_eq!(r.proof_validated_claimed_tip_work(&id), Some(BlueWorkType::from_u64(500)));
+        let unknown = CandidateId { pruning_point: pp(9), virtual_selected_parent: BlockHash::from_u64_word(99) };
+        assert_eq!(r.proof_validated_claimed_tip_work(&unknown), None, "an unknown candidate answers nothing");
     }
 }

@@ -883,12 +883,16 @@ impl IbdFlow {
         // about adoption. `verified_blue_work` is still required to be present — the proof must have
         // validated — but the number that settles which chain wins is computed later, at the commit
         // barrier, from headers this node validated to the tip itself.
-        let claimed_tip_work = match self.ctx.ibd_candidates().read().get(&id).map(|c| c.validation) {
-            Some(CandidateValidation::ProofValidated { .. }) => {
-                self.ctx.ibd_candidates().read().get(&id).and_then(|c| c.claimed_tip_blue_work())
-            }
-            _ => None,
-        };
+        //
+        // **One read, dropped at the end of this statement** (LIVE-R1, 2026-10-08: devnet r1's D6). This
+        // used to be `match registry.read().get(..) { ProofValidated => registry.read()... }`: a match
+        // scrutinee's temporaries live to the end of the match, so the arm took a SECOND read while the
+        // first was still held. `ibd_candidates` is a parking_lot `RwLock`, which is not reentrant: a
+        // writer arriving between the two reads (every relay flow's `expire_stale_verifications`) sets
+        // the writer bit and waits for our first read, our second read parks behind the writer, and every
+        // tokio worker that touches the registry after it parks too — RPC, P2P and the rule engine stop,
+        // and the node sits at 0 % CPU forever (two `sample`s 13 minutes apart, identical stacks).
+        let claimed_tip_work = self.ctx.ibd_candidates().read().proof_validated_claimed_tip_work(&id);
         let Some(claimed_tip_work) = claimed_tip_work else { return false };
 
         let session = self.ctx.consensus().session().await;
