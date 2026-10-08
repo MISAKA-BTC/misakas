@@ -23,11 +23,14 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 
 | RFC | Open | Kind |
 | --- | --- | --- |
+| RFC-0004 Part II (2026-10-08, in the gate by the user) | computation specification with typed roots (`Weights` / `Memory` + update rule / `Retrieval` snapshot + deterministic rule / `Composite`); real-node E2E per kind with outsider conviction and DA default; bounds; census counting | CODE + DESIGN |
 | RFC-0009 | L2 PALW fork-choice verification for remote clients (needs a state-root version bump and transition verification); the provider court (objective DA responsibility transfer); rail auto-resubmit; the RDA4 `SigningPurpose` | DESIGN / CODE |
 | RFC-0006 | non-seat watcher, per-segment pricing, per-shard V3 draw | CODE / DESIGN |
 | RFC-0013 | tiled range evaluator, Merkle index | CODE |
 | RFC-0002 / 0011 | the HF-majority acceptance bar (RFC-0011: one-sided 95% lower bound ≥ 90% over all public repos); census re-measurement running (COV-P4) | CODE + measurement |
 | RFC-0001 | proposals P1–P4 | CODE |
+| G14-for-rewards (lane D GAP 6/3) | H1 on a running devnet: a class whose kernel is KERNEL_NOT_ACTIVE and that has no PUBLIC_PROSECUTION_COMPLETE moved Candidate → Probation once 8 seats proved readiness — the V2 lifecycle consults seats/readiness only, and only classes that began onboarding are gated. From the full-activation release every NEW class must pass the onboarding/G14 gate before it can earn; whether live Panel-route classes are grandfathered is a user decision | CODE + POLICY |
+| fork-choice safety (FINX finding V6) | a fork-choice safety finding confirmed on t12's rules; details are internal (FINX branch, not for publication). The fix (C3 or rule E, ADR-0175 draft) ships in the full-activation release (user) | CODE (fence) + POLICY (C3 vs E) |
 | liveness | a minority that was partitioned ~41 min never rejoins (DNS reorg gate DominanceViolation) and one node deadlocks after "Chain participation held" — found by H1 on the devnet; the code is in int-12 too (LIVE-R1 investigating) | CODE (HIGH) |
 
 ## 3. Decisions for the user (collected, not urgent until the code is ready)
@@ -101,6 +104,7 @@ designs and writes first and builds at milestones with one cargo invocation; a n
 | 3 | L2FC | opus | RFC-0009 L2: verifiable PALW fork choice for remote clients (state-root version, transition verification) |
 | 3 | MEAS | sonnet | RFC-0015 fresh-verifier timings per class on real hardware → window and collateral formulas |
 | 3 | HFX | opus | RFC-0002/0011 the census's top software-closable blockers as generic features |
+| 2 | R4X | opus | RFC-0004 Part II: typed-root computation specifications — `Memory`, `Retrieval`, `Composite` classes end to end under G14 |
 | 4 | C4R4 | opus | independent attack round: grinding, watcher absence, 32-slot capture, Final race, economics, partition rejoin |
 | 4 | SOUND | opus | RFC-0007/0015 review dossier for the external soundness review (the review itself stays EXTERNAL) |
 
