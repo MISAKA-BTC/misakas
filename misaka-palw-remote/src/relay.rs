@@ -127,6 +127,47 @@ pub fn carrier_funding_signature_valid(tx: &Transaction, funding: &UtxoEntry) ->
     }
 }
 
+/// The public key a carrier's single funding input is signed with, read from its signature script (`<sig‖hashtype> <pubkey>`). A relay that holds
+/// a completed carrier needs it to rebuild the funding entry (the script the sighash commits to) from the amount alone.
+pub fn funding_pubkey_of_carrier_v1(tx: &Transaction) -> Option<Vec<u8>> {
+    let [input] = tx.inputs.as_slice() else { return None };
+    parse_two_pushes(&input.signature_script).map(|(_, pk)| pk.to_vec())
+}
+
+/// What a relay learns from a completed free-prompt carrier it did not sign.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedFpCarrierV1 {
+    pub claim_id: Hash64,
+    pub executor_pubkey: Vec<u8>,
+    pub funding_pubkey: Vec<u8>,
+}
+
+/// **Is this a free-prompt carrier worth relaying?** A relay holds no key and is no authority, but it should not be a conduit for bytes that cannot
+/// stand: the transaction rides the free-prompt subnetwork, its payload decodes, and the claim signature verifies under the executor key the
+/// commitment itself names. The funding signature is checked by [`broadcast_signed_tx`] once the funding amount is known (the sighash commits to it).
+pub fn check_fp_carrier_v1(tx: &Transaction) -> Result<CheckedFpCarrierV1, String> {
+    use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PalwFpCommitmentTxPayloadV3};
+    if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+        return Err(format!("the transaction rides subnetwork {}, not the free-prompt commitment's", tx.subnetwork_id));
+    }
+    let payload: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload).map_err(|e| format!("the payload does not decode: {e}"))?;
+    let claim_id = payload.claim_id();
+    let executor_pubkey = payload.commitment.job.executor_pubkey.clone();
+    if !matches!(
+        kaspa_txscript::verify_mldsa87_with_context(
+            &executor_pubkey,
+            claim_id.as_byte_slice(),
+            &payload.signature,
+            PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT
+        ),
+        Ok(true)
+    ) {
+        return Err("the claim signature does not verify under the executor key the commitment names".into());
+    }
+    let funding_pubkey = funding_pubkey_of_carrier_v1(tx).ok_or("the carrier does not have one funding input signed with <signature> <pubkey>")?;
+    Ok(CheckedFpCarrierV1 { claim_id, executor_pubkey, funding_pubkey })
+}
+
 fn read_push(script: &[u8]) -> Option<(&[u8], &[u8])> {
     let (&op, rest) = script.split_first()?;
     let (len, rest) = match op {
@@ -257,5 +298,96 @@ mod tests {
         assert_ne!(altered.id(), tx().id());
         let r = fan_out_verdict(tx().id(), vec![("n".into(), Reply::Accepted(altered.id()))], 1);
         assert!(matches!(r, Err(RelayFailure::NoneAccepted(_))));
+    }
+
+    // ---- a completed free-prompt carrier somebody else signed, relayed by anyone ----
+
+    fn fp_carrier(amount: u64) -> (Transaction, UtxoEntry) {
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptCommitmentV3, PalwFreePromptJobV3, fp_trace_manifest_v3,
+        };
+        use kaspa_pq_validator_core::{FpCommitmentPriceV1, ValidatorKey, build_fp_commitment_tx_with};
+        let key = ValidatorKey::from_seed([0x31; 32]);
+        let network_domain = Hash64::from_bytes([0x4E; 64]);
+        let ids: Vec<u32> = (0..96).collect();
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain,
+            class_id: Hash64::from_bytes([0xBA; 64]),
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([7; 64]), 0),
+            executor_pubkey: key.public_key().to_vec(),
+            operator_id: Hash64::from_bytes([0xE0; 64]),
+            anchor_block: Hash64::from_bytes([0xA0; 64]),
+            anchor_daa: 5_000,
+            job_nonce: [0x11; 32],
+            tokenizer_id: Hash64::from_bytes([0x70; 64]),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&ids),
+            prompt_tokens: ids.len() as u32,
+            decode_token_limit: 512,
+            max_context_tokens: 4_096,
+            privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
+            tail: None,
+        };
+        let events: Vec<Hash64> = (0..256u64).map(|i| Hash64::from_u64_word(i + 1)).collect();
+        let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(Hash64::from_bytes([0xB1; 64]), &events);
+        let commitment = PalwFreePromptCommitmentV3 {
+            trace_root: Hash64::from_bytes([0x7A; 64]),
+            output_root: Hash64::from_bytes([0x0B; 64]),
+            schedule_root: Hash64::from_bytes([0x5C; 64]),
+            execution_root: Hash64::from_bytes([0x4E; 64]),
+            decode_tokens_executed: 256,
+            stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+            work_leaves: 1_600,
+            trace_manifest_root: manifest_root,
+            trace_chunk_count: chunk_count,
+            trace_retention_daa: 505_000,
+            job,
+        };
+        let spk = crate::bundle::funding_spk_of_pubkey_v1(key.public_key());
+        let entry = UtxoEntry::new(amount, spk, 0, false);
+        let tx = build_fp_commitment_tx_with(
+            &key,
+            network_domain,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            commitment,
+            ids,
+            FpCommitmentPriceV1::Chain { quanta: 16, pwu: 1_600 },
+            kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([9; 64]), 0),
+            &entry,
+            300_000,
+        )
+        .expect("an admissible carrier builds");
+        (tx, entry)
+    }
+
+    #[test]
+    fn a_relay_forwards_a_carrier_it_did_not_sign_and_refuses_one_that_cannot_stand() {
+        let (tx, entry) = fp_carrier(50_000_000);
+        let checked = check_fp_carrier_v1(&tx).expect("a well-formed carrier");
+        assert_eq!(checked.executor_pubkey, checked.funding_pubkey, "this carrier is funded by the executor's own key");
+        // The funding entry is rebuilt from the public amount and the signing key alone — no key on the relay.
+        let rebuilt = UtxoEntry::new(50_000_000, crate::bundle::funding_spk_of_pubkey_v1(&checked.funding_pubkey), 0, false);
+        assert_eq!(rebuilt.script_public_key, entry.script_public_key);
+        let nodes = [fake::FakeRelay::new("a", fake::Mode::Honest), fake::FakeRelay::new("b", fake::Mode::Honest)];
+        let refs: Vec<&dyn RelayNode> = nodes.iter().map(|n| n as &dyn RelayNode).collect();
+        let report = broadcast_signed_tx(&tx, Some(&rebuilt), &refs, 2).expect("relayed");
+        assert_eq!(report.id, tx_id_of_bytes(&tx));
+        // A WRONG funding amount: the funding signature (which commits to it) does not verify, so nothing is sent.
+        let wrong = UtxoEntry::new(50_000_001, rebuilt.script_public_key.clone(), 0, false);
+        assert!(matches!(broadcast_signed_tx(&tx, Some(&wrong), &refs, 2), Err(RelayFailure::Preflight(_))));
+        // A flipped claim-signature bit: refused before any node is asked.
+        let mut bad = tx.clone();
+        let mut payload: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&bad.payload).unwrap();
+        payload.signature[10] ^= 1;
+        bad.payload = borsh::to_vec(&payload).unwrap();
+        bad.finalize();
+        assert!(check_fp_carrier_v1(&bad).unwrap_err().contains("claim signature"));
+        // Not a free-prompt carrier at all.
+        let plain = Transaction::new(0, vec![], vec![], 0, kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE, 0, vec![]);
+        assert!(check_fp_carrier_v1(&plain).is_err());
     }
 }

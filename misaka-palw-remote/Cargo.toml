@@ -41,5 +41,9 @@ name = "palw-remote-miner"
 path = "src/bin/palw-remote-miner.rs"
 required-features = ["rpc"]
 
+[dev-dependencies]
+# Carrier fixtures for the relay tests: a free-prompt commitment built through the shipped builder.
+kaspa-pq-validator-core.workspace = true
+
 [lints]
 workspace = true

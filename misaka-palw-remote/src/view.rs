@@ -69,6 +69,14 @@ pub struct AgreedView {
     pub nodes: Vec<String>,
 }
 
+impl AgreedView {
+    /// What this view is worth: several nodes agreeing, with nothing proven against a header. Every fact taken from it is
+    /// [`crate::trust::UNVERIFIED_REMOTE_STATE`] until a state proof (`crate::proof`) says otherwise.
+    pub fn provenance(&self) -> crate::trust::Provenance {
+        crate::trust::Provenance::UnverifiedRemoteState { agreeing: self.nodes.len() }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Halt {
     #[error("only {responding} distinct node(s) answered and agree on the checkpoint, {needed} are required (unreachable or unsynced: {silent:?})")]
@@ -244,5 +252,15 @@ mod tests {
         let mut p = policy();
         p.checkpoint.network_id = "testnet-11".into();
         assert!(matches!(agree(&refs(&nodes), &p), Err(Halt::CheckpointNetwork { .. })));
+    }
+
+    #[test]
+    fn an_agreed_view_is_labelled_unverified_remote_state_however_many_nodes_agree() {
+        let nodes = [node("a", 6_000, CheckpointStatus::OnChain), node("b", 6_001, CheckpointStatus::OnChain), node("c", 6_002, CheckpointStatus::OnChain)];
+        let v = agree(&refs(&nodes), &policy()).unwrap();
+        let p = v.provenance();
+        assert!(!p.is_proven());
+        assert!(p.label().starts_with(crate::trust::UNVERIFIED_REMOTE_STATE));
+        assert!(p.label().contains("3 node(s)"));
     }
 }
