@@ -44,6 +44,9 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
     class's attempts. This is a liveness price set together with 4a. Design: `opv-beacon-bootstrap.md` §6.3.
 4c. `grandfather_panel_route_classes` (G14-for-rewards, under `palw_panel_free_v1`; default false). Should Panel-route classes
     registered before the fence keep earning without passing the reward gate?
+4d. RFC-0004 Part II memory classes: a lie that reaches Final after the liability horizon taints the memory line permanently,
+    so the collateral bar's max gain must include the line value at risk. Options: a per-class declared cap, or a horizon
+    stretched to match the line. Source: `rfc-0004-part2-typed-roots.md` §10 and §13.
 5. The activation height of the single release, once every row above is clear.
 
 ## 3a. User rulings on the Panel=0 parameters (2026-10-08 ~20:30)
