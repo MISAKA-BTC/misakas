@@ -1309,3 +1309,125 @@ async fn g14_kernel_route_survives_a_pruned_import() {
     assert_eq!(importer.ctx.consensus.palw_kernel_route_v1(), w.net.api(), "the same route, rows and aux");
     assert!(importer.ctx.consensus.palw_kernel_route_v1().unwrap().ledger().unwrap().claims[&lie.id].convicted);
 }
+
+// ---- the per-block adjudication budget -------------------------------------------------------------------------------
+
+/// **The adjudication budget bounds the BLOCK, however the fold is split into single-object rehearsals.** (Tests run with a
+/// four-adjudication block.) Five junk class registrations — each decodes, names an attested artifact, charges the block and is then
+/// refused for a program nobody can decode — ride one block: the first four spend the budget (refusals still spend it, so junk is
+/// never free), the fifth finds it spent and charges nothing; the next block starts afresh.
+#[tokio::test]
+async fn g14_kernel_route_the_block_adjudication_budget_bounds_the_block_not_each_object() {
+    use kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1;
+    use misaka_palw_kernel::plan::{PlanBudgetsV1, VerificationPlanV1};
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::new().await;
+    assert_eq!(w.policy().max_adjudications_per_block, 4, "the test node runs a four-adjudication block");
+    let junk = |n: u8| K::RegisterClass {
+        descriptor: k2_tir_v2_descriptor().digest(),
+        program_bytes: vec![n],
+        plan: VerificationPlanV1 {
+            grammar: 1,
+            descriptor_digest: [0; 64],
+            program_root: [0; 64],
+            max_positions: 4,
+            relations: vec![],
+            boundaries: vec![],
+            declared_error_bits: 0,
+            budgets: PlanBudgetsV1::default(),
+        },
+        param_commitments: w.fx.pc.clone(),
+    };
+    let budget = |w: &World| -> Option<(u64, u32, u64)> {
+        w.net.chain.tip_state().1.kernel_route().and_then(|k| k.aux_row(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]))
+    };
+    let classes = w.net.ledger().classes.len();
+    let mut items = Vec::new();
+    for (n, card) in [2usize, 3, 4, 5, 6].into_iter().enumerate() {
+        let o = w.net.route(card, &junk(n as u8 + 1));
+        items.push((card, o));
+    }
+    let blue_before = w.net.chain.tip_state().1.kernel_route().map(|k| k.aux.len());
+    w.net.send(items).await;
+    let (blue, adjudications, work) = budget(&w).expect("the spent budget is recorded");
+    assert_eq!((adjudications, work), (4, 0), "four charged, the fifth found the block's budget spent");
+    assert_eq!(w.net.ledger().classes.len(), classes, "and none of the junk registered");
+    assert!(blue_before.is_some());
+    // The next chain block starts a fresh budget: one more junk object is charged once, from zero.
+    let o = w.net.route(2, &junk(9));
+    w.net.send(vec![(2, o)]).await;
+    let (blue_next, adjudications, _) = budget(&w).unwrap();
+    assert!(blue_next > blue, "a later block");
+    assert_eq!(adjudications, 1, "a fresh block, a fresh budget");
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+// ---- the public read model behind RPC ops 210 / 211 ---------------------------------------------------------------------
+
+/// **What the RPC serves is enough, and exact**: the open demand and then the served position show up in the claim read; the public
+/// record rebuilds a fresh verifier (the kernel's own constructor, from the bytes alone); and the route's rows, gathered page by page
+/// with a small budget, rebuild a ledger whose root is the committed one.
+#[tokio::test]
+async fn g14_kernel_route_the_read_model_serves_a_claim_and_rows_that_rebuild_the_committed_root() {
+    use misaka_palw_kernel::evidence::EvidenceHeaderV1;
+    use misaka_palw_kernel::public::ServedPositionV1;
+    use misaka_palw_kernel::rows::LedgerRowsV1;
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::new().await;
+    let job = w.job().await;
+    let lie = w.claim(0, &job, true).await;
+    let seats = w.seats(&lie.id);
+    w.cover(&lie.id).await;
+    let outsider = w.outsiders(&lie, &seats, 1)[0];
+
+    // An open demand is public...
+    w.demand(outsider, &lie.id, lie.at.0).await;
+    let read = w.net.api().unwrap().claim_read_v1(&lie.id).unwrap().expect("the claim is known");
+    assert_eq!((read.kind, read.convicted, read.rewarded), ("program", false, false));
+    assert!(read.state.starts_with("Disputed"), "{}", read.state);
+    assert_eq!(read.demands.len(), 1);
+    assert_eq!((read.demands[0].position, read.demands[0].demanders, read.demands[0].last_rejection.clone()), (lie.at.0, 1, None));
+    assert!(read.served.is_empty());
+    assert_eq!(read.reserved, w.policy().claim_collateral);
+    // ...and so is the position once served.
+    w.serve(0, &lie, lie.at.0).await;
+    let read = w.net.api().unwrap().claim_read_v1(&lie.id).unwrap().unwrap();
+    assert!(read.demands.is_empty());
+    assert_eq!(read.served.len(), 1);
+    assert_eq!((read.served[0].0, read.served[0].1), (0, lie.at.0));
+    borsh::from_slice::<ServedPositionV1>(&read.served[0].2).expect("the served bytes decode");
+    assert!(w.net.api().unwrap().claim_read_v1(&[0xAB; 64]).unwrap().is_none(), "an unknown claim is not found");
+
+    // The public record alone builds a fresh verifier (what an outsider does with the RPC's bytes).
+    let route = w.net.api().unwrap();
+    let template = palw_kernel_route_template_v1(route.header.policy);
+    let header: EvidenceHeaderV1 = borsh::from_slice(&read.record_header).expect("the header decodes");
+    misaka_palw_kernel::public::FreshVerifierV1::from_public_bytes(&read.public_record, &template.known, header)
+        .expect("a fresh verifier is built from the served public record");
+
+    // The rows, a small page at a time, rebuild the committed ledger.
+    let mut rows = LedgerRowsV1::new();
+    let (mut cursor, mut pages) = (None, 0);
+    let mut seen = 0u64;
+    loop {
+        let page = route.rows_page_v1(cursor.clone(), 8 << 10);
+        pages += 1;
+        assert_eq!(page.total_rows, (route.rows.len() + route.aux.len()) as u64);
+        for (table, key, row) in page.rows {
+            seen += 1;
+            if table < kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 {
+                rows.insert((table, key), row);
+            }
+        }
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    assert!(pages > 1, "the budget forced several pages");
+    assert_eq!(seen, (route.rows.len() + route.aux.len()) as u64, "every row exactly once");
+    let rebuilt = KernelLedgerV1::from_rows(&template, route.header.scalars, &rows).expect("the pages rebuild a ledger");
+    assert_eq!(rebuilt.root(), route.ledger_root().as_bytes(), "and its root is the committed one");
+    assert_eq!(rebuilt.public_record(&lie.id).unwrap().0.to_bytes(), read.public_record, "the same public record");
+}

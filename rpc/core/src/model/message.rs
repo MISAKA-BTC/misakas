@@ -12719,6 +12719,347 @@ impl Deserializer for GetPalwPanelV3StatusResponse {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------
+// G14 lane D — the kernel route's public read (ops 210, 211)
+// ---------------------------------------------------------------------------------------------------------------------------
+
+/// **`getPalwKernelClaim` (op 210)**: one claim of the probabilistic-constraint route, as the tip state holds it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwKernelClaimRequest {
+    /// The claim id: 128 hex.
+    pub claim_id: String,
+}
+
+impl Serializer for GetPalwKernelClaimRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwKernelClaimRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { claim_id: load!(String, reader)? })
+    }
+}
+
+/// One position served on chain in answer to a demand: public from then on.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwKernelServed {
+    pub stage: u32,
+    pub position: u32,
+    /// Borsh of the kernel's `ServedPositionV1`, hex.
+    pub bytes: String,
+}
+
+impl Serializer for RpcPalwKernelServed {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u32, &self.stage, writer)?;
+        store!(u32, &self.position, writer)?;
+        store!(String, &self.bytes, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwKernelServed {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { stage: load!(u32, reader)?, position: load!(u32, reader)?, bytes: load!(String, reader)? })
+    }
+}
+
+/// One open position demand.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwKernelDemand {
+    pub stage: u32,
+    pub position: u32,
+    pub demanders: u32,
+    pub filed_daa: u64,
+    pub deadline_daa: u64,
+    /// The latest rejected response's class (`malformed`, `wrong_bytes`, `wrong_root`, `fake_opening`, `partial`); empty if none.
+    pub last_rejection: String,
+}
+
+impl Serializer for RpcPalwKernelDemand {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u32, &self.stage, writer)?;
+        store!(u32, &self.position, writer)?;
+        store!(u32, &self.demanders, writer)?;
+        store!(u64, &self.filed_daa, writer)?;
+        store!(u64, &self.deadline_daa, writer)?;
+        store!(String, &self.last_rejection, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwKernelDemand {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            stage: load!(u32, reader)?,
+            position: load!(u32, reader)?,
+            demanders: load!(u32, reader)?,
+            filed_daa: load!(u64, reader)?,
+            deadline_daa: load!(u64, reader)?,
+            last_rejection: load!(String, reader)?,
+        })
+    }
+}
+
+/// One interim seat: the V2 bond (`txid:index`) and the kernel's digest of it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwKernelSeat {
+    pub bond: String,
+    pub kernel_bond: String,
+}
+
+impl Serializer for RpcPalwKernelSeat {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(String, &self.kernel_bond, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwKernelSeat {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { bond: load!(String, reader)?, kernel_bond: load!(String, reader)? })
+    }
+}
+
+/// Everything public about one kernel-route claim. Every digest is 128 hex, every blob hex; every amount in sompi. **Nothing here is
+/// private**: the route holds chain state only. The per-block verdict and settlement events are not stored (they are the fold's
+/// output); what they decided is here — `state`, `convicted`, `rewarded`, `reserved` — and replaying the chain reproduces them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwKernelClaimResponse {
+    /// The node answered from a state that holds a kernel route (`false` before the fence's first block, and off ConsensusV2).
+    pub available: bool,
+    pub found: bool,
+    pub tip_daa: u64,
+    pub claim_id: String,
+    /// `program` or `pipeline`.
+    pub kind: String,
+    /// The lifecycle state, spelled out.
+    pub state: String,
+    /// The DAA the claim finalized at (0 if it has not).
+    pub final_daa: u64,
+    pub convicted: bool,
+    pub rewarded: bool,
+    pub reserved_sompi: u64,
+    pub committed_daa: u64,
+    /// The end of the liability horizon (0 if none).
+    pub liability_until: u64,
+    pub producer_bond: String,
+    pub job_id: String,
+    pub class_id: String,
+    /// The public claim record a fresh verifier is built from (`PublicClaimRecordV1::to_bytes`), hex.
+    pub public_record: String,
+    /// Borsh of the class header the verifier is built with, hex (empty for a pipeline claim).
+    pub record_header: String,
+    pub served: Vec<RpcPalwKernelServed>,
+    pub demands: Vec<RpcPalwKernelDemand>,
+    /// The interim Panel assignment while the receipts are counted (empty once covered or ended).
+    pub seats: Vec<RpcPalwKernelSeat>,
+    pub quorum: u32,
+    pub assignment_deadline_daa: u64,
+    pub receipts_counted: u32,
+    /// The committed ledger root and the consensus tables' root (see `getPalwKernelRows`).
+    pub ledger_root: String,
+    pub aux_root: String,
+}
+
+impl Serializer for GetPalwKernelClaimResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(bool, &self.found, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.kind, writer)?;
+        store!(String, &self.state, writer)?;
+        store!(u64, &self.final_daa, writer)?;
+        store!(bool, &self.convicted, writer)?;
+        store!(bool, &self.rewarded, writer)?;
+        store!(u64, &self.reserved_sompi, writer)?;
+        store!(u64, &self.committed_daa, writer)?;
+        store!(u64, &self.liability_until, writer)?;
+        store!(String, &self.producer_bond, writer)?;
+        store!(String, &self.job_id, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.public_record, writer)?;
+        store!(String, &self.record_header, writer)?;
+        serialize!(Vec<RpcPalwKernelServed>, &self.served, writer)?;
+        serialize!(Vec<RpcPalwKernelDemand>, &self.demands, writer)?;
+        serialize!(Vec<RpcPalwKernelSeat>, &self.seats, writer)?;
+        store!(u32, &self.quorum, writer)?;
+        store!(u64, &self.assignment_deadline_daa, writer)?;
+        store!(u32, &self.receipts_counted, writer)?;
+        store!(String, &self.ledger_root, writer)?;
+        store!(String, &self.aux_root, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwKernelClaimResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            found: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            claim_id: load!(String, reader)?,
+            kind: load!(String, reader)?,
+            state: load!(String, reader)?,
+            final_daa: load!(u64, reader)?,
+            convicted: load!(bool, reader)?,
+            rewarded: load!(bool, reader)?,
+            reserved_sompi: load!(u64, reader)?,
+            committed_daa: load!(u64, reader)?,
+            liability_until: load!(u64, reader)?,
+            producer_bond: load!(String, reader)?,
+            job_id: load!(String, reader)?,
+            class_id: load!(String, reader)?,
+            public_record: load!(String, reader)?,
+            record_header: load!(String, reader)?,
+            served: deserialize!(Vec<RpcPalwKernelServed>, reader)?,
+            demands: deserialize!(Vec<RpcPalwKernelDemand>, reader)?,
+            seats: deserialize!(Vec<RpcPalwKernelSeat>, reader)?,
+            quorum: load!(u32, reader)?,
+            assignment_deadline_daa: load!(u64, reader)?,
+            receipts_counted: load!(u32, reader)?,
+            ledger_root: load!(String, reader)?,
+            aux_root: load!(String, reader)?,
+        })
+    }
+}
+
+/// **`getPalwKernelRows` (op 211)**: the kernel route's rows, a page at a time.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwKernelRowsRequest {
+    /// Resume after this row (exclusive). `has_cursor == false` starts at the beginning.
+    pub has_cursor: bool,
+    pub after_table: u32,
+    /// The cursor's key, hex.
+    pub after_key: String,
+    /// The page's budget in key and row bytes (0 = the node's default; capped by the node).
+    pub max_bytes: u32,
+}
+
+impl Serializer for GetPalwKernelRowsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.has_cursor, writer)?;
+        store!(u32, &self.after_table, writer)?;
+        store!(String, &self.after_key, writer)?;
+        store!(u32, &self.max_bytes, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwKernelRowsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            has_cursor: load!(bool, reader)?,
+            after_table: load!(u32, reader)?,
+            after_key: load!(String, reader)?,
+            max_bytes: load!(u32, reader)?,
+        })
+    }
+}
+
+/// One row: `(table, key, row)`, key and row hex.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwKernelRow {
+    pub table: u32,
+    pub key: String,
+    pub row: String,
+}
+
+impl Serializer for RpcPalwKernelRow {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u32, &self.table, writer)?;
+        store!(String, &self.key, writer)?;
+        store!(String, &self.row, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwKernelRow {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { table: load!(u32, reader)?, key: load!(String, reader)?, row: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwKernelRowsResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    /// The committed roots. A reader that gathers every page, rebuilds the ledger from the ledger tables (below 32) with the policy in
+    /// `header` and checks `ledger_root`, holds exactly what the chain committed.
+    pub ledger_root: String,
+    pub aux_root: String,
+    /// Borsh of the route's header (policy, config root, scalars), hex.
+    pub header: String,
+    pub rows: Vec<RpcPalwKernelRow>,
+    /// More rows follow this page (resume after `next_table` / `next_key`).
+    pub more: bool,
+    pub next_table: u32,
+    pub next_key: String,
+    pub total_rows: u64,
+}
+
+impl Serializer for GetPalwKernelRowsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(String, &self.ledger_root, writer)?;
+        store!(String, &self.aux_root, writer)?;
+        store!(String, &self.header, writer)?;
+        serialize!(Vec<RpcPalwKernelRow>, &self.rows, writer)?;
+        store!(bool, &self.more, writer)?;
+        store!(u32, &self.next_table, writer)?;
+        store!(String, &self.next_key, writer)?;
+        store!(u64, &self.total_rows, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwKernelRowsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            ledger_root: load!(String, reader)?,
+            aux_root: load!(String, reader)?,
+            header: load!(String, reader)?,
+            rows: deserialize!(Vec<RpcPalwKernelRow>, reader)?,
+            more: load!(bool, reader)?,
+            next_table: load!(u32, reader)?,
+            next_key: load!(String, reader)?,
+            total_rows: load!(u64, reader)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod palw_model_market_wire_tests {
     use super::*;

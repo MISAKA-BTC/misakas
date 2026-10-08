@@ -1045,6 +1045,32 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwPanelV3StatusResponse::default())
     }
 
+    /// G14 lane D (op 210): one kernel-route claim, everything public about it.
+    async fn get_palw_kernel_claim(&self, request: GetPalwKernelClaimRequest) -> RpcResult<GetPalwKernelClaimResponse> {
+        self.get_palw_kernel_claim_call(None, request).await
+    }
+    async fn get_palw_kernel_claim_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwKernelClaimRequest,
+    ) -> RpcResult<GetPalwKernelClaimResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwKernelClaimResponse::default())
+    }
+
+    /// G14 lane D (op 211): the kernel route's rows, a page at a time.
+    async fn get_palw_kernel_rows(&self, request: GetPalwKernelRowsRequest) -> RpcResult<GetPalwKernelRowsResponse> {
+        self.get_palw_kernel_rows_call(None, request).await
+    }
+    async fn get_palw_kernel_rows_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwKernelRowsRequest,
+    ) -> RpcResult<GetPalwKernelRowsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwKernelRowsResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

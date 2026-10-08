@@ -128,6 +128,8 @@ impl Factory {
                 GetPalwCapacityShadow,
                 GetPalwStateProof,
                 GetPalwPanelV3Status,
+                GetPalwKernelClaim,
+                GetPalwKernelRows,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 NotifyBlockAdded,

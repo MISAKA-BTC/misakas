@@ -3048,6 +3048,87 @@ message GetPalwCapacityShadowResponseMessage {
   RPCError error = 1000;
 }
 
+// G14 lane D: the kernel route's public read (ops 210, 211).
+message RpcPalwKernelServed {
+  uint32 stage = 1;
+  uint32 position = 2;
+  string bytes = 3;
+}
+
+message RpcPalwKernelDemand {
+  uint32 stage = 1;
+  uint32 position = 2;
+  uint32 demanders = 3;
+  uint64 filedDaa = 4;
+  uint64 deadlineDaa = 5;
+  string lastRejection = 6;
+}
+
+message RpcPalwKernelSeat {
+  string bond = 1;
+  string kernelBond = 2;
+}
+
+message GetPalwKernelClaimRequestMessage {
+  string claimId = 1;
+}
+
+message GetPalwKernelClaimResponseMessage {
+  bool available = 1;
+  bool found = 2;
+  uint64 tipDaa = 3;
+  string claimId = 4;
+  string kind = 5;
+  string state = 6;
+  uint64 finalDaa = 7;
+  bool convicted = 8;
+  bool rewarded = 9;
+  uint64 reservedSompi = 10;
+  uint64 committedDaa = 11;
+  uint64 liabilityUntil = 12;
+  string producerBond = 13;
+  string jobId = 14;
+  string classId = 15;
+  string publicRecord = 16;
+  string recordHeader = 17;
+  repeated RpcPalwKernelServed served = 18;
+  repeated RpcPalwKernelDemand demands = 19;
+  repeated RpcPalwKernelSeat seats = 20;
+  uint32 quorum = 21;
+  uint64 assignmentDeadlineDaa = 22;
+  uint32 receiptsCounted = 23;
+  string ledgerRoot = 24;
+  string auxRoot = 25;
+  RPCError error = 1000;
+}
+
+message RpcPalwKernelRow {
+  uint32 table = 1;
+  string key = 2;
+  string row = 3;
+}
+
+message GetPalwKernelRowsRequestMessage {
+  bool hasCursor = 1;
+  uint32 afterTable = 2;
+  string afterKey = 3;
+  uint32 maxBytes = 4;
+}
+
+message GetPalwKernelRowsResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  string ledgerRoot = 3;
+  string auxRoot = 4;
+  string header = 5;
+  repeated RpcPalwKernelRow rows = 6;
+  bool more = 7;
+  uint32 nextTable = 8;
+  string nextKey = 9;
+  uint64 totalRows = 10;
+  RPCError error = 1000;
+}
+
 // RFC-0009 stage D: one PALW state collection proven against the header that commits it (op 202).
 message GetPalwStateProofRequestMessage {
   string blockHash = 1;

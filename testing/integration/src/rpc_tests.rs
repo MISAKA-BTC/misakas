@@ -1186,6 +1186,33 @@ async fn sanity_test() {
                     assert!(!read.available && read.json.is_empty());
                 })
             }
+            KaspadPayloadOps::GetPalwKernelClaim => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // G14 (op 210): a malformed claim id is an error before any state is read; a well-formed read on a network that
+                    // holds no kernel route answers `available: false`.
+                    assert!(rpc_client
+                        .get_palw_kernel_claim_call(None, GetPalwKernelClaimRequest { claim_id: "not-hex".to_string() })
+                        .await
+                        .is_err());
+                    let read = rpc_client
+                        .get_palw_kernel_claim_call(None, GetPalwKernelClaimRequest { claim_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!read.available && !read.found && read.served.is_empty() && read.demands.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwKernelRows => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // G14 (op 211): a malformed cursor is an error before any state is read; with no kernel route there are no rows.
+                    let bad_cursor =
+                        GetPalwKernelRowsRequest { has_cursor: true, after_table: 1, after_key: "zz".to_string(), max_bytes: 0 };
+                    assert!(rpc_client.get_palw_kernel_rows_call(None, bad_cursor).await.is_err());
+                    let read = rpc_client.get_palw_kernel_rows_call(None, GetPalwKernelRowsRequest::default()).await.unwrap();
+                    assert!(!read.available && read.rows.is_empty() && !read.more);
+                })
+            }
             KaspadPayloadOps::GetPalwFreePromptClaim => {
                 let rpc_client = client.clone();
                 tst!(op, {

@@ -1467,6 +1467,76 @@ from!(item: &kaspa_rpc_core::GetPalwPanelV3StatusRequest, protowire::GetPalwPane
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwPanelV3StatusResponse>, protowire::GetPalwPanelV3StatusResponseMessage, {
     Self { available: item.available, observation_version: item.observation_version, json: item.json.clone(), error: None }
 });
+from!(item: &kaspa_rpc_core::RpcPalwKernelServed, protowire::RpcPalwKernelServed, {
+    Self { stage: item.stage, position: item.position, bytes: item.bytes.clone() }
+});
+from!(item: &kaspa_rpc_core::RpcPalwKernelDemand, protowire::RpcPalwKernelDemand, {
+    Self {
+        stage: item.stage,
+        position: item.position,
+        demanders: item.demanders,
+        filed_daa: item.filed_daa,
+        deadline_daa: item.deadline_daa,
+        last_rejection: item.last_rejection.clone(),
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwKernelSeat, protowire::RpcPalwKernelSeat, {
+    Self { bond: item.bond.clone(), kernel_bond: item.kernel_bond.clone() }
+});
+from!(item: &kaspa_rpc_core::GetPalwKernelClaimRequest, protowire::GetPalwKernelClaimRequestMessage, {
+    Self { claim_id: item.claim_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwKernelClaimResponse>, protowire::GetPalwKernelClaimResponseMessage, {
+    Self {
+        available: item.available,
+        found: item.found,
+        tip_daa: item.tip_daa,
+        claim_id: item.claim_id.clone(),
+        kind: item.kind.clone(),
+        state: item.state.clone(),
+        final_daa: item.final_daa,
+        convicted: item.convicted,
+        rewarded: item.rewarded,
+        reserved_sompi: item.reserved_sompi,
+        committed_daa: item.committed_daa,
+        liability_until: item.liability_until,
+        producer_bond: item.producer_bond.clone(),
+        job_id: item.job_id.clone(),
+        class_id: item.class_id.clone(),
+        public_record: item.public_record.clone(),
+        record_header: item.record_header.clone(),
+        served: item.served.iter().map(protowire::RpcPalwKernelServed::from).collect(),
+        demands: item.demands.iter().map(protowire::RpcPalwKernelDemand::from).collect(),
+        seats: item.seats.iter().map(protowire::RpcPalwKernelSeat::from).collect(),
+        quorum: item.quorum,
+        assignment_deadline_daa: item.assignment_deadline_daa,
+        receipts_counted: item.receipts_counted,
+        ledger_root: item.ledger_root.clone(),
+        aux_root: item.aux_root.clone(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwKernelRow, protowire::RpcPalwKernelRow, {
+    Self { table: item.table, key: item.key.clone(), row: item.row.clone() }
+});
+from!(item: &kaspa_rpc_core::GetPalwKernelRowsRequest, protowire::GetPalwKernelRowsRequestMessage, {
+    Self { has_cursor: item.has_cursor, after_table: item.after_table, after_key: item.after_key.clone(), max_bytes: item.max_bytes }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwKernelRowsResponse>, protowire::GetPalwKernelRowsResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        ledger_root: item.ledger_root.clone(),
+        aux_root: item.aux_root.clone(),
+        header: item.header.clone(),
+        rows: item.rows.iter().map(protowire::RpcPalwKernelRow::from).collect(),
+        more: item.more,
+        next_table: item.next_table,
+        next_key: item.next_key.clone(),
+        total_rows: item.total_rows,
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::RpcPalwCapacityStep, protowire::RpcPalwCapacityStep, {
     Self { from_daa: item.from_daa, rho: item.rho, q_credit_permille: item.q_credit_permille }
 });
@@ -3668,6 +3738,74 @@ try_from!(item: &protowire::GetPalwPanelV3StatusRequestMessage, kaspa_rpc_core::
 try_from!(item: &protowire::GetPalwPanelV3StatusResponseMessage, RpcResult<kaspa_rpc_core::GetPalwPanelV3StatusResponse>, {
     Self { available: item.available, observation_version: item.observation_version, json: item.json.clone() }
 });
+try_from!(item: &protowire::RpcPalwKernelServed, kaspa_rpc_core::RpcPalwKernelServed, {
+    Self { stage: item.stage, position: item.position, bytes: item.bytes.clone() }
+});
+try_from!(item: &protowire::RpcPalwKernelDemand, kaspa_rpc_core::RpcPalwKernelDemand, {
+    Self {
+        stage: item.stage,
+        position: item.position,
+        demanders: item.demanders,
+        filed_daa: item.filed_daa,
+        deadline_daa: item.deadline_daa,
+        last_rejection: item.last_rejection.clone(),
+    }
+});
+try_from!(item: &protowire::RpcPalwKernelSeat, kaspa_rpc_core::RpcPalwKernelSeat, {
+    Self { bond: item.bond.clone(), kernel_bond: item.kernel_bond.clone() }
+});
+try_from!(item: &protowire::GetPalwKernelClaimRequestMessage, kaspa_rpc_core::GetPalwKernelClaimRequest, {
+    Self { claim_id: item.claim_id.clone() }
+});
+try_from!(item: &protowire::GetPalwKernelClaimResponseMessage, RpcResult<kaspa_rpc_core::GetPalwKernelClaimResponse>, {
+    Self {
+        available: item.available,
+        found: item.found,
+        tip_daa: item.tip_daa,
+        claim_id: item.claim_id.clone(),
+        kind: item.kind.clone(),
+        state: item.state.clone(),
+        final_daa: item.final_daa,
+        convicted: item.convicted,
+        rewarded: item.rewarded,
+        reserved_sompi: item.reserved_sompi,
+        committed_daa: item.committed_daa,
+        liability_until: item.liability_until,
+        producer_bond: item.producer_bond.clone(),
+        job_id: item.job_id.clone(),
+        class_id: item.class_id.clone(),
+        public_record: item.public_record.clone(),
+        record_header: item.record_header.clone(),
+        served: item.served.iter().map(kaspa_rpc_core::RpcPalwKernelServed::try_from).collect::<RpcResult<Vec<_>>>()?,
+        demands: item.demands.iter().map(kaspa_rpc_core::RpcPalwKernelDemand::try_from).collect::<RpcResult<Vec<_>>>()?,
+        seats: item.seats.iter().map(kaspa_rpc_core::RpcPalwKernelSeat::try_from).collect::<RpcResult<Vec<_>>>()?,
+        quorum: item.quorum,
+        assignment_deadline_daa: item.assignment_deadline_daa,
+        receipts_counted: item.receipts_counted,
+        ledger_root: item.ledger_root.clone(),
+        aux_root: item.aux_root.clone(),
+    }
+});
+try_from!(item: &protowire::RpcPalwKernelRow, kaspa_rpc_core::RpcPalwKernelRow, {
+    Self { table: item.table, key: item.key.clone(), row: item.row.clone() }
+});
+try_from!(item: &protowire::GetPalwKernelRowsRequestMessage, kaspa_rpc_core::GetPalwKernelRowsRequest, {
+    Self { has_cursor: item.has_cursor, after_table: item.after_table, after_key: item.after_key.clone(), max_bytes: item.max_bytes }
+});
+try_from!(item: &protowire::GetPalwKernelRowsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwKernelRowsResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        ledger_root: item.ledger_root.clone(),
+        aux_root: item.aux_root.clone(),
+        header: item.header.clone(),
+        rows: item.rows.iter().map(kaspa_rpc_core::RpcPalwKernelRow::try_from).collect::<RpcResult<Vec<_>>>()?,
+        more: item.more,
+        next_table: item.next_table,
+        next_key: item.next_key.clone(),
+        total_rows: item.total_rows,
+    }
+});
 try_from!(item: &protowire::RpcPalwCapacityStep, kaspa_rpc_core::RpcPalwCapacityStep, {
     Self { from_daa: item.from_daa, rho: item.rho, q_credit_permille: item.q_credit_permille }
 });
@@ -5055,6 +5193,82 @@ mod native_settlement_tests {
         let duty = GetPrecommitDutyResponse { retired_at: Some(5), ..Default::default() };
         let wire: protowire::GetPrecommitDutyResponseMessage = RpcResult::Ok(&duty).into();
         assert_eq!(GetPrecommitDutyResponse::try_from(&wire).unwrap().retired_at, Some(5));
+    }
+}
+
+#[cfg(test)]
+mod palw_kernel_route_grpc_tests {
+    use super::*;
+    use kaspa_rpc_core::{
+        GetPalwKernelClaimRequest, GetPalwKernelClaimResponse, GetPalwKernelRowsRequest, GetPalwKernelRowsResponse, RpcPalwKernelDemand,
+        RpcPalwKernelRow, RpcPalwKernelSeat, RpcPalwKernelServed, RpcResult,
+    };
+
+    /// **`getPalwKernelClaim` and `getPalwKernelRows` (ops 210, 211) survive the grpc wire, both ways** — every field crosses.
+    #[test]
+    fn the_kernel_route_reads_round_trip_the_grpc_wire() {
+        let request = GetPalwKernelClaimRequest { claim_id: "ab".repeat(64) };
+        let wire: protowire::GetPalwKernelClaimRequestMessage = (&request).into();
+        assert_eq!(GetPalwKernelClaimRequest::try_from(&wire).unwrap().claim_id, request.claim_id);
+
+        let response = GetPalwKernelClaimResponse {
+            available: true,
+            found: true,
+            tip_daa: 99,
+            claim_id: "ab".repeat(64),
+            kind: "program".to_string(),
+            state: "Final { final_daa: 7 }".to_string(),
+            final_daa: 7,
+            convicted: false,
+            rewarded: true,
+            reserved_sompi: 100_000_000_000,
+            committed_daa: 3,
+            liability_until: 207,
+            producer_bond: "01".repeat(64),
+            job_id: "02".repeat(64),
+            class_id: "03".repeat(64),
+            public_record: "deadbeef".to_string(),
+            record_header: "cafe".to_string(),
+            served: vec![RpcPalwKernelServed { stage: 0, position: 4, bytes: "00ff".to_string() }],
+            demands: vec![RpcPalwKernelDemand {
+                stage: 0,
+                position: 1,
+                demanders: 2,
+                filed_daa: 5,
+                deadline_daa: 25,
+                last_rejection: "fake_opening".to_string(),
+            }],
+            seats: vec![RpcPalwKernelSeat { bond: format!("{}:0", "ee".repeat(64)), kernel_bond: "04".repeat(64) }],
+            quorum: 3,
+            assignment_deadline_daa: 103,
+            receipts_counted: 2,
+            ledger_root: "05".repeat(64),
+            aux_root: "06".repeat(64),
+        };
+        let wire: protowire::GetPalwKernelClaimResponseMessage = RpcResult::Ok(&response).into();
+        let back: GetPalwKernelClaimResponse = (&wire).try_into().unwrap();
+        assert_eq!(back, response);
+
+        let request = GetPalwKernelRowsRequest { has_cursor: true, after_table: 33, after_key: "0a0b".to_string(), max_bytes: 4096 };
+        let wire: protowire::GetPalwKernelRowsRequestMessage = (&request).into();
+        let back = GetPalwKernelRowsRequest::try_from(&wire).unwrap();
+        assert_eq!((back.has_cursor, back.after_table, back.after_key, back.max_bytes), (true, 33, "0a0b".to_string(), 4096));
+
+        let response = GetPalwKernelRowsResponse {
+            available: true,
+            tip_daa: 12,
+            ledger_root: "07".repeat(64),
+            aux_root: "08".repeat(64),
+            header: "0102".to_string(),
+            rows: vec![RpcPalwKernelRow { table: 6, key: "aa".to_string(), row: "bb".to_string() }],
+            more: true,
+            next_table: 6,
+            next_key: "aa".to_string(),
+            total_rows: 41,
+        };
+        let wire: protowire::GetPalwKernelRowsResponseMessage = RpcResult::Ok(&response).into();
+        let back: GetPalwKernelRowsResponse = (&wire).try_into().unwrap();
+        assert_eq!(back, response);
     }
 }
 

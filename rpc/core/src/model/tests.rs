@@ -2680,6 +2680,107 @@ mod mockery {
     }
     test!(GetPalwPanelV3StatusResponse);
 
+    // G14 lane D: ops 210 and 211 and their parts round-trip.
+    impl Mock for GetPalwKernelClaimRequest {
+        fn mock() -> Self {
+            GetPalwKernelClaimRequest { claim_id: mock_hex() }
+        }
+    }
+    test!(GetPalwKernelClaimRequest);
+
+    impl Mock for RpcPalwKernelServed {
+        fn mock() -> Self {
+            RpcPalwKernelServed { stage: mock(), position: mock(), bytes: mock_hex() }
+        }
+    }
+    test!(RpcPalwKernelServed);
+
+    impl Mock for RpcPalwKernelDemand {
+        fn mock() -> Self {
+            RpcPalwKernelDemand {
+                stage: mock(),
+                position: mock(),
+                demanders: mock(),
+                filed_daa: mock(),
+                deadline_daa: mock(),
+                last_rejection: "fake_opening".to_string(),
+            }
+        }
+    }
+    test!(RpcPalwKernelDemand);
+
+    impl Mock for RpcPalwKernelSeat {
+        fn mock() -> Self {
+            RpcPalwKernelSeat { bond: format!("{}:{}", mock_hex(), mock::<u32>()), kernel_bond: mock_hex() }
+        }
+    }
+    test!(RpcPalwKernelSeat);
+
+    impl Mock for GetPalwKernelClaimResponse {
+        fn mock() -> Self {
+            GetPalwKernelClaimResponse {
+                available: mock(),
+                found: mock(),
+                tip_daa: mock(),
+                claim_id: mock_hex(),
+                kind: "program".to_string(),
+                state: "Final { final_daa: 7 }".to_string(),
+                final_daa: mock(),
+                convicted: mock(),
+                rewarded: mock(),
+                reserved_sompi: mock(),
+                committed_daa: mock(),
+                liability_until: mock(),
+                producer_bond: mock_hex(),
+                job_id: mock_hex(),
+                class_id: mock_hex(),
+                public_record: mock_hex(),
+                record_header: mock_hex(),
+                served: mock(),
+                demands: mock(),
+                seats: mock(),
+                quorum: mock(),
+                assignment_deadline_daa: mock(),
+                receipts_counted: mock(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwKernelClaimResponse);
+
+    impl Mock for GetPalwKernelRowsRequest {
+        fn mock() -> Self {
+            GetPalwKernelRowsRequest { has_cursor: mock(), after_table: mock(), after_key: mock_hex(), max_bytes: mock() }
+        }
+    }
+    test!(GetPalwKernelRowsRequest);
+
+    impl Mock for RpcPalwKernelRow {
+        fn mock() -> Self {
+            RpcPalwKernelRow { table: mock(), key: mock_hex(), row: mock_hex() }
+        }
+    }
+    test!(RpcPalwKernelRow);
+
+    impl Mock for GetPalwKernelRowsResponse {
+        fn mock() -> Self {
+            GetPalwKernelRowsResponse {
+                available: mock(),
+                tip_daa: mock(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+                header: mock_hex(),
+                rows: mock(),
+                more: mock(),
+                next_table: mock(),
+                next_key: mock_hex(),
+                total_rows: mock(),
+            }
+        }
+    }
+    test!(GetPalwKernelRowsResponse);
+
     // ADR-0152 P2-10: op 199 and its parts round-trip.
     impl Mock for GetPalwVestingRequest {
         fn mock() -> Self {

@@ -3189,6 +3189,140 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     }
 
     // ------------------------------------------------------------------------------------------
+    // G14 lane D — the kernel route's public read (ops 210, 211)
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_kernel_claim_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwKernelClaimRequest,
+    ) -> RpcResult<GetPalwKernelClaimResponse> {
+        // A malformed claim id is an error before any state is read, on every network.
+        let claim = parse_hash64(request.claim_id.trim(), "claim id")?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwKernelClaimResponse { claim_id: claim.to_string(), ..Default::default() });
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let tip_daa = session.get_virtual_daa_score();
+        let kernel_claim = claim.as_bytes();
+        let read = session
+            .spawn_blocking(move |c| c.palw_kernel_route_v1().map(|route| route.claim_read_v1(&kernel_claim)))
+            .await;
+        let Some(read) = read else {
+            return Ok(GetPalwKernelClaimResponse { claim_id: claim.to_string(), tip_daa, ..Default::default() });
+        };
+        let Some(read) = read.map_err(RpcError::General)? else {
+            return Ok(GetPalwKernelClaimResponse { available: true, claim_id: claim.to_string(), tip_daa, ..Default::default() });
+        };
+        let hex = |bytes: &[u8]| faster_hex::hex_string(bytes);
+        Ok(GetPalwKernelClaimResponse {
+            available: true,
+            found: true,
+            tip_daa,
+            claim_id: claim.to_string(),
+            kind: read.kind.to_string(),
+            state: read.state,
+            final_daa: read.final_daa.unwrap_or(0),
+            convicted: read.convicted,
+            rewarded: read.rewarded,
+            reserved_sompi: read.reserved,
+            committed_daa: read.committed_daa,
+            liability_until: read.liability_until.unwrap_or(0),
+            producer_bond: hex(&read.producer_bond),
+            job_id: hex(&read.job_id),
+            class_id: hex(&read.class_id),
+            public_record: hex(&read.public_record),
+            record_header: hex(&read.record_header),
+            served: read
+                .served
+                .iter()
+                .map(|(stage, position, bytes)| RpcPalwKernelServed { stage: *stage as u32, position: *position, bytes: hex(bytes) })
+                .collect(),
+            demands: read
+                .demands
+                .iter()
+                .map(|d| RpcPalwKernelDemand {
+                    stage: d.stage as u32,
+                    position: d.position,
+                    demanders: d.demanders,
+                    filed_daa: d.filed_daa,
+                    deadline_daa: d.deadline_daa,
+                    last_rejection: d.last_rejection.clone().unwrap_or_default(),
+                })
+                .collect(),
+            seats: read
+                .seats
+                .iter()
+                .map(|(bond, kernel_bond)| RpcPalwKernelSeat {
+                    bond: format!("{}:{}", bond.0.transaction_id, bond.0.index),
+                    kernel_bond: hex(kernel_bond),
+                })
+                .collect(),
+            quorum: read.quorum as u32,
+            assignment_deadline_daa: read.assignment_deadline_daa,
+            receipts_counted: read.receipts_counted,
+            ledger_root: read.ledger_root.to_string(),
+            aux_root: read.aux_root.to_string(),
+        })
+    }
+
+    async fn get_palw_kernel_rows_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwKernelRowsRequest,
+    ) -> RpcResult<GetPalwKernelRowsResponse> {
+        // The cursor is parsed before a byte of chain state is read.
+        let after = if request.has_cursor {
+            let table = u8::try_from(request.after_table).map_err(|_| RpcError::General("afterTable must fit a u8".to_string()))?;
+            let text = request.after_key.trim();
+            if text.len() % 2 != 0 {
+                return Err(RpcError::General("afterKey must be an even number of hex digits".to_string()));
+            }
+            let mut key = vec![0u8; text.len() / 2];
+            faster_hex::hex_decode(text.as_bytes(), &mut key).map_err(|e| RpcError::General(format!("afterKey is not hex: {e}")))?;
+            Some((table, key))
+        } else {
+            None
+        };
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwKernelRowsResponse::default());
+        }
+        let max_bytes = match request.max_bytes {
+            0 => PALW_KERNEL_ROWS_RPC_BYTES,
+            n => (n as usize).min(PALW_KERNEL_ROWS_RPC_BYTES_MAX),
+        };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let tip_daa = session.get_virtual_daa_score();
+        let Some((route, page)) = session
+            .spawn_blocking(move |c| c.palw_kernel_route_v1().map(|route| {
+                let page = route.rows_page_v1(after, max_bytes);
+                (route, page)
+            }))
+            .await
+        else {
+            return Ok(GetPalwKernelRowsResponse { tip_daa, ..Default::default() });
+        };
+        let hex = |bytes: &[u8]| faster_hex::hex_string(bytes);
+        let header = borsh::to_vec(&route.header).map_err(|e| RpcError::General(e.to_string()))?;
+        let (more, next_table, next_key) = match &page.next {
+            Some((table, key)) => (true, *table as u32, hex(key)),
+            None => (false, 0, String::new()),
+        };
+        Ok(GetPalwKernelRowsResponse {
+            available: true,
+            tip_daa,
+            ledger_root: route.ledger_root().to_string(),
+            aux_root: route.aux_root().to_string(),
+            header: hex(&header),
+            rows: page.rows.iter().map(|(table, key, row)| RpcPalwKernelRow { table: *table as u32, key: hex(key), row: hex(row) }).collect(),
+            more,
+            next_table,
+            next_key,
+            total_rows: page.total_rows,
+        })
+    }
+
+    // ------------------------------------------------------------------------------------------
     // ADR-0152 P2-10 — the vesting table (op 199)
     // ------------------------------------------------------------------------------------------
 
@@ -4893,6 +5027,10 @@ impl AsyncService for RpcCoreService {
         })
     }
 }
+
+/// `getPalwKernelRows`'s default page budget (key and row bytes) and the most a caller may ask.
+const PALW_KERNEL_ROWS_RPC_BYTES: usize = 1 << 20;
+const PALW_KERNEL_ROWS_RPC_BYTES_MAX: usize = 8 << 20;
 
 /// `getPalwCapacityShadow`'s default page of bond and claim rows, and the most a caller may ask.
 const PALW_CAPACITY_SHADOW_RPC_ROWS: usize = 500;
