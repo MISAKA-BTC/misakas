@@ -881,3 +881,305 @@ async fn rfc12_x3_sibling_and_deep_forks_converge_in_any_arrival_order_and_match
     fork_case(&[2, 3], &[4, 5], "tie").await;
     fork_case(&[2], &[3, 4, 5, 6, 7], "deep: one block against five (a withheld private fork released later)").await;
 }
+
+
+// =====================================================================================================================
+// MATRIX 5 — process restart; old-version node
+// =====================================================================================================================
+
+/// **EXPECTED.** A node stopped after the fence and reopened on the same database serves the same sink, the same snapshot, the
+/// same heads and holds the same ledger; it rebuilds its in-memory rows from the retained deltas, builds the next block, and
+/// that block's snapshot equals the one a node replaying the whole chain from scratch publishes.
+#[tokio::test]
+async fn rfc12_x5_a_restart_keeps_the_heads_and_the_snapshot_and_carries_on() {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    let p = parts(Some(FENCE));
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _rx) = async_channel::unbounded();
+    let first = TestConsensus::with_db(db.clone(), &p.0, sender);
+    let mut a = Rig::on(first, &p, 0x12_0500_0000);
+    prefix(&mut a).await;
+    extend(&mut a, &[2]).await;
+    let (sink, snap, heads, supply) = (a.chain.sink(), snapshot_of(&a), heads_of(&a), a.supply());
+    assert!(snap.is_some(), "a snapshot was published before the stop");
+    let (wallets, nonce, simulated_time, reopen_nonce) = (a.wallets.clone(), a.nonce, a.chain.ctx.simulated_time, a.chain.nonce_for_reopen());
+    drop(a);
+
+    let mut resumed = p.0.clone();
+    resumed.process_genesis = false;
+    let (sender, _rx2) = async_channel::unbounded();
+    let second = TestConsensus::with_db(db.clone(), &resumed, sender);
+    let chain = t12_reopened_chain(second, &resumed, &p.1, simulated_time, reopen_nonce);
+    let p2: Parts = (resumed, p.1.clone(), p.2.clone(), p.3.clone());
+    let mut r = Rig::resumed(chain, &p2, wallets, nonce);
+    assert_eq!(r.chain.sink(), sink, "the restarted node's sink is the stopped node's");
+    assert_eq!(snapshot_of(&r), snap, "its native snapshot came off the disk");
+    assert_eq!(heads_of(&r), heads, "and its heads");
+    assert_eq!(r.supply(), supply, "and its ledger");
+    assert_eq!(r.vp().native_rows.lock().len(), 0, "the row cache is memory only: it starts empty");
+
+    let next = extend(&mut r, &[3]).await;
+    let s = snapshot_of(&r).expect("a snapshot after the restart");
+    assert_eq!((s.generation, s.latest, s.safe, s.finalized), (next[0].header.hash, Some(next[0].header.hash), None, None));
+    assert_eq!(s.stop, Some(SettlementStopV1::FrontierNotCovered));
+    assert!(r.vp().native_rows.lock().len() > 3, "the rows were rebuilt from the retained deltas");
+    let chain = r.blocks_through(r.chain.sink());
+    let z = follower(&p, nonce, &chain).await;
+    assert_eq!(snapshot_of(&z), snapshot_of(&r), "a from-scratch replay publishes the same snapshot");
+    assert_eq!(heads_of(&z), heads_of(&r));
+    assert_eq!(z.supply(), r.supply());
+}
+
+/// **EXPECTED.** A node on the same code without the fence (the old rules) accepts the fenced chain's blocks below the fence as its
+/// sink, and the chain stops for it at the first block whose rules differ (the coinbase it must pay, the state it must commit):
+/// its sink stays strictly behind the fenced node's, on the common prefix. It does not follow, and it does not fork the fenced node.
+#[tokio::test]
+async fn rfc12_x6_a_node_without_the_fence_follows_history_to_the_fence_and_no_further() {
+    let (pf, po) = (parts(Some(FENCE)), parts(None));
+    let mut a = Rig::new(&pf, 0x12_0600_0000);
+    let mut chain = prefix(&mut a).await;
+    chain.extend(extend(&mut a, &[2, 3]).await);
+    let mut old = Rig::new(&po, 0x12_0610_0000);
+    let mut divergence = None;
+    for (i, blk) in chain.iter().enumerate() {
+        let verdict = old.api().validate_and_insert_block(blk.clone()).virtual_state_task.await;
+        let status = old.api().block_status(blk.header.hash);
+        eprintln!("[x6] block {i} daa {} -> {:?} / {:?}; the old node's sink is block {:?}", blk.header.daa_score, verdict.as_ref().map(|_| ()).map_err(|e| e.to_string()), status,
+            chain.iter().position(|c| c.header.hash == old.chain.sink()));
+        if old.chain.sink() != blk.header.hash && divergence.is_none() {
+            divergence = Some(i);
+        }
+    }
+    let first = divergence.expect("the old node stops following somewhere");
+    let first_retired = chain.iter().position(|b| pf.0.params.palw_dns_retired_at(b.header.daa_score)).expect("a retired block");
+    eprintln!("[x6] the old rules agree on blocks 0..{first}; the first retired block is {first_retired}");
+    assert!(first >= first_retired, "no block below the fence is refused by the old rules: history is byte-identical");
+    assert!(first < chain.len(), "and the old node cannot follow the whole fenced chain");
+    let old_sink_pos = chain.iter().position(|c| c.header.hash == old.chain.sink()).expect("the old node's sink is on the fenced chain");
+    assert!(old_sink_pos < chain.len() - 1, "the old node's sink is behind the fenced node's");
+    assert_eq!(old_sink_pos + 1, first, "it stays on the last common block");
+}
+
+// =====================================================================================================================
+// MATRIX 6 — below-finalized conflict: alarm, sticky, resync
+// =====================================================================================================================
+
+fn publish_native(rig: &Rig, snapshot: NativeSettlementSnapshotV1) {
+    let vp = rig.vp();
+    let mut batch = rocksdb::WriteBatch::default();
+    vp.evm_heads_store.write().set_native_batch(&mut batch, Some(snapshot)).unwrap();
+    vp.db.write(batch).unwrap();
+}
+
+/// **EXPECTED.** If a branch abandons a head the node had published as `finalized`, the next snapshot says `FinalizedConflict`
+/// with no `safe` and no `finalized` (and still the sink as `latest`: execution is a fact, not a certificate), the node logs the
+/// resync requirement, and the conflict **stays** through the following blocks and through the loss of the in-memory rows. Only a
+/// root-verified pruning-point EVM import (the resync) clears it; after it the snapshot is built from the chain again, and neither
+/// the conflict nor DNS authority is back.
+#[tokio::test]
+async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_clears_it() {
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0700_0000);
+    let pre = prefix(&mut a).await;
+    let mut b = follower(&p, 0x12_0710_0000, &pre).await;
+    let side = extend(&mut b, &[3]).await;
+    let main = extend(&mut a, &[2]).await;
+    a.arrive(side[0].clone(), "the sibling").await;
+    let sink = a.chain.sink();
+    let abandoned = if sink == main[0].header.hash { side[0].header.hash } else { main[0].header.hash };
+    assert_ne!(abandoned, sink);
+    // The node had published `abandoned` as finalized (the test's hand — nothing in this harness can finalize).
+    publish_native(
+        &a,
+        NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: a.config.params.consensus_params_id(),
+            policy_id: test_policy().id(),
+            generation: sink,
+            retirement_daa: FENCE,
+            frontier: None,
+            latest: Some(sink),
+            safe: Some(abandoned),
+            finalized: Some(abandoned),
+            depth: 1,
+            unique_work: "1".into(),
+            stop: None,
+        },
+    );
+    let z = extend(&mut a, &[4]).await;
+    let conflict = snapshot_of(&a).expect("a snapshot");
+    assert_eq!(conflict.stop, Some(SettlementStopV1::FinalizedConflict), "the abandoned finalized head is reported, not relabelled");
+    assert_eq!((conflict.safe, conflict.finalized), (None, None));
+    assert_eq!(conflict.latest, Some(z[0].header.hash), "latest is the executed sink even in conflict");
+    let heads = heads_of(&a).expect("heads");
+    assert_eq!((heads.latest_head(), heads.safe_head(), heads.finalized_head()), (Some(z[0].header.hash), None, None));
+    // Sticky: another block, and the loss of every in-memory row.
+    a.vp().native_rows.lock().clear();
+    let z2 = extend(&mut a, &[5]).await;
+    let still = snapshot_of(&a).expect("a snapshot");
+    assert_eq!((still.stop, still.generation), (Some(SettlementStopV1::FinalizedConflict), z2[0].header.hash), "sticky");
+    // The resync: a root-verified import of the pruning point's EVM state (a retired pruning point).
+    let pp = a.chain.sink();
+    let header = a.api().get_evm_header_of(pp).unwrap().expect("the EVM header");
+    let snapshot = a.api().get_evm_state_snapshot_of(pp).unwrap().expect("the EVM state");
+    {
+        // A node that imports has not got these rows (that is why it imports); this one has, so they go first.
+        use crate::model::stores::evm::{EvmHeaderStore, EvmStateStore};
+        let (vp, mut batch) = (a.vp(), rocksdb::WriteBatch::default());
+        vp.evm_header_store.delete_batch(&mut batch, pp).unwrap();
+        vp.evm_state_store.delete_batch(&mut batch, pp).unwrap();
+        vp.db.write(batch).unwrap();
+    }
+    a.vp().import_pruning_point_evm_state(pp, header, snapshot).expect("a root-verified import");
+    assert_eq!(snapshot_of(&a), None, "the import clears native evidence until reconstruction supplies proof");
+    let heads = heads_of(&a).expect("heads");
+    assert_eq!((heads.latest_head(), heads.safe_head(), heads.finalized_head()), (Some(pp), None, None), "and never invents safe or finalized");
+    let z3 = extend(&mut a, &[6]).await;
+    let rebuilt = snapshot_of(&a).expect("a snapshot");
+    assert_eq!((rebuilt.generation, rebuilt.latest, rebuilt.safe, rebuilt.finalized), (z3[0].header.hash, Some(z3[0].header.hash), None, None));
+    assert_eq!(rebuilt.stop, Some(SettlementStopV1::FrontierNotCovered), "reconstruction built it from the chain; the conflict is gone");
+}
+
+// =====================================================================================================================
+// MATRIX 7 — certified work makes a prefix safe; a reorg takes it back; lost history stops certification
+// =====================================================================================================================
+
+/// **Plant a safe frontier on the tip, consistently**: the tip *and* the sink's delta row (a `Frontier` entry, the row's root
+/// rewritten), so every later block commits to the planted state and a reorg walk reverts it exactly. This is the test's hand: a
+/// frontier is what a `Final` claim buys, and no claim can reach `Final` on this clock.
+fn plant_frontier(rig: &Rig, blue: u64, frontier: BlockHash) {
+    use crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2;
+    use kaspa_consensus_core::palw_state_v2::{PalwDeltaEntryV2, PalwStateCarriageV2};
+    let (sink, tip) = rig.chain.tip_state();
+    let before = tip.safe_frontier();
+    let mut carriage = PalwStateCarriageV2::from_state(&tip);
+    carriage.safe_frontier_blue_score = blue;
+    carriage.safe_frontier = frontier;
+    let planted = carriage.into_state(&rig.chain.bundle.state, None).expect("a planted frontier is a consistent state");
+    let vp = rig.vp();
+    let mut store = vp.palw_state_v2_store.write();
+    let (_, mut delta) = store.delta_of(sink).expect("the sink's delta row");
+    delta.entries.push(PalwDeltaEntryV2::Frontier { old: before, new: (blue, frontier) });
+    store
+        .set_delta_record_for_tests(sink, PalwStateDeltaRecordV2 { state_root: planted.state_root(), delta_borsh: borsh::to_vec(&delta).unwrap() })
+        .unwrap();
+    store.set_tip_for_tests(sink, &planted).unwrap();
+    drop(store);
+    // A plant rewrites a delta row under the cache (a real chain never does): the rows read before it are stale.
+    vp.native_rows.lock().clear();
+}
+
+/// Place a unit of matured useful work at `at`, as if its PALW delta had carried it (the cfg(test) seam; the extraction from real
+/// deltas is `rfc0012_native_evidence_fold`'s).
+fn place_fact(rig: &Rig, at: &Block, work: u128) {
+    let fact = MatureUsefulWorkV1 {
+        identity: Hash64::from_u64_word(0x1201),
+        anchor: at.header.hash,
+        operator: Hash64::from_u64_word(0x1202),
+        class: Hash64::from_u64_word(0x1203),
+        anchor_blue: at.header.blue_score,
+        accepted_blue: at.header.blue_score,
+        anchor_daa: at.header.daa_score,
+        accepted_daa: at.header.daa_score,
+        matured_daa: 0,
+        work,
+    };
+    rig.vp().native_fact_override.lock().entry(at.header.hash).or_default().push(fact);
+}
+
+/// Build the certified scenario on `a`: prefix, a planted frontier at b0, one attempt carrying a placed fact, one more attempt, the
+/// pruning point at b0. Returns the blocks `(b0, e3)`.
+async fn certified(a: &mut Rig) -> (Block, Block, Vec<Block>) {
+    let pre = prefix(a).await;
+    plant_frontier(a, pre[0].header.blue_score, pre[0].header.hash);
+    let e3 = extend(a, &[2]).await.remove(0);
+    place_fact(a, &e3, 10);
+    a.vp().pruning_point_store.write().set(pre[0].header.hash, 1).unwrap();
+    extend(a, &[3]).await;
+    (pre[0].clone(), e3, pre)
+}
+
+/// **EXPECTED.** With a safe frontier at b0, one unit of matured work (10) placed after it, and b0 the pruning point:
+/// `safe` is b0 — the deepest executed effect whose lifecycle is closed (every claim accepted at or before it resolved) and which
+/// the frontier covers — with depth 1 and work 10; the prefix stops at e1 (`FrontierNotCovered`: the frontier is at b0, not past it);
+/// `finalized` is b0 (an executed ancestor of `safe`, the validated pruning point); and `latest` is the sink. Then a heavier
+/// branch that does not contain the work takes the sink: `safe` and `finalized` are recomputed to nothing (stop `InsufficientDepth`)
+/// while `latest` follows. The label was never pinned.
+#[tokio::test]
+async fn rfc12_x8_certified_work_makes_a_prefix_safe_and_a_reorg_takes_it_back() {
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0800_0000);
+    let pre_blocks = {
+        // B must see the same planted prefix, so it is built the same way.
+        let pre = prefix(&mut a).await;
+        pre
+    };
+    plant_frontier(&a, pre_blocks[0].header.blue_score, pre_blocks[0].header.hash);
+    let mut b = follower(&p, 0x12_0810_0000, &pre_blocks).await;
+    plant_frontier(&b, pre_blocks[0].header.blue_score, pre_blocks[0].header.hash);
+    assert_eq!(a.chain.tip_state().1.state_root(), b.chain.tip_state().1.state_root(), "the same planted state on both nodes");
+    let e3 = extend(&mut a, &[2]).await.remove(0);
+    place_fact(&a, &e3, 10);
+    let b0 = pre_blocks[0].header.hash;
+    a.vp().pruning_point_store.write().set(b0, 1).unwrap();
+    let e4 = extend(&mut a, &[3]).await.remove(0);
+    let s = snapshot_of(&a).expect("a snapshot");
+    eprintln!("[x8] {s:?}");
+    assert_eq!((s.generation, s.latest), (e4.header.hash, Some(e4.header.hash)));
+    assert_eq!(s.safe, Some(b0), "b0 is the deepest effect that is closed, covered by the frontier, and buried under D and W");
+    assert_eq!((s.depth, s.unique_work.as_str()), (1, "10"));
+    assert_eq!(s.stop, Some(SettlementStopV1::FrontierNotCovered), "and the prefix ends where the frontier does");
+    assert_eq!(s.finalized, Some(b0), "finalized = the validated pruning point under a certified safe prefix");
+    assert_eq!(s.frontier, Some(b0));
+    let h = heads_of(&a).expect("heads");
+    assert_eq!((h.latest_head(), h.safe_head(), h.finalized_head()), (Some(e4.header.hash), Some(b0), Some(b0)));
+
+    // The reorg: B's three attempts on the same planted prefix beat A's two.
+    let ys = extend(&mut b, &[4, 5, 6]).await;
+    for y in &ys {
+        a.arrive(y.clone(), "the heavier branch").await;
+    }
+    assert_eq!(a.chain.sink(), ys.last().unwrap().header.hash, "the heavier branch took the sink");
+    let s = snapshot_of(&a).expect("a snapshot");
+    assert_eq!(s.latest, Some(ys.last().unwrap().header.hash), "latest follows");
+    assert_eq!((s.safe, s.finalized), (None, None), "the work was on the abandoned branch: recomputed away, not pinned");
+    assert_eq!(s.stop, Some(SettlementStopV1::InsufficientDepth));
+    let h = heads_of(&a).expect("heads");
+    assert_eq!((h.safe_head(), h.finalized_head()), (None, None));
+}
+
+/// **EXPECTED.** If the delta row of a chain block is gone (a pruned or damaged history) the snapshot stops at `MissingHistory`
+/// — `safe` and `finalized` withdrawn, `latest` kept — rather than certifying over a gap; restoring the row (and the rows being
+/// rebuilt) brings the same certificate back. The in-memory rows are not authoritative: clearing them changes nothing.
+#[tokio::test]
+async fn rfc12_x9_lost_history_stops_certification_and_never_certifies_around_the_gap() {
+    use crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2;
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0900_0000);
+    let (b0, _e3, pre) = certified(&mut a).await;
+    let want = snapshot_of(&a).expect("a snapshot");
+    assert_eq!(want.safe, Some(b0.header.hash), "the certified scenario");
+    // Clearing the rows changes nothing: they are a cache.
+    a.vp().native_rows.lock().clear();
+    extend(&mut a, &[4]).await;
+    let rebuilt = snapshot_of(&a).expect("a snapshot");
+    assert_eq!((rebuilt.safe, rebuilt.finalized, rebuilt.depth, rebuilt.unique_work.clone()), (want.safe, want.finalized, want.depth, want.unique_work.clone()));
+    // A gap: b1's delta row is lost.
+    let b1 = pre[2].header.hash;
+    let (root, delta) = a.vp().palw_state_v2_store.read().delta_of(b1).expect("b1's row");
+    let record = PalwStateDeltaRecordV2 { state_root: root, delta_borsh: borsh::to_vec(&delta).unwrap() };
+    a.vp().palw_state_v2_store.write().delete_delta_for_tests(b1).unwrap();
+    a.vp().native_rows.lock().clear();
+    let tip = extend(&mut a, &[5]).await.remove(0);
+    let gap = snapshot_of(&a).expect("a snapshot");
+    assert_eq!(gap.stop, Some(SettlementStopV1::MissingHistory), "a gap is a stop");
+    assert_eq!((gap.safe, gap.finalized), (None, None), "nothing is certified around it");
+    assert_eq!(gap.latest, Some(tip.header.hash), "execution is still reported");
+    assert_eq!(heads_of(&a).map(|h| (h.latest_head(), h.safe_head(), h.finalized_head())), Some((Some(tip.header.hash), None, None)));
+    // Restored: the same certificate.
+    a.vp().palw_state_v2_store.write().set_delta_record_for_tests(b1, record).unwrap();
+    a.vp().native_rows.lock().clear();
+    let tip2 = extend(&mut a, &[6]).await.remove(0);
+    let back = snapshot_of(&a).expect("a snapshot");
+    assert_eq!((back.generation, back.safe, back.finalized, back.depth, back.unique_work.clone()), (tip2.header.hash, want.safe, want.finalized, want.depth, want.unique_work));
+}
