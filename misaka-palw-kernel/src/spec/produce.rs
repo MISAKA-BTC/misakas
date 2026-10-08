@@ -7,6 +7,7 @@ use crate::evidence::build_evidence_v1;
 use crate::hash::Digest;
 use crate::job::DecodeRuleV1;
 use crate::ledger::ClassRowV1;
+use crate::public::TensorWireV1;
 use crate::trace::{ParamCommitmentsV1, TraceV1, WiringV1, tensor_commitment, trace_v1};
 
 use super::composite::{CompositeJobV1, StageClaimV1, stage_claim_v1, stage_job_v1};
@@ -25,8 +26,10 @@ pub struct MemoryProductionV1 {
 }
 
 /// **Produce a memory claim.** `base` is the rule's artifact (its base weights; the slot params are replaced per step), `pre` the
-/// pre-state tensors (the line head's), `lie(step, trace)` edits a step's committed trace before it is committed (the honest
-/// producer passes a no-op). Each step's delivered token is the greedy token of the trace it commits.
+/// pre-state tensors (the line head's — any producer reads them from the chain,
+/// [`crate::ledger::KernelLedgerV1::memory_head_tensors_v1`]), `lie(step, trace)` edits a step's committed trace before it is
+/// committed (the honest producer passes a no-op). Each step's delivered token is the greedy token of the trace it commits; the
+/// post-state is carried opened.
 #[allow(clippy::too_many_arguments)]
 pub fn produce_memory_v1(
     class: &Digest,
@@ -70,8 +73,9 @@ pub fn produce_memory_v1(
     }
     let commitments: Vec<Digest> = state.iter().map(tensor_commitment).collect();
     roots.push(memory_root_v1(&root.slots, &commitments));
+    let post_state = state.iter().map(TensorWireV1::of).collect();
     Ok(MemoryProductionV1 {
-        claim: MemoryClaimV1 { job_id, producer_bond: *producer, generated, step_roots: roots, steps },
+        claim: MemoryClaimV1 { job_id, producer_bond: *producer, generated, step_roots: roots, steps, post_state },
         traces,
         post: state,
     })

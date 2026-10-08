@@ -28,7 +28,26 @@ impl Params {
     }
 
     /// **The fence's refusal**: Part II is armed only by the single full-activation release, so any armed height is refused here.
+    ///
+    /// First, by name, **its prerequisites** (kept when the blanket refusal is lifted): the typed kinds ride the kernel route and register
+    /// only under `OptimisticPublicVerification`, so `palw_probabilistic_constraints_v1` (the route) and `palw_panel_free_v1` (OPV) must
+    /// be armed at or below this fence's height.
     pub fn validate_palw_typed_roots_v1(&self) -> Result<(), PalwModeV2Error> {
+        if let Some(at) = self.palw_typed_roots_activation() {
+            let route = self.palw_probabilistic_constraints_v1.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
+            if !route.is_some_and(|r| r <= at) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_typed_roots_v1 requires palw_probabilistic_constraints_v1 (the kernel route it rides) armed at or below it",
+                ));
+            }
+            let opv =
+                self.palw_panel_free_v1.as_ref().filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
+            if !opv.is_some_and(|o| o <= at) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_typed_roots_v1 requires palw_panel_free_v1 (every typed kind registers only under OPV) armed at or below it",
+                ));
+            }
+        }
         match self.palw_typed_roots_v1 {
             Some(f) if f != ForkActivation::never() => Err(PalwModeV2Error::Invalid(
                 "palw_typed_roots_v1 cannot be armed: RFC-0004 Part II is armed only by the single full-activation release",
@@ -57,7 +76,21 @@ mod tests {
         p.validate_palw_typed_roots_v1().unwrap();
         assert_eq!(p.palw_typed_roots_activation(), None);
         p.palw_typed_roots_v1 = Some(ForkActivation::new(1_000));
-        assert!(p.validate_palw_typed_roots_v1().is_err());
+        let why = |p: &Params| match p.validate_palw_typed_roots_v1() {
+            Err(PalwModeV2Error::Invalid(why)) => why,
+            other => panic!("refused by name: {other:?}"),
+        };
+        assert!(why(&p).contains("requires palw_probabilistic_constraints_v1"), "{}", why(&p));
+        p.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(1_001));
+        assert!(why(&p).contains("requires palw_probabilistic_constraints_v1"), "the route above it: {}", why(&p));
+        p.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(1_000));
+        assert!(why(&p).contains("requires palw_panel_free_v1"), "{}", why(&p));
+        p.palw_panel_free_v1 = Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(ForkActivation::new(1_001)));
+        assert!(why(&p).contains("requires palw_panel_free_v1"), "OPV above it: {}", why(&p));
+        p.palw_panel_free_v1 = Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(ForkActivation::new(900)));
+        assert!(why(&p).contains("cannot be armed"), "prerequisites met: the blanket refusal remains: {}", why(&p));
+        p.palw_probabilistic_constraints_v1 = None;
+        p.palw_panel_free_v1 = None;
         assert_eq!(p.palw_typed_roots_activation(), Some(1_000));
         assert!(p.palw_typed_roots_active_at(1_000) && !p.palw_typed_roots_active_at(999));
         assert_ne!(p.consensus_params_id(), id, "an armed height would be a different network");

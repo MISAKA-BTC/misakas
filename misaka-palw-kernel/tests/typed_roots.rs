@@ -411,6 +411,12 @@ impl Mem {
     fn m0(&self) -> Vec<Tensor> {
         vec![self.fx.params.tensors[&(1, Some(0))].clone()]
     }
+
+    /// **The line head's tensors as a fresh node reads them**: from the rows (the carried post-state of the claim that advanced it)
+    /// and the public artifact (`M0`) — never from any producer.
+    fn chain_head(&self) -> Vec<Tensor> {
+        self.w.rebuilt().memory_head_tensors_v1(&self.class, &self.fx.params).expect("the head is public")
+    }
 }
 
 #[test]
@@ -434,18 +440,23 @@ fn memory_end_to_end_a_lie_in_one_step_is_convicted_and_memory_is_carried_across
     assert_ne!(head1, m0_commitments, "the line moved at Final");
     assert_eq!(root1, *p1.claim.step_roots.last().unwrap(), "to the claim's post-state");
     assert_eq!(m.w.l.typed.lines[&m.class].advances.len(), 1);
+    // The head is public: a fresh node reads its tensors from the rows (job 1's carried post-state), not from job 1's producer.
+    assert_eq!(m.w.l.typed.lines[&m.class].head_source, Some(c1));
+    let pre2 = m.chain_head();
+    assert_eq!(pre2, p1.post, "the chain holds exactly the memory job 1 left");
 
     // Job 2 over job 1's post-state: a lie in step 1 (one MatMul value at its first position), convicted by a fresh outsider.
     let (_, job2) = m.job(vec![vec![4, 4], vec![8, 1, 6], vec![2]]);
     assert_eq!(job2.pre_root, root1, "memory is carried: the next job runs on the head");
     let (s_at, n_at) = matmul_of(&m.fx.program);
-    let lie = m.produce(&job2, P1, &p1.post, |i, t| {
+    let lie = m.produce(&job2, P1, &pre2, |i, t| {
         if i == 1 {
             bump(&mut t.values[0][s_at][n_at], 1)
         }
     });
     let (c2, _) = m.w.commit(SpecClaimV1::Memory(lie.claim.clone()));
-    let da2 = Da::memory(&lie, Some(&p1.post));
+    // The outsider's step-0 pre-state comes from the chain too (no 0x40 material in its directory).
+    let da2 = Da::memory(&lie, None);
     let finding = check(&m.w.rebuilt(), c2, &da2, &m.fx.params, &());
     let OutsiderFindingV1::Prosecute(ProsecutionV1::Spec(bytes)) = &finding else { panic!("{finding:?}") };
     let fault: SpecFaultV1 = borsh::from_slice(bytes).unwrap();
@@ -459,16 +470,18 @@ fn memory_end_to_end_a_lie_in_one_step_is_convicted_and_memory_is_carried_across
     assert!(m.w.l.claims[&c2].convicted);
     assert_eq!(m.head().1, root1, "a convicted claim never moves the line");
 
-    // The job is free again: an honest claim of job 2 finalizes and carries the memory a second time.
-    let honest = m.produce(&job2, P2, &p1.post, |_, _| {});
+    // The job is free again: P2 — which never held job 1's memory — produces from the chain alone; it finalizes and carries the
+    // memory a second time.
+    let honest = m.produce(&job2, P2, &pre2, |_, _| {});
     let (c3, _) = m.w.commit(SpecClaimV1::Memory(honest.claim.clone()));
-    let da3 = Da::memory(&honest, Some(&p1.post));
+    let da3 = Da::memory(&honest, None);
     assert_eq!(check(&m.w.rebuilt(), c3, &da3, &m.fx.params, &()), OutsiderFindingV1::Clean);
     let final_at = m.w.l.opv.claims[&c3].window_end_daa;
     m.w.beat_to(final_at);
     assert!(matches!(m.w.state(&c3), ClaimStateV1::Final { .. }));
     assert_eq!(m.head().1, *honest.claim.step_roots.last().unwrap(), "the head is job 2's post-state, computed from job 1's");
     assert_ne!(m.head().1, root1);
+    assert_eq!((m.w.l.typed.lines[&m.class].head_source, m.chain_head()), (Some(c3), honest.post.clone()), "public again");
     // The post-state is not an independent run from M0: carrying memory changed the result.
     let fresh = m.produce(&job2, P2, &m.m0(), |_, _| {});
     assert_ne!(*fresh.claim.step_roots.last().unwrap(), m.head().1, "job 2 from M0 would leave another memory");
@@ -478,50 +491,70 @@ fn memory_end_to_end_a_lie_in_one_step_is_convicted_and_memory_is_carried_across
 #[test]
 fn memory_a_withheld_pre_state_is_a_default_and_a_served_one_completes_the_check() {
     let mut m = Mem::new(memory_v1(5));
-    // Advance the line once, so the pre-state of the next job is a committed value, not the registered M0.
+    // Advance the line once, so the next job's pre-state is a committed value (job 1's carried post-state), not the registered M0.
     let (_, job1) = m.job(vec![vec![1, 2, 3]]);
     let p1 = m.produce(&job1, P1, &m.m0(), |_, _| {});
     let (c1, _) = m.w.commit(SpecClaimV1::Memory(p1.claim.clone()));
     let at = m.w.l.opv.claims[&c1].window_end_daa;
     m.w.beat_to(at);
+    let head = m.chain_head();
+    let mask = misaka_palw_kernel::trace::derived_mask_v1(&m.fx.program);
 
-    // Two claims over the new head (two jobs), both honest, whose producers do not publish the pre-state.
+    // Two honest two-step claims over the new head. Step 0's pre-state is public on chain; step 1's pre-state — step 0's slot write at
+    // its last position, a committed value of THIS claim — is the claim's DA. An outsider without it demands exactly that position.
     for (withhold, producer) in [(true, P1), (false, P2)] {
         let (_, job) = m.job(vec![vec![7, 7], vec![9]]);
-        let prod = m.produce(&job, producer, &p1.post, |_, _| {});
+        let prod = m.produce(&job, producer, &head, |_, _| {});
         let (c, _) = m.w.commit(SpecClaimV1::Memory(prod.claim.clone()));
-        let da = Da::memory(&prod, None);
+        let at = prod.traces[0].values.len() as u32 - 1;
+        let mut da = Da::memory(&prod, None);
+        da.0.retain(|(stage, p, _, _), _| !(*stage == 0 && *p == at));
         assert_eq!(
             check(&m.w.rebuilt(), c, &da, &m.fx.params, &()),
-            OutsiderFindingV1::Demand(vec![(MEMORY_PRE_STATE_STAGE_V1, 0)]),
-            "the outsider demands exactly the pre-state"
+            OutsiderFindingV1::Demand(vec![(0, at)]),
+            "the outsider demands exactly step 1's pre-state (step 0's needs no demand: it is on chain)"
         );
-        let ev = m.w.block(vec![obj(OUT, O::FileDemand { demander: OUT, claim: c, stage: MEMORY_PRE_STATE_STAGE_V1, position: 0 })]);
+        let ev = m.w.block(vec![obj(OUT, O::FileDemand { demander: OUT, claim: c, stage: 0, position: at })]);
         assert!(ev.iter().any(|e| matches!(e, E::DemandOpened { .. })), "{ev:?}");
         if withhold {
-            let deadline = m.w.l.demands[&(c, MEMORY_PRE_STATE_STAGE_V1, 0)].deadline_daa;
+            let deadline = m.w.l.demands[&(c, 0, at)].deadline_daa;
             m.w.beat_to(deadline);
             assert!(matches!(m.w.state(&c), ClaimStateV1::Unavailable { producer_defaulted: true, .. }), "{:?}", m.w.state(&c));
             assert!(!m.w.l.claims[&c].convicted, "withholding is a default, never fraud");
+            assert_eq!(m.head().1, *p1.claim.step_roots.last().unwrap(), "a defaulted claim never moves the line");
         } else {
-            // A wrong tensor is rejected; the right one is served and the check completes from the chain alone.
-            let wrong =
-                PositionResponseV1 { values: vec![vec![MaterialResponseV1::Whole(TensorWireV1::of(&m.m0()[0]))]], inputs: vec![] };
-            let ev = m.w.block(vec![obj(
-                producer,
-                O::Respond { claim: c, stage: MEMORY_PRE_STATE_STAGE_V1, position: 0, bytes: borsh::to_vec(&wrong).unwrap() },
-            )]);
-            assert!(ev.iter().any(|e| matches!(e, E::ResponseRejected { .. })), "{ev:?}");
-            let right = PositionResponseV1 {
-                values: vec![p1.post.iter().map(|t| MaterialResponseV1::Whole(TensorWireV1::of(t))).collect()],
-                inputs: vec![],
+            // The 0x40 obligation of RFC-0004 §II.2 stands as well (served from the chain's copy by the producer).
+            let ev =
+                m.w.block(vec![obj(OUT, O::FileDemand { demander: OUT, claim: c, stage: MEMORY_PRE_STATE_STAGE_V1, position: 0 })]);
+            assert!(ev.iter().any(|e| matches!(e, E::DemandOpened { .. })), "{ev:?}");
+            let whole = |t: &Tensor| MaterialResponseV1::Whole(TensorWireV1::of(t));
+            let response = |values: &[Vec<Tensor>]| {
+                let values = values
+                    .iter()
+                    .enumerate()
+                    .map(|(s, o)| {
+                        o.iter().enumerate().map(|(n, t)| if mask[s][n] { MaterialResponseV1::Omitted } else { whole(t) }).collect()
+                    })
+                    .collect();
+                borsh::to_vec(&PositionResponseV1 { values, inputs: vec![] }).unwrap()
             };
-            let ev = m.w.block(vec![obj(
-                producer,
-                O::Respond { claim: c, stage: MEMORY_PRE_STATE_STAGE_V1, position: 0, bytes: borsh::to_vec(&right).unwrap() },
-            )]);
-            assert!(ev.iter().any(|e| matches!(e, E::Served { .. })), "{ev:?}");
-            assert_eq!(check(&m.w.rebuilt(), c, &da, &m.fx.params, &()), OutsiderFindingV1::Clean);
+            // A wrong value is rejected; the right position is served, and so is the pre-state.
+            let mut wrong = prod.traces[0].values[at as usize].clone();
+            let (s_at, n_at) = matmul_of(&m.fx.program);
+            bump(&mut wrong[s_at][n_at], 0);
+            let ev = m.w.block(vec![obj(producer, O::Respond { claim: c, stage: 0, position: at, bytes: response(&wrong) })]);
+            assert!(ev.iter().any(|e| matches!(e, E::ResponseRejected { .. })), "{ev:?}");
+            let right = response(&prod.traces[0].values[at as usize]);
+            let pre = PositionResponseV1 { values: vec![head.iter().map(whole).collect()], inputs: vec![] };
+            let ev = m.w.block(vec![
+                obj(producer, O::Respond { claim: c, stage: 0, position: at, bytes: right }),
+                obj(
+                    producer,
+                    O::Respond { claim: c, stage: MEMORY_PRE_STATE_STAGE_V1, position: 0, bytes: borsh::to_vec(&pre).unwrap() },
+                ),
+            ]);
+            assert_eq!(ev.iter().filter(|e| matches!(e, E::Served { .. })).count(), 2, "{ev:?}");
+            assert_eq!(check(&m.w.rebuilt(), c, &da, &m.fx.params, &()), OutsiderFindingV1::Clean, "complete from the chain alone");
         }
     }
 }
@@ -553,15 +586,18 @@ fn memory_a_lie_that_finalized_is_convicted_after_final_and_the_line_rolls_back(
     m.w.beat_to(at);
     assert!(matches!(m.w.state(&c1), ClaimStateV1::Final { .. }), "nobody prosecuted in the window");
     assert_ne!(m.head().1, root0, "the lie moved the line");
-    // A later job is posted on the moved head and an honest claim of it commits, then the old lie is convicted.
+    // A later job is posted on the moved head and an honest claim of it (from the chain's copy) commits; then the old lie is convicted.
     let (_, job2) = m.job(vec![vec![1]]);
-    let p2 = m.produce(&job2, P2, &lie.post, |_, _| {});
+    assert_eq!(m.chain_head(), lie.post, "the lie's memory was public too");
+    let p2 = m.produce(&job2, P2, &m.chain_head(), |_, _| {});
     let (c2, _) = m.w.commit(SpecClaimV1::Memory(p2.claim));
     let finding = check(&m.w.rebuilt(), c1, &Da::memory(&lie, Some(&m.m0())), &m.fx.params, &());
     let OutsiderFindingV1::Prosecute(ProsecutionV1::Spec(bytes)) = finding else { panic!("{finding:?}") };
     let ev = m.w.file(OUT, c1, borsh::from_slice(&bytes).unwrap());
     assert!(ev.iter().any(|e| matches!(e, E::Convicted { post_final: true, .. })), "{ev:?}");
     assert_eq!(m.head().1, root0, "the line rolls back to the convicted claim's pre-state");
+    assert_eq!(m.w.l.typed.lines[&m.class].head_source, None, "whose tensors are the registered M0's");
+    assert_eq!(m.chain_head(), m.m0());
     // The later claim was not a fraud — it computed from the head of its time — but it is superseded: Final, paid, the line unmoved.
     let at = m.w.l.opv.claims[&c2].window_end_daa;
     m.w.beat_to(at);
@@ -627,13 +663,35 @@ fn memory_registration_and_inclusion_refusals_are_by_name() {
     }
     assert!(w.l.typed.is_empty() && fresh.l.typed.is_empty(), "every refusal left the typed state untouched");
 
-    // Inclusion: a fabricated boundary root and a stale head are refused before any court.
+    // Inclusion: a fabricated boundary root, and a carried post-state that is not the committed write (another value, a missing
+    // slot, another type), are refused before any court.
     let mut m = Mem::new(fx);
     let (_, job) = m.job(vec![vec![1, 2]]);
-    let mut prod = m.produce(&job, P1, &m.m0(), |_, _| {});
+    let honest = m.produce(&job, P1, &m.m0(), |_, _| {});
+    let mut prod = honest.clone();
     prod.claim.step_roots[1] = [9; 64];
     let (_, ev) = m.w.commit(SpecClaimV1::Memory(prod.claim));
     assert!(refused(&ev).unwrap().contains("boundary root 1"), "{ev:?}");
+    let narrowed = {
+        let t = &honest.post[0];
+        Tensor::new(misaka_palw_tir::DType::I64, vec![t.data.len()], t.data.clone()).unwrap()
+    };
+    for (edit, why) in [
+        (TensorWireV1::of(&m.m0()[0]), "not the committed write"),
+        (TensorWireV1::of(&narrowed), "not of its param's type"),
+        (TensorWireV1 { dtype: 0xEE, shape: vec![], bytes: vec![] }, "does not decode"),
+    ] {
+        let mut c = honest.claim.clone();
+        c.post_state[0] = edit;
+        let (_, ev) = m.w.commit(SpecClaimV1::Memory(c));
+        assert!(refused(&ev).is_some_and(|r| r.contains(why)), "{why}: {ev:?}");
+    }
+    let mut c = honest.claim.clone();
+    c.post_state.clear();
+    let (_, ev) = m.w.commit(SpecClaimV1::Memory(c));
+    assert!(refused(&ev).unwrap().contains("has 0 tensors"), "{ev:?}");
+    let (id, ev) = m.w.commit(SpecClaimV1::Memory(honest.claim));
+    assert!(ev.contains(&E::ClaimCommitted { claim: id }), "the honest claim still commits: {ev:?}");
     let _ = root;
 }
 
@@ -1042,6 +1100,12 @@ fn bounds_per_kind_fit_the_carriers_and_refuse_past_each_ceiling_by_name() {
     let b = row.bounds;
     assert_eq!(b.max_concurrent_sessions, 8 * MAX_POSITIONS + 1);
     assert_eq!(b.max_public_bytes, rule.bounds.max_public_bytes + 16 * 4 + 128, "one step's material and the 16 × i32 pre-state");
+    let evidence = 64 * 16 + 64 * MAX_POSITIONS as u128 * 2;
+    assert_eq!(
+        b.max_retained_state,
+        8 * (rule.bounds.max_retained_state + evidence) + 64 * 9 + 64 + 16 * 4 + 128,
+        "8 steps' commitments and evidence, 9 boundary roots, the pre-state's commitment and the carried 16 × i32 post-state"
+    );
     assert_eq!(
         (b.max_opening_bytes, b.max_court_work),
         (rule.bounds.max_opening_bytes, rule.bounds.max_court_work),

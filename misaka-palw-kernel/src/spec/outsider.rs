@@ -2,8 +2,10 @@
 //! public artifact and whatever public copy of a snapshot it can fetch, with its own salt. It reports exactly what it must demand
 //! (one round), or the filing that convicts, or `Clean`.
 //!
-//! * **memory**: the pre-state (stage `0x40`) and every step position (stage 0); then, step by step, the decode and every relation of
-//!   the step's record over its overlay — the first fault is filed as `MemoryDecode` / `MemoryStep` naming the step;
+//! * **memory**: the pre-state (served at stage `0x40`, else public on chain — the carried post-state of the claim it came from, or the
+//!   registered `M0` in the artifact — so in practice never demanded) and every step position (stage 0, where step `i ≥ 1`'s pre-state
+//!   lives); then, step by step, the decode and every relation of the step's record over its overlay — the first fault is filed as
+//!   `MemoryDecode` / `MemoryStep` naming the step;
 //! * **retrieval**: every snapshot slice (served on chain, else the public copy; missing slices are demanded); then every entry
 //!   re-opened, then a scan for a better excluded item;
 //! * **composite**: the `StageLogits` edges, then each stage in order with its component's check; the first fault names its stage.
@@ -175,8 +177,14 @@ impl SpecOutsiderV1<'_> {
             (SpecClaimV1::Memory(c), SpecJobV1::Memory(j), SpecClassKindV1::Memory { rule, root, writers }) => {
                 let pre = body.pre_state.first().ok_or("no pre-state")?;
                 let mut missing = Vec::new();
+                // Served at 0x40, else public: the chain's carried post-state or the artifact's M0 (checked against `pre` there).
+                let public = l.memory_state_tensors_v1(&row.class_binding_id, body.pre_source.as_ref(), pre, self.artifact);
                 let pre_values: Vec<Option<Tensor>> = (0..root.slots.len())
-                    .map(|k| self.node(MEMORY_PRE_STATE_STAGE_V1, 0, 0, k as u16).filter(|t| tensor_commitment(t) == pre[k]))
+                    .map(|k| {
+                        self.node(MEMORY_PRE_STATE_STAGE_V1, 0, 0, k as u16)
+                            .filter(|t| tensor_commitment(t) == pre[k])
+                            .or_else(|| public.as_ref().map(|v| v[k].clone()))
+                    })
                     .collect();
                 if pre_values.iter().any(Option::is_none) {
                     missing.push((MEMORY_PRE_STATE_STAGE_V1, 0));

@@ -298,6 +298,9 @@ pub struct SpecClaimBodyV1 {
     pub claim: SpecClaimV1,
     /// Memory: `[slot commitments of the line head at commit]`; empty otherwise.
     pub pre_state: Vec<Vec<Digest>>,
+    /// Memory: where the pre-state's tensors are public — the claim whose carried post-state they are (the line's `head_source` at
+    /// commit); `None`: the registered `M0` (the attested artifact), or not a memory claim.
+    pub pre_source: Option<Digest>,
 }
 
 impl SpecClaimBodyV1 {
@@ -443,10 +446,12 @@ pub fn memory_bounds_v1(
         max_localization_rounds: 2,
         max_court_work: base.max_court_work,
         max_verifier_ram: base.max_verifier_ram.saturating_add(m),
+        // Every step's commitments and evidence, the boundary roots, the pre-state's commitments and the carried post-state (`M`).
         max_retained_state: steps
             .saturating_mul(base.max_retained_state.saturating_add(evidence))
             .saturating_add(64 * (steps + 1))
-            .saturating_add(64 * root.slots.len() as u128),
+            .saturating_add(64 * root.slots.len() as u128)
+            .saturating_add(m),
         max_concurrent_sessions: (root.max_steps as u64 * plan.max_positions as u64 + 1).min(u32::MAX as u64) as u32,
         deadline_daa: policy.court_deadline_daa,
     };

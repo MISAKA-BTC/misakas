@@ -10,6 +10,9 @@ descriptor to be Active in the route's schedule (§9: the fence). Neither live t
 > ledger root)。`Memory` は「規則プログラムの Fixed state の書き込み」を一歩(step)ごとの post-state とし、次の step と次の job へ
 > param overlay として渡す。各 step は既存 K2 claim と同じ形なので、既存の court がそのまま一歩に局所化して裁く。pre-state は claim
 > の DA 義務(stage 0x40 の demand、出さなければ default)。chain は memory line の head を Final で進め、Final 後の有罪で巻き戻す。
+> **head は構造的に公開**: claim は post-state を開いて運び(包含時に trace の commitment と照合)、line は head の tensor を持つ
+> claim を記録する(`head_source`、`None` = 登録済み `M0`)。次の job は誰でも chain だけから作れる(最後に進めた producer の私物にならず、
+> 誰も持たない tensor で止まらない)。
 > `Retrieval` は公開 snapshot の Merkle root・決定的 index・整数スコアと FR-09 の tie 規則(κ = (s+2^SB)·2^b + (2^b−1−id))で、
 > wrong item / missed better item の court と snapshot slice の DA(stage 0x80+s)を持つ。`Composite` は登録済みクラスの列で、
 > tool stage は検証済み kernel(Retrieval か TIR)だけ。辺は on-chain 値なら包含時に厳密再計算、committed 値(logits→query)なら
@@ -104,10 +107,12 @@ memory_root_v1(slots, c) = H("misaka-palw/spec/memory-root/v1"; n; for each slot
 step_roots    = [root(overlay_0 slots), root(overlay_1 slots), …, root(post)]          (S + 1 boundary roots)
 ```
 
-The claim carries `step_roots` and every step's evidence object and trace commitments; inclusion recomputes every overlay and every
-boundary root **from the committed traces** (never from a statement), requires `step_roots[0] = job.pre_root = line head`, and runs each
-step's binding and structure checks (`binding_fault_v1`, the header with `artifact_root = overlay_i.root()`, `FreshVerifierV1::structure`)
-— so a fabricated boundary, a borrowed trace or a step over another pre-state is refused at inclusion, objectively.
+The claim carries `step_roots`, every step's evidence object and trace commitments, and **its post-state opened** (`post_state`: one
+tensor per slot); inclusion recomputes every overlay and every boundary root **from the committed traces** (never from a statement),
+requires `step_roots[0] = job.pre_root = line head`, checks every carried post-state tensor against the slot param's declared dtype and
+shape and against the commitment the traces derive (`check_post_state_v1`), and runs each step's binding and structure checks
+(`binding_fault_v1`, the header with `artifact_root = overlay_i.root()`, `FreshVerifierV1::structure`) — so a fabricated boundary, a
+borrowed trace, a step over another pre-state or a post-state that is not the committed write is refused at inclusion, objectively.
 
 ### 2.3 The court (localisation to one step)
 
@@ -124,21 +129,33 @@ step's record is a correct K2 claim; every court dismisses.
 Demand stages of a memory claim: stage `0` = the steps' positions in one global index (step `i` covers `[off_i, off_i + |chunk_i|)`),
 stage `0x40` position `0` = **the pre-state** (one "position" whose values are the slot tensors, classified against the line head's slot
 commitments by `classify_position_response_v1`). Step `i ≥ 1`'s pre-state is step `i−1`'s committed `StateWrite` at its last
-position — already demandable at stage 0. Withholding either is the producer's availability default (`ProducerDefault`, never a
-conviction); a served pre-state is public from then on. The outsider (§7) reports exactly which it needs.
+position — demandable at stage 0, and the claim's own DA: withholding it is the producer's availability default (`ProducerDefault`,
+never a conviction). Step 0's pre-state (the line head) is **already public**: the carried post-state of the claim that advanced the
+line (`SpecClaimBodyV1::pre_source`), or the registered `M0` in the attested artifact (§2.5) — so an outsider never needs to demand it.
+The `0x40` obligation stays as RFC-0004 §II.2 states it (withheld → default), though anyone can answer it from the chain. The outsider
+(§7) reports exactly which positions it needs.
 
 ### 2.5 Memory carried across jobs (the chain-tracked state root)
 
-`MemoryLineV1 { head: Vec<Digest> (slot commitments), head_root, advances: Vec<AdvanceV1 { claim, pre, post, until_daa }> }`, one per
-memory class (table 24). Rules:
+`MemoryLineV1 { head: Vec<Digest> (slot commitments), head_root, head_source: Option<claim>, advances: Vec<AdvanceV1 { claim, pre,
+pre_source, post, until_daa }> }`, one per memory class (table 24). Rules:
 
 * `PostJob` of a memory job requires `pre_root = head_root`; `CommitClaim` requires it again (a claim never commits over a stale head).
-* At a claim's **Final**: if `head_root` is still its `step_roots[0]`, the head becomes its post-state and an advance is recorded until
-  the claim's liability horizon ends; otherwise the claim is Final and paid but **superseded** (it computed correctly from a state that
-  was the head when it committed; it does not move the line).
-* A **post-Final conviction** of an advancing claim rolls the head back to that claim's pre-state and drops every later advance (their
-  claims are not convicted — they are superseded). A pre-Final conviction moved nothing.
-* Advances past their horizon are pruned (a conviction can no longer reach them).
+* At a claim's **Final**: if `head_root` is still its `step_roots[0]`, the head becomes its post-state, `head_source` becomes the claim
+  (whose carried `post_state` is the head's tensors) and an advance is recorded until the claim's liability horizon ends; otherwise the
+  claim is Final and paid but **superseded** (it computed correctly from a state that was the head when it committed; it does not move
+  the line).
+* A **post-Final conviction** of an advancing claim rolls the head back to that claim's pre-state — `head_source` back to that state's
+  source — and drops every later advance (their claims are not convicted — they are superseded). A pre-Final conviction moved nothing.
+* Advances past their horizon are pruned (a conviction can no longer reach them); the head and its source are never pruned (claims
+  rows are kept).
+
+**The head is public by construction.** `KernelLedgerV1::memory_head_tensors_v1(class, artifact)` returns the head's tensors from the
+rows (`head_source`'s carried post-state) or, for `M0`, the public artifact — each checked against the head's commitments. Any bond
+produces the next job from that alone; the E2E's second-job producers are other cards than the first job's and read only the node's
+API. Without it the head's tensors would be held by the producer that advanced the line last: only it could continue the line (a
+private monopoly over a public class), and if it went away the line would stall forever. The price is `M` bytes per memory claim on
+chain (bounded at registration: §2.6).
 
 RFC-0004 §II.3: the head is the in-job analogue of a line head; promoting a memory state through §§4–8 is a candidate over this class
 (a later lane), not a new mechanism.
@@ -154,7 +171,7 @@ RFC-0004 §II.3: the head is the in-job analogue of a line head; promoting a mem
 | response | `max(base.max_response_bytes, M + slots · 128 + 128)` |
 | rounds | 2 (one demand round, one filing) |
 | verifier RAM | `base.max_verifier_ram + M` |
-| retained per claim | `S · base.max_retained_state + 64 · (S + 1) + 64 · slots + evidence` |
+| retained per claim | `S · (base.max_retained_state + evidence) + 64 · (S + 1) + 64 · slots + M` (the carried post-state; the commit carrier must fit it) |
 | sessions per claim | `S · plan.max_positions + 1` (every position and the pre-state demandable at once) ≤ `max_sessions_per_claim` |
 | per prosecution (K2S sense) | the faulty step's positions + 1 (with a v4 rule program: 2 + 1) |
 
@@ -273,8 +290,9 @@ opening, filing, response and court work; per prosecution: the lying stage's.
 ## 7. The outsider
 
 `SpecOutsiderV1` (same inputs as `OutsiderV1`: the ledger rebuilt from served rows, a public DA directory, the public artifact, a salt):
-memory — every step's record rebuilt with its overlay, missing positions or the missing pre-state reported as demands, else the first
-decode or kernel fault as a `MemoryStep`/`MemoryDecode` filing; retrieval — every entry re-opened (`WrongItem`), then a full scan of
+memory — the step-0 pre-state from the chain (served `0x40`, else the source claim's carried post-state, else `M0` from the artifact),
+every step's record rebuilt with its overlay, missing positions reported as demands, else the first decode or kernel fault as a
+`MemoryStep`/`MemoryDecode` filing; retrieval — every entry re-opened (`WrongItem`), then a full scan of
 the snapshot for a better excluded item (`MissedBetter`), missing slices reported as demands; composite — the edge, then each stage.
 
 ## 8. G14, per criterion
@@ -300,29 +318,36 @@ absent the template, the schedule, `config_root` and every root are byte for byt
 (`the_unarmed_typed_roots_fence_leaves_the_schedule_config_root_and_root_unchanged`). It does not ride the K2 fence: the full-activation
 release arms it at the same height as the others, as its own decision. The E2E arms it through the harness's `Config` seam.
 
+**Prerequisites, by name** (checked before the blanket refusal, so they hold once it is lifted): `validate_palw_typed_roots_v1` requires
+`palw_probabilistic_constraints_v1` (the route the typed kinds ride) and `palw_panel_free_v1` (every typed kind is OPV-only) armed at
+or below its height (`the_fence_is_dormant_everywhere_refused_when_armed_and_hashed_some_only`).
+
 ## 10. GAPs (not done here)
 
 * Onboarding facts for typed classes: an artifact binding that names `M0` (today the attested set covers it as part of the Weights
-  root), a snapshot availability binding and its conformance statement (RFC-0007 Part VI) — OB lanes.
+  root), a snapshot availability binding and its conformance statement (RFC-0007 Part VI) — OB lanes. **The snapshot binding must also
+  attest that every leaf is a well-formed item** (key of length `D`, payload ≤ `P`): an item that is not cannot be opened by any court
+  (`authentic` refuses its shape), so a producer could state anything for its id unconvicted; and an honest producer could not serve
+  its slice (`malformed`).
 * Memory carried through a `Hist` state; memory inside a composite; IVF/HNSW-style indexes (each a versioned kernel extension).
 * Panel-licensed typed classes (a receipt scope per step / item).
 * RFC-0011 §18 census: a repository that is a complete computation of a supported kind counts in `D_complete` — HFX/COV own the census;
   this lane exposes the predicate (`supported_kinds`).
 * GAP-5 escrow (G14-R4): spec jobs must open the poster's escrow like `PostJob` once that lands (`post_spec_job` already receives the
   poster; two calls to add at the merge).
-* **Memory-line liveness** (not G14): the next job's producer needs the head's tensors. They are committed values of the advancing claim,
-  demandable during its liability horizon, and every later claim must serve its own pre-state (stage `0x40`); a head whose tensors nobody
-  holds after that horizon stalls the line (no claim can be produced; nothing unprovable is rewarded). A line checkpoint object (anyone
-  posts the head's tensors on chain, bounded by the slots' bytes) is the v2 fix.
+* ~~Memory-line liveness~~ — **closed (R4X successor, 2026-10-09)**: the claim carries its post-state opened and the line records its
+  source (§2.5), so the head is always public; no producer can hold a line hostage and no line stalls on unpublished tensors.
 * Withholding after Final (a post-Final default on a memory claim) forfeits the reservation but does not roll the line back: the
-  computation is not proven wrong, and the next producer must serve the same tensors as its own pre-state.
+  computation is not proven wrong, and the head's tensors are on chain regardless.
+* A memory job posted over a head that has since moved can never be claimed (a claim never commits over a stale head): its escrow must
+  be refundable on expiry once GAP-5 lands (G14-R4's job escrow and timeout).
 
 ## 11. Evidence (RFC-0004 §II.4)
 
 | §II.4 | Test |
 | --- | --- |
 | 1 wire form, Weights byte for byte | kernel `typed_roots::weights_only_*`; node `r4x_weights_only_spec_is_byte_for_byte_the_legacy_registration` |
-| 2 Memory E2E | node `r4x_memory_*`: register → job 1 → Final → head advanced → job 2 over job 1's post-state → a lie in one step convicted by an outsider (the fault names the step) → honest claim → head carried again; withheld pre-state → default |
+| 2 Memory E2E | node `r4x_memory_*`: register → job 1 → Final → head advanced (its tensors served by the node) → job 2 over job 1's post-state, produced by OTHER cards from the node's API alone → a lie in one step convicted by an outsider (the fault names the step) → honest claim → head carried again; withheld pre-state (step 1's, the claim's DA; and the `0x40` obligation) → default; kernel `typed_roots::memory_*` also: a carried post-state that is not the committed write refused at inclusion, the rollback restoring `M0` as the head's source |
 | 3 Retrieval E2E | node `r4x_retrieval_*`: wrong item convicted, missed better item convicted, withheld slice → default |
 | 4 Composite | node `r4x_composite_*`: one verified tool stage (retrieval) feeding a model stage; a lie in the tool stage convicted at stage 0, a filing against the honest stage dismissed |
 | 5 Bounds | kernel `typed_roots::bounds_*` per kind (values, carrier fit, refusals past each ceiling) |
@@ -341,3 +366,24 @@ release arms it at the same height as the others, as its own decision. The E2E a
 | fixtures (`memory_v1`, `memory_ttt_v1`) | `misaka-palw-tir-sketch/src/fixture.rs` |
 | fence | `consensus/core/src/palw_typed_roots_v1.rs`, `config/params.rs`, `fork_id_v1.rs`, `processor.rs`, `palw_kernel_route_{v1,fold_v1}.rs` |
 | tests | `misaka-palw-kernel/tests/typed_roots.rs` (ledger), `consensus/.../tests/r4x_typed_roots_e2e.rs` (real node) |
+
+## 13. The design premise, condition by condition (`docs/PRINCIPLES.md` §6)
+
+A typed class earns a reward or consensus work weight only when all seven conditions of the premise hold. Each typed kind adds no way
+of judging arithmetic of its own (§0), so most of what remains is the kernel route's and OPV's, shared with every K2 class. The kinds
+below are what each condition means for a typed class, what this branch shows, and what is left — by kind of blocker (readiness
+matrix: CODE / DESIGN / POLICY / EXTERNAL).
+
+| §6 | Memory | Retrieval | Composite | Left (kind, owner) |
+| --- | --- | --- | --- | --- |
+| 1 coverage of every rewarded relation | every TIR relation of every step: the rule program's K2 plan; the memory edges (overlays, boundary roots, the carried post-state) are recomputed at inclusion from committed traces; the token by the decode court | exact: the opening (Merkle), the score (dot + clamp), the order (κ at inclusion), completeness (`MissedBetter`) | each stage's own; token edges at inclusion; the logits→query edge court | — (met by construction, given the K2 plan's coverage) |
+| 2 approved probabilistic soundness, grinding resistance | the rule program's plan (Freivalds bits); outsiders check with their own salt after commit, so a producer cannot grind an outsider's draw; `S` steps multiply work, not the per-step error | ε = 0: no sampling, nothing to grind | the weakest stage's | POLICY: the challenge policy's security level (interim 2 bits, target 128). CODE: sealed-source beacon v3 (OPVB / G14-R4) for any sampled approval. EXTERNAL: soundness review of the composition |
+| 3 public, authenticated material | base weights and `M0`: the attested artifact; step 0's pre-state: **on chain** (§2.5); step `i ≥ 1`'s pre-states and every committed value: the claim's DA (demand → serve → default) | the snapshot: attested public; slices: the claim's DA | components' artifacts and snapshots; stage values: DA | CODE/EXTERNAL (onboarding, RFC-0014 §16): an on-chain availability fact for artifacts and snapshots — today the route's attested list is test-only; the snapshot binding must attest leaf well-formedness (§10) |
+| 4 bounded localisation and objective adjudication by one outsider | one step (§2.3); the fresh outsider rebuilds every step from the rows, the chain's head and DA | one item (§3.3), one session per prosecution | one stage or edge (§4) | — (shown: kernel `typed_roots::*`, node `r4x_*`, each with a fresh outsider over rows a second node replays) |
+| 5 collectable collateral consistent with the maximum gain | a claim's gain includes the line's future: a lie that reaches Final moves the head every later job computes from; rolled back by a post-Final conviction within the liability horizon, permanent after it | the gain of a promoted / suppressed item is external to the reward | one reservation for the whole pipeline | POLICY: the OPV reservation (interim 1,000 BILI) from max gain ÷ detection probability; DESIGN: a memory class's **line value at risk** belongs in that gain (a per-class declared bound, or a liability horizon that scales with it) |
+| 6 resources, cost and incentive for an honest verifier in time | a whole-claim check is `S` step checks (parallel); the window must fit them | detecting a missed item scans the snapshot: `N · item` bytes fetched once per class (amortised), `N · D` MACs per claim (`retrieval_claim_material_bytes_v1`) | Σ over stages | EXTERNAL (MEAS): `T_check` per kind on real sizes; POLICY: a window ≥ `T_beacon + T_fetch + T_check + T_localize + T_file + T_margin` per class, the accuser reward |
+| 7 dispute, DA/default, Final and reorg consistency | the route's lifecycle; Final advances the line, a post-Final conviction rolls it back, a superseded claim never moves it; the line is ledger rows, folded per block (replayed by a second node) | the route's | the route's | CODE (FINX): rule E (ADR-0175) before the release; CODE (G14-R4, at the merge): GAP-5 escrow for spec jobs and refund of a memory job stranded by a moved head |
+
+**RFC-0004 §II.4 item 6 (census).** `SUPPORTED_KINDS_V1` is the predicate a census reads: a repository that is a complete computation
+of a supported kind (for example a retriever + index + generator repository as a Composite) belongs in `D_complete` and counts as
+registered once registered as that kind. Classifying Hugging Face repositories into kinds is the census's (HFX / COV): CODE, not here.

@@ -12,8 +12,8 @@ use crate::spec::composite::{
     stage_job_v1, stage_prompt_v1,
 };
 use crate::spec::memory::{
-    MemoryLineV1, boundary_states_v1, check_memory_root_v1, memory_root_v1, overlay_v1, slot_commitments_v1, step_claim_v1,
-    step_header_v1, step_job_v1, step_record_v1,
+    MemoryLineV1, boundary_states_v1, check_memory_root_v1, check_post_state_v1, memory_root_v1, overlay_v1, slot_commitments_v1,
+    step_claim_v1, step_header_v1, step_job_v1, step_record_v1,
 };
 use crate::spec::retrieval::{
     check_query_v1, check_result_v1, classify_slice_response_v1, judge_retrieval_fault_v1, payload_digest_v1,
@@ -263,9 +263,9 @@ impl KernelLedgerV1 {
         if self.claims.contains_key(&id) {
             return Err(rule("an exact duplicate claim".into()));
         }
-        // Cheap objective checks first (no opening, no court): shapes, the line head, the result's order, the edges' lengths.
-        let pre_state = match (claim, job, &class.kind) {
-            (SpecClaimV1::Memory(c), SpecJobV1::Memory(j), SpecClassKindV1::Memory { root, writers, .. }) => {
+        // Cheap objective checks first (no court): shapes, the line head, the carried post-state, the result's order, the edges.
+        let (pre_state, pre_source) = match (claim, job, &class.kind) {
+            (SpecClaimV1::Memory(c), SpecJobV1::Memory(j), SpecClassKindV1::Memory { rule: r, root, writers }) => {
                 let s = j.chunks.len();
                 if c.generated.len() != s || c.steps.len() != s || c.step_roots.len() != s + 1 {
                     return Err(rule(format!("{s} steps: one token, one step commitment and S + 1 boundary roots")));
@@ -281,11 +281,13 @@ impl KernelLedgerV1 {
                         return Err(rule(format!("boundary root {i} is not the committed traces' (a fabricated memory state)")));
                     }
                 }
-                vec![line.head.clone()]
+                // The post-state is public before it can become the head: opened here, against what the traces commit.
+                check_post_state_v1(&r.program, &root.slots, states.last().expect("S + 1 states"), &c.post_state).map_err(rule)?;
+                (vec![line.head.clone()], line.head_source)
             }
             (SpecClaimV1::Retrieval(c), SpecJobV1::Retrieval(_), SpecClassKindV1::Retrieval { root }) => {
                 check_result_v1(root, &c.result).map_err(rule)?;
-                Vec::new()
+                (Vec::new(), None)
             }
             (SpecClaimV1::Composite(c), SpecJobV1::Composite(j), SpecClassKindV1::Composite { root, components }) => {
                 if c.stages.len() != root.stages.len() {
@@ -311,7 +313,7 @@ impl KernelLedgerV1 {
                         _ => return Err(rule(format!("stage {s}: the claim stage is not the class stage's kind"))),
                     }
                 }
-                Vec::new()
+                (Vec::new(), None)
             }
             _ => return Err(rule("the claim is not of its job's kind".into())),
         };
@@ -376,7 +378,7 @@ impl KernelLedgerV1 {
             }
             _ => {}
         }
-        let body = ClaimBodyV1::Spec(Box::new(SpecClaimBodyV1 { claim: claim.clone(), pre_state }));
+        let body = ClaimBodyV1::Spec(Box::new(SpecClaimBodyV1 { claim: claim.clone(), pre_state, pre_source }));
         self.admit(id, producer, class_id, job_id, body, out).map_err(rule)?;
         self.seals.remove(&(job_id, producer));
         Ok(())
@@ -504,6 +506,34 @@ impl KernelLedgerV1 {
             }
             _ => Err("a filing for another kind of claim".into()),
         }
+    }
+
+    /// **The public tensors of a memory state**, in slot order: the carried post-state of `source`, or (`None`) the registered `M0`
+    /// read from the public artifact — each checked against `expect` (`None`: unavailable or not that state). What a producer runs the
+    /// next job from and what an outsider checks a step-0 pre-state with: the chain and the artifact, never a producer's copy.
+    pub fn memory_state_tensors_v1(
+        &self,
+        class: &Digest,
+        source: Option<&Digest>,
+        expect: &[Digest],
+        artifact: &dyn PublicArtifactV1,
+    ) -> Option<Vec<misaka_palw_tir::Tensor>> {
+        let Some(SpecClassKindV1::Memory { root, .. }) = self.typed.classes.get(class).map(|r| &r.kind) else { return None };
+        let tensors: Vec<misaka_palw_tir::Tensor> = match source {
+            Some(c) => {
+                let ClaimBodyV1::Spec(b) = &self.claims.get(c)?.body else { return None };
+                let SpecClaimV1::Memory(m) = &b.claim else { return None };
+                m.post_state.iter().map(|w| w.decode().ok()).collect::<Option<_>>()?
+            }
+            None => root.slots.iter().map(|s| artifact.param(0, s.param.0, s.param.1)).collect::<Option<_>>()?,
+        };
+        (tensors.len() == expect.len() && tensors.iter().zip(expect).all(|(t, c)| tensor_commitment(t) == *c)).then_some(tensors)
+    }
+
+    /// **The head of a memory line, as tensors** (`None`: no such line, or `M0` absent from `artifact`).
+    pub fn memory_head_tensors_v1(&self, class: &Digest, artifact: &dyn PublicArtifactV1) -> Option<Vec<misaka_palw_tir::Tensor>> {
+        let line = self.typed.lines.get(class)?;
+        self.memory_state_tensors_v1(class, line.head_source.as_ref(), &line.head, artifact)
     }
 
     /// `derived[occurrence][node]` of a typed claim's demand stage.

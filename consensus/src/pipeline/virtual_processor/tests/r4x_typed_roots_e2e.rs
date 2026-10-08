@@ -536,6 +536,12 @@ impl MemWorld {
         vec![self.fx.params.tensors[&(1, Some(0))].clone()]
     }
 
+    /// **The line head's tensors from the node's read API** (the rows: the carried post-state of the claim that advanced it; `M0`
+    /// from the public artifact) — what any producer runs the next job from. No producer's copy.
+    fn chain_head(&self) -> Vec<Tensor> {
+        self.net.ledger().memory_head_tensors_v1(&self.class, &self.fx.params).expect("the head is public")
+    }
+
     async fn job(&mut self, chunks: Vec<Vec<u32>>) -> MemoryJobV1 {
         self.jobs += 1;
         let job = MemoryJobV1 { class: self.class, pre_root: self.head(), chunks, nonce: [self.jobs; 64] };
@@ -568,19 +574,22 @@ async fn r4x_memory_class_end_to_end_a_lie_in_one_step_is_convicted_and_memory_i
     m.net.final_of(&c1).await;
     let root1 = m.head();
     assert_eq!(root1, *p1.claim.step_roots.last().unwrap(), "Final moved the line to the claim's post-state");
+    // The head is public: cards 4 and 5 below never see card 0's memory, only the node's rows.
+    let pre2 = m.chain_head();
+    assert_eq!(pre2, p1.post, "the node serves exactly the memory job 1 left (its claim carried it, opened)");
 
     // Job 2 over job 1's post-state; card 4 lies in step 1.
     let job2 = m.job(vec![vec![4, 4], vec![8, 1, 6]]).await;
     assert_eq!(job2.pre_root, root1, "memory is carried: the job runs on the head");
     let (s_at, n_at) = matmul_of(&m.fx.program);
-    let lie = m.produce(&job2, 4, &p1.post, |i, t| {
+    let lie = m.produce(&job2, 4, &pre2, |i, t| {
         if i == 1 {
             bump(&mut t.values[0][s_at][n_at], 1)
         }
     });
     let before = m.net.collateral(4);
     let c2 = m.net.commit(4, SpecClaimV1::Memory(lie.claim.clone())).await;
-    let fault = fault_of(fresh(&m.net, c2, &Da::memory(&lie, Some(&p1.post)), &m.fx.params, &(), 0x22));
+    let fault = fault_of(fresh(&m.net, c2, &Da::memory(&lie, None), &m.fx.params, &(), 0x22));
     let SpecFaultV1::MemoryStep { step: 1, proof } = &fault else { panic!("localised to step 1: {fault:?}") };
     let outsider = 6;
     m.net.file(outsider, c2, SpecFaultV1::MemoryStep { step: 0, proof: proof.clone() }).await;
@@ -593,19 +602,22 @@ async fn r4x_memory_class_end_to_end_a_lie_in_one_step_is_convicted_and_memory_i
     assert_eq!(m.net.owed(outsider), slashed * u64::from(l.policy.accuser_reward_permille) / 1000, "the outsider's reward is queued");
     assert_eq!(m.head(), root1, "a convicted claim never moves the line");
 
-    // An honest claim of job 2 (card 5) finalizes: the head is job 2's post-state, computed from job 1's.
-    let honest = m.produce(&job2, 5, &p1.post, |_, _| {});
+    // An honest claim of job 2 (card 5, from the node's copy) finalizes: the head is job 2's post-state, computed from job 1's.
+    let honest = m.produce(&job2, 5, &pre2, |_, _| {});
     let c3 = m.net.commit(5, SpecClaimV1::Memory(honest.claim.clone())).await;
-    assert_eq!(fresh(&m.net, c3, &Da::memory(&honest, Some(&p1.post)), &m.fx.params, &(), 0x33), OutsiderFindingV1::Clean);
+    assert_eq!(fresh(&m.net, c3, &Da::memory(&honest, None), &m.fx.params, &(), 0x33), OutsiderFindingV1::Clean);
     m.net.final_of(&c3).await;
     assert_eq!(m.head(), *honest.claim.step_roots.last().unwrap(), "carried a second time");
+    assert_eq!(m.chain_head(), honest.post, "and public again");
     let from_m0 = m.produce(&job2, 5, &m.m0(), |_, _| {});
     assert_ne!(*from_m0.claim.step_roots.last().unwrap(), m.head(), "the carried memory changed the result");
     m.net.assert_replays().await;
 }
 
-/// **A withheld pre-state is a default, never a conviction**: after the line moved, an honest claim whose producer does not publish
-/// its pre-state is demanded at stage `0x40` by an outsider and defaults at the deadline.
+/// **A withheld pre-state is a default, never a conviction**: after the line moved, step 0's pre-state is public on the node (the
+/// carried post-state of the claim that moved it), so an outsider needs no demand for it; step 1's pre-state — step 0's slot write
+/// at its last position, a committed value of this claim — is the claim's DA. An outsider without it demands exactly that position;
+/// the producer withholds it and defaults at the deadline (the fixed default penalty, not the fraud slash).
 #[tokio::test]
 async fn r4x_memory_a_withheld_pre_state_is_classified_as_a_default() {
     kaspa_core::log::try_init_logger("warn");
@@ -616,17 +628,22 @@ async fn r4x_memory_a_withheld_pre_state_is_classified_as_a_default() {
     m.net.final_of(&c1).await;
 
     let job2 = m.job(vec![vec![7, 7], vec![9]]).await;
-    let p2 = m.produce(&job2, 4, &p1.post, |_, _| {});
+    let p2 = m.produce(&job2, 4, &m.chain_head(), |_, _| {});
     let before = m.net.collateral(4);
     let c2 = m.net.commit(4, SpecClaimV1::Memory(p2.claim.clone())).await;
+    let at = p2.traces[0].values.len() as u32 - 1;
+    let mut da = Da::memory(&p2, None);
+    da.0.retain(|(stage, p, _, _), _| !(*stage == 0 && *p == at));
     assert_eq!(
-        fresh(&m.net, c2, &Da::memory(&p2, None), &m.fx.params, &(), 0x44),
-        OutsiderFindingV1::Demand(vec![(MEMORY_PRE_STATE_STAGE_V1, 0)]),
-        "the outsider demands exactly the pre-state"
+        fresh(&m.net, c2, &da, &m.fx.params, &(), 0x44),
+        OutsiderFindingV1::Demand(vec![(0, at)]),
+        "the outsider demands exactly step 1's pre-state"
     );
     let outsider = 6;
+    m.net.demand(outsider, c2, 0, at).await;
+    // The RFC's literal obligation (the claim's pre-state at stage 0x40) stands too, though the node already holds it.
     m.net.demand(outsider, c2, MEMORY_PRE_STATE_STAGE_V1, 0).await;
-    let deadline = m.net.ledger().demands[&(c2, MEMORY_PRE_STATE_STAGE_V1, 0)].deadline_daa;
+    let deadline = m.net.ledger().demands[&(c2, 0, at)].deadline_daa;
     m.net.beat_to(deadline).await;
     let l = m.net.ledger();
     assert!(
@@ -636,6 +653,7 @@ async fn r4x_memory_a_withheld_pre_state_is_classified_as_a_default() {
     );
     assert!(!l.claims[&c2].convicted, "withholding is a default, never fraud");
     assert_eq!(m.net.collateral(4), before - l.policy.default_penalty, "the fixed default penalty, not the fraud slash");
+    assert_eq!(m.head(), *p1.claim.step_roots.last().unwrap(), "a defaulted claim never moves the line");
     m.net.assert_replays().await;
 }
 

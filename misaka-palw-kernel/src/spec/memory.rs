@@ -14,6 +14,12 @@
 //! The chain tracks one head per memory class ([`MemoryLineV1`]): a claim's Final advances it if the head is still the claim's
 //! pre-state (otherwise the claim is superseded: Final and paid, the line unmoved); a post-Final conviction of an advancing claim rolls
 //! it back to that claim's pre-state and drops every later advance.
+//!
+//! **The head is public by construction.** A claim carries its post-state OPENED ([`MemoryClaimV1::post_state`]), checked at inclusion
+//! against the commitments its traces derive, and the line records which claim holds its head's tensors
+//! ([`MemoryLineV1::head_source`]; `None` = the registered `M0`, part of the attested artifact). So any bond can produce the next job
+//! from the chain alone ([`crate::ledger::KernelLedgerV1::memory_head_tensors_v1`]): a line is never the private property of the
+//! producer who advanced it last, and it never stalls on tensors that nobody published.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_tir::Prim;
@@ -23,8 +29,8 @@ use crate::evidence::{EvidenceHeaderV1, VerificationEvidenceV1};
 use crate::hash::{Digest, finish, keyed, object_id};
 use crate::job::{DecodeRuleV1, KernelClaimV1, KernelJobV1};
 use crate::ledger::ClassRowV1;
-use crate::public::{PublicClaimRecordV1, program_root_v1};
-use crate::trace::ParamCommitmentsV1;
+use crate::public::{PublicClaimRecordV1, TensorWireV1, program_root_v1};
+use crate::trace::{ParamCommitmentsV1, tensor_commitment};
 
 pub const MEMORY_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/spec/memory-root/v1";
 pub const MEMORY_STEP_NONCE_DOMAIN_V1: &[u8] = b"misaka-palw/spec/memory-step-nonce/v1";
@@ -187,7 +193,8 @@ pub struct StepCommitV1 {
     pub commitments: Vec<Vec<Vec<Digest>>>,
 }
 
-/// A memory claim (signed by `producer_bond`): one delivered token per step, the `S + 1` boundary roots, every step's commitments.
+/// A memory claim (signed by `producer_bond`): one delivered token per step, the `S + 1` boundary roots, every step's commitments,
+/// and the post-state opened.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct MemoryClaimV1 {
     pub job_id: Digest,
@@ -195,6 +202,38 @@ pub struct MemoryClaimV1 {
     pub generated: Vec<u32>,
     pub step_roots: Vec<Digest>,
     pub steps: Vec<StepCommitV1>,
+    /// **The post-state, opened**: one tensor per slot, in slot order — the last step's slot writes at its last position. Checked at
+    /// inclusion against the commitments the traces derive ([`check_post_state_v1`]), so the state a Final could make the head is
+    /// public before it can be: the next job's producer reads it from the chain, never from this producer.
+    pub post_state: Vec<TensorWireV1>,
+}
+
+/// **The inclusion check of a carried post-state**: one tensor per slot, each of its slot param's declared dtype and shape, each the
+/// committed value `post[k]` (the commitment the traces derive). A wrong value under the right commitment cannot exist; a lie in the
+/// committed write itself is the step's kernel fault, judged by the court like any other value.
+pub fn check_post_state_v1(
+    program: &TirProgramV1,
+    slots: &[MemorySlotV1],
+    post: &[Digest],
+    carried: &[TensorWireV1],
+) -> Result<(), String> {
+    if carried.len() != slots.len() || post.len() != slots.len() {
+        return Err(format!("the carried post-state has {} tensors, the class {} slots", carried.len(), slots.len()));
+    }
+    for (k, ((slot, c), w)) in slots.iter().zip(post).zip(carried).enumerate() {
+        let t = w.decode().map_err(|e| format!("the carried post-state's slot {k} does not decode: {e}"))?;
+        let decl = program.params.get(slot.param.0 as usize).ok_or(format!("slot {k}'s param is not declared"))?;
+        let shape: Vec<usize> = decl.shape.iter().map(|d| *d as usize).collect();
+        if t.dtype != decl.dtype || t.shape != shape {
+            return Err(format!("the carried post-state's slot {k} is not of its param's type"));
+        }
+        if tensor_commitment(&t) != *c {
+            return Err(format!(
+                "the carried post-state's slot {k} is not the committed write (memory is carried only in public, as committed)"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The sub-job step `i` is a claim of.
@@ -285,47 +324,57 @@ pub fn locate_v1(steps: &[StepCommitV1], g: u32) -> Option<(usize, u32)> {
     None
 }
 
-/// One advance of a line: the claim that moved it, from what, to what, and until when a conviction can still reach it.
+/// One advance of a line: the claim that moved it, from what (and which claim carried that state's tensors), to what, and until when
+/// a conviction can still reach it.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct AdvanceV1 {
     pub claim: Digest,
     pub pre: Vec<Digest>,
+    /// The claim whose carried post-state is `pre` (`None`: the registered `M0`).
+    pub pre_source: Option<Digest>,
     pub post: Vec<Digest>,
     pub until_daa: u64,
 }
 
-/// **The chain-tracked memory of one class**: the head's slot commitments and root, and the advances a conviction can still reach.
+/// **The chain-tracked memory of one class**: the head's slot commitments and root, where its tensors are public, and the advances a
+/// conviction can still reach.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct MemoryLineV1 {
     pub head: Vec<Digest>,
     pub head_root: Digest,
+    /// The claim whose carried post-state ([`MemoryClaimV1::post_state`]) is the head's tensors; `None`: the registered `M0`, public
+    /// as part of the attested artifact.
+    pub head_source: Option<Digest>,
     pub advances: Vec<AdvanceV1>,
 }
 
 impl MemoryLineV1 {
     pub fn genesis(slots: &[MemorySlotV1], m0: Vec<Digest>) -> Self {
-        Self { head_root: memory_root_v1(slots, &m0), head: m0, advances: Vec::new() }
+        Self { head_root: memory_root_v1(slots, &m0), head: m0, head_source: None, advances: Vec::new() }
     }
 
-    /// A claim reached Final from `pre` to `post`: the head moves if it is still `pre` (`true`), else the claim is superseded.
+    /// A claim reached Final from `pre` to `post`: the head moves if it is still `pre` (`true`), and its tensors are then the claim's
+    /// carried post-state; else the claim is superseded.
     pub fn on_final(&mut self, slots: &[MemorySlotV1], claim: Digest, pre: &[Digest], post: Vec<Digest>, until_daa: u64) -> bool {
         if self.head != pre {
             return false;
         }
-        self.advances.push(AdvanceV1 { claim, pre: pre.to_vec(), post: post.clone(), until_daa });
+        self.advances.push(AdvanceV1 { claim, pre: pre.to_vec(), pre_source: self.head_source, post: post.clone(), until_daa });
         self.head_root = memory_root_v1(slots, &post);
         self.head = post;
+        self.head_source = Some(claim);
         true
     }
 
-    /// A claim was convicted after Final: if it advanced the line, the head returns to its pre-state and every later advance is
-    /// dropped (`true`).
+    /// A claim was convicted after Final: if it advanced the line, the head returns to its pre-state (whose tensors are where they
+    /// were) and every later advance is dropped (`true`).
     pub fn on_post_final_conviction(&mut self, slots: &[MemorySlotV1], claim: &Digest) -> bool {
         let Some(k) = self.advances.iter().position(|a| a.claim == *claim) else { return false };
-        let pre = self.advances[k].pre.clone();
+        let (pre, source) = (self.advances[k].pre.clone(), self.advances[k].pre_source);
         self.advances.truncate(k);
         self.head_root = memory_root_v1(slots, &pre);
         self.head = pre;
+        self.head_source = source;
         true
     }
 
@@ -348,12 +397,17 @@ mod tests {
         let s = slots();
         let mut line = MemoryLineV1::genesis(&s, vec![[0; 64]]);
         let r0 = line.head_root;
+        assert_eq!(line.head_source, None, "the genesis head is the registered M0");
         assert!(line.on_final(&s, [1; 64], &[[0; 64]], vec![[1; 64]], 100));
+        assert_eq!(line.head_source, Some([1; 64]), "the head's tensors are the advancing claim's carried post-state");
         assert!(!line.on_final(&s, [2; 64], &[[0; 64]], vec![[2; 64]], 100), "a claim over a stale head is superseded");
+        assert_eq!(line.head_source, Some([1; 64]), "a superseded claim never becomes the head's source");
         assert!(line.on_final(&s, [3; 64], &[[1; 64]], vec![[3; 64]], 120));
-        assert_eq!(line.head, vec![[3; 64]]);
+        assert_eq!((line.head.clone(), line.head_source), (vec![[3; 64]], Some([3; 64])));
+        assert_eq!(line.advances[1].pre_source, Some([1; 64]));
         assert!(line.on_post_final_conviction(&s, &[1; 64]), "the first advance is convicted");
         assert_eq!((line.head.clone(), line.head_root), (vec![[0; 64]], r0), "back to its pre-state; the later advance dropped");
+        assert_eq!(line.head_source, None, "and to where that state's tensors are public (M0)");
         assert!(line.advances.is_empty());
         assert!(!line.on_post_final_conviction(&s, &[3; 64]), "a dropped advance is no longer the line's");
         line.on_final(&s, [4; 64], &[[0; 64]], vec![[4; 64]], 10);
