@@ -3,6 +3,7 @@ use kaspa_consensus_core::BlockHash; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::{
     api::{BlockValidationFuture, BlockValidationFutures},
     block::Block,
+    config::params::ForkActivation,
 };
 use kaspa_consensusmanager::{BlockProcessingBatch, ConsensusProxy};
 use kaspa_core::debug;
@@ -15,15 +16,18 @@ use std::{
 use super::process_queue::ProcessQueue;
 
 /// **A block's dependencies: its direct parents and, past the EXEC payload fence (RFC-0008 v2), the lane heads its coinbase anchors.**
-/// Both must be known before the block can be judged, so the orphan pool treats them alike.
-fn block_deps(block: &Block) -> Vec<BlockHash> {
-    block
-        .header
-        .direct_parents()
-        .iter()
-        .copied()
-        .chain(kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_heads_of_block(block))
-        .collect()
+/// Both must be known before the block can be judged, so the orphan pool treats them alike — where the fence is in force at the block's
+/// own DAA, the predicate the body stage asks before it names a missing head. Elsewhere (every shipped preset, every height below an
+/// armed fence) a coinbase is the miner's bytes and is never read: the X8R review found the unconditional read let any miner end its
+/// tag in a trailer naming hashes nobody has, which held its block in this pool forever on an upgraded node while an older node
+/// released it — a relay split with the fence off.
+fn block_deps(block: &Block, exec_v2: Option<ForkActivation>) -> Vec<BlockHash> {
+    let heads = if exec_v2.is_some_and(|fence| fence.is_active(block.header.daa_score)) {
+        kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_heads_of_block(block)
+    } else {
+        Vec::new()
+    };
+    block.header.direct_parents().iter().copied().chain(heads).collect()
 }
 
 /// The output of an orphan pool block query
@@ -71,6 +75,8 @@ pub struct OrphanBlocksPool {
     max_orphans: usize,
     /// The log base 2 of `max_orphans`
     max_orphans_log: usize,
+    /// RFC-0008 v2: `Params::palw_exec_payload_v2_fence` ([`block_deps`]). `None` on every shipped preset.
+    exec_v2: Option<ForkActivation>,
 }
 
 impl OrphanBlocksPool {
@@ -79,7 +85,14 @@ impl OrphanBlocksPool {
             orphans: IndexMap::with_capacity(max_orphans),
             max_orphans,
             max_orphans_log: (max_orphans as f64).log2().ceil() as usize,
+            exec_v2: None,
         }
+    }
+
+    /// RFC-0008 v2: the EXEC payload's fence, so an anchoring block waits for its lane heads past it (and nothing is read below it).
+    pub fn with_exec_v2(mut self, exec_v2: Option<ForkActivation>) -> Self {
+        self.exec_v2 = exec_v2;
+        self
     }
 
     /// Adds the provided block to the orphan pool. Returns None if the block is already
@@ -90,14 +103,15 @@ impl OrphanBlocksPool {
             return None;
         }
         orphan_block.asses_for_cache()?;
-        let (roots, orphan_ancestors) = match self.get_orphan_roots(consensus, block_deps(&orphan_block).into_iter().collect()).await {
-            FindRootsOutput::Roots(roots, orphan_ancestors) => (roots, orphan_ancestors),
-            FindRootsOutput::NoRoots(orphan_ancestors) => {
-                let blocks: Vec<_> =
-                    orphan_ancestors.into_iter().map(|h| self.orphans.swap_remove(&h).expect("orphan ancestor").block).collect();
-                return Some(OrphanOutput::NoRoots(consensus.validate_and_insert_block_batch(blocks)));
-            }
-        };
+        let (roots, orphan_ancestors) =
+            match self.get_orphan_roots(consensus, block_deps(&orphan_block, self.exec_v2).into_iter().collect()).await {
+                FindRootsOutput::Roots(roots, orphan_ancestors) => (roots, orphan_ancestors),
+                FindRootsOutput::NoRoots(orphan_ancestors) => {
+                    let blocks: Vec<_> =
+                        orphan_ancestors.into_iter().map(|h| self.orphans.swap_remove(&h).expect("orphan ancestor").block).collect();
+                    return Some(OrphanOutput::NoRoots(consensus.validate_and_insert_block_batch(blocks)));
+                }
+            };
 
         if self.orphans.len() == self.max_orphans {
             let mut eviction_succeeded = false;
@@ -129,7 +143,7 @@ impl OrphanBlocksPool {
                 return None;
             }
         }
-        for parent in &block_deps(&orphan_block) {
+        for parent in &block_deps(&orphan_block, self.exec_v2) {
             if let Some(entry) = self.orphans.get_mut(parent) {
                 entry.children.insert(orphan_hash);
             }
@@ -150,7 +164,7 @@ impl OrphanBlocksPool {
     /// a peer, these blocks should be the next-in-line to be requested from that peer.
     pub async fn get_orphan_roots_if_known(&self, consensus: &ConsensusProxy, orphan: BlockHash) -> OrphanOutput {
         if let Some(orphan_block) = self.orphans.get(&orphan) {
-            match self.get_orphan_roots(consensus, block_deps(&orphan_block.block).into_iter().collect()).await {
+            match self.get_orphan_roots(consensus, block_deps(&orphan_block.block, self.exec_v2).into_iter().collect()).await {
                 FindRootsOutput::Roots(roots, _) => OrphanOutput::Roots(roots),
                 FindRootsOutput::NoRoots(_) => OrphanOutput::NoRoots(Default::default()),
             }
@@ -169,7 +183,7 @@ impl OrphanBlocksPool {
         while let Some(current) = queue.pop_front() {
             if let Some(block) = self.orphans.get(&current) {
                 orphan_ancestors.insert(current);
-                for parent in block_deps(&block.block) {
+                for parent in block_deps(&block.block, self.exec_v2) {
                     if visited.insert(parent) {
                         queue.push_back(parent);
                     }
@@ -198,7 +212,7 @@ impl OrphanBlocksPool {
         while let Some(orphan_hash) = process_queue.dequeue() {
             if let Occupied(entry) = self.orphans.entry(orphan_hash) {
                 let mut processable = true;
-                for p in block_deps(&entry.get().block) {
+                for p in block_deps(&entry.get().block, self.exec_v2) {
                     if !processing.contains_key(&p) && consensus.async_get_block_status(p).await.is_none_or(|s| s.is_header_only()) {
                         processable = false;
                         break;
@@ -218,11 +232,9 @@ impl OrphanBlocksPool {
     }
 
     fn iterate_child_orphans(&self, hash: BlockHash) -> impl Iterator<Item = BlockHash> + '_ {
-        self.orphans.iter().filter_map(
-            move |(&orphan_hash, orphan_block)| {
-                if block_deps(&orphan_block.block).contains(&hash) { Some(orphan_hash) } else { None }
-            },
-        )
+        self.orphans.iter().filter_map(move |(&orphan_hash, orphan_block)| {
+            if block_deps(&orphan_block.block, self.exec_v2).contains(&hash) { Some(orphan_hash) } else { None }
+        })
     }
 
     /// Iterate all orphans and remove blocks which are no longer orphans.
@@ -251,7 +263,7 @@ impl OrphanBlocksPool {
         let mut roots = Vec::new();
         for block in self.orphans.values() {
             let mut processable = true;
-            for parent in block_deps(&block.block) {
+            for parent in block_deps(&block.block, self.exec_v2) {
                 if self.orphans.contains_key(&parent)
                     || consensus.async_get_block_status(parent).await.is_none_or(|status| status.is_header_only())
                 {
@@ -427,6 +439,9 @@ mod tests {
         assert_eq!(*processed.read(), (1u64..=6).map(BlockHash::from).collect::<Vec<_>>());
     }
 
+    /// The EXEC payload in force from genesis, as the anchoring tests below run it.
+    const ARMED: Option<ForkActivation> = Some(ForkActivation::always());
+
     /// A pipeline that, like the real body stage, refuses a block whose lane heads (RFC-0008 v2) are not in yet, as it does a block whose
     /// parent is not.
     #[derive(Default)]
@@ -437,7 +452,7 @@ mod tests {
     impl ConsensusApi for DependencyCheckingProcessor {
         fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
             let mut processed = self.processed.write();
-            let missing: Vec<BlockHash> = block_deps(&block).into_iter().filter(|dep| !processed.contains(dep)).collect();
+            let missing: Vec<BlockHash> = block_deps(&block, ARMED).into_iter().filter(|dep| !processed.contains(dep)).collect();
             let result: BlockProcessResult<BlockStatus> = if missing.is_empty() {
                 processed.push(block.hash());
                 Ok(BlockStatus::StatusUTXOPendingVerification)
@@ -489,14 +504,14 @@ mod tests {
         let processed = processor.processed.clone();
         let ci = ConsensusInstance::new(SessionLock::new(), Arc::new(processor));
         let consensus = ci.session().await;
-        let mut pool = OrphanBlocksPool::new(16);
+        let mut pool = OrphanBlocksPool::new(16).with_exec_v2(ARMED);
 
         // The chain block 1 is known; the lane 20 <- 21 hangs from it; block 30 builds on 1 and anchors the lane's head set {20, 21}.
         let chain = Block::from_precomputed_hash(1.into(), vec![]);
         let head_a = Block::from_precomputed_hash(20.into(), vec![1.into()]);
         let head_b = Block::from_precomputed_hash(21.into(), vec![1.into()]);
         let anchoring = anchoring_block(30, 1, &[20, 21]);
-        assert_eq!(block_deps(&anchoring), vec![BlockHash::from(1u64), 20.into(), 21.into()], "parents, then the heads");
+        assert_eq!(block_deps(&anchoring, ARMED), vec![BlockHash::from(1u64), 20.into(), 21.into()], "parents, then the heads");
         consensus.validate_and_insert_block(chain).virtual_state_task.await.unwrap();
 
         // Its parent is known, its heads are not: an orphan, and the pool names the heads as what to request.
@@ -522,6 +537,38 @@ mod tests {
         assert!(processed.read().contains(&anchoring.hash()));
 
         // A block with no trailer names no head: its dependencies are its parents alone.
-        assert_eq!(block_deps(&Block::from_precomputed_hash(40.into(), vec![1.into()])), vec![BlockHash::from(1u64)]);
+        assert_eq!(block_deps(&Block::from_precomputed_hash(40.into(), vec![1.into()]), ARMED), vec![BlockHash::from(1u64)]);
+    }
+
+    /// **Fence off, a coinbase is the miner's bytes** (the X8R review). A block whose tag ends in a well-formed trailer naming hashes
+    /// nobody has is, where `palw_exec_payload_v2` is not armed — or armed above the block's DAA — an orphan of its PARENT alone: the
+    /// pool names only the parent as a root and releases the block the moment the parent lands, exactly as a pool that never heard of
+    /// RFC-0008 v2 does. (With the read unconditional, the same block waited for the named hashes forever on an upgraded node.)
+    #[tokio::test]
+    async fn fence_off_a_trailer_in_a_miners_tag_is_not_a_dependency() {
+        let anchoring = anchoring_block(30, 1, &[20, 21]);
+        for exec_v2 in [None, Some(ForkActivation::new(1_000))] {
+            assert_eq!(block_deps(&anchoring, exec_v2), vec![BlockHash::from(1u64)], "{exec_v2:?}: the parents alone");
+
+            let processor = ParentCheckingProcessor::default();
+            let processed = processor.processed.clone();
+            let ci = ConsensusInstance::new(SessionLock::new(), Arc::new(processor));
+            let consensus = ci.session().await;
+            let mut pool = OrphanBlocksPool::new(16).with_exec_v2(exec_v2);
+            let Some(OrphanOutput::Roots(roots)) = pool.add_orphan(&consensus, anchoring.clone()).await else {
+                panic!("an orphan of its missing parent");
+            };
+            assert_eq!(roots, vec![BlockHash::from(1u64)], "the parent is the only root: the trailer's hashes are never requested");
+            consensus.validate_and_insert_block(Block::from_precomputed_hash(1.into(), vec![])).virtual_state_task.await.unwrap();
+            let (blocks, _, tasks) = pool.unorphan_blocks(&consensus, 1.into()).await;
+            assert_eq!(
+                blocks.iter().map(|block| block.hash()).collect::<Vec<_>>(),
+                vec![anchoring.hash()],
+                "released with its parent"
+            );
+            try_join_all(tasks).await.expect("and consensus takes it");
+            assert!(pool.orphans.is_empty());
+            assert!(processed.read().contains(&anchoring.hash()));
+        }
     }
 }

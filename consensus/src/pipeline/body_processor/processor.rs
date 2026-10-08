@@ -154,7 +154,7 @@ impl BlockBodyProcessor {
             window_manager: services.window_manager.clone(),
 
             pruning_lock,
-            task_manager: BlockTaskDependencyManager::new(),
+            task_manager: BlockTaskDependencyManager::new(params.palw_exec_payload_v2_fence()),
             notification_root,
             counters,
         }

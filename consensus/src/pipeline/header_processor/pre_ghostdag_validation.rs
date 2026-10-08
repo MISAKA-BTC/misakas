@@ -211,11 +211,14 @@ impl HeaderProcessor {
         // ADR-0072 SA-3: the admissible envelope version travels with the lane, so pre-fence
         // history validates under the old version and post-fence blocks under the new, in one
         // binary. `Unfenced` supplies the compiled-in version, which is every shipped preset.
-        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at(
+        // RFC-0008 v2: a `PXE2` algo-10 envelope is a carrier only where `palw_exec_payload_v2` is in force at the header's own DAA;
+        // elsewhere this gate judges it exactly as the build before RFC-0008 v2 did (the X8R review).
+        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_exec_at(
             header.pow_algo_id,
             &header.palw_commitment,
             commitment_bound,
             attempt_lane,
+            self.palw_exec_v2.is_some_and(|fence| fence.is_active(header.daa_score)),
         )
         .map_err(|e| RuleError::BadPalwCommitmentShape(e.to_string()))?;
         // The `palw_state_root` shape rule, on the `palw_commitment` pattern: the field is

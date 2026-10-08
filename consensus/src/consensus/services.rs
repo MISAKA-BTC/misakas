@@ -151,7 +151,9 @@ impl ConsensusServices {
             params.deflationary_phase_daa_score,
             params.pre_deflationary_phase_base_subsidy,
             params.target_time_per_block_history(),
-        );
+        )
+        // RFC-0008 v2: the anchor-trailer readings exist only where the EXEC payload is armed.
+        .with_exec_v2_armed(params.palw_exec_payload_v2_fence().is_some());
 
         let mass_calculator = MassCalculator::new(
             params.mass_per_tx_byte,
@@ -241,7 +243,8 @@ impl ConsensusServices {
             relations_service.clone(),
         );
 
-        let pruning_proof_manager = Arc::new(PruningProofManager::new(
+        let pruning_proof_manager = Arc::new(
+            PruningProofManager::new(
             db,
             &storage,
             parents_manager.clone(),
@@ -274,7 +277,10 @@ impl ConsensusServices {
             // no Layer-0 work, so the proof's PoW check reads the same fence the pipeline does.
             params.palw_single_lottery,
             is_consensus_exiting,
-        ));
+        )
+        // RFC-0008 v2: a proof header's `PXE2` envelope passes the shape gate only where the fence is in force at its DAA.
+        .with_palw_exec_v2(params.palw_exec_payload_v2_fence()),
+        );
 
         let sync_manager = SyncManager::new(
             params.mergeset_size_limit(),
@@ -288,7 +294,7 @@ impl ConsensusServices {
         );
         // **RFC-0008 v2 (sync): the EXEC blocks a chain block's anchor covers**, so that IBD lists and requests them although no block
         // names them as a parent. Installed only where the payload is armed.
-        let sync_manager = if params.palw_exec_payload_v2_fence().is_some() {
+        let sync_manager = if let Some(exec_v2_fence) = params.palw_exec_payload_v2_fence() {
             use crate::model::stores::{
                 acceptance_data::AcceptanceDataStoreReader, ghostdag::GhostdagStoreReader as _, headers::HeaderStoreReader,
                 relations::RelationsStoreReader,
@@ -327,7 +333,12 @@ impl ConsensusServices {
                             if found.len() >= bound || found.contains(&child) {
                                 continue;
                             }
-                            if headers_store.get_header(child).is_ok_and(|header| header.pow_algo_id == lane_id) {
+                            // Lane blocks of the v2 era only: below the fence a round block reaches a syncee through the mergeset
+                            // that names it, and the list stays the one the build before RFC-0008 v2 served (the X8R review).
+                            if headers_store
+                                .get_header(child)
+                                .is_ok_and(|header| header.pow_algo_id == lane_id && exec_v2_fence.is_active(header.daa_score))
+                            {
                                 found.push(child);
                                 queue.push(child);
                             }

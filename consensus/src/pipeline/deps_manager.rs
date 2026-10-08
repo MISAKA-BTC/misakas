@@ -173,11 +173,16 @@ pub(crate) struct BlockTaskDependencyManager {
 
     // Used to signal that workers are idle
     idle_signal: Condvar,
+
+    /// **RFC-0008 v2: `Params::palw_exec_payload_v2_fence`.** Where it is in force at a block's DAA the lane heads its coinbase anchor
+    /// names are dependencies like its parents; elsewhere — every shipped preset, and every height below an armed fence — a coinbase
+    /// is the miner's bytes and is never read here (the X8R review: an ungated read let any miner's trailer reorder this queue).
+    exec_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 impl BlockTaskDependencyManager {
-    pub fn new() -> Self {
-        Self { pending: Mutex::new(HashMap::new()), idle_signal: Condvar::new() }
+    pub fn new(exec_v2: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        Self { pending: Mutex::new(HashMap::new()), idle_signal: Condvar::new(), exec_v2 }
     }
 
     /// Registers the `(task, result_transmitter)` pair as a pending task. If a task with the same
@@ -223,9 +228,13 @@ impl BlockTaskDependencyManager {
         let internal_task = group.tasks.front().expect("try_begin expects a task");
         let task_block = internal_task.task.as_ref().expect("task is expected to not be taken").block();
         let header = task_block.header.clone();
-        // RFC-0008 v2: the lane heads a chain block's anchor names are dependencies like parents (a no-op for every block without a
-        // trailer: one suffix test of the coinbase payload).
-        let exec_heads = kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_heads_of_block(task_block);
+        // RFC-0008 v2: past the fence, the lane heads a chain block's anchor names are dependencies like parents (a no-op for every
+        // block without a trailer: one suffix test of the coinbase payload). Below it, and where it is not armed, nothing is read.
+        let exec_heads = if self.exec_v2.is_some_and(|fence| fence.is_active(header.daa_score)) {
+            kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_heads_of_block(task_block)
+        } else {
+            Vec::new()
+        };
         for parent in header.direct_parents().iter().chain(exec_heads.iter()) {
             if let Some(parent_task) = pending.get_mut(parent) {
                 parent_task.dependent_tasks.push(task_id);

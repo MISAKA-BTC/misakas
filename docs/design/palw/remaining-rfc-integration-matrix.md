@@ -83,10 +83,10 @@ wire/fence impact · test · real-node result · status.
 | RFC-0009 B/D (reserved, spec) | 150–153 | 140–141 | 0xE9 | provider court (unallocated) |
 | Kernel route (A, G14) | 110–119 (110–112 used; **113 reserved for G14-R4** accusation seal, 2026-10-08) | 160–169 | 0xEC (aux tables: 36–38 onboarding, 39–40 OB-P0, **41–42 G14-R4** G14 chunk table) | `palw_probabilistic_constraints_v1` (refused) |
 | RFC-0010 V3 production fold (C2) | 120–129 (120 = `PanelBeaconProofV3`) | 170–179 (170–173 used) | 0xED | `palw_permissionless_panel_v1` (refused); `PalwVoidReasonV2` 120–129 (120–122 used; 0–10 implicit unchanged) |
-| EXEC payload v2 (A, later) | 130–139 | 180–189 | 0xEE | `palw_exec_payload_v2` (not yet declared) |
+| EXEC payload v2 (X8/X8R) | 130–139 (130 used: `ExecWorkRootOpenedV2`) | 180–189 (180 `ExecV2Row`, tables 1–4; 181 `ExecV2Verdict`, the refusal-record note) | 0xEE | `palw_exec_payload_v2` (declared; refused: `PALW_EXEC_PAYLOAD_V2_ARMABLE = false`, armable only on a salted t12 drill); `PalwVoidReasonV2` 130–139 (130 `WorkRootExpired`, 131 `WorkSliceProvenFalse`, 132 `WorkSliceDefaulted`) |
 | Onboarding objects (D phase 3) | 104–108 used (104 ArtifactBound, 105 refutation, 106 KernelBound, 107 ConformanceCommitted, 108 SignedRegistrationV1), 109 **used by OB-P0** `ConformanceEvidenceV1` (2026-10-08 18:10; aux tables 39 attempts / 40 evidence material used with it) | none (rows in the kernel route's aux tables 36–38, journalled by deltas 160/161) | none (tail 0xEC) | `palw_signed_registration_v1` (108; refused) |
-| RPC ops | C1 202–209 (202 used; 203–209 reserved for C1r2), D 210–219 (210, 211, 212 used) and 230–239 (230 used; 231 used by OB-P0 `getPalwConformanceEvidence`, 232 unused), C2 220–229 (220 used) | — | — | — |
-| `PalwVoidReasonV2` | C2 120–122; X8 one variant (assign an explicit number ≥ 130 at merge) | — | — | — |
+| RPC ops | C1 202–209 (202 used; 203–209 reserved for C1r2), D 210–219 (210, 211, 212 used) and 230–239 (230 used; 231 used by OB-P0 `getPalwConformanceEvidence`, 232 unused), C2 220–229 (220 used), X8R 240–249 (240 used: `getPalwExecV2Status`, gRPC 1294/1295) | — | — | — |
+| `PalwVoidReasonV2` | C2 120–122; X8R 130–132 (explicit; 130 was X8's implicit 11) | — | — | — |
 
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the
 skeleton first; lanes build on that commit.

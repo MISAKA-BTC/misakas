@@ -253,7 +253,7 @@ impl HeaderProcessor {
             _pruning_point_manager: services.pruning_point_manager.clone(),
             parents_manager: services.parents_manager.clone(),
 
-            task_manager: BlockTaskDependencyManager::new(),
+            task_manager: BlockTaskDependencyManager::new(params.palw_exec_payload_v2_fence()),
             pruning_lock,
             counters,
 

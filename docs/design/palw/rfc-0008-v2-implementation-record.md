@@ -32,7 +32,7 @@ Statuses (the matrix vocabulary): **IMPLEMENTED_AND_TESTED** (real node path, re
 | object tag | 130 `ExecWorkRootOpenedV2` (tags 131-139 unused) |
 | delta number | 180 `ExecV2Row { table, key, old, new }`, tables 1 roots, 2 slices, 3 jobs, 4 anchored (181-189 unused) |
 | state carriage tail | `0xEE` (`PALW_CARRIAGE_EXEC_V2_TAIL_V1`); the empty carriage is byte-identical to before; root block `exec_v2/v1` is Some-only |
-| void reason | borsh 11 `WorkRootExpired` (pinned in `rcore_v22_skeleton::the_v22_void_reasons_are_pinned`) |
+| void reason | **explicit borsh 130** `WorkRootExpired` (was the implicit 11; moved by X8R at the integration merge, beside RFC-0010's explicit 120–122; pinned in `rcore_v22_skeleton::the_v22_void_reasons_are_pinned` and `exec_v2_fold_v1::the_object_and_delta_numbers_are_the_allocated_ones`) |
 | envelope | magic `PXE2`, version 2, subtypes `EXEC_TX` / `EXEC_SLICE` (exclusive), 16 KiB header cap, distinct keyed-BLAKE2b signing/content/payload/binding/id domains and ML-DSA-87 contexts per subtype |
 | anchor trailer | `PXA2` v1 at the end of a **chain** block's coinbase extra data: up to 8 heads, count, Merkle root over the covered members in canonical order |
 | limits | open roots 256 (4 per bond), extra executors 7, slices per root 128, pending depth 4 (16 per bond), 8 slices folded per block, lifetime 100,000 DAA, root work 2^48 |
@@ -196,3 +196,59 @@ P7 `lane_state_survives_a_restart_and_a_replaying_node_agrees_whatever_the_arriv
 P8 `ibd_carries_the_anchored_lane_blocks_through_both_sync_lists` -
 P9 `a_burst_of_competing_slice_blocks_is_anchored_once_credited_once_and_weightless` -
 P10 `a_reorg_unanchors_the_lane_and_the_winning_branch_anchors_and_credits_it_once`.
+
+## 10. X8R review of every pipeline path the fence does not guard (2026-10-08)
+
+Lane X8R (branch `rfc8/x8r-review`) reviewed every change of `6176a636a..960f65a42` outside the fold. The bar, from the user's directive:
+each change is either **(a) a no-op while `palw_exec_payload_v2` is `None`** — byte-identical verdicts, state and relay behaviour on
+the live int-12 ruleset — or **(b) a deliberate node-only change that is safe for a mixed fleet**. A change that moved live behaviour with
+the fence off is a bug and was gated or reverted. Because the real release will carry the fence armed at a height H while int-12
+nodes are still on the network, every gate below is also checked **armed with H above the block** ("armed-below"): the gates read the
+fence *at the block's own DAA*, not merely its presence, wherever a DAA is in hand.
+
+One fact bounds several trailer findings: on every kaspa-pq preset the coinbase payload's miner script must be the 69-byte ML-DSA-87
+P2PKH (`NonPqCoinbasePayloadScript`) and the payload cap is 204 bytes, so a payload is at least 88 bytes and a one-head `PXA2` trailer
+(140 bytes) never fits: with the fence off a block whose tag ends in a trailer is always refused `PayloadLenAboveMax`. The trailer
+readers below therefore could not change a *valid* block's verdict, but they did change what a node does with such a block before (or
+instead of) refusing it, and one of them changed other miners' templates.
+
+| # | path | X8 change | fence-off finding | verdict | X8R action / pin |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `pow_layer0::check_palw_commitment_shape_at` (header isolation **and the pruning-proof header gate**) | a `PXE2` algo-10 payload gets its own 16 KiB cap and the v2 shape decode, ungated | relay path: still refused (later, at the stateless check, as `BadPalwCarriageAdmission` instead of `BadPalwCommitmentShape`; the refusal telemetry class moves). **Proof path: the proof gate runs only this check, so a pruning proof could carry a `PXE2` header that int-12 refuses** | **BUG** | new `check_palw_commitment_shape_exec_at(.., exec_v2_active)`; `_at` is the pre-X8 function exactly; the header stage and `PruningProofManager` (`with_palw_exec_v2`) pass the fence at the header's DAA. Pins: module test (`pre_v2` error equality), P5, P11 |
+| 2 | `pre_ghostdag::check_round_lane_parents` | a non-lane block names no lane parent past the fence | gated `is_active(header.daa_score)` | (a) | — |
+| 3 | `pre_ghostdag::palw_carriage_stateless_v2` | algo 10: `PXE2` below / `PXR1` past the fence refused by name | `PXR1` below the fence falls through untouched; a `PXE2` header no longer reaches this branch below the fence (row 1) | (a) | kept as defence in depth |
+| 4 | `post_pow::round_lane_members_v2` (`check_mergeset_size_limit`, the header rule) | members decoded by the v2-aware `palw_exec_lane_coords_v1`; slices counted | identical for every `PXR1` byte string; `PXE2` cannot be stored below the fence after row 1 | (a) | made explicit: `lane_coords` is the v1 decode (same error text) where the fence is not armed |
+| 5 | `post_pow::check_round_lane_mergeset` | envelope anchor == selected parent (v2); lane total bound `members + slices` before the v1 rule | with no slice the total bound is the v1 rule's first check, same error text (`TooMany`) | (a) | anchor check also gated on the fence being armed |
+| 6 | `deps_manager::try_begin` | the anchor's heads are task dependencies, **ungated** | any coinbase ending in a trailer made the task wait for named pending blocks: no deadlock (each side commits to the other's hash, so no cycle), but a processing-order change a miner controls | **BUG** (minor) | gated on the fence at the block's DAA (`BlockTaskDependencyManager::new(fence)`) |
+| 7 | `flowcontext/orphans.rs::block_deps` | the anchor's heads are orphan dependencies, **ungated** | an orphan whose tag ends in a trailer naming unknown hashes was **held for those hashes forever** (until eviction) where int-12 releases it with its parent and hands it to consensus: a relay divergence, and the sender of the invalid block is never charged | **BUG** | gated on the fence at the block's DAA (`OrphanBlocksPool::with_exec_v2`). Pin: `orphans::fence_off_a_trailer_in_a_miners_tag_is_not_a_dependency` (None and armed-above) |
+| 8 | `processes/sync` hooks | IBD lists the anchored lane blocks and requests header-only lane children | hooks installed only where the fence is armed (`services.rs`): `None` is the old code path | (a) / (b) | armed-below: the children hook now lists only lane blocks at or past the fence, so the body list is int-12's below it |
+| 9 | `body_validation_in_isolation::check_exec_v2_shape` | trailer shape, no trailer on a lane block, a slice carries only its coinbase | gated `is_active(daa)` | (a) | — |
+| 10 | `body_validation_in_context` | heads with no body → retryable `MissingParents`; `check_payload_len_at` before the payload read | heads gated; inactive `check_payload_len_at` is `len <= cap` else `PayloadLenAboveMax(len, cap)` — the error the payload reader gave, at the same point | (a) | P11 pins the over-cap trailer refusal string |
+| 11 | `coinbase::deserialize_coinbase_payload` | a payload ending in the magic may exceed the cap by a trailer, **ungated** | every body-validated payload passed the strict check first; a reader of a payload that skipped in-context validation (trusted blocks) would accept what int-12 refuses | **BUG** (latent) | lenient only where the fence is armed (`CoinbaseManager::with_exec_v2_armed`) |
+| 12 | `coinbase::modify_coinbase_payload` | a trailer at the end of the cached template's payload survives the next miner's data, **ungated** | the bytes are the *previous miner's* tag (`getBlockTemplate` extra data): re-appended to another miner's payload they push it over the cap, so one RPC caller poisoned every other miner's template | **BUG** (node-local) | carried only where the fence is armed |
+| 13 | `virtual_processor::palw_exec_v2_augment` | covered blocks appended to the in-memory reds | gated `is_active(header.daa_score)`; returns the same `Arc` otherwise | (a) | — |
+| 14 | `palw_exec_v2_non_daa` (chain walk ×4, virtual, `utxo_validation`) | covered blocks join the non-DAA set | gated on `palw_exec_v2.is_none()` only: armed-below it extended the set with the mergeset's round blocks (idempotent — `difficulty.rs` already puts every round block outside the DAA set) | (a) | now gated on the block's own DAA |
+| 15 | `palw_round_verdicts_v1` | canonical order `(round, index, hash)`, a running `taken` set and the payee bound, **ungated** | chain mergesets: the header rule makes both checks redundant and `uses` is re-sorted, but the `judged` order (telemetry) moved, and **virtual's mergeset is no header the rule judged**, so the checks could change virtual's UTXO view | **BUG** (node-local) | order and both checks only past the fence; below it the old hash order, byte for byte |
+| 16 | `palw_record_round_verdicts`, `exec_lane_adapt_block_template` (the round template refactor) | coordinates through the v2-aware decoder; the extra total bound | identical for `PXR1`; total bound = the v1 rule's first check | (a) | — |
+| 17 | `heartbeat_adapt_block_template` | the trailer is re-appended to the beat's miner data | provably a no-op (a trailer in miner data re-serialises to the same bytes, else the fallback), but proof by argument | (a) | gated on the fence at the template's DAA |
+| 18 | `build_block_template` (virtual's anchor) | the template's miner data carries the virtual's anchor | gated `palw_exec_v2_active_at(virtual daa)` | (a) | — |
+| 19 | `palw_add_round_parents` | virtual takes no round parent within `mergeset_size_limit + 1` DAA of the fence | `None`: untouched. **Armed: the v1 EXEC_TX lane stopped up to 181 DAA (~8 h on testnet-12) before the fence on upgraded nodes** | (b) | virtual's own DAA (round parents add none) computed only within one mergeset of the fence; none past it |
+| 20 | `calculate_virtual_state` | `UtxoProcessingContext` built after the DAA window; the exec state read | no side effect moved; the read is gated on the virtual's DAA | (a) | — |
+| 21 | acceptance walk: tag 130 dropped by name below the fence | | equals int-12's skip at extraction: rent ceiling 0, no carrier refund, no slot, not an H-1 carrier, the refund settle sequence unchanged (the drop happens before any state is read) | (a) | P5, P11 |
+| 22 | **`palw_lifecycle_object_may_ride_v2`, tag 130** | the declaration's shape checked at ride time | int-12 cannot decode tag 130 and, testnet-12 declaring the audit fence, **tolerates** it (A-2). An upgraded node refused a malformed declaration in isolation, so **a block carrying it was invalid on upgraded nodes and valid on int-12: a consensus split with the fence off** | **BUG (critical)** | tag 130 rides unjudged; `validate_palw_lifecycle_tx` judges it exactly as an undecodable payload (`Ok` iff the ruleset tolerates); arming now requires `palw_audit_2026_09_11` declared. Pins: `exec_v2_fold_v1::a_tag_130_carrier_rides_exactly_as_an_undecodable_payload`, P11 (a malformed declaration is carried and the block stands) |
+| 23 | fold (`palw_state_v2.rs`, `palw_exec_v2_fold.rs`) | deadline hold, arm guard, exposure rows, `settle_at_final_v2`, void/retire hooks, expiry sweep, root block, tail `0xEE`, delta 180 | each is a no-op on an empty table (`settle_at_final_v2` returns `(amount, [])` and writes nothing; the sweep returns on an empty map; root block and tail are Some-only), and nothing fills the table unless the fence is active | (a) | — |
+| 24 | enums | `WorkRootExpired`, `PayeeBound`, `ExecWorkRootOpenedV2`, delta 180, new `RuleError`s | written only past the fence; `RuleError` is not serialised | (a) | `WorkRootExpired` now explicit 130 |
+| 25 | kaspad round producer, RPC/kaspad names, params and fork id | | producer: `exec_v2_fence: None` signs `PXR1` byte for byte (unit test); names are display only; ids Some-only with the `never()` collapse | (a) / (b) | repin (section 11) |
+
+**Pins added.** P11 `t12_exec_v2_fence_off_every_lane_object_is_judged_as_before_and_an_armed_node_agrees`: node A (fence unarmed)
+carries a plain chain, then two tag-130 carriers (one malformed), a heartbeat whose tag ends in a well-formed trailer and its twin one byte
+off the magic (both refused with the same `PayloadLenAboveMax(len, 204)`), and a `PXE2` header (refused with the pre-X8 shape error);
+node B (unarmed) and node C (armed at 1,000,000) replay every block and agree on every status, every refusal, the sink, the PALW state
+root and the virtual UTXO multiset — before the lane objects and after them. P5 now expects the pre-X8 shape refusal. Core:
+the shape-gate module test and the tag-130 admission test. Flows: the fence-off orphan test.
+
+**Cross-lane findings (not this lane's code; reported to the Lead).** The row-22 split class is not unique to tag 130. On the
+integration line every object kind appended after int-12 whose may-ride arm refuses anything is a pre-fence split on testnet-12 for the
+same reason (int-12 tolerates the undecodable payload): `KernelRouteV1` (110: unsigned or oversized), `KernelConstraintReceiptV1` (111:
+unsigned), the onboarding objects 104–107 and 109 (unsigned), `SignedRegistrationV1` (108), `PanelBeaconProofV3` (120: oversized). The
+row-1 class likewise applies to RFC-0009's `PFS4` arm of the same shape gate (int-12's gate has no `PFS4` arm), on the pruning-proof path.

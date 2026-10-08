@@ -862,6 +862,25 @@ pub fn check_palw_commitment_shape_at(
     bound: bool,
     lane: PalwAttemptLaneV1,
 ) -> Result<(), PowLayer0Error> {
+    check_palw_commitment_shape_exec_at(algo_id, palw_commitment, bound, lane, false)
+}
+
+/// **[`check_palw_commitment_shape_at`] with RFC-0008 v2's `PXE2` envelope admitted where `palw_exec_payload_v2` is in force at the
+/// header's own DAA** (`exec_v2_active`). Where it is not — every shipped preset, and every height below an armed fence — an algo-10
+/// payload is judged exactly as the build before RFC-0008 v2 judged it: as a `PXR1` envelope under the 8,192-byte cap, so a `PXE2`
+/// payload is `PalwCommitmentTooLong` or `PalwCommitmentMalformed`, the same error at the same stage, on the relay path and on the
+/// pruning-proof path alike (the proof path runs only this gate, not the stateless carriage check that names the fence). The
+/// X8R review's finding: an ungated `PXE2` arm here let a proof carry a `PXE2` header that a node without RFC-0008 v2 refuses.
+pub fn check_palw_commitment_shape_exec_at(
+    algo_id: u8,
+    palw_commitment: &[u8],
+    bound: bool,
+    lane: PalwAttemptLaneV1,
+    exec_v2_active: bool,
+) -> Result<(), PowLayer0Error> {
+    let exec_v2_carriage = exec_v2_active
+        && algo_id == POW_ALGO_ID_PALW_ROUND_V1
+        && crate::palw_exec_v2::PalwExecV2Envelope::is_v2_carriage(palw_commitment);
     if !is_palw_algo_id(algo_id) {
         // Unconditional, fence or no fence: a non-PALW header's commitment is hash-INVISIBLE
         // (`write_header_preimage` length-prefixes it only for PALW ids), so a non-empty one is
@@ -877,11 +896,11 @@ pub fn check_palw_commitment_shape_at(
     // receipt — keeps the 8,192-byte one, so the set of acceptable payloads below `palw_receipt_spend_v4` is unchanged (a `PFS4` header is
     // refused by name at the header stage until the fence opens).
     // RFC-0008 v2: a `PXE2` EXEC envelope (an ML-DSA-87 key and signature beside a slice's twelve roots) is over 8 KiB, so it too has
-    // its own cap; a `PXR1` round envelope keeps the 8,192-byte one, and a `PXE2` header is refused by name at the header stage until
-    // `palw_exec_payload_v2` opens.
+    // its own cap where `palw_exec_payload_v2` is in force; a `PXR1` round envelope keeps the 8,192-byte one, and below the fence a
+    // `PXE2` payload meets that cap and the v1 decode, as it always did.
     let cap = if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 && crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment) {
         crate::palw_receipt_v4::PALW_COMMITMENT_MAX_BYTES_V4
-    } else if algo_id == POW_ALGO_ID_PALW_ROUND_V1 && crate::palw_exec_v2::PalwExecV2Envelope::is_v2_carriage(palw_commitment) {
+    } else if exec_v2_carriage {
         crate::palw_exec_v2::PALW_EXEC_V2_MAX_ENVELOPE_BYTES
     } else {
         PALW_COMMITMENT_MAX_BYTES
@@ -924,9 +943,9 @@ pub fn check_palw_commitment_shape_at(
             .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
     }
     if algo_id == POW_ALGO_ID_PALW_ROUND_V1 {
-        // RFC-0008 v2: the magic says which envelope this is; both are the lane's, and a payload of neither is malformed. Shape only —
-        // WHICH of the two a height admits is the header stage's, against `palw_exec_payload_v2`.
-        if crate::palw_exec_v2::PalwExecV2Envelope::is_v2_carriage(palw_commitment) {
+        // RFC-0008 v2: where the fence is in force the magic says which envelope this is; both are the lane's, and a payload of
+        // neither is malformed. Shape only — that a `PXR1` one is refused past the fence is the stateless carriage check's.
+        if exec_v2_carriage {
             return crate::palw_exec_v2::PalwExecV2Envelope::decode(palw_commitment)
                 .and_then(|envelope| envelope.validate_shape())
                 .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });

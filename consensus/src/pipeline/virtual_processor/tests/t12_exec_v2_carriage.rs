@@ -135,19 +135,24 @@ fn declaration_for(chain: &T12Chain, claim: Hash64, expiry: u64) -> PalwWorkRoot
 
 /// The 0x4b carrier of `object`, funded by card `0`'s float and signed by card 0.
 fn carrier_of(config: &Config, floats: &[(TransactionOutpoint, UtxoEntry)], object: Obj) -> Transaction {
+    carrier_by(config, floats, 0, object)
+}
+
+/// The 0x4b carrier of `object`, funded by card `card`'s float and signed by that card.
+fn carrier_by(config: &Config, floats: &[(TransactionOutpoint, UtxoEntry)], card: usize, object: Obj) -> Transaction {
     use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
     let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).expect("serializes");
-    let (float_outpoint, float_entry) = floats[0].clone();
+    let (float_outpoint, float_entry) = floats[card].clone();
     let mut tx = Transaction::new(
         crate::constants::TX_VERSION,
         vec![TransactionInput::new(float_outpoint, vec![], 0, 1)],
-        vec![TransactionOutput::new(float_entry.amount - 300_000, card_payout_spk(0))],
+        vec![TransactionOutput::new(float_entry.amount - 300_000, card_payout_spk(card))],
         0,
         kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
         0,
         payload,
     );
-    sign_spend(&mut tx, float_entry, 0, config.params.storage_mass_parameter);
+    sign_spend(&mut tx, float_entry, card, config.params.storage_mass_parameter);
     tx
 }
 
@@ -675,7 +680,20 @@ async fn t12_exec_v2_below_the_fence_a_pxe2_header_is_refused_and_a_root_declara
     let (_, state) = chain.tip_state();
     assert!(state.exec_v2_root_v1(&claim).is_none(), "the declaration was dropped by name below the fence");
     assert_eq!(state.exec_v2_counts_v1(), (0, 0, 0));
-    // A PXE2 lane header: refused by name (the v1 adapter builds the block; the envelope is the v2 one).
+    // A PXE2 lane header: refused by the shape gate exactly as the build before RFC-0008 v2 refused it (the X8R review: the fence is not
+    // armed, so the v2 envelope is never read — it is a malformed v1 one).
+    let block = pxe2_tx_header_block(&mut chain, &config);
+    let expected = pxe2_refusal_before_rfc8_v2(&block);
+    let err =
+        chain.ctx.consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await.expect_err("below the fence");
+    assert_eq!(err.to_string(), expected, "the pre-RFC-0008-v2 refusal, byte for byte");
+    // And a chain block's coinbase carries no trailer, with or without lane blocks around.
+    let (attempt, _) = chain.attempt(2, ttpb, Vec::new(), &|_| true).await;
+    assert!(palw_exec_v2_anchor_split(&attempt.transactions[0].payload).unwrap().1.is_none());
+}
+
+/// A signed `PXE2` `EXEC_TX` header (the v1 adapter builds the block; the envelope is the v2 one) on `chain`'s sink — not inserted.
+fn pxe2_tx_header_block(chain: &mut T12Chain, config: &Config) -> MutableBlock {
     let mut template = chain
         .ctx
         .consensus
@@ -693,7 +711,7 @@ async fn t12_exec_v2_below_the_fence_a_pxe2_header_is_refused_and_a_root_declara
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
     let mut envelope = PalwExecV2Envelope {
         version: PALW_EXEC_V2_WIRE_VERSION,
-        network_domain: network_domain(&config),
+        network_domain: network_domain(config),
         anchor,
         subtype: PalwExecSubtypeV2::Tx,
         tx_permit: Some(kaspa_consensus_core::palw_exec_v2::PalwExecTxPermitV2 { round, permit_index: 0 }),
@@ -707,12 +725,170 @@ async fn t12_exec_v2_below_the_fence_a_pxe2_header_is_refused_and_a_root_declara
     envelope.signature = sign(0, &message, envelope.mldsa87_context());
     block.header.palw_commitment = envelope.encode();
     block.header.finalize();
-    let err =
-        chain.ctx.consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await.expect_err("below the fence");
-    refused_with("below palw_exec_payload_v2", &err.to_string());
-    // And a chain block's coinbase carries no trailer, with or without lane blocks around.
-    let (attempt, _) = chain.attempt(2, ttpb, Vec::new(), &|_| true).await;
-    assert!(palw_exec_v2_anchor_split(&attempt.transactions[0].payload).unwrap().1.is_none());
+    block
+}
+
+/// The refusal the build before RFC-0008 v2 gives a `PXE2` algo-10 header: its shape gate reads the bytes as a v1 envelope (the gate
+/// that build ran is [`kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at`], unchanged).
+fn pxe2_refusal_before_rfc8_v2(block: &MutableBlock) -> String {
+    let shape = kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at(
+        block.header.pow_algo_id,
+        &block.header.palw_commitment,
+        false,
+        kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::Unfenced,
+    )
+    .expect_err("a PXE2 payload is no v1 envelope");
+    kaspa_consensus_core::errors::block::RuleError::BadPalwCommitmentShape(shape.to_string()).to_string()
+}
+
+/// A heartbeat on `chain`'s sink whose miner tag ends in `tail` — built, not inserted. The coinbase payload is the template's with `tail`
+/// appended (the miner's extra data is the payload's last field), the merkle root recomputed.
+fn beat_with_tag_tail(chain: &mut T12Chain, config: &Config, nonce: u64, tail: &[u8]) -> MutableBlock {
+    let ttpb = config.params.target_time_per_block();
+    let mut template = chain
+        .ctx
+        .consensus
+        .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(Vec::new())), TemplateBuildMode::Standard)
+        .expect("a template");
+    stamp_harness_time(&config.params, &mut template.block.header, chain.ctx.simulated_time + ttpb);
+    template.block.header.nonce = nonce;
+    template.block.header.finalize();
+    let mut beat = chain.vp().heartbeat_adapt_block_template(template).expect("the heartbeat lane is open").0.block;
+    let mut payload = beat.transactions[0].payload.clone();
+    payload.extend_from_slice(tail);
+    beat.transactions[0].payload = payload;
+    beat.transactions[0].finalize();
+    beat.header.hash_merkle_root = kaspa_consensus_core::merkle::calc_hash_merkle_root(beat.transactions.iter());
+    beat.header.finalize();
+    beat
+}
+
+/// **Fence off, every RFC-0008 v2 object is judged as the build before it judged it — and a node with the fence armed far above the chain
+/// agrees on every verdict and every root** (the X8R review's pin; spec section 9's "below / at / above activation", below half).
+///
+/// Node A runs testnet-12 with `palw_exec_payload_v2` unarmed. It carries, beside an ordinary chain (heartbeats, a REAL attempt): two
+/// 0x4b carriers of a tag-130 root declaration — one well-formed and signed, one MALFORMED (no plan; before the review a ride-time
+/// shape check refused its transaction, which the live build tolerates as undecodable) — both valid transactions, both dropped by name,
+/// nothing folded; a heartbeat whose miner tag ends in a well-formed `PXA2` trailer, and its twin whose trailer magic is one byte off —
+/// both refused with the same over-the-cap payload error (a trailer cannot fit beside the PQ-only 69-byte payout script under the
+/// 204-byte cap, so the reader that extends the cap must not exist here); and a `PXE2` algo-10 header, refused by the shape gate with
+/// the v1 decode's error. Node B (unarmed) and node C (armed at 1,000,000) replay every block: the same statuses, the same refusals, the
+/// same sink, PALW state root and virtual UTXO multiset — with and without the lane objects (the comparison is made after the plain
+/// chain and again after the lane objects).
+#[tokio::test]
+async fn t12_exec_v2_fence_off_every_lane_object_is_judged_as_before_and_an_armed_node_agrees() {
+    use kaspa_consensus_core::errors::{block::RuleError, coinbase::CoinbaseError};
+    kaspa_core::log::try_init_logger("warn");
+    let (config, premine, floats) = config_with(None);
+    let (armed_far, _, _) = config_with(Some(1_000_000));
+    let mut a = chain_of(&config, &premine, &floats);
+    let ttpb = config.params.target_time_per_block();
+
+    // Every node's view, as the comparison reads it.
+    fn view(chain: &T12Chain) -> (BlockHash, Hash64, kaspa_hashes::Hash64) {
+        let (_, state) = chain.tip_state();
+        let multiset = chain.vp().virtual_stores.read().state.get().unwrap().multiset.clone().finalize();
+        (chain.sink(), state.state_root(), multiset)
+    }
+    async fn replay(
+        config: &Config,
+        premine: &[(TransactionOutpoint, UtxoEntry)],
+        floats: &[(TransactionOutpoint, UtxoEntry)],
+        blocks: &[Block],
+        refused: &[(MutableBlock, String)],
+    ) -> T12Chain {
+        let node = chain_of(config, premine, floats);
+        for block in blocks {
+            let hash = block.header.hash;
+            node.ctx
+                .consensus
+                .validate_and_insert_block(block.clone())
+                .virtual_state_task
+                .await
+                .unwrap_or_else(|e| panic!("block {hash}: {e}"));
+        }
+        for (block, why) in refused {
+            let err = node
+                .ctx
+                .consensus
+                .validate_and_insert_block(block.clone().to_immutable())
+                .virtual_state_task
+                .await
+                .expect_err("refused on every node");
+            assert_eq!(&err.to_string(), why, "the same refusal");
+        }
+        node
+    }
+
+    // ---- the plain chain: heartbeats and a REAL attempt ----
+    for _ in 0..6 {
+        a.heartbeat(ttpb, Vec::new()).await;
+    }
+    let (_, claim) = a.attempt(0, ttpb, Vec::new(), &|_| true).await;
+    let plain = selected_chain_blocks(&a, a.sink());
+    for other in [&config, &armed_far] {
+        let node = replay(other, &premine, &floats, &plain, &[]).await;
+        assert_eq!(view(&node), view(&a), "without the lane objects");
+    }
+
+    // ---- the lane objects ----
+    let daa = a.daa_of(a.sink());
+    let mut good = declaration_for(&a, claim, daa + 5_000);
+    good.signature = sign(0, &good.signing_message(network_domain(&config)), PALW_EXEC_V2_ROOT_MLDSA87_CONTEXT);
+    let mut malformed = good.clone();
+    malformed.boundaries.clear();
+    assert!(malformed.validate_shape().is_err());
+    let good_carrier = carrier_of(&config, &floats, Obj::ExecWorkRootOpenedV2 { declaration: Box::new(good) });
+    let malformed_carrier = carrier_by(&config, &floats, 1, Obj::ExecWorkRootOpenedV2 { declaration: Box::new(malformed) });
+    let carrying = a.heartbeat(ttpb, vec![good_carrier.clone(), malformed_carrier.clone()]).await;
+    for carrier in [&good_carrier, &malformed_carrier] {
+        assert!(carrying.transactions.iter().any(|tx| tx.id() == carrier.id()), "a valid transaction, carried");
+    }
+    a.heartbeat(ttpb, Vec::new()).await; // accepts them
+    let (_, state) = a.tip_state();
+    assert!(state.exec_v2_root_v1(&claim).is_none() && state.exec_v2_counts_v1() == (0, 0, 0), "dropped by name: nothing folded");
+
+    // A trailer in a miner's tag — and its twin one byte off the magic: the same refusal, the build before's.
+    let cap = config.params.max_coinbase_payload_len;
+    let trailer = PalwExecV2AnchorV1 {
+        heads: vec![a.vp().ghostdag_store.get_selected_parent(a.sink()).unwrap()],
+        count: 1,
+        root: Hash64::from_u64_word(0xA2),
+    }
+    .trailer();
+    let mut off_by_one = trailer.clone();
+    *off_by_one.last_mut().unwrap() ^= 1;
+    let mut refused: Vec<(MutableBlock, String)> = Vec::new();
+    for (nonce, tail) in [(0xA0, trailer), (0xA1, off_by_one)] {
+        let beat = beat_with_tag_tail(&mut a, &config, nonce, &tail);
+        let len = beat.transactions[0].payload.len();
+        assert!(len > cap, "a trailer does not fit beside the 69-byte payout script: {len} > {cap}");
+        let err =
+            a.ctx.consensus.validate_and_insert_block(beat.clone().to_immutable()).virtual_state_task.await.expect_err("over the cap");
+        assert_eq!(
+            err.to_string(),
+            RuleError::BadCoinbasePayload(CoinbaseError::PayloadLenAboveMax(len, cap)).to_string(),
+            "the cap is the cap, trailer or not"
+        );
+        refused.push((beat, err.to_string()));
+    }
+
+    // A PXE2 header: the shape gate's v1 refusal.
+    let pxe2 = pxe2_tx_header_block(&mut a, &config);
+    let expected = pxe2_refusal_before_rfc8_v2(&pxe2);
+    let err = a.ctx.consensus.validate_and_insert_block(pxe2.clone().to_immutable()).virtual_state_task.await.expect_err("no carrier");
+    assert_eq!(err.to_string(), expected);
+    refused.push((pxe2, expected));
+
+    // ---- every node agrees, with the lane objects ----
+    let with_objects = selected_chain_blocks(&a, a.sink());
+    for other in [&config, &armed_far] {
+        let node = replay(other, &premine, &floats, &with_objects, &refused).await;
+        assert_eq!(view(&node), view(&a), "with the lane objects");
+        for block in &with_objects {
+            assert_eq!(node.ctx.consensus.block_status(block.header.hash), a.ctx.consensus.block_status(block.header.hash));
+        }
+    }
 }
 
 // =============================================================================================

@@ -388,12 +388,14 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // RFC-0007 Part I: a vertex rides shaped (the strict leaf order, the caps, the root) at every height, and an equivocation
         // shaped (one seat, one round, two roots), as the held leaf challenge does; the signatures, the clock and the registry are
         // the acceptance layer's, and below `palw_verification_vertex_v1` the walk drops them by name.
-        // RFC-0008 v2 (tag 130): a work-session root declaration rides shaped (a valid plan partition, set roots, canonical
-        // executors) at every height, as the registrations do; the signature, the claim, the prefix and the quotas are the
-        // acceptance layer's and the fold's, and below `palw_exec_payload_v2` the walk drops it by name.
-        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { declaration } => {
-            declaration.validate_shape().map_err(|_| "a work-session root declaration is malformed (RFC-0008 v2)")
-        }
+        // RFC-0008 v2 (tag 130): a work-session root declaration rides at every height UNJUDGED (A-2, exactly). The live testnet-12
+        // build cannot decode tag 130 and, its ruleset declaring the audit fence, tolerates the payload as undecodable — so any
+        // ride-time refusal here, a shape check included, would make an upgraded node refuse a block that node accepts: a split before
+        // the fence (the X8R review). The shape, the signature, the claim, the prefix and the quotas are the acceptance layer's and the
+        // fold's past `palw_exec_payload_v2`; below it the walk drops the object by name, as the older build skips it.
+        // [`validate_palw_lifecycle_tx`] holds the other half: where a ruleset does NOT tolerate undecodable payloads, tag 130 is
+        // refused as undecodable, as the older build refuses it.
+        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } => Ok(()),
         PalwConsensusObjectV2::VerificationVertexV1 { vertex } => {
             crate::palw_vertex_v1::palw_vertex_shape_v1(vertex).map_err(|_| "a verification vertex is malformed (RFC-0007 Part I)")
         }
@@ -1014,6 +1016,13 @@ pub fn validate_palw_lifecycle_tx(payload: &[u8], tolerate_undecodable: bool) ->
             return Ok(());
         }
         return Err(PalwLifecycleTxError::UnsupportedVersion { got: payload.version, expected: PALW_LIFECYCLE_TX_VERSION_V2 });
+    }
+    // **RFC-0008 v2 (tag 130) is judged as the build without it judges its bytes: undecodable** (the X8R review). That build is the
+    // live testnet-12 release; tolerated where the ruleset tolerates undecodable payloads (testnet-12 does, and
+    // `validate_palw_exec_payload_v2` makes that a prerequisite of arming the fence), refused as `Undecodable` where it does not — so
+    // the verdict is the older build's on every ruleset, before and after the fence alike.
+    if crate::palw_state_v2::palw_object_is_exec_v2(&payload.object) {
+        return if tolerate_undecodable { Ok(()) } else { Err(PalwLifecycleTxError::Undecodable) };
     }
     palw_lifecycle_object_may_ride_v2(&payload.object).map_err(PalwLifecycleTxError::ObjectMayNotRide)
 }

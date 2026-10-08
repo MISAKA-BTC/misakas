@@ -57,7 +57,7 @@ impl HeaderProcessor {
         &self,
         ghostdag_data: &crate::model::stores::ghostdag::GhostdagData,
     ) -> BlockProcessResult<(Vec<(u64, u16, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>, usize)> {
-        use kaspa_consensus_core::palw_exec_v2::{PalwExecLaneCoordsV1, palw_exec_lane_coords_v1};
+        use kaspa_consensus_core::palw_exec_v2::PalwExecLaneCoordsV1;
         let mut members = Vec::new();
         let mut slices = 0usize;
         if self.palw_execution_lane.is_none() {
@@ -68,12 +68,29 @@ impl HeaderProcessor {
             if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 {
                 continue;
             }
-            match palw_exec_lane_coords_v1(&header.palw_commitment).map_err(RuleError::BadRoundLaneMergeset)? {
+            match self.lane_coords(&header.palw_commitment)? {
                 PalwExecLaneCoordsV1::Permit { round, permit_index, bond } => members.push((round, permit_index, bond)),
                 PalwExecLaneCoordsV1::Slice { .. } => slices += 1,
             }
         }
         Ok((members, slices))
+    }
+
+    /// **A lane member's coordinates.** Where `palw_exec_payload_v2` is not armed this is the v1 envelope's decode and nothing else —
+    /// the exact reading (and refusal) of the build before RFC-0008 v2, whatever bytes a header holds — so the header rule cannot
+    /// move on a network that does not arm the fence (the X8R review). Where it is armed a `PXE2` member (which only a header at or past
+    /// the fence can be: the shape and stateless gates refuse one below it) reads as its subtype.
+    fn lane_coords(&self, commitment: &[u8]) -> BlockProcessResult<kaspa_consensus_core::palw_exec_v2::PalwExecLaneCoordsV1> {
+        if self.palw_exec_v2.is_none() {
+            let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(commitment)
+                .map_err(|e| RuleError::BadRoundLaneMergeset(e.to_string()))?;
+            return Ok(kaspa_consensus_core::palw_exec_v2::PalwExecLaneCoordsV1::Permit {
+                round: envelope.round,
+                permit_index: envelope.permit_index,
+                bond: envelope.bond,
+            });
+        }
+        kaspa_consensus_core::palw_exec_v2::palw_exec_lane_coords_v1(commitment).map_err(RuleError::BadRoundLaneMergeset)
     }
 
     /// **ADR-0125: the round lane's header rule.**
@@ -111,11 +128,12 @@ impl HeaderProcessor {
                 )));
             }
         }
-        use kaspa_consensus_core::palw_exec_v2::{PalwExecLaneCoordsV1, PalwExecV2Envelope, palw_exec_lane_coords_v1};
+        use kaspa_consensus_core::palw_exec_v2::{PalwExecLaneCoordsV1, PalwExecV2Envelope};
         let block_round = if header.pow_algo_id == round_id {
             // **RFC-0008 v2:** the envelope's carrier anchor IS the block's selected parent (the chain block it hangs from), so
-            // a carrier cannot be re-hung from another anchor under a signature that names one.
-            if PalwExecV2Envelope::is_v2_carriage(&header.palw_commitment) {
+            // a carrier cannot be re-hung from another anchor under a signature that names one. (Only where the fence is armed: elsewhere
+            // a `PXE2` header never passed the shape gate.)
+            if self.palw_exec_v2.is_some() && PalwExecV2Envelope::is_v2_carriage(&header.palw_commitment) {
                 let envelope =
                     PalwExecV2Envelope::decode(&header.palw_commitment).map_err(|e| RuleError::BadRoundLaneMergeset(e.to_string()))?;
                 if envelope.anchor != selected_parent {
@@ -125,7 +143,7 @@ impl HeaderProcessor {
                     )));
                 }
             }
-            match palw_exec_lane_coords_v1(&header.palw_commitment).map_err(RuleError::BadRoundLaneMergeset)? {
+            match self.lane_coords(&header.palw_commitment)? {
                 PalwExecLaneCoordsV1::Permit { round, .. } => Some(round),
                 PalwExecLaneCoordsV1::Slice { .. } => None,
             }
