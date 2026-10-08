@@ -23,6 +23,7 @@ economic choice the user decides) · **EXTERNAL** (review, measurement, drill, h
 
 | RFC | Open | Kind |
 | --- | --- | --- |
+| RFC-0004 Part II (2026-10-08, in the gate by the user) | computation specification with typed roots (`Weights` / `Memory` + update rule / `Retrieval` snapshot + deterministic rule / `Composite`); real-node E2E per kind with outsider conviction and DA default; bounds; census counting | CODE + DESIGN |
 | RFC-0009 | L2 PALW fork-choice verification for remote clients (needs a state-root version bump and transition verification); the provider court (objective DA responsibility transfer); rail auto-resubmit; the RDA4 `SigningPurpose` | DESIGN / CODE |
 | RFC-0006 | non-seat watcher, per-segment pricing, per-shard V3 draw | CODE / DESIGN |
 | RFC-0013 | tiled range evaluator, Merkle index | CODE |
@@ -101,6 +102,7 @@ designs and writes first and builds at milestones with one cargo invocation; a n
 | 3 | L2FC | opus | RFC-0009 L2: verifiable PALW fork choice for remote clients (state-root version, transition verification) |
 | 3 | MEAS | sonnet | RFC-0015 fresh-verifier timings per class on real hardware → window and collateral formulas |
 | 3 | HFX | opus | RFC-0002/0011 the census's top software-closable blockers as generic features |
+| 2 | R4X | opus | RFC-0004 Part II: typed-root computation specifications — `Memory`, `Retrieval`, `Composite` classes end to end under G14 |
 | 4 | C4R4 | opus | independent attack round: grinding, watcher absence, 32-slot capture, Final race, economics, partition rejoin |
 | 4 | SOUND | opus | RFC-0007/0015 review dossier for the external soundness review (the review itself stays EXTERNAL) |
 

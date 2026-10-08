@@ -1048,6 +1048,65 @@ without the A-2 tolerance.
   BVM/GVM implementation programme. Existing Phase A engineering estimates do not include the new
   probabilistic kernel's prover/checker work and must be re-estimated before scheduling that route.
 
+## Part II — Verifiable computation beyond fixed weight files (2026-10-08)
+
+> **日本語要約:** MISAKA は「LLM の重みファイルを登録するチェーン」ではなく、「独立検証可能な有用 AI 計算を登録・実行・決済するチェーン」である。
+> モデルを「認証された計算仕様 + 型付き state root の集合」に一般化する。
+> 対象は、重みを使うモデル、推論中に記憶を更新するモデル、検索型、モデルとツールの複合である。
+> 任意の外部 API や Python は認めない。報酬の条件は今後も G14(Panel 外の普通の検証者が公開材料だけで不正を立証できる)である。
+> 本 Part は**「全 RFC の実装完了」の範囲に含む**(ユーザー決定 2026-10-08)。
+
+### II.1 Why
+
+Model families will keep changing. The likely shapes are:
+
+- weights plus external memory, retrieval and tools;
+- models that update memory, or some parameters, during inference (Titans/MIRAS-style test-time memory);
+- many small models plus external data, instead of one giant checkpoint.
+
+Weight-free methods are not expected to replace general LLMs within 5–10 years. Even so, a protocol that equates "model" with "one fixed weight file" would freeze today's architecture into consensus.
+
+This RFC already treats improvement as computation over PALW-TIR: lines, heads, candidates, evaluation. Part II extends the same idea from *improving a model between jobs* to *models whose computation reads and updates authenticated state other than fixed weights*. One invariant is unchanged: **an ordinary bonded verifier outside any Panel, from public authenticated material only, reaches an objective conviction or a correctly classified DA/default for every rewarded computation.**
+
+### II.2 The computation specification
+
+A class binds a versioned **computation specification**: the kernel id and plan id (RFC-0005 / ADR-0172), plus a list of **typed roots**. Each root kind is versioned. A class whose kinds the active kernel does not implement is refused by name, never treated as another kind.
+
+| Root kind | Bound at registration | Per job / per claim | What G14 requires |
+| --- | --- | --- | --- |
+| `Weights` | the artifact (weight) root, as today | — | as today: commitments, localisation, exact court |
+| `Memory` | the initial memory root, an **update rule** expressible in the active kernel (TIR `StateWrite` / `HistAppend` / `Fixed` states, or a fenced kernel extension), and retention terms | the pre-state and post-state roots of every update step, committed; memory carried across jobs is a chain-tracked state root | a fault is localised to ONE update step and judged exactly from the committed pre-state, the inputs and the rule. The pre-state must be publicly available (DA) for the claim's liability horizon; withholding it is a default, never fraud |
+| `Retrieval` | a reference-data **snapshot root** (a public, retained corpus), a deterministic index commitment, and a deterministic retrieval rule (integer scores with a pinned tie rule, as RFC-0002 FR-09's counting threshold) | the retrieved item ids plus their openings against the snapshot | the snapshot's availability (DA); a retrieval result judged per item: a wrong item, a missed better item, or a wrong opening |
+| `Composite` | a pipeline of computation specifications. Tool stages are allowed only as verified kernels with their own specifications | per-stage commitments | per-stage localisation (RFC-0003 edge courts, extended); a tool stage is judged like any other stage |
+
+Forbidden in every kind:
+- arbitrary external APIs;
+- unverified code (Python, remote services);
+- non-deterministic retrieval;
+- any state an outsider cannot obtain and re-derive.
+
+A semantic the active kernel cannot express is a versioned kernel extension: a coordinated, fenced protocol change (RFC-0005 §K), never a per-class escape hatch.
+
+### II.3 Relation to the improvement protocol
+
+- A `Memory` class's persistent state is the in-job analogue of a line head. A promoted memory state is a candidate in this RFC's sense: evaluated and promoted under §§4–8, with its root recorded on the line.
+- Test-time parameter updates (a slice of weights updated per job) are a `Memory` root whose state is a parameter subset. The update rule must be a kernel-expressible optimiser step. Training-as-IR stays §12's optional profile; nothing here makes consensus train models.
+- Retrieval corpora are teaching artifacts in §5's sense when a line uses them; their rights follow §9.
+
+### II.4 Required evidence (part of "every RFC implemented")
+
+1. **The wire form.** Every class registration carries a computation specification with typed roots, behind a dormant fence. `Weights` alone reproduces today's classes byte for byte: a regression test shows existing class ids and roots are unchanged.
+2. **A `Memory` class end to end on the real node.**
+   - registration → jobs whose claims commit per-step pre/post roots → a lie in one update step, convicted by an outsider from public material;
+   - a withheld pre-state classified as a default;
+   - memory carried across two jobs.
+3. **A `Retrieval` class end to end.** A snapshot root and a deterministic rule; a wrong item and a missed better item each convicted; a withheld snapshot slice classified as a default.
+4. **A `Composite` class with one verified tool stage**, convicted at the stage that lied.
+5. **Bounds.** Every kind passes RFC-0011's bounded-verification gates (validator work, public bytes per prosecution, carrier fit) and RFC-0015's window and economics rules before it is OPV-eligible.
+6. **Census.** RFC-0011 §18's `D_complete` counts a repository that is a complete computation of a supported kind, even when it is not a single weight checkpoint.
+
+Activation follows the single full-activation release. Nothing in Part II is armed on its own.
+
 ## Shared verification-challenge boundary — 2026-10-08
 
 For new Kernel/model conformance or probabilistic claim checks in this improvement workflow, bind and use only
