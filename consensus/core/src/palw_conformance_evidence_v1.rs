@@ -35,7 +35,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use misaka_palw_challenge::beacon::{BeaconContextV1, VerifiedWorkBeaconV1, WorkBeaconStateV1, WorkBeaconV1, WorkFinalEventV1};
+use misaka_palw_challenge::beacon::{AttributedWorkV1, BeaconContextV1, VerifiedWorkBeaconV1, WorkBeaconStateV1, WorkBeaconV1};
 use misaka_palw_challenge::conformance::{
     BeaconConformanceEvidenceV1, ConformanceCommitmentV1, ConformanceRefusalV1, ConformanceStatusV1, verify_conformance_evidence_v1,
 };
@@ -607,15 +607,43 @@ pub const PALW_ONBOARDING_POLICY_WINDOW_DAA_V1: u64 = 120;
 pub const PALW_ONBOARDING_POLICY_DEPTH_DAA_V1: u64 = 2;
 pub const PALW_ONBOARDING_POLICY_REPETITIONS_V1: u32 = 1;
 pub const PALW_ONBOARDING_POLICY_SECURITY_BITS_V1: u16 = 2;
+/// **The seal window `W` of the network's sealed-source (v3) onboarding policy** (INTERIM). The reveal window is the next `W`, so the
+/// ledger's seal TTL must be at least `2W` (`misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1`; G14-R4's interim 100).
+pub const PALW_ONBOARDING_SEALED_WINDOW_DAA_V1: u64 = 40;
+/// v3's `ε_src` terms (INTERIM, stated): `δ`, the bound on how late a block that carries an honest seal is merged, and the adversary's
+/// block share as `−log2 ρ` in millibits (1,000: ½). With `W = 40` that is 30 bits (`sealed_source_censorship_bits_v3`).
+pub const PALW_ONBOARDING_SEALED_MERGE_DELAY_DAA_V1: u64 = 10;
+pub const PALW_ONBOARDING_SEALED_ADVERSARY_NEG_LOG2_MILLIBITS_V1: u64 = 1_000;
+
+/// **The network's sealed-source (v3) onboarding policy** (`docs/design/palw/opv-beacon-bootstrap.md` §6.3): the sampled policy's
+/// numbers under `palw-work-beacon/sealed-source/v3` — commit-reveal over salted claim seals, every qualifying seal of the window
+/// mixed, a withheld or abandoned mixed seal a counted veto. INTERIM like the v2 one (2 bits, a drill), and a different id.
+pub fn palw_onboarding_sealed_policy_v1() -> PostCommitChallengePolicyV1 {
+    PostCommitChallengePolicyV1 {
+        security_bits: PALW_ONBOARDING_POLICY_SECURITY_BITS_V1,
+        ..misaka_palw_challenge::sealed_source_policy_v3(
+            PALW_ONBOARDING_POLICY_K_V1,
+            PALW_ONBOARDING_POLICY_DELAY_DAA_V1,
+            PALW_ONBOARDING_SEALED_WINDOW_DAA_V1,
+            PALW_ONBOARDING_POLICY_DEPTH_DAA_V1,
+            PALW_ONBOARDING_POLICY_REPETITIONS_V1,
+        )
+    }
+}
 
 /// **The network's post-commit challenge policy for model onboarding** — INTERIM, a consensus constant of the never-armed kernel route
 /// fence (like every other onboarding term): the contract's reference policy (unreviewed soundness id, `retry_limit` 2, so three
 /// counted attempts) with a collection window long enough for an OPV Final (window 50 DAA) to settle inside it, and **2 bits**: a
 /// number a drill can reach with a handful of checks, NOT a security value. An activation replaces it by a reviewed, approved tuple
 /// (RFC-0007 §VI.8). Its id is what tag 106 binds a class to and tag 107's commitment names.
+///
+/// Its sources follow the DISTINCT rule (`docs/design/palw/opv-beacon-bootstrap.md` §6): the `k` works come from distinct producer
+/// bonds (and distinct consumers once the route records a job's payer), so one bond cannot fill every position. The network's other
+/// onboarding policy is the complete check ([`crate::palw_opv_bootstrap_v1::palw_onboarding_complete_check_policy_v1`]).
 pub fn palw_onboarding_challenge_policy_v1() -> PostCommitChallengePolicyV1 {
     PostCommitChallengePolicyV1 {
         security_bits: PALW_ONBOARDING_POLICY_SECURITY_BITS_V1,
+        source_eligibility_policy_id: misaka_palw_challenge::policy::ImplementedV1::source_eligibility_distinct(),
         ..misaka_palw_challenge::reference_policy_v1(
             PALW_ONBOARDING_POLICY_K_V1,
             PALW_ONBOARDING_POLICY_DELAY_DAA_V1,
@@ -691,6 +719,10 @@ pub enum ConformanceEvidenceActionV1 {
     Post(Box<ConformanceEvidencePostV1>),
     /// Any other operator refutes posted evidence inside its challenge window.
     Refute { evidence_id: Hash64, fault: Box<ConformanceFaultV1> },
+    /// The class's registrant posts the COMPLETE check of an attempt committed under the complete-check policy: the whole artifact and
+    /// the result roots of every input and leaf, judged entirely in the fold (no seed, no beacon, no window) — the OPV bootstrap
+    /// (`crate::palw_opv_bootstrap_v1`). Sized to ride ONE carrier: it never needs a chunk lane.
+    PostComplete(Box<crate::palw_opv_bootstrap_v1::CompleteCheckPostV1>),
 }
 
 // =================================================================================================================================
@@ -891,8 +923,8 @@ pub struct FreshInputV1<'a> {
     pub policy: &'a PostCommitChallengePolicyV1,
     /// The beacon context the chain froze at the commitment (op 231).
     pub ctx: &'a BeaconContextV1,
-    /// Every Final fact the route serves (op 212), any order.
-    pub events: &'a [WorkFinalEventV1],
+    /// Every attributed Final fact the route serves (op 212), any order.
+    pub events: &'a [AttributedWorkV1],
     /// The DAA the reads were taken at.
     pub tip_daa: u64,
     pub program: &'a TirProgramV1,
@@ -935,7 +967,7 @@ pub fn fresh_verify_v1(input: &FreshInputV1<'_>) -> FreshVerdictV1 {
         leaf_faults: Vec::new(),
         vectors_selected: 0,
     };
-    let beacon = match misaka_palw_challenge::collect_work_beacon_v1(input.ctx, input.events, input.tip_daa) {
+    let beacon = match misaka_palw_challenge::collect_attributed_work_beacon_v1(input.ctx, input.events, input.tip_daa) {
         Ok(WorkBeaconStateV1::Locked(b)) => {
             out.beacon = format!("LOCKED at {}", b.lock_position);
             out.beacon_output = Some(b.output);

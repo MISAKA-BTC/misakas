@@ -8456,6 +8456,17 @@ pub enum PalwConsensusObjectV2 {
     /// `signing_message()` under the receipt context, checked at acceptance. Admitted structurally by the kernel
     /// (`admit_receipt_v1`) against the claim's INTERIM assignment. **Tag 111, declared explicitly.**
     KernelConstraintReceiptV1 { receipt: Box<misaka_palw_kernel::receipt::PalwConstraintReceiptV1>, signature: Vec<u8> } = 111,
+    /// **G14 (tag 113, C4 F-C4R3-03): one chunk of a prosecution object in the kernel route's OWN chunk lane** — a `FileProof` or a
+    /// position `Respond` (tag 110) or an onboarding refutation (tag 105) too large for one carrier. The certification lane's
+    /// `ObjectChunk` table is ONE network-wide table of eight groups that eight junk chunks hold for 4,000 DAA; here a group is
+    /// keyed by the bond that SIGNS its chunks (`signature`: the opener's ML-DSA-87 over
+    /// [`crate::palw_kernel_route_v1::palw_kernel_chunk_message_v1`]), each bond holds at most
+    /// [`crate::palw_kernel_route_v1::PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1`] groups backed by a deposit forfeited if the group never
+    /// completes, and a group never outlives its target's deadline — so no set of bonds can hold another's prosecution off the chain.
+    /// The assembled object's own signature is checked at the completing chunk; the object is then applied by its own arm. Rows in
+    /// the route's aux table 41. Dropped by name below `palw_probabilistic_constraints_v1`. **Tag 113, declared explicitly** (the
+    /// lead's allocation of 2026-10-08; 112 unallocated).
+    KernelRouteChunkV1 { chunk: Box<crate::palw_kernel_route_v1::PalwKernelChunkV1>, signature: Vec<u8> } = 113,
     // Tags 104–108 are lane D's onboarding objects (phase 3; the lead's allocation of 2026-10-08), 109 P0's evidence. Dropped by name below
     // `palw_probabilistic_constraints_v1` (the envelope, 108, below `palw_signed_registration_v1`); rows in the route's aux tables.
     /// **G14 phase 3 (tag 104): the registrant of an existing V2 class states that its artifact has kernel root `kernel_param_root`**
@@ -8584,11 +8595,16 @@ pub fn palw_object_is_panel_v3_v1(object: &PalwConsensusObjectV2) -> bool {
     matches!(object, PalwConsensusObjectV2::PanelBeaconProofV3 { .. })
 }
 
-/// **Is this object a kernel route object (tag 110 or 111)** — a variant an older build cannot decode and skips (A-2)? Below
+/// **Is this object a kernel route object (tag 110, 111 or 113)** — a variant an older build cannot decode and skips (A-2)? Below
 /// `Params::palw_probabilistic_constraints_v1` the acceptance walk drops it by name before any slot, rent or budget is charged
 /// for it, and the fold refuses it as the second lock.
 pub fn palw_object_is_kernel_route_v1(object: &PalwConsensusObjectV2) -> bool {
-    matches!(object, PalwConsensusObjectV2::KernelRouteV1 { .. } | PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. })
+    matches!(
+        object,
+        PalwConsensusObjectV2::KernelRouteV1 { .. }
+            | PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. }
+            | PalwConsensusObjectV2::KernelRouteChunkV1 { .. }
+    )
 }
 
 /// **Is this object an RFC-0007 audit-mesh move** (tag 102 or 103) — a variant an older build cannot decode and skips (A-2)? Below
@@ -11006,6 +11022,10 @@ pub enum PalwStateV2Error {
     /// a lister with no bond).
     #[error("an adapter class listing is refused: {0}")]
     AdapterClassRefused(String),
+    /// **G14-for-rewards** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`, past the OPV fence): the class has not passed the
+    /// onboarding/G14 path, so it earns no reward and no consensus work weight — no claim of it is admitted on any lane.
+    #[error("class {class} earns no reward or consensus work weight: {code} ({why})")]
+    ClassNotRewardable { class: Hash64, code: &'static str, why: String },
     /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
@@ -17237,6 +17257,17 @@ impl PalwFoldReadV1<'_> {
     /// ([`Self::check_model_market_admits`]) both ask it, so a claim and a position cannot disagree
     /// about whether the chain serves a model (the 2026-09-23 Position route matrix, P-B3: they did —
     /// a buy filled on a class whose every claim the registry refused).
+    /// **G14-for-rewards at this read** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`): `Unarmed` below the OPV fence.
+    pub(crate) fn reward_gate_v1(&self, class_id: &Hash64, daa: u64) -> crate::palw_opv_bootstrap_v1::PalwRewardGateV1 {
+        crate::palw_opv_bootstrap_v1::palw_reward_gate_v1(
+            self.state,
+            &self.params.base_class_id(),
+            self.extras.kernel_route.as_ref(),
+            class_id,
+            daa,
+        )
+    }
+
     fn class_lifecycle_refusal(&self, class_id: &Hash64) -> Option<String> {
         self.extras.model_registry.as_ref()?;
         if *class_id == self.params.base_class_id() {
@@ -17445,8 +17476,25 @@ impl PalwFoldReadV1<'_> {
             now_daa,
             incoming == PalwGatedClaimV1::Attempt,
         )?;
+        // **G14-for-rewards** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`, past the OPV fence): a class earns reward or consensus
+        // work weight only through the onboarding/G14 path. Refused, it takes no claim on any lane; passed, its claims are admitted on
+        // that ground — the registry lifecycle, the Panel verify deadline and the Panel room (seat readiness) are not asked, only its
+        // in-flight cap. Unarmed or exempt (the base class; a grandfathered Panel-route class): the rules below, byte for byte.
+        let g14 = self.reward_gate_v1(class_id, now_daa);
+        if let crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { code, why } = &g14 {
+            return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why: why.clone() });
+        }
+        let g14_passed = g14 == crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Passed;
         let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
         let whole = incoming.whole_claims(self.params.fp_quanta_per_canonical_job as u64);
+        if g14_passed {
+            let Some(row) = self.state.model_lifecycles.get(class_id) else { return Ok(()) };
+            let inflight = self.model_registry_inflight(class_id);
+            if (inflight as u64).saturating_add(whole) > row.profile.max_inflight_claims as u64 {
+                return Err(PalwStateV2Error::ClassInflightCapped { class: *class_id, inflight, cap: row.profile.max_inflight_claims });
+            }
+            return Ok(());
+        }
         if let Some(state) = self.class_lifecycle_refusal(class_id) {
             return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state });
         }
@@ -18302,6 +18350,11 @@ impl PalwFoldReadV1<'_> {
     /// with the fence off) [`Self::bond_class_share_v1`] is `None` and this is `Ok` without
     /// reading anything.
     fn check_bond_class_share(&self, bond: &PalwBondKeyV2, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        // G14-for-rewards: a class admitted through the G14 path is not split by Panel licence (its claims are bounded by its in-flight
+        // cap and the kernel route's live caps).
+        if self.reward_gate_v1(class_id, now_daa) == crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Passed {
+            return Ok(());
+        }
         // ADR-0160 F-R: past `palw_capacity_verify_room` the stake-proportional share replaces
         // T-2(a)'s `⌈c/2⌉` (`bond_class_share_for_v1`); below it this is T-2(a) byte for byte.
         // ADR-0160 stage 4 (F-N): past F-N a model class's room is divided by lane N's rule over the class's
@@ -31849,6 +31902,16 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         {
             continue;
         }
+        // **G14-for-rewards** (past the OPV fence): a class activates only through the reward gate — refused, it stays Registered and
+        // earns nothing (`docs/PRINCIPLES.md` §6: registered, never rewarded). A class that PASSED gets a real path to REAL work that
+        // does not wait on Panel seat readiness: at least the minimum grantable share (an onboarding registration asks for none), so
+        // it bears weight and is budgeted, and the epoch's budgets re-derived now rather than at the next boundary.
+        let gate = builder.read().reward_gate_v1(&class_id, ctx.daa_score);
+        if matches!(gate, crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { .. }) {
+            continue;
+        }
+        let g14_passed = gate == crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Passed;
+        let share = if g14_passed { share.max(builder.params.min_grantable_share_permille()) } else { share };
         // **A grant that cannot be made freezes the CLASS, not the chain.**
         //
         // This was `?`, and the error propagated out of a transition that is a pure function of
@@ -31896,6 +31959,14 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         builder.write_class(class_id, Some(record));
         // Onboarding P0: a gated class that activated is ACTIVE_REWARDABLE in its conformance record (a no-op for any other class).
         palw_onboarding_fold_v1::note_class_activated_v1(builder, &class_id);
+        if g14_passed {
+            let epoch_index = ctx.daa_score / builder.params.epoch_length;
+            if let Some(budgets) = palw_epoch_budgets_for_v2(&builder.state, builder.params, epoch_index)
+                && builder.state.epoch_budgets.as_ref() != Some(&budgets)
+            {
+                builder.write_epoch_budgets(Some(budgets));
+            }
+        }
     }
     Ok(())
 }
@@ -34119,7 +34190,10 @@ fn apply_class_registration_v1(
             u16::try_from(committed).expect("committed is bounded by 1000 above"),
         )?;
     }
-    let weightless = *activation_daa > ctx.daa_score;
+    // **G14-for-rewards**: past the OPV fence no class is written Active (and granted share) at its registration — it activates in
+    // `activate_due_classes`, through the reward gate (`palw_opv_bootstrap_v1::palw_reward_gate_v1`).
+    let reward_gated = builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()).is_some_and(|o| o.reward_gate.is_some());
+    let weightless = *activation_daa > ctx.daa_score || reward_gated;
     if !weightless {
         // ADR-0045 Decision 3: the share table mutates HERE and at the activation edge,
         // and nowhere else. The first class funds the liveness floor whole; every later
@@ -34710,6 +34784,10 @@ fn apply_object(
         }
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { receipt, signature } => {
             palw_kernel_route_fold_v1::apply_kernel_receipt_v1(builder, ctx, receipt, signature)?;
+        }
+        // (tag 113, C4 F-C4R3-03): a chunk of a prosecution object in the route's own chunk lane.
+        PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, signature: _ } => {
+            palw_kernel_route_fold_v1::apply_kernel_route_chunk_v1(builder, ctx, chunk)?;
         }
         // **G14 lane D phase 3 (tags 104–107): model onboarding** — rows in the route's aux tables (`palw_onboarding_fold_v1`).
         PalwConsensusObjectV2::ArtifactBoundV1 { v2_class, kernel_param_root, signer, signature: _ } => {

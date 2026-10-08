@@ -185,12 +185,25 @@ impl W {
         let id = job.id();
         let ev = self.block(vec![spec_obj(REG, SpecObjectV1::PostJob { job })]);
         assert!(ev.contains(&E::JobPosted { job: id }), "{ev:?}");
+        // GAP-5 (G14-R4, at the merge): a typed job opens its poster's escrow exactly as `PostJob` does.
+        if self.l.policy.claim_reward > 0 {
+            assert_eq!(self.l.job_escrows.get(&id).map(|e| (e.poster, e.amount)), Some((REG, self.l.policy.claim_reward)));
+        }
         id
     }
 
-    /// Seal one block, then reveal.
+    /// Seal one block, then reveal. Past `palw_panel_free_v1` (OPV-BOOT GAP-B1a) the seal is salted (`claim_seal_v2`) and the reveal
+    /// carries the salt (`CommitClaimSalted` with the typed claim); before it, the historical unsalted pair.
     fn commit(&mut self, claim: SpecClaimV1) -> (Digest, Vec<E>) {
         let (id, producer, job) = (claim.id(), claim.producer(), claim.job_id());
+        if self.l.salted_seals_from().is_some_and(|at| self.l.daa >= at) {
+            let salt = misaka_palw_kernel::hash::id(b"misaka-palw/test/claim-salt", &id);
+            let seal = misaka_palw_kernel::ledger::claim_seal_v2(&id, &salt);
+            self.block(vec![obj(producer, O::SealClaim { producer, job, seal })]);
+            let reveal = O::CommitClaimSalted { salt, commit: misaka_palw_kernel::ledger::SaltedCommitV1::Spec { claim } };
+            let ev = self.block(vec![obj(producer, reveal)]);
+            return (id, ev);
+        }
         self.block(vec![obj(producer, O::SealClaim { producer, job, seal: claim_seal_v1(&id) })]);
         let ev = self.block(vec![spec_obj(producer, SpecObjectV1::CommitClaim { claim })]);
         (id, ev)

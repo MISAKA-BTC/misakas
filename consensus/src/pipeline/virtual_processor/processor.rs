@@ -240,6 +240,29 @@ pub(crate) fn kernel_route_test_attest_artifact_v1(artifact_root: kaspa_hashes::
     }
 }
 
+/// **OPV-BOOT, TEST ONLY: the OPV classes a pre-derivation mechanics test treats as eligible.** RFC-0015 eligibility is DERIVED from
+/// chain state (`palw_opv_bootstrap_v1::opv_eligibility_v1`); the OPV mechanics worlds written against the retired manual admission
+/// list (`g14_opv_*`, `g14_conformance_*`) name their classes here instead. Like the attestation hook it exists only under
+/// `cfg(test)`: the extras field it fills is `Vec::new()` in every build that can run a network (pinned by
+/// `opv_test_eligibility_hook_is_test_only`). Append-only and process-wide, so every node of one test folds the same set.
+#[cfg(test)]
+static KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1: std::sync::Mutex<Vec<kaspa_hashes::Hash64>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn kernel_route_test_opv_eligible_v1(class: kaspa_hashes::Hash64) {
+    let mut list = KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1.lock().unwrap();
+    if !list.contains(&class) {
+        list.push(class);
+    }
+}
+
+#[cfg(test)]
+fn kernel_route_test_opv_eligible_list_v1() -> Vec<kaspa_hashes::Hash64> {
+    let mut list = KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1.lock().unwrap().clone();
+    list.sort();
+    list
+}
+
 #[cfg(test)]
 fn kernel_route_test_attestations_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64> {
     let mut roots: Vec<_> =
@@ -13175,6 +13198,28 @@ impl VirtualStateProcessor {
                 Obj::KernelRouteV1 { bytes, signer, signature } => {
                     self.palw_kernel_route_object_is_signed(state, point.daa_score, bytes, signer, signature)?;
                 }
+                // **G14 (tag 113, C4 F-C4R3-03): a chunk of the route's own chunk lane** — the fence, the opener's Active bond and its
+                // ML-DSA-87 signature over the chunk; at the chunk that COMPLETES its group, the assembled object's own signature,
+                // judged exactly as the direct object's arm judges it (an inner the fence or the signature refuses drops the completing
+                // chunk, and the group's deposit is forfeited at its TTL). The group's rows, target and deposit are the fold's.
+                Obj::KernelRouteChunkV1 { chunk, signature } => {
+                    self.palw_kernel_chunk_is_signed(state, point.daa_score, chunk, signature)?;
+                    match state.kernel_route().and_then(|k| k.chunk_completion_v1(chunk)) {
+                        Some(Obj::KernelRouteV1 { bytes, signer, signature }) => {
+                            self.palw_kernel_route_object_is_signed(state, point.daa_score, &bytes, &signer, &signature)?;
+                        }
+                        Some(Obj::ArtifactBindingChallengedV1 { v2_class, kernel_param_root, challenger, proof, signature }) => {
+                            let payload = borsh::to_vec(&(v2_class, kernel_param_root, proof.as_ref())).map_err(|e| e.to_string())?;
+                            self.palw_onboarding_signature_ok(state, point.daa_score, 105, &challenger, &payload, &signature)?;
+                        }
+                        // OPV-BOOT #1: conformance evidence (tag 109), judged as the direct object is.
+                        Some(Obj::ConformanceEvidenceV1 { v2_class, action, signer, signature }) => {
+                            let payload = borsh::to_vec(&(v2_class, action.as_ref())).map_err(|e| e.to_string())?;
+                            self.palw_onboarding_signature_ok(state, point.daa_score, 109, &signer, &payload, &signature)?;
+                        }
+                        _ => {}
+                    }
+                }
                 // **G14 lane D phase 3 (tags 104-107): the onboarding objects** — the fence, an Active signer, the signer's signature over
                 // the object's payload; the rows, the proofs and the V2 class's own facts are the fold's.
                 Obj::ArtifactBoundV1 { v2_class, kernel_param_root, signer, signature } => {
@@ -13583,6 +13628,37 @@ impl VirtualStateProcessor {
         borsh::from_slice::<Obj>(&whole).ok()
     }
 
+    /// **G14 (tag 113, C4 F-C4R3-03): is this chunk of the route's own lane signed by the Active bond that opens its group?**
+    fn palw_kernel_chunk_is_signed(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa_score: u64,
+        chunk: &kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkV1,
+        signature: &[u8],
+    ) -> Result<(), String> {
+        if !self.palw_kernel_route_at(daa_score) {
+            return Err(
+                "a kernel route chunk is refused: palw_probabilistic_constraints_v1 is not in force at this block (G14)".to_string()
+            );
+        }
+        let record = state
+            .bond(&chunk.opener)
+            .ok_or_else(|| "a kernel route chunk is signed by a bond this chain does not have".to_string())?;
+        if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err("a kernel route chunk is signed by a bond that is not Active".to_string());
+        }
+        let message = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_chunk_message_v1(self.palw_network_domain_v2(), chunk);
+        if !Self::verify_mldsa87_with_context_bool(
+            &record.pubkey,
+            message.as_byte_slice(),
+            signature,
+            kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1,
+        ) {
+            return Err("a kernel route chunk carries a signature its opener's key does not verify".to_string());
+        }
+        Ok(())
+    }
+
     /// **G14 lane D (tag 110): is this kernel route object signed by the bond it names, and is the kernel willing to decode it?**
     fn palw_kernel_route_object_is_signed(
         &self,
@@ -13620,9 +13696,25 @@ impl VirtualStateProcessor {
         {
             return Err("a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)".to_string());
         }
+        // **OPV-BOOT GAP-B1a: a salted claim reveal (inner kind 20) rides the same fence** (A-2: below it, dropped as a build without
+        // the kind drops it at the kernel's decode; the ledger refuses it too).
+        if matches!(object, misaka_palw_kernel::route::KernelRouteObjectV1::CommitClaimSalted { .. })
+            && !self.palw_kernel_opv_at(daa_score)
+        {
+            return Err(
+                "a salted claim reveal is refused: palw_panel_free_v1 is not in force at this block (claim seal v2)".to_string()
+            );
+        }
         // **RFC-0004 Part II: a typed-root object (inner kind 19) is dropped unless `palw_typed_roots_v1` is in force** (the route's
         // schedule refuses it too: the second lock).
-        let typed = matches!(object, misaka_palw_kernel::route::KernelRouteObjectV1::Spec { .. });
+        let typed = matches!(
+            object,
+            misaka_palw_kernel::route::KernelRouteObjectV1::Spec { .. }
+                | misaka_palw_kernel::route::KernelRouteObjectV1::CommitClaimSalted {
+                    commit: misaka_palw_kernel::route::SaltedCommitV1::Spec { .. },
+                    ..
+                }
+        );
         if typed && !self.palw_kernel_typed_roots_at(daa_score) {
             return Err("a typed-root object is refused: palw_typed_roots_v1 is not in force at this block (RFC-0004 Part II)".into());
         }
@@ -15059,7 +15151,17 @@ impl VirtualStateProcessor {
                 max_adjudications_per_block: None,
                 opv: self.palw_kernel_opv_fence().map(|fence| kaspa_consensus_core::palw_kernel_route_v1::PalwKernelOpvExtrasV1 {
                     policy: fence.opv_policy(),
-                    admitted_classes: fence.admitted_classes.clone(),
+                    denied_classes: fence.denied_classes.clone(),
+                    min_effective_bits: fence.min_effective_bits,
+                    #[cfg(test)]
+                    test_eligible: kernel_route_test_opv_eligible_list_v1(),
+                    #[cfg(not(test))]
+                    test_eligible: Vec::new(),
+                    reward_gate: fence.activation.is_active(daa_score).then(|| {
+                        kaspa_consensus_core::palw_kernel_route_v1::PalwRewardGateTermsV1 {
+                            grandfathered_before_daa: fence.grandfather_panel_route_classes.then(|| fence.activation.daa_score()),
+                        }
+                    }),
                 }),
                 typed_roots: self.palw_kernel_typed_roots_activation(),
                 // DA16: the provider court's activation, where its (never armable) fence is in force at this block.
@@ -21715,6 +21817,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::AdapterClassListed { .. } => "AdapterClassListed",
         O::KernelRouteV1 { .. } => "KernelRouteV1",
         O::KernelConstraintReceiptV1 { .. } => "KernelConstraintReceiptV1",
+        O::KernelRouteChunkV1 { .. } => "KernelRouteChunkV1",
         O::ArtifactBoundV1 { .. } => "ArtifactBoundV1",
         O::ArtifactBindingChallengedV1 { .. } => "ArtifactBindingChallengedV1",
         O::KernelBoundV1 { .. } => "KernelBoundV1",

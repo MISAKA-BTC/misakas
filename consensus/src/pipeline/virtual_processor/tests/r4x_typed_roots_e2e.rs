@@ -337,10 +337,19 @@ impl Net {
     /// Seal one block, then reveal (signed by the claim's producer card).
     async fn commit(&mut self, card: usize, claim: SpecClaimV1) -> Digest {
         let (id, job) = (claim.id(), claim.job_id());
-        let seal = K::SealClaim { producer: self.kid(card), job, seal: claim_seal_v1(&id) };
+        // Past `palw_panel_free_v1` (OPV-BOOT GAP-B1a) the seal is salted and the reveal carries the salt; before it, unsalted.
+        let ledger = self.ledger();
+        let salted = ledger.salted_seals_from().is_some_and(|at| ledger.daa.saturating_add(1) >= at);
+        let salt = misaka_palw_kernel::hash::id(b"misaka-palw/test/claim-salt", &id);
+        let seal = if salted { misaka_palw_kernel::ledger::claim_seal_v2(&id, &salt) } else { claim_seal_v1(&id) };
+        let seal = K::SealClaim { producer: self.kid(card), job, seal };
         let o = self.route(card, &seal);
         self.send(vec![(card, o)]).await;
-        let o = self.spec(card, SpecObjectV1::CommitClaim { claim });
+        let o = if salted {
+            self.route(card, &K::CommitClaimSalted { salt, commit: misaka_palw_kernel::ledger::SaltedCommitV1::Spec { claim } })
+        } else {
+            self.spec(card, SpecObjectV1::CommitClaim { claim })
+        };
         self.send(vec![(card, o)]).await;
         assert!(self.ledger().claims.contains_key(&id), "the claim committed over its seal");
         id

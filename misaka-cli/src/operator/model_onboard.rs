@@ -208,6 +208,7 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
     for f in &finals.finals {
         if !f.work_final_event.is_empty() {
             events.push(
+                // An attributed event (the event and its producer): the type is the reads' (inferred).
                 borsh::from_slice(&unhex(&f.work_final_event)?)
                     .map_err(|e| CliError::new(exit::GENERIC, format!("a Final's beacon event does not decode: {e}")))?,
             );

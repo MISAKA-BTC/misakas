@@ -35,7 +35,7 @@ use kaspa_consensus_core::palw_onboarding_v1::{
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, palw_class_registration_buyer_v1};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::{Hash, Hash64};
-use misaka_palw_challenge::WorkFinalEventV1;
+use misaka_palw_challenge::AttributedWorkV1;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -259,8 +259,9 @@ pub struct PublicConformanceReadsV1 {
     pub attempt_row: Vec<u8>,
     /// Table 40's row, raw (op 231 `evidenceRow`), if evidence was posted.
     pub evidence_row: Option<Vec<u8>>,
-    /// Every Final fact with a beacon event (op 212 `workFinalEvent`), any order.
-    pub events: Vec<WorkFinalEventV1>,
+    /// Every Final fact with a beacon event (op 212 `workFinalEvent`: an attributed event — the producer stands behind it, for the
+    /// policy's distinct source rule), any order.
+    pub events: Vec<AttributedWorkV1>,
     /// The DAA the reads were taken at.
     pub tip_daa: u64,
     /// The class's canonical program bytes (op 231 `program`).
@@ -293,6 +294,18 @@ pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Op
     let program = misaka_palw_tir::TirProgramV1::decode_canonical(&reads.program)
         .map_err(|e| Refusal::new("PROGRAM_MALFORMED", e.to_string()))?;
     let policy = palw_onboarding_challenge_policy_v1();
+    if attempt.is_sealed_source() {
+        return Err(Refusal::new(
+            "SEALED_SOURCE",
+            "a sealed-source (v3) attempt's beacon reads the route's seals, which no public read serves yet (GAP: a seal-facts read)",
+        ));
+    }
+    if attempt.is_complete_check() {
+        return Err(Refusal::new(
+            "COMPLETE_CHECK",
+            "a complete-check attempt has no beacon or seed to re-derive: the fold computed every check itself (its post is in the block)",
+        ));
+    }
     if policy.id() != attempt.commitment.challenge_policy_id {
         return Err(Refusal::new(
             "POLICY_SUBSTITUTED",
