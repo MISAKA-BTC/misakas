@@ -240,6 +240,15 @@ pub fn element_count(shape: &[usize]) -> usize {
     shape.iter().product()
 }
 
+/// [`element_count`] for a shape that may come from outside (a wire, a filing): `None` when the count does not fit a `usize`.
+/// A shape with a zero dimension has no elements whatever its other dimensions.
+pub fn checked_element_count(shape: &[usize]) -> Option<usize> {
+    if shape.contains(&0) {
+        return Some(0);
+    }
+    shape.iter().try_fold(1usize, |acc, d| acc.checked_mul(*d))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

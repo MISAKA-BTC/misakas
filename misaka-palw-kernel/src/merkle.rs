@@ -41,16 +41,25 @@ pub struct LayoutV1 {
 }
 
 impl LayoutV1 {
+    /// The layout of a constructed tensor (whose element count fits a `usize`, hence a `u64`).
     pub fn of(shape: &[usize]) -> Self {
-        let len: u64 = shape.iter().map(|d| *d as u64).product();
-        match shape.len() {
+        Self::try_of(shape).expect("a constructed tensor's element count fits a u64")
+    }
+
+    /// The layout of a shape that may come from a wire or a filing: `None` when its element count does not fit a `u64` (a malformed
+    /// opening, never a panic). Identical to [`Self::of`] wherever that does not overflow.
+    pub fn try_of(shape: &[usize]) -> Option<Self> {
+        let dims: Vec<u64> = shape.iter().map(|d| *d as u64).collect();
+        let len: u64 = if dims.contains(&0) { 0 } else { dims.iter().try_fold(1u64, |acc, d| acc.checked_mul(*d))? };
+        Some(match dims.len() {
             0 | 1 => LayoutV1 { rows: 1, row_len: len, cols: 1, col_len: len, m: 1, n: len },
             r => {
-                let (m, n) = (shape[r - 2] as u64, shape[r - 1] as u64);
-                let batch = if m * n == 0 { 0 } else { len / (m * n) };
+                let (m, n) = (dims[r - 2], dims[r - 1]);
+                // `len == 0` covers every zero dimension; otherwise `m · n` divides `len`, so it fits.
+                let batch = if len == 0 { 0 } else { len / (m * n) };
                 LayoutV1 { rows: if n == 0 { 0 } else { len / n }, row_len: n, cols: batch * n, col_len: m, m, n }
             }
-        }
+        })
     }
 
     fn rank_le_1(shape: &[usize]) -> bool {
@@ -224,7 +233,7 @@ impl TensorOpeningV1 {
     /// unknown dtype, wrong length, an element outside the dtype, an index or path that fits no tree).
     pub fn recomputed_commitment(&self) -> Option<Digest> {
         let (dtype, shape) = (self.dtype()?, self.shape_usize()?);
-        let l = LayoutV1::of(&shape);
+        let l = LayoutV1::try_of(&shape)?;
         let (count, len) = match self.axis {
             AXIS_ROW => (l.rows, l.row_len),
             AXIS_COL => (l.cols, l.col_len),
@@ -258,6 +267,25 @@ mod tests {
     fn t(shape: &[usize]) -> Tensor {
         let n: usize = shape.iter().product();
         Tensor::new(DType::I32, shape.to_vec(), (0..n as i128).map(|v| v * 7 - 50).collect()).unwrap()
+    }
+
+    #[test]
+    fn an_opening_whose_shape_overflows_is_malformed_never_a_panic() {
+        for shape in [vec![u64::MAX, 2], vec![0, 1 << 40, 1 << 40], vec![1 << 32, 1 << 32, 2], vec![u64::MAX, u64::MAX, 0]] {
+            let o = TensorOpeningV1 {
+                dtype: DType::I32.tag(),
+                shape: shape.clone(),
+                axis: AXIS_ROW,
+                index: 0,
+                values: vec![],
+                siblings: vec![],
+                other_root: [0; 64],
+            };
+            assert!(o.recomputed_commitment().is_none() || shape.contains(&0), "{shape:?}");
+        }
+        assert_eq!(LayoutV1::try_of(&[0, 1 << 40, 1 << 40]).map(|l| (l.rows, l.cols)), Some((0, 0)));
+        assert!(LayoutV1::try_of(&[usize::MAX, 2]).is_none());
+        assert_eq!(LayoutV1::try_of(&[3, 4]), Some(LayoutV1::of(&[3, 4])));
     }
 
     #[test]

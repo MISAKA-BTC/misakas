@@ -602,3 +602,15 @@ impl ReleaseMetricsV1 {
         }
     }
 }
+
+#[cfg(test)]
+mod wire_overflow_tests {
+    use super::*;
+
+    #[test]
+    fn a_wire_tensor_whose_shape_overflows_is_refused_never_a_panic() {
+        for shape in [vec![u64::MAX, 2], vec![1 << 32, 1 << 32, 4], vec![u64::MAX / 4]] {
+            assert!(TensorWireV1 { dtype: 0, shape, bytes: vec![] }.decode().is_err());
+        }
+    }
+}
