@@ -16837,6 +16837,8 @@ mod t12_tir_registration_cap;
 // G14 lane D: a model registration on the REAL consensus path against the offline gate (preflight parity, adversarial
 // registrations, mempool -> template -> fold -> persisted tip -> ConsensusApi reads, replay and reorg).
 mod g14_registration_e2e;
+// G14 lane D phase 2: the kernel route folded into PalwChainStateV2 -- a covered lie convicted by a fresh outsider through the real node path.
+mod g14_kernel_route_e2e;
 // RFC-0002 Phase F's second IR fence: the IR step-leaf DA demand at the gate.
 mod t12_tir_da_step_gate;
 // RFC-0004 A4/A5: the material objects' and the candidate's signatures at the gate, and a licence

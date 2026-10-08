@@ -1300,6 +1300,16 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **G14 lane D: the kernel route's state at the tip** — the ledger's public rows (classes with their programs, plans and artifact
+    /// commitments, jobs, committed claims with their evidence and trace commitments, demands, served positions, the bonds' kernel
+    /// view), the interim seat assignments and the receipts counted so far, and the configuration they were folded under. Everything a
+    /// fresh verifier needs and nothing private: it rebuilds the ledger from the rows and checks them against the committed root
+    /// ([`crate::palw_kernel_route_v1::PalwKernelRouteStateV1::ledger_root`]). `None` before the fence's first kernel move and off
+    /// ConsensusV2.
+    fn palw_kernel_route_v1(&self) -> Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1> {
+        None
+    }
+
     /// RFC-0004 (spec 17): every open improvement epoch at the tip, as a node reads it — the line,
     /// its policy, the epoch's header, candidates and items. Empty off ConsensusV2 and below the fence.
     fn palw_improvement_open_epochs_v1(&self) -> Vec<crate::palw_improve_state_v1::PalwImprovementEpochViewV1> {

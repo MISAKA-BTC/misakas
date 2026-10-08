@@ -2509,6 +2509,10 @@ impl ConsensusApi for Consensus {
         self.palw_state_v2_tip()?.tir_class_v1(&class_id).cloned()
     }
 
+    fn palw_kernel_route_v1(&self) -> Option<kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1> {
+        self.palw_state_v2_tip()?.kernel_route().cloned()
+    }
+
     fn palw_adopt_class_carriage_v1(&self, class_id: kaspa_hashes::Hash64, carriage: &[u8]) -> Result<(), String> {
         self.virtual_processor.palw_adopt_class_carriage_v1_impl(class_id, carriage)
     }
