@@ -150,6 +150,7 @@ struct Env {
     chain: T12Chain,
     config: Config,
     bundle: PalwConsensusParamsV2,
+    premine: Premine,
     floats: Premine,
     domain: Hash64,
 }
@@ -175,7 +176,7 @@ impl Env {
             config.params.net.to_string().as_bytes(),
             Some(config.params.genesis.hash),
         );
-        Env { chain, config, bundle, floats, domain }
+        Env { chain, config, bundle, premine, floats, domain }
     }
 
     /// The chain's own pricing, as `getPalwRegistrationTerms` serves it: (initial target, slash value, ladder).
@@ -768,4 +769,139 @@ async fn g14_program_mutation_differential() {
     eprintln!("[g14] mutation differential (code -> (admitted by both, refused by both)): {stats:?}");
     assert!(bad.is_empty(), "the gate and the chain disagree:\n{}", bad.join("\n"));
     assert!(stats.len() >= 3, "the mutations reach several refusal classes: {stats:?}");
+}
+
+// ---- the pipeline: carrier -> mempool -> template -> block -> fold -> persisted tip -> reads ---------------
+
+/// A 0x4b lifecycle carrier for `object`, funded by card `card`'s genesis fee float and signed by that card.
+fn carrier_of(env: &Env, object: &Obj, card: usize, fee: u64) -> Transaction {
+    use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+    let payload =
+        borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).expect("serializes");
+    let (outpoint, entry) = env.floats[card].clone();
+    let mut tx = Transaction::new(
+        crate::constants::TX_VERSION,
+        vec![TransactionInput::new(outpoint, vec![], 0, 1)],
+        vec![TransactionOutput::new(entry.amount - fee, card_payout_spk(card))],
+        0,
+        kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        payload,
+    );
+    sign_spend(&mut tx, entry, card, env.config.params.storage_mass_parameter);
+    tx
+}
+
+const CARRIER_FEE: u64 = 2_000_000;
+
+fn mempool_verdict(env: &Env, tx: &Transaction) -> Result<(), kaspa_consensus_core::errors::tx::TxRuleError> {
+    env.chain
+        .vp()
+        .validate_mempool_transaction(&mut kaspa_consensus_core::tx::MutableTransaction::from_tx(tx.clone()), &Default::default())
+}
+
+/// One IR registration, mined by the node's own template and folded by the next chain block.
+struct Mined {
+    env: Env,
+    object: Obj,
+    class_id: Hash64,
+    card: usize,
+    carrier: Transaction,
+    /// The blocks, oldest first: the warm-up heartbeat, the carrying block, the folding block.
+    blocks: Vec<kaspa_consensus_core::block::Block>,
+    /// The gate's record (what the offline tooling says the chain will write).
+    record: kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1,
+    activation: u64,
+    /// The registrant bond's collateral before the registration.
+    collateral_before: u64,
+}
+
+const ACTIVATION_AHEAD: u64 = 30;
+
+async fn mine_registration(case_name: &str, card: usize) -> Mined {
+    let mut env = Env::new(0);
+    let ttpb = env.config.params.target_time_per_block();
+    let h1 = env.chain.heartbeat(ttpb, Vec::new()).await;
+    let (block, state) = env.chain.tip_state();
+    let daa = env.chain.daa_of(block);
+    let spec = spec_of(&case(case_name), card, daa + ACTIVATION_AHEAD);
+    let object = signed(&env, &state, &spec);
+    let class_id = class_id_of(&object);
+    let collateral_before = state.bond(&env.chain.bonds[card]).expect("the registrant bond").collateral;
+    // The gate, before the fee is spent.
+    let certified = state.chain_certified_families(PalwCertifiedLaneV1::Attempt);
+    let (entry, record) = palw_tir_registration_preflight_at_v1(&env.config.params, &env.bundle, &object, daa, &certified)
+        .expect("the offline gate admits the class");
+    assert_eq!(entry.class_id, class_id);
+    let carrier = carrier_of(&env, &object, card, CARRIER_FEE);
+    mempool_verdict(&env, &carrier).expect("the mempool takes the registration carrier");
+    let carrying = env.chain.heartbeat(ttpb, vec![carrier.clone()]).await;
+    assert!(carrying.transactions.iter().any(|tx| tx.id() == carrier.id()), "the node's own template carries the registration");
+    let folding = env.chain.heartbeat(ttpb, Vec::new()).await;
+    Mined { env, object, class_id, card, carrier, blocks: vec![h1, carrying, folding], record, activation: daa + ACTIVATION_AHEAD, collateral_before }
+}
+
+#[tokio::test]
+async fn g14_registration_mined_end_to_end_on_the_real_node_path() {
+    use kaspa_consensus_core::api::ConsensusApi;
+    use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
+    kaspa_core::log::try_init_logger("warn");
+    let mut m = mine_registration("moe-top2-shared", 2).await;
+    let env = &mut m.env;
+    let bond = env.chain.bonds[m.card];
+    let consensus = &env.chain.ctx.consensus;
+
+    // ---- the persisted tip (read back from the store, as a restart reads it) ----
+    let (fold_block, state) = env.chain.tip_state();
+    assert_eq!(fold_block, m.blocks[2].header.hash, "the tip is the folding block");
+    let row = state.class(&m.class_id).expect("the folding block wrote the class row");
+    assert_eq!(row.status, PalwClassStatusV2::Registered { activation_daa: m.activation, pending_share_permille: 0 }, "dormant until its activation");
+    assert_eq!(row.registrant_bond, Some(bond), "whose bond paid");
+    assert_eq!(row.artifact_root, match &m.object { Obj::ClassRegisteredTirV1 { artifact_root, .. } => *artifact_root, _ => unreachable!() });
+    assert_eq!(state.tir_class_v1(&m.class_id), Some(&m.record), "the tir_classes row is exactly what the gate derived");
+    assert!(state.tir_class_v1(&m.class_id).unwrap().check_program_v1().is_ok(), "and the program travels with it");
+    let (target, ..) = env.terms(&state);
+    assert_eq!(state.class_target(&m.class_id).map(|t| t.target), Some(target), "at the chain's target");
+    let b = state.bond(&bond).expect("the bond");
+    assert!(state.registration_exposure(&bond) > 0, "the registration exposure is reserved on the registrant's bond");
+    assert_eq!(b.collateral, m.collateral_before - kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, "1 MSK burned");
+    // The carrying block's own tip state (one block earlier) did not hold it: the fold is the chain block's.
+    // ---- the node's reads (what the RPC serves) ----
+    let rows = consensus.palw_v2_class_table();
+    let served = rows.iter().find(|r| r.class_id == m.class_id).expect("getPalwClasses lists the class");
+    assert!(served.status.contains("Registered"), "status: {}", served.status);
+    assert_eq!(served.share_permille, None, "a pending class holds no share row yet");
+    assert_eq!(served.artifact_root, row.artifact_root);
+    assert_eq!(consensus.palw_tir_class_record_v1(m.class_id).as_ref(), Some(&m.record), "getPalwTirClass");
+    let terms = consensus.palw_v2_registration_terms().expect("terms");
+    assert!(terms.registered_class_ids.contains(&m.class_id) && terms.registered_artifact_roots.contains(&row.artifact_root));
+    let registry = consensus.palw_model_registry_v1().expect("the registry read");
+    let reg_row = registry.classes.iter().find(|c| c.class_id == m.class_id);
+    eprintln!("[g14] registry row of the new class: {:?}", reg_row.map(|c| (c.row.clone(), c.share_permille, c.reason.clone())));
+
+    // ---- the registration-status reads the RPC builds a verdict from ----
+    let accepting_daa = row.registered_daa;
+    let found = kaspa_consensus_core::palw_model_registration_v1::palw_registration_row_written_by_v1(&m.carrier, accepting_daa, &rows);
+    assert_eq!(
+        found.map(|r| r.class_id),
+        Some(m.class_id),
+        "getPalwModelRegistrationStatus <carrier txid> finds the row the carrier wrote (IR carriers included)"
+    );
+    assert!(
+        kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_object_v1(&m.carrier).is_some(),
+        "the dropped-carrier diagnosis can re-read an IR carrier's object"
+    );
+
+    // ---- the clock flips it Active; the mempool no longer holds the spent float ----
+    let ttpb = env.config.params.target_time_per_block();
+    while env.chain.daa_of(env.chain.sink()) < m.activation + 1 {
+        env.chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    let (_, later) = env.chain.tip_state();
+    assert_eq!(later.class(&m.class_id).map(|c| c.status.clone()), Some(PalwClassStatusV2::Active), "Active past its activation");
+    assert_eq!(later.class_share_permille(&m.class_id), Some(0), "a registered class earns nothing by registering");
+    assert!(matches!(
+        mempool_verdict(env, &m.carrier),
+        Err(kaspa_consensus_core::errors::tx::TxRuleError::MissingTxOutpoints)
+    ), "the mempool refuses a replay of the spent carrier");
 }
