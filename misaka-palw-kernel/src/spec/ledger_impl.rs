@@ -31,7 +31,12 @@ impl KernelLedgerV1 {
     }
 
     /// **Apply one `Spec` object.** Transactional like every route object: a refusal leaves the state byte-identical.
-    pub(super) fn apply_spec(&mut self, obj: &SpecObjectV1, out: &mut Vec<LedgerEventV1>) -> Result<(), KernelRefusalV1> {
+    pub(super) fn apply_spec(
+        &mut self,
+        obj: &SpecObjectV1,
+        auth: &AuthV1,
+        out: &mut Vec<LedgerEventV1>,
+    ) -> Result<(), KernelRefusalV1> {
         let name = obj.name();
         if !self.typed_roots_active() {
             return Err(KernelRefusalV1::rule(
@@ -53,7 +58,7 @@ impl KernelLedgerV1 {
                 out.push(LedgerEventV1::ClassRegistered { class });
             }
             SpecObjectV1::PostJob { job } => {
-                let id = self.post_spec_job(job)?;
+                let id = self.post_spec_job(job, &auth.signer_bond)?;
                 out.push(LedgerEventV1::JobPosted { job: id });
             }
             SpecObjectV1::CommitClaim { claim } => {
@@ -172,7 +177,9 @@ impl KernelLedgerV1 {
         Ok(class)
     }
 
-    fn post_spec_job(&mut self, job: &SpecJobV1) -> Result<Digest, KernelRefusalV1> {
+    /// `_poster` is the signer: G14-R4's GAP-5 escrow (user-pays) opens against it exactly as for `PostJob`, once that lands
+    /// (`job_escrow_affordable` before the charge, `open_job_escrow` after the insert).
+    fn post_spec_job(&mut self, job: &SpecJobV1, _poster: &Digest) -> Result<Digest, KernelRefusalV1> {
         const NAME: &str = "SpecPostJob";
         let rule = |why: String| KernelRefusalV1::rule(NAME, why);
         let id = job.id();

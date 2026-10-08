@@ -241,8 +241,16 @@ impl PipelineClassRowV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum ClaimBodyV1 {
-    Program { claim: KernelClaimV1, evidence: VerificationEvidenceV1, commitments: Vec<Vec<Vec<Digest>>> } = 0,
-    Pipeline { claim: PipelineClaimV1, evidence: PipelineEvidenceV1, stages: Vec<StageCommitmentsV1> } = 1,
+    Program {
+        claim: KernelClaimV1,
+        evidence: VerificationEvidenceV1,
+        commitments: Vec<Vec<Vec<Digest>>>,
+    } = 0,
+    Pipeline {
+        claim: PipelineClaimV1,
+        evidence: PipelineEvidenceV1,
+        stages: Vec<StageCommitmentsV1>,
+    } = 1,
     /// RFC-0004 Part II: a typed claim (memory, retrieval, composite).
     Spec(Box<crate::spec::SpecClaimBodyV1>) = 3,
 }
@@ -850,7 +858,7 @@ impl KernelLedgerV1 {
                 self.seals.insert((*job, *producer), SealRowV1 { seal: *seal, daa: self.daa });
                 out.push(LedgerEventV1::ClaimSealed { job: *job, producer: *producer });
             }
-            KernelRouteObjectV1::Spec { object } => self.apply_spec(object, &mut out)?,
+            KernelRouteObjectV1::Spec { object } => self.apply_spec(object, auth, &mut out)?,
             KernelRouteObjectV1::Withdraw { bond } => {
                 let (daa, delay) = (self.daa, self.policy.exit_delay_daa);
                 match self.bonds.get(bond) {

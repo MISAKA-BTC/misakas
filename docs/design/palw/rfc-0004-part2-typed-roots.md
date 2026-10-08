@@ -287,13 +287,18 @@ pre-empted; (7) the E2E runs the real node path (§11). Forbidden things stay ou
 nondeterministic retrieval (κ is a total order), no state an outsider cannot obtain (every pre-state is a committed value or the claim's
 DA obligation; every snapshot item is DA of the claim).
 
-## 9. The fence
+## 9. The fence (decided by the Lead, 2026-10-08)
 
-`K2-TR-v1` (`kernel_id 3`, version 1; families none — it is an extension, not a TIR kernel) must be **Active in the route ledger's
-schedule**. The consensus template adds it only when the typed-roots fence is in force, so an unarmed route's `config_root`, header and
-ledger root are unchanged. Proposed: a Some-only `Params` fence `palw_typed_roots_v1: Option<ForkActivation>`, refused by validation like
-`palw_probabilistic_constraints_v1`, resolved into `PalwKernelRouteExtrasV1` and recorded in the route header (Lead skeleton). The
-E2E arms it through the harness's `Config` seam.
+`K2-TR-v1` (`kernel_id 3`, version 1; families none — it is an extension, not a TIR kernel; identity = its semantics digest) must be
+**Active in the route ledger's schedule**. **`palw_typed_roots_v1: Option<ForkActivation>`** (`crate::palw_typed_roots_v1`) follows
+`palw_probabilistic_constraints_v1` exactly: hashed Some-only into `consensus_params_id` and `consensus_schedule_id` with the `never()`
+collapse, visited by `for_each_fence`, an arm in the `fork_id_v1` probe, `None` on every preset, refused by `validate_palw_v2` at every
+height. The processor resolves it once (`palw_kernel_typed_roots_at`), drops a `Spec` object by name at the acceptance walk below it,
+and hands its activation to the fold (`PalwKernelRouteExtrasV1::typed_roots`), which records it in the route header
+(`PalwKernelRouteHeaderV1::typed_roots`) and schedules `K2-TR-v1` Active from it (`palw_kernel_route_template_typed_v1`). With the fence
+absent the template, the schedule, `config_root` and every root are byte for byte the historical ones
+(`the_unarmed_typed_roots_fence_leaves_the_schedule_config_root_and_root_unchanged`). It does not ride the K2 fence: the full-activation
+release arms it at the same height as the others, as its own decision. The E2E arms it through the harness's `Config` seam.
 
 ## 10. GAPs (not done here)
 
@@ -303,7 +308,14 @@ E2E arms it through the harness's `Config` seam.
 * Panel-licensed typed classes (a receipt scope per step / item).
 * RFC-0011 §18 census: a repository that is a complete computation of a supported kind counts in `D_complete` — HFX/COV own the census;
   this lane exposes the predicate (`supported_kinds`).
-* GAP-5 escrow (G14-R4): spec jobs must open the poster's escrow like `PostJob` once that lands.
+* GAP-5 escrow (G14-R4): spec jobs must open the poster's escrow like `PostJob` once that lands (`post_spec_job` already receives the
+  poster; two calls to add at the merge).
+* **Memory-line liveness** (not G14): the next job's producer needs the head's tensors. They are committed values of the advancing claim,
+  demandable during its liability horizon, and every later claim must serve its own pre-state (stage `0x40`); a head whose tensors nobody
+  holds after that horizon stalls the line (no claim can be produced; nothing unprovable is rewarded). A line checkpoint object (anyone
+  posts the head's tensors on chain, bounded by the slots' bytes) is the v2 fix.
+* Withholding after Final (a post-Final default on a memory claim) forfeits the reservation but does not roll the line back: the
+  computation is not proven wrong, and the next producer must serve the same tensors as its own pre-state.
 
 ## 11. Evidence (RFC-0004 §II.4)
 
@@ -314,3 +326,18 @@ E2E arms it through the harness's `Config` seam.
 | 3 Retrieval E2E | node `r4x_retrieval_*`: wrong item convicted, missed better item convicted, withheld slice → default |
 | 4 Composite | node `r4x_composite_*`: one verified tool stage (retrieval) feeding a model stage; a lie in the tool stage convicted at stage 0, a filing against the honest stage dismissed |
 | 5 Bounds | kernel `typed_roots::bounds_*` per kind (values, carrier fit, refusals past each ceiling) |
+
+## 12. Implementation map
+
+| Piece | Where |
+| --- | --- |
+| wire, kinds, class id, bounds, typed root, `K2-TR-v1` | `misaka-palw-kernel/src/spec/mod.rs` |
+| memory (slots, overlays, steps, line) | `spec/memory.rs` |
+| retrieval (snapshot, rule, courts, slices) | `spec/retrieval.rs` |
+| composite (stages, edges, stage records) | `spec/composite.rs` |
+| the ledger's typed rules (child of `ledger`) | `spec/ledger_impl.rs`; hooks in `ledger.rs`, tables in `rows.rs`, root in `state.rs` |
+| the outsider | `spec/outsider.rs` |
+| an honest (or lying) producer | `spec/produce.rs` |
+| fixtures (`memory_v1`, `memory_ttt_v1`) | `misaka-palw-tir-sketch/src/fixture.rs` |
+| fence | `consensus/core/src/palw_typed_roots_v1.rs`, `config/params.rs`, `fork_id_v1.rs`, `processor.rs`, `palw_kernel_route_{v1,fold_v1}.rs` |
+| tests | `misaka-palw-kernel/tests/typed_roots.rs` (ledger), `consensus/.../tests/r4x_typed_roots_e2e.rs` (real node) |
