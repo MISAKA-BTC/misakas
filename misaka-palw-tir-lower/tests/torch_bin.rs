@@ -652,3 +652,30 @@ fn mutated_pickles_and_archives_never_panic() {
     assert!(h.entries.len() > 3);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// **The conversion of a `.bin` is the conversion of its safetensors original, byte for byte** — calibrated, quantised and written as a
+/// `PALWTIR1` container from the same tensors, read through the pickle interpreter instead of a safetensors header.
+#[test]
+fn a_pytorch_checkpoint_converts_to_the_same_artifact_as_its_safetensors_original() {
+    use misaka_palw_tir_lower::convert::{ConvertRequest, convert_model};
+    let dir = scratch("convert");
+    // The calibration sequences: seeded token ids inside the fixture's vocabulary, in the token file's JSON form.
+    let cfg: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture("hf/llama/config.json")).unwrap()).unwrap();
+    let vocab = cfg["vocab_size"].as_u64().unwrap() as usize;
+    let seqs = misaka_palw_tir_lower::fidelity::random_sequences(vocab, 3, 12, 7);
+    let calib = misaka_palw_tir_lower::convert::CalibInput { sequences: seqs, source: serde_json::json!({"source": "torch_bin test"}) };
+    let convert = |model: PathBuf, tag: &str| {
+        let mut req = ConvertRequest::new(&model, dir.join(format!("{tag}.palwtir")));
+        req.calib = Some(calib.clone());
+        req.chunk_store = Some(dir.join(format!("{tag}.chunks")));
+        let out = convert_model(&req, &|_| {}).unwrap_or_else(|e| panic!("{tag}: {e}"));
+        (std::fs::read(&req.out).unwrap(), out.architecture, out.stats_digest)
+    };
+    let (want, arch, stats) = convert(fixture("hf/llama"), "safetensors");
+    for (name, tag) in [("hf-bin/llama", "bin"), ("hf-bin/llama-sharded", "shards")] {
+        let (got, a, s) = convert(fixture(name), tag);
+        assert_eq!((a, s), (arch.clone(), stats.clone()), "{name}: the same model, the same calibration statistics");
+        assert!(got == want, "{name}: the artifact differs from the safetensors original's ({} vs {} bytes)", got.len(), want.len());
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
