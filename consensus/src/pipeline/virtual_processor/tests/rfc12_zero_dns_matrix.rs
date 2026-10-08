@@ -175,6 +175,8 @@ pub(super) struct Seen {
     pub fees: u64,
     /// The DNS state row as the node holds it after the block.
     pub dns: Option<kaspa_consensus_core::dns_finality::DnsState>,
+    /// Whether the block is an attempt-lane block (it carries a claim and a subsidy).
+    pub attempt: bool,
 }
 
 pub(super) struct Rig {
@@ -353,6 +355,7 @@ impl Rig {
             minted,
             fees,
             dns: self.vp().dns_state_store.read().get().ok(),
+            attempt: kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(block.header.pow_algo_id),
         };
         self.last_supply = Some(supply);
         self.log.push(seen);
@@ -1292,4 +1295,71 @@ async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_re
     let err = format!("{:?}", refused.err().expect("a stake bond after the fence cannot be mined"));
     eprintln!("[x11] a new bond after the fence: {err}");
     assert!(err.contains("DnsParticipationRetired"), "refused by name: {err}");
+}
+
+
+// =====================================================================================================================
+// MATRIX 9 — the retired 20 % is never minted, and an old claim's escrow is not raised
+// =====================================================================================================================
+
+/// The recorded escrow of the claim an attempt block created.
+fn escrow_of(rig: &Rig, attempt: BlockHash) -> u64 {
+    let (_, state) = rig.chain.tip_state();
+    state.claims_iter().find(|(_, c)| c.accepted_block == attempt).map(|(_, c)| c.escrowed_reward).expect("the attempt created a claim")
+}
+
+/// **EXPECTED.** On the same script, fenced and unfenced:
+///
+/// 1. Whatever the lane and side of the fence, the coinbase of the block that merges an attempt mints **no subsidy**: its whole
+///    worker base is withheld (92 % after the fence: `native_worker_base_v1`), so the only value it pays is fees (none here).
+/// 2. A claim accepted below the fence records exactly the escrow the unfenced chain records for the same position: retirement
+///    does not raise an old entitlement, even when the block that pays it is past the fence.
+/// 3. A recovery-floor claim accepted past the fence also keeps its prior bounded carve (equal to the unfenced chain's), so the
+///    difference between the withheld base and what it escrows — the retired 20 % — is **never minted** and is stated: `unminted`.
+/// 4. The decomposition `S = escrow + unminted + inclusion pool` is exact in integers for every attempt, and `escrow <= withheld base`.
+#[tokio::test]
+async fn rfc12_x12_the_retired_share_is_never_minted_and_an_old_escrow_is_not_raised() {
+    use kaspa_consensus_core::palw_native_settlement_v1::native_worker_base_v1;
+    let (pf, pc) = (parts(Some(FENCE)), parts(None));
+    let (mut f, mut c) = (Rig::new(&pf, 0x12_0c00_0000), Rig::new(&pc, 0x12_0c10_0000));
+    for rig in [&mut f, &mut c] {
+        prefix(rig).await;
+        extend(rig, &[2, 3]).await;
+    }
+    assert_eq!(f.log.len(), c.log.len());
+    let (mut legacy_rows, mut retired_rows) = (0, 0);
+    for i in 0..f.log.len() - 1 {
+        let (fa, ca) = (&f.log[i], &c.log[i]);
+        let (fc, cc) = (&f.log[i + 1], &c.log[i + 1]);
+        assert_eq!((fa.attempt, fa.daa), (ca.attempt, ca.daa), "the two runs have one shape");
+        if !fa.attempt {
+            continue;
+        }
+        if fa.retired { retired_rows += 1 } else { legacy_rows += 1 }
+        let subsidy = f.vp().coinbase_manager.calc_block_subsidy(fa.daa);
+        assert_eq!(subsidy, c.vp().coinbase_manager.calc_block_subsidy(ca.daa));
+        let (escrow_f, escrow_c) = (escrow_of(&f, fa.hash), escrow_of(&c, ca.hash));
+        let base = native_worker_base_v1(subsidy);
+        let paying_retired = fc.retired;
+        eprintln!(
+            "[x12] attempt at daa {} (earn {}, pay {}): subsidy {subsidy}; escrow fenced {escrow_f} / unfenced {escrow_c}; withheld base {}; \
+             minted by the paying coinbase fenced {} / unfenced {}",
+            fa.daa,
+            if fa.retired { "retired" } else { "legacy" },
+            if paying_retired { "retired" } else { "legacy" },
+            if paying_retired { base } else { escrow_c },
+            fc.minted,
+            cc.minted
+        );
+        assert_eq!(fc.minted, fa.fees, "(1) the coinbase merging an attempt mints no subsidy, only the attempt's fees");
+        assert_eq!(cc.minted, ca.fees, "(1) and neither does the legacy one: the worker base is withheld there too");
+        assert_eq!(escrow_f, escrow_c, "(2)/(3) the recorded escrow is the legacy carve for a legacy claim and for the recovery floor");
+        if paying_retired {
+            assert!(escrow_f <= base, "(4) the escrow fits the withheld base");
+            let (unminted, pool) = (base - escrow_f, subsidy - base);
+            assert_eq!(escrow_f as u128 + unminted as u128 + pool as u128, subsidy as u128, "(4) integer reconciliation");
+            eprintln!("[x12]   S = escrow {escrow_f} + unminted {unminted} + inclusion pool {pool} = {}", escrow_f + unminted + pool);
+        }
+    }
+    assert!(legacy_rows >= 1 && retired_rows >= 2, "attempts on both sides of the fence ({legacy_rows} legacy, {retired_rows} retired)");
 }
