@@ -74,6 +74,12 @@ mod surface;
 // RFC-0001 §2.7: the worker pool and the per-source bounds.
 mod pool;
 mod tensor;
+// RFC-0001 §2.7: Retry-After, the bounded queue as a reservation, and the client-presence probe.
+mod serving;
+// RFC-0001 §2.7: an Idempotency-Key makes a retry the same claim, not a second one.
+mod idempotency;
+// RFC-0001 §2.7: streaming → committed → submitted → final | voided, and what each is worth.
+mod status;
 
 use surface::{AdmittedRequest, ChatRequest};
 use wire::{AnswerStream, PromptPlan};
@@ -267,6 +273,11 @@ struct Config {
     /// (preferred over the built-in one) and its generation defaults (gateway defaults, applied
     /// through the entrance's own admission).
     sidecar: Option<SidecarRuntime>,
+    /// **RFC-0001 §2.7: stop serving, and never commit, a request whose client has gone** (on by default;
+    /// `--no-cancel-on-disconnect` turns it off for a client that half-closes after sending its request).
+    cancel_on_disconnect: bool,
+    /// How deep (DAA) a `Final`/void claim row must be before `GET /v1/requests/<id>` calls it settled.
+    finality_depth: u64,
 }
 
 /// A loaded, verified sidecar and the two template ids it runs under (leaked once at boot: the
@@ -935,8 +946,14 @@ impl WorkerSupervisor {
         request: &PalwFpWorkerRequestV3,
         prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
         on_token: &mut dyn FnMut(u32, &[u8]),
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<PalwFpWorkerResultV3, String> {
         let mut guard = self.pool.acquire();
+        // **A request whose client left while it waited for this slot is not run** (RFC-0001 §2.7): the slot goes straight
+        // to the next in line and the worker is untouched.
+        if cancelled() {
+            return Err(serving::CANCELLED_BY_CLIENT.to_string());
+        }
         let slot = guard.get_mut();
         if slot.is_none() {
             *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
@@ -954,8 +971,16 @@ impl WorkerSupervisor {
     }
 
     /// RFC-0001 §2.6/§2.7: the answer with no commitment, on the next idle worker.
-    fn run_answer(&self, request: &PalwFpWorkerRequestV3, on_token: &mut dyn FnMut(u32, &[u8])) -> Result<AnswerRun, String> {
+    fn run_answer(
+        &self,
+        request: &PalwFpWorkerRequestV3,
+        on_token: &mut dyn FnMut(u32, &[u8]),
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<AnswerRun, String> {
         let mut guard = self.pool.acquire();
+        if cancelled() {
+            return Err(serving::CANCELLED_BY_CLIENT.to_string());
+        }
         let slot = guard.get_mut();
         if slot.is_none() {
             *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
@@ -1019,6 +1044,83 @@ impl WorkerSupervisor {
 
 /// The most worker processes one gateway runs for one class (`--worker-processes`).
 const MAX_WORKER_PROCESSES: usize = 16;
+
+/// **What the entrance needs of a pool of resident workers** — and nothing else, so the whole chat path (admission, the job
+/// built from the request, the worker's frames, the bindings, the outbox) runs unchanged against an in-process worker in a
+/// test. The shipped implementation is [`WorkerSupervisor`], whose methods these delegate to.
+trait JobRunner: Sync {
+    fn manifest(&self) -> &PalwFpWorkerManifestV1;
+    fn processes(&self) -> usize;
+    fn waiting(&self) -> usize;
+    fn answer_only_supported(&self) -> bool;
+    /// One committed job. `cancelled` is asked once the slot is granted and before the worker is touched.
+    fn run(
+        &self,
+        request: &PalwFpWorkerRequestV3,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        on_token: &mut dyn FnMut(u32, &[u8]),
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<PalwFpWorkerResultV3, String>;
+    fn run_answer(
+        &self,
+        request: &PalwFpWorkerRequestV3,
+        on_token: &mut dyn FnMut(u32, &[u8]),
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<AnswerRun, String>;
+    fn run_answer_batch(
+        &self,
+        requests: &[PalwFpWorkerRequestV3],
+        on_token: &mut dyn FnMut(usize, u32, &[u8]),
+    ) -> Result<AnswerBatchRun, String>;
+    fn run_embed(&self, request: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1) -> Result<EmbedRun, String>;
+}
+
+impl JobRunner for WorkerSupervisor {
+    fn manifest(&self) -> &PalwFpWorkerManifestV1 {
+        WorkerSupervisor::manifest(self)
+    }
+    fn processes(&self) -> usize {
+        WorkerSupervisor::processes(self)
+    }
+    fn waiting(&self) -> usize {
+        WorkerSupervisor::waiting(self)
+    }
+    fn answer_only_supported(&self) -> bool {
+        WorkerSupervisor::answer_only_supported(self)
+    }
+    fn run(
+        &self,
+        request: &PalwFpWorkerRequestV3,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        on_token: &mut dyn FnMut(u32, &[u8]),
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<PalwFpWorkerResultV3, String> {
+        WorkerSupervisor::run(self, request, prompt_ids_form, on_token, cancelled)
+    }
+    fn run_answer(
+        &self,
+        request: &PalwFpWorkerRequestV3,
+        on_token: &mut dyn FnMut(u32, &[u8]),
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<AnswerRun, String> {
+        WorkerSupervisor::run_answer(self, request, on_token, cancelled)
+    }
+    fn run_answer_batch(
+        &self,
+        requests: &[PalwFpWorkerRequestV3],
+        on_token: &mut dyn FnMut(usize, u32, &[u8]),
+    ) -> Result<AnswerBatchRun, String> {
+        WorkerSupervisor::run_answer_batch(self, requests, on_token)
+    }
+    fn run_embed(&self, request: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpEmbedRequestV1) -> Result<EmbedRun, String> {
+        WorkerSupervisor::run_embed(self, request)
+    }
+}
+
+/// What a request carries besides its content: whether its client is still there, and where its status is recorded.
+struct RequestCtx<'a> {
+    link: &'a dyn serving::ClientLink,
+}
 
 // ---------------------------------------------------------------------------------------------
 // OpenAI-compatible request/response shapes: the request lives in `surface` (ADR-0096 Decision 1);
@@ -1104,6 +1206,8 @@ struct HttpRequest {
     method: String,
     path: String,
     body: Vec<u8>,
+    /// The raw `Idempotency-Key` header, if one was sent (validated by [`idempotency::IdempotencyKey::parse`]).
+    idempotency_key: Option<String>,
 }
 
 /// **A request line and a header line are bounded** (mainnet audit, 2026-09-05).
@@ -1137,6 +1241,7 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     let path = parts.next().unwrap_or("").to_string();
     let mut content_length: usize = 0;
     let mut transfer_encoding_chunked = false;
+    let mut idempotency_key: Option<String> = None;
     let mut headers_read = 0usize;
     loop {
         let line = read_capped_line(&mut reader, "a request header")?;
@@ -1153,6 +1258,11 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
                 content_length = value.trim().parse().map_err(|_| "content-length is not a number".to_string())?;
             } else if name.eq_ignore_ascii_case("transfer-encoding") && value.to_ascii_lowercase().contains("chunked") {
                 transfer_encoding_chunked = true;
+            } else if name.eq_ignore_ascii_case(idempotency::IDEMPOTENCY_HEADER) {
+                // A second header of the same name is refused rather than merged: two keys are two answers to "which request".
+                if idempotency_key.replace(value.trim().to_string()).is_some() {
+                    return Err("the Idempotency-Key header was sent twice".into());
+                }
             }
         }
     }
@@ -1166,13 +1276,20 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     }
     let mut body = vec![0u8; content_length];
     reader.read_exact(&mut body).map_err(|e| format!("cannot read the body: {e}"))?;
-    Ok(HttpRequest { method, path, body })
+    Ok(HttpRequest { method, path, body, idempotency_key })
 }
 
+/// **Every JSON response goes through [`serving::render_head`]**, so a 503 or a 429 carries its `Retry-After` whichever call
+/// site produced it (RFC-0001 §2.7: the queue's refusal is "a 503 with a Retry-After", and for a long while it was a 503
+/// without one).
 fn respond(stream: &mut TcpStream, status: &str, body: &serde_json::Value) {
+    respond_with(stream, status, body, None, &[]);
+}
+
+/// [`respond`] with an explicit `Retry-After` and extra headers (e.g. `idempotent-replayed`).
+fn respond_with(stream: &mut TcpStream, status: &str, body: &serde_json::Value, retry_after: Option<u32>, extra: &[(&str, &str)]) {
     let bytes = body.to_string().into_bytes();
-    let head =
-        format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", bytes.len());
+    let head = serving::render_head(status, "application/json", bytes.len(), retry_after, extra);
     let _ = stream.write_all(head.as_bytes());
     let _ = stream.write_all(&bytes);
     let _ = stream.flush();
@@ -1180,8 +1297,7 @@ fn respond(stream: &mut TcpStream, status: &str, body: &serde_json::Value) {
 
 /// A binary body (ADR-0078 Decision 6's fetch handle: the artifact by its derived id).
 fn respond_bytes(stream: &mut TcpStream, status: &str, content_type: &str, bytes: &[u8]) {
-    let head =
-        format!("HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", bytes.len());
+    let head = serving::render_head(status, content_type, bytes.len(), None, &[]);
     let _ = stream.write_all(head.as_bytes());
     let _ = stream.write_all(bytes);
     let _ = stream.flush();
@@ -1214,7 +1330,12 @@ fn hex(h: Hash64) -> String {
 /// which is what keeps "streaming is UX; the consensus object is untouched" true in the code and
 /// not only in the ADR.
 trait ChatSink {
-    fn delta(&mut self, _text: &str) {}
+    /// One more piece of the answer, for the person watching. `false` means it could not be delivered (the client is gone):
+    /// the run is NOT interrupted — the resident worker has no cancel frame, so it finishes and its result is discarded
+    /// (`serving::CANCELLED_BY_CLIENT`) — but nothing more is written and no commitment will be.
+    fn delta(&mut self, _text: &str) -> bool {
+        true
+    }
 }
 
 struct BufferedSink;
@@ -1225,27 +1346,40 @@ struct SseSink<'a> {
     id: String,
     model: String,
     started: bool,
+    /// A write failed: the client is gone. Latched; nothing further is written.
+    broken: bool,
 }
 
 impl SseSink<'_> {
     fn head(&mut self) {
         let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n";
-        let _ = self.stream.write_all(head.as_bytes());
-        let _ = self.stream.flush();
+        self.write(head.as_bytes());
         self.started = true;
     }
 
+    fn write(&mut self, bytes: &[u8]) {
+        if self.broken {
+            return;
+        }
+        if self.stream.write_all(bytes).and_then(|()| self.stream.flush()).is_err() {
+            self.broken = true;
+        }
+    }
+
     fn event(&mut self, value: &serde_json::Value) {
-        let _ = self.stream.write_all(format!("data: {value}\n\n").as_bytes());
-        let _ = self.stream.flush();
+        self.write(format!("data: {value}\n\n").as_bytes());
     }
 
     fn chunk(&mut self, delta: serde_json::Value, finish_reason: serde_json::Value) {
+        // **A streamed piece is PROVISIONAL**: `misaka.status` says so on every chunk, so a client that renders tokens as they
+        // arrive can never mistake them for a committed (let alone final) result — the commitment does not exist until the
+        // run ends, and the terminal event says what became of it.
         let value = serde_json::json!({
             "id": self.id,
             "object": "chat.completion.chunk",
             "model": self.model,
             "choices": [{ "index": 0, "delta": delta, "finish_reason": finish_reason }],
+            "misaka": { "status": status::RequestStatus::Streaming.as_str(), "final": false },
         });
         self.event(&value);
     }
@@ -1263,14 +1397,14 @@ impl SseSink<'_> {
     }
 
     fn done(&mut self) {
-        let _ = self.stream.write_all(b"data: [DONE]\n\n");
-        let _ = self.stream.flush();
+        self.write(b"data: [DONE]\n\n");
     }
 }
 
 impl ChatSink for SseSink<'_> {
-    fn delta(&mut self, text: &str) {
+    fn delta(&mut self, text: &str) -> bool {
         self.chunk(serde_json::json!({ "content": text }), serde_json::Value::Null);
+        !self.broken
     }
 }
 
@@ -1455,7 +1589,7 @@ fn committed_constraint_v1(
 fn handle_chat(
     config: &Config,
     identity: &Identity,
-    worker: &WorkerSupervisor,
+    worker: &dyn JobRunner,
     budget: &Mutex<PublicJobBudget>,
     facts: &chain::ChainFacts,
     chain_source: &chain::ChainSource,
@@ -1465,6 +1599,7 @@ fn handle_chat(
     // own for a single choice, `H(base_seed ‖ i)` for candidate `i` of `n` (RFC-0001 §2.4).
     sampling: ([u8; 32], u32),
     sink: &mut dyn ChatSink,
+    ctx: &RequestCtx<'_>,
 ) -> Result<serde_json::Value, String> {
     let manifest = worker.manifest();
     let PreparedJob { plan, decode_limit, request, anchor_daa } =
@@ -1490,7 +1625,7 @@ fn handle_chat(
     if let Some(why) = &commit_refusal
         && config.answer_fast_path
         && worker.answer_only_supported()
-        && let Some(body) = answer_only_response(config, worker, chat, admitted, &request, &plan, why, sink)?
+        && let Some(body) = answer_only_response(config, worker, chat, admitted, &request, &plan, why, sink, ctx)?
     {
         budget.lock().expect("the budget lock is never poisoned").answered_without_commit += 1;
         return Ok(body);
@@ -1505,14 +1640,32 @@ fn handle_chat(
     } else {
         AnswerStream::with_stop_holdback(kaspa_consensus_core::palw_decode_pipeline_v4::PALW_DECODE_V4_MAX_STOP_TOKENS)
     };
+    // **Cancellation (RFC-0001 §2.7).** `gone` latches the first sign that the person who asked has left: a delta that could
+    // not be written, or a probe of the connection. A request that is gone before the slot is granted never runs; one that
+    // leaves mid-run is DRAINED (the resident worker has no cancel frame, and killing it would make every dropped
+    // connection cost a model re-map) and its result is discarded below — before any outbox file, any budget charge.
+    let gone = std::cell::Cell::new(false);
+    let is_gone = || gone.get() || ctx.link.is_gone();
     let result = {
+        let mut tokens_seen = 0u32;
         let mut on_token = |token_id: u32, rendered: &[u8]| {
-            if let Some(delta) = stream.push(token_id, rendered, &eog) {
-                sink.delta(&delta);
+            if let Some(delta) = stream.push(token_id, rendered, &eog)
+                && !sink.delta(&delta)
+            {
+                gone.set(true);
+            }
+            tokens_seen += 1;
+            if tokens_seen % 8 == 0 && !gone.get() && ctx.link.is_gone() {
+                gone.set(true);
             }
         };
-        worker.run(&request, facts.prompt_ids_form(), &mut on_token)?
+        worker.run(&request, facts.prompt_ids_form(), &mut on_token, &is_gone)?
     };
+    if is_gone() {
+        // Nothing of this run is kept: the retained trace the worker wrote for a claim that will never exist goes too.
+        let _ = std::fs::remove_dir_all(config.outbox.join("traces").join(hex(fp_job_id_v3(&result.job))));
+        return Err(serving::CANCELLED_BY_CLIENT.to_string());
+    }
     // RFC-0001 §A.3 step 7: where the job's own stop rule ended the answer — derived from the job
     // the worker bound and the ids it committed, never taken from the worker's word.
     let v4_stop = result.job.decode.as_ref().filter(|_| result.job.is_v4()).map(|decode| {
@@ -1708,6 +1861,8 @@ fn handle_chat(
         "decode_token_limit": result.job.decode_token_limit,
         "stop_reason": match result.stop_reason { PalwFpStopReasonV3::ExactBudgetReached => "exact_budget", PalwFpStopReasonV3::EndOfGeneration => "end_of_generation" },
         "fp_claim_id": hex(claim_id),
+        // The bond the claim names, for the status route: a chain row naming ANOTHER bond is not this gateway's claim.
+        "executor_bond": format!("{}:{}", result.job.executor_bond.transaction_id, result.job.executor_bond.index),
         "trace_root": hex(result.trace_root),
         "output_root": hex(result.output_root),
         "schedule_root": hex(result.schedule_root),
@@ -1827,7 +1982,16 @@ fn handle_chat(
     });
     let tool_choice = (admitted.tool_choice_given || !admitted.tools.is_empty())
         .then(|| serde_json::json!({ "requested": admitted.tool_choice.requested_json(), "enforcement": "advisory" }));
+    // **What this response is worth** (RFC-0001 §2.7): a commitment in the outbox is `committed` and an answer that became no
+    // claim is `answered`; NEITHER is final. `GET /v1/requests/<id>` follows it from here, and only the chain's Final is final.
+    let request_status = if commit_refusal.is_none() { status::RequestStatus::Committed } else { status::RequestStatus::Answered };
     let misaka = serde_json::json!({
+        "request": {
+            "id": format!("{}{}", status::COMPLETION_PREFIX, &hex(job_id)[..24]),
+            "status": request_status.as_str(),
+            "final": false,
+            "status_route": format!("/v1/requests/{}{}", status::COMPLETION_PREFIX, &hex(job_id)[..24]),
+        },
         "fp_job_id": hex(job_id),
         "trace_root": hex(result.trace_root),
         "output_root": hex(result.output_root),
@@ -1912,13 +2076,14 @@ fn handle_chat(
 #[allow(clippy::too_many_arguments)]
 fn answer_only_response(
     config: &Config,
-    worker: &WorkerSupervisor,
+    worker: &dyn JobRunner,
     chat: &ChatRequest,
     admitted: &AdmittedRequest,
     request: &PalwFpWorkerRequestV3,
     plan: &PromptPlan,
     why_not_committed: &str,
     sink: &mut dyn ChatSink,
+    ctx: &RequestCtx<'_>,
 ) -> Result<Option<serde_json::Value>, String> {
     let manifest = worker.manifest();
     let eog: BTreeSet<u32> = manifest.eog_token_ids.iter().copied().collect();
@@ -1927,17 +2092,24 @@ fn answer_only_response(
     } else {
         AnswerStream::with_stop_holdback(kaspa_consensus_core::palw_decode_pipeline_v4::PALW_DECODE_V4_MAX_STOP_TOKENS)
     };
+    let gone = std::cell::Cell::new(false);
+    let is_gone = || gone.get() || ctx.link.is_gone();
     let answer = {
         let mut on_token = |token_id: u32, rendered: &[u8]| {
-            if let Some(delta) = stream.push(token_id, rendered, &eog) {
-                sink.delta(&delta);
+            if let Some(delta) = stream.push(token_id, rendered, &eog)
+                && !sink.delta(&delta)
+            {
+                gone.set(true);
             }
         };
-        match worker.run_answer(request, &mut on_token)? {
+        match worker.run_answer(request, &mut on_token, &is_gone)? {
             AnswerRun::Answered(answer) => answer,
             AnswerRun::Unsupported => return Ok(None),
         }
     };
+    if is_gone() {
+        return Err(serving::CANCELLED_BY_CLIENT.to_string());
+    }
     Ok(Some(answer_only_body(config, worker, chat, admitted, request, plan, why_not_committed, &mut stream, answer, sink)?))
 }
 
@@ -1946,7 +2118,7 @@ fn answer_only_response(
 #[allow(clippy::too_many_arguments)]
 fn answer_only_body(
     config: &Config,
-    worker: &WorkerSupervisor,
+    worker: &dyn JobRunner,
     chat: &ChatRequest,
     admitted: &AdmittedRequest,
     request: &PalwFpWorkerRequestV3,
@@ -2018,6 +2190,11 @@ fn answer_only_body(
             "total_tokens": prompt_tokens + completion_tokens,
         },
         "misaka": {
+            "request": {
+                "id": format!("{}{}", status::COMPLETION_PREFIX, &answer_id[..24]),
+                "status": status::RequestStatus::Answered.as_str(),
+                "final": false,
+            },
             "committed": false,
             "not_committed_because": why_not_committed,
             "output_token_ids": answer.output_token_ids,
@@ -2060,7 +2237,7 @@ fn answer_only_body(
 fn answer_batch_candidates(
     config: &Config,
     identity: &Identity,
-    worker: &WorkerSupervisor,
+    worker: &dyn JobRunner,
     facts: &chain::ChainFacts,
     chat: &ChatRequest,
     admitted: &AdmittedRequest,
@@ -2109,12 +2286,13 @@ fn answer_batch_candidates(
 fn handle_chat_candidates(
     config: &Config,
     identity: &Identity,
-    worker: &WorkerSupervisor,
+    worker: &dyn JobRunner,
     budget: &Mutex<PublicJobBudget>,
     facts: &chain::ChainFacts,
     chain_source: &chain::ChainSource,
     chat: &ChatRequest,
     admitted: &AdmittedRequest,
+    ctx: &RequestCtx<'_>,
 ) -> Result<serde_json::Value, String> {
     let (base_seed, temperature_q) = admitted.sampling;
     let n = admitted.candidates;
@@ -2138,7 +2316,7 @@ fn handle_chat_candidates(
                 let seed = surface::candidate_seed_v1(&base_seed, i);
                 scope.spawn(move || {
                     let mut sink = BufferedSink;
-                    handle_chat(config, identity, worker, budget, facts, chain_source, chat, admitted, (seed, temperature_q), &mut sink)
+                    handle_chat(config, identity, worker, budget, facts, chain_source, chat, admitted, (seed, temperature_q), &mut sink, ctx)
                 })
             })
             .collect();
@@ -2185,7 +2363,7 @@ fn handle_chat_candidates(
 /// `Ok(None)` means the worker serves no embedding path (the route answers 501).
 fn handle_embeddings(
     config: &Config,
-    worker: &WorkerSupervisor,
+    worker: &dyn JobRunner,
     request: &surface::EmbeddingsRequest,
     admitted: &surface::AdmittedEmbeddings,
 ) -> Result<Option<serde_json::Value>, String> {
@@ -2269,6 +2447,8 @@ fn main() {
     let mut max_connections_per_source = DEFAULT_MAX_CONNECTIONS_PER_SOURCE;
     let mut max_jobs_per_source = DEFAULT_MAX_JOBS_PER_SOURCE;
     let mut sidecar_path: Option<PathBuf> = None;
+    let mut cancel_on_disconnect = true;
+    let mut finality_depth = status::DEFAULT_FINALITY_DEPTH;
     while let Some(arg) = args.pop_front() {
         let mut value = |what: &str| args.pop_front().unwrap_or_else(|| die(format!("{what} needs a value")));
         match arg.as_str() {
@@ -2321,6 +2501,8 @@ fn main() {
                 worker_args.extend(["--kv-cache-verify-every".to_string(), n.to_string()]);
             }
             "--no-answer-fast-path" => answer_fast_path = false,
+            "--no-cancel-on-disconnect" => cancel_on_disconnect = false,
+            "--finality-depth" => finality_depth = value("--finality-depth").parse().unwrap_or_else(|e| die(format!("{e}"))),
             // RFC-0001 §2.9: the artifact sidecar — read here for its chat template and defaults,
             // and forwarded to every worker for its tokenizer.
             "--sidecar" => {
@@ -2336,7 +2518,7 @@ fn main() {
                 per_source_jobs_per_window = value("--per-source-jobs-per-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
             other => die(format!(
-                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--worker-processes n] [--kv-cache-budget-mib n [--kv-cache-verify-every n]] [--no-answer-fast-path] [--sidecar <file>] [--max-connections-per-source n] [--max-jobs-per-source n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
+                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--worker-processes n] [--kv-cache-budget-mib n [--kv-cache-verify-every n]] [--no-answer-fast-path] [--sidecar <file>] [--no-cancel-on-disconnect] [--finality-depth n] [--max-connections-per-source n] [--max-jobs-per-source n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
             )),
         }
     }
@@ -2375,6 +2557,8 @@ fn main() {
         max_connections_per_source: max_connections_per_source.max(1),
         max_jobs_per_source: max_jobs_per_source.max(1),
         sidecar: sidecar_path.as_deref().map(|p| SidecarRuntime::load(p).unwrap_or_else(|e| die(e))),
+        cancel_on_disconnect,
+        finality_depth,
     };
 
     // -----------------------------------------------------------------------------------------
@@ -2511,13 +2695,14 @@ fn main() {
     let sources = Arc::new(Mutex::new(SourceRates::default()));
     // RFC-0001 §2.7: per-source open connections and jobs in flight.
     let gate = Arc::new(pool::SourceGate::new(config.max_connections_per_source, config.max_jobs_per_source));
+    let services = Arc::new(Services::open(&config.outbox));
 
     let listener = TcpListener::bind(&config.listen).unwrap_or_else(|e| die(format!("cannot bind {}: {e}", config.listen)));
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         if connections.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
             connections.fetch_sub(1, Ordering::AcqRel);
-            respond(&mut stream, "503 Service Unavailable", &error_body("connection cap reached"));
+            respond_with(&mut stream, "503 Service Unavailable", &error_body("connection cap reached"), Some(serving::RETRY_AFTER_CONNECTION_SECS), &[]);
             continue;
         }
         let (config, identity, worker, chain_source) =
@@ -2525,6 +2710,7 @@ fn main() {
         let (in_flight, budget, sources) = (Arc::clone(&in_flight), Arc::clone(&budget), Arc::clone(&sources));
         let connections = Arc::clone(&connections);
         let gate = Arc::clone(&gate);
+        let services = Arc::clone(&services);
         let acknowledged_bind = acknowledged;
         // The per-source connection share: counted here, before the thread, so a source over its
         // share costs a 503 and not a thread.
@@ -2541,7 +2727,7 @@ fn main() {
                 &mut stream,
                 &config,
                 &identity,
-                &worker,
+                &*worker,
                 &chain_source,
                 &in_flight,
                 &budget,
@@ -2549,6 +2735,7 @@ fn main() {
                 backend,
                 acknowledged_bind,
                 &gate,
+                &services,
             );
             if let Some(peer) = peer {
                 gate.close_connection(peer);
@@ -2558,12 +2745,136 @@ fn main() {
     }
 }
 
+/// The status route's observer: a node over RPC answers (one node: `agreeing = 1`, which is a report and not a proof); the
+/// anchor-file form has no node and says so.
+impl status::ClaimObserver for chain::ChainSource {
+    fn observe(
+        &self,
+        claim_id: Hash64,
+        tx_id: Option<Hash64>,
+    ) -> Result<(misaka_palw_remote::track::ChainObservation, usize), String> {
+        match self {
+            chain::ChainSource::Rpc(rpc) => rpc.observe_claim(claim_id, tx_id).map(|obs| (obs, 1)),
+            chain::ChainSource::AnchorFile(_) => Err("this gateway has no node to ask (--anchor form)".into()),
+        }
+    }
+}
+
+/// **The per-process serving state the entrance shares across connections**: the idempotency table and the book of requests in
+/// flight / cancelled.
+struct Services {
+    idempotency: idempotency::IdempotencyStore,
+    book: status::RequestBook,
+}
+
+impl Services {
+    fn open(outbox: &Path) -> Self {
+        Self { idempotency: idempotency::IdempotencyStore::open(outbox), book: status::RequestBook::default() }
+    }
+}
+
+/// A source's share of in-flight jobs, given back when the request ends however it ends.
+struct SourceJobsGuard<'a> {
+    gate: &'a pool::SourceGate,
+    source: Option<IpAddr>,
+    jobs: u32,
+}
+
+impl Drop for SourceJobsGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(source) = self.source {
+            self.gate.finish_jobs(source, self.jobs);
+        }
+    }
+}
+
+/// How a request is turned away (or answered) before it costs anything.
+enum Early {
+    Refuse(&'static str, String),
+    Replay(serde_json::Value),
+}
+
+/// Whether the body asks for a streamed delivery (read leniently: a malformed body is refused later, by the entrance).
+fn streaming_requested(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body).ok().and_then(|v| v.get("stream").and_then(serde_json::Value::as_bool)).unwrap_or(false)
+}
+
+/// **The idempotency decision** (see [`idempotency`]): no header → `Ok(None)` (the request runs as it always did); a fresh key →
+/// `Ok(Some(reservation))`; a finished request → `Early::Replay`; anything else a refusal that says why.
+fn begin_idempotent<'a>(services: &'a Services, request: &HttpRequest) -> Result<Option<idempotency::Reservation<'a>>, Early> {
+    let Some(raw) = request.idempotency_key.as_deref() else { return Ok(None) };
+    let key = idempotency::IdempotencyKey::parse(raw).map_err(|e| Early::Refuse("400 Bad Request", e))?;
+    let digest = idempotency::request_digest(&request.body).map_err(|e| Early::Refuse("400 Bad Request", e))?;
+    match services.idempotency.begin(&key, digest) {
+        idempotency::Begin::Fresh(reservation) => Ok(Some(reservation)),
+        idempotency::Begin::Replay(body) => Err(Early::Replay(body)),
+        idempotency::Begin::InProgress => Err(Early::Refuse(
+            "409 Conflict",
+            "a request with this Idempotency-Key is still running; retry shortly and you will receive its response".into(),
+        )),
+        idempotency::Begin::Conflict => Err(Early::Refuse(
+            "409 Conflict",
+            "this Idempotency-Key was used for a different request; a key names one request".into(),
+        )),
+        idempotency::Begin::Overloaded => Err(Early::Refuse("503 Service Unavailable", "the idempotency table is full of running requests".into())),
+    }
+}
+
+/// The status of a finished job's completion id, read from the outbox (and the chain, when a node can be asked).
+fn status_of_completion(config: &Config, chain_source: &chain::ChainSource, id: &str) -> Option<(status::StatusReport, status::LocalFacts)> {
+    let stem = status::stem_of_completion_id(id)?;
+    let local = status::read_local_facts(&config.outbox, &stem)?;
+    let observer: Option<&dyn status::ClaimObserver> = chain_source.can_submit().then_some(chain_source as &dyn status::ClaimObserver);
+    let report = status::status_with_chain(&local, observer, config.finality_depth, None);
+    Some((report, local))
+}
+
+/// **Serve a stored response again** — the same claim, no inference — with its status recomputed NOW (a replay a day later may
+/// find the claim submitted, or final) and the replay marked. A streamed retry gets the whole answer as one delta and the same
+/// terminal event.
+fn replay_stored(
+    stream: &mut TcpStream,
+    config: &Config,
+    chain_source: &chain::ChainSource,
+    body: &serde_json::Value,
+    streaming: bool,
+) {
+    let mut body = body.clone();
+    if let Some((report, local)) = body["id"].as_str().and_then(|id| status_of_completion(config, chain_source, id)) {
+        body["misaka"]["request"] = report.to_json(&local);
+    }
+    body["misaka"]["idempotent_replay"] = serde_json::json!(true);
+    if !streaming {
+        respond_with(stream, "200 OK", &body, None, &[("idempotent-replayed", "true")]);
+        return;
+    }
+    let mut sink = SseSink {
+        stream,
+        id: body["id"].as_str().unwrap_or("palwcmpl-replay").to_string(),
+        model: body["model"].as_str().unwrap_or(surface::MODEL_ID).to_string(),
+        started: false,
+        broken: false,
+    };
+    sink.head();
+    let message = &body["choices"][0]["message"];
+    if let Some(text) = message["content"].as_str() {
+        sink.delta(text);
+    }
+    let delta = match message.get("tool_calls").and_then(serde_json::Value::as_array) {
+        Some(calls) => serde_json::json!({ "tool_calls": calls.iter().enumerate().map(|(i, c)| { let mut c = c.clone(); c["index"] = serde_json::json!(i); c }).collect::<Vec<_>>() }),
+        None => serde_json::json!({}),
+    };
+    sink.chunk(delta, body["choices"][0]["finish_reason"].clone());
+    sink.event(&serde_json::json!({ "misaka": body["misaka"].clone(), "usage": body["usage"].clone() }));
+    sink.done();
+}
+
 #[allow(clippy::too_many_arguments)]
 fn serve_connection(
     stream: &mut TcpStream,
     config: &Config,
     identity: &Identity,
-    worker: &WorkerSupervisor,
+    worker: &dyn JobRunner,
     chain_source: &chain::ChainSource,
     in_flight: &AtomicUsize,
     budget: &Mutex<PublicJobBudget>,
@@ -2571,6 +2882,7 @@ fn serve_connection(
     backend: ConfinementBackend,
     acknowledged_bind: bool,
     gate: &pool::SourceGate,
+    services: &Services,
 ) {
     let source = stream.peer_addr().map(|a| a.ip()).ok();
     let request = match read_http_request(stream) {
@@ -2666,14 +2978,27 @@ fn serve_connection(
             );
         }
         ("POST", "/v1/chat/completions") => {
+            if request.body.len() > MAX_REQUEST_BODY_BYTES {
+                respond(stream, "400 Bad Request", &error_body("the body exceeds the request cap"));
+                return;
+            }
+            // **Idempotency (RFC-0001 §2.7), BEFORE anything that costs.** A retry of a finished request is answered from the
+            // stored response: no chain read, no queue place, no per-source token, no inference, no second claim.
+            let reservation = match begin_idempotent(services, &request) {
+                Ok(reservation) => reservation,
+                Err(Early::Refuse(status, message)) => {
+                    respond(stream, status, &error_body(&message));
+                    return;
+                }
+                Err(Early::Replay(body)) => {
+                    replay_stored(stream, config, chain_source, &body, streaming_requested(&request.body));
+                    return;
+                }
+            };
             if let Some(source) = source
                 && !sources.lock().expect("the source lock is never poisoned").admit(source, config.per_source_jobs_per_window)
             {
                 respond(stream, "429 Too Many Requests", &error_body("per-source job rate exceeded"));
-                return;
-            }
-            if request.body.len() > MAX_REQUEST_BODY_BYTES {
-                respond(stream, "400 Bad Request", &error_body("the body exceeds the request cap"));
                 return;
             }
             // Parsed AND ADMITTED before the queue reservation and before the worker is touched
@@ -2700,30 +3025,32 @@ fn serve_connection(
             // The bounded in-flight queue. Reserved BEFORE the slot is contended, so the depth of
             // the wait is a number this process chose rather than one the network chose for it. A
             // request for `n` candidates is `n` jobs (RFC-0001 §2.4), against the queue and against
-            // its source's share alike.
+            // its source's share alike. **A reservation, released by drop** (`serving::QueueGate`): it cannot leak on a
+            // panic and it never over-reserves, even for an instant.
             let jobs = admitted.candidates.max(1);
-            if in_flight.fetch_add(jobs as usize, Ordering::AcqRel) + jobs as usize > in_flight_cap(worker.processes()) {
-                in_flight.fetch_sub(jobs as usize, Ordering::AcqRel);
-                respond(
-                    stream,
-                    "503 Service Unavailable",
-                    &error_body("the in-flight queue is full; the worker slots are busy and the queue behind them is bounded"),
-                );
-                return;
-            }
+            let _queue_place = match serving::QueueGate::try_reserve(in_flight, jobs as usize, in_flight_cap(worker.processes())) {
+                Ok(guard) => guard,
+                Err(_) => {
+                    respond(
+                        stream,
+                        "503 Service Unavailable",
+                        &error_body("the in-flight queue is full; the worker slots are busy and the queue behind them is bounded"),
+                    );
+                    return;
+                }
+            };
             if let Some(source) = source
                 && gate.start_jobs(source, jobs).is_err()
             {
-                in_flight.fetch_sub(jobs as usize, Ordering::AcqRel);
                 respond(stream, "429 Too Many Requests", &error_body("per-source jobs in flight exceeded"));
                 return;
             }
-            let finish = |in_flight: &AtomicUsize| {
-                in_flight.fetch_sub(jobs as usize, Ordering::AcqRel);
-                if let Some(source) = source {
-                    gate.finish_jobs(source, jobs);
-                }
+            let _source_share = SourceJobsGuard { gate, source, jobs };
+            let link: Box<dyn serving::ClientLink> = match serving::TcpLink::new(stream) {
+                Some(link) if config.cancel_on_disconnect => Box::new(link),
+                _ => Box::new(serving::AlwaysPresent),
             };
+            let ctx = RequestCtx { link: link.as_ref() };
             if streaming {
                 // **A slow reader must not wedge the one job slot.** The deltas are written from
                 // inside the worker's mutex, so a client that stops reading would otherwise block
@@ -2736,12 +3063,14 @@ fn serve_connection(
                 // The chunk id is drawn per RESPONSE: the job id does not exist until the run
                 // ends, and an OpenAI client needs a stable id from the first chunk.
                 let include_usage = admitted.include_usage;
-                let mut sink = SseSink { stream, id: format!("palwcmpl-{}", faster_hex::hex_string(&nonce)), model, started: false };
+                let stream_id = format!("palwcmpl-{}", faster_hex::hex_string(&nonce));
+                let ticket = services.book.begin(&stream_id);
+                let mut sink = SseSink { stream, id: stream_id, model, started: false, broken: false };
                 sink.head();
-                let outcome = handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, &admitted, admitted.sampling, &mut sink);
-                finish(in_flight);
+                let outcome = handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, &admitted, admitted.sampling, &mut sink, &ctx);
                 match outcome {
                     Ok(body) => {
+                        drop(ticket);
                         // The terminal chunk carries the finish reason and, in the same event, the
                         // `misaka` object: whether this answer became a claim and, if not, why.
                         // An SSE client that never sees it is a client that was told nothing.
@@ -2767,25 +3096,41 @@ fn serve_connection(
                         }
                         sink.event(&serde_json::json!({ "misaka": body["misaka"].clone(), "usage": body["usage"].clone() }));
                         sink.done();
+                        if let Some(reservation) = reservation {
+                            reservation.complete(body);
+                        }
+                    }
+                    Err(e) if serving::is_cancelled(&e) => {
+                        // The client is gone: nothing was committed and there is nobody to tell.
+                        ticket.cancelled();
+                        eprintln!("[misaka-palw-gateway] event lane=prompt stage=CANCELLED reason=client_disconnected");
                     }
                     Err(e) => {
                         // Past the head, an error can only be an event. Decision 2: a stream whose
                         // rendering is not the committed one is CLOSED with an error, and no
                         // commitment was written.
+                        drop(ticket);
                         sink.event(&surface::refusal_body(&e));
                         sink.done();
                     }
                 }
             } else {
                 let outcome = if admitted.candidates > 1 {
-                    handle_chat_candidates(config, identity, worker, budget, &facts, chain_source, &chat, &admitted)
+                    handle_chat_candidates(config, identity, worker, budget, &facts, chain_source, &chat, &admitted, &ctx)
                 } else {
                     let mut sink = BufferedSink;
-                    handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, &admitted, admitted.sampling, &mut sink)
+                    handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, &admitted, admitted.sampling, &mut sink, &ctx)
                 };
-                finish(in_flight);
                 match outcome {
-                    Ok(body) => respond(stream, "200 OK", &body),
+                    Ok(body) => {
+                        respond(stream, "200 OK", &body);
+                        if let Some(reservation) = reservation {
+                            reservation.complete(body);
+                        }
+                    }
+                    Err(e) if serving::is_cancelled(&e) => {
+                        eprintln!("[misaka-palw-gateway] event lane=prompt stage=CANCELLED reason=client_disconnected");
+                    }
                     Err(e) => respond(stream, "400 Bad Request", &surface::refusal_body(&e)),
                 }
             }
@@ -2818,27 +3163,44 @@ fn serve_connection(
                     return;
                 }
             };
-            if in_flight.fetch_add(1, Ordering::AcqRel) + 1 > in_flight_cap(worker.processes()) {
-                in_flight.fetch_sub(1, Ordering::AcqRel);
-                respond(stream, "503 Service Unavailable", &error_body("the in-flight queue is full; the worker slots are busy and the queue behind them is bounded"));
-                return;
-            }
+            let _queue_place = match serving::QueueGate::try_reserve(in_flight, 1, in_flight_cap(worker.processes())) {
+                Ok(guard) => guard,
+                Err(_) => {
+                    respond(stream, "503 Service Unavailable", &error_body("the in-flight queue is full; the worker slots are busy and the queue behind them is bounded"));
+                    return;
+                }
+            };
             if let Some(source) = source
                 && gate.start_jobs(source, 1).is_err()
             {
-                in_flight.fetch_sub(1, Ordering::AcqRel);
                 respond(stream, "429 Too Many Requests", &error_body("per-source jobs in flight exceeded"));
                 return;
             }
+            let _source_share = SourceJobsGuard { gate, source, jobs: 1 };
             let outcome = handle_embeddings(config, worker, &parsed, &admitted);
-            in_flight.fetch_sub(1, Ordering::AcqRel);
-            if let Some(source) = source {
-                gate.finish_jobs(source, 1);
-            }
             match outcome {
                 Ok(Some(body)) => respond(stream, "200 OK", &body),
                 Ok(None) => respond(stream, "501 Not Implemented", &error_body("this class's worker serves no embeddings path")),
                 Err(e) => respond(stream, "400 Bad Request", &surface::refusal_body(&e)),
+            }
+        }
+        // **RFC-0001 §2.7: what became of a request** — `streaming | answered | committed | submitted | final | voided | cancelled`.
+        // A GET with no side effects, bounded by the same per-source fetch rate as the artifact route. `final` appears only from a
+        // chain fact, and carries the label that says how the chain was read (see `status`).
+        ("GET", path) if path.starts_with("/v1/requests/") => {
+            if let Some(source) = source
+                && !sources.lock().expect("the source lock is never poisoned").admit_fetch(source)
+            {
+                respond(stream, "429 Too Many Requests", &error_body("per-source status fetch rate exceeded"));
+                return;
+            }
+            let id = &path["/v1/requests/".len()..];
+            if let Some(report) = status::status_from_book(&services.book, id) {
+                respond(stream, "200 OK", &report.to_json(&status::LocalFacts::default()));
+            } else if let Some((report, local)) = status_of_completion(config, chain_source, id) {
+                respond(stream, "200 OK", &report.to_json(&local));
+            } else {
+                respond(stream, "404 Not Found", &error_body("no request under that id: it is neither streaming here nor in this gateway's outbox"));
             }
         }
         // ADR-0078 Decision 6's fetch handle: a derived artifact too large to ride inline is
@@ -2880,7 +3242,7 @@ fn serve_connection(
             stream,
             "404 Not Found",
             &error_body(
-                "this gateway serves POST /v1/chat/completions, POST /v1/embeddings, GET /v1/models, GET /health and GET /v1/artifacts/<derived-id>",
+                "this gateway serves POST /v1/chat/completions, POST /v1/embeddings, GET /v1/models, GET /health, GET /v1/requests/<id> and GET /v1/artifacts/<derived-id>",
             ),
         ),
     }
@@ -2997,6 +3359,8 @@ mod tests {
             max_connections_per_source: DEFAULT_MAX_CONNECTIONS_PER_SOURCE,
             max_jobs_per_source: DEFAULT_MAX_JOBS_PER_SOURCE,
             sidecar: None,
+            cancel_on_disconnect: true,
+            finality_depth: status::DEFAULT_FINALITY_DEPTH,
         }
     }
 

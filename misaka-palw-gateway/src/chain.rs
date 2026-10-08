@@ -538,6 +538,72 @@ impl RpcChainSource {
     }
 }
 
+/// **The chain's claim row, as the tracker folds it** — the same mapping `misaka-palw-fp-rail --track` makes, so a request's
+/// status here and a claim's state there are one reading. `claim` is the node's `GetPalwFreePromptClaim` answer.
+///
+/// An answer this client does not understand is an error, never a guess: a phase it has no word for would otherwise be filed
+/// under the nearest one and read as progress (or as finality).
+pub fn observation_from_claim_reply(
+    sink: Hash64,
+    virtual_daa: u64,
+    tx_in_mempool: bool,
+    claim: &kaspa_rpc_core::GetPalwFreePromptClaimResponse,
+) -> Result<misaka_palw_remote::track::ChainObservation, String> {
+    use misaka_palw_remote::track::{ChainObservation, ClaimObs, ClaimPhaseObs};
+    if !claim.found {
+        return Ok(ChainObservation { sink, virtual_daa, tx_in_mempool, claim: None });
+    }
+    let (txid, index) = claim.executor_bond.split_once(':').ok_or("the node's executor_bond is not txid:index")?;
+    let bond = kaspa_consensus_core::tx::TransactionOutpoint::new(
+        hash64_from_hex(txid, "the node's executor_bond transaction id")?,
+        index.parse::<u32>().map_err(|e| format!("the node's executor_bond index: {e}"))?,
+    );
+    let phase = match claim.phase.as_str() {
+        "provisional" => ClaimPhaseObs::Provisional,
+        "panel_bound" => ClaimPhaseObs::PanelBound,
+        "receipt_licensed" => ClaimPhaseObs::ReceiptLicensed { licensed_daa: claim.phase_daa },
+        "final" => ClaimPhaseObs::Final { final_daa: claim.phase_daa },
+        "voided" => ClaimPhaseObs::Voided { voided_daa: claim.phase_daa },
+        other => return Err(format!("the node reports a claim phase this client does not know: {other:?}")),
+    };
+    let accepted_block = hash64_from_hex(&claim.accepted_block, "the node's accepted_block").unwrap_or_default();
+    Ok(ChainObservation {
+        sink,
+        virtual_daa,
+        tx_in_mempool,
+        claim: Some(ClaimObs { executor_bond: bond, accepted_block, accepted_daa: claim.accepted_daa, phase }),
+    })
+}
+
+impl RpcChainSource {
+    /// One poll of the node for one claim: the sink and its DAA, whether the transaction is in the pool, and the claim row.
+    pub fn observe_claim(
+        &self,
+        claim_id: Hash64,
+        tx_id: Option<Hash64>,
+    ) -> Result<misaka_palw_remote::track::ChainObservation, String> {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        self.runtime.block_on(async {
+            let client = self.connect().await?;
+            let outcome = async {
+                let info = client.get_block_dag_info().await.map_err(|e| e.to_string())?;
+                let in_pool = match tx_id {
+                    Some(id) => client.get_mempool_entry(id, true, true).await.is_ok(),
+                    None => false,
+                };
+                let claim = client
+                    .get_palw_free_prompt_claim(faster_hex::hex_string(claim_id.as_byte_slice()))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                observation_from_claim_reply(info.sink, info.virtual_daa_score, in_pool, &claim)
+            }
+            .await;
+            let _ = client.disconnect().await;
+            outcome
+        })
+    }
+}
+
 /// `host:port` becomes the borsh wRPC URL the CLI's `--rpc` means; anything already carrying a
 /// scheme is left alone.
 pub fn normalize_endpoint(endpoint: &str) -> String {
@@ -683,6 +749,43 @@ mod tests {
         let source = std::include_str!("chain.rs");
         let assignments = source.lines().filter(|l| l.contains(&needle)).count();
         assert_eq!(assignments, 1, "the fence is read from the node's producer facts and from nowhere else");
+    }
+
+    #[test]
+    fn a_claim_reply_is_folded_the_way_the_rail_folds_it_and_an_unknown_phase_is_an_error() {
+        use kaspa_rpc_core::GetPalwFreePromptClaimResponse;
+        use misaka_palw_remote::track::ClaimPhaseObs;
+        let hex = |n: u8| faster_hex::hex_string(Hash64::from_bytes([n; 64]).as_byte_slice());
+        let reply = |phase: &str, daa: u64| GetPalwFreePromptClaimResponse {
+            found: true,
+            executor_bond: format!("{}:3", hex(9)),
+            accepted_block: hex(5),
+            accepted_daa: 100,
+            phase: phase.into(),
+            phase_daa: daa,
+            ..Default::default()
+        };
+        let sink = Hash64::from_bytes([1; 64]);
+        // Absent: no claim, and whether the transaction sits in a pool is carried through.
+        let absent = observation_from_claim_reply(sink, 50, true, &GetPalwFreePromptClaimResponse::default()).unwrap();
+        assert!(absent.claim.is_none() && absent.tx_in_mempool);
+        for (phase, expect) in [
+            ("provisional", ClaimPhaseObs::Provisional),
+            ("panel_bound", ClaimPhaseObs::PanelBound),
+            ("receipt_licensed", ClaimPhaseObs::ReceiptLicensed { licensed_daa: 77 }),
+            ("final", ClaimPhaseObs::Final { final_daa: 77 }),
+            ("voided", ClaimPhaseObs::Voided { voided_daa: 77 }),
+        ] {
+            let obs = observation_from_claim_reply(sink, 500, false, &reply(phase, 77)).unwrap();
+            let claim = obs.claim.expect("found");
+            assert_eq!((claim.phase, claim.executor_bond.index), (expect, 3), "{phase}");
+        }
+        assert!(observation_from_claim_reply(sink, 1, false, &reply("challengeable", 1)).unwrap_err().contains("does not know"));
+        let mut bad = reply("final", 1);
+        bad.executor_bond = "no-colon".into();
+        assert!(observation_from_claim_reply(sink, 1, false, &bad).is_err());
+        bad.executor_bond = format!("{}:x", hex(9));
+        assert!(observation_from_claim_reply(sink, 1, false, &bad).is_err());
     }
 
     #[test]

@@ -1702,7 +1702,7 @@ mod tests {
         let source = std::include_str!("main.rs");
         let post_arm = source.find("(\"POST\", \"/v1/chat/completions\")").expect("the POST route");
         let admitted_at = source[post_arm..].find("surface::parse_and_admit_with(").expect("the route admits") + post_arm;
-        let reserved_at = source[post_arm..].find("in_flight.fetch_add(").expect("the route reserves") + post_arm;
+        let reserved_at = source[post_arm..].find("serving::QueueGate::try_reserve(in_flight, jobs").expect("the route reserves") + post_arm;
         let handled_at = source[post_arm..].find("handle_chat(config").expect("the route runs") + post_arm;
         assert!(admitted_at < reserved_at && reserved_at < handled_at, "admit, then reserve the queue, then touch the worker");
     }
