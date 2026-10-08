@@ -10,6 +10,59 @@ pub const MAX_CANDIDATES_V1: u32 = 4096;
 pub const MAX_PENDING_V1: u32 = 1024;
 pub const MAX_TRACKED_V1: u32 = 65_536;
 pub const MAX_BEACON_PROOF_BYTES_V1: u32 = 65_536;
+/// RFC-0006 × RFC-0010: at most this many strata (a plan's `S_L` is at most 64) …
+pub const MAX_STRATA_V1: u16 = 64;
+/// … at most this many class seats a stratum …
+pub const MAX_STRATUM_CLASS_SEATS_V1: u16 = 15;
+/// … and at most this many seats a stratified binding (64 shards × `[outsider] ++ 3 class seats`).
+pub const MAX_STRATIFIED_SEATS_V1: u32 = 256;
+
+/// **A stratified draw** (RFC-0006's per-shard Panel under RFC-0010's permissionless rule): the claim's Panel is `count` strata,
+/// each `[outsider?] ++ class_seats` seats, stored stratum-major. Generic — the engine knows nothing of shards: stratum `s`'s class
+/// seats come from the candidates the host marked as members of `s` (`PanelSnapshotV1::strata_members`), its outsider from the
+/// OUTSIDER-role population. Frozen at admission; `None` on a record is the flat draw, byte for byte the old rules.
+///
+/// The rules (`stage_assign`, re-checked by the carriage validation):
+/// * stratum `s` is drawn from its own seed `H("misaka-palw/panel-v3/stratum-seed" ‖ seed ‖ s)` with the flat draw's tickets;
+/// * inside a stratum, one seat per operator, and the stratum's outsider is none of its class seats;
+/// * an operator holds at most one outsider seat over the claim's whole life (every round, every stratum);
+/// * a retry never reuses, in stratum `s`, an operator that sat in `s` in an earlier round (class or outsider) — alternates are
+///   never reused per stratum; an operator may sit in several strata (distinct duties);
+/// * a bond seated in several strata of one round reserves the claim's per-seat exposure ONCE (the one ledger's duty row holds a
+///   bond once) and needs headroom for it once;
+/// * a stratum that cannot be filled ends the claim `NoCapablePanel` — a stratified claim never falls back to a flat Panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelStrataV1 {
+    pub count: u16,
+    pub class_seats: u16,
+    pub outsider: bool,
+}
+
+impl PanelStrataV1 {
+    /// `2 ≤ count ≤ 64`, `1 ≤ class_seats ≤ 15`, at most [`MAX_STRATIFIED_SEATS_V1`] seats in all.
+    pub fn validate(&self) -> Result<(), PanelErrorV1> {
+        if !(2..=MAX_STRATA_V1).contains(&self.count)
+            || !(1..=MAX_STRATUM_CLASS_SEATS_V1).contains(&self.class_seats)
+            || self.seat_count() > MAX_STRATIFIED_SEATS_V1 as usize
+        {
+            return Err(PanelErrorV1::InvalidSnapshot);
+        }
+        Ok(())
+    }
+    /// Seats a stratum: `[outsider?] ++ class_seats`.
+    pub fn stride(&self) -> u16 {
+        self.class_seats + u16::from(self.outsider)
+    }
+    /// Seats a binding: `count × stride`.
+    pub fn seat_count(&self) -> usize {
+        usize::from(self.count) * usize::from(self.stride())
+    }
+    /// The stratum bits a member may carry (`count` low bits).
+    pub fn member_mask(&self) -> u64 {
+        if self.count >= 64 { u64::MAX } else { (1u64 << self.count) - 1 }
+    }
+}
 
 /// All numbers are experimental configuration, not network defaults. The whole value is committed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
@@ -146,6 +199,10 @@ pub struct PanelSnapshotV1 {
     pub excluded_operator: Hash64,
     pub excluded_key: Hash64,
     pub candidates: Vec<SeatCandidateV1>,
+    /// **The strata populations** of a stratified claim, frozen with everything else at the pre-entropy checkpoint (the root covers
+    /// them): one bitmap per candidate, aligned with `candidates` — bit `s` set iff the candidate may hold a class seat of stratum
+    /// `s`, and the CLASS role set iff some bit is. Empty for a flat claim.
+    pub strata_members: Vec<u64>,
 }
 
 impl PanelSnapshotV1 {
@@ -199,6 +256,18 @@ pub trait ConsensusViewV1 {
     /// `bound_daa + receipt_window_daa`.
     fn receipt_clock(&self, _claim: &Hash64) -> Option<ReceiptClockV1> {
         None
+    }
+    /// **The population of a stratified claim** ([`PanelStrataV1`]), at the same checkpoint and under the same rules as
+    /// [`Self::candidates`]: the candidates and, aligned with them, each one's stratum bits (bit `s`: may hold a class seat of
+    /// stratum `s`; the CLASS role iff some bit, the OUTSIDER role for the outsider population). The default — a host that cannot
+    /// answer for strata — is an empty population: such a claim seals nothing it can use and ends `NoCapablePanel`, never a
+    /// failed fold.
+    fn stratified_candidates(
+        &self,
+        _claim: &AdmittedClaimV1,
+        _strata: &PanelStrataV1,
+    ) -> Result<(Vec<SeatCandidateV1>, Vec<u64>), PanelErrorV1> {
+        Ok((Vec::new(), Vec::new()))
     }
 }
 
@@ -284,6 +353,8 @@ pub struct ClaimRecordV3 {
     pub used_operators: Vec<Hash64>,
     pub binding_history: Vec<PanelBoundV3>,
     pub phase: ClaimPhaseV3,
+    /// The claim's strata, frozen at admission; `None` is the flat draw.
+    pub strata: Option<PanelStrataV1>,
 }
 
 /// Ordered *accepted* objects, not a producer-chosen subset. Fold assignments precede admissions.

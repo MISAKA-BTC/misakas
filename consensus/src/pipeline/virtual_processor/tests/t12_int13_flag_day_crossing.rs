@@ -1,6 +1,8 @@
-//! **testnet-12's int-13 flag day at the processor: EVERY fence of `PALW_T12_INT13_FENCES_V1` armed at ONE height over the whole
-//! compressed release, and a chain that crosses it** (`release/t12-daa9000`, the coordinator's brief of 2026-10-08: DAA 9,000 on the
-//! shipped ruleset, `PALW_T12_INT13_DAA`).
+//! **testnet-12's int-13 list at the processor: EVERY fence of `PALW_T12_INT13_FENCES_V1` armed at ONE height over the whole
+//! compressed release, and a chain that crosses it** (written for `release/t12-daa9000`, the coordinator's brief of 2026-10-08: DAA 9,000
+//! on the shipped ruleset; **the user cancelled that flag day the same day** — `PALW_T12_INT13_DAA` is `None` and the list waits for the
+//! full-activation release). The list is armed here EXPLICITLY at the harness's height `H` through `palw_t12_arm_int13_flag_day_at_v1`,
+//! over a ruleset assembled from the launch ruleset (not from the shipped one), so nothing below depends on a shipped height.
 //!
 //! The four tier-1 fences — `palw_audit_1004_v1`, `palw_gen_range_twin_v1`, `palw_model_court_window`, `palw_receipt_spend_v4` — are
 //! code changes whose prerequisites are in force on testnet-12 already (the range twin stands on the int-11 list's `palw_gen_v1`). The
@@ -42,7 +44,7 @@ use kaspa_hashes::Hash64;
 
 type Premine = Vec<(TransactionOutpoint, UtxoEntry)>;
 
-/// The int-13 list's height in this harness (the release's is 9,000); the int-11 list the range twin stands on is at 40, and its ρ = 100 step
+/// The int-13 list's height in this harness (the shipped ruleset has none; this is the height the list is armed at explicitly); the int-11 list the range twin stands on is at 40, and its ρ = 100 step
 /// (H + 95 = 135) lies past the end of the script (`H + 2 × anchor_delay + 6 = 126`), so the capacity regime is ρ = 25 throughout.
 pub(super) const H: u64 = 80;
 /// The compressed release's int-11 height.

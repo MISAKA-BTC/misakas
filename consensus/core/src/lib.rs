@@ -496,6 +496,8 @@ pub mod palw_probabilistic_constraints_v1;
 pub mod palw_fork_choice_rule_e_v1;
 /// ADR-0175 × RFC-0009 L2: the rule-E fields of the fork-choice leaf v2 — the window and registry trees, openings, the client's pair.
 pub mod palw_fork_choice_rule_e_leaf_v2;
+/// RFC-0004 Part II: the typed-roots fence `palw_typed_roots_v1` — dormant, no height, refused when armed.
+pub mod palw_typed_roots_v1;
 /// G14 lane D: the kernel route's consensus state, messages and interim policy (fence `palw_probabilistic_constraints_v1`).
 pub mod palw_kernel_route_v1;
 /// G14 lane D phase 3: the onboarding objects (artifact binding and its refutation, the kernel binding, the conformance commitment,
@@ -601,6 +603,12 @@ pub mod palw_tir_step_v1;
 pub mod palw_tir_work_v1;
 /// RFC-0006: layer-sharded panels for IR classes — the plan, the partition, the cells, the V4 receipt, the recount, the fence.
 pub mod palw_tir_shard_v1;
+/// RFC-0006 per-segment pricing (agent SHARD): the dormant fence `palw_tir_shard_segment_v2` and the resident table, the price share
+/// `max(work, resident)` and the seat need it puts in force.
+pub mod palw_tir_shard_segment_v2;
+/// RFC-0006 × G14 (agent SHARD): the non-seat cell watcher's targets — every shard of a live claim drawn per shard that a bond does
+/// not seat, as a watch duty (pure over the tip state; node policy).
+pub mod palw_tir_shard_watch_v1;
 pub mod palw_terminal;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in

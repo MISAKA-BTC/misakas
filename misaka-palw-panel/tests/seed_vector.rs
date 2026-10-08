@@ -28,6 +28,7 @@ fn seed_v3_matches_independently_encoded_python_blake2b_vector() {
         excluded_operator: h(0),
         excluded_key: h(0),
         candidates: vec![],
+        strata_members: vec![],
     };
     // Independently generated with hashlib.blake2b(struct.pack('<I', len(domain)) + domain +
     // bytes([1])*64 + bytes([2])*64 + bytes([3])*64 + struct.pack('<Q', 5) + bytes([4])*64 +

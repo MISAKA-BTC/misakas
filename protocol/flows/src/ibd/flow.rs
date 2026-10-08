@@ -398,7 +398,7 @@ impl IbdFlow {
                         // lease, per-peer failure count.
                         // A node-side checkpoint violation IS misbehaviour (the peer is already banned),
                         // so it never keeps the connection.
-                        if !matches!(e, ProtocolError::MisbehavingPeer(_)) && !self.ctx.is_consensus_participation_allowed() {
+                        if !matches!(e, ProtocolError::MisbehavingPeer(_)) && !self.ctx.is_chain_settled() {
                             info!(
                                 "Keeping the connection to {} despite the failed IBD: this node is still reviewing its chain, and \
                                  a peer offering a different one is evidence rather than an offence.",
@@ -792,7 +792,7 @@ impl IbdFlow {
     /// this reads it. `verify_challenger` re-checks the state and the source, so a candidate another
     /// flow is already serving is skipped rather than fetched twice.
     async fn serve_pending_nomination(&mut self) {
-        if self.ctx.is_consensus_participation_allowed() {
+        if self.ctx.is_chain_settled() {
             return;
         }
         let me = self.router.key();
@@ -810,7 +810,7 @@ impl IbdFlow {
     /// Cheap and idempotent: it returns immediately unless participation is withheld and the latch
     /// is free, and `consider_post_ibd_switch` re-applies every condition itself.
     async fn reconsider_validated_candidates(&self) {
-        if self.ctx.is_consensus_participation_allowed() || self.ctx.is_ibd_running() {
+        if self.ctx.is_chain_settled() || self.ctx.is_ibd_running() {
             return;
         }
         // Before anything else: a reservation that has stopped making progress is holding the latch
@@ -855,7 +855,7 @@ impl IbdFlow {
     /// candidate, and the review hold must be released or the node never participates again.
     #[must_use = "the caller releases the review hold unless an adoption was reserved"]
     async fn consider_post_ibd_switch(&self, id: CandidateId, verified_blue_work: BlueWorkType) -> bool {
-        if self.ctx.is_consensus_participation_allowed() || self.ctx.is_ibd_running() {
+        if self.ctx.is_chain_settled() || self.ctx.is_ibd_running() {
             record_stage(
                 RecoveryStage::Rejected,
                 None,
@@ -883,12 +883,16 @@ impl IbdFlow {
         // about adoption. `verified_blue_work` is still required to be present — the proof must have
         // validated — but the number that settles which chain wins is computed later, at the commit
         // barrier, from headers this node validated to the tip itself.
-        let claimed_tip_work = match self.ctx.ibd_candidates().read().get(&id).map(|c| c.validation) {
-            Some(CandidateValidation::ProofValidated { .. }) => {
-                self.ctx.ibd_candidates().read().get(&id).and_then(|c| c.claimed_tip_blue_work())
-            }
-            _ => None,
-        };
+        //
+        // **One read, dropped at the end of this statement** (LIVE-R1, 2026-10-08: devnet r1's D6). This
+        // used to be `match registry.read().get(..) { ProofValidated => registry.read()... }`: a match
+        // scrutinee's temporaries live to the end of the match, so the arm took a SECOND read while the
+        // first was still held. `ibd_candidates` is a parking_lot `RwLock`, which is not reentrant: a
+        // writer arriving between the two reads (every relay flow's `expire_stale_verifications`) sets
+        // the writer bit and waits for our first read, our second read parks behind the writer, and every
+        // tokio worker that touches the registry after it parks too — RPC, P2P and the rule engine stop,
+        // and the node sits at 0 % CPU forever (two `sample`s 13 minutes apart, identical stacks).
+        let claimed_tip_work = self.ctx.ibd_candidates().read().proof_validated_claimed_tip_work(&id);
         let Some(claimed_tip_work) = claimed_tip_work else { return false };
 
         let session = self.ctx.consensus().session().await;

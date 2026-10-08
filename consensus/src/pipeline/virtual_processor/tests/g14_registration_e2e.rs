@@ -1861,8 +1861,9 @@ async fn g14_real_checkpoints_at_32783_positions_mined_under_the_whole_release()
     assert_eq!(z.tip_state().1.tir_class_v1(&a.class_id), Some(&a.record));
 }
 
-/// **The int-13 flag day's `palw_model_court_window`, on the real node path** (the coordinator's brief of 2026-10-08: it is armed at DAA 9,000
-/// with the other tier-1 fences, and no processor test had ever registered a class under it). A class that needs a dissection (fused
+/// **The int-13 list's `palw_model_court_window`, on the real node path** (the coordinator's brief of 2026-10-08 armed it at DAA 9,000 with
+/// the other tier-1 fences — the user cancelled that flag day the same day, so this test arms the list explicitly — and no processor test
+/// had ever registered a class under it). A class that needs a dissection (fused
 /// attention) registered PAST the fence commits its own finite window — the node derives it (`palw_class_court_windows_for_objects`) and
 /// the fold stores it — and on testnet-12's held clock that is the network window; registered BELOW the fence, on the same armed ruleset,
 /// it commits none (the table is empty below the fence); on the ruleset with the list dormant it commits none at any height. A second node

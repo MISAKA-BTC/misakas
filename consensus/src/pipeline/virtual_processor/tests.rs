@@ -16839,6 +16839,9 @@ mod t12_tir_registration_cap;
 mod g14_registration_e2e;
 // G14 lane D phase 2: the kernel route folded into PalwChainStateV2 -- a covered lie convicted by a fresh outsider through the real node path.
 mod g14_kernel_route_e2e;
+// RFC-0004 Part II: computation specifications with typed roots on the real node -- Weights byte for byte, Memory, Retrieval,
+// Composite, each lie convicted by an outsider and each withholding a default.
+mod r4x_typed_roots_e2e;
 // RFC-0002 Phase F's second IR fence: the IR step-leaf DA demand at the gate.
 mod t12_tir_da_step_gate;
 // RFC-0004 A4/A5: the material objects' and the candidate's signatures at the gate, and a licence
@@ -16916,7 +16919,7 @@ mod t12_seat_maturity_fence;
 // testnet-12's post-launch release (int-4): EVERY fence of PALW_T12_POST_LAUNCH_FENCES_V1 at one
 // height, crossed by one chain with the clock running — the combined crossing no lane ran alone.
 mod t12_post_launch_fences_combined;
-// testnet-12's int-13 flag day (DAA 9,000 on the shipped ruleset): the four tier-1 fences of PALW_T12_INT13_FENCES_V1 at one height over the
+// testnet-12's int-13 list (armed explicitly at a test height; the DAA-9,000 flag day was cancelled by the user on 2026-10-08): the four tier-1 fences of PALW_T12_INT13_FENCES_V1 at one height over the
 // whole compressed release, crossed by one chain with the clock running — below the fence a released node, past it the list live, a second
 // node and a restart across the fence agreeing, the fork id keeping and refusing the released build.
 mod t12_int13_flag_day_crossing;

@@ -2847,3 +2847,5 @@ async fn capacity_probe_w_t6c_lane_a_keeps_a_non_operators_private_claims_create
 
 // FINX (2026-10-08): the finality guard against the PALW fork choice, multi-node (P0).
 mod finality_consistency;
+// LIVE-R1 (2026-10-08): H1's devnet partition that healed on the wire and stayed split.
+mod partition_rejoin;
