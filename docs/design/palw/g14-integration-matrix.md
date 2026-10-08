@@ -109,6 +109,13 @@ activation height.
 
 ## 5. Change log
 
+* 2026-10-08 — **P0 found by C4 (independent fuzz) and fixed (`098ffc749`)**: a one-bond stranger could panic the kernel-route
+  ledger (release overflow-checks) with a tiny FileProof (Decode/Kernel) or Respond whose tensor/opening shape overflows the element
+  count (`[u64::MAX, 2]`, or `[0, 2^40, 2^40]` via LayoutV1 m·n). Now malformed, never a panic (checked counts in misaka-palw-tir
+  `Tensor::new`/`from_le_bytes`, `LayoutV1::try_of`). Live t12 TIR courts only build tensors from admitted program shapes —
+  unaffected; behaviour for every non-overflowing input unchanged. Rule for lane D: no kernel/TIR call on attacker bytes outside a
+  Result path inside the consensus fold.
+
 * 2026-10-08 — lane B R1–R5 integrated; RFC-0010 circularity rule in the contract (`fcde1e3dc`); tag registry in `remaining-rfc-integration-matrix.md` §2 (kernel route: tags 110–119, deltas 160–169, tail 0xEC).
 
 * 2026-10-08 — matrix created; shared challenge contract `misaka-palw-challenge` landed (policy, PALW Work Beacon, seed,
