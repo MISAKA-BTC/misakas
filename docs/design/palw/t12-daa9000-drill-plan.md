@@ -1,5 +1,7 @@
 # testnet-12 DAA 9,000 (int-13) — drill plan, rollout and rollback
 
+**CANCELLED 2026-10-08 (user): no DAA-9,000 flag day; the list waits for the full-activation release; kept as the template for that release's drill.**
+
 Status: **plan, 2026-10-08** (`release/t12-daa9000`, agent R9). **Nothing in this file has been run.** It describes a drill on a Mac, not a
 change to any shared host. The release candidate is the tree whose commit carries the re-pin (`re-pin:`); every id below is read from that
 build, never typed. Long builds and the drill itself are scheduled by the lead after the code freeze (about 10-10).

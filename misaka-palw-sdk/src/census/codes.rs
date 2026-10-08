@@ -178,6 +178,8 @@ pub fn gate_code_of_preflight(code: &str) -> Option<(Gate, &'static str)> {
         "READY_SEATS_INSUFFICIENT" => (Gate::Seat, "READY_SEATS_SHORT"),
         "INDEPENDENT_OPERATORS" => (Gate::Seat, "INDEPENDENCE_SHORT"),
         "PACK_NOT_VERIFIED" => (Gate::Pack, "PACK_NOT_VERIFIED"),
+        // A pipeline class (RFC-0003) this build cannot declare shape-only: the admission was not run, which is `NOT_RUN`, not a verdict.
+        "PIPELINE_CLASS_UNDECLARED" => (Gate::Admit, NOT_RUN_PIPELINE_ADMISSION),
         _ => return None,
     })
 }
@@ -272,6 +274,7 @@ mod tests {
             "READY_SEATS_INSUFFICIENT",
             "INDEPENDENT_OPERATORS",
             "PACK_NOT_VERIFIED",
+            "PIPELINE_CLASS_UNDECLARED",
         ];
         for c in published {
             assert!(gate_code_of_preflight(c).is_some(), "{c} has no gate");
@@ -283,7 +286,12 @@ mod tests {
     /// list in the test above is the whole vocabulary.
     #[test]
     fn the_preflight_raises_no_code_outside_the_table() {
-        let src = [include_str!("../preflight/model.rs"), include_str!("../preflight/chain.rs"), include_str!("../preflight/full.rs")];
+        let src = [
+            include_str!("../preflight/model.rs"),
+            include_str!("../preflight/chain.rs"),
+            include_str!("../preflight/full.rs"),
+            include_str!("../preflight/pipeline.rs"),
+        ];
         let mut seen = std::collections::BTreeSet::new();
         for s in src {
             for (i, _) in s.match_indices("Blocker::new(") {

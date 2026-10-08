@@ -531,7 +531,8 @@ pub struct Args {
     pub palw_drill_int11_at: Option<u64>,
     /// **DRILL ONLY: cross the int-13 flag day as the release arms it, at this DAA** (`config::drill::palw_drill_int13_at_v1`): the
     /// whole list — `palw_audit_1004_v1`, `palw_gen_range_twin_v1`, `palw_model_court_window` and `palw_receipt_spend_v4` — at H', as
-    /// the release arms them at DAA 9,000. The combined crossing, instead of the per-fence flag of its one entry that has one
+    /// the future full-activation release will arm them (the list has no height on the shipped ruleset: the user cancelled the DAA-9,000
+    /// flag day on 2026-10-08, so the drill ARMS fences the release leaves dormant). The combined crossing, instead of the per-fence flag of its one entry that has one
     /// (`--palw-drill-model-court-at`), which it excludes. It needs `palw_gen_v1` in force at or below it (the range twin): with the
     /// release's int-11 list at 5,300 that is `--palw-drill-int11-at` below it. Command line only, like the salt.
     #[serde(skip)]

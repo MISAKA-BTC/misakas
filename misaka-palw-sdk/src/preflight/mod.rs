@@ -23,6 +23,7 @@ pub mod full;
 pub mod kernel;
 pub mod model;
 pub mod node;
+pub mod pipeline;
 pub mod remote;
 pub mod render;
 pub mod residency;
@@ -220,6 +221,12 @@ pub struct Options {
     /// A PEFT LoRA adapter over the model (RFC-0004: a candidate is a parent plus an adapter): its `adapter_config.json` and the
     /// tensor names of its `adapter_model.safetensors`, attached to the model's spec before the shape-only lowering.
     pub lora: Option<LoraInput>,
+    /// **Judge a data-route class by the pipeline admission** (RFC-0003; [`pipeline`]): an encoder–decoder is declared shape-only at
+    /// the context and asked of the node's own gate (`palw_gen_registration_preflight_at_v1`) at the judged height, and a route this
+    /// build cannot declare is the blocker `PIPELINE_CLASS_UNDECLARED`. Off, the route's stage programs are admitted one by one and the
+    /// register and mine stages stay `unknown` — the behaviour the corpus pins (`tests/golden/corpus_preflight_v1.json`, hashed by the
+    /// RFC-0011 coverage audit) record for `Options::default()`. The CLIs and the census turn it on.
+    pub pipeline_admission: bool,
 }
 
 /// An adapter the preflight attaches to the model it reads ([`Options::lora`]).
@@ -247,6 +254,7 @@ impl Default for Options {
             node: None,
             full: full::FullInputs::default(),
             lora: None,
+            pipeline_admission: false,
         }
     }
 }
@@ -347,6 +355,9 @@ pub struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kernel: Option<kernel::KernelRouteInfo>,
     pub admission: Option<chain::AdmissionInfo>,
+    /// The pipeline class judged by the generative admission ([`pipeline`]); absent for an IR class (and in the JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline: Option<pipeline::PipelineInfo>,
     pub chain: Vec<Condition>,
     pub seat: Option<chain::SeatInfo>,
     pub forecast: Option<chain::Forecast>,
@@ -363,9 +374,16 @@ pub struct Report {
 
 impl Report {
     /// Whether every stage the depth reached is `ok` (the exit code of the command).
+    ///
+    /// **A stage the requested depth should have judged and could not is not a pass**: at the `shape` depth or deeper a `register` or
+    /// `mine` verdict of `unknown` (a route whose class was not judged, no network named) makes the model not registrable, so the
+    /// command's exit status is never 0 on a registration nobody asked the chain about. At the `headers` depth they are `unknown`
+    /// by design.
     pub fn registrable(&self) -> bool {
+        let judged = self.depth.requested >= Depth::Shape;
         [&self.verdict.convert, &self.verdict.register, &self.verdict.mine].iter().all(|v| v.status != StageStatus::Blocked)
             && self.verdict.convert.status == StageStatus::Ok
+            && (!judged || (self.verdict.register.status == StageStatus::Ok && self.verdict.mine.status == StageStatus::Ok))
     }
 
     /// The blockers of every stage, in stage order.
@@ -500,6 +518,35 @@ impl JudgeCache {
         source::hex(st.finalize().as_bytes())
     }
 
+    /// The key of a pipeline class's judgment: its programs' bytes, its lengths, its template and every option the judgment reads.
+    pub fn pipeline_key(routed: &model::RoutedClass, opts: &Options) -> String {
+        let mut st = blake2b_simd::Params::new().hash_length(32).key(b"misaka-palw/preflight-judge-cache/pipeline/v1").to_state();
+        match routed {
+            model::RoutedClass::EncDec(e) => {
+                st.update(&e.encoder.encode());
+                st.update(&e.decoder.encode());
+                st.update(
+                    format!("|{}|{}|{:?}|{}|{}|{}", e.source_len, e.target_len, e.eos, e.pad, e.decoder_start, e.vocab).as_bytes(),
+                );
+            }
+            model::RoutedClass::Undeclarable { kind, adapter, why } => {
+                st.update(format!("undeclarable|{kind}|{adapter}|{why}").as_bytes());
+            }
+        }
+        st.update(
+            format!(
+                "|{:?}|{:?}|{:?}|{:?}|{}",
+                opts.network,
+                opts.height,
+                opts.seat_shares.iter().map(|s| (s.name.clone(), s.bytes)).collect::<Vec<_>>(),
+                opts.node.is_some(),
+                opts.pipeline_admission
+            )
+            .as_bytes(),
+        );
+        source::hex(st.finalize().as_bytes())
+    }
+
     /// A cache backed by `path`: its judgments are loaded, and every new one is appended.
     pub fn with_file(path: &Path) -> Result<JudgeCache, String> {
         let c = JudgeCache::default();
@@ -596,6 +643,26 @@ fn run_on_source_cached(
     if opts.depth >= Depth::Shape {
         match (&opts.network, &analysis.program) {
             (None, _) => stopped_at = Some("network not given (--network <id>)".into()),
+            // A data-route class (RFC-0003) the convert stage lowered: the pipeline admission judges it.
+            (Some(id), None) if opts.pipeline_admission && analysis.routed.is_some() => {
+                let routed = analysis.routed.as_ref().expect("checked");
+                let net = chain::PreflightNetwork::parse(id)?;
+                if let Some(node) = &opts.node
+                    && !node.network.is_empty()
+                    && node.network != net.id
+                {
+                    return Err(format!(
+                        "--node is on {} and --network is {}: the conditions would be judged on another chain",
+                        node.network, net.id
+                    ));
+                }
+                chain_out = match cache {
+                    Some(c) => c.get_or_judge(JudgeCache::pipeline_key(routed, opts), || pipeline::judge_pipeline(&net, opts, routed)),
+                    None => pipeline::judge_pipeline(&net, opts, routed),
+                };
+                network = Some(chain_out.network.clone());
+                reached = Depth::Shape;
+            }
             (Some(_), None) => stopped_at = Some("no program to judge: the convert stage is blocked".into()),
             (Some(id), Some(program)) => {
                 let net = chain::PreflightNetwork::parse(id)?;
@@ -677,6 +744,7 @@ fn run_on_source_cached(
         residency,
         kernel,
         admission: chain_out.admission.clone(),
+        pipeline: chain_out.pipeline.clone(),
         chain: chain_out.conditions.clone(),
         seat: chain_out.seat.clone(),
         forecast: chain_out.forecast.clone(),
