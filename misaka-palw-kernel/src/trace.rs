@@ -46,7 +46,7 @@ pub fn tensor_commitment(t: &Tensor) -> Digest {
 }
 
 /// The commitment of every param instance the artifact holds: `(param, layer) → commitment`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct ParamCommitmentsV1 {
     pub by_instance: BTreeMap<(u16, Option<u16>), Digest>,
 }

@@ -22,41 +22,43 @@ use std::collections::BTreeMap;
 use crate::hash::Digest;
 use crate::receipt::TallyStateV1;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum ClaimStateV1 {
-    Committed,
+    Committed = 0,
     ChallengeBound {
         anchor_daa: u64,
-    },
+    } = 1,
     Checking {
         anchor_daa: u64,
         deadline_daa: u64,
-    },
+    } = 2,
     ProbabilisticPass {
         passed_daa: u64,
         window_end_daa: u64,
-    },
+    } = 3,
     WindowClosed {
         window_end_daa: u64,
-    },
+    } = 4,
     Final {
         final_daa: u64,
-    },
+    } = 5,
     /// Open disputes; `resume` is the state a dismissal of the last one returns to.
     Disputed {
         open: u32,
         resume: Box<ClaimStateV1>,
-    },
+    } = 6,
     Convicted {
         daa: u64,
-    },
+    } = 7,
     Unavailable {
         daa: u64,
         producer_defaulted: bool,
-    },
+    } = 8,
     TimedOut {
         daa: u64,
-    },
+    } = 9,
 }
 
 impl ClaimStateV1 {
@@ -66,7 +68,7 @@ impl ClaimStateV1 {
 }
 
 /// The versioned timing a claim is bound to at its binding (a fence mid-window never reinterprets it).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct LifecyclePolicyV1 {
     /// From the anchor to the receipts' deadline.
     pub check_window_daa: u64,
@@ -106,7 +108,7 @@ pub enum LifecycleErrorV1 {
 }
 
 /// One claim's lifecycle.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct ClaimLifecycleV1 {
     pub policy: LifecyclePolicyV1,
     pub state: ClaimStateV1,

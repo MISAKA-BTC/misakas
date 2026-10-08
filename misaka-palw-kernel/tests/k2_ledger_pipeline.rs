@@ -6,8 +6,11 @@
 #[path = "../../misaka-palw-tir/tests/v2common/mod.rs"]
 mod v2common;
 
+mod common;
+
 use std::collections::BTreeMap;
 
+use common::chain::{Consumer, T, block_of};
 use misaka_palw_kernel::descriptor::{
     KernelScheduleV1, KernelStatusV1, k2_tir_v1_descriptor, k2_tir_v2_descriptor, k2_tir_v3_descriptor,
 };
@@ -15,8 +18,7 @@ use misaka_palw_kernel::gate::ProsecutionPolicyV1;
 use misaka_palw_kernel::hash::Digest;
 use misaka_palw_kernel::job::DecodeRuleV1;
 use misaka_palw_kernel::ledger::{
-    KernelLedgerV1, LedgerBlockV1, LedgerEventV1 as E, LedgerPolicyV1, LedgerTxV1 as T, OutsiderFindingV1, OutsiderV1, ProsecutionV1,
-    PublicSourceV1,
+    KernelLedgerV1, LedgerBlockV1, LedgerEventV1 as E, LedgerPolicyV1, OutsiderFindingV1, OutsiderV1, ProsecutionV1, PublicSourceV1,
 };
 use misaka_palw_kernel::lifecycle::ClaimStateV1;
 use misaka_palw_kernel::pipeline::{PipelineTraceV1, build_pipeline_evidence_v1, pipeline_plan_v1, stage_view_v1, trace_pipeline_v1};
@@ -36,6 +38,9 @@ const RANDOM: PipelineRandomV1 = PipelineRandomV1 { seed: [4; 32], item: 0 };
 
 fn policy() -> LedgerPolicyV1 {
     LedgerPolicyV1 {
+        network_domain: [9; 64],
+        ruleset_digest: [3; 64],
+        challenge_policy_id: [5; 64],
         claim_collateral: 1000,
         demand_bond: 10,
         check_window_daa: 100,
@@ -48,6 +53,8 @@ fn policy() -> LedgerPolicyV1 {
         accuser_reward_permille: 500,
         default_penalty: 100,
         claim_reward: 7,
+        max_adjudications_per_block: 64,
+        max_court_work_per_block: u64::MAX,
         prosecution: ProsecutionPolicyV1 {
             court_deadline_daa: 20,
             max_sessions_per_claim: 1 << 10,
@@ -123,6 +130,7 @@ struct World {
     genesis: KernelLedgerV1,
     blocks: Vec<LedgerBlockV1>,
     l: KernelLedgerV1,
+    consumer: Consumer,
     class: Digest,
     p: TirPipelineV1,
     programs: Vec<TirProgramV2>,
@@ -140,7 +148,16 @@ impl World {
         let known = vec![k2_tir_v1_descriptor(), k2_tir_v2_descriptor(), k2_tir_v3_descriptor()];
         let genesis = KernelLedgerV1::genesis(policy(), armed(), known).unwrap();
         let params = ProgramParams(programs.iter().enumerate().map(|(i, prog)| materialize_v2(prog, seed + i as u64)).collect());
-        let mut w = World { genesis: genesis.clone(), blocks: vec![], l: genesis, class: [0; 64], p, programs, params };
+        let mut w = World {
+            genesis: genesis.clone(),
+            blocks: vec![],
+            l: genesis,
+            consumer: Consumer::default(),
+            class: [0; 64],
+            p,
+            programs,
+            params,
+        };
         let ev = w.block(
             1,
             vec![
@@ -174,17 +191,14 @@ impl World {
             plan: pipeline_plan_v1(&d, &self.p, &self.programs).unwrap(),
             params: self.params.0.clone(),
             decode,
-            network: [9; 64],
-            ruleset: [3; 64],
         }
     }
 
     fn block(&mut self, daa: u64, txs: Vec<T>) -> Vec<E> {
-        let b = LedgerBlockV1 { daa, txs };
-        let before = self.l.events.len();
-        self.l.apply_block(&b);
+        let b = block_of(daa, txs, PRODUCER);
+        let ev = self.consumer.apply(&mut self.l, &b);
         self.blocks.push(b);
-        self.l.events[before..].iter().map(|(_, e)| e.clone()).collect()
+        ev
     }
 
     fn post(&mut self, daa: u64, job: &PipelineJob, max_new_tokens: u32, nonce: u8) -> PipelineJobPostV1 {
@@ -248,7 +262,7 @@ impl World {
 fn outsider(w: &World, claim: Digest, da: &Da) -> OutsiderFindingV1 {
     let fresh = KernelLedgerV1::replay(&w.genesis, &w.blocks);
     assert_eq!(fresh.root(), w.l.root());
-    OutsiderV1 { ledger: &fresh, claim, material: da, salt: [0x5A; 64] }.check().unwrap()
+    OutsiderV1 { ledger: &fresh, claim, material: da, artifact: &w.params.0, salt: [0x5A; 64] }.check().unwrap()
 }
 
 fn convicted(ev: &[E]) -> Option<bool> {
@@ -427,32 +441,42 @@ fn a_pipeline_class_needs_its_decode_rule_and_the_media_pipeline_kernel_and_a_jo
         genesis: l.clone(),
         blocks: vec![],
         l: l.clone(),
+        consumer: Consumer::default(),
         class: [0; 64],
         p: vlm_pipeline().0,
         programs: vlm_pipeline().1,
         params: ProgramParams(vec![]),
     };
     w.params = ProgramParams(w.programs.iter().enumerate().map(|(i, prog)| materialize_v2(prog, 400 + i as u64)).collect());
-    let ev = w.block(1, vec![w.register(None)]);
+    w.block(1, vec![T::RegisterBond { bond: PRODUCER, collateral: 5000 }]);
+    let ev = w.block(2, vec![w.register(None)]);
     assert!(refused(&ev).unwrap().contains("decode rule"), "{ev:?}");
     // Under a kernel without the media-pipeline family.
     let T::RegisterPipelineClass { pipeline_bytes, program_bytes, params, .. } = w.register(Some(DecodeRuleV1::Greedy)) else {
         unreachable!()
     };
     let d1 = k2_tir_v1_descriptor();
-    l.apply_block(&LedgerBlockV1 {
-        daa: 1,
-        txs: vec![T::RegisterPipelineClass {
-            descriptor: d1.digest(),
-            pipeline_bytes,
-            program_bytes,
-            plan: pipeline_plan_v1(&k2_tir_v3_descriptor(), &w.p, &w.programs).unwrap(),
-            params,
-            decode: Some(DecodeRuleV1::Greedy),
-            network: [9; 64],
-            ruleset: [3; 64],
-        }],
-    });
+    let mut consumer = Consumer::default();
+    let ev = consumer.apply(
+        &mut l,
+        &block_of(
+            1,
+            vec![
+                T::RegisterBond { bond: PRODUCER, collateral: 5000 },
+                T::RegisterPipelineClass {
+                    descriptor: d1.digest(),
+                    pipeline_bytes,
+                    program_bytes,
+                    plan: pipeline_plan_v1(&k2_tir_v3_descriptor(), &w.p, &w.programs).unwrap(),
+                    params,
+                    decode: Some(DecodeRuleV1::Greedy),
+                },
+            ],
+            PRODUCER,
+        ),
+    );
+    let why = refused(&ev).unwrap_or_default();
+    assert!(why.contains("another kernel descriptor"), "a kernel without the media-pipeline family: {ev:?}");
     assert!(l.pipeline_classes.is_empty());
 
     // A registered text pipeline refuses a job without a generation budget or without a prompt.

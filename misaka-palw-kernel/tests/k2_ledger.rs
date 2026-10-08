@@ -8,272 +8,16 @@
 
 mod common;
 
-use std::collections::BTreeMap;
-
-use common::{MAX_POSITIONS, active_for, bump, root_of};
-use misaka_palw_kernel::descriptor::{k2_tir_v1_descriptor, k2_tir_v2_descriptor};
-use misaka_palw_kernel::evidence::build_evidence_v1;
-use misaka_palw_kernel::gate::ProsecutionPolicyV1;
-use misaka_palw_kernel::hash::Digest;
+use common::chain::T;
+use common::ledger_world::*;
+use common::{MAX_POSITIONS, active_for, bump};
+use misaka_palw_kernel::descriptor::k2_tir_v1_descriptor;
 use misaka_palw_kernel::job::{DecodeRuleV1, KernelClaimV1, KernelJobV1};
-use misaka_palw_kernel::ledger::{
-    KernelLedgerV1, LedgerBlockV1, LedgerEventV1 as E, LedgerPolicyV1, LedgerTxV1 as T, OutsiderFindingV1, OutsiderV1, ProsecutionV1,
-    PublicSourceV1,
-};
+use misaka_palw_kernel::ledger::{KernelLedgerV1, LedgerBlockV1, LedgerEventV1 as E, OutsiderFindingV1, ProsecutionV1};
 use misaka_palw_kernel::lifecycle::ClaimStateV1;
 use misaka_palw_kernel::merkle::TensorOpeningV1;
-use misaka_palw_kernel::plan::plan_for_tir_program_v1;
-use misaka_palw_kernel::public::{MaterialResponseV1, PositionResponseV1, TensorWireV1};
-use misaka_palw_kernel::trace::{TraceV1, WiringV1, derived_mask_v1, trace_v1};
-use misaka_palw_tir::program::TirProgramV1;
-use misaka_palw_tir::{MapParams, Prim, Tensor};
-use misaka_palw_tir_sketch::fixture::dense_moe_v1;
-
-const PRODUCER: Digest = [0xA1; 64];
-const OUTSIDER: Digest = [0x0B; 64];
-const SPAM1: Digest = [0x51; 64];
-const SPAM2: Digest = [0x52; 64];
-
-const PROSECUTION: ProsecutionPolicyV1 = ProsecutionPolicyV1 {
-    court_deadline_daa: 20,
-    max_sessions_per_claim: 1 << 10,
-    max_public_bytes: 1 << 40,
-    max_verifier_ram: 1 << 36,
-    max_retained_state: 1 << 32,
-};
-
-fn policy() -> LedgerPolicyV1 {
-    LedgerPolicyV1 {
-        claim_collateral: 1000,
-        demand_bond: 10,
-        check_window_daa: 100,
-        challenge_window_daa: 50,
-        court_deadline_daa: 20,
-        proof_grace_daa: 10,
-        liability_daa: 200,
-        exit_delay_daa: 30,
-        dismissed_proof_fee: 5,
-        accuser_reward_permille: 500,
-        default_penalty: 100,
-        claim_reward: 7,
-        prosecution: PROSECUTION,
-    }
-}
-
-/// The values of the class's program that are derived — a `Hist` window and its views — which nobody serves.
-fn derived() -> Vec<Vec<bool>> {
-    derived_mask_v1(&dense_moe_v1(7).program)
-}
-
-/// A public DA provider: the bytes a producer published, minus what it withholds. It never publishes a derived value (a window is
-/// rebuilt from the committed rows), so its bytes are linear in the claim's length.
-struct Da(BTreeMap<(u32, u16, u16), Vec<u8>>);
-
-impl Da {
-    fn publishing(trace: &TraceV1, withhold: &[(u32, u16, u16)]) -> Self {
-        let mask = derived();
-        let mut m = BTreeMap::new();
-        for (p, pos) in trace.values.iter().enumerate() {
-            for (s, occ) in pos.iter().enumerate() {
-                for (n, t) in occ.iter().enumerate() {
-                    let k = (p as u32, s as u16, n as u16);
-                    if !withhold.contains(&k) && !mask[s][n] {
-                        m.insert(k, borsh::to_vec(&TensorWireV1::of(t)).unwrap());
-                    }
-                }
-            }
-        }
-        Da(m)
-    }
-
-    fn get(&self, p: u32, s: u16, n: u16) -> Option<Tensor> {
-        borsh::from_slice::<TensorWireV1>(self.0.get(&(p, s, n))?).ok()?.decode().ok()
-    }
-}
-
-impl PublicSourceV1 for Da {
-    fn node(&self, stage: u8, p: u32, s: u16, n: u16) -> Option<Tensor> {
-        if stage == 0 { self.get(p, s, n) } else { None }
-    }
-}
-
-/// **A fresh outsider**: a node that replays the chain from genesis, then checks `claim` from the replayed state and `da` alone.
-fn outsider(w: &World, claim: Digest, da: &Da) -> OutsiderFindingV1 {
-    let fresh = KernelLedgerV1::replay(&w.genesis, &w.blocks);
-    assert_eq!(fresh.root(), w.l.root(), "a fresh node reaches the same state");
-    OutsiderV1 { ledger: &fresh, claim, material: da, salt: [0x5A; 64] }.check().unwrap()
-}
-
-/// A producer's claim (its private objects: the test drops them before an outsider looks).
-struct Produced {
-    claim: KernelClaimV1,
-    trace: TraceV1,
-    tx: T,
-}
-
-struct World {
-    genesis: KernelLedgerV1,
-    blocks: Vec<LedgerBlockV1>,
-    l: KernelLedgerV1,
-    class: Digest,
-    program: TirProgramV1,
-    params: MapParams,
-}
-
-impl World {
-    fn new() -> Self {
-        Self::with(policy())
-    }
-
-    fn with(policy: LedgerPolicyV1) -> Self {
-        let fx = dense_moe_v1(7);
-        let d = k2_tir_v1_descriptor();
-        let genesis = KernelLedgerV1::genesis(policy, active_for(&d), vec![k2_tir_v1_descriptor(), k2_tir_v2_descriptor()]).unwrap();
-        let mut w =
-            World { genesis: genesis.clone(), blocks: vec![], l: genesis, class: [0; 64], program: fx.program, params: fx.params };
-        let ev = w.block(1, vec![bond(PRODUCER, 5000), bond(OUTSIDER, 1000), bond(SPAM1, 1000), bond(SPAM2, 1000), w.register()]);
-        if let Some(class) = ev.iter().find_map(|e| match e {
-            E::ClassRegistered { class } => Some(*class),
-            _ => None,
-        }) {
-            w.class = class;
-        }
-        w
-    }
-
-    fn register(&self) -> T {
-        let d = k2_tir_v1_descriptor();
-        let plan = plan_for_tir_program_v1(&d, &self.program, root_of(&self.program), MAX_POSITIONS).unwrap();
-        T::RegisterClass {
-            descriptor: d.digest(),
-            program_bytes: self.program.encode(),
-            plan,
-            params: self.params.clone(),
-            network: [9; 64],
-            ruleset: [3; 64],
-        }
-    }
-
-    fn block(&mut self, daa: u64, txs: Vec<T>) -> Vec<E> {
-        let b = LedgerBlockV1 { daa, txs };
-        let before = self.l.events.len();
-        self.l.apply_block(&b);
-        self.blocks.push(b);
-        self.l.events[before..].iter().map(|(_, e)| e.clone()).collect()
-    }
-
-    fn post_job(&mut self, daa: u64, prompt: &[u32], max_new_tokens: u32, nonce: u8) -> KernelJobV1 {
-        let job = KernelJobV1 {
-            class_binding_id: self.class,
-            prompt: prompt.to_vec(),
-            max_new_tokens,
-            decode: DecodeRuleV1::Greedy,
-            nonce: [nonce; 64],
-        };
-        let ev = self.block(daa, vec![T::PostJob { job: job.clone() }]);
-        assert!(ev.contains(&E::JobPosted { job: job.id() }), "{ev:?}");
-        job
-    }
-
-    /// The honest greedy generation of `n` tokens under `params`.
-    fn greedy(&self, params: &MapParams, prompt: &[u32], n: usize) -> Vec<u32> {
-        let (post, logits) = self.l.classes[&self.class].logits_at();
-        let mut stream = prompt.to_vec();
-        let mut out = vec![];
-        for _ in 0..n {
-            let t = trace_v1(&self.program, params, &stream).unwrap();
-            let tok = DecodeRuleV1::Greedy.select(&t.values[stream.len() - 1][post as usize][logits as usize]).unwrap();
-            out.push(tok);
-            stream.push(tok);
-        }
-        out
-    }
-
-    /// A claim of `job` delivering `generated`, its trace computed under `params` then edited by `lie`.
-    fn produce(
-        &self,
-        job: &KernelJobV1,
-        bond: Digest,
-        generated: Vec<u32>,
-        params: &MapParams,
-        lie: impl FnOnce(&mut TraceV1),
-    ) -> Produced {
-        let fed = generated.len() - 1;
-        let stream: Vec<u32> = job.prompt.iter().chain(&generated[..fed]).copied().collect();
-        let mut trace = trace_v1(&self.program, params, &stream).unwrap();
-        lie(&mut trace);
-        let class = &self.l.classes[&self.class];
-        let w = WiringV1::new(&self.program).unwrap();
-        let ev = build_evidence_v1(&w, &trace.evidence(), &stream, class.header(self.class), &class.descriptor, 2).unwrap();
-        let claim = KernelClaimV1 { job_id: job.id(), producer_bond: bond, generated, evidence_root: ev.root() };
-        let tx = T::CommitClaim { claim: claim.clone(), evidence: ev, commitments: trace.evidence().commitments };
-        Produced { claim, trace, tx }
-    }
-
-    fn honest(&self, job: &KernelJobV1, n: usize) -> Produced {
-        let generated = self.greedy(&self.params, &job.prompt, n);
-        self.produce(job, PRODUCER, generated, &self.params, |_| {})
-    }
-
-    /// An honest generation whose committed trace lies at one MatMul at position ≥ 1.
-    fn lying(&self, job: &KernelJobV1, n: usize) -> ((u32, u16, u16), Produced) {
-        let at = self.matmul_at(1);
-        let generated = self.greedy(&self.params, &job.prompt, n);
-        let p = self
-            .produce(job, PRODUCER, generated, &self.params, |t| bump(&mut t.values[at.0 as usize][at.1 as usize][at.2 as usize], 1));
-        (at, p)
-    }
-
-    fn matmul_at(&self, from: u32) -> (u32, u16, u16) {
-        for (s, (b, _)) in self.program.occurrences().iter().enumerate() {
-            for (n, node) in self.program.blocks[*b as usize].nodes.iter().enumerate() {
-                if matches!(node.prim, Prim::MatMul) {
-                    return (from, s as u16, n as u16);
-                }
-            }
-        }
-        panic!("no MatMul")
-    }
-
-    fn state(&self, claim: &Digest) -> ClaimStateV1 {
-        self.l.claims[claim].life.state.clone()
-    }
-}
-
-fn bond(bond: Digest, collateral: u64) -> T {
-    T::RegisterBond { bond, collateral }
-}
-
-fn convicted(ev: &[E]) -> Option<(u64, u64, bool)> {
-    ev.iter().find_map(|e| match e {
-        E::Convicted { slashed, accuser_reward, post_final, .. } => Some((*slashed, *accuser_reward, *post_final)),
-        _ => None,
-    })
-}
-
-fn refused(ev: &[E]) -> Option<String> {
-    ev.iter().find_map(|e| match e {
-        E::Refused { why, .. } => Some(why.clone()),
-        _ => None,
-    })
-}
-
-/// A position demand's response: every committed value of position `p` of `trace`, whole, then `edit`ed.
-fn position(trace: &TraceV1, p: u32, edit: impl FnOnce(&mut Vec<Vec<MaterialResponseV1>>)) -> Vec<u8> {
-    let mask = derived();
-    let mut r: Vec<Vec<MaterialResponseV1>> = trace.values[p as usize]
-        .iter()
-        .enumerate()
-        .map(|(s, o)| {
-            o.iter()
-                .enumerate()
-                .map(|(n, t)| if mask[s][n] { MaterialResponseV1::Omitted } else { MaterialResponseV1::Whole(TensorWireV1::of(t)) })
-                .collect()
-        })
-        .collect();
-    edit(&mut r);
-    borsh::to_vec(&PositionResponseV1 { values: r, inputs: vec![] }).unwrap()
-}
+use misaka_palw_kernel::public::{MaterialResponseV1, TensorWireV1};
+use misaka_palw_tir::Prim;
 
 // ── A: the producer and every Panel seat collude ──────────────────────────────────────────────────────────────────────────
 
@@ -296,7 +40,7 @@ fn a_full_panel_collusion_loses_to_one_outside_bond_before_final_and_after_it() 
     assert!(matches!(w.state(&id), ClaimStateV1::Convicted { .. }), "a convicted claim never finalizes");
     assert!(!w.l.claims[&id].rewarded);
     assert_eq!(w.l.bonds[&PRODUCER].collateral, 4000);
-    assert_eq!(w.l.bonds[&OUTSIDER].credits, 500);
+    assert_eq!(w.consumer.paid(&OUTSIDER), 500);
     let ev = w.block(201, vec![T::FileProof { accuser: SPAM1, claim: id, proof }]);
     assert_eq!(ev, vec![E::Duplicate { claim: id }], "a claim is convicted once");
 
@@ -552,7 +296,7 @@ fn a_class_without_a_complete_public_prosecution_never_registers() {
     let w = World::with(p);
     assert_eq!(w.class, [0; 64]);
     assert!(w.l.classes.is_empty());
-    let why = refused(&w.l.events.iter().map(|(_, e)| e.clone()).collect::<Vec<_>>()).unwrap();
+    let why = refused(&w.events).unwrap();
     assert!(why.starts_with("not publicly prosecutable") && why.contains("public bytes"), "{why}");
     // Fewer demand sessions than the plan has positions: some position could not be demanded, so the class is refused.
     let mut p = policy();
@@ -562,19 +306,12 @@ fn a_class_without_a_complete_public_prosecution_never_registers() {
 
     // A kernel this binary does not implement, and a plan for another program, are refused too.
     let mut w = World::new();
-    let T::RegisterClass { program_bytes, plan, params, network, ruleset, .. } = w.register() else { unreachable!() };
-    let unknown = T::RegisterClass {
-        descriptor: [0xEE; 64],
-        program_bytes: program_bytes.clone(),
-        plan: plan.clone(),
-        params: params.clone(),
-        network,
-        ruleset,
-    };
+    let T::RegisterClass { program_bytes, plan, params, .. } = w.register() else { unreachable!() };
+    let unknown =
+        T::RegisterClass { descriptor: [0xEE; 64], program_bytes: program_bytes.clone(), plan: plan.clone(), params: params.clone() };
     let mut other = plan.clone();
     other.program_root = [1; 64];
-    let mismatched =
-        T::RegisterClass { descriptor: k2_tir_v1_descriptor().digest(), program_bytes, plan: other, params, network, ruleset };
+    let mismatched = T::RegisterClass { descriptor: k2_tir_v1_descriptor().digest(), program_bytes, plan: other, params };
     let ev = w.block(2, vec![unknown, mismatched]);
     assert_eq!(ev.iter().filter(|e| matches!(e, E::Refused { tx: "RegisterClass", .. })).count(), 2, "{ev:?}");
     // A job outside the class is refused at posting (an unsupported relation is never a success).
@@ -772,17 +509,6 @@ fn spam_demands_and_joins_cannot_push_final_past_window_end_plus_court_deadline_
     assert!(final_daa <= 60 + 20 + 10, "the absolute bound: window end + court deadline + proof grace");
 }
 
-/// A lying claim the Panel covered at daa 10 (window end 60) and that finalized at 60: liability until 260.
-fn final_lying_claim(w: &mut World) -> (Digest, (u32, u16, u16), Da, TraceV1) {
-    let job = w.post_job(2, &[3, 17, 9], 3, 1);
-    let (at, lie) = w.lying(&job, 3);
-    let (id, da, trace) = (lie.claim.id(), Da::publishing(&lie.trace, &[at]), lie.trace.clone());
-    w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
-    assert_eq!(w.block(60, vec![]), vec![E::Final { claim: id, reward: 7 }]);
-    assert_eq!(w.l.claims[&id].liability_until, Some(260));
-    (id, at, da, trace)
-}
-
 #[test]
 fn a_post_final_demand_must_fit_its_whole_path_in_the_liability_horizon() {
     // A demand whose deadline + grace would pass the horizon is refused: what it served nobody could still prosecute with.
@@ -806,7 +532,7 @@ fn a_post_final_demand_must_fit_its_whole_path_in_the_liability_horizon() {
 fn a_post_final_default_forfeits_the_whole_reservation_and_is_never_a_conviction() {
     let mut w = World::new();
     let (id, at, da, _) = final_lying_claim(&mut w);
-    assert_eq!(w.l.bonds[&PRODUCER].credits, 7, "the reward was paid at Final");
+    assert_eq!(w.consumer.paid(&PRODUCER), 7, "the reward was paid at Final");
     let OutsiderFindingV1::Demand(p) = outsider(&w, id, &da) else { panic!() };
     assert_eq!(p, vec![(0, at.0)]);
     w.block(100, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
@@ -818,7 +544,7 @@ fn a_post_final_default_forfeits_the_whole_reservation_and_is_never_a_conviction
     assert!(matches!(w.state(&id), ClaimStateV1::Final { .. }), "the claim stays Final");
     assert_eq!(w.l.bonds[&PRODUCER].collateral, collateral - 1000, "the whole reservation, not default_penalty");
     assert_eq!(w.l.bonds[&PRODUCER].reserved, 0);
-    assert_eq!(w.l.bonds[&OUTSIDER].credits, 500, "the demander's share of the forfeit");
+    assert_eq!(w.consumer.paid(&OUTSIDER), 500, "the demander's share of the forfeit");
     assert_eq!(w.l.burned, burned + 500);
     assert_eq!(w.l.bonds[&OUTSIDER].reserved, 0, "the demand bond returns");
 
@@ -892,12 +618,12 @@ fn da_responses_are_classified_and_a_default_is_an_availability_penalty_not_a_co
     assert_eq!(classes, ["malformed", "malformed", "wrong_bytes", "wrong_root", "fake_opening"]);
 
     // The deadline passes on a non-serving response: the producer's default, a fixed penalty to the demander.
-    let (collateral, credits) = (w.l.bonds[&PRODUCER].collateral, w.l.bonds[&OUTSIDER].credits);
+    let (collateral, credits) = (w.l.bonds[&PRODUCER].collateral, w.consumer.paid(&OUTSIDER));
     let ev = w.block(32, vec![]);
     assert_eq!(ev, vec![E::ProducerDefault { claim: id, stage: 0, position: 1, last: Some("fake_opening"), penalty: 100 }]);
     assert!(convicted(&ev).is_none());
     assert_eq!(w.l.bonds[&PRODUCER].collateral, collateral - 100, "a penalty, not the 1000 fraud slash");
-    assert_eq!(w.l.bonds[&OUTSIDER].credits, credits + 100);
+    assert_eq!(w.consumer.paid(&OUTSIDER), credits + 100);
     assert_eq!(w.l.bonds[&OUTSIDER].reserved, 0);
     assert_eq!(w.state(&id), ClaimStateV1::Unavailable { daa: 32, producer_defaulted: true });
     let ev = w.block(33, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: 1 }]);
@@ -927,13 +653,13 @@ fn the_state_is_a_pure_fold_so_restart_ibd_and_reorg_agree_and_collateral_is_nev
     let ev = w.block(12, vec![T::Withdraw { bond: [0xC0; 64] }]);
     assert!(refused(&ev).is_some());
     w.block(60, vec![]); // Final for claim 1
-    assert_eq!(w.l.bonds[&[0xC0; 64]].credits, 7);
+    assert_eq!(w.consumer.paid(&[0xC0; 64]), 7);
     let ev = w.block(261, vec![T::Withdraw { bond: [0xC0; 64] }]); // the release happens in this block's tick, after the tx
     assert!(refused(&ev).is_some() && ev.contains(&E::Released { claim: id1 }), "{ev:?}");
     let ev = w.block(262, vec![c2.tx.clone()]);
     assert_eq!(refused(&ev).as_deref(), Some("the producer bond is exiting"));
     let ev = w.block(263, vec![T::Withdraw { bond: [0xC0; 64] }]);
-    assert_eq!(ev, vec![E::Withdrawn { bond: [0xC0; 64], amount: 1507 }]);
+    assert_eq!(ev, vec![E::Withdrawn { bond: [0xC0; 64], amount: 1500 }], "the collateral; the 7 reward was paid out at Final");
 
     // The second claim, by the main producer; convicted once; a second proof is a duplicate.
     let c2 = w.produce(&job2, PRODUCER, c2.claim.generated.clone(), &params, |t| {

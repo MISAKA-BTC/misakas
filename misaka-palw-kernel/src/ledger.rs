@@ -1,11 +1,22 @@
-//! **An in-process chain for the kernel route: the consensus rules public prosecution relies on, as a deterministic fold.**
+//! **The consensus rules public prosecution relies on, as a deterministic fold a consensus node can embed.**
 //!
-//! [`KernelLedgerV1`] is a state that [`KernelLedgerV1::apply_block`] advances by blocks of [`LedgerTxV1`]. It is the local
-//! harness for the consensus properties a library cannot show alone (ADR-0173, RFC-0015 §1.1): it is not wired into the node,
-//! and the real-chain drill stays an external gate. Every rule below reads only ledger state — registered classes (program or
-//! pipeline, plan, public artifact), posted jobs, committed claims (evidence object and trace commitments) and material served
-//! in answer to demands — so every adjudication is something any node replaying the blocks recomputes.
+//! [`KernelLedgerV1`] is a state that advances by the per-object API a consensus fold calls: [`KernelLedgerV1::begin_block`], then
+//! per signed object [`KernelLedgerV1::apply_object`] (transactional: a refusal leaves the state byte-identical), the
+//! consumer-derived inputs [`KernelLedgerV1::sync_bond`], [`KernelLedgerV1::attest_artifact`] and
+//! [`KernelLedgerV1::apply_panel_tally`], and finally [`KernelLedgerV1::tick`]. [`KernelLedgerV1::apply_block`] and
+//! [`KernelLedgerV1::replay`] are thin wrappers over those. The state is [`KernelLedgerV1::root`] (a versioned canonical root over
+//! per-collection roots, see [`crate::state`]); **events are per-block receipts the consumer stores, not state**.
 //!
+//! It is not wired into the node here, and the real-chain drill stays an external gate. Every rule below reads only ledger state —
+//! registered classes (program, plan and the artifact's *commitments*), posted jobs, committed claims (evidence object and trace
+//! commitments) and material served in answer to demands — and the bytes of the object being applied, so every adjudication is
+//! something any node replaying the blocks recomputes.
+//!
+//! * **Bonds are the consumer's.** The ledger holds a view of each bond's real locked collateral ([`KernelLedgerV1::sync_bond`]) and
+//!   reservations against it; it never mints. Every slash, accuser reward, default share, refund, reservation and Final reward is an
+//!   explicit [`crate::settle::SettlementInstructionV1`] receipt the consumer applies to its real bonds. Objects are signed by a
+//!   bond ([`AuthV1`]); the signer must be the producer / accuser / demander the object names. The Panel's coverage is not an object:
+//!   the consumer derives it ([`KernelLedgerV1::apply_panel_tally`]).
 //! * **Collateral** (category 19): a claim reserves `claim_collateral` of its producer bond's FREE collateral (no double use);
 //!   the reservation lasts until the claim's liability horizon ends; an exiting bond backs nothing new and withdraws only after
 //!   its delay with nothing reserved.
@@ -15,7 +26,8 @@
 //! * **Direct proofs** (categories 1–4, 7–9, 11, 13, 16): a kernel fault proof, a decode fault, or a pipeline stage / edge /
 //!   decode fault is adjudicated in the block that carries it by the same courts any node runs, from ledger state alone. It is
 //!   never refused because a demand or another session is open: open sessions on a convicted claim settle as moot and their
-//!   bonds return (no pre-emption).
+//!   bonds return (no pre-emption). Courts read consensus state and the filing's bytes only — never the artifact: a `MatMul`
+//!   scalar opens one row of `X`, one column of `W` and one row of `Y` against the registered *commitments*.
 //! * **Demands** (categories 10, 14, 15): any bond may demand one committed POSITION of one stage (every node value and stage
 //!   input of it); joining an open demand for the same position shares its progress. One session per stage position, so every
 //!   position is demandable at once and no set of demanders (a producer's friends included) can starve another's: one round of
@@ -24,7 +36,9 @@
 //!   the producer's availability default — a fixed penalty, never the fraud slash. A bond's open demands are limited by its
 //!   free collateral, not by a count.
 //! * **Filings are bounded and priced**: a filed proof must fit the class's filing envelope, and a dismissed one forfeits
-//!   `dismissed_proof_fee` (a convicting or duplicate one does not).
+//!   `dismissed_proof_fee` (a convicting or duplicate one does not). Each block has an adjudication budget
+//!   ([`LedgerPolicyV1::max_adjudications_per_block`], `max_court_work_per_block`): an object past it is refused (dropped, never
+//!   fatal, no fee) and may be included in a later block.
 //! * **Final** (category 17): a claim needs the Panel's covered tally, the closed window, no open demand and — after a demand was
 //!   served — `proof_grace_daa` more, so the prosecution the served values enable can still be filed before Final (a service
 //!   in the window's last block must not hand the claim Final before the demander can use what it was served). New demands are
@@ -41,6 +55,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_tir::pipeline::{TirPipelineV1, stream_stage};
 use misaka_palw_tir::program::TirProgramV1;
 use misaka_palw_tir::program_v2::TirProgramV2;
@@ -50,7 +65,7 @@ use crate::check::check_plan_v1;
 use crate::descriptor::{ContextPolicyV1, KernelDescriptorV1, KernelScheduleV1, ModelKernelBindingV1};
 use crate::evidence::{EvidenceHeaderV1, VerificationEvidenceV1};
 use crate::gate::{ProsecutionBoundsV1, ProsecutionPolicyV1, public_pipeline_prosecution_complete_v1, public_prosecution_complete_v1};
-use crate::hash::{Digest, finish, id, keyed};
+use crate::hash::Digest;
 use crate::job::{BindingFaultV1, DecodeFaultV1, DecodeRuleV1, KernelClaimV1, KernelJobV1, binding_fault_v1, verify_decode_fault_v1};
 use crate::lifecycle::{ClaimEventV1, ClaimLifecycleV1, ClaimStateV1, LifecyclePolicyV1};
 use crate::pipeline::{
@@ -67,12 +82,20 @@ use crate::public::{
     program_root_v1,
 };
 use crate::receipt::TallyStateV1;
+pub use crate::route::{AuthV1, KernelRefusalV1, KernelRouteObjectV1, ProsecutionV1, RefusalKindV1};
+use crate::settle::{SettlementInstructionV1, SettlementKindV1};
 use crate::trace::{EvidenceV1, ParamCommitmentsV1, derived_mask_v1, tensor_commitment};
 use crate::verify::MaterialV1;
 
-/// The network's ledger policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The network's ledger policy: a consensus constant the consumer fixes at genesis (chain identity included — an object never
+/// names its own network, ruleset or challenge policy).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct LedgerPolicyV1 {
+    /// `palw_network_domain_v2`: network id and chain genesis.
+    pub network_domain: Digest,
+    pub ruleset_digest: Digest,
+    /// The id of the `PostCommitChallengePolicyV1` in force (`misaka-palw-challenge`), bound into every claim's challenge subject.
+    pub challenge_policy_id: Digest,
     pub claim_collateral: u64,
     pub demand_bond: u64,
     pub check_window_daa: u64,
@@ -88,8 +111,12 @@ pub struct LedgerPolicyV1 {
     pub accuser_reward_permille: u16,
     /// What an availability default forfeits (to the demanders), never more than the reservation.
     pub default_penalty: u64,
-    /// Paid to the producer at Final.
+    /// Paid to the producer at Final (a settlement instruction; the consumer's reward path funds it).
     pub claim_reward: u64,
+    /// The most court / classification / inclusion-check runs one block may trigger; an object past it is refused (dropped).
+    pub max_adjudications_per_block: u32,
+    /// The most court work (the class's declared worst court work, summed over the block's filed proofs) one block may trigger.
+    pub max_court_work_per_block: u64,
     pub prosecution: ProsecutionPolicyV1,
 }
 
@@ -97,7 +124,7 @@ impl LedgerPolicyV1 {
     /// The relations among the timings and amounts every rule below relies on.
     pub fn validate(&self) -> Result<(), String> {
         let p = self;
-        let checks: [(bool, &str); 9] = [
+        let checks: [(bool, &str); 11] = [
             (p.court_deadline_daa == p.prosecution.court_deadline_daa, "the ledger's court deadline is the gate's"),
             (p.court_deadline_daa > 0 && p.challenge_window_daa > 0 && p.check_window_daa > 0, "every window is non-empty"),
             (p.proof_grace_daa > 0, "a served demand leaves a non-empty grace to file the proof it enables"),
@@ -112,6 +139,8 @@ impl LedgerPolicyV1 {
             (p.demand_bond > 0 && p.dismissed_proof_fee > 0, "demands and filings are not free"),
             (p.accuser_reward_permille <= 1000, "the accuser's share is a share"),
             (p.claim_collateral > 0, "a claim reserves collateral"),
+            (p.max_adjudications_per_block > 0, "a block may adjudicate"),
+            (p.max_court_work_per_block > 0, "a block may run a court"),
         ];
         match checks.iter().find(|(ok, _)| !ok) {
             Some((_, why)) => Err(format!("ledger policy: {why}")),
@@ -120,12 +149,12 @@ impl LedgerPolicyV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The ledger's view of one bond: the consumer's real locked collateral and what the kernel route has reserved against it.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct BondRowV1 {
     pub collateral: u64,
     pub reserved: u64,
     pub exit_requested: Option<u64>,
-    pub credits: u64,
 }
 
 impl BondRowV1 {
@@ -134,15 +163,14 @@ impl BondRowV1 {
     }
 }
 
-/// A registered single-program class: everything public a court reads about it.
+/// A registered single-program class: everything public a court reads about it. The artifact's tensors are NOT here — only their
+/// commitments; outsiders read the tensors through a [`PublicArtifactV1`] source, authenticated against the commitments.
 #[derive(Clone, Debug)]
 pub struct ClassRowV1 {
     pub descriptor: KernelDescriptorV1,
     pub program_bytes: Vec<u8>,
     pub program: TirProgramV1,
     pub plan: VerificationPlanV1,
-    /// The artifact, public (a public-prosecution profile's weights are public by the gate).
-    pub params: MapParams,
     pub param_commitments: ParamCommitmentsV1,
     pub network_domain: Digest,
     pub ruleset_digest: Digest,
@@ -177,8 +205,7 @@ pub struct PipelineClassRowV1 {
     pub program_bytes: Vec<Vec<u8>>,
     pub programs: Vec<TirProgramV2>,
     pub plan: PipelinePlanV1,
-    /// Each program's artifact, public.
-    pub params: Vec<MapParams>,
+    /// Each program's artifact commitments (the tensors are public off-chain material).
     pub param_commitments: Vec<ParamCommitmentsV1>,
     pub binding: PipelineClassV1,
     pub network_domain: Digest,
@@ -193,10 +220,12 @@ impl PipelineClassRowV1 {
 }
 
 /// What a committed claim is: a single program's or a pipeline's.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum ClaimBodyV1 {
-    Program { claim: KernelClaimV1, evidence: VerificationEvidenceV1, commitments: Vec<Vec<Vec<Digest>>> },
-    Pipeline { claim: PipelineClaimV1, evidence: PipelineEvidenceV1, stages: Vec<StageCommitmentsV1> },
+    Program { claim: KernelClaimV1, evidence: VerificationEvidenceV1, commitments: Vec<Vec<Vec<Digest>>> } = 0,
+    Pipeline { claim: PipelineClaimV1, evidence: PipelineEvidenceV1, stages: Vec<StageCommitmentsV1> } = 1,
 }
 
 impl ClaimBodyV1 {
@@ -222,14 +251,13 @@ impl ClaimBodyV1 {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ClaimRowV1 {
     pub producer: Digest,
     pub class_binding_id: Digest,
     pub job_id: Digest,
     pub body: ClaimBodyV1,
     pub committed_daa: u64,
-    pub beacon: Digest,
     pub life: ClaimLifecycleV1,
     pub reserved: u64,
     pub liability_until: Option<u64>,
@@ -243,162 +271,111 @@ impl ClaimRowV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The response classes a rejected response can have, as stored codes (`1 + index`).
+pub const RESPONSE_CLASS_NAMES_V1: [&str; 6] = ["malformed", "wrong_bytes", "wrong_root", "fake_opening", "partial", "oversized"];
+
+fn response_class_code(name: &str) -> u8 {
+    RESPONSE_CLASS_NAMES_V1.iter().position(|n| *n == name).map(|i| i as u8 + 1).unwrap_or(0)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct DemandRowV1 {
     /// Every bond that filed or joined it, with its bond amount.
     pub demanders: Vec<(Digest, u64)>,
     pub filed_daa: u64,
     pub deadline_daa: u64,
-    /// The latest response's class name.
-    pub last: Option<&'static str>,
+    /// The latest response's class code (`1 + index` into [`RESPONSE_CLASS_NAMES_V1`]).
+    pub last: Option<u8>,
 }
 
-/// What a bond files against a claim.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ProsecutionV1 {
-    /// A kernel fault proof's canonical bytes ([`crate::public::FaultProofWireV1`]).
-    Kernel(Vec<u8>),
-    /// A delivered token that is not the decode of the committed logits.
-    Decode(DecodeFaultV1),
-    /// A pipeline fault's canonical bytes ([`crate::pipeline_public::PipelineFaultWireV1`]: stage, edge or decode).
-    Pipeline(Vec<u8>),
+impl DemandRowV1 {
+    /// The latest response's class name.
+    pub fn last_class(&self) -> Option<&'static str> {
+        self.last.and_then(|c| RESPONSE_CLASS_NAMES_V1.get((c as usize).wrapping_sub(1)).copied())
+    }
 }
 
 /// The demand key: `(claim, stage, position)`.
 pub type DemandKeyV1 = (Digest, u8, u32);
 
+/// One input of a block. `SyncBond`, `AttestArtifact` and `PanelCovered` are **consumer-derived** from authenticated chain state
+/// (never transactions anyone submits); `Object` is a signed public object.
 #[derive(Clone, Debug)]
 pub enum LedgerTxV1 {
-    RegisterBond {
-        bond: Digest,
-        collateral: u64,
-    },
-    RequestExit {
-        bond: Digest,
-    },
-    Withdraw {
-        bond: Digest,
-    },
-    RegisterClass {
-        descriptor: Digest,
-        program_bytes: Vec<u8>,
-        plan: VerificationPlanV1,
-        params: MapParams,
-        network: Digest,
-        ruleset: Digest,
-    },
-    RegisterPipelineClass {
-        descriptor: Digest,
-        pipeline_bytes: Vec<u8>,
-        program_bytes: Vec<Vec<u8>>,
-        plan: PipelinePlanV1,
-        params: Vec<MapParams>,
-        decode: Option<DecodeRuleV1>,
-        network: Digest,
-        ruleset: Digest,
-    },
-    PostJob {
-        job: KernelJobV1,
-    },
-    PostPipelineJob {
-        job: PipelineJobPostV1,
-    },
-    CommitClaim {
-        claim: KernelClaimV1,
-        evidence: VerificationEvidenceV1,
-        commitments: Vec<Vec<Vec<Digest>>>,
-    },
-    CommitPipelineClaim {
-        claim: PipelineClaimV1,
-        evidence: PipelineEvidenceV1,
-        stages: Vec<StageCommitmentsV1>,
-    },
+    /// The real locked collateral of `bond`, as the consumer's bond state says.
+    SyncBond { bond: Digest, collateral: u64 },
+    /// The consumer's authenticated registry says the artifact with this root is publicly obtainable and was validated against its
+    /// program (a class registers only over attested artifacts: weights are public by the consumer's fact, not a registrant flag).
+    AttestArtifact { artifact_root: Digest },
     /// The Panel's tally reached coverage (an honest Panel, or every seat colluding: the ledger cannot tell, and need not).
-    PanelCovered {
-        claim: Digest,
-    },
-    FileProof {
-        accuser: Digest,
-        claim: Digest,
-        proof: ProsecutionV1,
-    },
-    /// A demand for every committed value (and stage input) of one stage position.
-    FileDemand {
-        demander: Digest,
-        claim: Digest,
-        stage: u8,
-        position: u32,
-    },
-    /// Anyone (the producer, a DA provider) answers a position demand: borsh [`crate::public::PositionResponseV1`].
-    Respond {
-        claim: Digest,
-        stage: u8,
-        position: u32,
-        bytes: Vec<u8>,
-    },
+    PanelCovered { claim: Digest },
+    /// A signed public object.
+    Object { auth: AuthV1, object: KernelRouteObjectV1 },
 }
 
-/// What a transaction did (the ledger's receipt log; part of the state).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// What an input did: a **receipt** (the consumer stores it per block; it is not part of the state).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
 pub enum LedgerEventV1 {
     Refused {
         tx: &'static str,
         why: String,
-    },
+    } = 0,
     ClassRegistered {
         class: Digest,
-    },
+    } = 1,
     JobPosted {
         job: Digest,
-    },
+    } = 2,
     ClaimCommitted {
         claim: Digest,
-    },
+    } = 3,
     Convicted {
         claim: Digest,
         accuser: Digest,
         slashed: u64,
         accuser_reward: u64,
         post_final: bool,
-    },
+    } = 4,
     ProofDismissed {
         claim: Digest,
         accuser: Digest,
         why: String,
         fee: u64,
-    },
+    } = 5,
     Duplicate {
         claim: Digest,
-    },
+    } = 6,
     DemandOpened {
         claim: Digest,
         stage: u8,
         position: u32,
         deadline: u64,
-    },
+    } = 7,
     DemandJoined {
         claim: Digest,
         stage: u8,
         position: u32,
-    },
+    } = 8,
     Served {
         claim: Digest,
         stage: u8,
         position: u32,
-    },
+    } = 9,
     ResponseRejected {
         claim: Digest,
         stage: u8,
         position: u32,
         class: &'static str,
-    },
+    } = 10,
     ProducerDefault {
         claim: Digest,
         stage: u8,
         position: u32,
         last: Option<&'static str>,
         penalty: u64,
-    },
+    } = 11,
     /// A demand on a Final claim defaulted: the whole remaining reservation is forfeited (availability, never a conviction).
     PostFinalDefault {
         claim: Digest,
@@ -406,25 +383,30 @@ pub enum LedgerEventV1 {
         position: u32,
         last: Option<&'static str>,
         forfeited: u64,
-    },
+    } = 12,
     DemandsMoot {
         claim: Digest,
         refunded: u32,
-    },
+    } = 13,
     Final {
         claim: Digest,
         reward: u64,
-    },
+    } = 14,
     TimedOut {
         claim: Digest,
-    },
+    } = 15,
     Released {
         claim: Digest,
-    },
+    } = 16,
+    ExitRequested {
+        bond: Digest,
+    } = 17,
     Withdrawn {
         bond: Digest,
         amount: u64,
-    },
+    } = 18,
+    /// An explicit instruction the consumer applies to its real bonds ([`crate::settle`]).
+    Settlement(SettlementInstructionV1) = 19,
 }
 
 /// One block.
@@ -432,6 +414,93 @@ pub enum LedgerEventV1 {
 pub struct LedgerBlockV1 {
     pub daa: u64,
     pub txs: Vec<LedgerTxV1>,
+}
+
+/// What the current block has spent of its adjudication budget. **Block-local scratch**: reset by `begin_block`, not part of the
+/// state or its root (a refusal that did court work still spent it, so junk cannot be tried for free).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BlockBudgetV1 {
+    pub adjudications: u32,
+    pub court_work: u64,
+}
+
+/// **Any public source of the artifact's tensors** — a registry mirror, a DA provider, the model's host. Whatever it returns is
+/// authenticated against the class's registered commitments before anything uses it.
+pub trait PublicArtifactV1 {
+    /// Program `program`'s param instance (a single-program class is program 0).
+    fn param(&self, program: u16, index: u16, layer: Option<u16>) -> Option<Tensor>;
+}
+
+impl PublicArtifactV1 for MapParams {
+    fn param(&self, program: u16, index: u16, layer: Option<u16>) -> Option<Tensor> {
+        if program != 0 {
+            return None;
+        }
+        self.tensors.get(&(index, layer)).cloned()
+    }
+}
+
+impl PublicArtifactV1 for [MapParams] {
+    fn param(&self, program: u16, index: u16, layer: Option<u16>) -> Option<Tensor> {
+        self.get(program as usize)?.tensors.get(&(index, layer)).cloned()
+    }
+}
+
+impl PublicArtifactV1 for Vec<MapParams> {
+    fn param(&self, program: u16, index: u16, layer: Option<u16>) -> Option<Tensor> {
+        self.as_slice().param(program, index, layer)
+    }
+}
+
+/// The param instances a program may be committed for: every param, once per layer if it is per-layer.
+fn declared_param_instances(params: &[misaka_palw_tir::program::ParamDecl], layers: usize) -> BTreeSet<(u16, Option<u16>)> {
+    let mut out = BTreeSet::new();
+    for (j, p) in params.iter().enumerate() {
+        if p.per_layer {
+            out.extend((0..layers).map(|l| (j as u16, Some(l as u16))));
+        } else {
+            out.insert((j as u16, None));
+        }
+    }
+    out
+}
+
+/// The param instances a relation can read: every `Ref::Param(j)` (j < `real`: a pipeline stage's lifted inputs are committed as
+/// stage inputs, not as artifact) of every node of every occurrence. A missing commitment for one makes the relation over it
+/// unprovable ("no commitment for param"), so registration refuses a commitment set that lacks any.
+fn used_param_instances(p: &TirProgramV1, real: usize) -> BTreeSet<(u16, Option<u16>)> {
+    use misaka_palw_tir::program::Ref;
+    let mut out = BTreeSet::new();
+    for (b, layer) in p.occurrences() {
+        for n in &p.blocks[b as usize].nodes {
+            for r in &n.inputs {
+                if let Ref::Param(j) = r
+                    && (*j as usize) < real
+                {
+                    out.insert((*j, if p.params[*j as usize].per_layer { layer } else { None }));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The commitments cover every instance a relation reads and name no instance the program does not declare.
+fn check_commitment_set(
+    pc: &ParamCommitmentsV1,
+    used: &BTreeSet<(u16, Option<u16>)>,
+    declared: &BTreeSet<(u16, Option<u16>)>,
+) -> Result<(), String> {
+    if let Some(missing) = used.iter().find(|k| !pc.by_instance.contains_key(k)) {
+        return Err(format!("the artifact commitments lack param {} layer {:?}, which a relation reads", missing.0, missing.1));
+    }
+    if let Some(extra) = pc.by_instance.keys().find(|k| !declared.contains(k)) {
+        return Err(format!(
+            "the artifact commitments name param {} layer {:?}, which the program does not declare",
+            extra.0, extra.1
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -450,8 +519,17 @@ pub struct KernelLedgerV1 {
     pub demands: BTreeMap<DemandKeyV1, DemandRowV1>,
     /// Stage positions served in answer to demands: public from then on.
     pub served: BTreeMap<DemandKeyV1, ServedPositionV1>,
-    pub events: Vec<(u64, LedgerEventV1)>,
+    /// Artifact roots the consumer attested public (see [`LedgerTxV1::AttestArtifact`]).
+    pub attested_artifacts: BTreeSet<Digest>,
+    /// Cumulative amount burned (derived from the settlement instructions; kept as a checksum).
     pub burned: u64,
+    budget: BlockBudgetV1,
+}
+
+fn settle(out: &mut Vec<LedgerEventV1>, bond: Digest, amount: u64, kind: SettlementKindV1, claim: Option<Digest>) {
+    if amount > 0 {
+        out.push(LedgerEventV1::Settlement(SettlementInstructionV1 { bond, amount, kind, claim }));
+    }
 }
 
 impl KernelLedgerV1 {
@@ -470,8 +548,9 @@ impl KernelLedgerV1 {
             claims: BTreeMap::new(),
             demands: BTreeMap::new(),
             served: BTreeMap::new(),
-            events: Vec::new(),
+            attested_artifacts: BTreeSet::new(),
             burned: 0,
+            budget: BlockBudgetV1::default(),
         })
     }
 
@@ -484,131 +563,230 @@ impl KernelLedgerV1 {
         s
     }
 
-    /// A digest of the whole state (two nodes agree iff their roots do).
-    pub fn root(&self) -> Digest {
-        id(b"misaka-palw/kernel/ledger-root/v1", format!("{self:?}").as_bytes())
+    /// What the current block has spent of its budget.
+    pub fn budget_used(&self) -> BlockBudgetV1 {
+        self.budget
     }
 
-    fn log(&mut self, e: LedgerEventV1) {
-        self.events.push((self.daa, e));
+    // ── consumer-derived inputs ──────────────────────────────────────────────────────────────────────────────────────────
+
+    /// **The consumer's real locked collateral of `bond`** (absolute, not a delta). Reservations and an exit request stay.
+    pub fn sync_bond(&mut self, bond: Digest, collateral: u64) {
+        self.bonds.entry(bond).or_insert(BondRowV1 { collateral: 0, reserved: 0, exit_requested: None }).collateral = collateral;
     }
 
-    pub fn events_at(&self, daa: u64) -> impl Iterator<Item = &LedgerEventV1> {
-        self.events.iter().filter(move |(d, _)| *d == daa).map(|(_, e)| e)
+    /// **The consumer attests an artifact public** (its tensors obtainable, validated against the program by the consumer's
+    /// registry). A class registers only over attested artifacts.
+    pub fn attest_artifact(&mut self, artifact_root: Digest) {
+        self.attested_artifacts.insert(artifact_root);
     }
 
-    pub fn apply_block(&mut self, block: &LedgerBlockV1) {
-        if block.daa < self.daa {
-            return; // blocks are in DAA order; a stale block is not applied
+    /// **The Panel's tally, derived by the consumer**: `covered` starts the claim's pass and challenge window. `false` changes
+    /// nothing (silence and partial coverage never pass).
+    pub fn apply_panel_tally(&mut self, claim: &Digest, covered: bool) -> Result<Vec<LedgerEventV1>, KernelRefusalV1> {
+        let daa = self.daa;
+        let Some(row) = self.claims.get_mut(claim) else { return Err(KernelRefusalV1::rule("PanelTally", "no such claim")) };
+        if covered {
+            let _ = row.life.apply(ClaimEventV1::Tally { daa, state: TallyStateV1::Covered });
         }
-        self.daa = block.daa;
-        for tx in &block.txs {
-            self.apply_tx(tx);
+        Ok(Vec::new())
+    }
+
+    // ── the per-object API ───────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// **Start a block at `daa`** (resets the adjudication budget). A block older than the ledger's clock is refused.
+    pub fn begin_block(&mut self, daa: u64) -> Result<(), KernelRefusalV1> {
+        if daa < self.daa {
+            return Err(KernelRefusalV1::new(
+                "Block",
+                RefusalKindV1::Stale,
+                format!("block {daa} is older than the ledger's {}", self.daa),
+            ));
         }
-        self.tick();
+        self.daa = daa;
+        self.budget = BlockBudgetV1::default();
+        Ok(())
     }
 
-    fn refuse(&mut self, tx: &'static str, why: impl Into<String>) {
-        self.log(LedgerEventV1::Refused { tx, why: why.into() });
-    }
-
-    fn apply_tx(&mut self, tx: &LedgerTxV1) {
-        match tx {
-            LedgerTxV1::RegisterBond { bond, collateral } => {
-                let row =
-                    self.bonds.entry(*bond).or_insert(BondRowV1 { collateral: 0, reserved: 0, exit_requested: None, credits: 0 });
-                if row.exit_requested.is_some() {
-                    self.refuse("RegisterBond", "the bond is exiting");
-                } else {
-                    row.collateral = row.collateral.saturating_add(*collateral);
-                }
+    /// **Apply one signed object**, parsed and signature-verified by the consumer. Transactional: a refusal leaves the state
+    /// (everything [`Self::root`] covers) byte-identical; an over-budget object is dropped, never fatal.
+    pub fn apply_object(&mut self, obj: &KernelRouteObjectV1, auth: &AuthV1) -> Result<Vec<LedgerEventV1>, KernelRefusalV1> {
+        let name = obj.name();
+        let len = obj.encoded_len();
+        if len > obj.max_encoded_bytes() {
+            return Err(KernelRefusalV1::new(
+                name,
+                RefusalKindV1::Oversized,
+                format!("{len} bytes past the {}-byte ceiling", obj.max_encoded_bytes()),
+            ));
+        }
+        self.authorize(obj, auth)?;
+        let mut out = Vec::new();
+        match obj {
+            KernelRouteObjectV1::RegisterClass { descriptor, program_bytes, plan, param_commitments } => {
+                let class = self.register_class(descriptor, program_bytes, plan, param_commitments)?;
+                out.push(LedgerEventV1::ClassRegistered { class });
             }
-            LedgerTxV1::RequestExit { bond } => match self.bonds.get_mut(bond) {
-                Some(b) if b.exit_requested.is_none() => b.exit_requested = Some(self.daa),
-                _ => self.refuse("RequestExit", "no such bond, or already exiting"),
-            },
-            LedgerTxV1::Withdraw { bond } => {
-                let (daa, delay) = (self.daa, self.policy.exit_delay_daa);
-                match self.bonds.get(bond) {
-                    Some(b) if b.exit_requested.is_some_and(|at| daa >= at + delay) && b.reserved == 0 => {
-                        let amount = b.collateral + b.credits;
-                        self.bonds.remove(bond);
-                        self.log(LedgerEventV1::Withdrawn { bond: *bond, amount });
-                    }
-                    Some(_) => self.refuse("Withdraw", "not exiting, inside the delay, or collateral still reserved"),
-                    None => self.refuse("Withdraw", "no such bond"),
-                }
-            }
-            LedgerTxV1::RegisterClass { descriptor, program_bytes, plan, params, network, ruleset } => {
-                match self.register_class(descriptor, program_bytes, plan, params, *network, *ruleset) {
-                    Ok(class) => self.log(LedgerEventV1::ClassRegistered { class }),
-                    Err(why) => self.refuse("RegisterClass", why),
-                }
-            }
-            LedgerTxV1::RegisterPipelineClass {
+            KernelRouteObjectV1::RegisterPipelineClass {
                 descriptor,
                 pipeline_bytes,
                 program_bytes,
                 plan,
-                params,
+                param_commitments,
                 decode,
-                network,
-                ruleset,
             } => {
-                match self.register_pipeline_class(
-                    descriptor,
-                    pipeline_bytes,
-                    program_bytes,
-                    plan,
-                    params,
-                    *decode,
-                    *network,
-                    *ruleset,
-                ) {
-                    Ok(class) => self.log(LedgerEventV1::ClassRegistered { class }),
-                    Err(why) => self.refuse("RegisterPipelineClass", why),
-                }
+                let class =
+                    self.register_pipeline_class(descriptor, pipeline_bytes, program_bytes, plan, param_commitments, *decode)?;
+                out.push(LedgerEventV1::ClassRegistered { class });
             }
-            LedgerTxV1::PostJob { job } => {
-                let Some(class) = self.classes.get(&job.class_binding_id) else {
-                    return self.refuse("PostJob", "no such class");
-                };
-                match job.well_formed(class.program.token_bound, class.plan.max_positions) {
-                    Ok(()) => {
-                        self.jobs.insert(job.id(), job.clone());
-                        self.log(LedgerEventV1::JobPosted { job: job.id() });
+            KernelRouteObjectV1::PostJob { job } => {
+                let class = self.classes.get(&job.class_binding_id).ok_or_else(|| KernelRefusalV1::rule(name, "no such class"))?;
+                job.well_formed(class.program.token_bound, class.plan.max_positions)
+                    .map_err(|why| KernelRefusalV1::rule(name, why))?;
+                let id = job.id();
+                if self.jobs.contains_key(&id) {
+                    return Err(KernelRefusalV1::rule(name, "the job is already posted"));
+                }
+                self.jobs.insert(id, job.clone());
+                out.push(LedgerEventV1::JobPosted { job: id });
+            }
+            KernelRouteObjectV1::PostPipelineJob { job } => {
+                let id = job.id();
+                if self.pipeline_jobs.contains_key(&id) {
+                    return Err(KernelRefusalV1::rule(name, "the job is already posted"));
+                }
+                self.charge(name, 0)?;
+                self.post_pipeline_job(job).map_err(|why| KernelRefusalV1::rule(name, why))?;
+                self.pipeline_jobs.insert(id, job.clone());
+                out.push(LedgerEventV1::JobPosted { job: id });
+            }
+            KernelRouteObjectV1::CommitClaim { claim, evidence, commitments } => {
+                self.commit_claim(claim, evidence, commitments, &mut out)?;
+                out.push(LedgerEventV1::ClaimCommitted { claim: claim.id() });
+            }
+            KernelRouteObjectV1::CommitPipelineClaim { claim, evidence, stages } => {
+                self.commit_pipeline_claim(claim, evidence, stages, &mut out)?;
+                out.push(LedgerEventV1::ClaimCommitted { claim: claim.id() });
+            }
+            KernelRouteObjectV1::FileProof { accuser, claim, proof } => self.file_proof(accuser, claim, proof, &mut out)?,
+            KernelRouteObjectV1::FileDemand { demander, claim, stage, position } => {
+                self.file_demand(demander, claim, *stage, *position, &mut out)?
+            }
+            KernelRouteObjectV1::Respond { claim, stage, position, bytes } => {
+                self.respond(claim, *stage, *position, bytes, &mut out)?
+            }
+            KernelRouteObjectV1::RequestExit { bond } => match self.bonds.get_mut(bond) {
+                Some(b) if b.exit_requested.is_none() => {
+                    b.exit_requested = Some(self.daa);
+                    out.push(LedgerEventV1::ExitRequested { bond: *bond });
+                }
+                _ => return Err(KernelRefusalV1::rule(name, "no such bond, or already exiting")),
+            },
+            KernelRouteObjectV1::Withdraw { bond } => {
+                let (daa, delay) = (self.daa, self.policy.exit_delay_daa);
+                match self.bonds.get(bond) {
+                    Some(b) if b.exit_requested.is_some_and(|at| daa >= at + delay) && b.reserved == 0 => {
+                        let amount = b.collateral;
+                        self.bonds.remove(bond);
+                        out.push(LedgerEventV1::Withdrawn { bond: *bond, amount });
+                        settle(&mut out, *bond, amount, SettlementKindV1::Withdraw, None);
                     }
-                    Err(why) => self.refuse("PostJob", why),
+                    Some(_) => return Err(KernelRefusalV1::rule(name, "not exiting, inside the delay, or collateral still reserved")),
+                    None => return Err(KernelRefusalV1::rule(name, "no such bond")),
                 }
             }
-            LedgerTxV1::PostPipelineJob { job } => match self.post_pipeline_job(job) {
-                Ok(()) => {
-                    self.pipeline_jobs.insert(job.id(), job.clone());
-                    self.log(LedgerEventV1::JobPosted { job: job.id() });
-                }
-                Err(why) => self.refuse("PostPipelineJob", why),
-            },
-            LedgerTxV1::CommitClaim { claim, evidence, commitments } => match self.commit_claim(claim, evidence, commitments) {
-                Ok(()) => self.log(LedgerEventV1::ClaimCommitted { claim: claim.id() }),
-                Err(why) => self.refuse("CommitClaim", why),
-            },
-            LedgerTxV1::CommitPipelineClaim { claim, evidence, stages } => match self.commit_pipeline_claim(claim, evidence, stages) {
-                Ok(()) => self.log(LedgerEventV1::ClaimCommitted { claim: claim.id() }),
-                Err(why) => self.refuse("CommitPipelineClaim", why),
-            },
-            LedgerTxV1::PanelCovered { claim } => {
-                let daa = self.daa;
-                match self.claims.get_mut(claim) {
-                    Some(row) => {
-                        let _ = row.life.apply(ClaimEventV1::Tally { daa, state: TallyStateV1::Covered });
-                    }
-                    None => self.refuse("PanelCovered", "no such claim"),
-                }
-            }
-            LedgerTxV1::FileProof { accuser, claim, proof } => self.file_proof(accuser, claim, proof),
-            LedgerTxV1::FileDemand { demander, claim, stage, position } => self.file_demand(demander, claim, *stage, *position),
-            LedgerTxV1::Respond { claim, stage, position, bytes } => self.respond(claim, *stage, *position, bytes),
         }
+        Ok(out)
+    }
+
+    /// Decode and apply one encoded object (strict: see [`KernelRouteObjectV1::decode`]).
+    pub fn apply_encoded(&mut self, bytes: &[u8], auth: &AuthV1) -> Result<Vec<LedgerEventV1>, KernelRefusalV1> {
+        let object = KernelRouteObjectV1::decode(bytes)?;
+        self.apply_object(&object, auth)
+    }
+
+    /// **The block's closing step**: demand deadlines (the producer's availability default), windows, Final, liability release.
+    pub fn tick(&mut self) -> Vec<LedgerEventV1> {
+        let mut out = Vec::new();
+        self.tick_into(&mut out);
+        out
+    }
+
+    /// A whole block as one call (a thin wrapper over the per-object API): `begin_block`, each input, `tick`. Refusals become
+    /// `Refused` receipts; a stale block is not applied.
+    pub fn apply_block(&mut self, block: &LedgerBlockV1) -> Vec<LedgerEventV1> {
+        let mut out = Vec::new();
+        if self.begin_block(block.daa).is_err() {
+            return out; // blocks are in DAA order; a stale block is not applied
+        }
+        for tx in &block.txs {
+            let r = match tx {
+                LedgerTxV1::SyncBond { bond, collateral } => {
+                    self.sync_bond(*bond, *collateral);
+                    Ok(Vec::new())
+                }
+                LedgerTxV1::AttestArtifact { artifact_root } => {
+                    self.attest_artifact(*artifact_root);
+                    Ok(Vec::new())
+                }
+                LedgerTxV1::PanelCovered { claim } => self.apply_panel_tally(claim, true),
+                LedgerTxV1::Object { auth, object } => self.apply_object(object, auth),
+            };
+            match r {
+                Ok(ev) => out.extend(ev),
+                Err(r) => out.push(LedgerEventV1::Refused { tx: r.object, why: r.why }),
+            }
+        }
+        out.extend(self.tick());
+        out
+    }
+
+    /// Who may sign what. Objects naming an actor must be signed by it; the rest need a bond the consumer synced.
+    fn authorize(&self, obj: &KernelRouteObjectV1, auth: &AuthV1) -> Result<(), KernelRefusalV1> {
+        use KernelRouteObjectV1 as O;
+        let name = obj.name();
+        let signer = auth.signer_bond;
+        let named = match obj {
+            O::CommitClaim { claim, .. } => Some((claim.producer_bond, "producer")),
+            O::CommitPipelineClaim { claim, .. } => Some((claim.producer_bond, "producer")),
+            O::FileProof { accuser, .. } => Some((*accuser, "accuser")),
+            O::FileDemand { demander, .. } => Some((*demander, "demander")),
+            O::RequestExit { bond } | O::Withdraw { bond } => Some((*bond, "bond")),
+            _ => None,
+        };
+        if let Some((actor, role)) = named {
+            // Whether the actor is a registered, free-enough bond is the rule's own check (its message names the role).
+            return if actor == signer {
+                Ok(())
+            } else {
+                Err(KernelRefusalV1::new(name, RefusalKindV1::Unauthorized, format!("the signer is not the {role} the object names")))
+            };
+        }
+        match self.bonds.get(&signer) {
+            None => Err(KernelRefusalV1::new(name, RefusalKindV1::Unauthorized, "the signer is not a registered bond")),
+            // A class or job is state that outlives the signer's exit: an exiting bond adds none. (A response is not state to
+            // keep, and a producer must always be able to answer.)
+            Some(b) if b.exit_requested.is_some() && !matches!(obj, O::Respond { .. }) => {
+                Err(KernelRefusalV1::new(name, RefusalKindV1::Unauthorized, "the signer is exiting"))
+            }
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// Charge one adjudication (and `court_work`) to the block, or refuse the object as over budget. Nothing is charged on a refusal.
+    fn charge(&mut self, name: &'static str, court_work: u64) -> Result<(), KernelRefusalV1> {
+        let b = self.budget;
+        if b.adjudications >= self.policy.max_adjudications_per_block
+            || b.court_work.saturating_add(court_work) > self.policy.max_court_work_per_block
+        {
+            return Err(KernelRefusalV1::new(
+                name,
+                RefusalKindV1::OverBudget,
+                format!("the block's adjudication budget is spent ({} runs, {} court work)", b.adjudications, b.court_work),
+            ));
+        }
+        self.budget = BlockBudgetV1 { adjudications: b.adjudications + 1, court_work: b.court_work.saturating_add(court_work) };
+        Ok(())
     }
 
     fn known_descriptor(&self, descriptor: &Digest) -> Result<KernelDescriptorV1, String> {
@@ -620,28 +798,45 @@ impl KernelLedgerV1 {
         descriptor: &Digest,
         program_bytes: &[u8],
         plan: &VerificationPlanV1,
-        params: &MapParams,
-        network: Digest,
-        ruleset: Digest,
-    ) -> Result<Digest, String> {
-        let d = self.known_descriptor(descriptor)?;
-        let program = TirProgramV1::decode_canonical(program_bytes).map_err(|e| format!("program: {e}"))?;
+        pc: &ParamCommitmentsV1,
+    ) -> Result<Digest, KernelRefusalV1> {
+        const NAME: &str = "RegisterClass";
+        let rule = |why: String| KernelRefusalV1::rule(NAME, why);
+        let d = self.known_descriptor(descriptor).map_err(rule)?;
         let root = program_root_v1(program_bytes);
-        check_plan_v1(&self.schedule, &d, &program, root, plan, self.daa).map_err(|o| o.to_string())?;
-        let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
-        let bounds = public_prosecution_complete_v1(&d, plan, nodes, &ProfileMaterialV1::kernel_route(true), &self.policy.prosecution)
-            .map_err(|g| format!("not publicly prosecutable: {g:?}"))?;
-        let param_commitments = ParamCommitmentsV1::of(params);
         let binding = ModelKernelBindingV1 {
             descriptor_digest: d.digest(),
             plan_root: plan.root(),
             program_root: root,
-            artifact_root: param_commitments.root(),
+            artifact_root: pc.root(),
             tokenizer_or_input_schema_root: [0; 64],
             task_output_schema: [0; 64],
             context_and_state_policy: ContextPolicyV1 { max_positions: plan.max_positions },
         };
         let class = binding.class_binding_id();
+        if self.classes.contains_key(&class) {
+            // Re-registering would overwrite the row every court reads; the class id binds everything, so there is nothing to add.
+            return Err(rule("the class is already registered".into()));
+        }
+        if !self.attested_artifacts.contains(&binding.artifact_root) {
+            return Err(rule("the artifact is not attested public by the consumer's registry".into()));
+        }
+        self.charge(NAME, 0)?;
+        let program = TirProgramV1::decode_canonical(program_bytes).map_err(|e| rule(format!("program: {e}")))?;
+        check_plan_v1(&self.schedule, &d, &program, root, plan, self.daa).map_err(|o| rule(o.to_string()))?;
+        check_commitment_set(
+            pc,
+            &used_param_instances(&program, program.params.len()),
+            &declared_param_instances(&program.params, program.schedule.layers.len()),
+        )
+        .map_err(rule)?;
+        let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
+        // The artifact is public by the consumer's attestation (checked above), not by a registrant's flag.
+        let bounds = public_prosecution_complete_v1(&d, plan, nodes, &ProfileMaterialV1::kernel_route(true), &self.policy.prosecution)
+            .map_err(|g| rule(format!("not publicly prosecutable: {g:?}")))?;
+        if bounds.max_court_work > self.policy.max_court_work_per_block {
+            return Err(rule("the class's worst court does not fit one block's court budget: nobody could prosecute it".into()));
+        }
         self.classes.insert(
             class,
             ClassRowV1 {
@@ -649,35 +844,37 @@ impl KernelLedgerV1 {
                 program_bytes: program_bytes.to_vec(),
                 program,
                 plan: plan.clone(),
-                params: params.clone(),
-                param_commitments,
-                network_domain: network,
-                ruleset_digest: ruleset,
+                param_commitments: pc.clone(),
+                network_domain: self.policy.network_domain,
+                ruleset_digest: self.policy.ruleset_digest,
                 bounds,
             },
         );
         Ok(class)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn register_pipeline_class(
         &mut self,
         descriptor: &Digest,
         pipeline_bytes: &[u8],
         program_bytes: &[Vec<u8>],
         plan: &PipelinePlanV1,
-        params: &[MapParams],
+        pcs: &[ParamCommitmentsV1],
         decode: Option<DecodeRuleV1>,
-        network: Digest,
-        ruleset: Digest,
-    ) -> Result<Digest, String> {
-        let d = self.known_descriptor(descriptor)?;
+    ) -> Result<Digest, KernelRefusalV1> {
+        const NAME: &str = "RegisterPipelineClass";
+        let rule = |why: String| KernelRefusalV1::rule(NAME, why);
+        let d = self.known_descriptor(descriptor).map_err(rule)?;
+        if pcs.iter().any(|p| !self.attested_artifacts.contains(&p.root())) {
+            return Err(rule("an artifact is not attested public by the consumer's registry".into()));
+        }
+        self.charge(NAME, 0)?;
         let programs = program_bytes
             .iter()
-            .map(|b| TirProgramV2::decode_canonical(b).map_err(|e| format!("program: {e}")))
+            .map(|b| TirProgramV2::decode_canonical(b).map_err(|e| rule(format!("program: {e}"))))
             .collect::<Result<Vec<_>, _>>()?;
-        let pipeline = TirPipelineV1::decode_canonical(pipeline_bytes, &programs).map_err(|e| format!("pipeline: {e}"))?;
-        check_pipeline_plan_v1(&self.schedule, &d, &pipeline, &programs, plan, self.daa).map_err(|o| o.to_string())?;
+        let pipeline = TirPipelineV1::decode_canonical(pipeline_bytes, &programs).map_err(|e| rule(format!("pipeline: {e}")))?;
+        check_pipeline_plan_v1(&self.schedule, &d, &pipeline, &programs, plan, self.daa).map_err(|o| rule(o.to_string()))?;
         let bounds = public_pipeline_prosecution_complete_v1(
             &d,
             plan,
@@ -686,22 +883,35 @@ impl KernelLedgerV1 {
             &ProfileMaterialV1::kernel_route(true),
             &self.policy.prosecution,
         )
-        .map_err(|g| format!("not publicly prosecutable: {g:?}"))?;
-        if params.len() != programs.len() {
-            return Err("one artifact per program".into());
+        .map_err(|g| rule(format!("not publicly prosecutable: {g:?}")))?;
+        if pcs.len() != programs.len() {
+            return Err(rule("one artifact per program".into()));
+        }
+        for (prog, pc) in programs.iter().zip(pcs) {
+            check_commitment_set(
+                pc,
+                &used_param_instances(&stage_view_v1(prog).view, prog.params.len()),
+                &declared_param_instances(&prog.params, prog.schedule.layers.len()),
+            )
+            .map_err(rule)?;
         }
         if stream_stage(&pipeline).is_some() != decode.is_some() {
-            return Err("a stream stage's output needs a decode rule; a pipeline without one has none".into());
+            return Err(rule("a stream stage's output needs a decode rule; a pipeline without one has none".into()));
         }
-        let param_commitments: Vec<ParamCommitmentsV1> = params.iter().map(ParamCommitmentsV1::of).collect();
+        if bounds.max_court_work > self.policy.max_court_work_per_block {
+            return Err(rule("the class's worst court does not fit one block's court budget: nobody could prosecute it".into()));
+        }
         let binding = PipelineClassV1 {
             descriptor_digest: d.digest(),
             pipeline_root: pipeline_root_v1(&pipeline, &programs),
             plan_root: plan.root(),
-            artifact_roots: param_commitments.iter().map(ParamCommitmentsV1::root).collect(),
+            artifact_roots: pcs.iter().map(ParamCommitmentsV1::root).collect(),
             decode,
         };
         let class = binding.class_binding_id();
+        if self.pipeline_classes.contains_key(&class) {
+            return Err(rule("the class is already registered".into()));
+        }
         self.pipeline_classes.insert(
             class,
             PipelineClassRowV1 {
@@ -711,11 +921,10 @@ impl KernelLedgerV1 {
                 program_bytes: program_bytes.to_vec(),
                 programs,
                 plan: plan.clone(),
-                params: params.to_vec(),
-                param_commitments,
+                param_commitments: pcs.to_vec(),
                 binding,
-                network_domain: network,
-                ruleset_digest: ruleset,
+                network_domain: self.policy.network_domain,
+                ruleset_digest: self.policy.ruleset_digest,
                 bounds,
             },
         );
@@ -743,8 +952,16 @@ impl KernelLedgerV1 {
         Ok(())
     }
 
-    /// Reserve a new claim's collateral and start its lifecycle.
-    fn admit(&mut self, id: Digest, producer: Digest, class: Digest, job: Digest, body: ClaimBodyV1) -> Result<(), String> {
+    /// Reserve a new claim's collateral and start its lifecycle. Every refusal is decided before the first mutation.
+    fn admit(
+        &mut self,
+        id: Digest,
+        producer: Digest,
+        class: Digest,
+        job: Digest,
+        body: ClaimBodyV1,
+        out: &mut Vec<LedgerEventV1>,
+    ) -> Result<(), String> {
         if self.claims.contains_key(&id) {
             return Err("an exact duplicate claim".into());
         }
@@ -766,8 +983,6 @@ impl KernelLedgerV1 {
         let _ = life.apply(ClaimEventV1::StartChecking { daa });
         // The commitments are on chain from inclusion: the retention obligation for Final is met by the ledger itself.
         let _ = life.apply(ClaimEventV1::RetentionMet);
-        let mut s = keyed(b"misaka-palw/kernel/ledger-beacon/v1");
-        s.update(&id).update(&daa.to_le_bytes());
         self.claims.insert(
             id,
             ClaimRowV1 {
@@ -776,7 +991,6 @@ impl KernelLedgerV1 {
                 job_id: job,
                 body,
                 committed_daa: daa,
-                beacon: finish(s),
                 life,
                 reserved: need,
                 liability_until: None,
@@ -784,6 +998,7 @@ impl KernelLedgerV1 {
                 rewarded: false,
             },
         );
+        settle(out, producer, need, SettlementKindV1::ReserveClaim, Some(id));
         Ok(())
     }
 
@@ -792,20 +1007,29 @@ impl KernelLedgerV1 {
         claim: &KernelClaimV1,
         evidence: &VerificationEvidenceV1,
         commitments: &[Vec<Vec<Digest>>],
-    ) -> Result<(), String> {
-        let job = self.jobs.get(&claim.job_id).ok_or("no such job")?;
-        let class = self.classes.get(&job.class_binding_id).ok_or("no such class")?;
+        out: &mut Vec<LedgerEventV1>,
+    ) -> Result<(), KernelRefusalV1> {
+        const NAME: &str = "CommitClaim";
+        let rule = |why: String| KernelRefusalV1::rule(NAME, why);
+        let job = self.jobs.get(&claim.job_id).ok_or_else(|| rule("no such job".into()))?;
+        let class = self.classes.get(&job.class_binding_id).ok_or_else(|| rule("no such class".into()))?;
         if let Some(f) = binding_fault_v1(job, claim, evidence, class.program.token_bound) {
-            return Err(format!("binding fault {f:?}"));
+            return Err(rule(format!("binding fault {f:?}")));
         }
         if evidence.header != class.header(job.class_binding_id) {
-            return Err(format!("binding fault {:?}", BindingFaultV1::WrongClass));
+            return Err(rule(format!("binding fault {:?}", BindingFaultV1::WrongClass)));
         }
         // The trace commitments are carried with the claim (they bound every later opening): they must be the evidence's.
         if EvidenceV1::new(commitments.to_vec()).root() != evidence.trace_root {
-            return Err("the carried trace commitments are not the evidence's trace root".into());
+            return Err(rule("the carried trace commitments are not the evidence's trace root".into()));
         }
         let id = claim.id();
+        if self.claims.contains_key(&id) {
+            return Err(rule("an exact duplicate claim".into()));
+        }
+        self.charge(NAME, 0)?;
+        let job = self.jobs.get(&claim.job_id).expect("checked");
+        let class = self.classes.get(&job.class_binding_id).expect("checked");
         // Everything a court checks before any relation, checked now: a claim is never committed in a shape a court could only
         // call malformed (fabricated segment boundaries, another suite, a wrong output or state root, misshapen commitments).
         let record = PublicClaimRecordV1 {
@@ -816,14 +1040,16 @@ impl KernelLedgerV1 {
             trace_commitments: commitments.to_vec(),
             param_commitments: class.param_commitments.by_instance.iter().map(|((j, l), d)| (*j, *l, *d)).collect(),
             tokens: claim.stream(job),
+            // The legacy block-hash beacon is gone from the route: outsiders check with their own salt and the claim's challenge
+            // subject comes from `misaka-palw-challenge`.
             beacon: [0; 64],
         };
         FreshVerifierV1::from_public_bytes(&record.to_bytes(), &self.known, class.header(job.class_binding_id))
             .and_then(|v| v.structure())
-            .map_err(|why| format!("malformed evidence: {why}"))?;
+            .map_err(|why| rule(format!("malformed evidence: {why}")))?;
         let body = ClaimBodyV1::Program { claim: claim.clone(), evidence: evidence.clone(), commitments: commitments.to_vec() };
         let class_id = job.class_binding_id;
-        self.admit(id, claim.producer_bond, class_id, claim.job_id, body)
+        self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)
     }
 
     fn commit_pipeline_claim(
@@ -831,11 +1057,14 @@ impl KernelLedgerV1 {
         claim: &PipelineClaimV1,
         evidence: &PipelineEvidenceV1,
         stages: &[StageCommitmentsV1],
-    ) -> Result<(), String> {
-        let job = self.pipeline_jobs.get(&claim.job_id).ok_or("no such job")?;
-        let class = self.pipeline_classes.get(&job.class_binding_id).ok_or("no such class")?;
+        out: &mut Vec<LedgerEventV1>,
+    ) -> Result<(), KernelRefusalV1> {
+        const NAME: &str = "CommitPipelineClaim";
+        let rule = |why: String| KernelRefusalV1::rule(NAME, why);
+        let job = self.pipeline_jobs.get(&claim.job_id).ok_or_else(|| rule("no such job".into()))?;
+        let class = self.pipeline_classes.get(&job.class_binding_id).ok_or_else(|| rule("no such class".into()))?;
         use BindingFaultV1 as F;
-        let fault = |f: F| Err(format!("binding fault {f:?}"));
+        let fault = |f: F| Err(rule(format!("binding fault {f:?}")));
         if claim.evidence_root != evidence.root() {
             return fault(F::WrongEvidence);
         }
@@ -867,14 +1096,21 @@ impl KernelLedgerV1 {
             return fault(F::WrongInput);
         }
         if claim.output_root != evidence.output_root {
-            return Err("binding fault WrongOutput".into());
+            return Err(rule("binding fault WrongOutput".into()));
         }
         if stages.len() != evidence.stages.len()
             || stages.iter().zip(&evidence.stages).any(|(s, e)| s.evidence().root() != e.trace_root)
         {
-            return Err("the carried trace commitments are not the evidence's trace roots".into());
+            return Err(rule("the carried trace commitments are not the evidence's trace roots".into()));
         }
         let id = claim.id();
+        if self.claims.contains_key(&id) {
+            return Err(rule("an exact duplicate claim".into()));
+        }
+        self.charge(NAME, 0)?;
+        let job = self.pipeline_jobs.get(&claim.job_id).expect("checked");
+        let class = self.pipeline_classes.get(&job.class_binding_id).expect("checked");
+        let h = class.header(job.class_binding_id);
         let record = PipelinePublicRecordV1 {
             claim_id: id,
             pipeline_bytes: class.pipeline_bytes.clone(),
@@ -893,10 +1129,10 @@ impl KernelLedgerV1 {
         };
         FreshPipelineVerifierV1::from_public_bytes(&record.to_bytes(), &self.known, h, &class.binding)
             .and_then(|v| v.structure())
-            .map_err(|why| format!("malformed evidence: {why}"))?;
+            .map_err(|why| rule(format!("malformed evidence: {why}")))?;
         let body = ClaimBodyV1::Pipeline { claim: claim.clone(), evidence: evidence.clone(), stages: stages.to_vec() };
         let class_id = job.class_binding_id;
-        self.admit(id, claim.producer_bond, class_id, claim.job_id, body)
+        self.admit(id, claim.producer_bond, class_id, claim.job_id, body, out).map_err(rule)
     }
 
     /// The public record of a single-program claim, assembled from ledger state only (what a court and a fresh verifier read).
@@ -913,7 +1149,7 @@ impl KernelLedgerV1 {
             trace_commitments: commitments.clone(),
             param_commitments: class.param_commitments.by_instance.iter().map(|((j, l), d)| (*j, *l, *d)).collect(),
             tokens: c.stream(job),
-            beacon: row.beacon,
+            beacon: [0; 64],
         };
         Some((record, class.header(row.class_binding_id)))
     }
@@ -938,7 +1174,7 @@ impl KernelLedgerV1 {
                 .collect(),
             facts: job.facts.clone(),
             generated: c.generated.clone(),
-            beacon: row.beacon,
+            beacon: [0; 64],
         };
         Some((record, class.header(row.class_binding_id), class.binding.clone()))
     }
@@ -987,42 +1223,59 @@ impl KernelLedgerV1 {
         }
     }
 
-    fn file_proof(&mut self, accuser: &Digest, claim: &Digest, proof: &ProsecutionV1) {
+    fn file_proof(
+        &mut self,
+        accuser: &Digest,
+        claim: &Digest,
+        proof: &ProsecutionV1,
+        out: &mut Vec<LedgerEventV1>,
+    ) -> Result<(), KernelRefusalV1> {
+        const NAME: &str = "FileProof";
+        let rule = |why: &str| KernelRefusalV1::rule(NAME, why);
         let fee = self.policy.dismissed_proof_fee;
         match self.bonds.get(accuser) {
-            None => return self.refuse("FileProof", "the accuser is not a registered bond"),
-            Some(b) if b.free() < fee => {
-                return self.refuse("FileProof", "the accuser's free collateral does not cover the filing fee");
-            }
+            None => return Err(rule("the accuser is not a registered bond")),
+            Some(b) if b.free() < fee => return Err(rule("the accuser's free collateral does not cover the filing fee")),
             Some(_) => {}
         }
-        let Some(row) = self.claims.get(claim) else { return self.refuse("FileProof", "no such claim") };
+        let Some(row) = self.claims.get(claim) else { return Err(rule("no such claim")) };
         if row.convicted {
-            return self.log(LedgerEventV1::Duplicate { claim: *claim });
+            // A second filing of the same fault, in this block or after a replay: one conviction, no second slash, no fee.
+            out.push(LedgerEventV1::Duplicate { claim: *claim });
+            return Ok(());
         }
         let is_final = matches!(row.life.state, ClaimStateV1::Final { .. });
         let bounds = self.bounds_of(&row.class_binding_id);
-        let verdict = if is_final && row.liability_until.is_none_or(|until| self.daa > until) {
-            Err("past the liability horizon".to_string())
+        let cheap = if is_final && row.liability_until.is_none_or(|until| self.daa > until) {
+            Some("past the liability horizon".to_string())
         } else if row.reserved == 0 {
-            Err("nothing is reserved any more".to_string())
-        } else if let Some(why) = bounds.and_then(|b| oversized(proof, &b)) {
-            Err(why)
+            Some("nothing is reserved any more".to_string())
         } else {
-            self.adjudicate(claim, proof)
+            bounds.and_then(|b| oversized(proof, &b))
+        };
+        let verdict = match cheap {
+            Some(why) => Err(why),
+            None => {
+                // The court is about to run: it spends the block's budget (a refusal here costs the accuser nothing).
+                self.charge(NAME, bounds.map(|b| b.max_court_work).unwrap_or(0))?;
+                self.adjudicate(claim, proof)
+            }
         };
         match verdict {
             Err(why) => {
                 let b = self.bonds.get_mut(accuser).expect("checked");
                 b.collateral -= fee;
                 self.burned += fee;
-                self.log(LedgerEventV1::ProofDismissed { claim: *claim, accuser: *accuser, why, fee })
+                out.push(LedgerEventV1::ProofDismissed { claim: *claim, accuser: *accuser, why, fee });
+                settle(out, *accuser, fee, SettlementKindV1::SlashFiling, Some(*claim));
+                settle(out, *accuser, fee, SettlementKindV1::Burn, Some(*claim));
             }
-            Ok(()) => self.convict(claim, accuser, is_final),
+            Ok(()) => self.convict(claim, accuser, is_final, out),
         }
+        Ok(())
     }
 
-    fn convict(&mut self, claim: &Digest, accuser: &Digest, post_final: bool) {
+    fn convict(&mut self, claim: &Digest, accuser: &Digest, post_final: bool, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
         let row = self.claims.get_mut(claim).expect("checked");
         let slashed = row.reserved;
@@ -1044,42 +1297,57 @@ impl KernelLedgerV1 {
             b.collateral = b.collateral.saturating_sub(slashed);
         }
         let reward = slashed * self.policy.accuser_reward_permille as u64 / 1000;
-        if let Some(a) = self.bonds.get_mut(accuser) {
-            a.credits += reward;
-        }
         self.burned += slashed - reward;
-        self.log(LedgerEventV1::Convicted { claim: *claim, accuser: *accuser, slashed, accuser_reward: reward, post_final });
-        self.settle_demands_moot(claim);
+        out.push(LedgerEventV1::Convicted { claim: *claim, accuser: *accuser, slashed, accuser_reward: reward, post_final });
+        settle(out, producer, slashed, SettlementKindV1::SlashFraud, Some(*claim));
+        settle(out, *accuser, reward, SettlementKindV1::AccuserReward, Some(*claim));
+        settle(out, producer, slashed - reward, SettlementKindV1::Burn, Some(*claim));
+        self.settle_demands_moot(claim, out);
+    }
+
+    /// Return every demand bond of `d` (the demand is over).
+    fn refund(&mut self, claim: &Digest, d: &DemandRowV1, out: &mut Vec<LedgerEventV1>) {
+        for (bond, amount) in &d.demanders {
+            if let Some(b) = self.bonds.get_mut(bond) {
+                b.reserved = b.reserved.saturating_sub(*amount);
+            }
+            settle(out, *bond, *amount, SettlementKindV1::ReleaseDemand, Some(*claim));
+        }
     }
 
     /// Every open demand on a convicted claim is moot: its bonds return. No session survives to pre-empt anything.
-    fn settle_demands_moot(&mut self, claim: &Digest) {
+    fn settle_demands_moot(&mut self, claim: &Digest, out: &mut Vec<LedgerEventV1>) {
         let keys: Vec<_> = self.demands.keys().filter(|(c, _, _)| c == claim).copied().collect();
         let mut refunded = 0u32;
         for k in keys {
             if let Some(d) = self.demands.remove(&k) {
-                for (bond, amount) in d.demanders {
-                    if let Some(b) = self.bonds.get_mut(&bond) {
-                        b.reserved = b.reserved.saturating_sub(amount);
-                    }
-                    refunded += 1;
-                }
+                refunded += d.demanders.len() as u32;
+                self.refund(claim, &d, out);
             }
         }
         if refunded > 0 {
-            self.log(LedgerEventV1::DemandsMoot { claim: *claim, refunded });
+            out.push(LedgerEventV1::DemandsMoot { claim: *claim, refunded });
         }
     }
 
-    fn file_demand(&mut self, demander: &Digest, claim: &Digest, stage: u8, position: u32) {
+    fn file_demand(
+        &mut self,
+        demander: &Digest,
+        claim: &Digest,
+        stage: u8,
+        position: u32,
+        out: &mut Vec<LedgerEventV1>,
+    ) -> Result<(), KernelRefusalV1> {
+        const NAME: &str = "FileDemand";
+        let rule = |why: &str| KernelRefusalV1::rule(NAME, why);
         let daa = self.daa;
-        let Some(row) = self.claims.get(claim) else { return self.refuse("FileDemand", "no such claim") };
+        let Some(row) = self.claims.get(claim) else { return Err(rule("no such claim")) };
         if row.terminal_for_demands() {
-            return self.refuse("FileDemand", "the claim is already decided");
+            return Err(rule("the claim is already decided"));
         }
         let is_final = matches!(row.life.state, ClaimStateV1::Final { .. });
-        // Before Final, only while the challenge window is open (so no demand extends Final past window + deadline); after Final,
-        // within the liability horizon (material for a post-Final proof), without touching the lifecycle.
+        // Before Final, only while the challenge window is open (so no demand extends Final past window + deadline + grace); after
+        // Final, within the liability horizon (material for a post-Final proof), without touching the lifecycle.
         let path = self.policy.court_deadline_daa.saturating_add(self.policy.proof_grace_daa);
         let window_open = match &row.life.state {
             // The demand's whole path (its deadline, then the grace after a service) must fit in the horizon, or a late demand
@@ -1088,27 +1356,30 @@ impl KernelLedgerV1 {
             s => demand_window_open(s, daa),
         };
         if !window_open {
-            return self.refuse("FileDemand", "the challenge window is closed");
+            return Err(rule("the challenge window is closed"));
         }
         if row.body.position(stage, position).is_none() {
-            return self.refuse("FileDemand", "the claim commits no such position");
+            return Err(rule("the claim commits no such position"));
         }
         let k = (*claim, stage, position);
         if self.served.contains_key(&k) {
-            return self.refuse("FileDemand", "already served: it is public");
+            return Err(rule("already served: it is public"));
         }
         let need = self.policy.demand_bond;
-        let Some(b) = self.bonds.get(demander) else { return self.refuse("FileDemand", "the demander is not a registered bond") };
+        let Some(b) = self.bonds.get(demander) else { return Err(rule("the demander is not a registered bond")) };
         if b.exit_requested.is_some() || b.free() < need {
-            return self.refuse("FileDemand", "the demander's free collateral does not cover the demand bond");
+            return Err(rule("the demander's free collateral does not cover the demand bond"));
         }
         if let Some(d) = self.demands.get_mut(&k) {
-            // Shared progress: a second demander joins the open demand rather than being refused by it.
+            // Shared progress: a second demander joins the open demand rather than being refused by it (its deadline is the open
+            // demand's: joining restarts nothing).
             if !d.demanders.iter().any(|(b, _)| b == demander) {
                 d.demanders.push((*demander, need));
                 self.bonds.get_mut(demander).expect("checked").reserved += need;
+                settle(out, *demander, need, SettlementKindV1::ReserveDemand, Some(*claim));
             }
-            return self.log(LedgerEventV1::DemandJoined { claim: *claim, stage, position });
+            out.push(LedgerEventV1::DemandJoined { claim: *claim, stage, position });
+            return Ok(());
         }
         // One session per stage position: the count is bounded by the claim's positions, and no demand can crowd out another.
         self.bonds.get_mut(demander).expect("checked").reserved += need;
@@ -1118,36 +1389,43 @@ impl KernelLedgerV1 {
             let row = self.claims.get_mut(claim).expect("checked");
             let _ = row.life.apply(ClaimEventV1::DisputeFiled { daa });
         }
-        self.log(LedgerEventV1::DemandOpened { claim: *claim, stage, position, deadline });
+        settle(out, *demander, need, SettlementKindV1::ReserveDemand, Some(*claim));
+        out.push(LedgerEventV1::DemandOpened { claim: *claim, stage, position, deadline });
+        Ok(())
     }
 
-    fn close_demand(&mut self, k: DemandKeyV1) -> Option<DemandRowV1> {
-        let d = self.demands.remove(&k)?;
-        for (bond, amount) in &d.demanders {
-            if let Some(b) = self.bonds.get_mut(bond) {
-                b.reserved = b.reserved.saturating_sub(*amount);
-            }
-        }
+    fn close_demand(&mut self, k: DemandKeyV1, out: &mut Vec<LedgerEventV1>) {
+        let Some(d) = self.demands.remove(&k) else { return };
+        self.refund(&k.0, &d, out);
         let daa = self.daa;
         if let Some(row) = self.claims.get_mut(&k.0)
             && matches!(row.life.state, ClaimStateV1::Disputed { .. })
         {
             let _ = row.life.apply(ClaimEventV1::CourtVerdict { daa, convicted: false });
         }
-        Some(d)
     }
 
-    fn respond(&mut self, claim: &Digest, stage: u8, position: u32, bytes: &[u8]) {
+    fn respond(
+        &mut self,
+        claim: &Digest,
+        stage: u8,
+        position: u32,
+        bytes: &[u8],
+        out: &mut Vec<LedgerEventV1>,
+    ) -> Result<(), KernelRefusalV1> {
+        const NAME: &str = "Respond";
         let k = (*claim, stage, position);
         if !self.demands.contains_key(&k) {
-            return self.refuse("Respond", "no open demand for this position");
+            return Err(KernelRefusalV1::rule(NAME, "no open demand for this position"));
         }
         let row = self.claims.get(claim).expect("a demand names a committed claim");
         let limit = self.bounds_of(&row.class_binding_id).map(|b| b.max_response_bytes).unwrap_or(0);
-        let (values, inputs) = row.body.position(stage, position).expect("a demand names a committed position");
         let verdict = if bytes.len() as u128 > limit {
             Err("oversized")
         } else {
+            self.charge(NAME, 0)?;
+            let row = self.claims.get(claim).expect("checked");
+            let (values, inputs) = row.body.position(stage, position).expect("a demand names a committed position");
             classify_position_response_v1(values, &self.derived_mask(row, stage), inputs, bytes)
         };
         match verdict {
@@ -1158,25 +1436,27 @@ impl KernelLedgerV1 {
                 if let Some(row) = self.claims.get_mut(claim) {
                     let _ = row.life.apply(ClaimEventV1::ProofGrace { until_daa: until });
                 }
-                self.close_demand(k);
-                self.log(LedgerEventV1::Served { claim: *claim, stage, position });
+                self.close_demand(k, out);
+                out.push(LedgerEventV1::Served { claim: *claim, stage, position });
             }
             Err(class) => {
                 if let Some(d) = self.demands.get_mut(&k) {
-                    d.last = Some(class);
+                    d.last = Some(response_class_code(class));
                 }
-                self.log(LedgerEventV1::ResponseRejected { claim: *claim, stage, position, class });
+                out.push(LedgerEventV1::ResponseRejected { claim: *claim, stage, position, class });
             }
         }
+        Ok(())
     }
 
     /// Deadlines, windows, Final, liability release.
-    fn tick(&mut self) {
+    fn tick_into(&mut self, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
         // Demands past their deadline: the producer's availability default.
-        let due: Vec<_> = self.demands.iter().filter(|(_, d)| daa >= d.deadline_daa).map(|(k, d)| (*k, d.last)).collect();
-        for ((claim, stage, position), last) in due {
+        let due: Vec<_> = self.demands.iter().filter(|(_, d)| daa >= d.deadline_daa).map(|(k, _)| *k).collect();
+        for (claim, stage, position) in due {
             let Some(d) = self.demands.remove(&(claim, stage, position)) else { continue };
+            let last = d.last_class();
             let post_final = self.claims.get(&claim).is_some_and(|r| matches!(r.life.state, ClaimStateV1::Final { .. }));
             // Before Final a default costs the fixed penalty (the claim is Unavailable and earns no reward). After Final the reward
             // was already paid, so a default forfeits the WHOLE remaining reservation: withholding is never cheaper than a
@@ -1190,32 +1470,35 @@ impl KernelLedgerV1 {
             // bonds return.
             let paid = if post_final { penalty * self.policy.accuser_reward_permille as u64 / 1000 } else { penalty };
             let share = if d.demanders.is_empty() { 0 } else { paid / d.demanders.len() as u64 };
-            for (bond, amount) in &d.demanders {
-                if let Some(b) = self.bonds.get_mut(bond) {
-                    b.reserved = b.reserved.saturating_sub(*amount);
-                    b.credits += share;
-                }
-            }
-            self.burned += penalty - share * d.demanders.len() as u64;
+            let burn = penalty - share * d.demanders.len() as u64;
+            self.burned += burn;
+            let producer = self.claims.get(&claim).map(|r| r.producer);
             if let Some(row) = self.claims.get_mut(&claim) {
-                let producer = row.producer;
                 let was_final = matches!(row.life.state, ClaimStateV1::Final { .. });
                 row.reserved -= penalty;
                 if !was_final {
                     let _ = row.life.apply(ClaimEventV1::MaterialUnavailable { daa, producer_defaulted: true });
                 }
-                if let Some(b) = self.bonds.get_mut(&producer) {
+                if let Some(b) = self.bonds.get_mut(&row.producer) {
                     b.reserved = b.reserved.saturating_sub(penalty);
                     b.collateral = b.collateral.saturating_sub(penalty);
                 }
             }
-            self.log(if post_final {
+            out.push(if post_final {
                 LedgerEventV1::PostFinalDefault { claim, stage, position, last, forfeited: penalty }
             } else {
                 LedgerEventV1::ProducerDefault { claim, stage, position, last, penalty }
             });
+            if let Some(producer) = producer {
+                settle(out, producer, penalty, SettlementKindV1::SlashDefault, Some(claim));
+                for (bond, _) in &d.demanders {
+                    settle(out, *bond, share, SettlementKindV1::DemanderShare, Some(claim));
+                }
+                settle(out, producer, burn, SettlementKindV1::Burn, Some(claim));
+            }
+            self.refund(&claim, &d, out);
             // An unavailable claim never finalizes; its other open demands are moot.
-            self.settle_demands_moot(&claim);
+            self.settle_demands_moot(&claim, out);
         }
         let ids: Vec<Digest> = self.claims.keys().copied().collect();
         for id in ids {
@@ -1231,34 +1514,33 @@ impl KernelLedgerV1 {
                     row.liability_until = Some(daa + self.policy.liability_daa);
                     let reward = if row.convicted { 0 } else { self.policy.claim_reward };
                     row.rewarded = reward > 0;
-                    if let Some(b) = self.bonds.get_mut(&producer) {
-                        b.credits += reward;
-                    }
-                    self.log(LedgerEventV1::Final { claim: id, reward });
+                    out.push(LedgerEventV1::Final { claim: id, reward });
+                    settle(out, producer, reward, SettlementKindV1::FinalReward, Some(id));
                 }
                 (b, ClaimStateV1::TimedOut { .. }) if !matches!(b, ClaimStateV1::TimedOut { .. }) => {
-                    self.release(&id, producer, reserved);
-                    self.log(LedgerEventV1::TimedOut { claim: id });
+                    self.release(&id, producer, reserved, out);
+                    out.push(LedgerEventV1::TimedOut { claim: id });
                 }
                 (ClaimStateV1::Unavailable { .. }, _) if reserved > 0 => {
-                    self.release(&id, producer, reserved);
+                    self.release(&id, producer, reserved, out);
                 }
                 (ClaimStateV1::Final { .. }, _) if reserved > 0 && liability.is_some_and(|u| daa > u) => {
-                    self.release(&id, producer, reserved);
-                    self.log(LedgerEventV1::Released { claim: id });
+                    self.release(&id, producer, reserved, out);
+                    out.push(LedgerEventV1::Released { claim: id });
                 }
                 _ => {}
             }
         }
     }
 
-    fn release(&mut self, claim: &Digest, producer: Digest, amount: u64) {
+    fn release(&mut self, claim: &Digest, producer: Digest, amount: u64, out: &mut Vec<LedgerEventV1>) {
         if let Some(row) = self.claims.get_mut(claim) {
             row.reserved = 0;
         }
         if let Some(b) = self.bonds.get_mut(&producer) {
             b.reserved = b.reserved.saturating_sub(amount);
         }
+        settle(out, producer, amount, SettlementKindV1::ReleaseClaim, Some(*claim));
     }
 }
 
@@ -1273,7 +1555,7 @@ fn oversized(proof: &ProsecutionV1, b: &ProsecutionBoundsV1) -> Option<String> {
 
 /// Whether a new demand may open against a claim in `state` before Final: while it is checking (up to the receipts' deadline) or
 /// passed (up to the challenge window's end); a disputed claim by the state its disputes resume to. Every demand lives
-/// `court_deadline_daa`, so Final is never later than `window end + court deadline`, however many demands are filed.
+/// `court_deadline_daa`, so Final is never later than `window end + court deadline + proof grace`, however many demands are filed.
 pub fn demand_window_open(state: &ClaimStateV1, daa: u64) -> bool {
     match state {
         ClaimStateV1::Checking { deadline_daa, .. } => daa <= *deadline_daa,
@@ -1300,7 +1582,9 @@ pub struct OutsiderV1<'a> {
     pub ledger: &'a KernelLedgerV1,
     pub claim: Digest,
     pub material: &'a dyn PublicSourceV1,
-    /// The outsider's own randomness for its probabilistic checks (never the claim's public beacon, which a producer may have
+    /// The public artifact: tensors the class registered only the commitments of, authenticated against them before use.
+    pub artifact: &'a dyn PublicArtifactV1,
+    /// The outsider's own randomness for its probabilistic checks (never a claim's public beacon, which a producer may have
     /// predicted): the faults it finds are convictable whatever vectors found them.
     pub salt: Digest,
 }
@@ -1316,11 +1600,13 @@ pub enum OutsiderFindingV1 {
     Demand(Vec<(u8, u32)>),
 }
 
-/// One stage's public material for a court: served values first, then the source; the class's public artifact.
+/// One stage's public material for a court: served values first, then the source; the class's public artifact, authenticated
+/// against the registered commitments.
 struct StageMaterial<'b> {
     o: &'b OutsiderV1<'b>,
     stage: u8,
-    params: &'b MapParams,
+    program: u16,
+    commitments: &'b ParamCommitmentsV1,
 }
 
 impl MaterialV1 for StageMaterial<'_> {
@@ -1328,7 +1614,10 @@ impl MaterialV1 for StageMaterial<'_> {
         self.o.node(self.stage, p, s, n)
     }
     fn param(&self, index: u16, layer: Option<u16>) -> Option<Tensor> {
-        self.params.tensors.get(&(index, layer)).cloned()
+        let want = self.commitments.by_instance.get(&(index, layer))?;
+        let t = self.o.artifact.param(self.program, index, layer)?;
+        // A tensor the registered commitment does not open to is unavailable, not trusted.
+        (tensor_commitment(&t) == *want).then_some(t)
     }
     fn stage_input(&self, k: u16, position: u32) -> Option<Tensor> {
         self.o.input(self.stage, position, k)
@@ -1407,7 +1696,7 @@ impl OutsiderV1<'_> {
             }
         }
         // Then every relation the plan covers.
-        let material = StageMaterial { o: self, stage: 0, params: &class.params };
+        let material = StageMaterial { o: self, stage: 0, program: 0, commitments: &class.param_commitments };
         Ok(match fresh.check_salted(&material, &ScopeV1::WholeClaim, self.salt) {
             ScopeVerdictV1::Pass { .. } => OutsiderFindingV1::Clean,
             ScopeVerdictV1::Fault(p) => {
@@ -1429,7 +1718,12 @@ impl OutsiderV1<'_> {
             .stages
             .iter()
             .enumerate()
-            .map(|(si, st)| StageMaterial { o: self, stage: si as u8, params: &class.params[st.program as usize] })
+            .map(|(si, st)| StageMaterial {
+                o: self,
+                stage: si as u8,
+                program: st.program,
+                commitments: &class.param_commitments[st.program as usize],
+            })
             .collect();
         let refs: Vec<&dyn MaterialV1> = mats.iter().map(|m| m as &dyn MaterialV1).collect();
         match fresh.check_salted(&refs, self.salt) {

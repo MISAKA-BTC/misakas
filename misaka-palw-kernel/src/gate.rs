@@ -17,7 +17,7 @@ use crate::plan::VerificationPlanV1;
 use crate::public::ProfileMaterialV1;
 
 /// The network's prosecution policy (one for every class on the route).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct ProsecutionPolicyV1 {
     /// A demand's response window, and a filed proof's inclusion bound.
     pub court_deadline_daa: u64,
@@ -32,7 +32,7 @@ pub struct ProsecutionPolicyV1 {
 }
 
 /// What one public prosecution of a claim of this plan can cost, at most.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct ProsecutionBoundsV1 {
     /// Everything a fresh verifier fetches: committed node values, the artifact, the commitments and the evidence object.
     pub max_public_bytes: u128,

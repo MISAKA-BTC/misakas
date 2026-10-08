@@ -2,6 +2,9 @@
 //! object, a verifier, and a court that holds only public material.
 #![allow(dead_code)]
 
+pub mod chain;
+pub mod ledger_world;
+
 use misaka_palw_kernel::KernelFaultProofV1;
 use misaka_palw_kernel::challenge::ChallengeBindingV1;
 use misaka_palw_kernel::descriptor::{KernelDescriptorV1, KernelScheduleV1, KernelStatusV1, k2_tir_v1_descriptor};
