@@ -19,7 +19,8 @@ use kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1;
 use kaspa_consensus_core::palw_conformance_evidence_v1::{
     CheckOutcomeV1, ConformanceEvidenceActionV1, ConformanceEvidencePostV1, ConformanceScopeV1,
     PALW_CONFORMANCE_CHALLENGE_WINDOW_DAA_V1, PALW_CONFORMANCE_EVIDENCE_DEADLINE_DAA_V1, ResultV1, assemble_evidence_v1,
-    derive_selection_v1, openings_root_v1, palw_onboarding_challenge_policy_v1, reference_leaf_result_v1,
+    derive_selection_v1, openings_root_v1, palw_onboarding_challenge_policy_v1, palw_onboarding_sealed_policy_v1,
+    reference_leaf_result_v1,
 };
 use kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1;
 use kaspa_consensus_core::palw_onboarding_v1::{AttemptBeaconV1, ConformanceAttemptEndV1, ConformanceAttemptRowV1};
@@ -1044,7 +1045,9 @@ async fn g14_opv_bootstrap_a_sealed_source_v3_beacon_locks_on_salted_seals_and_t
                 locked = Some(bk);
                 break;
             }
-            AttemptBeaconV1::Waiting { .. } => net.chain.heartbeat(ttpb, Vec::new()).await,
+            AttemptBeaconV1::Waiting { .. } => {
+                net.chain.heartbeat(ttpb, Vec::new()).await;
+            }
             other => panic!("the v3 beacon must lock here: {other:?}"),
         }
     }
