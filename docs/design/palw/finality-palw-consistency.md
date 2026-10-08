@@ -163,7 +163,9 @@ one slot ahead (within the timestamp tolerance, `hb_probe_b_future_*`) and is re
 that abandons that anchor is refused before the V2 arm — so V6 reaches only a payment newer than the victim's last DNS-final anchor,
 i.e. the DNS confirmation lag (GAP: the live lag is not measured here; it is the fleet's tip-minus-anchor DAA distance). The bound
 disappears when the overlay is not Active, when validators stall past the veto's 120-DAA TTL, when the gate abstains, and when RFC-0012
-retires the overlay — then the window below applies. **So C3 or rule E must be active no later than the DNS retirement.**
+retires the overlay — then the window below applies. As a function of the victim's anchor lag `L` (sink DAA minus its last DNS-final
+anchor's DAA) and the veto's TTL (120 DAA): reach `L − 1` DAA for `3 < L ≤ 120`, none for `L ≤ 3`, the finality depth for `L > 120` or no
+Active/confirmed overlay (ADR-0175 §6). **So C3 or rule E is a hard prerequisite of arming the DNS retirement** (ADR-0175 §6).
 
 Window without the veto (DERIVED from the rules; ~120 s a DAA): lower bound 3 DAA (≈ 6 min) — the shallow window is 2. Upper bound the
 victim's finality point (600 blue: 154–300 DAA, 5.2–10.2 h). In practice the carrier form closes once the public chain carries licences of its own claims

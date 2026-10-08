@@ -124,11 +124,34 @@ Under one dormant fence, `Params::palw_fork_choice_participation_v1` (a height),
 * **Fingerprint.** One fence: scheduling moves the params id and the schedule id; activation moves the consensus identity id. Below it
   the build is byte-identical.
 
-## 6. What this ADR does not decide
+## 6. Ordering rule, and V6's live window under the DNS veto
+
+**Hard prerequisite: the V6 fix (C3 or rule E) is active at or below the height that arms `palw_dns_retirement_v1`.** Today the DNS BFT
+veto (ADR-0128, `dns_bft_gate`, armed on testnet-12 from DAA 0) is the only layer that bounds V6; RFC-0012's retirement removes it. A
+schedule that arms the retirement without this fix at or below the same height must be refused — by `validate_palw_v2`, the way F-W
+already refuses to arm without strict-win (`PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1`).
+
+**V6's live window as a function of the DNS state.** Let `L` be the victim's anchor lag: its sink's DAA minus the DAA of its last
+DNS-final anchor. The veto refuses every candidate that does not hold that anchor, and releases it once the anchor is stale on the
+victim's own chain, `L > TTL` with `TTL = dns_veto_ttl_daa_score = 120` DAA (`confirmed_anchor_is_stale`). A reversal needs the fork at or
+above the anchor (the anchor in both branches' history) and the payment above the fork, so a payment `d` DAA deep is reachable exactly
+when `2 < d ≤ R`, with
+
+| DNS state on the victim | reach `R` | at ~120 s a DAA |
+|---|---|---|
+| Active, anchor confirmed, `L ≤ 3` | none — the veto covers every depth past the shallow window | — |
+| Active, anchor confirmed, `3 < L ≤ 120` | `R = L − 1` | up to 4 h at the TTL edge |
+| anchor stale (`L > 120`: validators stalled), overlay not Active, no confirmed anchor, the gate abstaining, or the overlay retired | `R = F`, the finality depth in DAA (600 blue at 3.9–2.0 blue a slot: 154–300) | 5.2–10.2 h |
+
+(Within `R`, the record's §3.1 practical bounds still apply: the carrier form closes once the public chain carries licences of its own
+post-payment claims, ≈ 21–25 DAA while attempts flow; the clock form stays open until those claims turn `Final`, ≥ 141 DAA.) The live
+`L` is not measured here (record §9); reading it off the fleet needs the user's approval.
+
+## 7. What this ADR does not decide
 
 C3 or E (the user's). `W_p`'s value. K. The frontier-by-DAA follow-up. Bonded slot clocks.
 
-## 7. Until the release (PROPOSED, node-local, no fence)
+## 8. Until the release (PROPOSED, node-local, no fence)
 
 * LIVE-R1's N2 watchdog and the explained wedge warning — a wedged node says so and stops participating.
 * The operator runbook for a sealed node: resync from an empty datadir **with `--checkpoint=<daa>:<hash>` of the network's chain**, so the
