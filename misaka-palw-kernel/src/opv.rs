@@ -762,6 +762,8 @@ mod tests {
             accuser_reward_permille: 500,
             default_penalty: 100,
             claim_reward: 7,
+            job_fee: 2,
+            job_escrow_ttl_daa: 300,
             max_adjudications_per_block: 64,
             max_court_work_per_block: u64::MAX,
             claim_seal_delay_daa: 1,

@@ -186,8 +186,13 @@ pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash6
         dismissed_proof_fee: SOMPI_PER_KASPA / 10,
         accuser_reward_permille: 500,
         default_penalty: 100 * SOMPI_PER_KASPA,
-        // INTERIM: a reward needs a funded payout path that does not exist (GAP); the mapping to the coinbase queue is exercised.
+        // GAP-5 (the user's ruling: user-pays escrow): the reward is paid out of the job's ESCROW, reserved from the poster's bond at
+        // posting and spent once at the job's first Final — never new money.
         claim_reward: 5 * SOMPI_PER_KASPA,
+        // GAP-5: posting a job burns 1 BILI beside its escrow (a self-posted job is never free), and an escrow no claim can still use
+        // goes back to its poster 300 DAA after posting (past the seal TTL, the check and challenge windows and a court).
+        job_fee: SOMPI_PER_KASPA,
+        job_escrow_ttl_daa: 300,
         max_adjudications_per_block: 64,
         max_court_work_per_block: 1 << 30,
         // Seal, then reveal: a claim commits over its producer's seal at least one block old; an unrevealed seal lives one check window.

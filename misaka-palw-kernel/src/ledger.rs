@@ -136,8 +136,17 @@ pub struct LedgerPolicyV1 {
     /// What an availability default forfeits, never more than the reservation: split like a slash — the demanders take
     /// `accuser_reward_permille` of it (an OPV claim's demanders at most `1000 − default_burn_permille`), the rest is burned.
     pub default_penalty: u64,
-    /// Paid to the producer at Final (a settlement instruction; the consumer's reward path funds it).
+    /// Paid to the producer at Final — **out of the job's escrow, never issued** (GAP-5, the user's ruling: option A, user-pays
+    /// escrow): every `PostJob` / `PostPipelineJob` reserves this much of its POSTER's free collateral as the job's escrow, and the
+    /// job's first Final pays it out (the poster's bond is debited exactly what the producer is paid). An escrow pays at most once,
+    /// and one no claim can still use is returned after `job_escrow_ttl_daa`.
     pub claim_reward: u64,
+    /// GAP-5: what posting a job costs its poster, non-refundably (burned) — beside the escrow — so a self-posted job always costs
+    /// something its own reward cannot pay back.
+    pub job_fee: u64,
+    /// GAP-5: an escrow is returned to its poster once this long has passed since the job was posted, no claim holds the job and no
+    /// producer's seal of it is live (a sealed producer is never left working for an escrow that left).
+    pub job_escrow_ttl_daa: u64,
     /// The most court / classification / inclusion-check runs one block may trigger; an object past it is refused (dropped).
     pub max_adjudications_per_block: u32,
     /// The most court work (the class's declared worst court work, summed over the block's filed proofs) one block may trigger.
@@ -153,7 +162,7 @@ impl LedgerPolicyV1 {
     /// The relations among the timings and amounts every rule below relies on.
     pub fn validate(&self) -> Result<(), String> {
         let p = self;
-        let checks: [(bool, &str); 14] = [
+        let checks: [(bool, &str); 16] = [
             (p.court_deadline_daa == p.prosecution.court_deadline_daa, "the ledger's court deadline is the gate's"),
             (p.court_deadline_daa > 0 && p.challenge_window_daa > 0 && p.check_window_daa > 0, "every window is non-empty"),
             (p.proof_grace_daa > 0, "a served demand leaves a non-empty grace to file the proof it enables"),
@@ -173,6 +182,9 @@ impl LedgerPolicyV1 {
             ),
             (p.default_penalty <= p.claim_collateral, "a default never takes more than the reservation"),
             (p.demand_bond > 0 && p.dismissed_proof_fee > 0, "demands and filings are not free"),
+            // GAP-5: a self-posted job pays itself its own escrow back; only a burned fee makes it cost anything.
+            (p.job_fee > 0, "posting a job is not free (a self-posted job must cost something its reward cannot recover)"),
+            (p.job_escrow_ttl_daa >= p.seal_ttl_daa, "a job's escrow outlives a producer's seal of it"),
             // A slash and a default both burn part of what they take: a 100% share would let a producer's own accuser or demander
             // cycle it back for nothing (C4 F-C4R3-02).
             (p.accuser_reward_permille < 1000, "the accuser's share is a share, and part of every slash and default is burned"),
@@ -303,6 +315,14 @@ pub struct ClaimRowV1 {
     pub liability_until: Option<u64>,
     pub convicted: bool,
     pub rewarded: bool,
+}
+
+/// **GAP-5: a job's escrow** — what its poster reserved to fund the job's Final reward.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct JobEscrowRowV1 {
+    pub poster: Digest,
+    pub amount: u64,
+    pub posted_daa: u64,
 }
 
 /// An unrevealed seal: the claim seal and the DAA it was carried at.
@@ -472,6 +492,12 @@ pub enum LedgerEventV1 {
         claim: Digest,
         accuser: Digest,
     } = 21,
+    /// GAP-5: an escrow no claim could still use went back to its poster.
+    JobEscrowReturned {
+        job: Digest,
+        poster: Digest,
+        amount: u64,
+    } = 22,
 }
 
 /// One block.
@@ -594,6 +620,8 @@ pub struct KernelLedgerV1 {
     pub seals: BTreeMap<(Digest, Digest), SealRowV1>,
     /// GAP-R7: accusers' proof seals, keyed `(claim, accuser)` (see [`KernelRouteObjectV1::SealProof`]).
     pub proof_seals: BTreeMap<(Digest, Digest), SealRowV1>,
+    /// GAP-5: `job → its poster's escrow` — reserved at posting, paid out (once) as the job's Final reward, or returned.
+    pub job_escrows: BTreeMap<Digest, JobEscrowRowV1>,
     /// Cumulative amount burned (derived from the settlement instructions; kept as a checksum).
     pub burned: u64,
     /// RFC-0015: the OPV policy, classes and claim rows. Dormant (no policy) = the historical ledger, root included.
@@ -659,6 +687,7 @@ impl KernelLedgerV1 {
             job_claims: BTreeMap::new(),
             seals: BTreeMap::new(),
             proof_seals: BTreeMap::new(),
+            job_escrows: BTreeMap::new(),
             burned: 0,
             opv: OpvStateV1::default(),
             budget: BlockBudgetV1::default(),
@@ -823,18 +852,22 @@ impl KernelLedgerV1 {
                 if self.jobs.contains_key(&id) {
                     return Err(KernelRefusalV1::rule(name, "the job is already posted"));
                 }
+                self.job_escrow_affordable(name, &auth.signer_bond)?;
                 self.jobs.insert(id, job.clone());
                 out.push(LedgerEventV1::JobPosted { job: id });
+                self.open_job_escrow(&auth.signer_bond, id, &mut out);
             }
             KernelRouteObjectV1::PostPipelineJob { job } => {
                 let id = job.id();
                 if self.pipeline_jobs.contains_key(&id) {
                     return Err(KernelRefusalV1::rule(name, "the job is already posted"));
                 }
+                self.job_escrow_affordable(name, &auth.signer_bond)?;
                 self.charge(name, 0)?;
                 self.post_pipeline_job(job).map_err(|why| KernelRefusalV1::rule(name, why))?;
                 self.pipeline_jobs.insert(id, job.clone());
                 out.push(LedgerEventV1::JobPosted { job: id });
+                self.open_job_escrow(&auth.signer_bond, id, &mut out);
             }
             KernelRouteObjectV1::CommitClaim { claim, evidence, commitments } => {
                 self.commit_claim(claim, evidence, commitments, &mut out)?;
@@ -986,6 +1019,76 @@ impl KernelLedgerV1 {
                 Err(KernelRefusalV1::new(name, RefusalKindV1::Unauthorized, "the signer is exiting"))
             }
             Some(_) => Ok(()),
+        }
+    }
+
+    /// **GAP-5: a job's escrow and fee** — `claim_reward` reserved (the job's Final reward) and `job_fee` burned — must be covered by
+    /// its poster's free collateral (checked before any mutation).
+    fn job_escrow_affordable(&self, name: &'static str, poster: &Digest) -> Result<(), KernelRefusalV1> {
+        let need = self.policy.claim_reward.saturating_add(self.policy.job_fee);
+        match self.bonds.get(poster) {
+            Some(b) if b.free() >= need => Ok(()),
+            _ => Err(KernelRefusalV1::rule(
+                name,
+                "the poster's free collateral does not cover the job's escrow and fee (the escrow funds the job's Final reward, GAP-5)",
+            )),
+        }
+    }
+
+    /// **GAP-5: open a job's escrow** — reserve `claim_reward` of the poster's free collateral against the job and burn `job_fee`.
+    fn open_job_escrow(&mut self, poster: &Digest, job: Digest, out: &mut Vec<LedgerEventV1>) {
+        let (amount, fee) = (self.policy.claim_reward, self.policy.job_fee);
+        if let Some(b) = self.bonds.get_mut(poster) {
+            b.reserved += amount;
+            b.collateral -= fee;
+        }
+        self.burned += fee;
+        if amount > 0 {
+            self.job_escrows.insert(job, JobEscrowRowV1 { poster: *poster, amount, posted_daa: self.daa });
+        }
+        settle(out, *poster, amount, SettlementKindV1::ReserveJobEscrow, None);
+        settle(out, *poster, fee, SettlementKindV1::JobFee, None);
+        settle(out, *poster, fee, SettlementKindV1::Burn, None);
+    }
+
+    /// **GAP-5: pay a Final out of its job's escrow** — the poster's bond is debited exactly what the producer is paid, and the escrow
+    /// is spent (an escrow pays once). No escrow (already paid, or returned): no reward — nothing is ever issued.
+    fn pay_from_job_escrow(&mut self, job: &Digest, claim: &Digest, producer: Digest, out: &mut Vec<LedgerEventV1>) -> u64 {
+        let Some(row) = self.job_escrows.remove(job) else { return 0 };
+        let collateral = self.bonds.get(&row.poster).map_or(0, |b| b.collateral);
+        // Never instruct more than the poster's bond still holds (another subsystem may have slashed it since).
+        let paid = row.amount.min(collateral);
+        if let Some(b) = self.bonds.get_mut(&row.poster) {
+            b.reserved = b.reserved.saturating_sub(row.amount);
+            b.collateral -= paid;
+        }
+        settle(out, row.poster, paid, SettlementKindV1::PayJobEscrow, Some(*claim));
+        settle(out, row.poster, row.amount - paid, SettlementKindV1::ReleaseJobEscrow, Some(*claim));
+        settle(out, producer, paid, SettlementKindV1::FinalReward, Some(*claim));
+        paid
+    }
+
+    /// **GAP-5: return the escrows no claim can still use**: past `job_escrow_ttl_daa`, the job held by no live claim and sealed by
+    /// no producer. A job whose holder later fails keeps its escrow until this rule returns it.
+    fn release_idle_job_escrows(&mut self, out: &mut Vec<LedgerEventV1>) {
+        let ttl = self.policy.job_escrow_ttl_daa;
+        let idle: Vec<Digest> = self
+            .job_escrows
+            .iter()
+            .filter(|(job, row)| {
+                self.daa > row.posted_daa.saturating_add(ttl)
+                    && !self.job_claims.get(*job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job)
+                    && self.seals.range((**job, [0u8; 64])..=(**job, [0xFFu8; 64])).next().is_none()
+            })
+            .map(|(job, _)| *job)
+            .collect();
+        for job in idle {
+            let Some(row) = self.job_escrows.remove(&job) else { continue };
+            if let Some(b) = self.bonds.get_mut(&row.poster) {
+                b.reserved = b.reserved.saturating_sub(row.amount);
+            }
+            out.push(LedgerEventV1::JobEscrowReturned { job, poster: row.poster, amount: row.amount });
+            settle(out, row.poster, row.amount, SettlementKindV1::ReleaseJobEscrow, None);
         }
     }
 
@@ -1884,6 +1987,8 @@ impl KernelLedgerV1 {
         let ttl = self.policy.seal_ttl_daa;
         self.seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
         self.proof_seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
+        // GAP-5: escrows no claim can still use go back to their posters.
+        self.release_idle_job_escrows(out);
         // Demands past their deadline: the producer's availability default.
         let due: Vec<_> = self.demands.iter().filter(|(_, d)| daa >= d.deadline_daa).map(|(k, _)| *k).collect();
         for (claim, stage, position) in due {
@@ -1967,10 +2072,13 @@ impl KernelLedgerV1 {
                 (b, ClaimStateV1::Final { .. }) if !matches!(b, ClaimStateV1::Final { .. }) => {
                     let row = self.claims.get_mut(&id).expect("listed");
                     row.liability_until = Some(daa + self.policy.liability_daa);
-                    let reward = if row.convicted { 0 } else { self.policy.claim_reward };
-                    row.rewarded = reward > 0;
+                    // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued.
+                    let (job, convicted) = (row.job_id, row.convicted);
+                    let mut paid = Vec::new();
+                    let reward = if convicted { 0 } else { self.pay_from_job_escrow(&job, &id, producer, &mut paid) };
+                    self.claims.get_mut(&id).expect("listed").rewarded = reward > 0;
                     out.push(LedgerEventV1::Final { claim: id, reward });
-                    settle(out, producer, reward, SettlementKindV1::FinalReward, Some(id));
+                    out.extend(paid);
                 }
                 (b, ClaimStateV1::TimedOut { .. }) if !matches!(b, ClaimStateV1::TimedOut { .. }) => {
                     self.release(&id, producer, reserved, out);

@@ -21,7 +21,10 @@
 //! instructions need no write (V2 reads the ledger's own reservation); a slash is a real [`TransitionBuilder::slash_bond`] of exactly
 //! the slashed amount (the synced collateral guarantees it never clamps, so the split to accuser, demanders and the burn conserves); an
 //! accuser's reward, a demander's share and a Final reward are payouts in the coinbase queue under the kernel's payout prefix; a kernel
-//! `Withdraw` is the route forgetting the bond, not a V2 exit.
+//! `Withdraw` is the route forgetting the bond, not a V2 exit. **GAP-5** (user-pays escrow): a Final reward is never new money — a
+//! posted job's escrow is a reservation on its poster's bond, the job's first Final debits it (a real `slash_bond`, burned at release)
+//! and pays the producer exactly that, and the fold pays a `FinalReward` only out of the `PayJobEscrow` debit before it in the same
+//! batch: Σ kernel payouts ≤ Σ kernel debits, with no coinbase rule involved.
 //!
 //! # Seats (INTERIM)
 //!
@@ -229,6 +232,9 @@ fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &
 /// tick is not strict: it runs after the rehearsal, so an error there would fail the whole block — and with every held bond re-synced
 /// just before it, the ledger's clamped instructions are always payable; if that ever failed, taking what the bond holds is the safe side.
 fn apply_settlements(builder: &mut TransitionBuilder<'_>, events: &[LedgerEventV1], strict: bool) -> Result<(), PalwStateV2Error> {
+    // GAP-5: what this batch actually debited from posters' escrows — the only source a Final reward is paid from. A `FinalReward`
+    // with no spent escrow behind it is never paid (there is no unfunded reward path).
+    let mut escrow_debited: u64 = 0;
     for event in events {
         let LedgerEventV1::Settlement(s) = event else { continue };
         let key = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&s.bond));
@@ -236,7 +242,9 @@ fn apply_settlements(builder: &mut TransitionBuilder<'_>, events: &[LedgerEventV
             SettlementKindV1::SlashFraud
             | SettlementKindV1::SlashDefault
             | SettlementKindV1::SlashFiling
-            | SettlementKindV1::AdmissionFee => {
+            | SettlementKindV1::AdmissionFee
+            | SettlementKindV1::JobFee
+            | SettlementKindV1::PayJobEscrow => {
                 let Some(key) = key else {
                     if strict {
                         return Err(refused("a slash names a bond the route never saw"));
@@ -251,11 +259,24 @@ fn apply_settlements(builder: &mut TransitionBuilder<'_>, events: &[LedgerEventV
                 if debit != s.amount && strict {
                     return Err(refused(format!("a slash of {} took {debit}: the synced collateral did not cover it", s.amount)));
                 }
+                if s.kind == SettlementKindV1::PayJobEscrow {
+                    escrow_debited = escrow_debited.saturating_add(debit);
+                }
             }
             SettlementKindV1::AccuserReward | SettlementKindV1::DemanderShare | SettlementKindV1::FinalReward => {
+                let amount = if s.kind == SettlementKindV1::FinalReward {
+                    let funded = s.amount.min(escrow_debited);
+                    escrow_debited -= funded;
+                    if funded != s.amount && strict {
+                        return Err(refused("a Final reward with no spent escrow behind it (GAP-5: nothing is issued)"));
+                    }
+                    funded
+                } else {
+                    s.amount
+                };
                 let payee = key.and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
                 match payee {
-                    Some(payload) => match builder.add_kernel_payout(payload, s.amount) {
+                    Some(payload) => match builder.add_kernel_payout(payload, amount) {
                         Ok(()) => {}
                         Err(e) if strict => return Err(e),
                         Err(_) => {}
@@ -270,6 +291,8 @@ fn apply_settlements(builder: &mut TransitionBuilder<'_>, events: &[LedgerEventV
             | SettlementKindV1::ReleaseClaim
             | SettlementKindV1::ReserveDemand
             | SettlementKindV1::ReleaseDemand
+            | SettlementKindV1::ReserveJobEscrow
+            | SettlementKindV1::ReleaseJobEscrow
             | SettlementKindV1::Burn
             | SettlementKindV1::Withdraw => {}
         }

@@ -22,6 +22,12 @@ use misaka_palw_kernel::settle::{SettlementBookV1, SettlementInstructionV1};
 use misaka_palw_kernel::trace::ParamCommitmentsV1;
 use misaka_palw_tir::MapParams;
 
+/// **GAP-5: the harness's job poster** — a consumer bond that posts every job (and pays its price, which funds the job's Final
+/// reward), so the producers' own collateral reads exactly as it did before jobs had a price. Every world registers it.
+pub const POSTER: Digest = [0x9B; 64];
+/// What every world registers [`POSTER`] with.
+pub const POSTER_COLLATERAL: u64 = 1_000_000;
+
 /// The harness's transactions: what the ledger tests have always written. `into_txs` signs each with the actor it names (or the
 /// harness signer) and splits the consumer-derived inputs from the signed objects.
 #[derive(Clone, Debug)]
@@ -153,8 +159,8 @@ impl T {
                 ));
                 v
             }
-            T::PostJob { job } => vec![obj(signer, O::PostJob { job })],
-            T::PostPipelineJob { job } => vec![obj(signer, O::PostPipelineJob { job })],
+            T::PostJob { job } => vec![obj(POSTER, O::PostJob { job })],
+            T::PostPipelineJob { job } => vec![obj(POSTER, O::PostPipelineJob { job })],
             T::CommitClaim { claim, evidence, commitments } => {
                 vec![obj(claim.producer_bond, O::CommitClaim { claim, evidence, commitments })]
             }

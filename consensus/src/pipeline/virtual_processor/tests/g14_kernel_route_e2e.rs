@@ -842,7 +842,13 @@ async fn g14_kernel_route_a_covered_lie_is_convicted_by_an_outsider_through_the_
 async fn g14_kernel_route_a_covered_lie_is_convicted_after_final_within_the_liability_horizon() {
     kaspa_core::log::try_init_logger("warn");
     let mut w = World::new().await;
+    let poster_slashed = w.net.slashed(1);
     let job = w.job().await;
+    // GAP-5: posting the job reserved its escrow on the poster's REAL bond (card 1) and burned the fee; the Final reward is paid out
+    // of the escrow, never issued.
+    let escrow = w.policy().claim_reward;
+    assert_eq!(w.net.slashed(1), poster_slashed + w.policy().job_fee, "the posting fee is a real slash of its poster");
+    assert_eq!(w.net.ledger().job_escrows[&job.id()].amount, escrow);
     let before = w.net.collateral(0);
     let lie = w.claim(0, &job, true).await;
     let seats = w.seats(&lie.id);
@@ -852,11 +858,12 @@ async fn g14_kernel_route_a_covered_lie_is_convicted_after_final_within_the_liab
     let ClaimStateV1::ProbabilisticPass { window_end_daa, .. } = w.net.claim_state(&lie.id) else { panic!("covered") };
     assert_eq!(window_end_daa, covered_at + w.policy().challenge_window_daa);
 
-    // Nobody prosecutes inside the window: the claim finalizes and the producer is paid (INTERIM reward, GAP: unfunded).
+    // Nobody prosecutes inside the window: the claim finalizes and the producer is paid — out of the job's escrow (GAP-5).
     w.net.beat_to(window_end_daa).await;
     let ClaimStateV1::Final { final_daa } = w.net.claim_state(&lie.id) else { panic!("{:?}", w.net.claim_state(&lie.id)) };
     assert_eq!(final_daa, window_end_daa);
     assert_eq!(w.net.owed(0), w.policy().claim_reward, "the Final reward is queued for the producer's payee");
+    assert!(w.net.ledger().job_escrows.is_empty(), "paid out of the job's escrow, which pays once");
     assert!(w.net.ledger().claims[&lie.id].liability_until.is_some(), "and liability runs");
 
     // The outsider, from the read API and the public DA alone, convicts post-Final.
@@ -1596,6 +1603,110 @@ async fn g14_kernel_route_hostile_objects_are_dropped_or_dismissed_and_never_sto
     let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x77);
     w.proof(c, &lie.id, proof).await;
     assert!(w.net.ledger().claims[&lie.id].convicted, "the outsider still convicts after the noise");
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+// ---- GAP-5: the Final reward is the poster's escrow, paid once (user-pays escrow) ------------------------------------------
+
+/// What `chain` has actually minted to card `card`'s payee and still holds unspent: every coinbase output of its selected chain paying
+/// the payee's script that the virtual UTXO set holds (a reorged-out coinbase holds nothing), plus what the queue still owes it.
+fn minted_and_owed(net: &Net, chain: &T12Chain, card: usize) -> (u64, u64) {
+    let state = chain.tip_state().1;
+    let payload = state.bond(&net.bond(card)).expect("the bond").payout_payload;
+    let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
+    let mut minted = 0u64;
+    for b in chain_blocks(chain, chain.sink()) {
+        let Some(cb) = b.transactions.first() else { continue };
+        for (i, o) in cb.outputs.iter().enumerate() {
+            if o.script_public_key == spk
+                && chain.ctx.consensus.get_virtual_utxo_entry(TransactionOutpoint::new(cb.id(), i as u32)).is_some()
+            {
+                minted += o.value;
+            }
+        }
+    }
+    let key = palw_kernel_payout_key_v1(&payload);
+    let owed = state.pending_payouts_iter().find(|(k, _)| **k == key).map(|(_, p)| p.amount).unwrap_or(0);
+    (minted, owed)
+}
+
+/// **GAP-5 on the real node (the user's ruling: user-pays escrow).** The poster's escrow is a reservation on its REAL bond and the
+/// posting fee a real slash; the Final debits the escrow (a slash of the poster) and queues exactly that for the producer; the coinbase
+/// mints it once. Across a replay, a reorg that undoes the Final (B re-finalizes the claim on its own branch) and back, a re-applied
+/// claim, and the queue's redemption, the producer is paid exactly ONE reward and the poster debited exactly one escrow and one fee:
+/// Σ kernel payouts ≤ Σ kernel debits, nothing issued.
+#[tokio::test]
+async fn g14_kernel_route_the_final_reward_is_paid_once_out_of_the_posters_escrow_across_reorg_replay_and_redemption() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::new().await;
+    let pol = w.policy();
+    let reward = pol.claim_reward;
+    let (slashed0, reserved0) = (w.net.slashed(1), w.net.kernel_reserved(1));
+    let job = w.job().await; // card 1 posts every job
+    assert_eq!(w.net.kernel_reserved(1), reserved0 + u128::from(reward), "the escrow is reserved on the poster's real bond");
+    assert_eq!(w.net.slashed(1), slashed0 + pol.job_fee, "the posting fee is a real slash (burned at release)");
+    assert_eq!(w.net.ledger().job_escrows[&job.id()].amount, reward);
+    let claim = w.claim(0, &job, false).await;
+    w.cover(&claim.id).await;
+    let ClaimStateV1::ProbabilisticPass { window_end_daa, .. } = w.net.claim_state(&claim.id) else { panic!("covered") };
+    w.net.beat_to(window_end_daa - 1).await;
+    let fork = w.net.chain.sink();
+    assert!(!matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }));
+    w.net.beat_to(window_end_daa).await;
+    assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }));
+    assert_eq!(minted_and_owed(&w.net, &w.net.chain, 0), (0, reward), "queued once, out of the escrow");
+    assert_eq!(w.net.slashed(1), slashed0 + pol.job_fee + reward, "the poster's escrow debited");
+    assert_eq!(w.net.kernel_reserved(1), reserved0, "and its reservation spent");
+    assert!(w.net.ledger().job_escrows.is_empty());
+
+    // A second node replays; then B, from just before the Final, out-works A: the reorg undoes A's Final and B finalizes the claim on
+    // its own branch — still exactly one reward and one debit.
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "Z on A");
+    let mut zn = w.net.on_chain(z);
+    let b = t12_genesis_chain(&w.net.config, &w.net.bundle, &w.net.premine, &w.net.floats);
+    let up_to_fork = chain_blocks(&w.net.chain, fork);
+    let fork_timestamp = up_to_fork.last().unwrap().header.timestamp;
+    for blk in up_to_fork {
+        arrive(&b, blk, "a block up to the fork").await;
+    }
+    let mut b = b;
+    b.ctx.simulated_time = fork_timestamp;
+    let ttpb = w.net.ttpb();
+    let mut b_blocks = Vec::new();
+    for _ in 0..4 {
+        b_blocks.push(b.heartbeat(ttpb, Vec::new()).await);
+    }
+    for blk in &b_blocks {
+        arrive(&zn.chain, blk.clone(), "B's block").await;
+    }
+    assert_eq!(zn.chain.sink(), b.sink(), "B out-works A: Z reorgs onto B");
+    let (minted, owed) = minted_and_owed(&w.net, &zn.chain, 0);
+    eprintln!("[GAP-5] on B after the reorg: minted {minted}, owed {owed}, poster slashed {}", zn.slashed(1) - slashed0);
+    assert_eq!(minted + owed, reward, "the reorg undid A's Final; B's Final pays once — never twice");
+    assert_eq!(zn.slashed(1), slashed0 + pol.job_fee + reward, "and debits the escrow once");
+    assert_eq!(zn.chain.ctx.consensus.palw_kernel_route_v1(), b.ctx.consensus.palw_kernel_route_v1());
+
+    // A out-works B again: Z returns to A — one reward, one debit.
+    let old_len = chain_blocks(&w.net.chain, w.net.chain.sink()).len();
+    for _ in 0..4 {
+        w.net.chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    for blk in chain_blocks(&w.net.chain, w.net.chain.sink()).into_iter().skip(old_len) {
+        arrive(&zn.chain, blk, "A's later block").await;
+    }
+    w.net.assert_same(&zn.chain, "Z back on A");
+    let (minted, owed) = minted_and_owed(&w.net, &zn.chain, 0);
+    assert_eq!((minted, owed), (reward, 0), "redeemed by A's next coinbase, once");
+    assert_eq!(zn.slashed(1), slashed0 + pol.job_fee + reward);
+
+    // A re-applied claim (its seal and its reveal carried again) is dropped: nothing is paid twice.
+    let again = w.claim_with(0, &job, false, Delivery::Direct).await;
+    assert_eq!(again.id, claim.id, "the same claim");
+    w.net.beat_to(w.net.daa() + 3).await;
+    assert_eq!(minted_and_owed(&w.net, &w.net.chain, 0), (reward, 0), "the queue redeemed it once; a re-application pays nothing");
+    assert_eq!(w.net.slashed(1), slashed0 + pol.job_fee + reward, "the poster was debited one escrow");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }

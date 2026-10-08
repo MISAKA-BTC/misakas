@@ -328,7 +328,7 @@ fn a_lying_optimistic_claim_is_convicted_before_final_and_after_it_by_one_outsid
     // (5000 less the slashed reservation and the claim's non-refundable admission fee of 3, C4 F-C4R3-05.)
     assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.bonds[&PRODUCER].reserved), (4000 - 3, 0));
     assert_eq!(w.consumer.paid(&OUTSIDER), 500, "the bounty is a share of the collected reservation");
-    assert_eq!(w.l.burned, 500 + 3, "the burned half of the slash and the admission fee");
+    assert_eq!(w.l.burned, 500 + 3 + 2, "the burned half of the slash, the admission fee and the job's posting fee (GAP-5)");
     let ev = w.block(31, vec![T::FileProof { accuser: SPAM1, claim: id, proof }]);
     assert_eq!(ev, vec![E::Duplicate { claim: id }], "a claim is convicted once; a copied proof pays nobody");
     w.block(200, vec![]);
@@ -390,7 +390,7 @@ fn withheld_material_is_a_default_not_a_fraud_conviction_and_the_claim_never_fin
     // The penalty is split at least like a slash so a producer cannot cycle it through its own demander for nothing (the larger of
     // the policy's 100 permille and the 500 permille a slash burns, C4 F-C4R3-02), the rest to the demander. The rest of the
     // reservation is held through the default's liability horizon, then released (no valid proof ever arrived).
-    assert_eq!((w.consumer.paid(&OUTSIDER), w.l.burned), (50, 50 + 3), "(and the admission fee, C4 F-C4R3-05)");
+    assert_eq!((w.consumer.paid(&OUTSIDER), w.l.burned), (50, 50 + 3 + 2), "(and the admission fee and the job's posting fee)");
     assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.bonds[&PRODUCER].reserved), (4900 - 3, 900), "(and the admission fee)");
     assert_eq!(w.block(243, vec![]), vec![E::Released { claim: id }]);
     assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.bonds[&PRODUCER].reserved), (4900 - 3, 0));
@@ -1028,7 +1028,7 @@ fn the_optimistic_state_root_form_is_versioned_and_pinned_by_a_golden_vector() {
 
 /// The policy part moved with the G14-R4 fix of F-C4R3-05 (`OpvEconomicsV1::admission_fee`).
 const GOLDEN_OPV_PARTS: [&str; 4] = ["ab038a45fd92a4a9", "557931bf322541c3", "b018a938b23ad4fb", "3fbfb5902dada353"];
-/// Moved with the G14-R4 fixes: GAP-R7 (the historical root inside it gained the proof-seal collection) and F-C4R3-05 (the policy's
-/// admission fee).
+/// Moved with the G14-R4 fixes: GAP-R7 and GAP-5 (the historical root inside it gained the proof-seal and job-escrow collections and
+/// its policy the job fee and escrow TTL) and F-C4R3-05 (the OPV policy's admission fee).
 const GOLDEN_OPV_ROOT: &str =
-    "f98c54b2ebcaebb54d04bc67ecb64bdc109b78c62b97cc5f78a429bbf5c343b7c7e3a25acf8b96a32cfdd04b341764008ddafeebc8cb4abca9822878e74495d4";
+    "bbb9dca1029c232081329cb2551d43ef5c64e4f7cb3319b844a49b5497d89686949e88e32a93e0f7ae36ee77a374135979c043a86b2310a40b585107e7851558";

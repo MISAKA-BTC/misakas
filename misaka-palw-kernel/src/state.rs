@@ -105,6 +105,8 @@ pub struct StateRootPartsV1 {
     pub seals: Digest,
     /// GAP-R7: the accusers' proof seals (in the root since the G14-R4 fix).
     pub proof_seals: Digest,
+    /// GAP-5: the posters' job escrows that fund Final rewards (in the root since the G14-R4 fix).
+    pub job_escrows: Digest,
 }
 
 impl StateRootPartsV1 {
@@ -176,6 +178,7 @@ impl KernelLedgerV1 {
             job_claims: collection_root(&d("job-claims"), self.job_claims.len(), self.job_claims.iter()),
             seals: collection_root(&d("seals"), self.seals.len(), self.seals.iter()),
             proof_seals: collection_root(&d("proof-seals"), self.proof_seals.len(), self.proof_seals.iter()),
+            job_escrows: collection_root(&d("job-escrows"), self.job_escrows.len(), self.job_escrows.iter()),
         }
     }
 

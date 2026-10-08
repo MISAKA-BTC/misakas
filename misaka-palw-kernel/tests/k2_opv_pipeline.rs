@@ -57,6 +57,8 @@ fn policy() -> LedgerPolicyV1 {
         accuser_reward_permille: 500,
         default_penalty: 100,
         claim_reward: 7,
+        job_fee: 2,
+        job_escrow_ttl_daa: 300,
         max_adjudications_per_block: 64,
         max_court_work_per_block: u64::MAX,
         claim_seal_delay_daa: 1,
@@ -152,8 +154,11 @@ impl World {
             params,
             events: vec![],
         };
-        let mut txs =
-            vec![LedgerTxV1::SyncBond { bond: PRODUCER, collateral: 5000 }, LedgerTxV1::SyncBond { bond: OUTSIDER, collateral: 1000 }];
+        let mut txs = vec![
+            LedgerTxV1::SyncBond { bond: PRODUCER, collateral: 5000 },
+            LedgerTxV1::SyncBond { bond: OUTSIDER, collateral: 1000 },
+            LedgerTxV1::SyncBond { bond: common::chain::POSTER, collateral: common::chain::POSTER_COLLATERAL },
+        ];
         txs.extend(w.register_txs(opv.map(|_| OPV)));
         let ev = w.block_raw(1, txs);
         if let Some(class) = ev.iter().find_map(|e| if let E::ClassRegistered { class } = e { Some(*class) } else { None }) {

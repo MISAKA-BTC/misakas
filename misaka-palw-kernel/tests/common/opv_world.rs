@@ -108,7 +108,15 @@ impl World {
             params: fx.params,
         };
         let mut txs: Vec<LedgerTxV1> = Vec::new();
-        for (b, c) in [(PRODUCER, 5000), (OUTSIDER, 1000), (SPAM1, 1000), (SPAM2, 1000), (HONEST, 3000), (SQUATTER, 3000)] {
+        for (b, c) in [
+            (PRODUCER, 5000),
+            (OUTSIDER, 1000),
+            (SPAM1, 1000),
+            (SPAM2, 1000),
+            (HONEST, 3000),
+            (SQUATTER, 3000),
+            (super::chain::POSTER, super::chain::POSTER_COLLATERAL),
+        ] {
             txs.push(LedgerTxV1::SyncBond { bond: b, collateral: c });
         }
         txs.extend(register_in(&w, VerificationModeV1::OptimisticPublicVerification, PRODUCER));
@@ -185,6 +193,7 @@ impl World {
                 super::ledger_world::bond(OUTSIDER, 1000),
                 super::ledger_world::bond(SPAM1, 1000),
                 super::ledger_world::bond(SPAM2, 1000),
+                super::ledger_world::bond(super::chain::POSTER, super::chain::POSTER_COLLATERAL),
                 w.register(),
             ],
         );
