@@ -294,8 +294,14 @@ impl CensusContext {
     /// The preflight options of a census: the shape depth on `network`, at `height` (`None`: the last scheduled fence height, as
     /// the preflight chooses it), the reference seat tiers.
     pub fn new(snapshot: &str, network: &str, height: Option<u64>, policy: RightsPolicy, tree: &str) -> CensusContext {
-        let options =
-            preflight::Options { depth: preflight::Depth::Shape, network: Some(network.to_string()), height, ..Default::default() };
+        let options = preflight::Options {
+            depth: preflight::Depth::Shape,
+            network: Some(network.to_string()),
+            height,
+            // A pipeline class (an encoder–decoder) is judged by the generative admission, not left `NOT_RUN` (2026-10-08).
+            pipeline_admission: true,
+            ..Default::default()
+        };
         let context_rule = ContextRule::ModelCapped { cap: 8_192, retry: 2_048 };
         CensusContext {
             snapshot: snapshot.to_string(),
@@ -408,6 +414,12 @@ fn admit_of(r: &Report) -> GateResultV1 {
     }
     let f: Vec<Found> = mapped(r, Stage::Register).into_iter().filter(|(g, _)| *g == Gate::Admit).map(|(_, x)| x).collect();
     if !f.is_empty() {
+        // A pipeline class this build could not declare shape-only (`PIPELINE_CLASS_UNDECLARED`) maps to the `NOT_RUN_*` code of the
+        // admission that was not asked: not a verdict about the model, never a pass, never a gap.
+        if f.iter().all(|x| super::onboarding::is_not_run_code(&x.code)) {
+            let ev = f.iter().flat_map(|x| x.evidence.iter().cloned()).take(3).collect();
+            return not_run(Gate::Admit, &f[0].code, ev);
+        }
         return fail(Gate::Admit, f, "shape");
     }
     match r.verdict.register.status {
@@ -975,7 +987,11 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
     ch.push(Gate::Pack, || not_run(Gate::Pack, codes::NOT_RUN_NEEDS_WEIGHTS, vec![]));
     let routed = rep.is_some_and(|r| r.notes.iter().any(|n| n.contains("RFC-0003 program")));
     ch.push(Gate::Admit, || {
-        if task.profile.is_pipeline() || routed {
+        // A data-route class the preflight lowered (an encoder–decoder) carries its own admission verdict — the generative lane's
+        // pipeline admission at the judged height, or `NOT_RUN_PIPELINE_ADMISSION` for a route this build cannot declare shape-only
+        // (`admit_of`). A pipeline task whose class is not a data route (an embedding model, a text-to-image repository) has no
+        // pipeline admission to read here.
+        if task.profile.is_pipeline() && !routed {
             return not_run(
                 Gate::Admit,
                 codes::NOT_RUN_PIPELINE_ADMISSION,

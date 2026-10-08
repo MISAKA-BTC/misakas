@@ -109,6 +109,15 @@ pub struct ArtifactInfo {
     pub note: String,
 }
 
+/// **A data-route class** (RFC-0003) the convert stage lowered: what the pipeline admission is asked of ([`super::pipeline`]).
+#[derive(Clone, Debug)]
+pub enum RoutedClass {
+    /// An encoder–decoder whose two stages lowered at the declared source and target lengths.
+    EncDec(Box<misaka_palw_tir_lower::model::route::EncDecStagesV1>),
+    /// A route whose class this build cannot declare shape-only, and why (never a pass).
+    Undeclarable { kind: String, adapter: String, why: String },
+}
+
 /// Everything the convert stage learned.
 pub struct Analysis {
     pub model: Option<ModelInfo>,
@@ -122,6 +131,8 @@ pub struct Analysis {
     pub program: Option<TirProgramV1>,
     /// The tokenizer is present (or its absence is not known).
     pub tokenizer_known: Option<bool>,
+    /// The data-route class lowered for the pipeline admission (only when `Options::pipeline_admission` is set).
+    pub routed: Option<RoutedClass>,
 }
 
 const CAP: usize = 24;
@@ -271,6 +282,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
     // ---- a kind the decoder pipeline does not run: its RFC-0003 route (a vision tower, a convolutional network, an encoder–decoder, a
     // diffusers component) is read, lowered to its version-2 programs and admitted, and that is the convert stage's verdict ------------
     let mut routed_ok = false;
+    let mut routed: Option<RoutedClass> = None;
     let is_route = src.gguf_model.is_none() && src.config.as_ref().is_some_and(misaka_palw_tir_lower::model::route::is_data_route);
     if let (Some(config), None) = (&src.config, &src.gguf_model)
         && misaka_palw_tir_lower::model::route::is_data_route(config)
@@ -281,7 +293,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
             routed_ok = true;
             let programs = probe["programs"].as_array().cloned().unwrap_or_default();
             notes.push(format!(
-                "a {} class (adapter {}): lowered to {} RFC-0003 program(s), each admitted ({}); it registers as a pipeline class, whose rules are the generative lane's (RFC-0003) and are not judged here",
+                "a {} class (adapter {}): lowered to {} RFC-0003 program(s), each admitted ({}); it registers as a pipeline class, {}",
                 probe["kind"].as_str().unwrap_or("?"),
                 probe["adapter"].as_str().unwrap_or("?"),
                 programs.len(),
@@ -289,8 +301,42 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
                     .iter()
                     .map(|p| format!("{} nodes, {:.0} MACs", p["nodes"], p["macs"].as_f64().unwrap_or(0.0)))
                     .collect::<Vec<_>>()
-                    .join("; ")
+                    .join("; "),
+                if opts.pipeline_admission {
+                    "judged below by the generative lane's admission (RFC-0003)"
+                } else {
+                    "whose rules are the generative lane's (RFC-0003) and are not judged here"
+                }
             ));
+            if opts.pipeline_admission {
+                let kind = probe["kind"].as_str().unwrap_or("?").to_string();
+                let adapter = probe["adapter"].as_str().unwrap_or("?").to_string();
+                if kind == "encdec" {
+                    let ctx = opts.max_context.unwrap_or_else(|| pipeline_default_context(config));
+                    match misaka_palw_tir_lower::model::route::lower_encdec_stages_v1(config, tindex.as_ref(), ctx, ctx) {
+                        Ok(misaka_palw_tir_lower::model::route::EncDecShapeV1::Stages(st)) => routed = Some(RoutedClass::EncDec(st)),
+                        Ok(misaka_palw_tir_lower::model::route::EncDecShapeV1::NotDeclarable(why)) => {
+                            routed = Some(RoutedClass::Undeclarable { kind, adapter, why })
+                        }
+                        Err(e) => blockers.push(
+                            Blocker::new(
+                                Stage::Convert,
+                                "ARCH_REFUSED",
+                                "the model's data route cannot be lowered at the declared context",
+                            )
+                            .evidence([format!("source and target of {ctx} positions: {}", short(&e))]),
+                        ),
+                    }
+                } else {
+                    routed = Some(RoutedClass::Undeclarable {
+                        why: format!(
+                            "a {kind} route declares an Embedding- or Image-profile class, which lowers from the checkpoint's weights (calibration); this build declares no such class from headers"
+                        ),
+                        kind,
+                        adapter,
+                    });
+                }
+            }
         } else {
             blockers.push(
                 Blocker::new(Stage::Convert, "ARCH_REFUSED", "the model's data route (RFC-0003 programs) refuses it")
@@ -530,7 +576,13 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
     // ---- the artifact estimate ------------------------------------------------------------------------------------------------------
     let program = prepared.as_ref().map(|p| p.lowered.program.clone());
     let artifact = program.as_ref().map(|p| artifact_of(src, p, &scope, &tensors, &unused_set, &ignored));
-    Analysis { model, scope, storage, tensors, artifact, blockers, notes, program, tokenizer_known }
+    Analysis { model, scope, storage, tensors, artifact, blockers, notes, program, tokenizer_known, routed }
+}
+
+/// The declared context of a pipeline class when none is asked for: the model's declared positions, at most 1,024 (an encoder–decoder's
+/// attention is quadratic in it), at least 16; 512 when the configuration declares none.
+fn pipeline_default_context(config: &serde_json::Value) -> u32 {
+    crate::census::gates::declared_positions(config).map(|(v, _)| v.min(1_024) as u32).unwrap_or(512).max(16)
 }
 
 /// Whether a refusal's text is the quantisation's (already raised as its own blocker).
