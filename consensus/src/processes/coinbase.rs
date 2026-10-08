@@ -521,6 +521,14 @@ impl CoinbaseManager {
             ));
         }
 
+        // RFC-0008 v2: a template's anchor trailer belongs to the block, not to the miner's tag — it commits the EXEC blocks the
+        // template's state already accepts — so it survives the miner replacing its own data. (None for a payload without one,
+        // which is every payload below the fence: the trailer magic is read, never produced, by anything else.)
+        let trailer = kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(&payload)
+            .ok()
+            .and_then(|(_, anchor)| anchor)
+            .map(|anchor| anchor.trailer());
+
         // Keep only blue score and subsidy. Note that truncate does not modify capacity, so
         // the usual case where the payloads are the same size will not trigger a reallocation
         payload.truncate(LENGTH_OF_BLUE_SCORE + LENGTH_OF_SUBSIDY);
@@ -530,8 +538,24 @@ impl CoinbaseManager {
                 .chain(miner_data.script_public_key.script().iter().copied())    // Script public key
                 .chain(miner_data.extra_data.as_ref().iter().copied()), // Extra data
         );
+        if let Some(trailer) = trailer {
+            payload.extend_from_slice(&trailer);
+        }
 
         Ok(payload)
+    }
+
+    /// **RFC-0008 v2: the payload length rule at a height.** The cap is `max_coinbase_payload_len`, as ever; where the EXEC v2
+    /// payload is in force a payload that carries a well-formed anchor trailer may exceed it by the trailer's own length (the
+    /// anchor does not fit in the bytes the miner's script and tag leave).
+    pub fn check_payload_len_at(&self, payload: &[u8], exec_v2_active: bool) -> CoinbaseResult<()> {
+        if payload.len() <= self.max_coinbase_payload_len {
+            return Ok(());
+        }
+        let anchored = exec_v2_active
+            && kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(payload)
+                .is_ok_and(|(prefix, anchor)| anchor.is_some() && prefix.len() <= self.max_coinbase_payload_len);
+        if anchored { Ok(()) } else { Err(CoinbaseError::PayloadLenAboveMax(payload.len(), self.max_coinbase_payload_len)) }
     }
 
     pub fn deserialize_coinbase_payload<'a>(&self, payload: &'a [u8]) -> CoinbaseResult<CoinbaseData<&'a [u8]>> {
@@ -539,8 +563,16 @@ impl CoinbaseManager {
             return Err(CoinbaseError::PayloadLenBelowMin(payload.len(), MIN_PAYLOAD_LENGTH));
         }
 
-        if payload.len() > self.max_coinbase_payload_len {
-            return Err(CoinbaseError::PayloadLenAboveMax(payload.len(), self.max_coinbase_payload_len));
+        // RFC-0008 v2: a payload ending in the anchor trailer's magic may exceed the cap by at most the trailer. Whether that is LEGAL
+        // at a height is the body stage's question ([`Self::check_payload_len_at`]); this reader is lenient so that every site that
+        // reads an already-validated coinbase can read an anchoring one.
+        let cap = if payload.ends_with(&kaspa_consensus_core::palw_exec_v2_anchor::PALW_EXEC_V2_ANCHOR_MAGIC) {
+            self.max_coinbase_payload_len + kaspa_consensus_core::palw_exec_v2_anchor::PALW_EXEC_V2_ANCHOR_MAX_TRAILER_BYTES
+        } else {
+            self.max_coinbase_payload_len
+        };
+        if payload.len() > cap {
+            return Err(CoinbaseError::PayloadLenAboveMax(payload.len(), cap));
         }
 
         let mut parser = PayloadParser::new(payload);

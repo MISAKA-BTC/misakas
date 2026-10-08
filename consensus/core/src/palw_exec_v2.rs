@@ -301,6 +301,32 @@ fn tx_content_digest(permit: &PalwExecTxPermitV2) -> Hash64 {
     finish(state)
 }
 
+/// **What a header stage and a mergeset rule read of any lane block, whichever envelope it carries**: its permit coordinates if it
+/// holds one (a v1 round block, or a v2 `EXEC_TX`), or the fact that it is a slice (which holds none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwExecLaneCoordsV1 {
+    /// A permit holder: `(round, permit index, bond)` — a v1 round block or a v2 `EXEC_TX`.
+    Permit { round: u64, permit_index: u16, bond: PalwBondKeyV2 },
+    /// A v2 `EXEC_SLICE`: no round, no permit.
+    Slice { bond: PalwBondKeyV2 },
+}
+
+/// Decode a lane block's `palw_commitment` into [`PalwExecLaneCoordsV1`], by its magic. `Err` names why neither envelope decodes.
+pub fn palw_exec_lane_coords_v1(commitment: &[u8]) -> Result<PalwExecLaneCoordsV1, String> {
+    if PalwExecV2Envelope::is_v2_carriage(commitment) {
+        let envelope = PalwExecV2Envelope::decode(commitment).map_err(|e| e.to_string())?;
+        return Ok(match (&envelope.tx_permit, &envelope.work_slice) {
+            (Some(permit), None) => {
+                PalwExecLaneCoordsV1::Permit { round: permit.round, permit_index: permit.permit_index, bond: envelope.executor_bond }
+            }
+            (None, Some(_)) => PalwExecLaneCoordsV1::Slice { bond: envelope.executor_bond },
+            _ => return Err("a v2 envelope carries exactly one payload".into()),
+        });
+    }
+    let envelope = crate::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(commitment).map_err(|e| e.to_string())?;
+    Ok(PalwExecLaneCoordsV1::Permit { round: envelope.round, permit_index: envelope.permit_index, bond: envelope.bond })
+}
+
 /// Why a v2 envelope was refused. Every variant rejects the **whole carrier**.
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwExecV2Error {
@@ -544,6 +570,15 @@ impl Params {
         self.palw_exec_payload_v2.filter(|f| *f != ForkActivation::never()).is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// **The fence with the mode folded in**: the EXEC v2 payload widens the execution lane, which only a `ConsensusV2` network
+    /// has, so only it answers (and `Some(never())`, the dormant spelling, answers nothing). The pipeline reads this.
+    pub fn palw_exec_payload_v2_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_exec_payload_v2) {
+            (PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
     /// **The EXEC payload fence's own refusals**, asked by [`Params::validate_palw_v2`]:
     ///
     /// * a V2 bundle whose mirror of the height is not the fence's;
@@ -696,6 +731,41 @@ mod tests {
             }
         }
         assert_ne!(PALW_EXEC_V2_CARRIAGE_MAGIC, crate::palw_execution_lane_v1::PALW_EXEC_CARRIAGE_MAGIC_V1);
+    }
+
+    /// A slice envelope (an ML-DSA-87 key and signature beside twelve roots) is over the 8 KiB v1 carriage cap, so `PXE2` has its own
+    /// cap — the way `PFS4` does — and the shape gate accepts it for algo 10 and nothing else.
+    #[test]
+    fn a_slice_envelope_exceeds_the_v1_cap_and_fits_its_own_and_the_shape_gate_takes_it_for_the_lane_only() {
+        use crate::pow_layer0::{
+            PALW_COMMITMENT_MAX_BYTES, POW_ALGO_ID_PALW_ROUND_V1, PalwAttemptLaneV1, check_palw_commitment_shape_at,
+        };
+        let bytes = slice_envelope(slice(0, 0, 10)).encode();
+        assert!(bytes.len() > PALW_COMMITMENT_MAX_BYTES, "that is why the PXE2 cap exists: {} bytes", bytes.len());
+        assert!(bytes.len() <= PALW_EXEC_V2_MAX_ENVELOPE_BYTES);
+        check_palw_commitment_shape_at(POW_ALGO_ID_PALW_ROUND_V1, &bytes, false, PalwAttemptLaneV1::Unfenced)
+            .expect("a PXE2 slice envelope");
+        // The permit envelope is smaller and takes the same gate.
+        check_palw_commitment_shape_at(POW_ALGO_ID_PALW_ROUND_V1, &tx_envelope(h(77)).encode(), false, PalwAttemptLaneV1::Unfenced)
+            .expect("a PXE2 permit envelope");
+        // Over its own cap, or malformed, or on another lane: refused.
+        let mut huge = bytes.clone();
+        huge.resize(PALW_EXEC_V2_MAX_ENVELOPE_BYTES + 1, 0);
+        assert!(check_palw_commitment_shape_at(POW_ALGO_ID_PALW_ROUND_V1, &huge, false, PalwAttemptLaneV1::Unfenced).is_err());
+        let mut both = slice_envelope(slice(0, 0, 10));
+        both.tx_permit = Some(PalwExecTxPermitV2 { round: 1, permit_index: 0 });
+        assert!(
+            check_palw_commitment_shape_at(POW_ALGO_ID_PALW_ROUND_V1, &both.encode(), false, PalwAttemptLaneV1::Unfenced).is_err()
+        );
+        assert!(
+            check_palw_commitment_shape_at(crate::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1, &bytes, false, PalwAttemptLaneV1::Unfenced)
+                .is_err(),
+            "no other lane carries a PXE2 envelope"
+        );
+        // A v1 envelope keeps the 8,192-byte cap.
+        let v1_cap =
+            vec![b'P', b'X', b'R', b'1'].into_iter().chain(std::iter::repeat_n(0u8, PALW_COMMITMENT_MAX_BYTES)).collect::<Vec<u8>>();
+        assert!(check_palw_commitment_shape_at(POW_ALGO_ID_PALW_ROUND_V1, &v1_cap, false, PalwAttemptLaneV1::Unfenced).is_err());
     }
 
     #[test]

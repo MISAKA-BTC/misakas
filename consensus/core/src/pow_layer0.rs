@@ -876,8 +876,13 @@ pub fn check_palw_commitment_shape_at(
     // RFC-0009: a `PFS4` receipt carriage (two signatures and two keys) has its own, larger cap. Every other carriage — including a `PFS3`
     // receipt — keeps the 8,192-byte one, so the set of acceptable payloads below `palw_receipt_spend_v4` is unchanged (a `PFS4` header is
     // refused by name at the header stage until the fence opens).
+    // RFC-0008 v2: a `PXE2` EXEC envelope (an ML-DSA-87 key and signature beside a slice's twelve roots) is over 8 KiB, so it too has
+    // its own cap; a `PXR1` round envelope keeps the 8,192-byte one, and a `PXE2` header is refused by name at the header stage until
+    // `palw_exec_payload_v2` opens.
     let cap = if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 && crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment) {
         crate::palw_receipt_v4::PALW_COMMITMENT_MAX_BYTES_V4
+    } else if algo_id == POW_ALGO_ID_PALW_ROUND_V1 && crate::palw_exec_v2::PalwExecV2Envelope::is_v2_carriage(palw_commitment) {
+        crate::palw_exec_v2::PALW_EXEC_V2_MAX_ENVELOPE_BYTES
     } else {
         PALW_COMMITMENT_MAX_BYTES
     };
@@ -919,6 +924,13 @@ pub fn check_palw_commitment_shape_at(
             .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
     }
     if algo_id == POW_ALGO_ID_PALW_ROUND_V1 {
+        // RFC-0008 v2: the magic says which envelope this is; both are the lane's, and a payload of neither is malformed. Shape only —
+        // WHICH of the two a height admits is the header stage's, against `palw_exec_payload_v2`.
+        if crate::palw_exec_v2::PalwExecV2Envelope::is_v2_carriage(palw_commitment) {
+            return crate::palw_exec_v2::PalwExecV2Envelope::decode(palw_commitment)
+                .and_then(|envelope| envelope.validate_shape())
+                .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
+        }
         // ADR-0125: the permit envelope is REQUIRED — a round block without one names no permit.
         // Shape only here; the round, the signature and the network are the stateless carriage
         // check's, and whether the bond holds the permit is the merging block's.

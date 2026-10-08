@@ -948,3 +948,44 @@ fn a_root_declaration_is_signed_by_the_claims_bond_for_this_network_and_by_no_ot
     assert_ne!(PALW_EXEC_V2_ROOT_MLDSA87_CONTEXT, PALW_EXEC_V2_TX_MLDSA87_CONTEXT);
     assert_ne!(PALW_EXEC_V2_ROOT_SIGNING_DOMAIN, PALW_EXEC_V2_ROOT_DECL_DOMAIN);
 }
+
+// =============================================================================================
+// The anchored set
+// =============================================================================================
+
+fn anchor_fold(span_now: u64, members: &[(u64, u64)]) -> crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1 {
+    crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1 { members: members.iter().map(|(b, span)| (h64(*b), *span)).collect(), span_now }
+}
+
+fn anchor_step(
+    p: &PalwStateParamsV2,
+    s: &PalwChainStateV2,
+    word: u64,
+    daa: u64,
+    fold: crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1,
+) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    let extras = PalwTransitionExtrasV1 { exec_v2_anchor: Some(fold), ..xx() };
+    step_with(s, p, word, daa, &[], &extras).map(|(state, _)| state)
+}
+
+#[test]
+fn an_anchor_records_what_it_covered_once_and_the_window_drops_the_old() {
+    let (p, s0, _) = world(Some(0));
+    let s1 = anchor_step(&p, &s0, 50, 120, anchor_fold(5, &[(0xA1, 4), (0xA2, 5)])).unwrap();
+    assert!(s1.exec_v2_anchored_v1(&h64(0xA1)) && s1.exec_v2_anchored_v1(&h64(0xA2)));
+    assert!(!s1.exec_v2_state_v1().is_empty(), "an anchored block is a row: the table is rooted and carried");
+    // A block covered by an earlier anchor cannot be covered again.
+    let again = anchor_step(&p, &s1, 51, 121, anchor_fold(5, &[(0xA1, 4)])).expect_err("covered once");
+    assert!(again.to_string().contains("earlier anchor"), "{again}");
+    // A block outside the window is refused by the ledger's own guard (the closure never offers one).
+    assert!(anchor_step(&p, &s1, 51, 121, anchor_fold(8, &[(0xA3, 5)])).expect_err("outside the window").to_string().contains("outside the window"));
+    // Two spans on, the older entries are dropped by the next anchoring block; the newer one stays inside the window.
+    let s2 = anchor_step(&p, &s1, 51, 130, anchor_fold(6, &[(0xA4, 6)])).unwrap();
+    assert!(!s2.exec_v2_anchored_v1(&h64(0xA1)), "span 4 is outside the window of span 6");
+    assert!(s2.exec_v2_anchored_v1(&h64(0xA2)), "span 5 is the span before");
+    assert!(s2.exec_v2_anchored_v1(&h64(0xA4)));
+    // Below the fence an anchor is a fold error by name, and no row is written.
+    let (pd, sd, _) = world(None);
+    let err = anchor_step(&pd, &sd, 50, 120, anchor_fold(5, &[(0xA1, 5)])).expect_err("dormant");
+    assert!(err.to_string().contains("before palw_exec_payload_v2"), "{err}");
+}

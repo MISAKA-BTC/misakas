@@ -14,6 +14,18 @@ use std::{
 
 use super::process_queue::ProcessQueue;
 
+/// **A block's dependencies: its direct parents and, past the EXEC payload fence (RFC-0008 v2), the lane heads its coinbase anchors.**
+/// Both must be known before the block can be judged, so the orphan pool treats them alike.
+fn block_deps(block: &Block) -> Vec<BlockHash> {
+    block
+        .header
+        .direct_parents()
+        .iter()
+        .copied()
+        .chain(kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_heads_of_block(block))
+        .collect()
+}
+
 /// The output of an orphan pool block query
 #[derive(Debug)]
 pub enum OrphanOutput {
@@ -78,15 +90,14 @@ impl OrphanBlocksPool {
             return None;
         }
         orphan_block.asses_for_cache()?;
-        let (roots, orphan_ancestors) =
-            match self.get_orphan_roots(consensus, orphan_block.header.direct_parents().iter().copied().collect()).await {
-                FindRootsOutput::Roots(roots, orphan_ancestors) => (roots, orphan_ancestors),
-                FindRootsOutput::NoRoots(orphan_ancestors) => {
-                    let blocks: Vec<_> =
-                        orphan_ancestors.into_iter().map(|h| self.orphans.swap_remove(&h).expect("orphan ancestor").block).collect();
-                    return Some(OrphanOutput::NoRoots(consensus.validate_and_insert_block_batch(blocks)));
-                }
-            };
+        let (roots, orphan_ancestors) = match self.get_orphan_roots(consensus, block_deps(&orphan_block).into_iter().collect()).await {
+            FindRootsOutput::Roots(roots, orphan_ancestors) => (roots, orphan_ancestors),
+            FindRootsOutput::NoRoots(orphan_ancestors) => {
+                let blocks: Vec<_> =
+                    orphan_ancestors.into_iter().map(|h| self.orphans.swap_remove(&h).expect("orphan ancestor").block).collect();
+                return Some(OrphanOutput::NoRoots(consensus.validate_and_insert_block_batch(blocks)));
+            }
+        };
 
         if self.orphans.len() == self.max_orphans {
             let mut eviction_succeeded = false;
@@ -118,7 +129,7 @@ impl OrphanBlocksPool {
                 return None;
             }
         }
-        for parent in orphan_block.header.direct_parents() {
+        for parent in &block_deps(&orphan_block) {
             if let Some(entry) = self.orphans.get_mut(parent) {
                 entry.children.insert(orphan_hash);
             }
@@ -139,7 +150,7 @@ impl OrphanBlocksPool {
     /// a peer, these blocks should be the next-in-line to be requested from that peer.
     pub async fn get_orphan_roots_if_known(&self, consensus: &ConsensusProxy, orphan: BlockHash) -> OrphanOutput {
         if let Some(orphan_block) = self.orphans.get(&orphan) {
-            match self.get_orphan_roots(consensus, orphan_block.block.header.direct_parents().iter().copied().collect()).await {
+            match self.get_orphan_roots(consensus, block_deps(&orphan_block.block).into_iter().collect()).await {
                 FindRootsOutput::Roots(roots, _) => OrphanOutput::Roots(roots),
                 FindRootsOutput::NoRoots(_) => OrphanOutput::NoRoots(Default::default()),
             }
@@ -158,7 +169,7 @@ impl OrphanBlocksPool {
         while let Some(current) = queue.pop_front() {
             if let Some(block) = self.orphans.get(&current) {
                 orphan_ancestors.insert(current);
-                for parent in block.block.header.direct_parents().iter().copied() {
+                for parent in block_deps(&block.block) {
                     if visited.insert(parent) {
                         queue.push_back(parent);
                     }
@@ -187,7 +198,7 @@ impl OrphanBlocksPool {
         while let Some(orphan_hash) = process_queue.dequeue() {
             if let Occupied(entry) = self.orphans.entry(orphan_hash) {
                 let mut processable = true;
-                for p in entry.get().block.header.direct_parents().iter().copied() {
+                for p in block_deps(&entry.get().block) {
                     if !processing.contains_key(&p) && consensus.async_get_block_status(p).await.is_none_or(|s| s.is_header_only()) {
                         processable = false;
                         break;
@@ -207,9 +218,11 @@ impl OrphanBlocksPool {
     }
 
     fn iterate_child_orphans(&self, hash: BlockHash) -> impl Iterator<Item = BlockHash> + '_ {
-        self.orphans.iter().filter_map(move |(&orphan_hash, orphan_block)| {
-            if orphan_block.block.header.direct_parents().contains(&hash) { Some(orphan_hash) } else { None }
-        })
+        self.orphans.iter().filter_map(
+            move |(&orphan_hash, orphan_block)| {
+                if block_deps(&orphan_block.block).contains(&hash) { Some(orphan_hash) } else { None }
+            },
+        )
     }
 
     /// Iterate all orphans and remove blocks which are no longer orphans.
@@ -238,7 +251,7 @@ impl OrphanBlocksPool {
         let mut roots = Vec::new();
         for block in self.orphans.values() {
             let mut processable = true;
-            for parent in block.block.header.direct_parents().iter().copied() {
+            for parent in block_deps(&block.block) {
                 if self.orphans.contains_key(&parent)
                     || consensus.async_get_block_status(parent).await.is_none_or(|status| status.is_header_only())
                 {

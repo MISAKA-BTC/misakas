@@ -221,8 +221,12 @@ impl BlockTaskDependencyManager {
         let mut pending = self.pending.lock();
         let group = pending.get(&task_id).expect("try_begin expects a task group");
         let internal_task = group.tasks.front().expect("try_begin expects a task");
-        let header = internal_task.task.as_ref().expect("task is expected to not be taken").block().header.clone();
-        for parent in header.direct_parents().iter() {
+        let task_block = internal_task.task.as_ref().expect("task is expected to not be taken").block();
+        let header = task_block.header.clone();
+        // RFC-0008 v2: the lane heads a chain block's anchor names are dependencies like parents (a no-op for every block without a
+        // trailer: one suffix test of the coinbase payload).
+        let exec_heads = kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_heads_of_block(task_block);
+        for parent in header.direct_parents().iter().chain(exec_heads.iter()) {
             if let Some(parent_task) = pending.get_mut(parent) {
                 parent_task.dependent_tasks.push(task_id);
                 return None; // The block will be reprocessed once the pending parent completes processing

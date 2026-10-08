@@ -433,11 +433,16 @@ pub struct PalwExecV2StateV1 {
     pub slices: std::collections::BTreeMap<(Hash64, u32), PalwWorkSliceRowV2>,
     /// `JobWorkUse`: a job's work identity to the root that holds it.
     pub jobs: std::collections::BTreeMap<Hash64, Hash64>,
+    /// **The EXEC blocks an anchor has covered**, by block hash to the span of the block's anchor: what bounds the closure walk
+    /// (a covered block is a boundary, covered once and never walked past) and what stops one carrier being accepted twice through
+    /// two anchors. Holds only blocks inside the two-span window — an older entry is dropped by the next anchoring block, and a
+    /// block that old is outside the window anyway, so it could not be covered again.
+    pub anchored: std::collections::BTreeMap<Hash64, u64>,
 }
 
 impl PalwExecV2StateV1 {
     pub fn is_empty(&self) -> bool {
-        self.roots.is_empty() && self.slices.is_empty() && self.jobs.is_empty()
+        self.roots.is_empty() && self.slices.is_empty() && self.jobs.is_empty() && self.anchored.is_empty()
     }
 
     /// Open roots whose root executor is `bond`.

@@ -310,6 +310,11 @@ impl TransitionBuilder<'_> {
     pub(super) fn write_exec_job(&mut self, key: Hash64, new: Option<Hash64>) {
         self.write_exec_v2_row(PALW_EXEC_V2_TABLE_JOBS_V1, key, new, |s| &mut s.exec_v2.jobs);
     }
+
+    /// The one writer of the anchored-block set.
+    pub(super) fn write_exec_anchored(&mut self, key: Hash64, new: Option<u64>) {
+        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_ANCHORED_V1, key, new, |s| &mut s.exec_v2.anchored);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -358,6 +363,7 @@ pub(super) fn apply_exec_v2_row_v1(
         PALW_EXEC_V2_TABLE_ROOTS_V1 => swap(&mut state.exec_v2.roots, key, old, new, revert),
         PALW_EXEC_V2_TABLE_SLICES_V1 => swap(&mut state.exec_v2.slices, key, old, new, revert),
         PALW_EXEC_V2_TABLE_JOBS_V1 => swap(&mut state.exec_v2.jobs, key, old, new, revert),
+        PALW_EXEC_V2_TABLE_ANCHORED_V1 => swap(&mut state.exec_v2.anchored, key, old, new, revert),
         _ => Err(PalwStateV2Error::DeltaMismatch("an exec v2 row names no table")),
     }
 }
@@ -529,6 +535,47 @@ fn accept_slice_v2(
         root.phase = PalwWorkRootPhaseV2::Complete;
     }
     builder.write_exec_root(slice.root_claim_id, Some(root));
+}
+
+/// **Record what one anchoring block covered.** After the permits and the slices (steps 7 and 7b), at a fixed place. Drops the
+/// entries the window has passed, refuses a block covered twice (the closure never offers one: this is the ledger's own guard, as
+/// the permit's is) or one anchored outside the window, and writes the covered blocks. Bounded by the closure's own leaf bound.
+pub(super) fn record_exec_anchor_v2(
+    builder: &mut TransitionBuilder<'_>,
+    fold: &crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1,
+) -> Result<(), PalwStateV2Error> {
+    if !builder.params.exec_v2_from_daa().is_some() {
+        return Err(refused("an anchor before palw_exec_payload_v2 is in force"));
+    }
+    let stale: Vec<Hash64> = builder
+        .state
+        .exec_v2
+        .anchored
+        .iter()
+        .filter(|(_, span)| span.checked_add(1).is_none_or(|next| next < fold.span_now))
+        .map(|(block, _)| *block)
+        .collect();
+    for block in stale {
+        builder.write_exec_anchored(block, None);
+    }
+    for (block, span) in &fold.members {
+        if !crate::palw_exec_v2_anchor::palw_exec_v2_window_ok(*span, fold.span_now) {
+            return Err(refused(format!("{block} is anchored in span {span}, outside the window of span {}", fold.span_now)));
+        }
+        if builder.state.exec_v2.anchored.contains_key(block) {
+            return Err(refused(format!("{block} was covered by an earlier anchor")));
+        }
+        builder.write_exec_anchored(*block, Some(*span));
+    }
+    Ok(())
+}
+
+impl PalwChainStateV2 {
+    /// **Has an anchor already covered this EXEC block?** The closure's boundary: a covered block is neither covered again nor
+    /// walked past.
+    pub fn exec_v2_anchored_v1(&self, block: &Hash64) -> bool {
+        self.exec_v2.anchored.contains_key(block)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

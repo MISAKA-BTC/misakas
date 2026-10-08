@@ -14296,6 +14296,7 @@ impl PalwChainStateV2 {
             state.update(collection_root(b"exec_v2_roots", &self.exec_v2.roots).as_byte_slice());
             state.update(collection_root(b"exec_v2_slices", &self.exec_v2.slices).as_byte_slice());
             state.update(collection_root(b"exec_v2_jobs", &self.exec_v2.jobs).as_byte_slice());
+            state.update(collection_root(b"exec_v2_anchored", &self.exec_v2.anchored).as_byte_slice());
         }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
@@ -16249,6 +16250,7 @@ pub enum PalwDeltaEntryV2 {
 pub const PALW_EXEC_V2_TABLE_ROOTS_V1: u8 = 1;
 pub const PALW_EXEC_V2_TABLE_SLICES_V1: u8 = 2;
 pub const PALW_EXEC_V2_TABLE_JOBS_V1: u8 = 3;
+pub const PALW_EXEC_V2_TABLE_ANCHORED_V1: u8 = 4;
 
 /// The full effect one block application had on the state, in application order. Applying it to
 /// the same parent reproduces the transition's output exactly ([`apply_delta_v2`]); reverting it
@@ -29541,6 +29543,11 @@ pub fn apply_palw_transition_v7(
     if !extras.exec_v2_covered.is_empty() {
         let _verdicts = palw_exec_v2_fold::apply_covered_slices_v2(&mut builder, ctx, &extras.exec_v2_covered);
     }
+    // 7c. **RFC-0008 v2: record what the anchor covered** — the carriers' own ledgers have spoken, so the covered set itself is
+    //     written last, at a fixed place. Drops the entries the window has passed.
+    if let Some(anchor) = &extras.exec_v2_anchor {
+        palw_exec_v2_fold::record_exec_anchor_v2(&mut builder, anchor)?;
+    }
     #[cfg(test)]
     for (claim, index) in &extras.exec_v2_test_verified {
         palw_exec_v2_fold::mark_slice_verified_for_tests(&mut builder, *claim, *index, ctx.daa_score)?;
@@ -38036,6 +38043,10 @@ pub struct PalwTransitionExtrasV1 {
     /// does not exist in any build that is not a test, and no node can name it.
     #[cfg(test)]
     pub exec_v2_test_verified: Vec<(Hash64, u32)>,
+    /// **RFC-0008 v2: the EXEC blocks the accepting block's anchor covered** (every covered carrier, whatever the fold decides about
+    /// it — a covered block is covered once), with the span clock the window is read at. `None` where the block anchors nothing,
+    /// which is `Default` and every chain below the fence.
+    pub exec_v2_anchor: Option<crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1>,
     /// **ADR-0126 Decision 3: `Params::palw_overlay_carve` resolved at the block's DAA** — the carve
     /// the claim of this block's OWN attempt escrows at, since the block that carried the attempt is
     /// this block. A merged attempt's carve rides its own record
@@ -70197,6 +70208,7 @@ pub(crate) mod tests {
                 exec_v2_covered: Vec::new(),
                 #[cfg(test)]
                 exec_v2_test_verified: Vec::new(),
+                exec_v2_anchor: None,
                 escrow_carve: None,
                 objective_offence_daa: None,
             }
@@ -70455,6 +70467,7 @@ pub(crate) mod tests {
                 exec_v2_covered: Vec::new(),
                 #[cfg(test)]
                 exec_v2_test_verified: Vec::new(),
+                exec_v2_anchor: None,
                 escrow_carve: None,
                 objective_offence_daa: None,
             };

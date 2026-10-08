@@ -68,6 +68,9 @@ pub struct BlockBodyProcessor {
     /// **Lane accept-order** (`Params::palw_lane_accept_parents_first_fence`): from it a round block's
     /// body may not carry an EVM payload. `None` on every shipped preset.
     pub(super) palw_lane_accept_parents_first: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0008 v2**: the unified EXEC payload's fence. Past it a coinbase may end in an anchor trailer, a lane block's may not,
+    /// and an `EXEC_SLICE` block carries only its coinbase.
+    pub(super) palw_exec_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     // Stores
     pub(super) statuses_store: Arc<RwLock<DbStatusesStore>>,
@@ -133,6 +136,7 @@ impl BlockBodyProcessor {
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
             palw_round_lane: params.palw_execution_lane_fence().map(|lane| lane.activation),
             palw_lane_accept_parents_first: params.palw_lane_accept_parents_first_fence(),
+            palw_exec_v2: params.palw_exec_payload_v2_fence(),
 
             statuses_store: storage.statuses_store.clone(),
             _ghostdag_store: storage.ghostdag_store.clone(),
