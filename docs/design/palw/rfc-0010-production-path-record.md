@@ -142,6 +142,44 @@ in it. What replaces it is the table above.
 * a V3 duty and a lane-A duty cannot spend the same collateral, in both orders;
 * V3 seats sign ordinary V2 receipts and hold slashable locks; the claim finalises by V2's sweep and every duty is released;
 * every block's delta re-applies and reverts, and the carriage reloads under its root.
+* a bond registered after genesis (the ordinary `BondRegistered`, no named operator) is in the sealed snapshot and is seated when
+  the seat count equals the population (`a_bond_registered_after_genesis_…`; folded without the acceptance layer's ML-DSA check,
+  like every test here — a real mature non-genesis cohort is the external drill below);
+* a snapshot whose candidates, root, policy id or excluded producer was touched neither reloads under the committed state root nor
+  passes the engine's own check (`a_tampered_snapshot_…`); in the fold the snapshot is host-derived, a producer carries none;
+* the read model (below) follows a claim from acceptance to release and names every non-fraud end with `fraud: false`.
+
+## 4b. Through the real virtual processor (testnet-12 harness, `t12_permissionless_panel_e2e.rs`)
+
+**These tests bypass `validate_palw_v2`, and say so.** `ConfigBuilder::build` panics at an armed `palw_permissionless_panel_v1`
+(as it must on a real network), so the fence is set on `Config.params` after `build` and mirrored by
+`sync_palw_permissionless_panel_v1`; the processor takes its beacon source from a `#[cfg(test)]`-only override
+(`VirtualStateProcessor::panel_v3_test_beacon`, compiled out of every non-test build) because no Panel-independent Final exists on a
+real chain. Nothing here is evidence that the permissionless Panel is complete.
+
+| Test | What it pins |
+|---|---|
+| `t12_a_v3_claim_binds_on_a_heartbeat_with_no_named_operator_while_lane_a_drains_the_legacy_claim` | a legacy claim (below the fence) is bound by lane A's own binder; the V3 claim is bound by the engine on a **heartbeat** block — no named operator, no anchor attempt — in its acceptance; a lane-A `PanelBound` of the V3 claim is refused at the gate; the duty row, the exposure and the V2 panel anchor (= the V3 seed) agree; the node's read (op 220) equals the pure function of the tip state |
+| `t12_a_node_that_syncs_the_chain_reaches_the_same_engine_state_block_by_block` | a second node fed A's blocks (IBD order) has A's PALW state root after every block; the tip carriage reloads under it |
+| `t12_the_bind_survives_a_reorg_and_the_carrier_does_not_change_the_panel` | A and A2 bind on different carriers: same seed, same seats, same exposure, different `binding_block` (the witness only); a third node follows PALW fork choice A → A2 → A and its state is the one the branch it stands on commits, at every switch |
+| `t12_a_certified_output_carried_below_the_fence_is_dropped_by_name_and_the_block_stands` | the gate names the fence; a block that carries tag 120 below it stands, no engine appears |
+
+PALW fork choice orders by safe frontier, safe weight and live total (safe + bounded immature), not by blue work, so the reorg
+test makes the branch with more live attempt work win and says so; it does not assert blue-work order.
+
+## 4c. The observation read (RPC op 220, `misaka palw panel-v3`)
+
+`getPalwPanelV3Status` (wRPC op **220**, the first of the lane-C2 range 220–229; gRPC `KaspadRequest/Response` fields **1254/1255**,
+the `2·op + 814` series ops 199–201 follow) returns the node's `PanelV3ObservationV1` as one camelCase JSON document with its own
+`version` (fields are only appended): the engine's overview (tip, cursor, per-phase counts, certified epochs) and, per claim, the rule
+(`permissionlessV3` / `historicalLaneA`, decided by acceptance), V2 phase, engine phase, seal, frozen snapshot summary, the epoch's
+certified-output state (`collecting` / `certified` / `unavailable`), the assignment (retry index, seed, beacon id, seats, exposure,
+bound DAA, witness block), the redraw count and the terminal reason (`SEAL_UNAVAILABLE`, `BEACON_UNAVAILABLE`, `NO_CAPABLE_PANEL`,
+`PANEL_UNAVAILABLE`, all `fraud: false`, or `RELEASED`). Request: up to 64 claim ids (128 hex each, a malformed id is an error before
+any state is read) or none for the first tracked claims; unknown ids are listed, never silently absent. A pure read of the committed
+tip: no rule calls it. JSON in a string rather than a typed protobuf tree is deliberate: it is a read model, and a typed mirror can
+follow when an explorer needs one. A node built before op 220 drops the WebSocket on it (like every tail-appended op): ask it on a
+connection of its own. `misaka palw panel-v3 [--claim ID]… [--limit N] [--json]` prints it.
 
 ## 5. Open items (not hidden)
 
@@ -156,4 +194,36 @@ in it. What replaces it is the table above.
 | Drain bound for lane-A claims (their original timeout / court / DA liability) | DESIGN_GAP (time) |
 | `receipt_window_daa`, `max_retries`, `seal_wait_daa` are policy numbers with no network default | EXTERNAL_GATE_PENDING |
 | `PanelUnavailable` obligation hold for V3 (re-roll cost) | policy decision |
-| Real-node IBD / non-genesis cohort drill | EXTERNAL_GATE_PENDING |
+| Real-node IBD / non-genesis cohort drill (a mature bonded cohort that is not the genesis operators, on a multi-node network) | EXTERNAL_GATE_PENDING |
+| Sharded-IR classes under V3: the flat V3 draw cannot license by parts, so the claim ends `PermissionlessNoCapablePanel` at admission | DESIGN_GAP (RFC-0006 V3 per-shard draw; needs the beacon) |
+| Processor-level `PanelUnavailable` / `NoCapablePanel` and exhausted-alternates cases | fold-level only (`rfc0010_production_fold.rs`); the processor tests cover bind, IBD, reorg, legacy drain, the fence drop |
+| An RPC typed protobuf tree for the observation (explorers) | not built; the JSON document is versioned |
+
+## 6. RFC-0006 gaps handled with this lane (what changed, what is proposed)
+
+* **Shard reorg + duplicate receipt — fold level, DONE** (`palw_tir_shard_fold.rs::shard_parts_are_branch_local_…`): from one bound
+  claim, branch A lands shard 0's part then shard 1's, branch B the other order; both license with the same `basis_k`; A's deltas
+  revert to the bound state exactly (parts, per-shard progress, cell counts and every seat lock), the very receipts A spent fold
+  again on B (a receipt is spent per branch, never globally), B's deltas reproduce B's states, and inside one branch the same part
+  twice is refused by name (`ShardAlreadyLicensed`). **Processor/T12Chain-level twin: GAP** — it needs an IR class with a shard
+  plan and a signed `ReceiptV4` chain through the real node, which the T12 harness does not yet build; D-S1…D-S6 drill evidence is
+  EXTERNAL_GATE_PENDING.
+* **Stale "dormant" wording — DONE** (RFC-0006 status note, `palw_tir_shard_v1.rs`, `palw_tir_shard_fold_v1.rs`, `config/params.rs`):
+  `palw_tir_shard_v1` is armed on testnet-12 at DAA 5,300.
+* **Per-segment resource pricing — PROPOSAL ONLY, nothing changed.** The armed rules already price a cell's *work*: the plan's cell
+  shares come from `palw_tir_shard_cell_permille_v1` (`work_cell_v1(layers, positions)`, so attention work grows with the
+  segment's positions) and a signer's lock is `full_lock × share(mask)`. What they do not price is *residency*: readiness is one
+  possession proof per **shard** (`palw_tir_shard_ready_class_v1`), while a partial seat's minimum state is the whole K/V prefix up
+  to its segment's end (`palw_resource_profile_v1`: `end_rows`, `kv_resident_bytes`), which grows with the segment index. A seat can
+  therefore (expected from the profile; not drilled) hold shard `i`'s rows, be drawn into a late cell it cannot host, and be a non-responder there (a liveness cost borne by
+  the claim, not a safety hole: the exact court and `basis_k` are unchanged). Any fix changes the draw and the price, so it needs a
+  **new versioned fence** (suggested name `palw_tir_shard_segment_v2`, undeclared and unarmed) with: a per-`(shard, segment)`
+  resident-byte table in the plan; a readiness tier a seat proves (the highest segment it can host); the stratified draw
+  restricted to seats whose tier covers the cell; and the lock share `max(work share, resident share)`. The armed fence at 5,300
+  keeps its rules. Needs a decision on the tier granularity and on whether a seat that over-declares a tier is slashable (open; not checked against
+  the shard readiness court rules in this lane).
+* **Non-seat public cell watcher — GAP.** `TirShardCourtAccused` is already open to any Active bond, but nothing in the tree plays
+  a non-seat watcher: it needs the public material read for outsiders (matrix row "A row 16": carry-in tiles, history rows,
+  checkpoints) and A's fresh-verifier engine to replay one cell. No code in this lane.
+* **V3 per-shard draw — DESIGN_GAP.** Blocked on the beacon (BEACON_UNAVAILABLE) as the matrix says; until then a sharded class
+  never reaches a Panel under V3.
