@@ -40,6 +40,17 @@ fail() { # fail <stage> <category|auto> <code> <command> <expected> <log> [secur
 }
 jmerge() { python3 "$H1/report.py" merge "$@"; }
 pc() { "$PALW_CLASS_BIN" "$@"; }
+# guarded <pid-name> <stdout> <stderr> cmd... -- run a long job so the disk guard can pause it: its PID goes to pids/<name>.pid for
+# wh-h1-run/diskguard2.sh (SIGSTOP below 15 GB free, SIGCONT at 18), and is removed when the job ends.
+guarded() {
+    local name=$1 so=$2 se=$3; shift 3
+    mkdir -p "$RUN_ROOT/pids"
+    "$@" > "$so" 2> "$se" & local p=$!
+    echo "$p" > "$RUN_ROOT/pids/$name.pid"
+    local rc=0; wait "$p" || rc=$?
+    rm -f "$RUN_ROOT/pids/$name.pid" "$RUN_ROOT/pids/$name.state"
+    return $rc
+}
 
 model_json() {
     python3 "$H1/report.py" model "$MODELS" "$MID" > "$EV/model.json.tmp"
@@ -161,9 +172,9 @@ do_artifact() {
     local build_rc=0
     if [ ! -s "$A/BUILT" ]; then
         rm -rf "$A/pack" "$A/class.palwtir"
-        /usr/bin/time -l "$PALW_CLASS_BIN" pack build --model "$LOCAL" --out "$A/class.palwtir" --pack "$A/pack" --calib "$A/calib.json" \
+        guarded "$MID-build" "$A/build.out" "$A/build.err" /usr/bin/time -l "$PALW_CLASS_BIN" pack build --model "$LOCAL" --out "$A/class.palwtir" --pack "$A/pack" --calib "$A/calib.json" \
             --context "$CTX" --name "$MID" --repo "$REPO" --revision "$REV" --hf-reference "$A/hfref" \
-            --declare "testnet-12:max-context=$CTX$DECLARE_EXTRA" ${CHUNK_STORE:+--chunk-store "$CHUNK_STORE"} $BUILD_OPTS > "$A/build.out" 2> "$A/build.err" || build_rc=$?
+            --declare "testnet-12:max-context=$CTX$DECLARE_EXTRA" ${CHUNK_STORE:+--chunk-store "$CHUNK_STORE"} $BUILD_OPTS || build_rc=$?
         [ -n "$CHUNK_STORE" ] && rm -rf "$CHUNK_STORE"
         cat "$A/build.err" >> "$log"
         if [ "$build_rc" = 0 ]; then date +%s > "$A/BUILT"; fi
@@ -176,9 +187,16 @@ do_artifact() {
     local decl; decl=$(ls "$A"/class.palwtir.testnet-12.palwtir 2>/dev/null | head -1)
     [ -n "$decl" ] || { fail artifact LAYOUT_OR_RESOURCE_REFUSED NO_DECLARED_CLASS "palw-class pack build --declare testnet-12:max-context=$CTX" "a declared class file" "$A/build.err"; return 1; }
     echo "$decl" > "$A/DECLARED"
+    [ -n "$CHUNK_STORE" ] && rm -rf "$CHUNK_STORE"
+    # The lowered file is the declared one minus its layout record: nothing reads it after the declare (the pack pins the declared
+    # identity), and on a large model it is the difference between a rebuild that fits on the disk and one that does not.
+    [ -s "$decl" ] && rm -f "$A/class.palwtir"
+    # `--rebuild` converts again into the temp dir (the artifact plus its chunk store, about twice the artifact): only with room for it
+    # and the shared disk's 15 GB floor; otherwise the strict verification runs without it and says so.
+    local need_gb=$(( $(stat -f %z "$decl") * 2 / 1073741824 + 16 )) free_gb; free_gb=$(df -g / | awk 'NR==2 {print $4}')
+    local rebuild=--rebuild; if [ "$free_gb" -lt "$need_gb" ]; then rebuild=""; echo "REBUILD_NOT_RUN: ${free_gb} GB free < ${need_gb} GB needed" > "$A/REBUILD_SKIPPED"; else rm -f "$A/REBUILD_SKIPPED"; fi
     local vrc=0
-    /usr/bin/time -l "$PALW_CLASS_BIN" pack verify "$A/pack" --model "$LOCAL" --artifact "$decl" --rebuild --strict --json \
-        > "$A/verify.json" 2> "$A/verify.err" || vrc=$?
+    guarded "$MID-verify" "$A/verify.json" "$A/verify.err" /usr/bin/time -l "$PALW_CLASS_BIN" pack verify "$A/pack" --model "$LOCAL" --artifact "$decl" $rebuild --strict --json || vrc=$?
     cat "$A/verify.err" >> "$log"
     python3 - "$A" "$EV" "$build_rc" "$vrc" "$key" "$((SECONDS - t0))" "${CACHE:-1}" <<'PY'
 import json, os, re, sys, hashlib
@@ -211,7 +229,9 @@ try:
     v = json.load(open(os.path.join(A, "verify.json")))
 except Exception as e:
     v = {"readable": False, "error": str(e)}
-pv = {"schema": "misaka.h1.pack-verification.v1", "command": "palw-class pack verify <pack> --model <checkpoint> --artifact <declared class file> --rebuild --strict --json",
+rb = open(os.path.join(A, "REBUILD_SKIPPED")).read().strip() if os.path.exists(os.path.join(A, "REBUILD_SKIPPED")) else None
+pv = {"schema": "misaka.h1.pack-verification.v1", "command": "palw-class pack verify <pack> --model <checkpoint> --artifact <declared class file> " + ("" if rb else "--rebuild ") + "--strict --json",
+      "rebuild": rb or "run (the artifact rebuilt from the public source and the pack's profile)",
       "exit": int(vrc), "verified": v.get("verified"), "ok": v.get("ok"), "pack": v.get("pack"), "checks": v.get("checks"),
       "skipped": [c for c in (v.get("checks") or []) if c.get("status") == "SKIPPED"],
       "failed": [c for c in (v.get("checks") or []) if c.get("status") == "FAIL"], "max_rss_bytes": rss(os.path.join(A, "verify.err"))}
