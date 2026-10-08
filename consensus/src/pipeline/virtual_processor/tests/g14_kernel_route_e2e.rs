@@ -1431,3 +1431,61 @@ async fn g14_kernel_route_the_read_model_serves_a_claim_and_rows_that_rebuild_th
     assert_eq!(rebuilt.root(), route.ledger_root().as_bytes(), "and its root is the committed one");
     assert_eq!(rebuilt.public_record(&lie.id).unwrap().0.to_bytes(), read.public_record, "the same public record");
 }
+
+// ---- hostile input -----------------------------------------------------------------------------------------------------
+
+/// **Hostile, signature-valid objects are dropped or dismissed — none fails a block, none panics the fold** (C4's P0: a wire shape
+/// whose element count overflows; the kernel's Result paths only). Signed by real bonds so each reaches the kernel: a response for a
+/// claim nobody committed, one with no open demand, a proof of 64 junk bytes, a decode fault whose logits shape is `[u64::MAX, 2]`, a
+/// pipeline proof for a program claim, a demand at stage 255 / position `u32::MAX`, a seal for no job, an exit for another's bond and
+/// a withdrawal of nothing. The chain carries on, the claim is untouched — and the outsider's genuine proof still convicts it. The
+/// junk proofs cost their filers the (small) dismissal fee, a real slash of the real bond.
+#[tokio::test]
+async fn g14_kernel_route_hostile_objects_are_dropped_or_dismissed_and_never_stop_the_chain() {
+    use misaka_palw_kernel::job::DecodeFaultV1;
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::new().await;
+    let job = w.job().await;
+    let lie = w.claim(0, &job, true).await;
+    let seats = w.seats(&lie.id);
+    w.cover(&lie.id).await;
+    let cards = w.outsiders(&lie, &seats, 3);
+    let (a, b, c) = (cards[0], cards[1], cards[2]);
+    let before = w.net.ledger().claims[&lie.id].clone();
+    let (a_before, b_before) = (w.net.collateral(a), w.net.collateral(b));
+    let fee = w.policy().dismissed_proof_fee;
+
+    let huge = TensorWireV1 { dtype: 0, shape: vec![u64::MAX, 2], bytes: vec![0; 8] };
+    let hostile: Vec<(usize, K)> = vec![
+        (a, K::Respond { claim: [0x11; 64], stage: 0, position: 0, bytes: vec![0xFF; 4096] }),
+        (a, K::Respond { claim: lie.id, stage: 0, position: 3, bytes: vec![0xFF; 64] }),
+        (a, K::FileProof { accuser: w.net.kid(a), claim: lie.id, proof: ProsecutionV1::Kernel(vec![0xFF; 64]) }),
+        (b, K::FileProof { accuser: w.net.kid(b), claim: lie.id, proof: ProsecutionV1::Decode(DecodeFaultV1 { index: 0, logits: huge }) }),
+        (b, K::FileProof { accuser: w.net.kid(b), claim: lie.id, proof: ProsecutionV1::Pipeline(vec![1, 2, 3]) }),
+        (c, K::FileDemand { demander: w.net.kid(c), claim: lie.id, stage: 255, position: u32::MAX }),
+        (c, K::FileDemand { demander: w.net.kid(c), claim: [0x22; 64], stage: 0, position: 0 }),
+        (c, K::SealClaim { producer: w.net.kid(c), job: [0x33; 64], seal: [0x44; 64] }),
+        (c, K::RequestExit { bond: w.net.kid(a) }),
+        (c, K::Withdraw { bond: [0x55; 64] }),
+    ];
+    let mut items = Vec::new();
+    for (card, object) in &hostile {
+        let o = w.net.route(*card, object);
+        items.push((*card, o));
+    }
+    w.net.send(items).await;
+    // The claim is untouched and the chain carries on.
+    let after = w.net.ledger().claims[&lie.id].clone();
+    assert_eq!(after, before, "no hostile object moved the claim");
+    assert!(w.net.ledger().demands.is_empty() && !w.net.ledger().claims[&lie.id].convicted);
+    // The junk proofs were dismissed against their filers: the fee is a real slash of the real bonds (a: one proof; b: two).
+    assert!(w.net.collateral(a) < a_before && w.net.collateral(b) < b_before, "dismissed filings cost the filer");
+    assert!(w.net.collateral(a) >= a_before - fee && w.net.collateral(b) >= b_before - 2 * fee, "and no more than the fee each");
+    assert_eq!(w.net.slashed(c), 0, "the refused objects cost nothing");
+    // The genuine proof still convicts.
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x77);
+    w.proof(c, &lie.id, proof).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted, "the outsider still convicts after the noise");
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
