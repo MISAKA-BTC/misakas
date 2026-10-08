@@ -142,6 +142,8 @@ struct Life {
     executor_bond: PalwBondKeyV2,
     executor_pubkey: Vec<u8>,
     valid_seats: Vec<PalwBondKeyV2>,
+    /// How long `native_delta_evidence_v1` took over every delta of the claim's life, and how many there were.
+    extraction: (std::time::Duration, usize),
 }
 
 fn live_life() -> Life {
@@ -199,11 +201,18 @@ fn live_life() -> Life {
     assert!(matches!(s.claim(&id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "licensed");
     let mut daa = 1_003u64;
     let mut old_reader_saw = Vec::new();
+    let mut extraction = (std::time::Duration::ZERO, 0usize);
     let (mut final_daa, mut final_delta, mut at_final) = (0, None, None);
     let (retired_daa, retire_delta, after_retirement) = loop {
         daa += 1;
         assert!(daa < 20_000, "the claim retires");
         let (next, delta) = step(&p, &sp, &s, daa, &[], PalwBlockWorkV3::None, Hash64::default(), 0, true);
+        // What a cold row costs: the delta's stored bytes decoded, then read.
+        let bytes = borsh::to_vec(&delta).unwrap();
+        let started = std::time::Instant::now();
+        let decoded = borsh::from_slice::<PalwStateDeltaV2>(&bytes).unwrap();
+        let _ = native_delta_evidence_v1(&decoded);
+        extraction = (extraction.0 + started.elapsed(), extraction.1 + 1);
         match next.claim(&id) {
             Some(c) => {
                 if let PalwClaimPhaseV2::Final { final_daa: f } = c.phase {
@@ -235,6 +244,7 @@ fn live_life() -> Life {
         executor_bond: exec_bond,
         executor_pubkey: exec_pk_kept,
         valid_seats,
+        extraction,
     }
 }
 
@@ -263,6 +273,12 @@ fn rfc0012_the_old_reader_never_sees_the_claim_and_the_finalizing_delta_carries_
         l.retention_daa,
         l.retention_daa - l.accepted_daa,
         l.old_reader_saw.len()
+    );
+    eprintln!(
+        "[rfc0012-measure] decode + native_delta_evidence_v1 over {} real deltas: {:?} in total, {:?} per delta (debug build, no disk)",
+        l.extraction.1,
+        l.extraction.0,
+        l.extraction.0 / l.extraction.1.max(1) as u32
     );
     // EXPECTED: the claim is retired exactly `claim_retirement` after Final, before its retention lapses.
     assert!(

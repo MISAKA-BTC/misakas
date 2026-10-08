@@ -277,6 +277,18 @@ impl Rig {
 
     /// **Card `card`'s attempt on the node's own template at this host's clock**, carrying `txs` and `evm`.
     pub fn attempt(&mut self, card: usize, txs: Vec<Transaction>, evm: EvmTemplateData) -> MutableBlock {
+        self.attempt_injecting(card, txs, evm, Vec::new())
+    }
+
+    /// [`Self::attempt`] with `inject` appended to the finished template's transactions - past the template builder, which would
+    /// refuse them - and the merkle root recomputed before the carriage commits to it. How a hostile miner builds a block.
+    pub fn attempt_injecting(
+        &mut self,
+        card: usize,
+        txs: Vec<Transaction>,
+        evm: EvmTemplateData,
+        inject: Vec<Transaction>,
+    ) -> MutableBlock {
         use kaspa_consensus_core::palw_attempt_v2::{
             PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2,
             PalwAttemptUnsignedV2, attempt_id_v2, attempt_trace_manifest_root_v1, challenge_v2, class_ticket_v3, execution_anchor_v3,
@@ -293,6 +305,10 @@ impl Rig {
             )
             .expect("a template");
         assert!(kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(t.block.header.pow_algo_id), "the attempt lane");
+        if !inject.is_empty() {
+            t.block.transactions.extend(inject);
+            t.block.header.hash_merkle_root = kaspa_consensus_core::merkle::calc_hash_merkle_root(t.block.transactions.iter());
+        }
         t.block.header.nonce = self.nonce;
         let facts = self.api().palw_producer_facts_v2(self.bundle.base_class_id, Some(bond.0)).expect("the floor answers");
         let key = TestConsensus::palw_v2_registry_keypair(card as u64);
@@ -552,6 +568,22 @@ pub(super) async fn scripted_run(rig: &mut Rig, through: &str) -> Run {
     assert_eq!(e3.evm_payload.transactions, vec![withdraw_raw], "the payload carries the withdrawal");
     step!("e3-withdraw", e3);
     let e4 = rig.attempt(4, Vec::new(), no_evm());
+    // The sells were executed by e3's lane and decided by e3's fold: e4 carries both settlements as `MarketSettle` ops. The line has
+    // no seeded market, so both are `Refused { MARKET_MISSING }` (a fill needs a market the Position route seeds - a GAP stated above).
+    let settles: Vec<_> = e4
+        .evm_payload
+        .system_ops
+        .iter()
+        .filter_map(|op| match op {
+            EvmSystemOp::MarketSettle(s) => Some(*s),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(settles.len(), 2, "both market orders reach their settlement, carried by the next block");
+    for (i, s) in settles.iter().enumerate() {
+        assert_eq!((s.seq, s.account, s.line_id, s.action), (i as u32, EvmAddress::from_bytes(ACCOUNT), line, PALW_EVM_ACTION_SELL));
+        assert_eq!(s.outcome, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::MARKET_MISSING });
+    }
     step!("e4-settle", e4);
     let e5 = rig.attempt(5, Vec::new(), no_evm());
     step!("e5", e5);
@@ -1431,7 +1463,6 @@ async fn rfc12_x12_the_retired_share_is_never_minted_and_an_old_escrow_is_not_ra
     );
 }
 
-
 /// **EXPECTED.** The mempool's coinbase-settlement policy reads the DNS-confirmed anchor below the fence and **not** past it: a frozen
 /// historical anchor no longer releases coinbases early once the virtual is retired (the wallet clears the same shortcut), while the
 /// long fallback still applies. Policy only; no block rule reads it.
@@ -1462,4 +1493,141 @@ async fn prefix_rest(rig: &mut Rig) {
     rig.take(b, "b1").await;
     let e = rig.attempt(1, Vec::new(), no_evm());
     rig.take(e, "e2").await;
+}
+
+// =====================================================================================================================
+// MATRIX 10 — a block carrying a retired kind; a reorg across a deposit claim and the fence
+// =====================================================================================================================
+
+/// **EXPECTED.** A block whose own DAA is past the fence and which carries a stake bond (0x10) is refused at validation by name —
+/// not merely kept out of templates — so a hostile miner cannot slip a retired kind into the DAG.
+#[tokio::test]
+async fn rfc12_x15_a_block_carrying_a_retired_kind_past_the_fence_is_refused_by_name() {
+    use super::dns_harness;
+    const BOND: u64 = 40 * 100_000_000;
+    let p = parts_custom(Some(FENCE), false, |params| {
+        params.dns_params.as_mut().expect("testnet-12 runs the DNS overlay").min_bond_amount_sompi = BOND;
+    });
+    let mut rig = Rig::new(&p, 0x12_0f00_0000);
+    prefix(&mut rig).await;
+    let mass = rig.config.params.storage_mass_parameter;
+    let (float_out, float_entry) = rig.wallets.remove(&7).expect("a float");
+    let (bond_tx, _, _) = dns_harness::funded_signed_bond_tx(card_seed(7), float_out, float_entry.amount, 0, BOND, 0, mass);
+    let block = rig.attempt_injecting(0, Vec::new(), no_evm(), vec![bond_tx]);
+    assert!(
+        rig.config.params.palw_dns_retired_at(block.header.daa_score),
+        "the block is past the fence (daa {})",
+        block.header.daa_score
+    );
+    let verdict = rig.api().validate_and_insert_block(block.to_immutable()).virtual_state_task.await;
+    let err = format!("{:?}", verdict.expect_err("a retired kind past the fence must not be accepted into the DAG"));
+    eprintln!("[x15] {err}");
+    assert!(err.contains("DnsParticipationRetired"), "refused by name: {err}");
+}
+
+/// One case. Node A mines a lock (spending card 1's float), its unasked claim, and attempts; node B, from the same first block, mines
+/// `b_attempts` attempts around its own heartbeat, the first of which spends the SAME float elsewhere (a double spend of the lock's
+/// funding). Four nodes meet in different orders, then one more block merges everything.
+async fn claim_reorg_case(b_attempts: usize, what: &str) {
+    let p = parts(Some(FENCE));
+    let scale = EVM_NATIVE_SCALE as u128;
+    let mass = p.0.params.storage_mass_parameter;
+    let mut a = Rig::new(&p, 0x12_0e00_0000);
+    let b0 = {
+        let b = a.beat();
+        a.take(b, "b0").await
+    };
+    let mut b = follower(&p, 0x12_0e10_0000, std::slice::from_ref(&b0)).await;
+    let (float_out, float_entry) = a.wallets.get(&1).cloned().expect("card 1's float");
+    let lock = a.lock_tx(1);
+    let mut conflict = Transaction::new(
+        crate::constants::TX_VERSION,
+        vec![TransactionInput::new(float_out, vec![], 0, 1)],
+        vec![TransactionOutput::new(float_entry.amount - CARRIER_FEE, card_payout_spk(1))],
+        0,
+        SUBNETWORK_ID_NATIVE,
+        0,
+        Vec::new(),
+    );
+    sign_spend(&mut conflict, float_entry, 1, mass);
+    let mut xs = Vec::new();
+    let blk = a.attempt(0, vec![lock.clone()], no_evm());
+    xs.push(a.take(blk, "e1 carries the lock").await);
+    let blk = a.beat();
+    xs.push(a.take(blk, "b1 claims the lock and ticks the clock").await);
+    xs.extend(extend(&mut a, &[2, 3]).await);
+    assert_eq!(balance_of(&a, ACCOUNT), DEPOSIT as u128 * scale, "{what}: A's own chain credits the deposit exactly once");
+
+    // B never saw the lock; its first attempt spends the lock's funding elsewhere. Its own tick comes after `b_attempts / 2` attempts.
+    let cards = [4usize, 5, 6, 7];
+    let mut ys = Vec::new();
+    for (i, card) in cards.iter().take(b_attempts).enumerate() {
+        if i == b_attempts / 2 {
+            let blk = b.beat();
+            ys.push(b.take(blk, "B's heartbeat").await);
+        }
+        let txs = if i == 0 { vec![conflict.clone()] } else { Vec::new() };
+        let blk = b.attempt(*card, txs, no_evm());
+        ys.push(b.take(blk, "B's attempt").await);
+    }
+    let mut n1 = follower(&p, 0x12_0e20_0000, std::slice::from_ref(&b0)).await;
+    for blk in xs.iter().chain(&ys) {
+        n1.arrive(blk.clone(), "A then B").await;
+    }
+    let mut n2 = follower(&p, 0x12_0e30_0000, std::slice::from_ref(&b0)).await;
+    for blk in ys.iter().chain(&xs) {
+        n2.arrive(blk.clone(), "B then A").await;
+    }
+    for blk in &ys {
+        a.arrive(blk.clone(), "A hears B").await;
+    }
+    for blk in &xs {
+        b.arrive(blk.clone(), "B hears A").await;
+    }
+    // One more block, mined by n1 with both branches in view, merges everything; the others take it.
+    let merge = {
+        let blk = n1.attempt(1, Vec::new(), no_evm());
+        n1.take(blk, "the merging block").await
+    };
+    for n in [&mut a, &mut b, &mut n2] {
+        n.arrive(merge.clone(), "the merging block").await;
+    }
+    let sink = n1.chain.sink();
+    for (i, n) in [&a, &b, &n2].iter().enumerate() {
+        assert_eq!(n.chain.sink(), sink, "{what}: node {i} chose another sink");
+        assert_eq!(n.supply(), n1.supply(), "{what}: node {i} holds another ledger");
+        assert_eq!(snapshot_of(n), snapshot_of(&n1), "{what}: node {i} publishes another snapshot");
+        assert_eq!(heads_of(n), heads_of(&n1), "{what}: node {i} serves other heads");
+        assert_eq!(balance_of(n, ACCOUNT), balance_of(&n1, ACCOUNT));
+    }
+    // Exactly one of the two spends of the float is in the ledger, and the deposit is credited iff it is the lock - once.
+    let lock_accepted = n1.api().get_virtual_utxo_entry(TransactionOutpoint::new(lock.id(), 1)).is_some();
+    let conflict_accepted = n1.api().get_virtual_utxo_entry(TransactionOutpoint::new(conflict.id(), 0)).is_some();
+    assert!(
+        lock_accepted ^ conflict_accepted,
+        "{what}: one spend of the float won (lock {lock_accepted}, conflict {conflict_accepted})"
+    );
+    let credit = balance_of(&n1, ACCOUNT);
+    assert_eq!(
+        credit,
+        if lock_accepted { DEPOSIT as u128 * scale } else { 0 },
+        "{what}: the deposit is credited exactly once, iff the lock is"
+    );
+    assert!(
+        n1.api().get_virtual_utxo_entry(TransactionOutpoint::new(lock.id(), 0)).is_none(),
+        "{what}: the lock output is never left spendable"
+    );
+    // The conflicting chains' coinbases and fees move the ledger like any other block: the combined ledger is the genesis one plus
+    // what the DAG minted, and it is the same on every node (asserted above).
+    eprintln!("[x14] {what}: the lock {}, credit {credit}", if lock_accepted { "won" } else { "lost to the conflicting spend" });
+}
+
+/// **EXPECTED.** A double spend of a deposit lock's funding across a reorg and the fence: whichever branch the selected chain
+/// follows, after one block merges both every node holds the same sink, snapshot, heads, ledger and EVM balance; exactly one spend of
+/// the float is accepted; the deposit is credited exactly once if the lock is the accepted spend and never otherwise (its claim,
+/// carried by a block of the losing branch, finds no lock); and the lock output is never left spendable.
+#[tokio::test]
+async fn rfc12_x14_a_reorg_across_a_deposit_claim_and_the_fence_undoes_both_ledgers_together() {
+    claim_reorg_case(5, "the branch without the lock is heavier").await;
+    claim_reorg_case(1, "the branch with the lock is heavier").await;
 }
