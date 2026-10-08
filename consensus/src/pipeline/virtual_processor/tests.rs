@@ -16927,7 +16927,9 @@ mod t12_f2_lock_redate_crossing;
 // carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
 mod t53_drill_isolation;
 
-// RFC-0012: the private zero-DNS acceptance matrix (lane X12).
+// RFC-0012: the private zero-DNS acceptance matrix (lane X12). It drives the EVM lane (deposits, sells, withdrawals), so it builds
+// with the `evm` feature only, like `p2_evm_twin`.
+#[cfg(feature = "evm")]
 mod rfc12_zero_dns_matrix;
 
 /// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
