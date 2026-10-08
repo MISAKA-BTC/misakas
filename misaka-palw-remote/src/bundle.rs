@@ -969,6 +969,20 @@ pub fn verify_signed_registration_v1(s: &SignedRegistrationV1, policy: &SubmitPo
     if palw_registration_object_id_v1(&object_bytes(&payload.object)) != s.object_id {
         return Err(BundleRefusalV1::NotTheCarrier("the object id is not the declared one"));
     }
+    // The file's displayed fields are what the CLI shows, journals and checks duplicates by: they must be the payload's (C4 F-C4-12),
+    // or a relay could relabel the file (e.g. as an already registered class) and make `model submit` skip the user's registration.
+    if s.class_id != p.class_id {
+        return Err(BundleRefusalV1::ClassSwapped { bundle: s.class_id, expected: p.class_id });
+    }
+    if s.artifact_root != p.artifact_root {
+        return Err(BundleRefusalV1::RootSwapped { bundle: s.artifact_root, expected: p.artifact_root });
+    }
+    if s.owner_bond != owner_bond {
+        return Err(BundleRefusalV1::OwnerSwapped { bundle: s.owner_bond.clone(), expected: owner_bond });
+    }
+    if s.object_digest != unsigned_object_digest_v1(&payload.object)? {
+        return Err(BundleRefusalV1::NotTheCarrier("the displayed object digest is not the payload's"));
+    }
     Ok(VerifiedSignedV1 { tx, tx_id: id, object_id: s.object_id, fee_sompi: fee, object: payload.object })
 }
 
