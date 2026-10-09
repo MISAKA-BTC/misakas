@@ -2444,6 +2444,10 @@ pub(crate) fn palw_da_unit_answer_v1(
                 "pipeline step node ({stage}, {level}, {index}): answered by the pipeline responder, not the capture path (RFC-0004 Phase F)"
             ));
         }
+        // LG14-B (dormant): a legacy held unit is answered by tag 158, built by `palw_legacy_held_responder`, never by tag 55.
+        PalwDaUnitV1::LegacyHeldV2(unit) => {
+            return Err(format!("{unit:?}: a legacy held unit is answered by tag 158 (LG14-B's responder), not by MaterialDisclosedV2"));
+        }
     };
     let (binding, disclosure) = match (material, &facts.lane) {
         (PalwDaCaptureV1::FreePrompt(payload), _) => palw_fp_held_disclosure_v1(
@@ -14266,6 +14270,10 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
         PalwConsensusObjectV2::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
         PalwConsensusObjectV2::DaTransferV1 { .. } => "DaTransferV1",
+        // LG14-B (tags 157–159): the legacy route's public descent and held DA units, dormant.
+        PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. } => "LegacyHeldDemandedV2",
+        PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
+        PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

@@ -659,6 +659,9 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_provider_court_v1` (lane DA16, RFC-0009 §4.2): may the provider court's objects (tags 150–153) be folded. Resolved in
     /// ONE place, [`Self::palw_provider_court_at`]. Never armable by a real network.
     pub(super) palw_provider_court_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_legacy_held_da_v2` (lane LG14-B, RFC-0014 §4–§5 on the legacy V2 route): may the legacy held DA objects (tags
+    /// 157–159) be folded. Resolved in ONE place, [`Self::palw_legacy_held_da_v2_at`]. Never armable by a real network.
+    pub(super) palw_legacy_held_da_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_gen_v1` (RFC-0003): may a class be a pipeline of PALW-TIR version-2 programs on
     /// this chain. Resolved in ONE place, [`Self::palw_gen_at`], at the block.
     pub(super) palw_gen_v1: Option<kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1>,
@@ -1290,6 +1293,7 @@ impl VirtualStateProcessor {
             palw_typed_roots_v1: params.palw_typed_roots_v1,
             palw_signed_registration_v1: params.palw_signed_registration_v1,
             palw_provider_court_v1: params.palw_provider_court_v1,
+            palw_legacy_held_da_v2: params.palw_legacy_held_da_v2,
             palw_gen_v1: params.palw_gen_v1_fence(),
             palw_tir_only_v1: params.palw_tir_only_fence(),
             palw_gdn_key_heads: params.palw_gdn_key_heads_fence(),
@@ -7901,6 +7905,16 @@ impl VirtualStateProcessor {
                 );
                 continue;
             }
+            // **Lane LG14-B: below `palw_legacy_held_da_v2` a legacy held object (tags 157–159) — or an int-12 object carrying its
+            // appended unit — is dropped by name**, first and charged nothing, for the same reason (an older build cannot decode it and
+            // skips it, A-2).
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_legacy_held_da_v2(&object) && !self.palw_legacy_held_da_v2_at(point.daa_score)
+            {
+                info!(
+                    "Block {block}: a legacy held DA object was dropped by name below palw_legacy_held_da_v2, and the block stands (LG14-B)"
+                );
+                continue;
+            }
             // **RFC-0003: below `palw_gen_v1` a generative object is dropped by name**, first and
             // charged nothing, for the IR objects' reason above (an older build skips it undecoded).
             if kaspa_consensus_core::palw_state_v2::palw_object_is_gen_v1(&object) && !self.palw_gen_at(point.daa_score) {
@@ -8224,6 +8238,7 @@ impl VirtualStateProcessor {
                     kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(&inner)
                         || kaspa_consensus_core::palw_state_v2::palw_object_is_onboarding_v1(&inner)
                         || kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(&inner)
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_legacy_held_da_v2(&inner)
                 });
             let is_certification =
                 matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
@@ -13262,6 +13277,56 @@ impl VirtualStateProcessor {
                     let payload = borsh::to_vec(claim).map_err(|e| e.to_string())?;
                     self.palw_provider_court_signature_ok(state, point.daa_score, 153, producer, &payload, signature)?;
                 }
+                // **Lane LG14-B (tags 157–159): the legacy held DA** — the fence, the named bond's signature over the object's message,
+                // the close ceiling on what it carries; the units, answers and verdicts are the fold's.
+                Obj::LegacyHeldDemandedV2 { demand } => {
+                    use kaspa_consensus_core::palw_legacy_held_da_v2 as l;
+                    let domain = self.palw_network_domain_v2();
+                    let message = l::palw_legacy_held_demand_message_v2(domain.as_byte_slice(), demand);
+                    let bytes = borsh::to_vec(&demand.binding).map(|b| b.len() as u64).unwrap_or(u64::MAX);
+                    self.palw_legacy_held_signature_ok(
+                        state,
+                        point.daa_score,
+                        &demand.claim,
+                        &demand.accuser,
+                        &message,
+                        &demand.signature,
+                        l::PALW_LEGACY_HELD_DEMAND_MLDSA87_CONTEXT_V2,
+                        bytes,
+                    )?;
+                }
+                Obj::LegacyHeldAnsweredV2 { answer } => {
+                    use kaspa_consensus_core::palw_legacy_held_da_v2 as l;
+                    let domain = self.palw_network_domain_v2();
+                    let message = l::palw_legacy_held_answer_message_v2(domain.as_byte_slice(), answer);
+                    let bytes = l::palw_legacy_held_answer_bytes_v2(&answer.answer);
+                    self.palw_legacy_held_signature_ok(
+                        state,
+                        point.daa_score,
+                        &answer.claim,
+                        &answer.discloser,
+                        &message,
+                        &answer.signature,
+                        l::PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2,
+                        bytes,
+                    )?;
+                }
+                Obj::LegacyLeafRecomputedV2 { accusation } => {
+                    use kaspa_consensus_core::palw_legacy_held_da_v2 as l;
+                    let domain = self.palw_network_domain_v2();
+                    let message = l::palw_legacy_leaf_recompute_message_v2(domain.as_byte_slice(), accusation);
+                    let bytes = l::palw_legacy_leaf_recompute_bytes_v2(accusation);
+                    self.palw_legacy_held_signature_ok(
+                        state,
+                        point.daa_score,
+                        &accusation.claim,
+                        &accusation.accuser_bond,
+                        &message,
+                        &accusation.signature,
+                        l::PALW_LEGACY_LEAF_RECOMPUTE_MLDSA87_CONTEXT_V2,
+                        bytes,
+                    )?;
+                }
                 // (tag 108): the acceptance walk replaces the envelope by its registration before this gate; one that reaches it was
                 // not unwrapped (a direct caller of the gate), and is refused.
                 Obj::SignedRegistrationV1 { .. } => {
@@ -14836,6 +14901,7 @@ impl VirtualStateProcessor {
             // the V2 kind as dormant after the gate admitted it, and the V1 kind by the old rule
             // after the gate refused it.
             offence_attribution_active: self.palw_offence_attribution_at(daa_score),
+            legacy_held_da_v2_active: self.palw_legacy_held_da_v2_at(daa_score),
             // ADR-0152-adjacent (Activation Pool): R1, R2 and the pool's terms at this block. Written
             // explicitly for the reason every line above gives: an unwritten default here would
             // reclaim a listing by the old rule on a network that has armed the new one.
@@ -14922,6 +14988,49 @@ impl VirtualStateProcessor {
             && self.palw_provider_court_v1.is_some_and(|fence| {
                 fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score)
             })
+    }
+
+    /// **Lane LG14-B: `Params::palw_legacy_held_da_v2` resolved at the block's DAA**, in exactly one place. The legacy held DA rides
+    /// R-core+'s DA court, so `palw_rcore_plus` must be in force too.
+    pub(super) fn palw_legacy_held_da_v2_at(&self, daa_score: u64) -> bool {
+        self.palw_legacy_held_da_v2.is_some_and(|fence| {
+            fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score)
+        })
+    }
+
+    /// **Lane LG14-B: a legacy held object's acceptance** (tags 157–159): the fence, the named bond on this chain, its ML-DSA-87
+    /// signature over the object's message under its context, and the ruleset's close ceiling on what it carries. The claim's roots,
+    /// the units, the answers and the verdict are the fold's.
+    #[allow(clippy::too_many_arguments)]
+    fn palw_legacy_held_signature_ok(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa_score: u64,
+        claim: &kaspa_hashes::Hash64,
+        signer: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        message: &kaspa_hashes::Hash64,
+        signature: &[u8],
+        context: &[u8],
+        bytes: u64,
+    ) -> Result<(), String> {
+        if !self.palw_legacy_held_da_v2_at(daa_score) {
+            return Err(format!("claim {claim}: a legacy held object is refused: palw_legacy_held_da_v2 is not in force at this block (LG14-B)"));
+        }
+        let court = self
+            .palw_court_params_v2
+            .as_ref()
+            .ok_or_else(|| "a legacy held object on a network with no V2 court parameters".to_string())?;
+        if bytes > court.max_close_bytes() {
+            return Err(format!(
+                "claim {claim}: the legacy held object carries {bytes} bytes and this ruleset prices a close at {}",
+                court.max_close_bytes()
+            ));
+        }
+        let record = state.bond(signer).ok_or_else(|| format!("a legacy held object names bond {signer:?} this chain does not have"))?;
+        if !Self::verify_mldsa87_with_context_bool(&record.pubkey, message.as_byte_slice(), signature, context) {
+            return Err(format!("claim {claim}: the legacy held object is not signed by the bond it names"));
+        }
+        Ok(())
     }
 
     /// **Lane DA16: a provider-court object's acceptance** (tags 150–153): the court's fence, an Active signer bond, and the signer's
@@ -21790,6 +21899,9 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
         O::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
         O::DaTransferV1 { .. } => "DaTransferV1",
+        O::LegacyHeldDemandedV2 { .. } => "LegacyHeldDemandedV2",
+        O::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
+        O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

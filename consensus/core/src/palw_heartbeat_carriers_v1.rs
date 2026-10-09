@@ -117,6 +117,10 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         O::GenShardCourtAccused { .. } => true,
         // RFC-0003 decision 22: the held leaf challenge opens a session, a court opening too.
         O::HeldLeafChallengeDeclared { .. } => true,
+        // LG14-B (tags 157–159, dormant): a legacy held demand and answer are DA traffic like `DefaultAccusedHeld` and
+        // `MaterialDisclosedV2`, and the leaf recompute a one-move conviction like `ShardCourtAccused`. Below their fence the H-1 gate's
+        // fold refuses every one, so none is ever admitted there.
+        O::LegacyHeldDemandedV2 { .. } | O::LegacyHeldAnsweredV2 { .. } | O::LegacyLeafRecomputedV2 { .. } => true,
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }
         | O::BondRetireRequested { .. }
@@ -334,6 +338,13 @@ pub fn palw_h1_carrier_lane_key_v1(object: &PalwConsensusObjectV2) -> Option<Pal
         O::GenShardCourtAccused { accusation } => Some(PalwH1LaneKeyV1::CourtOpening(accusation.claim)),
         O::HeldLeafChallengeDeclared { challenge } => Some(PalwH1LaneKeyV1::CourtOpening(challenge.claim)),
         O::CheckpointAccused { accusation } => Some(PalwH1LaneKeyV1::CheckpointConviction(accusation.claim)),
+        // LG14-B: one demand session a claim, one answer a (claim, unit), one recompute a claim, as their int-12 twins.
+        O::LegacyHeldDemandedV2 { demand } => Some(PalwH1LaneKeyV1::DaSession(demand.claim)),
+        O::LegacyHeldAnsweredV2 { answer } => Some(PalwH1LaneKeyV1::DaAnswer(
+            answer.claim,
+            borsh::to_vec(&crate::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(answer.unit)).expect("a DA unit serializes"),
+        )),
+        O::LegacyLeafRecomputedV2 { accusation } => Some(PalwH1LaneKeyV1::CourtOpening(accusation.claim)),
         _ => None,
     }
 }

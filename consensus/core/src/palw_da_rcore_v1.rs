@@ -137,9 +137,20 @@ pub enum PalwDaUnitV1 {
     /// execution, by the claim's binding proving so. One demand serves a segment's boundary rows where a
     /// `TirStepLeaf` per position could not be demanded within a seat's four sessions (RFC-0006 §3, decision 4).
     TirStepRun { first: u64, count: u32 },
+    /// **Lane LG14-B (RFC-0014 §4–§5, past `Params::palw_legacy_held_da_v2`; appended, so no earlier tag moves): a unit of a legacy
+    /// V2 claim's public descent** — an interior node of its step or checkpoint tree, or a leaf's committed half (CKW)
+    /// ([`crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2`]). Demanded only by tag 157 and answered only by tag 158; a tag-55
+    /// answer, a tag-67 or a tag-83 demand naming it is refused by form, and dropped by name below the fence (A-2). Written into
+    /// state only past the fence.
+    LegacyHeldV2(crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2),
 }
 
 impl PalwDaUnitV1 {
+    /// Is this a unit only `palw_legacy_held_da_v2` makes legal (LG14-B)?
+    pub fn is_legacy_held_v2(&self) -> bool {
+        matches!(self, Self::LegacyHeldV2(_))
+    }
+
     /// The unit an event accusation's packed index names (`palw_da_event_index_parts_v1`).
     pub fn event_of_index(index: u32) -> Self {
         let (row, tile) = crate::palw_state_v2::palw_da_event_index_parts_v1(index);
@@ -654,8 +665,12 @@ pub fn palw_da_producer_action_v1(collateral: u64, g: u128) -> u128 {
 /// placing a step leaf in a segment needs the claim's committed step-leaf count, which no record the
 /// fold keeps after the accusation carries (a partial seat is therefore never charged for a held
 /// unit — an under-charge of a colluding partial seat, named, never an over-charge of an honest one).
-pub fn palw_da_unit_covered_by_v1(_unit: &PalwDaUnitV1, attested: crate::palw_verification_v2::PalwSegmentMaskV2, segments: u16) -> bool {
-    segments > 0 && attested.is_full(segments)
+///
+/// **LG14-B: a legacy held unit is covered by no mask.** DA-7's S4 rests on a covering signer being able to answer the unit itself
+/// (`PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1`), and a seat's automatic answering builds no descent node or committed witness — so a
+/// default of one is the producer's alone (S1, or S3 and the vesting row after `Final`), never a signer's.
+pub fn palw_da_unit_covered_by_v1(unit: &PalwDaUnitV1, attested: crate::palw_verification_v2::PalwSegmentMaskV2, segments: u16) -> bool {
+    !unit.is_legacy_held_v2() && segments > 0 && attested.is_full(segments)
 }
 
 // ---------------------------------------------------------------------------------------------

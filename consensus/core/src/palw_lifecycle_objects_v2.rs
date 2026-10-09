@@ -373,6 +373,20 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::ProviderChallengeV1 { .. }
         | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
         | PalwConsensusObjectV2::DaTransferV1 { .. } => Ok(()),
+        // LG14-B (tags 157–159): the legacy held DA objects ride at every height (A-2) and carry their signer's signature; the
+        // fence, the bonds, the claim's roots and the units are the acceptance layer's and the fold's.
+        PalwConsensusObjectV2::LegacyHeldDemandedV2 { demand } if demand.signature.is_empty() => {
+            Err("a legacy held demand must carry its accuser's signature")
+        }
+        PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } if answer.signature.is_empty() => {
+            Err("a legacy held answer must carry its discloser's signature")
+        }
+        PalwConsensusObjectV2::LegacyLeafRecomputedV2 { accusation } if accusation.signature.is_empty() => {
+            Err("a leaf recompute must carry its accuser's signature")
+        }
+        PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
+        | PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }
+        | PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => Ok(()),
         PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
             if signature.is_empty() {
                 Err("a signed registration envelope must carry its signer's signature")
