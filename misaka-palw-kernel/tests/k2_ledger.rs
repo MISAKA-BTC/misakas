@@ -859,6 +859,22 @@ fn a_served_demand_bond_is_refunded_on_conviction_or_default_and_burned_only_at_
     assert!(ev.iter().any(|e| matches!(e, E::ProducerDefault { position: 2, .. })), "{ev:?}");
     assert_eq!((w.l.bonds[&OUTSIDER].reserved, w.l.bonds[&OUTSIDER].collateral), (0, 1000), "refunded with the default");
     assert!(w.l.served_demands.is_empty());
+
+    // A claim the Panel never covers TIMES OUT: the served position's bond is refunded with the timeout (the claim never stood Final,
+    // so no horizon can burn it).
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let h = w.honest(&job, 3);
+    let (id, trace) = (h.claim.id(), h.trace.clone());
+    w.block(10, vec![h.tx]);
+    w.block(11, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: 1 }]);
+    serve(&mut w, 12, id, &trace, 1);
+    assert_eq!(w.l.bonds[&OUTSIDER].reserved, 10, "held while the claim is undecided");
+    let ev = w.block(200, vec![]);
+    assert!(matches!(w.l.claims[&id].life.state, ClaimStateV1::TimedOut { .. }), "{:?}", w.l.claims[&id].life.state);
+    assert!(!ev.iter().any(|e| matches!(e, E::ServedDemandBondsBurned { .. })), "{ev:?}");
+    assert_eq!((w.l.bonds[&OUTSIDER].reserved, w.l.bonds[&OUTSIDER].collateral), (0, 1000), "refunded with the timeout");
+    assert!(w.l.served_demands.is_empty());
 }
 
 // ── Duplicates, reorg, restart, IBD; collateral double use and exit ──────────────────────────────────────────────────────

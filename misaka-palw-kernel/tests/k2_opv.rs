@@ -1270,17 +1270,19 @@ fn past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists
     assert!(!seal_ttl_admits_beacon_window_v1(&w.l.policy, ttl / 2 + 1));
     let job = w.post_job(2, &[3, 17, 9], 3, 1);
     let withheld = |n: u8| claim_seal_v2(&[n; 64], &[0x77; 64]);
-    // SQUATTER seals at 20 and re-seals at 30 (only the latest counts); HONEST seals at 25. Neither reveals.
+    // SQUATTER seals at 20 and re-seals at 30; HONEST seals at 25. Neither reveals. Past the fence the re-seal FORFEITS the seal it
+    // replaces at its own position (ECON F-ECON-1/2, fix S1): SQUATTER's seal at 20 stays in the read, forfeited at 30.
     w.block(20, vec![T::SealClaim { producer: SQUATTER, job: job.id(), seal: withheld(1) }]);
     w.block(25, vec![T::SealClaim { producer: HONEST, job: job.id(), seal: withheld(2) }]);
     w.block(30, vec![T::SealClaim { producer: SQUATTER, job: job.id(), seal: withheld(3) }]);
-    let live = w.l.claim_beacon_seals_v1();
+    let read = w.l.claim_beacon_seals_v1();
     assert_eq!(
-        live.iter().map(|s| (s.producer, s.sealed_daa, s.seal)).collect::<Vec<_>>(),
-        vec![(HONEST, 25, withheld(2)), (SQUATTER, 30, withheld(3))]
+        read.iter().map(|s| (s.producer, s.sealed_daa, s.seal, s.forfeited_daa)).collect::<Vec<_>>(),
+        vec![(SQUATTER, 20, withheld(1), Some(30)), (HONEST, 25, withheld(2), None), (SQUATTER, 30, withheld(3), None)],
+        "every seal position, in seal order: the replaced one forfeited at the re-seal, the two others live"
     );
-    assert!(live.iter().all(|s| s.revealed.is_none() && s.forfeited_daa.is_none()), "live seals");
-    // HONEST's expires first (25 + TTL), SQUATTER's latest seal later (30 + TTL): both are kept, with their seal and DAA.
+    assert!(read.iter().all(|s| s.revealed.is_none()), "nothing revealed");
+    // HONEST's expires first (25 + TTL), SQUATTER's latest seal later (30 + TTL): every withheld seal is kept, with its seal and DAA.
     let ev = w.block(25 + ttl + 1, vec![]);
     assert!(ev.iter().any(|e| matches!(e, E::SealForfeited { producer, .. } if *producer == HONEST)), "{ev:?}");
     w.block(30 + ttl + 1, vec![]);
@@ -1289,9 +1291,10 @@ fn past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists
         w.l.forfeited_claim_seals.iter().map(|(k, r)| (*k, *r)).collect::<Vec<_>>(),
         vec![
             ((job.id(), HONEST, 25), ForfeitedSealRowV1 { seal: withheld(2), forfeited_daa: 25 + ttl + 1 }),
+            ((job.id(), SQUATTER, 20), ForfeitedSealRowV1 { seal: withheld(1), forfeited_daa: 30 }),
             ((job.id(), SQUATTER, 30), ForfeitedSealRowV1 { seal: withheld(3), forfeited_daa: 30 + ttl + 1 }),
         ],
-        "both withheld seals are kept (HONEST's key sorts first), the re-sealed one at its latest seal"
+        "every withheld seal is kept (HONEST's key sorts first), the replaced one at its own position"
     );
     // An honest claim revealed salted afterwards sorts after them; every seal is in the read, in seal order.
     let h = w.honest(&job, 3);
@@ -1302,9 +1305,9 @@ fn past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists
     let read = w.l.claim_beacon_seals_v1();
     assert_eq!(
         read.iter().map(|s| (s.sealed_daa, s.forfeited_daa.is_some(), s.revealed.is_some())).collect::<Vec<_>>(),
-        vec![(25, true, false), (30, true, false), (30 + ttl + 1, false, true),]
+        vec![(20, true, false), (25, true, false), (30, true, false), (30 + ttl + 1, false, true),]
     );
-    assert_eq!(read[2].revealed, Some((id, at, common::chain::test_salt(&id))));
+    assert_eq!(read[3].revealed, Some((id, at, common::chain::test_salt(&id))));
     assert!(read.iter().all(|s| s.poster == Some(common::chain::POSTER)), "every seal reads its job's poster");
     rows_agree(&w.l);
     assert_eq!(KernelLedgerV1::replay(&w.genesis, &w.blocks).root(), w.l.root());
