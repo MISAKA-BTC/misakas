@@ -10859,6 +10859,11 @@ impl Params {
             h.write(b"palw_tir_shard_segment_v2");
             h.write(at.daa_score().to_le_bytes());
         }
+        // ADR-0175's immutable registrations, NAMED likewise (its `for_each_fence` arm is Some-only).
+        if let Some(at) = self.palw_model_immutable_v1 {
+            h.write(b"palw_model_immutable_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
         // The provider court's fence (DA16), NAMED likewise.
         if let Some(at) = self.palw_provider_court_v1 {
             h.write(b"palw_provider_court_v1");
@@ -12075,13 +12080,12 @@ impl Params {
                 visit(&mut absent);
             }
         }
-        // ADR-0088 Decision 11. A pure fence with no payload, the same shape.
-        match palw_model_immutable_v1.as_mut() {
-            Some(activation) => fork(activation, visit),
-            None => {
-                absent = u64::MAX;
-                visit(&mut absent);
-            }
+        // ADR-0175's immutable registrations: Some-only, NAMED in the schedule id, like every fence added
+        // after the presets' schedule ids were pinned. (As merged from `pre` this arm visited a `u64::MAX`
+        // sentinel when absent, the older D2 shape, and so moved the schedule id of every preset —
+        // testnet-12's live `1678e073…` included — though no preset sets the fence; lane INTF.)
+        if let Some(activation) = palw_model_immutable_v1.as_mut() {
+            fork(activation, visit);
         }
         match palw_model_lines.as_mut() {
             Some(activation) => fork(activation, visit),
