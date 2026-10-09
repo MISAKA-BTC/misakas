@@ -181,48 +181,59 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                 "gain_defended_by_interim_reservation_bili": bili(defended_gain_sompi(interim.economics.reservation_per_claim as u128, accuser, pn, pd)),
             }));
         }
-        // 2. The derived budgets, judged by the kernel's own relations (window sized to the first step; the horizon kept).
-        let cold = daa(c.fetch_s(in_window.max(1)) * (1.0 + c.margin_frac), s_per_daa);
-        let chk = daa(c.check_s(in_window.max(1)) * (1.0 + c.margin_frac), s_per_daa);
-        let budgets = OpvBudgetsV1 {
-            cold_material_daa: cold,
-            check_daa: chk,
-            localize_daa: daa(c.localize_s, s_per_daa),
-            disclose_daa: interim.budgets.disclose_daa,
-            court_daa: daa(c.file_s, s_per_daa).max(interim.budgets.court_daa),
-            carrier_daa: interim.budgets.carrier_daa,
-            reorg_slack_daa: interim.budgets.reorg_slack_daa,
-        };
-        let need = budgets.cold_material_daa + budgets.check_daa + budgets.carrier_daa + budgets.reorg_slack_daa;
-        let horizon = interim.window.verification_horizon_daa;
-        let mut derived = interim;
-        derived.budgets = budgets;
-        derived.window.base_challenge_window_daa = need.saturating_sub(horizon).max(1);
-        let (pn, pd) = p_det_rational(in_window as f64 / p as f64, q, n_ver, eps_enf);
-        let verdict = match reservation_sompi(gain, penalty, accuser, pn, pd) {
-            Some(r) => {
-                derived.economics.reservation_per_claim = r.min(u64::MAX as u128) as u64;
-                derived.economics.assumed_detection_permille = ((pn * 1000 / pd) as u16).clamp(1, 1000);
-                match derived.validate(&ledger) {
-                    Ok(()) => "OpvPolicyV1::validate: OK".to_string(),
-                    Err(why) => format!("OpvPolicyV1::validate: {why}"),
+        // 2. The derived budgets, judged by the kernel's own relations (the horizon kept; the base window sized to the first step).
+        let judge = |m: u64| -> Value {
+            let cold = daa(c.fetch_s(m.max(1)) * (1.0 + c.margin_frac), s_per_daa);
+            let chk = daa(c.check_s(m.max(1)) * (1.0 + c.margin_frac), s_per_daa);
+            let budgets = OpvBudgetsV1 {
+                cold_material_daa: cold,
+                check_daa: chk,
+                localize_daa: daa(c.localize_s, s_per_daa),
+                disclose_daa: interim.budgets.disclose_daa,
+                court_daa: daa(c.file_s, s_per_daa).max(interim.budgets.court_daa),
+                carrier_daa: interim.budgets.carrier_daa,
+                reorg_slack_daa: interim.budgets.reorg_slack_daa,
+            };
+            let need = budgets.cold_material_daa + budgets.check_daa + budgets.carrier_daa + budgets.reorg_slack_daa;
+            let mut derived = interim;
+            derived.budgets = budgets;
+            derived.window.base_challenge_window_daa = need.saturating_sub(interim.window.verification_horizon_daa).max(1);
+            let (pn, pd) = p_det_rational(m as f64 / p as f64, q, n_ver, eps_enf);
+            let verdict = match reservation_sompi(gain, penalty, accuser, pn, pd) {
+                Some(r) => {
+                    derived.economics.reservation_per_claim = r.min(u64::MAX as u128) as u64;
+                    derived.economics.assumed_detection_permille = ((pn * 1000 / pd) as u16).clamp(1, 1000);
+                    let window = derived.window_daa();
+                    let mut with_liability = ledger;
+                    with_liability.liability_daa = window + ledger.court_deadline_daa + ledger.proof_grace_daa + 1;
+                    json!({
+                        "interim_ledger": derived.validate(&ledger).map(|_| "OK".to_string()).unwrap_or_else(|e| e),
+                        "liability_daa_needed": with_liability.liability_daa,
+                        "with_that_liability": derived.validate(&with_liability).map(|_| "OK".to_string()).unwrap_or_else(|e| e),
+                    })
                 }
-            }
-            None => "no finite reservation (detection probability 0)".to_string(),
+                None => json!("no finite reservation (detection probability 0)"),
+            };
+            json!({"positions": m, "budgets_daa": {"cold": budgets.cold_material_daa, "check": budgets.check_daa, "localize": budgets.localize_daa,
+                   "court": budgets.court_daa, "carrier": budgets.carrier_daa, "reorg": budgets.reorg_slack_daa},
+                   "base_window_daa": derived.window.base_challenge_window_daa, "window_daa": derived.window_daa(), "kernel_validate": verdict})
         };
+        let judged_interim = judge(in_window);
+        let judged_whole = judge(p);
         classes_out.push(json!({
             "name": c.name, "positions": p, "t_challenge_whole_claim_s": full, "t_challenge_whole_claim_daa": daa(full, s_per_daa),
             "interim_window_daa": interim.window_daa(), "positions_within_interim_window": in_window,
             "coverage_within_interim_window": in_window as f64 / p as f64, "rows": rows,
-            "derived_budgets_daa": {"cold": budgets.cold_material_daa, "check": budgets.check_daa, "localize": budgets.localize_daa, "court": budgets.court_daa,
-                                      "carrier": budgets.carrier_daa, "reorg": budgets.reorg_slack_daa, "base_window": derived.window.base_challenge_window_daa},
-            "kernel_verdict_on_derived_terms": verdict,
+            "derived_for_interim_window_coverage": judged_interim, "derived_for_whole_claim": judged_whole,
         }));
     }
     Ok(json!({
         "cmd": "derive", "s_per_daa": s_per_daa, "max_gain_bili": bili(gain), "default_penalty_bili": bili(penalty), "accuser_permille": accuser,
         "interim_reservation_bili": bili(interim.economics.reservation_per_claim as u128), "live_claims_per_producer": live_per_producer, "live_claims_total": live_total,
-        "participation_q": q, "verifiers_n": n_ver, "eps_enf": eps_enf, "classes": classes_out,
+        // NOT measured by anything: how many independent honest verifiers check, and how likely each is present. The defaults (one
+        // verifier, always present) give the coverage of ONE verifier, which is a lower bound on P_det only if that verifier exists.
+        "assumed_inputs": {"participation_q": q, "verifiers_n": n_ver, "eps_enf": eps_enf, "independence_of_verifiers": "assumed by P_det = 1-(1-qc)^n"},
+        "classes": classes_out,
     }))
 }
 
