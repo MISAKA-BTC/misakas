@@ -531,6 +531,9 @@ pub mod palw_public_material_v1;
 /// Lane DA16 (RFC-0009 §4.2): the provider court on the kernel route — leases, unit challenges, answers, the DA transfer, its rows and its
 /// fence `palw_provider_court_v1` (dormant, refused when armed).
 pub mod palw_provider_court_v1;
+/// Lane INTF (ADR-0032's 2026-10-10 amendment): the PALW reporter share, 10% below and 49% at or past the dormant fence
+/// `palw_reporter_share_v2` (refused when armed) — R-1 fixed at the conviction's close, DA-6 at the session's open.
+pub mod palw_reporter_share_v2;
 /// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
 pub mod palw_state_proof_v1;
 /// Lane PA: the 2026-10-04 audit's consensus fixes behind one dormant fence (`palw_audit_1004_v1`).
