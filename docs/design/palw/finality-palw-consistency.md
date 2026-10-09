@@ -7,9 +7,9 @@
 Lane FINX · branch `fin/palw-finality-consistency` (from the integration head `9ea89994b`) · decision draft:
 [ADR-0175](../../adr/0175-fork-choice-heals-a-partition-on-bonded-participation.md).
 
-**Status: analysis, probes and a model. No shipping rule is changed.** Every candidate rule below lives only in the model
-(`consensus/core/tests/finality_palw_consistency_model.rs`); the pipeline tests run testnet-12's rules as they are. What to change,
-if anything, is the user's decision.
+**Status (2026-10-09): rule E ADOPTED by the user and IMPLEMENTED behind the dormant fence `palw_fork_choice_rule_e_v1`** (§10).
+§0–§9 are the analysis that led there, unchanged: the candidates in the model (`consensus/core/tests/finality_palw_consistency_model.rs`)
+and the status-quo pipeline probes, which still pass unarmed. Nothing ships armed; no live id moves.
 
 Words used exactly, as in the RFC-0012 record: **MEASURED** — printed by a test on this branch (named; command in §8). **DERIVED** —
 arithmetic on shipped constants. **MODEL** — an output of the executable model (§5), which drives the shipped comparator functions but
@@ -492,3 +492,48 @@ chains a node can follow, so a mixed network still disagrees.
 * E's participation count needs the attempt headers above the fork on both branches: header-only data, bounded by the finality depth,
   but its cost on a node fed many junk branches is not measured. A header-level pre-filter (participation is computable before bodies
   arrive) is the obvious bound.
+
+## 10. Rule E, implemented (2026-10-09)
+
+Decision record: [ADR-0175](../../adr/0175-fork-choice-heals-a-partition-on-bonded-participation.md) §4 (as implemented) and §9.
+Code: `consensus/core/src/palw_fork_choice_rule_e_v1.rs`, `consensus/core/src/palw_fork_choice_rule_e_leaf_v2.rs`,
+`consensus/src/pipeline/virtual_processor/palw_rule_e.rs`; the gate in `dns_reorg_outcome`, the continuation in
+`sink_search_algorithm`, the IBD commit and the relay in `protocol/flows`. Leaf v2 (for lane L2FC): `rule-e-leaf-v2-note.md`.
+
+**The definition the implementation settled on** (it refines §4's PROPOSED text so a header-verified client can evaluate it):
+exclusive claims are those a tip's own chain accepted above the two tips' common selected-chain ancestor `F` that the other tip's
+state does not hold; participation counts bonds of `F`'s registry; participation counts once the LOWER tip stands `W_p` = 20 DAA
+above `F`. Every side is computed from per-claim records by one function the node and the leaf-v2 client share.
+
+### 10.1 What the pipeline shows (MEASURED, `hb_fork_choice_probe::finality_consistency::rule_e`)
+
+**The harness's weights.** PoW is skipped, so a heartbeat carries almost no blue work and an attempt header 2^20: the side with more
+attempt blocks is GHOSTDAG's heavier, whatever its producer count. The scenarios set "heavier" with one bond attempting repeatedly
+against more bonds attempting once. (The model's heartbeat 2^24 is the live weight; the pipeline's conclusions do not depend on it.)
+
+RESULTS-PLACEHOLDER
+
+### 10.2 Findings the implementation added
+
+* **Merged work counts for neither side.** Each node's virtual merges the other side's blocks that are lighter than its tip and
+  inside its merge window, and a merged attempt is in both pasts. So after a short partition the side that merges the other's work
+  cancels that work's participation and wins on its own exclusive attempts — the chain holding both sides' work, but not the model's
+  "bond majority" (the model does not merge). Measured in `finx_e_v2_…`.
+* **Panels bind, and the status quo then heals.** An attempt at a claim's anchor slot (acceptance + 20 DAA) binds its panel, which
+  gives the claim anchored weight past F-W; a partition where bonds keep attempting is no longer an economic tie, and the status quo
+  heals it when the GHOSTDAG-heavier side is also economically ahead (§3, V2's own condition). The V2/V3 flips are therefore measured
+  on scenarios where no panel binds before the decision point.
+* **The merge-past attacker** (§3.1's analysis, now pipeline-measured): the attacker's branch merged the public attempts made between
+  the fork and X; their claims cancel under rule E (one bond against two), while an above-the-fork count would rank the attacker
+  first (four bonds against three).
+* **The search's bound holds under a flood**: thirty heartbeat tips cost no UTXO validation (header-level participation 0); twelve
+  attempt tips by one registered bond cost at most eight a resolve.
+* **LIVE-R1's N2 watchdog reads rule E** past the fence: the refusal record is taken at the sink rule E settles on, and a refusal is
+  weighed when rule E weighed the pair and the refused tip does not outrank the sink.
+
+### 10.3 Residuals (stated; ADR-0175 §5 and §9)
+
+Heartbeat-only partitions stay split; a partition longer than the seal stays split on the relay path (the minority's way back is the
+IBD commit, which rule E decides for the majority, or a verified resync); IBD ties keep the incumbent; a lighter branch with no
+registered bond's attempt above the fork is never weighed by the search's continuation; a flood that takes the continuation's eight
+validations needs header-level participation at least the honest branch's.
