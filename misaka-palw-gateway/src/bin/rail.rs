@@ -55,7 +55,7 @@ use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
 use kaspa_pq_validator_core::{
     ATTESTATION_TX_FEE_FLOOR_SOMPI, FpCommitmentPriceV1, MessageSigner, VALIDATOR_SEED_LEN, ValidatorKey, build_fp_commitment_tx_with,
-    estimate_overlay_fee_with,
+    build_redemption_bundle_v4_with, estimate_overlay_fee_with,
 };
 use kaspa_txscript::{pay_to_address_script, script_class::ScriptClass};
 
@@ -169,6 +169,13 @@ fn main() {
     let mut track_claim: Option<String> = None;
     let mut track_tx_id: Option<String> = None;
     let mut finality_depth: u64 = 60;
+    // RFC-0009 obstruction: `--track … --carrier <signed tx> --resubmit-state <file>` remembers a relay's ACK between two polls and, when no
+    // independent observer confirms it within `--resubmit-bound` DAA, sends the SAME bytes through another `--relay`. `--observe a,b` adds
+    // observer-only nodes (the relays are observers of each other).
+    let mut carrier_path: Option<PathBuf> = None;
+    let mut resubmit_state_path: Option<PathBuf> = None;
+    let mut resubmit_bound: u64 = misaka_palw_remote::resubmit::RESUBMIT_DEFAULT_BOUND_DAA;
+    let mut observe_endpoints: Vec<String> = Vec::new();
     // RFC-0009 stage C: the executor's redemption authorization, signed once at claim time so any builder may spend the claim's winning
     // quanta while this PC is off (`palw_receipt_spend_v4`, dormant until its fence opens).
     let mut redeem_auth_out: Option<PathBuf> = None;
@@ -238,6 +245,14 @@ fn main() {
             "--evidence-panel-only" => evidence_panel_only = true,
             "--track" => track_claim = Some(value("--track")),
             "--tx-id" => track_tx_id = Some(value("--tx-id")),
+            "--carrier" => carrier_path = Some(PathBuf::from(value("--carrier"))),
+            "--resubmit-state" => resubmit_state_path = Some(PathBuf::from(value("--resubmit-state"))),
+            "--resubmit-bound" => {
+                resubmit_bound = value("--resubmit-bound").parse().unwrap_or_else(|e| die(format!("--resubmit-bound: {e}")))
+            }
+            "--observe" => {
+                observe_endpoints = value("--observe").split(',').map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect()
+            }
             "--finality-depth" => {
                 finality_depth = value("--finality-depth").parse().unwrap_or_else(|e| die(format!("--finality-depth: {e}")))
             }
@@ -270,7 +285,8 @@ fn main() {
                  --funding-amount <sompi> --relay <host:port,host:port,...> [--relay-min-accept <n>] [--fee <sompi>] \
                  (RFC-0009: sign here, relay raw bytes through several nodes, stage nothing — the claim's material is still yours to serve)\n       misaka-palw-fp-rail --artifact <stem> --signer-socket <path> --bond-pubkey <hex> --funding-outpoint <txid:index> --funding-amount <sompi> --relay <host:port,...> \
                  (RFC-0009: the bond key stays in a kaspa-pq-signer sidecar; this process holds only the public key)\n       misaka-palw-fp-rail --relay-signed <commitment-tx.borsh> --funding-amount <sompi> --relay <host:port,...> [--checkpoint <daa>:<hash>] \
-                 (RFC-0009: relay a carrier somebody else signed — no key, no authority)\n       misaka-palw-fp-rail --watch <outbox> --bond-key-seed <file> --rpc <host:port> \
+                 (RFC-0009: relay a carrier somebody else signed — no key, no authority)\n       misaka-palw-fp-rail --track <claim-id> --bond <txid:index> --relay <a,b,...> [--observe <x,y>] --carrier <commitment-tx.borsh> --funding-amount <sompi> --resubmit-state <file> [--resubmit-bound <DAA>] \
+                 (RFC-0009: a relay whose ACK no independent observer confirms within the bound is routed around — the SAME bytes through another relay; run it from a timer)\n       misaka-palw-fp-rail --watch <outbox> --bond-key-seed <file> --rpc <host:port> \
                  [--funding-outpoint <txid:index> --funding-amount <sompi>] [--coinbase-funding-only] [--interval <secs>] [--max-attempts <n>] [--once] \
                  [--fee <sompi>] [--class-leaves <u64>] [--retention-dir <dir>] [--anchor-ttl-daa <n>]\
                  \n       misaka-palw-fp-rail --print-identity --bond-key-seed <file> --rpc <host:port> --class-id <128hex> \
@@ -292,7 +308,29 @@ fn main() {
         let bond = parse_outpoint(
             bond_flag.as_deref().unwrap_or_else(|| die("--track needs --bond <txid:index> (the executor bond)".into())),
         );
-        track_once(&endpoints, &claim_hex, track_tx_id.as_deref(), bond, finality_depth);
+        match (&carrier_path, &resubmit_state_path) {
+            (None, None) => track_once(&endpoints, &claim_hex, track_tx_id.as_deref(), bond, finality_depth),
+            (Some(carrier), Some(state)) => {
+                if relay_endpoints.is_empty() {
+                    die("--carrier / --resubmit-state need --relay <a,b,...>: the nodes the same bytes may be sent through".into());
+                }
+                track_and_resubmit(&ResubmitArgs {
+                    relays: &relay_endpoints,
+                    observers: &observe_endpoints,
+                    claim_hex: &claim_hex,
+                    carrier,
+                    state_path: state,
+                    funding_amount,
+                    bound_daa: resubmit_bound,
+                    finality_depth,
+                    bond,
+                })
+            }
+            _ => {
+                die("--carrier and --resubmit-state go together: the signed bytes to resend, and the file that remembers the ACKs"
+                    .into())
+            }
+        }
         return;
     }
     // **The gateway's identity, from the node and the key** — five fields an operator used to
@@ -717,22 +755,20 @@ fn main() {
     // can spend a winning quantum into its own block once `palw_receipt_spend_v4` is armed; the miner's PC need not be on. The file is not
     // secret and grants nothing beyond what it says (the range, the beacon rule, the fee in basis points, the expiry).
     let redeemed = redeem_auth_out.as_ref().map(|path| {
-        // The sidecar has a signing purpose for the claim and for a spend, and none for the V4 redemption authorization (CODE_GAP: a new
-        // `SigningPurpose`). Signing it needs the seed — on the machine that holds it, once.
-        let key = bond.seed_key().unwrap_or_else(|| {
-            die("--redeem-auth-out needs --bond-key-seed: the sidecar has no signing purpose for the V4 redemption authorization yet".into())
-        });
-        let bundle = key
-            .build_redemption_bundle_v4(
-                commitment.job.network_domain,
-                claim_id,
-                commitment.job.executor_bond,
-                0,
-                quanta,
-                redeem_fee_bps,
-                redeem_expiry_daa,
-            )
-            .unwrap_or_else(|e| die(format!("cannot sign the redemption authorization: {e}")));
+        // Signed through whatever custodies the bond key: the seed this process holds, or the sidecar (`SigningPurpose::PalwReceiptAuthV4`,
+        // visible only under `palw_receipt_spend_v4`: a daemon not started with `--palw-receipt-spend-v4` refuses by name, and that refusal
+        // is printed here as it came).
+        let bundle = build_redemption_bundle_v4_with(
+            bond.signer(),
+            commitment.job.network_domain,
+            claim_id,
+            commitment.job.executor_bond,
+            0,
+            quanta,
+            redeem_fee_bps,
+            redeem_expiry_daa,
+        )
+        .unwrap_or_else(|e| die(format!("cannot sign the redemption authorization: {e}")));
         std::fs::write(path, bundle.encode()).unwrap_or_else(|e| die(format!("cannot write {}: {e}", path.display())));
         serde_json::json!({
             "file": path.display().to_string(),
@@ -916,13 +952,61 @@ impl misaka_palw_remote::relay::RelayNode for WrpcRelayNode<'_> {
     }
 }
 
+/// **One node's observation of a claim** (RFC-0009 stage A): its DAG info, whether it holds `tx_id` in its mempool, and the claim row it serves.
+/// An error is the node's silence or a reply this client cannot read — never a guess.
+fn observe_endpoint(
+    runtime: &tokio::runtime::Runtime,
+    client: &kaspa_wrpc_client::KaspaRpcClient,
+    claim_hex: &str,
+    tx_id: Option<Hash64>,
+) -> Result<misaka_palw_remote::track::ChainObservation, String> {
+    use kaspa_rpc_core::api::rpc::RpcApi;
+    use misaka_palw_remote::track::{ChainObservation, ClaimObs, ClaimPhaseObs};
+    runtime.block_on(async {
+        let info = client.get_block_dag_info().await.map_err(|e| e.to_string())?;
+        let tx_in_mempool = match tx_id {
+            Some(id) => client.get_mempool_entry(id, true, true).await.is_ok(),
+            None => false,
+        };
+        let claim = client.get_palw_free_prompt_claim(claim_hex.to_string()).await.map_err(|e| e.to_string())?;
+        let claim_obs = if !claim.found {
+            None
+        } else {
+            let (txid, index) = claim.executor_bond.split_once(':').ok_or("the node's executor_bond is not txid:index")?;
+            let mut raw = [0u8; 64];
+            if txid.len() != 128 || faster_hex::hex_decode(txid.as_bytes(), &mut raw).is_err() {
+                return Err("the node's executor_bond is not a 128-hex id".to_string());
+            }
+            let bond = TransactionOutpoint::new(Hash64::from_bytes(raw), index.parse::<u32>().map_err(|e| e.to_string())?);
+            let phase = match claim.phase.as_str() {
+                "provisional" => ClaimPhaseObs::Provisional,
+                "panel_bound" => ClaimPhaseObs::PanelBound,
+                "receipt_licensed" => ClaimPhaseObs::ReceiptLicensed { licensed_daa: claim.phase_daa },
+                "final" => ClaimPhaseObs::Final { final_daa: claim.phase_daa },
+                "voided" => ClaimPhaseObs::Voided { voided_daa: claim.phase_daa },
+                other => return Err(format!("the node reports a claim phase this client does not know: {other:?}")),
+            };
+            let mut accepted = [0u8; 64];
+            let accepted_block = if claim.accepted_block.len() == 128
+                && faster_hex::hex_decode(claim.accepted_block.as_bytes(), &mut accepted).is_ok()
+            {
+                Hash64::from_bytes(accepted)
+            } else {
+                Hash64::default()
+            };
+            Some(ClaimObs { executor_bond: bond, accepted_block, accepted_daa: claim.accepted_daa, phase })
+        };
+        Ok::<_, String>(ChainObservation { sink: info.sink, virtual_daa: info.virtual_daa_score, tx_in_mempool, claim: claim_obs })
+    })
+}
+
 /// **RFC-0009 stage A: where does this claim stand, according to each node?** One poll per node, folded through
 /// [`misaka_palw_remote::track::ClaimTracker`]. Tx id, claim id, inclusion and phase are separate facts; `Final`/void are reported settled only
 /// `finality_depth` DAA deep; and a claim row naming another executor bond is `Misattributed`, never ours. The nodes are compared, and a
 /// disagreement is printed as one rather than averaged away.
 fn track_once(endpoints: &[String], claim_hex: &str, tx_id_hex: Option<&str>, our_bond: TransactionOutpoint, finality_depth: u64) {
     use kaspa_rpc_core::api::rpc::RpcApi;
-    use misaka_palw_remote::track::{ChainObservation, ClaimObs, ClaimPhaseObs, ClaimTracker};
+    use misaka_palw_remote::track::ClaimTracker;
     let parse_hash = |what: &str, text: &str| -> Hash64 {
         let mut out = [0u8; 64];
         if text.len() != 128 || faster_hex::hex_decode(text.as_bytes(), &mut out).is_err() {
@@ -943,42 +1027,7 @@ fn track_once(endpoints: &[String], claim_hex: &str, tx_id_hex: Option<&str>, ou
                 continue;
             }
         };
-        let observation = runtime.block_on(async {
-            let info = client.get_block_dag_info().await.map_err(|e| e.to_string())?;
-            let tx_in_mempool = match tx_id {
-                Some(id) => client.get_mempool_entry(id, true, true).await.is_ok(),
-                None => false,
-            };
-            let claim = client.get_palw_free_prompt_claim(claim_hex.to_string()).await.map_err(|e| e.to_string())?;
-            let claim_obs = if !claim.found {
-                None
-            } else {
-                let (txid, index) = claim.executor_bond.split_once(':').ok_or("the node's executor_bond is not txid:index")?;
-                let mut raw = [0u8; 64];
-                if txid.len() != 128 || faster_hex::hex_decode(txid.as_bytes(), &mut raw).is_err() {
-                    return Err("the node's executor_bond is not a 128-hex id".to_string());
-                }
-                let bond = TransactionOutpoint::new(Hash64::from_bytes(raw), index.parse::<u32>().map_err(|e| e.to_string())?);
-                let phase = match claim.phase.as_str() {
-                    "provisional" => ClaimPhaseObs::Provisional,
-                    "panel_bound" => ClaimPhaseObs::PanelBound,
-                    "receipt_licensed" => ClaimPhaseObs::ReceiptLicensed { licensed_daa: claim.phase_daa },
-                    "final" => ClaimPhaseObs::Final { final_daa: claim.phase_daa },
-                    "voided" => ClaimPhaseObs::Voided { voided_daa: claim.phase_daa },
-                    other => return Err(format!("the node reports a claim phase this client does not know: {other:?}")),
-                };
-                let mut accepted = [0u8; 64];
-                let accepted_block = if claim.accepted_block.len() == 128
-                    && faster_hex::hex_decode(claim.accepted_block.as_bytes(), &mut accepted).is_ok()
-                {
-                    Hash64::from_bytes(accepted)
-                } else {
-                    Hash64::default()
-                };
-                Some(ClaimObs { executor_bond: bond, accepted_block, accepted_daa: claim.accepted_daa, phase })
-            };
-            Ok::<_, String>(ChainObservation { sink: info.sink, virtual_daa: info.virtual_daa_score, tx_in_mempool, claim: claim_obs })
-        });
+        let observation = observe_endpoint(&runtime, &client, claim_hex, tx_id);
         let _ = runtime.block_on(client.disconnect());
         match observation {
             Ok(obs) => {
@@ -1005,6 +1054,126 @@ fn track_once(endpoints: &[String], claim_hex: &str, tx_id_hex: Option<&str>, ou
             "provenance": misaka_palw_remote::trust::UNVERIFIED_REMOTE_STATE,
             "mode": misaka_palw_remote::verify::ModeLabelV1::UnverifiedRemote.as_str(),
             "note": "a relay accept is not inclusion; Final/void are settled only finality_depth DAA deep; a disagreement is a disagreement, not an average",
+        })
+    );
+}
+
+/// What `--track --carrier --resubmit-state` is told.
+struct ResubmitArgs<'a> {
+    relays: &'a [String],
+    observers: &'a [String],
+    claim_hex: &'a str,
+    carrier: &'a Path,
+    state_path: &'a Path,
+    funding_amount: u64,
+    bound_daa: u64,
+    finality_depth: u64,
+    bond: TransactionOutpoint,
+}
+
+/// **RFC-0009 obstruction, wired: poll, decide, and — when a relay's ACK has gone unconfirmed past its bound — send the SAME bytes through
+/// another relay.** One invocation is one step of [`misaka_palw_remote::resubmit`]'s state machine: it reads the carrier (its id is checked
+/// against the state file, so nothing but these bytes is ever sent), asks every relay and observer what it sees, decides, sends if the
+/// decision says so, and rewrites the state file atomically. Run it from a timer or a loop; it never sleeps and never re-signs (it holds no
+/// key). A relay's ACK is confirmed only by a node that is not that relay and not one already found swallowing; with no independent
+/// observer it sends nothing (`Blind`).
+fn track_and_resubmit(a: &ResubmitArgs<'_>) {
+    use kaspa_rpc_core::api::rpc::RpcApi;
+    use misaka_palw_remote::relay::{RelayNode, check_fp_carrier_v1, tx_id_of_bytes};
+    use misaka_palw_remote::resubmit::{ResubmitStateV1, step_resubmit_v1};
+    if a.funding_amount == 0 {
+        die("--carrier needs --funding-amount <sompi>: the funding input's value, which its signature commits to".into());
+    }
+    let tx: kaspa_consensus_core::tx::Transaction = read_borsh(a.carrier, "signed carrier");
+    let checked = check_fp_carrier_v1(&tx).unwrap_or_else(|e| die(format!("nothing is resent: {e}")));
+    if hex(checked.claim_id) != a.claim_hex {
+        die(format!("--track names claim {} but the carrier is for claim {}", a.claim_hex, hex(checked.claim_id)));
+    }
+    let tx_id = tx_id_of_bytes(&tx);
+    let funding =
+        UtxoEntry::new(a.funding_amount, misaka_palw_remote::bundle::funding_spk_of_pubkey_v1(&checked.funding_pubkey), 0, false);
+
+    let mut state = match ResubmitStateV1::load(a.state_path).unwrap_or_else(|e| die(e.to_string())) {
+        Some(state) => {
+            if state.tx_id != tx_id.to_string()
+                || state.claim_id != a.claim_hex
+                || state.bond != format!("{}:{}", a.bond.transaction_id, a.bond.index)
+            {
+                die(format!(
+                    "{} was made for another carrier, claim or bond: a resubmission sends the same bytes or nothing",
+                    a.state_path.display()
+                ));
+            }
+            state
+        }
+        None => ResubmitStateV1::new(&tx, checked.claim_id, a.bond, a.relays, a.bound_daa, a.finality_depth)
+            .unwrap_or_else(|e| die(e.to_string())),
+    };
+    // Relays added since the state was made join the list (after the ones already tried): the way out of `Exhausted`.
+    for relay in a.relays {
+        if !state.relays.contains(relay) {
+            state.relays.push(relay.clone());
+        }
+    }
+
+    // Everyone this process can ask: the relays (which can also be sent through) and the observer-only nodes.
+    let mut endpoints: Vec<String> = Vec::new();
+    for e in a.relays.iter().chain(a.observers.iter()) {
+        if !endpoints.contains(e) {
+            endpoints.push(e.clone());
+        }
+    }
+    let runtime = rpc_runtime();
+    let mut relay_nodes: Vec<WrpcRelayNode<'_>> = Vec::new();
+    let mut observations: Vec<(String, misaka_palw_remote::track::ChainObservation)> = Vec::new();
+    let mut silent: Vec<String> = Vec::new();
+    for endpoint in &endpoints {
+        let client = match try_rpc_connect(&runtime, endpoint) {
+            Ok(c) => c,
+            Err(e) => {
+                silent.push(format!("{endpoint}: {e}"));
+                continue;
+            }
+        };
+        match observe_endpoint(&runtime, &client, a.claim_hex, Some(tx_id)) {
+            Ok(obs) => observations.push((endpoint.clone(), obs)),
+            Err(e) => silent.push(format!("{endpoint}: {e}")),
+        }
+        if a.relays.contains(endpoint) {
+            relay_nodes.push(WrpcRelayNode { endpoint: endpoint.clone(), runtime: &runtime, client });
+        } else {
+            let _ = runtime.block_on(client.disconnect());
+        }
+    }
+    let refs: Vec<&dyn RelayNode> = relay_nodes.iter().map(|n| n as &dyn RelayNode).collect();
+    let step = step_resubmit_v1(&mut state, &tx, Some(&funding), &observations, &refs)
+        .unwrap_or_else(|e| die(format!("nothing was resent: {e}")));
+    // Saved before anything is printed: the next poll must know who was asked.
+    state.save(a.state_path).unwrap_or_else(|e| die(e.to_string()));
+    for node in &relay_nodes {
+        let _ = runtime.block_on(node.client.disconnect());
+    }
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema": "misaka.palw.fp-rail-resubmit.v1",
+            "claim_id": a.claim_hex,
+            "tx_id": tx_id.to_string(),
+            "decision": format!("{:?}", step.decision),
+            "outcome": format!("{:?}", step.outcome),
+            "sent": step.sent.iter().map(|(relay, outcome)| format!("{relay}: {outcome:?}")).collect::<Vec<_>>(),
+            "acked_by": step.acked_by,
+            "attempts": state.attempts.iter().map(|x| format!("{} @ DAA {}", x.relay, x.acked_at_daa)).collect::<Vec<_>>(),
+            "suspects": state.suspects,
+            "bound_daa": state.bound_daa,
+            "observed": observations.iter().map(|(n, o)| serde_json::json!({
+                "node": n, "virtual_daa": o.virtual_daa, "tx_in_mempool": o.tx_in_mempool, "claim_on_chain": o.claim.is_some(),
+            })).collect::<Vec<_>>(),
+            "silent": silent,
+            "state_file": a.state_path.display().to_string(),
+            "provenance": misaka_palw_remote::trust::UNVERIFIED_REMOTE_STATE,
+            "mode": misaka_palw_remote::verify::ModeLabelV1::UnverifiedRemote.as_str(),
+            "note": "the SAME signed bytes (one tx id, one fee, one claim); a relay's ACK is confirmed only by a node that is not that relay; a relay found swallowing is never asked again; Exhausted means add relays (--relay)",
         })
     );
 }
@@ -1062,12 +1231,6 @@ impl BondSigner {
         match self {
             BondSigner::Seed(key) => key,
             BondSigner::Sidecar(sidecar) => sidecar,
-        }
-    }
-    fn seed_key(&self) -> Option<&ValidatorKey> {
-        match self {
-            BondSigner::Seed(key) => Some(key),
-            BondSigner::Sidecar(_) => None,
         }
     }
 }
