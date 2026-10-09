@@ -5288,6 +5288,11 @@ pub fn palw_rcore_deadline_v1(
     if !claim.phase.is_terminal() && da.is_some_and(|record| record.open_seat_sessions > 0) {
         return Ok(None);
     }
+    // **Lane PL part C × G14 (SHARD)**: a lane-A claim whose next end past `palw_panel_unavailable_expiry` is uncharged owes no
+    // deadline while an accusation is pending on it. Dormant: the fence is armed on no shipped preset.
+    if !claim.phase.is_terminal() && state.palw_v2_expiry_held_v1(params, claim_id, claim) {
+        return Ok(None);
+    }
     Ok(match claim.phase {
         // **RFC-0010: the engine is the clock** of a claim it tracks until the claim is licensed — no bind or receipt deadline of
         // V2's applies, because the engine's seal, beacon and receipt windows decide, and a V2 sweep would end a claim the engine
@@ -13212,6 +13217,30 @@ impl PalwChainStateV2 {
             && self.palw_accusation_pending_v1(claim_id)
     }
 
+    /// **Lane PL part C × G14: does the hold reach this lane-A claim?** (Agent SHARD, the Lead's ruling of 2026-10-09 under
+    /// PRINCIPLES §3/§6.7: nothing escapes to an uncharged void while a valid accusation is open.) Past
+    /// `palw_panel_unavailable_expiry` a lane-A claim's SECOND Panel ends uncharged when it fails — the second receipt timeout and
+    /// an S2 licence's second gate expire `PanelUnavailable`, a redrawn claim's bind window `BindTimeout` — and an uncharged void
+    /// closes every session on the claim neutrally. So the hold reaches a V2 claim (not the permissionless engine's, which has its
+    /// own guard) whose redraw (`rebound_daa`) is at or past the fence, while it is `Provisional`, `PanelBound`, or an S2 licence
+    /// awaiting replay. Keyed on the redraw — immutable — so DL-1 agrees at rest and in the fold. `false` on every shipped preset.
+    pub fn palw_v2_expiry_hold_applies_v1(&self, params: &PalwStateParamsV2, claim_id: &Hash64, claim: &PalwClaimStateV2) -> bool {
+        claim.rebound_daa.is_some_and(|at| params.panel_unavailable_expiry_active_at(at))
+            && !self.panel_v3.as_ref().is_some_and(|engine| engine.claim_rows().contains_key(claim_id))
+            && match claim.phase {
+                PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } => true,
+                PalwClaimPhaseV2::ReceiptLicensed { .. } => palw_rcore_licence_awaits_replay_v1(claim),
+                _ => false,
+            }
+    }
+
+    /// **The hold itself** (DL-1's part-C G14 row): the hold reaches the claim and an accusation is pending on it
+    /// ([`Self::palw_accusation_pending_v1`]) — it owes no deadline, so no uncharged expiry can pre-empt the accusation; the end of
+    /// the last accusation re-derives the deadline, and an expiry already due then lands at the next sweep.
+    pub fn palw_v2_expiry_held_v1(&self, params: &PalwStateParamsV2, claim_id: &Hash64, claim: &PalwClaimStateV2) -> bool {
+        self.palw_v2_expiry_hold_applies_v1(params, claim_id, claim) && self.palw_accusation_pending_v1(claim_id)
+    }
+
     pub fn vertex_counts_v1(&self) -> (usize, usize, usize) {
         (self.vertex.rounds.len(), self.vertex.tallies.len(), self.vertex.held.len())
     }
@@ -15169,8 +15198,9 @@ impl PalwChainStateV2 {
             {
                 continue;
             }
-            // RFC-0010 × G14 (SHARD): a V3 S2 licence a pending accusation holds owes none (DL-1's G14 row).
-            if self.palw_v3_s2_licence_held_v1(id, claim) {
+            // RFC-0010 × G14 (SHARD): a V3 S2 licence a pending accusation holds owes none (DL-1's G14 row), nor does a lane-A
+            // claim the part-C hold reaches while one is pending.
+            if self.palw_v3_s2_licence_held_v1(id, claim) || self.palw_v2_expiry_held_v1(params, id, claim) {
                 continue;
             }
             if let Some(deadline) = expected_deadline(claim, self.open_courts_by_claim.get(id).copied().unwrap_or(0)) {
@@ -21423,10 +21453,12 @@ impl<'a> TransitionBuilder<'a> {
             }
             self.rearm_claim_deadline_dl1_v1(claim_id, now_daa)?;
         } else if open_left == 0
-            && matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
-            && palw_rcore_licence_awaits_replay_v1(&claim)
-            && self.state.panel_v3.as_ref().is_some_and(|engine| engine.claim_rows().contains_key(&claim_id))
+            && ((matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
+                && palw_rcore_licence_awaits_replay_v1(&claim)
+                && self.state.panel_v3.as_ref().is_some_and(|engine| engine.claim_rows().contains_key(&claim_id)))
+                || self.state.palw_v2_expiry_hold_applies_v1(self.params, &claim_id, &claim))
         {
+            // …and the last session on a lane-A claim the part-C hold reaches (SHARD): the same re-derivation.
             // RFC-0010 × G14 (SHARD): the last session on a V3 S2 licence closed — DL-1 re-derives its deadline (none while a court
             // is still open). Dormant: no engine exists on any shipped chain.
             self.rearm_claim_deadline_dl1_v1(claim_id, now_daa)?;
@@ -27015,6 +27047,7 @@ impl<'a> TransitionBuilder<'a> {
             self.state.courts_by_challenger.insert((record.challenger_bond, key));
         }
         let removed = new.is_none();
+        let touched_claim = new.as_ref().map(|record| record.claim).or_else(|| old.as_ref().map(|record| record.claim));
         self.entries.push(PalwDeltaEntryV2::Court { key, old, new });
         // **RFC-0002 F7: an IR dissection is a row ABOUT a session, so it dies with it** — here, for
         // the close groups' reason below: a cleanup each removal site had to remember is a cleanup
@@ -27053,6 +27086,29 @@ impl<'a> TransitionBuilder<'a> {
                     self.write_court_close_group((key, side), None);
                 }
             }
+        }
+        // **Lane PL part C × G14 (SHARD): a court session starts or ends a lane-A claim's hold** — here, at the one writer of
+        // sessions, so every opener and every ending moves the deadline as DL-1 derives it. Dormant: the hold reaches no claim on
+        // any shipped preset.
+        if let Some(claim_id) = touched_claim {
+            self.sync_v2_expiry_hold_v1(claim_id)?;
+        }
+        Ok(())
+    }
+
+    /// **Lane PL part C × G14: re-derive the deadline of a `Provisional` / `PanelBound` lane-A claim the hold reaches** (after a
+    /// court session opened or ended on it): none while an accusation is pending, DL-1's row once nothing is. (An S2 licence's
+    /// court moves are the licensed rows' own: `CourtOpened` disarms, `rearm_claim_after_court_close` re-derives.)
+    fn sync_v2_expiry_hold_v1(&mut self, claim_id: Hash64) -> Result<(), PalwStateV2Error> {
+        let Some(claim) = self.state.claims.get(&claim_id).cloned() else { return Ok(()) };
+        if !matches!(claim.phase, PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. })
+            || !self.state.palw_v2_expiry_hold_applies_v1(self.params, &claim_id, &claim)
+        {
+            return Ok(());
+        }
+        self.disarm_deadline(claim_id);
+        if let Some(at) = palw_rcore_deadline_v1(&self.state, self.params, &claim_id, &claim, None)? {
+            self.arm_deadline(at, claim_id);
         }
         Ok(())
     }
@@ -27110,6 +27166,10 @@ impl<'a> TransitionBuilder<'a> {
         // void or a Final) can arm what DL-1 would not rebuild. `da_claims` is empty below
         // `palw_rcore_plus`, where this is the plain insert it always was.
         let mut deadline = deadline;
+        // Lane PL part C × G14 (SHARD): DL-1's hold row, at the same primitive — a held lane-A claim owes none.
+        if self.state.claims.get(&claim).is_some_and(|c| !c.phase.is_terminal() && self.state.palw_v2_expiry_held_v1(self.params, &claim, c)) {
+            return;
+        }
         if let Some(record) = self.state.da_claims.get(&claim) {
             let terminal = self.state.claims.get(&claim).is_some_and(|c| c.phase.is_terminal());
             if (!terminal && record.open_seat_sessions > 0) || (terminal && record.open_sessions() > 0) {
@@ -30481,7 +30541,7 @@ fn open_da_session_rcore_v1(
     }
     // RFC-0010 × G14 (SHARD): any session on a V3 S2 licence holds it — DL-1 gives it no deadline while one is open (the close of
     // the last re-derives it, `da_close_session_v1`). Dormant: no engine exists on any shipped chain.
-    if builder.state.palw_v3_s2_licence_held_v1(&claim_id, &claim) {
+    if builder.state.palw_v3_s2_licence_held_v1(&claim_id, &claim) || builder.state.palw_v2_expiry_held_v1(builder.params, &claim_id, &claim) {
         builder.disarm_deadline(claim_id);
     }
     let until = admission.deadline_daa.saturating_add(builder.params.window_challenge_at(ctx.daa_score));
@@ -33195,6 +33255,11 @@ fn palw_void_claims_unbound_in_their_anchor_block_v1(
             builder.write_claim(claim_id, Some(retried));
             continue;
         }
+        // Lane PL part C × G14 (SHARD): a redrawn claim the hold reaches is not ended unbound while an accusation is pending on it
+        // (the binder may still bind it; the end of the last accusation re-arms its bind window).
+        if builder.state.palw_v2_expiry_held_v1(builder.params, &claim_id, &claim) {
+            continue;
+        }
         let reason = builder.bind_timeout_reason(&claim, ctx);
         builder.void_claim(claim_id, &claim, ctx.daa_score, reason)?;
     }
@@ -33457,6 +33522,11 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
         }
         builder.state.deadlines.remove(&(deadline, claim_id));
         let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+        // Lane PL part C × G14 (SHARD): no uncharged end of a held lane-A claim while an accusation is pending — DL-1 arms none
+        // (unreachable by the derivation); skipped consistently with it, the end of the last accusation re-arms.
+        if !claim.phase.is_terminal() && builder.state.palw_v2_expiry_held_v1(builder.params, &claim_id, &claim) {
+            continue;
+        }
         match claim.phase {
             PalwClaimPhaseV2::Provisional => {
                 let reason = builder.bind_timeout_reason(&claim, ctx);
