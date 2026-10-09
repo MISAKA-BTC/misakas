@@ -314,7 +314,7 @@ fn l_t1_a_da_default_takes_its_s1_and_a_lifting_freeze_past_the_fence_decision_1
         assert_eq!(
             reward,
             kaspa_consensus_core::palw_state_v2::palw_reporter_reward_amount_v1(record.collected, 0),
-            "armed={armed}: the reporter reward is 49% of the tier debit (decision 4)"
+            "armed={armed}: the reporter reward is 10% of the tier debit (decision 4)"
         );
         if !armed {
             assert_eq!(freeze(c, &producer), None, "dormant: no freeze");
