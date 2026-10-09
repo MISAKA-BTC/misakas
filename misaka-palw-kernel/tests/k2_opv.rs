@@ -1169,10 +1169,14 @@ fn past_the_panel_free_fence_a_claim_opens_only_its_salted_seal_and_the_salt_is_
     assert!(refused(&ev).unwrap().contains("revealed only with its salt"), "{ev:?}");
     let ev = w.block_raw(7, vec![obj(salted([1; 64]))]);
     assert!(refused(&ev).unwrap().contains("salt does not open"), "{ev:?}");
-    // (2) A v2 seal (a re-seal: the one deposit stays): another salt does not open it, and neither does an unsalted reveal.
+    // (2) A v2 seal — a re-seal past the fence, so the v1 seal it replaces is FORFEITED at its own position (ECON fix S1) and the
+    // v2 seal is bonded afresh: another salt does not open it, and neither does an unsalted reveal.
     let salt = [0x5A; 64];
+    let collateral = w.l.bonds[&PRODUCER].collateral;
     w.block_raw(8, vec![seal(claim_seal_v2(&id, &salt))]);
-    assert_eq!(w.l.bonds[&PRODUCER].reserved, w.l.policy.seal_deposit, "one deposit across the re-seal");
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, w.l.policy.seal_deposit, "the new seal's deposit (the old one was forfeited)");
+    assert_eq!(w.l.bonds[&PRODUCER].collateral, collateral - w.l.policy.seal_deposit, "the replaced seal's deposit burned");
+    assert_eq!(w.l.forfeited_claim_seals[&(job.id(), PRODUCER, 4)].seal, claim_seal_v1(&id), "and its position kept");
     let ev = w.block_raw(10, vec![obj(salted([0x5B; 64]))]);
     assert!(refused(&ev).unwrap().contains("salt does not open"), "{ev:?}");
     let ev = w.block_raw(10, vec![obj(plain)]);
@@ -1185,15 +1189,26 @@ fn past_the_panel_free_fence_a_claim_opens_only_its_salted_seal_and_the_salt_is_
     assert_eq!(w.l.bonds[&PRODUCER].reserved, 1000, "the seal's deposit returned at the reveal; the claim's reservation alone");
     assert_eq!(
         w.l.claim_beacon_seals_v1(),
-        vec![ClaimBeaconSealV1 {
-            job: job.id(),
-            producer: PRODUCER,
-            seal: claim_seal_v2(&id, &salt),
-            sealed_daa: 8,
-            revealed: Some((id, 11, salt)),
-            forfeited_daa: None,
-            poster: Some(common::chain::POSTER),
-        }]
+        vec![
+            ClaimBeaconSealV1 {
+                job: job.id(),
+                producer: PRODUCER,
+                seal: claim_seal_v1(&id),
+                sealed_daa: 4,
+                revealed: None,
+                forfeited_daa: Some(8),
+                poster: Some(common::chain::POSTER),
+            },
+            ClaimBeaconSealV1 {
+                job: job.id(),
+                producer: PRODUCER,
+                seal: claim_seal_v2(&id, &salt),
+                sealed_daa: 8,
+                revealed: Some((id, 11, salt)),
+                forfeited_daa: None,
+                poster: Some(common::chain::POSTER),
+            },
+        ]
     );
     // C4R4 F-C4R4-08: the job's poster is kept past the fence (the beacon's consumer), beyond the escrow that also names it.
     assert_eq!(w.l.job_poster(&job.id()), Some(common::chain::POSTER));
@@ -1291,6 +1306,52 @@ fn past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists
     );
     assert_eq!(read[2].revealed, Some((id, at, common::chain::test_salt(&id))));
     assert!(read.iter().all(|s| s.poster == Some(common::chain::POSTER)), "every seal reads its job's poster");
+    rows_agree(&w.l);
+    assert_eq!(KernelLedgerV1::replay(&w.genesis, &w.blocks).root(), w.l.root());
+}
+
+/// **ECON F-ECON-1 / F-ECON-2, fix S1: past the fence a seal position, once taken, is never withdrawn for free.** A re-seal of a live
+/// `(job, producer)` FORFEITS the replaced seal at its own `sealed_daa` (table 26, its deposit burned) and bonds the new one afresh.
+/// (1) "One deposit vetoes every attempt" is impossible: staying live by re-sealing under the TTL costs a deposit per re-seal, and
+/// every earlier position stays in the beacon read. (2) A re-seal inside a reveal window does not move a mixed seal out of its seal
+/// window: the replaced seal stays at its position, unrevealed and forfeited — a counted veto, never a silent withdrawal.
+#[test]
+fn past_the_fence_a_re_seal_forfeits_the_replaced_seal_at_its_position_so_no_seal_is_withdrawn_for_free() {
+    use misaka_palw_kernel::ledger::claim_seal_v2;
+    let mut w = World::new_opv();
+    let d = w.l.policy.seal_deposit;
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let seal = |n: u8| claim_seal_v2(&[n; 64], &[0x77; 64]);
+    let (collateral, burned) = (w.l.bonds[&SQUATTER].collateral, w.l.burned);
+    // (1) Seal at 10, then re-seal every 83 DAA (under the TTL): each re-seal forfeits the seal it replaces.
+    let positions = [10u64, 93, 176, 259];
+    for (i, at) in positions.iter().enumerate() {
+        let ev = w.block(*at, vec![T::SealClaim { producer: SQUATTER, job: job.id(), seal: seal(i as u8) }]);
+        assert!(refused(&ev).is_none(), "{ev:?}");
+        if i > 0 {
+            assert!(ev.contains(&E::SealForfeited { job: job.id(), producer: SQUATTER, forfeited: d }), "re-seal {i}: {ev:?}");
+        }
+    }
+    let replaced = (positions.len() - 1) as u64;
+    assert_eq!(w.l.bonds[&SQUATTER].collateral, collateral - replaced * d, "one deposit burned per replaced seal");
+    assert_eq!(w.l.burned - burned, replaced * d);
+    assert_eq!(w.l.bonds[&SQUATTER].reserved, d, "and one live deposit");
+    let read = w.l.claim_beacon_seals_v1();
+    let mine: Vec<(u64, bool)> =
+        read.iter().filter(|s| s.producer == SQUATTER).map(|s| (s.sealed_daa, s.forfeited_daa.is_some())).collect();
+    assert_eq!(mine, vec![(10, true), (93, true), (176, true), (259, false)], "every position stays in the read");
+    assert!(read.iter().filter(|s| s.producer == SQUATTER).all(|s| s.revealed.is_none()));
+    // (2) A beacon whose seal window held the seal at 93 (say [90, 130)) sees it unrevealed in its reveal window [130, 170) — it was
+    // replaced at 176, after that window, but ANY replacement leaves it at 93: forfeited, never revealed — a veto, never an exclusion.
+    let at_93 = read.iter().find(|s| s.producer == SQUATTER && s.sealed_daa == 93).unwrap();
+    assert_eq!((at_93.seal, at_93.forfeited_daa, at_93.revealed), (seal(1), Some(176), None));
+    // A re-seal INSIDE a reveal window: seal at 300, re-seal at 345 (window [300, 340), reveals [340, 380)) — the seal at 300 stays.
+    w.block(300, vec![T::SealClaim { producer: HONEST, job: job.id(), seal: seal(9) }]);
+    w.block(345, vec![T::SealClaim { producer: HONEST, job: job.id(), seal: seal(10) }]);
+    let read = w.l.claim_beacon_seals_v1();
+    let at_300 = read.iter().find(|s| s.producer == HONEST && s.sealed_daa == 300).expect("the replaced seal is still read");
+    assert_eq!((at_300.seal, at_300.forfeited_daa, at_300.revealed), (seal(9), Some(345), None), "unrevealed: a counted veto");
+    // Below the fence the historical rule stands (one deposit kept): pinned by k2_ledger_route's bonded-seal test.
     rows_agree(&w.l);
     assert_eq!(KernelLedgerV1::replay(&w.genesis, &w.blocks).root(), w.l.root());
 }

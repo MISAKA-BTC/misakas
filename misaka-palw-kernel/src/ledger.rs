@@ -1024,18 +1024,27 @@ impl KernelLedgerV1 {
                     return Err(KernelRefusalV1::rule(name, "another claim already holds the job"));
                 }
                 // A seal is bonded: `seal_deposit` of the producer's free collateral until it is revealed (forfeited if it expires). A
-                // producer may re-seal (another output): the latest seal replaces the earlier, keeps its deposit, and its clock restarts.
-                let held = self.seals.get(&(*job, *producer)).map(|r| r.deposit);
+                // producer may re-seal (another output): the latest seal replaces the earlier and its clock restarts. Below the fence the
+                // one deposit is kept. **Past `palw_panel_free_v1` (ECON F-ECON-1 / F-ECON-2, fix S1) the REPLACED seal is forfeited** at
+                // its own position (table 26, its deposit burned) and the new seal is bonded afresh: a seal position once taken is
+                // never withdrawn for free — re-sealing to stay live costs a deposit each time, and moving a mixed seal out of a beacon's
+                // seal window leaves the old one in the mix as a veto, never a silent withdrawal.
+                let held = self.seals.get(&(*job, *producer)).copied();
+                let replaced = held.filter(|r| self.salted_seals_from().is_some_and(|at| r.daa >= at));
                 let deposit = self.policy.seal_deposit;
-                if held.is_none() {
-                    let b = self.bonds.get_mut(producer).expect("checked");
-                    if b.free() < deposit {
+                if held.is_none() || replaced.is_some() {
+                    // (a forfeit of the replaced seal takes its deposit out of both the collateral and the reservation: free is unchanged)
+                    if self.bonds[producer].free() < deposit {
                         return Err(KernelRefusalV1::rule(name, "the producer's free collateral does not cover the seal deposit"));
                     }
-                    b.reserved += deposit;
+                    if let Some(row) = replaced {
+                        self.seals.remove(&(*job, *producer));
+                        self.forfeit_claim_seal(*job, *producer, row, &mut out);
+                    }
+                    self.bonds.get_mut(producer).expect("checked").reserved += deposit;
                     settle(&mut out, *producer, deposit, SettlementKindV1::ReserveSealDeposit, None);
                 }
-                let deposit = held.unwrap_or(deposit);
+                let deposit = held.filter(|_| replaced.is_none()).map_or(deposit, |r| r.deposit);
                 self.seals.insert((*job, *producer), SealRowV1 { seal: *seal, daa: self.daa, deposit });
                 out.push(LedgerEventV1::ClaimSealed { job: *job, producer: *producer });
             }
@@ -2290,6 +2299,32 @@ impl KernelLedgerV1 {
         Ok(())
     }
 
+    /// **Forfeit an unrevealed claim seal** (its row already removed from `seals`): the deposit is slashed and burned (as far as the
+    /// bond still holds it), and a seal accepted past `palw_panel_free_v1` stays readable as `(job, producer, sealed_daa) →
+    /// {seal, forfeited_daa}` (table 26) — it vetoes the v3 beacon it was mixed into; deleting it would turn the veto into a silent
+    /// exclusion. Called at expiry (the tick) and, past the fence, when a re-seal replaces it (ECON fix S1).
+    fn forfeit_claim_seal(&mut self, job: Digest, producer: Digest, row: SealRowV1, out: &mut Vec<LedgerEventV1>) {
+        let daa = self.daa;
+        if self.salted_seals_from().is_some_and(|at| row.daa >= at) {
+            self.forfeited_claim_seals.insert((job, producer, row.daa), ForfeitedSealRowV1 { seal: row.seal, forfeited_daa: daa });
+        }
+        let deposit = row.deposit;
+        if deposit == 0 {
+            return;
+        }
+        let collateral = self.bonds.get(&producer).map_or(0, |b| b.collateral);
+        let taken = deposit.min(collateral);
+        if let Some(b) = self.bonds.get_mut(&producer) {
+            b.reserved = b.reserved.saturating_sub(deposit);
+            b.collateral -= taken;
+        }
+        self.burned += taken;
+        settle(out, producer, taken, SettlementKindV1::ForfeitSealDeposit, None);
+        settle(out, producer, deposit - taken, SettlementKindV1::ReleaseSealDeposit, None);
+        settle(out, producer, taken, SettlementKindV1::Burn, None);
+        out.push(LedgerEventV1::SealForfeited { job, producer, forfeited: taken });
+    }
+
     /// Deadlines, windows, Final, liability release.
     fn tick_into(&mut self, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
@@ -2298,29 +2333,9 @@ impl KernelLedgerV1 {
         // An unrevealed claim seal expires and FORFEITS its deposit (slashed, burned): withholding a sealed reveal is never free.
         let expired: Vec<((Digest, Digest), SealRowV1)> =
             self.seals.iter().filter(|(_, row)| daa > row.daa.saturating_add(ttl)).map(|(k, row)| (*k, *row)).collect();
-        let salted_from = self.salted_seals_from();
         for ((job, producer), row) in expired {
             self.seals.remove(&(job, producer));
-            // OPV-BOOT GAP-B1a: a seal accepted past the fence stays readable once forfeited (it vetoes the v3 beacon it was mixed
-            // into; deleting it would turn the veto into a silent exclusion).
-            if salted_from.is_some_and(|at| row.daa >= at) {
-                self.forfeited_claim_seals.insert((job, producer, row.daa), ForfeitedSealRowV1 { seal: row.seal, forfeited_daa: daa });
-            }
-            let deposit = row.deposit;
-            if deposit == 0 {
-                continue;
-            }
-            let collateral = self.bonds.get(&producer).map_or(0, |b| b.collateral);
-            let taken = deposit.min(collateral);
-            if let Some(b) = self.bonds.get_mut(&producer) {
-                b.reserved = b.reserved.saturating_sub(deposit);
-                b.collateral -= taken;
-            }
-            self.burned += taken;
-            settle(out, producer, taken, SettlementKindV1::ForfeitSealDeposit, None);
-            settle(out, producer, deposit - taken, SettlementKindV1::ReleaseSealDeposit, None);
-            settle(out, producer, taken, SettlementKindV1::Burn, None);
-            out.push(LedgerEventV1::SealForfeited { job, producer, forfeited: taken });
+            self.forfeit_claim_seal(job, producer, row, out);
         }
         self.proof_seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
         // GAP-5: escrows no claim can still use go back to their posters.

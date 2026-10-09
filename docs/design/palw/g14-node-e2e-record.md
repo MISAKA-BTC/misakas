@@ -362,6 +362,14 @@ model computes it when the seal is posted, and a beacon over such seals is groun
   unchanged (its `sealed_daa` is the seal position, its `committed_daa` the reveal position);
 * a seal accepted past the fence that expires unrevealed is KEPT as `(job, producer, sealed_daa) → { seal, forfeited_daa }` (table 26),
   so a withheld seal stays in the v3 mix and vetoes it instead of silently dropping out of it (SOUND SG-01a(i));
+* **a re-seal past the fence forfeits the seal it replaces** (ECON F-ECON-1 / F-ECON-2, fix S1, 2026-10-09): the replaced seal goes
+  to table 26 at its OWN `sealed_daa` with its deposit burned, and the new seal is bonded afresh. Before the fix a re-seal kept the
+  one deposit and overwrote the row, so (1) one deposit, re-sealed under the TTL, stayed live forever and vetoed every attempt of a
+  class, and (2) a re-seal inside a reveal window moved a mixed seal out of its seal window — a free, uncounted withdrawal chosen after
+  the honest salts were public (2^a lockable outputs with `a` attacker seals). Now every seal position, once taken, is in the read
+  until revealed or forfeited, and staying live costs a deposit per re-seal. (Refusing the re-seal outright was the alternative; the
+  forfeit keeps the honest "seal another output" path and makes its price explicit.) Below the fence the historical one-deposit rule
+  stands. k2_opv `past_the_fence_a_re_seal_forfeits_the_replaced_seal_at_its_position_so_no_seal_is_withdrawn_for_free`;
 * `claim_beacon_seals_v1()` lists live, salted-revealed and forfeited seals together in `(sealed_daa, seal)` order (a re-seal counts at
   its latest seal) — OPV-BOOT maps it into `SealedSourceV3`;
 * **the job's poster is kept** (C4R4 F-C4R4-08, agreed with OPV-BOOT): `job → poster` (table 18, `job_posters`, `job_poster()`),
