@@ -1080,7 +1080,7 @@ async fn g14_rewards_a_v2_claim_of_a_kernel_bound_class_never_earns_the_new_rewa
     let refusal = cw.facts(cw.v2_class, PRODUCERS[0]).class_admission_refusal.unwrap_or_default();
     assert!(refusal.contains("earns no reward"), "before its conformance the class earns nothing: {refusal}");
     let (_, old_rules) = cw.onboarded_v2_claims_on_the_legacy_channel(PRODUCERS[0]).await;
-    assert!(!old_rules.is_empty(), "the old rules' refusal is named: {old_rules}");
+    assert!(!old_rules.contains("earns no reward"), "what refuses it is the old rules, never the gate: {old_rules}");
     // The class's new reward channel is its kernel class's OPV claims: derived-eligible on the drill terms (the binding's own path).
     let route = cw.net.api().expect("the route");
     let ledger = route.ledger().unwrap();
