@@ -183,6 +183,75 @@ def section2() -> None:
 
 
 # =====================================================================================================================================
+# §2b The default-before-conviction rule: the 49% bound (I-49) against no dilution of an honest accuser (I-D, C4 F-C4R3-02)
+# =====================================================================================================================================
+
+RULES = {
+    "NOW": "today: demanders paid D(1 - β_d) at the default; bounty min(a(S + D), S) (basis as if no default)",
+    "O1": "one cap across both legs: bounty min(a(S + D) - demanders_paid, S)",
+    "O2": "demanders credited only without a conviction: the share is held at the default; a conviction in the horizon pays one "
+    "pool min(a(S + D), S) to the bounty holder and burns the held share; no conviction by the horizon pays the demanders then",
+    "O3": "burn the whole pre-Final default penalty (β_d = 1): no demanders' share; bounty as today",
+    "O4": "bounty on the slash alone: min(a·S, S) (reverts F-C4R3-02's basis)",
+}
+
+
+def legs(t: Terms, rule: str, convicted: bool) -> tuple[Q, Q, str]:
+    """For one claim with a pre-Final default (penalty D) and, if `convicted`, a conviction of the rest S = K - D: what ALL the
+    demanders get together, what the bounty holder gets, and when the demanders are paid."""
+    s_rest = t.K - t.D
+    burn = Q(1) if rule == "O3" else t.beta_d
+    share = t.D - floor_q(t.D * burn)
+    if not convicted:
+        return share, Q(0), ("at the horizon (default + liability)" if rule == "O2" else "at the default")
+    basis = t.K if rule != "O4" else s_rest
+    pool = floor_q(t.a * basis)
+    if rule == "O1":
+        return share, min(pool - share, s_rest), "at the default"
+    if rule == "O2":
+        return Q(0), min(pool, s_rest), "never (folded into the conviction's pool)"
+    return share, min(pool, s_rest), "at the default"
+
+
+def section2b() -> None:
+    head(2, "b — default before conviction: I-49 (≤ 49% recouped) against I-D (no dilution of an honest accuser)")
+    t = INTERIM_49
+    rows = {}
+    for rule, text in RULES.items():
+        print(f"  -- {rule}: {text}")
+        dem, bounty, when = legs(t, rule, convicted=True)
+        dem_nc, _, when_nc = legs(t, rule, convicted=False)
+        self_recoup = dem + bounty  # every demander and the bounty holder are the producer's own Sybils
+        honest_bounty = bounty  # the coalition self-defaults through its Sybil demander; an honest accuser holds the bounty
+        honest_bounty_no_default = floor_q(t.a * t.K)  # the same lie, convicted without a default first
+        i49 = self_recoup <= floor_q(t.a * t.K)
+        idil = honest_bounty >= honest_bounty_no_default
+        rows[rule] = (i49, idil)
+        show("DERIVED", "all roles the producer's own: recoup / collected",
+             f"{float(self_recoup):.0f} / 1000 = {float(self_recoup) / 10:.1f}%  → I-49 {'holds' if i49 else 'BROKEN'}")
+        show("DERIVED", "honest accuser after the coalition's self-default / without it",
+             f"{float(honest_bounty):.0f} / {float(honest_bounty_no_default):.0f}  → I-D {'holds' if idil else 'BROKEN'}"
+             + ("" if idil else f" (diluted by {float(honest_bounty_no_default - honest_bounty):.0f})"))
+        show("DERIVED", "honest demanders on a defaulted lie that someone convicts", f"{float(dem):.0f}, paid {when}")
+        show("DERIVED", "honest demanders on a default with no conviction", f"{float(dem_nc):.0f}, paid {when_nc}")
+        show("DERIVED", "an honest demander beside one Sybil demander (no conviction)", f"{float(dem_nc / 2):.1f}")
+    check(rows["NOW"] == (False, True), "today: I-D holds, I-49 is broken (53.9%)")
+    check(rows["O1"] == (True, False) and rows["O4"] == (True, False), "one cap (O1) or a slash-only basis (O4) breaks I-D")
+    check(rows["O2"] == (True, True) and rows["O3"] == (True, True), "O2 and O3 keep both invariants")
+    # Under M*-49 the honest drawn sealers take the first B_cap of the pool: O1's dilution reaches them only if pool - share < B_cap.
+    b_cap = 2 * t.G
+    _, bounty, _ = legs(t, "O1", convicted=True)
+    show("DERIVED", "under M*-49 with O1: the pool left after the demanders' share vs B_cap = m·G", f"{float(bounty):.0f} vs {float(b_cap):.0f}")
+    check(bounty >= b_cap, "under M*-49, O1's dilution falls on the earliest sealer's remainder, not on the drawn sealers")
+    # How large O1's dilution can get: D(1 - β_d) ≤ a·D, i.e. at most D/K of the honest bounty a·K.
+    worst = max(
+        (legs(replace(t, D=Q(d)), "NOW", True)[1] - legs(replace(t, D=Q(d)), "O1", True)[1]) / floor_q(t.a * t.K)
+        for d in range(0, 511, 10)
+    )
+    show("DERIVED", "O1: the worst dilution of an honest accuser over D ∈ [0, 510]", f"{float(worst):.1%} of its bounty (≤ D/K)")
+
+
+# =====================================================================================================================================
 # §3 ADR-0176 D6 per claim: p·(R_risk + L_collectible_net) > C_saved (+ external gain)
 # =====================================================================================================================================
 
@@ -710,7 +779,7 @@ def section8() -> None:
 # =====================================================================================================================================
 
 
-SECTIONS = {1: section1, 2: section2, 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8}
+SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8}
 
 
 def main() -> int:

@@ -37,8 +37,8 @@ Amounts are in BILI.
 | Id | Statement | Status |
 |---|---|---|
 | **M0** | **Capture.** Today the earliest seal of the exact convicting bytes takes the bounty. On every self-dealing path, the liar's own Sybil takes the whole 49%, and the honest verifier who found the lie earns 0. Checking an honest claim also earns 0. | **COUNTEREXAMPLE**. MEASURED at 49% (`econ_bounty`). |
-| **E1** | **The 49% does not bound a self-dealer.** After a self-inflicted pre-Final default, the coalition recoups the demanders' share and the bounty: 539 of 1,000 collected. Its net loss is 46.1%, below ADR-0032's 51%. Over every penalty `D`, the loss can fall to `(1 − a)²·K` = 26%. | **FINDING**. MEASURED (`econ_bounty`) and DERIVED. Fix: §2.2. |
-| **S** | **Self-dealing never pays** (self-fraud, self-accusation, bounty receipt, check fees). With E1 fixed, a coalition that convicts its own lie loses at least `(1 − a)` of what was collected. An honest claim cannot be convicted. Self-dealing only turns gross `K` into `L_net = (1 − a_eff)·K` inside ADR-0176 D6. | **PROVEN** (§2.3). |
+| **E1** | **The 49% does not bound a self-dealer.** After a self-inflicted pre-Final default, the coalition recoups the demanders' share and the bounty: 539 of 1,000 collected. Its net loss is 46.1%, below ADR-0032's 51%. Over every penalty `D`, the loss can fall to `(1 − a)²·K` = 26%. Capping it naively (O1) lets a Sybil demander dilute an honest accuser again. Rule O2 keeps both invariants. | **FINDING**. MEASURED (`econ_bounty`) and DERIVED. Options and the trade-off: §2.2. |
+| **S** | **Self-dealing never pays** (self-fraud, self-accusation, bounty receipt, check fees). With E1 fixed (rule O2, or O1/O3; §2.2), a coalition that convicts its own lie loses at least `(1 − a)` of what was collected. An honest claim cannot be convicted. Self-dealing only turns gross `K` into `L_net = (1 − a_eff)·K` inside ADR-0176 D6. | **PROVEN** (§2.3). |
 | **Y** | **Per bond and window** (ADR-0176). With fully backed reservations, every forging strategy is deterred only if reward / capital per window `< p·(1 − a_eff)·W / (H_L·(λ + x − p·r_risk))`. At `p` = 0 no positive reward yield is safe. | **PROVEN** (§2.4). |
 | **C** | **Correlation and shared collateral.** With fully backed reservations (`κ ≤ 1`), expected collection is linear and correlation is irrelevant. With `κ > 1`, the worst case (comonotone detection, which a forger can induce) divides deterrence by `κ`. | **PROVEN** (§2.5). |
 | **T0** | **A bounty-only verifier cannot be paid** once deterrence works: its income is at most the fraud rate times its share. | **PROVEN** (predecessor). Numbers redone at 49% (§3.1). |
@@ -52,7 +52,7 @@ Amounts are in BILI.
 ### 0.2 Verdicts
 
 **The P0 proof.**
-* **Part 1, proved.** Self-dealing does not pay once E1 is fixed. Self-dealing never makes a deterred lie profitable.
+* **Part 1, proved.** Self-dealing does not pay once E1 is fixed by a rule that also keeps the honest accuser's bounty (O2, §2.2). Self-dealing never makes a deterred lie profitable.
 * **Part 2, proved for M\*-49 only, under its assumptions.** The honest verifier recovers its costs. Today it is false (M0).
 * **Its scope is the model the verifier can obtain.** For a closed model, no honest party can verify, and `p` = 0.
 
@@ -150,14 +150,46 @@ ADR-0032 states that a self-reporter's net loss is "at least 51% of the slash". 
 
 Measured against everything the claim lost (1,000), the recoup is 53.9%.
 
-**Fix (G14R's ledger; not built here).** One claim, one 49%: every payout to accusers and demanders out of one claim's collected money
-(penalty + slash) is capped at `⌊a·collected⌋`. Concretely, in `convict`:
+**The fix is a trade-off between two invariants** (G14R found the same case; its record, `g14/r4-fixes` `7e4253d7f`, leaves the choice
+to ECON):
+* **I-49:** a coalition that holds every reporter and demander role recoups at most `⌊a·collected⌋` of one claim (ADR-0032).
+* **I-D:** a producer's self-inflicted default does not shrink an honest accuser's bounty (C4 F-C4R3-02, `7da2d9ee2`). That is why the
+  bounty's basis is the reservation as if no default had come first.
 
-```text
-reward = min(⌊a·(slashed + taken_by_default)⌋ − demanders_paid_on_this_claim, slashed)
-```
+Today I-D holds and I-49 is broken. The candidate rules, at the interim terms and 49% (DERIVED, model §2b):
 
-With the fix, every path loses exactly 510 (51%), and no penalty `D` does better. DERIVED; the model checks the 1-BILI grid.
+| Rule | Self-dealer recoup (I-49) | Honest accuser after a self-default (I-D) | Honest demanders, lie later convicted | Honest demanders, no conviction |
+|---|---|---|---|---|
+| **now** | 539 = 53.9%, **broken** | 490, holds | 49, at the default | 49, at the default |
+| **O1** one cap across both legs: `bounty = min(⌊a·(S + D)⌋ − demanders_paid, S)` | 490, holds | **441, broken**, diluted by `D·(1 − β_d)` | 49, at the default | 49, at the default |
+| **O2** demanders credited only without a conviction: the share is held at the default; a conviction in the liability horizon pays one pool `min(⌊a·(S + D)⌋, S)` to the bounty holder and burns the held share; with no conviction the demanders are paid at the horizon | 490, holds | 490, holds | **0** | 49, **200 DAA later** |
+| **O3** burn the whole pre-Final penalty on OPV claims (`β_d` = 1) | 490, holds | 490, holds | **0** | **0** |
+| **O4** bounty on the slash alone: `min(⌊a·S⌋, S)` (reverts F-C4R3-02's basis) | 490, holds | **441, broken** | 49, at the default | 49, at the default |
+
+**Which side each option breaks.**
+* **O1 and O4** restore I-49 and break I-D. A producer that sees an honest accuser coming defaults first through its Sybil demander.
+  That moves `D·(1 − β_d)` from the honest accuser to itself: 49 of 490, or 10% at the interim terms. The dilution is at most `a·D`,
+  i.e. `D/K` of the honest bounty, which is 51% at `D = (1 − a)·K`. Deterrence is unaffected, since the coalition still loses at least
+  51%.
+* **O3** keeps both invariants. It breaks the DA-default incentive: demanders get only their bond back. That is acceptable only if
+  M\*-49's fee pays drawn verifiers for their demands.
+* **O2** keeps both invariants on every path. It breaks two lesser things:
+  * the timeliness of a true DA default's demanders' share, which is deferred by `liability_daa`;
+  * the share of an honest demander whose demand defaulted a lie that someone else then convicts.
+
+  It also adds state: a held share per defaulted claim until its horizon, a consensus change.
+
+Every rule keeps the equal split among demanders (`tick_into`). So a Sybil demander still halves an honest demander's share of a
+no-conviction default; that is remedy B's dilution, which only M\*-49's per-check fee removes.
+
+Under M\*-49, O1's dilution never reaches an honest **drawn** verifier. The drawn sealers take the first `B_cap` = 40, and the pool left
+after the demanders' share is still 441. The dilution falls on the earliest sealer's remainder, usually the liar's Sybil.
+
+**Recommendation: O2.** It keeps I-49 and I-D and still pays the demanders of a true DA default. O3 keeps both invariants only by
+dropping that incentive, so it fits only alongside M\*-49. If M\*-49 is adopted, O1 is the simpler acceptable alternative.
+
+Under O1, O2 or O3, every self-dealing path loses at least 51% of what was collected: 510 of 1,000 on the conviction paths. No penalty
+`D` does better. DERIVED; the model checks the 1-BILI grid for O1.
 
 The OPV reservation relation must count the leak until the fix lands. The code's `required_reservation` is
 `max(G + D, G/p)/(1 − a)`; with the leak counted it is `max(G + D, G/p + D·(1 − β_d))/(1 − a)`:
@@ -174,7 +206,7 @@ DERIVED. At the interim `p` = 0.5 the `G + D` term binds and the two relations a
 **Setting.**
 * Any coalition `C ∋ P`, any claim `c` of `P`, any strategy.
 * "Collected" `Γ ≤ K` is what the claim's penalty and slash actually took.
-* `a_eff = a` with E1. Otherwise `a_eff = recoup_now/K` (§2.2), the worst case over paths, which is at most
+* `a_eff = a` under O1, O2 or O3 (§2.2). Otherwise `a_eff = recoup_now/K` (§2.2), the worst case over paths, which is at most
   `a + (D/K)·(1 − β_d)`.
 
 **(S-1) Self-accusing an honest claim.** The exact court dismisses a proof against a correct claim (RFC-0014). The filer pays
@@ -186,7 +218,7 @@ DERIVED. At the interim `p` = 0.5 the `G + D` term binds and the two relations a
 * refunds and returned deposits, which net to 0;
 * fees under M\*-49 (S-3).
 
-With E1 the first two sum to at most `⌊a·Γ⌋`, so `Π_C ≤ −(1 − a)·Γ − f_adm < 0`. Without E1, `Π_C ≤ −(1 − a_eff)·K < 0`, because
+Under O1, O2 or O3 the first two sum to at most `⌊a·Γ⌋`, so `Π_C ≤ −(1 − a)·Γ − f_adm < 0`. Without E1, `Π_C ≤ −(1 − a_eff)·K < 0`, because
 `a_eff < 1` whenever `a < 1` and `β_d > 0`, both validated.
 
 **(S-3) Check fees (M\*-49, §3.2).** A drawn slot is paid its fee whatever the claim's fate. So:
@@ -211,7 +243,7 @@ added. Self-dealing cannot make a lie profitable that D6 deters. It is fully pri
 
 **Per claim at the interim terms** (`C_saved = R` = 5). DERIVED; `p_min` is the minimum effective `p`.
 
-| `X` | when the lie is caught | `p_min` with E1 | `p_min` today |
+| `X` | when the lie is caught | `p_min` with E1 fixed | `p_min` today |
 |---|---|---|---|
 | 0 | post-Final (reward kept) | 0.98% | 1.08% |
 | 0 | pre-Final (reward forfeited) | 0.97% | 1.07% |
@@ -326,7 +358,7 @@ Both pay on lies only (T0).
    * the remainder goes to the earliest sealer, as today;
    * the rest of the collected amount is burned.
 
-   With E1 the coalition still recoups at most `a·collected`. So S holds unchanged.
+   With E1 fixed (§2.2), the coalition still recoups at most `a·collected`. So S holds unchanged.
 5. **`B_cap = m·G`**, the bribery floor (T5). At the interim terms that is 40 of the 490. DERIVED.
 
 **Budgets named** (ADR-0176 requires every new payment to name its source).
@@ -416,7 +448,7 @@ it is not needed for cost recovery, because `F` covers the demand.
 
 | Item | Owner |
 |---|---|
-| E1, one claim one 49%, a ~3-line change in `convict` | G14R |
+| E1: rule O2 (a held demanders' share per defaulted claim, folded into the conviction's pool), or O1 (~3 lines in `convict`) | G14R |
 | the per-model watcher-pool object and table | allocation |
 | the v3 post-commit draw | OPVB |
 | `m·F` in the escrow, pay on fate, the attestation object, and the fee settlement kinds | G14R |
@@ -660,7 +692,7 @@ Every reward, consensus-weight and Panel=0 fence stays refused:
 
 | Proved | Open |
 |---|---|
-| S (with E1) | T6, the lazy verifier |
+| S (with E1 fixed) | T6, the lazy verifier |
 | Y | `p` for any closed model |
 | C | `θ_h` and `σ` per model |
 | T0 | MEAS's costs per class |
@@ -673,7 +705,7 @@ Every reward, consensus-weight and Panel=0 fence stays refused:
 
 | Id | Decision | Recommendation |
 |---|---|---|
-| D-E1 | Fix E1 (one claim, one 49%) or keep the leak | **Fix it.** It restores ADR-0032's 51% on every path at about 3 lines; until then, add `D·(1 − β_d)` to the reservation relation |
+| D-E1 | The default-before-conviction rule: O1, O2, O3 or O4 (§2.2), or keep today's leak | **O2**: demanders are credited only when no conviction comes, and a conviction pays one 49% pool. It keeps both the 49% bound and the honest accuser's bounty. O1 is acceptable once M\*-49 is adopted. Until a fix lands, add `D·(1 − β_d)` to the reservation relation |
 | D-M\* | Adopt M\*-49 as the direction for verifier pay: per-check fees from the user's escrow, and drawn sealers first inside the 49% | **Adopt.** It is the only design here that satisfies both halves of P0. Keep T6 open, and keep every reward fence refused until T6 is closed |
 | D-q | `q`, `m`, `F`, `B_cap = m·G` per class | Derive them from `p_min` (§3.3) and MEAS's costs. None is set now |
 | D-B12 | The seal deposit | `d_src = c_ab·T_w/T_ab` (28.6 at the interim terms and 49%) on an opt-in source seal (S3). Also S2 (vetoes do not count) and S4 as a concurrency cap `N_max`. `γ*` is set through `D`, not `d` |
