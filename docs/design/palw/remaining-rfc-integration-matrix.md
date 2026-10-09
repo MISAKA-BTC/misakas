@@ -91,6 +91,8 @@ wire/fence impact · test · real-node result · status.
 | Bond budget + model allocation (BUDGET, ADR-0176/0177, 2026-10-10) | **140–149** (verify unused before first use) | **190–199** | **0xEF** | `palw_bond_budget_v1`, `palw_model_bond_allocation_v1` (dormant, refused when armed); RPC **250–259**; V2 root block `bond_budget/v1` |
 | Reporter share migration (INTF, ADR-0032 2026-10-10) | — | — | — | `palw_reporter_share_v2` (dormant; Some-only hashed) |
 | Immutable registrations (pre, ADR-0175) | — (refuses existing lifecycle tags past it) | — | — | `palw_model_immutable_v1` (dormant) |
+| Legacy V2 Panel route G14, filer/reservation (LG14-A, RFC-0014 §6–§7, 2026-10-10) | **154–156** | **200–204** | **0xE2** | `palw_legacy_public_filer_v1` (dormant, refused); RPC **204–206** |
+| Legacy V2 Panel route G14, held/fused DA + localization (LG14-B, RFC-0014 §4–§5, 2026-10-10) | **157–159** | **205–209** | **0xE3** | `palw_legacy_held_da_v2` (dormant, refused); RPC **207–209** |
 | `PalwVoidReasonV2` | C2 120–122; X8 one variant (assign an explicit number ≥ 130 at merge) | — | — | — |
 
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the

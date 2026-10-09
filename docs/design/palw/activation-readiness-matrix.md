@@ -186,10 +186,13 @@ Common to every family:
 - **GAP-81.** The new reward gate is per CLAIM verification route. Only claims verified on a G14-complete route pass `palw_reward_gate_v1`. V2-root claims of a kernel-bound class stay on the legacy channel and never earn the new rewards.
 - **GAP-70.** For the release, only the complete conformance check gates rewards. Sampled conformance is a non-reward signal until a digest court exists (DESIGN).
 
-**For the user:**
-- **GAP-80.** The legacy V2 Panel route cannot meet G14: seat-only filers, the three held 8k gaps, `ExecutorRefuted` blocked by an open court, and a garbage trace answers row 0.
-- Under the 10-09 ruling (5), it keeps its old verification and stays separated. It is never Panel=0 and never earns new rewards.
-- The open question is whether it keeps earning at all after the release, given PRINCIPLES §6. Making it meet G14 is XL.
+**User decision GAP-80 (2026-10-10): the legacy V2 Panel route must also meet G14.** It is RFC-0014's own core (§4–§7). Two lanes
+behind new dormant fences, because the route is ARMED on testnet-12 and the live int-12 rules must not move:
+- LG14-A: the common seat/non-seat fraud filer, the non-seat dispute reservation and its Final condition, no pre-emption by a session or
+  a court, `ExecutorRefuted` reachable while a court is open, a bystander's accusation never outrun by timeouts.
+- LG14-B: hierarchical commitment and independent localization, the three canonical 8k held/fused DA gaps [C12], and the
+  consistent-garbage-trace (row 0) / borrowed-trace / state / routing / checkpoint / output cases.
+Until both lanes' fences are verified, legacy classes are "not Panel=0, not new-reward eligible".
 
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
