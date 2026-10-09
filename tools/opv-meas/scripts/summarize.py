@@ -13,6 +13,7 @@ Usage (python -I):  summarize.py RESULTS_DIR OUT.json
 """
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -107,6 +108,7 @@ DAA_MIN_S = 120
 host = {
     "machine": m("Apple M1 Max, 10 cores, 32 GiB, macOS 26.7", "sysctl hw.ncpu hw.memsize; sample(1)"),
     "shared": "yes: 9 devnet kaspad + other lanes' builds ran during every sample; see load and swap per sample",
+    "runs_after_the_restart": "glm-edge-1.5b (static, weights, build-world) ran on 2026-10-10 05:11-05:16 at 1-minute load 13-18, swap 4 GB; every other class ran on 2026-10-09",
     "load1_during_verify_samples": stat([s["load_before"][0] for s in verifies] + [s["load_after"][0] for s in verifies]),
     "swap_used_gb_at_samples": stat([n["swap_used_gb"] for n in notes if "swap_used_gb" in n]) if any("swap_used_gb" in n for n in notes) else None,
     "verifier_implementation": "reference (misaka-palw-kernel check path): single thread, i128 tensors, every parameter instance cached for the scope (16 bytes/param)",
@@ -363,20 +365,120 @@ for label, c in classes.items():
         artifact_fetch_cpu_s=d(c["artifact"]["container_bytes"]["v"] / 1e6 / tput, "same rate") if tput else None, fetch_provider="not run",
         filing_object_bytes_by_lie=None, t_localize=None, note="components only: weight pass (M, streaming), public-material bytes (M); the estimate is an assumption")
 
+# ── GAP-07: the worst-case deadline of G14 condition C8, per family / class / profile ───────────────────────────────────────
+# T_challenge = (T_fetch(claim material) + T_check_to_verdict(worst lie: the LAST position) + T_file) x (1 + margin) + carrier + reorg.
+# CPU seconds are the comparable figure (the host was shared); the margin is the measured median wall/CPU.
+MARGIN = 1.35
+CHAIN_DAA = 4   # policy: carrier_daa 2 + reorg_slack_daa 2 (opv.rs interim), NOT measured (fleet plan F6)
+WINDOW_DAA, HARD_DAA, LIABILITY_DAA = 50, 80, 200   # the interim windows: OPV 40 + 10; Panel-licensed: pass + challenge_window; + court 20 + grace 10; post-Final
+
+
+def daa_of(sec):
+    return max(1, math.ceil(sec / DAA_MIN_S))
+
+
+def gap07_row(klass, P, status, fetch_cpu, check_cpu, localize_cpu, file_cpu, src, **kw):
+    inner = fetch_cpu + check_cpu + localize_cpu + file_cpu
+    total = inner * MARGIN + CHAIN_DAA * DAA_MIN_S
+    r = {
+        "family": "F1", "class": klass, "positions": P, "status": status,
+        "t_fetch_claim_material_cpu_s": fetch_cpu, "t_check_to_verdict_cpu_s": check_cpu, "t_localize_cpu_s": localize_cpu, "t_file_cpu_s": file_cpu,
+        "margin_factor": MARGIN, "carrier_plus_reorg_daa_policy": CHAIN_DAA,
+        "t_challenge_s": total, "t_challenge_daa": daa_of(total),
+        "window_daa": {"opv_window": WINDOW_DAA, "panel_licensed_colluding_seats_window": WINDOW_DAA, "hard_deadline": HARD_DAA, "post_final_liability": LIABILITY_DAA},
+        "fits_the_interim_window": daa_of(total) <= WINDOW_DAA, "fits_the_interim_hard_deadline": daa_of(total) <= HARD_DAA,
+        "src": src,
+    }
+    r.update(kw)
+    return r
+
+
+gap07_rows = []
+lt = q["lies"].get("late", {})
+fd3 = files_f.get("claim_material_cpu_s", {}).get("v", 0.0)
+if lt:
+    gap07_rows.append(gap07_row(
+        Q, 3, "MEASURED (late lie, n=%d; fetch n=%d)" % (lt["samples"]["v"], files_f["claim_material_cpu_s"].get("n", 1)),
+        fd3, lt["check_to_verdict_cpu_s"]["max"], 0.0, (lt.get("filing_assemble_cpu_s") or {"v": 0.0})["v"] + (lt.get("court_cpu_s") or {"v": 0.0})["v"],
+        "verify --claim late: check_outsider runs to the verdict, so it already contains localization; its maximum over samples is the worst case",
+        check_to_verdict_wall_s_max=lt["check_to_verdict_wall_s"]["max"], peak_rss_bytes_max=tco["peak_rss_bytes_max"]["v"]))
+for pt, smp in zip(pts, honest_fresh):
+    if pt["P"] == 3:
+        continue
+    gap07_rows.append(gap07_row(
+        Q, pt["P"], "MEASURED honest pass (fresh path); localization A (the P=3 upper bound carried; the last-position lie was not run at this P)",
+        phase(smp, "fetch_da")["cpu_s"], pt["cpu"], 23.5, 0.1,
+        "verify --via fresh: check_salted over an honest claim (the whole pass a last-position lie also costs) + the P=3 localization upper bound",
+        check_wall_s=pt["wall"], peak_rss_bytes=pt["rss"], load1=pt["load1"]))
+g07v = [r for r in read_jsonl("gap07-verify.jsonl") if r.get("cmd") == "verify"]
+for smp in g07v:
+    ck = phase(smp, "check_outsider")
+    if ck is None:
+        continue
+    mpos = re.search(r"-p(\d+)$", smp["label"])
+    pos = int(mpos.group(1)) if mpos else None
+    gap07_rows.append(gap07_row(
+        Q, pos, "MEASURED (%s lie, outsider path, n=1; the worst case: the whole pass, then localization, filing and the court)" % smp["claim"],
+        (phase(smp, "fetch_da") or {"cpu_s": 0.0})["cpu_s"], ck["cpu_s"], 0.0,
+        sum((phase(smp, n) or {"cpu_s": 0.0})["cpu_s"] for n in ("assemble_filing", "encode_filing_object", "strict_decode_filing", "court_node")),
+        "verify --claim %s: check_outsider runs to the verdict (localization included)" % smp["claim"],
+        check_wall_s=ck["wall_s"], peak_rss_bytes=smp["peak_rss_bytes"], load1=smp["load_before"][0], da_bytes=smp["da_bytes"]))
+g07a = []
+if (res / "gap07-attempts.json").exists():
+    g07a = json.loads((res / "gap07-attempts.json").read_text())
+tput_bytes = rate.get("claim_material_MB_per_cpu_s", 690.0) * 1e6
+for label, c in classes.items():
+    if label == Q or "t_check_estimate_p3_cpu_s" not in c:
+        continue
+    est = c["t_check_estimate_p3_cpu_s"]["fixed_s"], c["t_check_estimate_p3_cpu_s"]["per_position_s"]
+    pb = c["da_p3"]["per_position_bytes"]["v"]
+    for P in (3, 64):
+        gap07_rows.append(gap07_row(
+            label, P, "ASSUMED: no check of this class ran (reference verifier needs >= 16 B/param); weight pass MEASURED, fixed and per-position parts carried from the 0.5B fit, localization the 0.5B upper bound",
+            P * pb / tput_bytes, est[0] + P * est[1], 23.5, 0.1, "t_check_estimate_p3_cpu_s (A) + the measured weight pass as its floor",
+            t_check_lower_bound_cpu_s=c["t_check_lower_bound_cpu_s"]["v"]))
+families = [
+    {"family": "F1", "what": "K2-TIR v1/v2 single-program classes", "profiles": "Panel-licensed with every interim seat colluding; OPV", "status": "see rows: MEASURED for Qwen2.5-0.5B (P = 3, 8, 16, and the merged-head samples); ASSUMED for the four other real classes", "needs": "hosts with >= 24 / 32 / 48 GB RAM for the reference verifier (fleet plan F2)"},
+    {"family": "F2", "what": "K2-TIR v3 pipeline / media classes", "profiles": "OPV", "status": "UNMEASURED: V-ref only, no real pipeline claim, no onboarding path (GAP-20, GAP-21)", "structure": "sum over stages of the component's T_check; edges at inclusion; one logits tensor per edge filing", "needs": "a real pipeline claim on a node (K2S wire form)"},
+    {"family": "F3", "what": "K2-TIR v4 segmented real-scale (8k, 262k window, 2M)", "profiles": "OPV only", "status": "UNMEASURED: the only real artifact would be H1's 9B pack (not built); 2M is refused by the gate", "structure": "9B-8k rows of opv-measurements.md section 5 are ASSUMED", "needs": "the 9B pack, a >= 160 GB host, the K2S v4 node"},
+    {"family": "F4", "what": "K2-TIR v5 encoders and task heads", "profiles": "kernel route", "status": "UNMEASURED: V-unit test failing at the commit; no node test", "needs": "K2S GAP-40"},
+    {"family": "F5", "what": "private / fused material profiles", "profiles": "-", "status": "NO DEADLINE: never registers (fail-closed)"},
+    {"family": "F6", "what": "RFC-0004 typed roots: Memory / Retrieval / Composite", "profiles": "OPV + palw_typed_roots_v1", "status": "UNMEASURED: no real artifact of any kind exists", "structure": "opv-measurements.md section 8", "needs": "a real memory class, retrieval snapshot, composite"},
+    {"family": "F7", "what": "RFC-0008 EXEC work slices", "profiles": "palw_exec_payload_v2", "status": "UNMEASURED: a slice's kernel claim has the F1/F3 deadline of its own size; leg continuity and suffix void have no timing", "needs": "X8R slice node E2E on a real class"},
+    {"family": "F8", "what": "onboarding conformance evidence (tag 109) and artifact binding", "profiles": "the reward gate", "status": "NO OUTSIDER DEADLINE on the complete-check path (judged in the fold, node CPU per block, not measured here); the sampled path cannot gate rewards"},
+    {"family": "F9-F16", "what": "legacy V2 Panel route on t12", "profiles": "exempt LEGACY_PANEL_ROUTE", "status": "NOT G14: windows receipt 600 / challenge 1,200 DAA (code reading, t12-bond-reuse-audit-2026-10-10.md)"},
+]
+gap07 = {
+    "what": "G14 condition C8: the worst-case deadline for a fresh, non-seat, bonded verifier that HOLDS the registered model to fetch the claim material, check, localize and file (g14-completion-matrix.md GAP-07). Windows are the INTERIM policy constants, not production values.",
+    "formula": "(T_fetch(claim material) + T_check_to_verdict(worst lie = last position, localization included) + T_file) x 1.35 + (carrier 2 + reorg 2) DAA x 120 s; T_beacon = 0 (private-salt outsider)",
+    "windows_daa": {"opv_window": WINDOW_DAA, "panel_licensed_with_every_seat_colluding": "pass + challenge_window = %d (lifecycle.rs: ProbabilisticPass.window_end; a dispute is refused after it)" % WINDOW_DAA, "hard_deadline": HARD_DAA, "post_final_liability": LIABILITY_DAA, "s_per_daa": DAA_MIN_S},
+    "rows": gap07_rows,
+    "attempted_and_not_completed": g07a,
+    "families": families,
+}
+
 # ── the clock ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 clock = {
     "s_per_daa_lower_bound": d(DAA_MIN_S, "target_time_per_block of the 2-minute network (rfc-0012-policy-proposal.md): a DAA step needs one heartbeat slot. Used for every DAA conversion (a lower bound makes the DAA budget conservative)"),
     "s_per_daa_cited": a("125-150", "t12-daa9000-drill-plan.md (~125 measured on a Mac drill) and operational notes (~150): NOT measured by this lane; fleet plan item F1"),
 }
 
+scopes = {
+    "adr_0177_d7": "The chain does not make a model obtainable. Every `artifact_*` field is the registered MODEL: an off-chain acquisition assumption (what a verifier already holds, or fetches before the claim), NOT a protocol term of T_challenge. Every `da_claim_material_*` field is the CLAIM's public material: a protocol term (T_fetch).",
+    "detection_probability": "Every detection probability derived from these timings is CONDITIONAL on the verifier holding the registered model. For a closed model nobody but the producer holds, it is 0 and no finite collateral exists (opv-measurements.md section 3.2).",
+    "adr_0032": "A self-reporting producer recovers the reporter share (4,900 bps) of a collected slash; collateral formulas use the net loss, 51 % of the collected slash, never the gross slash.",
+}
+
 doc = {
-    "schema": "opv-measurements/v1",
+    "schema": "opv-measurements/v2",
+    "scopes": scopes,
     "generated_by": "tools/opv-meas/scripts/summarize.py",
     "legend": {"measured": "read off a harness run on this host", "derived": "computed from measured values by the stated formula", "assumed": "no run established it"},
     "host": host,
     "clock": clock,
     "unit_costs": unit,
     "table": table,
+    "gap07_worst_case_deadlines": gap07,
     "classes": classes,
     "not_measured": [
         "link bandwidth, latency, loss and provider egress (every fetch here is a local file or the localhost HTTP provider)",
@@ -384,6 +486,9 @@ doc = {
         "the number of independent honest verifiers that actually check, and the probability each is present (q, n, P_run)",
         "any class beyond 0.5B end to end: the reference verifier caches 16 bytes per parameter (0.8B needs >= 12.3 GB, 1B >= 19.9 GB, 1.7B >= 27.6 GB; the host is shared)",
         "the 9B-8k real artifact (H1's pack is not built)",
+        "how many verifiers HOLD a registered model, and for a closed model whether any third party does (ADR-0177 D7): the effective detection probability is 0 for a closed model and unmeasured for every other",
+        "any real Memory, Retrieval or Composite artifact (RFC-0004 Part II): none exists in the repository or in H1's evidence, only the synthetic fixtures of misaka-palw-tir-sketch; per-kind inspection cost is therefore a derived model, not a measurement (opv-measurements.md section 8)",
+        "the ADR-0176 section 4 measurements that need the BUDGET engine (claims, reward blocks, rewards and Final credit per DAA per unit of bond; liability and maximum concurrent exposure; effective collection rate): the plan is opv-measurements.md section 7",
     ],
 }
 out_path.write_text(json.dumps(doc, indent=1, sort_keys=False) + "\n")

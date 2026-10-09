@@ -272,6 +272,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                 ProsecutionV1::Kernel(_) => "Prosecute(Kernel)",
                 ProsecutionV1::Decode(_) => "Prosecute(Decode)",
                 ProsecutionV1::Pipeline(_) => "Prosecute(Pipeline)",
+                ProsecutionV1::Spec(_) => "Prosecute(Spec)",
             });
             filing = Some(p);
         }
