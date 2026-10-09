@@ -1,5 +1,12 @@
 # Mainnet readiness
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **Where MISAKA stands against what a production L1 needs before its mainnet genesis.** Each item is
@@ -37,6 +44,8 @@ add more rules.
 | **PARTIAL** | Pinned fingerprints in tests | `shipped_presets_have_pinned_fingerprints` exists, but `scripts/ci-gates.sh --list` declares it a known red until the next single re-pin |
 | **PARTIAL** | Launch gate (ADR-0152 §8.3) | [t12-rcore-launch-checklist.md](t12-rcore-launch-checklist.md) §1.0 recorded the gate as not met on 2026-09-25; testnet-12 launched with the gaps listed in [the launch note §2](t12-launch-2026-09-25.md) |
 | **TODO** | **Consensus rules frozen** | testnet-12's two CRITICAL fixes (heartbeat transparency, panel-seed grinding) land as post-launch fences, and more are scheduled (launch note §2.5–2.7) |
+| **TODO** | Bond/time-bounded PALW production, reward and Final weight — added 2026-10-10 | [ADR176](adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md) / [RFC15 §8](rfc/0015-panel-free-permissionless-verification.md): common claim/block/reward/Final-weight budgets, capacity subdivision, fixed reuse clock, collectible retained liability, all-path recovery/migration and adversarial economic measurements are not implemented or activated by documentation |
+| **TODO** | Model acquisition non-interference / distinct model-bond coinbase allocation — 2026-10-10後続改定 | [ADR177](adr/0177-model-bond-allocation-without-availability-consensus.md): MISAKA Torrent/Seeder rewards and availability gates abolished; choose multiplier/capital snapshot/court scope, implement three-level budgets and recovery, prove conditional prosecution and open-vs-closed economics, then coordinate activation. Documentation checks are not runtime/economic PASS |
 | **TODO** | Mainnet genesis and parameters final | the `mainnet` parameter set is defined, but it is not declared final and no mainnet card is minted ([palw-mainnet-audit-2026-09-06.md](palw-mainnet-audit-2026-09-06.md) lists what must be true first) |
 | **TODO** | The running ruleset's design is on record | testnet-12 runs R-core+ (ADR-0152 v3.1), which is cited throughout the code but not committed to `docs/adr/`; the [architecture overview](architecture/overview.md) is the current map until it is |
 | **TODO** | Consensus differential testing | no second implementation or reference model is run against the node's consensus in CI |

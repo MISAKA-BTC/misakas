@@ -1,5 +1,12 @@
 # MISAKA architecture overview
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **This page describes MISAKA as it is now.** The [ADRs](../adr/README.md) record *how* it got here:
@@ -25,6 +32,28 @@ testnet-11 is live here, from genesis.
 >   [launch note](../t12-launch-2026-09-25.md) are the only written record of it.
 > * **The [ADR index](../adr/README.md) is not current past ADR-0149.** Its activation map is
 >   testnet-11's. The topic map below is the current view.
+
+## 0. Additional PALW design premise — 2026-10-10, not activated
+
+[ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md) adds bond/time-bounded
+production to probabilistic verification and objective public prosecution. Equal eligible collateral over the same DAA
+period and common capacity tier gives honest execution and fast fabrication the same maximum claim opportunity.
+Increasing claim capacity subdivides or reallocates one fixed block/reward/Final-weight budget; it creates no extra
+economic or consensus credit. Execution is the legitimate work needed to use that budget. Proven fraud loses reward
+and applicable collateral; public evidence, detection/collection and retained liability remain separate prerequisites.
+
+The current slot/discount, global emission and provisional-weight mechanisms do not fully implement this rule.
+Final weight and every settlement reader, common reuse clocks and old-liability migration need versioned implementation
+and independent tests. [RFC15 §8](../rfc/0015-panel-free-permissionless-verification.md) specifies the direction.
+The historical/current-runtime map below is preserved; this addition does not re-label existing code as implemented.
+
+[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md) subsequently abolishes
+MISAKA Torrent and dedicated Seeder rewards. Model acquisition stays outside consensus.
+The proposed model coinbase allocation follows distinct locked miner principal, inside the same network issuance
+budget and ADR176 individual ceilings; deposits alone earn nothing. Public-verifier prosecution assumes the verifier
+obtained the registered model. The advantage of publication over closed self-funding requires a chosen curve and
+adversarial economics; neither allocation nor that advantage is implemented/proven here. The diagram below retains
+its dated runtime scope and is not a diagram of the unactivated model-allocation rule.
 
 ## 1. The system in one picture
 

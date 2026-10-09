@@ -1,0 +1,223 @@
+{
+  "date_jst": "2026-10-10",
+  "branch": "pre",
+  "head": "e4f3f6f3d81c75166ea6308bfff0b8aeaf836ca5",
+  "dirty_tree": true,
+  "scope": "compiled pre source; includes prior uncommitted 49% PALW reporter amendment; no live fleet or 7-day execution measurement",
+  "parameters": {
+    "anchor_delay_daa": 20,
+    "capacity_escrow_fence": "Some(ForkActivation(1700))",
+    "capacity_slots_fence": "Some(ForkActivation(1700))",
+    "classes": [
+      {
+        "c7": false,
+        "id": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+        "leaves": 7708,
+        "n_ctx": null
+      },
+      {
+        "c7": false,
+        "id": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+        "leaves": 105518224,
+        "n_ctx": null
+      },
+      {
+        "c7": true,
+        "id": "74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a",
+        "leaves": 27002967184,
+        "n_ctx": null
+      }
+    ],
+    "exposure_permille": 500,
+    "minimum_bond_sompi": 1300000000000,
+    "params_id": "c5a6416861eaf301f7df5488807dca511a264383682e23ea5a77fdb3d66d8d6b",
+    "rho_schedule": [
+      {
+        "from_daa": 1700,
+        "q_credit_permille": 250,
+        "rho": 10
+      },
+      {
+        "from_daa": 5300,
+        "q_credit_permille": 250,
+        "rho": 25
+      },
+      {
+        "from_daa": 5395,
+        "q_credit_permille": 250,
+        "rho": 100
+      },
+      {
+        "from_daa": 5490,
+        "q_credit_permille": 250,
+        "rho": 250
+      },
+      {
+        "from_daa": 5585,
+        "q_credit_permille": 250,
+        "rho": 1000
+      }
+    ],
+    "scope": "pre compiled shipped t12, not live-node measurement",
+    "stages": [
+      {
+        "burst_milli": 1000,
+        "daa": 0,
+        "issuance_active": false,
+        "outstanding_cap": 2,
+        "q_credit_permille": null,
+        "rate_milli_per_daa": 100,
+        "rho": 1
+      },
+      {
+        "burst_milli": 1000,
+        "daa": 750,
+        "issuance_active": false,
+        "outstanding_cap": 2,
+        "q_credit_permille": null,
+        "rate_milli_per_daa": 100,
+        "rho": 1
+      },
+      {
+        "burst_milli": 1000,
+        "daa": 1300,
+        "issuance_active": false,
+        "outstanding_cap": 2,
+        "q_credit_permille": null,
+        "rate_milli_per_daa": 100,
+        "rho": 1
+      },
+      {
+        "burst_milli": 1000,
+        "daa": 1700,
+        "issuance_active": true,
+        "outstanding_cap": 20,
+        "q_credit_permille": 250,
+        "rate_milli_per_daa": 1000,
+        "rho": 10
+      },
+      {
+        "burst_milli": 1000,
+        "daa": 2000,
+        "issuance_active": true,
+        "outstanding_cap": 20,
+        "q_credit_permille": 250,
+        "rate_milli_per_daa": 1000,
+        "rho": 10
+      },
+      {
+        "burst_milli": 1000,
+        "daa": 3600,
+        "issuance_active": true,
+        "outstanding_cap": 20,
+        "q_credit_permille": 250,
+        "rate_milli_per_daa": 1000,
+        "rho": 10
+      },
+      {
+        "burst_milli": 100000,
+        "daa": 10000,
+        "issuance_active": true,
+        "outstanding_cap": 2000,
+        "q_credit_permille": 250,
+        "rate_milli_per_daa": 100000,
+        "rho": 1000
+      }
+    ],
+    "window_challenge_daa": 1200,
+    "window_receipt_daa": 600
+  },
+  "reuse_predicate": {
+    "accepted_daa": 10000,
+    "current_a16_8k_class": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+    "escrow_released_earlier_sompi": 320084650080,
+    "fast_holds_slot": false,
+    "fast_license_daa": 10021,
+    "same_observation_daa": 10021,
+    "scope": "current pure decision predicates over a synthetic record; not an end-to-end forgery",
+    "waiting_bound_daa": 10020,
+    "waiting_holds_slot": true
+  },
+  "attempt_quotes_on_synthetic_empty_13k_bond": [
+    {
+      "ceiling_sompi": 650000000000,
+      "class": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+      "daa": 2,
+      "escrow_sompi": 320084650080,
+      "reservation_sompi": 320095402740,
+      "scope": "producer quote on empty synthetic 13k bond, not full execution or saturated bond"
+    },
+    {
+      "ceiling_sompi": 650000000000,
+      "class": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "daa": 2,
+      "escrow_sompi": 320084650080,
+      "reservation_sompi": 322556250310,
+      "scope": "producer quote on empty synthetic 13k bond, not full execution or saturated bond"
+    },
+    {
+      "ceiling_sompi": 650000000000,
+      "class": "74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a",
+      "daa": 2,
+      "escrow_sompi": 320084650080,
+      "reservation_sompi": 6294378856900,
+      "scope": "producer quote on empty synthetic 13k bond, not full execution or saturated bond"
+    },
+    {
+      "ceiling_sompi": 650000000000,
+      "class": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+      "daa": 1700,
+      "escrow_sompi": 320084650080,
+      "reservation_sompi": 32009540274,
+      "scope": "producer quote on empty synthetic 13k bond, not full execution or saturated bond"
+    },
+    {
+      "ceiling_sompi": 650000000000,
+      "class": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "daa": 1700,
+      "escrow_sompi": 320084650080,
+      "reservation_sompi": 320331810103,
+      "scope": "producer quote on empty synthetic 13k bond, not full execution or saturated bond"
+    },
+    {
+      "ceiling_sompi": 650000000000,
+      "class": "74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a",
+      "daa": 1700,
+      "escrow_sompi": 320084650080,
+      "reservation_sompi": 917514070762,
+      "scope": "producer quote on empty synthetic 13k bond, not full execution or saturated bond"
+    },
+    {
+      "ceiling_sompi": 650000000000,
+      "class": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+      "daa": 10000,
+      "escrow_sompi": 320084650080,
+      "reservation_sompi": 320095404,
+      "scope": "producer quote on empty synthetic 13k bond, not full execution or saturated bond"
+    },
+    {
+      "ceiling_sompi": 650000000000,
+      "class": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "daa": 10000,
+      "escrow_sompi": 320084650080,
+      "reservation_sompi": 320087121681,
+      "scope": "producer quote on empty synthetic 13k bond, not full execution or saturated bond"
+    },
+    {
+      "ceiling_sompi": 650000000000,
+      "class": "74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a",
+      "daa": 10000,
+      "escrow_sompi": 320084650080,
+      "reservation_sompi": 326058944287,
+      "scope": "producer quote on empty synthetic 13k bond, not full execution or saturated bond"
+    }
+  ],
+  "evidence_source_sha256": "8dd8c36b3024ebbd8fa92d615a90a2c87bff01fee7083edb740a5fced16c3067",
+  "tests": {
+    "current_probe": 3,
+    "mainnet_assumed_bonds": 2,
+    "counted_licence_frees_slot": 1,
+    "failed": 0
+  },
+  "production_code_changed_in_this_audit": false
+}

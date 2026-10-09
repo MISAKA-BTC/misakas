@@ -1,5 +1,12 @@
 # RFC index
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 **トークン名は Misaka、ticker は BILI。** アドレスの `misaka` 系プレフィックスと既存のチェーンID・コマンド・wire/API識別子は維持する。過去の実測・出力のMSKは旧表記として保存する（[ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)）。
 
 ## MISAKAの中核目標と設計の優先順位（2026-10-07）
@@ -10,6 +17,8 @@ An RFC is a proposal under discussion. [INDEX.md](../INDEX.md) §3 explains how 
 and a Spec change. Take the next number from this table, not from `ls`: an RFC can live on a branch
 before it reaches `main`.
 
+**2026-10-10追加前提:** [ADR176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md) / RFC15 §8は、確率的検証・公開prosecutionとbond/DAA採掘予算をANDで要求する。claim容量を増やしてもblock/reward/Final weight総量は増やさない。[全RFC/ADR改定・文書検証記録](../adr/evidence/0176-bond-budget-policy-alignment-2026-10-10.md)。
+
 | RFC | Title | Status | Where |
 | --- | --- | --- | --- |
 | 0001 | PALW inference surface gaps: deterministic decode controls, serving and input extensions (FP Job V4) | §A (the FP Job V4 release) Implementation Frozen, 2026-09-27 (G0). §0–§7 (P1–P3) Draft, for a later release | [0001-palw-inference-surface-gaps.md](0001-palw-inference-surface-gaps.md). The former branch reservation is historical; the file is included in this reviewed document set. |
@@ -17,18 +26,44 @@ before it reaches `main`.
 | 0003 | PALW Generative Model Classes: one job, determinism and output layer (deterministic randomness R, canonical tensors and why no execution profile, canonical outputs), and the class profiles on top of it (image generation in detail; text, embedding, multimodal input, audio, video); Generation R strictly separated from RFC07 post-commit verification randomness | Revised 2026-10-08 — new challenge-policy boundary; historical profile/tests unchanged | [0003-palw-generative-model-classes.md](0003-palw-generative-model-classes.md) (branch `rfc/0003-image-generation`) |
 | 0004 | モデル改善：学習・評価を継続し、改善版は独立した不変モデルとして登録。既存head/version・Position/AMMの置換は禁止 | Revised 2026-10-09 — 独立immutable fenceとcandidate選択をpreに実装、全preset休眠。memory materialの担保条件・kind別MEASは未決/未測定 | [0004-palw-model-improvement.md](0004-palw-model-improvement.md), [ADR-0175](../adr/0175-registered-models-are-permanently-immutable.md) |
 | 0005 | Versioned model/verification kernels, not BVM/GVM: declarative plans within active families, coordinated SegWit-class extensions for missing semantics, encoded probabilistic checks and bounded exact court; Immutable approved checker/challenge/soundness tuple; Kernel differential conformance only after completeness | Revised Draft, 2026-10-08 — §§K.2/K.4 use RFC07; no VM fallback or activation | [0005-palw-ml-vm.md](0005-palw-ml-vm.md) (stable filename) |
-| 0006 | PALW layer-sharded panels: bounded cell checks with authenticated boundaries, scope-aware receipts and independent public-bond localization/court gates; first-divergence localization is conditional on acquired material and actual checks | Draft, 2026-10-01 | [0006-palw-layer-sharded-panels.md](0006-palw-layer-sharded-panels.md) (branch `rfc6/gpu-shard`) |
+| 0006 | Layer-sharded verification: authenticated boundaries, scope-bound receipts and conditional public-bond court; model acquisition outside consensus | Revised Draft / deferred where applicable, 2026-10-10後続改定 — ADR177 economics/allocation/implementation gates open; old runtime/tests retain scope; no activation | [0006-palw-layer-sharded-panels.md](0006-palw-layer-sharded-panels.md) (branch `rfc6/gpu-shard`) |
 | 0007 | PALW constraint verification: Part VI is the sole post-commit PALW-work beacon/challenge protocol; Part V remains scoped Freivalds/GKR verification. Parts I–IV preserve their historical/prototype evidence | Revised Draft, 2026-10-08 — source/codec/security/implementation gates open; no beacon or activation proof | [0007-palw-verification-certificates-and-algebraic-checks.md](0007-palw-verification-certificates-and-algebraic-checks.md) |
-| 0008 | Unified PALW EXEC lane: EXEC_TX from existing Final-credit permits and EXEC_SLICE for authenticated non-overlapping work of an active REAL-root claim; separate accounting, one root Final/settlement, zero EXEC fork-choice/DAA; main heartbeat/BASE-0/liveness preserved; Inherits RFC07 policy per committed root/slice statement; zero EXEC weight/DAA and unchanged main liveness | Revised Draft, 2026-10-08 — design only; former algo-11 design deleted, historical test record retained | [0008-palw-claim-backed-consensus-blocks.md](0008-palw-claim-backed-consensus-blocks.md) |
-| 0009 | PALW Remote Client: node-less model registration with user-paid GAS/bond, signed remote claims, independent evidence delivery, public receipt redemption with bond-bound payout, and a verifiable client | Draft, upstream updated 2026-10-06 retained; mission amendment 2026-10-07 — design only; no activation | [0009-palw-remote-miner.md](0009-palw-remote-miner.md) |
-| 0010 | Permissionless PALW Panel binding and claim completion: remove the eight-genesis anchor privilege through sealed claims, frozen public seat snapshots, binder-independent Panel randomness, and open end-to-end claim paths; Panel draw randomness and verification challenges remain separate versioned contracts | Revised Draft, 2026-10-08 — RFC07 separation added; dormant reference engine and guarded policy implemented on pre; production beacon/handoff and release gates pending; no live seed migration or activation | [0010-permissionless-palw-panel-and-claim-completion.md](0010-permissionless-palw-panel-and-claim-completion.md), [implementation](0010-dormant-implementation.md) |
-| 0011 | Permissionless model onboarding with probabilistic encoded-constraint checks and exact court on dispute; active-kernel plan admission, explicit kernel-extension gaps (no VM fallback), 9B/2M barriers and ≥90% full-task HF evidence; §17 Static Admission → Beacon Conformance → Active Eligibility; RegisteredDormant can wait asynchronously | Revised Draft, 2026-10-08 — RFC07 policy; source/soundness/G14 gates open, 9B/2M/HF evidence remains scoped | [0011-permissionless-model-and-long-context-onboarding.md](0011-permissionless-model-and-long-context-onboarding.md) |
-| 0012 | PALW-only consensus and native EVM settlement: retire DNS validators, attestations, precommits, DNS-final and stake reorg veto; PALW-derived EVM heads, legacy bond/reward wind-down and coordinated migration; Verification beacon is derived PALW data, never DNS/BFT or a new reorg/finality authority | Revised Draft, 2026-10-08 — authority separation added; dormant implementation on pre; native settlement/migration gates pending; no activation | [0012-palw-only-consensus-and-native-evm-settlement.md](0012-palw-only-consensus-and-native-evm-settlement.md) |
-| 0013 | Reproducible exact layouts and resource-bounded onboarding tools: historical/live gate separation, bit-exact calibration interchange, independent streamed conformance and honest registration evidence; §9 ConformanceCommitmentV1, BeaconConformanceEvidenceV1 and reproducible asynchronous resume/retry | Revised Draft, 2026-10-08 — proposed tooling/evidence fields unimplemented; previous test scope preserved | [0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md](0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md) |
-| 0014 | Public-verifier dispute completeness; §16 integrates MISAKA Model Transport into misakas and makes class-bound model download availability a consensus reward/weight condition, with bonded service obligations and cold-verifier prosecution; §3.4 adds public challenge/source/transcript reconstruction and exact escalation to G14 | Revised Draft, 2026-10-08 — full prosecution/transport/randomness gates pending; no activation | [0014-panel-independent-fraud-prosecution.md](0014-panel-independent-fraud-prosecution.md) |
-| 0015 | Deferred Panel=0: permissionless verifiers and objective fraud proofs replace fixed-Panel verification; G14 adds post-commit challenge completeness; same-seed watchers remain non-independent | Deferred Revised Draft, 2026-10-08 — all RFC14 and RFC15 gates plus explicit activation still mandatory | [0015-panel-free-permissionless-verification.md](0015-panel-free-permissionless-verification.md) |
+| 0008 | Unified EXEC_TX / EXEC_SLICE: one root settlement, unique work, zero EXEC weight/DAA, model-bond allocation and Rule E | Revised Draft / deferred where applicable, 2026-10-10後続改定 — ADR177 economics/allocation/implementation gates open; old runtime/tests retain scope; no activation | [0008-palw-claim-backed-consensus-blocks.md](0008-palw-claim-backed-consensus-blocks.md) |
+| 0009 | Node-less registration / signed remote claims: explicit GAS/bond, optional off-chain supply and finite claim-evidence duties | Revised Draft / deferred where applicable, 2026-10-10後続改定 — ADR177 economics/allocation/implementation gates open; old runtime/tests retain scope; no activation | [0009-palw-remote-miner.md](0009-palw-remote-miner.md) |
+| 0010 | Permissionless Panel binding: sealed claims, snapshots, shared challenge protocol and completion; no model-availability gate | Revised Draft / deferred where applicable, 2026-10-10後続改定 — ADR177 economics/allocation/implementation gates open; old runtime/tests retain scope; no activation | [0010-permissionless-palw-panel-and-claim-completion.md](0010-permissionless-palw-panel-and-claim-completion.md), [implementation](0010-dormant-implementation.md) |
+| 0011 | Permissionless full-task onboarding: immutable identity, conditional G14 and model-bond allocation; 9B/2M/HF historical scope retained | Revised Draft / deferred where applicable, 2026-10-10後続改定 — ADR177 economics/allocation/implementation gates open; old runtime/tests retain scope; no activation | [0011-permissionless-model-and-long-context-onboarding.md](0011-permissionless-model-and-long-context-onboarding.md) |
+| 0012 | PALW-only / native EVM: legacy DNS wind-down, model-bond allocation, Rule E and zero extra issuance | Revised Draft / deferred where applicable, 2026-10-10後続改定 — ADR177 economics/allocation/implementation gates open; old runtime/tests retain scope; no activation | [0012-palw-only-consensus-and-native-evm-settlement.md](0012-palw-only-consensus-and-native-evm-settlement.md) |
+| 0013 | Resource-bounded tools: conformance/resume, identity, distinct model capital and allocation evidence; fetch telemetry stays off-chain | Revised Draft / deferred where applicable, 2026-10-10後続改定 — ADR177 economics/allocation/implementation gates open; old runtime/tests retain scope; no activation | [0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md](0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md) |
+| 0014 | Conditional public-verifier prosecution; §16 model-acquisition non-interference, distinct miner capital, coinbase allocation; MISAKA Torrent / Seeder rewards / FPR abolished | Revised Draft / deferred where applicable, 2026-10-10後続改定 — ADR177 economics/allocation/implementation gates open; old runtime/tests retain scope; no activation | [0014-panel-independent-fraud-prosecution.md](0014-panel-independent-fraud-prosecution.md) |
+| 0015 | Deferred Panel=0: bond/time Q/B/R/F budgets, capacity subdivision and §8.5 model-bond coinbase allocation; no acquisition consensus | Revised Draft / deferred where applicable, 2026-10-10後続改定 — ADR177 economics/allocation/implementation gates open; old runtime/tests retain scope; no activation | [0015-panel-free-permissionless-verification.md](0015-panel-free-permissionless-verification.md) |
 
 **Next free number: RFC-0016.**
+
+## Model acquisition non-interference and model-bond allocation — 2026-10-10後続改定
+
+[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md) is the governing direction.
+**MISAKA Torrent adoption/integration, dedicated Bonded Seeders and Seeder rewards are abolished.**
+PoR, Full Fetch, availability leases, TRDC/FPR, whole-model disclosure funding and availability-driven
+qualification/weight suspension are withdrawn. General off-chain model sharing is optional.
+The chain neither manages nor guarantees acquisition; non-publication alone triggers no reward loss or Slash.
+
+Preserve immutable Model ID/root/weights/spec and finite claim-specific evidence/court responsibility.
+G14 prosecution is conditional on acquiring the registered model; the all-owner-refusal retrieval guarantee is withdrawn.
+Compute distinct `S_m=sum_b C_{b,m}` with `sum_m C_{b,m}<=C_b_effective_locked`.
+Allocate `R_m=R_PALW*f(S_m)/sum_j f(S_j)` inside the existing total coinbase budget, with defined zero/rounding/unused rules.
+Valid computational work is required for payment; retain ADR176's individual Q/B/R/F ceilings and common DAA hold.
+Coinbase allocation alone changes neither block cadence nor DAA/difficulty/fork choice.
+
+The goal is an overwhelming economic advantage for publication that attracts external capital.
+Equal capital gives equal allocation irrespective of ownership; wallet count is not independence evidence.
+The multiplier curve, self-funding/Sybil/concentration, incumbent caps, competition and closed-model detection
+must be evaluated before claiming that goal achieved. Allocation and economic implementation remain pending.
+See [RFC14 §16](0014-panel-independent-fraud-prosecution.md), [RFC15 §8.5](0015-panel-free-permissionless-verification.md)
+and the [current document validation](../adr/evidence/0177-model-distribution-policy-alignment-2026-10-10.md).
+
+The earlier [Seeder](evidence/0014-independent-bonded-seeders-audit-2026-10-10.md) and
+[FPR](evidence/0014-forced-public-retrieval-alignment-2026-10-10.md) checks are historical withdrawn-policy records.
+Their PASS does not prove this economic goal, new allocation, G14 under closure or activation.
 
 ## Shared post-commit challenge protocol (2026-10-08)
 
