@@ -16938,6 +16938,9 @@ mod t53_drill_isolation;
 // with the `evm` feature only, like `p2_evm_twin`.
 #[cfg(feature = "evm")]
 mod rfc12_zero_dns_matrix;
+// RFC-0012 wave 2 (C1 a real claim to `Final` with the lane on, C2 a pruned join with EVM state): `evm` feature only, like the matrix.
+#[cfg(feature = "evm")]
+mod rfc12_c_items;
 
 /// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
 /// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`
@@ -17360,28 +17363,6 @@ async fn the_round_templates_merge_depth_predicate_names_the_stale_tip_the_valid
 }
 
 
-/// **A test ruleset whose DNS retirement is armed, built without rule E** (ADR-0175). An armed retirement needs
-/// `palw_fork_choice_rule_e_v1` at or below it, and arming rule E is refused in this binary — so `ConfigBuilder::build`, which
-/// validates, would refuse every such ruleset. The ruleset is validated as a COPY with rule E at the retirement's height, where it
-/// must meet exactly rule E's own refusal (`validate_palw_v2` asks it last, so every other check passed); the `Config` is then
-/// built directly from the params as they were, so these tests run the rules they ran before rule E existed.
-fn config_with_retirement_unarmed_rule_e(
-    mut params: kaspa_consensus_core::config::params::Params,
-) -> kaspa_consensus_core::config::Config {
-    let mut with_rule_e = params.clone();
-    with_rule_e.palw_fork_choice_rule_e_v1 = params.palw_dns_retirement.map(|r| r.activation);
-    with_rule_e.validate_palw_v1().expect("the V1 fence validates");
-    assert_eq!(
-        with_rule_e.validate_palw_v2(),
-        Err(kaspa_consensus_core::palw_mode_v2::PalwModeV2Error::Invalid(
-            kaspa_consensus_core::palw_fork_choice_rule_e_v1::PALW_FORK_CHOICE_RULE_E_UNARMABLE_V1
-        )),
-        "a test retirement validates but for rule E's own refusal"
-    );
-    params.skip_proof_of_work = true;
-    kaspa_consensus_core::config::Config::new(params)
-}
-
 /// Private fixture only: the production presets intentionally assign no retirement fence.
 #[tokio::test]
 async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
@@ -17394,32 +17375,32 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
     };
     let catalog = palw_v2_test_catalog();
     let bundle = palw_v2_test_bundle(&catalog);
-    // ADR-0175: an armed retirement needs rule E, which this binary refuses to arm — so the ruleset is checked as a copy and the
-    // Config built directly (`config_with_retirement_unarmed_rule_e`), rule E unarmed as before.
-    let mut params = MAINNET_PARAMS;
-    let edit = |p: &mut kaspa_consensus_core::config::params::Params| {
-        p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
-        *p = p.clone().with_palw_v2_cadence();
-        p.dns_params.as_mut().unwrap().full_reward_split_daa_score = 0;
-        p.dns_bft_gate = Some(DnsBftGateV1 {
-            activation: ForkActivation::new(1),
-            t_leak_daa: 50,
-            reentry_final_depth_daa: 10,
-            min_retained_validators: 4,
-        });
-        p.palw_dns_retirement = Some(PalwDnsRetirementV1 {
-            activation: ForkActivation::new(5),
-            settlement: PalwSettlementPolicyV1 {
-                settled_anchor_depth: 2,
-                unique_mature_work: 20,
-                max_operator_permille: 1000,
-                max_class_permille: 1000,
-            },
-            legacy_evidence_horizon_daa: 10,
-        });
-    };
-    edit(&mut params);
-    let config = config_with_retirement_unarmed_rule_e(params);
+    // Validated WITHOUT the retirement, which is set afterwards: the release's validation requires `palw_fork_choice_rule_e_v1` armed
+    // at or below it (ADR-0175), a fence this fixture does not arm; the test is about the retirement's own behaviour.
+    let mut config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+            p.dns_params.as_mut().unwrap().full_reward_split_daa_score = 0;
+            p.dns_bft_gate = Some(DnsBftGateV1 {
+                activation: ForkActivation::new(1),
+                t_leak_daa: 50,
+                reentry_final_depth_daa: 10,
+                min_retained_validators: 4,
+            });
+        })
+        .build();
+    config.params.palw_dns_retirement = Some(PalwDnsRetirementV1 {
+        activation: ForkActivation::new(5),
+        settlement: PalwSettlementPolicyV1 {
+            settled_anchor_depth: 2,
+            unique_mature_work: 20,
+            max_operator_permille: 1000,
+            max_class_permille: 1000,
+        },
+        legacy_evidence_horizon_daa: 10,
+    });
     let mut ctx = TestContext::new(TestConsensus::new(&config));
     for _ in 0..16 {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();

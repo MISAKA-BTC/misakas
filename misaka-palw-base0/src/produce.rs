@@ -357,6 +357,10 @@ pub fn base0_execute_streaming_select_capped_v1(
     let mut next = select(&last_logits) as usize;
     generated.push(next as u32);
     on_token(next as u32);
+    // RFC-0001 P1: a cancelled run stops at the next token.
+    if crate::cancel::aborted_v1() {
+        return Err(ProduceError::Internal(crate::cancel::CANCELLED_V1));
+    }
     logits_rows.push(last_logits);
 
     // Calls 1..=D−1 — decode. The COORDINATE's position is 0 in every decode call (each call has
@@ -370,6 +374,9 @@ pub fn base0_execute_streaming_select_capped_v1(
         next = select(&logits) as usize;
         generated.push(next as u32);
         on_token(next as u32);
+        if crate::cancel::aborted_v1() {
+            return Err(ProduceError::Internal(crate::cancel::CANCELLED_V1));
+        }
         logits_rows.push(logits);
         // A checkpoint after this call if the cadence says so — the capture's OWN predicate, not a
         // second spelling of the per-call rule (audit B, M-1). `call == next_covered_decode_call()`

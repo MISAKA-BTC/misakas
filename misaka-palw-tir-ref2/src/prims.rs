@@ -14,7 +14,7 @@ use crate::transcendental::{floor_divmod, int_exp, int_ln, int_rsqrt, log2_floor
 use crate::types::DType;
 use crate::wide::Wide;
 
-fn shape_err<T>(prim: &Prim, why: &str) -> Res<T> {
+pub(crate) fn shape_err<T>(prim: &Prim, why: &str) -> Res<T> {
     err(Class::Shape, format!("{} at evaluation: {why}", prim.name()))
 }
 
@@ -33,7 +33,7 @@ pub(crate) fn fit_i(v: i128, dt: DType) -> Res<i128> {
 
 /// The operand multi-index read for output multi-index `o` under §2.3 broadcasting: trailing
 /// alignment, and an operand extent of 1 reads index 0.
-fn broadcast_index(o: &[u64], in_shape: &[u64], idx: &mut Vec<u64>) {
+pub(crate) fn broadcast_index(o: &[u64], in_shape: &[u64], idx: &mut Vec<u64>) {
     idx.clear();
     let off = o.len() - in_shape.len();
     for (k, &d) in in_shape.iter().enumerate() {
@@ -42,7 +42,7 @@ fn broadcast_index(o: &[u64], in_shape: &[u64], idx: &mut Vec<u64>) {
 }
 
 /// Checks that `in_shape` broadcasts to `out` (concretely).
-fn broadcasts_to(in_shape: &[u64], out: &[u64]) -> bool {
+pub(crate) fn broadcasts_to(in_shape: &[u64], out: &[u64]) -> bool {
     if in_shape.len() > out.len() {
         return false;
     }

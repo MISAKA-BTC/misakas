@@ -83,6 +83,8 @@ workflow-wasm.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+# DA16: the sketch's fixture weights for the public-material tests (an artifact, its inventory, its kernel commitments).
+misaka-palw-tir-sketch = { path = "../../misaka-palw-tir-sketch" }
 bincode.workspace = true
 wasm-bindgen-test.workspace = true
 web-sys.workspace = true

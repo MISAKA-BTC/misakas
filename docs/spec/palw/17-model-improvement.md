@@ -1,5 +1,15 @@
 # PALW spec — 17. The Model Improvement Protocol
 
+## 17.0 Immutable registrations — 2026-10-09 amendment
+
+[ADR-0175](../../adr/0175-registered-models-are-permanently-immutable.md) governs past the independent `palw_model_immutable_v1` fence. Training, datasets, bounded evaluation and settlement may continue. **No epoch decision or rollback may replace an existing registered model, its lineage head, its version/root or its Position/AMM binding.** Improved artifacts are independently registered models with their own admission and eligibility. Parent references record provenance only.
+
+The old promotion selector still computes the evaluation verdict. At a decision under the new fence, a winning `Promoted { class_id, wins, losses }` is recorded as `CandidateSelected { class_id, wins, losses }` (appended Borsh outcome tag 2); tags 0/1 remain unchanged for historical replay. This points to the candidate's independent registration and grants no eligibility inherited from the parent. Evaluation fees, candidate bond refunds/vesting and trainer/dataset grants keep their conservation rules. A pre-fence epoch finishing after activation settles under this selection rule without changing the parent. No new last-promotion/rollback authority or regression-parent switch is installed.
+
+`ModelVersionPublished`, `ModelVersionPromoted`, `ModelVersionWithdrawn` and `LineageHeadRolledBack` retain their recognized wire encodings but are deterministically refused after the new fence, before state writes. The fold also preserves an existing head across opt-out/re-opt-in. Operational policy, custody roles, usage, availability and reward eligibility can change under their own rules; model definition and market identity cannot.
+
+Existing versions, previews and head entries stay historical data. The fence neither resets a current V2 to V1 nor automatically registers old previews elsewhere. The subsequent promotion/rollback algorithms and vectors apply **only before the immutable fence**. `palw_improvement_v1` and the new fence stay dormant in shipped presets; this amendment does not arm typed artifact/evaluation paths. New ModelLineFounded IDs include root; old IDs and class hash formulas retain their exact encodings. See RFC0004's revised implementation/status table for memory-material collateral and kind-specific MEAS work. No new collateral amount or checker latency is established by this policy.
+
 > **Normative.** This chapter specifies RFC-0004, the PALW Model Improvement Protocol (as of
 > 62fd7558c, with its amendment 8ad4c5dfa):
 > - governed lines and their policy;

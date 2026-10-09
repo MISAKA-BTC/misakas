@@ -447,6 +447,7 @@ pub struct VirtualStateProcessor {
     /// to) and the fold attributes claims to versions; before it all ten are refused by name.
     /// Resolved at the BLOCK's DAA.
     pub(super) palw_model_lines: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_model_immutable_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0095 §4.11 as corrected: the membership's own fence.
     pub(super) palw_model_benefits: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0114: `Params::palw_model_leg_v2_fence` — the five-percent owner leg's height.
@@ -489,6 +490,18 @@ pub struct VirtualStateProcessor {
     /// refusing a heavier, fully validated candidate on the PALW deep-reorg rule
     /// ([`Self::palw_partition_refusal_v1`]). Memory only; node-local; no verdict reads it.
     pub(super) palw_refusal_streak: parking_lot::Mutex<Option<kaspa_consensus_core::api::PalwPartitionRefusalV1>>,
+    /// Test-only: the clock the TEMPLATE BUILDER reads in place of the wall clock (milliseconds; 0 = the wall clock). On an EVM-active
+    /// network the builder executes the lane against the stamp it chooses, so a harness cannot re-stamp afterwards; with this it can
+    /// make the builder choose a simulated stamp, and `build == validate` holds with a simulated clock. Never set outside a test.
+    #[cfg(test)]
+    pub(super) template_clock: std::sync::atomic::AtomicU64,
+    /// Test-only: relabel every `Final` attempt the native-settlement walk reads to this class, so a floor claim (the only claim the
+    /// harness can produce) is read as REAL work. The node's own delta, extraction, conversion and certificate run unchanged.
+    #[cfg(test)]
+    pub(super) native_relabel_class: parking_lot::Mutex<Option<Hash64>>,
+    /// The `finalized` head a virtual change published and a later one withdrew while no conflict was recorded (RFC-0012 C11), kept
+    /// until a `finalized` is published again. Memory only, for the explanation; the `error!` at the withdrawal is the durable signal.
+    pub(super) native_finalized_withdrawn: parking_lot::Mutex<Option<BlockHash>>,
     /// Test-only: facts a test places at a chain block, as if its PALW delta had carried that work.
     #[cfg(test)]
     pub(super) native_fact_override:
@@ -643,6 +656,9 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
     /// (tag 108). Resolved in ONE place, [`Self::palw_signed_registration_at`]. Never armable by a real network.
     pub(super) palw_signed_registration_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_provider_court_v1` (lane DA16, RFC-0009 §4.2): may the provider court's objects (tags 150–153) be folded. Resolved in
+    /// ONE place, [`Self::palw_provider_court_at`]. Never armable by a real network.
+    pub(super) palw_provider_court_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_gen_v1` (RFC-0003): may a class be a pipeline of PALW-TIR version-2 programs on
     /// this chain. Resolved in ONE place, [`Self::palw_gen_at`], at the block.
     pub(super) palw_gen_v1: Option<kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1>,
@@ -1214,6 +1230,7 @@ impl VirtualStateProcessor {
             palw_share_growth_final: params.palw_share_growth_final_fence(),
             palw_model_market: params.palw_model_market_fence(),
             palw_model_lines: params.palw_model_lines_fence(),
+            palw_model_immutable_v1: params.palw_model_immutable_v1_fence(),
             palw_model_benefits: params.palw_model_benefits_fence(),
             palw_model_leg_v2: params.palw_model_leg_v2_fence(),
             palw_model_seed_v2: params.palw_model_seed_v2_fence(),
@@ -1227,6 +1244,11 @@ impl VirtualStateProcessor {
             native_readiness_memo: Default::default(),
             palw_reader_snapshot: Default::default(),
             palw_refusal_streak: Default::default(),
+            #[cfg(test)]
+            template_clock: Default::default(),
+            #[cfg(test)]
+            native_relabel_class: Default::default(),
+            native_finalized_withdrawn: Default::default(),
             #[cfg(test)]
             native_fact_override: Default::default(),
             palw_native_ruleset_id: params.consensus_params_id(),
@@ -1276,6 +1298,7 @@ impl VirtualStateProcessor {
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_typed_roots_v1: params.palw_typed_roots_v1,
             palw_signed_registration_v1: params.palw_signed_registration_v1,
+            palw_provider_court_v1: params.palw_provider_court_v1,
             palw_gen_v1: params.palw_gen_v1_fence(),
             palw_tir_only_v1: params.palw_tir_only_fence(),
             palw_gdn_key_heads: params.palw_gdn_key_heads_fence(),
@@ -3348,18 +3371,20 @@ impl VirtualStateProcessor {
         }
         if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.dns_retired_at(daa)) {
             let policy = self.palw_dns_retirement.expect("retirement is active").settlement.id();
-            match self.evm_heads_store.read().native_snapshot() {
+            let previous_finalized = match self.evm_heads_store.read().native_snapshot() {
                 Ok(Some(s)) if s.version != 1 || s.policy_id != policy || s.ruleset_id != self.palw_native_ruleset_id => {
                     error!("[native-settlement] incompatible persisted evidence; preserving it for resync");
                     return;
                 }
-                Err(StoreError::KeyNotFound(_)) | Ok(_) => {}
+                Ok(previous) => previous.and_then(|s| s.finalized),
+                Err(StoreError::KeyNotFound(_)) => None,
                 Err(e) => {
                     error!("[native-settlement] unreadable persisted evidence: {e}; preserving it for resync");
                     return;
                 }
-            }
+            };
             let snapshot = self.native_evm_settlement_snapshot(sink);
+            self.note_finalized_withdrawal(sink, previous_finalized, &snapshot);
             let heads = kaspa_consensus_core::evm::CanonicalEvmHeads {
                 latest: snapshot.latest.unwrap_or_default(), safe: snapshot.safe.unwrap_or_default(), finalized: snapshot.finalized.unwrap_or_default(),
             };
@@ -7771,6 +7796,7 @@ impl VirtualStateProcessor {
             state.clone()
         };
         let mut accepted = Vec::with_capacity(objects.len());
+        let mut model_classes_registered_in_block = std::collections::BTreeSet::new();
         // **The 2026-09-23 Position route matrix, P-B1: a refused carrier buy or seed is owed its
         // MSK back.** Its carrier is already accepted and its sink already holds the payment, so a
         // drop here used to be a burn. Every drop path below ends the iteration without reaching
@@ -7887,6 +7913,16 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a kernel route object was dropped by name below palw_probabilistic_constraints_v1, and the block stands (G14)");
                 continue;
             }
+            // **Lane DA16: below `palw_provider_court_v1` a provider-court object (tags 150–153) is dropped by name**, first and charged
+            // nothing, for the same reason (an older build cannot decode it and skips it, A-2).
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(&object)
+                && !self.palw_provider_court_at(point.daa_score)
+            {
+                info!(
+                    "Block {block}: a provider-court object was dropped by name below palw_provider_court_v1, and the block stands (DA16)"
+                );
+                continue;
+            }
             // **RFC-0003: below `palw_gen_v1` a generative object is dropped by name**, first and
             // charged nothing, for the IR objects' reason above (an older build skips it undecoded).
             if kaspa_consensus_core::palw_state_v2::palw_object_is_gen_v1(&object) && !self.palw_gen_at(point.daa_score) {
@@ -7933,7 +7969,15 @@ impl VirtualStateProcessor {
             // possession proof) and the `TirStepRun` unit and its answer are payloads an older build cannot decode and
             // skips (A-2), so they are dropped here, first, and charged nothing; the fold refuses them too.
             if kaspa_consensus_core::palw_state_v2::palw_object_is_tir_shard_v1(&object) && !self.palw_tir_shard_at(point.daa_score) {
-                info!("Block {block}: a layer-sharded-panel object was dropped by name below palw_tir_shard_v1, and the block stands (RFC-0006)");
+                info!(
+                    "Block {block}: a layer-sharded-panel object was dropped by name below palw_tir_shard_v1, and the block stands (RFC-0006)"
+                );
+                continue;
+            }
+            if self.palw_model_immutable_v1_at(point.daa_score)
+                && let Some(name) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_model_definition_update_v1(&object)
+            {
+                info!("Block {block}: {name} refused by immutable model registration (ADR-0175); the block stands");
                 continue;
             }
             // **RFC-0004 §6.3: an IR close carrying a composite artifact's sub-root openings** (the
@@ -8201,6 +8245,7 @@ impl VirtualStateProcessor {
                 && !Self::palw_kernel_chunk_inner(&folded, &object).is_some_and(|inner| {
                     kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(&inner)
                         || kaspa_consensus_core::palw_state_v2::palw_object_is_onboarding_v1(&inner)
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(&inner)
                 });
             let is_certification =
                 matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
@@ -8477,6 +8522,7 @@ impl VirtualStateProcessor {
                         self.palw_da_court_at(point.daa_score),
                         &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                             own_attempt_class,
+                            model_classes_registered_in_block: model_classes_registered_in_block.clone(),
                             ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
                         },
                     ) {
@@ -8628,6 +8674,7 @@ impl VirtualStateProcessor {
                             self.palw_da_court_at(point.daa_score),
                             &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 own_attempt_class,
+                                model_classes_registered_in_block: model_classes_registered_in_block.clone(),
                                 ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
                             },
                         )
@@ -8645,7 +8692,10 @@ impl VirtualStateProcessor {
                             self.palw_capability_bound_at(point.daa_score),
                             self.palw_uncertified_weightless_at(point.daa_score),
                             self.palw_da_court_at(point.daa_score),
-                            &self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object)),
+                            &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+                                model_classes_registered_in_block: model_classes_registered_in_block.clone(),
+                                ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
+                            },
                         )
                         .map(|(next, _)| next)
                     };
@@ -8709,6 +8759,16 @@ impl VirtualStateProcessor {
                                     Err(err) => {
                                         warn!("[palw-class-carriage] class {class_id}'s carriage does not re-serialize: {err}")
                                     }
+                                }
+                            }
+                            if self.palw_model_immutable_v1_at(point.daa_score) {
+                                use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+                                if let Obj::ClassRegistered { class_id, .. }
+                                | Obj::ClassRegisteredTirV1 { class_id, .. }
+                                | Obj::ClassRegisteredGenV1 { class_id, .. } = &object
+                                    && state.class(class_id).is_none()
+                                {
+                                    model_classes_registered_in_block.insert(*class_id);
                                 }
                             }
                             accepted.push(object);
@@ -13018,6 +13078,11 @@ impl VirtualStateProcessor {
                         let payload = borsh::to_vec(&(v2_class, action.as_ref())).map_err(|e| e.to_string())?;
                         self.palw_onboarding_signature_ok(state, point.daa_score, 109, &signer, &payload, &signature)?;
                     }
+                    // DA16: a provider's answer delivered in chunks, judged on the assembled whole.
+                    Some(Obj::ProviderAnswerV1 { subject, provider, unit, answer, signature }) => {
+                        let payload = borsh::to_vec(&(subject, unit, answer.as_ref())).map_err(|e| e.to_string())?;
+                        self.palw_provider_court_signature_ok(state, point.daa_score, 152, &provider, &payload, &signature)?;
+                    }
                     _ => {}
                 },
                 // RFC-0002 Phase F (tag 63): judged by the transition like the legacy lane object;
@@ -13200,6 +13265,24 @@ impl VirtualStateProcessor {
                 Obj::ConformanceEvidenceV1 { v2_class, action, signer, signature } => {
                     let payload = borsh::to_vec(&(v2_class, action.as_ref())).map_err(|e| e.to_string())?;
                     self.palw_onboarding_signature_ok(state, point.daa_score, 109, signer, &payload, signature)?;
+                }
+                // **Lane DA16 (tags 150–153): the provider court** — the fence, an Active signer, its signature over the payload; the
+                // leases, units and verdicts are the fold's.
+                Obj::ProviderLeaseV1 { subject, reserved, serve_until_daa, provider, signature } => {
+                    let payload = borsh::to_vec(&(subject, reserved, serve_until_daa)).map_err(|e| e.to_string())?;
+                    self.palw_provider_court_signature_ok(state, point.daa_score, 150, provider, &payload, signature)?;
+                }
+                Obj::ProviderChallengeV1 { subject, provider, unit, valid_until_daa, challenger, signature } => {
+                    let payload = borsh::to_vec(&(subject, provider, unit, valid_until_daa)).map_err(|e| e.to_string())?;
+                    self.palw_provider_court_signature_ok(state, point.daa_score, 151, challenger, &payload, signature)?;
+                }
+                Obj::ProviderAnswerV1 { subject, provider, unit, answer, signature } => {
+                    let payload = borsh::to_vec(&(subject, unit, answer.as_ref())).map_err(|e| e.to_string())?;
+                    self.palw_provider_court_signature_ok(state, point.daa_score, 152, provider, &payload, signature)?;
+                }
+                Obj::DaTransferV1 { claim, producer, signature } => {
+                    let payload = borsh::to_vec(claim).map_err(|e| e.to_string())?;
+                    self.palw_provider_court_signature_ok(state, point.daa_score, 153, producer, &payload, signature)?;
                 }
                 // (tag 108): the acceptance walk replaces the envelope by its registration before this gate; one that reaches it was
                 // not unwrapped (a direct caller of the gate), and is refused.
@@ -14072,6 +14155,10 @@ impl VirtualStateProcessor {
         self.palw_model_lines.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    pub(super) fn palw_model_immutable_v1_at(&self, daa_score: u64) -> bool {
+        self.palw_model_immutable_v1.is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0095 §4.11 as corrected, resolved at the BLOCK's own DAA like every other fence.
     pub(super) fn palw_model_benefits_active_at(&self, daa_score: u64) -> bool {
         self.palw_model_benefits.is_some_and(|fence| fence.is_active(daa_score))
@@ -14651,6 +14738,8 @@ impl VirtualStateProcessor {
             merged_reds: Default::default(),
             audit_1004_draw_seed_source: None,
             model_lines_active: self.palw_model_lines_active_at(daa_score),
+            model_immutable_active: self.palw_model_immutable_v1_at(daa_score),
+            model_classes_registered_in_block: Default::default(),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),
             // Written explicitly like the fences below it: this one decides what every move pays.
@@ -14848,6 +14937,51 @@ impl VirtualStateProcessor {
         self.palw_probabilistic_constraints_v1.is_some_and(|fence| fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score))
     }
 
+    /// **Lane DA16: `Params::palw_provider_court_v1` resolved at the block's DAA**, in exactly one place (the kernel route's fence must be in
+    /// force too: the court's rows are the route's).
+    pub(super) fn palw_provider_court_at(&self, daa_score: u64) -> bool {
+        self.palw_kernel_route_at(daa_score)
+            && self.palw_provider_court_v1.is_some_and(|fence| {
+                fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score)
+            })
+    }
+
+    /// **Lane DA16: a provider-court object's acceptance** (tags 150–153): the court's fence, an Active signer bond, and the signer's
+    /// ML-DSA-87 signature over `(network, kind, signer, payload)`. The rows, the units and the verdicts are the fold's.
+    fn palw_provider_court_signature_ok(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa_score: u64,
+        kind: u8,
+        signer: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> Result<(), String> {
+        if !self.palw_provider_court_at(daa_score) {
+            return Err("a provider-court object is refused: palw_provider_court_v1 is not in force at this block (DA16)".to_string());
+        }
+        let record =
+            state.bond(signer).ok_or_else(|| "a provider-court object is signed by a bond this chain does not have".to_string())?;
+        if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err("a provider-court object is signed by a bond that is not Active".to_string());
+        }
+        let message = kaspa_consensus_core::palw_provider_court_v1::palw_provider_court_message_v1(
+            self.palw_network_domain_v2(),
+            kind,
+            signer,
+            payload,
+        );
+        if !Self::verify_mldsa87_with_context_bool(
+            &record.pubkey,
+            message.as_byte_slice(),
+            signature,
+            kaspa_consensus_core::palw_provider_court_v1::PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1,
+        ) {
+            return Err("a provider-court object carries a signature its bond's key does not verify".to_string());
+        }
+        Ok(())
+    }
+
     /// **RFC-0009 G-EXPIRY / G-RULESET: `Params::palw_signed_registration_v1` resolved at the block's DAA**, in exactly one place.
     pub(super) fn palw_signed_registration_at(&self, daa_score: u64) -> bool {
         self.palw_signed_registration_v1
@@ -15001,6 +15135,11 @@ impl VirtualStateProcessor {
                     admitted_classes: fence.admitted_classes.clone(),
                 }),
                 typed_roots: self.palw_kernel_typed_roots_activation(),
+                // DA16: the provider court's activation, where its (never armable) fence is in force at this block.
+                provider_court: self
+                    .palw_provider_court_at(daa_score)
+                    .then(|| self.palw_provider_court_v1.map(|f| f.daa_score()))
+                    .flatten(),
             }
         })
     }
@@ -19641,6 +19780,19 @@ impl VirtualStateProcessor {
         Ok(())
     }
 
+    /// The wall clock the template builder reads. Production: `unix_now()`, always. A test may substitute a simulated clock
+    /// (`template_clock`); there is no way to do so in a non-test build.
+    fn template_now(&self) -> u64 {
+        #[cfg(test)]
+        {
+            let simulated = self.template_clock.load(std::sync::atomic::Ordering::Relaxed);
+            if simulated != 0 {
+                return simulated;
+            }
+        }
+        unix_now()
+    }
+
     /// **The stamp a template built on a virtual carries — or the lead cap's refusal of it.** One
     /// computation for the template builder and for [`Self::palw_lead_cap_virtual_parents`], so the
     /// policy leaves out exactly what the builder would refuse.
@@ -19751,7 +19903,8 @@ impl VirtualStateProcessor {
         if merged_beats.is_empty() && !is_beat(sink) {
             return (virtual_parents, virtual_ghostdag_data);
         }
-        let now = unix_now();
+        // The builder's clock (the wall clock outside a test), so the policy leaves out exactly what the builder would refuse.
+        let now = self.template_now();
         if !self.palw_virtual_steps_past_lead_cap(&virtual_ghostdag_data, now) {
             return (virtual_parents, virtual_ghostdag_data);
         }
@@ -20484,7 +20637,7 @@ impl VirtualStateProcessor {
         } else {
             None
         };
-        let timestamp = self.palw_template_stamp_v1(clock, lead_capped, virtual_state.past_median_time, unix_now())?;
+        let timestamp = self.palw_template_stamp_v1(clock, lead_capped, virtual_state.past_median_time, self.template_now())?;
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
         let header_pruning_point =
             self.pruning_point_manager.expected_header_pruning_point(virtual_state.ghostdag_data.to_compact()).pruning_point;
@@ -21693,6 +21846,10 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ConformanceCommittedV1 { .. } => "ConformanceCommittedV1",
         O::SignedRegistrationV1 { .. } => "SignedRegistrationV1",
         O::ConformanceEvidenceV1 { .. } => "ConformanceEvidenceV1",
+        O::ProviderLeaseV1 { .. } => "ProviderLeaseV1",
+        O::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
+        O::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
+        O::DaTransferV1 { .. } => "DaTransferV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

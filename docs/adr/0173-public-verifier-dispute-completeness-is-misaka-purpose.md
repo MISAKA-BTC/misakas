@@ -1,14 +1,26 @@
 # ADR-0173 — MISAKA's purpose: public-verifier dispute completeness
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 **トークンの表示名は Misaka、ticker は BILI。** `misaka` 系アドレスプレフィックスと既存のprotocol/CLI/API識別子は維持する（[ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)）。
 
 * **Status:** Accepted as the project's design mandate at the user's request, 2026-10-07. Implementation and activation remain pending. This decision assigns no wire id, consensus fingerprint, activation height or deployment.
-* **Purpose:** Panel外の普通のpublic bondが、producerの秘密状態を使わず、public authenticated materialだけから不正をlocalizeして客観的convictionまで進めることを、完全に成立させる。
+* **Purpose:** 正しい固定modelを保有/取得できたPanel外のpublic bondが、producer秘密状態なしにclaim固有の認証証拠から不正をlocalizeし客観的convictionへ到達する。モデル入手自体はchainが管理・保証しない（ADR177）。
 * **Design path:** [RFC-0014](../rfc/0014-panel-independent-fraud-prosecution.md) specifies the implementation work and completion gates. [RFC-0015](../rfc/0015-panel-free-permissionless-verification.md) specifies a separately gated, deferred Panel=0 mode.
 * **Complements:** [ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md)'s useful local-inference purpose, [ADR-0171](0171-probabilistic-constraint-checks-and-court-on-dispute.md)'s verification direction and [ADR-0172](0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)'s kernel-only extension boundary.
 * **Audit:** [All-RFC/ADR alignment report](evidence/0173-mission-alignment-audit-2026-10-07.md). The report records document versions, dispositions and the limits of this documentation change.
+* **Amendment, 2026-10-10:** 旧Seeder/TRDC/FPR可用性方針は、後続の[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)で撤回した。従来の整合チェックは履歴で、新配分の経済/実装証拠ではない。
+* **Further amendment, 2026-10-10:** 旧Seeder/TRDC/FPR可用性方針は、後続の[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)で撤回した。従来の整合チェックは履歴で、新配分の経済/実装証拠ではない。
 
 ## 1. MISAKAの中核目標
+
+**後続改定:** 以下の公開検証目標は、検証者が正しい登録modelを得られた条件で成立する。
+model配布は合意の管理・強制対象にせず、旧無条件取得保証をADR177で撤回する。
 
 MISAKAは、利用者がローカルで実行する有用なLLM計算を、公開に検証可能なワークとして扱うP2P基盤を目指す。その安全性の中核目標は、**固定Panelの多数派を信用しなくても、普通のpublic bondを持つ独立参加者が、公開され認証された証拠だけで不正を特定し、合意規則が検証するconvictionとproducerへの責任追及まで完結できること**である。
 
@@ -21,7 +33,7 @@ Panelが不正なclaimを一度licenseしても、その多数決で計算上の
 | 用語 | この決定での意味 |
 | --- | --- |
 | 普通のpublic bond | 公開されたidentity・bond・maturity・collateral規則を満たす参加者。Panel非所属でも参加可能で、genesis allowlist、operator anchorの特権、モデル所有者の承認を必要としない。無資源・無担保での無制限な訴追を意味しない。 |
-| public authenticated material | claim・class・job・versionのcommitmentに検証可能に拘束された、必要な入力、artifact/weights、state/checkpoint、trace/constraint、opening、outputおよび応答。公開取得可能なoff-chain配布でもよい。ハッシュだけ、第三者の「見た」という署名だけでは不足する。 |
+| public authenticated material（ADR177のscope） | claimのinput/state/trace/output/witness等の有限な認証証拠。modelはoff-chainで得た固定rootのbytesを前提にし、model weightsの取得を強制する公開義務にはしない。hash/成功署名だけでは計算検証を代替しない。 |
 | producerの秘密状態を使わない | producerだけのcapture、未公開FOLD prefix、KV cache、tile preimage、RAM、ファイル、秘密鍵、内部prover API、producerインスタンスへの参照を訴追の前提にしない。検証者自身の計算・メモリ・秘密乱数は使えるが、convictionは公開検証可能でなければならない。 |
 | localize | 全体の異常や検査失敗を、認証された入力・境界・状態に拘束された有界の不正箇所とterminal proofへ落とすこと。leaf番号の報告だけでは完了しない。 |
 | objective conviction | 任意の合意検証ノードが、規範的なcourt規則と証拠から同じ有罪結果を計算すること。Panel投票、LLM回答の良し悪し、ローカルHTTP失敗を有罪の根拠にしない。 |
@@ -104,22 +116,84 @@ sourceはconsuming challengeと独立に有効な将来canonical workに限定�
 
 同じseedを多数watcherが検査しても独立試行とは数えない。mismatchは認証localization・exact courtへ進め、probabilistic failureだけでconvict/slashしない。有効なexact fraud proofを出すために新beacon待ちを要求しない。challenge再現・公的material・objective outcomeの全経路をG14に追加し、RFC15のPanel=0はその達成後も別gate/activationを要する。この追記は実装・activationの宣言ではない。
 
+### D9 — 永久不変のモデル同一性と入手への合意不介入（2026-10-10後続改定）
+
+[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を適用する。
+**チェーンはモデルを入手できるかどうかに一切干渉しない。** 登録は自由、登録後のModel ID/root、
+weights・tokenizer/config・実行仕様は永久不変とする。取得者は認証piece/shardと全量復元rootを照合する。
+claimは同じ固定Model ID/root/specをbindし、root一致とminer計算の正当性を区別する。
+
+MISAKA Torrent採用・専用SeederとSeeder報酬の概念を廃止する。一般的なP2P/mirror/共有は任意の
+off-chain運用とし、合意によるSeeder登録・選出・取得監査・
+PoR/lease/TRDCを撤回する。モデル非公開・全peer停止・第三者への提供拒否だけでclaim/reward/weightを止めず、
+bondをslashしない。モデル取得成功を合意が保証するという旧AND契約も撤回する。
+任意のinfohash/manifest bindingを登録する場合は固定rootとの対応を不変にし、必須の取得経路にしない。
+
+### D10 — モデル別拘束miner元本とcoinbase配分（2026-10-10後続改定）
+
+model別の適格拘束元本を`C_{b,m}`、`S_m=sum_b C_{b,m}`とし、同じbondのmodel割当合計は
+実効拘束元本以下にする。claim予約件数・rho・root/slice/rider・鍵分割で元本を増幅しない。
+model ownerの市場seed/Position/AMMやPanel/Seeder担保も自動算入しない。
+`A_m=f(S_m)`、正の分母では`R_m=R_PALW*A_m/sum_j A_j`として既定の総coinbase予算内で配分する。
+分母0はmodel配分0、整数残余と未使用枠を規範化する。資本預託だけでは報酬を払わず、有効claimとFinalを要求する。
+
+公開参加が資本と配分倍率を大幅に増やし、閉鎖自己資本より圧倒的に有利になることを経済設計の目標にする。
+同額`S_m`なら自己/外部資本の配分は同じであり、所有者の独立性をウォレット数から認定しない。
+倍率曲線、競合・自己増資・Sybil/集中・閉鎖時の検出率と既存minerのcapを含め、利益比較で立証する。
+既存minerの実収入増や公開が常に利益最大になることは未保証である。
+
+モデル予算と個別bondのQ/B/R/F上限・共通DAA拘束を同時に適用する（ADR176）。
+model配分変更だけでblock頻度、DAA、難易度、fork choiceを変えず、Final/courtと全writer/readerを別に実証する。
+
+### D11 — FPR撤回と条件付きpublic prosecution（2026-10-10後続改定）
+
+旧FPR三段階、モデル全量公開、配布default/重大Slash、代替Seeder、公開費予約、
+availability起因CHALLENGED-weight停止を撤回する。モデル配布を合意のcourtへ持ち込まない。
+claim固有の認証state/trace/output/witnessの適格要求・保持・客観的計算不正/defaultは維持するが、
+weight-file/range、全量列挙や反復要求をモデル取得の強制へ転用しない（ADR177 D2）。
+必要なoperandの認証と許可unit/累積scopeを実装前に確定する。
+
+G14は、verifierが正しい固定modelを実際に得られた条件で公開証拠からlocalize/convictする能力を検証する。
+**全model所有者が提供を拒否しても第三者が必ず取得できるという旧保証は撤回する。**
+モデル未取得は計算不正・qualification停止・Slashの根拠ではない。実効検出`p=0`の場合も経済評価へ含める。
+適格なclaim裁定が未解決ならそのFinal規則を適用するが、配布不能だけの停止へ読み替えない。
+Panel=0、倍率式・経済優位・新会計/weight・court scopeは未実装/未立証であり、別activationを要する。
+
+### D12 — Bondが時間内の採掘能力と総経済・consensus creditを制限する
+
+[ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を、確率的検証・公開prosecutionと
+組み合わせるPALWの追加必須前提とする。モデル計算はbondで制限された枠を使うための正当な仕事であり、
+同額bond・同DAA期間・同倍率なら高速偽造でclaim発行能力、ブロック、報酬、Final後の確定weightの上限を増やさない。
+claim容量を増やすときは一件の権利を細分化/配分し、bond当たりの総影響を維持する。
+受理時予約、共通`d + W`までの早期回復禁止、全報酬/weight経路の帰属、残存責任の担保保持を要求する。
+
+Final前のweight capだけでは成立せず、Final/retired/reversalと全settlement readerまで同じ予算を適用する。
+不正反証で報酬失効と適用規則上の担保損失を執行するが、同じ共有担保をclaimごとに回収可能として重複計上しない。
+実効検出・徴収率と計算費用を測定し、同じ上限だけで正直な計算の経済優位を証明したと扱わない。
+この決定はproducer採掘予算に適用し、public challengerの別責任・費用を消さない。
+
 ## 4. RFC/ADR間の優先順位
 
 1. 将来のPALW設計で、Panel-only evidence、honest-majority arithmetic authority、producer-private prosecution、kernel-only adjudicability certificate、無条件のPanel=0と本ADRが衝突した場合は、**本ADRとRFC-0014/0015の厳しいcompletion/activation条件を優先する**。
 2. ADR-0172の承認済みversioned Kernel + 宣言的VerificationPlanを維持する。任意のverifier upload、model/fraud-proof VM、TEE validity trust、BFT orchestrator/PKI/committee authorityを代替依存として復活させない。ML-DSA/Hash64/UTXO、既存EVMやclock/fork-choiceの個別規則は、別の改定なしに変更しない。
 3. ADR-0144の利用者の有用なローカル推論を対象にする目的は維持し、安全性の中核要件として本ADRを追加する。modelの回答の品質・source fidelity・実行の一致・不正の訴追可能性は別々に示す。
 4. 過去のStatus、measurement、実装記録、fenceは履歴として保持する。該当文書の先頭bannerと末尾amendmentが、今後の設計における読み替えを指定する。「Implemented」と書かれた旧bodyだけから、本目標の達成を推論しない。
+5. モデル入手の合意不介入とmodel拘束miner元本によるcoinbase配分はADR177を優先する。旧Seeder/Torrent/PoR/監査/lease/TRDC/FPR gateと配布起因weight停止を撤回し、固定登録identityとclaim固有courtのscopeを維持する。
+6. public prosecutionのモデル取得前提はD11/ADR177 D7の条件付き保証へ改定する。全保有者拒否時の取得保証と閉鎖時の正の検出率は宣言しない。取得失敗だけで資格停止/SlashやFinal延長を起動しない。
+7. D12とADR-0176を全将来PALW採掘経路の共通前提とする。class/work量・claim数の増加から未予約の報酬・block・Final weightを得る経路を改定し、既存実装や旧claimの記録を新保証の完成証拠としない。
 
 ## 5. 完成の証拠
 
 RFC-0014のgatesを、少なくとも次の条件で満たすまで本目標を「完了」と呼ばない。
 
 * fresh process・別bond・Panel非所属で始め、producerの内部オブジェクト、captureディレクトリ、既知fault位置を渡さず、公開したclass/claim/materialから不正の発見とlocalizationを行う。
-* Panel多数派および全席の偽`Valid`でlicenseしたclaim、served but falseな認証trace/state/FOLD、偽output、held/recurrent/checkpoint境界、fused tile、prompt/weights/identity mismatch、非開示を対象にする。正直なclaimにfalse convictionが出ないことも確認する。
+* 正しいmodelを得たverifierで、Panel多数派および全席の偽`Valid`でlicenseしたclaim、served but falseな認証trace/state/FOLD、偽output、held/recurrent/checkpoint境界、fused tile、prompt/weights/identity mismatch、claim固有証拠の非開示を対象にする。正直なclaimにfalse convictionが出ないことも確認する。
 * 実際の公開transport、bond admission、demand、court、terminal transition、producerの回収可能なslash、必要なseat責任まで確認する。liar自身の`ServedView`を外部取得の代用品にしたfixtureをこのgateの成功証拠にしない。
 * bytes、work、rounds、deadline、保持・再取得、in-flight load、証拠包含、正しいnon-fault応答、duplicate、Final/reversal、reorg/IBD/pruning、activationを宣言した上限で確認する。
 * 9B-8kや対応を主張するlong-contextなど、実際のcanonical最大profileで測る。証明可能性と回収可能額・監視インセンティブを区別し、不足担保を文書上のslash額で埋めたことにしない。
+* RFC14 §16.8のnon-interference/元本/配分試験、§16.10のweight/規則E、§16.11の公開/閉鎖ECON・MEASを満たす。取得監査を資格gateへ戻さず、条件付き検出率と現実の計算/通信費を測る。
+* ADR177の許可claim証拠unitと累積scopeを検証し、モデル取得要求を裁定から排除する。全peer停止でも同一chain/proofの合意結果が変わらず、正しいmodelを持つfresh verifierがclaimを裁定できることを確認する。
+* ADR-0176の同額bond/同期間/同倍率での正直な計算対高速偽造、容量拡大時の総量保存、Final weight全経路、共通拘束、分割/再登録/期間境界、徴収可能損失と経済評価を満たす。
 
 ## 6. 確認したコードの位置づけ
 
