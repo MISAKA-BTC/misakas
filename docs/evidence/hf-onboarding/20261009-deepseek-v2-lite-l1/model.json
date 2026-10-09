@@ -1,0 +1,133 @@
+{
+ "order": 6,
+ "id": "deepseek-v2-lite",
+ "family": "deepseek-native-moe",
+ "repo": "deepseek-ai/DeepSeek-V2-Lite-Chat",
+ "revision": "85864749cd611b4353ce1decdb286193298f64c7",
+ "task": "text-generation",
+ "context": 512,
+ "local": null,
+ "full": "header-only",
+ "bytes": 31413626576,
+ "source": {
+  "schema": "misaka.h1.source.v1",
+  "repo": "deepseek-ai/DeepSeek-V2-Lite-Chat",
+  "revision": "85864749cd611b4353ce1decdb286193298f64c7",
+  "resolved_sha": "85864749cd611b4353ce1decdb286193298f64c7",
+  "gated": false,
+  "private": false,
+  "architectures": [
+   "DeepseekV2ForCausalLM"
+  ],
+  "model_type": "deepseek_v2",
+  "pipeline_tag": "text-generation",
+  "files": [
+   {
+    "path": ".gitattributes",
+    "size": 1519,
+    "git_oid": "a6344aac8c09253b3b630fb776ae94478aa0275b",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "LICENSE",
+    "size": 13759,
+    "git_oid": "ac09290cb2947183ab7f19d7477511dad3600a7a",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "README.md",
+    "size": 15500,
+    "git_oid": "70003f900a116afa00e10e7b292e365a8934b90e",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "config.json",
+    "size": 1522,
+    "git_oid": "a1aa8126bbf462cbec8fcc79e8c98d8d87f5c7ed",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "configuration_deepseek.py",
+    "size": 10338,
+    "git_oid": "82e0f5d9d33620a66e328fdeae0b8dc12e2cff7c",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "generation_config.json",
+    "size": 181,
+    "git_oid": "458e1d985ba3fbaaf62a4d1a9dd6ff795a451f7e",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "model-00001-of-000004.safetensors",
+    "size": 8594887408,
+    "git_oid": "85c63d2812c5bc7cf2b3dd554ed498da091b4abf",
+    "sha256": "a314b79a30810b1038f9db08345178e16fb5742aa266c4a3dc05054c59800082",
+    "lfs": true
+   },
+   {
+    "path": "model-00002-of-000004.safetensors",
+    "size": 8591757448,
+    "git_oid": "ddd6a53abedf53333ca3aabda471773c0e2dbb9b",
+    "sha256": "b0bd088feada0af954614da3a5b179c4d4d5d8bb2482ec83194d101f3fe91796",
+    "lfs": true
+   },
+   {
+    "path": "model-00003-of-000004.safetensors",
+    "size": 8590718520,
+    "git_oid": "dd9c07f626ed3de6d565efce044017af5b898efb",
+    "sha256": "d31b192e488f0b3a04e007d842c3c9ba5783d944cb1cc27402fe8b8bb837c490",
+    "lfs": true
+   },
+   {
+    "path": "model-00004-of-000004.safetensors",
+    "size": 5636263200,
+    "git_oid": "52dfe0665db6ea97c93e09039700d766c8f68f62",
+    "sha256": "304499be0ea06bf8a3937d7a3cc515bc3738dbd288bdd0bbc1b2d3560fce4930",
+    "lfs": true
+   },
+   {
+    "path": "model.safetensors.index.json",
+    "size": 479924,
+    "git_oid": "5a821356160292c668d01f8e7fdf9abba4a7b72d",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "modeling_deepseek.py",
+    "size": 78672,
+    "git_oid": "847a458bedcc8df352b1a89315b8e400b9bc6030",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "tokenization_deepseek_fast.py",
+    "size": 1368,
+    "git_oid": "d24377191dd00e80c44f22e31dc15272258a22de",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "tokenizer.json",
+    "size": 4607451,
+    "git_oid": "8b284e5afe1730e31c97ed5c3bdf240adbd15c86",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "tokenizer_config.json",
+    "size": 1279,
+    "git_oid": "685b4b63ad1aedad8f98824ab21d2ff422d9e1b1",
+    "sha256": null,
+    "lfs": false
+   }
+  ],
+  "weights_bytes": 31413626576
+ }
+}

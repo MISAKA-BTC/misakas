@@ -1,0 +1,20 @@
+[
+ {
+  "schema": "misaka.h1.failure.v1",
+  "recorded_at": "2026-10-09T08:42:21+0900",
+  "model": "qwen15-moe-a2.7b",
+  "stage": "preflight",
+  "category": "LAYOUT_OR_RESOURCE_REFUSED",
+  "code": "SEAT_MEMORY_SHORT",
+  "command": "misaka model preflight hf://Qwen/Qwen1.5-MoE-A2.7B-Chat@ec052fda178e241c7c443468d2fa1db6618996be --depth shape --max-context 512",
+  "expected": "convert/register/mine ok at the declared context",
+  "observed": "SEAT_MEMORY_SHORT [mine]  \u2014 no seat tier holds the class: a seat never becomes ready for it, because it cannot replay a claim",
+  "model_revision": "ec052fda178e241c7c443468d2fa1db6618996be",
+  "integration_sha": "3b9ee24e7ed503c17cb1d7212f1a52a47dfafd9a",
+  "failing_fixture": null,
+  "owner": "C",
+  "security_consequence": "",
+  "reproduction": "RUN=20261009-qwen15-moe-a2.7b-l1 bash tests/hf-onboarding/onboard.sh preflight qwen15-moe-a2.7b",
+  "log": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261009-qwen15-moe-a2.7b-l1/preflight/blocker-1.txt"
+ }
+]

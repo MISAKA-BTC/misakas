@@ -37,6 +37,8 @@ OWNER = {
     "PANEL_CAPACITY_UNAVAILABLE": "D / H1 (devnet sizing)", "INFERENCE_FAILED": "C3", "FINAL_OR_SETTLEMENT_FAILED": "D",
     "TEST_INFRASTRUCTURE_FAILED": "H1",
 }
+# A code may name a better owner than its category's default.
+OWNER_BY_CODE = {"HF_FIT_OUT_OF_TOLERANCE": "A (lowering quality) / H1 (calibration policy)"}
 
 # (regex over the log, category, code group or literal). First match wins; ordered from specific to generic.
 RULES = [
@@ -58,6 +60,9 @@ RULES = [
      r"NOT_END_TO_END_CERTIFIED)\b", "TIR_ADMISSION_REFUSED", None),
     (r"\bPUBLIC_PROSECUTION_INCOMPLETE\b|\bKERNEL_NOT_ACTIVE\b", "G14_INCOMPLETE", None),
     (r"\bBEACON_UNAVAILABLE\b|WAITING_RANDOMNESS", "BEACON_UNAVAILABLE", None),
+    # The pack builder's fit gate: the integer program held to the float reference's units, order and KL (corpus-v1 §9). A fit that
+    # misses the tolerance is a measured property of the lowering, never an infrastructure failure.
+    (r"outside the tolerance of its reference", "CONFORMANCE_FAILED", "HF_FIT_OUT_OF_TOLERANCE"),
     (r"EVIDENCE_FORGED|EVIDENCE_NOT_REPRODUCED|COMMITMENT_STALE|conformance .*FAIL|check .* FAILED", "CONFORMANCE_FAILED", None),
     (r"\bSKIPPED\b.*(strict|verified)|not VERIFIED|PACK_NOT_VERIFIED", "PACK_INCOMPLETE", None),
     (r"\b(REGISTRATION_DROPPED|DuplicateClass|not signed by the bond|difficulty is not a registrant's)\b", "CONSENSUS_REGISTRATION_REFUSED", None),
@@ -118,11 +123,13 @@ def main():
     if cat not in CATEGORIES:
         print(f"unknown category {cat}", file=sys.stderr)
         return 2
-    tail = "\n".join([ln for ln in text.splitlines() if ln.strip()][-12:])
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    keys = [ln for ln in lines if re.search(r"against the reference|outside the tolerance|error|failed|refused|panicked", ln, re.IGNORECASE)][-6:]
+    tail = "\n".join(keys + ["--- tail ---"] + lines[-12:]) if keys else "\n".join(lines[-12:])
     rec = {
         "schema": "misaka.h1.failure.v1", "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "model": a.model, "stage": a.stage,
         "category": cat, "code": code, "command": a.command, "expected": a.expected, "observed": a.observed or tail,
-        "model_revision": a.revision, "integration_sha": a.sha, "failing_fixture": a.fixture, "owner": a.owner or OWNER[cat],
+        "model_revision": a.revision, "integration_sha": a.sha, "failing_fixture": a.fixture, "owner": a.owner or OWNER_BY_CODE.get(code) or OWNER[cat],
         "security_consequence": a.security, "reproduction": a.repro, "log": a.log,
     }
     rows.append(rec)
