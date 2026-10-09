@@ -1,0 +1,12 @@
+== headroom16=0.25  top-1 0.0000  KL mean 1.19820 max 1.8910  ppl float 9001.303 int 118209.617 (Δ +1213.25%)
+      hf -> int    slope 0.2922  corr 0.48984  top-1 0.000  KL 1.19820  max|d| 14.391
+== headroom16=0.5  top-1 0.0312  KL mean 0.56296 max 1.2076  ppl float 9001.303 int 34046.944 (Δ +278.24%)
+      hf -> int    slope 0.6071  corr 0.78831  top-1 0.031  KL 0.56296  max|d| 9.868
+== headroom16=0.75  top-1 0.4688  KL mean 0.13015 max 0.3162  ppl float 9001.303 int 13455.435 (Δ +49.48%)
+      hf -> int    slope 0.8889  corr 0.95264  top-1 0.469  KL 0.13015  max|d| 4.431
+== headroom16=1.0  top-1 0.8125  KL mean 0.04946 max 0.1991  ppl float 9001.303 int 9063.820 (Δ +0.69%)
+      hf -> int    slope 0.9757  corr 0.98242  top-1 0.812  KL 0.04946  max|d| 3.040
+== headroom16=1.5  top-1 0.7500  KL mean 0.07836 max 0.3576  ppl float 9001.303 int 10335.690 (Δ +14.82%)
+      hf -> int    slope 0.9721  corr 0.97182  top-1 0.750  KL 0.07836  max|d| 4.805
+== headroom16=2.0  top-1 0.7188  KL mean 0.08097 max 0.3292  ppl float 9001.303 int 10120.681 (Δ +12.44%)
+      hf -> int    slope 0.9696  corr 0.97132  top-1 0.719  KL 0.08097  max|d| 3.996

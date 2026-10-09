@@ -412,6 +412,9 @@ PY
 
 do_reregister() {
     # The SAME registration object again, through another carrier: the chain must not write it twice nor take the burn/exposure twice.
+    # This is a duplicate/idempotence probe, never an update of a model: a registration is permanently immutable (ADR-0175), changed
+    # content is a NEW registration (`CandidateSelected`) with its own class id, and nothing here changes a registered class's row.
+    # (`resubmit` is the preferred name of this stage; `reregister` stays as its alias for the recorded runs.)
     local cid; cid=$(cat "$SCR/class.id"); local out=$SCR/reregister; mkdir -p "$out"; local addr; addr=$(u_addr)
     rpc C getPalwClasses '{}' | python3 -c "import json,sys; print(json.dumps([c for c in json.load(sys.stdin)['classes'] if c['classId']=='$cid']))" > "$out/row-before.json"
     local b0; b0=$(balance_of "$addr")
@@ -516,7 +519,7 @@ case $stage in
     observe) do_observe ;;
     lifecycle) do_lifecycle ;;
     reorg-register) do_reorg_register ;;
-    reregister) do_reregister ;;
+    reregister|resubmit) do_reregister ;;
     summary) python3 "$H1/summarize.py" "$EV" "$RUN" "$MID" ;;
     *) sed -n '2,20p' "$0"; exit 2 ;;
 esac
