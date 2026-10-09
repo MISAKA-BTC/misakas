@@ -1,5 +1,10 @@
 {
- "schema": "opv-measurements/v1",
+ "schema": "opv-measurements/v2",
+ "scopes": {
+  "adr_0177_d7": "The chain does not make a model obtainable. Every `artifact_*` field is the registered MODEL: an off-chain acquisition assumption (what a verifier already holds, or fetches before the claim), NOT a protocol term of T_challenge. Every `da_claim_material_*` field is the CLAIM's public material: a protocol term (T_fetch).",
+  "detection_probability": "Every detection probability derived from these timings is CONDITIONAL on the verifier holding the registered model. For a closed model nobody but the producer holds, it is 0 and no finite collateral exists (opv-measurements.md section 3.2).",
+  "adr_0032": "A self-reporting producer recovers the reporter share (4,900 bps) of a collected slash; collateral formulas use the net loss, 51 % of the collected slash, never the gross slash."
+ },
  "generated_by": "tools/opv-meas/scripts/summarize.py",
  "legend": {
   "measured": "read off a harness run on this host",
@@ -13,6 +18,7 @@
    "src": "sysctl hw.ncpu hw.memsize; sample(1)"
   },
   "shared": "yes: 9 devnet kaspad + other lanes' builds ran during every sample; see load and swap per sample",
+  "runs_after_the_restart": "glm-edge-1.5b (static, weights, build-world) ran on 2026-10-10 05:11-05:16 at 1-minute load 13-18, swap 4 GB; every other class ran on 2026-10-09",
   "load1_during_verify_samples": {
    "n": 44,
    "median": 57.005126953125,
@@ -549,8 +555,512 @@
    "filing_object_bytes_by_lie": null,
    "t_localize": null,
    "note": "components only: weight pass (M, streaming), public-material bytes (M); the estimate is an assumption"
+  },
+  {
+   "class": "glm-edge-1.5b",
+   "positions": 3,
+   "path": "not run (reference verifier needs >= 16 B/param of RAM)",
+   "t_check_cpu_s": null,
+   "t_check_lower_bound_cpu_s": {
+    "v": 133.77433599999972,
+    "kind": "derived",
+    "src": "the weight pass alone (read + 2 x commit + projection), measured streaming on the real artifact: a fresh check cannot cost less"
+   },
+   "t_check_estimate_cpu_s": {
+    "v": 395.120197787895,
+    "kind": "assumed",
+    "src": "ASSUMPTION, not a measurement: fixed part = (0.5B intercept / 0.5B weight-pass model) x this class's weight-pass model; per-position part = the 0.5B cost per public-material byte x this class's bytes per position. Replace by a run on a host with the RAM (fleet plan F2)",
+    "fixed_s": 310.1041098152983,
+    "per_position_s": 28.338695990865585,
+    "kappa": 2.3181136164660083
+   },
+   "peak_rss_bytes": {
+    "v": {
+     "min_verifier_ram_bytes": 23763004176,
+     "host_ram_bytes": 34359738368
+    },
+    "kind": "derived",
+    "src": "16 bytes x params: Ctx::param_cache keeps every parameter instance as i128 for the scope (misaka-palw-kernel/src/verify.rs)"
+   },
+   "da_claim_material_bytes": {
+    "v": 290303217,
+    "kind": "measured",
+    "src": "build-world: every committed value but the derived ones, 3 positions"
+   },
+   "da_claim_material_fetch_cpu_s": {
+    "v": 0.42126881962525947,
+    "kind": "derived",
+    "src": "bytes / the 0.5B class's measured fetch+hash-check MB per CPU-second (a CPU floor; no link)"
+   },
+   "artifact_bytes": {
+    "v": 1642067712,
+    "kind": "measured",
+    "src": "static"
+   },
+   "artifact_fetch_cpu_s": {
+    "v": 2.3828600107417706,
+    "kind": "derived",
+    "src": "same rate"
+   },
+   "fetch_provider": "not run",
+   "filing_object_bytes_by_lie": null,
+   "t_localize": null,
+   "note": "components only: weight pass (M, streaming), public-material bytes (M); the estimate is an assumption"
   }
  ],
+ "gap07_worst_case_deadlines": {
+  "what": "G14 condition C8: the worst-case deadline for a fresh, non-seat, bonded verifier that HOLDS the registered model to fetch the claim material, check, localize and file (g14-completion-matrix.md GAP-07). Windows are the INTERIM policy constants, not production values.",
+  "formula": "(T_fetch(claim material) + T_check_to_verdict(worst lie = last position, localization included) + T_file) x 1.35 + (carrier 2 + reorg 2) DAA x 120 s; T_beacon = 0 (private-salt outsider)",
+  "windows_daa": {
+   "opv_window": 50,
+   "panel_licensed_with_every_seat_colluding": "pass + challenge_window = 50 (lifecycle.rs: ProbabilisticPass.window_end; a dispute is refused after it)",
+   "hard_deadline": 80,
+   "post_final_liability": 200,
+   "s_per_daa": 120
+  },
+  "rows": [
+   {
+    "family": "F1",
+    "class": "qwen25-0.5b",
+    "positions": 3,
+    "status": "MEASURED (late lie, n=2; fetch n=16)",
+    "t_fetch_claim_material_cpu_s": 0.2592465,
+    "t_check_to_verdict_cpu_s": 164.76761799999997,
+    "t_localize_cpu_s": 0.0,
+    "t_file_cpu_s": 0.006919500000012846,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 702.7956084,
+    "t_challenge_daa": 6,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "verify --claim late: check_outsider runs to the verdict, so it already contains localization; its maximum over samples is the worst case",
+    "check_to_verdict_wall_s_max": 293.538528833,
+    "peak_rss_bytes_max": 10444423168
+   },
+   {
+    "family": "F1",
+    "class": "qwen25-0.5b",
+    "positions": 8,
+    "status": "MEASURED honest pass (fresh path); localization A (the P=3 upper bound carried; the last-position lie was not run at this P)",
+    "t_fetch_claim_material_cpu_s": 0.646174,
+    "t_check_to_verdict_cpu_s": 250.652554,
+    "t_localize_cpu_s": 23.5,
+    "t_file_cpu_s": 0.1,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 851.1132828,
+    "t_challenge_daa": 8,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "verify --via fresh: check_salted over an honest claim (the whole pass a last-position lie also costs) + the P=3 localization upper bound",
+    "check_wall_s": 498.772159166,
+    "peak_rss_bytes": 6879330304,
+    "load1": 80.12939453125
+   },
+   {
+    "family": "F1",
+    "class": "qwen25-0.5b",
+    "positions": 8,
+    "status": "MEASURED honest pass (fresh path); localization A (the P=3 upper bound carried; the last-position lie was not run at this P)",
+    "t_fetch_claim_material_cpu_s": 0.7646379999999999,
+    "t_check_to_verdict_cpu_s": 247.142178,
+    "t_localize_cpu_s": 23.5,
+    "t_file_cpu_s": 0.1,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 846.5342016,
+    "t_challenge_daa": 8,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "verify --via fresh: check_salted over an honest claim (the whole pass a last-position lie also costs) + the P=3 localization upper bound",
+    "check_wall_s": 469.3425335,
+    "peak_rss_bytes": 10456907776,
+    "load1": 122.66357421875
+   },
+   {
+    "family": "F1",
+    "class": "qwen25-0.5b",
+    "positions": 16,
+    "status": "MEASURED honest pass (fresh path); localization A (the P=3 upper bound carried; the last-position lie was not run at this P)",
+    "t_fetch_claim_material_cpu_s": 1.3549479999999998,
+    "t_check_to_verdict_cpu_s": 373.668726,
+    "t_localize_cpu_s": 23.5,
+    "t_file_cpu_s": 0.1,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 1018.1419599000001,
+    "t_challenge_daa": 9,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "verify --via fresh: check_salted over an honest claim (the whole pass a last-position lie also costs) + the P=3 localization upper bound",
+    "check_wall_s": 663.669109375,
+    "peak_rss_bytes": 10440179712,
+    "load1": 163.4384765625
+   },
+   {
+    "family": "F1",
+    "class": "qwen25-0.5b",
+    "positions": 16,
+    "status": "MEASURED honest pass (fresh path); localization A (the P=3 upper bound carried; the last-position lie was not run at this P)",
+    "t_fetch_claim_material_cpu_s": 1.5190910000000002,
+    "t_check_to_verdict_cpu_s": 368.01786000000004,
+    "t_localize_cpu_s": 23.5,
+    "t_file_cpu_s": 0.1,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 1010.7348838500001,
+    "t_challenge_daa": 9,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "verify --via fresh: check_salted over an honest claim (the whole pass a last-position lie also costs) + the P=3 localization upper bound",
+    "check_wall_s": 752.252749708,
+    "peak_rss_bytes": 10570498048,
+    "load1": 150.87548828125
+   },
+   {
+    "family": "F1",
+    "class": "qwen25-0.5b",
+    "positions": 32,
+    "status": "MEASURED (late lie, outsider path, n=1; the worst case: the whole pass, then localization, filing and the court)",
+    "t_fetch_claim_material_cpu_s": 2.894838,
+    "t_check_to_verdict_cpu_s": 624.200556,
+    "t_localize_cpu_s": 0.0,
+    "t_file_cpu_s": 0.03185799999992511,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 1326.6217902,
+    "t_challenge_daa": 12,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "verify --claim late: check_outsider runs to the verdict (localization included)",
+    "check_wall_s": 750.668752167,
+    "peak_rss_bytes": 13217628160,
+    "load1": 26.06005859375,
+    "da_bytes": 1921824608
+   },
+   {
+    "family": "F1",
+    "class": "qwen35-0.8b",
+    "positions": 3,
+    "status": "ASSUMED: no check of this class ran (reference verifier needs >= 16 B/param); weight pass MEASURED, fixed and per-position parts carried from the 0.5B fit, localization the 0.5B upper bound",
+    "t_fetch_claim_material_cpu_s": 2.2728650225999667,
+    "t_check_to_verdict_cpu_s": 622.127369520808,
+    "t_localize_cpu_s": 23.5,
+    "t_file_cpu_s": 0.1,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 1354.8003166336007,
+    "t_challenge_daa": 12,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "t_check_estimate_p3_cpu_s (A) + the measured weight pass as its floor",
+    "t_check_lower_bound_cpu_s": 70.5062120000002
+   },
+   {
+    "family": "F1",
+    "class": "qwen35-0.8b",
+    "positions": 64,
+    "status": "ASSUMED: no check of this class ran (reference verifier needs >= 16 B/param); weight pass MEASURED, fixed and per-position parts carried from the 0.5B fit, localization the 0.5B upper bound",
+    "t_fetch_claim_material_cpu_s": 48.487787148799285,
+    "t_check_to_verdict_cpu_s": 9948.7418780969,
+    "t_localize_cpu_s": 23.5,
+    "t_file_cpu_s": 0.1,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 14008.120048081695,
+    "t_challenge_daa": 117,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": false,
+    "fits_the_interim_hard_deadline": false,
+    "src": "t_check_estimate_p3_cpu_s (A) + the measured weight pass as its floor",
+    "t_check_lower_bound_cpu_s": 70.5062120000002
+   },
+   {
+    "family": "F1",
+    "class": "llama32-1b",
+    "positions": 3,
+    "status": "ASSUMED: no check of this class ran (reference verifier needs >= 16 B/param); weight pass MEASURED, fixed and per-position parts carried from the 0.5B fit, localization the 0.5B upper bound",
+    "t_fetch_claim_material_cpu_s": 0.3069067733680187,
+    "t_check_to_verdict_cpu_s": 351.9169434079047,
+    "t_localize_cpu_s": 23.5,
+    "t_file_cpu_s": 0.1,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 987.3621977447183,
+    "t_challenge_daa": 9,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "t_check_estimate_p3_cpu_s (A) + the measured weight pass as its floor",
+    "t_check_lower_bound_cpu_s": 125.09318399999992
+   },
+   {
+    "family": "F1",
+    "class": "llama32-1b",
+    "positions": 64,
+    "status": "ASSUMED: no check of this class ran (reference verifier needs >= 16 B/param); weight pass MEASURED, fixed and per-position parts carried from the 0.5B fit, localization the 0.5B upper bound",
+    "t_fetch_claim_material_cpu_s": 6.547344498517732,
+    "t_check_to_verdict_cpu_s": 1611.2971251663848,
+    "t_localize_cpu_s": 23.5,
+    "t_file_cpu_s": 0.1,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 2695.9500340476184,
+    "t_challenge_daa": 23,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "t_check_estimate_p3_cpu_s (A) + the measured weight pass as its floor",
+    "t_check_lower_bound_cpu_s": 125.09318399999992
+   },
+   {
+    "family": "F1",
+    "class": "smollm2-1.7b",
+    "positions": 3,
+    "status": "ASSUMED: no check of this class ran (reference verifier needs >= 16 B/param); weight pass MEASURED, fixed and per-position parts carried from the 0.5B fit, localization the 0.5B upper bound",
+    "t_fetch_claim_material_cpu_s": 0.46320127040555825,
+    "t_check_to_verdict_cpu_s": 446.3707639908913,
+    "t_localize_cpu_s": 23.5,
+    "t_file_cpu_s": 0.1,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 1115.0858531027507,
+    "t_challenge_daa": 10,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "t_check_estimate_p3_cpu_s (A) + the measured weight pass as its floor",
+    "t_check_lower_bound_cpu_s": 152.23253200000013
+   },
+   {
+    "family": "F1",
+    "class": "smollm2-1.7b",
+    "positions": 64,
+    "status": "ASSUMED: no check of this class ran (reference verifier needs >= 16 B/param); weight pass MEASURED, fixed and per-position parts carried from the 0.5B fit, localization the 0.5B upper bound",
+    "t_fetch_claim_material_cpu_s": 9.881627101985243,
+    "t_check_to_verdict_cpu_s": 2347.0994240736295,
+    "t_localize_cpu_s": 23.5,
+    "t_file_cpu_s": 0.1,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 3693.7844190870796,
+    "t_challenge_daa": 31,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "t_check_estimate_p3_cpu_s (A) + the measured weight pass as its floor",
+    "t_check_lower_bound_cpu_s": 152.23253200000013
+   },
+   {
+    "family": "F1",
+    "class": "glm-edge-1.5b",
+    "positions": 3,
+    "status": "ASSUMED: no check of this class ran (reference verifier needs >= 16 B/param); weight pass MEASURED, fixed and per-position parts carried from the 0.5B fit, localization the 0.5B upper bound",
+    "t_fetch_claim_material_cpu_s": 0.42126881962525947,
+    "t_check_to_verdict_cpu_s": 395.120197787895,
+    "t_localize_cpu_s": 23.5,
+    "t_file_cpu_s": 0.1,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 1045.8409799201524,
+    "t_challenge_daa": 9,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "t_check_estimate_p3_cpu_s (A) + the measured weight pass as its floor",
+    "t_check_lower_bound_cpu_s": 133.77433599999972
+   },
+   {
+    "family": "F1",
+    "class": "glm-edge-1.5b",
+    "positions": 64,
+    "status": "ASSUMED: no check of this class ran (reference verifier needs >= 16 B/param); weight pass MEASURED, fixed and per-position parts carried from the 0.5B fit, localization the 0.5B upper bound",
+    "t_fetch_claim_material_cpu_s": 8.987068152005536,
+    "t_check_to_verdict_cpu_s": 2123.780653230696,
+    "t_localize_cpu_s": 23.5,
+    "t_file_cpu_s": 0.1,
+    "margin_factor": 1.35,
+    "carrier_plus_reorg_daa_policy": 4,
+    "t_challenge_s": 3391.096423866647,
+    "t_challenge_daa": 29,
+    "window_daa": {
+     "opv_window": 50,
+     "panel_licensed_colluding_seats_window": 50,
+     "hard_deadline": 80,
+     "post_final_liability": 200
+    },
+    "fits_the_interim_window": true,
+    "fits_the_interim_hard_deadline": true,
+    "src": "t_check_estimate_p3_cpu_s (A) + the measured weight pass as its floor",
+    "t_check_lower_bound_cpu_s": 133.77433599999972
+   }
+  ],
+  "attempted_and_not_completed": [
+   {
+    "positions": 64,
+    "class": "qwen25-0.5b",
+    "claim": "late",
+    "date": "2026-10-10",
+    "what": "the gate's evaluation point (--positions 4,64): the producer's world and then one fresh outsider verifier",
+    "world_built": {
+     "kind": "measured",
+     "producer_honest_trace_cpu_s": 486.3,
+     "producer_honest_commitments_cpu_s": 68.0,
+     "param_commitments_cpu_s": 14.7,
+     "build_world_peak_rss_bytes": 15600484352,
+     "claim_public_material_bytes": 3879431872,
+     "public_material_bytes_per_position": 60616123,
+     "chain_bytes": 27050160,
+     "demanded_position_respond_object_bytes": 59444957,
+     "src": "build-world --prompt 64 --max-positions 64 --claims late (results4/p64-world-record.jsonl)"
+    },
+    "verifier": {
+     "kind": "measured",
+     "outcome": "STOPPED, no verdict and no timing sample: the harness watchdog ended the process when its peak RSS passed the 14 GiB cap I set to protect the shared host (peak RSS 15,099,871,232 B, cap 15,032,385,536 B, exit 86), about 3 minutes into the check",
+     "consequence": "the reference verifier needs more than 15.1 GB of RAM for a 64-position claim of the 0.5B class (10.4 GB at P <= 16); the deadline at P=64 is therefore NOT measured, only fitted (D)",
+     "src": "verify --claim late --rss-cap-gb 14 (matrix3.sh, 2026-10-10 06:36-06:39)"
+    }
+   }
+  ],
+  "families": [
+   {
+    "family": "F1",
+    "what": "K2-TIR v1/v2 single-program classes",
+    "profiles": "Panel-licensed with every interim seat colluding; OPV",
+    "status": "see rows: MEASURED for Qwen2.5-0.5B (P = 3, 8, 16, and the merged-head samples); ASSUMED for the four other real classes",
+    "needs": "hosts with >= 24 / 32 / 48 GB RAM for the reference verifier (fleet plan F2)"
+   },
+   {
+    "family": "F2",
+    "what": "K2-TIR v3 pipeline / media classes",
+    "profiles": "OPV",
+    "status": "UNMEASURED: V-ref only, no real pipeline claim, no onboarding path (GAP-20, GAP-21)",
+    "structure": "sum over stages of the component's T_check; edges at inclusion; one logits tensor per edge filing",
+    "needs": "a real pipeline claim on a node (K2S wire form)"
+   },
+   {
+    "family": "F3",
+    "what": "K2-TIR v4 segmented real-scale (8k, 262k window, 2M)",
+    "profiles": "OPV only",
+    "status": "UNMEASURED: the only real artifact would be H1's 9B pack (not built); 2M is refused by the gate",
+    "structure": "9B-8k rows of opv-measurements.md section 5 are ASSUMED",
+    "needs": "the 9B pack, a >= 160 GB host, the K2S v4 node"
+   },
+   {
+    "family": "F4",
+    "what": "K2-TIR v5 encoders and task heads",
+    "profiles": "kernel route",
+    "status": "UNMEASURED: V-unit test failing at the commit; no node test",
+    "needs": "K2S GAP-40"
+   },
+   {
+    "family": "F5",
+    "what": "private / fused material profiles",
+    "profiles": "-",
+    "status": "NO DEADLINE: never registers (fail-closed)"
+   },
+   {
+    "family": "F6",
+    "what": "RFC-0004 typed roots: Memory / Retrieval / Composite",
+    "profiles": "OPV + palw_typed_roots_v1",
+    "status": "UNMEASURED: no real artifact of any kind exists",
+    "structure": "opv-measurements.md section 8",
+    "needs": "a real memory class, retrieval snapshot, composite"
+   },
+   {
+    "family": "F7",
+    "what": "RFC-0008 EXEC work slices",
+    "profiles": "palw_exec_payload_v2",
+    "status": "UNMEASURED: a slice's kernel claim has the F1/F3 deadline of its own size; leg continuity and suffix void have no timing",
+    "needs": "X8R slice node E2E on a real class"
+   },
+   {
+    "family": "F8",
+    "what": "onboarding conformance evidence (tag 109) and artifact binding",
+    "profiles": "the reward gate",
+    "status": "NO OUTSIDER DEADLINE on the complete-check path (judged in the fold, node CPU per block, not measured here); the sampled path cannot gate rewards"
+   },
+   {
+    "family": "F9-F16",
+    "what": "legacy V2 Panel route on t12",
+    "profiles": "exempt LEGACY_PANEL_ROUTE",
+    "status": "NOT G14: windows receipt 600 / challenge 1,200 DAA (code reading, t12-bond-reuse-audit-2026-10-10.md)"
+   }
+  ]
+ },
  "classes": {
   "qwen25-0.5b": {
    "label": "qwen25-0.5b",
@@ -2097,6 +2607,205 @@
     "kappa": 2.3181136164660083
    },
    "samples": "none: no claim was verified for this class"
+  },
+  "glm-edge-1.5b": {
+   "label": "glm-edge-1.5b",
+   "artifact": {
+    "container_bytes": {
+     "v": 1642067712,
+     "kind": "measured",
+     "src": "static"
+    },
+    "params": {
+     "v": 1485187761,
+     "kind": "measured",
+     "src": "static"
+    },
+    "param_instances": {
+     "v": 1552,
+     "kind": "measured",
+     "src": "static"
+    },
+    "committed_nodes_per_position": {
+     "v": 7826,
+     "kind": "measured",
+     "src": "static"
+    },
+    "token_bound": {
+     "v": 59264,
+     "kind": "measured",
+     "src": "static"
+    },
+    "history_bound": {
+     "v": 262144,
+     "kind": "measured",
+     "src": "static"
+    }
+   },
+   "plan_bounds_k2_v2": {
+    "max_positions_4": {
+     "evidence_bytes_per_position_bound": {
+      "v": 12310237065,
+      "kind": "measured",
+      "src": "static: plan budget at the class's history bound"
+     },
+     "gate_ok": {
+      "v": true,
+      "kind": "measured",
+      "src": "static: public_prosecution_complete_v1"
+     },
+     "worst_filing_bytes": {
+      "v": 1073807360,
+      "kind": "measured",
+      "src": "static: gate bound"
+     },
+     "max_verifier_ram_bound": {
+      "v": 12604508266,
+      "kind": "measured",
+      "src": "static: gate bound = artifact_bytes + evidence_bytes_per_position"
+     },
+     "opv_carrier_fit_interim": {
+      "v": false,
+      "kind": "measured",
+      "src": "static: carrier_fit_v1 at the interim 1,583,616-byte carriers"
+     },
+     "opv_carrier_refusal": "a worst-case filing of 12311239056 bytes does not fit a FileProof (1583616)"
+    },
+    "max_positions_64": {
+     "evidence_bytes_per_position_bound": {
+      "v": 12310237065,
+      "kind": "measured",
+      "src": "static: plan budget at the class's history bound"
+     },
+     "gate_ok": {
+      "v": true,
+      "kind": "measured",
+      "src": "static: public_prosecution_complete_v1"
+     },
+     "worst_filing_bytes": {
+      "v": 1073807360,
+      "kind": "measured",
+      "src": "static: gate bound"
+     },
+     "max_verifier_ram_bound": {
+      "v": 12604508266,
+      "kind": "measured",
+      "src": "static: gate bound = artifact_bytes + evidence_bytes_per_position"
+     },
+     "opv_carrier_fit_interim": {
+      "v": false,
+      "kind": "measured",
+      "src": "static: carrier_fit_v1 at the interim 1,583,616-byte carriers"
+     },
+     "opv_carrier_refusal": "a worst-case filing of 12311239056 bytes does not fit a FileProof (1583616)"
+    }
+   },
+   "weights_pass_streaming": {
+    "read_cpu_s": {
+     "v": 3.501004000000064,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "commit_once_cpu_s": {
+     "v": 43.49343199999983,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "project_cpu_s": {
+     "v": 43.286468000000006,
+     "kind": "measured",
+     "src": "weights: 2 repetitions of W r over GF(2^127-1)"
+    },
+    "field_mults": {
+     "v": 2961571840,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "model_cpu_s_commit_twice": {
+     "v": 133.77433599999972,
+     "kind": "derived",
+     "src": "read + 2 x commit + project (the reference verifier authenticates a weight twice)"
+    },
+    "model_cpu_ns_per_param": {
+     "v": 90.07233934511243,
+     "kind": "derived",
+     "src": "model_cpu_s / params"
+    },
+    "wall_s_under_load": {
+     "v": 117.854044708,
+     "kind": "measured",
+     "src": "weights",
+     "load1_before": 13.0224609375
+    },
+    "peak_rss_bytes": {
+     "v": 2290466816,
+     "kind": "measured",
+     "src": "weights (streaming: one tensor at a time)"
+    }
+   },
+   "producer_side_p3": {
+    "registration_mode": {
+     "v": "PanelLicensed",
+     "kind": "measured",
+     "src": "build-world: OPV first, Panel-licensed when OPV is refused"
+    },
+    "opv_registration_refusal": "RegisterClassV2: not carriable: a worst-case filing of 12311239056 bytes does not fit a FileProof (1583616)",
+    "honest_trace_cpu_s": {
+     "v": 67.356667,
+     "kind": "measured",
+     "src": "build-world: the producer's reference evaluation of 3 positions"
+    },
+    "honest_commitments_cpu_s": {
+     "v": 6.006502000000004,
+     "kind": "measured",
+     "src": "build-world"
+    },
+    "param_commitments_cpu_s": {
+     "v": 47.826907000000006,
+     "kind": "measured",
+     "src": "build-world"
+    },
+    "chain_bytes": {
+     "v": 1641702,
+     "kind": "measured",
+     "src": "build-world: class registration + 6 claims' commitments (Borsh)"
+    }
+   },
+   "da_p3": {
+    "claim_public_material_bytes": {
+     "v": 290303217,
+     "kind": "measured",
+     "src": "build-world: every committed value but the derived ones, 3 positions"
+    },
+    "per_position_bytes": {
+     "v": 96767739.0,
+     "kind": "derived",
+     "src": "da bytes / 3 positions (small history: it grows with the position index)"
+    }
+   },
+   "end_to_end_measured": false,
+   "why_not_end_to_end": {
+    "v": {
+     "min_verifier_ram_bytes": 23763004176,
+     "host_ram_bytes": 34359738368
+    },
+    "kind": "derived",
+    "src": "16 bytes x params: Ctx::param_cache keeps every parameter instance as i128 for the scope (misaka-palw-kernel/src/verify.rs)"
+   },
+   "t_check_lower_bound_cpu_s": {
+    "v": 133.77433599999972,
+    "kind": "derived",
+    "src": "the weight pass alone (read + 2 x commit + projection), measured streaming on the real artifact: a fresh check cannot cost less"
+   },
+   "t_check_estimate_p3_cpu_s": {
+    "v": 395.120197787895,
+    "kind": "assumed",
+    "src": "ASSUMPTION, not a measurement: fixed part = (0.5B intercept / 0.5B weight-pass model) x this class's weight-pass model; per-position part = the 0.5B cost per public-material byte x this class's bytes per position. Replace by a run on a host with the RAM (fleet plan F2)",
+    "fixed_s": 310.1041098152983,
+    "per_position_s": 28.338695990865585,
+    "kappa": 2.3181136164660083
+   },
+   "samples": "none: no claim was verified for this class"
   }
  },
  "not_measured": [
@@ -2104,6 +2813,9 @@
   "chain inclusion of a filing: carrier latency and reorg depth (opv.rs carrier_daa / reorg_slack_daa)",
   "the number of independent honest verifiers that actually check, and the probability each is present (q, n, P_run)",
   "any class beyond 0.5B end to end: the reference verifier caches 16 bytes per parameter (0.8B needs >= 12.3 GB, 1B >= 19.9 GB, 1.7B >= 27.6 GB; the host is shared)",
-  "the 9B-8k real artifact (H1's pack is not built)"
+  "the 9B-8k real artifact (H1's pack is not built)",
+  "how many verifiers HOLD a registered model, and for a closed model whether any third party does (ADR-0177 D7): the effective detection probability is 0 for a closed model and unmeasured for every other",
+  "any real Memory, Retrieval or Composite artifact (RFC-0004 Part II): none exists in the repository or in H1's evidence, only the synthetic fixtures of misaka-palw-tir-sketch; per-kind inspection cost is therefore a derived model, not a measurement (opv-measurements.md section 8)",
+  "the ADR-0176 section 4 measurements that need the BUDGET engine (claims, reward blocks, rewards and Final credit per DAA per unit of bond; liability and maximum concurrent exposure; effective collection rate): the plan is opv-measurements.md section 7"
  ]
 }
