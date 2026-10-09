@@ -782,7 +782,7 @@ pub struct VirtualStateProcessor {
     /// ([`Self::palw_reorg_shallow_ghostdag_win_v1`]), so honest slot races converge.
     pub(super) palw_reorg_strict_economic_win: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
-    /// **ADR-0175: rule E** (`Params::palw_fork_choice_rule_e_v1`), `None` on every preset. Past it — at the incumbent's DAA — the
+    /// **ADR-0178: rule E** (`Params::palw_fork_choice_rule_e_v1`), `None` on every preset. Past it — at the incumbent's DAA — the
     /// deep-reorg gate weighs the two tips' exclusive pasts ([`Self::palw_rule_e_gate_v1`]) and the sink search takes the best of the
     /// candidates it admits rather than the first ([`Self::sink_search_algorithm`]).
     pub(super) palw_fork_choice_rule_e: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -6765,7 +6765,7 @@ impl VirtualStateProcessor {
     /// Record (or clear) the streak at the point a sink search settles on `sink`. `refused` is the
     /// heaviest candidate the gate refused in that search, if any. Past rule E (`rule_e`) a refusal is
     /// weighed when rule E weighed the pair over the two exclusive pasts and the refused tip does not
-    /// outrank `sink` (ADR-0175); below it, when both absolute orders were read and the refused one is not
+    /// outrank `sink` (ADR-0178); below it, when both absolute orders were read and the refused one is not
     /// strictly ahead.
     fn note_palw_refusal_streak(&self, sink: BlockHash, refused: Option<(BlockHash, DnsReorgOutcome)>, rule_e: bool) {
         use kaspa_consensus_core::api::PalwPartitionRefusalV1;
@@ -18289,7 +18289,7 @@ impl VirtualStateProcessor {
             // can; and an incumbent this node cannot weigh is a state fault, refused rather than
             // silently downgraded to blue work.
             //
-            // **ADR-0175: past rule E's fence the two tips' EXCLUSIVE pasts decide, and the absolute orders are not read.** Bonded
+            // **ADR-0178: past rule E's fence the two tips' EXCLUSIVE pasts decide, and the absolute orders are not read.** Bonded
             // participation first once both tips stand `W_p` above the fork, then the economic keys over those pasts; a claim both
             // tips hold decides nothing (`palw_rule_e`). Unweighable refuses, as below; an allowed reorg still meets ADR-0065 D2.
             if self.palw_rule_e_active_at(incumbent_daa) {
@@ -18996,7 +18996,7 @@ impl VirtualStateProcessor {
                         // Hence as an optimization we prefer removing such blocks in advance to allow valid tips to be considered.
                         let filtering_root = self.depth_store.merge_depth_root(candidate).unwrap();
                         let filtering_blue_work = self.ghostdag_store.get_blue_work(filtering_root).unwrap_or_default();
-                        // **ADR-0175: past rule E's fence (at the incumbent's DAA) the search goes on** for a bounded number of
+                        // **ADR-0178: past rule E's fence (at the incumbent's DAA) the search goes on** for a bounded number of
                         // lighter candidates and keeps the best over the exclusive pasts (`palw_rule_e_finish_search_v1`); where the
                         // first stays best its answer is this one.
                         // LIVE-R1 N2's record is then taken at the sink rule E settles on, and a refusal counts as weighed when

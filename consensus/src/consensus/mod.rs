@@ -2746,7 +2746,7 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_candidate_order_v2(point)
     }
 
-    /// ADR-0175 rule E: the state at the same weighing point as [`Self::get_palw_candidate_order_v2`], for the IBD commit's
+    /// ADR-0178 rule E: the state at the same weighing point as [`Self::get_palw_candidate_order_v2`], for the IBD commit's
     /// claim-set comparison.
     fn get_palw_rule_e_weighing_v1(&self) -> Option<kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1> {
         let point = self.virtual_processor.palw_weighing_point_v2(self.get_sink())?;

@@ -1536,7 +1536,7 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
-    /// **ADR-0175 rule E: this consensus's standing for the IBD commit** — the PALW state at the block it is weighed at (its sink; a
+    /// **ADR-0178 rule E: this consensus's standing for the IBD commit** — the PALW state at the block it is weighed at (its sink; a
     /// staging consensus's imported pruning point, exactly as [`Self::get_palw_candidate_order_v2`] chooses) and that block's DAA
     /// score. `None` off a ConsensusV2 network or where the state cannot be read; the IBD flow fails closed on it.
     fn get_palw_rule_e_weighing_v1(&self) -> Option<crate::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1> {

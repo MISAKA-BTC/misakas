@@ -774,7 +774,7 @@ mod tests {
             "palw_gen_range_twin_v1" => params.palw_gen_range_twin_v1 = Some(at),
             // RFC-0011 §15.7's dormant kernel-route fence: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_probabilistic_constraints_v1" => params.palw_probabilistic_constraints_v1 = Some(at),
-            // ADR-0175's rule E: refused when armed (and the DNS retirement's order checked) by `validate_palw_v2`, which the probe
+            // ADR-0178's rule E: refused when armed (and the DNS retirement's order checked) by `validate_palw_v2`, which the probe
             // does not run.
             "palw_fork_choice_rule_e_v1" => params.palw_fork_choice_rule_e_v1 = Some(at),
             // RFC-0004 Part II's dormant typed-roots fence: refused when armed by `validate_palw_v2`, which the probe does not run.

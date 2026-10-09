@@ -41,7 +41,7 @@ fn parts(finality_depth: Option<u64>) -> (Config, PalwConsensusParamsV2, Utxos, 
     parts_ruled(finality_depth, false)
 }
 
-/// [`parts`], and — when `rule_e` — ADR-0175's rule E armed from DAA 1 on top ([`armed_rule_e`]).
+/// [`parts`], and — when `rule_e` — ADR-0178's rule E armed from DAA 1 on top ([`armed_rule_e`]).
 fn parts_ruled(finality_depth: Option<u64>, rule_e: bool) -> (Config, PalwConsensusParamsV2, Utxos, Utxos) {
     let (config, _, premine, floats) = t12_with_harness_cards();
     let mut params: Params = config.params.clone();
@@ -65,7 +65,7 @@ fn parts_ruled(finality_depth: Option<u64>, rule_e: bool) -> (Config, PalwConsen
     (config, bundle, premine, floats)
 }
 
-/// **ADR-0175's rule E armed from DAA 1** on a ruleset that validated without it. Arming it is refused in this
+/// **ADR-0178's rule E armed from DAA 1** on a ruleset that validated without it. Arming it is refused in this
 /// binary (`PALW_FORK_CHOICE_RULE_E_ARMABLE_V1`), so the Config is set directly — after asserting that rule E's own
 /// refusal is the only one the armed ruleset meets (`validate_palw_v2` asks it last).
 fn armed_rule_e(mut config: Config) -> Config {
@@ -909,5 +909,5 @@ async fn finx_p0_f_a_branch_one_tick_ahead_crosses_a_pre_fork_final_first_and_re
     assert!(!has_x && has_y, "{tag}: the branch one tick ahead reverses X — no bond, no carrier, no collusion");
 }
 
-/// ADR-0175's rule E against every violation above, armed — and the attacks it is built to hold.
+/// ADR-0178's rule E against every violation above, armed — and the attacks it is built to hold.
 mod rule_e;

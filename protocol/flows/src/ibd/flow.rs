@@ -1995,7 +1995,7 @@ impl IbdFlow {
         // exactly as the deep-reorg fence reads it at the incumbent's DAA. `Ok(0)` on a missing
         // header falls to the unfenced rule below rather than failing the sync.
         let incumbent_daa = consensus.async_get_header(incumbent_sink).await.map(|h| h.daa_score).unwrap_or(0);
-        // **ADR-0175: past rule E's fence the commit is rule E's**, over the claim-set difference of the two states (the two
+        // **ADR-0178: past rule E's fence the commit is rule E's**, over the claim-set difference of the two states (the two
         // consensus instances share no DAG) — the same comparator the relay path's deep-reorg gate runs, so the two paths decide a
         // pair alike. Fail closed exactly as below.
         if self.ctx.config.params.palw_fork_choice_rule_e_active_at(incumbent_daa) {
@@ -2045,7 +2045,7 @@ impl IbdFlow {
         }
     }
 
-    /// **ADR-0175: the IBD commit under rule E** — [`kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_ibd_commit_v1`]
+    /// **ADR-0178: the IBD commit under rule E** — [`kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_ibd_commit_v1`]
     /// over each consensus's weighing state (the local sink; the staged pruning point). The challenger is weighed at its pruning
     /// point, so it is understated as under the economic rule, never overstated. A side that cannot be weighed keeps the local chain.
     async fn validate_staging_palw_rule_e(

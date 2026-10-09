@@ -17376,7 +17376,7 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
     let catalog = palw_v2_test_catalog();
     let bundle = palw_v2_test_bundle(&catalog);
     // Validated WITHOUT the retirement, which is set afterwards: the release's validation requires `palw_fork_choice_rule_e_v1` armed
-    // at or below it (ADR-0175), a fence this fixture does not arm; the test is about the retirement's own behaviour.
+    // at or below it (ADR-0178), a fence this fixture does not arm; the test is about the retirement's own behaviour.
     let mut config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
