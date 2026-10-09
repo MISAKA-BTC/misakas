@@ -2,8 +2,16 @@
 
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
-**Date:** 2026-08-16 · **Tool:** `scripts/misaka-palw-economics-sim.py` (re-run it; every number
-below is its output) · **Normative:** ADR-0028 §4 (issuance split, no-show floor, admission
+> **PALW bounty amendment, 2026-10-10:** [ADR-0032](adr/0032-palw-fee-bond-escrow.md#palw-challenger-share-amendment--2026-10-10)
+> raises the share to 49%, retaining the `B_cap = 2,000` coin candidate. The current simulation
+> uses `min(⌊49% × collected slash⌋, B_cap)`: a 1,000-coin slash pays 490; a full 20,000-coin
+> slash still pays 2,000 (the cap binds). The maximum self-slash return ratio is at most 0.49,
+> leaving at least 51% of the collected slash lost. This is an arithmetic check under the retained
+> inputs, not a new measurement or a complete economic-safety gate for 49%. The dated 10% results
+> below are preserved as history.
+
+**Date:** 2026-08-16 · **Tool:** `scripts/misaka-palw-economics-sim.py` (historical output below;
+the current script includes the 2026-10-10 amendment) · **Normative:** ADR-0028 §4 (issuance split, no-show floor, admission
 caps), ADR-0032 (fee-bond escrow), ADR-0027 §4 (bounty cap) · **Gate:** B15
 
 Every number ADR-0028 and ADR-0032 marked "economic-simulation-gated" is derived here from

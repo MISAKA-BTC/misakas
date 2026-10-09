@@ -1,9 +1,17 @@
 # RFC-0012 — PALW-only consensus and native EVM settlement: retire DNS validators and their reorg veto
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 
 * Status: **Draft — dormant implementation; no activation or production settlement parameters assigned.**
+* Revision, 2026-10-10後続改定: §2.1 withdraws model-availability consensus and adds model-bond coinbase allocation under unchanged total issuance and individual ceilings. Rule E and claim-specific adjudication remain separate gates; the dormant DNS-retirement work does not implement this amendment.
 * Implementation record: [unactivated fence, native heads, monetary transition and remaining release gates](0012-dormant-implementation.md).
 * Source baseline: `3b09a814ed4b2a2f90009c05c1219efc9be46b5f` on `misakas/main`.
 * Requested direction: remove DNS validators, DNS finality, DNS attestations, precommits,
@@ -100,6 +108,31 @@ this RFC. All live dependencies above must disappear together; historical reader
    carry state transitions where permitted and advance timeout machinery, but are not substitutes
    for useful-work evidence in the bridge confirmation policy below. This RFC does not silently
    activate RFC08 or claim that today's floor-heavy production is already useful-work dominant.
+
+### 2.1 Model acquisition non-interference, allocation and Rule E — 2026-10-10後続改定
+
+[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。chainはmodel取得可否・Seeder登録/独立性・配布量/速度を管理せず、
+旧必須Torrent、独立Bonded Seeder、PoR/Full Fetch/lease/TRDC/FPRと取得不履行に基づく資格/weight停止を撤回する。
+model配布は任意のTorrent/mirror/共有契約で行い、取得失敗・非公開だけでSlash/Final延長を起動しない。
+
+固定Model ID/root、weights/tokenizer/config/specは不変とし、変更は新Model IDとして登録する。
+取得bytesは認証と全量復元rootで照合し、claimも同じroot/specをbindする。
+任意のinfohash対応を登録する場合はimmutable bindingとし、必須取得経路にしない。
+claim固有state/trace/output/witnessの有限な証拠責任は維持するが、modelの全量/反復range公開へ転用しない。
+必要operandの認証と許可unit/累積scopeをADR177 D2で確定し、modelを得たfresh non-seat verifierの
+計算反証/localization/exact courtを試験する。全model保有者拒否時の取得保証は撤回する。
+
+重複しないminer拘束元本`S_m=sum_b C_{b,m}`からmodelのcoinbase予算を`f(S_m)`で配分する。
+同じ元本をclaim数/rho/複数modelで増幅せず、総発行予算と個別bondのQ/B/R/F cap・共通DAA拘束を維持する。
+資本預託だけでは支払わない。model別配分はblock頻度・DAA・fork choiceを自動変更しない。
+公開参加資本が閉鎖自己資本より圧倒的に有利になることは倍率式・経済評価の未立証目標であり、
+同額資本の所有者独立性をchainが識別できるとはしない。既存minerの実収入増も無条件保証しない。
+non-interference、distinct-capital、三層予算、公開/閉鎖比較、回復/移行のgateはADR177 §3を用いる。
+既存実装/測定・旧claim/activation記録は保持し、新配分・Panel=0は未実装/未有効化である。
+
+EXEC_TX/EXEC_SLICEのweight/DAA=0、unique-work、root単位一回精算を維持する。
+適用modeのclaim固有Final/court条件・暫定creditとsafe settlement・規則Eの全writer/reader/undoを検証する。
+model配布不能だけの停止を起動せず、閉鎖時の未検出workを必ず排除できるとは主張しない。
 
 ## 3. What “settled” means after DNS-final is gone
 
@@ -313,3 +346,18 @@ they are measurable security and liveness conditions that must be addressed befo
 DNS authorityの撤廃とPALW computation accountabilityは維持する。PALW Panelを残す記述は移行中の通常処理を指し、正直な多数派を安全性前提にしたり永久の固定Panelを義務づけたりしない。計算の客観的裁定はDNS vote、Panel vote、EVM executionで代替しない。RFC14全gateとRFC15固有のsettlement/monitoring/migration条件が揃うまではPanel=0を有効化しない。
 
 本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
+
+## Bond予算・総影響保存の改定 — 2026-10-10
+
+[ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](0015-panel-free-permissionless-verification.md)を適用する。
+
+PALW-only/native EVMの将来経路にも同じbond/DAAのblock/reward/Final weight予算を適用する。Finalというphase名だけを未予約full creditやbridge safeの根拠にしない。
+会計上の配分、保留dispute、残存責任、経済Finalを全head/writer/readerで一致させる。旧DNS/clockの撤去は別upgradeのままで、本原則から新weight/DAAを暗黙に有効化しない。
+
+本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。
+
+## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定
+
+[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
+Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
+モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。

@@ -347,8 +347,25 @@ pub struct StreamedNote {
     pub ref2_skipped: Option<String>,
     /// The largest tensor the reference held at once, in bytes of its `i128` form.
     pub reference_peak_tensor_bytes: u64,
-    /// Largest independently decoded parameter, not total process RSS or activation memory.
+    /// Largest independently decoded parameter, not total process RSS or activation memory. Under tiling this is the most param elements the
+    /// independent implementation held at once (a tile, or a param loaded whole) in its `i128` form.
     pub independent_peak_tensor_bytes: u64,
+    /// RFC-0013 §5: what the tiled independent implementation did (`None` when it read whole tensors).
+    pub independent_tiles: Option<misaka_palw_tir_ref2::tiled::TileReport>,
+    /// RFC-0013 §5: the container reads behind those tiles, with the leaves hashed when a stored Merkle index authenticated them.
+    pub independent_rows: Option<crate::tir_rows::RowReadStatsV1>,
+}
+
+/// **How the independent implementation reads a param larger than a tile** (RFC-0013 §5). `MatMul` and `Gather` consume it in row tiles of at
+/// most `max(tile_elems, one row)` elements — never whole — through the container's rows; with `strict`, a param larger than a tile that no
+/// tiled primitive reads is refused instead of loaded whole, so the residency bound is a guarantee. With an `index` every tile is authenticated
+/// by hashing only the leaves that cover it ([`crate::tir_merkle_index`]); the caller has shown the index folds to the root it holds. The
+/// vectors are the same bytes as the untiled run's (the tiled evaluation is bit-identical to the whole-tensor one); only the memory moves.
+#[derive(Clone, Copy)]
+pub struct StreamTilingV1<'a> {
+    pub tile_elems: u64,
+    pub strict: bool,
+    pub index: Option<&'a crate::tir_merkle_index::PalwTirMerkleIndexV1>,
 }
 
 /// **[`run`], streamed**: the artifact at `path` is opened as a node opens it (mapped), the reference evaluator reads each param through a
@@ -373,6 +390,19 @@ pub fn run_streamed_with_progress(
     progress: &dyn Fn(usize),
     position_progress: &dyn Fn(usize, usize),
 ) -> Result<(Vec<ConformanceVector>, StreamedNote), String> {
+    run_streamed_tiled_with_progress(path, jobs, impls, None, progress, position_progress)
+}
+
+/// [`run_streamed_with_progress`], with the independent implementation reading params in row tiles when `tiling` is given (RFC-0013 §5).
+/// Without `impls.ref2` there is no independent implementation and `tiling` has nothing to apply to.
+pub fn run_streamed_tiled_with_progress(
+    path: &Path,
+    jobs: &[ConformanceJob],
+    impls: ImplSet,
+    tiling: Option<&StreamTilingV1<'_>>,
+    progress: &dyn Fn(usize),
+    position_progress: &dyn Fn(usize, usize),
+) -> Result<(Vec<ConformanceVector>, StreamedNote), String> {
     let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(path)?;
     let container = artifact.container();
     let p = &container.program;
@@ -383,7 +413,27 @@ pub fn run_streamed_with_progress(
     } else {
         None
     };
-    let params2 = p2.as_ref().map(|program| LazyIndependentParams { container, program, peak: std::cell::Cell::new(0) });
+    // The independent implementation's params: whole tensors decoded on demand, or (RFC-0013 §5) row tiles.
+    let lazy2 = match (&p2, tiling) {
+        (Some(program), None) => Some(LazyIndependentParams { container, program, peak: std::cell::Cell::new(0) }),
+        _ => None,
+    };
+    let row_source = match (&p2, tiling) {
+        (Some(program), Some(t)) => Some(crate::tir_rows::ContainerRowSource::new(container, program, t.index)?),
+        _ => None,
+    };
+    let tiled2 = match (&row_source, tiling) {
+        (Some(rows), Some(t)) => {
+            let tiled = misaka_palw_tir_ref2::tiled::TiledParams::new(rows, t.tile_elems);
+            Some(if t.strict { tiled.strict() } else { tiled })
+        }
+        _ => None,
+    };
+    let params2: Option<&dyn misaka_palw_tir_ref2::eval::ParamSource> = match (&tiled2, &lazy2) {
+        (Some(t), _) => Some(t),
+        (None, Some(l)) => Some(l),
+        (None, None) => None,
+    };
     let mut ran = vec!["reference".to_string()];
     if impls.exec {
         ran.push("typed-backend".into());
@@ -408,7 +458,7 @@ pub fn run_streamed_with_progress(
             let o1 = interp.step(&lazy, &mut st1, tok as u32).map_err(|e| format!("{}: reference at {pos}: {e}", job.label))?;
             let c1: Vec<Commit> =
                 o1.commits.iter().map(|c| (c.slot as u64, c.block, c.layer.map(u32::from), c.node, c.value.data.clone())).collect();
-            if let (Some(p2), Some(params2), Some(st)) = (&p2, &params2, st2.as_mut()) {
+            if let (Some(p2), &Some(params2), Some(st)) = (&p2, &params2, st2.as_mut()) {
                 let (o2, next) = misaka_palw_tir_ref2::eval::step(p2, params2, &*st, tok as u64)
                     .map_err(|e| format!("{}: ref2 at {pos}: {e:?}", job.label))?;
                 *st = next;
@@ -477,7 +527,13 @@ pub fn run_streamed_with_progress(
             ran,
             ref2_skipped: None,
             reference_peak_tensor_bytes: lazy.peak_tensor_bytes(),
-            independent_peak_tensor_bytes: params2.as_ref().map_or(0, |p| p.peak.get()),
+            independent_peak_tensor_bytes: match (&tiled2, &lazy2) {
+                (Some(t), _) => t.report().peak_param_elems().saturating_mul(std::mem::size_of::<i128>() as u64),
+                (None, Some(l)) => l.peak.get(),
+                (None, None) => 0,
+            },
+            independent_tiles: tiled2.as_ref().map(|t| t.report()),
+            independent_rows: row_source.as_ref().map(|r| r.stats()),
         },
     ))
 }

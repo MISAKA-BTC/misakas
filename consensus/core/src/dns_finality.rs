@@ -2462,6 +2462,28 @@ pub enum SigningPurpose {
     /// total over its fields and the chain refuses a duplicate `(claim, transformer)`
     /// idempotently, so a re-signed derivation records nothing twice. (Appended; 0-6 unchanged.)
     PalwDerivedArtifactV1 = 7,
+    /// **RFC-0009 stage C: the executor's V4 redemption authorization (`RDA4`)** — message digest is
+    /// [`crate::palw_receipt_v4::redeem_auth_id_v4`] (total over the authorization, so signing the id signs every
+    /// field); context is [`crate::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT`], which no other purpose may
+    /// carry. **Visible only under `palw_receipt_spend_v4`** ([`SigningPurpose::offered_by`]): the fence is a bare height
+    /// that is `None` on every preset, and a signer offers this purpose only where its operator has said the network
+    /// arms it (`SignerState::set_receipt_spend_v4_offered` in `kaspa-pq-signer`, off by default). No journal, by
+    /// decision: the authorization is position-free and non-revocable except by its expiry, the chain's branch-scoped
+    /// spent-quantum set is the double-spend guard, and a re-signed authorization for the same claim authorizes the
+    /// same quanta (RFC-0009 §6). (Appended; 0-7 unchanged — never renumber.)
+    PalwReceiptAuthV4 = 8,
+}
+
+impl SigningPurpose {
+    /// **Whether a network offers this purpose at `daa_score`.** Every purpose that predates the V4 receipt lane is offered
+    /// everywhere, as it always was; [`SigningPurpose::PalwReceiptAuthV4`] only where `Params::palw_receipt_spend_v4` is in
+    /// force (it is `None` on every preset, so the purpose is dormant until a flag-day list arms the fence).
+    pub fn offered_by(self, params: &crate::config::params::Params, daa_score: u64) -> bool {
+        match self {
+            SigningPurpose::PalwReceiptAuthV4 => params.palw_receipt_spend_v4_active_at(daa_score),
+            _ => true,
+        }
+    }
 }
 
 /// The digest the signer will ML-DSA-87-sign, **typed by purpose** (audit H-03). This makes the
@@ -2491,6 +2513,10 @@ pub enum SignerMessageDigest {
     PalwFpSpendV3(Hash64),
     /// 64-byte derived-artifact message ([`crate::palw_derived_v1::palw_derived_message_v1`]).
     PalwDerivedArtifactV1(Hash64),
+    /// 64-byte V4 redemption-authorization id ([`crate::palw_receipt_v4::redeem_auth_id_v4`]) — the identity is total over the
+    /// authorization, so signing it signs the claim, the executor bond, the quantum range, the beacon rule, the builder fee
+    /// and the expiry. (Appended; the earlier variants keep their positions.)
+    PalwReceiptAuthV4(Hash64),
 }
 
 impl SignerMessageDigest {
@@ -2506,6 +2532,7 @@ impl SignerMessageDigest {
             SignerMessageDigest::PalwFpCommitmentV3(_) => SigningPurpose::PalwFpCommitmentV3,
             SignerMessageDigest::PalwFpSpendV3(_) => SigningPurpose::PalwFpSpendV3,
             SignerMessageDigest::PalwDerivedArtifactV1(_) => SigningPurpose::PalwDerivedArtifactV1,
+            SignerMessageDigest::PalwReceiptAuthV4(_) => SigningPurpose::PalwReceiptAuthV4,
         }
     }
 }
@@ -10916,6 +10943,48 @@ mod tests {
         assert_eq!(SigningPurpose::Attestation as u8, 1);
         assert_eq!(SigningPurpose::TakeoverToken as u8, 2);
         assert_eq!(SigningPurpose::Unbond as u8, 3);
+        // The PALW purposes were appended one by one; none was ever renumbered.
+        assert_eq!(SigningPurpose::PalwAttemptV2 as u8, 4);
+        assert_eq!(SigningPurpose::PalwFpCommitmentV3 as u8, 5);
+        assert_eq!(SigningPurpose::PalwFpSpendV3 as u8, 6);
+        assert_eq!(SigningPurpose::PalwDerivedArtifactV1 as u8, 7);
+        // RFC-0009 stage C: the next explicit discriminant.
+        assert_eq!(SigningPurpose::PalwReceiptAuthV4 as u8, 8);
+    }
+
+    /// The V4 authorization's digest variant carries its own purpose, and the wire bytes of every older variant are the ones they were:
+    /// the new digest is appended (borsh enum index 8) and a request for it round-trips.
+    #[test]
+    fn the_receipt_authorization_purpose_is_appended_and_its_digest_agrees_with_it() {
+        let digest = SignerMessageDigest::PalwReceiptAuthV4(Hash64::from_bytes([0x44; 64]));
+        assert_eq!(digest.purpose(), SigningPurpose::PalwReceiptAuthV4);
+        let wire = borsh::to_vec(&digest).unwrap();
+        assert_eq!(wire[0], 8, "an appended variant: the 9th, index 8");
+        assert_eq!(borsh::from_slice::<SignerMessageDigest>(&wire).unwrap(), digest);
+        // Older variants keep their indices.
+        assert_eq!(borsh::to_vec(&SignerMessageDigest::Transaction(Hash64::from_bytes([1; 64]))).unwrap()[0], 0);
+        assert_eq!(borsh::to_vec(&SignerMessageDigest::PalwDerivedArtifactV1(Hash64::from_bytes([1; 64]))).unwrap()[0], 7);
+        let request = SignerRequest {
+            request_id: 1,
+            validator_id: Hash64::from_bytes([2; 64]),
+            purpose: SigningPurpose::PalwReceiptAuthV4,
+            context: crate::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT.to_vec(),
+            message_digest: digest,
+            metadata: SignerMetadata::None,
+        };
+        assert!(request.purpose_matches_digest());
+        let mismatched = SignerRequest { purpose: SigningPurpose::PalwFpSpendV3, ..request.clone() };
+        assert!(!mismatched.purpose_matches_digest(), "a tag that disagrees with the typed digest is malformed");
+        assert_eq!(borsh::from_slice::<SignerRequest>(&borsh::to_vec(&request).unwrap()).unwrap(), request);
+        // The context is the authorization's own: distinct from every other signing context of the lane.
+        assert_ne!(
+            crate::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT,
+            crate::palw_receipt_v4::PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT
+        );
+        assert_ne!(
+            crate::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT,
+            crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT
+        );
     }
 
     #[test]
@@ -10927,7 +10996,13 @@ mod tests {
 
     #[test]
     fn signing_purpose_borsh_roundtrip() {
-        for p in [SigningPurpose::Transaction, SigningPurpose::Attestation, SigningPurpose::TakeoverToken, SigningPurpose::Unbond] {
+        for p in [
+            SigningPurpose::Transaction,
+            SigningPurpose::Attestation,
+            SigningPurpose::TakeoverToken,
+            SigningPurpose::Unbond,
+            SigningPurpose::PalwReceiptAuthV4,
+        ] {
             let bytes = borsh::to_vec(&p).unwrap();
             let back: SigningPurpose = borsh::from_slice(&bytes).unwrap();
             assert_eq!(back, p);
