@@ -24,7 +24,7 @@ use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_model_lines_v1::{
     PALW_MODEL_EVALUATIONS_PER_VERSION_V1, PALW_MODEL_LINE_MLDSA87_CONTEXT, PALW_MODEL_LINE_NAME_MAX_BYTES,
     PALW_MODEL_LINES_PER_CLASS_V1, PALW_MODEL_PREVIEWS_V1, PALW_MODEL_PROPOSALS_PER_LINE_V1, PALW_MODEL_VERSION_HISTORY_V1,
-    model_line_id_v1, model_proposal_id_v1, palw_model_evaluation_message_v1, palw_model_line_founded_message_v1,
+    model_line_id_at_v1, model_proposal_id_v1, palw_model_evaluation_message_v1, palw_model_line_founded_message_v1,
     palw_model_proposal_close_message_v1, palw_model_proposal_message_v1, palw_model_retire_message_v1, palw_model_roles_message_v1,
     palw_model_transfer_message_v1, palw_model_version_message_v1, palw_model_version_move_message_v1,
 };
@@ -33,6 +33,17 @@ use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_pq_validator_core::ValidatorKey;
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_rpc_core::{GetPalwModelLineResponse, RpcPalwModelLine, RpcPalwModelVersion, RpcTransactionOutpoint};
+
+/// Refuse obsolete version writers before signing or paying a carrier on the new ruleset.
+fn require_mutable_model(nv: &NodeView) -> CliResult {
+    if nv.params.palw_model_immutable_v1_active_at(nv.virtual_daa) {
+        return Err(CliError::new(
+            exit::GENERIC,
+            "registered models are immutable: use line-found for an independent model with its own Position and AMM",
+        ));
+    }
+    Ok(())
+}
 
 // ---- parsing and printing ---------------------------------------------------------------------
 
@@ -527,7 +538,8 @@ pub async fn line_found(
     if lines.lines.len() >= PALW_MODEL_LINES_PER_CLASS_V1 {
         return Err(CliError::new(exit::GENERIC, format!("class {class} already holds {} lines, the most it may", lines.lines.len())));
     }
-    let line_id = model_line_id_v1(&class, &founder, &name_bytes);
+    let line_id =
+        model_line_id_at_v1(&class, &root, &founder, &name_bytes, nv.params.palw_model_immutable_v1_active_at(nv.virtual_daa));
     if lines.lines.iter().any(|l| l.line_id == line_id.to_string()) {
         return Err(CliError::new(exit::GENERIC, format!("line {line_id} — this founder's '{name}' on this class — already exists")));
     }
@@ -573,6 +585,7 @@ pub async fn version_publish(
     let notes_hash = notes_hash.as_deref().map(|h| parse_hash(h, "notes hash")).transpose()?;
     let key = ks.load_key()?;
     let nv = connect(ctx).await?;
+    require_mutable_model(&nv)?;
     let (r, row) = require_line(&nv, line).await?;
     require_active(&row)?;
     let version = row.versions_published.saturating_add(1);
@@ -657,6 +670,7 @@ pub async fn version_move(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str,
     let line = parse_hash(line_id, "line id")?;
     let key = ks.load_key()?;
     let nv = connect(ctx).await?;
+    require_mutable_model(&nv)?;
     let (_, row) = require_line(&nv, line).await?;
     require_active(&row)?;
     let v = nv
@@ -829,6 +843,9 @@ pub async fn line_benefits(
     let key = ks.load_key()?;
     let parsed = tiers.iter().map(|t| parse_tier(t)).collect::<Result<Vec<PalwModelBenefitTierV1>, CliError>>()?;
     let nv = connect(ctx).await?;
+    if nv.params.palw_model_immutable_v1_active_at(nv.virtual_daa) && parsed.iter().any(|t| t.grants & grant::EARLY_VERSION != 0) {
+        return Err(CliError::new(exit::GENERIC, "EARLY_VERSION cannot promise a replacement of an immutable registered model"));
+    }
     let (_, row) = require_line(&nv, line).await?;
     require_active(&row)?;
     // The same shape check the fold will make, made here so a malformed card costs no fee.

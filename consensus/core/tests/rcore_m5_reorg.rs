@@ -386,9 +386,9 @@ fn the_reporter_award_journals_a_reporter_awarded_note() {
 // T07: the reorg fuzz.
 // ---------------------------------------------------------------------------------------------
 
-/// R-1's reporter share `r`, in basis points — ADR-0152 §3.6 (1,000 bps), written here from the ADR
+/// R-1's reporter share `r`, in basis points — ADR-0032 amendment (4,900 bps), written here independently
 /// and never read from the fold, so the oracle's reward bound is not the fold's own.
-const R_BPS: u128 = 1_000;
+const R_BPS: u128 = 4_900;
 
 /// What one Final claim's vesting row was when the chain wrote it — the oracle's own copy, kept after
 /// the row moves or burns, so a row that leaves early is still counted against its producer.
@@ -1127,7 +1127,7 @@ fn t07_run(seed: u64, steps: usize, subsidy: u64) -> T07Report {
 ///   * **the lock side, alone (R-5, R-6, V3S-04):** while a Final claim's row is held by its own
 ///     clocks, its `basis_k` load-bearing locks are live and the `basis_k` smallest sum to at least
 ///     `1.1·G_res + 0.1·E_v` — the ADR's bound, computed here, not the fold's price;
-///   * **the reward side (R-1):** every reward opened is at most `r = 10%` of its conviction's
+///   * **the reward side (R-1):** every reward opened is at most `r = 49%` of its conviction's
 ///     collected debit, and every award is the pending amount;
 ///   * **the aggregate:** for every producer bond, **Σ recoverable (net of R) ≥ Σ extractable** over
 ///     its Final claims inside their window — extractable `G_res` (plus the escrow if the row left

@@ -94,6 +94,10 @@ use crate::settle::{SettlementInstructionV1, SettlementKindV1};
 use crate::trace::{EvidenceV1, ParamCommitmentsV1, derived_mask_v1, tensor_commitment};
 use crate::verify::MaterialV1;
 
+/// RFC-0004 Part II: the typed roots on the ledger (a child module, so it applies the route's own private rules).
+#[path = "spec/ledger_impl.rs"]
+mod spec_impl;
+
 /// The network's ledger policy: a consensus constant the consumer fixes at genesis (chain identity included — an object never
 /// names its own network, ruleset or challenge policy).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -237,8 +241,18 @@ impl PipelineClassRowV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum ClaimBodyV1 {
-    Program { claim: KernelClaimV1, evidence: VerificationEvidenceV1, commitments: Vec<Vec<Vec<Digest>>> } = 0,
-    Pipeline { claim: PipelineClaimV1, evidence: PipelineEvidenceV1, stages: Vec<StageCommitmentsV1> } = 1,
+    Program {
+        claim: KernelClaimV1,
+        evidence: VerificationEvidenceV1,
+        commitments: Vec<Vec<Vec<Digest>>>,
+    } = 0,
+    Pipeline {
+        claim: PipelineClaimV1,
+        evidence: PipelineEvidenceV1,
+        stages: Vec<StageCommitmentsV1>,
+    } = 1,
+    /// RFC-0004 Part II: a typed claim (memory, retrieval, composite).
+    Spec(Box<crate::spec::SpecClaimBodyV1>) = 3,
 }
 
 impl ClaimBodyV1 {
@@ -252,6 +266,7 @@ impl ClaimBodyV1 {
                 let inputs = s.inputs.get(position as usize).map(Vec::as_slice).unwrap_or(&[]);
                 Some((s.commitments.get(position as usize)?, inputs))
             }
+            Self::Spec(b) => b.position(stage, position),
         }
     }
 
@@ -260,6 +275,7 @@ impl ClaimBodyV1 {
         match self {
             Self::Program { commitments, .. } => vec![(0, commitments.len() as u32)],
             Self::Pipeline { stages, .. } => stages.iter().enumerate().map(|(i, s)| (i as u8, s.commitments.len() as u32)).collect(),
+            Self::Spec(b) => b.stages(),
         }
     }
 }
@@ -440,6 +456,26 @@ pub enum LedgerEventV1 {
         job: Digest,
         producer: Digest,
     } = 20,
+    /// **RFC-0009 §4.2 (lane DA16): a demand on a claim whose material obligation the consumer moved to bonded providers was not
+    /// answered by its deadline.** The producer pays nothing (one failure, one party): the consumer charges every live lease of the claim
+    /// and pays `demanders` from that charge; before Final the claim is `Unavailable { producer_defaulted: false }` (void, no reward), after
+    /// Final its fact is withdrawn. The demand bonds were refunded exactly as on the producer path. Never a conviction. (Discriminant 30:
+    /// 21–23 are G14-R4's.)
+    ProviderLiableDefault {
+        claim: Digest,
+        stage: u8,
+        position: u32,
+        last: Option<&'static str>,
+        post_final: bool,
+        demanders: Vec<Digest>,
+    } = 30,
+    /// **DA16: every provider that stood behind a transferred claim's material has defaulted** (a common-mode outage): the claim lapses —
+    /// before Final `Unavailable { producer_defaulted: false }` (no reward, the producer's reservation released, never slashed), after
+    /// Final its fact is withdrawn. Never a conviction.
+    ProviderLapsed {
+        claim: Digest,
+        post_final: bool,
+    } = 31,
 }
 
 /// One block.
@@ -564,6 +600,13 @@ pub struct KernelLedgerV1 {
     pub burned: u64,
     /// RFC-0015: the OPV policy, classes and claim rows. Dormant (no policy) = the historical ledger, root included.
     pub opv: OpvStateV1,
+    /// RFC-0004 Part II: typed-root classes, their jobs and the memory lines (tables 22–24; empty = the historical ledger).
+    pub typed: crate::spec::TypedStateV1,
+    /// **RFC-0009 §4.2 (lane DA16): claims whose material obligation the consumer moved to bonded providers.** Consumer-derived from
+    /// the consumer's own rooted rows and re-injected before every object and tick (like the attested set's source); NOT part of this
+    /// state, its rows or its root. A demand on such a claim that nobody answers by its deadline is a
+    /// [`LedgerEventV1::ProviderLiableDefault`] — the providers' failure, never the producer's; and [`Self::provider_lapse`] voids it.
+    pub provider_liable: BTreeSet<Digest>,
     budget: BlockBudgetV1,
 }
 
@@ -626,6 +669,8 @@ impl KernelLedgerV1 {
             seals: BTreeMap::new(),
             burned: 0,
             opv: OpvStateV1::default(),
+            typed: crate::spec::TypedStateV1::default(),
+            provider_liable: BTreeSet::new(),
             budget: BlockBudgetV1::default(),
         })
     }
@@ -824,7 +869,7 @@ impl KernelLedgerV1 {
                 _ => return Err(KernelRefusalV1::rule(name, "no such bond, or already exiting")),
             },
             KernelRouteObjectV1::SealClaim { producer, job, seal } => {
-                if !self.jobs.contains_key(job) && !self.pipeline_jobs.contains_key(job) {
+                if !self.jobs.contains_key(job) && !self.pipeline_jobs.contains_key(job) && !self.typed.jobs.contains_key(job) {
                     return Err(KernelRefusalV1::rule(name, "no such job"));
                 }
                 match self.bonds.get(producer) {
@@ -839,6 +884,7 @@ impl KernelLedgerV1 {
                 self.seals.insert((*job, *producer), SealRowV1 { seal: *seal, daa: self.daa });
                 out.push(LedgerEventV1::ClaimSealed { job: *job, producer: *producer });
             }
+            KernelRouteObjectV1::Spec { object } => self.apply_spec(object, auth, &mut out)?,
             KernelRouteObjectV1::Withdraw { bond } => {
                 let (daa, delay) = (self.daa, self.policy.exit_delay_daa);
                 match self.bonds.get(bond) {
@@ -911,6 +957,7 @@ impl KernelLedgerV1 {
             O::FileDemand { demander, .. } => Some((*demander, "demander")),
             O::RequestExit { bond } | O::Withdraw { bond } => Some((*bond, "bond")),
             O::SealClaim { producer, .. } => Some((*producer, "producer")),
+            O::Spec { object } => object.named_actor(),
             _ => None,
         };
         if let Some((actor, role)) = named {
@@ -1489,11 +1536,17 @@ impl KernelLedgerV1 {
                     Some(derived_mask_v1(&stage_view_v1(c.programs.get(st.program as usize)?).view))
                 })
                 .unwrap_or_default(),
+            ClaimBodyV1::Spec(b) => self.spec_derived_mask(row, b, stage),
         }
     }
 
-    fn bounds_of(&self, class: &Digest) -> Option<ProsecutionBoundsV1> {
-        self.classes.get(class).map(|c| c.bounds).or_else(|| self.pipeline_classes.get(class).map(|c| c.bounds))
+    /// The prosecution bounds of a registered class of any kind (single program, pipeline, typed).
+    pub fn bounds_of(&self, class: &Digest) -> Option<ProsecutionBoundsV1> {
+        self.classes
+            .get(class)
+            .map(|c| c.bounds)
+            .or_else(|| self.pipeline_classes.get(class).map(|c| c.bounds))
+            .or_else(|| self.typed.classes.get(class).map(|c| c.bounds))
     }
 
     /// **The court**, over ledger state only.
@@ -1517,6 +1570,7 @@ impl KernelLedgerV1 {
                 FreshPipelineVerifierV1::from_public_bytes_in_mode(&record.to_bytes(), &self.known, header, &binding, mode)?
                     .try_proof(bytes)
             }
+            (ClaimBodyV1::Spec(_), ProsecutionV1::Spec(bytes)) => self.adjudicate_spec(claim, bytes),
             _ => Err("a filing for another kind of claim".into()),
         }
     }
@@ -1609,6 +1663,9 @@ impl KernelLedgerV1 {
         settle(out, producer, slashed - reward, SettlementKindV1::Burn, Some(*claim));
         self.settle_demands_moot(claim, out);
         self.opv_sync_live(claim);
+        if post_final {
+            self.spec_on_post_final_conviction(claim);
+        }
     }
 
     /// Return every demand bond of `d` (the demand is over).
@@ -1664,7 +1721,7 @@ impl KernelLedgerV1 {
         if !window_open {
             return Err(rule("the challenge window is closed"));
         }
-        if row.body.position(stage, position).is_none() {
+        if row.body.position(stage, position).is_none() && !self.spec_slice_demandable(row, stage, position) {
             return Err(rule("the claim commits no such position"));
         }
         let k = (*claim, stage, position);
@@ -1731,8 +1788,13 @@ impl KernelLedgerV1 {
         } else {
             self.charge(NAME, 0)?;
             let row = self.claims.get(claim).expect("checked");
-            let (values, inputs) = row.body.position(stage, position).expect("a demand names a committed position");
-            classify_position_response_v1(values, &self.derived_mask(row, stage), inputs, bytes)
+            match self.spec_classify_slice(row, stage, position, bytes) {
+                Some(slice) => slice,
+                None => {
+                    let (values, inputs) = row.body.position(stage, position).expect("a demand names a committed position");
+                    classify_position_response_v1(values, &self.derived_mask(row, stage), inputs, bytes)
+                }
+            }
         };
         match verdict {
             Ok(served) => {
@@ -1761,12 +1823,18 @@ impl KernelLedgerV1 {
         // Unrevealed seals expire (a junk seal holds nothing and lives a bounded time).
         let ttl = self.policy.seal_ttl_daa;
         self.seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
+        self.spec_prune_lines(daa);
         // Demands past their deadline: the producer's availability default.
         let due: Vec<_> = self.demands.iter().filter(|(_, d)| daa >= d.deadline_daa).map(|(k, _)| *k).collect();
         for (claim, stage, position) in due {
             let Some(d) = self.demands.remove(&(claim, stage, position)) else { continue };
             let last = d.last_class();
             let post_final = self.claims.get(&claim).is_some_and(|r| matches!(r.life.state, ClaimStateV1::Final { .. }));
+            // DA16: a transferred claim's material is its providers' obligation — the producer is not charged for this failure.
+            if self.provider_liable.contains(&claim) {
+                self.provider_liable_default(claim, stage, position, last, post_final, d, out);
+                continue;
+            }
             // Before Final a default costs the fixed penalty (the claim is Unavailable and earns no reward). After Final the reward
             // was already paid, so a default forfeits the WHOLE remaining reservation: withholding is never cheaper than a
             // conviction would be for the reward it kept.
@@ -1839,6 +1907,7 @@ impl KernelLedgerV1 {
                     row.rewarded = reward > 0;
                     out.push(LedgerEventV1::Final { claim: id, reward });
                     settle(out, producer, reward, SettlementKindV1::FinalReward, Some(id));
+                    self.spec_on_final(&id);
                 }
                 (b, ClaimStateV1::TimedOut { .. }) if !matches!(b, ClaimStateV1::TimedOut { .. }) => {
                     self.release(&id, producer, reserved, out);
@@ -1854,6 +1923,81 @@ impl KernelLedgerV1 {
                 _ => {}
             }
         }
+    }
+
+    /// **DA16: would `bytes` serve this committed position?** — exactly the classification a `Respond` gets (the class's response
+    /// envelope, then `classify_position_response_v1` against the committed values), without a demand and without touching the state.
+    /// A provider court's answer and a transport fetch are judged by this one function.
+    pub fn classify_served_position_v1(
+        &self,
+        claim: &Digest,
+        stage: u8,
+        position: u32,
+        bytes: &[u8],
+    ) -> Result<ServedPositionV1, &'static str> {
+        let row = self.claims.get(claim).ok_or("no such claim")?;
+        let (values, inputs) = row.body.position(stage, position).ok_or("the claim commits no such position")?;
+        let limit = self.bounds_of(&row.class_binding_id).map(|b| b.max_response_bytes).unwrap_or(0);
+        if bytes.len() as u128 > limit {
+            return Err("oversized");
+        }
+        classify_position_response_v1(values, &self.derived_mask(row, stage), inputs, bytes)
+    }
+
+    /// **DA16: a demand on a provider-liable claim defaulted** (see [`LedgerEventV1::ProviderLiableDefault`]). The producer's reservation is
+    /// untouched here: before Final the claim turns `Unavailable` and the tick's release returns it whole; after Final it stays held for
+    /// the claim's fraud liability. The demand bonds return as on the producer path; the open demands of the claim are moot.
+    #[allow(clippy::too_many_arguments)]
+    fn provider_liable_default(
+        &mut self,
+        claim: Digest,
+        stage: u8,
+        position: u32,
+        last: Option<&'static str>,
+        post_final: bool,
+        d: DemandRowV1,
+        out: &mut Vec<LedgerEventV1>,
+    ) {
+        let daa = self.daa;
+        if !post_final && let Some(row) = self.claims.get_mut(&claim) {
+            let _ = row.life.apply(ClaimEventV1::MaterialUnavailable { daa, producer_defaulted: false });
+        }
+        let demanders = d.demanders.iter().map(|(b, _)| *b).collect();
+        out.push(LedgerEventV1::ProviderLiableDefault { claim, stage, position, last, post_final, demanders });
+        self.refund(&claim, &d, out);
+        self.settle_demands_moot(&claim, out);
+        if post_final && let Some(o) = self.opv.claims.get_mut(&claim) {
+            o.forfeited_after_final = true;
+        }
+        self.opv_sync_live(&claim);
+    }
+
+    /// **DA16: every provider behind a transferred claim's material has defaulted — the claim lapses** (a common-mode outage, never a
+    /// conviction). Consumer-called from its court's rows; refused unless the claim is provider-liable. A claim already decided
+    /// (convicted, unavailable, timed out) is left as it is (`Ok` with no event).
+    pub fn provider_lapse(&mut self, claim: &Digest) -> Result<Vec<LedgerEventV1>, KernelRefusalV1> {
+        const NAME: &str = "ProviderLapse";
+        if !self.provider_liable.contains(claim) {
+            return Err(KernelRefusalV1::rule(NAME, "the claim's material is not its providers' obligation"));
+        }
+        let Some(row) = self.claims.get(claim) else { return Err(KernelRefusalV1::rule(NAME, "no such claim")) };
+        if row.terminal_for_demands() {
+            return Ok(Vec::new());
+        }
+        let post_final = matches!(row.life.state, ClaimStateV1::Final { .. });
+        let mut out = Vec::new();
+        if !post_final {
+            let daa = self.daa;
+            let row = self.claims.get_mut(claim).expect("checked");
+            let _ = row.life.apply(ClaimEventV1::MaterialUnavailable { daa, producer_defaulted: false });
+        }
+        out.push(LedgerEventV1::ProviderLapsed { claim: *claim, post_final });
+        self.settle_demands_moot(claim, &mut out);
+        if post_final && let Some(o) = self.opv.claims.get_mut(claim) {
+            o.forfeited_after_final = true;
+        }
+        self.opv_sync_live(claim);
+        Ok(out)
     }
 
     fn release(&mut self, claim: &Digest, producer: Digest, amount: u64, out: &mut Vec<LedgerEventV1>) {
@@ -1901,6 +2045,8 @@ fn oversized(proof: &ProsecutionV1, b: &ProsecutionBoundsV1) -> Option<String> {
     let (len, limit) = match proof {
         ProsecutionV1::Kernel(bytes) | ProsecutionV1::Pipeline(bytes) => (bytes.len() as u128, b.max_filing_bytes as u128),
         ProsecutionV1::Decode(f) => (f.logits.bytes.len() as u128, b.max_response_bytes),
+        // A typed fault opens at most one kernel instance, one item or one logits vector.
+        ProsecutionV1::Spec(bytes) => (bytes.len() as u128, (b.max_filing_bytes as u128).max(b.max_response_bytes)),
     };
     (len > limit).then(|| format!("a {len}-byte filing past the class's {limit}-byte envelope"))
 }
@@ -2027,6 +2173,7 @@ impl OutsiderV1<'_> {
         match &row.body {
             ClaimBodyV1::Program { claim, .. } => self.check_program(row, claim),
             ClaimBodyV1::Pipeline { .. } => self.check_pipeline(row),
+            ClaimBodyV1::Spec(_) => Err("a typed claim: check it with crate::spec::outsider::SpecOutsiderV1".into()),
         }
     }
 

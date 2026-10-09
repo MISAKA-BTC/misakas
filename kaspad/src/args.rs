@@ -176,6 +176,10 @@ pub struct Args {
     pub user_agent_comments: Vec<String>,
     pub utxoindex: bool,
     pub reset_db: bool,
+    /// LIVE-R1: `--palw-verified-resync` — move the data directory aside (never delete it), sync from an
+    /// empty one, and stay out of participation until long-lived outbound peers confirm the chain.
+    #[serde(default)]
+    pub palw_verified_resync: bool,
     #[serde(rename = "outpeers")]
     pub outbound_target: usize,
     #[serde(rename = "maxinpeers")]
@@ -621,6 +625,9 @@ pub struct Args {
     /// RFC-0006: a sharded seat with no capture demands the runs its cell reads on chain (`DefaultAccusedTirStep`, unit
     /// `TirStepRun`) before it abstains. Off by default.
     pub palw_tir_shard_demand_runs: bool,
+    /// **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`): verify the shards of live sharded claims this bond does
+    /// not seat from public material, and accuse (as a non-seat bond) or demand their runs on chain. Off by default; files no receipt.
+    pub palw_tir_shard_watch: bool,
     /// RFC-0006: where an outsider fetches a class it does not hold (`--palw-tir-shard-mirror=<class container path>`); verified against
     /// the chain's registered root before it is used.
     pub palw_tir_shard_mirror: Option<String>,
@@ -845,6 +852,7 @@ impl Default for Args {
             async_threads: num_cpus::get(),
             utxoindex: false,
             reset_db: false,
+            palw_verified_resync: false,
             outbound_target: 8,
             inbound_limit: 128,
             rpc_max_clients: 128,
@@ -941,6 +949,7 @@ impl Default for Args {
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_boundary: None,
             palw_tir_shard_demand_runs: false,
+            palw_tir_shard_watch: false,
             palw_tir_shard_mirror: None,
             palw_tir_shard_fetch: false,
             palw_tir_shard_run_leaves: None,
@@ -1765,6 +1774,7 @@ pub fn cli() -> Command {
                 .help("Max number of RPC clients for standard connections (default: 128)."),
         )
         .arg(arg!(--"reset-db" "Reset database before starting node. It's needed when switching between subnetworks.").env("KASPAD_RESET_DB"))
+        .arg(arg!(--"palw-verified-resync" "Resync this node from the network's chain, verified: the data directory is moved aside (kept, never deleted), the node syncs from an empty one, and it does not mine, attest or report synced until at least two long-lived outbound peers confirm the synced chain. Writes palw-resync-report.json beside the data directory. The remedy for a PARTITION HOLD; never started automatically."))
         .arg(arg!(--"enable-unsynced-mining" "Allow the node to accept blocks from RPC while not synced (this flag is mainly used for testing)").env("KASPAD_ENABLE_UNSYNCED_MINING"))
         .arg(
             Arg::new("enable-mainnet-mining")
@@ -2588,6 +2598,16 @@ pub fn cli() -> Command {
                 .help(
                     "RFC-0006: a sharded seat with no capture demands the runs its cell reads on chain (DefaultAccusedTirStep, unit \
                      TirStepRun) before it abstains; the executor answers inside the disclosure window or its claim defaults.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-tir-shard-watch")
+                .long("palw-tir-shard-watch")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "RFC-0006 x G14: the non-seat cell watcher — verify every shard of a live sharded claim this bond does not seat from \
+                     public material only; a false cell is accused as a non-seat bond (TirShardCourtAccused), a claim with no public capture \
+                     has its runs demanded on chain (with --palw-tir-shard-demand-runs). Signs no receipt. Off by default.",
                 ),
         )
         .arg(
@@ -3577,6 +3597,7 @@ impl Args {
             rpc_max_clients: arg_match_unwrap_or::<usize>(&m, "rpcmaxclients", defaults.rpc_max_clients),
             max_tracked_addresses: arg_match_unwrap_or::<usize>(&m, "max-tracked-addresses", defaults.max_tracked_addresses),
             reset_db: arg_match_unwrap_or::<bool>(&m, "reset-db", defaults.reset_db),
+            palw_verified_resync: arg_match_unwrap_or::<bool>(&m, "palw-verified-resync", defaults.palw_verified_resync),
             enable_unsynced_mining: arg_match_unwrap_or::<bool>(&m, "enable-unsynced-mining", defaults.enable_unsynced_mining),
             enable_mainnet_mining: arg_match_unwrap_or::<bool>(&m, "enable-mainnet-mining", defaults.enable_mainnet_mining),
             trusted_checkpoint: m.get_one::<String>("trusted-checkpoint").cloned(),
@@ -3694,6 +3715,7 @@ impl Args {
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_boundary: m.get_one::<String>("palw-drill-tamper-boundary").cloned(),
             palw_tir_shard_demand_runs: m.get_one::<bool>("palw-tir-shard-demand-runs").copied().unwrap_or(false),
+            palw_tir_shard_watch: m.get_one::<bool>("palw-tir-shard-watch").copied().unwrap_or(false),
             palw_tir_shard_mirror: m.get_one::<String>("palw-tir-shard-mirror").cloned(),
             palw_tir_shard_fetch: m.get_one::<bool>("palw-tir-shard-fetch").copied().unwrap_or(false),
             palw_tir_shard_run_leaves: m.get_one::<u32>("palw-tir-shard-run-leaves").copied(),

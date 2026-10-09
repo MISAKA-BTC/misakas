@@ -698,6 +698,8 @@ pub(crate) struct PalwTirShardBooksV1 {
     row_fetches: HashMap<(Hash64, u16), PalwTirRowFetchV1>,
     /// Claims whose cells this seat refuted (or could not accuse): never answered `Valid`.
     pub refuted: HashSet<Hash64>,
+    /// The `(claim, shard)`s the non-seat watcher has verified (`--palw-tir-shard-watch`): each once.
+    pub watched: HashSet<(Hash64, u16)>,
     /// `(claim)` → the DAA a part was last carried.
     submitted: HashMap<Hash64, u64>,
     /// `(class, shard)` → the span a possession proof was last carried; the plan declaration's DAA by class.
@@ -1745,6 +1747,31 @@ impl super::PalwPanelService {
                     continue;
                 }
                 let Some(Ok(tir)) = self.backends().resolve_tir_v1(class_id, class.artifact_root) else { continue };
+                // **Per-segment pricing (`palw_tir_shard_segment_v2`, dormant; agent SHARD): readiness is the shard's heaviest cell.**
+                // Past the fence a node proves a shard only when its host can hold the shard's heaviest cell (its last segment's
+                // history), so every ready seat can host every cell of its shard and the draw needs no tier. Below it nothing changes.
+                if self.consensus_config.params.palw_tir_shard_segment_active_at(current_daa) {
+                    let need = kaspa_consensus_core::palw_tir_shard_segment_v2::palw_tir_shard_seat_need_bytes_v2(
+                        &tir.space().program,
+                        tir.class().layout.max_context,
+                        plan.s_l,
+                        plan.s_p,
+                        shard,
+                    );
+                    let refused = match need {
+                        Ok(bytes) => crate::palw_memory_ledger::host_ledger_v1()
+                            .capacity_admits(u64::try_from(bytes).unwrap_or(u64::MAX))
+                            .err()
+                            .map(|refusal| format!("the host cannot hold the shard's heaviest cell ({refusal})")),
+                        Err(why) => Some(format!("the shard's heaviest cell is not derivable ({why})")),
+                    };
+                    if let Some(why) = refused {
+                        crate::palw_backends::note_throttled_v1(&format!("tir-shard-need-{class_id}-{shard}"), || {
+                            format!("[{PALW_PANEL}] no possession proof for class {class_id} shard {shard}: {why}")
+                        });
+                        continue;
+                    }
+                }
                 match tir_shard_readiness_object_v1(&tir, bond_key, network_domain, class_id, plan.s_l, shard, span_now, |m, c| {
                     self.sign(m, c)
                 }) {
@@ -1821,3 +1848,7 @@ pub(crate) fn tir_shard_readiness_object_v1(
     let signature = sign(message.as_byte_slice(), PALW_TIR_SHARD_READINESS_MLDSA87_CONTEXT).ok_or("the proof cannot be signed")?;
     Ok(PalwConsensusObjectV2::TirSeatReadinessProved { bond, class_id, shard, span, proof: Box::new(proof), signature })
 }
+
+/// **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`, agent SHARD).
+#[path = "tir_shard_watch.rs"]
+pub(super) mod watch;

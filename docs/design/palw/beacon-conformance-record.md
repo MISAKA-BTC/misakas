@@ -170,8 +170,11 @@ says nothing about any chain.
   digests and pins it, but the resulting artifact (`e4f8b50a…`) is not the earlier Phase-H class (`d1d5fad6…`). Calibration should be
   re-measured in the bit-exact format before this pack is used for anything but this pipeline test.
 * The checks do not scale to the reference policy's security bits on a 1.7B model with the present reference/ref2 evaluators; a
-  tiled, range-based evaluator (RFC-0013 §5) is the only way to make vector draws cheap, and is not built.
+  tiled, range-based evaluator (RFC-0013 §5) is the only way to make vector draws cheap, and is not built. *(Built since, SMALL lane,
+  2026-10-09: the independent implementation's row-tiled evaluation, below. It bounds the independent evaluator's MEMORY; it does not make a
+  vector draw faster, and the reference evaluator and the typed backend are unchanged.)*
 * The authentication pass hashes the whole artifact (3–7 s here; proportional to artifact size); a stored leaf-hash index is not built.
+  *(Built since, SMALL lane: the stored Merkle index, below.)*
 * Peak RSS is a process maximum, not the evaluators' working set; it includes the mapped artifact pages the typed backend touches.
 * A first run on an earlier build of the same sources (`3a4218e55`) also PASSED (771/771, 793 s, 4.1 GB); it is not the recorded result.
 
@@ -198,3 +201,47 @@ says nothing about any chain.
    candidate in the context would make `eligibility_v1` refuse it by construction.
 8. **`OnboardingRecordV1::apply` has no way to record a commitment that exists without a chain registration**, so this tool keeps its
    own ledger; the retry count is the number of `BEACON_UNAVAILABLE` entries per candidate (allowed: `retry_limit + 1` windows).
+
+---
+
+## 6. RFC-0013 §5 and §7.2 (SMALL lane, 2026-10-09): the row-tiled independent evaluator and the stored Merkle index
+
+Nothing here is consensus, nothing is armed, and no court limit, sizing constant or id moved (the court's maximum bytes and work are exactly what they
+were: a tool that reads less memory does not hide what the court would read).
+
+**The row-tiled evaluator (`misaka-palw-tir-ref2::tiled`).** The independent implementation's `MatMul` and `Gather` can consume a param in row tiles
+through a `RowSource` instead of holding it whole as `i128` (a 1.9 GB artifact is 16× that). Three forms are tiled: a param that is a `MatMul` operand,
+a `Gather` table, and — since this is how the lowerer declares every linear layer (`lower_linear`: weights `[out, in]`, read through `Transpose [1, 0]`) — a
+**rank-2 param read through a `Transpose [1, 0]` whose only reader is one `MatMul`**: that transpose node is never built (it is neither committed, carried,
+nor the logits), and the tiles of the stored `[out, in]` rows feed the product directly. Any other reader of a large param loads it whole, and is counted
+(`TileReport::whole_loads`, `whole_peak_elems`) or, under `TiledParams::strict`, refused by name.
+
+| Claim | How it is held | Test |
+|---|---|---|
+| bit-identical to the whole-tensor evaluation | `MatMul` sums are order-free (04b §6.3: `P + N`, each total range-checked), so tiles add to the same per-output accumulators in any order and are finished in the output's linear order; every product is the exact 256-bit `Wide::mul_i128`; `Gather` is a copy with the same `Index` refusal at the same element; the shape rules are the whole path's, on the declared shapes | `tiled_evaluation_equals_whole_evaluation_on_random_programs` (250 random programs × tiles 1/2/3/5/10⁶ × 3 positions, values AND refusals), `a_whole_run_through_tiles_equals_the_run_it_replaces`, `a_tiled_matmul_equals_the_whole_matmul_values_and_refusals`, `a_matmul_through_a_fused_transpose_equals_the_matmul_of_the_transposed_tensor`, `weights_read_through_the_lowerers_transpose_are_tiled_never_built_and_the_run_is_the_whole_run` |
+| sizing equal to the existing evaluator's | the multiply-accumulate count is the whole path's exactly (`N · K` per output; analytic count asserted), every element of a tiled param is read exactly once, and the residency of a tile is at most `max(tile, widest row)` | `a_decoder_runs_through_tiles_strictly_with_the_same_logits_the_same_work_and_a_bounded_residency` |
+| a failing source stops the run with its own refusal | never a silent zero | `a_source_that_fails_mid_run_stops_the_run_with_its_own_refusal` |
+
+Not claimed: that a program with SEVERAL simultaneous faults reports the same §9.3 class first (an element fault is found when its tile is read, not when
+the tensor is loaded; §9.3 lets an input that breaks several rules report any one of them). A fault on its own reports the same class and reason. A
+second large param on the same node (a `MatMul` of two params) is loaded whole. `eval_cone` (the court's cone evaluation) is not tiled.
+
+**`misaka-palw-sdk::tir_rows::ContainerRowSource`** is that `RowSource` over a `PALWTIR1` container: it reads exactly the bytes of the rows asked for, and
+ref2 decodes them with its own `Tensor::from_le_bytes` (only I/O is shared with the first evaluator). `runtime_pack::conformance::run_streamed_tiled_with_progress`
+(`StreamTilingV1 { tile_elems, strict, index }`) runs the streamed conformance with the independent implementation tiled; its vectors are the untiled run's
+bytes (test `a_streamed_conformance_is_the_loaded_ones_and_never_holds_the_artifact_whole`, three tile sizes with and without the index).
+
+**The stored Merkle index (`misaka-palw-sdk::tir_merkle_index`, `palw-class pack index`).** One 64-byte hash per 32 KiB leaf, in inventory order, in
+`<artifact>.merkleidx` (`PALWTMX1`, versioned, with the program binding, the root and a trailer). It is a cache, never an authority: it is believed only after
+its leaves fold to the root the caller holds (`verify_root`), and nothing that fails that is used. With it
+* a byte range is authenticated by hashing **only the leaves that cover it** (`read_authenticated`) — a row tile of a tensor larger than memory is checked
+  against the artifact root without reading the rest (`ContainerRowSource` with an index);
+* the leaves a beacon draw names are opened with the consensus multiproof built from the stored hashes, reading those leaves only (`multiproof`);
+  `run-conformance` uses a sidecar index exactly this way (`authenticated_openings_auto`) and otherwise makes the streamed pass it always made — a damaged
+  index, one for another program, or one that folds to another root is logged and not believed. The evidence is byte for byte the same either way
+  (`a_stored_merkle_index_changes_what_the_openings_cost_and_nothing_the_evidence_says`; the measure `open_via_index` and `open_pass_hashed_bytes` say which).
+* building the index is the one pass it replaces (`palw-class pack index --artifact <f> [--root <hex>]`; `--root` refuses to write an index that does not fold to
+  the registered root).
+
+Not measured: the saving on a real artifact (the tests use the repository's tiny fixtures); the 1.87 GB SmolLM2 class's 3.0 s authentication pass is what an
+index replaces per run, at the price of 64 B per leaf (≈ 1.33 M leaves ≈ 85 MB for that class, against 1.87 GB). No fleet or live measurement was made.

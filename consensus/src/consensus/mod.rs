@@ -1079,7 +1079,7 @@ impl Consensus {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
             _ => return None,
         };
-        let (_chain_point, state) = self.storage.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let (_chain_point, state) = self.virtual_processor.palw_v2_reader_state(state_params).ok().flatten()?;
         Some(state)
     }
 
@@ -1326,6 +1326,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_locked_bond_outpoints_v2_impl()
     }
 
+    fn palw_partition_refusal_v1(&self) -> Option<kaspa_consensus_core::api::PalwPartitionRefusalV1> {
+        self.virtual_processor.palw_partition_refusal_v1()
+    }
+
     /// ADR-0078 Decision 5, on the node: the materialized tip, then [`palw_derived_claim_view_v1`].
     ///
     /// The state store's tip is a snapshot read like every other `palw_*` answer here, and the
@@ -1347,7 +1351,7 @@ impl ConsensusApi for Consensus {
         };
         // Audit M-7: the shared materialization, so a read path cannot cost the node a whole
         // re-rooting of the PALW state per unauthenticated call.
-        let (_chain_point, state) = self.storage.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let (_chain_point, state) = self.virtual_processor.palw_v2_reader_state(state_params).ok().flatten()?;
         palw_derived_claim_view_v1(&state, claim_id)
     }
 
@@ -1536,7 +1540,7 @@ impl ConsensusApi for Consensus {
         // Audit M-7: the same materialized tip every other `palw_*` answer takes, decoded once per
         // tip row rather than once per request. W5's chunk bytes are inside that carriage — up to
         // `2 x 27 x 100 KB` per open session — and this call is reachable unauthenticated.
-        let (_chain_point, state) = self.storage.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let (_chain_point, state) = self.virtual_processor.palw_v2_reader_state(state_params).ok().flatten()?;
         state.court_close_group(&session_id, side).cloned()
     }
 
@@ -2261,6 +2265,13 @@ impl ConsensusApi for Consensus {
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
     ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2> {
         self.virtual_processor.palw_seat_duties_v2_impl(&mine)
+    }
+
+    fn palw_tir_shard_watch_duties_v1(
+        &self,
+        watcher: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2> {
+        self.virtual_processor.palw_tir_shard_watch_duties_v1_impl(&watcher)
     }
 
     fn palw_court_duties_v2(

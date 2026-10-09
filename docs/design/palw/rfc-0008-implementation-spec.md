@@ -1,6 +1,13 @@
 # RFC-0008 implementation spec v1 — unified PALW EXEC lane (DRAFT, NOT IMPLEMENTED)
 
-Status: revised design, 2026-10-08. Baseline: `MISAKA-BTC/misakas` main `282355ba9`.
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
+Status: revised design, 2026-10-10. Baseline: `MISAKA-BTC/misakas` main `282355ba9`.
 No activation height, runtime change, deployment or fingerprint change is authorized by this document.
 The type and fence names below are proposed names, not declarations that exist in main.
 
@@ -8,10 +15,18 @@ This document implements the direction of [revised RFC-0008](../../rfc/0008-palw
 The former algo-11 design body has been deleted. Only its [v0 test results and unrun cases](rfc-0008-v0-test-record.md)
 are preserved; they are not v1 requirements or v1 validation evidence. Main's active heartbeat, BASE-0, clock, REAL admission and transaction-permit rules are the baseline.
 
-Implementation record (2026-10-08, branch `rfc8/x8-exec-v2`): dormant code for this spec exists behind the unarmable fence
-`palw_exec_payload_v2`. What is built, what proves it and which gates remain open are in
-[rfc-0008-v2-implementation-record.md](rfc-0008-v2-implementation-record.md). This spec stays normative and every gate in section 9 is
-still open.
+**2026-10-10後続改定 acceptance boundary:** [ADR-0177](../../adr/0177-model-bond-allocation-without-availability-consensus.md)
+and RFC08 §6.1 withdraw mandatory Torrent, Seeder/PoR/Full Fetch/lease/TRDC/FPR and availability-driven qualification/weight gates.
+Model supply is optional off-chain activity; immutable model identity and finite claim-specific evidence/court obligations remain.
+Do not turn this court into model retrieval through whole-weight or iterated range demands. Define permitted units, cumulative scope
+and authenticated model operands before claiming bounded court completeness. G14 is conditional on acquiring the registered model.
+Model-bond coinbase allocation uses distinct miner principal and preserves network/model/individual-bond budgets and EXEC zero weight/DAA.
+Open-versus-closed economics, allocation/recovery and non-interference gates are pending; this historical implementation does not satisfy them.
+
+**Implementation record (lane X8/X8R; non-normative — the design above wins).** Dormant code for an earlier reading of this spec
+exists on branch `rfc8/x8r-review` behind the unarmable fence `palw_exec_payload_v2`. What is built, what proves it and which gates
+remain open are in [rfc-0008-v2-implementation-record.md](rfc-0008-v2-implementation-record.md) and in the labelled section 10 at the
+end of this document. That record does not close any gate of section 9; every gate stays open until the gate's own evidence exists.
 
 ## 1. Invariants and rollout boundary
 
@@ -264,9 +279,28 @@ The v0 tests describe a different branch design and prove none of these v1 gates
 do not substitute a placeholder or harness-signed receipt for implemented verification. Choose activation and capacity
 parameters only after independent review, measured evidence and a separate coordinated release.
 
-## 10. Amendment 1 (X8R, 2026-10-08): the slice verification route and the five design decisions
+## Bond予算・総影響保存の改定 — 2026-10-10
 
-This amendment closes the choices sections 1–7 left open. It is normative for the implementation on `rfc8/x8r-review`; it changes no
+[ADR-0176](../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](../../rfc/0015-panel-free-permissionless-verification.md)を適用する。
+
+新reward/REAL/root経路は受理時に同じproducerのclaim/block/reward/Final weight配分を予約し、全権利行使・Final/retired/reversalとRPC/EVMで同じ会計を読む。
+容量倍率の拡大で総creditを増やさず、共通DAA拘束・残存責任と旧新ruleset混在を検査する。EXECのweight/DAA=0、既存発行量、unique-work条件は維持する。実装・activationは未完了である。
+
+本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。
+
+## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定
+
+[ADR-0177](../../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
+Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
+モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
+
+## 10. Implementation record — X8R amendment 1 (2026-10-08/09): the slice verification route and the five design decisions
+
+> **Label (2026-10-10 merge).** This section is lane X8R's implementation record, kept as it was written. It is **not normative**: where it
+and the user's 2026-10-10 revision of sections 1–9 and the two 2026-10-10 sections above differ, the revision wins. Section 10.9 maps the
+revision onto the code.
+
+This amendment closed the choices sections 1–7 left open, for the implementation on `rfc8/x8r-review`; it changes no
 activation height, preset or fingerprint (the fence stays unarmable on every shipped ruleset). Each decision states its rationale; none
 needed a policy value from the user (the numbers it touches are existing protocol constants or the G14 route's own policy, whose
 production values stay on hold per the 2026-10-08 Panel=0 rulings).

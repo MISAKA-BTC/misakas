@@ -325,7 +325,9 @@ fn main() {
                 rt.manifest().n_ctx,
                 rt.artifact().map(|a| a.digest_hex()).unwrap_or_else(|| "unverified".to_string())
             );
-            misaka_palw_base0::fp_worker::run_v3_serve_v1(&rt, &mut std::io::stdin().lock(), &mut std::io::stdout().lock(), &dir)
+            // RFC-0001 P1: the request stream is read on its own thread, so a `Cancel` frame reaches the run in progress.
+            let mut frames = misaka_palw_base0::fp_worker::ThreadedFrames::spawn(std::io::stdin());
+            misaka_palw_base0::fp_worker::run_v3_serve_cancellable_v1(&rt, &mut frames, &mut std::io::stdout().lock(), &dir)
                 .unwrap_or_else(|e| die(e));
         }
         other => die(format!(

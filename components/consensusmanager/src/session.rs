@@ -228,6 +228,14 @@ impl ConsensusSessionOwned {
         self.consensus.palw_seat_duties_v2(mine)
     }
 
+    /// RFC-0006 × G14: the shards a non-seat bond may watch (agent SHARD). Same store-tip read profile as the seat duties.
+    pub fn palw_tir_shard_watch_duties_v1(
+        &self,
+        watcher: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2> {
+        self.consensus.palw_tir_shard_watch_duties_v1(watcher)
+    }
+
     pub fn palw_court_duties_v2(
         &self,
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
@@ -531,6 +539,11 @@ impl ConsensusSessionOwned {
     /// Same store-tip read profile as `palw_producer_facts_v2` below. Empty off ConsensusV2.
     pub fn palw_locked_bond_outpoints_v2(&self) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
         self.consensus.palw_locked_bond_outpoints_v2()
+    }
+
+    /// LIVE-R1 N2: a memory read (one mutex), cheap enough to ask from an async flow directly.
+    pub fn palw_partition_refusal_v1(&self) -> Option<kaspa_consensus_core::api::PalwPartitionRefusalV1> {
+        self.consensus.palw_partition_refusal_v1()
     }
 
     /// **ADR-0078 Decision 5: one claim's derivations, as the chain holds them.** The claim (its

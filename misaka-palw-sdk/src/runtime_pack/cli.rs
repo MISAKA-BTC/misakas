@@ -27,6 +27,7 @@ USAGE:
                            [--no-ref2] [--no-exec] [--no-declared] [--stream|--no-stream] [--strict] [--json]
     palw-class pack show   <pack dir> [--json]
     palw-class pack bind-class --pack <existing dir> --artifact <declared.palwtir> --network <network> --out <new dir>
+    palw-class pack index  --artifact <file.palwtir> [--out <file>] [--root <hex128>]
     palw-class pack commit-conformance --pack <dir> --artifact <declared class file> --state <dir> --network <net>
                            --chain-genesis <hex128|label:x> --ruleset-id <hex128|label:x> [--class-id <prefix>] [--candidate-id <hex128>]
                            [--k N] [--delay N] [--window N] [--depth N] [--repetitions N] [--security-bits N] [--retry-limit N]
@@ -51,6 +52,10 @@ with --artifact it checks that file. VERIFIED only when nothing failed and nothi
 `bind-class` pins an existing declared artifact's exact layout into a NEW pack without recalibration or admission search.
 It changes the pack digest, not the class/artifact identity. It does not certify admission, readiness or mining;
 run `pack verify` and live `misaka model preflight` separately. Old packs remain untouched.
+`index` reads the artifact once and stores the Merkle index (one 64-byte hash per 32 KiB leaf) beside it, `<artifact>.merkleidx` (RFC-0013
+§7.2); with --root it refuses to write an index that does not fold to that root. It is a cache, never an authority: `run-conformance`
+uses a sidecar index only when it folds to the committed artifact root (opening the drawn leaves then reads those leaves only, not the
+artifact) and otherwise makes the streamed pass it always made.
 
 Beacon conformance (RFC-0013 §9; the policy is an UNAPPROVED test policy; nothing here is consensus):
 `commit-conformance` binds the pack into a ConformanceCommitmentV1 (artifact/program/tokenizer/exact-layout roots re-derived from the
@@ -127,6 +132,30 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         "verify-conformance" => conformance_cli::verify_cmd(&mut args, &log),
         "synthetic-facts" => conformance_cli::synthetic(&mut args),
         "conformance-status" => conformance_cli::status(&mut args),
+        "index" => {
+            // RFC-0013 §7.2: the stored Merkle index of an artifact — one pass now, so that opening the leaves a beacon draw names (and
+            // authenticating a row tile) never needs another.
+            let artifact = PathBuf::from(take_flag(&mut args, "--artifact").ok_or(PACK_USAGE)?);
+            let out =
+                take_flag(&mut args, "--out").map(PathBuf::from).unwrap_or_else(|| super::beacon_run::merkle_index_path(&artifact));
+            let want = take_flag(&mut args, "--root");
+            if let Some(extra) = args.first() {
+                return Err(format!("unexpected argument `{extra}`"));
+            }
+            let c =
+                misaka_palw_tir_artifact::PalwTirContainerV1::open(&artifact).map_err(|e| format!("{}: {e}", artifact.display()))?;
+            let ranges = crate::tir_stream::ContainerRanges::open(&c)?;
+            let index =
+                crate::tir_merkle_index::PalwTirMerkleIndexV1::build_streamed(&c.program, &ranges).map_err(|e| e.to_string())?;
+            if let Some(want) = want {
+                let root = kaspa_hashes::Hash64::from_bytes(super::commit::unhex64(&want)?);
+                index.verify_root(root).map_err(|e| format!("not writing {}: {e}", out.display()))?;
+            }
+            index.write(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+            log(format!("{} leaves, root {}; wrote {}", index.leaf_count(), index.root(), out.display()));
+            println!("{}", index.root());
+            Ok(0)
+        }
         "bind-class" => {
             let dir = PathBuf::from(take_flag(&mut args, "--pack").ok_or(PACK_USAGE)?);
             let artifact = PathBuf::from(take_flag(&mut args, "--artifact").ok_or(PACK_USAGE)?);

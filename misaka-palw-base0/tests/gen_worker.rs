@@ -192,6 +192,141 @@ fn the_worker_answers_a_request_frame_with_the_claims_binding() {
     assert_eq!(again, answer, "the same request, the same binding");
 }
 
+/// A toy tokenizer for the toy class: one id per byte, folded into the toy vocabulary of 16.
+struct ByteTokenizer {
+    id: Hash64,
+}
+
+impl GenPromptTokenizerV1 for ByteTokenizer {
+    fn tokenizer_id(&self) -> Hash64 {
+        self.id
+    }
+    fn encode_user_text(&self, text: &str) -> Result<Vec<u32>, String> {
+        if text.contains('\u{1}') {
+            return Err("an unspellable byte".to_string());
+        }
+        Ok(text.bytes().map(|b| (b % 16) as u32).collect())
+    }
+}
+
+/// **RFC-0001 P4: a `Text` request.** The requester sends the user's bytes and a job whose two prompt fields are left for the worker; the
+/// worker, holding the class's tokenizer, spells the ids, completes the job and runs it. The completed job passes the requester's check;
+/// the same ids sent as `TokenIds` give the same binding; a V1 frame is answered exactly as before; every refusal names a rule.
+#[test]
+fn a_text_request_is_spelled_by_the_worker_which_completes_the_job() {
+    let v = toy();
+    let held = GenHeldClassV1::hold(v.row.clone(), v.params.clone()).unwrap();
+    let tokenizer = ByteTokenizer { id: v.row.tokenizer_id };
+    let sent = {
+        let mut job = v5_job(&v, 4);
+        job.v4.prompt_tokens = 0;
+        job.v4.prompt_token_ids_hash = Hash64::default();
+        job
+    };
+    let image = GenWireImageV1 { h: v.image.h, w: v.image.w, rgb: v.image.rgb.clone() };
+    // The bytes 3, 15, 15, 5 spell the toy prompt [3, 15, 15, 5].
+    let text = PalwGenWorkerRequestV2 {
+        job: sent.clone(),
+        input: PalwGenWorkerInputV1::Text(vec![3, 15, 15, 5]),
+        images: vec![image.clone()],
+        source_ids: vec![],
+    };
+    let (answer, work) = gen_worker_answer_text_v1(&held, &text.to_frame(), FORM, Some(&tokenizer));
+    let PalwGenWorkerAnswerV1::Completed { job: done, prompt_ids, binding } = &answer else { panic!("{answer:?}") };
+    assert_eq!(prompt_ids, &v.prompt, "the worker spelled the prompt");
+    let offers = &held.row.class.offers;
+    gen_check_completed_job_v1(&sent, done, prompt_ids, &offers.forced_prompt_prefix, offers.max_prompt_tokens, FORM)
+        .expect("the requester accepts the completion");
+    assert_eq!(done, &v5_job(&v, 4), "the completed job is the job a requester that tokenized itself would have sent");
+    assert_eq!(work.expect("a work").execution_root(), binding.committed_execution_root);
+
+    // The same ids as `TokenIds` give the same binding (the arm changes who spells, not what runs).
+    let ids = PalwGenWorkerRequestV2 {
+        job: v5_job(&v, 4),
+        input: PalwGenWorkerInputV1::TokenIds(v.prompt.clone()),
+        images: vec![image.clone()],
+        source_ids: vec![],
+    };
+    let (by_ids, _) = gen_worker_answer_text_v1(&held, &ids.to_frame(), FORM, None);
+    assert_eq!(by_ids, PalwGenWorkerAnswerV1::Result { binding: binding.clone() });
+    // A V1 frame (no magic) is the V1 answer, byte for byte.
+    let v1 =
+        PalwGenWorkerRequestV1 { job: v5_job(&v, 4), prompt_ids: v.prompt.clone(), images: vec![image.clone()], source_ids: vec![] };
+    let v1_bytes = borsh::to_vec(&v1).unwrap();
+    assert_ne!(&v1_bytes[..4], &PALW_GEN_WORKER_TEXT_MAGIC_V1, "a V1 request never looks like a V2 one");
+    assert_eq!(gen_worker_answer_text_v1(&held, &v1_bytes, FORM, None).0, gen_worker_answer_v1(&held, &v1_bytes, FORM).0);
+    // The wire indices are the ones the types promise: appended, never renumbered.
+    assert_eq!(borsh::to_vec(&PalwGenWorkerAnswerV1::Refused { why: String::new() }).unwrap()[0], 1);
+    assert_eq!(borsh::to_vec(&answer).unwrap()[0], 2);
+    assert_eq!(borsh::to_vec(&PalwGenWorkerInputV1::TokenIds(vec![])).unwrap()[0], 0);
+    assert_eq!(borsh::to_vec(&PalwGenWorkerInputV1::Text(vec![])).unwrap()[0], 1);
+
+    // Refusals, each by the rule and never the text; the class stays held throughout.
+    let why = |request: &PalwGenWorkerRequestV2, tok: Option<&dyn GenPromptTokenizerV1>| match gen_worker_answer_text_v1(
+        &held,
+        &request.to_frame(),
+        FORM,
+        tok,
+    )
+    .0
+    {
+        PalwGenWorkerAnswerV1::Refused { why } => why,
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    assert!(why(&text, None).contains("holds no tokenizer"));
+    assert!(why(&text, Some(&ByteTokenizer { id: Hash64::from_bytes([9; 64]) })).contains("not the class's"));
+    let mut other_tokenizer = text.clone();
+    other_tokenizer.job.v4.tokenizer_id = Hash64::from_bytes([8; 64]);
+    assert!(why(&other_tokenizer, Some(&tokenizer)).contains("another tokenizer"));
+    let mut preset = text.clone();
+    preset.job.v4.prompt_tokens = 4;
+    assert!(why(&preset, Some(&tokenizer)).contains("prompt fields"));
+    let mut hashed = text.clone();
+    hashed.job.v4.prompt_token_ids_hash = Hash64::from_u64_word(1);
+    assert!(why(&hashed, Some(&tokenizer)).contains("prompt fields"));
+    let mut empty = text.clone();
+    empty.input = PalwGenWorkerInputV1::Text(vec![]);
+    assert!(why(&empty, Some(&tokenizer)).contains("no bytes"));
+    let mut not_utf8 = text.clone();
+    not_utf8.input = PalwGenWorkerInputV1::Text(vec![0xFF, 0xFE]);
+    assert!(why(&not_utf8, Some(&tokenizer)).contains("not UTF-8"));
+    let mut unspellable = text.clone();
+    unspellable.input = PalwGenWorkerInputV1::Text(vec![1]);
+    let refusal = why(&unspellable, Some(&tokenizer));
+    assert!(refusal.contains("did not tokenize") && !refusal.contains('\u{1}'), "{refusal}");
+    let mut bad_image = text.clone();
+    bad_image.images[0].rgb[0] ^= 1;
+    assert!(why(&bad_image, Some(&tokenizer)).contains("image 0"));
+    assert!(matches!(
+        gen_worker_answer_text_v1(&held, b"MPGTgarbage", FORM, Some(&tokenizer)).0,
+        PalwGenWorkerAnswerV1::Refused { .. }
+    ));
+    let (again, _) = gen_worker_answer_text_v1(&held, &text.to_frame(), FORM, Some(&tokenizer));
+    assert_eq!(again, answer, "a refusal never dropped the held class");
+
+    // The requester's check refuses a completion that moved anything but the two prompt fields, or whose ids are not the commitment's.
+    let check = |done: &PalwFreePromptJobV5, ids: &[u32]| {
+        gen_check_completed_job_v1(&sent, done, ids, &offers.forced_prompt_prefix, offers.max_prompt_tokens, FORM)
+    };
+    assert!(check(done, prompt_ids).is_ok());
+    let mut moved = done.clone();
+    moved.v4.decode_token_limit += 1;
+    assert!(check(&moved, prompt_ids).unwrap_err().contains("may not fill"));
+    let mut seed = done.clone();
+    seed.v4.sampling_seed[0] ^= 1;
+    assert!(check(&seed, prompt_ids).is_err());
+    let mut wrong_ids = prompt_ids.clone();
+    wrong_ids[0] ^= 1;
+    assert!(check(done, &wrong_ids).unwrap_err().contains("does not commit"));
+    assert!(check(done, &prompt_ids[..3]).is_err(), "a count that is not the job's");
+    assert!(
+        gen_check_completed_job_v1(&sent, done, prompt_ids, &[9, 9], offers.max_prompt_tokens, FORM)
+            .unwrap_err()
+            .contains("forced prefix")
+    );
+    assert!(gen_check_completed_job_v1(&sent, done, prompt_ids, &[], 3, FORM).unwrap_err().contains("longer than the class offers"));
+}
+
 #[test]
 fn a_seat_judges_a_claim_from_its_material() {
     let v = toy();

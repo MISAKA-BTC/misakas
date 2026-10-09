@@ -1,20 +1,40 @@
 # RFC-0014 — Panel多数派に依存しないPALW fraud prosecution: 1人の正直なverifierから有界の客観証拠へ
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
+## 2026-10-09 登録不変性との整合
+
+[ADR-0175](../adr/0175-registered-models-are-permanently-immutable.md)を適用する。モデルの配布者は登録済みweights・tokenizer・実行仕様・canonical artifact rootを変更する権限を持たない。MISAKA Torrent採用は後続改定で廃止する。peer、配布先、同じ内容の包装・取得経路はoff-chainの任意運用であり、合意上のavailability leaseは要求しない。新しいtransport bindingが必要な場合も、同じ固定model ID/rootへの対応を再検証し、違う内容なら別モデルとして登録する。
+
+「新しいmodel/version」は独立した新モデルの登録を意味し、同じ登録IDへのversion追加・line/head置換を意味しない。配布不能だけで当該モデルのrewardability・weight・担保責任を変更しない。客観的計算不正への裁定は別に維持する。既存Position・AMMは改善版へ移動しない。§16の配布不介入・資本配分と、この永久不変bindingをそれぞれ検証する。
+
 **トークンの表示名は Misaka、ticker は BILI。** `misaka` 系アドレスプレフィックスと既存のprotocol/CLI/API識別子は維持する（[ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)）。
 
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 
-* **Status:** Draft / implementation design, 2026-10-07。新しい合意規則・wire形式・fenceは未実装、未有効化。本RFCの作成で既存ネットワークの規則は変わらない。
+* **Status:** Revised Draft / implementation design, 2026-10-10後続改定。§16はモデル入手への合意不介入と拘束miner元本によるモデル別coinbase配分を定義する。旧Seeder/Torrent可用性/TRDC/FPR gateは撤回。倍率式・経済優位・実装・activationは未完了で、既存ネットワーク規則は変わらない。
 * **Source baseline:** MISAKA-BTC/misakas public main `43f0bcb362d37cba79414940f3fdd368d40d3377`（2026-10-07確認）。コード上の現状と本RFCの提案を区別する。
 * **Activation:** 協調したネットワーク別upgrade。提案fence名 `palw_dispute_complete_v1` は未割当であり、既存Paramsのfieldではない。DAA・object tag・serialization version・新しい署名domainはここでは割り当てない。
 * **Scope:** class admission、第三者の証拠取得・局所化、seat/non-seat共通filer、court開始とFinalの競合、producer/seatへの客観的処罰。
 * **Related:** RFC07 [S24]、RFC08 [S25]、RFC10 [S20]、RFC11 [S21]、RFC13 [S26]、ADR0171 [S22]、ADR0172 [S23]。
 * **Deferred successor:** [RFC-0015: Panel=0への移行][R15]。本RFCのpublic non-seat prosecutionが完全に成立するまで、そのmodeは有効化禁止。
-* **2026-10-07追加方針:** MISAKA Model Transportをmisakasへ取り込み、chainに拘束されたモデルをMISAKA Transport経由で取得できることを新しい報酬資格の合意条件とする。登録・配布宣言と報酬資格は区別する。統合、availability義務、pending rewardとcold verifierの受入は§16で定義する。コード取り込み・合意変更は本追記時点では未実装・未有効化。
+* **2026-10-07追加方針:** 旧モデル取得強制の設計は[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)で撤回した。以前の文書チェックは履歴であり、新coinbase配分の完成証拠ではない。
+* **2026-10-10改定:** 旧モデル取得強制の設計は[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)で撤回した。以前の文書チェックは履歴であり、新coinbase配分の完成証拠ではない。
+* **2026-10-10 FPR追加:** 旧モデル取得強制の設計は[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)で撤回した。以前の文書チェックは履歴であり、新coinbase配分の完成証拠ではない。
 * **Normative language:** MUST / MUST NOTは有効化後に必要な規則、SHOULDは理由を記録して変更できる実装方針。以下の新しい型・module名は設計用の仮名で、現行Rust型の存在を意味しない。
 
 ## 0. 採用する設計
+
+**後続改定のscope:** モデル自体の入手・公開は合意条件にしない。以下のG14/Dispute Completenessは、
+verifierが正しい登録modelを保有/取得できた条件で、claim固有証拠から裁定する能力を指す。
+モデル取得を目的とする要求は適格DA/courtとせず、全weights/反復rangeの強制公開へ拡張しない（§16、ADR177 D2/D7）。
+閉鎖時の実効検出と経済安全性は別に未立証であり、旧無条件の全量取得保証を意味しない。
 
 Panelは通常時の検査・receipt集約を担う。claimの真偽をPanel多数派の信頼だけで決めない。
 不正を見つけた任意の適格な第三者が、Panelへの所属やgenesis operatorの協力を必要とせず、
@@ -36,7 +56,7 @@ objective fraud proofへの移行であり、lifecycle・担保・Finalを含む
 目標は次の二つに分ける。
 
 1. **検出後の保証:** 正直なverifierが、不正を示す検証可能な不一致を期限内に発見した場合、
-   producerが必要な証拠を開示すれば客観裁定へ、開示しなければ定義されたDA/default処理へ進む。
+   producerが必要なclaim固有証拠を開示すれば客観裁定へ、開示しなければ定義されたDA/default処理へ進む。
    不正claimをPanelの多数票だけで経済的Finalに逃がさない。
 2. **検出の保証:** 完全な決定的検証なら、対象範囲について不正を検出する。
    ADR0171の確率的constraint検査なら、承認済みsuiteの条件付き見逃し確率を受け入れる。
@@ -144,8 +164,8 @@ PalwDisputePlanV1 (proposed)
     commitment_layout_id, locator_template_id, witness_schema_id
     input/state/weight/output/proof relation coverage
     approved localization transitions → exact terminal kernels
-    DA/retention policy, canonical evidence/chunk encodings
-    class-bound distribution / availability policy identities (section 16)
+    claim-specific DA/retention policy + permitted unit/cumulative scope, canonical evidence encodings
+    immutable model identity + optional distribution descriptor binding (section 16)
     max rounds, total bytes, carrier bytes, checker work, RAM/storage
     cold-fetch/verify/localize/disclose/court/inclusion deadline envelopes
     soundness profile, challenge_policy_id, challenge_binding_policy_id
@@ -186,13 +206,13 @@ RegisteredUnrewarded
     → semantic / coverage / dispute / resource admission
     → DisputeAdmissible
     → fixed candidate commitment + RFC07 Beacon Conformance / ConformancePassed
-    → class-bound MISAKA Transport distribution + DownloadAvailabilityReady (§16)
+    → model/bond allocation snapshot + production budgets (§16; no acquisition gate)
     → ordinary readiness and licensing rules
     → reward-bearing / weight-bearing claims
 ~~~
 
-モデルの登録だけでdownload・seedを全nodeへ義務付けない。新しい報酬claimの受入には§16の取得可能性を追加し、
-必要materialのpublic downloadが成立しないclass/profileは、この経路では報酬・work weightの対象にしない。
+登録・採掘のどちらでもmodelのdownload/seedを合意上義務付けない。classの裁定能力を検証する試験は、
+検証者が正しいmodelを得られた条件で実施する。claim固有証拠のscopeとFinal/court条件は維持する。
 
 現行の「held」は計算・保持形式にも使われるため、「安全審査待ち」の意味として流用しない。
 既存reward classをこの文書だけで停止しない。移行判断は§11の別upgrade規則で行う。
@@ -402,9 +422,9 @@ bounded予約は無制限pauseを導入するための例外ではない。
 
 ~~~text
 DisputeAdmissible class/plan/kernel
-AND claim-bound model distribution / availability obligations satisfied (§16)
+AND immutable model identity + network/model/producer-bond budgets satisfied (§16)
 AND required positive verification evidence / coverage accepted
-AND required DA obligations satisfied
+AND permitted claim-specific evidence / DA / court obligations satisfied
 AND ordinary challenge + class verify horizon expired
 AND no unresolved accepted pursuit / required court
 AND plan-specific settlement and unique-work accounting satisfied
@@ -535,9 +555,9 @@ node-only変更で既存証拠の提出能力を共有する段階と、
 6. 既存classの新descriptorは新identityとして再admitする。
    現行にgapがあるclassの新規報酬claimを止める必要がある場合は、別途公開した移行policyとfenceで実施する。
 7. post-Final liability/担保保持の長さをhard deadlineと整合させ、途中でreleaseして逃げられないことを確認する。
-8. §16のdistribution binding、provider lease、availability challenge/answer/default、報酬資格と解放条件を
-   state/root/carriageへ含める。各validatorが同じ認証済みobjectから同じ結果を得ることを確認し、
-   torrentのpeer数やローカルdownload状態を合意入力にしない。
+8. §16の固定model identity、distinct miner元本、配分snapshotとnetwork/model/bond予算を
+   state/root/carriageへ含める。claim固有courtの許可unit/累積scope、Finalと責任解放を規範化し、
+   同じ認証済みobjectから同じ結果を得ることを確認する。model取得・peer状態は合意入力にしない。
 
 RFC10のoperator-anchor撤去はこのRFCから暗黙に有効化しない [S20]。
 公開fraud filerを先に作れても、permissionlessなPanel seedの安全性は別のactivation gateである。
@@ -558,7 +578,7 @@ RFC10のoperator-anchor撤去はこのRFCから暗黙に有効化しない [S20]
 | P4: admission・Final | class/TIR admission、state deadlines/locks/sweep、proposed reservation | 完全性未達classは新reward対象外。外部追及でFinalを有界にblockし、spamで無限延長しない |
 | P5: 大型constraint suite | RFC07/RFC11/ADR0171のkernel/checker/receipt/localizer | 全constraint、条件付きsoundness、独立witness取得、最大court負荷が測定・審査済み |
 | P6: permissionless rollout | RFC10 beacon/binding、network schedules/fingerprint | genesis operatorなしの新参加者が登録・claim・外部追及・settlementを完結 |
-| P-T: Transport統合・availability | §16、misaka-model-transport由来crate/daemon、proposed availability state、resolver、RPC/SDK | full cold downloadのL1/L2/L3、bonded disclosure/default、in-flight retention、pending rewardからmaturityまで独立public bondで実証。P4の報酬gateと一体で有効化 |
+| P-A: モデル資本・coinbase配分 / 不介入 | §16、distinct capital snapshot、versioned allocation/accounting、RPC/SDK、claim-specific court scope | network/model/bond予算保存、取得結果からの独立性、公開対閉鎖の経済評価とrecovery/移行を独立に検証。旧Transport統合・Seeder/取得gateは廃止 |
 
 RFC15のPanel=0実装・有効化は本RFCの完了条件に含めない。依存はRFC14のpublic prosecution完成から
 RFC15へ一方向とし、RFC14完成だけでPanel数・quorum・既存lifecycleを変更しない。
@@ -574,7 +594,8 @@ P1/P2のnode testとconsensus testは同時に設計し、P4のgateがない状�
 
 producerと3/4/5 malicious seatsが偽claimをlicenseする。
 正直なverifierはPanel外の通常public bondのみで、producerのheap/鍵/drill instanceを持たない。
-public claimと認証されたnetwork materialのみから処罰まで進む。
+正しい固定modelを保有/任意配布から取得した条件で、public claimと認証されたclaim固有materialから処罰まで進む。
+全保有者拒否時のmodel取得はこの試験の保証に含めない。
 
 少なくとも以下を実行する。
 
@@ -614,8 +635,8 @@ reduced fixtureの成功をcanonical rowの成功と呼ばない。
 * localizerが全dense capture、無制限replay、未認証boundary、未有効kernelを必要とする。
 * non-seat追及中にFinal/報酬が確定する、またはchallenge spamが時計を無限に延長する。
 * bytes/work/rounds/inclusion/deposit/retentionのworst-case boundが未定または実測条件で不成立。
-* MISAKA Transportで対象artifactをcold downloadできない、root照合が不成立、宣言やpeer数だけでavailabilityをPASSにする。
-* provider lease・認証開示・default・報酬失効/解放が合意に接続されていない、またはmodel取得中に必要な期限・保持期間が終わる。
+* 固定model/root照合、distinct元本・model配分・三層予算が不成立、または取得成否を資格/weight判定へ持ち込む。
+* claim固有証拠/court scope・認証/default・Final/責任解放が未定、または公開対閉鎖の経済条件が未評価。
 * legacy claim、旧receipt、state root/fingerprint、IBD/reorgの意味が変わる。
 * 大型constraint suiteのcoverage/soundness/localizationが未審査なのに大型対応済みと表記する。
 
@@ -647,8 +668,8 @@ activation前に別途固定する項目:
 * bond/deposit/exposure、実費とbounty、lock/retention/hard deadlineとnetwork inclusion envelope。
 * encoded constraint suiteのparameterと全claim soundness accounting。
 * independent implementation、template review、実network E2Eとmigration/fingerprint evidence。
-* §16のdistribution-to-class binding、availability challenge scheme、provider数/coverage/担保、freshness/expiry、
-  full cold download throughput、range/operand認証、reward maturity・availability failureの責任帰属。
+* §16のimmutable identity、重複のないmodel元本、coinbase配分/残余、claim固有court scope、
+  個別bond予算との接続、公開/閉鎖の経済評価と条件付き実効検出率。
 
 これらが未定の間は設計・実装計画であり、「1 honest verifierで任意モデルが安全」の
 稼働保証として利用しない。
@@ -715,255 +736,153 @@ activation前に別途固定する項目:
 [S27]: https://github.com/MISAKA-BTC/misakas/blob/43f0bcb362d37cba79414940f3fdd368d40d3377/docs/rfc/README.md#L1
 [R15]: 0015-panel-free-permissionless-verification.md
 
-## 16. MISAKA Transportをmisakasへ統合し、モデル取得可能性を報酬資格の合意条件にする
+## 16. モデル入手への不介入と拘束bond連動coinbase配分（2026-10-10後続改定）
 
-### 16.1 採択する方針と現行transportとの差分
+### 16.1 採択方針と旧方針の撤回
 
-**MISAKA Model Transport（MISAKA Torrent）をmisakasのリポジトリへ取り込み、
-報酬を得る新しいclass/profileは、chainに拘束されたモデルと検証用materialをMISAKA Transport経由で
-普通のpublic verifierが取得できなければならない。** この条件はPanelの有無にかかわらず新経路に適用し、
-RFC15のPanel=0にも引き継ぐ。目的は公開に検証・訴追できる計算へ報酬を与えることである。
+[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を正とする。
+**チェーンはモデルを入手できるかどうかに一切干渉しない。**
+MISAKA Torrentの採用・統合、専用Bonded SeederとSeeder報酬を廃止する。
+必須Torrent、独立Bonded Seeder群、PoR、Full Fetch、funded availability lease、TRDC、FPR、
+モデル全量の強制公開費用と取得不履行に基づくreward/weight停止を撤回する。
+旧7/5コピー、Seeder 15%、監査3-of-5、符号化4-of-7も採択しない。
+旧文書チェックのPASSは旧設計の整合記録であり、この後続設計の経済・実装証拠ではない。
 
-確認したtransportの基準は`MISAKA-BTC/misaka-model-transport`の
-`a9085f60effed42d8654ea98e6c459948d0139b3`（2026-10-07取得）[T01]。
-bundle/BEP52/Safe Model Profile/IPC/engine/daemonの配布機能は再利用する。
-現行の`ModelTransport`はbundle取得・seedのAPIであり、public-bond availability判定、PALW court、
-reward gate、class-root照合をすべて実装したものではない [T03]–[T05]。
-transportのREADMEの実装記録と、そのRFC冒頭の古いDraft statusを混同しない。
+### 16.2 配布と合意の境界
 
-transport RFC0001 §3.2–§3.3、`PALW-DIST-6`の「distribution rowをどの規則も読まない」は
-**旧declaration-only modeの規則として保持する**。本RFCでは将来のversioned modeに、
-distributionとclassの認証binding、担保付きavailability義務、それを読む報酬資格の合意規則を追加する [T02]。
-旧rowをそのままavailability certificateへ読み替えない。
+一般的なP2P配布・DHT/PEX・mirror・保存/共有契約はoff-chainの任意運用である。
+MISAKA固有のTorrent採用や専用Seeder制度・報酬は設けない。
+モデル保有者、miner、Panel、一般peerへ公開・Seeder義務を課さず、chainはpeer数・独立性・速度を追跡しない。
+全peer停止、公開拒否、ローカル取得失敗だけではclaim受理、報酬、Final weightや担保責任を変えない。
+配布の成功/失敗を証言する新委員会・availability oracleを導入しない。
 
-registrationとpossessionをcoupleしない原則は維持する。未配布のモデルも登録・研究は可能だが、
-**登録されたこと、magnet/infohashを宣言したこと、providerが「持っている」と署名したことだけで
-新しい報酬資格は得られない**。この改定はregistration gateではなくrewardability/weight gateである。
+### 16.3 固定モデルとの同一性
 
-### 16.2 リポジトリ統合と合意処理の境界
+登録時にModel ID、Canonical Artifact Root、canonical manifest、全weights、tokenizer/config/実行仕様、
+artifact sizeを固定し、変更は別Model IDとして登録する。path/order/encoding/file扱い等のcanonical化を定義する。
+claimは固定Model ID/root/specをbindする。取得者はpiece/shardを認証し、全量取得/復元後のrootを登録rootと照合する。
+任意のTorrent descriptor/infohashを登録するなら、その固定rootとの対応をimmutable bindingにする。
+infohashとartifact rootは別domainであり、infohashの必須登録・Torrent接続を資格条件にしない。
+異なるデータを正規モデルとして使用せず、root一致だけでminerの実計算を証明したと扱わない。
 
-実装では、transportのsourceを履歴・source commit・license/NOTICEとともにmisakasへ取り込む。
-仮称`model-transport/`のsubtreeを統合単位とし、crate参照・release・CIをmisakasから再現可能にする。
-取り込みは単なる外部リンクの追加で完了したとは扱わない。以下のpath・型・fence名は実装用の仮称である。
+### 16.4 モデル資格とclaim証拠のscope
 
-| 取り込むもの / 新設するもの | 責務と制約 |
-| --- | --- |
-| `misaka-bundle` / `misaka-btv2` / `misaka-transport-policy` | canonical descriptor、bundle commitment、torrent metadata/BEP52、formatとbyte boundの共通実装。chain adapterに利用する純粋な検証部分はI/Oと切り離し、versionとvectorsを固定する |
-| `misaka-transport-ipc` / `misaka-transport-engine` / `misaka-torrentd` / CLI | 実際のfetch/seed、cache、局所的な帯域・容量管理。daemonは引き続き秘密鍵を持たず、取得したmodel/codeを実行しない。libtorrent/C++ backendをconsensus validatorへlinkしない |
-| misakas resolver / fraud filer adapter | 自分のcanonical chainからclass/line/versionを解決し、daemonに取得を依頼し、L1/L2/L3を検証して公開検査・courtへ接続する。サイトやRPCの申告rootだけを信頼しない |
-| proposed `palw_artifact_availability_v1`とstate fold | class/distribution binding、providerのbond/coverage/期限、認証challenge/answer/default、reward eligibility、lockとexpiryを決定的に処理する。ネットワークdownloadをstate transition中に実行しない |
-
-root workspaceとのRust edition/MSRV、dependency/resolver、BorshとHash64 domainの整合をCIで確認する。
-desktop GUI、I2P/trackers、libtorrent、confinementは取得側のoptionであり、
-特定client・tracker・DNS・公式サイトの成功をコンセンサスの信頼根拠にしない。
-標準BitTorrent v2 clientから得たbytesでも認証条件を満たせる。
-全nodeが全モデルを保持する義務や、通常node P2Pへの無界bundle転送は導入しない。
-
-**合意に入れるのは、モデル取得を成立させる認証されたbinding・義務・裁定・報酬条件である。**
-validatorがtorrentへ接続して成功したか、DHTのpeer数、個々のdownload速度、HTTP status、
-daemonの`Finished`表示をblock validityへ直接使う実装は禁止する。
-
-### 16.3 chain-bound artifactと三段階検証
-
-claimはimmutableなclass/kernel/planに加え、当該claimに適用するversion/rootと
-distribution/availability policyのsnapshotを束縛する。新しい配布宣言でin-flight claimの証拠を差し替えない。
-descriptor、metadata、必要なindex・認証pathも公開取得対象である。
+旧六項`ModelRewardEligible`の可用性gateは撤回する。新routeの設計predicateは次とする。
+型名は仮称で、合意snapshotから導き、swarmやノードの取得結果を入力にしない。
 
 ~~~text
-canonical chainのclass / model version / artifact-inventory root
-    → accepted distribution binding
-        (descriptor commitment, full v2 infohash, file/range map, byte bounds)
-    → MISAKA Transportで取得
-    → L1: BEP52 piece/file Merkle verification
-    → L2: canonical bundle commitment・paths・sizes・formatsの照合
-    → L3: 実際のPALW inventory/weight materialを再計算・認証し、chainのrootへ束縛
-    → independent verification / localization / objective court
+ModelRewardEligible(model, epoch)
+    = ImmutableIdentityBindingValid
+      AND SemanticConstraintCourtPlanAdmitted
+      AND ApplicableKernelModeAndRulesetActive
+
+ClaimRewardEligible(claim)
+    = ModelRewardEligible(claim.model, claim.accepted_epoch)
+      AND RootBoundClaimCommitmentAndAuthorizationValid
+      AND NetworkModelAndBondBudgetsReserved
+      AND ClaimSpecificEvidenceCourtAndFinalConditionsSatisfied
+      AND UniqueWorkAndNoApplicableConviction
 ~~~
 
-32-byteのBitTorrent SHA-256 root、64-byteのbundle commitment、PALW inventory/artifact root、
-class identityは異なる型・domainであり、同じhashと扱わない。
-`Descriptor.palw.roots`に正しいrootが書かれているだけではL3に合格しない [T03]。
-source GGUF/safetensorsだけを配布する場合は、claimが使うcanonical weights/layoutへの
-再現可能な変換と認証bindingも必要である。変換済みPALW artifactと同名source modelの混同を拒否する。
+型付きのclaim固有state/trace/output/witnessのcommitment・保持・客観裁定は維持する。
+モデル取得目的のweight-file/range、全量列挙/反復要求をこのcourtに持ち込まない。
+許可unit・累積scopeと必要model operandの認証をADR177 D2に従って確定する。
+取得できないという申告だけでは適格なcourt開始、void、Slash、反証期間延長にならない。
 
-どのbundleを使うかはsource-DAAの規則で解決し、producerが同一計算についてinfohash・包装metadataを
-自由に変えて抽選をgrindしたり、余分なwork creditを得たりできないようにする。
-配布表現・所在の更新と計算の意味を分け、旧claimのrootと配布証拠は責任期間中保持する。
+### 16.5 重複しないモデル別miner元本
 
-### 16.4 DownloadAvailabilityReadyとproviderの合意上の義務
-
-仮称`ArtifactAvailabilityLeaseV1`は、単なるtorrent宣言とは別の合意objectである。
-少なくとも以下を拘束する。wire/tag/domainと具体的な定数はactivation前に固定する。
+受理済み配分snapshotにおいて、各bondのmodel別適格拘束元本を`C_{b,m}(t)`とする。
 
 ~~~text
-ArtifactAvailabilityLeaseV1 (proposed; not an existing Rust type)
-    network / version / policy_id
-    class_id, line/version when applicable, artifact/inventory root
-    accepted distribution_binding_id, descriptor commitment, v2 infohash
-    provider_bond, covered_files/ranges, possession commitment
-    accepted_at, serve_from, serve_until, retained_liability_until
-    challenge scheme / freshness / bounded response and disclosure envelope
-    reserved collateral / maximum concurrent obligations
+sum_m C_{b,m}(t) <= C_b_effective_locked(t)
+S_m(t) = sum_b C_{b,m}(t)
 ~~~
 
-providerはgenesis allowlistやmodel ownerの許可を要求しない公開bond規則で参加できる。
-model lineの配布宣言を署名する権限と、既に認証されたartifactを保持・提供する義務を引き受ける権限は別である。
-ownerなしのgenesis classにも公開bindingとleaseを構成する経路を定義する。
+claim予約額や件数を単純合算しない。rho・再送・root/slice/rider・key分割で同じ元本を増幅しない。
+owner seed/AMM/Position/Panel担保も自動算入しない。slash、退出、責任控除、model移動、期間境界の
+資本帰属とsnapshot/積分方式を固定し、短期借入と二重配分を評価する。7日間は未採用の説明例である。
 
-policyは全必要file/rangeのcoverage、取得量、独立供給と冗長性、freshなpossession/serve検査、
-最悪時帯域・同時要求・deadline・保持・担保を定義し、chainは有界で認証された証拠から判定する。
-provider数の具体値は測定・審査なしに固定しない。
-異なるbond/operator名だけで実体の独立性やSybil耐性を証明したとは扱わず、
-同時停止・選択的非開示・共通upstream依存・eclipseへの条件を明記する。
-providerの多数決で計算の真偽を決める新しいPanelは作らない。
+### 16.6 モデル別coinbase allocation
 
-必要なprobeはcommit後の承認済み乱数で対象を選び、認証されたchunk/openingの有効性を検証する。
-署名した自己申告、announceのupload量、Sybil可能なdownload receiptは証拠の代わりにならない。
-少数のrandom possession検査だけで「全bytesがいつでも誰にでもdownloadできる」ことを証明したとは扱わない。
-その残余リスク・公開serve義務・非開示closure・full cold download試験を別々に示す。
-
-新規reward-bearing claimの受入は、少なくとも次のAND条件を読む。
+採択済み総PALW発行予算の中で、非負・単調、`f(0)=0`の配分関数を用いる。
 
 ~~~text
-DisputeAdmissible(class / profile)
-AND valid class-to-distribution binding and all required ranges covered
-AND DownloadAvailabilityReady under the activated policy
-AND provider obligations funded and retained through the claim's dispute / liability horizon
-AND cold-fetch/check/court/inclusion envelope fits the claim lifecycle
+A_m(t) = f(S_m(t))
+R_m(t) = R_PALW(t) * A_m(t) / sum_j A_j(t)   [positive denominator]
+sum_m R_m(t) <= R_PALW(t)
 ~~~
 
-未充足のclassはRegisteredのまま保持できるが、新経路のreward/weight claimを受け入れない。
-READYは合意policyの条件成立を示す状態であり、将来のインターネット接続の無条件保証ではない。
-lease期限切れ、challenge不成立、認証defaultは新規資格を閉じる。再取得・再認証後に別の有効leaseで復帰できる。
-既存claimのservice/担保予約を、新しいleaseへの切替やclassの停止で消さない。
+他モデル資本を固定した場合、model資本の増加は配分を非減少にする。
+全modelが同時に増資する場合の絶対増額や既存minerの収入増は保証しない。
+分母0ならmodel配分0。丸め・未配分/未使用残高、model内leg、old/new会計の処理を規範化し、追加mintをしない。
+元本を預けただけでは支払わず、当該modelの有効な計算claimとFinal・予算条件を要する。
 
-### 16.5 モデルを持たない外部bondのdemandと客観的非開示裁定
+### 16.7 個別bond予算との同時制約
 
-fresh verifierはmodelを持っていなくても、公開されたclass/bindingから対象unitを指定できる。
-適格なbond/fee、unit binding、resource capを満たせば、**初期の算術mismatch証拠なしでも**
-必要materialへのavailability demandを開ける。取得できないと不正を発見できず、
-不正を発見しないと取得を要求できないという循環を禁止する。
+ネットワークcoinbase予算、model配分、ADR176の個別Q/B/R/F capを同時に検査する。
+公開参加者の資本追加で集合の配分が増えても、既存minerの最大枠と共通`d + W`時計を増やさない。
+受理snapshotと最大配分権を固定し、未払escrow・成熟・Final・reversal/readerで同じ帰属を使う。
+可変model配分から過去claimへ未予約の追加creditを発生させない。配分だけでblock数・DAA・難易度を変えない。
 
-受理したdemandはproviderと対象rangeを特定し、absolute response deadlineを合意上固定する。
-応答は、公開され再利用可能なchunkとBEP52/bundle/PALW rootへの規範的な認証path、
-または同じ義務を満たす承認済みの有界disclosureである。off-chain responseの到達を申告するだけで
-closureにせず、carrier上の公開開示等で全validatorが同じ結果を得る経路を定義する。
-これを口実にfull modelを一度にchainへ載せない。chunk・総bytes・in-flight数とreserve期間を制限する。
+### 16.8 独立受入matrix
 
-* 正しい開示はaccusationをrefuteし、他のpublic verifierも同じ証拠を使える。
-* 認証された誤答または規範的期限の非開示は、該当provider義務のdefaultを客観的に裁定する。
-* requesterのローカルdownload失敗、切断、悪意ある「受け取っていない」申告はdefault証明ではない。
-* 公開供給の必要coverageが回復しなければ、新規reward資格を閉じ、影響するpending claimを有界の
-  availability dispute/default処理へ進める。永久pendingや無制限延長を許さない。
+ADR177 §3のnon-interference、identity/court scope、distinct capital、allocation conservation、
+same-bond opportunity、open-versus-closed economics、recovery/activationを独立に試験する。
+同一chain/proofでpeer停止とlocal取得結果を変えても合意結果が同じになることを確認する。
+モデルのavailability監査をactivation gateへ戻さず、実効監視・経済評価の仮定を明示する。
 
-providerへのavailability liabilityとproducerへの計算fraud liabilityを区別する。
-provider defaultだけでproducerに未証明のComputationMismatchを帰属させない。
-producerも同じ提供義務を引き受けた場合はその義務を裁定し、報酬条件未充足のclaimのescrowを失効させる。
-providerのcollateral回収、producer rewardの失効、計算fraudのslashはそれぞれのbasisで処理する。
+### 16.9 資料と記録の位置づけ
 
-### 16.6 cold/hot verifier、全取得と必要range取得の時間予算
+Torrent/PoRの外部仕様は任意transportの資料であり、報酬資格・全量公開・外部所有者識別の証明ではない。
+現行subsidy carveは`palw_reward_v2.rs`、DAA emission budgetはADR167を参照する。
+本章の`S_m`/`f`配分は未実装で、従来のt12・Torrent/FPR文書PASSを新配分の証拠に流用しない。
 
-hot watcherは認証済みmodelをcacheできる。cold verifierはclaim公開後にdescriptor/metadata、
-必要なweights/tokenizer/plan/stateを取得してrootを確認し、検査・localization・courtへ進める。
-双方に同じ公開証拠と訴追権を提供する。cache保有者だけを安全性の前提にしない。
+### 16.10 規則Eとfork-choiceへの接続
 
-対象profileでは、cold開始cutoffと次の最悪時予算を事前固定・実測する。
+claim固有の適格court/Final条件、暫定creditと不可逆settlementの区別、ADR176のFinal weight上限を維持する。
+root/sliceと全writer/reader/undo、partition/reorg/restart/IBDをversioned規則で検証する。
+モデル配布不能だけで新たなweight停止を起動せず、閉鎖時の未検出不正を無条件に防げるとは主張しない。
+escrow・個別cap・model配分だけでRule E統合が完了したとしない。EXEC_TX/EXEC_SLICEのweight/DAAは0を維持する。
 
-~~~text
-t_start + B_discovery + B_metadata + B_cold_fetch_and_root_verify
-        + B_check + B_localize + B_witness_fetch_and_proof
-        + B_court + B_inclusion + B_reorg_margin
-    <= dispute_hard_deadline
+### 16.11 ECON・MEAS: 公開参加の経済優位
 
-provider serve/retention and collectible liability
-    cover all applicable deadlines, accepted pursuits and post-Final liability
-~~~
+公開による外部参加資本の増加が、閉鎖自己資本より圧倒的に有利となる倍率曲線を目標にする。
+同額の`S_m`では自己資本と外部資本は同じ配分であり、ウォレット数を独立資本認定に使わない。
+`f(S)=S`だけで既存minerの利益増を保証せず、superlinearな曲線の集中/Sybil/予算飽和も評価する。
+既存miner/ownerのcap、配布/資本/計算/検証費、競合model、自己増資、借入、全資本自前、
+閉鎖による検出率低下、49% reporter還流、共有担保と外部利得を含めて比較する。
+優位の数値基準・適用市場/資本範囲を事前定義し、成立しない条件と未立証事項を報告する。
+正しいモデルを得られないverifierの実効`p`は0にもなり、`p(R_risk+L_net)>C_saved`を無条件に成立としない。
 
-各Bは同じprofile/rulesetの有界費用とdeadline envelopeであり、時間・bytes・CPUを混ぜて足さない。
-network clock、minimum throughput/inclusion、並行負荷、renew/expiry/reorgの仮定を記録する。
-小さいfixtureやhot cacheの速度を、34 GiB級以上のfull cold downloadの成功へ外挿しない。
-この条件を満たせないmodel/profileは新reward modeおよびPanel=0へ入れない。
+### 16.12 未決パラメータとactivation
 
-通常検査を小さいconstraint check、異常時をrange/localization、terminal courtを必要な
-weight tile/operand/state/checkpoint取得で構成する最適化を採用できる。
-ただし**モデル全体の取得経路は公開に利用可能でなければならない**。
-部分取得しか存在しないことを、ユーザーの求めるモデルdownload条件の成立と呼ばない。
+`f`の形・上限/逓増範囲、model内配分、適格元本、配分時計/snapshot、ADR176の共通`W`との接続、
+整数精度・残余、claim固有court scope、検出/包含/徴収仮定、経済優位の閾値、versioned移行を固定する。
+wire/fingerprint・全実装・独立試験・別の協調activationまで新modeを有効化しない。
+model配分で採掘機会まで変更する追加設計は本coinbase改定から自動導入しない。
 
-部分court取得には、`file/offset/range → canonical tensor/row/tile → PALW root`の認証bridgeが必要である。
-BEP52のpiece proofだけでは、そのpieceがclassの正しいoperandである証明にならない。
-現行`ModelTransport` traitのbundle APIをrange/priority fetchとcourt witnessへ接続する追加実装が必要であり、
-当該bridgeとworst-case cold費用が確認されるまでは、その最適化を成立済みとしてbudgetから外さない。
+<a id="forced-public-retrieval"></a>
+### 16.13 Forced Public Retrievalの撤回と検証保証の変更
 
-### 16.7 報酬の算定、pending、Finalとspendableを分ける
-
-新規claimの報酬額は、eligibility/admissionを満たしたREAL block/claimの受理時に計算してよい。
-その額はまずescrow/pendingで表示し、即spendableなUTXOを発行しない。
-Panel付き新modeでは既存のpositive verification/receipt条件も維持し、
-Panel-freeの状態名とreceipt撤去はRFC15の別gateを満たしてから使う。
-
-~~~text
-registered model + DisputeAdmissible + DownloadAvailabilityReady
-    → accepted reward-bearing REAL block / claim
-    → reward amount computed / escrow-pending
-    → challengeable lifecycle (Panel-free mode: RFC15 Challengeable)
-         ├─ proven computation fraud → reward void + producer slash
-         ├─ adjudicated availability failure → defined reward/default/liability handling
-         └─ required checks + DA/availability + elapsed windows + no unresolved pursuit
-                → Final → reward maturity/vesting rules → spendable
-~~~
-
-§7.3のFinal predicate、pending reward/vesting/mintの全writer、withdraw/lock readersは、
-当該claimのavailability義務と裁定状態を同じ意味で読む。
-新規claim資格を閉じるclass-levelの最新状態と、既存claimが予約したbinding/期限/義務は区別する。
-別versionが配布されたことだけで過去claimを有罪にせず、過去の必要artifactを消して逃げることも許さない。
-maturity解放と必要retention/liability期間を整合させ、未裁定の証拠取得中に解放しない。
-新しい無期限rollbackや、完全に解放した報酬を後から無条件に回収できる保証は導入しない。
-
-upload bytes、torrent peer数、自己申告download receiptに新しいseed報酬を付けない。
-providerの固定報酬率（例: 2%）もここでは決めない。
-availability義務を満たす費用・担保・誘因と供給継続性は受入前にレビューし、
-protocol内のprovider支払いを設ける場合は、有界で客観判定できる義務に対する別の経済仕様を必要とする。
-外部のprovider契約だけでhonest watcherや公開取得を保証したことにしない。
-
-### 16.8 実装段階とactivation gate
-
-| 段階 | 実装・検証すること | 出口条件 |
-| --- | --- | --- |
-| T0: source統合 | transport subtree、licenses/provenance、workspace/dependency、backend分離、release/CI | 共通vectorsが同じrootを返し、consensus buildがswarm/GUI/C++に依存しない |
-| T1: chain bindingとresolver | canonical metadata/descriptor、class/version/root binding、full fetch、L1/L2/L3、immutable cache | model未保有のpublic bondが実transportから対象full artifactを取得し、自分のchain rootと照合できる |
-| T2: availability state | lease/coverage/freshness/expiry、possession challenge、public demand/disclosure/default、担保 | 偽宣言・自己申告・Sybil receiptをREADYにせず、public non-seat demandを客観的に裁定できる |
-| T3: reward接続 | new claim admission、Final、escrow/maturity、source snapshots、migration/fingerprint | 不可用profileへ新reward/weightを出さず、正直claimは有界にsettleし、責任期間中の証拠と担保を維持 |
-| T4: canonical E2E | real swarmとcold verifier、最大profile、全/部分取得、fraud proof、load/reorg/IBD | §13のfresh outsiderが公開downloadからlocalization/conviction・reward失効/slashまで完結。正直claimは正しくmature |
-
-必須の敵対的ケースは、seed=0だが有効metadataあり、sourceだけ取得できcanonical artifactなし、
-L1/L2は通るがL3が不一致、宣言rootをコピーした別model、descriptor/index withholding、
-selective serve、providerの共同停止・Sybil/freshness偽装、全coverageの一部欠落、
-帯域不足・eclipse・大量demand、expiry/退去/担保二重利用、配布差替え・reorg、
-完全download可だが計算trace不正、正しいmodel/claimへのfalse accusationを含む。
-full downloadとrange-to-operand bridge、pendingからFinal/maturity、既存courtとの競合を分けて測定する。
-
-provider policy、認証scheme、資源/時間/担保上限、codec/domain/fingerprint、in-flight migrationの
-いずれかが未定・未実装・未試験なら、この報酬経路を有効化しない。
-提案fence名`palw_artifact_availability_v1`は未割当であり、
-既存`palw_model_distribution`の名前や過去のDAAをこの追記で有効化済みにしない。
-**§16の完成はRFC14のpublic prosecution完成に必要だが、RFC15のPanel=0を自動有効化しない。**
-
-### 16.9 この追加で確認したtransport source
-
-* **T01** — [README、配布機能とchain側の境界][T01]。
-* **T02** — [transport RFC0001、declaration-onlyとPALW-DIST-6/8][T02]。
-* **T03** — [canonical Descriptor / PalwInfo / PalwRoot][T03]。
-* **T04** — [L2のread-only検証とFull depth][T04]。
-* **T05** — [ModelTransport traitとbundle fetch/seed API][T05]。
-
-[T01]: https://github.com/MISAKA-BTC/misaka-model-transport/blob/a9085f60effed42d8654ea98e6c459948d0139b3/README.md
-[T02]: https://github.com/MISAKA-BTC/misaka-model-transport/blob/a9085f60effed42d8654ea98e6c459948d0139b3/docs/rfc/0001-misaka-torrent.md
-[T03]: https://github.com/MISAKA-BTC/misaka-model-transport/blob/a9085f60effed42d8654ea98e6c459948d0139b3/crates/misaka-bundle/src/descriptor.rs
-[T04]: https://github.com/MISAKA-BTC/misaka-model-transport/blob/a9085f60effed42d8654ea98e6c459948d0139b3/crates/misaka-transport-policy/src/l2.rs
-[T05]: https://github.com/MISAKA-BTC/misaka-model-transport/blob/a9085f60effed42d8654ea98e6c459948d0139b3/crates/misaka-transport-engine/src/lib.rs
+旧FPR三段階、全量公開義務、モデル配布用重大Slash/上限付きdefault、代替Seeder・公開費予約と
+availability起因CHALLENGED weight制約を撤回する。modelを公開しないだけでminer bondを失わせない。
+既存claim固有の客観的計算反証・適格court/defaultはそれぞれのrulesetで維持する。
+**全所有者が拒否してもpublic verifierが全modelを取得できるという保証は撤回する。**
+G14の検証は正しい固定modelを保有/取得できた条件付きとなる。モデル未取得だけではchainは介入しない。
+旧TRDC/FPRは未実装・未有効化だった設計であり、現在のG14/activation要件として引用しない。
+過去の文書チェックと撤回sectionはADR177の整合記録に履歴として保持する。
 
 ## Mission alignment amendment — 2026-10-07
 
 本RFCはMISAKAの中核目標を実現する主実装設計である。各completion gateは普通のpublic bond・fresh verifier・公開transportと認証material・producer秘密状態なしを共通条件とし、kernel単体やliar-internal ServedViewだけの試験で完了扱いにしない。新しいclass/profileの報酬有効化は、この全経路の成立を必要条件とする。RFC15のPanel=0は本RFCの未完成部分が一つでも残る間は有効化しない。
 
 本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
+
+## Bond予算・総影響保存の改定 — 2026-10-10
+
+[ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](0015-panel-free-permissionless-verification.md)を適用する。
+
+確率的検出とpublic non-seat prosecutionに、producer bondが時間内のclaim機会とblock/reward/Final weightの総量を制限する前提を追加する。計算省略で枠を増やさず、客観裁定後は報酬失効と徴収可能担保への責任を執行する。
+public challengerの別責任・資源枠をproducer採掘capと同一視しない。正当な追及を包含できる能力、実効検出/徴収率、共有担保枯渇と自己共謀還流を評価し、capだけでG14/Rule E/ECON/MEASを満たしたと扱わない。
+
+本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。
