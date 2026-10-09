@@ -358,6 +358,62 @@ pub fn authenticated_openings(
     Ok((proof, hashed))
 }
 
+/// The stored Merkle index beside an artifact (`<artifact>.merkleidx`, written by `palw-class pack index`; RFC-0013 §7.2).
+pub fn merkle_index_path(artifact: &Path) -> PathBuf {
+    let mut s = artifact.as_os_str().to_owned();
+    s.push(".merkleidx");
+    PathBuf::from(s)
+}
+
+/// **The drawn leaves, opened against the artifact root from a STORED Merkle index** (RFC-0013 §7.2): the index must fold to the committed root
+/// (it is a cache, never an authority), only the drawn leaves' bytes are read — each hashed and held against its stored leaf — and the consensus
+/// multiproof is assembled from the stored hashes and verified against the root before any byte of it is used. The proof is the one
+/// [`authenticated_openings`] returns, byte for byte; the second return is the bytes hashed (the drawn leaves, not the artifact).
+pub fn authenticated_openings_indexed(
+    artifact: &Path,
+    index: &crate::tir_merkle_index::PalwTirMerkleIndexV1,
+    leaves: &[SelectedLeafV1],
+    artifact_root: &Digest,
+) -> Result<(PalwArtifactMultiproofV1, u64), Refusal> {
+    let fail = |e: String| Refusal::new("ARTIFACT_OPENING_FAILED", e);
+    let root = kaspa_hashes::Hash64::from_bytes(*artifact_root);
+    index.verify_root(root).map_err(|e| fail(e.to_string()))?;
+    let c = misaka_palw_tir_artifact::PalwTirContainerV1::open(artifact).map_err(|e| fail(e.to_string()))?;
+    let ranges = crate::tir_stream::ContainerRanges::open_with_window(&c, 64 << 10).map_err(fail)?;
+    let draw: Vec<u32> = leaves.iter().map(|l| l.leaf_index).collect::<BTreeSet<_>>().into_iter().collect();
+    let proof = index.multiproof(&c.program, &ranges, &draw).map_err(|e| fail(e.to_string()))?;
+    verify_artifact_multiproof_v1(&proof, root)
+        .map_err(|e| fail(format!("the openings do not reconstruct the committed artifact root: {e}")))?;
+    let hashed = proof.opened.iter().map(|(_, operand)| operand.bytes.len() as u64).sum();
+    Ok((proof, hashed))
+}
+
+/// **[`authenticated_openings`] without the pass when a trustworthy index is beside the artifact.** A sidecar index that is absent, damaged, for
+/// another program, folds to another root, or fails to open the draw is not an error and not believed: the streamed pass runs instead, which
+/// either reproduces the proof or refuses with its own reason. The third return says which way the openings were made.
+pub fn authenticated_openings_auto(
+    artifact: &Path,
+    leaves: &[SelectedLeafV1],
+    artifact_root: &Digest,
+    log: &dyn Fn(String),
+) -> Result<(PalwArtifactMultiproofV1, u64, bool), Refusal> {
+    let path = merkle_index_path(artifact);
+    if path.exists() {
+        let loaded = misaka_palw_tir_artifact::PalwTirContainerV1::open(artifact)
+            .map_err(|e| e.to_string())
+            .and_then(|c| crate::tir_merkle_index::PalwTirMerkleIndexV1::read(&c.program, &path).map_err(|e| e.to_string()));
+        match loaded.and_then(|ix| authenticated_openings_indexed(artifact, &ix, leaves, artifact_root).map_err(|r| r.to_string())) {
+            Ok((proof, hashed)) => return Ok((proof, hashed, true)),
+            Err(e) => log(format!(
+                "the stored Merkle index {} was not used ({e}); one streamed pass over the artifact instead",
+                path.display()
+            )),
+        }
+    }
+    let (proof, hashed) = authenticated_openings(artifact, leaves, artifact_root)?;
+    Ok((proof, hashed, false))
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------
 // Check outcomes
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -516,6 +572,8 @@ pub fn evidence_json(ev: &BeaconConformanceEvidenceV1) -> Value {
 pub struct Measures {
     pub open_pass_ms: u64,
     pub open_pass_hashed_bytes: u64,
+    /// The openings were made from a stored Merkle index (RFC-0013 §7.2): `open_pass_hashed_bytes` is then the drawn leaves, not the artifact.
+    pub open_via_index: bool,
     pub leaf_checks_ms: u64,
     pub leaf_bytes_compared: u64,
     pub vector_checks_ms: u64,
@@ -529,12 +587,12 @@ pub struct Measures {
 impl Measures {
     pub fn to_json(&self) -> Value {
         json!({
-            "open_pass_ms": self.open_pass_ms, "open_pass_hashed_bytes": self.open_pass_hashed_bytes,
+            "open_pass_ms": self.open_pass_ms, "open_pass_hashed_bytes": self.open_pass_hashed_bytes, "open_via_index": self.open_via_index,
             "leaf_checks_ms": self.leaf_checks_ms, "leaf_bytes_compared": self.leaf_bytes_compared,
             "vector_checks_ms": self.vector_checks_ms, "vector_positions": self.vector_positions,
             "checks_executed": self.checks_executed, "checks_reused": self.checks_reused,
             "wall_ms": self.wall_ms, "peak_rss_bytes": self.peak_rss_bytes,
-            "note": "peak RSS is the process's lifetime maximum (getrusage), mapped file pages included; hashed bytes are the authentication read of the whole artifact, compared bytes are the sampled leaves",
+            "note": "peak RSS is the process's lifetime maximum (getrusage), mapped file pages included; hashed bytes are the authentication read of the whole artifact (the drawn leaves only when open_via_index), compared bytes are the sampled leaves",
         })
     }
 }
@@ -664,11 +722,13 @@ impl Engine<'_> {
             proof = Some(match reusable {
                 Some(p) => p,
                 None => {
-                    log(format!("opening {} leaf(s) against the artifact root (one streamed pass over the artifact)", want.len()));
+                    log(format!("opening {} leaf(s) against the artifact root", want.len()));
                     let t = Instant::now();
-                    let (p, hashed) = authenticated_openings(self.artifact, &selection.leaves, &self.commitment.artifact_root)?;
+                    let (p, hashed, via_index) =
+                        authenticated_openings_auto(self.artifact, &selection.leaves, &self.commitment.artifact_root, log)?;
                     m.open_pass_ms = t.elapsed().as_millis() as u64;
                     m.open_pass_hashed_bytes = hashed;
+                    m.open_via_index = via_index;
                     if let Some(dir) = self.store {
                         write_atomic(
                             &dir.join("multiproof.borsh"),

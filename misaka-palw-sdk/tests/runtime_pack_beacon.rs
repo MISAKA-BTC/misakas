@@ -641,6 +641,72 @@ fn commit_beacon_evidence_verify_passes_reproduces_byte_for_byte_and_the_verifie
     assert_eq!(std::fs::read(dir.join("evidence.borsh")).unwrap(), std::fs::read(dir4.join("evidence.borsh")).unwrap());
 }
 
+/// **RFC-0013 §7.2: a stored Merkle index changes what the openings cost and nothing the evidence says.** With `<artifact>.merkleidx` beside the
+/// artifact, the drawn leaves are opened by reading those leaves only (the index folds to the committed root, the multiproof is built from the
+/// stored hashes); the evidence is byte for byte the streamed pass's. A sidecar that is damaged, or that is another artifact's, is not believed:
+/// the run makes the streamed pass it always made and ends in the same bytes.
+#[test]
+fn a_stored_merkle_index_changes_what_the_openings_cost_and_nothing_the_evidence_says() {
+    use misaka_palw_sdk::tir_merkle_index::PalwTirMerkleIndexV1;
+    use misaka_palw_sdk::tir_stream::ContainerRanges;
+    let s = shared();
+    let work = scratch("merkle-index");
+    let copy = work.join("class.palwtir");
+    std::fs::copy(&s.class_file, &copy).expect("a private copy of the class file");
+    let run = |tag: &str| {
+        let state = scratch(tag);
+        let (b, root) = commit(&state, &s.pack, &copy, &test_params());
+        let facts = facts_of(&b);
+        match run_with(&state, &s.pack, &copy, &root, &facts, ImplSet::default(), None, None).unwrap_or_else(|e| panic!("run: {e}")) {
+            RunOutcome::Evidence { evidence, dir, measures, .. } => {
+                (evidence, std::fs::read(dir.join("evidence.borsh")).unwrap(), measures)
+            }
+            other => panic!("expected evidence, got {other:?}"),
+        }
+    };
+    let artifact_bytes = std::fs::metadata(&copy).unwrap().len();
+
+    // No sidecar: the streamed pass reads the whole artifact.
+    let (ev_pass, bytes_pass, m_pass) = run("mi-pass");
+    assert_eq!(ev_pass.status, ConformanceStatusV1::Passed);
+    assert!(!m_pass.open_via_index && m_pass.open_pass_hashed_bytes >= artifact_bytes / 2, "{m_pass:?}");
+
+    // The sidecar: the same evidence, opened by reading the drawn leaves only.
+    let container = misaka_palw_tir_artifact::PalwTirContainerV1::open(&copy).unwrap();
+    let index = PalwTirMerkleIndexV1::build_streamed(&container.program, &ContainerRanges::open(&container).unwrap()).unwrap();
+    let sidecar = merkle_index_path(&copy);
+    index.write(&sidecar).expect("sidecar");
+    let (ev_idx, bytes_idx, m_idx) = run("mi-indexed");
+    assert!(m_idx.open_via_index, "{m_idx:?}");
+    assert_eq!(bytes_idx, bytes_pass, "the evidence is the streamed pass's, byte for byte");
+    assert_eq!(ev_idx, ev_pass);
+    assert!(
+        m_idx.open_pass_hashed_bytes > 0 && m_idx.open_pass_hashed_bytes < m_pass.open_pass_hashed_bytes,
+        "{} bytes hashed of an artifact of {artifact_bytes} ({} for the pass): the drawn leaves, not the artifact",
+        m_idx.open_pass_hashed_bytes,
+        m_pass.open_pass_hashed_bytes
+    );
+
+    // A damaged sidecar (a flipped bit in a stored leaf) and another artifact's index are refused, not believed: the pass runs, the evidence stands.
+    let good = std::fs::read(&sidecar).unwrap();
+    let mut damaged = good.clone();
+    damaged[good.len() / 2] ^= 1;
+    std::fs::write(&sidecar, &damaged).unwrap();
+    let (_, bytes_damaged, m_damaged) = run("mi-damaged");
+    assert!(!m_damaged.open_via_index, "{m_damaged:?}");
+    assert_eq!(bytes_damaged, bytes_pass);
+    let other = {
+        let mut leaves = index.leaves().to_vec();
+        leaves[0] = kaspa_hashes::Hash64::from_u64_word(0xBAD);
+        PalwTirMerkleIndexV1::from_leaves(&container.program, leaves).unwrap()
+    };
+    other.write(&sidecar).unwrap();
+    let (_, bytes_other, m_other) = run("mi-other");
+    assert!(!m_other.open_via_index, "an index that folds to another root is not used");
+    assert_eq!(bytes_other, bytes_pass);
+    let _ = std::fs::remove_dir_all(work);
+}
+
 #[test]
 fn an_interrupted_run_resumes_from_its_records_and_ends_with_the_same_evidence() {
     let s = shared();

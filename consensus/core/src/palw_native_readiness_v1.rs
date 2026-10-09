@@ -255,6 +255,12 @@ pub enum FinalizedWaitV1 {
 
 /// `finalized` is the validated pruning point under a certified safe prefix: it advances with the pruning point, not with any
 /// maturity number.
+///
+/// **A published `finalized` may be withdrawn, and never silently** (RFC-0012 C11, decided in the policy proposal §12): the label is
+/// recomputed from the evidence at every virtual change, so when the certified prefix retreats below the pruning point the label goes
+/// to `null` — fail-closed, never to a different block — while the block itself stays canonical (a reorg that abandons it is the
+/// separate, sticky `finalizedConflict`). `withdrawn_from` names the head this node published and withdrew, from the withdrawing virtual
+/// change until a `finalized` is published again. In memory: a restart forgets it (the log line does not).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FinalizedReadinessV1 {
@@ -262,6 +268,8 @@ pub struct FinalizedReadinessV1 {
     pub pruning_point: Hash64,
     pub pruning_blue: Option<u64>,
     pub wait: Option<FinalizedWaitV1>,
+    #[serde(default)]
+    pub withdrawn_from: Option<Hash64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -651,7 +659,13 @@ mod tests {
     }
 
     fn finalized() -> FinalizedReadinessV1 {
-        FinalizedReadinessV1 { finalized: None, pruning_point: h(0), pruning_blue: Some(0), wait: Some(FinalizedWaitV1::NoSafePrefix) }
+        FinalizedReadinessV1 {
+            finalized: None,
+            pruning_point: h(0),
+            pruning_blue: Some(0),
+            wait: Some(FinalizedWaitV1::NoSafePrefix),
+            withdrawn_from: None,
+        }
     }
 
     /// Run the explanation on a chain of `n` effects at blues 10, 20, … (daa = blue).

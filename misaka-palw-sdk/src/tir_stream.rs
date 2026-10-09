@@ -64,22 +64,34 @@ pub struct ContainerRanges<'c> {
     c: &'c PalwTirContainerV1,
     file: std::fs::File,
     window: Mutex<(u64, Vec<u8>)>,
+    window_bytes: u64,
 }
 
 impl<'c> ContainerRanges<'c> {
     pub fn open(c: &'c PalwTirContainerV1) -> Result<Self, String> {
-        Ok(Self { c, file: std::fs::File::open(&c.path).map_err(|e| format!("{}: {e}", c.path.display()))?, window: Mutex::new((0, Vec::new())) })
+        Self::open_with_window(c, WINDOW)
+    }
+
+    /// [`Self::open`] with a read-ahead of `window_bytes` (at least one request): the sequential walk of the inventory wants 4 MiB, a reader of
+    /// scattered row tiles (RFC-0013 §5, `tir_rows`) wants a few leaves.
+    pub fn open_with_window(c: &'c PalwTirContainerV1, window_bytes: u64) -> Result<Self, String> {
+        Ok(Self {
+            c,
+            file: std::fs::File::open(&c.path).map_err(|e| format!("{}: {e}", c.path.display()))?,
+            window: Mutex::new((0, Vec::new())),
+            window_bytes: window_bytes.max(1),
+        })
     }
 }
 
 #[cfg(unix)]
-fn pread(file: &std::fs::File, buf: &mut [u8], at: u64) -> std::io::Result<()> {
+pub(crate) fn pread(file: &std::fs::File, buf: &mut [u8], at: u64) -> std::io::Result<()> {
     use std::os::unix::fs::FileExt;
     file.read_exact_at(buf, at)
 }
 
 #[cfg(not(unix))]
-fn pread(file: &std::fs::File, buf: &mut [u8], at: u64) -> std::io::Result<()> {
+pub(crate) fn pread(file: &std::fs::File, buf: &mut [u8], at: u64) -> std::io::Result<()> {
     use std::io::{Read, Seek, SeekFrom};
     let mut f = file.try_clone()?;
     f.seek(SeekFrom::Start(at))?;
@@ -98,7 +110,7 @@ impl PalwTirRangeSourceV1 for ContainerRanges<'_> {
         if !(abs >= w.0 && abs + out.len() as u64 <= w.0 + w.1.len() as u64) {
             // A new window from here, as far as the file (not past this tensor's end: the next
             // tensor is a different instance, read when the walk reaches it).
-            let len = WINDOW.max(out.len() as u64).min(self.c.file_len - abs);
+            let len = self.window_bytes.max(out.len() as u64).min(self.c.file_len - abs);
             w.1.resize(len as usize, 0);
             pread(&self.file, &mut w.1, abs).map_err(|e| format!("{}: {e}", self.c.path.display()))?;
             w.0 = abs;

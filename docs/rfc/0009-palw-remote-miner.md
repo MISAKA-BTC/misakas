@@ -1,11 +1,19 @@
 # RFC-0009: PALW Remote Client — node を持たないモデル登録・claim・非保管型の報酬回収
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
-* Status: Draft, 2026-10-04 — design only; activation height、fingerprint、wire format は未決定。
+* Status: Revised Draft, 2026-10-10後続改定 — off-chain model acquisition; model-bond coinbase allocation and conditional prosecution; historical implementation/measurements retain scope; new economics/implementation/activation pending.
 * 改訂: 2026-10-06 — node-less モデル登録と登録者の GAS 負担を追加。仕様の追記であり、実装・有効化済みという意味ではない。
+* 改訂: 2026-10-10後続改定 — §3.5は固定同一性・任意配布・モデル別拘束miner元本を扱う。MISAKA TorrentとSeeder報酬を廃止し、旧取得監査/TRDC/FPR gateを撤回する。新配分の実装・経済評価・activationは未完了。
 * 対象: 現行 `testnet-12` のモデル/class 登録と PALW attempt / free-prompt claim。将来の [RFC-0008](0008-palw-claim-backed-consensus-blocks.md) の work-slice block は別途適合性を審査する。
 * 関連: [ADR-0044](../adr/0044-palw-free-prompt-receipts.md)、[ADR-0124](../adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md)、[ADR-0125](../adr/0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md)。
 
@@ -99,13 +107,30 @@ quote には `network/genesis`、ruleset/fence、参照 tip/DAA と期限、clas
 
 既定はユーザー自己負担とし、無料登録・自動スポンサーを装わない。スポンサーを提供する場合も明示的な署名済み条件に限定し、fee payer、bond signer、publisher、model-line owner を区別する。carrier fee の肩代わりだけで owner を取得できず、現行の bond burn がスポンサーへ移ることもない。所有者/支払元の新しい分離規則が必要なら別の合意更新とする。
 
-### 3.5 Artifact と公開情報は MISAKA Torrent / 投稿者 seeder
+### 3.5 Artifact配布の任意運用とmodel-bond配分 — 2026-10-10後続改定
 
-モデル本体、README、HF provenance、distribution metadata は署名付き content-addressed object として MISAKA Torrent の投稿者 PC / peer seeder へ置く。チェーンには既存規則で必要な commitment・登録 object を載せ、巨大な重みを carrier へ埋め込まない。**投稿データの唯一の正本や durable copy をサイト VPS の DB・ファイルへ置かない。** VPS を使う場合は非永続 relay とし、必要な保存・再構築は peer 側で行う。鍵は配信 object に含めない。
+[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。chainはmodel取得可否・Seeder登録/独立性・配布量/速度を管理せず、
+旧必須Torrent、独立Bonded Seeder、PoR/Full Fetch/lease/TRDC/FPRと取得不履行に基づく資格/weight停止を撤回する。
+model配布は任意のTorrent/mirror/共有契約で行い、取得失敗・非公開だけでSlash/Final延長を起動しない。
 
-取得者は signature、chain owner、class/root、content hash、Torrent commitment を検証する。署名付き README の公開と chain の class 登録は別操作で、公開成功を登録受理と表示しない。サイトにも登録者の署名検証経路から表示し、管理者の catalogue 編集を必須にしない。後続の Panel/court が必要な material の取得と責任は §4 の規則に従う。
+固定Model ID/root、weights/tokenizer/config/specは不変とし、変更は新Model IDとして登録する。
+取得bytesは認証と全量復元rootで照合し、claimも同じroot/specをbindする。
+任意のinfohash対応を登録する場合はimmutable bindingとし、必須取得経路にしない。
+claim固有state/trace/output/witnessの有限な証拠責任は維持するが、modelの全量/反復range公開へ転用しない。
+必要operandの認証と許可unit/累積scopeをADR177 D2で確定し、modelを得たfresh non-seat verifierの
+計算反証/localization/exact courtを試験する。全model保有者拒否時の取得保証は撤回する。
 
-node-less は seeder まで不要にする意味ではない。他の peer に検証済みコピーと必要な保持期間を確保できるまでは、投稿者 PC を停止しても配信が続くとは約束しない。magnet、storage receipt、peer count だけで将来の可用性を証明したと扱わず、取得可能性を別に表示する。
+重複しないminer拘束元本`S_m=sum_b C_{b,m}`からmodelのcoinbase予算を`f(S_m)`で配分する。
+同じ元本をclaim数/rho/複数modelで増幅せず、総発行予算と個別bondのQ/B/R/F cap・共通DAA拘束を維持する。
+資本預託だけでは支払わない。model別配分はblock頻度・DAA・fork choiceを自動変更しない。
+公開参加資本が閉鎖自己資本より圧倒的に有利になることは倍率式・経済評価の未立証目標であり、
+同額資本の所有者独立性をchainが識別できるとはしない。既存minerの実収入増も無条件保証しない。
+non-interference、distinct-capital、三層予算、公開/閉鎖比較、回復/移行のgateはADR177 §3を用いる。
+既存実装/測定・旧claim/activation記録は保持し、新配分・Panel=0は未実装/未有効化である。
+
+登録・README公開・モデル取得・Final/報酬をclientで別表示する。署名/rootを検証し、巨大weightsをcarrierへ載せず、
+鍵を配信objectへ含めない。配布先のtelemetryを合意上のREADY/停止表示へ変換しない。
+モデル配布契約/新配分登録をユーザーの見積りや署名なしに自動実行せず、投稿者VPSを唯一の保存先にしない。
 
 ### 3.6 状態追跡・再送・登録と readiness の分離
 
@@ -121,7 +146,7 @@ GAS の返金を保証しない。carrier が取り込まれ登録 object が拒
 
 claim が現在 bind する `trace_root`、`output_root`、`execution_root`、`trace_chunk_count`、retention deadline に対応する material を、claim 提出前に複数 provider へ配置する。`EvidenceManifestV1` は network、claim id または衝突しない preclaim id、各 root、chunk の順序/length/hash、encoding、最大展開サイズ、保持 DAA を正規化して commit する。claim id が manifest hash を含む場合は循環参照にならない preclaim id を定義する。Panel は任意 provider から必要な chunk/opening を取り、root と claim binding を検証してから既存の再実行・court に渡す。provider の署名だけで material の正しさを判定しない。
 
-provider は鍵、bond、報酬の代理人ではなく byte 配信者である。storage receipt には provider identity、manifest root、対象 chunk 集合、保持期限、network、署名を含める。必要な複製数、byte cap、同一運営者の重複、rate limit、discovery、料金は実測と攻撃予算から fence ごとに固定する。特定の transport や `misaka-torrentd` が現リポジトリにあると仮定しない。
+provider は鍵、bond、報酬の代理人ではなく byte 配信者である。storage receipt には provider identity、manifest root、対象 chunk 集合、保持期限、network、署名を含める。必要な複製数、byte cap、同一運営者の重複、rate limit、discovery、料金は実測と攻撃予算から fence ごとに固定する。claim固有証拠の配信scopeをmodel weights取得に拡張しない。MISAKA Torrent/専用Seederは本設計から廃止する。
 
 **新profileの適用境界（2026-10-06）:** 既存profileへの配信は既存replay/courtを維持する。
 将来の大型claimは[RFC07 Part V](0007-palw-verification-certificates-and-algebraic-checks.md)・
@@ -280,3 +305,18 @@ RFC11 §17 / RFC13 §9のRegisteredDormant、WaitingRandomness、ConformancePass
 node-less producerとrelayの分離は維持する。証拠の配布先をPanelだけに限定せず、普通のpublic bondがproducerの停止後も認証されたmaterialを取得して局所化・court提出できる責任と保持期間を定義する。複数RPCの一致は算術証明ではない。relayのHTTP失敗やmaterial未到達を自動slashの根拠にせず、規範的demand/disclosure/defaultで扱う。
 
 本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
+
+## Bond予算・総影響保存の改定 — 2026-10-10
+
+[ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](0015-panel-free-permissionless-verification.md)を適用する。
+
+remote producerにも同じbond/DAAのclaim/block/reward/Final weight予算を適用する。クライアントの計算速度・model/PWU申告・再送で枠を増やさない。
+readiness/RPCは予算残高、共通reuse_not_before、残存責任headroomとrulesetを公開し、予約額見積りと実際の合意creditを分ける。UIの表示だけで新会計を実装したことにしない。
+
+本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。
+
+## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定
+
+[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
+Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
+モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。

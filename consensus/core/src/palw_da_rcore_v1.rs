@@ -619,7 +619,7 @@ pub fn palw_da_resume_claim_v1(
 // DA-6: what a session costs
 // ---------------------------------------------------------------------------------------------
 
-/// **DA-6: a session's exposure** — `min(⌈r × S_P(stage)⌉, min_collateral_sompi)`, `r` = 1,000 bps,
+/// **DA-6: a session's exposure** — `min(⌈r × S_P(stage)⌉, min_collateral_sompi)`, `r` = 4,900 bps,
 /// `reward_base` being [`palw_da_stage_reward_base_v1`]'s.
 pub fn palw_da_session_exposure_v1(reward_base: u128, min_collateral_sompi: u64) -> u128 {
     reward_base.saturating_mul(PALW_DA_REFUTED_COST_BPS_V1).div_ceil(10_000).min(u128::from(min_collateral_sompi))
@@ -1258,18 +1258,19 @@ mod tests {
         assert_eq!(palw_da_pause_credit_v1(100, 150, 150), 100, "no pause, no credit");
     }
 
-    /// **DA-6: `min(⌈r · S_P(stage)⌉, min_collateral)`**, the floor's ADR figures: `Live`/`Licensed`
-    /// on the commitment (3,201.0 MSK → 320.10 MSK), `FinalRow` on the producer's S3 action
-    /// `min(25% · C, 3 G)` (13k producer: 3,250 → 325.00), the cap at `min_collateral`.
+    /// **DA-6: `min(⌈r · S_P(stage)⌉, min_collateral)`**, at ADR-0032's amended 49% share:
+    /// `Live`/`Licensed` on the commitment (3,201.0 MSK → 1,568.49 MSK), `FinalRow` on the
+    /// producer's S3 action `min(25% · C, 3 G)` (13k producer: 3,250 → 1,592.50), capped at `min_collateral`.
     #[test]
     fn a_session_costs_r_times_its_stage_base_and_never_more_than_the_floor() {
         const MSK: u128 = 100_000_000;
         let floor = 13_000 * 100_000_000u64;
         let live = palw_da_stage_reward_base_v1(PalwDaStageV1::Live, 320_100_000_000, floor, u128::MAX / 4);
-        assert_eq!(palw_da_session_exposure_v1(live, floor), 32_010_000_000, "320.10 MSK");
+        assert_eq!(PALW_DA_REFUTED_COST_BPS_V1, 4_900, "DA-6 follows PALW's reporter share");
+        assert_eq!(palw_da_session_exposure_v1(live, floor), 156_849_000_000, "1,568.49 MSK");
         let final_row = palw_da_stage_reward_base_v1(PalwDaStageV1::FinalRow, 0, floor, 10_000 * MSK);
         assert_eq!(final_row, 3_250 * MSK, "min(25% x 13,000, 3G)");
-        assert_eq!(palw_da_session_exposure_v1(final_row, floor), 325 * MSK);
+        assert_eq!(palw_da_session_exposure_v1(final_row, floor), 159_250_000_000);
         assert_eq!(palw_da_producer_action_v1(939_000 * 100_000_000, 100 * MSK), 300 * MSK, "3G binds");
         assert_eq!(palw_da_session_exposure_v1(1_000_000 * MSK, floor), u128::from(floor), "capped at min_collateral");
         assert_eq!(palw_da_session_exposure_v1(1, floor), 1, "rounded up: never free");

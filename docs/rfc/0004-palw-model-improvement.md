@@ -1,5 +1,26 @@
 # RFC-0004: PALW Model Improvement Protocol — self-improvement and distillation over PALW-TIR
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
+## 2026-10-09 改定 — 改善結果は独立モデルとして登録する
+
+**新規登録は自由。登録内容は永久不変。モデル改善は新規登録。既存モデルの置換は禁止。** [ADR-0175](../adr/0175-registered-models-are-permanently-immutable.md)を適用する。学習、蒸留、LoRA、dataset処理と評価は続けられるが、勝者を既存lineの次のheadへ反映する方式は新規則で廃止する。評価勝者は独立登録済みのcandidateとして`CandidateSelected`を記録し、そのモデル自身のroot・検証責任・報酬資格・Positionを使う。親のmodel ID、version、root、head、AMMは動かない。親子参照は来歴だけである。
+
+### 実装状態と残作業
+
+| 項目 | 現在の範囲 | 残作業・有効化条件 |
+| --- | --- | --- |
+| RFC0004 モデル改善 | epoch・評価・typed/composite artifact・reward foldの既存実装を保持。新しい不変登録fenceと独立candidate選択を実装。旧Part I/Part IIの「統合済み」を同一line更新の有効化根拠にしない | `palw_improvement_v1`と`palw_model_immutable_v1`はshipped ParamsではNone。明示的な高さ・独立試験・関連gateが必要 |
+| memory line / typed roots | 学習・評価用の独立material。登録済みモデルのweights/rootを差し替える経路ではない | 担保条件は別決定・検証が必要。旧一覧の「利用者判断4d」はmemory materialの独立した運用条件として扱い、担保額は未設定 |
+| kind別の検査費用 | MEASは未取得の実測入力。typed rootやhash登録だけで検査が完了した扱いにしない | kind、サイズ、CPU/GPU、cold/warm取得、公開証拠・exact court、帯域・メモリとdeadlineを実測し、担保・資源上限へ反映する |
+
+以下のpromotion/rollbackと旧予定表は、fence前の設計・実装履歴として保持する。新規則下の実装はspec17の改定節を優先し、自己改善やtyped-rootの休眠経路をこの改定で有効化しない。
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。

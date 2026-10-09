@@ -14,7 +14,9 @@
 //! * [`attempt`] mounts an attempt on a quorum-checked template with the miner's OWN executor and signer: the node supplies a template and
 //!   relays the finished block, and never sees the inference, the key, or a signature made before the draw is won.
 //! * An accepted relay is **not** inclusion: [`track::ClaimTracker`] follows tx id, claim id, block, licence, challenge window and
-//!   `Final`/void separately and walks backwards on a reorg.
+//!   `Final`/void separately and walks backwards on a reorg. [`resubmit`] remembers an ACK between two polls and, when no
+//!   independent observer confirms it within the bound, sends the SAME bytes through another relay (idempotent: one tx id, one fee, one
+//!   claim).
 //! * Stage A0's [`register`] adds a model without a node: a quote that names every cost by its payer, a gate that stops
 //!   signing when anything moved, and a tracker that keeps relay ACK, inclusion and the registry's accepted row apart.
 //! * Stage B's [`evidence`] gives the Panel somewhere other than the miner's PC to read from; a storage receipt is a promise, not a
@@ -33,6 +35,7 @@ pub mod proof;
 pub mod public_material;
 pub mod register;
 pub mod relay;
+pub mod resubmit;
 pub mod template;
 pub mod track;
 pub mod transport;

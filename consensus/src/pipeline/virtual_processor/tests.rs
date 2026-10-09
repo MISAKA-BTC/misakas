@@ -16941,6 +16941,9 @@ mod t12_a2u_new_kinds_uniform;
 // with the `evm` feature only, like `p2_evm_twin`.
 #[cfg(feature = "evm")]
 mod rfc12_zero_dns_matrix;
+// RFC-0012 wave 2 (C1 a real claim to `Final` with the lane on, C2 a pruned join with EVM state): `evm` feature only, like the matrix.
+#[cfg(feature = "evm")]
+mod rfc12_c_items;
 
 /// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
 /// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`
@@ -17375,7 +17378,9 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
     };
     let catalog = palw_v2_test_catalog();
     let bundle = palw_v2_test_bundle(&catalog);
-    let config = ConfigBuilder::new(MAINNET_PARAMS)
+    // Validated WITHOUT the retirement, which is set afterwards: the release's validation requires `palw_fork_choice_rule_e_v1` armed
+    // at or below it (ADR-0175), a fence this fixture does not arm; the test is about the retirement's own behaviour.
+    let mut config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
@@ -17387,18 +17392,18 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
                 reentry_final_depth_daa: 10,
                 min_retained_validators: 4,
             });
-            p.palw_dns_retirement = Some(PalwDnsRetirementV1 {
-                activation: ForkActivation::new(5),
-                settlement: PalwSettlementPolicyV1 {
-                    settled_anchor_depth: 2,
-                    unique_mature_work: 20,
-                    max_operator_permille: 1000,
-                    max_class_permille: 1000,
-                },
-                legacy_evidence_horizon_daa: 10,
-            });
         })
         .build();
+    config.params.palw_dns_retirement = Some(PalwDnsRetirementV1 {
+        activation: ForkActivation::new(5),
+        settlement: PalwSettlementPolicyV1 {
+            settled_anchor_depth: 2,
+            unique_mature_work: 20,
+            max_operator_permille: 1000,
+            max_class_permille: 1000,
+        },
+        legacy_evidence_horizon_daa: 10,
+    });
     let mut ctx = TestContext::new(TestConsensus::new(&config));
     for _ in 0..16 {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
