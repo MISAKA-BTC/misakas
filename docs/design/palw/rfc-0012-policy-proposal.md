@@ -311,9 +311,8 @@ analysis, not measurement):
 * **`Final + 3,000`** is a policy-only change (a v2 rule: `matured = Final + claim_retirement`, drop the retention term; a committed policy field
   and a version bump), with three stated cautions: (0) **it has no slack** — the last block that reverses a `Final` is the block at `F + 3,000`,
   which is also the rule's own instant; it is closed only because the certificate reads the sink state *including* that block, and
-  `Final + C + 1` (or `+ reorg_margin 300`) is the cheap way to stop depending on that equality (10.3, `d1_b`/`d1_d`); (1) it ignores a class's own model court window (`palw_model_court_window`), which can outrun
-  `window_court` and extends the claim's retention (palw_state_v2.rs ≈30790) — neither rule reads an extension made *after* `Final`, so if that
-  fence is armed the class window must be read; (2) the slash-only tail (F+3,000…F+6,000) stays open exactly as under v1.
+  `Final + C + 1` (or `+ reorg_margin 300`) is the cheap way to stop depending on that equality (10.3, `d1_b`/`d1_d`); (1) a class's own model court window (`palw_model_court_window`) can outrun `window_court` and extends the claim's retention (palw_state_v2.rs ≈30790)
+  after `Final` - **closed in wave 2 (C6, 12): the evidence conversion now reads the claim's live retention too, so the fact is mature at the later of the two**; (2) the slash-only tail (F+3,000…F+6,000) stays open exactly as under v1.
 * **v1 (5,400)** needs nothing more; its cost is the lag and its slack.
 
 ### 10.3 Tests and measurements (X12b)
@@ -515,7 +514,7 @@ decides the value from §10. Nothing below is decided by this lane. **Sizes:** S
 | C4 | **Re-measure D1 on the merged tree with 0008 / 0010 / 0011-K2 / 0014 / 0015 armed** | the horizons in §10.3 are properties of the fold as it is (`F_off = 123`, last reversing block `Final + 3,000`, DA default horizon `Final + 4,201`). Panel-free licensing (0015), permissionless panels (0010), public non-seat prosecution and the court/`Final` race (0014) and claim-backed slices (0008) can move every one of them, and 0014 §7.3 requires reward maturity and the lease `retained_liability_until` to be aligned with the liability horizon | run `rfc0012_safe_maturity_attacks` and `rfc12_r*` unchanged on the integration branch with those fences armed in the TEST `Params` (they read the windows from `Params`); any change in the `d1_b` / `d1_c` last-block numbers is a D1 input and the 10.2 table is re-issued | X12b · S to run, M to adapt |
 | C5 | **The maturity rule, if D1 ≠ v1** | `Final + 3,000` needs a committed policy field | `NativeMaturityRuleV1 { V1, FinalPlus(offset) }` in `NativeFactRulesV1`, the lifecycle closure and `PalwSettlementPolicyV1::commitment_bytes` (version bump), `readiness.maturity.rule` reporting it, and the `Rule` enum of `rfc0012_safe_maturity_attacks.rs` promoted to the library with those tests unchanged. Must land BEFORE the release's fingerprint, because the policy id is committed in `PalwDnsRetirementV1::commitment_bytes`. Not needed if v1 stays | X12b · M |
 | C6 | **A class's model-court window can extend a claim's retention** (`palw_model_court_window`, palw_state_v2.rs ≈ 30790) | with 0011-K2 / 0014 in the release, check whether any class window can outrun `window_court`; neither maturity rule reads an extension made after `Final` | grep + a fold test that sets a class window above `window_court` and asks `d1_b`/`d1_c`; if it can, the rule must read the class window or the fence must forbid it | X12b · S |
-| C7 | **Preset + release wiring** | the fence is `None` on every preset and in no flag-day list | in the release branch only: set `palw_dns_retirement` on the t12 preset (activation, policy, horizon), add it to the fence list and `consensus_params_id` / fork-id inputs, update `rfc0012_fork_id_and_cost` (its TEST fence is 9,137 today) and `validate_palw_v2`'s tests; the policy id of the preset must equal the committed one (test) | Lead / integration · S |
+| C7 | **Preset + release wiring** | the fence is `None` on every preset and in no flag-day list | in the release branch only: set `palw_dns_retirement` on the t12 preset (activation, policy, horizon), add it to the fence list and `consensus_params_id` / fork-id inputs, update `rfc0012_fork_id_and_cost` (its TEST fence is 9,137 today) and `validate_palw_v2`'s tests; the policy id of the preset must equal the committed one (test); **requires `palw_fork_choice_rule_e_v1` (ADR-0175) armed at or below** the retirement height | Lead / integration · S |
 | C8 | **Explorer renders `nativeReadiness`** | the reasons are served; only the CLI shows them | `contrib/misakascan-t12/app.js` + `tests/native-settlement.cjs`: show `maturity.rule`, `blocking.waits`, `finalized.wait`, `skipped` | X12b · S |
 | C9 | **Release-build cost at 100k+ blocks** | §6 is a debug-build measurement and an extrapolation | a release-build benchmark of `certify_native_prefix_v1` on 160,000 effects with real fact density, and a cold rebuild of `NativeRowCache` from a devnet DB | X12b · S |
 | C10 | **The DNS "all-equivocating votes" case past the fence** | x2/x13 show DNS is not an input; no equivocation was crafted | one matrix test with equivocating DNS attestations after the fence asserting no effect on the sink or the labels | X12 · S |
@@ -544,3 +543,91 @@ decides the value from §10. Nothing below is decided by this lane. **Sizes:** S
 * **Runbook and pager** for `FinalizedConflict` (the record §5 has the signal and the resync; the page is OPS).
 * **Live census** (operators by entity, REAL classes, `pwu` per window) — the input for W and the caps; data gathering, not code.
 * **Release notes** carrying the integrator wording above and the D1 choice in the user's words.
+
+## 12. Wave 2: the code items C1-C11 of section 11 (lane X12c, branch `rfc12/x12-c-items`, 2026-10-08; built and run by X12N, 2026-10-09)
+
+The coordinator asked for every code item of 11.1 to be implemented before the single full-activation release (no DAA-9,000 flag day; RFC-0012 ships with
+RFC-0008 / 0010 / 0011-K2 / 0014 / 0015). **Status of this section: written by X12c while builds were on hold; built, fixed and run by X12N on 2026-10-09.
+The "Result" column is what that run showed** (implementation record 7.1-7.3 has the commands and every binary's count). Nothing here moves a params /
+schedule / identity id: every change is a `cfg(test)` seam, a test, a pure function or a log/RPC field that exists only past the dormant fence (plus one
+line that makes the lead-cap parent policy read the same clock as the template builder, which is `unix_now()` outside a test).
+
+| Item | What was written | Where | Result |
+|---|---|---|---|
+| **C1** a claim reaches `Final` through the processor with the EVM lane on | the builder reads a simulated clock (`template_clock` / `template_now`, `cfg(test)`) set by `T12Chain::arm_clock` on an EVM-active network, so the harness no longer re-stamps; `native_relabel_class` (`cfg(test)`) reads the floor claim as REAL work | `processor.rs`, `native_settlement.rs`, `t12_round_lane_e2e.rs`, `tests/rfc12_c_items.rs` (`c1_a`, `c1_b`, `c1_c` ignored: ~5,400 DAA) | **PASS** (`c1_a`, `c1_b`); `c1_c` (~5,400 DAA) is run once on the release candidate |
+| **C2** a pruned join with EVM state | the joiner replays through P, loses everything a pruned joiner lacks (PALW tip and deltas, EVM header and state rows), and installs the PALW carriage and the EVM header + state through the node's own import functions; the blocks above P are taken and compared root for root | `tests/rfc12_c_items.rs` (`c2`) | **PASS**. **Partial by construction:** the UTXO set is the replayed one (the source's pruning UTXO set is advanced by the real pruning processor, which cannot move a pruning point on this clock), the overlay snapshot and the P2P messages are not exercised |
+| **C3** market orders across the fence with ADR-0162 armed | ADR-0162 (`palw_model_virtual_v1`, dormant on every preset, the user has not decided it) armed at DAA 0 in a TEST copy of the params; an 80 MSK deposit, a 50 MSK buy and two one-unit sells (signed with `cast`, held to their fields) ride one payload across the fence; the combined ledger is asserted conserved on every block | `tests/rfc12_zero_dns_matrix.rs` (`c3`) | **PASS as restated; a FILL is a GAP.** X12c wrote the test to expect three fills; the run showed ADR-0162 Decision 5 at work: trading opens only at the class's approval (status `Active` and a registry lifecycle of exactly `Active`), and t12's genesis class is `Active` / `Prefetching`. So the buy reverts at the call and keeps its 50 MSK (gas only), the market exists (no more `MARKET_MISSING`) and both sells settle `Refused EXCEEDS_POSITION`, and the ledger conserves on every block. A fill end to end needs an approved class, which the floor-only harness cannot reach (record 7.2) |
+| **C4** re-measure D1 with the other lanes armed | `measure_horizons` + tripwire `d1_g`: F_off, the last reversing conviction, the last DA accusation and the latest default asserted as RELATIONS under every lane configuration the fixture can arm (baseline, `palw_model_court_window`). **Not armable here, and why:** `panel_v3` (RFC-0010: a beacon and a draw policy), `kernel_route` / OPV (RFC-0014/0015: a class registry, the interim 50-DAA window), RFC-0008 slices, RFC-0011-K2 class registrations. **Measured against what is merged now; to be redone at integration** by adding a variant | `tests/rfc0012_safe_maturity_attacks.rs` (`d1_g`) | **PASS** on the merged tree (both configurations identical to the baseline); redo at integration |
+| **C6** a class's own court window extends retention | `native_facts_and_skips_v1` now reads a claim's LIVE retention from the sink state too (a court opened after `Final` on a class with its own window extends `trace_retention_daa`, palw_state_v2.rs:30818); a fact is mature at the later of the recorded and the live value. Without a class window the two are equal, so nothing changes on any network that does not arm that fence | `palw_native_settlement_v1.rs`; `d1_h` | **PASS** |
+| **C8** explorer renders `nativeReadiness` | reasons, clocks, gaps, skipped counts, the maturity rule, and the withdrawn-label alarm | `contrib/misakascan-t12/app.js`, `tests/native-settlement.cjs` | **PASS** (`node`, no cargo) |
+| **C9** release-build cost at 100k+ blocks | designed, not run (12.9) | `tests/rfc0012_c9_release_cost.rs` (two `#[ignore]`d tests) | DESIGNED; compiles; not run (by order) |
+| **C10** DNS "all validators equivocate" past the fence | `x16`: P is DNS-final on branch X, Q on branch Y, C on neither; the heavier PALW branch wins on all three with the same snapshot and heads; every (rollout stage x health) with an anchor on the abandoned incumbent leaves the outcome the anchorless one; an equivocation-evidence transaction citing a target at or past the fence is refused by name (`DnsLegacyEvidenceOutsideWindow`) | `tests/rfc12_zero_dns_matrix.rs` (`x16`) | **PASS** |
+| **C11** may a published `finalized` retreat | decided: yes, to `null` only, never silently (12.7); implemented and tested | `native_settlement.rs`, `processor.rs`, CLI, explorer, `rfc12_r5` | **PASS** |
+| **C5** the maturity rule v2 | skipped: the user has not chosen a D1 other than v1 | - | - |
+| **C7** preset and release wiring | a ready-to-apply checklist (12.8); not applied | this document | - |
+
+
+### 12.7 C11 - decided: a published `finalized` may be withdrawn; it is never replaced by a different block and never withdrawn silently
+
+**Decision (X12c, for the user's veto): no latch.** Reasons, in the order they matter:
+
+1. **What the label is.** `finalized` is "the validated pruning point under a certified `safe` prefix" - an *evidence-backed* label, recomputed at every virtual
+   change. A latch would keep it standing after the evidence that justified it is gone (a conviction retracts the last work under it, a delta row is lost):
+   authority without evidence, which is exactly what the design refuses everywhere else (missing evidence STOPS certification).
+2. **A retreat can only be to `null`.** `finalized` is the pruning point, and the pruning point only advances along a chain; the label therefore never moves to an
+   *older* or a different block. A reader that acts only on a non-null `finalized` and never walks its own view backwards cannot be misled by a retreat; the unsafe
+   behaviour (the label jumping back) does not exist by construction.
+3. **The dangerous case already has its own, stronger signal.** A reorg that abandons the published head is the sticky `finalizedConflict` (x7): `safe` and
+   `finalized` withheld, an `ERROR` log, the CLI and explorer alarm, cleared only by a validated import.
+4. **Reachability.** On a real chain `finalized` sits at least 74,920 blue score behind the tip (10.1). A retreat needs the certified prefix to fall *below* the pruning
+   point: a conviction-driven retraction moves `safe` back by the few effects the retracted claim supported (hours of blocks, not 74,920), and a reorg deeper than the
+   node's 600-blue finality depth is refused. The harness reaches the case only because its pruning point is adjacent to `safe` (`rfc12_r5`).
+5. **A latch is not free.** It would relax the API's ordered-prefix invariant (`finalized` an ancestor of `safe`, enforced by `get_native_settlement_snapshot` and the
+   ETH-tag consistency checks) and add persistent consensus-adjacent state.
+
+**What was implemented so the retreat is never silent.** The virtual-change path (`update_evm_canonical_heads` -> `note_finalized_withdrawal`) compares the previous
+snapshot's `finalized` with the new one's: when a published head is withdrawn and no conflict is recorded it logs `FINALIZED LABEL WITHDRAWN: <head> was published as
+finalized and is still canonical, but at <sink> the evidence no longer certifies it (stop ...)` at `ERROR` level (the durable signal; a pager rule on that string is OPS),
+and keeps the head in memory so `getPalwSettlement.nativeReadiness.finalized.withdrawnFrom` names it until a `finalized` is published again (a restart forgets the field,
+not the log). The CLI prints it, the explorer renders it as an alarm. Tested: `rfc12_r5` (the withdrawn head is the published one; nothing is named when nothing was
+published), core/rpc/gRPC/CLI/explorer round trips. **If the user prefers the latch**, it needs a design note first (it changes the snapshot's invariants), then
+`native_evaluate` step 8 reads the previous snapshot - the data is already in hand.
+
+### 12.8 C7 - the activation release: a ready-to-apply checklist (do NOT apply before the release)
+
+Everything below is a release-branch edit; nothing here is applied in wave 2, and every step keeps the fence dormant until the height is chosen.
+
+1. **Pick the height `H` and the policy** (the user, section 11.2): `D`, `W`, the caps, the horizon. Record them in one place: three `const`s next to the entry below.
+2. **The entry** - in `consensus/core/src/palw_native_settlement_v1.rs`, in the pattern of `palw_audit_1004_v1::PALW_T12_AUDIT_1004_ENTRY`:
+   ```rust
+   pub const PALW_T12_SETTLEMENT_POLICY_V1: PalwSettlementPolicyV1 = PalwSettlementPolicyV1 { settled_anchor_depth: /* D */, unique_mature_work: /* W */,
+       max_operator_permille: /* 400 */, max_class_permille: /* 1000 */ };
+   pub const PALW_T12_LEGACY_EVIDENCE_HORIZON_DAA: u64 = 10_080;
+   pub const PALW_T12_DNS_RETIREMENT_ENTRY: crate::config::params::PalwPostLaunchFenceV1 = crate::config::params::PalwPostLaunchFenceV1 {
+       name: "palw_dns_retirement_v1",
+       set: |params, at| {
+           params.palw_dns_retirement = at.map(|activation| PalwDnsRetirementV1 {
+               activation, settlement: PALW_T12_SETTLEMENT_POLICY_V1, legacy_evidence_horizon_daa: PALW_T12_LEGACY_EVIDENCE_HORIZON_DAA });
+       },
+   };
+   ```
+   `Some(never())` must collapse as every other entry does (`Params::sync_*`; the existing `Some(ForkActivation::never())` handling at params.rs ~6358 is the template). A test holds the name to `Params::palw_fences_v1()` (which already lists `"palw_dns_retirement_v1"`, params.rs:10414).
+3. **Append it to the list** the release arms: `PALW_T12_INT13_FENCES_V1` (params.rs:21890) if the full-activation release reuses that list and its height (`PALW_T12_INT13_DAA`, now `None`), else a fresh list and constant. Prerequisites in force already: `ConsensusV2` (`validate_palw_v2` requires it), the EVM lane (genesis). Order: after `palw_audit_1004_v1`.
+   **Hard prerequisite (Lead, 2026-10-09): `palw_dns_retirement_v1` requires `palw_fork_choice_rule_e_v1` (ADR-0175) armed at or below its height.** A release list that arms the retirement without it, or above it, is not shippable; `validate_palw_v2` refuses it (FINX). Order in the list: `palw_fork_choice_rule_e_v1` first. The RFC-0012 test fixtures that arm the retirement build their `Config` directly (validated without the retirement, which is set afterwards), so they do not depend on that fence.
+4. **Re-pin the identities.** `consensus_params_id` and `consensus_schedule_id` move (params `5ee7fd8e...`, schedule `1678e073...` today): `grep -rln 5ee7fd8e` lists the `*_is_t12_only.rs` / `pruning_proof_strict_economic_fence` / `reorg_strict_win_fence` pins to update; the deploy kit's `contrib/t12-deploy-kit/fleet.env.example` `INT13_FLAG_DAY_DAA=` and the `t12_deploy_kit_constants` test that pins it to `PALW_T12_INT13_DAA`; the drill flag `--palw-drill-int13-at` already arms the whole list on a salted chain - use it for the dry run.
+5. **The fork-id gate.** `rfc0012_fork_id_and_cost` arms a TEST fence at 9,137 and proves an upgraded node partitions from an un-upgraded one at the height; re-run it, and move its TEST height if the release height collides with it. The fence is visible to the fork id only if it is in the list BEFORE the build is cut ("once the int-13 build is cut this list is frozen", params.rs:21880).
+6. **Gates, in order:** `cargo test -p kaspa-consensus-core --lib` (palw_native_*), `--test rfc0012_*`; `-p kaspa-consensus --features evm rfc12_` (x0-x16, r1-r5, c1-c3); `-p kaspa-rpc-core -p kaspa-grpc-core -p misaka-cli`; the explorer test; then the drill (policy proposal 11.3) on the SHIPPED binary crossing the fence. The `#[ignore]`d `rfc12_c1_c` (~5,400 DAA) and the C9 release-cost measurement are run once, on the release candidate.
+7. **Words:** release notes carry the integrator wording of 11.2 and the D1 choice in the user's words; the `FINALIZED LABEL WITHDRAWN` and `FINALIZED CONFLICT` log strings go into the pager rules.
+
+### 12.9 C9 - the release-build cost measurement: DESIGNED, NOT RUN
+
+`consensus/core/tests/rfc0012_c9_release_cost.rs` (two `#[ignore]`d tests, compiled with the others so they cannot rot) and the node-level half described in its module
+doc. Protocol: fleet-class hardware, release profile, an idle machine, three runs, the median of each figure recorded verbatim in the implementation record.
+* **c9_a** - `certify_native_prefix_v1` at 10k / 40k / 160k / 640k / 1.28M effects in two shapes: *dense* (F = N/2, the stress shape of section 6) and *measured* (one REAL
+  claim per 123 blocks, the fold's own `F_off`). PROPOSED gates: <= 40 ms at 160k dense, <= 5 ms at 160k measured, time growth within 1.15x of the input growth per step
+  (a superlinear step at the top size says the sort or the anchor map dominates and the sweep needs chunking).
+* **c9_b** - `native_safe_readiness_v1` on the same chains with 10,000 open claims and 100 sessions; PROPOSED gate <= 2x the sweep.
+* **Node half (to write when run)** - a devnet database (the drill network, or the harness filled with N synthetic delta rows) opened fresh: the FIRST `native_evaluate`
+  (every row a store read plus a delta decode) cold-cache and warm-cache, and the SECOND (all hits); RSS before and after (design number 352 B/row, 42 MB per 100k blocks).
+  PROPOSED gates: cold first evaluation <= 30 s per 100k blocks on the fleet disk, warm per-change evaluation <= 50 ms. A node that cannot answer a virtual change within
+  one block interval when warm is the failing case.

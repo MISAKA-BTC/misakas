@@ -490,6 +490,18 @@ pub struct VirtualStateProcessor {
     /// refusing a heavier, fully validated candidate on the PALW deep-reorg rule
     /// ([`Self::palw_partition_refusal_v1`]). Memory only; node-local; no verdict reads it.
     pub(super) palw_refusal_streak: parking_lot::Mutex<Option<kaspa_consensus_core::api::PalwPartitionRefusalV1>>,
+    /// Test-only: the clock the TEMPLATE BUILDER reads in place of the wall clock (milliseconds; 0 = the wall clock). On an EVM-active
+    /// network the builder executes the lane against the stamp it chooses, so a harness cannot re-stamp afterwards; with this it can
+    /// make the builder choose a simulated stamp, and `build == validate` holds with a simulated clock. Never set outside a test.
+    #[cfg(test)]
+    pub(super) template_clock: std::sync::atomic::AtomicU64,
+    /// Test-only: relabel every `Final` attempt the native-settlement walk reads to this class, so a floor claim (the only claim the
+    /// harness can produce) is read as REAL work. The node's own delta, extraction, conversion and certificate run unchanged.
+    #[cfg(test)]
+    pub(super) native_relabel_class: parking_lot::Mutex<Option<Hash64>>,
+    /// The `finalized` head a virtual change published and a later one withdrew while no conflict was recorded (RFC-0012 C11), kept
+    /// until a `finalized` is published again. Memory only, for the explanation; the `error!` at the withdrawal is the durable signal.
+    pub(super) native_finalized_withdrawn: parking_lot::Mutex<Option<BlockHash>>,
     /// Test-only: facts a test places at a chain block, as if its PALW delta had carried that work.
     #[cfg(test)]
     pub(super) native_fact_override:
@@ -1223,6 +1235,11 @@ impl VirtualStateProcessor {
             native_readiness_memo: Default::default(),
             palw_reader_snapshot: Default::default(),
             palw_refusal_streak: Default::default(),
+            #[cfg(test)]
+            template_clock: Default::default(),
+            #[cfg(test)]
+            native_relabel_class: Default::default(),
+            native_finalized_withdrawn: Default::default(),
             #[cfg(test)]
             native_fact_override: Default::default(),
             palw_native_ruleset_id: params.consensus_params_id(),
@@ -3342,18 +3359,20 @@ impl VirtualStateProcessor {
         }
         if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.dns_retired_at(daa)) {
             let policy = self.palw_dns_retirement.expect("retirement is active").settlement.id();
-            match self.evm_heads_store.read().native_snapshot() {
+            let previous_finalized = match self.evm_heads_store.read().native_snapshot() {
                 Ok(Some(s)) if s.version != 1 || s.policy_id != policy || s.ruleset_id != self.palw_native_ruleset_id => {
                     error!("[native-settlement] incompatible persisted evidence; preserving it for resync");
                     return;
                 }
-                Err(StoreError::KeyNotFound(_)) | Ok(_) => {}
+                Ok(previous) => previous.and_then(|s| s.finalized),
+                Err(StoreError::KeyNotFound(_)) => None,
                 Err(e) => {
                     error!("[native-settlement] unreadable persisted evidence: {e}; preserving it for resync");
                     return;
                 }
-            }
+            };
             let snapshot = self.native_evm_settlement_snapshot(sink);
+            self.note_finalized_withdrawal(sink, previous_finalized, &snapshot);
             let heads = kaspa_consensus_core::evm::CanonicalEvmHeads {
                 latest: snapshot.latest.unwrap_or_default(), safe: snapshot.safe.unwrap_or_default(), finalized: snapshot.finalized.unwrap_or_default(),
             };
@@ -19701,6 +19720,19 @@ impl VirtualStateProcessor {
         Ok(())
     }
 
+    /// The wall clock the template builder reads. Production: `unix_now()`, always. A test may substitute a simulated clock
+    /// (`template_clock`); there is no way to do so in a non-test build.
+    fn template_now(&self) -> u64 {
+        #[cfg(test)]
+        {
+            let simulated = self.template_clock.load(std::sync::atomic::Ordering::Relaxed);
+            if simulated != 0 {
+                return simulated;
+            }
+        }
+        unix_now()
+    }
+
     /// **The stamp a template built on a virtual carries — or the lead cap's refusal of it.** One
     /// computation for the template builder and for [`Self::palw_lead_cap_virtual_parents`], so the
     /// policy leaves out exactly what the builder would refuse.
@@ -19811,7 +19843,8 @@ impl VirtualStateProcessor {
         if merged_beats.is_empty() && !is_beat(sink) {
             return (virtual_parents, virtual_ghostdag_data);
         }
-        let now = unix_now();
+        // The builder's clock (the wall clock outside a test), so the policy leaves out exactly what the builder would refuse.
+        let now = self.template_now();
         if !self.palw_virtual_steps_past_lead_cap(&virtual_ghostdag_data, now) {
             return (virtual_parents, virtual_ghostdag_data);
         }
@@ -20544,7 +20577,7 @@ impl VirtualStateProcessor {
         } else {
             None
         };
-        let timestamp = self.palw_template_stamp_v1(clock, lead_capped, virtual_state.past_median_time, unix_now())?;
+        let timestamp = self.palw_template_stamp_v1(clock, lead_capped, virtual_state.past_median_time, self.template_now())?;
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
         let header_pruning_point =
             self.pruning_point_manager.expected_header_pruning_point(virtual_state.ghostdag_data.to_compact()).pruning_point;
