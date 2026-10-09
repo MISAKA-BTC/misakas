@@ -380,12 +380,14 @@ pub fn palw_rule_e_verify_window_above_v1(
     if opening.records.windows(2).any(|w| key(&w[0]) >= key(&w[1])) {
         return Err(PalwRuleELeafV2ErrorV1::BadOrder);
     }
-    // The boundary: with records before the range, the first opened record is the last at or below the fork.
-    if lo > 0 && opening.records.first().is_none_or(|r| r.accepted_blue_score > fork_blue_score) {
+    // The boundary: the first opened record when it lies at or below the fork — the last such record. It may sit at index 0 (one
+    // record of the window at or below the fork); with records before the range it is required, so the suffix starts where it says.
+    let boundary = opening.records.first().is_some_and(|r| r.accepted_blue_score <= fork_blue_score);
+    if lo > 0 && !boundary {
         return Err(PalwRuleELeafV2ErrorV1::BadOrder);
     }
     // …and only it: a second record at or below the fork means the range starts too early (harmless, but not the canonical opening).
-    if opening.records.iter().skip(usize::from(lo > 0)).any(|r| r.accepted_blue_score <= fork_blue_score) {
+    if opening.records.iter().skip(usize::from(boundary)).any(|r| r.accepted_blue_score <= fork_blue_score) {
         return Err(PalwRuleELeafV2ErrorV1::BadRange);
     }
     let root = root_from_range(
@@ -583,7 +585,8 @@ mod tests {
     fn a_window_opens_above_a_fork_and_any_tampering_is_refused() {
         let window: Vec<_> = (0..7u64).map(|i| record(100 + i, 10 + 2 * i, i as u32, PalwRuleEClaimStatusV1::Live)).collect();
         let ext = palw_rule_e_leaf_v2_ext_of(5, &window, &[bond(1), bond(2)]);
-        for fork_bs in [5u64, 9, 10, 15, 22, 30] {
+        // 10 and 11: exactly one record at or below the fork — the boundary at index 0, which the opening starts with.
+        for fork_bs in [5u64, 9, 10, 11, 15, 22, 30] {
             let opening = palw_rule_e_open_window_above_v1(&window, fork_bs);
             let above = palw_rule_e_verify_window_above_v1(&ext, fork_bs, &opening).unwrap_or_else(|e| panic!("{fork_bs}: {e:?}"));
             let expected: Vec<_> = window.iter().filter(|r| r.accepted_blue_score > fork_bs).copied().collect();
@@ -606,6 +609,12 @@ mod tests {
         hidden.lo += 1;
         hidden.records.remove(0);
         assert!(palw_rule_e_verify_window_above_v1(&ext, 15, &hidden).is_err(), "a suffix must start at its boundary");
+        // The same with the boundary at index 0.
+        let mut hidden0 = palw_rule_e_open_window_above_v1(&window, 10);
+        assert_eq!(hidden0.lo, 0);
+        hidden0.lo += 1;
+        hidden0.records.remove(0);
+        assert_eq!(palw_rule_e_verify_window_above_v1(&ext, 10, &hidden0), Err(PalwRuleELeafV2ErrorV1::BadOrder));
     }
 
     #[test]

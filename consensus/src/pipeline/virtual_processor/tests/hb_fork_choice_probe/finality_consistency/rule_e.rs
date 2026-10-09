@@ -202,13 +202,16 @@ async fn finx_e_v1_the_lighter_branch_more_bonds_worked_on_is_weighed_and_taken(
         assert_eq!((pair.a.economic(), pair.b.economic()), ((0, 0, 0), (0, 0, 0)), "{tag}: an economic tie");
         if armed {
             assert_eq!((n.heavy.sink(), n.light.sink()), (lt, lt), "{tag}: both nodes on the lighter branch more bonds worked on");
-            // LIVE-R1 N2's consensus half reads rule E: the light node's refusal of the heavier tip is a weighed refusal (rule E
-            // weighed the pair and the refused tip does not outrank its sink); the heavy node, which moved, records none.
-            assert!(
-                n.light.vp().palw_partition_refusal_v1().is_some_and(|r| r.refused == ht),
-                "{tag}: the light node's refusal is weighed"
-            );
-            assert_eq!(n.heavy.vp().palw_partition_refusal_v1(), None, "{tag}: the heavy node moved and refuses nothing");
+            // LIVE-R1 N2's consensus half reads rule E: each node's refusal of the heavier tip is a weighed refusal (rule E weighed
+            // the pair and the refused tip does not outrank its sink). The heavy node, once it moved, refuses its own former tip on
+            // every later resolve exactly as the light node does — the same record on both, which holds nothing by itself: the
+            // watchdog holds only when long-lived outbound peers are on the refused chain, and here none is.
+            for (who, node) in [("light", &n.light), ("heavy", &n.heavy)] {
+                assert!(
+                    node.vp().palw_partition_refusal_v1().is_some_and(|r| r.refused == ht && r.sink == lt),
+                    "{tag}: the {who} node's refusal of the heavier tip is weighed, at the lighter sink"
+                );
+            }
         } else {
             assert_eq!((n.heavy.sink(), n.light.sink()), (ht, lt), "{tag}: the status quo — split (V1)");
             assert_eq!(n.heavy.vp().palw_rule_e_searches.load(Relaxed), 0, "{tag}: no continuation runs unarmed");
