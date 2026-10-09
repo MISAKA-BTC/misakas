@@ -23,7 +23,14 @@ pub fn floor_profile() -> Box<kaspa_consensus_core::palw_step::PalwShapeProfileV
     )
 }
 
-/// One block through the real fold, with the t12 extras — or with the audit fence switched OFF,
+/// An edit to the fold's extras, applied after the fixture built them: how a test arms a lane the fixture does not (RFC-0012 C4/C6).
+pub type ExtrasEdit = std::sync::Arc<dyn Fn(&mut PalwTransitionExtrasV1) + Send + Sync>;
+
+pub fn no_edit() -> ExtrasEdit {
+    std::sync::Arc::new(|_| {})
+}
+
+/// One block through the real fold, with the t12 extras - or with the audit fence switched OFF,
 /// which is the fold every other network runs. `Err` is the fold's own refusal of the block.
 pub fn try_step(
     p: &Params,
@@ -36,12 +43,29 @@ pub fn try_step(
     subsidy: u64,
     audit: bool,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+    try_step_with(p, sp, parent, daa, objects, work, exec_key, subsidy, audit, &|_| {})
+}
+
+/// [`try_step`] with `edit` applied to the extras the fixture built.
+pub fn try_step_with(
+    p: &Params,
+    sp: &PalwStateParamsV2,
+    parent: &PalwChainStateV2,
+    daa: u64,
+    objects: &[PalwConsensusObjectV2],
+    work: PalwBlockWorkV3<'_>,
+    exec_key: Hash64,
+    subsidy: u64,
+    audit: bool,
+    edit: &dyn Fn(&mut PalwTransitionExtrasV1),
+) -> Result<(PalwChainStateV2, PalwStateDeltaV2), kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
     let f = flags(p, daa);
     let mut e: PalwTransitionExtrasV1 = extras(p, daa);
     e.audit_2026_09_23_active = audit;
     if !audit {
         e.settled_anchor_depth = None;
     }
+    edit(&mut e);
     let (s, d, _) = apply_palw_transition_v7(
         parent,
         sp,
@@ -60,6 +84,19 @@ pub fn try_step(
     Ok((s, d))
 }
 
+/// [`try_step`] for a [`Life`]: its params, its state params and its extras edit, the audit fence on.
+pub fn try_step_for(
+    l: &Life,
+    parent: &PalwChainStateV2,
+    daa: u64,
+    objects: &[PalwConsensusObjectV2],
+    work: PalwBlockWorkV3<'_>,
+    exec_key: Hash64,
+    subsidy: u64,
+) -> Result<(PalwChainStateV2, PalwStateDeltaV2), kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+    try_step_with(&l.p, &l.sp, parent, daa, objects, work, exec_key, subsidy, true, &*l.extras_edit)
+}
+
 /// [`try_step`], and a refusal is a panic naming the DAA.
 pub fn step(
     p: &Params,
@@ -73,6 +110,21 @@ pub fn step(
     audit: bool,
 ) -> (PalwChainStateV2, PalwStateDeltaV2) {
     try_step(p, sp, parent, daa, objects, work, exec_key, subsidy, audit).unwrap_or_else(|e| panic!("DAA {daa}: {e:?}"))
+}
+
+/// [`step`] with an extras edit.
+pub fn step_with(
+    p: &Params,
+    sp: &PalwStateParamsV2,
+    parent: &PalwChainStateV2,
+    daa: u64,
+    objects: &[PalwConsensusObjectV2],
+    work: PalwBlockWorkV3<'_>,
+    exec_key: Hash64,
+    subsidy: u64,
+    edit: &dyn Fn(&mut PalwTransitionExtrasV1),
+) -> (PalwChainStateV2, PalwStateDeltaV2) {
+    try_step_with(p, sp, parent, daa, objects, work, exec_key, subsidy, true, edit).unwrap_or_else(|e| panic!("DAA {daa}: {e:?}"))
 }
 
 /// The floor's registry row (what `step_model_registry` writes at a span boundary), so the fold's
@@ -140,9 +192,16 @@ pub struct Life {
     pub valid_seats: Vec<PalwBondKeyV2>,
     /// How long `native_delta_evidence_v1` took over every delta of the claim's life, and how many there were.
     pub extraction: (std::time::Duration, usize),
+    /// The extras edit this life was folded under (a lane the fixture does not arm, armed for a measurement).
+    pub extras_edit: ExtrasEdit,
 }
 
 pub fn live_life() -> Life {
+    live_life_with(no_edit())
+}
+
+/// [`live_life`] with the fold's extras edited at every block (RFC-0012 C4/C6: arm a lane, re-measure).
+pub fn live_life_with(extras_edit: ExtrasEdit) -> Life {
     let p = t12();
     let b = bundle(&p);
     let sp = b.state.clone();
@@ -171,8 +230,9 @@ pub fn live_life() -> Life {
     let key = execution_commitment_v3(&env.attempt, anchor);
     let id = attempt_id_v2(&env.attempt);
     let retention_daa = env.attempt.trace_retention_daa;
-    let (s, _) = step(&p, &sp, &s, accepted_daa, &[], PalwBlockWorkV3::Attempt(&env), key, T12_BLOCK_SUBSIDY_SOMPI, true);
-    let (s, _) = step(
+    let (s, _) =
+        step_with(&p, &sp, &s, accepted_daa, &[], PalwBlockWorkV3::Attempt(&env), key, T12_BLOCK_SUBSIDY_SOMPI, &*extras_edit);
+    let (s, _) = step_with(
         &p,
         &sp,
         &s,
@@ -181,9 +241,9 @@ pub fn live_life() -> Life {
         PalwBlockWorkV3::None,
         Hash64::default(),
         0,
-        true,
+        &*extras_edit,
     );
-    let (mut s, _) = step(
+    let (mut s, _) = step_with(
         &p,
         &sp,
         &s,
@@ -192,7 +252,7 @@ pub fn live_life() -> Life {
         PalwBlockWorkV3::None,
         Hash64::default(),
         0,
-        true,
+        &*extras_edit,
     );
     assert!(matches!(s.claim(&id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "licensed");
     let mut daa = 1_003u64;
@@ -202,7 +262,7 @@ pub fn live_life() -> Life {
     let (retired_daa, retire_delta, after_retirement) = loop {
         daa += 1;
         assert!(daa < 20_000, "the claim retires");
-        let (next, delta) = step(&p, &sp, &s, daa, &[], PalwBlockWorkV3::None, Hash64::default(), 0, true);
+        let (next, delta) = step_with(&p, &sp, &s, daa, &[], PalwBlockWorkV3::None, Hash64::default(), 0, &*extras_edit);
         // What a cold row costs: the delta's stored bytes decoded, then read.
         let bytes = borsh::to_vec(&delta).unwrap();
         let started = std::time::Instant::now();
@@ -241,6 +301,7 @@ pub fn live_life() -> Life {
         executor_pubkey: exec_pk_kept,
         valid_seats,
         extraction,
+        extras_edit,
     }
 }
 

@@ -1948,6 +1948,7 @@ declare! {
             pruningPoint: string;
             pruningBlue: bigint | null;
             wait: { kind: "noSafePrefix" | "pruningPointNotExecuted" | "conflict" } | { kind: "pruningPointNotUnderSafe"; safeBlue: bigint } | null;
+            withdrawnFrom?: string | null;
         };
         skipped: { voided: bigint; baseClass: bigint; openDa: bigint; unpriced: bigint; bondNotHeld: bigint };
     }

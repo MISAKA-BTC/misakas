@@ -1,9 +1,22 @@
 # RFC-0011: Permissionless model onboarding with probabilistic constraint verification and court on dispute
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
+## 2026-10-09 改定 — 登録IDとモデル内容の永久不変binding
+
+[ADR-0175](../adr/0175-registered-models-are-permanently-immutable.md)を適用する。permissionlessな新規登録は継続し、weights、graph、tokenizer、実行仕様、canonical artifact root、kernel/verification planを登録IDに固定する。登録後の更新要求、同一登録へのV2/V3、overwrite、head置換を拒否する。改善版・異なる実行仕様は新規IDと独立した検証・報酬資格を持つ。計算graphの識別とmodel registration IDを混同しない。既存class/hash/wire IDは再採番せず、追加modelの登録IDにrootを含める。
+
+新kernel・planの有効化は新登録のadmissionを可能にするもので、既存モデルのbindingを置換しない。実際のbeacon、challenge transcript、conformance証拠、利用量や報酬資格は運用・証拠状態であり、固定された承認bindingを変更しない。登録の自由と配布・rewardabilityの要件は分離する。
+
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 
-* Status: Revised Draft, 2026-10-08. **Sampling-first / court-on-dispute** remains the ADR-0171 direction; §17 adds Static Admission → Beacon Conformance → Active Eligibility using RFC07's single challenge protocol. Design and acceptance criteria only; no runtime, testnet-12 rule, activation height or fingerprint changes by merging this text.
+* Status: Revised Draft, 2026-10-10後続改定。Sampling-first/court-on-disputeと永久不変identityを維持し、§17のmodel取得gateを撤回する。model-bond coinbase配分・条件付きG14を採用する設計で、実装/経済評価/activationは未完了。既存t12/fingerprintは変更しない。
 * Source audit: repository commit `27670cd2b` (includes the DAA 5,300 release). Source-proven limits below describe this commit, not a fresh measurement of every deployed node. Prior 9B run results, current code facts, and proposed fixes are labelled separately; no successful 9B registration or 2M run is claimed.
 * Scope: PALW-TIR model conversion, class admission, long-context claims, probabilistic constraint checks, data availability, court, and readiness. The primary coverage target is **at least 90% of all public Hugging Face model repositories at a pinned snapshot, registered as their complete advertised task and context**. Registration must be independent of the registrant's VPS size. Execution semantics and terminal adjudication remain exact; normal verification accepts a quantified, nonzero soundness error.
 * Related: [RFC-0002](0002-palw-tensor-ir.md), [RFC-0006](0006-palw-layer-sharded-panels.md), [RFC-0007](0007-palw-verification-certificates-and-algebraic-checks.md), [ADR-0082](../adr/0082-the-close-is-flat-in-the-context.md), [ADR-0103](../adr/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md), [ADR-0135](../adr/0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md).
@@ -566,13 +579,29 @@ Kernel; RFC02 binds it into new class/plan identity; RFC13 records commitment/ev
 ```text
 Candidate -> StaticAdmitted / RegisteredDormant
           -> ChallengePending -> ConformancePending -> ConformancePassed
-          -> G14 + public availability + resources + actual chain eligibility
+          -> G14 + ModelRewardEligible + resources + actual chain eligibility
           -> ActiveRewardable
 ```
 
 `Registered != Active != Rewardable`. A static registration can finish without waiting for future work; a CLI can
 return a durable candidate/commitment id and resume status later. Transaction presence or a local preflight alone
 cannot claim chain registration, conformance PASS or reward eligibility. Missing beacon keeps the candidate dormant.
+
+**2026-10-10後続改定 — identity / acquisition non-interference / model-bond allocation:**
+[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を適用し、旧Torrent/Seeder/PoR/監査/lease/TRDC/FPR gateを撤回する。
+登録済みModel ID/root、weights/tokenizer/config/specと受理済み任意descriptor bindingは不変とする。
+改善版は別Model IDとして登録し、line/head/Position/AMMを付け替えない。
+モデル取得・配布はoff-chainの任意運用であり、非公開/全peer停止だけで報酬・weightを止めない。
+
+新`ModelRewardEligible`はimmutable identity、semantic/constraint/court planとactive rulesetを扱う（RFC14 §16.4）。
+G14/計算検証は正しいmodelを得たverifierの条件付き能力とし、claim固有証拠の開示/保持/court scopeは維持する。
+weight-file/range・全量列挙・反復要求をmodel取得の強制にしない。必要operandの認証と許可unitを確定する。
+正しいbytesのroot一致はminerの実計算を証明せず、全保有者拒否時の取得保証は撤回する。
+
+重複しないmodel別miner拘束元本に連動してcoinbase予算を配分し、network発行予算と個別bond上限を同時に維持する。
+claim数/rho/複数modelで元本を増幅せず、資本預託だけでは支払わない。
+公開の圧倒的利益は`f`・市場/競合・自己増資/独立資本・閉鎖時の検出率を比較する未立証目標である。
+同額`S_m`なら自己/外部資本は同じ配分。未決の関数/会計・経済評価・実装/activationを旧HF censusやconformanceで代替しない。
 
 ### 17.1 Stage A — Static Admission
 
@@ -609,13 +638,15 @@ transfer, verifier/prover work and resource use; a 100GB artifact becoming a few
 not demonstrated by this document. Opening authenticates bytes, not the computation relation by itself.
 
 Changes to artifact/layout/plan/constraints/scope/implementation invalidate evidence and require a new commitment
-before a new future window, subject to counted retries. A failed check initiates authenticated localization and the
+before a new future window, subject to counted retries. If an accepted model's immutable identity is affected,
+register a new independent model; never edit the registered record in place. A failed check initiates authenticated localization and the
 applicable exact/DA outcome; it does not itself convict or slash. Preserve failed and aborted records.
 
 ### 17.3 Stage C — Active Eligibility
 
 ConformancePassed additionally needs complete semantic/constraint/court coverage, RFC14/G14 fresh-public-bond
-prosecution, class-bound public download/DA/retention, funded bond/liability, bounded resource profile, active
+prosecution conditional on acquired registered model data, claim-specific evidence/court/retention,
+funded bond/liability and network/model/bond budgets, bounded resource profile, active
 Kernel/challenge policy, challenge lifecycle and the actual chain carrier/admission path. Local conformance, a Panel
 vote, register transaction or successful market opening cannot replace any of those conditions. Source fidelity,
 market listing, operator readiness and active reward eligibility remain separately labelled.
@@ -623,6 +654,7 @@ market listing, operator readiness and active reward eligibility remain separate
 ```text
 ActiveRewardable = SemanticComplete AND ConstraintComplete AND ChallengeComplete
                   AND CourtComplete AND PublicMaterialComplete AND G14Complete
+                  AND ModelRewardEligible(model, epoch)
                   AND ResourceBounded AND ConformancePassed AND ActiveChainEligibility
 ```
 
@@ -630,6 +662,10 @@ Future randomness provides ChallengeComplete only when RFC07's source/security/i
 does not supply the other predicates. A conformance pass does not activate a Kernel extension, remove Panel rules
 or certify a future claim. Whole-claim Final, one-use work/reward and all present exposure caps still apply.
 Reorg rolls back dependent challenge/conformance/activation state under RFC07's branch-relative lock policy.
+`ActiveRewardable` is ruleset/verification eligibility, not a model-availability lease or a mutation of registered identity.
+Require ADR177 §3 / RFC14 §16.8's non-interference/allocation matrix, §16.10's Rule E/fork-choice safety and §16.11's open-versus-closed ECON/MEAS
+before activating the new gate. The registration/HF coverage numerator still measures accepted complete-task
+registration; report active rewardable coverage separately and do not replace historical counts.
 
 ### 17.4 Kernel extension and release evidence
 
@@ -645,8 +681,56 @@ reconstruction/localization/conviction, reorg/restart/IBD/pruning and existing l
 All new protocol gates remain open. Preserve existing 9B/2M/HF evidence and coverage denominators; these added
 requirements do not convert untested models or dormant proposals into registered/active successes.
 
+## 18. Coverage target restated — 2026-10-08 (user decision)
+
+The 2026-10-08 census (`docs/design/palw/tir/hf-census-report-2026-10-08.md`) measured 3,117,871 public repositories:
+
+- shape-ready (full task, declared context, shape depth): **16.65%** of `D_all` (one-sided 95% lower bound 15.74%);
+- software-closable failures: 34.84%;
+- external failures under the current classification: 48.51% (missing weights 18.93%, gated 1.71%, adapter base missing 7.58%, no model task or config 20.28%).
+
+So even with every software failure closed, `D_all` tops out at 51.49% under today's snapshot and buckets. The 90% bar of §0/§7/§10 over `D_all` is unreachable *by construction*. That says nothing about how much of the actual model population MISAKA can serve. It is a property of what the denominator counts.
+
+**Primary target (replaces `registered_full_task / D_all ≥ 0.90` as the acceptance bar):** at least 90%, as a one-sided 95% lower bound, of the public Hugging Face repositories that form a **complete model** are registered on chain as their complete advertised task and advertised context, without model-specific consensus changes.
+
+`D_complete` is the set of public repositories at a pinned snapshot whose weights and the information needed to build the model can be obtained. That means weights present or resolvable, a base resolvable for adapters, a task and config that are declared or deterministically derivable, and access permitted.
+
+**Denominator rules (anti-gaming):**
+
+- **Architectures and tasks MISAKA does not support stay in `D_complete`** and count as failures. This applies to any architecture or task (Qwen, Llama, GLM, DeepSeek, vision, audio, classification, …). Excluding a repository because MISAKA cannot handle it is forbidden; otherwise 90% could be reached by choosing easy models.
+- **External failures are not permanent.** A repository moves into `D_complete` when its gap is resolved by a generic, auditable rule. Examples:
+  - weights it references in another repository, resolved at a pinned revision;
+  - a LoRA/adapter whose base is identified and pinned;
+  - a task fixed safely from its weights and metadata;
+  - a gated model whose access and redistribution rights are actually held.
+
+  Each reclassification rule is published with the census, and its effect is reported separately.
+
+**Always publish three numbers,** with their lower bounds, never only the flattering one:
+
+1. coverage over **all public repositories** (`D_all`);
+2. **full-task, full-advertised-context on-chain registration** over `D_complete`;
+3. the share that reached **mining and a funded `Final` reward**.
+
+**Evidence standard.** Frontend or shape-ready coverage never counts as registration. A sampled success is a real checkpoint → `.palwart` → G14 verification (public prosecution complete for its route) → devnet/chain registration. Alternatively, it is independently reproduced equivalence to an already registered class (§11.2). Text-only, short-context, synthetic-beacon, unit-test and dormant registrations are reported in their own columns. This section supersedes the acceptance bar of §0, §7, §10 and §14's "Broad coverage" row. `D_all` stays the first published number.
+
 ## Mission alignment amendment — 2026-10-07
 
 §13、§15、§16のVerificationPlan/kernel admission、9B-8k/long-context/全taskのcoverageに、fresh non-seat public-bond prosecutionの実測を追加する。kernel-only certificateや正直なFinalだけを成功と数えない。非公開weights/input/state、FOLD prefixやfused preimageが必要なprofileは、公開取得または承認済み公開証明経路が完結するまで新しい報酬対象にしない。HF coverage、ε_check、source fidelityとこのgateは別の指標である。
 
 本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
+
+## Bond予算・総影響保存の改定 — 2026-10-10
+
+[ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](0015-panel-free-permissionless-verification.md)を適用する。
+
+全承認reward class/profileにclass非依存のbond/DAA採掘予算を追加し、巨大モデルや仕事量の申告で上限を増やさない。確率的な全constraint検査、G14、公的取得・裁定・資源gateとANDでadmitする。
+一claimの権利/予約を小さくする評価でも、公開検証供給、最大同時責任、徴収可能net損失と計算費用を測る。多数の小claimを大きな未決済creditの迂回にしない。
+
+本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。
+
+## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定
+
+[ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
+Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
+モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。

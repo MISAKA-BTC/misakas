@@ -1,5 +1,12 @@
 # ADR-0168 — An execution block is a third class, and the chain reaches it through an anchor, never a parent
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **RFC8 integration precedence — 2026-10-08:** For the unified EXEC lane, [revised RFC-0008](../rfc/0008-palw-claim-backed-consensus-blocks.md) governs the current direction: `EXEC_TX` and `EXEC_SLICE` share a chain-independent class with zero raw/PALW fork-choice weight, blue score and DAA contribution. §10.3's positive round `safe_weight` pool and `REAL_ROUND`/E-BLUE naming are earlier proposals, not requirements for this lane; root weight is not redistributed to EXEC. Parent/anchor hygiene and bounded lane acceptance remain design references. Earlier branch implementation/status records below do not claim these features are shipped in main or activated.
 
 * Historical Status (superseded for the unified RFC8 EXEC lane by the amendment above): **PROPOSED 2026-10-03, REVISED TWICE (2026-10-03 14:00, user): §10 is the design — a Round coloring class generalising ADR-0105's `LaneColoring`, rounds first-class and transparent to consensus accounting, one weight budget a claim. §§1–9 keep the incident, the parent hygiene, the anchor, the closure, the window and the state rows; where §2 Decision 1 says "weight 0 class" §10 governs.** Target: the next fence after DAA 5,300; dormant on this branch.

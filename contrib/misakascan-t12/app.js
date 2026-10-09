@@ -2517,13 +2517,61 @@ async function scanOverlay(anchor){
 async function readNativeSettlement() {
   try { return await rpc("getPalwSettlement", {daaScore: 0}); } catch { return null; }
 }
+// RFC-0012 D1 (C8): why `safe` stands where it does - getPalwSettlement.nativeReadiness. Every unmet condition of the blocking effect, the
+// clocks already running, the named gaps in history; nothing here is a promise (earliestReadyInDaa is null whenever an event is awaited).
+function readinessWaitText(w) {
+  const n = v => esc(String(v));
+  const claim = v => `${n(v).slice(0, 12)}…`;
+  switch (w.kind) {
+    case "invalidPolicy": return "the settlement policy is unusable";
+    case "missingHistory": return `missing history (${n(w.gap)})${w.block ? ` at ${linkBlock(w.block)}` : ""}`;
+    case "unexecuted": return "no executed block yet";
+    case "finalizedConflict": return "a finalized-head conflict is recorded";
+    case "frontierBehind": return `the safe frontier (blue ${n(w.frontierBlue)}) has not reached blue ${n(w.effectBlue)}${w.frontierOnBranch ? "" : " (not on this branch)"}`;
+    case "openClaim": return `claim ${claim(w.claim)} is ${n(w.stage)}${w.waitDaa != null ? `; its trace retention lapses in ${n(w.waitDaa)} DAA` : ""}`;
+    case "openDaSession": return `data-availability court open on claim ${claim(w.claim)} until DAA ${n(w.deadlineDaa)} (${n(w.waitDaa)} DAA)${w.claimKnown ? "" : " (claim not in state)"}`;
+    case "waitingMaturity": return `waiting on maturity: ${n(w.facts)} fact(s), work ${n(w.work)}; the first matures in ${n(w.waitDaa)} DAA${w.readyDaa != null ? `, enough by DAA ${n(w.readyDaa)}` : ", but they would not be enough"}`;
+    case "insufficientDepth": return `${n(w.have)} of ${n(w.need)} settled anchors`;
+    case "insufficientWork": return `work ${n(w.have)} of ${n(w.need)}`;
+    case "concentratedWork": return `${n(w.dimension)} concentration ${n(w.topPermille)}‰ over the ${n(w.capPermille)}‰ cap`;
+    case "duplicateWork": return "one work identity appears twice";
+    case "arithmeticOverflow": return "evidence arithmetic overflowed";
+    default: return esc(JSON.stringify(w));
+  }
+}
+function nativeReadinessView(r) {
+  if (!r) return "";
+  const out = [];
+  const fin = r.finalized || {};
+  if (r.stoppedEarly) {
+    out.push(`<div class="note"><b>Safe is withheld:</b> ${readinessWaitText(r.stoppedEarly)}</div>`);
+  } else {
+    if (r.safeLagDaa != null) out.push(`<div class="note">Safe trails the newest executed block by ${esc(String(r.safeLagDaa))} DAA / ${esc(String(r.safeLagBlue))} blue.</div>`);
+    const b = r.blocking;
+    if (b) {
+      const waits = (b.waits || []).map(w => `<li>${readinessWaitText(w)}</li>`).join("");
+      const clock = b.earliestReadyInDaa != null ? `<div>On the facts already on the chain, no sooner than ${esc(String(b.earliestReadyInDaa))} DAA from now.</div>` : "";
+      const more = Number(b.openClaimsTotal) > 8 || Number(b.openSessionsTotal) > 8 ? `<div>${esc(String(b.openClaimsTotal))} open claim(s), ${esc(String(b.openSessionsTotal))} open session(s) in all.</div>` : "";
+      out.push(`<div class="note"><b>Safe cannot pass</b> ${linkBlock(b.block)} (DAA ${esc(String(b.daa))}, blue ${esc(String(b.blue))}):<ul>${waits}</ul>${more}${clock}</div>`);
+    }
+  }
+  if (fin.withdrawnFrom) out.push(`<div class="note" style="border-color:#c0392b"><b>Finalized label withdrawn:</b> ${linkBlock(fin.withdrawnFrom)} was published as finalized and is still canonical, but the evidence no longer certifies it. Safe and finalized read null until it is certified again.</div>`);
+  else if (fin.wait) out.push(`<div class="note">Finalized waits on the pruning point: ${esc(String(fin.wait.kind))}${fin.wait.safeBlue != null ? ` (safe is at blue ${esc(String(fin.wait.safeBlue))})` : ""}.</div>`);
+  const k = r.skipped || {};
+  const total = ["voided", "baseClass", "openDa", "unpriced", "bondNotHeld"].reduce((a, key) => a + Number(k[key] || 0), 0);
+  if (total > 0) out.push(`<div class="note">Evidence seen and not counted: ${esc(String(k.voided))} voided, ${esc(String(k.baseClass))} floor, ${esc(String(k.openDa))} under a DA session, ${esc(String(k.unpriced))} unpriced, ${esc(String(k.bondNotHeld))} with no bond in state.</div>`);
+  const m = r.maturity || {};
+  out.push(`<div class="note">Maturity rule ${esc(String(m.rule))}: work counts once it can no longer be reversed (claim retirement ${esc(String(m.claimRetirementDaa))} DAA).</div>`);
+  return out.join("");
+}
 function nativeSettlementView(status) {
   const s = status && status.nativeSettlement;
   // A below-finalized conflict is an alarm, not a status: the node withholds every settlement label and says so (RFC-0012 §4.2).
   const alarm = s && s.stop === "finalizedConflict"
     ? `<div class="note" style="border-color:#c0392b"><b>Safety alarm:</b> this node's chain abandons a head it had published as finalized. Safe and finalized are withheld until this node is resynced (a validated pruning-point import); do not rely on its settlement labels.</div>` : "";
   return alarm + `<div class="note">DNS validator role retired at DAA ${esc(String(status.dnsRetiredAt))}. Consensus and native UTXO ↔ EVM settlement use PALW. Historical bonds and evidence remain readable.</div>` +
-    (s ? `<div class="cards">${["latest", "safe", "finalized"].map(k => `<div class="card"><div class="k">${k}</div><div class="v sm">${s[k] ? linkBlock(s[k]) : "unavailable"}</div></div>`).join("")}</div><div class="note">Settled anchors: ${esc(String(s.depth))}; unique matured work: ${esc(s.uniqueWork)}${s.stop ? ` · ${esc(s.stop)}` : ""}</div>` : `<div class="note">Native settlement snapshot unavailable; safe/finalized are not inferred from the tip.</div>`);
+    (s ? `<div class="cards">${["latest", "safe", "finalized"].map(k => `<div class="card"><div class="k">${k}</div><div class="v sm">${s[k] ? linkBlock(s[k]) : "unavailable"}</div></div>`).join("")}</div><div class="note">Settled anchors: ${esc(String(s.depth))}; unique matured work: ${esc(s.uniqueWork)}${s.stop ? ` · ${esc(s.stop)}` : ""}</div>` : `<div class="note">Native settlement snapshot unavailable; safe/finalized are not inferred from the tip.</div>`) +
+    nativeReadinessView(status && status.nativeReadiness);
 }
 
 function showNativeSettlement(status, generation) {

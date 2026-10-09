@@ -493,6 +493,8 @@ pub mod palw_gen_range_twin_v1;
 pub mod palw_task_heads_v1;
 /// RFC-0011 §15.7: the kernel route's fence `palw_probabilistic_constraints_v1` — dormant, no height, refused when armed.
 pub mod palw_probabilistic_constraints_v1;
+/// RFC-0004 Part II: the typed-roots fence `palw_typed_roots_v1` — dormant, no height, refused when armed.
+pub mod palw_typed_roots_v1;
 /// G14 lane D: the kernel route's consensus state, messages and interim policy (fence `palw_probabilistic_constraints_v1`).
 pub mod palw_kernel_route_v1;
 /// G14 lane D phase 3: the onboarding objects (artifact binding and its refutation, the kernel binding, the conformance commitment,
@@ -524,6 +526,12 @@ pub mod palw_receipt_v4;
 pub mod palw_evidence_v1;
 /// RFC-0009 stage B: the provider challenge court (`palw_evidence_court_v1`, DORMANT, not yet folded into the chain state).
 pub mod palw_evidence_court_v1;
+/// Lane DA16 (RFC-0014 §16, RFC-0009 §4): public material units — what an artifact leaf, a bound kernel row or a claim position is checked
+/// against (always the chain's root), the artifact manifest, and a binding confirmed or refuted from the bytes.
+pub mod palw_public_material_v1;
+/// Lane DA16 (RFC-0009 §4.2): the provider court on the kernel route — leases, unit challenges, answers, the DA transfer, its rows and its
+/// fence `palw_provider_court_v1` (dormant, refused when armed).
+pub mod palw_provider_court_v1;
 /// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
 pub mod palw_state_proof_v1;
 /// Lane PA: the 2026-10-04 audit's consensus fixes behind one dormant fence (`palw_audit_1004_v1`).
@@ -598,6 +606,12 @@ pub mod palw_tir_step_v1;
 pub mod palw_tir_work_v1;
 /// RFC-0006: layer-sharded panels for IR classes — the plan, the partition, the cells, the V4 receipt, the recount, the fence.
 pub mod palw_tir_shard_v1;
+/// RFC-0006 per-segment pricing (agent SHARD): the dormant fence `palw_tir_shard_segment_v2` and the resident table, the price share
+/// `max(work, resident)` and the seat need it puts in force.
+pub mod palw_tir_shard_segment_v2;
+/// RFC-0006 × G14 (agent SHARD): the non-seat cell watcher's targets — every shard of a live claim drawn per shard that a bond does
+/// not seat, as a watch duty (pure over the tip state; node policy).
+pub mod palw_tir_shard_watch_v1;
 pub mod palw_terminal;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in

@@ -13,8 +13,12 @@
 //! **Dormant**: no consensus code reads this crate; it has no fence, wire id, state tag or activation. Its domains and algorithm
 //! ids are proposed values awaiting the release review of RFC-0007 §VI.8 (codec vectors, source-cost/bias/grinding analysis,
 //! k/D/delay selection). Nothing here is BFT, DNS, validator- or committee-derived.
+//!
+//! [`composition`] is not part of the contract: a pure calculator of the composed false-accept bound for the external soundness
+//! review dossier (`docs/design/palw/soundness-review-dossier/`), called by no consensus or policy code.
 
 pub mod beacon;
+pub mod composition;
 pub mod conformance;
 pub mod hash;
 pub mod lifecycle;

@@ -1,5 +1,12 @@
 # MISAKA PALW-Slash Protocol Design Specification
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 **文書名:** MISAKA PALW-Slash Protocol Design Specification  
 **略称:** PALW-S  
 **版:** Draft v0.1  
@@ -1049,7 +1056,10 @@ strikeは一定期間で減衰できるが、完全消去ではなく長期履�
 
 self-challenge bounty farmingを防ぐため、slashed amountの大半をchallengerへ渡してはならない。
 
-推奨初期配分:
+現行PALWの摘発報酬率は[ADR-0032の2026-10-10改定](adr/0032-palw-fee-bond-escrow.md#palw-challenger-share-amendment--2026-10-10)
+により49%とする。旧credit-overlayの配分は`min(⌊49% × 実回収Slash額⌋, B_cap)`をchallengerへ払い、
+残額をburnする。`B_cap`は据え置く。現行V2 R-coreでは既払利益控除後の実徴収額の49%を用い、
+旧capを持ち込まない。以下は改定前v0.1の歴史的な初期配分であり、49%へ単純に置換して合計139%にしてはならない:
 
 - 50%: protocol insurance / security reserve
 - 20%: burn
@@ -1058,7 +1068,8 @@ self-challenge bounty farmingを防ぐため、slashed amountの大半をchallen
 
 reward forfeitureは別枠で、verification cost補填とPALW reserveへ配分する。
 
-bountyがslash額より十分小さいため、minerが別identityで自分をchallengeしても純利益にならない。
+bountyは実回収額の49%以下であり、minerが別identityで自分をchallengeしてもSlash分の会計は純損失となる。
+既払利益を含めたR-coreの自己摘発条件はADR-0032の改定に従う。
 
 ---
 
@@ -1525,7 +1536,7 @@ Non-response WorkBond slash   = 50%
 Invalid opening WorkBond      = 100%
 Equivocation BaseBond slash   = 25% minimum
 Full prefix replay            = 1/8 normal, 1/2 high-risk
-Challenge bounty              = 10% of slash maximum
+Challenge bounty              = min(49% of collected slash, B_cap) [2026-10-10 amendment]
 Unbonding delay               = 7 days minimum
 Profile anomaly               = freeze, not slash
 PALW chain validity coupling  = disabled
@@ -1678,3 +1689,12 @@ struct SlashDecisionV1 {
 - concrete state machine、wire objects、timing、rollout gates
 
 これらの追加部分は、実装前にsimulation、testnet計測、独立監査を必要とする。
+
+## Bond予算・総影響保存の改定 — 2026-10-10
+
+[ADR-0176](adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](rfc/0015-panel-free-permissionless-verification.md)を適用する。
+
+bondを事後slashの財源だけでなく、時間内のclaim発行能力とblock/reward/Final weight上限の資本として扱う。早期void・取消で枠を回復せず、未解決責任の担保を別に保持する。
+確率的検出・全constraint coverage・exact裁定と実徴収可能net損失をANDで評価する。過去のsampling/quorum模型を本追加前提の完成証拠にせず、現在の客観証拠と49%還流を含む経済評価へ接続する。
+
+本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。
