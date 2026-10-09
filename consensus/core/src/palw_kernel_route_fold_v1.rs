@@ -296,6 +296,8 @@ pub(super) fn apply_settlements(
                     escrow_debited = escrow_debited.saturating_add(debit);
                 }
             }
+            // ADR-0176 HOOK `budget-final` on the node (lane BUDGET): a payout is paid only inside the R / F reservation the claim
+            // made at acceptance — this arm is where the consumer re-checks it, beside the escrow check below.
             SettlementKindV1::AccuserReward | SettlementKindV1::DemanderShare | SettlementKindV1::FinalReward => {
                 let amount = if s.kind == SettlementKindV1::FinalReward {
                     let funded = s.amount.min(escrow_debited);

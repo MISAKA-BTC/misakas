@@ -12,6 +12,7 @@
 //! real node's mempool), and judges each reply against the id it computed from the bytes. Only what the real node accepted is mined.
 use super::*;
 use kaspa_consensus_core::config::params::Params;
+use kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1;
 use misaka_palw_remote::relay::{NodeOutcome, RelayNode, Reply, broadcast_signed_tx, tx_id_of_bytes};
 
 // ---- the node-less path --------------------------------------------------------------------------------------------------
@@ -234,7 +235,11 @@ async fn g14_c4r3_a_self_inflicted_default_must_not_erase_a_provable_fraud() {
     assert!(e.convicted, "a valid proof inside the claim's horizon convicts it (it was {:?})", e.state);
     assert_eq!(e.outsider_fee, 0, "a true fraud proof never costs its filer the dismissal fee");
     assert!(e.sybil_gain < e.producer_loss as i128, "the colluding demander recoups less than the default cost the producer");
-    assert_eq!(e.outsider_paid, e.reservation / 2, "the honest accuser's bounty is not diluted by the self-inflicted default");
+    assert_eq!(
+        e.outsider_paid,
+        e.reservation * u64::from(PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1) / 1000,
+        "the honest accuser's bounty (ADR-0032's 49 %) is not diluted by the self-inflicted default"
+    );
 }
 
 /// F-C4R3-02 on an OPV class: the same escape (it used to cost the colluders only RFC-0015's 10 % default burn). Fixed the same way.
@@ -249,7 +254,11 @@ async fn g14_c4r3_opv_a_self_inflicted_default_must_not_erase_a_provable_fraud()
     assert!(e.convicted, "a valid proof inside the claim's horizon convicts it (it was {:?})", e.state);
     assert_eq!(e.outsider_fee, 0, "a true fraud proof never costs its filer the dismissal fee");
     assert!(e.sybil_gain < e.producer_loss as i128, "the colluding demander recoups less than the default cost the producer");
-    assert_eq!(e.outsider_paid, e.reservation / 2, "the honest accuser's bounty is not diluted by the self-inflicted default");
+    assert_eq!(
+        e.outsider_paid,
+        e.reservation * u64::from(PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1) / 1000,
+        "the honest accuser's bounty (ADR-0032's 49 %) is not diluted by the self-inflicted default"
+    );
 }
 
 // ---- GAP-R7: proof front-running (closed by the accuser seal) ------------------------------------------------------------
@@ -467,7 +476,9 @@ async fn g14_c4r3_an_envelope_in_flight_must_not_split_builds_that_differ_only_i
 /// proof filed inside the horizon convicts.
 #[tokio::test]
 async fn g14_c4r3_eight_junk_chunk_groups_must_not_hold_a_chunked_proof_off_the_chain() {
-    use kaspa_consensus_core::palw_kernel_route_v1::{PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1, PalwKernelChunkTargetV1, PalwKernelChunkV1};
+    use kaspa_consensus_core::palw_kernel_route_v1::{
+        PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1, PalwKernelChunkTargetV1, PalwKernelChunkV1,
+    };
     kaspa_core::log::try_init_logger("warn");
     let mut w = World::new().await;
     let job = w.job().await;

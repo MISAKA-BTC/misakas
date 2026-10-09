@@ -167,6 +167,12 @@ pub struct PalwKernelOpvExtrasV1 {
     pub admitted_classes: Vec<Hash64>,
 }
 
+/// **The PALW reporter share on the kernel route, permille** (ADR-0032's 2026-10-10 amendment: 4,900 bps): what an accuser, a
+/// demander or an onboarding challenger is paid of a slash the chain actually collected; the rest is burned. One constant for every
+/// reporter path of the route, so the share cannot drift between them. (`palw_reporter_share_v2` is INTF's fence for the R-core rate;
+/// the kernel route is dormant as a whole, so its share needs no fence of its own: it has never been in force at any other rate.)
+pub const PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1: u16 = 490;
+
 /// **The INTERIM ledger policy.** Windows are short so a drill crosses them; the amounts are sompi. Values are consensus constants
 /// of the (never-armed) fence, written once here: a real activation would revisit every one.
 pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash64) -> LedgerPolicyV1 {
@@ -190,7 +196,11 @@ pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash6
         liability_daa: 200,
         exit_delay_daa: 30,
         dismissed_proof_fee: SOMPI_PER_KASPA / 10,
-        accuser_reward_permille: 500,
+        // ADR-0032 (2026-10-10 amendment): the PALW reporter share is 49 % (4,900 bps) of what a slash actually COLLECTED, the rest
+        // burned. The route's accuser (a conviction), its demanders (a default penalty) and — at the same rate — the onboarding
+        // challenger are PALW reporters, so the interim share is that ceiling, not the 500‰ it was. A self-reporter recovers at most
+        // 49 %: the net loss of a convicted producer is ≥ 51 % of the collected slash, never the gross slash (ADR-0176 D6).
+        accuser_reward_permille: PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1,
         default_penalty: 100 * SOMPI_PER_KASPA,
         // GAP-5 (the user's ruling: user-pays escrow): the reward is paid out of the job's ESCROW, reserved from the poster's bond at
         // posting and spent once at the job's first Final — never new money.
@@ -676,11 +686,7 @@ impl PalwKernelRouteStateV1 {
         }
         // `next` is a resume point only if something follows it.
         if let Some(cursor) = &next {
-            let after_last = self
-                .rows
-                .range((Excluded(cursor.clone()), Unbounded))
-                .next()
-                .is_some()
+            let after_last = self.rows.range((Excluded(cursor.clone()), Unbounded)).next().is_some()
                 || self.aux.range((Excluded(cursor.clone()), Unbounded)).next().is_some();
             if !after_last {
                 next = None;
@@ -938,7 +944,11 @@ mod tests {
         small.max_adjudications_per_block = 4;
         opv.validate(&small).unwrap();
         let state = PalwKernelRouteStateV1::new(p, Some(opv), LedgerScalarsV1::default());
-        assert_eq!(state.ledger().unwrap().root(), state.ledger_root().as_bytes(), "an empty OPV state roots like an empty OPV ledger");
+        assert_eq!(
+            state.ledger().unwrap().root(),
+            state.ledger_root().as_bytes(),
+            "an empty OPV state roots like an empty OPV ledger"
+        );
         let plain = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
         assert_ne!(state.ledger_root(), plain.ledger_root(), "the OPV root form is not the historical one");
         // OPV-BOOT GAP-B1a: with tables 25 and 26 empty there is no root extension — both forms are what they were before them.

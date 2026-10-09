@@ -1228,6 +1228,9 @@ impl KernelLedgerV1 {
 
     /// **GAP-5: pay a Final out of its job's escrow** — the poster's bond is debited exactly what the producer is paid, and the escrow
     /// is spent (an escrow pays once). No escrow (already paid, or returned): no reward — nothing is ever issued.
+    ///
+    /// **ADR-0176 HOOK `budget-final` (lane BUDGET; not built here):** the reward is paid only within the R / F reservation the claim
+    /// made at acceptance (`budget-accept`), re-checked here; the budget is not recovered before `d + W`, whatever the claim's fate.
     fn pay_from_job_escrow(&mut self, job: &Digest, claim: &Digest, producer: Digest, out: &mut Vec<LedgerEventV1>) -> u64 {
         let Some(row) = self.job_escrows.remove(job) else { return 0 };
         let collateral = self.bonds.get(&row.poster).map_or(0, |b| b.collateral);
@@ -1588,6 +1591,11 @@ impl KernelLedgerV1 {
             self.opv.live.insert((producer, id));
             self.job_claims.insert(job, id);
         }
+        // **ADR-0176 HOOK `budget-accept` (lane BUDGET, `palw_bond_budget_v1`; not built here).** Claim acceptance is where the
+        // producer bond's Q/B/R/F budget over the common window W must reserve this claim: one unit of Q, and of R the reward the
+        // claim can draw at Final (the job escrow's amount, GAP-5; for an OPV claim also `work_credit_per_claim`, which nothing
+        // releases yet), plus any verifier bounty a later conviction could pay — refusing the commit when the budget is spent, as
+        // `need` above refuses it when collateral is. Until the engine exists every reward fence stays refused (arming list, CODE).
         settle(out, producer, seal_credit, SettlementKindV1::ReleaseSealDeposit, Some(id));
         settle(out, producer, need, SettlementKindV1::ReserveClaim, Some(id));
         settle(out, producer, fee, SettlementKindV1::AdmissionFee, Some(id));
@@ -2099,6 +2107,9 @@ impl KernelLedgerV1 {
         // The bounty is the accuser's share of the claim's reservation as if no default had come first (C4 F-C4R3-02): a producer
         // that defaults on its own demand before a proof lands neither dilutes the honest accuser's bounty nor recoups more than its
         // demanders' share of the penalty. Never more than this conviction slashes.
+        // The share is ADR-0032's PALW reporter share on the node (`PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1`, 49 %); a self-accusing
+        // producer recovers at most that much of THIS slash. ADR-0176 HOOK `budget-bounty`: the bounty is a slash split, not issuance,
+        // but it counts against the claim's R reservation made at `budget-accept`.
         let basis = slashed as u128 + taken_by_default as u128;
         let reward = ((basis * self.policy.accuser_reward_permille as u128 / 1000) as u64).min(slashed);
         self.burned += slashed - reward;
