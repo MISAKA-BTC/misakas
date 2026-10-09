@@ -547,6 +547,26 @@ pub enum LedgerEventV1 {
         job: Digest,
         producer: Digest,
     } = 20,
+    /// **RFC-0009 §4.2 (lane DA16): a demand on a claim whose material obligation the consumer moved to bonded providers was not
+    /// answered by its deadline.** The producer pays nothing (one failure, one party): the consumer charges every live lease of the claim
+    /// and pays `demanders` from that charge; before Final the claim is `Unavailable { producer_defaulted: false }` (void, no reward), after
+    /// Final its fact is withdrawn. The demand bonds were refunded exactly as on the producer path. Never a conviction. (Discriminant 30:
+    /// 21–23 are G14-R4's.)
+    ProviderLiableDefault {
+        claim: Digest,
+        stage: u8,
+        position: u32,
+        last: Option<&'static str>,
+        post_final: bool,
+        demanders: Vec<Digest>,
+    } = 30,
+    /// **DA16: every provider that stood behind a transferred claim's material has defaulted** (a common-mode outage): the claim lapses —
+    /// before Final `Unavailable { producer_defaulted: false }` (no reward, the producer's reservation released, never slashed), after
+    /// Final its fact is withdrawn. Never a conviction.
+    ProviderLapsed {
+        claim: Digest,
+        post_final: bool,
+    } = 31,
     /// GAP-R7: an accuser sealed a proof against a claim.
     ProofSealed {
         claim: Digest,
@@ -711,6 +731,11 @@ pub struct KernelLedgerV1 {
     pub opv: OpvStateV1,
     /// RFC-0004 Part II: typed-root classes, their jobs and the memory lines (tables 22–24; empty = the historical ledger).
     pub typed: crate::spec::TypedStateV1,
+    /// **RFC-0009 §4.2 (lane DA16): claims whose material obligation the consumer moved to bonded providers.** Consumer-derived from
+    /// the consumer's own rooted rows and re-injected before every object and tick (like the attested set's source); NOT part of this
+    /// state, its rows or its root. A demand on such a claim that nobody answers by its deadline is a
+    /// [`LedgerEventV1::ProviderLiableDefault`] — the providers' failure, never the producer's; and [`Self::provider_lapse`] voids it.
+    pub provider_liable: BTreeSet<Digest>,
     budget: BlockBudgetV1,
 }
 
@@ -779,6 +804,7 @@ impl KernelLedgerV1 {
             burned: 0,
             opv: OpvStateV1::default(),
             typed: crate::spec::TypedStateV1::default(),
+            provider_liable: BTreeSet::new(),
             budget: BlockBudgetV1::default(),
         })
     }
@@ -2312,6 +2338,11 @@ impl KernelLedgerV1 {
             let Some(d) = self.demands.remove(&(claim, stage, position)) else { continue };
             let last = d.last_class();
             let post_final = self.claims.get(&claim).is_some_and(|r| matches!(r.life.state, ClaimStateV1::Final { .. }));
+            // DA16: a transferred claim's material is its providers' obligation — the producer is not charged for this failure.
+            if self.provider_liable.contains(&claim) {
+                self.provider_liable_default(claim, stage, position, last, post_final, d, out);
+                continue;
+            }
             // Before Final a default costs the fixed penalty (the claim is Unavailable and earns no reward). After Final the reward
             // was already paid, so a default forfeits the WHOLE remaining reservation: withholding is never cheaper than a
             // conviction would be for the reward it kept.
@@ -2417,6 +2448,81 @@ impl KernelLedgerV1 {
         }
         // The served positions' demand bonds whose claim is now decided (after this block's defaults, Finals and releases).
         self.settle_due_served_demand_bonds(out);
+    }
+
+    /// **DA16: would `bytes` serve this committed position?** — exactly the classification a `Respond` gets (the class's response
+    /// envelope, then `classify_position_response_v1` against the committed values), without a demand and without touching the state.
+    /// A provider court's answer and a transport fetch are judged by this one function.
+    pub fn classify_served_position_v1(
+        &self,
+        claim: &Digest,
+        stage: u8,
+        position: u32,
+        bytes: &[u8],
+    ) -> Result<ServedPositionV1, &'static str> {
+        let row = self.claims.get(claim).ok_or("no such claim")?;
+        let (values, inputs) = row.body.position(stage, position).ok_or("the claim commits no such position")?;
+        let limit = self.bounds_of(&row.class_binding_id).map(|b| b.max_response_bytes).unwrap_or(0);
+        if bytes.len() as u128 > limit {
+            return Err("oversized");
+        }
+        classify_position_response_v1(values, &self.derived_mask(row, stage), inputs, bytes)
+    }
+
+    /// **DA16: a demand on a provider-liable claim defaulted** (see [`LedgerEventV1::ProviderLiableDefault`]). The producer's reservation is
+    /// untouched here: before Final the claim turns `Unavailable` and the tick's release returns it whole; after Final it stays held for
+    /// the claim's fraud liability. The demand bonds return as on the producer path; the open demands of the claim are moot.
+    #[allow(clippy::too_many_arguments)]
+    fn provider_liable_default(
+        &mut self,
+        claim: Digest,
+        stage: u8,
+        position: u32,
+        last: Option<&'static str>,
+        post_final: bool,
+        d: DemandRowV1,
+        out: &mut Vec<LedgerEventV1>,
+    ) {
+        let daa = self.daa;
+        if !post_final && let Some(row) = self.claims.get_mut(&claim) {
+            let _ = row.life.apply(ClaimEventV1::MaterialUnavailable { daa, producer_defaulted: false });
+        }
+        let demanders = d.demanders.iter().map(|(b, _)| *b).collect();
+        out.push(LedgerEventV1::ProviderLiableDefault { claim, stage, position, last, post_final, demanders });
+        self.refund(&claim, &d, out);
+        self.settle_demands_moot(&claim, out);
+        if post_final && let Some(o) = self.opv.claims.get_mut(&claim) {
+            o.forfeited_after_final = true;
+        }
+        self.opv_sync_live(&claim);
+    }
+
+    /// **DA16: every provider behind a transferred claim's material has defaulted — the claim lapses** (a common-mode outage, never a
+    /// conviction). Consumer-called from its court's rows; refused unless the claim is provider-liable. A claim already decided
+    /// (convicted, unavailable, timed out) is left as it is (`Ok` with no event).
+    pub fn provider_lapse(&mut self, claim: &Digest) -> Result<Vec<LedgerEventV1>, KernelRefusalV1> {
+        const NAME: &str = "ProviderLapse";
+        if !self.provider_liable.contains(claim) {
+            return Err(KernelRefusalV1::rule(NAME, "the claim's material is not its providers' obligation"));
+        }
+        let Some(row) = self.claims.get(claim) else { return Err(KernelRefusalV1::rule(NAME, "no such claim")) };
+        if row.terminal_for_demands() {
+            return Ok(Vec::new());
+        }
+        let post_final = matches!(row.life.state, ClaimStateV1::Final { .. });
+        let mut out = Vec::new();
+        if !post_final {
+            let daa = self.daa;
+            let row = self.claims.get_mut(claim).expect("checked");
+            let _ = row.life.apply(ClaimEventV1::MaterialUnavailable { daa, producer_defaulted: false });
+        }
+        out.push(LedgerEventV1::ProviderLapsed { claim: *claim, post_final });
+        self.settle_demands_moot(claim, &mut out);
+        if post_final && let Some(o) = self.opv.claims.get_mut(claim) {
+            o.forfeited_after_final = true;
+        }
+        self.opv_sync_live(claim);
+        Ok(out)
     }
 
     fn release(&mut self, claim: &Digest, producer: Digest, amount: u64, out: &mut Vec<LedgerEventV1>) {

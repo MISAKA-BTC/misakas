@@ -874,7 +874,8 @@ pub(super) fn apply_improvement_policy_set_v1(
             return Err(policy_refused("a judge is not an admitted IR class"));
         }
         // A judge class is not the line's head, nor a class that was (RFC-0004 §7.3 as decided 2026-09-30).
-        let head = row.as_ref().filter(|r| r.status != PalwImprovementLineStatusV1::Dissolved).map_or(spec15.class_id, |r| r.head);
+        let head = row.as_ref().filter(|r| builder.extras.model_immutable_active || r.status != PalwImprovementLineStatusV1::Dissolved)
+            .map_or(spec15.class_id, |r| r.head);
         let history = builder.state.improvement_head_history(&line_id);
         if policy
             .eval
@@ -928,7 +929,11 @@ pub(super) fn apply_improvement_policy_set_v1(
                 policy_sequence: payload.sequence,
                 status: PalwImprovementLineStatusV1::Governed,
                 governed_from_daa: daa,
-                head: spec15.class_id,
+                head: if builder.extras.model_immutable_active {
+                    row.as_ref().map_or(spec15.class_id, |r| r.head)
+                } else {
+                    spec15.class_id
+                },
                 head_seq: head_seq + 1,
                 next_epoch,
                 open_epoch: None,
@@ -946,7 +951,7 @@ pub(super) fn apply_improvement_policy_set_v1(
                 builder,
                 &line_id,
                 head_seq,
-                PalwLineageHeadEntryV1 { epoch: 0, class_id: spec15.class_id, previous: None, daa, cause: PalwHeadCauseV1::OptIn },
+                PalwLineageHeadEntryV1 { epoch: 0, class_id: line.head, previous: None, daa, cause: PalwHeadCauseV1::OptIn },
             );
             builder.write_improvement_line(line_id, Some(line));
         }
@@ -1020,6 +1025,7 @@ fn move_head_v1(
     daa: u64,
     cause: PalwHeadCauseV1,
 ) {
+    assert!(!builder.extras.model_immutable_active, "immutable registrations have no head replacement authority");
     push_head_v1(
         builder,
         &line.line_id,
@@ -1060,6 +1066,9 @@ pub(super) fn apply_lineage_rollback_v1(
     payload: &PalwLineageRollbackV1,
     filer: &PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
+    if builder.extras.model_immutable_active {
+        return Err(PalwStateV2Error::ImmutableModelUpdate("LineageHeadRolledBack"));
+    }
     let daa = ctx.daa_score;
     let line_id = payload.line_id;
     let mut line = builder.improvement_line_row_v1(&line_id)?;
@@ -1652,9 +1661,19 @@ fn decide_epoch_v1(
         }
         other => other,
     };
+    // Evaluation still selects and pays for a separately registered candidate. It grants no
+    // authority to replace this model or transfer its Position, AMM or head to the winner.
+    let outcome = match outcome {
+        PalwPromotionOutcomeV1::Promoted { class_id, wins, losses } if builder.extras.model_immutable_active => {
+            PalwPromotionOutcomeV1::CandidateSelected { class_id, wins, losses }
+        }
+        other => other,
+    };
     let aborted = matches!(outcome, PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::Aborted });
     let winner = match outcome {
-        PalwPromotionOutcomeV1::Promoted { class_id, .. } => Some(class_id),
+        PalwPromotionOutcomeV1::Promoted { class_id, .. } | PalwPromotionOutcomeV1::CandidateSelected { class_id, .. } => {
+            Some(class_id)
+        }
         PalwPromotionOutcomeV1::NoChange { .. } => None,
     };
     let unit = palw_improvement_epoch_length_v1(&policy.windows);
@@ -1759,15 +1778,17 @@ fn decide_epoch_v1(
         pool.balance -= granted;
         pool.unvested += granted;
         builder.write_improvement_pool(line_id, Some(pool));
-        move_head_v1(builder, line, epoch, class_id, daa, PalwHeadCauseV1::Promoted);
-        // [E22] The rollback terms are the promoted epoch's policy's, pinned now.
-        line.last_promotion = Some(PalwLastPromotionV1 {
-            epoch,
-            owner_until_daa: daa.saturating_add(unit.saturating_mul(policy.rollback_epochs as u64)),
-            ban_daa: unit.saturating_mul(policy.ban_epochs as u64),
-        });
-        line.regression_check = Some(header.parent);
-        line.regression_epoch = None;
+        if !builder.extras.model_immutable_active {
+            move_head_v1(builder, line, epoch, class_id, daa, PalwHeadCauseV1::Promoted);
+            // [E22] The rollback terms are the promoted epoch's policy's, pinned now.
+            line.last_promotion = Some(PalwLastPromotionV1 {
+                epoch,
+                owner_until_daa: daa.saturating_add(unit.saturating_mul(policy.rollback_epochs as u64)),
+                ban_daa: unit.saturating_mul(policy.ban_epochs as u64),
+            });
+            line.regression_check = Some(header.parent);
+            line.regression_epoch = None;
+        }
     }
     for grant in grants {
         builder.write_improvement_grant((line_id, epoch, header.grants), Some(grant));
@@ -1927,9 +1948,11 @@ fn dissolve_if_done_v1(
     for epoch in materials {
         builder.write_improvement_material((line_id, epoch), None);
     }
-    let heads: Vec<u32> = builder.state.improvement_heads.range((line_id, 0)..=(line_id, u32::MAX)).map(|((_, s), _)| *s).collect();
-    for seq in heads {
-        builder.write_improvement_head((line_id, seq), None);
+    if !builder.extras.model_immutable_active {
+        let heads: Vec<u32> = builder.state.improvement_heads.range((line_id, 0)..=(line_id, u32::MAX)).map(|((_, s), _)| *s).collect();
+        for seq in heads {
+            builder.write_improvement_head((line_id, seq), None);
+        }
     }
     builder.write_improvement_policy(line_id, None);
     builder.write_improvement_usage(line_id, None);
@@ -2086,6 +2109,30 @@ mod tests {
     }
 
     #[test]
+    fn immutable_models_keep_the_existing_head_and_history_across_opt_out_and_reentry() {
+        let p = params();
+        let mut s = opted_in(500);
+        // A historical head selected before the new fence is different from the original class.
+        s.improvement_lines.get_mut(&h(LINE)).unwrap().head = h(CAND_A);
+        s.improvement_heads.get_mut(&(h(LINE), 0)).unwrap().class_id = h(CAND_A);
+        let extras = PalwTransitionExtrasV1 { model_immutable_active: true, ..Default::default() };
+        let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+        apply_improvement_policy_set_v1(&mut b, &ctx(600), &set(LINE, 2, None)).unwrap();
+        let s = b.checkpoint().0;
+        let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+        advance_improvement_v1(&mut b, &ctx(1_600)).unwrap();
+        let s = b.checkpoint().0;
+        assert_eq!(s.improvement_line(&h(LINE)).unwrap().status, PalwImprovementLineStatusV1::Dissolved);
+        assert_eq!(s.improvement_last_head(&h(LINE)).unwrap().class_id, h(CAND_A));
+        let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+        apply_improvement_policy_set_v1(&mut b, &ctx(1_700), &set(LINE, 3, Some(policy()))).unwrap();
+        let resumed = b.checkpoint().0;
+        assert_eq!(resumed.improvement_line(&h(LINE)).unwrap().head, h(CAND_A));
+        assert_eq!(resumed.improvement_last_head(&h(LINE)).unwrap().class_id, h(CAND_A));
+        assert_eq!(resumed.improvement_head_history(&h(LINE)).len(), 2);
+    }
+
+    #[test]
     fn a_developer_cannot_promote_on_a_governed_line() {
         let p = params();
         let s = opted_in(500);
@@ -2100,6 +2147,15 @@ mod tests {
     /// hold-out cases are drawn; A passes every item the parent fails, B ties; A is promoted.
     #[test]
     fn an_epoch_runs_from_usage_to_a_promotion() {
+        evaluated_epoch(false);
+    }
+
+    #[test]
+    fn immutable_models_select_an_independent_candidate_without_replacing_the_parent() {
+        evaluated_epoch(true);
+    }
+
+    fn evaluated_epoch(immutable: bool) {
         let p = params();
         let mut s = opted_in(500);
         s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 500 });
@@ -2185,9 +2241,32 @@ mod tests {
         conserved(&s, &h(LINE));
         // t_eval → Closing, and — nothing pending: every score is in, no evaluation claim is live
         // (the evaluation lane's hook) — scored and decided in the same block, not at t_score.
-        let s = at(&s, &p, 1_800, |_| {});
+        let before = s.clone();
+        let extras = PalwTransitionExtrasV1 { model_immutable_active: immutable, ..Default::default() };
+        let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+        advance_improvement_v1(&mut builder, &ctx(1_800)).unwrap();
+        let s = builder.checkpoint().0;
         let e = s.improvement_epoch(&h(LINE), 1).unwrap();
         assert_eq!(e.state, PalwEpochStateV1::Decided);
+        if immutable {
+            assert_eq!(e.outcome, Some(PalwPromotionOutcomeV1::CandidateSelected { class_id: h(CAND_A), wins: 8, losses: 0 }));
+            let line = s.improvement_line(&h(LINE)).unwrap();
+            assert_eq!(line.head, before.improvement_line(&h(LINE)).unwrap().head);
+            assert_eq!(line.last_promotion, None);
+            assert_eq!(s.improvement_head_history(&h(LINE)), before.improvement_head_history(&h(LINE)));
+            assert_eq!(s.model_lines, before.model_lines);
+            assert_eq!(s.model_versions, before.model_versions);
+            assert_eq!(s.model_markets, before.model_markets);
+            assert_eq!(s.model_positions, before.model_positions);
+            conserved(&s, &h(LINE));
+            let payload = PalwLineageRollbackV1 { line_id: h(LINE), epoch: 1, to_class: h(LINE), cause: PalwRollbackCauseV1::Owner };
+            let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+            assert!(matches!(
+                apply_lineage_rollback_v1(&mut b, &ctx(1_801), &payload, &bond(OWNER)),
+                Err(PalwStateV2Error::ImmutableModelUpdate(_))
+            ));
+            return;
+        }
         assert_eq!(e.outcome, Some(PalwPromotionOutcomeV1::Promoted { class_id: h(CAND_A), wins: 8, losses: 0 }));
         let line = s.improvement_line(&h(LINE)).unwrap();
         assert_eq!((line.head, line.open_epoch, line.regression_check), (h(CAND_A), None, Some(h(LINE))));

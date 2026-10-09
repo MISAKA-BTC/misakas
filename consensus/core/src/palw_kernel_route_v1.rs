@@ -152,6 +152,9 @@ pub struct PalwKernelRouteExtrasV1 {
     /// **RFC-0004 Part II**: the `palw_typed_roots_v1` fence's activation (`None`: absent) — a genesis constant of the route, like the
     /// OPV policy: from this height the route's schedule holds the typed-roots extension `K2-TR-v1` Active.
     pub typed_roots: Option<u64>,
+    /// **Lane DA16: `Params::palw_provider_court_v1`'s activation DAA, where that fence is in force at the block** (`None` below it and on
+    /// every network). The provider court's objects fold only with it; a claim committed below it can never move its DA responsibility.
+    pub provider_court: Option<u64>,
 }
 
 /// What the processor hands the fold for the OPV mode (RFC-0015): the network's policy and the two restrictions of the DERIVED

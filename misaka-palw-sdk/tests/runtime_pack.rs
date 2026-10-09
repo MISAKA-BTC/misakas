@@ -397,6 +397,107 @@ fn a_streamed_conformance_is_the_loaded_ones_and_never_holds_the_artifact_whole(
         .unwrap_or(0);
     assert!(note.reference_peak_tensor_bytes <= largest, "{} > {largest}", note.reference_peak_tensor_bytes);
     assert!(note.independent_peak_tensor_bytes > 0 && note.independent_peak_tensor_bytes <= largest, "{note:?}");
+
+    // **RFC-0013 §5 and §7.2: the same run with the independent implementation reading row tiles, each authenticated by a stored Merkle index.**
+    // The vectors are the untiled run's, byte for byte; the independent implementation never held a param whole beyond a tile; and the index
+    // hashed the leaves under the tiles it read, not the artifact.
+    use misaka_palw_sdk::tir_merkle_index::PalwTirMerkleIndexV1;
+    use misaka_palw_sdk::tir_stream::ContainerRanges;
+    // Which primitive reads each param of the lowered program (shown when the tiled run does not tile what it should).
+    let consumers = {
+        let p2 = misaka_palw_tir_ref2::codec::decode_canonical(&container.program.encode()).expect("ref2 decodes the program");
+        let mut by_param: std::collections::BTreeMap<u16, std::collections::BTreeSet<String>> = std::collections::BTreeMap::new();
+        for block in &p2.blocks {
+            for node in &block.nodes {
+                for (pos, r) in node.inputs.iter().enumerate() {
+                    if let misaka_palw_tir_ref2::Ref::Param(j) = r {
+                        by_param.entry(*j).or_default().insert(format!("{}@{pos}", node.prim.name()));
+                    }
+                }
+            }
+        }
+        p2.params
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.shape.iter().map(|&x| x as u64).product::<u64>() >= 64)
+            .map(|(j, d)| format!("param {j} `{}` {:?} {:?}: read by {:?}", d.name, d.dtype, d.shape, by_param.get(&(j as u16))))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let artifact = work_streamed.join("artifact.palwtir");
+    let (whole_vectors, whole_note) =
+        conformance::run_streamed(&artifact, &jobs, conformance::ImplSet::default(), &|_| {}).expect("untiled");
+    assert!(whole_note.independent_tiles.is_none() && whole_note.independent_rows.is_none());
+    let index =
+        PalwTirMerkleIndexV1::build_streamed(&container.program, &ContainerRanges::open(&container).expect("ranges")).expect("index");
+    index.verify_root(streamed.result.inventory_root.parse().expect("the pack's inventory root")).expect("the pack's root");
+    // The stored form is what a later run loads: write, read back, check the root again.
+    let index_file = work_streamed.join("artifact.palwtir.merkleidx");
+    index.write(&index_file).expect("written");
+    let index = PalwTirMerkleIndexV1::read(&container.program, &index_file).expect("read");
+    index.verify_root(streamed.result.inventory_root.parse().expect("root")).expect("the stored index folds to the pack's root");
+    let largest_param = container
+        .program
+        .params
+        .iter()
+        .map(|d| d.shape.iter().map(|&x| x as u64).product::<u64>())
+        .max()
+        .expect("the program has params");
+    assert!(largest_param < 1_000_000, "the fixture is small enough that one tile of 10^6 elements holds every param");
+    for (tile_elems, strict, indexed) in [(8u64, false, true), (64, false, false), (1_000_000, false, true)] {
+        let tiling = conformance::StreamTilingV1 { tile_elems, strict, index: indexed.then_some(&index) };
+        let (vectors, tiled_note) = conformance::run_streamed_tiled_with_progress(
+            &artifact,
+            &jobs,
+            conformance::ImplSet::default(),
+            Some(&tiling),
+            &|_| {},
+            &|_, _| {},
+        )
+        .expect("tiled");
+        assert_eq!(vectors, whole_vectors, "tile {tile_elems}: the tiled run is the untiled run");
+        let tiles = tiled_note.independent_tiles.expect("tiled");
+        let rows = tiled_note.independent_rows.expect("rows");
+        assert!(rows.reads > 0, "{tiles:?} {rows:?}");
+        if tile_elems >= largest_param {
+            // Every param fits one tile: the evaluation reads them whole (as the untiled run does), and says so.
+            assert!(tiles.tiles == 0 && tiles.macs == 0 && tiles.whole_loads > 0, "{tiles:?}");
+        } else {
+            assert!(tiles.tiles > 0 && tiles.macs > 0, "{tiles:?} {rows:?}\n{consumers}");
+        }
+        assert_eq!(rows.leaves_authenticated > 0, indexed, "{rows:?}");
+        if tile_elems == 8 {
+            assert!(tiles.tiles > 100, "a tiny tile reads many tiles: {tiles:?}");
+            let widest_row = container
+                .program
+                .params
+                .iter()
+                .map(|d| d.shape.iter().skip(1).map(|&x| x as u64).product::<u64>().max(1))
+                .max()
+                .unwrap();
+            assert!(tiles.peak_tile_elems <= tile_elems.max(widest_row), "{tiles:?}");
+        }
+    }
+    // A damaged weight byte: the indexed tiled run refuses it, as the leaf it is in.
+    let damaged = work_streamed.join("damaged.palwtir");
+    let mut bytes = std::fs::read(&artifact).expect("artifact");
+    // One bit in the middle of every tensor instance: the matmul weights are read whole at every position, so a tile of one is certain to be read.
+    for e in &container.header.tensors {
+        let (off, len) = container.locate(e.param, e.layer).expect("located");
+        bytes[(off + len / 2) as usize] ^= 0x20;
+    }
+    std::fs::write(&damaged, &bytes).expect("damaged copy");
+    let tiling = conformance::StreamTilingV1 { tile_elems: 8, strict: false, index: Some(&index) };
+    let refused = conformance::run_streamed_tiled_with_progress(
+        &damaged,
+        &jobs,
+        conformance::ImplSet { exec: false, ref2: true },
+        Some(&tiling),
+        &|_| {},
+        &|_, _| {},
+    );
+    // The reference evaluator reads the damaged byte too, so the run may fail at a disagreement or at the authentication; either way it does not pass.
+    assert!(refused.is_err(), "a damaged weight must not pass the indexed tiled run");
     let _ = std::fs::remove_dir_all(work_loaded);
     let _ = std::fs::remove_dir_all(work_streamed);
 }

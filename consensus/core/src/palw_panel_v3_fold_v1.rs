@@ -23,20 +23,32 @@
 //!
 //! **The receipt/court handoff.** The binding becomes an ordinary `PalwPanelStateV2` whose `anchor` is the V3 seed, so every
 //! V2 door — receipts, the coverage and S2 licences, DA accusations (a bound panel is what `DaClaimNotAccusable` asks for), the
-//! court — works for a V3 claim exactly as for a V2 one, by any ordinary public bond. Sharded classes are NOT bound by V3 (a
-//! flat panel cannot license by parts): a V3-rule claim of a class with a shard plan ends at admission, non-fraud
-//! (`PermissionlessNoCapablePanel`); the per-shard V3 draw is RFC-0006's DESIGN_GAP.
+//! court — works for a V3 claim exactly as for a V2 one, by any ordinary public bond.
+//!
+//! **RFC-0006 × RFC-0010: the per-shard V3 draw** (agent SHARD, `docs/design/palw/shard-rfc6-10.md` §1). A V3-rule claim of a
+//! class with a layer-shard plan (past `palw_tir_shard_v1`) is admitted with the engine's strata — one stratum a shard,
+//! `[outsider?] ++ 3 class seats` each, the class seats from the bonds that proved the shard's readiness, the outsider from the
+//! base class — and its binding writes, beside the V2 panel record (shard-major), RFC-0006's per-shard record: the armed
+//! machinery (cell-masked receipts, licence by parts, `basis_k` over cells, scaled locks, pay by share, the exact court) then runs
+//! unchanged on it.
+//!
+//! **G14: no non-fraud end pre-empts an accusation** (§2). [`PalwChainStateV2::palw_accusation_pending_v1`] is the one
+//! predicate, [`end_claim`] the one writer of every V3 non-fraud end: while an accusation is pending the engine keeps its own
+//! decision (on its own clock — nothing is re-rolled) and the V2 void is DEFERRED, applied at the first stage (2f or 4b″) at
+//! which nothing is pending, or never, because a conviction ended the claim first.
 
 use super::*;
 use crate::palw_panel_beacon_v1::{self as beacon, PanelBeaconHistoryV1};
 use crate::palw_panel_v2::PalwPanelDrawPolicyV1;
-use crate::palw_permissionless_panel_v1::{PalwPanelV3ParamsV1, panel_admitted_claim_v1, panel_bond_key_v1, panel_snapshot_candidates_v1};
+use crate::palw_permissionless_panel_v1::{
+    PalwPanelV3ParamsV1, panel_admitted_claim_v1, panel_bond_key_v1, panel_snapshot_candidates_v1, panel_stratified_candidates_v1,
+};
 use misaka_palw_challenge::hash::Digest;
 use misaka_palw_challenge::{FinalPathV1, PostCommitChallengePolicyV1, WorkFinalEventV1, WorkSourceKindV1};
 use misaka_palw_panel as eng;
 use misaka_palw_panel::{
     AdmittedClaimV1, BeaconProofV1, BeaconRequestV1, BondIdV1, ClaimPhaseV3, ConsensusViewV1, NonFraudReasonV1, PanelCursorV1,
-    PanelErrorV1, PanelFoldEventsV1, PermissionlessPanelStateV1, ReceiptClockV1, SeatCandidateV1, SelectedChainStepV1,
+    PanelErrorV1, PanelFoldEventsV1, PanelStrataV1, PermissionlessPanelStateV1, ReceiptClockV1, SeatCandidateV1, SelectedChainStepV1,
 };
 
 /// Where the beacon's source events come from.
@@ -191,6 +203,22 @@ struct FoldView<'a, 'b> {
 }
 
 impl<'a, 'b> FoldView<'a, 'b> {
+    /// The engine's structural checks on one candidate (maturity, exclusions, collateral, roles, commitments): a candidate that
+    /// fails one is simply not offered, so the engine's own check cannot fail the block.
+    fn admissible(&self, seat: &SeatCandidateV1, claim: &AdmittedClaimV1) -> bool {
+        let policy = self.mirror.policy;
+        let checkpoint_daa = self.engine.daa();
+        seat.collateral >= policy.min_collateral
+            && seat.registered_daa.checked_add(policy.bond_maturity_daa).is_some_and(|mature| mature <= checkpoint_daa)
+            && seat.bond != claim.producer
+            && seat.operator != claim.producer_operator
+            && seat.key != claim.producer_key
+            && seat.roles != 0
+            && seat.roles & !3 == 0
+            && seat.capability_root != Hash64::default()
+            && seat.readiness_root != Hash64::default()
+    }
+
     fn new(
         builder: &'a TransitionBuilder<'b>,
         parent: &'a PalwChainStateV2,
@@ -217,7 +245,8 @@ impl<'a, 'b> FoldView<'a, 'b> {
             if let ClaimPhaseV3::Bound(binding) = &record.phase
                 && !view.terminal_claim(id)
             {
-                for seat in &binding.seats {
+                // Once per bond: a bond seated in several strata holds one V2 duty (`reserve_seat_duties_with`).
+                for seat in binding.seats.iter().collect::<BTreeSet<_>>() {
                     *duties.entry(*seat).or_insert(0u128) += binding.exposure as u128;
                 }
             }
@@ -246,22 +275,41 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
         )
         // A claim the checkpoint does not hold seals an empty population (and ends non-fraud), never a failed block.
         .unwrap_or_default();
-        rows.retain(|seat| {
-            seat.collateral >= policy.min_collateral
-                && seat.registered_daa.checked_add(policy.bond_maturity_daa).is_some_and(|mature| mature <= checkpoint_daa)
-                && seat.bond != claim.producer
-                && seat.operator != claim.producer_operator
-                && seat.key != claim.producer_key
-                && seat.roles != 0
-                && seat.roles & !3 == 0
-                && seat.capability_root != Hash64::default()
-                && seat.readiness_root != Hash64::default()
-        });
+        rows.retain(|seat| self.admissible(seat, claim));
         if rows.len() > policy.max_candidates as usize {
             rows.sort_by(|a, b| b.collateral.cmp(&a.collateral).then(a.bond.cmp(&b.bond)));
             rows.truncate(policy.max_candidates as usize);
         }
         Ok(rows)
+    }
+
+    /// **The population of a claim drawn per shard** (RFC-0006 × RFC-0010), at the same checkpoint and sanitised exactly as
+    /// [`Self::candidates`]: per shard, the bonds that proved the shard's readiness (`palw_tir_shard_ready_class_v1` — the same
+    /// eligibility lane A's per-shard draw reads), each with its stratum bits; and, for an outsider-judged claim, the base
+    /// class's population as OUTSIDER role. A population above the cap keeps its highest collateral, the bits kept aligned.
+    fn stratified_candidates(
+        &self,
+        claim: &AdmittedClaimV1,
+        strata: &PanelStrataV1,
+    ) -> Result<(Vec<SeatCandidateV1>, Vec<u64>), PanelErrorV1> {
+        let policy = self.mirror.policy;
+        let mut rows = panel_stratified_candidates_v1(
+            self.parent,
+            claim.claim_id,
+            self.inputs.floor_class,
+            self.engine.daa(),
+            policy,
+            self.inputs.draw,
+            self.inputs.capability_proof,
+            strata,
+        )
+        .unwrap_or_default();
+        rows.retain(|(seat, _)| self.admissible(seat, claim));
+        if rows.len() > policy.max_candidates as usize {
+            rows.sort_by(|(a, _), (b, _)| b.collateral.cmp(&a.collateral).then(a.bond.cmp(&b.bond)));
+            rows.truncate(policy.max_candidates as usize);
+        }
+        Ok(rows.into_iter().unzip())
     }
 
     /// **The one ledger's room for one more duty, excluding the engine's own** (the engine subtracts its live reservations
@@ -307,21 +355,18 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
     /// earlier than that close. The pause is bounded:
     /// a claim takes at most three non-seat sessions open at once and sixteen over its life, each at most the disclose window.
     /// V2's own phase anchor (which a seat session's pause credit moves) and the old court's `DefaultDisputed` are read too.
+    ///
+    /// The pause is [`PalwChainStateV2::palw_accusation_pending_v1`] — the one G14 predicate every V3 non-fraud end reads (a DA
+    /// session, a court session, `DefaultDisputed`).
     fn receipt_clock(&self, claim: &Hash64) -> Option<ReceiptClockV1> {
+        if self.builder.state.palw_accusation_pending_v1(claim) {
+            return Some(ReceiptClockV1::Paused);
+        }
         let record = self.builder.state.da_claims.get(claim);
-        if record.is_some_and(|record| record.open_sessions() > 0) {
-            return Some(ReceiptClockV1::Paused);
-        }
-        // …and while a court session is open on it: an accusation of the executor must reach its verdict (or its own backstop)
-        // before a non-fraud expiry can close the claim and the session with it. Bounded by the court's session capacity.
-        if self.builder.state.open_courts_by_claim.get(claim).is_some_and(|open| *open > 0) {
-            return Some(ReceiptClockV1::Paused);
-        }
         match self.builder.state.claims.get(claim).map(|claim| &claim.phase) {
             Some(PalwClaimPhaseV2::PanelBound { bound_daa }) => Some(ReceiptClockV1::Running {
                 bound_daa: (*bound_daa).max(record.and_then(|record| record.last_closed_daa).unwrap_or(0)),
             }),
-            Some(PalwClaimPhaseV2::DefaultDisputed { .. }) => Some(ReceiptClockV1::Paused),
             _ => None,
         }
     }
@@ -386,12 +431,13 @@ pub(super) fn advance_v1(
     let (next, events) = advanced.map_err(|e| inconsistent("advance", e))?;
     // The engine is in place BEFORE its V2 effects are written: the deadline derivations a writer consults read it.
     builder.state.panel_v3 = Some(next);
-    apply_events(builder, ctx, &events)
+    apply_events(builder, ctx, &events)?;
+    apply_deferred_ends_v1(builder, ctx)
 }
 
 fn apply_events(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, events: &PanelFoldEventsV1) -> Result<(), PalwStateV2Error> {
     for (id, reason) in &events.non_fraud_voids {
-        end_claim(builder, ctx, id, v2_reason_of(*reason))?;
+        end_claim(builder, ctx, id, v2_reason_of(*reason), true)?;
     }
     for (id, binding) in &events.bindings {
         bind_v2(builder, ctx, id, binding)?;
@@ -399,13 +445,52 @@ fn apply_events(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, e
     Ok(())
 }
 
-/// A non-fraud termination: the V2 claim ends (the reservation released, nothing slashed, no strike, no hold).
-fn end_claim(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, id: &Hash64, reason: PalwVoidReasonV2) -> Result<(), PalwStateV2Error> {
+/// **The one writer of every V3 non-fraud end**: the V2 claim ends (the reservation released, nothing slashed, no strike, no hold).
+///
+/// **The G14 guard** (`deferrable`, every end the engine decided): while an accusation is pending on the claim
+/// ([`PalwChainStateV2::palw_accusation_pending_v1`]) the void is DEFERRED — the V2 claim stays where it is, holding its
+/// reservation and duties, the engine keeps its decision (`Voided { reason }`, on its own clock: nothing is re-rolled by timing),
+/// and [`apply_deferred_ends_v1`] applies it at the first stage nothing is pending — or never, because the accusation convicted
+/// first (`ProducerWithholding`, `CourtFraud`, `CourtDefault`). A refused admission is not deferrable: the engine never held the
+/// claim, and it is decided in the claim's own acceptance block (4b″), before any accusation the chain could carry can bind.
+fn end_claim(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    id: &Hash64,
+    reason: PalwVoidReasonV2,
+    deferrable: bool,
+) -> Result<(), PalwStateV2Error> {
     let Some(claim) = builder.state.claims.get(id).cloned() else { return Ok(()) };
     if claim.phase.is_terminal() {
         return Ok(());
     }
+    if deferrable && builder.state.palw_accusation_pending_v1(id) {
+        return Ok(());
+    }
     builder.void_claim(*id, &claim, ctx.daa_score, reason)
+}
+
+/// **The deferred ends** (G14): every claim the engine ended while an accusation was pending, still waiting in V2, with nothing
+/// pending now, ends as the engine decided. Run at 2f and at 4b″ — so an accusation that closes in a block's sweep or objects
+/// releases its claim's deferred end in that block or the next.
+fn apply_deferred_ends_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    let Some(engine) = builder.state.panel_v3.as_ref() else { return Ok(()) };
+    let due: Vec<(Hash64, NonFraudReasonV1)> = engine
+        .claim_rows()
+        .iter()
+        .filter_map(|(id, record)| match record.phase {
+            ClaimPhaseV3::Voided { reason, .. }
+                if claim_awaits_its_panel(builder.state.claims.get(id)) && !builder.state.palw_accusation_pending_v1(id) =>
+            {
+                Some((*id, reason))
+            }
+            _ => None,
+        })
+        .collect();
+    for (id, reason) in due {
+        end_claim(builder, ctx, &id, v2_reason_of(reason), true)?;
+    }
+    Ok(())
 }
 
 /// **A binding becomes the V2 bind**: the panel record (anchor = the V3 seed), the duty row and each seat's reserved exposure
@@ -428,12 +513,33 @@ fn bind_v2(
         let operator_id = builder.state.bonds.get(&bond).map(|record| record.operator_id).ok_or(PalwStateV2Error::MissingBond(bond))?;
         seats.push(PalwPanelSeatV2 { bond, operator_id });
     }
+    let strata = builder.state.panel_v3.as_ref().and_then(|engine| engine.claim(claim_id)).and_then(|record| record.strata);
     if retry {
+        // A claim drawn per shard licenses by parts while `PanelBound`: a part the previous round landed locked its signers. The
+        // redraw deals a new Panel that must license every shard again, so those locks go with the round (the claim never
+        // reached `Final`; a lock kept would hold a seat's room for a Panel it no longer sits on — Q-5's redraw rule).
+        if strata.is_some() {
+            for (key, _) in builder.claim_locks_v1(claim_id) {
+                builder.write_slashable_lock(key, None);
+            }
+        }
         // The previous round's seats leave duty with their exposure; the redraw deals different ones.
         builder.release_seat_duties(claim_id)?;
     }
     builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: binding.panel_seed_v3, seats: seats.clone(), bound_daa: ctx.daa_score }));
     builder.reserve_seat_duties_with(*claim_id, &seats, binding.exposure as u128, ctx.daa_score)?;
+    if let Some(strata) = strata {
+        // RFC-0006's per-shard record: the plan frozen, the outsider flag, each seat's share — the armed machinery runs from here.
+        super::palw_tir_shard_fold_v1::bind_record_stratified_v1(
+            builder,
+            ctx,
+            claim_id,
+            &claim.class_id,
+            &binding.panel_seed_v3,
+            strata.count,
+            strata.outsider,
+        )?;
+    }
     let mut bound = claim;
     bound.phase = PalwClaimPhaseV2::PanelBound { bound_daa: ctx.daa_score };
     if retry {
@@ -470,30 +576,45 @@ fn claims_created_this_block(builder: &TransitionBuilder<'_>) -> Vec<Hash64> {
     created
 }
 
-/// Why a V3-rule claim cannot enter the engine (it ends non-fraud, in this block).
+/// How a V3-rule claim enters the engine — flat, or in strata for a class drawn per shard — or why it cannot (it ends non-fraud,
+/// in this block).
 fn admission_of(
     builder: &TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     mirror: &PalwPanelV3ParamsV1,
     claim_id: &Hash64,
     claim: &PalwClaimStateV2,
-) -> Result<AdmittedClaimV1, &'static str> {
+) -> Result<(AdmittedClaimV1, Option<PanelStrataV1>), &'static str> {
     if claim.work_id.is_none_or(|work| work == Hash64::default()) {
         return Err("a claim with no canonical work identity cannot be drawn a Panel (P0-10)");
     }
-    // A class with a layer-shard plan is drawn per shard; the V3 draw is flat (RFC-0006's per-shard V3 draw is a DESIGN_GAP).
-    if builder.params.tir_shard_active_at(ctx.daa_score) && builder.state.tir_shard_plans.contains_key(&claim.class_id) {
-        return Err("a sharded class is drawn per shard; the permissionless draw is flat");
+    let outsider = palw_claim_is_outsider_judged_v1(&builder.state, claim, builder.extras.admission_independence_daa);
+    // **RFC-0006 × RFC-0010 (SHARD): a class with a layer-shard plan is drawn per shard** — one stratum a shard, three class seats
+    // from the shard's ready bonds, the shard's outsider first exactly when the claim is outsider-judged (each shard's part names
+    // its outsider). Never flat: a flat Panel cannot license by parts. The per-seat exposure is priced over every seat of the
+    // stratified Panel.
+    if let Some(plan) = super::palw_tir_shard_fold_v1::plan_of_class_v1(&builder.state, builder.params, &claim.class_id, ctx.daa_score) {
+        let strata = PanelStrataV1 {
+            count: plan.s_l,
+            class_seats: crate::palw_tir_shard_v1::PALW_TIR_SHARD_SEATS_PER_SHARD_V1,
+            outsider,
+        };
+        strata.validate().map_err(|_| "the class's plan has no stratified Panel")?;
+        let prices = builder.read().rcore_bind_prices(claim_id, claim, strata.seat_count(), ctx.daa_score);
+        let exposure = u64::try_from(prices.eligibility).map_err(|_| "the per-seat exposure does not fit")?;
+        let admitted =
+            panel_admitted_claim_v1(&builder.state, *claim_id, exposure).map_err(|_| "the claim has no admissible immutable fields")?;
+        return Ok((admitted, Some(strata)));
     }
     // The outsider seat is part of the licence (`palw_licence_names_its_outsider_v1`): the policy must draw one exactly when V2
     // would require one, or a bound claim could never license.
-    let outsider = palw_claim_is_outsider_judged_v1(&builder.state, claim, builder.extras.admission_independence_daa);
     if outsider != (mirror.policy.outsider_seats == 1) {
         return Err("the policy's outsider seat disagrees with the claim's independence rule");
     }
     let prices = builder.read().rcore_bind_prices(claim_id, claim, mirror.policy.seat_count as usize, ctx.daa_score);
     let exposure = u64::try_from(prices.eligibility).map_err(|_| "the per-seat exposure does not fit")?;
-    panel_admitted_claim_v1(&builder.state, *claim_id, exposure).map_err(|_| "the claim has no admissible immutable fields")
+    let admitted = panel_admitted_claim_v1(&builder.state, *claim_id, exposure).map_err(|_| "the claim has no admissible immutable fields")?;
+    Ok((admitted, None))
 }
 
 /// **Step 4b″: the certified outputs, the admissions and the journal.**
@@ -529,12 +650,14 @@ pub(super) fn take_block_v1(
             Err(_) => refused.push(claim_id),
         }
     }
-    let (next, rejected) = engine.admit(&admitted).map_err(|e| inconsistent("admit", e))?;
+    let (next, rejected) = engine.admit_with_strata(&admitted).map_err(|e| inconsistent("admit", e))?;
     builder.state.panel_v3 = Some(next);
     // A claim the engine could not take ends non-fraud at once, holding nothing.
     for claim_id in refused.into_iter().chain(rejected.into_iter().map(|(id, _)| id)) {
-        end_claim(builder, ctx, &claim_id, PalwVoidReasonV2::PermissionlessNoCapablePanel)?;
+        end_claim(builder, ctx, &claim_id, PalwVoidReasonV2::PermissionlessNoCapablePanel, false)?;
     }
+    // G14: an end deferred while an accusation was pending, released by this block's objects.
+    apply_deferred_ends_v1(builder, ctx)?;
     push_journal(builder, parent);
     Ok(())
 }
@@ -721,15 +844,28 @@ impl PalwChainStateV2 {
                     if row.seat_exposure != binding.exposure as u128 || row.seats.keys().copied().collect::<BTreeSet<_>>() != seats.iter().copied().collect() {
                         return Err(bad(format!("claim {id}'s duty row is not its binding")));
                     }
+                    // RFC-0006 × RFC-0010: a claim drawn per shard licenses by parts — it holds its per-shard record, of its strata.
+                    if let Some(strata) = record.strata
+                        && !self.tir_shard_claims.get(id).is_some_and(|shard| shard.s_l == strata.count && shard.outsider == strata.outsider)
+                    {
+                        return Err(bad(format!("claim {id} was drawn per shard but holds no per-shard record of its strata")));
+                    }
                 }
                 ClaimPhaseV3::Released { .. } => {
                     if claim_awaits_its_panel(claim) {
                         return Err(bad(format!("claim {id} was released but still awaits its Panel")));
                     }
                 }
+                // **G14: a deferred end.** The engine ended the claim while an accusation was pending and the V2 claim still waits:
+                // the void is applied at the next stage at which nothing is pending (`apply_deferred_ends_v1`, 2f or 4b″ — so at
+                // rest it may be due one block late, never lost). Until then it holds what it held at the decision: a duty row only
+                // if it is bound.
                 ClaimPhaseV3::Voided { .. } => {
-                    if claim.is_some_and(|claim| matches!(claim.phase, PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. })) {
-                        return Err(bad(format!("claim {id} ended in the engine but is still waiting in V2")));
+                    if let Some(claim) = claim
+                        && matches!(claim.phase, PalwClaimPhaseV2::Provisional)
+                        && self.panel_duties.contains_key(id)
+                    {
+                        return Err(bad(format!("claim {id}'s end is deferred before its bind but it holds a duty row")));
                     }
                 }
             }

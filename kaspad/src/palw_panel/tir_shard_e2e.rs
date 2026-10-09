@@ -538,3 +538,63 @@ fn the_pre_fence_shadow_agrees_on_an_honest_capture_and_disagrees_with_a_valid_v
     shadow.note(&d, true);
     shadow.note(&d, false);
 }
+
+/// **RFC-0006 × G14: the non-seat cell watcher** (agent SHARD, `tir_shard::watch`). A watch duty — the shard's outsider span (the
+/// whole shard), no seat (`PALW_TIR_SHARD_WATCH_NO_SEAT_V1`), the watcher's bond — verifies every shard of an honest claim and files
+/// nothing; on a planted lie the watch duty of the shard that owns it finds it and builds the IR one-move accusation with the
+/// WATCHER's bond as the accuser, the close the chain's one-move gate convicts on; a flat duty is no watch duty.
+#[test]
+fn a_non_seat_watcher_verifies_whole_shards_and_accuses_a_lie_as_itself() {
+    use super::tir_shard::watch::{PalwTirShardWatchFindingV1, palw_tir_shard_watch_finding_v1};
+    use kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2;
+    use kaspa_consensus_core::palw_tir_shard_watch_v1::PALW_TIR_SHARD_WATCH_NO_SEAT_V1;
+    let ir = shard_class("watch");
+    let tir = ir.tir();
+    let (job, prompt) = tir.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let honest = tir.execute(&job, &prompt).unwrap();
+    let watcher = bond(30);
+    let court = PalwCourtParamsV2::new(LADDER, 20, 2).unwrap();
+    let rules = tir.court_rules(&court);
+    let watch = |shard: u16, execution_root: Hash64, trace_root: Hash64| PalwSeatDutyV2 {
+        seat_bond: watcher,
+        seat_index: PALW_TIR_SHARD_WATCH_NO_SEAT_V1,
+        execution_root,
+        trace_root,
+        ..duty(&ir, shard, 2, 1, PalwSegmentMaskV2::full(1), true)
+    };
+    let find = |material: &[u8], d: &PalwSeatDutyV2| {
+        palw_tir_shard_watch_finding_v1(&tir, material, d, watcher, &court, &rules, LADDER, PalwPromptIdsFormV1::Flat, &mut kaspa_cpu())
+            .expect("the watch duty runs")
+    };
+    for shard in 0..2u16 {
+        let d = watch(shard, honest.execution_root, honest.trace_root);
+        assert_eq!(find(&honest.material, &d), PalwTirShardWatchFindingV1::Valid, "shard {shard}: an honest shard verifies whole");
+    }
+    let leaves = tir.decode_capture(&honest.material).unwrap().binding.step_leaf_count;
+    let mut accused = 0usize;
+    for leaf in [leaves / 5, leaves / 3, leaves / 2, leaves - 3] {
+        let forged = tir.execute_with_injected_fault(&job, &prompt, leaf).unwrap();
+        let mut found = 0;
+        for shard in 0..2u16 {
+            match find(&forged.material, &watch(shard, forged.execution_root, forged.trace_root)) {
+                PalwTirShardWatchFindingV1::Accuse { accusation, .. } => {
+                    assert_eq!(accusation.accuser_bond, watcher, "leaf {leaf}: the watcher accuses as itself, no seat's bond");
+                    assert_eq!(accusation.verdict, PalwCourtVerdictV2::ExecutorGuilty);
+                    assert_eq!((accusation.execution_root, accusation.trace_root), (forged.execution_root, forged.trace_root));
+                    found += 1;
+                    accused += 1;
+                }
+                PalwTirShardWatchFindingV1::Unconvictable { .. } => found += 1,
+                PalwTirShardWatchFindingV1::Valid => {}
+                PalwTirShardWatchFindingV1::Abstain(why) => panic!("leaf {leaf} shard {shard}: {why}"),
+            }
+        }
+        assert!(found >= 1, "leaf {leaf}: the shard that owns it finds it");
+    }
+    assert!(accused >= 3, "the watcher's accusation is one the one-move gate convicts on: {accused}");
+    let flat = PalwSeatDutyV2 { tir_shard: None, ..watch(0, honest.execution_root, honest.trace_root) };
+    assert!(
+        palw_tir_shard_watch_finding_v1(&tir, &honest.material, &flat, watcher, &court, &rules, LADDER, PalwPromptIdsFormV1::Flat, &mut kaspa_cpu())
+            .is_err()
+    );
+}

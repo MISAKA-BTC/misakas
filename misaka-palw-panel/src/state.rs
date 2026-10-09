@@ -197,9 +197,11 @@ impl PermissionlessPanelStateV1 {
         policy: PanelPolicyV1,
     ) -> Result<Self, PanelErrorV1> {
         policy.validate()?;
+        // A stratified binding holds up to `MAX_STRATIFIED_SEATS_V1` seats, whatever the flat `seat_count` is.
+        let seats = (policy.seat_count as u64).max(MAX_STRATIFIED_SEATS_V1 as u64);
         let limit = 4096u64
             + policy.max_tracked_claims as u64
-                * (8192 + policy.max_candidates as u64 * 400 + (policy.max_retries as u64 + 1) * policy.seat_count as u64 * 100);
+                * (8192 + policy.max_candidates as u64 * 400 + (policy.max_retries as u64 + 1) * seats * 100);
         if bytes.len() as u64 > limit {
             return Err(PanelErrorV1::ResourceLimit);
         }
@@ -246,7 +248,7 @@ impl PermissionlessPanelStateV1 {
         next.stage_ready(step.daa, &mut events)?;
         next.stage_assign(step.block, step.daa, view, &mut events)?;
         for (index, claim) in step.admissions.iter().enumerate() {
-            next.stage_admit(step.block, step.height, step.daa, index as u32, claim)?;
+            next.stage_admit(step.block, step.height, step.daa, index as u32, claim, None)?;
         }
         next.stage_close(step)?;
         Ok((next, events))
@@ -264,11 +266,7 @@ impl PermissionlessPanelStateV1 {
     /// closed make claims ready or terminate them `BeaconUnavailable`, and due assignments (first draws and receipt-timeout
     /// retries) are made against the host's headroom view. The cursor then moves to the step's block. Admissions and certified
     /// outputs of this block are not here: they are later stages, so neither can change a Panel that was already due.
-    pub fn advance(
-        &self,
-        step: &SelectedChainStepV1,
-        view: &impl ConsensusViewV1,
-    ) -> Result<(Self, PanelFoldEventsV1), PanelErrorV1> {
+    pub fn advance(&self, step: &SelectedChainStepV1, view: &impl ConsensusViewV1) -> Result<(Self, PanelFoldEventsV1), PanelErrorV1> {
         self.validate()?;
         self.check_step(step)?;
         if !step.admissions.is_empty() || !step.beacons.is_empty() {
@@ -300,16 +298,26 @@ impl PermissionlessPanelStateV1 {
     /// because a production block that carries a refused claim stands — the host terminates that claim itself. At most
     /// `max_admissions_per_block` are admitted; the rest are refused `ResourceLimit`. The block is the cursor's.
     pub fn admit(&self, admissions: &[AdmittedClaimV1]) -> Result<(Self, Vec<(Hash64, PanelErrorV1)>), PanelErrorV1> {
+        let flat: Vec<(AdmittedClaimV1, Option<PanelStrataV1>)> = admissions.iter().map(|claim| (claim.clone(), None)).collect();
+        self.admit_with_strata(&flat)
+    }
+
+    /// **Stage 3 with strata**: [`Self::admit`], each claim with the strata its Panel is drawn in (`None` is the flat draw —
+    /// `admit` is exactly this with `None` everywhere). A claim whose strata do not validate is refused with the others admitted.
+    pub fn admit_with_strata(
+        &self,
+        admissions: &[(AdmittedClaimV1, Option<PanelStrataV1>)],
+    ) -> Result<(Self, Vec<(Hash64, PanelErrorV1)>), PanelErrorV1> {
         let mut next = self.clone();
         let mut refused = Vec::new();
         let (block, height, daa) = (next.tip, next.height, next.daa);
         let mut admitted = 0u32;
-        for (index, claim) in admissions.iter().enumerate() {
+        for (index, (claim, strata)) in admissions.iter().enumerate() {
             let outcome = if admitted >= next.policy.max_admissions_per_block {
                 Err(PanelErrorV1::ResourceLimit)
             } else {
                 // A refused admission mutates nothing (every check precedes the first write).
-                next.stage_admit(block, height, daa, index as u32, claim)
+                next.stage_admit(block, height, daa, index as u32, claim, *strata)
             };
             match outcome {
                 Ok(()) => admitted += 1,
@@ -334,8 +342,7 @@ impl PermissionlessPanelStateV1 {
 
     fn stage_seal(&mut self, step_daa: u64, view: &impl ConsensusViewV1, events: &mut PanelFoldEventsV1) -> Result<(), PanelErrorV1> {
         // Seal against the *parent* checkpoint, before this block's registrations/topups/objects.
-        let (policy, network, ruleset, tip, height, daa) =
-            (self.policy, self.network, self.ruleset, self.tip, self.height, self.daa);
+        let (policy, network, ruleset, tip, height, daa) = (self.policy, self.network, self.ruleset, self.tip, self.height, self.daa);
         for record in self.claims.values_mut() {
             if record.phase != ClaimPhaseV3::PendingSeal {
                 continue;
@@ -355,11 +362,32 @@ impl PermissionlessPanelStateV1 {
                 Self::void(record, step_daa, NonFraudReasonV1::SealUnavailable, events);
                 continue;
             }
-            let mut candidates = view.candidates(&record.claim)?;
-            if candidates.len() > policy.max_candidates as usize {
-                return Err(PanelErrorV1::ResourceLimit);
+            // A stratified claim's population carries each candidate's stratum bits; sorted with them, so they stay aligned.
+            let (candidates, strata_members) = match &record.strata {
+                None => {
+                    let mut candidates = view.candidates(&record.claim)?;
+                    if candidates.len() > policy.max_candidates as usize {
+                        return Err(PanelErrorV1::ResourceLimit);
+                    }
+                    candidates.sort_by_key(|s| s.bond);
+                    (candidates, Vec::new())
+                }
+                Some(strata) => {
+                    let (candidates, members) = view.stratified_candidates(&record.claim, strata)?;
+                    if candidates.len() > policy.max_candidates as usize {
+                        return Err(PanelErrorV1::ResourceLimit);
+                    }
+                    if candidates.len() != members.len() {
+                        return Err(PanelErrorV1::InvalidSnapshot);
+                    }
+                    let mut paired: Vec<(SeatCandidateV1, u64)> = candidates.into_iter().zip(members).collect();
+                    paired.sort_by_key(|(s, _)| s.bond);
+                    paired.into_iter().unzip()
+                }
+            };
+            if !strata_members_hold(record.strata.as_ref(), &candidates, &strata_members) {
+                return Err(PanelErrorV1::InvalidSnapshot);
             }
-            candidates.sort_by_key(|s| s.bond);
             let mut bonds = BTreeSet::new();
             for s in &candidates {
                 if !bonds.insert(s.bond)
@@ -387,11 +415,12 @@ impl PermissionlessPanelStateV1 {
                 excluded_operator: record.claim.producer_operator,
                 excluded_key: record.claim.producer_key,
                 candidates,
+                strata_members,
             };
             snapshot.root = snapshot.computed_root();
             // Signature and claim lookup id are deliberately absent. Acceptance order is assigned
             // by the fold, never supplied by a miner and never broken by a grindable claim hash.
-            let id = digest(
+            let mut id = digest(
                 "misaka-palw/panel-v3/seal",
                 &(
                     network,
@@ -418,6 +447,10 @@ impl PermissionlessPanelStateV1 {
                     snapshot.root,
                 ),
             );
+            // A stratified seal names its strata (the snapshot root already covers the populations).
+            if let Some(strata) = &record.strata {
+                id = digest("misaka-palw/panel-v3/seal-strata", &(id, *strata));
+            }
             record.seal = Some(ClaimSealV1 {
                 id,
                 accepted_block: record.accepted_block,
@@ -486,10 +519,8 @@ impl PermissionlessPanelStateV1 {
             if let Some(output) = self.beacons.get(&seal.beacon_epoch) {
                 let snapshot = record.snapshot.as_ref().ok_or(PanelErrorV1::InvalidCarriage)?;
                 let seed = panel_seed_v3(network, ruleset, seal, snapshot, *output);
-                let beacon_id = digest(
-                    "misaka-palw/panel-v3/beacon",
-                    &(network, ruleset, policy.beacon_scheme, seal.beacon_epoch, output),
-                );
+                let beacon_id =
+                    digest("misaka-palw/panel-v3/beacon", &(network, ruleset, policy.beacon_scheme, seal.beacon_epoch, output));
                 record.phase = ClaimPhaseV3::EntropyReady {
                     ready_daa: ready,
                     assignment_point: add(ready, policy.assignment_delay_daa)?,
@@ -529,7 +560,17 @@ impl PermissionlessPanelStateV1 {
             }
         }
         due.sort();
-        for (_, _, _, id) in due.into_iter().take(policy.max_assignments_per_block as usize) {
+        // The per-block budget is in DRAWS: a flat claim is one, a stratified claim one per stratum. In queue order, never a
+        // subset: the first due claim that does not fit stops the block's draws (the first one always runs).
+        let mut budget = u64::from(policy.max_assignments_per_block);
+        let mut spent = 0u64;
+        for (_, _, _, id) in due {
+            let cost = self.claims[&id].strata.map_or(1, |strata| u64::from(strata.count));
+            if spent > 0 && cost > budget {
+                break;
+            }
+            budget = budget.saturating_sub(cost);
+            spent += cost;
             let mut r = self.claims.remove(&id).unwrap();
             let (seed, beacon_id, ready, point, retry) = match &r.phase {
                 ClaimPhaseV3::EntropyReady { seed, beacon_id, ready_daa, assignment_point } => {
@@ -542,61 +583,151 @@ impl PermissionlessPanelStateV1 {
             if retry > policy.max_retries {
                 Self::void(&mut r, step_daa, NonFraudReasonV1::PanelUnavailable, events);
             } else {
-                let snapshot = r.snapshot.as_ref().unwrap();
-                let mut used = r.used_operators.clone();
-                let mut seats = Vec::new();
-                for (role, needed) in [
-                    (OUTSIDER_ROLE_V1, policy.outsider_seats),
-                    (CLASS_ROLE_V1, policy.seat_count - policy.outsider_seats),
-                ] {
-                    let mut selected = 0;
-                    for bond in seat_order_v1(snapshot, seed, retry, role, &used)? {
-                        if selected == needed {
-                            break;
-                        }
-                        let candidate = snapshot.candidates.iter().find(|s| s.bond == bond).unwrap();
-                        if used.contains(&candidate.operator) {
-                            continue;
-                        }
-                        let free =
-                            view.available_collateral(&bond).min(candidate.collateral as u128).saturating_sub(self.reserved(&bond));
-                        if free < r.claim.required_exposure as u128 {
-                            continue;
-                        }
-                        seats.push(bond);
-                        used.push(candidate.operator);
-                        selected += 1;
+                let drawn = match r.strata {
+                    None => self.draw_flat(&r, seed, retry, view)?,
+                    Some(strata) => self.draw_stratified(&r, &strata, seed, retry, view)?,
+                };
+                match drawn {
+                    None => Self::void(&mut r, step_daa, NonFraudReasonV1::NoCapablePanel, events),
+                    Some((seats, used)) => {
+                        let binding = PanelBoundV3 {
+                            claim_seal_id: r.seal.as_ref().unwrap().id,
+                            panel_snapshot_root: r.snapshot.as_ref().unwrap().root,
+                            beacon_id,
+                            panel_seed_v3: seed,
+                            entropy_ready_daa: ready,
+                            assignment_point: point,
+                            binding_block: block,
+                            bound_daa: step_daa,
+                            retry_index: retry,
+                            seats,
+                            exposure: r.claim.required_exposure,
+                        };
+                        r.used_operators = used;
+                        r.binding_history.push(binding.clone());
+                        events.bindings.insert(id, binding.clone());
+                        r.phase = ClaimPhaseV3::Bound(binding);
                     }
-                    if selected < needed {
-                        break;
-                    }
-                }
-                if seats.len() != policy.seat_count as usize {
-                    Self::void(&mut r, step_daa, NonFraudReasonV1::NoCapablePanel, events);
-                } else {
-                    let binding = PanelBoundV3 {
-                        claim_seal_id: r.seal.as_ref().unwrap().id,
-                        panel_snapshot_root: snapshot.root,
-                        beacon_id,
-                        panel_seed_v3: seed,
-                        entropy_ready_daa: ready,
-                        assignment_point: point,
-                        binding_block: block,
-                        bound_daa: step_daa,
-                        retry_index: retry,
-                        seats,
-                        exposure: r.claim.required_exposure,
-                    };
-                    r.used_operators = used;
-                    r.binding_history.push(binding.clone());
-                    events.bindings.insert(id, binding.clone());
-                    r.phase = ClaimPhaseV3::Bound(binding);
                 }
             }
             self.claims.insert(id, r);
             self.rebuild_reservations()?;
         }
         Ok(())
+    }
+
+    /// May `bond` take one more per-seat exposure of `r`? Its free collateral (the host's headroom, capped by its frozen
+    /// collateral) less every reservation the engine already holds for it.
+    fn has_headroom(&self, r: &ClaimRecordV3, candidate: &SeatCandidateV1, view: &impl ConsensusViewV1) -> bool {
+        let free = view
+            .available_collateral(&candidate.bond)
+            .min(candidate.collateral as u128)
+            .saturating_sub(self.reserved(&candidate.bond));
+        free >= r.claim.required_exposure as u128
+    }
+
+    /// **The flat draw** (unchanged): `outsider_seats` OUTSIDER seats then the CLASS seats, one per operator, every operator of an
+    /// earlier round excluded. `None` when the population cannot fill it. Returns the seats and the claim's used operators.
+    fn draw_flat(
+        &self,
+        r: &ClaimRecordV3,
+        seed: Hash64,
+        retry: u16,
+        view: &impl ConsensusViewV1,
+    ) -> Result<Option<(Vec<BondIdV1>, Vec<Hash64>)>, PanelErrorV1> {
+        let policy = self.policy;
+        let snapshot = r.snapshot.as_ref().unwrap();
+        let mut used = r.used_operators.clone();
+        let mut seats = Vec::new();
+        for (role, needed) in [(OUTSIDER_ROLE_V1, policy.outsider_seats), (CLASS_ROLE_V1, policy.seat_count - policy.outsider_seats)] {
+            let mut selected = 0;
+            for bond in seat_order_v1(snapshot, seed, retry, role, &used)? {
+                if selected == needed {
+                    break;
+                }
+                let candidate = snapshot.candidates.iter().find(|s| s.bond == bond).unwrap();
+                if used.contains(&candidate.operator) {
+                    continue;
+                }
+                if !self.has_headroom(r, candidate, view) {
+                    continue;
+                }
+                seats.push(bond);
+                used.push(candidate.operator);
+                selected += 1;
+            }
+            if selected < needed {
+                break;
+            }
+        }
+        Ok((seats.len() == policy.seat_count as usize).then_some((seats, used)))
+    }
+
+    /// **The stratified draw** ([`PanelStrataV1`]'s rules), stratum by stratum from each stratum's own seed: the outsider first (an
+    /// operator that held no outsider seat of the claim, in any round or stratum, and did not sit in this stratum before), then
+    /// the class seats from the stratum's members (one per operator, none that sat in this stratum in an earlier round, not the
+    /// stratum's outsider). A bond already seated in an earlier stratum of this round needs no more headroom (it reserves once).
+    /// `None` when any stratum cannot be filled.
+    fn draw_stratified(
+        &self,
+        r: &ClaimRecordV3,
+        strata: &PanelStrataV1,
+        seed: Hash64,
+        retry: u16,
+        view: &impl ConsensusViewV1,
+    ) -> Result<Option<(Vec<BondIdV1>, Vec<Hash64>)>, PanelErrorV1> {
+        let snapshot = r.snapshot.as_ref().unwrap();
+        let by_bond: BTreeMap<BondIdV1, &SeatCandidateV1> = snapshot.candidates.iter().map(|c| (c.bond, c)).collect();
+        let stride = usize::from(strata.stride());
+        let rounds: Vec<&[Hash64]> = r.used_operators.chunks(strata.seat_count()).collect();
+        let mut outsiders: Vec<Hash64> = if strata.outsider {
+            rounds.iter().flat_map(|round| round.chunks(stride).map(|slice| slice[0])).collect()
+        } else {
+            Vec::new()
+        };
+        let mut seats: Vec<BondIdV1> = Vec::with_capacity(strata.seat_count());
+        let mut ops: Vec<Hash64> = Vec::with_capacity(strata.seat_count());
+        for stratum in 0..strata.count {
+            let at = usize::from(stratum) * stride;
+            // Every operator that sat in this stratum in an earlier round: never an alternate of it again.
+            let mut excluded: Vec<Hash64> = rounds.iter().flat_map(|round| round[at..at + stride].iter().copied()).collect();
+            for (role, needed) in [(OUTSIDER_ROLE_V1, u16::from(strata.outsider)), (CLASS_ROLE_V1, strata.class_seats)] {
+                if needed == 0 {
+                    continue;
+                }
+                let mut barred = excluded.clone();
+                if role == OUTSIDER_ROLE_V1 {
+                    barred.extend(outsiders.iter().copied());
+                }
+                let mut selected = 0;
+                for bond in stratum_seat_order_v1(snapshot, stratum, seed, retry, role, &barred)? {
+                    if selected == needed {
+                        break;
+                    }
+                    let candidate = by_bond[&bond];
+                    if barred.contains(&candidate.operator) {
+                        continue;
+                    }
+                    if !seats.contains(&bond) && !self.has_headroom(r, candidate, view) {
+                        continue;
+                    }
+                    seats.push(bond);
+                    ops.push(candidate.operator);
+                    barred.push(candidate.operator);
+                    excluded.push(candidate.operator);
+                    if role == OUTSIDER_ROLE_V1 {
+                        outsiders.push(candidate.operator);
+                    }
+                    selected += 1;
+                }
+                if selected < needed {
+                    return Ok(None);
+                }
+            }
+        }
+        let mut used = r.used_operators.clone();
+        used.extend(ops);
+        Ok(Some((seats, used)))
     }
 
     fn stage_admit(
@@ -606,7 +737,11 @@ impl PermissionlessPanelStateV1 {
         daa: u64,
         index: u32,
         claim: &AdmittedClaimV1,
+        strata: Option<PanelStrataV1>,
     ) -> Result<(), PanelErrorV1> {
+        if let Some(strata) = &strata {
+            strata.validate()?;
+        }
         if self.claims.contains_key(&claim.claim_id) || self.work_ids.contains(&claim.work_id) {
             return Err(PanelErrorV1::DuplicateClaim);
         }
@@ -637,6 +772,7 @@ impl PermissionlessPanelStateV1 {
                 used_operators: Vec::new(),
                 binding_history: Vec::new(),
                 phase: ClaimPhaseV3::PendingSeal,
+                strata,
             },
         );
         Ok(())
@@ -666,13 +802,31 @@ impl PermissionlessPanelStateV1 {
         self.reservations.clear();
         for r in self.claims.values() {
             if let ClaimPhaseV3::Bound(b) = &r.phase {
-                for seat in &b.seats {
+                // Once per bond per binding: a bond seated in several strata holds one duty (a flat binding's bonds are distinct).
+                for seat in b.seats.iter().collect::<BTreeSet<_>>() {
                     let amount = self.reservations.entry(*seat).or_default();
                     *amount = amount.checked_add(b.exposure as u128).ok_or(PanelErrorV1::Overflow)?;
                 }
             }
         }
         Ok(())
+    }
+
+    /// The flat draw's rules over a record's binding history: roles by position, every operator once over the claim's life. The
+    /// operators, in seat order (what `used_operators` must be).
+    fn flat_history_operators(&self, r: &ClaimRecordV3, snapshot: &PanelSnapshotV1) -> Result<Vec<Hash64>, PanelErrorV1> {
+        let mut used = Vec::new();
+        for binding in &r.binding_history {
+            for (seat_index, bond) in binding.seats.iter().enumerate() {
+                let s = snapshot.candidates.iter().find(|s| &s.bond == bond).ok_or(PanelErrorV1::InvalidCarriage)?;
+                let role = if seat_index < self.policy.outsider_seats as usize { OUTSIDER_ROLE_V1 } else { CLASS_ROLE_V1 };
+                if used.contains(&s.operator) || s.roles & role == 0 {
+                    return Err(PanelErrorV1::InvalidCarriage);
+                }
+                used.push(s.operator);
+            }
+        }
+        Ok(used)
     }
 
     fn validate(&self) -> Result<(), PanelErrorV1> {
@@ -700,6 +854,7 @@ impl PermissionlessPanelStateV1 {
                 || r.accepted_daa > self.daa
                 || r.claim.required_exposure == 0
                 || r.seal.is_some() != r.snapshot.is_some()
+                || r.strata.is_some_and(|strata| strata.validate().is_err())
             {
                 return Err(PanelErrorV1::InvalidCarriage);
             }
@@ -753,10 +908,13 @@ impl PermissionlessPanelStateV1 {
                     }
                     previous = Some(s.bond);
                 }
-                let mut used = Vec::new();
+                if !strata_members_hold(r.strata.as_ref(), &snapshot.candidates, &snapshot.strata_members) {
+                    return Err(PanelErrorV1::InvalidCarriage);
+                }
+                let seat_count = r.strata.map_or(self.policy.seat_count as usize, |strata| strata.seat_count());
                 for (index, binding) in r.binding_history.iter().enumerate() {
                     if binding.retry_index as usize != index
-                        || binding.seats.len() != self.policy.seat_count as usize
+                        || binding.seats.len() != seat_count
                         || binding.claim_seal_id != seal.id
                         || binding.panel_snapshot_root != snapshot.root
                         || binding.exposure != r.claim.required_exposure
@@ -767,15 +925,11 @@ impl PermissionlessPanelStateV1 {
                     {
                         return Err(PanelErrorV1::InvalidCarriage);
                     }
-                    for (seat_index, bond) in binding.seats.iter().enumerate() {
-                        let s = snapshot.candidates.iter().find(|s| &s.bond == bond).ok_or(PanelErrorV1::InvalidCarriage)?;
-                        let role = if seat_index < self.policy.outsider_seats as usize { OUTSIDER_ROLE_V1 } else { CLASS_ROLE_V1 };
-                        if used.contains(&s.operator) || s.roles & role == 0 {
-                            return Err(PanelErrorV1::InvalidCarriage);
-                        }
-                        used.push(s.operator);
-                    }
                 }
+                let used = match &r.strata {
+                    None => self.flat_history_operators(r, snapshot)?,
+                    Some(strata) => stratified_history_operators(r, snapshot, strata)?,
+                };
                 if used != r.used_operators {
                     return Err(PanelErrorV1::InvalidCarriage);
                 }
@@ -793,6 +947,60 @@ impl PermissionlessPanelStateV1 {
         }
         Ok(())
     }
+}
+
+/// **A snapshot's stratum bits agree with its claim's strata**: none for a flat claim; for a stratified one, one bitmap per candidate,
+/// within the strata's bits, and the CLASS role exactly where some bit is set.
+fn strata_members_hold(strata: Option<&PanelStrataV1>, candidates: &[SeatCandidateV1], members: &[u64]) -> bool {
+    match strata {
+        None => members.is_empty(),
+        Some(strata) => {
+            members.len() == candidates.len()
+                && candidates
+                    .iter()
+                    .zip(members)
+                    .all(|(seat, bits)| bits & !strata.member_mask() == 0 && ((seat.roles & CLASS_ROLE_V1) != 0) == (*bits != 0))
+        }
+    }
+}
+
+/// **The stratified draw's rules over a record's binding history** ([`PanelStrataV1`]): every seat a candidate of its slot's role
+/// (the outsider slot OUTSIDER, a class slot CLASS with the stratum's bit), operators distinct inside a stratum, an operator at most
+/// one outsider seat over the claim's life, and no operator sitting again in a stratum it sat in in an earlier round. The
+/// operators, in seat order (what `used_operators` must be).
+fn stratified_history_operators(
+    r: &ClaimRecordV3,
+    snapshot: &PanelSnapshotV1,
+    strata: &PanelStrataV1,
+) -> Result<Vec<Hash64>, PanelErrorV1> {
+    let stride = usize::from(strata.stride());
+    let mut used = Vec::new();
+    let mut outsiders: BTreeSet<Hash64> = BTreeSet::new();
+    let mut sat_in: Vec<BTreeSet<Hash64>> = vec![BTreeSet::new(); usize::from(strata.count)];
+    for binding in &r.binding_history {
+        for (stratum, slice) in binding.seats.chunks(stride).enumerate() {
+            let mut inside: BTreeSet<Hash64> = BTreeSet::new();
+            for (slot, bond) in slice.iter().enumerate() {
+                let index = snapshot.candidates.iter().position(|s| &s.bond == bond).ok_or(PanelErrorV1::InvalidCarriage)?;
+                let (s, bits) = (&snapshot.candidates[index], snapshot.strata_members[index]);
+                let outsider_slot = strata.outsider && slot == 0;
+                let fits = if outsider_slot {
+                    s.roles & OUTSIDER_ROLE_V1 != 0
+                } else {
+                    s.roles & CLASS_ROLE_V1 != 0 && bits & (1u64 << stratum) != 0
+                };
+                if !fits || !inside.insert(s.operator) || sat_in[stratum].contains(&s.operator) {
+                    return Err(PanelErrorV1::InvalidCarriage);
+                }
+                if outsider_slot && !outsiders.insert(s.operator) {
+                    return Err(PanelErrorV1::InvalidCarriage);
+                }
+                used.push(s.operator);
+            }
+            sat_in[stratum].extend(inside);
+        }
+    }
+    Ok(used)
 }
 
 fn serialize_reservations<S: serde::Serializer>(map: &BTreeMap<BondIdV1, u128>, serializer: S) -> Result<S::Ok, S::Error> {

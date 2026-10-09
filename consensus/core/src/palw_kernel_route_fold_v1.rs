@@ -195,7 +195,7 @@ pub(super) fn ensure_route_header(builder: &mut TransitionBuilder<'_>, ctx: &Pal
 
 /// **The ledger the block's kernel moves run on**: the route's header created on first use (under the interim policy the processor
 /// resolved), the ledger rebuilt from the rows, the block begun.
-fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<KernelLedgerV1, PalwStateV2Error> {
+pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<KernelLedgerV1, PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
     let extras = builder.extras.kernel_route.as_ref().expect("checked by the header");
     // The artifact roots the route may attest: the test hook's list (empty outside a test) and every Matured or Final onboarding
@@ -216,6 +216,19 @@ fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) ->
     // The attested set IS the derived set (not a growing one): a binding refuted after a root was attested stops attesting it for the
     // next kernel class, and the stale row goes with it.
     ledger.attested_artifacts = attested.iter().map(|root| root.as_bytes()).collect();
+    // DA16: the claims whose material obligation moved to bonded providers — derived from the court's rooted rows, never a ledger table
+    // (and nothing at all below `palw_provider_court_v1`, where no such row can exist).
+    if extras.provider_court.is_some() {
+        ledger.provider_liable = builder
+            .state
+            .kernel_route
+            .as_ref()
+            .map(|k| k.provider_liable_claims_v1())
+            .unwrap_or_default()
+            .iter()
+            .map(|c| c.as_bytes())
+            .collect();
+    }
     // RFC-0015 admission is no longer a list read here: a class is admitted to the mode at its own registration, and only while
     // DERIVED-eligible (`opv_gate_v1`), so the ledger's admitted rows are exactly the classes that were eligible when they registered.
     Ok(ledger)
@@ -293,7 +306,7 @@ fn opv_gate_v1(
 }
 
 /// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them.
-fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &LedgerRowsV1) {
+pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &LedgerRowsV1) {
     for ((table, key), old_new) in diff_rows(before, &ledger.to_rows()).into_iter().map(|(k, _old, new)| (k, new)) {
         builder.write_kernel_row(table, key, old_new);
     }
@@ -309,7 +322,11 @@ fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1, before: &
 /// `strict` (every object arm): a slash the real bond cannot pay in full refuses the object (it is dropped, the block stands). The closing
 /// tick is not strict: it runs after the rehearsal, so an error there would fail the whole block — and with every held bond re-synced
 /// just before it, the ledger's clamped instructions are always payable; if that ever failed, taking what the bond holds is the safe side.
-fn apply_settlements(builder: &mut TransitionBuilder<'_>, events: &[LedgerEventV1], strict: bool) -> Result<(), PalwStateV2Error> {
+pub(super) fn apply_settlements(
+    builder: &mut TransitionBuilder<'_>,
+    events: &[LedgerEventV1],
+    strict: bool,
+) -> Result<(), PalwStateV2Error> {
     // GAP-5: what this batch actually debited from posters' escrows — the only source a Final reward is paid from. A `FinalReward`
     // with no spent escrow behind it is never paid (there is no unfunded reward path).
     let mut escrow_debited: u64 = 0;
@@ -659,6 +676,9 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     super::palw_onboarding_fold_v1::tick_onboarding_v1(builder, ctx);
     // The route's chunk groups past their TTL are dropped and their deposits forfeited, whatever the ledger is doing.
     forfeit_expired_chunk_groups_v1(builder, ctx);
+    // DA16: the provider court's deadlines (a provider that did not answer is charged), expired leases, lapses — before the kernel's tick,
+    // so a claim whose last provider was charged this block is void before its demands are swept.
+    super::palw_provider_court_fold_v1::tick_provider_court_v1(builder, ctx)?;
     let Some(kernel) = builder.state.kernel_route.as_ref() else { return Ok(()) };
     // Anything the tick moves: claims and demands, and (G14-R4) bonded seals that expire, escrows that return and served demands'
     // bonds — a route whose only rows are a seal or an escrow must still forfeit or return it on time.
@@ -707,6 +727,8 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
         builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key_bytes(&claim), None);
     }
     flush(builder, &ledger, &before);
+    // DA16: a demand on a transferred claim that nobody answered is its providers' failure — charge them (never the producer).
+    super::palw_provider_court_fold_v1::settle_provider_liable_defaults_v1(builder, ctx, &events)?;
     Ok(())
 }
 

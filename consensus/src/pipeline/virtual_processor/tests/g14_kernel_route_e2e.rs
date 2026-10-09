@@ -2976,6 +2976,9 @@ mod c4r3;
 // Onboarding P0 (OB-P0): conformance evidence on chain (tag 109) — the beacon from FUTURE Panel-independent Finals, the evidence judged
 // in the fold, an optimistic window with outsider refutations, the lifecycle to ACTIVE_REWARDABLE: `g14_kernel_route_e2e/conformance.rs`.
 mod conformance;
+// Lane DA16: the public-material transport and the provider court (tags 150–153) — an outsider confirms or refutes a binding from the
+// bytes, providers' defaults, a common-mode outage, a false computation still the miner's, reorg and replay: `g14_kernel_route_e2e/da16.rs`.
+mod da16;
 // OPV-BOOT: the OPV ↔ beacon startup cycle closed — the complete-check bootstrap from zero Finals, derived eligibility, its loss,
 // hostile complete checks, the deny-list and the test seam's pin: `g14_kernel_route_e2e/opv_bootstrap.rs`.
 mod opv_bootstrap;

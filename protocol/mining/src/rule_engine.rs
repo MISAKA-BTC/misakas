@@ -96,6 +96,10 @@ impl MiningRuleEngine {
             // the window, so an operator seeing an idle miner or a `NodeNotSynced` validator has
             // the reason in front of them rather than having to infer it.
             match self.chain_participation.state() {
+                ChainParticipation::Ready if self.chain_participation.partition_hold() => info!(
+                    "Chain participation held: PARTITION HOLD — this node keeps a branch its long-lived outbound peers have left \
+                     (see the PARTITION HOLD error). Not mining, not attesting, reporting unsynced."
+                ),
                 ChainParticipation::Ready => {}
                 ChainParticipation::CandidateReview => info!(
                     "Chain participation held: reviewing the chain just adopted ({}s floor remaining). Not mining, not \

@@ -1373,21 +1373,148 @@ enum WorkerOutcome {
     Answered(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1),
 }
 
+/// **Where a `v3-serve` worker reads its frames from — and how it learns of a cancel while a run is in progress** (RFC-0001 P1).
+///
+/// The gateway writes a `Cancel` frame AFTER the request, while the run is executing, so it can neither be an ordinary in-order frame nor
+/// be read by the thread that is busy decoding. A source that can look ahead without blocking ([`ThreadedFrames`]) answers
+/// [`Self::cancel_requested`] from the token sink; one that cannot ([`SerialFrames`], the old behaviour) answers `false` and the run is
+/// drained as before.
+pub trait WorkerFrameSource {
+    /// The next request-bearing frame, blocking; `None` at a clean end of stream. A cancel frame that arrives between requests (the run
+    /// ended before the cancel was read) is dropped here: it names a request that is over.
+    fn next_frame(&mut self) -> Result<Option<Vec<u8>>, String>;
+    /// A new request is about to run: forget every cancel seen so far (a stale cancel must never name a later request with the same bytes).
+    fn begin_request(&mut self) {}
+    /// Without blocking: has a cancel for `request_hash` arrived? Frames that are not cancels stay queued, in order.
+    fn cancel_requested(&mut self, _request_hash: Hash64) -> bool {
+        false
+    }
+}
+
+/// The frames of a plain reader, one blocking read at a time: no look-ahead, no cancel — `v3-serve` as it was.
+pub struct SerialFrames<'a, R: Read>(pub &'a mut R);
+
+impl<R: Read> WorkerFrameSource for SerialFrames<'_, R> {
+    fn next_frame(&mut self) -> Result<Option<Vec<u8>>, String> {
+        loop {
+            match read_framed_stream(self.0, PALW_V2_MAX_FRAME_BYTES)? {
+                Some(frame) if kaspa_consensus_core::palw_freeprompt_v3::parse_fp_worker_cancel_frame_v1(&frame).is_some() => continue,
+                other => return Ok(other),
+            }
+        }
+    }
+}
+
+/// One item the reader thread hands over: a frame, the clean end of the stream, or the error that ended it.
+type FrameItem = Result<Option<Vec<u8>>, String>;
+
+/// **A reader thread over the request stream**, so the worker can see a `Cancel` that arrives mid-run. Frames queue in arrival order;
+/// [`WorkerFrameSource::cancel_requested`] drains what has arrived without blocking and keeps the requests it finds for later.
+pub struct ThreadedFrames {
+    rx: std::sync::mpsc::Receiver<FrameItem>,
+    pending: std::collections::VecDeque<FrameItem>,
+    cancels: std::collections::BTreeSet<Hash64>,
+}
+
+impl ThreadedFrames {
+    /// Read `input` (the worker's stdin) on a background thread. The thread ends at the end of the stream, on a read error, or when this
+    /// value is dropped (its next send fails).
+    pub fn spawn<R: Read + Send + 'static>(mut input: R) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<FrameItem>();
+        std::thread::spawn(move || {
+            loop {
+                let item = read_framed_stream(&mut input, PALW_V2_MAX_FRAME_BYTES);
+                let last = !matches!(item, Ok(Some(_)));
+                if tx.send(item).is_err() || last {
+                    break;
+                }
+            }
+        });
+        Self { rx, pending: std::collections::VecDeque::new(), cancels: std::collections::BTreeSet::new() }
+    }
+
+    /// Move everything that has arrived into the queue, recording the cancels (they are consumed here, never queued as requests).
+    fn drain(&mut self) {
+        while let Ok(item) = self.rx.try_recv() {
+            match item {
+                Ok(Some(frame)) => match kaspa_consensus_core::palw_freeprompt_v3::parse_fp_worker_cancel_frame_v1(&frame) {
+                    Some(hash) => {
+                        self.cancels.insert(hash);
+                    }
+                    None => self.pending.push_back(Ok(Some(frame))),
+                },
+                end => self.pending.push_back(end),
+            }
+        }
+    }
+}
+
+impl WorkerFrameSource for ThreadedFrames {
+    fn next_frame(&mut self) -> Result<Option<Vec<u8>>, String> {
+        loop {
+            let item = match self.pending.pop_front() {
+                Some(item) => item,
+                None => match self.rx.recv() {
+                    Ok(item) => item,
+                    // The reader thread is gone without an end marker: the stream is over.
+                    Err(_) => return Ok(None),
+                },
+            };
+            match item {
+                Ok(Some(frame)) if kaspa_consensus_core::palw_freeprompt_v3::parse_fp_worker_cancel_frame_v1(&frame).is_some() => {
+                    continue;
+                }
+                item => return item,
+            }
+        }
+    }
+
+    fn begin_request(&mut self) {
+        self.cancels.clear();
+    }
+
+    fn cancel_requested(&mut self, request_hash: Hash64) -> bool {
+        self.drain();
+        self.cancels.contains(&request_hash)
+    }
+}
+
 /// `--mode v3-serve`: the artifact is already mapped; announce it once, then answer jobs until the
 /// stream ends.
 ///
 /// Returns `Ok` on a clean end of stream — the gateway closing the pipe is how a resident worker
 /// is meant to stop — and `Err` only for a stream this worker can no longer read or write, which
 /// is the one class of failure that must not be answered with a frame.
+///
+/// This form reads its frames serially, so a `Cancel` frame cannot interrupt a run (it is dropped when it is reached); the worker
+/// binaries use [`run_v3_serve_cancellable_v1`] over [`ThreadedFrames`].
 pub fn run_v3_serve_v1<B, R, W>(rt: &FpWorkerRuntime<B>, input: &mut R, output: &mut W, trace_out: &Path) -> Result<(), String>
 where
     B: PalwExecutionBackendV1,
     R: Read,
     W: Write,
 {
+    run_v3_serve_cancellable_v1(rt, &mut SerialFrames(input), output, trace_out)
+}
+
+/// **`v3-serve` with RFC-0001 P1's cancel**: the same loop, reading through a [`WorkerFrameSource`]. A cancel for the request in flight
+/// stops its run at the next token (the decode loops check [`crate::cancel`] after reporting each id); the worker answers with exactly one
+/// `Cancelled` terminator — no result, no retained trace, no commitment — and stays up for the next request. A cancel that arrives after
+/// the run ended is ignored.
+pub fn run_v3_serve_cancellable_v1<B, F, W>(
+    rt: &FpWorkerRuntime<B>,
+    frames: &mut F,
+    output: &mut W,
+    trace_out: &Path,
+) -> Result<(), String>
+where
+    B: PalwExecutionBackendV1,
+    F: WorkerFrameSource,
+    W: Write,
+{
     write_frame_v1(output, &PalwFpWorkerFrameV1::Manifest(rt.manifest.clone()))?;
     loop {
-        let payload = match read_framed_stream(input, PALW_V2_MAX_FRAME_BYTES)? {
+        let payload = match frames.next_frame()? {
             Some(payload) => payload,
             None => return Ok(()),
         };
@@ -1465,6 +1592,9 @@ where
         // it is recorded and re-raised after the run, because the run itself must not be abandoned
         // half-captured.
         let mut stream_error: Option<String> = None;
+        // RFC-0001 P1: a new request forgets every earlier cancel, and no abort survives from an earlier run.
+        frames.begin_request();
+        crate::cancel::take_abort_v1();
         // The sink is scoped so its borrow of `output` and `stream_error` ends with the run, and
         // the terminator below writes to the same stream without a `drop` anybody could move.
         let outcome = {
@@ -1475,6 +1605,11 @@ where
                 let frame = PalwFpWorkerFrameV1::Token { token_id, rendered: rendered.to_vec() };
                 if let Err(e) = write_frame_v1(output, &frame) {
                     stream_error = Some(e);
+                    return;
+                }
+                // The cancel is read HERE, between tokens, without blocking: the decode loop stops at its next check.
+                if !crate::cancel::aborted_v1() && frames.cancel_requested(request_hash) {
+                    crate::cancel::request_abort_v1();
                 }
             };
             if answer_only {
@@ -1485,6 +1620,13 @@ where
         };
         if let Some(e) = stream_error {
             return Err(e);
+        }
+        // A run that stopped because the requester cancelled it ends in `Cancelled`, whatever the backend called its error; a run that
+        // finished before the check reached it is a result like any other (the gateway discards it, as it always did).
+        let cancelled = crate::cancel::take_abort_v1();
+        if cancelled && outcome.is_err() {
+            write_frame_v1(output, &PalwFpWorkerFrameV1::Cancelled { request_hash })?;
+            continue;
         }
         match outcome {
             Ok(WorkerOutcome::Committed(result)) => write_frame_v1(output, &PalwFpWorkerFrameV1::Result(Box::new(result)))?,
@@ -1864,6 +2006,175 @@ mod tests {
         let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
         frame.extend_from_slice(&payload);
         frame
+    }
+
+    // ------------------------------------------------------------------------------------------------------------------------
+    // RFC-0001 P1 — the cancel frame
+    // ------------------------------------------------------------------------------------------------------------------------
+
+    /// A frame source with a script: the requests in order, and a cancel that "arrives" at a chosen poll of a chosen request (1-based each),
+    /// so the moment is exact rather than a race with a reader thread.
+    struct ScriptedFrames {
+        requests: std::collections::VecDeque<Vec<u8>>,
+        cancel_at: Option<(usize, usize)>,
+        request: usize,
+        polls: usize,
+        asked: Vec<(usize, Hash64)>,
+    }
+
+    impl ScriptedFrames {
+        fn new(requests: Vec<Vec<u8>>, cancel_at: Option<(usize, usize)>) -> Self {
+            Self { requests: requests.into(), cancel_at, request: 0, polls: 0, asked: Vec::new() }
+        }
+    }
+
+    impl WorkerFrameSource for ScriptedFrames {
+        fn next_frame(&mut self) -> Result<Option<Vec<u8>>, String> {
+            Ok(self.requests.pop_front())
+        }
+        fn begin_request(&mut self) {
+            self.request += 1;
+            self.polls = 0;
+        }
+        fn cancel_requested(&mut self, request_hash: Hash64) -> bool {
+            self.polls += 1;
+            self.asked.push((self.request, request_hash));
+            self.cancel_at.is_some_and(|(req, poll)| self.request == req && self.polls >= poll)
+        }
+    }
+
+    fn payload_of(request: &PalwFpWorkerRequestV3) -> Vec<u8> {
+        borsh::to_vec(request).expect("a request serializes")
+    }
+
+    /// **A cancel stops the run at its next token; nothing of it is kept; the worker serves the next request, and that request's result is
+    /// the one it would have produced alone.**
+    ///
+    /// Request A (8 decode tokens) is cancelled at the second token poll. The stream is `Manifest, Token, Token, Cancelled{A}`, then B's
+    /// eight tokens and its `Result`. A leaves no retained trace; the cancel flag does not survive into B; B's whole result equals B run
+    /// on a fresh worker — the abort left the resident engine, its cache and its artifact exactly as a finished run would.
+    #[test]
+    fn a_cancel_stops_the_run_at_the_next_token_and_the_worker_serves_the_next_request_unchanged() {
+        let temp = std::env::temp_dir().join(format!("palw-fp-worker-cancel-{}", std::process::id()));
+        let rt = fixture_runtime_v1();
+        let manifest = rt.manifest().clone();
+        let mut a = fixture_request_v1(&manifest, PalwFpWorkerInputV3::TokenIds(vec![3, 5, 8, 13]));
+        a.decode_token_limit = 8;
+        let mut b = a.clone();
+        b.job_nonce = [0x6B; 32];
+        let (hash_a, hash_b) = (fp_worker_request_hash_v3(&payload_of(&a)), fp_worker_request_hash_v3(&payload_of(&b)));
+
+        let mut frames = ScriptedFrames::new(vec![payload_of(&a), payload_of(&b)], Some((1, 2)));
+        let mut out = Vec::new();
+        run_v3_serve_cancellable_v1(&rt, &mut frames, &mut out, &temp).expect("the session ends cleanly");
+        let decoded = decode_frames_v1(&out).expect("the frames decode");
+
+        assert!(matches!(decoded[0], PalwFpWorkerFrameV1::Manifest(_)));
+        let tokens_a = decoded[1..].iter().take_while(|f| matches!(f, PalwFpWorkerFrameV1::Token { .. })).count();
+        assert_eq!(tokens_a, 2, "the cancel was seen at the second poll and the run stopped at once: {decoded:?}");
+        assert_eq!(
+            decoded[1 + tokens_a],
+            PalwFpWorkerFrameV1::Cancelled { request_hash: hash_a },
+            "exactly one terminator, and it names A"
+        );
+        let rest = &decoded[2 + tokens_a..];
+        let tokens_b = rest.iter().take_while(|f| matches!(f, PalwFpWorkerFrameV1::Token { .. })).count();
+        assert_eq!(tokens_b, 8, "B ran to its budget");
+        let Some(PalwFpWorkerFrameV1::Result(served_b)) = rest.last() else { panic!("B ends in a Result, got {rest:?}") };
+        assert_eq!(rest.len(), tokens_b + 1);
+        assert_eq!(decoded.iter().filter(|f| matches!(f, PalwFpWorkerFrameV1::Result(_))).count(), 1, "A produced no result");
+
+        // The worker polled for A's hash during A and for B's during B, and never carried a cancel across.
+        assert!(frames.asked.iter().all(|(req, h)| *h == if *req == 1 { hash_a } else { hash_b }));
+        assert!(frames.asked.iter().filter(|(req, _)| *req == 1).count() == 2, "A stopped at the poll that saw the cancel");
+        assert!(frames.asked.iter().filter(|(req, _)| *req == 2).count() >= 8, "B was polled at every token and never cancelled");
+        assert!(!crate::cancel::aborted_v1(), "no abort flag survives the session");
+
+        // A kept nothing: no retained trace under its job id.
+        let (job_a, _) = prepare_job_v1(&rt, &a).expect("A's job");
+        assert!(!temp.join(hex(fp_job_id_v3(&job_a))).exists(), "a cancelled run retains no trace");
+
+        // B equals B alone on a fresh worker.
+        let alone_dir = temp.join("alone");
+        let alone = run_one_job_v1(&fixture_runtime_v1(), &b, hash_b, &alone_dir, &mut |_, _| {}).expect("B alone");
+        assert_eq!(without_clocks(served_b), without_clocks(&alone), "the abort left no trace in the resident worker");
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// A cancel for a request that is not running — one that arrives after its run ended, or names nothing in flight — is ignored without a
+    /// reply, and a serial source (no look-ahead) drops it when it reaches it.
+    #[test]
+    fn a_late_cancel_is_ignored_and_a_serial_source_skips_it() {
+        let temp = std::env::temp_dir().join(format!("palw-fp-worker-late-cancel-{}", std::process::id()));
+        let rt = fixture_runtime_v1();
+        let manifest = rt.manifest().clone();
+        let a = fixture_request_v1(&manifest, PalwFpWorkerInputV3::TokenIds(vec![3, 5, 8, 13]));
+        let hash_a = fp_worker_request_hash_v3(&payload_of(&a));
+        // The stream: A, then a cancel for A (too late), then A again (the same bytes: a retry).
+        let mut stream = framed(&a);
+        let cancel = kaspa_consensus_core::palw_freeprompt_v3::fp_worker_cancel_frame_v1(hash_a);
+        stream.extend((cancel.len() as u32).to_le_bytes());
+        stream.extend(&cancel);
+        stream.extend(framed(&a));
+        let mut out = Vec::new();
+        run_v3_serve_v1(&rt, &mut stream.as_slice(), &mut out, &temp).expect("the session ends cleanly");
+        let decoded = decode_frames_v1(&out).expect("the frames decode");
+        assert_eq!(decoded.iter().filter(|f| matches!(f, PalwFpWorkerFrameV1::Result(_))).count(), 2, "both runs finished");
+        assert!(
+            decoded.iter().all(|f| !matches!(f, PalwFpWorkerFrameV1::Cancelled { .. } | PalwFpWorkerFrameV1::Refused { .. })),
+            "{decoded:?}"
+        );
+
+        // The scripted source forgets cancels at each request: a stale cancel never names the retry.
+        let mut frames = ScriptedFrames::new(vec![payload_of(&a), payload_of(&a)], Some((1, 1)));
+        let mut out = Vec::new();
+        run_v3_serve_cancellable_v1(&rt, &mut frames, &mut out, &temp).expect("the session ends cleanly");
+        let decoded = decode_frames_v1(&out).expect("the frames decode");
+        let terminators: Vec<&PalwFpWorkerFrameV1> =
+            decoded.iter().filter(|f| matches!(f, PalwFpWorkerFrameV1::Result(_) | PalwFpWorkerFrameV1::Cancelled { .. })).collect();
+        assert!(matches!(terminators[0], PalwFpWorkerFrameV1::Cancelled { .. }), "the first request was cancelled at its first token");
+        assert!(
+            matches!(terminators[1], PalwFpWorkerFrameV1::Result(_)),
+            "the retry of the SAME bytes ran: the cancel did not outlive its request"
+        );
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// **The reader thread keeps the frames in order, takes the cancels out of the request stream, and forgets them at the next request.**
+    #[test]
+    fn the_threaded_source_orders_requests_consumes_cancels_and_forgets_them_per_request() {
+        let rt = fixture_runtime_v1();
+        let manifest = rt.manifest().clone();
+        let a = fixture_request_v1(&manifest, PalwFpWorkerInputV3::TokenIds(vec![3, 5, 8, 13]));
+        let mut b = a.clone();
+        b.job_nonce = [0x6B; 32];
+        let (pa, pb) = (payload_of(&a), payload_of(&b));
+        let (hash_a, hash_b) = (fp_worker_request_hash_v3(&pa), fp_worker_request_hash_v3(&pb));
+        let frame = |bytes: &[u8]| {
+            let mut f = (bytes.len() as u32).to_le_bytes().to_vec();
+            f.extend_from_slice(bytes);
+            f
+        };
+        let mut stream = frame(&pa);
+        stream.extend(frame(&kaspa_consensus_core::palw_freeprompt_v3::fp_worker_cancel_frame_v1(hash_a)));
+        stream.extend(frame(&pb));
+        let mut source = ThreadedFrames::spawn(std::io::Cursor::new(stream));
+
+        // Wait (bounded) for the reader to deliver everything: the cancel for A shows up.
+        let started = std::time::Instant::now();
+        while !source.cancel_requested(hash_a) {
+            assert!(started.elapsed() < std::time::Duration::from_secs(10), "the reader thread delivered nothing");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(!source.cancel_requested(hash_b), "a cancel names one request");
+        // The requests are still there, in order, with the cancel taken out; then the clean end.
+        assert_eq!(source.next_frame().unwrap(), Some(pa));
+        assert_eq!(source.next_frame().unwrap(), Some(pb));
+        assert_eq!(source.next_frame().unwrap(), None);
+        // A new request forgets the cancel.
+        assert!(source.cancel_requested(hash_a));
+        source.begin_request();
+        assert!(!source.cancel_requested(hash_a), "a stale cancel never names a later request");
     }
 
     /// **The worker refuses a sampler it does not implement, before the artifact is touched**

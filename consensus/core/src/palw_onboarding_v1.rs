@@ -401,8 +401,13 @@ impl PalwKernelRouteStateV1 {
                 (PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1, Vec::new())..(PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1 + 1, Vec::new()),
             )
             .filter_map(|((_, key), row)| {
-                let (_, root) = borsh::from_slice::<(Hash64, Hash64)>(key).ok()?;
+                let (class, root) = borsh::from_slice::<(Hash64, Hash64)>(key).ok()?;
                 let row = borsh::from_slice::<ArtifactBindingRowV1>(row).ok()?;
+                // DA16: a binding whose artifact pair lapsed after it was bound (every provider charged) attests nothing — its bytes
+                // stopped being publicly obtainable inside its refutation horizon. (No lapse row exists below the court's fence.)
+                if self.provider_pair_lapsed_since_v1(&class, &root, row.bound_daa) {
+                    return None;
+                }
                 matches!(row.state_at(daa), ArtifactBindingStateV1::Matured | ArtifactBindingStateV1::Final).then_some(root)
             })
             .collect();
@@ -454,7 +459,14 @@ impl PalwKernelRouteStateV1 {
                 why: "the kernel class the V2 class is bound to is not registered in the route",
             };
         }
-        match self.artifact_binding_v1(class, &binding.kernel_param_root).map(|row| row.state_at(daa)) {
+        let row = self.artifact_binding_v1(class, &binding.kernel_param_root);
+        if row.is_some_and(|row| self.provider_pair_lapsed_since_v1(class, &binding.kernel_param_root, row.bound_daa)) {
+            return PalwOnboardingGateV1::Held {
+                code: "AVAILABILITY_REQUIRED",
+                why: "the artifact's bytes stopped being publicly obtainable inside the binding's horizon (every provider was charged): re-bind over live leases",
+            };
+        }
+        match row.map(|row| row.state_at(daa)) {
             Some(ArtifactBindingStateV1::Final) => {}
             Some(ArtifactBindingStateV1::Refuted) | None => {
                 return PalwOnboardingGateV1::Held {

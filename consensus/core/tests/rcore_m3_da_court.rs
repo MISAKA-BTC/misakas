@@ -274,7 +274,7 @@ fn t67_da5_only_a_seat_session_pauses_the_claim() {
 
 /// **T69 (core half, DA-6): a session costs `min(⌈r · S_P(stage)⌉, min_collateral)`, on the
 /// accuser's free half.** At `Live` and `Licensed` the base is the producer's whole commitment
-/// (`w + esc + rr`), so the exposure is a tenth of it; the accuser ledger (A-6) rises by exactly that
+/// (`w + esc + rr`), so the exposure is 49% of it (capped at the floor); the accuser ledger (A-6) rises by exactly that
 /// and nothing enters the accuser's `reserved_exposure`.
 #[test]
 fn t69_da6_a_session_costs_r_times_the_stage_reward_base() {
@@ -283,7 +283,7 @@ fn t69_da6_a_session_costs_r_times_the_stage_reward_base() {
     let (id, seats, bound) = bound_floor_claim(&mut c, 0x69);
     let claim = c.claim(&id);
     let full = palw_claim_bond_reservation_v1(&c.sp, &claim).expect("the reservation");
-    let expected = (full * 1_000).div_ceil(10_000).min(u128::from(c.sp.min_collateral_sompi()));
+    let expected = (full * 4_900).div_ceil(10_000).min(u128::from(c.sp.min_collateral_sompi()));
     let reserved_before = c.reserved(&bond_key(1));
     c.step(&[accuse(id, bond_key(1), 3)]);
     let live = c.s.da_session(&id, &bond_key(1)).unwrap().clone();
@@ -294,7 +294,7 @@ fn t69_da6_a_session_costs_r_times_the_stage_reward_base() {
     c.step(&[accuse(id, bond_key(2), 3)]);
     let licensed = c.s.da_session(&id, &bond_key(2)).unwrap().clone();
     assert_eq!((licensed.stage, licensed.exposure), (PalwDaStageV1::Licensed, expected), "Licensed: the same base (X7)");
-    // The floor's numbers (ADR §3.11 DA-6's table): about 320.10 MSK at 13k.
+    // At the amended 49% share: about 1,568.49 MSK at the 13k floor.
     println!("floor Live/Licensed exposure: {} sompi ({} MSK)", expected, expected as f64 / MSK as f64);
 }
 
@@ -364,7 +364,7 @@ fn m1_a_da_accusation_is_refused_past_the_accusers_free_half() {
     let half = u128::from(collateral) / 2;
     assert!(committed < half && committed > 0, "the premise: two own attempts, under the work ceiling");
     let floor_claim = c.claim(&floor_id);
-    let exposure = (palw_claim_bond_reservation_v1(&c.sp, &floor_claim).unwrap() * 1_000)
+    let exposure = (palw_claim_bond_reservation_v1(&c.sp, &floor_claim).unwrap() * 4_900)
         .div_ceil(10_000)
         .min(u128::from(c.sp.min_collateral_sompi()));
     println!(
