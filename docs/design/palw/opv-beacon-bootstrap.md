@@ -41,8 +41,8 @@ Never a source anywhere: heartbeat, BASE-0, EXEC tx/slices, receipt-only materia
 signatures, DNS/BFT/validator randomness (`misaka-palw-challenge` `eligibility_v1`, by kind).
 
 **What OPV eligibility and rewardability need** (§5): Active kernel; conformance passed (G14_ELIGIBLE or later) for the V2 class bound to
-the class under either mode; the kernel class stands (it registered only after `PUBLIC_PROSECUTION_COMPLETE`); a live (Matured/Final,
-unrefuted) artifact binding = public DA; the class's prosecution bounds fit the OPV carriers, court budget and censorship-cost rule; the
+the class under either mode; the kernel class stands (it registered only after `PUBLIC_PROSECUTION_COMPLETE`); a standing (Matured/Final,
+unrefuted) artifact binding — an identity fact, never an availability one (§14.1); the class's prosecution bounds fit the OPV carriers, court budget and censorship-cost rule; the
 challenge policy its conformance was decided under is verified (the network's, structurally valid, effective bits ≥ the fence's floor,
 §7); not on the fence's deny-list. **Rewardability** of an OPV Final follows: a claim of a class commits only while the class is
 eligible (§5.3), so every OPV Final — and the Final reward G14-R4's escrow releases — belongs to a claim committed under eligibility.
@@ -118,7 +118,7 @@ can ever serve** (with or without position); a class with history has `Σ T^l` p
 * the post carries **the whole inventory** (every leaf, in inventory order) and six result roots: the reference / independent / backend
   implementations' roots over every input (`(token, position, logits digest, greedy next)`) and over every leaf (its decoded-values
   digest);
-* the fold re-roots every leaf to the V2 class's registered `artifact_root` (public DA of the whole artifact, on chain), rebuilds the
+* the fold re-roots every leaf to the V2 class's registered `artifact_root` (the whole artifact is carried on chain in the post, so this class's material is in the block itself — §14.2), rebuilds the
   tensors, recomputes `ParamCommitmentsV1` and requires its root to be the kernel binding's `kernel_param_root` — **binding equality
   proven, not bonded** (closes onboarding GAP 1 for this class);
 * it runs the chain's reference TIR interpreter on every input and requires every posted implementation result, and every leaf's
@@ -154,9 +154,9 @@ to `X` or to `X`'s legacy (Panel-licensed) sibling `L` (the same descriptor, pro
 | E1 | the kernel descriptor of `X` is Active at `t` | `KernelNotActive` |
 | E2 | `V`'s conformance record is `G14_ELIGIBLE` or `ACTIVE_REWARDABLE` and its commitment names `V`'s artifact root, `X`'s program root and `X`'s plan root | `ConformanceNotPassed` / `ConformanceOfAnotherStatement` |
 | E3 | the bound kernel class stands in the route (registered only after `PUBLIC_PROSECUTION_COMPLETE`) | `NotG14Complete` |
-| E4 | `V`'s artifact binding to `X`'s commitments root is Matured or Final and not refuted at `t` | `DaLapsed` |
+| E4 | `V`'s artifact binding to `X`'s commitments root stands: Matured or Final and not refuted at `t`. An identity fact (ADR-0175/0177): maturity means the refutation window passed, NOT that anyone could fetch the bytes (§14.1) | `BindingNotStanding` |
 | E5 | the class's prosecution bounds fit the OPV carriers, the block court budget, and saturating the court for the claim's exposure costs more than its maximum gain | `ResourceUnbounded` |
-| E6 | the attempt's challenge policy is one of the network's two, structurally valid, and its effective bits (§7) — `Complete` for a complete check — reach the fence's `min_effective_bits` | `PolicyNotVerified` |
+| E6 | the attempt's challenge policy is one of the network's, structurally valid, **the complete check** (GAP-70: in the release a sampled conformance, v2 or v3, gates no reward until a digest court exists), and its effective bits (§7) — `Complete` for a complete check — reach the fence's `min_effective_bits` | `PolicyNotVerified` |
 | E7 | `X` is not on the fence's `denied_classes` | `Denied` |
 
 ### 5.2 The fence list: a deny-list, never a source
@@ -176,7 +176,7 @@ eligibility depend on registration order — a race, and a grinding surface). In
   A claim keeps the facts it was admitted with (its window, reservation and Final are never reinterpreted).
 * **Beacon sources**: 107 freezes `EP = eligible set at the commitment` minus the candidate under every mode.
 * **Loss**: the predicate is re-evaluated at each of those points, so eligibility is lost — new claims refused, no new attempt takes the
-  class as a source — when the artifact binding is refuted (DA lapse, E4), the kernel stops being Active (E1), the deny-list names it (E7),
+  class as a source — when the artifact binding is refuted (a proof of inequality, E4; never a failure to serve the bytes), the kernel stops being Active (E1), the deny-list names it (E7),
   or the statement no longer matches (E2: another plan or artifact is another class with no passed conformance).
 
 ### 5.4 The test seam
@@ -239,8 +239,12 @@ collector; it is a **DESIGN blocker for any sampled approval and for Panel=0 act
 **Cost to own `j` of `k` sources** (interim numbers; `f_job` is G14-R4's non-refundable fee of a self-posted job, not yet fixed):
 `j · (f_job + 3 carrier fees ≈ 0.06 BILI)` burned, `j · 1,000 BILI` reserved for ~250 DAA (refunded if honest), `j` bonds (distinct rule),
 `j` payers once recorded, and with the class cap `⌈2j/k⌉` classes (each a registration burn, a 100 BILI binding reservation for 200
-DAA, a 1 BILI complete-check fee). A post-lock veto costs a default penalty (100 BILI; 90 recoverable through one's own demander, 10
-burned) or a reservation. None of this prices the last contributor, which needs `j = 1`.
+DAA, a 1 BILI complete-check fee). A post-lock veto costs a default penalty (100 BILI) or a reservation. The kernel splits a default
+penalty like a slash (C4 F-C4R3-02): the demanders take the accuser's share (`accuser_reward_permille`, 500 ‰ today) and the rest is
+burned, at least `default_burn_permille`. So an attacker who demands its own source recovers 50 BILI and loses 50 today. Under the
+future ruleset's 49 % reporter share (ADR-0032, 2026-10-10), it recovers at most 49 BILI and loses at least 51 BILI per veto. Each source is also a claim
+of its producer bond and draws that bond's ADR-0176 claim ceiling `Q` over the window `W` (§14.3). None of this prices the last
+contributor, which needs `j = 1`.
 
 ### 6.3 The sealed-source beacon v3 (SOUND SG-01, SG-01a)
 
@@ -299,6 +303,14 @@ The bound holds under three assumptions (A-B2): an honest producer seals an elig
 blocks are not filled by fee-paying spam, and `2W ≤` the ledger's seal TTL, so every in-window reveal is legal. An honest producer
 reveals exactly `W` after sealing, which makes its seal a source of every subject whose seal window contains it.
 
+**Participation needs the source class's model (ADR-0177).** Only a party that holds a source class's registered model can produce a
+claim of it, and the chain guarantees no one can acquire a model. So "an honest producer seals" is conditional on an honest party
+having acquired an eligible source class's model (A-ACQ, §14.2). A complete-check source carried its whole artifact in its `PostComplete`
+(≤ 64 KiB, §8), so any node that keeps that block holds the model; that is a property of the bootstrap, not a requirement on anyone.
+A sampled-eligible source of a closed model may have no honest producer at all. This is why `PALW_ONBOARDING_SEALED_PARTICIPATION_BITS_V1`
+is 0 and why no count of bonds can raise it. A review must supply it as a statement about honest parties that hold some eligible
+source's model.
+
 The union with the algorithmic bound costs one bit (`combine_failure_bits_v1`). Golden vectors:
 
 * the interim window `W = 40`, `δ = 10`, `b = 1`, `ρ = ½` gives **30 bits**;
@@ -338,25 +350,63 @@ The route then serves each seal fact for op 212: `SealedSourceV3` from the seal 
 * An effective 128 bits is the DESIGN TARGET. A scheme is approved only after external review, and nothing is approved until its
   effective soundness is audited.
 * The 128 bits bound the mathematical check and the manipulation of its challenges: the false-accept probability given that a check
-  runs on unpredictable coins. They are NOT a 128-bit guarantee that an honest watcher exists or checks in time. That is the
-  environment assumption A-WATCH below, with its own probability, and deterrence prices it (SG-06).
+  runs on unpredictable coins. They are NOT a 128-bit guarantee that an honest watcher exists, holds the model, or checks in time.
+  Those are the environment assumptions A-ACQ and A-WATCH below, with their own probability (0 for a closed model), and deterrence
+  prices them (SG-06). The 128 bits also cover a conformance check's math and the manipulation of its challenge (grinding, retries,
+  adaptive statements, `ε_src`) — never the existence of a refuter that holds the model (§14.2).
 
-No public-coin per-claim check is wired, and this branch does not wire one. It states the dependence instead. **OPV detection
-soundness rests entirely on outsiders' private salts:**
+No public-coin per-claim check is wired, and this branch does not wire one. **SG-05 is resolved by the formal statement below: OPV
+per-claim detection rests on an honest outsider's PRIVATE salt, and that is sufficient for G14** (producer and every Panel seat colluding,
+one non-Panel bonded verifier convicting from public authenticated material). A public seed would add nothing to that statement.
 
-* `misaka-palw-kernel` `OutsiderV1` draws its vectors from `FreshVerifierV1::check_salted(…, salt)`. The salt is chosen after the
-  claim is committed and is never published before a filing, so the producer's commitment is independent of it. A fault on a fraction
-  `f` of a relation's draws escapes `n` salted draws with probability `(1 − f)^n`, per outsider.
-* The unsalted entry points use the record's public `beacon`, which is `[0; 64]`, so their coins are predictable and they have
-  **no soundness**. These are `FreshVerifierV1::check` and `PipelineFreshVerifierV1::check`. They are called only by tests
-  (`k2_public.rs`, `k2_adversarial.rs`); no outsider, seat, SDK or node path reaches them. SOUND's Q-13 recommends making them
-  unreachable outside tests; that change is the kernel owner's.
-* The interim Panel route's seats are seeded by the claim id (`palw_kernel_interim_seed_v1`, grindable, stated). They are a
-  Panel=1 path and give no OPV soundness.
-* A claim is therefore caught only if at least one honest outsider runs a salted check inside the window (A-WATCH). The per-claim
-  detection probability is `p_watch · (1 − (1 − f)^n)`, the deterrence-only regime of SG-06. A public-coin per-claim seed would need a beacon
-  per claim, drawn from sources after the claim. With v3 that is a `ClaimVerification` subject whose seal window opens at the
-  claim's commitment, which costs the claim `2W + D` DAA of latency. It is not wired.
+**Proposition SG-05 (private-coin per-claim detection).** Fix a claim `c` of an OPV class, committed at DAA `t_c`; its execution
+commitment `E_c` (trace roots, generated tokens, evidence root) is fixed in the block that admits it. Let `O` be an outsider that is not
+`c`'s producer and holds no Panel seat. Assume:
+
+* **A-ACQ** — `O` holds the class's registered model, authenticated against the registered root (ADR-0177: the chain does not
+  guarantee this; for a closed model it may never hold);
+* **A-SALT** — `O` draws a salt `s` from its own CSPRNG after `t_c`, and no other party learns `s` before `O`'s filing is included;
+* **A-WATCH** — `O` runs the salted check (`FreshVerifierV1::check_salted`) inside the claim's window, and its filing is included before
+  the window closes (bounded by E5's censorship cost and the OPV budgets);
+* **A-H** — the kernel's draw stream from `s` is a random oracle (SOUND SG-07).
+
+Suppose a fraction `f_i` of relation family `i`'s draw space exposes a fault of `c`, and `O` makes `n_i` draws of family `i`. Then:
+
+```text
+Pr[ O misses every fault of c ]  ≤  Π_i (1 − f_i)^(n_i)        (over s alone)
+```
+
+This holds whatever the producer and every Panel seat do. There are three reasons:
+
+1. `E_c` is fixed before `s` exists, so no colluding party can adapt the commitment to the draws.
+2. `s` is never input to anything the colluders control. No beacon, seat, Panel receipt or block hash enters `O`'s draws.
+3. A filed fault is adjudicated deterministically from public authenticated material (the claim's committed values and the court's
+   exact relation), so the court never needs to know how `O` chose where to look. A localized fault is an objective statement, and
+   the selection's coins need not be public for the conviction to stand.
+
+The per-claim detection probability of the network is therefore
+
+```text
+p  =  Pr[some honest outsider satisfies A-ACQ, A-SALT and A-WATCH for c]  ·  (1 − Π_i (1 − f_i)^(n_i))
+```
+
+**`p` can be 0 for a closed model** (no honest outsider satisfies A-ACQ). No count of claims, bonds or Panel seats raises it.
+
+**What a public per-claim seed would and would not add.** It would make a check reproducible by third parties. That is needed only to
+pay or credit a check as such (watcher rewards per check performed), or to rely on a seat's check under Panel > 0, where a seat could
+claim a check it never ran. G14 relies on neither. It would also cost the claim `2W + D` DAA of latency under v3, as a
+`ClaimVerification` subject whose seal window opens at the claim's commitment. **Decision recorded:** no public per-claim seed is
+wired, and SG-05 is closed by this statement.
+
+**What would break it.**
+
+* **Predictable coins.** The unsalted entry points `FreshVerifierV1::check` and `PipelineFreshVerifierV1::check` draw from the
+  record's public `beacon`, which is `[0; 64]`. A producer can place a fault outside every predictable draw, so those entry points
+  have **no soundness**. Only kernel tests call them (`k2_public.rs`, `k2_adversarial.rs`); no outsider, seat, SDK or node path does.
+  SOUND's Q-13 asks for them to be unreachable outside tests (CODE, the kernel owner's).
+* **Grindable seeds.** The interim Panel route's seats are seeded by the claim id (`palw_kernel_interim_seed_v1`, grindable, stated).
+  That is a Panel = 1 path. It gives no OPV soundness, and G14 does not count it.
+* **No acquisition.** A-ACQ failing makes `p = 0`; §14.2.
 
 ## 7. Effective false-accept accounting
 
@@ -376,7 +426,9 @@ so the result never overstates the bound.
   `security_bits` (`BelowTarget`). The shipped registry (`shipped_registry_v1`) is empty; nothing is approved.
 * **Eligibility** (E6): a passed attempt's effective bits (`attempt_effective_bits_v1`) — `Complete` for a complete check; for a sampled
   one the committed scope's families under the policy's repetitions and retries, `G = 2^128` (the last contributor,
-  `palw_onboarding_grinding_choices_v1`), one beacon, one statement — must reach the fence's `min_effective_bits` (interim 128).
+  `palw_onboarding_grinding_choices_v1`), one beacon, one statement — must reach the fence's `min_effective_bits` (interim 128). The
+  bits bound the check's math and the manipulation of its challenge. Whether a refuter that holds the model exists is A-ACQ, which
+  they do not cover (§14.2).
 * Golden vectors (`misaka-palw-challenge/tests/soundness.rs`): the interim drill = 0; a production-shaped tuple (4 × 64 bits × 3 reps,
   `G = 992`, `Q = 2^20`) = 158; exactly 128 at the target and 127 one statement later; complete = `Complete`; a staged beacon of three
   rounds at `G = 2^10` loses 30; the chain's whole check bound against `h = 128` = 239; saturation never wraps.
@@ -411,7 +463,7 @@ Real node (`consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/
 | No bootstrap class: the sources are empty, BEACON_UNAVAILABLE (counted), a re-commitment again freezes nothing, C never eligible, its OPV registration refused; the chain keeps producing blocks and moving state; replay | `g14_opv_bootstrap_without_a_complete_check_class_the_beacon_never_comes_and_the_chain_lives` |
 | A stateless class with 1,100 inputs: 106 under the complete-check policy refused (rows untouched), the sampled policy accepted; a PostComplete for a sampled attempt dropped | `g14_opv_bootstrap_a_class_that_cannot_be_checked_whole_is_refused_the_complete_check` |
 | A block of hostile complete checks (late-failing result roots, a junk inventory, an honest one, an outsider's): the outsider's dropped free, exactly 2 judged, each charged its whole work and the fee, the third waits uncharged; failures counted; the waiting one judged next block; a failed class re-commits and passes; replay | `g14_opv_bootstrap_a_block_of_hostile_complete_checks_spends_budget_and_never_stops_the_chain` |
-| Loss: C on a FALSE binding passes a sampled conformance, becomes eligible, registers; the binding is refuted (two disagreeing openings) → `DaLapsed`, C's next claim dropped at the door; B (binding proven by its complete check) stays eligible; another plan of the program is `NotOnboarded`; replay | `g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refuted` |
+| Loss: C on a FALSE binding passes a sampled conformance, becomes eligible, registers; the binding is refuted (two disagreeing openings) → `BindingNotStanding`, C's next claim dropped at the door; B (binding proven by its complete check) stays eligible; another plan of the program is `NotOnboarded`; replay | `g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refuted` |
 | The deny-list takes eligibility away (a passed bootstrap is not eligible, its registration refused) | `g14_opv_bootstrap_the_deny_list_takes_eligibility_away_and_never_grants_it` |
 | The test seam exists only under `cfg(test)` and is `Vec::new()` otherwise | `opv_test_eligibility_hook_is_test_only` |
 | Qualification (stateless small class qualifies; history never) and the complete check's judgement on every lie | `opv_bootstrap_a_stateless_small_class_qualifies_…`, `opv_bootstrap_the_complete_check_passes_the_truth_…` |
@@ -456,6 +508,15 @@ drill floor (§12).
 * **GAP-B14 (G14-for-rewards): the REAL attempt's Final.** §12 opens admission; an admitted attempt of a G14 class still reaches
   Final (and pays) only through its verification route: a Panel licence, or the RFC-0008 slice to the kernel route (X8R). A class
   with no seats has no Panel licence.
+* **GAP-B18 (ADR-0177, CODE, DA16b): DA16's artifact half.** Where `palw_provider_court_v1` is armed, availability is still a
+  condition of tag 104, of the attested roots and of `onboarding_gate_v1` (§14.1). The reward gate and its activation no longer read it.
+* **GAP-B19 (DESIGN/POLICY): a conformance refutation earns no bounty, and evidence carries no stake** (§14.4). A forged sampled post
+  costs only a counted retry. A refuter that proves the forgery gains nothing, and pays `dismissed_proof_fee` when it is wrong. Proposed:
+  an evidence bond with the 49 % refuter share. Its size is ECON's.
+* **GAP-B20 (ADR-0176, CODE: BUDGET): rewards not budgeted.** The channels name their legs and the hook exists (§14.3). No engine
+  implements the hook, so no door draws from a budget.
+* **GAP-B21 (ADR-0177, DESIGN): sampled eligibility of a closed model.** Its refutation rests entirely on A-ACQ, which the chain may not
+  test (§14.2). For the release it is moot: GAP-70 lets no sampled conformance gate a reward. Any digest court must state it.
 * **GAP-B15 (G14-for-rewards): what is not gated.** The market (seed / buy) and the work price unit read the registry lifecycle, not
   the reward gate. A non-G14 class past the fence is Registered with no share, so it bears no weight and holds no budget. A pre-fence
   class stays on the OLD Panel route in full (§12).
@@ -480,57 +541,85 @@ gate only of classes that began onboarding, and the registry's lifecycle reads s
 onboarded class (registered with share 0) could take no REAL attempt: there was no epoch budget, and the registry lifecycle, the
 Panel room, the verify deadline, seating and the bond share all stood in the way.
 
-**The gate** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`). It is armed from `palw_panel_free_v1`'s activation on, through
-`PalwKernelOpvExtrasV1::reward_gate`; below that it is `Unarmed` and the fold is byte-identical. Its verdicts:
+**GAP-81 (the Lead's decision, 2026-10-10, from G14C's matrix F17): the new rewards are per CLAIM verification route.** An earlier
+version of this gate returned `Passed` for a post-fence V2 class on the strength of its bound KERNEL class. It then admitted that
+class's V2 REAL work past the Panel's requirements. But that work is V2 claims with V2 step-tree roots, which the kernel route cannot
+convict, so under all-seats collusion only the legacy path could prosecute it, and the legacy path is not G14. Now:
+
+* **A claim's reward channel is its verification route** (`PalwRewardChannelV1`, §14.3). Only a kernel-route claim earns the NEW
+  rewards, and each OPV claim is gated by itself (`opv_gate_v1`, E1–E7 at its commit).
+* **A V2-root claim rides the legacy channel under the old rules in full**, whatever class it belongs to. It goes through the registry
+  lifecycle, the Panel room, the verify deadline, seating, the bond-share split, and the share its class registered with. It never
+  earns the new rewards.
+
+**The gate** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`) is now a class's footing for its V2-root claims. It is armed from
+`palw_panel_free_v1`'s activation on, through `PalwKernelOpvExtrasV1::reward_gate`; below that it is `Unarmed` and the fold is
+byte-identical. Its verdicts:
 
 * `Exempt`: the base class (BASE-0 is the bonded fallback, not useful-computation reward), or a class registered before the fence
   (`LEGACY_PANEL_ROUTE`);
-* `Passed`: three conditions hold. The onboarding gate is `Ready`. E1–E7 hold through the class's own kernel binding
-  (`v2_class_reward_eligibility_v1`), and E3 now re-derives the bound plan's PUBLIC_PROSECUTION_COMPLETE over its whole context, equal
-  to the registered bounds. The class's task/context (its IR layout's `max_context`) lies inside the plan's `max_positions`;
-* `Refused { code }` otherwise, naming the first unmet condition: `NOT_ONBOARDED`, the onboarding hold's code, or an E code.
-
-§6's seven conditions map onto these checks as the function's doc states. The graph gains `V2Rewardable`, which is unreachable
-without the bootstrap.
+* `Onboarded` (formerly `Passed`): the onboarding gate's identity part is `Ready`, E1–E7 hold through the class's own kernel binding
+  (E3 re-derives the bound plan's PUBLIC_PROSECUTION_COMPLETE over its whole context, equal to the registered bounds), and its
+  task/context lies inside the plan's `max_positions`. **It grants its V2-root claims nothing beyond the old rules;**
+* `Refused { code }` otherwise: a post-fence class that never passed takes no claim at all. The code names the first unmet
+  condition: `NOT_ONBOARDED`, the onboarding hold's code, or an E code.
 
 | Door | Armed behaviour |
 | --- | --- |
 | Registration (`apply_class_registration_v1`) | every post-fence class is written `Registered` (no share written at registration) |
-| Activation (`activate_due_classes`) | `Refused` stays `Registered` (no share, no weight, no budget). `Passed` activates with at least `min_grantable_share_permille` and re-derives the epoch's budgets now (the mid-epoch defect, closed under the fence only) |
-| Claim gate (`check_class_admits_claim`; fold and producer pre-check) | `Refused`: `ClassNotRewardable { code }` on every lane. `Passed`: the registry lifecycle, the Panel verify deadline and the Panel room are not asked; only the class's in-flight cap is |
-| Seating (`check_class_seated_root_v1`) | `Passed`: not seated by Panel possession (public DA, E4; one-outsider adjudication) |
-| Bond share (`check_bond_class_share`) | `Passed`: not split by Panel licence |
+| Activation (`activate_due_classes`) | `Refused` stays `Registered` (no share, no weight, no budget). Otherwise the old path: the onboarding gate, then the share the class registered with. No grant from the gate |
+| Claim gate (`check_class_admits_claim`; fold and producer pre-check) | `Refused`: `ClassNotRewardable { code }` on every lane. Otherwise the old rules in full |
+| Seating, bond share | the old rules in full (no G14 bypass) |
 
-**Existing Panel classes: two channels that never mix** (the user's ruling of 2026-10-09, replacing a grandfathering flag).
+The graph's node is `V2Onboarded` (formerly `V2Rewardable`). Reaching it means "may take V2-root claims under the old rules", never a
+new reward.
+
+**The real-node test** (`g14_rewards_a_v2_claim_of_a_kernel_bound_class_never_earns_the_new_reward`) runs on the drill terms. Before
+its conformance, the class is refused by the gate. After it, its kernel class meets E1–E7, and yet its V2-root REAL attempt gets
+nothing the old rules do not give: no share beyond the one it registered with, and its pre-check refused by the old rules, since no
+seat proves readiness. The helper `Cw::onboarded_v2_claims_on_the_legacy_channel` replaces X8R's `active_admitting_real`, whose premise
+(V2 REAL work admitted through the gate) GAP-81 withdraws. Binding a V2 REAL claim 1:1 to a kernel claim of the same job is X8R's
+(GAP-62).
+
+**The two channels never mix** (the user's ruling of 2026-10-09, sharpened by GAP-81).
 
 * **Past rights are protected.** A class registered before the fence keeps earning through the OLD Panel route, whose verification
-  stays in force in full: the gate exempts it, and no G14 bypass applies to it.
-* **New rewards need the new gate.** Earning the NEW rewards requires the gate, always: a post-fence class's V2 work (`Passed`), and
-  every kernel-route OPV claim (`opv_gate_v1`, E1–E7), whoever registered the class.
+  stays in force in full. The gate exempts it, and no G14 bypass applies to it.
+* **New rewards need the new route.** Only kernel-route claims earn them, each through `opv_gate_v1` (E1–E7), whoever registered the
+  class.
+* **One budget for both channels** (ADR-0176, §14.3). The channels differ in eligibility, never in budget: both draw the producer
+  bond's single `Q`/`B`/`R`/`F` budget over `W` (`PalwRewardChannelV1::draws`).
 * **Tested both ways** (`g14_rewards_a_legacy_panel_route_class_keeps_the_old_route_and_never_earns_opv_without_the_gate`):
-  * a legacy class is not refused by the gate, and its program under OPV is `NOT_ONBOARDED` and its OPV registration refused;
+  * a legacy class is not refused by the gate, its program under OPV is `NOT_ONBOARDED`, and its OPV registration is refused;
   * a post-fence class that never onboarded stays Registered, `NOT_ONBOARDED`.
 
 **OPV scope and the interim window** (the same rulings). OPV holds only for a class, plan and task/context for which G14 fully holds
 (E3 above). The 50-DAA OPV window (`PalwPanelFreeFenceV1::interim_v1`) is INTERIM and NOT approved for production. Nothing for
 rewards, consensus weight or Panel=0 is armed.
 
-**The drill floor.** E6 compares the passed attempt's effective bits with `min_effective_bits`. The interim sampled policy is 0
-effective bits, so under the ruled 128 only a complete-check class passes. The conformance mechanics worlds (and X8R's helper)
-therefore run with the floor at 0, which states the drill. `g14_rewards_under_the_ruled_floor_a_two_bit_conformance_earns_nothing`
-asserts what 128 decides.
+**GAP-70 (the Lead's decision, 2026-10-10): only the complete check gates rewards in the release.** A sampled conformance (v2 or v3) is
+a non-reward signal. It still runs and records G14_ELIGIBLE, but it satisfies E6 only once a digest court exists: a court for a
+vector's logits and commit digests (OB-P0 GAP 2), a vector refutation for a new class (GAP-B6), and closure of the self-reported
+implementation results (GAP-B7). That court stays on the DESIGN list. In code:
 
-**X8R's helper.** `Cw::active_admitting_real(producer)` is in `g14_kernel_route_e2e/conformance.rs`. It runs the conformance path to
-its end and asserts five things: the class is Active and ACTIVE_REWARDABLE, it holds a share, the claim gate, seating and the bond
-share admit it (`class_admission_refusal = None`), and `ready_to_produce` is `Ok` for the producer.
+* E6 refuses a sampled attempt with `POLICY_NOT_VERIFIED`, citing GAP-70, whatever its effective bits;
+* the switch is the fence's `sampled_conformance_gates_reward`. It is `false` in `interim_v1` and hashed Some-only, and
+  `validate_value` refuses `true`;
+* the graph's `PolicyVerified` now requires `CompleteEvidence`.
+
+**The drill.** The bootstrap's mechanics worlds (`boot_config`) and the conformance worlds on the drill floor (`Cw::over`) set the
+floor to 0 and the switch to `true`. That is the drill: they show the mechanism a digest court would unlock. Each world states it,
+and validation refuses it on any real network. The release terms are asserted where they decide:
+- `eligibility_release`: floor 128, no sampled conformance;
+- `g14_rewards_on_the_release_terms_a_sampled_conformance_earns_nothing`.
 
 | Case | Test |
 | --- | --- |
-| Before its conformance the class's claims are refused; after it, Active with a share and a REAL attempt admitted; replay | `g14_rewards_an_onboarded_class_is_active_and_admits_real_attempts` |
-| Under the ruled floor (128) a 2-bit sampled conformance passes yet earns nothing (`POLICY_NOT_VERIFIED`, held Registered, no share) | `g14_rewards_under_the_ruled_floor_a_two_bit_conformance_earns_nothing` |
+| GAP-81: before its conformance the class is refused; after it, its kernel class meets E1–E7, yet its V2-root REAL attempt gets no share grant and no bypass (refused by the old rules); replay | `g14_rewards_a_v2_claim_of_a_kernel_bound_class_never_earns_the_new_reward` |
+| GAP-70: on the release terms a sampled conformance passes (G14_ELIGIBLE) yet earns nothing (`POLICY_NOT_VERIFIED`, GAP-70; held Registered, no share) | `g14_rewards_on_the_release_terms_a_sampled_conformance_earns_nothing` |
 | A class that never began onboarding never activates (`NOT_ONBOARDED`) | `g14_rewards_a_class_that_never_began_onboarding_never_activates` |
 | The channels never mix: a legacy class keeps the old route, and its OPV needs the gate; a post-fence class needs the gate | `g14_rewards_a_legacy_panel_route_class_keeps_the_old_route_and_never_earns_opv_without_the_gate` |
-| The graph: `V2Rewardable` reachable only through the bootstrap | `palw_opv_bootstrap_v1::tests` |
+| The graph: `V2Onboarded` and `PolicyVerified` reachable only through the complete check | `palw_opv_bootstrap_v1::tests` |
 
 ## 13. C4 round 4 (C4R4b) findings in this lane
 
@@ -587,3 +676,199 @@ Sybil posters own every v2 source position and grind all of them offline (`misak
   `KernelLedgerV1::job_poster` and `ClaimBeaconSealV1::poster`.
 - **Once it lands (GAP-B2):** op 212's attribution and v3's seals carry `consumer = Present(poster)` for post-fence jobs.
 - **GAP-B16:** a typed `Spec` claim (R4X) passes `opv_gate_v1`. Its class's eligibility path is RFC-0004 Part II's.
+
+## 14. The user's design changes of 2026-10-10 (ADR-0175, ADR-0176, ADR-0177, ADR-0032 49 %)
+
+OPVB's successor applies them here after merging the integration head `b8ae9412b`.
+
+### 14.1 ADR-0177: no condition here depends on acquiring a model
+
+Every condition of OPV eligibility, of the beacon and of the reward gate, and what it reads:
+
+| Condition | Reads | Acquisition condition? |
+| --- | --- | --- |
+| E1 kernel Active | the route's schedule | no |
+| E2 conformance passed for this statement | the attempt row: the chain's own judgement, or a window that closed unrefuted | no. The condition never asks whether anyone holds the model. Its SOUNDNESS for a sampled attempt is acquisition-conditional (§14.2) |
+| E3 the class stands, PUBLIC_PROSECUTION_COMPLETE over its context | the ledger's class row, bounds re-derived now | no |
+| E4 the binding stands | the binding row (`ArtifactBindingRowV1::state_at`): Matured or Final, unrefuted | no. A refutation is a proof of inequality (tag 105, two disagreeing openings). Maturity is a clock. A binding nobody could check matures exactly as one everybody checked; that is the soundness gap of §14.2, not a condition |
+| E5 bounded resources | the class's bounds and the OPV terms | no |
+| E6 effective bits | the attempt's policy and scope | no |
+| E7 not denied | the fence | no |
+| beacon sources (v2 and v3) | OPV Finals of classes eligible at the commitment (`finals_read_v1`), seal rows | no. A source's own claim material is claim-specific DA, which ADR-0177 keeps |
+| v3 veto | a mixed seal unrevealed, or a mixed source that ends without a standing Final | no: both are the sealer's own acts |
+| the reward gate (§12) | `onboarding_identity_gate_v1`, then E1–E7 and the task/context check | no. It no longer reads DA16's lapse hold (this branch) |
+| V2 activation (`activate_due_classes`) | the old onboarding gate, then the reward gate's refusal | no new condition. Since GAP-81 this door belongs to the legacy channel's old rules, which still include DA16's lapse hold where `palw_provider_court_v1` is armed (the residual below) |
+
+**The one residual is DA16's artifact half** (`palw_provider_court_v1`, dormant). When that fence is armed, artifact availability is
+still a condition in four places:
+
+* tag 104 requires at least 2 live leases of distinct operators (the `V2Registered → ArtifactMatured` edge);
+* `onboarding_attested_roots_v1` drops a lapsed pair, so the kernel class (and through it the OPV class) cannot register;
+* `onboarding_gate_v1` holds a lapsed binding with `AVAILABILITY_REQUIRED`, for V2 activation where the reward gate is unarmed or exempt;
+* a lapse lets the binder replace the binding, which turns E4 back to Pending.
+
+ADR-0177 withdraws that half, and readiness §3c gives the re-scope to DA16b. This branch makes the reward gate lapse-blind, and leaves
+DA16's own code to DA16b; the legacy channel's V2 activation keeps the hold until DA16b removes it.
+
+- **Arming blocker (CODE, DA16b):** remove `palw_provider_court_v1`'s artifact subject before any OPV or reward fence arms, or never
+  arm the two together.
+
+**Names.**
+- E4's refusal `DaLapsed` / `DA_LAPSED` is now `BindingNotStanding` / `BINDING_NOT_STANDING`.
+- The lifecycle's `AVAILABILITY_REQUIRED` hold for a binding inside its horizon (`misaka-palw-challenge`
+  `OnboardingFailureV1::AvailabilityRequired`, op 231, RPC) is a historical name of the same clock. It means "the binding's refutation
+  horizon has not passed", never "the bytes could not be obtained". Renaming it changes the wire, so it is left to the release.
+
+### 14.2 G14 is conditional on the verifier holding the model (A-ACQ)
+
+ADR-0177 D7: G14 holds for a verifier that has acquired the registered model; the chain guarantees no such verifier. Nothing in this
+design assumes watchers hold the model. Per path:
+
+| Path | What detection needs | A closed model |
+| --- | --- | --- |
+| complete-check conformance (the bootstrap) | nothing off chain: the post carries the whole artifact, the fold re-roots it (binding equality PROVEN) and runs every input | detection 1, `ε = 0`, unconditional |
+| sampled conformance (v2, v3) | a refuter: `LeafDecode` needs the artifact's bytes; `VectorTokens` needs a Final of the bound kernel class, which needs a producer holding the model | **unrefutable**: the window closes "unrefuted" and E2 holds with effective detection 0. E6's bits do not see this |
+| an OPV claim of an eligible class | an honest outsider with the model and a private salt, in time (Proposition SG-05, §6.4) | `p = 0` |
+| v3's `ε_src` | an honest party that holds an eligible SOURCE class's model and seals (§6.3) | the participation term is 0 (interim 0 anyway) |
+| an artifact binding (tags 104 / 105) | a refuter that holds the bytes | the binding matures unrefuted, whatever the bytes are |
+
+Consequences:
+
+* **E6's 128 bits cover check math and challenge manipulation only** (§6.4, §7): grinding, retries, adaptive statements and
+  `ε_src`. They never cover the existence of a refuter or watcher that holds the model.
+* **The OPV reservation assumes a detection probability.** The interim reservation divides the gain by `assumed_detection_permille =
+  500`, which is an assumption about A-ACQ and A-WATCH. It is false for a closed model. ADR-0177 D7's
+  `p · (R_risk + L_collectible_net) > C_saved` holds only at the effective `p` (POLICY / ECON; MEAS measures the acquisition-conditional
+  `p`).
+* **Only a complete-check class is eligible in the release** (GAP-70, decided by the Lead on 2026-10-10, §12). That class's soundness
+  needs no acquisition. A sampled conformance is a non-reward signal until a digest court exists. Even then, its refutation would rest
+  entirely on A-ACQ, which the chain may not test (ADR-0177 D1). So a digest court alone does not make a closed model's sampled
+  conformance sound (GAP-B21).
+
+### 14.3 ADR-0176: the two reward channels and the per-bond budget they draw from
+
+Every reward this lane opens or keeps draws from ONE per-bond budget, the four ADR-0176 ceilings over the common window `W`: `Q`
+(claims), `B` (reward blocks), `R` (attributed rewards) and `F` (Final weight). The channels never mix for ELIGIBILITY (§12), but they
+share the bond's budget, so earning in both channels never doubles a ceiling.
+
+A claim's channel is its verification route (GAP-81, §12):
+
+| Channel | Which claims | Draws | Reserved at | Re-checked and consumed at |
+| --- | --- | --- | --- | --- |
+| `LegacyPanelRoute` (the OLD channel) | every V2-root claim: a pre-fence class's on the Panel route, and an onboarded post-fence class's under the same old rules | `Q` (the attempt), `B` (each reward block it derives), `R` (the attempt reward, the subsidy carve), `F` (its Final weight) | attempt admission | each reward block, each payout, maturity, Final |
+| `KernelRoute` (the NEW channel) | every kernel-route claim; an OPV class's only while E1–E7 hold at its commit (`opv_gate_v1`) | `Q` (the claim); `R` (the `FinalReward` from the job's escrow); `F` = 0 today | claim admission (`CommitClaim` / `CommitClaimSalted`) | the Final |
+
+Notes on the new channel:
+- The `FinalReward` is user-paid from the job's escrow, not new issuance, but it is still attributed to the producer bond, so it
+  counts against `R_max`.
+- An OPV Final carries no consensus weight today: `work_credit_per_claim` is only a gain bound. Any future weight must be reserved at
+  admission.
+
+Rules (ADR-0176 D1–D4):
+* Reserve the maximum at acceptance. Re-check at every payout, reward block, maturity and Final.
+* `reuse_not_before = d + W`. There is no early recovery on Final, void, default, conviction, `BEACON_VETOED` or a retry.
+* Raising `rho` never raises `B`, `R` or `F`.
+* Liability collateral (the OPV reservation, the binding reservation, the seal deposit) is separate from the issuance clock.
+* **A beacon source is a claim.** It draws `Q` from its producer bond, and owning a source earns nothing beyond that claim's own `R`.
+
+**The hook** is in `consensus/core/src/palw_opv_bootstrap_v1.rs`, section VI:
+- `PalwBondBudgetLegV1` and `PalwBudgetEventV1`;
+- `PalwRewardChannelV1::draws()`, the table above as data;
+- `PalwBudgetRequestV1` and the trait `PalwBondBudgetHookV1` (reserve at acceptance, consume at an event, never more than reserved,
+  `d + W`);
+- no verdict of `PalwRewardGateV1` names a channel: a claim's route does.
+
+BUDGET's engine (`palw_bond_budget_v1`, dormant) implements the trait. This branch wires no implementation, so no door draws yet.
+
+- **Arming blocker, "rewards not budgeted":** CODE (BUDGET) and POLICY (`W`, the `rho` mapping, the cap values). The refusal of
+  `validate_palw_panel_free_v1` names it.
+
+### 14.4 ADR-0032: 49 %, net of self-return
+
+| Bounty path in this lane | Code today | Under the future ruleset |
+| --- | --- | --- |
+| binding refutation (tag 105) | `PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1 = 500` (OB-P0's constant) | 49 %. Operator ids are self-declared, so a binder can refute itself through a Sybil operator: it recovers at most 49 BILI of a 100 BILI reservation and loses at least 51 BILI. CODE: the constant should follow `palw_reporter_share_v2` (INTF) |
+| kernel accuser reward | `accuser_reward_permille: 500` (G14-R4's policy) | the same: G14R / INTF |
+| a veto by an abandoned source (the default penalty) | `DemanderShare`: the accuser's share, 50 % to the demanders, the rest burned | at least 51 BILI net per veto (§6.2). The demanders' share follows `accuser_reward_permille`, so it follows the accuser fix above |
+| a forfeited seal deposit | burned whole | no bounty: the whole 1 BILI is lost |
+| the complete-check fee | burned | no bounty |
+| conformance refutation (tag 109 `Refute`) | **pays nothing, and forged evidence forfeits nothing** (the attempt ends REFUTED, a counted retry) | DESIGN blocker (readiness §6.6, verifier incentive). Proposal: an evidence bond `E`, reserved at `Post` and slashed on REFUTED, with 49 % to the refuter. A self-refuting registrant then loses at least 51 % of `E`. `E` is POLICY (ECON) |
+
+### 14.5 ADR-0175: nothing here moves a registration
+
+The bootstrap only READS registrations. Eligibility (derived), the deny-list and conformance attempts are facts about an immutable class
+id. Specifically:
+- A commitment naming another artifact, program or plan root is `ConformanceOfAnotherStatement` and is never eligible.
+- Tag 106 binds once ("a plan or program cannot be substituted afterwards").
+- An improvement is a new registration. It onboards on its own conformance, and its parent's eligibility is untouched.
+
+## 15. Arming blockers of this lane's fences (end of lane, 2026-10-10)
+
+Nothing here is armable. `palw_panel_free_v1` (OPV, derived eligibility, the reward gate, the v3 beacon) stays refused by validation.
+Its refusal names the blockers below.
+
+| Blocker | Kind | Owner |
+| --- | --- | --- |
+| **Rewards not budgeted** (ADR-0176): no engine implements `PalwBondBudgetHookV1`, so no door reserves or re-checks `Q`/`B`/`R`/`F` | CODE | BUDGET (`palw_bond_budget_v1`) |
+| `W`, the `rho` ↔ `Q`/`B`/`R`/`F` mapping, the cap values | POLICY | Lead / ECON |
+| DA16's artifact half still makes availability a condition of tag 104, the attested roots and the legacy channel's V2 activation (ADR-0177, GAP-B18) | CODE | DA16b |
+| A digest court for sampled conformance (GAP-70: until it exists, only the complete check gates rewards) | DESIGN | Lead / G14C |
+| A conformance refutation earns no bounty, and evidence carries no stake (GAP-B19); an evidence bond with the 49 % refuter share | DESIGN + POLICY | Lead / ECON |
+| A fresh complete-check verifier (GAP-B10): the post is in no served row | CODE + allocation | G14C (GAP-71) |
+| The 49 % rule for the binding challenger (`PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1 = 500`) and the kernel accuser (`accuser_reward_permille: 500`, which the default's demander share follows) | CODE | INTF / G14R |
+| v3's liveness price (GAP-B12): a withheld seal vetoes, counted; `seal_deposit` | POLICY | ECON |
+| v3's participation term and `ε_src` at production parameters (`W − δ ≥ 128` blocks at `ρ = ½`, a seal TTL ≥ `2W`) | POLICY + EXTERNAL (review) | Lead / SOUND |
+| The OPV reservation's `assumed_detection_permille` (500) is an assumption about A-ACQ and A-WATCH; 0 for a closed model (§14.2) | POLICY / EXTERNAL (MEAS) | ECON / MEAS |
+| The interim numbers: the complete check's bounds, fee and per-block cap; 2^26 work units against the block validation budget; the 50-DAA OPV window | POLICY + EXTERNAL (measurement) | MEAS |
+| An external soundness review of the effective-bits accounting (`shipped_registry_v1` is empty) | EXTERNAL | SOUND / reviewers |
+| Pipelines (GAP-B4) and typed roots (GAP-B16) have no onboarding path; both are eligible only through the `cfg(test)` seam | CODE | G14C (GAP-21, GAP-50) |
+| Binding a V2 REAL claim 1:1 to a kernel claim (GAP-62); until then V2-root work never earns the new rewards (GAP-81) | CODE / DESIGN | X8R |
+| RFC-0010 V3 does not read the route's OPV Finals, and no Panel beacon scheme is approved (GAP-B3) | CODE + POLICY | Lead |
+| Rule E (ADR-0178) armed at or below, for reorg consistency of every Final the beacon reads | CODE | FINX |
+
+## 16. G14 condition 9 — post-commit challenge completeness, this lane's part
+
+G14 (the user's priority, 2026-10-10): with the producer and EVERY Panel seat colluding, one non-Panel public bonded verifier convicts
+from public authenticated material alone. RFC-0014 §3.4 requires that verifier to reproduce the whole post-commit path from public
+reads, with no producer cache, private API, Panel seed distribution or operator signature. The lane G14C keeps the authoritative gap
+matrix. This section is the onboarding conformance path's row of it.
+
+| §3.4 step | Complete check (bootstrap) | Sampled (v2) | Sealed-source (v3) |
+| --- | --- | --- | --- |
+| policy resolution | `ConformanceAttemptRowV1::policy()` from the commitment's id (op 231) | same | same |
+| statement commitment and its position | tag 107's row (op 231) | same | same |
+| future source eligibility, independent Final | none: no beacon | op 212's attributed OPV Finals, against the eligible set frozen at 107 | the seal facts (seal position, salt, fate), derived from op 211's rows by the chain's own function |
+| ordered source set, branch-relative lock | — | `collect_attributed_work_beacon_v1` | `collect_sealed_work_beacon_v3` |
+| seed, identical queries | — (every input is checked) | `challenge_seed_v1`, `derive_selection_v1` | same |
+| localization, then exact court or default | the fold computes every check; a failure is `CONFORMANCE_FAILED` in the fold | `LeafDecode` (an opening against the root) or `VectorTokens` (a Final claim): exact; no evidence means a default (`Withheld`) | same |
+| the fresh verifier (`fresh_verify_from_reads_v1`, `misaka model onboard verify`) | **refused** (`COMPLETE_CHECK`, GAP-B10) | ops 231 and 212 | ops 231, 212 and 211 (this branch). Before, it was refused (`SEALED_SOURCE`, GAP-B17) |
+
+**GAP-B17 closes without a new RPC op.** Op 211 already serves every route row with the committed ledger and aux roots. The reader
+rebuilds its own copy of the route (`PalwKernelRouteStateV1::from_served_rows_v1`, which refuses rows that do not root to the served
+roots) and derives the seal facts with `beacon_sealed_sources_v1`, the function the fold uses. The SDK
+(`sealed_sources_from_kernel_rows_v1`) and the CLI (`kernel_sealed_sources`, every page of op 211, refused if the roots move between
+pages) do that. The node test runs the reader over small pages, checks that it reproduces the chain's v3 beacon output, seed and
+passing verdict, both inside and after the window, and checks that one forged row is refused
+(`g14_opv_bootstrap_a_sealed_source_v3_beacon_locks_on_salted_seals_and_the_class_passes`).
+
+How §3.4's other rules hold here:
+
+* **Seeds and ε are recomputed, never trusted.** The verifier re-derives the beacon and the seed. E6's bits (`attempt_effective_bits_v1`)
+  are a pure function of public rows.
+* **Many watchers are not many repetitions.** The bound counts the policy's `r`, never the number of watchers.
+* **An exact proof never waits for a new beacon.** A conformance refutation names a selected check of the posted evidence, under a seed
+  already locked. A per-claim OPV proof needs no beacon at all (Proposition SG-05).
+* **A source shortage never stops the chain.** It ends the attempt `BEACON_UNAVAILABLE` (counted); `…without_a_complete_check_class_the_beacon_never_comes_and_the_chain_lives`
+  tests this.
+* **No BFT/DNS beacon, no seed-timeout fallback.** The source kinds exclude both, and no fallback exists.
+
+**What remains for condition 9 in this lane.**
+
+| Item | Kind |
+| --- | --- |
+| A fresh complete-check verifier (GAP-B10). The `PostComplete` lives only in its block, and op 231's evidence row is typed for the sampled post. Fix: keep the post in an aux row op 231 serves (an allocation), then re-run `judge_complete_check_v1` off chain | CODE + allocation (Lead) |
+| The served roots are trusted as the node's. Authenticating them against the header-committed state is the state proof's job, shared by every public read (ops 211, 212, 231) | CODE, shared (G14C) |
+| Restart, IBD and pruning for a v3 attempt on a real node. The v2 restart test exists (`the restarted node passes the window`); a v3 one does not | CODE (tests) |
+| A fake source and a source shortage under v3 on a real node. Both are tested only in the challenge crate's pure tests | CODE (tests) |
+| GKR, sum-check or a staged beacon: no interactive suite exists (SOUND SG-10) | EXTERNAL, not applicable yet |
+| A sampled conformance of a model no honest party holds is unrefutable (§14.2, GAP-B21). Moot for the release (GAP-70) | DESIGN |
