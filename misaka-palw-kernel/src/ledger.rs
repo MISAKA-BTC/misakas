@@ -1059,11 +1059,33 @@ impl KernelLedgerV1 {
         }
         self.charge(name, 0)?;
         let program = TirProgramV1::decode_canonical(program_bytes).map_err(|e| rule(format!("program: {e}")))?;
-        check_plan_v1(&self.schedule, &d, &program, root, plan, self.daa).map_err(|o| rule(o.to_string()))?;
+        // K2-TIR-v5: the program's last two params are the job's input (`crate::seg_encoder`), never the artifact; one position; its
+        // ranges proven with the inputs' intervals (the ids below the token bound, the count at most `L`).
+        let artifact_params = if crate::descriptor::is_encoder_v1(&d) {
+            let e = crate::seg_encoder::encoder_binding_v1(&program).map_err(rule)?;
+            if plan.max_positions != 1 {
+                return Err(rule("a K2-TIR-v5 (encoder) plan is of one position".into()));
+            }
+            crate::seg_encoder::prove_encoder_ranges_v1(&program, &e).map_err(|why| rule(format!("FRONTEND_REQUIRED: {why}")))?;
+            crate::check::check_plan_with_v1(
+                &self.schedule,
+                &d,
+                &program,
+                root,
+                plan,
+                self.daa,
+                crate::check::RangeRuleV1::ProvenByV2,
+            )
+            .map_err(|o| rule(o.to_string()))?;
+            e.first_input as usize
+        } else {
+            check_plan_v1(&self.schedule, &d, &program, root, plan, self.daa).map_err(|o| rule(o.to_string()))?;
+            program.params.len()
+        };
         check_commitment_set(
             pc,
-            &used_param_instances(&program, program.params.len()),
-            &declared_param_instances(&program.params, program.schedule.layers.len()),
+            &used_param_instances(&program, artifact_params),
+            &declared_param_instances(&program.params[..artifact_params], program.schedule.layers.len()),
         )
         .map_err(rule)?;
         // The artifact is public by the consumer's attestation (checked above), not by a registrant's flag. PUBLIC_PROSECUTION_COMPLETE

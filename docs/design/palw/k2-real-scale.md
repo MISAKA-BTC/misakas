@@ -433,3 +433,106 @@ collateral of §11.3 is unaffordable, the answer is these proofs, not a lower as
 | claim draw and watcher assignment on a grinding-resistant beacon | CODE (OPVB) |
 | a fee for drawn checks | ECON (G14-R4) |
 | sublinear-read proofs | DESIGN_GAP |
+
+## 12. Encoders and heads: one position, element courts (K2-TIR-v5; HFX m3)
+
+### 12.0 The finding, and why tiling rows alone does not fix it
+
+HFX's m3 census: with testnet-12's ceilings, arming `palw_task_heads_v1` admits **no** encoder or head class on the generative route
+(RFC-0003, tag 68). Of 40 embedding classes, 24 are refused at the close-sizing work cap (`2^26 + 1` against `2^26`) and 15 at
+`max_position_macs`; `stsb-bert-tiny` is refused at the tile MACs (`2^25` against `2^24`). 0 of 5 heads are admitted.
+
+The cause is the unit. A bidirectional encoder is lowered as **one position over a padded token axis** (`lower::bidir`): every value is a
+`[L, …]` tensor of all rows at once. On the generative route a position is the unit of every bound:
+- a Panel seat replays it (`max_position_macs`: bge-large at 512 tokens is 1.68·10^11 MACs against 2^37);
+- a close walks its cone tile by tile across the whole sequence, so the sizing work passes `2^26` before it finishes.
+
+Cutting the position into tiles of rows does not shrink the cone below one layer. Under bidirectional attention, row `i` at layer `ℓ` reads the
+keys and values of every row at `ℓ`. A close that re-executes a tile of rows from the layer's inputs therefore still reads every row's
+`K` and `V` (or re-derives them from every row's input) and the layer's weights. One layer is the smallest closed unit of re-execution.
+
+### 12.1 What K2 does instead: commit every value, judge one element
+
+Under K2-TIR-v4 every value of the position is a leaf-tiled commitment under the position root: `Q`, `K`, `V`, the scores, the
+softmax's terms, the attention output and every FFN intermediate. A court never re-executes a layer or a tile of rows. It re-executes
+**one output element of one value** from the committed operands along that element's dependency line (§3):
+
+| Relation (one bidirectional layer, per head `h`) | One element court reads |
+|---|---|
+| `S[h,i,j] = Σ_c Q[h,i,c] · K[h,j,c]` | one row leaf of `Q` and one of `K` (`head_dim` elements each) |
+| the mask `j < count ? S : MIN` | one element of `S`, and `count` (the job's) |
+| the softmax along `j` (max, `IntExp`, sum, divide) | the line `S'[h,i,·]`: `L` elements, one leaf |
+| `O[h,i,c] = Σ_j P[h,i,j] · V[h,j,c]` | row `i` of `P` and column `c` of `V`: `L` elements each, one leaf each |
+| projections, FFN up / down, output projection | one row of the input (`d` or `ff` elements) and one column of the weight |
+| layer norm (mean, variance, `IntRsqrt`) | the row (`d` elements) |
+| the embedding `Gather` | one id (the job's prompt tile) and one row of the table |
+| pooling (`[CLS]` row, or the mean over `count` rows), a classifier or span head | one row / one column of `L` |
+
+"A row tile depends on all rows" is true of the computation, not of the court. The dependence on all rows passes through committed
+tensors (`K`, `V`, `P`), and each of them is judged by its own relation. **A lie localizes to the first wrong value in canonical node order
+and to one element of it**, exactly as in §3. The completeness argument is unchanged: every operand that element reads is an earlier
+value, a param, a const, or the job's input, so it is right, and the element court on it convicts. The "close per tile of rows" of the
+question is therefore finer here: the court is per element, and the tiles are the commitment's leaves (≤ 4,096 elements of one row or column).
+
+### 12.2 Numbers at 512 tokens
+
+Shape level (`misaka-palw-sdk/tests/k2s_encoder_court.rs`). The configurations are as published, lowered by `lower::bidir` with no
+weight read. Each is judged as ONE position under the v4 plan, `check_plan_v1`, the per-prosecution gate and the node's carrier.
+
+⟨ENCODER-TABLE⟩
+
+### 12.3 Against PRINCIPLES §6
+
+* **Condition 1 (coverage).** Every node of the encoder program has a relation with an element court: the plan covers every node and
+  `check_plan_v1` passes (the ε of the table). Nothing is left to a Panel.
+* **Condition 5 (collateral against the maximum gain).** Detection is §11's route B: re-execute the job (one forward pass, the MACs of
+  the table: the producer's own work) and compare ONE segment root. For an encoder that is cheap enough to run on **every** claim, so
+  `q = 1` is affordable and `P_dc = P_run`. At the interim terms (gain 20 BILI, default penalty 100 BILI, `a` = ½, `P_run` = ½) the
+  reservation is **240 BILI**, against 40,960 BILI for sampling a 9B-8k claim (§11.3). The detection cost is one job's compute, not a
+  fraction of a terabyte-scale claim.
+* **Condition 6 (the verifier's resources).** A check costs the forward pass plus hashing the position's values (the material
+  column). It reads the artifact and the job's ids. Only when the roots differ does it also read one position of material and file one
+  element court, whose size is the table's worst-court column, far under the carrier. The per-prosecution bound is the gate's column.
+* **The DA side.** The position's material is gigabytes a job. A producer does not need to keep it: the job is deterministic and cheap
+  to recompute from the ids on chain and the artifact. But a demanded position is served on chain in 1 MiB parts (the parts column),
+  so the demand-bond fate (G14-R4, §4) must price a demand of an encoder claim at that many parts.
+
+### 12.4 What a K2 encoder class is: K2-TIR-v5, with no new allocation
+
+* **The descriptor.** K2-TIR-v5 is K2-TIR-v4 (the same families, commitments, element courts, DA and gate) plus **job-bound inputs**.
+  The program's last two params are `input.ids` (`idx [L]`) and `input.count` (`idx []`), and they are the job's input, not the
+  artifact. This is exactly the version-1 view of `encoder::bidir_v2`'s program, where lifted inputs trail the params. The class has
+  one position (`max_positions = 1`), `L ≤ 4,096` (one prompt tile), and no node reads the per-position token.
+* **The job.** `PostTiledJob` (inner 17) and its `PostPromptTile`s (inner 18):
+  - the prompt is the template-applied ids (`[CLS] ‖ text ‖ [SEP]`, which the gateway forms, as on the generative route), with
+    `prompt_len` = `count` ≤ `L` and `max_new_tokens = 0`;
+  - the semantics pad it to `L` with id 0. A pad row never reaches a real row or the pooling (keys at or past `count` are masked), so the
+    pad id does not change the result.
+* **The claim.** `CommitSegmentedClaim` (inner 16) with no delivered ids and one position: one segment root on chain. The result is the
+  committed output node (the pooled vector, or a head's logits) at position 0. Anyone reads it from the producer's stream, with its
+  node opening against the segment root.
+* **Courts and detection.** These are §3's and §11's. The ids operand is opened by the job's prompt tile (`ElementFaultV1::token`), and the
+  count is the job's.
+* **Allocation: none.** It uses inner kinds 16–18, `ProsecutionV1::Segmented` and `ClaimBodyV1::Segmented`, which are lane K2S's. A
+  descriptor is identified by its digest. Like v4, v5 registers under OPV only and is armed in the dormant route template beside v1–v4.
+
+### 12.5 The alternative: encoder-sized ceilings on the generative route
+
+To admit these classes as they are, the generative route would need:
+- `max_position_macs ≥ ` the MACs column. That is a Panel replay of a whole forward pass per claim per seat.
+- A close sizing that walks a tile **class** rather than every tile (PALW-GEN-20's recorded follow-up). Until then the gate cannot price
+  the close at all, and a higher cap only moves the refusal.
+- Tile MACs above `2^24`.
+
+Even then the Panel replay is the route's detection, and the court's close for a layer-crossing lie still reads the layer. So this keeps the
+Panel as the root of detection, which PRINCIPLES §1 forbids as the final basis. It is not recommended as the main route. It would remain a
+throughput option once K2-TIR-v5 carries G14.
+
+### 12.6 What stays open
+
+* **The span head** (`OUTPUT_TOKEN_LOGITS_V1`) is HFX's branch, not this one. Its head adds one `[L, d] · [d, 2]` product (`k` = `d`)
+  and `2 · L` values: no measurable change to the bounds above. Pair segments (`ENC_PAIR_SEGMENTS_V1`) are HFX's too.
+* **8,192-token encoders** (the BGE-M3 / XLM-R lineage) do not lower: their scores exceed TIR's 2^28-element cap (HFX's RESOURCE item).
+  v5's one-tile input (`L ≤ 4,096`) is a second limit, and lifting it means a multi-tile `token` field.
+* **The Head profile** (`palw_task_heads_v1`) is the generative route's fence. A K2 encoder class is the kernel route (tag 110, OPV),
+  under its own dormant fence. The Head profile's decode rule (`HEAD_DECODE_V1`) applies unchanged to the verified output.

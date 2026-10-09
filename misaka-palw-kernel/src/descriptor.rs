@@ -230,9 +230,33 @@ pub fn k2_tir_v4_descriptor() -> KernelDescriptorV1 {
     d
 }
 
-/// Whether a descriptor's claims are segmented (K2-TIR-v4's commitment suite).
+/// Whether a descriptor's claims are segmented (K2-TIR-v4's commitment suite; K2-TIR-v5 too).
 pub fn is_segmented_v1(d: &KernelDescriptorV1) -> bool {
     d.commitment_suite_id == 3
+}
+
+pub const K2_TIR_V5_SEMANTICS: &[u8] = b"misaka-palw-kernel K2-TIR-v5 (encoders and heads): K2-TIR-v4 for a program of ONE position whose \
+last two params, input.ids (idx [L], L <= 4096) and input.count (idx []), are the job's input and not the artifact: the job's prompt ids \
+padded to L with id 0, and the prompt's length; no node reads the per-position token; a tiled job of no generated id and a claim of no \
+delivered id; the result is the program's output node at position 0; OptimisticPublicVerification only";
+
+/// The memory model of K2-TIR-v5: params past `first_input` are the job's input (`crate::seg_encoder`).
+pub const MEMORY_MODEL_JOB_INPUTS_V1: u32 = 2;
+
+/// **K2-TIR-v5** (`docs/design/palw/k2-real-scale.md` §12): K2-TIR-v4 (its families, commitments, element courts, DA and gate) for a
+/// bidirectional encoder or a head over one: ONE position over a padded token axis whose ids and count are the job's input
+/// ([`crate::seg_encoder`]). A new descriptor: v4 classes keep their rules.
+pub fn k2_tir_v5_descriptor() -> KernelDescriptorV1 {
+    let mut d = k2_tir_v4_descriptor();
+    d.version = 5;
+    d.semantics_digest = crate::hash::id(KERNEL_DESCRIPTOR_DOMAIN_V1, K2_TIR_V5_SEMANTICS);
+    d.memory_model_id = MEMORY_MODEL_JOB_INPUTS_V1;
+    d
+}
+
+/// Whether a descriptor's classes are encoders with job-bound inputs (K2-TIR-v5).
+pub fn is_encoder_v1(d: &KernelDescriptorV1) -> bool {
+    is_segmented_v1(d) && d.memory_model_id == MEMORY_MODEL_JOB_INPUTS_V1
 }
 
 /// Where a descriptor stands in the release sequence (ADR-0172 §3: proposal → reference + independent

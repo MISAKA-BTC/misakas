@@ -245,6 +245,7 @@ mod tests {
                 inline_prompt: None,
                 generated: &[],
                 decode: crate::job::DecodeRuleV1::Greedy,
+                encoder: None,
             };
             let first = *lies.iter().min().unwrap();
             let index = (0..segment_roots.len()).find(|i| segment_roots[*i] != own.segment_roots()[*i]).unwrap() as u32;

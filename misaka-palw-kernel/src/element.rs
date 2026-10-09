@@ -52,6 +52,9 @@ pub struct SegClaimContextV1<'a> {
     pub inline_prompt: Option<&'a [u32]>,
     pub generated: &'a [u32],
     pub decode: DecodeRuleV1,
+    /// K2-TIR-v5: the program's job-bound inputs (`crate::seg_encoder`). For such a claim the `tokens` every check takes are the job's
+    /// prompt ids (one position; no node reads a per-position token).
+    pub encoder: Option<crate::seg_encoder::EncoderBindingV1>,
 }
 
 /// One operand of a filing: the node it is a value of (`None` for a param) and the leaves the court reads.
@@ -341,8 +344,12 @@ struct PreparedV1<'a> {
 }
 
 impl<'a> PreparedV1<'a> {
-    fn new(program: &'a TirProgramV1) -> Result<Self, String> {
-        let w = WiringV1::new(program).map_err(|e| format!("the program does not validate: {e}"))?;
+    fn new(program: &'a TirProgramV1, encoder: Option<&crate::seg_encoder::EncoderBindingV1>) -> Result<Self, String> {
+        let w = match encoder {
+            Some(e) => WiringV1::for_stage(program, Some(&e.stage())),
+            None => WiringV1::new(program),
+        }
+        .map_err(|e| format!("the program does not validate: {e}"))?;
         let mut offsets = Vec::with_capacity(w.occurrences.len());
         let mut at = 0u64;
         for (b, _) in &w.occurrences {
@@ -481,7 +488,7 @@ fn token_at(c: &SegClaimContextV1<'_>, p: u32, tile: Option<&PromptTileOpeningV1
 /// read from the producer.
 pub fn verify_seg_fault_v1(c: &SegClaimContextV1<'_>, fault: &SegFaultV1) -> Result<SegConvictionV1, DismissalV1> {
     let na = DismissalV1::NotAuthentic;
-    let pr = PreparedV1::new(c.program).map_err(na)?;
+    let pr = PreparedV1::new(c.program, c.encoder.as_ref()).map_err(na)?;
     let node_ok = |o: &NodeOpeningV1, p: u32, s: u16, n: u16| -> Result<(), DismissalV1> {
         if (o.position, o.occurrence, o.node) != (p, s, n) || p >= c.positions || !pr.valid(s, n) {
             return Err(DismissalV1::NotAuthentic(format!(
@@ -617,8 +624,28 @@ pub fn verify_seg_fault_v1(c: &SegClaimContextV1<'_>, fault: &SegFaultV1) -> Res
                     }
                     OperandSourceV1::Source(SourceV1::Zeros { .. }) => CourtOperand::Zeros,
                     OperandSourceV1::Source(SourceV1::Public(v)) => CourtOperand::Scalar(*v as i128),
-                    OperandSourceV1::Source(SourceV1::Input { .. }) => {
-                        return Err(na("a pipeline stage input on a single-program claim".into()));
+                    OperandSourceV1::Source(SourceV1::Input { k, .. }) => {
+                        // K2-TIR-v5: input 0 is the job's ids (its inline prompt, or its one prompt tile, authenticated); input 1 is
+                        // their count, which the job states.
+                        let e = c.encoder.as_ref().ok_or_else(|| na("a pipeline stage input on a single-program claim".into()))?;
+                        if *k == 1 {
+                            CourtOperand::Full(e.count(c.prompt_len).map_err(na)?)
+                        } else {
+                            let prompt: Vec<u32> = match c.inline_prompt {
+                                Some(ids) => ids.to_vec(),
+                                None => {
+                                    let t = f.token.as_ref().ok_or_else(|| na("the job's ids are not opened".into()))?;
+                                    if t.index != 0
+                                        || t.ids.len() != c.prompt_len as usize
+                                        || !t.authenticates(c.prompt_len, &c.prompt_root)
+                                    {
+                                        return Err(na("the opened ids are not the job's".into()));
+                                    }
+                                    t.ids.clone()
+                                }
+                            };
+                            CourtOperand::Full(e.ids(&prompt).map_err(na)?)
+                        }
                     }
                 };
                 ops.push(op);
@@ -710,7 +737,7 @@ pub fn check_positions_v1(
     tokens: &[u32],
     positions: &[u32],
 ) -> SegFindingV1 {
-    let pr = match PreparedV1::new(c.program) {
+    let pr = match PreparedV1::new(c.program, c.encoder.as_ref()) {
         Ok(pr) => pr,
         Err(why) => return SegFindingV1::Inconsistent(why),
     };
@@ -772,7 +799,12 @@ fn resolve_operands(
             OperandSourceV1::Source(SourceV1::Const(j)) => (const_tensor(c.program, *j).ok(), None),
             OperandSourceV1::Source(SourceV1::Zeros { dtype, shape }) => (Some(Tensor::zeros(*dtype, shape)), None),
             OperandSourceV1::Source(SourceV1::Public(v)) => (None, Some(*v as i128)),
-            OperandSourceV1::Source(SourceV1::Input { .. }) => return Err("a stage input".into()),
+            OperandSourceV1::Source(SourceV1::Input { k, .. }) => {
+                let e = c.encoder.as_ref().ok_or("a stage input")?;
+                let prompt = tokens.get(..c.prompt_len as usize).ok_or("the job's ids are not in hand")?;
+                let (ids, count) = e.inputs(prompt)?;
+                (Some(if *k == 0 { ids } else { count }), None)
+            }
         };
         owned.push(t);
         scalars.push(v);
@@ -826,6 +858,10 @@ fn build_element_fault(
         if matches!(src, OperandSourceV1::Token) && p < c.prompt_len && c.inline_prompt.is_none() {
             token = PromptTileOpeningV1::of(&tokens[..c.prompt_len as usize], p / PROMPT_TILE_IDS_V1 as u32);
         }
+        // K2-TIR-v5: the job's ids are opened by the prompt's one tile (`L ≤ 4,096`).
+        if matches!(src, OperandSourceV1::Source(SourceV1::Input { k: 0, .. })) && c.encoder.is_some() && c.inline_prompt.is_none() {
+            token = PromptTileOpeningV1::of(&tokens[..c.prompt_len as usize], 0);
+        }
         inputs.push(OperandOpeningV1 { node: node_opening, leaves });
     }
     Ok(ElementFaultV1 { position: p, occurrence: s, node: n, element: e, output, inputs, token })
@@ -841,7 +877,7 @@ pub fn prove_element_v1(
     (p, s, n): (u32, u16, u16),
     e: u64,
 ) -> Result<ElementFaultV1, String> {
-    let pr = PreparedV1::new(c.program)?;
+    let pr = PreparedV1::new(c.program, c.encoder.as_ref())?;
     if !pr.valid(s, n) || p >= c.positions {
         return Err("no such value".into());
     }
@@ -1186,6 +1222,7 @@ mod tests {
             inline_prompt: None,
             generated: &f.generated,
             decode: DecodeRuleV1::Greedy,
+            encoder: None,
         }
     }
 
@@ -1196,7 +1233,7 @@ mod tests {
         let honest = Committed::of(trace.values.clone());
         let roots = honest.c.segment_roots();
         let c = ctx(&f, &roots);
-        let pr = PreparedV1::new(&f.program).unwrap();
+        let pr = PreparedV1::new(&f.program, None).unwrap();
         let loaded = load_positions(&c, &pr, &honest, &(0..5).collect::<Vec<_>>()).unwrap();
         let mut params = BTreeMap::new();
         let art = |j: u16, l: Option<u16>| f.params.tensors.get(&(j, l)).cloned();
@@ -1238,7 +1275,7 @@ mod tests {
         let honest_roots = honest.c.segment_roots();
         let hc = ctx(&f, &honest_roots);
         assert_eq!(check_positions_v1(&hc, &honest, &art, &f.tokens, &[0, 1, 2, 3]), SegFindingV1::Clean);
-        let pr = PreparedV1::new(&f.program).unwrap();
+        let pr = PreparedV1::new(&f.program, None).unwrap();
         let mut convicted = 0;
         for p in [0u32, 3] {
             for s in 0..pr.w.occurrences.len() as u16 {

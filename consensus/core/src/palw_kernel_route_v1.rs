@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::descriptor::{
     KernelScheduleV1, KernelStatusV1, k2_tir_v1_descriptor, k2_tir_v2_descriptor, k2_tir_v3_descriptor, k2_tir_v4_descriptor,
+    k2_tir_v5_descriptor,
 };
 use misaka_palw_kernel::gate::ProsecutionPolicyV1;
 use misaka_palw_kernel::hash::Digest;
@@ -196,13 +197,16 @@ pub fn palw_kernel_route_template_v1(policy: LedgerPolicyV1) -> KernelLedgerV1 {
     // K2-TIR-v4 (lane K2S, `docs/design/palw/k2-real-scale.md`): the real-scale suite — segmented claims, element courts, per-position
     // DA, prompt tiles; its classes register only under OptimisticPublicVerification. Like v1–v3 it is armed here and nowhere else:
     // the fence refuses every real height.
+    // K2-TIR-v5 (§12 of the same design): K2-TIR-v4 for encoders and heads, ONE position whose ids are the job's; armed here only.
     let (v1, v2, v3, v4) = (k2_tir_v1_descriptor(), k2_tir_v2_descriptor(), k2_tir_v3_descriptor(), k2_tir_v4_descriptor());
+    let v5 = k2_tir_v5_descriptor();
     let schedule = KernelScheduleV1::default()
         .with(v1.digest(), KernelStatusV1::Active { since_daa: 0 })
         .with(v2.digest(), KernelStatusV1::Active { since_daa: 0 })
         .with(v3.digest(), KernelStatusV1::Active { since_daa: 0 })
-        .with(v4.digest(), KernelStatusV1::Active { since_daa: 0 });
-    KernelLedgerV1::genesis(policy, schedule, vec![v1, v2, v3, v4]).expect("the interim kernel route policy validates")
+        .with(v4.digest(), KernelStatusV1::Active { since_daa: 0 })
+        .with(v5.digest(), KernelStatusV1::Active { since_daa: 0 });
+    KernelLedgerV1::genesis(policy, schedule, vec![v1, v2, v3, v4, v5]).expect("the interim kernel route policy validates")
 }
 
 /// One seat of an interim assignment.
@@ -755,6 +759,8 @@ mod tests {
         let template = palw_kernel_route_template_v1(p);
         let v4 = misaka_palw_kernel::descriptor::k2_tir_v4_descriptor();
         assert!(template.known.iter().any(|d| d.digest() == v4.digest()));
+        let v5 = misaka_palw_kernel::descriptor::k2_tir_v5_descriptor();
+        assert!(template.known.iter().any(|d| d.digest() == v5.digest()) && v5.digest() != v4.digest());
         let mut state = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
         let plain = state.clone();
         let rebuilt = state.ledger().unwrap().as_rebuilt_from_v1(&state.rows);

@@ -50,6 +50,8 @@ pub struct SegClaimViewV1 {
     pub positions: u32,
     pub job: JobViewV1,
     pub generated: Vec<u32>,
+    /// K2-TIR-v5: the program's job-bound inputs (an encoder or a head).
+    pub encoder: Option<crate::seg_encoder::EncoderBindingV1>,
 }
 
 impl SegClaimViewV1 {
@@ -64,6 +66,7 @@ impl SegClaimViewV1 {
             inline_prompt: self.job.inline_prompt.as_deref(),
             generated: &self.generated,
             decode: self.job.decode,
+            encoder: self.encoder,
         }
     }
 }
@@ -135,6 +138,11 @@ impl SegmentedClaimRecordV1 {
             return Err("the record is not the class's or the claim's".into());
         }
         self.evidence.check_structure(&self.segment_roots)?;
+        let encoder = if self.plan.descriptor_digest == crate::descriptor::k2_tir_v5_descriptor().digest() {
+            Some(crate::seg_encoder::encoder_binding_v1(&program)?)
+        } else {
+            None
+        };
         Ok(SegClaimViewV1 {
             program,
             params,
@@ -150,6 +158,7 @@ impl SegmentedClaimRecordV1 {
                 complete: true,
             },
             generated: self.generated.clone(),
+            encoder,
         })
     }
 }
@@ -191,6 +200,11 @@ impl KernelLedgerV1 {
             positions: evidence.positions,
             job: self.job_view_v1(&row.job_id)?,
             generated: c.generated.clone(),
+            encoder: if crate::descriptor::is_encoder_v1(&class.descriptor) {
+                crate::seg_encoder::encoder_binding_v1(&class.program).ok()
+            } else {
+                None
+            },
         })
     }
 
@@ -201,7 +215,15 @@ impl KernelLedgerV1 {
         if !crate::descriptor::is_segmented_v1(&class.descriptor) {
             return Err(rule("a tiled job names a class that is not K2-TIR-v4".into()));
         }
-        job.well_formed(class.plan.max_positions).map_err(rule)?;
+        if crate::descriptor::is_encoder_v1(&class.descriptor) {
+            // K2-TIR-v5: the prompt is the encoder's input (1 ..= L ids), and nothing is generated.
+            let e = crate::seg_encoder::encoder_binding_v1(&class.program).map_err(rule)?;
+            if job.prompt_len == 0 || job.prompt_len > e.l || job.max_new_tokens != 0 {
+                return Err(rule(format!("an encoder job has 1 ..= {} ids and generates nothing", e.l)));
+            }
+        } else {
+            job.well_formed(class.plan.max_positions).map_err(rule)?;
+        }
         let id = job.id();
         if self.tiled_jobs.contains_key(&id) || self.jobs.contains_key(&id) {
             return Err(rule("the job is already posted".into()));
@@ -258,17 +280,29 @@ impl KernelLedgerV1 {
         if evidence.suite != crate::evidence::SuiteParamsV1::of(&class.descriptor) {
             return Err(rule("the evidence names another suite than the class's descriptor".into()));
         }
-        if claim.generated.is_empty() || claim.generated.len() as u64 > job.max_new_tokens as u64 {
-            return Err(rule("binding fault WrongGenerationLength".into()));
-        }
-        if claim.generated.iter().any(|t| *t >= class.program.token_bound) {
-            return Err(rule("binding fault TokenOutOfRange".into()));
-        }
-        let fed = &claim.generated[..claim.generated.len() - 1];
-        let positions = job.prompt_len as u64 + fed.len() as u64;
-        if evidence.positions as u64 != positions || positions > class.plan.max_positions as u64 {
-            return Err(rule("binding fault WrongLength".into()));
-        }
+        let fed: &[u32] = if crate::descriptor::is_encoder_v1(&class.descriptor) {
+            // K2-TIR-v5: ONE position over the job's ids; no id is delivered (the result is the output node at position 0).
+            if !claim.generated.is_empty() || job.max_new_tokens != 0 {
+                return Err(rule("binding fault WrongGenerationLength: an encoder claim delivers no id".into()));
+            }
+            if evidence.positions != 1 || class.plan.max_positions != 1 {
+                return Err(rule("binding fault WrongLength: an encoder claim is one position".into()));
+            }
+            &[]
+        } else {
+            if claim.generated.is_empty() || claim.generated.len() as u64 > job.max_new_tokens as u64 {
+                return Err(rule("binding fault WrongGenerationLength".into()));
+            }
+            if claim.generated.iter().any(|t| *t >= class.program.token_bound) {
+                return Err(rule("binding fault TokenOutOfRange".into()));
+            }
+            let fed = &claim.generated[..claim.generated.len() - 1];
+            let positions = job.prompt_len as u64 + fed.len() as u64;
+            if evidence.positions as u64 != positions || positions > class.plan.max_positions as u64 {
+                return Err(rule("binding fault WrongLength".into()));
+            }
+            fed
+        };
         if evidence.job_input_root != job_input_root_v2(job.prompt_len, &job.prompt_root, fed) {
             return Err(rule("binding fault WrongInput".into()));
         }
