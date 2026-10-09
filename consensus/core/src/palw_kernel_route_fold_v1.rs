@@ -151,7 +151,8 @@ impl TransitionBuilder<'_> {
 #[allow(clippy::type_complexity)]
 fn route_policies(
     builder: &TransitionBuilder<'_>,
-) -> Result<(misaka_palw_kernel::ledger::LedgerPolicyV1, Option<misaka_palw_kernel::opv::OpvPolicyV1>, Option<u64>), PalwStateV2Error> {
+) -> Result<(misaka_palw_kernel::ledger::LedgerPolicyV1, Option<misaka_palw_kernel::opv::OpvPolicyV1>, Option<u64>), PalwStateV2Error>
+{
     let Some(extras) = builder.extras.kernel_route.as_ref() else {
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
     };
@@ -276,6 +277,33 @@ fn opv_gate_v1(
             // No onboarding path exists for a pipeline (GAP-B4): only the test seam names one. Its ids are admitted ahead and the
             // kernel matches the registration's own id against them (a refused registration flushes nothing).
             OpvGateV1::Admit(view.test_eligible.iter().filter(|id| !view.denied.contains(id)).map(|id| id.as_bytes()).collect())
+        }
+        // RFC-0004 Part II (R4X): a typed-root class registers only under OPV. A `Weights` spec IS today's single-program registration
+        // (the same id, by the same function), so it takes the same derived eligibility; a `Memory` / `Retrieval` / `Composite` class
+        // has no onboarding path yet (GAP-B16), so — like a pipeline — only the test seam can name it, and never past the deny-list.
+        KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::RegisterClass { spec } }
+            if spec.mode.is_optimistic() =>
+        {
+            use misaka_palw_kernel::spec::SpecShapeV1;
+            match (spec.shape(), spec.class_id()) {
+                (Ok(SpecShapeV1::Weights(w)), _) => {
+                    let facts = OpvClassFactsV1::of_registration(w.descriptor, &w.program_bytes, &w.plan, &w.param_commitments);
+                    match route.opv_eligibility_v1(ledger, &facts, ctx.daa_score, &view) {
+                        Ok(_) => OpvGateV1::Admit(vec![facts.opv_id]),
+                        Err(_) => OpvGateV1::Pass,
+                    }
+                }
+                (Ok(_), Ok(class)) => {
+                    let id = Hash64::from_bytes(class);
+                    if view.test_eligible.contains(&id) && !view.denied.contains(&id) {
+                        OpvGateV1::Admit(vec![class])
+                    } else {
+                        OpvGateV1::Pass
+                    }
+                }
+                // A malformed spec: the kernel refuses it by its own rule.
+                _ => OpvGateV1::Pass,
+            }
         }
         KernelRouteObjectV1::CommitClaim { claim, .. } => match ledger.jobs.get(&claim.job_id).map(|j| j.class_binding_id) {
             Some(class) if ledger.opv.classes.contains(&class) && !eligible(&class) => OpvGateV1::Drop,
@@ -593,7 +621,9 @@ pub(super) fn charge_route_budget_v1(
 }
 
 /// The route's ledger policy at this block (the fee a dismissed proof pays, for an onboarding refutation).
-pub(super) fn route_ledger_policy_v1(builder: &TransitionBuilder<'_>) -> Result<misaka_palw_kernel::ledger::LedgerPolicyV1, PalwStateV2Error> {
+pub(super) fn route_ledger_policy_v1(
+    builder: &TransitionBuilder<'_>,
+) -> Result<misaka_palw_kernel::ledger::LedgerPolicyV1, PalwStateV2Error> {
     Ok(route_policies(builder)?.0)
 }
 

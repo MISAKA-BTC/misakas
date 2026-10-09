@@ -259,7 +259,8 @@ pub(super) fn apply_provider_answer_v1(
     if now > row.deadline_daa {
         return Err(refused("the answer is past the challenge's deadline"));
     }
-    if !charge_route_budget_v1(builder, ctx, 0)? {
+    // An answer is a response, not a proof: like a kernel `Respond` it stops short of the runs reserved for proofs (F-C4R4-10).
+    if !charge_route_budget_v1(builder, ctx, 0, false)? {
         return Err(refused("the block's adjudication budget is spent: answer in a later block before the deadline"));
     }
     match subject {

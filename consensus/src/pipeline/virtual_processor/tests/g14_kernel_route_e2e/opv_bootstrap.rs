@@ -23,7 +23,9 @@ use kaspa_consensus_core::palw_conformance_evidence_v1::{
     reference_leaf_result_v1,
 };
 use kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1;
-use kaspa_consensus_core::palw_onboarding_v1::{AttemptBeaconV1, ConformanceAttemptEndV1, ConformanceAttemptRowV1};
+use kaspa_consensus_core::palw_onboarding_v1::{
+    ArtifactBindingStateV1, AttemptBeaconV1, ConformanceAttemptEndV1, ConformanceAttemptRowV1,
+};
 use kaspa_consensus_core::palw_opv_bootstrap_v1::*;
 use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_operands_v1;
 use misaka_palw_challenge::{
@@ -180,7 +182,11 @@ async fn onboard_all(net: &mut Net, specs: Vec<Spec>) -> Vec<Onb> {
         };
         items.push((s.card, net.route(s.card, &register)));
     }
-    net.send(items).await;
+    // A kernel registration spends one of the block's NON-proof adjudication runs: the test node's four, less the half reserved for
+    // proofs (C4 F-C4R3-05) — two per block. A third in the same block is refused over budget, so they go two blocks at a time.
+    for wave in items.chunks(2) {
+        net.send(wave.to_vec()).await;
+    }
     let (complete, sampled, sealed) = (
         palw_onboarding_complete_check_policy_v1().id(),
         palw_onboarding_challenge_policy_v1().id(),
@@ -1059,7 +1065,15 @@ async fn g14_opv_bootstrap_a_sealed_source_v3_beacon_locks_on_salted_seals_and_t
     let posted = net.attempt(c.v2).evidence.expect("the fold accepted the evidence under the v3 seed");
     assert_eq!(posted.beacon_output.as_bytes(), locked.output);
     net.beat_to(posted.window_end_daa + 1).await;
-    assert_eq!(net.attempt(c.v2).record.state, S::G14Eligible, "C passed with the v3 beacon");
+    // Passed: G14_ELIGIBLE, or already ACTIVE_REWARDABLE — the v3 beacon needs `2W` DAA of seal and reveal windows plus the sources'
+    // OPV Finals, long enough for C's artifact binding to pass its whole refutation horizon, after which `activate_due_classes` may
+    // activate C. ACTIVE_REWARDABLE is legitimate only past that horizon (the binding Final), never because of the beacon.
+    let state = net.attempt(c.v2).record.state;
+    assert!(matches!(state, S::G14Eligible | S::ActiveRewardable), "C passed with the v3 beacon: {state:?}");
+    if state == S::ActiveRewardable {
+        let binding = net.api().unwrap().artifact_binding_v1(&c.v2, &Hash64::from_bytes(c.kernel.pc.root())).expect("C's binding");
+        assert_eq!(binding.state_at(net.daa()), ArtifactBindingStateV1::Final, "activated only past the binding's horizon");
+    }
     assert_eq!(eligibility(&net, &c, 0), Ok(OpvEligibleV1::Derived { v2_class: c.v2 }));
     // v3's accounting: a 2-bit scope is still 0 effective bits (a drill), whatever the beacon; never above ε_src − 1.
     assert_eq!(

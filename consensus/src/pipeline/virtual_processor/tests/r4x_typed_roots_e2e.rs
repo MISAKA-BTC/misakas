@@ -63,7 +63,7 @@ const FEE: u64 = 2_000_000;
 const MAX_POSITIONS: u32 = 64;
 const OPV: VerificationModeV1 = VerificationModeV1::OptimisticPublicVerification;
 
-// ---- the classes (pure functions: their ids are the network's OPV admission list) -----------------------------------------------
+// ---- the classes (pure functions: their ids are what the test seam names OPV-eligible) ------------------------------------------
 
 fn weights(fx: &TirSketchFixtureV1) -> WeightsRootV1 {
     let d = k2_tir_v2_descriptor();
@@ -148,11 +148,13 @@ fn typed_config(typed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
     params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
-    let admitted: Vec<Hash64> = [memory_spec(), retrieval_spec(3), retrieval_spec(2), composite_spec()]
-        .iter()
-        .map(|s| Hash64::from_bytes(s.class_id().unwrap()))
-        .collect();
-    params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), admitted));
+    // OPV eligibility is DERIVED from chain state (OPV-BOOT), and a `Memory` / `Retrieval` / `Composite` class has no onboarding path
+    // yet (GAP-B16): these mechanics worlds name their typed classes through the processor's `cfg(test)` seam, exactly as the
+    // pre-derivation OPV worlds do. The fence's list is a DENY-list (nothing denied here), never an admission list.
+    for s in [memory_spec(), retrieval_spec(3), retrieval_spec(2), composite_spec()] {
+        crate::pipeline::virtual_processor::processor::kernel_route_test_opv_eligible_v1(Hash64::from_bytes(s.class_id().unwrap()));
+    }
+    params.palw_panel_free_v1 = Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new()));
     params.palw_typed_roots_v1 = typed.then(|| ForkActivation::new(1));
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
     params.skip_proof_of_work = true;
