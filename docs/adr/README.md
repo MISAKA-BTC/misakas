@@ -2,6 +2,13 @@
 
 > **設計前提(ADR・RFC より上位)— [MISAKAの不可侵原則](../PRINCIPLES.md):** 確率的に検出し、公開証拠で局所化し、決定論的に裁き、経済的に不正を抑止する。この索引のすべての文書はこの前提の下にあり、衝突する場合は前提が優先する(2026-10-09)。
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 ## Governing purpose — 2026-10-07
@@ -10,14 +17,44 @@
 
 | Decision | Authority and scope |
 | --- | --- |
+| [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md) | Accepted direction, 2026-10-10後続改定: abolish MISAKA Torrent/dedicated Seeder rewards; model acquisition outside consensus; distinct miner-capital coinbase allocation; conditional G14; economic superiority/allocation implementation and activation pending. |
+| [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md) | Accepted design premise, 2026-10-10: probabilistic verification plus bond/time-limited claim capacity, block/reward/Final-weight budgets, common reuse clock and retained liability. Capacity multiplication preserves total economic/consensus credit. Implementation/activation pending. |
+| [ADR-0175](0175-registered-models-are-permanently-immutable.md) | Permanent identity/new independent registrations and no Position/AMM retarget. Earlier availability amendment withdrawn under ADR177; immutable implementation/fence keeps its historical unarmed scope. |
 | [ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md) | Accepted token identity: display name Misaka, ticker BILI; address prefixes, chain IDs and compatibility identifiers remain unchanged; historical evidence retains its recorded label. |
-| [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) | Accepted design mandate. Future prosecution/admission/settlement directions that conflict are amended; historical implementation and activation records stay historical. |
+| [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) | D9–D11 superseded/revised under ADR177: fixed identity, acquisition non-interference, model allocation and conditional prosecution. D12/ADR176 individual bond/time budgets retained. Prior runtime/evidence stay historical. |
 | [RFC-0014](../rfc/0014-panel-independent-fraud-prosecution.md) | Main implementation design and full completion gates; not a claim that these gates already pass. |
-| [RFC-0015](../rfc/0015-panel-free-permissionless-verification.md) | Panel=0 remains deferred until all RFC14 gates and its own verification/economics/migration gates pass; explicit activation still required. |
+| [RFC-0015](../rfc/0015-panel-free-permissionless-verification.md) | §8 specifies the ADR176 design direction for common claim/block/reward/Final-weight budgets and capacity scaling; Panel=0 remains deferred until all RFC14 gates and its own verification/economics/migration gates pass. Specification text does not activate it. |
 
 [全RFC/ADRの確認記録](evidence/0173-mission-alignment-audit-2026-10-07.md)に各文書の版・改定・整合性判断を記載する。以下の旧indexの「today」「still governing」「what to build next」は各節に書かれた過去の日付の記録であり、2026-10-07のruntime auditまたは本目標の完成宣言ではない。将来の実装順序はRFC14の未完了gateを優先し、ADR144の有用なローカル推論、ADR171の確率的検査とexact court、ADR172のKernel-only拡張を維持する。
 
 この文書群は公開mainの未配置文書を取り込み、workspaceにあった文書は保持したreview snapshotである。runtimeのHEADやコードは更新しない。ADR0152/0160等、参照されてもsourceに実体のない文書は推測で作らない。
+
+**2026-10-10 bond予算の追加前提:** ADR176とRFC15 §8.3–8.4を全将来PALW経済に適用する。
+既存163 ADR・17 RFCと主要入口/設計21文書の参照・改定範囲は[整合記録](evidence/0176-bond-budget-policy-alignment-2026-10-10.md)と[JSON一覧](evidence/0176-bond-budget-policy-alignment-2026-10-10.json)に保存した。新経済規則は未実装・未有効化である。
+
+## モデル入手への不介入・model-bond配分 — 2026-10-10後続改定
+
+本review文書群ではADR-0177を使用済みとし、次の新規番号はADR-0178とする。以下の旧番号予約表は各時点の履歴である。
+
+[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を現行設計方針とする。
+**MISAKA Torrentの採用/統合、専用Bonded Seeder、Seeder報酬・固定15%配分を廃止する。**
+旧PoR/全量取得監査/lease/TRDC/FPR、全量公開費用、取得不履行に基づく資格/weight停止も撤回する。
+chainはモデル取得を管理・保証せず、公開拒否だけでは報酬失効やSlashを起動しない。
+
+固定Model ID/root/weights/spec、claim固有の有限証拠/courtと計算反証を維持する。
+全保有者拒否時の取得保証を外し、G14は正しいmodelを得たverifierの条件付き検証能力へ改定する。
+model別の重複しないminer拘束元本`S_m`から、既存coinbase予算を`f(S_m)`で配分する。
+資本だけでは報酬を払わず、ADR176の各bond Q/B/R/F cap・共通DAA時計と三層予算を同時に維持する。
+
+公開参加で追加資本を集めた方が閉鎖自己資本より圧倒的に有利になることを目標にするが、
+同額`S_m`では所有者によらず配分は同じである。倍率式・自己増資/Sybil・集中/競合・既存minerのcap、
+閉鎖時の検出率を敵対的経済評価で立証する。現時点で経済優位・新配分・Panel=0は未完了/未有効化である。
+
+RFC06/08/09/10/11/12/13/14/15、ADR62/67/166/両173/175/176、主要設計・索引へ反映する。
+[今回の文書検証](evidence/0177-model-distribution-policy-alignment-2026-10-10.md)と
+[JSON一覧/撤回記録](evidence/0177-model-distribution-policy-alignment-2026-10-10.json)を参照する。
+旧[Seeder](../rfc/evidence/0014-independent-bonded-seeders-audit-2026-10-10.md)・
+[FPR](../rfc/evidence/0014-forced-public-retrieval-alignment-2026-10-10.md)のPASSは撤回前の文書整合記録として保持する。
 
 > **Looking for how MISAKA works today?** Start with the
 > [architecture overview](../architecture/overview.md): it maps each part of the protocol to the
@@ -155,7 +192,7 @@ What that chain means today, in the sentences people most often get wrong:
 | 0026 / 0027 / 0028 | not reversed — **promoted**: the court, fraud proofs and sampling stop being credit machinery and become L1 machinery. 0026's thesis was walked back for one family by 0051 and **restored in full** by 0053 | [0038](0038-palw-is-the-consensus-work.md), [0053](0053-palw-one-execution-family.md) |
 | 0028 §4e — the credit-price remedy set (Remedy 1 rate cap, Remedy 2 subsidy fraction) | Remedy 1 was already recorded as non-existent at this panel; Remedy 2's variable — a subsidy fraction paid to an overlay job — has no referent once the block *is* the unit of credit. The admission quantity moves to a block-denominated per-class epoch budget; the `max_leverage` half moves to a per-**bond** exposure reserve | [0045](0045-palw-class-economy-on-chain.md) D2 (admission), [0042](0042-palw-mainnet-candidate-ruleset.md) D6 / P0-10 (leverage) |
 | 0029 — V1 chain carriage | the Stage-1 shape is reused; the V2 object set replaces it | [0046](0046-palw-v2-consensus-object-carriage.md) |
-| 0032 / 0033 — fee-bond escrow, the credit gate | not reversed, **dormant**: the credit-overlay lineage's value flows. On the V2 lineage the block is the unit of credit; escrow, void and slash are ADR-0042 D6/D10 and the carriage's fee-as-rent (0046, 0075 D1) | — |
+| 0032 / 0033 — fee-bond escrow, the credit gate | not reversed, **dormant**: the credit-overlay lineage's value flows. **2026-10-10: [0032 amendment](0032-palw-fee-bond-escrow.md#palw-challenger-share-amendment--2026-10-10) raises the PALW challenger share to 49%; the legacy `B_cap` stays fixed, and R-core retains its collected-minus-extracted basis (4,900 bps).** On the V2 lineage the block is the unit of credit; escrow, void and slash are ADR-0042 D6/D10 and the carriage's fee-as-rent (0046, 0075 D1) | — |
 | 0035 D1 — "testnet-11 is the *current chain*, continued; no re-genesis at announce" | held for Relaunch 1. The RC rule re-genesises a public RC on any rule change, and testnet-11 has been re-minted as Relaunch 2–5e; the algo-4 `LegacyTn11` lane is not running anywhere. D2 (class admission pinned in code) stands | [0042](0042-palw-mainnet-candidate-ruleset.md) §"The two-network split" |
 | 0036 D2 — backup-lineage ADR-0041's mechanism (`palw_spam` / `palw_algo4_accept` / `palw_compute_work_scale` / qwen-8.0 `mint.rs`) | **not adopted**, not ported. Two of that ADR's *conclusions* are adopted (new network identity; land→accept→mint) | — (0036 is itself the superseding record) |
 | 0036 D4 — "mainnet MUST ship the permanent hash floor" | reversed: a lane that can always produce blocks is a permanent incentive to mine the lane instead of the work. The testnet half of D4 (no floor on TN11/devnet; a loud halt beats a silent fork) survives verbatim — and is then *refined* by 0060: a bounded, near-weightless, fee-only clock lane is not a production floor | [0039](0039-palw-only-block-production.md) D1/D2 (W6′); [0060](0060-the-liveness-doctrine.md) / [0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md) |

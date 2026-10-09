@@ -447,6 +447,7 @@ pub struct VirtualStateProcessor {
     /// to) and the fold attributes claims to versions; before it all ten are refused by name.
     /// Resolved at the BLOCK's DAA.
     pub(super) palw_model_lines: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_model_immutable_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0095 §4.11 as corrected: the membership's own fence.
     pub(super) palw_model_benefits: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0114: `Params::palw_model_leg_v2_fence` — the five-percent owner leg's height.
@@ -1208,6 +1209,7 @@ impl VirtualStateProcessor {
             palw_share_growth_final: params.palw_share_growth_final_fence(),
             palw_model_market: params.palw_model_market_fence(),
             palw_model_lines: params.palw_model_lines_fence(),
+            palw_model_immutable_v1: params.palw_model_immutable_v1_fence(),
             palw_model_benefits: params.palw_model_benefits_fence(),
             palw_model_leg_v2: params.palw_model_leg_v2_fence(),
             palw_model_seed_v2: params.palw_model_seed_v2_fence(),
@@ -7753,6 +7755,7 @@ impl VirtualStateProcessor {
             state.clone()
         };
         let mut accepted = Vec::with_capacity(objects.len());
+        let mut model_classes_registered_in_block = std::collections::BTreeSet::new();
         // **The 2026-09-23 Position route matrix, P-B1: a refused carrier buy or seed is owed its
         // MSK back.** Its carrier is already accepted and its sink already holds the payment, so a
         // drop here used to be a burn. Every drop path below ends the iteration without reaching
@@ -7925,7 +7928,15 @@ impl VirtualStateProcessor {
             // possession proof) and the `TirStepRun` unit and its answer are payloads an older build cannot decode and
             // skips (A-2), so they are dropped here, first, and charged nothing; the fold refuses them too.
             if kaspa_consensus_core::palw_state_v2::palw_object_is_tir_shard_v1(&object) && !self.palw_tir_shard_at(point.daa_score) {
-                info!("Block {block}: a layer-sharded-panel object was dropped by name below palw_tir_shard_v1, and the block stands (RFC-0006)");
+                info!(
+                    "Block {block}: a layer-sharded-panel object was dropped by name below palw_tir_shard_v1, and the block stands (RFC-0006)"
+                );
+                continue;
+            }
+            if self.palw_model_immutable_v1_at(point.daa_score)
+                && let Some(name) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_model_definition_update_v1(&object)
+            {
+                info!("Block {block}: {name} refused by immutable model registration (ADR-0175); the block stands");
                 continue;
             }
             // **RFC-0004 §6.3: an IR close carrying a composite artifact's sub-root openings** (the
@@ -8470,6 +8481,7 @@ impl VirtualStateProcessor {
                         self.palw_da_court_at(point.daa_score),
                         &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                             own_attempt_class,
+                            model_classes_registered_in_block: model_classes_registered_in_block.clone(),
                             ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
                         },
                     ) {
@@ -8621,6 +8633,7 @@ impl VirtualStateProcessor {
                             self.palw_da_court_at(point.daa_score),
                             &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 own_attempt_class,
+                                model_classes_registered_in_block: model_classes_registered_in_block.clone(),
                                 ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
                             },
                         )
@@ -8638,7 +8651,10 @@ impl VirtualStateProcessor {
                             self.palw_capability_bound_at(point.daa_score),
                             self.palw_uncertified_weightless_at(point.daa_score),
                             self.palw_da_court_at(point.daa_score),
-                            &self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object)),
+                            &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+                                model_classes_registered_in_block: model_classes_registered_in_block.clone(),
+                                ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
+                            },
                         )
                         .map(|(next, _)| next)
                     };
@@ -8702,6 +8718,16 @@ impl VirtualStateProcessor {
                                     Err(err) => {
                                         warn!("[palw-class-carriage] class {class_id}'s carriage does not re-serialize: {err}")
                                     }
+                                }
+                            }
+                            if self.palw_model_immutable_v1_at(point.daa_score) {
+                                use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+                                if let Obj::ClassRegistered { class_id, .. }
+                                | Obj::ClassRegisteredTirV1 { class_id, .. }
+                                | Obj::ClassRegisteredGenV1 { class_id, .. } = &object
+                                    && state.class(class_id).is_none()
+                                {
+                                    model_classes_registered_in_block.insert(*class_id);
                                 }
                             }
                             accepted.push(object);
@@ -14088,6 +14114,10 @@ impl VirtualStateProcessor {
         self.palw_model_lines.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    pub(super) fn palw_model_immutable_v1_at(&self, daa_score: u64) -> bool {
+        self.palw_model_immutable_v1.is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0095 §4.11 as corrected, resolved at the BLOCK's own DAA like every other fence.
     pub(super) fn palw_model_benefits_active_at(&self, daa_score: u64) -> bool {
         self.palw_model_benefits.is_some_and(|fence| fence.is_active(daa_score))
@@ -14667,6 +14697,8 @@ impl VirtualStateProcessor {
             merged_reds: Default::default(),
             audit_1004_draw_seed_source: None,
             model_lines_active: self.palw_model_lines_active_at(daa_score),
+            model_immutable_active: self.palw_model_immutable_v1_at(daa_score),
+            model_classes_registered_in_block: Default::default(),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),
             // Written explicitly like the fences below it: this one decides what every move pays.

@@ -773,6 +773,24 @@ pub fn palw_bond_registration_binds_its_carrier_v2(tx: &Transaction, object: &Pa
     Ok(())
 }
 
+/// ADR-0175: recognized historical objects that would mutate an existing model definition.
+/// Keep their wire tags and shape checks. Acceptance and the pure fold ask this same policy
+/// before rent, signatures or state writes once the independent immutable fence is active.
+pub fn palw_model_definition_update_v1(object: &PalwConsensusObjectV2) -> Option<&'static str> {
+    match object {
+        PalwConsensusObjectV2::ModelVersionPublished { .. } => Some("ModelVersionPublished"),
+        PalwConsensusObjectV2::ModelVersionPromoted { .. } => Some("ModelVersionPromoted"),
+        PalwConsensusObjectV2::ModelVersionWithdrawn { .. } => Some("ModelVersionWithdrawn"),
+        PalwConsensusObjectV2::LineageHeadRolledBack { .. } => Some("LineageHeadRolledBack"),
+        PalwConsensusObjectV2::ModelLineBenefitsDeclared { tiers, .. }
+            if tiers.iter().any(|t| t.grants & crate::palw_model_benefits_v1::grant::EARLY_VERSION != 0) =>
+        {
+            Some("EARLY_VERSION")
+        }
+        _ => None,
+    }
+}
+
 /// **The bond key a registrant can actually SIGN.**
 ///
 /// A carried registration names its collateral output by index with a zero transaction id, because
