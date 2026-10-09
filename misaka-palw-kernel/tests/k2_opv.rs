@@ -1274,7 +1274,15 @@ fn past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists
     // replaces at its own position (ECON F-ECON-1/2, fix S1): SQUATTER's seal at 20 stays in the read, forfeited at 30.
     w.block(20, vec![T::SealClaim { producer: SQUATTER, job: job.id(), seal: withheld(1) }]);
     w.block(25, vec![T::SealClaim { producer: HONEST, job: job.id(), seal: withheld(2) }]);
-    w.block(30, vec![T::SealClaim { producer: SQUATTER, job: job.id(), seal: withheld(3) }]);
+    let d = w.l.policy.seal_deposit;
+    let (collateral, reserved, burned) = (w.l.bonds[&SQUATTER].collateral, w.l.bonds[&SQUATTER].reserved, w.l.burned);
+    let ev = w.block(30, vec![T::SealClaim { producer: SQUATTER, job: job.id(), seal: withheld(3) }]);
+    assert!(ev.contains(&E::SealForfeited { job: job.id(), producer: SQUATTER, forfeited: d }), "{ev:?}");
+    // Conservation: the replaced seal's deposit is collected from SQUATTER's bond and burned (the shared `Consumer` checks the bond
+    // book against the ledger after every block); the new seal is bonded afresh, so one deposit stays reserved.
+    assert_eq!(w.l.bonds[&SQUATTER].collateral, collateral - d, "the replaced seal's deposit is collected");
+    assert_eq!(w.l.burned - burned, d, "and burned");
+    assert_eq!(w.l.bonds[&SQUATTER].reserved, reserved, "one live deposit, bonded afresh");
     let read = w.l.claim_beacon_seals_v1();
     assert_eq!(
         read.iter().map(|s| (s.producer, s.sealed_daa, s.seal, s.forfeited_daa)).collect::<Vec<_>>(),
