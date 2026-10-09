@@ -1,5 +1,11 @@
 # ADR-0088 — the class keeps its graph; a line keeps its owner, and the owner keeps publishing
 
+## 2026-10-09 現行決定 — 登録内容は永久不変
+
+[ADR-0175](0175-registered-models-are-permanently-immutable.md)により、**新規登録は自由、既存登録の更新・上書き・置換は禁止**とする。V1→V2→V3を同じlineで発行する設計を廃止する。`ModelVersionPublished`（previewを含む）、`ModelVersionPromoted`、`ModelVersionWithdrawn`はwire tagとfence前の履歴処理を残し、独立した`palw_model_immutable_v1`以降は拒否する。新しいweights・tokenizer・実行/kernel/verification bindingは新しい独立登録にする。classのgraph IDと固定rootを含むmodel registration ID（`line_id`）を分け、同一graph上の別weightsにも別のPosition/AMMを作る。
+
+運用上のowner/developer/maintainer変更、利用量、retirement・報酬資格はモデルの内容を変更しない。元の登録のroot、versionと識別情報を移動させない。新規則のfenceは全presetで休眠し、以下の旧決定・実装記録はfence前の互換仕様として保持する。「owner keeps publishing」「new weights are a new version」「market stays」は新規則の権限ではない。
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **Status:** PROPOSED 2026-09-05, **revised the same day** — design only (no implementation yet).

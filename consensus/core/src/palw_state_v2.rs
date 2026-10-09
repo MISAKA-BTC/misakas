@@ -10333,6 +10333,8 @@ pub enum PalwStateV2Error {
     /// ADR-0095 §4.2/§4.1: the declaration's own shape (N5, N6).
     #[error("the benefits declaration for line {0} is not well formed: {1:?}")]
     ModelBenefitsRejected(Hash64, crate::palw_model_benefits_v1::PalwModelBenefitRejectV1),
+    #[error("immutable model registration rejects {0}; register an independent model (ADR-0175)")]
+    ImmutableModelUpdate(&'static str),
     #[error("version {1} of line {0} is current and cannot be withdrawn, only succeeded")]
     ModelVersionIsCurrent(Hash64, u32),
     #[error("version {1} of line {0} is not in force")]
@@ -33392,6 +33394,19 @@ fn apply_class_registration_v1(
         held,
         work,
     } = registration;
+    let immutable_previous = builder.extras.model_immutable_active.then(|| builder.state.classes.get(class_id).cloned()).flatten();
+    if let Some(previous) = &immutable_previous {
+        // Dormancy recovery may change eligibility/collateral, never the registered definition
+        // or its original attribution. The old common path below still handles the reservation.
+        if previous.artifact_root != *artifact_root
+            || previous.pwu_rule != *pwu_rule
+            || previous.slash_value_per_pwu != *slash_value_per_pwu
+            || previous.fused_attention != fused_attention
+            || previous.registrant_bond != registrant.filter(|b| *b != palw_genesis_registrant_bond_v1())
+        {
+            return Err(PalwStateV2Error::ImmutableModelUpdate("class re-registration with a changed definition"));
+        }
+    }
     // **ADR-0056 Decision 5: a Dormant class is the one id that may be registered twice.**
     //
     // It was reclaimed for producing nothing, not convicted of anything, so the way back is
@@ -33679,7 +33694,7 @@ fn apply_class_registration_v1(
             } else {
                 PalwClassStatusV2::Active
             },
-            registered_daa: ctx.daa_score,
+            registered_daa: immutable_previous.as_ref().map_or(ctx.daa_score, |c| c.registered_daa),
             // ADR-0056 Decision 3: whose bond paid for this to exist. The carriage is the
             // post-genesis form and names its registrant; a genesis registration has none,
             // and pays nothing, because the network itself decided it — and since ADR-0082
@@ -33773,6 +33788,23 @@ fn apply_object(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
+    if builder.extras.model_immutable_active {
+        if let Some(object) = crate::palw_lifecycle_objects_v2::palw_model_definition_update_v1(object) {
+            return Err(PalwStateV2Error::ImmutableModelUpdate(object));
+        }
+        // The verification plan is part of the registration block's fixed definition. A plan
+        // may be supplied with a NEW class in that block, never attached to an older class.
+        if let PalwConsensusObjectV2::ClassShardPlanDeclared { class_id, .. }
+        | PalwConsensusObjectV2::TirShardPlanDeclared { class_id, .. } = object
+            && !builder.extras.model_classes_registered_in_block.contains(class_id)
+            && !builder.entries.iter().any(|entry| {
+                matches!(entry,
+                PalwDeltaEntryV2::Class { key, old: None, new: Some(_) } if key == class_id)
+            })
+        {
+            return Err(PalwStateV2Error::ImmutableModelUpdate("verification plan binding"));
+        }
+    }
     // **ADR-0152 Q-1: `Sampled` is R-core+'s verdict.** Below `Params::palw_rcore_plus` an object
     // carrying one is refused by name, before any arm reads it — the acceptance layer refuses it
     // first — so the fold's behaviour on every other network is exactly what it was.
@@ -37717,6 +37749,12 @@ pub struct PalwTransitionExtrasV1 {
     /// `Params::palw_model_lines` resolved at the block's DAA (ADR-0088 Decision 11). Below it
     /// the ten registry objects are refused and no claim is attributed.
     pub model_lines_active: bool,
+    /// ADR-0175: resolved independently at the accepting block, false for historical replay.
+    pub model_immutable_active: bool,
+    /// Accepted NEW classes earlier in this block, supplied only for a one-object rehearsal.
+    /// The full block fold proves creation from its own Class delta. DAA alone is insufficient:
+    /// different blocks may have equal DAA scores.
+    pub model_classes_registered_in_block: std::collections::BTreeSet<Hash64>,
     /// `Params::palw_model_benefits` resolved at the block's DAA (ADR-0095 §4.11 as corrected).
     /// Below it a declaration is refused, no tenure clock is written, and §4.4's two refusals never
     /// fire — so a chain that has not armed it keeps exactly the state root it had.
@@ -38702,7 +38740,7 @@ fn apply_model_line_founded(
         return Err(PalwStateV2Error::ModelLineNameLength(name.len(), PALW_MODEL_LINE_NAME_MAX_BYTES));
     }
     builder.require_active_bond(founder)?;
-    let line_id = model_line_id_v1(class_id, founder, name);
+    let line_id = model_line_id_at_v1(class_id, root, founder, name, builder.extras.model_immutable_active);
     if builder.state.model_lines.contains_key(&line_id) {
         return Err(PalwStateV2Error::ModelLineExists(line_id));
     }
@@ -68454,6 +68492,7 @@ pub(crate) mod tests {
             let body = &body[..body.find("\n    }\n").expect("the builder's end")];
             for field in [
                 "model_lines_active: self.palw_model_lines_active_at(daa_score)",
+                "model_immutable_active: self.palw_model_immutable_v1_at(daa_score)",
                 "model_benefits_active: self.palw_model_benefits_active_at(daa_score)",
                 "evm_market_active: self.palw_model_evm_active_at(daa_score)",
                 "model_leg_v2_active: self.palw_model_leg_v2_active_at(daa_score)",
@@ -68765,6 +68804,191 @@ pub(crate) mod tests {
             // A stranger holds nothing, and is told so at the same height.
             let stranger = PalwModelPositionsReadV1::at_tip(&s5, &h64(0xB0_0002));
             assert_eq!((stranger.tip_daa, stranger.rows.len()), (330, 0));
+        }
+    }
+
+    mod immutable_models {
+        use super::*;
+        use crate::palw_model_lines_v1::*;
+
+        fn extras() -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 {
+                model_lines_active: true,
+                model_immutable_active: true,
+                model_benefits_active: true,
+                artifact_root_ownership_active: true,
+                ..Default::default()
+            }
+        }
+        fn fold(
+            s: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            objects: &[PalwConsensusObjectV2],
+        ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+            let last = s.last_point.as_ref().unwrap();
+            let next = ctx(last.blue_score + 1, last.daa_score + 1, last.blue_score + 1);
+            apply_palw_transition_v2_with_extras(s, p, &next, objects, None, false, false, false, false, &extras())
+        }
+
+        #[test]
+        fn immutable_models_freeze_legacy_versions_and_preserve_history_and_undo() {
+            let (p, s, class) = super::model_lines::owned_class_chain();
+            let old_extras = PalwTransitionExtrasV1 { model_lines_active: true, ..Default::default() };
+            let (legacy, _) = apply_palw_transition_v2_with_extras(
+                &s,
+                &p,
+                &ctx(3, 251, 3),
+                &[super::model_lines::publish(class, 2, h64(0xb2), false)],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &old_extras,
+            )
+            .unwrap();
+            let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&legacy)).unwrap();
+            for object in [
+                super::model_lines::publish(class, 3, h64(0xc3), true),
+                PalwConsensusObjectV2::ModelVersionPromoted { line_id: class, version: 1, signature: vec![1] },
+                PalwConsensusObjectV2::ModelVersionWithdrawn { line_id: class, version: 1, signature: vec![1] },
+            ] {
+                assert!(matches!(fold(&legacy, &p, &[object]), Err(PalwStateV2Error::ImmutableModelUpdate(_))));
+            }
+            assert_eq!(
+                borsh::to_vec(&PalwStateCarriageV2::from_state(&legacy)).unwrap(),
+                bytes,
+                "refused operations do not write history"
+            );
+            let (frozen, delta) = fold(&legacy, &p, &[]).unwrap();
+            assert_eq!(frozen.model_line_or_founding(&class).unwrap().current, 2);
+            assert_eq!(frozen.model_version(&class, 2).unwrap().root, h64(0xb2));
+            assert_eq!(frozen.model_version(&class, 1), legacy.model_version(&class, 1));
+            let reverted = revert_delta_v2(&frozen, &delta, &p).unwrap();
+            assert_eq!(reverted, legacy, "a reorg across the fence restores the historical state");
+        }
+
+        #[test]
+        fn immutable_models_register_different_weights_on_one_graph_without_moving_the_market() {
+            let (p, mut s, class) = super::model_lines::owned_class_chain();
+            // Start with a real seeded curve and a quoted purchase, not empty market maps.
+            use crate::palw_model_market_v1::{PalwModelMarketV1, palw_model_buy_quote_v1};
+            let market = PalwModelMarketV1::seed_v1(250, 100_000 * 100_000_000, h64(77));
+            let quote = palw_model_buy_quote_v1(&market, 10 * 100_000_000).unwrap();
+            s.model_markets.insert(class, quote.after);
+            s.model_positions.insert((class, h64(77)), quote.units_out);
+            s.assert_internal_consistency(&p).unwrap();
+            let mut ids = Vec::new();
+            for root in [h64(0xb2), h64(0xc3)] {
+                let id = model_registration_id_v1(&class, &root, &bond_key(2), b"improved");
+                assert_ne!(id, class);
+                let object = PalwConsensusObjectV2::ModelLineFounded {
+                    class_id: class,
+                    root,
+                    founder: bond_key(2),
+                    name: b"improved".to_vec(),
+                    signature: vec![1],
+                };
+                let (next, delta) = fold(&s, &p, &[object.clone()]).unwrap();
+                assert_eq!(next.model_line_or_founding(&id).unwrap().current, 1);
+                assert_eq!(next.model_version(&id, 1).unwrap().root, root);
+                assert_eq!(next.model_line_or_founding(&class), s.model_line_or_founding(&class));
+                assert_eq!(next.model_markets, s.model_markets, "registration never migrates a reserve");
+                assert_eq!(next.model_positions, s.model_positions, "registration never retargets a Position");
+                assert_eq!(revert_delta_v2(&next, &delta, &p).unwrap(), s);
+                assert!(matches!(fold(&next, &p, &[object]), Err(PalwStateV2Error::ModelLineExists(_))));
+                s = next;
+                ids.push(id);
+            }
+            assert_ne!(ids[0], ids[1], "same graph, founder and name; independent roots and model IDs");
+            s.assert_internal_consistency(&p).unwrap();
+        }
+
+        #[test]
+        fn immutable_models_allow_dormancy_recovery_without_rewriting_the_definition() {
+            let (p, mut s, class) = super::model_lines::owned_class_chain();
+            let old = s.classes.get(&class).unwrap().clone();
+            s.classes.get_mut(&class).unwrap().status = PalwClassStatusV2::Dormant { since_daa: 250 };
+            s.registration_exposure.remove(&bond_key(1));
+            s.class_shares.remove(&class);
+            s.class_shares.insert(p.base_class_id(), 1000);
+            let e = extras();
+            let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &e);
+            let mut changed = registration(class, 0, Some(bond_key(1)));
+            if let PalwConsensusObjectV2::ClassRegistered { artifact_root, slash_value_per_pwu, .. } = &mut changed {
+                *slash_value_per_pwu = old.slash_value_per_pwu;
+                *artifact_root = h64(0xff);
+            }
+            assert!(matches!(apply_object(&mut b, &ctx(3, 251, 3), &changed), Err(PalwStateV2Error::ImmutableModelUpdate(_))));
+            let mut same = changed;
+            if let PalwConsensusObjectV2::ClassRegistered { artifact_root, .. } = &mut same {
+                *artifact_root = old.artifact_root;
+            }
+            apply_object(&mut b, &ctx(3, 251, 3), &same).unwrap();
+            let recovered = b.state.class(&class).unwrap();
+            assert_eq!(recovered.artifact_root, old.artifact_root);
+            assert_eq!(recovered.registered_daa, old.registered_daa);
+            assert_eq!(recovered.registrant_bond, old.registrant_bond);
+            assert!(!matches!(recovered.status, PalwClassStatusV2::Dormant { .. }));
+        }
+
+        #[test]
+        fn immutable_models_pin_shard_plans_to_the_registration_block_not_its_daa_score() {
+            let (p, s, _) = super::model_lines::owned_class_chain();
+            let class = h64(3);
+            let mut registration = registration(class, 0, Some(bond_key(2)));
+            if let PalwConsensusObjectV2::ClassRegistered { slash_value_per_pwu, .. } = &mut registration {
+                *slash_value_per_pwu = 5;
+            }
+            let plan = PalwConsensusObjectV2::ClassShardPlanDeclared { class_id: class, shard_count: 2, signature: vec![1] };
+            let e = PalwTransitionExtrasV1 {
+                shard_licensing: Some(crate::palw_shard_licensing_v1::PalwShardLicensingParamsV1 {
+                    seats_per_shard: 3,
+                    quorum_per_shard: 2,
+                }),
+                ..extras()
+            };
+            let point = ctx(3, 251, 3);
+            let mut same_block = TransitionBuilder::new(&s, &p, false, false, false, false, &e);
+            apply_object(&mut same_block, &point, &registration).unwrap();
+            let after_registration = same_block.state.clone();
+            apply_object(&mut same_block, &point, &plan).unwrap();
+            assert_eq!(same_block.state.class_shard_plans.get(&class).unwrap().shard_count, 2);
+            let mut later = TransitionBuilder::new(&after_registration, &p, false, false, false, false, &e);
+            assert!(matches!(apply_object(&mut later, &ctx(4, 251, 4), &plan), Err(PalwStateV2Error::ImmutableModelUpdate(_))));
+            let mut rehearsal_extras = e.clone();
+            rehearsal_extras.model_classes_registered_in_block.insert(class);
+            let mut rehearsal = TransitionBuilder::new(&after_registration, &p, false, false, false, false, &rehearsal_extras);
+            apply_object(&mut rehearsal, &point, &plan).unwrap();
+            assert_eq!(rehearsal.state.class_shard_plans, same_block.state.class_shard_plans);
+        }
+
+        #[test]
+        fn immutable_models_refuse_new_version_entitlements_and_late_plan_binding() {
+            use crate::palw_model_benefits_v1::{PalwModelBenefitTierV1, grant};
+            let (p, s, class) = super::model_lines::owned_class_chain();
+            let mut card = PalwConsensusObjectV2::ModelLineBenefitsDeclared {
+                line_id: class,
+                tiers: vec![PalwModelBenefitTierV1 {
+                    min_units: 1,
+                    grants: grant::EARLY_VERSION,
+                    lead_daa: 5,
+                    min_hold_daa: 0,
+                    note: Vec::new(),
+                }],
+                cadence_daa: 0,
+                expires_daa: 0,
+                signature: vec![1],
+            };
+            assert!(matches!(fold(&s, &p, &[card.clone()]), Err(PalwStateV2Error::ImmutableModelUpdate("EARLY_VERSION"))));
+            if let PalwConsensusObjectV2::ModelLineBenefitsDeclared { tiers, .. } = &mut card {
+                tiers[0].grants = grant::PRIVATE_BETA | grant::SUPPORT;
+                tiers[0].lead_daa = 0;
+            }
+            let (served, _) = fold(&s, &p, &[card]).unwrap();
+            assert_eq!(served.model_version(&class, 1), s.model_version(&class, 1));
+            let plan = PalwConsensusObjectV2::ClassShardPlanDeclared { class_id: class, shard_count: 2, signature: vec![1] };
+            assert!(matches!(fold(&served, &p, &[plan]), Err(PalwStateV2Error::ImmutableModelUpdate("verification plan binding"))));
         }
     }
 
@@ -69950,6 +70174,8 @@ pub(crate) mod tests {
                 work_target: None,
                 work_target_active: false,
                 artifact_root_ownership_active: false,
+                model_immutable_active: false,
+                model_classes_registered_in_block: Default::default(),
                 operator_id_unique_active: false,
                 canonical_work_daa: None,
                 admission_independence_daa: None,
@@ -70207,6 +70433,8 @@ pub(crate) mod tests {
                 work_target: None,
                 work_target_active: false,
                 artifact_root_ownership_active: false,
+                model_immutable_active: false,
+                model_classes_registered_in_block: Default::default(),
                 operator_id_unique_active: false,
                 canonical_work_daa: None,
                 admission_independence_daa: None,

@@ -2408,6 +2408,10 @@ pub struct Params {
     /// founding line exists and its developer publishes. Independent of `palw_model_market`.
     /// The fingerprint moves only where this is set. Read through `palw_model_lines_fence` only.
     pub palw_model_lines: Option<ForkActivation>,
+    /// ADR-0175: independent immutable-model registration fence. Absent on shipped networks.
+    /// Past it model content, identity and verification bindings cannot be replaced; evaluation
+    /// may select a separately registered candidate but cannot move an existing lineage head.
+    pub palw_model_immutable_v1: Option<ForkActivation>,
     /// **ADR-0095 §4.11 as corrected: the membership needs its OWN fence.**
     ///
     /// The first draft put it under `palw_model_lines`, which is wrong on any chain where the
@@ -4159,6 +4163,7 @@ impl Params {
         self.validate_palw_useful_work_v1()?;
         // **RFC-0004: the improvement fence's own refusals** (`crate::palw_improve_v1`).
         self.validate_palw_improvement_v1()?;
+        self.validate_palw_model_immutable_v1()?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
         self.validate_palw_held_close_chunks_v1()?;
         // **RFC-0007 Part I: the verification vertex's refusals** (`crate::palw_vertex_v1`).
@@ -6355,6 +6360,9 @@ impl Params {
         if self.palw_model_virtual_v1 == Some(ForkActivation::never()) {
             self.palw_model_virtual_v1 = None;
         }
+        if self.palw_model_immutable_v1 == Some(ForkActivation::never()) {
+            self.palw_model_immutable_v1 = None;
+        }
         if self.palw_model_lines == Some(ForkActivation::never()) {
             self.palw_model_lines = None;
         }
@@ -8305,6 +8313,32 @@ impl Params {
         }
     }
 
+    pub fn palw_model_immutable_v1_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_model_immutable_v1) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn palw_model_immutable_v1_active_at(&self, daa_score: u64) -> bool {
+        self.palw_model_immutable_v1_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// Registration IDs and root attribution must already exist when definitions become fixed.
+    pub fn validate_palw_model_immutable_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_state_v2::PalwStateV2Error::InvalidParams;
+        let Some(fence) = self.palw_model_immutable_v1.filter(|f| *f != ForkActivation::never()) else { return Ok(()) };
+        if self.palw_model_immutable_v1_fence().is_none() {
+            return Err(InvalidParams("palw_model_immutable_v1 requires ConsensusV2"));
+        }
+        for dependency in [self.palw_model_lines_fence(), self.palw_artifact_root_ownership] {
+            if !dependency.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score()) {
+                return Err(InvalidParams("palw_model_immutable_v1 requires model lines and artifact root ownership at or below it"));
+            }
+        }
+        Ok(())
+    }
+
     /// ADR-0095's fence, with the mode condition and the registry dependency folded in. A
     /// membership over a registry that does not exist is meaningless, so this is `Some` only where
     /// the registry is armed too — the ONE place ADR-0095 is decided.
@@ -10121,6 +10155,7 @@ impl Params {
             palw_fp_ruleset_caps,
             palw_model_market,
             palw_model_lines,
+            palw_model_immutable_v1,
             palw_model_benefits,
             palw_model_leg_v2,
             palw_model_seed_v2,
@@ -10388,6 +10423,7 @@ impl Params {
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
             ("palw_model_market", *palw_model_market),
             ("palw_model_lines", *palw_model_lines),
+            ("palw_model_immutable_v1", *palw_model_immutable_v1),
             ("palw_model_benefits", *palw_model_benefits),
             ("palw_model_leg_v2", *palw_model_leg_v2),
             ("palw_model_seed_v2", *palw_model_seed_v2),
@@ -11347,6 +11383,7 @@ impl Params {
             palw_court_ladder,
             palw_model_market,
             palw_model_lines,
+            palw_model_immutable_v1,
             palw_model_benefits,
             palw_model_leg_v2,
             palw_model_seed_v2,
@@ -11907,6 +11944,13 @@ impl Params {
             }
         }
         // ADR-0088 Decision 11. A pure fence with no payload, the same shape.
+        match palw_model_immutable_v1.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
         match palw_model_lines.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
@@ -12624,6 +12668,7 @@ impl Params {
             palw_court_ladder,
             palw_model_market,
             palw_model_lines,
+            palw_model_immutable_v1,
             palw_model_benefits,
             palw_model_leg_v2,
             palw_model_seed_v2,
@@ -13254,6 +13299,10 @@ impl Params {
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0088 Decision 11: the same contract.
+        if let Some(activation) = palw_model_immutable_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_model_immutable_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         if let Some(activation) = palw_model_lines {
             h.write(b"palw_model_lines");
             h.write(activation.daa_score().to_le_bytes());
@@ -14210,6 +14259,7 @@ impl Params {
             palw_court_ladder: self.palw_court_ladder,
             palw_model_market: self.palw_model_market,
             palw_model_lines: self.palw_model_lines,
+            palw_model_immutable_v1: self.palw_model_immutable_v1,
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
             palw_model_seed_v2: self.palw_model_seed_v2,
@@ -15306,6 +15356,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_ladder: None,
     palw_model_market: None,
     palw_model_lines: None,
+    palw_model_immutable_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
@@ -15594,6 +15645,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_ladder: None,
     palw_model_market: None,
     palw_model_lines: None,
+    palw_model_immutable_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
@@ -15864,6 +15916,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_ladder: None,
     palw_model_market: None,
     palw_model_lines: None,
+    palw_model_immutable_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
@@ -23376,6 +23429,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_ladder: None,
     palw_model_market: None,
     palw_model_lines: None,
+    palw_model_immutable_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
@@ -27193,6 +27247,28 @@ mod consensus_params_id_tests {
             t11.dns_params.as_ref().map(|d| (d.min_active_validators, d.min_bond_amount_sompi)),
             Some((1, 10 * SOMPI_PER_KASPA))
         );
+    }
+
+    #[test]
+    fn immutable_models_have_an_independent_dormant_fence_and_commit_scheduled_rules() {
+        for p in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params(), palw_t12_shipped_params()] {
+            assert!(p.palw_model_immutable_v1.is_none());
+            assert!(!p.palw_model_immutable_v1_active_at(u64::MAX));
+            let mut future = p.clone();
+            future.palw_model_immutable_v1 = Some(ForkActivation::new(9_000_000));
+            assert_eq!(p.consensus_identity_id(), future.consensus_identity_id());
+            assert_ne!(p.consensus_params_id(), future.consensus_params_id());
+            let mut never = p.clone();
+            never.palw_model_immutable_v1 = Some(ForkActivation::never());
+            assert_eq!(p.consensus_params_id(), never.consensus_params_id());
+        }
+        let mut p = palw_t12_shipped_params();
+        p.palw_model_immutable_v1 = Some(ForkActivation::new(9_000_000));
+        p.validate_palw_model_immutable_v1().unwrap();
+        assert!(!p.palw_model_immutable_v1_active_at(8_999_999));
+        assert!(p.palw_model_immutable_v1_active_at(9_000_000));
+        p.palw_artifact_root_ownership = None;
+        assert!(p.validate_palw_model_immutable_v1().is_err());
     }
 
     /// **ADR-0088 Decision 11's fence has the same contract as ADR-0087's** and is independent of it.

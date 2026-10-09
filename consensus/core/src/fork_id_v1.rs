@@ -872,6 +872,7 @@ mod tests {
             "palw_fp_ruleset_caps" => params.palw_fp_ruleset_caps = Some(at),
             "palw_model_market" => params.palw_model_market = Some(at),
             "palw_model_lines" => params.palw_model_lines = Some(at),
+            "palw_model_immutable_v1" => params.palw_model_immutable_v1 = Some(at),
             "palw_model_benefits" => params.palw_model_benefits = Some(at),
             "palw_model_leg_v2" => params.palw_model_leg_v2 = Some(at),
             "palw_model_seed_v2" => params.palw_model_seed_v2 = Some(at),

@@ -1,5 +1,11 @@
 # RFC-0011: Permissionless model onboarding with probabilistic constraint verification and court on dispute
 
+## 2026-10-09 改定 — 登録IDとモデル内容の永久不変binding
+
+[ADR-0175](../adr/0175-registered-models-are-permanently-immutable.md)を適用する。permissionlessな新規登録は継続し、weights、graph、tokenizer、実行仕様、canonical artifact root、kernel/verification planを登録IDに固定する。登録後の更新要求、同一登録へのV2/V3、overwrite、head置換を拒否する。改善版・異なる実行仕様は新規IDと独立した検証・報酬資格を持つ。計算graphの識別とmodel registration IDを混同しない。既存class/hash/wire IDは再採番せず、追加modelの登録IDにrootを含める。
+
+新kernel・planの有効化は新登録のadmissionを可能にするもので、既存モデルのbindingを置換しない。実際のbeacon、challenge transcript、conformance証拠、利用量や報酬資格は運用・証拠状態であり、固定された承認bindingを変更しない。登録の自由と配布・rewardabilityの要件は分離する。
+
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
 

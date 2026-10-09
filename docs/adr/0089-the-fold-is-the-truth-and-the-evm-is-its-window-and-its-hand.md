@@ -1,5 +1,9 @@
 # ADR-0089 — the fold is the truth; the EVM is its window and its hand
 
+## 2026-10-09 改定 — Positionと市場の対象を固定する
+
+[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。市場の`line_id`は固定されたmodel registration IDであり、Position、reserve、seed、reward buybackとEVMの参照先を改善版へ付け替えない。改善版は自身の登録・検証責任・報酬資格・独立AMMを持つ。既存市場の残高、価格、virtual reserveや実reserveを新登録へ継承・自動移動させない。新規登録が他モデルの市場を変更してはならない。以下に残るversion移行への期待は旧設計の記録であり、新規則では権利を与えない。
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 > **Amended a third time (2026-10-01, implemented the same day behind the dormant fence `palw_model_virtual_v1`).** [0162](0162-the-pair-opens-on-a-virtual-reserve.md): past the fence the AMM window's `market()` answers a twelfth word (the row's own virtual reserve), `constants()`' third word is the virtual reserve again, `quoteSell`'s first word is the gross MSK out, and the writer reverts a seed after the market's first trade (`SeedAfterTrade()`) and a buy of a line whose class does not trade (`ClassNotEligible()`); a seed before the class's approval is taken.

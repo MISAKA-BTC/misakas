@@ -1,5 +1,11 @@
 # ADR-0095 — A position is a membership, not an income
 
+## 2026-10-09 改定 — 固定モデルに対するmembership
+
+[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。Positionは買った登録モデルから動かない。`EARLY_VERSION`のwire bitは履歴に保持するが、新しい不変規則下のbenefit宣言では拒否する。同一登録へのpreview発行や将来versionの先行取得を約束できない。改善版は別登録であり、既存Positionから自動的に権利を継承しない。
+
+`PRIVATE_BETA`は当該登録の固定artifact・同じ実行仕様のprivateサービスへのアクセスとして用いる。priority、quota、support、developer roomもそのモデルの運用サービスである。異なるquantization・weights・実行仕様をexperimental serviceの名で既存登録に付け替えない。旧lead/promotion/cadence規則は履歴再現用に保持し、新規則でversion操作を再開する根拠にはしない。
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 * Status: PROPOSED 2026-09-07

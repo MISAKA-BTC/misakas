@@ -1,5 +1,11 @@
 # RFC-0014 — Panel多数派に依存しないPALW fraud prosecution: 1人の正直なverifierから有界の客観証拠へ
 
+## 2026-10-09 登録不変性との整合
+
+[ADR-0175](../adr/0175-registered-models-are-permanently-immutable.md)を適用する。MISAKA Torrentは登録済みモデルのweights・tokenizer・実行仕様・canonical artifact rootを変更する権限を持たない。Seeder、tracker/配布先、providerのavailability lease、同じ内容の配布包装・取得経路は別状態として更新できる。新しいtransport bindingが必要な場合も、同じ固定model ID/rootへの対応を再検証し、違う内容なら別モデルとして登録する。
+
+「新しいmodel/version」は独立した新モデルの登録を意味し、同じ登録IDへのversion追加・line/head置換を意味しない。配布不能による当該モデルのrewardability停止・回復、担保やslashは内容変更ではない。既存Position・AMMは改善版へ移動しない。§16の公開可用性・責任分離・活性の要求と、この永久不変bindingをそれぞれ検証する。
+
 **トークンの表示名は Misaka、ticker は BILI。** `misaka` 系アドレスプレフィックスと既存のprotocol/CLI/API識別子は維持する（[ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)）。
 
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。

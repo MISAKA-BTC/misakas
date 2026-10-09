@@ -1,5 +1,19 @@
 # RFC-0004: PALW Model Improvement Protocol — self-improvement and distillation over PALW-TIR
 
+## 2026-10-09 改定 — 改善結果は独立モデルとして登録する
+
+**新規登録は自由。登録内容は永久不変。モデル改善は新規登録。既存モデルの置換は禁止。** [ADR-0175](../adr/0175-registered-models-are-permanently-immutable.md)を適用する。学習、蒸留、LoRA、dataset処理と評価は続けられるが、勝者を既存lineの次のheadへ反映する方式は新規則で廃止する。評価勝者は独立登録済みのcandidateとして`CandidateSelected`を記録し、そのモデル自身のroot・検証責任・報酬資格・Positionを使う。親のmodel ID、version、root、head、AMMは動かない。親子参照は来歴だけである。
+
+### 実装状態と残作業
+
+| 項目 | 現在の範囲 | 残作業・有効化条件 |
+| --- | --- | --- |
+| RFC0004 モデル改善 | epoch・評価・typed/composite artifact・reward foldの既存実装を保持。新しい不変登録fenceと独立candidate選択を実装。旧Part I/Part IIの「統合済み」を同一line更新の有効化根拠にしない | `palw_improvement_v1`と`palw_model_immutable_v1`はshipped ParamsではNone。明示的な高さ・独立試験・関連gateが必要 |
+| memory line / typed roots | 学習・評価用の独立material。登録済みモデルのweights/rootを差し替える経路ではない | 担保条件は別決定・検証が必要。旧一覧の「利用者判断4d」はmemory materialの独立した運用条件として扱い、担保額は未設定 |
+| kind別の検査費用 | MEASは未取得の実測入力。typed rootやhash登録だけで検査が完了した扱いにしない | kind、サイズ、CPU/GPU、cold/warm取得、公開証拠・exact court、帯域・メモリとdeadlineを実測し、担保・資源上限へ反映する |
+
+以下のpromotion/rollbackと旧予定表は、fence前の設計・実装履歴として保持する。新規則下の実装はspec17の改定節を優先し、自己改善やtyped-rootの休眠経路をこの改定で有効化しない。
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。

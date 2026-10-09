@@ -1,5 +1,11 @@
 # ADR-0143 — An artifact root has one owner on the chain, and competing weights stay permissionless
 
+## 2026-10-09 改定 — 永久不変なrootと独立モデルの一意性
+
+[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。登録したcanonical artifact rootはそのモデルについて永久不変である。同一graphでも異なるweights/rootなら別model registration IDを得られる。`artifact_owners[(class_id, root)]`の一意性と旧class間で同じartifactを利用する規則は維持する。他モデルのrootの奪取、version更新によるroot置換を認めない。運用停止・retirementは登録定義を削除しない。
+
+旧version evictionとroot解放のコードはfence前の履歴互換用である。新規則ではversion発行・withdrawを拒否するため、固定登録のrootをその経路で再利用可能にしない。休眠復帰は同一内容に限り、root ownershipと元の登録日時を維持する。
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **Status:** IMPLEMENTED 2026-09-18, **withdrawn from the 7,100 flag day and REWORKED** after the

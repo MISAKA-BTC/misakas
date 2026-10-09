@@ -8,6 +8,7 @@
 
 | Decision | Authority and scope |
 | --- | --- |
+| [ADR-0175](0175-registered-models-are-permanently-immutable.md) | Accepted 2026-10-09: open new registration, permanently immutable content/identity; improvements register independently, Position/AMM never retarget; independent fence implemented but unarmed. |
 | [ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md) | Accepted token identity: display name Misaka, ticker BILI; address prefixes, chain IDs and compatibility identifiers remain unchanged; historical evidence retains its recorded label. |
 | [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) | Accepted design mandate. Future prosecution/admission/settlement directions that conflict are amended; historical implementation and activation records stay historical. |
 | [RFC-0014](../rfc/0014-panel-independent-fraud-prosecution.md) | Main implementation design and full completion gates; not a claim that these gates already pass. |
