@@ -80,6 +80,8 @@ misaka-palw-base0.workspace = true
 misaka-palw-kernel.workspace = true
 misaka-palw-tir.workspace = true
 misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }
+# Lane K2S (GAP-40): the K2-TIR-v5 node E2E lowers a tiny HF encoder fixture with its weights (dev-only, as the SDK does).
+misaka-palw-tir-lower = { path = "../misaka-palw-tir-lower" }
 # RFC-0015: the E2E decodes the Panel-independent beacon fact (WorkFinalEventV1) the route exports.
 misaka-palw-challenge.workspace = true
 # Onboarding P0: the real-node E2E signs the tag-108 envelope and the tag-109 objects with the SDK's builders and runs the SDK's
