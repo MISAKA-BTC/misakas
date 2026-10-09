@@ -157,6 +157,40 @@ Panel configuration, an outside verifier who found a fault can carry an objectiv
 
 New POLICY items for §3: ADR-0176 `W`, the rho ↔ Q/B/R/F mapping and the cap values; ADR-0177 `f`, its range, the allocation epoch/snapshot and its tie to `W`, and the numeric bar for "publication is overwhelmingly better than closed self-funding" (to be fixed before ECON's evaluation); the activation of `palw_reporter_share_v2` with the single release.
 
+## 3d. G14 completion — the user's top priority (2026-10-10)
+
+The user, 2026-10-10: finish RFC-0015's Panel=0 precondition first. Even if the producer and ALL Panel seats collude, then for
+computation fraud and for job / input / output / state / DA violations covered by an active plan, ONE public bonded verifier outside
+the Panel reaches an objective conviction (or the correct DA default, or the dismissal of an honest claim) from public authenticated
+material only, never the producer's secret state. ADR-0177 makes this conditional on the verifier having the registered model.
+
+The authoritative gap matrix is lane G14C's `docs/design/palw/g14-completion-matrix.md` (branch `g14/completion`, 82a176a77).
+**No reward-bearing plan family meets G14 today.**
+
+Common to every family:
+- no prosecution by a bond registered after genesis (condition 1);
+- no fresh node that prosecutes (condition 2);
+- the RPC leg of the chain path is untested, because ops 210–212 and 231 are never served by a running node (condition 7).
+
+| Owner | Gaps |
+| --- | --- |
+| G14R | GAP-00: carry C4R4's fixes; the salted-seal reorg test; green on `b8ae9412b`. It heads the integration order: G14R + A2U, then OPVB, C4R4, K2S, X8R |
+| G14C | GAP-01..04: one canonical node harness (post-genesis bond, fresh node / IBD / pruned import, RPC, all seats collude, ADR-0177 non-interference); GAP-10 (other K2 lie types); GAP-71b; GAP-50/51 typed roots; GAP-20/21 pipelines |
+| K2S | GAP-32 (merge r4-fixes), GAP-30 (v4 node recovery and lie types), GAP-31 (canonical 8k held), GAP-40 (v5) |
+| DA16 | GAP-05 (artifact availability out of consensus), GAP-06 (claim-specific scope), GAP-52 (snapshot binding) |
+| X8R | GAP-60 (slice DA default on the node), GAP-61 (the real reward gate in place of the test seam), GAP-62 (initial boundary), GAP-63 (merge and rebuild) |
+| OPVB | GAP-71a (public seal read, condition 9), GAP-81 (see below) |
+| MEAS | GAP-07: measured worst-case deadlines (condition 8) |
+
+**Lead decisions (2026-10-10):**
+- **GAP-81.** The new reward gate is per CLAIM verification route. Only claims verified on a G14-complete route pass `palw_reward_gate_v1`. V2-root claims of a kernel-bound class stay on the legacy channel and never earn the new rewards.
+- **GAP-70.** For the release, only the complete conformance check gates rewards. Sampled conformance is a non-reward signal until a digest court exists (DESIGN).
+
+**For the user:**
+- **GAP-80.** The legacy V2 Panel route cannot meet G14: seat-only filers, the three held 8k gaps, `ExecutorRefuted` blocked by an open court, and a garbage trace answers row 0.
+- Under the 10-09 ruling (5), it keeps its old verification and stays separated. It is never Panel=0 and never earns new rewards.
+- The open question is whether it keeps earning at all after the release, given PRINCIPLES §6. Making it meet G14 is XL.
+
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
 Waves, because the Mac (32 GiB, ~40 GB free disk) cannot build a dozen targets at once, and builds are batched (user rule): each lane
