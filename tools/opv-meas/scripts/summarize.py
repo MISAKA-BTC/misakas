@@ -319,6 +319,50 @@ for label, c in classes.items():
         )
     c["samples"] = "none: no claim was verified for this class"
 
+# ── the flat table: one row per (class, claim size) ──────────────────────────────────────────────────────────────────────────
+rate = (q.get("fetch", {}).get("verification_throughput") or {}).get("v", {})
+files_f = q.get("fetch", {}).get("files", {})
+table = []
+
+
+def row(cls_, P, **kw):
+    r = {"class": cls_, "positions": P}
+    r.update(kw)
+    table.append(r)
+
+
+tco = q["t_check_p3_outsider_path"]
+lies = q.get("lies", {})
+filing_sizes = {k: v["filing_object_bytes"] for k, v in lies.items()}
+loc = {"upper_bound_late_s": lies.get("late", {}).get("t_localize_upper_bound_s"), "model_row_recompute_s": q["t_localize_model"]}
+row(Q, 3, path="OutsiderV1::check (authenticates every value, decode relation, check_salted)",
+    t_check_cpu_s=tco["cpu_s"], t_check_wall_s=tco["wall_s_under_load"], peak_rss_bytes=tco["peak_rss_bytes_max"],
+    da_claim_material_bytes=files_f["claim_material_bytes"], da_claim_material_fetch_wall_s=files_f["claim_material_wall_s"],
+    artifact_bytes=files_f["artifact_bytes"], artifact_fetch_wall_s=files_f["artifact_wall_s"], fetch_provider="files (no link)",
+    filing_object_bytes_by_lie=filing_sizes, t_localize=loc,
+    note="the only class run end to end; 5 honest samples, host load 37-220")
+for pt, smp in zip(pts, honest_fresh):
+    ph = phase(smp, "check_salted")
+    row(Q, pt["P"], path="FreshVerifierV1::check_salted only",
+        t_check_cpu_s=m(ph["cpu_s"], "verify --via fresh", load1=smp["load_before"][0]), t_check_wall_s=m(ph["wall_s"], "verify --via fresh"),
+        peak_rss_bytes=m(smp["peak_rss_bytes"], "verify --via fresh"), da_claim_material_bytes=m(smp["da_bytes"], "verify"),
+        da_claim_material_fetch_wall_s=m(phase(smp, "fetch_da")["wall_s"], "verify: files"), artifact_bytes=m(smp["artifact_bytes"], "verify"),
+        artifact_fetch_wall_s=m(phase(smp, "fetch_artifact")["wall_s"], "verify: files") if phase(smp, "fetch_artifact") else None, fetch_provider="files (no link)",
+        filing_object_bytes_by_lie=None, t_localize=None, note="honest claim; relation work only")
+for label, c in classes.items():
+    if label == Q:
+        continue
+    da = c.get("da_p3")
+    tput = rate.get("claim_material_MB_per_cpu_s")
+    row(label, 3, path="not run (reference verifier needs >= 16 B/param of RAM)",
+        t_check_cpu_s=None, t_check_lower_bound_cpu_s=c.get("t_check_lower_bound_cpu_s"), t_check_estimate_cpu_s=c.get("t_check_estimate_p3_cpu_s"),
+        peak_rss_bytes=c.get("why_not_end_to_end"),
+        da_claim_material_bytes=da["claim_public_material_bytes"] if da else None,
+        da_claim_material_fetch_cpu_s=d(da["claim_public_material_bytes"]["v"] / 1e6 / tput, "bytes / the 0.5B class's measured fetch+hash-check MB per CPU-second (a CPU floor; no link)") if da and tput else None,
+        artifact_bytes=c["artifact"]["container_bytes"],
+        artifact_fetch_cpu_s=d(c["artifact"]["container_bytes"]["v"] / 1e6 / tput, "same rate") if tput else None, fetch_provider="not run",
+        filing_object_bytes_by_lie=None, t_localize=None, note="components only: weight pass (M, streaming), public-material bytes (M); the estimate is an assumption")
+
 # ── the clock ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 clock = {
     "s_per_daa_lower_bound": d(DAA_MIN_S, "target_time_per_block of the 2-minute network (rfc-0012-policy-proposal.md): a DAA step needs one heartbeat slot. Used for every DAA conversion (a lower bound makes the DAA budget conservative)"),
@@ -332,6 +376,7 @@ doc = {
     "host": host,
     "clock": clock,
     "unit_costs": unit,
+    "table": table,
     "classes": classes,
     "not_measured": [
         "link bandwidth, latency, loss and provider egress (every fetch here is a local file or the localhost HTTP provider)",

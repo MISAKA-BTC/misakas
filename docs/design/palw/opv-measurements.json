@@ -74,6 +74,483 @@
    "max": 5.760752060077916
   }
  },
+ "table": [
+  {
+   "class": "qwen25-0.5b",
+   "positions": 3,
+   "path": "OutsiderV1::check (authenticates every value, decode relation, check_salted)",
+   "t_check_cpu_s": {
+    "v": 140.417784,
+    "kind": "measured",
+    "src": "verify: honest, files",
+    "n": 5,
+    "min": 138.370807,
+    "max": 154.093836
+   },
+   "t_check_wall_s": {
+    "v": 189.616064083,
+    "kind": "measured",
+    "src": "verify: honest, files; the host was shared",
+    "n": 5,
+    "min": 177.871944542,
+    "max": 291.615718125
+   },
+   "peak_rss_bytes": {
+    "v": 10444423168,
+    "kind": "measured",
+    "src": "verify: max over samples (macOS ru_maxrss: compressed/swapped pages are not counted, so the minimum is lower)",
+    "min": 4626415616
+   },
+   "da_claim_material_bytes": {
+    "v": 178650993,
+    "kind": "measured",
+    "src": "verify"
+   },
+   "da_claim_material_fetch_wall_s": {
+    "v": 0.3534240625,
+    "kind": "measured",
+    "src": "verify: fetch_claim_material_any, every chunk hash-checked against a manifest bound to the claim; provider=files",
+    "n": 16,
+    "min": 0.2878745,
+    "max": 0.982136125
+   },
+   "artifact_bytes": {
+    "v": 660666048,
+    "kind": "measured",
+    "src": "verify"
+   },
+   "artifact_fetch_wall_s": {
+    "v": 1.5037846665,
+    "kind": "measured",
+    "src": "verify: manifest check + every chunk hash-checked; provider=files",
+    "n": 16,
+    "min": 1.135760416,
+    "max": 3.993622583
+   },
+   "fetch_provider": "files (no link)",
+   "filing_object_bytes_by_lie": {
+    "early": {
+     "v": 30468,
+     "kind": "measured",
+     "src": "verify: the FileProof route object, strict-encoded"
+    },
+    "late": {
+     "v": 31492,
+     "kind": "measured",
+     "src": "verify: the FileProof route object, strict-encoded"
+    },
+    "gather": {
+     "v": 272271336,
+     "kind": "measured",
+     "src": "verify: the FileProof route object, strict-encoded"
+    },
+    "elem": {
+     "v": 227,
+     "kind": "measured",
+     "src": "verify: the FileProof route object, strict-encoded"
+    },
+    "decode": {
+     "v": 607896,
+     "kind": "measured",
+     "src": "verify: the FileProof route object, strict-encoded"
+    }
+   },
+   "t_localize": {
+    "upper_bound_late_s": {
+     "v": 23.45581249999998,
+     "kind": "derived",
+     "src": "median check-to-verdict CPU of the lying claim minus the median honest check CPU. The fault is in the LAST position, so detection costs what a pass would; the excess bounds localization + proof assembly from above. The host's run-to-run noise on a 140 s check is +-16 s (the fit residual), so a value inside that band is 'not distinguishable from 0'"
+    },
+    "model_row_recompute_s": {
+     "v": {
+      "logits_row_macs": 136134656,
+      "cpu_s": 2.338424000000001
+     },
+     "kind": "derived",
+     "src": "k x n exact i128 multiply-accumulates of the failing lm_head row x the measured exact_mac_cpu_ns; the lie 'late' is in that row"
+    }
+   },
+   "note": "the only class run end to end; 5 honest samples, host load 37-220"
+  },
+  {
+   "class": "qwen25-0.5b",
+   "positions": 8,
+   "path": "FreshVerifierV1::check_salted only",
+   "t_check_cpu_s": {
+    "v": 250.652554,
+    "kind": "measured",
+    "src": "verify --via fresh",
+    "load1": 80.12939453125
+   },
+   "t_check_wall_s": {
+    "v": 498.772159166,
+    "kind": "measured",
+    "src": "verify --via fresh"
+   },
+   "peak_rss_bytes": {
+    "v": 6879330304,
+    "kind": "measured",
+    "src": "verify --via fresh"
+   },
+   "da_claim_material_bytes": {
+    "v": 477101528,
+    "kind": "measured",
+    "src": "verify"
+   },
+   "da_claim_material_fetch_wall_s": {
+    "v": 0.667341167,
+    "kind": "measured",
+    "src": "verify: files"
+   },
+   "artifact_bytes": {
+    "v": 660666048,
+    "kind": "measured",
+    "src": "verify"
+   },
+   "artifact_fetch_wall_s": {
+    "v": 1.131981208,
+    "kind": "measured",
+    "src": "verify: files"
+   },
+   "fetch_provider": "files (no link)",
+   "filing_object_bytes_by_lie": null,
+   "t_localize": null,
+   "note": "honest claim; relation work only"
+  },
+  {
+   "class": "qwen25-0.5b",
+   "positions": 8,
+   "path": "FreshVerifierV1::check_salted only",
+   "t_check_cpu_s": {
+    "v": 247.142178,
+    "kind": "measured",
+    "src": "verify --via fresh",
+    "load1": 122.66357421875
+   },
+   "t_check_wall_s": {
+    "v": 469.3425335,
+    "kind": "measured",
+    "src": "verify --via fresh"
+   },
+   "peak_rss_bytes": {
+    "v": 10456907776,
+    "kind": "measured",
+    "src": "verify --via fresh"
+   },
+   "da_claim_material_bytes": {
+    "v": 477101528,
+    "kind": "measured",
+    "src": "verify"
+   },
+   "da_claim_material_fetch_wall_s": {
+    "v": 1.056513875,
+    "kind": "measured",
+    "src": "verify: files"
+   },
+   "artifact_bytes": {
+    "v": 660666048,
+    "kind": "measured",
+    "src": "verify"
+   },
+   "artifact_fetch_wall_s": {
+    "v": 1.947644667,
+    "kind": "measured",
+    "src": "verify: files"
+   },
+   "fetch_provider": "files (no link)",
+   "filing_object_bytes_by_lie": null,
+   "t_localize": null,
+   "note": "honest claim; relation work only"
+  },
+  {
+   "class": "qwen25-0.5b",
+   "positions": 16,
+   "path": "FreshVerifierV1::check_salted only",
+   "t_check_cpu_s": {
+    "v": 373.668726,
+    "kind": "measured",
+    "src": "verify --via fresh",
+    "load1": 163.4384765625
+   },
+   "t_check_wall_s": {
+    "v": 663.669109375,
+    "kind": "measured",
+    "src": "verify --via fresh"
+   },
+   "peak_rss_bytes": {
+    "v": 10440179712,
+    "kind": "measured",
+    "src": "verify --via fresh"
+   },
+   "da_claim_material_bytes": {
+    "v": 956439472,
+    "kind": "measured",
+    "src": "verify"
+   },
+   "da_claim_material_fetch_wall_s": {
+    "v": 1.839948667,
+    "kind": "measured",
+    "src": "verify: files"
+   },
+   "artifact_bytes": {
+    "v": 660666048,
+    "kind": "measured",
+    "src": "verify"
+   },
+   "artifact_fetch_wall_s": {
+    "v": 1.617572042,
+    "kind": "measured",
+    "src": "verify: files"
+   },
+   "fetch_provider": "files (no link)",
+   "filing_object_bytes_by_lie": null,
+   "t_localize": null,
+   "note": "honest claim; relation work only"
+  },
+  {
+   "class": "qwen25-0.5b",
+   "positions": 16,
+   "path": "FreshVerifierV1::check_salted only",
+   "t_check_cpu_s": {
+    "v": 368.01786000000004,
+    "kind": "measured",
+    "src": "verify --via fresh",
+    "load1": 150.87548828125
+   },
+   "t_check_wall_s": {
+    "v": 752.252749708,
+    "kind": "measured",
+    "src": "verify --via fresh"
+   },
+   "peak_rss_bytes": {
+    "v": 10570498048,
+    "kind": "measured",
+    "src": "verify --via fresh"
+   },
+   "da_claim_material_bytes": {
+    "v": 956439472,
+    "kind": "measured",
+    "src": "verify"
+   },
+   "da_claim_material_fetch_wall_s": {
+    "v": 2.18961725,
+    "kind": "measured",
+    "src": "verify: files"
+   },
+   "artifact_bytes": {
+    "v": 660666048,
+    "kind": "measured",
+    "src": "verify"
+   },
+   "artifact_fetch_wall_s": {
+    "v": 1.9461227920000002,
+    "kind": "measured",
+    "src": "verify: files"
+   },
+   "fetch_provider": "files (no link)",
+   "filing_object_bytes_by_lie": null,
+   "t_localize": null,
+   "note": "honest claim; relation work only"
+  },
+  {
+   "class": "qwen25-0.5b",
+   "positions": 3,
+   "path": "FreshVerifierV1::check_salted only",
+   "t_check_cpu_s": {
+    "v": 131.760132,
+    "kind": "measured",
+    "src": "verify --via fresh",
+    "load1": 64.6767578125
+   },
+   "t_check_wall_s": {
+    "v": 141.777014542,
+    "kind": "measured",
+    "src": "verify --via fresh"
+   },
+   "peak_rss_bytes": {
+    "v": 10466394112,
+    "kind": "measured",
+    "src": "verify --via fresh"
+   },
+   "da_claim_material_bytes": {
+    "v": 178650993,
+    "kind": "measured",
+    "src": "verify"
+   },
+   "da_claim_material_fetch_wall_s": {
+    "v": 0.365853,
+    "kind": "measured",
+    "src": "verify: files"
+   },
+   "artifact_bytes": {
+    "v": 660666048,
+    "kind": "measured",
+    "src": "verify"
+   },
+   "artifact_fetch_wall_s": {
+    "v": 1.621309042,
+    "kind": "measured",
+    "src": "verify: files"
+   },
+   "fetch_provider": "files (no link)",
+   "filing_object_bytes_by_lie": null,
+   "t_localize": null,
+   "note": "honest claim; relation work only"
+  },
+  {
+   "class": "qwen35-0.8b",
+   "positions": 3,
+   "path": "not run (reference verifier needs >= 16 B/param of RAM)",
+   "t_check_cpu_s": null,
+   "t_check_lower_bound_cpu_s": {
+    "v": 70.5062120000002,
+    "kind": "derived",
+    "src": "the weight pass alone (read + 2 x commit + projection), measured streaming on the real artifact: a fresh check cannot cost less"
+   },
+   "t_check_estimate_cpu_s": {
+    "v": 622.127369520808,
+    "kind": "assumed",
+    "src": "ASSUMPTION, not a measurement: fixed part = (0.5B intercept / 0.5B weight-pass model) x this class's weight-pass model; per-position part = the 0.5B cost per public-material byte x this class's bytes per position. Replace by a run on a host with the RAM (fleet plan F2)",
+    "fixed_s": 163.44141008263955,
+    "per_position_s": 152.89531981272282,
+    "kappa": 2.3181136164660083
+   },
+   "peak_rss_bytes": {
+    "v": {
+     "min_verifier_ram_bytes": 12255180912,
+     "host_ram_bytes": 34359738368
+    },
+    "kind": "derived",
+    "src": "16 bytes x params: Ctx::param_cache keeps every parameter instance as i128 for the scope (misaka-palw-kernel/src/verify.rs)"
+   },
+   "da_claim_material_bytes": {
+    "v": 1566268371,
+    "kind": "measured",
+    "src": "build-world: every committed value but the derived ones, 3 positions"
+   },
+   "da_claim_material_fetch_cpu_s": {
+    "v": 2.2728650225999663,
+    "kind": "derived",
+    "src": "bytes / the 0.5B class's measured fetch+hash-check MB per CPU-second (a CPU floor; no link)"
+   },
+   "artifact_bytes": {
+    "v": 1052511616,
+    "kind": "measured",
+    "src": "static"
+   },
+   "artifact_fetch_cpu_s": {
+    "v": 1.5273352141812275,
+    "kind": "derived",
+    "src": "same rate"
+   },
+   "fetch_provider": "not run",
+   "filing_object_bytes_by_lie": null,
+   "t_localize": null,
+   "note": "components only: weight pass (M, streaming), public-material bytes (M); the estimate is an assumption"
+  },
+  {
+   "class": "llama32-1b",
+   "positions": 3,
+   "path": "not run (reference verifier needs >= 16 B/param of RAM)",
+   "t_check_cpu_s": null,
+   "t_check_lower_bound_cpu_s": {
+    "v": 125.09318399999992,
+    "kind": "derived",
+    "src": "the weight pass alone (read + 2 x commit + projection), measured streaming on the real artifact: a fresh check cannot cost less"
+   },
+   "t_check_estimate_cpu_s": {
+    "v": 351.9169434079047,
+    "kind": "assumed",
+    "src": "ASSUMPTION, not a measurement: fixed part = (0.5B intercept / 0.5B weight-pass model) x this class's weight-pass model; per-position part = the 0.5B cost per public-material byte x this class's bytes per position. Replace by a run on a host with the RAM (fleet plan F2)",
+    "fixed_s": 289.98021315748764,
+    "per_position_s": 20.645576750139018,
+    "kappa": 2.3181136164660083
+   },
+   "peak_rss_bytes": {
+    "v": {
+     "min_verifier_ram_bytes": 19919975440,
+     "host_ram_bytes": 34359738368
+    },
+    "kind": "derived",
+    "src": "16 bytes x params: Ctx::param_cache keeps every parameter instance as i128 for the scope (misaka-palw-kernel/src/verify.rs)"
+   },
+   "da_claim_material_bytes": {
+    "v": 211494465,
+    "kind": "measured",
+    "src": "build-world: every committed value but the derived ones, 3 positions"
+   },
+   "da_claim_material_fetch_cpu_s": {
+    "v": 0.3069067733680187,
+    "kind": "derived",
+    "src": "bytes / the 0.5B class's measured fetch+hash-check MB per CPU-second (a CPU floor; no link)"
+   },
+   "artifact_bytes": {
+    "v": 1533096320,
+    "kind": "measured",
+    "src": "static"
+   },
+   "artifact_fetch_cpu_s": {
+    "v": 2.2247279371286783,
+    "kind": "derived",
+    "src": "same rate"
+   },
+   "fetch_provider": "not run",
+   "filing_object_bytes_by_lie": null,
+   "t_localize": null,
+   "note": "components only: weight pass (M, streaming), public-material bytes (M); the estimate is an assumption"
+  },
+  {
+   "class": "smollm2-1.7b",
+   "positions": 3,
+   "path": "not run (reference verifier needs >= 16 B/param of RAM)",
+   "t_check_cpu_s": null,
+   "t_check_lower_bound_cpu_s": {
+    "v": 152.23253200000013,
+    "kind": "derived",
+    "src": "the weight pass alone (read + 2 x commit + projection), measured streaming on the real artifact: a fresh check cannot cost less"
+   },
+   "t_check_estimate_cpu_s": {
+    "v": 446.3707639908913,
+    "kind": "assumed",
+    "src": "ASSUMPTION, not a measurement: fixed part = (0.5B intercept / 0.5B weight-pass model) x this class's weight-pass model; per-position part = the 0.5B cost per public-material byte x this class's bytes per position. Replace by a run on a host with the RAM (fleet plan F2)",
+    "fixed_s": 352.89230529829763,
+    "per_position_s": 31.15948623086456,
+    "kappa": 2.3181136164660083
+   },
+   "peak_rss_bytes": {
+    "v": {
+     "min_verifier_ram_bytes": 27615145488,
+     "host_ram_bytes": 34359738368
+    },
+    "kind": "derived",
+    "src": "16 bytes x params: Ctx::param_cache keeps every parameter instance as i128 for the scope (misaka-palw-kernel/src/verify.rs)"
+   },
+   "da_claim_material_bytes": {
+    "v": 319199553,
+    "kind": "measured",
+    "src": "build-world: every committed value but the derived ones, 3 positions"
+   },
+   "da_claim_material_fetch_cpu_s": {
+    "v": 0.4632012704055582,
+    "kind": "derived",
+    "src": "bytes / the 0.5B class's measured fetch+hash-check MB per CPU-second (a CPU floor; no link)"
+   },
+   "artifact_bytes": {
+    "v": 1866690944,
+    "kind": "measured",
+    "src": "static"
+   },
+   "artifact_fetch_cpu_s": {
+    "v": 2.708818382071327,
+    "kind": "derived",
+    "src": "same rate"
+   },
+   "fetch_provider": "not run",
+   "filing_object_bytes_by_lie": null,
+   "t_localize": null,
+   "note": "components only: weight pass (M, streaming), public-material bytes (M); the estimate is an assumption"
+  }
+ ],
  "classes": {
   "qwen25-0.5b": {
    "label": "qwen25-0.5b",

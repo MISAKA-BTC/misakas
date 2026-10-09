@@ -297,7 +297,10 @@ Stop conditions for any host: free disk < 15 GB, free memory below the sample's 
 
 ## 7. Reading `opv-measurements.json` (for ECON and K2S)
 
-Every leaf is `{"v", "kind": "measured"|"derived"|"assumed", "src", ...n/min/max}`. Per class: `artifact`, `plan_bounds_k2_v2`,
+Every leaf is `{"v", "kind": "measured"|"derived"|"assumed", "src", ...n/min/max}`. **`table`** is the flat view: one row per
+(class, claim size) with `t_check_cpu_s` / `t_check_wall_s`, the public-material fetch (`da_claim_material_bytes`, `…_fetch_wall_s`), the
+artifact fetch, `filing_object_bytes_by_lie`, `t_localize`, `peak_rss_bytes`; a class that did not run carries `t_check_lower_bound_cpu_s`
+(D) and a labelled-assumed `t_check_estimate_cpu_s`, and CPU-floor fetch times (D). The nested form, per class: `artifact`, `plan_bounds_k2_v2`,
 `weights_pass_streaming` (M), `producer_side_p3`, `da_p3` (public-material bytes), and — for the class that ran — `t_check_p3_outsider_path`,
 `t_check_by_positions_fresh_path` (samples, counters, fits), `fetch` (files and localhost HTTP; bytes, wall, CPU), `lies` (T_check to
 verdict, filing bytes, wire verdict, court), `t_localize_model`, `demand_flow`. For the three classes that did not run:
