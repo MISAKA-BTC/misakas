@@ -54,12 +54,20 @@ pub const TABLE_OPV_ADMITTED_V1: u8 = 12;
 pub const TABLE_OPV_CLASSES_V1: u8 = 13;
 pub const TABLE_OPV_CLAIMS_V1: u8 = 14;
 // 15–19 are G14-R4's (escrow and the seals). 20–21: K2-TIR-v4 (lane K2S, allocated 2026-10-08), in the root only when non-empty.
+// 22–24: RFC-0004 Part II's typed tables.
 /// K2-TIR-v4: `tiled job id → TiledJobRowV1` (the job and its posted-tile bitmap).
 pub const TABLE_TILED_JOBS_V1: u8 = 20;
 /// K2-TIR-v4: `(claim, stage, position) → SegProgressV1` (a position demand's served parts; a served position).
 pub const TABLE_SEG_PROGRESS_V1: u8 = 21;
 /// The domain of the root extension the two K2-TIR-v4 tables add (absent while both are empty: every older root is unchanged).
 pub const SEG_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-seg-extension/v1";
+/// RFC-0004 Part II: `class → ComputationSpecV1` (typed classes), `job → SpecJobV1`, `memory class → MemoryLineV1`. Each table is in
+/// the root only when non-empty ([`crate::spec::typed_root_v1`]), so every ledger without a typed row roots as before.
+pub const TABLE_SPEC_CLASSES_V1: u8 = 22;
+pub const TABLE_SPEC_JOBS_V1: u8 = 23;
+pub const TABLE_MEMORY_LINES_V1: u8 = 24;
+/// The typed tables, in root order.
+pub const TYPED_TABLES_V1: [u8; 3] = [TABLE_SPEC_CLASSES_V1, TABLE_SPEC_JOBS_V1, TABLE_MEMORY_LINES_V1];
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -93,6 +101,9 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_OPV_CLAIMS_V1 => "opv-claims",
         TABLE_TILED_JOBS_V1 => "tiled-jobs",
         TABLE_SEG_PROGRESS_V1 => "seg-progress",
+        TABLE_SPEC_CLASSES_V1 => "spec-classes",
+        TABLE_SPEC_JOBS_V1 => "spec-jobs",
+        TABLE_MEMORY_LINES_V1 => "memory-lines",
         _ => "attested-artifacts",
     };
     format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes()
@@ -155,6 +166,15 @@ impl KernelLedgerV1 {
         for (k, v) in &self.seg_progress {
             rows.insert((TABLE_SEG_PROGRESS_V1, bytes_of(k)), bytes_of(v));
         }
+        for (k, c) in &self.typed.classes {
+            rows.insert((TABLE_SPEC_CLASSES_V1, bytes_of(k)), bytes_of(&c.spec));
+        }
+        for (k, v) in &self.typed.jobs {
+            rows.insert((TABLE_SPEC_JOBS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.typed.lines {
+            rows.insert((TABLE_MEMORY_LINES_V1, bytes_of(k)), bytes_of(v));
+        }
         rows
     }
 
@@ -172,6 +192,7 @@ impl KernelLedgerV1 {
         fn dec<T: borsh::BorshDeserialize>(b: &[u8], what: &str) -> Result<T, String> {
             borsh::from_slice(b).map_err(|e| format!("a stored {what} does not decode: {e}"))
         }
+        let mut specs: Vec<(Digest, crate::spec::ComputationSpecV1)> = Vec::new();
         for ((table, key), row) in rows {
             match *table {
                 TABLE_BONDS_V1 => {
@@ -224,8 +245,21 @@ impl KernelLedgerV1 {
                 TABLE_SEG_PROGRESS_V1 => {
                     l.seg_progress.insert(dec::<DemandKeyV1>(key, "progress key")?, dec(row, "demand progress")?);
                 }
+                TABLE_SPEC_CLASSES_V1 => specs.push((dec(key, "spec class key")?, dec(row, "spec class")?)),
+                TABLE_SPEC_JOBS_V1 => {
+                    l.typed.jobs.insert(dec(key, "spec job key")?, dec(row, "spec job")?);
+                }
+                TABLE_MEMORY_LINES_V1 => {
+                    l.typed.lines.insert(dec(key, "memory line key")?, dec(row, "memory line")?);
+                }
                 other => return Err(format!("a stored row names no table ({other})")),
             }
+        }
+        // A composite's derived row reads its components': every other typed class first (a component never is a composite).
+        specs.sort_by_key(|(_, spec)| matches!(spec.roots.first(), Some(crate::spec::TypedRootV1::CompositeV1(_))));
+        for (id, spec) in specs {
+            let row = l.spec_class_row_of(&spec, false).map_err(|e| format!("a stored typed class does not rebuild: {e}"))?;
+            l.typed.classes.insert(id, row);
         }
         // The live-claim index is derived (not committed): rebuilt from the rows, exactly as a restored ledger does.
         l.opv_rebuild_live();
@@ -246,6 +280,8 @@ impl KernelLedgerV1 {
         self.opv.admitted = rows.keys().filter(|(t, _)| *t == TABLE_OPV_ADMITTED_V1).filter_map(|(_, k)| dec::<Digest>(k)).collect();
         self.opv_rebuild_live();
         self.restore_budget(Default::default());
+        // DA16's provider-liable set is consumer-derived (re-injected before every object), never a row: the rows' ledger has none.
+        self.provider_liable = Default::default();
         self
     }
 }
@@ -379,6 +415,9 @@ pub fn root_of_rows(
     };
     let _ = LEDGER_ROOT_DOMAIN_V1;
     let v1 = parts.root();
+    // RFC-0004 Part II: the typed tables, each only when non-empty (an untyped ledger's root is unchanged).
+    let typed: Vec<(u8, Digest)> =
+        crate::rows::TYPED_TABLES_V1.iter().filter(|t| by_table.contains_key(*t)).map(|t| (*t, coll(*t))).collect();
     // RFC-0015: with no OPV policy the root is the historical one, byte for byte; with one it is the OPV root form.
     let base = match opv {
         None => v1,
@@ -392,9 +431,11 @@ pub fn root_of_rows(
         }
         .root(),
     };
-    // K2-TIR-v4: the two tables extend the root only once either holds a row.
+    // K2-TIR-v4: the two tables extend the root only once either holds a row (then RFC-0004 Part II's typed tables, each only
+    // when non-empty): a ledger with neither roots as before.
     let seg = by_table.contains_key(&TABLE_TILED_JOBS_V1) || by_table.contains_key(&TABLE_SEG_PROGRESS_V1);
-    if seg { seg_root_extension_v1(&base, &coll(TABLE_TILED_JOBS_V1), &coll(TABLE_SEG_PROGRESS_V1)) } else { base }
+    let base = if seg { seg_root_extension_v1(&base, &coll(TABLE_TILED_JOBS_V1), &coll(TABLE_SEG_PROGRESS_V1)) } else { base };
+    crate::spec::typed_root_v1(base, &typed)
 }
 
 /// `H(extension; base root ‖ tiled jobs ‖ demand progress)`.

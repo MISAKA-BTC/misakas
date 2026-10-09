@@ -1,5 +1,26 @@
 # RFC-0004: PALW Model Improvement Protocol — self-improvement and distillation over PALW-TIR
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
+## 2026-10-09 改定 — 改善結果は独立モデルとして登録する
+
+**新規登録は自由。登録内容は永久不変。モデル改善は新規登録。既存モデルの置換は禁止。** [ADR-0175](../adr/0175-registered-models-are-permanently-immutable.md)を適用する。学習、蒸留、LoRA、dataset処理と評価は続けられるが、勝者を既存lineの次のheadへ反映する方式は新規則で廃止する。評価勝者は独立登録済みのcandidateとして`CandidateSelected`を記録し、そのモデル自身のroot・検証責任・報酬資格・Positionを使う。親のmodel ID、version、root、head、AMMは動かない。親子参照は来歴だけである。
+
+### 実装状態と残作業
+
+| 項目 | 現在の範囲 | 残作業・有効化条件 |
+| --- | --- | --- |
+| RFC0004 モデル改善 | epoch・評価・typed/composite artifact・reward foldの既存実装を保持。新しい不変登録fenceと独立candidate選択を実装。旧Part I/Part IIの「統合済み」を同一line更新の有効化根拠にしない | `palw_improvement_v1`と`palw_model_immutable_v1`はshipped ParamsではNone。明示的な高さ・独立試験・関連gateが必要 |
+| memory line / typed roots | 学習・評価用の独立material。登録済みモデルのweights/rootを差し替える経路ではない | 担保条件は別決定・検証が必要。旧一覧の「利用者判断4d」はmemory materialの独立した運用条件として扱い、担保額は未設定 |
+| kind別の検査費用 | MEASは未取得の実測入力。typed rootやhash登録だけで検査が完了した扱いにしない | kind、サイズ、CPU/GPU、cold/warm取得、公開証拠・exact court、帯域・メモリとdeadlineを実測し、担保・資源上限へ反映する |
+
+以下のpromotion/rollbackと旧予定表は、fence前の設計・実装履歴として保持する。新規則下の実装はspec17の改定節を優先し、自己改善やtyped-rootの休眠経路をこの改定で有効化しない。
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
@@ -1047,6 +1068,65 @@ without the A-2 tolerance.
 - Follow RFC05's current kernel-only design for new model semantics; do not start its withdrawn
   BVM/GVM implementation programme. Existing Phase A engineering estimates do not include the new
   probabilistic kernel's prover/checker work and must be re-estimated before scheduling that route.
+
+## Part II — Verifiable computation beyond fixed weight files (2026-10-08)
+
+> **日本語要約:** MISAKA は「LLM の重みファイルを登録するチェーン」ではなく、「独立検証可能な有用 AI 計算を登録・実行・決済するチェーン」である。
+> モデルを「認証された計算仕様 + 型付き state root の集合」に一般化する。
+> 対象は、重みを使うモデル、推論中に記憶を更新するモデル、検索型、モデルとツールの複合である。
+> 任意の外部 API や Python は認めない。報酬の条件は今後も G14(Panel 外の普通の検証者が公開材料だけで不正を立証できる)である。
+> 本 Part は**「全 RFC の実装完了」の範囲に含む**(ユーザー決定 2026-10-08)。
+
+### II.1 Why
+
+Model families will keep changing. The likely shapes are:
+
+- weights plus external memory, retrieval and tools;
+- models that update memory, or some parameters, during inference (Titans/MIRAS-style test-time memory);
+- many small models plus external data, instead of one giant checkpoint.
+
+Weight-free methods are not expected to replace general LLMs within 5–10 years. Even so, a protocol that equates "model" with "one fixed weight file" would freeze today's architecture into consensus.
+
+This RFC already treats improvement as computation over PALW-TIR: lines, heads, candidates, evaluation. Part II extends the same idea from *improving a model between jobs* to *models whose computation reads and updates authenticated state other than fixed weights*. One invariant is unchanged: **an ordinary bonded verifier outside any Panel, from public authenticated material only, reaches an objective conviction or a correctly classified DA/default for every rewarded computation.**
+
+### II.2 The computation specification
+
+A class binds a versioned **computation specification**: the kernel id and plan id (RFC-0005 / ADR-0172), plus a list of **typed roots**. Each root kind is versioned. A class whose kinds the active kernel does not implement is refused by name, never treated as another kind.
+
+| Root kind | Bound at registration | Per job / per claim | What G14 requires |
+| --- | --- | --- | --- |
+| `Weights` | the artifact (weight) root, as today | — | as today: commitments, localisation, exact court |
+| `Memory` | the initial memory root, an **update rule** expressible in the active kernel (TIR `StateWrite` / `HistAppend` / `Fixed` states, or a fenced kernel extension), and retention terms | the pre-state and post-state roots of every update step, committed; memory carried across jobs is a chain-tracked state root | a fault is localised to ONE update step and judged exactly from the committed pre-state, the inputs and the rule. The pre-state must be publicly available (DA) for the claim's liability horizon; withholding it is a default, never fraud |
+| `Retrieval` | a reference-data **snapshot root** (a public, retained corpus), a deterministic index commitment, and a deterministic retrieval rule (integer scores with a pinned tie rule, as RFC-0002 FR-09's counting threshold) | the retrieved item ids plus their openings against the snapshot | the snapshot's availability (DA); a retrieval result judged per item: a wrong item, a missed better item, or a wrong opening |
+| `Composite` | a pipeline of computation specifications. Tool stages are allowed only as verified kernels with their own specifications | per-stage commitments | per-stage localisation (RFC-0003 edge courts, extended); a tool stage is judged like any other stage |
+
+Forbidden in every kind:
+- arbitrary external APIs;
+- unverified code (Python, remote services);
+- non-deterministic retrieval;
+- any state an outsider cannot obtain and re-derive.
+
+A semantic the active kernel cannot express is a versioned kernel extension: a coordinated, fenced protocol change (RFC-0005 §K), never a per-class escape hatch.
+
+### II.3 Relation to the improvement protocol
+
+- A `Memory` class's persistent state is the in-job analogue of a line head. A promoted memory state is a candidate in this RFC's sense: evaluated and promoted under §§4–8, with its root recorded on the line.
+- Test-time parameter updates (a slice of weights updated per job) are a `Memory` root whose state is a parameter subset. The update rule must be a kernel-expressible optimiser step. Training-as-IR stays §12's optional profile; nothing here makes consensus train models.
+- Retrieval corpora are teaching artifacts in §5's sense when a line uses them; their rights follow §9.
+
+### II.4 Required evidence (part of "every RFC implemented")
+
+1. **The wire form.** Every class registration carries a computation specification with typed roots, behind a dormant fence. `Weights` alone reproduces today's classes byte for byte: a regression test shows existing class ids and roots are unchanged.
+2. **A `Memory` class end to end on the real node.**
+   - registration → jobs whose claims commit per-step pre/post roots → a lie in one update step, convicted by an outsider from public material;
+   - a withheld pre-state classified as a default;
+   - memory carried across two jobs.
+3. **A `Retrieval` class end to end.** A snapshot root and a deterministic rule; a wrong item and a missed better item each convicted; a withheld snapshot slice classified as a default.
+4. **A `Composite` class with one verified tool stage**, convicted at the stage that lied.
+5. **Bounds.** Every kind passes RFC-0011's bounded-verification gates (validator work, public bytes per prosecution, carrier fit) and RFC-0015's window and economics rules before it is OPV-eligible.
+6. **Census.** RFC-0011 §18's `D_complete` counts a repository that is a complete computation of a supported kind, even when it is not a single weight checkpoint.
+
+Activation follows the single full-activation release. Nothing in Part II is armed on its own.
 
 ## Shared verification-challenge boundary — 2026-10-08
 

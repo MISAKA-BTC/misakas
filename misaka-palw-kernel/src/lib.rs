@@ -111,6 +111,7 @@ pub mod seg_detect;
 pub mod seg_encoder;
 pub mod seg_ledger;
 pub mod settle;
+pub mod spec;
 pub mod state;
 pub mod trace;
 pub mod verify;

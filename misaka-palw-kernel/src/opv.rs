@@ -710,6 +710,7 @@ fn execution_root(row: &ClaimRowV1) -> Digest {
         ClaimBodyV1::Program { evidence, .. } => evidence.root(),
         ClaimBodyV1::Pipeline { evidence, .. } => evidence.root(),
         ClaimBodyV1::Segmented { evidence, .. } => evidence.root(),
+        ClaimBodyV1::Spec(b) => b.execution_root(),
     }
 }
 

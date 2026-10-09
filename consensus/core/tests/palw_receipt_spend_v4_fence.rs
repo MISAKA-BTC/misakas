@@ -1,13 +1,14 @@
-//! **RFC-0009 stage C — `palw_receipt_spend_v4`** — dormant on every ruleset a node can run but testnet-12 as shipped (NOT on the
-//! DAA-5,300 list; on the int-13 list, DAA 9,000: `palw_t12_flag_day_9000.rs`), fingerprinted
-//! where armed (its fee cap with it), invisible to the identity until it fires, named by the fork id, refused without its
-//! prerequisites, and byte-identical below its height.
+//! **RFC-0009 stage C — `palw_receipt_spend_v4`** — dormant on EVERY ruleset a node can run, testnet-12 as shipped included (NOT on the
+//! DAA-5,300 list; on the int-13 list, which is unscheduled — the user cancelled the DAA-9,000 flag day on 2026-10-08 and the list waits
+//! for the full-activation release: `palw_t12_flag_day_9000.rs`), fingerprinted where armed (its fee cap with it), invisible to the
+//! identity until it fires, named by the fork id, refused without its prerequisites, and byte-identical below its height.
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_receipt_spend_v4_fence`
 
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FENCES_V1, PALW_T12_INT13_DAA, PALW_T12_INT13_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
-    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v5_params, palw_t12_release_v6_params, palw_t12_shipped_params,
+    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_int13_flag_day_at_v1, palw_t12_release_v5_params,
+    palw_t12_release_v6_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_receipt_v4::{
@@ -28,9 +29,9 @@ fn armed(at: Option<ForkActivation>) -> Params {
 }
 
 #[test]
-fn it_is_only_in_the_int13_release_and_dormant_on_every_other_ruleset() {
+fn it_is_only_on_the_int13_list_and_dormant_on_every_shipped_ruleset() {
     assert!(PALW_T12_INT11_FENCES_V1.iter().all(|f| f.name != "palw_receipt_spend_v4"), "lane R9 is not in the DAA-5,300 flag day");
-    assert!(PALW_T12_INT13_FENCES_V1.iter().any(|f| f.name == "palw_receipt_spend_v4"), "…it is in the DAA-9,000 flag day");
+    assert!(PALW_T12_INT13_FENCES_V1.iter().any(|f| f.name == "palw_receipt_spend_v4"), "…it is on the int-13 list");
     for (name, p) in [
         ("MAINNET_PARAMS", MAINNET_PARAMS),
         ("TESTNET_PARAMS", TESTNET_PARAMS),
@@ -48,12 +49,19 @@ fn it_is_only_in_the_int13_release_and_dormant_on_every_other_ruleset() {
         assert!(p.palw_fences_v1().contains(&("palw_receipt_spend_v4", None)), "{name}: the exhaustive list names it");
         p.validate_palw_receipt_spend_v4().unwrap_or_else(|e| panic!("{name}: dormant validates: {e:?}"));
     }
-    // Testnet-12 as shipped arms it with the int-13 list, at 9,000 and nowhere else, and still validates.
+    // Testnet-12 as shipped arms it NOWHERE (the int-13 list is unscheduled), and still validates.
     let shipped = palw_t12_shipped_params();
-    assert_eq!(shipped.palw_receipt_spend_v4, PALW_T12_INT13_DAA.map(ForkActivation::new), "the int-13 flag day arms it at 9,000");
-    let at = PALW_T12_INT13_DAA.expect("the int-13 flag day");
-    assert!(!shipped.palw_receipt_spend_v4_active_at(at - 1) && shipped.palw_receipt_spend_v4_active_at(at));
+    assert_eq!(PALW_T12_INT13_DAA, None, "no DAA-9,000 flag day (user, 2026-10-08)");
+    assert_eq!(shipped.palw_receipt_spend_v4, None, "the shipped ruleset does not arm it");
+    assert!(!shipped.palw_receipt_spend_v4_active_at(u64::MAX - 1));
+    assert!(shipped.palw_fences_v1().contains(&("palw_receipt_spend_v4", None)), "the exhaustive list names it, dormant");
     shipped.validate_palw_v2().expect("the shipped testnet-12 ruleset still validates");
+    // Armed through the int-13 list at a test height (the way a drill or the future release arms it), it is in force from there only.
+    let mut listed = shipped.clone();
+    palw_t12_arm_int13_flag_day_at_v1(&mut listed, Some(AT));
+    assert_eq!(listed.palw_receipt_spend_v4, Some(ForkActivation::new(AT)), "the list arms it at its one height");
+    assert!(!listed.palw_receipt_spend_v4_active_at(AT - 1) && listed.palw_receipt_spend_v4_active_at(AT));
+    listed.validate_palw_v2().expect("the list armed at a test height validates");
 }
 
 #[test]
@@ -100,4 +108,43 @@ fn it_is_refused_without_its_prerequisites_and_off_consensus_v2() {
     let mut v1 = TESTNET11_PARAMS;
     v1.palw_receipt_spend_v4 = Some(ForkActivation::new(AT));
     assert!(v1.validate_palw_receipt_spend_v4().is_err(), "a ruleset with no V2 bundle");
+}
+
+/// **RFC-0009 stage C: the signer-sidecar purpose for the executor's authorization is visible only under this fence.** Every older
+/// purpose is offered everywhere (the fence is not theirs); `PalwReceiptAuthV4` is offered nowhere a preset ships it, and from its
+/// height only where the fence is armed — the same `Params::palw_receipt_spend_v4_active_at` the chain's own header stage asks.
+#[test]
+fn the_signing_purpose_for_the_authorization_is_visible_only_under_the_fence() {
+    use kaspa_consensus_core::dns_finality::SigningPurpose;
+    let older = [
+        SigningPurpose::Transaction,
+        SigningPurpose::Attestation,
+        SigningPurpose::TakeoverToken,
+        SigningPurpose::Unbond,
+        SigningPurpose::PalwAttemptV2,
+        SigningPurpose::PalwFpCommitmentV3,
+        SigningPurpose::PalwFpSpendV3,
+        SigningPurpose::PalwDerivedArtifactV1,
+    ];
+    let dormant = armed(None);
+    let live = armed(Some(ForkActivation::new(AT)));
+    for daa in [0, AT - 1, AT, u64::MAX - 1] {
+        for purpose in older {
+            assert!(
+                purpose.offered_by(&dormant, daa) && purpose.offered_by(&live, daa),
+                "{purpose:?} is offered everywhere, as it always was"
+            );
+        }
+        assert!(!SigningPurpose::PalwReceiptAuthV4.offered_by(&dormant, daa), "dormant: never offered (daa {daa})");
+    }
+    assert!(!SigningPurpose::PalwReceiptAuthV4.offered_by(&live, AT - 1), "below the height it is not offered");
+    assert!(SigningPurpose::PalwReceiptAuthV4.offered_by(&live, AT), "from the height it is");
+    // Every shipped ruleset, testnet-12 included, leaves it unoffered.
+    for p in [palw_t12_shipped_params(), mainnet_shipped_params(), devnet_shipped_params(), palw_rc_shipped_params()] {
+        assert!(!SigningPurpose::PalwReceiptAuthV4.offered_by(&p, u64::MAX - 1));
+    }
+    // `never()` is not armed.
+    assert!(!SigningPurpose::PalwReceiptAuthV4.offered_by(&armed(Some(ForkActivation::never())), u64::MAX - 1));
+    // And the new purpose changes no identity: the params/schedule ids are the dormant ruleset's.
+    assert_eq!(ids(&dormant), ids(&armed(None)));
 }

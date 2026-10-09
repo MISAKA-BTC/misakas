@@ -91,8 +91,8 @@ The node bootstraps from the built-in DNS seeders. `--addpeer` takes IP addresse
 Check the startup log for these lines:
 
 ```text
-Consensus params fingerprint: 2e56764257fe24888a7aab4f109b6ef83fa6ac5000dc47d1369398e5959cbc1f (network testnet-12)
-Consensus fence schedule: 750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585, 9000 (schedule id 5f5df8177e77fdf4e690222a690a0b5875f66d4e722d81159273435d754a8c5f)
+Consensus params fingerprint: 5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6 (network testnet-12)
+Consensus fence schedule: 750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585 (schedule id 1678e07359f6727e96224041450a3b1d2aadcf8acd6bb6db0c277ff4d401c9b9)
 ```
 
 A datadir from the first testnet-12 deployment (genesis `a8cabac4…`) is refused at startup with a
@@ -497,6 +497,8 @@ class registered mid-epoch has budget 0 until the next boundary. `kaspad --palw-
 every class's share and budget.
 
 ## 11. The DAA-9,000 flag day (int-13)
+
+**CANCELLED 2026-10-08 (user): there is no DAA-9,000 flag day.** The fence schedule above has no 9000, the params fingerprint and schedule id are the DAA-5,300 release's, and the four fences below stay dormant until the one full-activation release, which takes a fresh height. What follows describes that list as it was planned.
 
 The fence schedule gains **9000**. At that one height the release arms four changes that were finished and waiting for a height; none of
 them needs anything else to be switched on first (each stands on rules testnet-12 has had since genesis, or on the DAA-5,300 flag day):

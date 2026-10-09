@@ -19,6 +19,13 @@ pub type Params = BTreeMap<(u16, Option<u32>), Tensor>;
 /// The independent evaluator still checks each tensor and evaluates all primitives itself.
 pub trait ParamSource {
     fn tensor(&self, index: u16, layer: Option<u32>) -> Res<Option<Tensor>>;
+
+    /// **Row-tiled access, if this source offers it** (RFC-0013 §5; [`crate::tiled`]). A source that returns one lets a `MatMul` or a
+    /// `Gather` consume a param larger than a tile in row ranges, never whole. The default offers none, and evaluation is the whole-tensor
+    /// evaluation it always was.
+    fn tiles(&self) -> Option<&dyn crate::tiled::TileAccess> {
+        None
+    }
 }
 
 impl ParamSource for Params {
@@ -158,6 +165,30 @@ fn const_tensor(p: &Program, j: u16) -> Res<Tensor> {
 /// An effect of a node: a `StateWrite` value or a `HistAppend` row, at a layer.
 type Effect = (Prim, Option<u32>, Tensor);
 
+/// **A param a node reads in tiles instead of whole** (RFC-0013 §5), or `None` when it is no larger than a tile (and is loaded whole, as ever). The
+/// declaration is checked as the whole path checks it — present, the declared dtype and shape — and fails the same way; the elements are checked tile
+/// by tile as they are read. `transposed` is for the param behind a fused `Transpose` `[1, 0]` (a rank-2 param only).
+fn lazy_param_behind<'a>(
+    p: &Program,
+    tiles: &'a dyn crate::tiled::TileAccess,
+    layer: Option<u32>,
+    j: u16,
+    transposed: bool,
+) -> Res<Option<crate::tiled::LazyParam<'a>>> {
+    let d = &p.params[j as usize];
+    let Some((dtype, shape)) = tiles.decl(j, instance(d.per_layer, layer))? else {
+        return err(Class::Missing, format!("param {j} ({}) at layer {layer:?} not supplied", d.name));
+    };
+    let declared: Vec<u64> = d.shape.iter().map(|&x| x as u64).collect();
+    if dtype != d.dtype || shape != declared {
+        return err(Class::Operand, "param: dtype or shape is not the declared one");
+    }
+    if (transposed && shape.len() != 2) || crate::tensor::count(&shape) <= tiles.tile_elems() {
+        return Ok(None);
+    }
+    Ok(Some(crate::tiled::LazyParam { tiles, index: j, layer: instance(d.per_layer, layer), dtype, shape, transposed }))
+}
+
 /// Evaluates node `i` of occurrence `(b, layer)` from its operands (§3.2, §6, §9.1(2)); node operands
 /// are read from `vals`, which must hold them.
 #[allow(clippy::too_many_arguments)]
@@ -170,14 +201,33 @@ fn eval_one(
     leaves: &Leaves<'_>,
     i: usize,
     vals: &[Option<Tensor>],
+    unbuilt: &BTreeSet<usize>,
 ) -> Res<(Tensor, Option<Effect>)> {
     let block = &p.blocks[b];
     let n = &block.nodes[i];
     let mut owned: Vec<Tensor> = Vec::with_capacity(n.inputs.len());
     let mut from_node: Vec<Option<usize>> = Vec::with_capacity(n.inputs.len());
-    for r in &n.inputs {
+    // A param this node reads in row tiles instead of whole (RFC-0013 §5): its position among the inputs and its declaration.
+    let mut lazy: Option<(usize, crate::tiled::LazyParam<'_>)> = None;
+    for (pos, r) in n.inputs.iter().enumerate() {
         match *r {
             Ref::Node(k) => {
+                // RFC-0013 §5: a `Transpose` `[1, 0]` of a param the caller left unbuilt (`evaluate_nodes`) is read by this `MatMul` in row tiles,
+                // through the transpose, from the param it transposes.
+                if (k as usize) < i
+                    && unbuilt.contains(&(k as usize))
+                    && lazy.is_none()
+                    && pos <= 1
+                    && matches!(n.prim, Prim::MatMul)
+                    && let Some(tiles) = params.tiles()
+                    && let [Ref::Param(j)] = block.nodes[k as usize].inputs.as_slice()
+                    && let Some(param) = lazy_param_behind(p, tiles, layer, *j, true)?
+                {
+                    lazy = Some((pos, param));
+                    from_node.push(None);
+                    owned.push(Tensor::zeros(DType::I8, vec![])); // placeholder, never read
+                    continue;
+                }
                 if k as usize >= i || vals[k as usize].is_none() {
                     return err(Class::Missing, format!("node {k} has no value"));
                 }
@@ -194,6 +244,17 @@ fn eval_one(
             }
             Ref::Param(j) => {
                 let d = &p.params[j as usize];
+                // One param per node is read in tiles; a second (a `MatMul` of two params) is loaded whole like any other.
+                if lazy.is_none()
+                    && let Some(tiles) = params.tiles()
+                    && crate::tiled::tiled_form_exists(&n.prim, pos, d.shape.len())
+                    && let Some(param) = lazy_param_behind(p, tiles, layer, j, false)?
+                {
+                    lazy = Some((pos, param));
+                    from_node.push(None);
+                    owned.push(Tensor::zeros(DType::I8, vec![])); // placeholder, never read
+                    continue;
+                }
                 let Some(t) = params.tensor(j, instance(d.per_layer, layer))? else {
                     return err(Class::Missing, format!("param {j} ({}) at layer {layer:?} not supplied", d.name));
                 };
@@ -248,7 +309,10 @@ fn eval_one(
         }
         _ => None,
     };
-    let v = eval_prim(&n.prim, &ins, n.out.dtype, &n.out.extents(h), &p.states, prior.as_deref())?;
+    let v = match &lazy {
+        Some((pos, param)) => crate::tiled::eval_prim_tiled(&n.prim, &ins, *pos, param, n.out.dtype, &n.out.extents(h))?,
+        None => eval_prim(&n.prim, &ins, n.out.dtype, &n.out.extents(h), &p.states, prior.as_deref())?,
+    };
     let effect = match n.prim {
         Prim::StateWrite { .. } => Some((n.prim.clone(), layer, v.clone())),
         Prim::HistAppend { .. } => Some((n.prim.clone(), layer, ins[0].clone())),
@@ -270,12 +334,25 @@ fn evaluate_nodes(
     todo: &[bool],
     mut vals: Vec<Option<Tensor>>,
     effects: &mut Vec<Effect>,
+    fuse: bool,
 ) -> Res<Vec<Option<Tensor>>> {
+    // RFC-0013 §5: with a tiling source, a `Transpose` `[1, 0]` of a param larger than a tile whose only reader is one `MatMul` is never built — the
+    // `MatMul` reads the param in row tiles through it. Its value is unobservable (not committed, not a carry-out, not the logits).
+    let fusable = if fuse && params.tiles().is_some() { crate::tiled::fusable_transposes(p, b) } else { BTreeSet::new() };
+    let mut unbuilt: BTreeSet<usize> = BTreeSet::new();
     for i in 0..p.blocks[b].nodes.len() {
         if !todo[i] {
             continue;
         }
-        let (v, e) = eval_one(p, params, b, layer, h, leaves, i, &vals)?;
+        if fusable.contains(&i)
+            && let Some(tiles) = params.tiles()
+            && let [Ref::Param(j)] = p.blocks[b].nodes[i].inputs.as_slice()
+            && lazy_param_behind(p, tiles, layer, *j, true)?.is_some()
+        {
+            unbuilt.insert(i);
+            continue;
+        }
+        let (v, e) = eval_one(p, params, b, layer, h, leaves, i, &vals, &unbuilt)?;
         if let Some(e) = e {
             effects.push(e);
         }
@@ -330,7 +407,7 @@ pub fn step_violations(p: &Program, params: &dyn ParamSource, st: &RunState, tok
                 poisoned[i] = true;
                 continue;
             }
-            match eval_one(p, params, bu, layer, h, &leaves, i, &vals) {
+            match eval_one(p, params, bu, layer, h, &leaves, i, &vals, &BTreeSet::new()) {
                 Ok((v, _)) => vals[i] = Some(v),
                 Err(e) => {
                     out.insert(e.class);
@@ -419,7 +496,8 @@ fn step_inner(
         let hist = |j: u16| Some(st.hist.get(&(j, instance(p.states[j as usize].per_layer, layer))).cloned().unwrap_or_default());
         let leaves = Leaves { token: Some(token), pos: st.pos, carry_in: &carry, fixed: &fixed, hist: &hist };
         let todo = vec![true; block.nodes.len()];
-        let vals = evaluate_nodes(p, params, bu, layer, h, &leaves, &todo, vec![None; block.nodes.len()], &mut effects)?;
+        let vals =
+            evaluate_nodes(p, params, bu, layer, h, &leaves, &todo, vec![None; block.nodes.len()], &mut effects, trace.is_none())?;
         let vals: Vec<Tensor> = vals.into_iter().map(|v| v.unwrap_or_else(|| Tensor::zeros(DType::I8, vec![]))).collect();
         for (i, n) in block.nodes.iter().enumerate() {
             if n.commit {
@@ -598,6 +676,6 @@ pub fn eval_cone(p: &Program, params: &dyn ParamSource, block: u8, layer: Option
     let hist = |j: u16| env.hist_prior.get(&j).cloned();
     let leaves = Leaves { token: env.token, pos: env.pos, carry_in: &env.carry_in, fixed: &fixed, hist: &hist };
     let mut effects = Vec::new();
-    let vals = evaluate_nodes(p, params, bu, layer, h, &leaves, &todo, vals, &mut effects)?;
+    let vals = evaluate_nodes(p, params, bu, layer, h, &leaves, &todo, vals, &mut effects, false)?;
     vals[target as usize].clone().ok_or_else(|| TirError::new(Class::Missing, "the target has no value"))
 }

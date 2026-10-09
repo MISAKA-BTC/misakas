@@ -1615,6 +1615,17 @@ pub enum PalwFpV3Error {
     /// (`palw_gen_claim_v1`).
     #[error("the tensor claim is refused: {0}")]
     TensorClaim(String),
+    /// **RFC-0001 finding F2, hoisted into [`PalwFpWorkerResultV3::validate_against_request`]**: the request asked for stop strings
+    /// and the returned job carries fewer stop sequences than the floor (`max(asked sequences, 1)`) — the worker dropped them,
+    /// so the user's `stop` does nothing under the job it bound while the response says it applied.
+    #[error(
+        "the request asked for {asked} stop string(s) and the worker's job carries {have} stop sequence(s): the strings were not spelled into the job"
+    )]
+    StopStringsNotSpelled { asked: usize, have: usize },
+    /// **RFC-0001 finding F1, hoisted ([`PalwFpWorkerResultV3::validate_against_manifest`])**: the worker's result disagrees with the
+    /// manifest the same worker announced at boot (tokenizer, class or context), by name.
+    #[error("the worker's result does not match its own manifest: {0}")]
+    WorkerManifestMismatch(String),
     /// **RFC-0001 §A.2: the V4 job's `DecodeConfigV4` is not in canonical form**, by name.
     #[error("the V4 job's decode config is not canonical: {0}")]
     DecodeConfigNotCanonical(crate::palw_decode_pipeline_v4::PalwDecodeConfigV4Error),
@@ -2460,6 +2471,11 @@ impl PalwFpWorkerResultV3 {
         {
             return Err(PalwFpV3Error::WorkerResultMismatch("the returned job's decode rule is not the request's"));
         }
+        // **RFC-0001 finding F2 (hoisted, P2).** The check above only CAPS the stop sequences a worker may add — it spells each
+        // requested string with the class's tokenizer, which the caller does not hold — so a worker that silently DROPPED them
+        // returned a result that bound its request, under a job where `stop` does nothing. The floor is checkable without the
+        // tokenizer: at least one spelled sequence (or as many as the request already carried as ids).
+        self.check_stop_texts_were_spelled(request)?;
         if self.request_hash != request_hash {
             return Err(PalwFpV3Error::WorkerResultMismatch("the result echoes a different request"));
         }
@@ -2515,6 +2531,62 @@ impl PalwFpWorkerResultV3 {
             return Err(PalwFpV3Error::WorkerResultMismatch("a zero trace manifest retains nothing"));
         }
         Ok(())
+    }
+
+    /// **RFC-0001 finding F2: the stop strings a request asked for must have been spelled into the job.** The strings cannot be
+    /// re-spelled here (no tokenizer), so what is checked is the floor of the count: when the request carries `stop_texts`, the job
+    /// carries at least `max(sequences the request already named, 1)` stop sequences. A request with no stop strings is unaffected.
+    pub fn check_stop_texts_were_spelled(&self, request: &PalwFpWorkerRequestV3) -> Result<(), PalwFpV3Error> {
+        if request.stop_texts.is_empty() {
+            return Ok(());
+        }
+        let asked = request.decode.as_ref().map_or(0, |d| d.stop_sequences.len());
+        let have = self.job.decode.as_ref().map_or(0, |d| d.stop_sequences.len());
+        if have < asked.max(1) {
+            return Err(PalwFpV3Error::StopStringsNotSpelled { asked: request.stop_texts.len(), have });
+        }
+        Ok(())
+    }
+
+    /// **RFC-0001 finding F1: the result against the manifest the same worker announced at boot** — the one link
+    /// [`Self::validate_against_request`] cannot make, because a request carries no tokenizer and the chain's tokenizer rule is
+    /// dormant. The job's `tokenizer_id` is inside the claim, but no consensus rule compares it to anything, so a worker that
+    /// stamped another tokenizer would produce a well-formed claim whose ids were read under a tokenizer the class does not
+    /// name. The job's class and its context are held to the manifest as well.
+    pub fn validate_against_manifest(&self, manifest: &PalwFpWorkerManifestV1) -> Result<(), PalwFpV3Error> {
+        let job = &self.job;
+        if job.tokenizer_id != manifest.tokenizer_id {
+            return Err(PalwFpV3Error::WorkerManifestMismatch(format!(
+                "the worker's result names tokenizer {} where its own manifest names {}: the prompt ids were not read under the class's tokenizer",
+                job.tokenizer_id, manifest.tokenizer_id
+            )));
+        }
+        if job.class_id != manifest.class_id {
+            return Err(PalwFpV3Error::WorkerManifestMismatch(
+                "the worker's result is for a different class than its own manifest".to_string(),
+            ));
+        }
+        if job.max_context_tokens > manifest.n_ctx {
+            return Err(PalwFpV3Error::WorkerManifestMismatch(format!(
+                "the worker's result claims a context of {} where its manifest registers {}",
+                job.max_context_tokens, manifest.n_ctx
+            )));
+        }
+        Ok(())
+    }
+
+    /// **Everything a caller that holds the worker's manifest checks, in one call** (P2): the request binding
+    /// ([`Self::validate_against_request`], now including F2) and the manifest binding ([`Self::validate_against_manifest`], F1).
+    /// A caller with no manifest to hand (a drill client reading a one-shot result) keeps calling the first alone.
+    pub fn validate_against_request_and_manifest(
+        &self,
+        request: &PalwFpWorkerRequestV3,
+        request_hash: Hash64,
+        prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        manifest: &PalwFpWorkerManifestV1,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_against_request(request, request_hash, prompt_ids_form)?;
+        self.validate_against_manifest(manifest)
     }
 
     /// Assemble the consensus commitment from a validated result plus the two pieces only the
@@ -2619,6 +2691,35 @@ pub enum PalwFpWorkerFrameV1 {
     BatchToken { index: u32, token_id: u32, rendered: Vec<u8> } = 6,
     /// **RFC-0001 §2.8 — the answer to an embedding request** ([`PALW_FP_WORKER_EMBED_MAGIC_V1`]).
     Embedded(Box<PalwFpWorkerEmbeddingV1>) = 7,
+    /// **RFC-0001 P1 — the terminator of a request the gateway cancelled** ([`PALW_FP_WORKER_CANCEL_MAGIC_V1`]): the run stopped
+    /// at its next token, nothing was retained, no result exists, and the worker STAYS UP with its artifact resident. Exactly one
+    /// terminator still ends the request (`Result`, `Answered`, `Refused` or this). `request_hash` echoes the request's, so a
+    /// reader can tell this answer is for the request it cancelled. Node-local; no consensus object is built from it.
+    Cancelled {
+        request_hash: Hash64,
+    } = 8,
+}
+
+/// **RFC-0001 P1 — a `v3-serve` frame that CANCELS the request in flight**: this magic, then the 64-byte request hash
+/// ([`fp_worker_request_hash_v3`] of the request's bytes, the same hash the result echoes). A request frame begins with a `u16`
+/// version and the other magics (`MPAO`, `MPAB`, `MPEM`) are distinct, so the framings never collide. The worker reads it WHILE
+/// the run is in progress (it cannot be an ordinary in-order frame: the gateway writes it after the request, mid-run) and stops
+/// at the next token; a cancel for a request that already ended is ignored. A worker that does not know the magic refuses the
+/// frame as "not a v3 request" and runs on, which is today's drain-and-discard behaviour.
+pub const PALW_FP_WORKER_CANCEL_MAGIC_V1: [u8; 4] = *b"MPCX";
+
+/// The cancel frame's bytes for the request whose hash is `request_hash`.
+pub fn fp_worker_cancel_frame_v1(request_hash: Hash64) -> Vec<u8> {
+    let mut frame = PALW_FP_WORKER_CANCEL_MAGIC_V1.to_vec();
+    frame.extend_from_slice(request_hash.as_byte_slice());
+    frame
+}
+
+/// The request hash a cancel frame names, or `None` when the bytes are not exactly a cancel frame (wrong magic, wrong length).
+pub fn parse_fp_worker_cancel_frame_v1(bytes: &[u8]) -> Option<Hash64> {
+    let body = bytes.strip_prefix(&PALW_FP_WORKER_CANCEL_MAGIC_V1)?;
+    let hash: [u8; 64] = body.try_into().ok()?;
+    Some(Hash64::from_bytes(hash))
 }
 
 /// A `v3-serve` frame that asks for the POOLED HIDDEN STATE of a prompt (RFC-0001 §2.8): this magic,
@@ -3577,6 +3678,178 @@ mod tests {
                 .is_err(),
             "a zero manifest retains nothing"
         );
+    }
+
+    /// **RFC-0001 P2: findings F1 and F2 live in the validator every caller shares.** A V4 request asks for one stop string; the
+    /// honest worker spelled it into a stop sequence, and the result binds. A worker that DROPPED the sequences returns a result the
+    /// request binding itself now refuses (F2), where it used to pass with the gap recorded as a finding; a result stamped with
+    /// another tokenizer, class or a wider context is refused by the manifest binding (F1) and by the combined call. No wire byte
+    /// or id moves: this changes what a result is admitted for, nothing it is.
+    #[test]
+    fn the_hoisted_f1_and_f2_checks_are_in_the_shared_validator() {
+        let form = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let ids: Vec<u32> = (0..96).collect();
+        let mut j = job();
+        j.version = PALW_FP_V4_VERSION;
+        j.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&ids);
+        // The request names no stop ids of its own (a gateway holds no tokenizer) and one stop STRING.
+        let cfg = DecodeConfigV4 {
+            repeat_penalty_q: 81_920,
+            penalty_window: 64,
+            frequency_penalty_q: 1 << 22,
+            presence_penalty_q: -(1 << 21),
+            logit_bias: vec![(13, 5 << 24)],
+            stop_sequences: vec![],
+        };
+        let asked = cfg.clone();
+        let mut spelled = cfg;
+        spelled.stop_sequences = vec![vec![198, 198]];
+        j.decode = Some(spelled);
+        let request = PalwFpWorkerRequestV3 {
+            version: PALW_FP_V4_VERSION,
+            network_domain: j.network_domain,
+            class_id: j.class_id,
+            executor_bond: j.executor_bond,
+            executor_pubkey: j.executor_pubkey.clone(),
+            operator_id: j.operator_id,
+            anchor_block: j.anchor_block,
+            anchor_daa: j.anchor_daa,
+            job_nonce: j.job_nonce,
+            decode_token_limit: j.decode_token_limit,
+            max_context_tokens: j.max_context_tokens,
+            privacy_mode: j.privacy_mode,
+            prompt_mode: j.prompt_mode,
+            sampling_seed: j.sampling_seed,
+            temperature_q: j.temperature_q,
+            input: PalwFpWorkerInputV3::TokenIds(ids.clone()),
+            model_profile_id: Hash64::from_u64_word(0x1),
+            runtime_manifest_hash: Hash64::from_u64_word(0x2),
+            runtime_class_id: Hash64::from_u64_word(0x3),
+            shape_profile_id: Hash64::from_u64_word(0x4),
+            trace_scheme_id: Hash64::from_u64_word(0x5),
+            decode: Some(asked),
+            stop_texts: vec![b"\n\n".to_vec()],
+            constraint: None,
+        };
+        let request_hash = fp_worker_request_hash_v3(&borsh::to_vec(&request).unwrap());
+        let result = PalwFpWorkerResultV3 {
+            version: PALW_FP_V3_VERSION,
+            request_hash,
+            job: j.clone(),
+            prompt_token_ids: ids,
+            trace_root: Hash64::from_u64_word(0x7A),
+            output_root: Hash64::from_u64_word(0x0B),
+            schedule_root: Hash64::from_u64_word(0x5C),
+            execution_root: Hash64::from_u64_word(0x4E),
+            trace_manifest_root: Hash64::from_u64_word(0xDA),
+            trace_chunk_count: 1,
+            trace_event_count: 77,
+            decode_tokens_executed: 77,
+            step_leaf_count: 4_096,
+            stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+            output_token_ids: vec![9; 77],
+            rendered: b"an answer".to_vec(),
+            model_load_ms: 1,
+            execute_ms: 2,
+        };
+        let manifest = PalwFpWorkerManifestV1 {
+            version: PALW_FP_WORKER_MANIFEST_V1_VERSION,
+            model_id: "fixture".to_string(),
+            class_id: j.class_id,
+            model_profile_id: Hash64::from_u64_word(0x1),
+            runtime_manifest_hash: Hash64::from_u64_word(0x2),
+            runtime_class_id: Hash64::from_u64_word(0x3),
+            shape_profile_id: Hash64::from_u64_word(0x4),
+            trace_scheme_id: Hash64::from_u64_word(0x5),
+            tokenizer_id: j.tokenizer_id,
+            n_ctx: j.max_context_tokens,
+            prefill_single_batch_cap: 512,
+            vocab: 1_000,
+            special_tokens: vec![],
+            eog_token_ids: vec![],
+        };
+        // The honest result passes every one of the three.
+        result.validate_against_request(&request, request_hash, form).expect("the honest result binds its request");
+        result.check_stop_texts_were_spelled(&request).expect("it spelled the string");
+        result.validate_against_manifest(&manifest).expect("it names its own worker's tokenizer, class and context");
+        result.validate_against_request_and_manifest(&request, request_hash, form, &manifest).expect("and the combined call");
+
+        // F2: the worker dropped the spelled sequences. The request binding refuses it now.
+        let mut dropped = result.clone();
+        dropped.job.decode.as_mut().unwrap().stop_sequences.clear();
+        assert_eq!(
+            dropped.validate_against_request(&request, request_hash, form),
+            Err(PalwFpV3Error::StopStringsNotSpelled { asked: 1, have: 0 }),
+            "the finding: this used to bind, under a job where `stop` does nothing"
+        );
+        assert!(dropped.validate_against_request(&request, request_hash, form).unwrap_err().to_string().contains("not spelled"));
+        // A request with no stop strings is unaffected by the floor (a worker may add none).
+        let mut plain = request.clone();
+        plain.stop_texts.clear();
+        let plain_hash = fp_worker_request_hash_v3(&borsh::to_vec(&plain).unwrap());
+        let mut plain_result = dropped.clone();
+        plain_result.request_hash = plain_hash;
+        plain_result.validate_against_request(&plain, plain_hash, form).expect("no stop strings asked, none required");
+        // The floor is a floor and not an equality: more sequences than the cap still fail the cap, as before.
+        let mut too_many = result.clone();
+        too_many.job.decode.as_mut().unwrap().stop_sequences = vec![vec![1], vec![2]];
+        assert!(too_many.validate_against_request(&request, request_hash, form).is_err(), "the cap (asked + stop_texts) is unchanged");
+
+        // F1: tokenizer, class, context — each refused by name, by the manifest binding and by the combined call.
+        let mut foreign = result.clone();
+        foreign.job.tokenizer_id = Hash64::from_u64_word(0xBAD);
+        assert!(
+            foreign.validate_against_request(&request, request_hash, form).is_ok(),
+            "the request carries no tokenizer: only the manifest can tell"
+        );
+        assert!(foreign.validate_against_manifest(&manifest).unwrap_err().to_string().contains("tokenizer"));
+        assert!(foreign.validate_against_request_and_manifest(&request, request_hash, form, &manifest).is_err());
+        let mut other_class = result.clone();
+        other_class.job.class_id = Hash64::from_u64_word(1);
+        assert!(other_class.validate_against_manifest(&manifest).unwrap_err().to_string().contains("class"));
+        let mut wide = result.clone();
+        wide.job.max_context_tokens = manifest.n_ctx + 1;
+        assert!(wide.validate_against_manifest(&manifest).unwrap_err().to_string().contains("context"));
+        assert!(matches!(wide.validate_against_manifest(&manifest), Err(PalwFpV3Error::WorkerManifestMismatch(_))));
+    }
+
+    /// **RFC-0001 P1: the cancel frame is exactly its magic and a 64-byte request hash**, and nothing else reads as one.
+    #[test]
+    fn a_cancel_frame_names_one_request_and_collides_with_no_other_framing() {
+        let h = Hash64::from_u64_word(0xCA);
+        let frame = fp_worker_cancel_frame_v1(h);
+        assert_eq!(frame.len(), 4 + 64);
+        assert_eq!(&frame[..4], b"MPCX");
+        assert_eq!(parse_fp_worker_cancel_frame_v1(&frame), Some(h));
+        // Wrong magic, truncated, over-long, empty: not a cancel.
+        let mut other = frame.clone();
+        other[3] = b'Y';
+        assert_eq!(parse_fp_worker_cancel_frame_v1(&other), None);
+        assert_eq!(parse_fp_worker_cancel_frame_v1(&frame[..frame.len() - 1]), None);
+        let mut long = frame.clone();
+        long.push(0);
+        assert_eq!(parse_fp_worker_cancel_frame_v1(&long), None);
+        assert_eq!(parse_fp_worker_cancel_frame_v1(&[]), None);
+        // The four magics a v3-serve frame may begin with are distinct, and none can begin a request (a request starts with a
+        // u16 version: 0x504D, 0x5041... read as a version are far above every FP job version).
+        let magics = [
+            PALW_FP_WORKER_CANCEL_MAGIC_V1,
+            PALW_FP_WORKER_ANSWER_ONLY_MAGIC_V1,
+            PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1,
+            PALW_FP_WORKER_EMBED_MAGIC_V1,
+        ];
+        let set: std::collections::BTreeSet<[u8; 4]> = magics.into_iter().collect();
+        assert_eq!(set.len(), 4);
+        for m in magics {
+            assert!(u16::from_le_bytes([m[0], m[1]]) > 1_000, "{m:?} cannot be read as a request version");
+        }
+        // The terminator that answers a cancel is the 9th frame, appended: the others keep their discriminants.
+        let cancelled = PalwFpWorkerFrameV1::Cancelled { request_hash: h };
+        let bytes = borsh::to_vec(&cancelled).unwrap();
+        assert_eq!(bytes[0], 8);
+        assert_eq!(borsh::from_slice::<PalwFpWorkerFrameV1>(&bytes).unwrap(), cancelled);
+        assert_eq!(borsh::to_vec(&PalwFpWorkerFrameV1::Refused { reason: String::new() }).unwrap()[0], 3);
+        assert_eq!(borsh::to_vec(&PalwFpWorkerFrameV1::Token { token_id: 1, rendered: vec![] }).unwrap()[0], 1);
     }
 
     /// The on-chain payload: an honest one validates, and the two lies only the payload can tell

@@ -1,5 +1,14 @@
 # ADR-0173 — A seat holds a root, not a class: possession is keyed `(bond, class, root)`, a new root is NotReady until its floor, the draw reads the claim's own root, and a model's activation waits for possession (validation and canary are the dormant skeleton)
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
+> **2026-10-10後続改定 future reward-profile boundary:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md) abolishes MISAKA Torrent / dedicated Seeder rewards and withdraws the added availability/FPR gate. The earlier seat-root proposal retains its dated implementation/readiness scope, not a full-model acquisition guarantee. Future model allocation and conditional prosecution have separate unresolved gates; no runtime activation occurs here.
+
 **Status:** PROPOSED 2026-10-04 on `rcore/post5300-audit` (lane MU), the user's request after the DAA-5,300 release. Consensus change behind the
 **same** dormant fence as the audit fixes, `Params::palw_audit_1004_v1` ("今回の監査修正で"): below it every path folds byte for byte as at
 `0b1c11b87`, and on every shipped preset the fence is `None`. Amends **ADR-0088** (a version is in force from its publication — now: claimable from
@@ -87,9 +96,9 @@ registry's lifecycle, or not seated (possession floor with no executor excluded,
   5 minutes. On exit 0 — or whenever a bundle is dropped by hand — `--palw-root-drop-dir` (default `--palw-improve-artifact-dir`) is
   scanned; a bundle that declares the wanted class and roots to the wanted root joins the holdings and the next tick's duty proves it. A
   failed fetch is a `ROOT_BUNDLE_MISSING` log line and nothing else: it is never a ground for a slash, a void or an `Unavailable`.
-  **TODO: integrate `misaka-model-transport` (`bundle_commitment`, btv2 infohash declarations of ADR-0171, lane MN) as the default
-  fetcher** — it is not in this branch; until then the declared values are not passed (no caller supplies them).
-* Panel binary updates stay on fences; weights follow through the transport once it is in.
+  **WITHDRAWN, 2026-10-10後続改定:** the proposed default `misaka-model-transport` integration was not built in this branch
+  and is abolished under ADR177. The earlier hook/readiness record stays historical; future model supply is operator-selected off-chain activity.
+* Panel binary updates retain their versioned upgrade rules; no MISAKA model-transport integration is scheduled by this document.
 
 ## 5. Tests
 
@@ -119,3 +128,31 @@ machine. Below the fence every existing test is unchanged; `scripts/t12-repin.sh
 5. **A new root that never gathers its floor** — R5 leaves the line on its current root forever. Should a preview expire (withdraw automatically after N DAA)?
 6. **R6 and a winner that is not yet ready** — the epoch is decided as no change (its fees and rewards follow the no-change path). Alternative: defer the
    decision until the winner is ready, which needs an epoch state the fold does not have; preferable only if candidates routinely win before they are seated.
+
+## Model acquisition outside consensus amendment — 2026-10-10後続改定
+
+[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。chainはmodel取得可否・Seeder登録/独立性・配布量/速度を管理せず、
+旧必須Torrent、独立Bonded Seeder、PoR/Full Fetch/lease/TRDC/FPRと取得不履行に基づく資格/weight停止を撤回する。
+model配布は任意のTorrent/mirror/共有契約で行い、取得失敗・非公開だけでSlash/Final延長を起動しない。
+
+固定Model ID/root、weights/tokenizer/config/specは不変とし、変更は新Model IDとして登録する。
+取得bytesは認証と全量復元rootで照合し、claimも同じroot/specをbindする。
+任意のinfohash対応を登録する場合はimmutable bindingとし、必須取得経路にしない。
+claim固有state/trace/output/witnessの有限な証拠責任は維持するが、modelの全量/反復range公開へ転用しない。
+必要operandの認証と許可unit/累積scopeをADR177 D2で確定し、modelを得たfresh non-seat verifierの
+計算反証/localization/exact courtを試験する。全model保有者拒否時の取得保証は撤回する。
+
+重複しないminer拘束元本`S_m=sum_b C_{b,m}`からmodelのcoinbase予算を`f(S_m)`で配分する。
+同じ元本をclaim数/rho/複数modelで増幅せず、総発行予算と個別bondのQ/B/R/F cap・共通DAA拘束を維持する。
+資本預託だけでは支払わない。model別配分はblock頻度・DAA・fork choiceを自動変更しない。
+公開参加資本が閉鎖自己資本より圧倒的に有利になることは倍率式・経済評価の未立証目標であり、
+同額資本の所有者独立性をchainが識別できるとはしない。既存minerの実収入増も無条件保証しない。
+non-interference、distinct-capital、三層予算、公開/閉鎖比較、回復/移行のgateはADR177 §3を用いる。
+既存実装/測定・旧claim/activation記録は保持し、新配分・Panel=0は未実装/未有効化である。
+
+
+## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定
+
+[ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
+Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
+モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。

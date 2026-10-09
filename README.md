@@ -1,5 +1,7 @@
 <h1>misakas — post-quantum (PQ-only) Kaspa</h1>
 
+> **MISAKAの設計前提(すべての ADR・RFC・Spec の上位): [不可侵原則](docs/PRINCIPLES.md)** — 確率的に検出し、公開証拠で局所化し、決定論的に裁き、経済的に不正を抑止する。 *Probabilistic Detection. Public Localization. Deterministic Adjudication. Economic Deterrence.*
+
 The native token is **Misaka**, ticker **BILI**. Native addresses keep the `misaka`
 prefix (with the existing network-specific variants); see [ADR-0174](docs/adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md).
 
@@ -14,10 +16,10 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > launched on 2026-09-25/26 JST from release commit **`0e8ec984e`**; the current fleet lineage is
 > **`4ca695b98`**. Run it with
 > `kaspad --testnet --netsuffix=12` or `misaka --network testnet-12` (the CLI's default) and verify:
-> * consensus params fingerprint **`2e56764257fe24888a7aab4f109b6ef83fa6ac5000dc47d1369398e5959cbc1f`** — the
->   post-launch release, which arms every post-launch fence **from DAA 750** (fence schedule `750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585, 9000`: 3,600 is `palw_tir_fence2` alone; 5,300 is the int-12 flag day — decode rules, generative classes, FP Job V5, held close chunks, model improvement, layer-sharded panels (RFC-0006), verification vertices and the audit mesh (RFC-0007), the inference-surface rules (RFC-0001), class seating and GDN key heads (RFC-0002), the Useful Work Transition (ADR-0165, ADR-0166), the anchor window (ADR-0170), L_ver, the ×1000 capacity package and capacity ρ = 25 — and 5,395 / 5,490 / 5,585 are ρ = 100 / 250 / 1000; 9,000 is the int-13 flag day — `palw_audit_1004_v1`, `palw_gen_range_twin_v1`, `palw_model_court_window` and `palw_receipt_spend_v4`); a node
+> * consensus params fingerprint **`5ee7fd8ee019968cf52929b844cf9ddfb1aad500842a89cf04bced8ba4edefb6`** — the
+>   post-launch release, which arms every post-launch fence **from DAA 750** (fence schedule `750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585`: 3,600 is `palw_tir_fence2` alone; 5,300 is the int-12 flag day — decode rules, generative classes, FP Job V5, held close chunks, model improvement, layer-sharded panels (RFC-0006), verification vertices and the audit mesh (RFC-0007), the inference-surface rules (RFC-0001), class seating and GDN key heads (RFC-0002), the Useful Work Transition (ADR-0165, ADR-0166), the anchor window (ADR-0170), L_ver, the ×1000 capacity package and capacity ρ = 25 — and 5,395 / 5,490 / 5,585 are ρ = 100 / 250 / 1000; there is no DAA-9,000 flag day — the user cancelled it on 2026-10-08, and `palw_audit_1004_v1`, `palw_gen_range_twin_v1`, `palw_model_court_window` and `palw_receipt_spend_v4` wait, dormant, for the full-activation release); a node
 >   still on the launch release (`b8564b88…`) is refused by upgraded peers from DAA 750
-> * genesis `a27f8f44fe4d91a5…` and schedule id `5f5df8177e77fdf4…`
+> * genesis `a27f8f44fe4d91a5…` and schedule id `1678e07359f6727e…`
 >
 > Read **[docs/t12-launch-2026-09-25.md](docs/t12-launch-2026-09-25.md)** before relying on it: what the
 > release contains, the known issues (two CRITICAL ones are fixed by post-launch activation fences),
@@ -547,6 +549,15 @@ The `kaspa-pq-validator` sidecar connects to a local node over wRPC and attests 
 
 ```bash
 # 1. generate a validator key + print its funding address
+
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](docs/adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](docs/adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+[新方針・廃止範囲](docs/adr/0177-model-bond-allocation-without-availability-consensus.md) / [文書チェックと未完了事項](docs/adr/evidence/0177-model-distribution-policy-alignment-2026-10-10.md)。
+
 kaspa-pq-validator keygen --out val.seed --network testnet
 # 2. send funds to the printed funding address (mine to it, or transfer from another wallet)
 # 3. stake a DNS-finality bond. Testnet-11's minimum is 10 MSK = 1,000,000,000 sompi.

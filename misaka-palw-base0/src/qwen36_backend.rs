@@ -805,6 +805,8 @@ fn qwen36_execute_streaming_v1(
     let mut next = select(&last_logits);
     generated.push(next);
     on_token(next);
+    // RFC-0001 P1: a cancelled run stops at the next token.
+    crate::cancel::check_abort_v1()?;
     logits_rows.push(last_logits);
 
     for call in 1..decode_tokens {
@@ -820,6 +822,7 @@ fn qwen36_execute_streaming_v1(
         next = select(&logits);
         generated.push(next);
         on_token(next);
+        crate::cancel::check_abort_v1()?;
         logits_rows.push(logits);
         // The same predicate the prefill arm asks, so the two cannot drift into two cadences.
         if checkpoints.wants_checkpoint_after_v1(call as u32, 0) {

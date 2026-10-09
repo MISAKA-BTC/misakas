@@ -459,3 +459,82 @@ fn a_v5_job_rides_the_lanes_commitment_and_names_its_own_claim() {
     // The signature covers the V5 claim id — the lane's own signed message.
     assert_eq!(p5.signed_message(), p5.claim_id());
 }
+
+/// **RFC-0001 P3: a version-8 claim's output root and data-availability trio are the pipeline claim convention** — decided
+/// before the V5 fold exists, enforced by a door of their own so the existing V5 door (and with it every V4 validator) is
+/// byte for byte what it was. A producer that builds through [`palw_fp_v5_canonical_commitment_v1`] cannot fail the check; a
+/// commitment with any field of the convention moved is refused by that field's name, after V4's own rules have had their say.
+#[test]
+fn a_v5_commitment_follows_the_pipeline_claim_convention_through_its_own_door() {
+    use kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3;
+    let h = |w: u64| Hash64::from_u64_word(w);
+    let v4 = v4_jobs().remove(0);
+    let v5 = PalwFreePromptJobV5 { v4: v4.clone(), images: vec![image(2, 3)], source: None };
+    let canonical = palw_fp_v5_canonical_commitment_v1(&v5, h(0x7A), h(0x4E), 64, 4);
+    assert_eq!(canonical.job, v5.into_carried(), "the job is the V5 job as the lane carries it");
+    assert_eq!((canonical.trace_root, canonical.execution_root, canonical.work_leaves), (h(0x7A), h(0x4E), 64));
+    assert_eq!(canonical.decode_tokens_executed, 4);
+    palw_fp_v5_check_commitment_conventions_v1(&canonical).expect("canonical by construction");
+    assert_eq!(
+        (
+            canonical.output_root,
+            canonical.schedule_root,
+            canonical.trace_manifest_root,
+            canonical.trace_chunk_count,
+            canonical.trace_retention_daa
+        ),
+        (Hash64::default(), Hash64::default(), Hash64::default(), 1, 0),
+        "the convention: no output root, no schedule root, no manifest, one chunk, retention the chain's"
+    );
+
+    // Each field of the convention, moved: refused by its own name.
+    let moved: [(&str, fn(&mut kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3)); 5] = [
+        ("output_root", |c| c.output_root = Hash64::from_u64_word(0x0B)),
+        ("schedule_root", |c| c.schedule_root = Hash64::from_u64_word(0x5C)),
+        ("trace_manifest_root", |c| c.trace_manifest_root = Hash64::from_u64_word(0x3F)),
+        ("trace_chunk_count", |c| c.trace_chunk_count = 2),
+        ("trace_retention_daa", |c| c.trace_retention_daa = 505_000),
+    ];
+    for (name, mutate) in moved {
+        let mut c = canonical.clone();
+        mutate(&mut c);
+        assert_eq!(palw_fp_v5_check_commitment_conventions_v1(&c), Err(PalwFpV5Error::CommitmentNotCanonical(name)), "{name}");
+    }
+    // Fields the convention does not name stay free: the step root, the execution root, the price.
+    let mut free = canonical.clone();
+    (free.trace_root, free.execution_root, free.work_leaves) = (h(1), h(2), 99);
+    palw_fp_v5_check_commitment_conventions_v1(&free).expect("the roots and the price are the binding's, not the convention's");
+
+    // The doors. The new one is the old one plus the convention, and nothing else.
+    let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+    let ladder = 1 << 26;
+    let payload = |commitment| PalwFpCommitmentTxPayloadV3 {
+        version: PALW_FP_V3_VERSION,
+        commitment,
+        prompt_token_ids: vec![],
+        signature: vec![0x5A; 16],
+    };
+    let door = |p: &PalwFpCommitmentTxPayloadV3, armed: bool| {
+        palw_fp_v5_validate_payload_v1(p, v4.network_domain, true, ladder, None, form, armed)
+    };
+    let canonical_door = |p: &PalwFpCommitmentTxPayloadV3, armed: bool| {
+        palw_fp_v5_validate_payload_canonical_v1(p, v4.network_domain, true, ladder, None, form, armed)
+    };
+    let good = payload(canonical.clone());
+    assert_eq!(
+        canonical_door(&good, true),
+        door(&good, true),
+        "a canonical commitment is admitted exactly when the existing door admits it"
+    );
+    assert_eq!(canonical_door(&good, false), Err(PalwFpV5Error::NotArmed), "dormant below the V5 fence, as the existing door");
+    let mut off = canonical;
+    off.output_root = h(0x0B);
+    off.trace_manifest_root = h(0x3F);
+    off.trace_retention_daa = 505_000;
+    let odd = payload(off);
+    match door(&odd, true) {
+        Ok(_) => assert_eq!(canonical_door(&odd, true), Err(PalwFpV5Error::CommitmentNotCanonical("output_root"))),
+        Err(e) => assert_eq!(canonical_door(&odd, true), Err(e), "V4's own reason comes first, unchanged"),
+    }
+    assert_eq!(canonical_door(&odd, false), Err(PalwFpV5Error::NotArmed));
+}

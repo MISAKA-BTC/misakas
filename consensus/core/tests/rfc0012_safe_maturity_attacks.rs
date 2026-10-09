@@ -106,7 +106,7 @@ fn walk(
     }
     for daa in from_daa + 1..=to_daa {
         let objects = events.get(&daa).cloned().unwrap_or_default();
-        match try_step(&l.p, &l.sp, &s, daa, &objects, PalwBlockWorkV3::None, Hash64::default(), 0, true) {
+        match try_step_for(l, &s, daa, &objects, PalwBlockWorkV3::None, Hash64::default(), 0) {
             Ok((next, delta)) => {
                 let o = observe(l, &next, daa, &delta, void);
                 void = o.voided;
@@ -540,4 +540,167 @@ fn rfc0012_d1_d_a_colluding_producer_and_panel_is_caught_in_time_only_if_safe_wa
     for k in ks.iter().filter(|k| **k <= 600) {
         assert_eq!(v(Rule::FinalPlus(600), *k), Verdict::CaughtBeforeSafe, "Final+600 at {k}: inside its wait");
     }
+}
+
+// =====================================================================================================================
+// C4 - the horizons D1 rests on, as TRIPWIRES for the integration tree
+// =====================================================================================================================
+
+/// The relations section 10.2 rests on, measured on the real fold under one lane configuration.
+#[derive(Debug, PartialEq, Eq)]
+struct Horizons {
+    /// `Final - acceptance` of an honest quorum.
+    f_off: u64,
+    claim_retirement: u64,
+    /// The last block, in DAA after `Final`, whose conviction still reverses the `Final`; and the first that does not.
+    last_conviction: u64,
+    first_unreversed: Option<u64>,
+    /// The last accusation the DA channel admits, and the latest default it produces (both in DAA after `Final`).
+    last_accusation: u64,
+    last_default: u64,
+    disclose: u64,
+}
+
+fn measure_horizons(l: &Life) -> Horizons {
+    let disclose = kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&l.sp);
+    let retirement = l.sp.claim_retirement_daa();
+    let ks = [retirement - 1, retirement, retirement + 1, retirement + 2];
+    let accs = [1_800u64, retirement - 1, retirement, retirement + 1];
+    let keep: BTreeSet<u64> = ks.iter().chain(&accs).map(|k| l.final_daa + k - 1).collect();
+    let (_, kept, refused) = walk(l, &l.at_final, l.final_daa, l.final_daa + retirement + 3, &BTreeMap::new(), &keep, false);
+    assert!(refused.is_none(), "{refused:?}");
+    let (mut last_conviction, mut first_unreversed) = (0, None);
+    for k in ks {
+        let res = try_step_for(
+            l,
+            &kept[&(l.final_daa + k - 1)],
+            l.final_daa + k,
+            &[false_valid(l, l.valid_seats[0])],
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+            0,
+        );
+        if matches!(&res, Ok((_, d)) if native_delta_evidence_v1(d).voided.contains(&l.id)) {
+            last_conviction = k;
+        } else if first_unreversed.is_none() {
+            first_unreversed = Some(k);
+        }
+    }
+    let (mut last_accusation, mut last_default) = (0, 0);
+    for a in accs {
+        let event = BTreeMap::from([(
+            l.final_daa + a,
+            vec![PalwConsensusObjectV2::DefaultAccused {
+                claim: l.id,
+                missing_event_index: 0,
+                accuser: l.valid_seats[0],
+                signature: vec![],
+            }],
+        )]);
+        let (obs, _, refused) = walk(
+            l,
+            &kept[&(l.final_daa + a - 1)],
+            l.final_daa + a - 1,
+            l.final_daa + a + disclose + 3,
+            &event,
+            &BTreeSet::new(),
+            false,
+        );
+        if refused.is_none() {
+            last_accusation = a;
+            if let Some(o) = obs.iter().find(|o| o.voided) {
+                last_default = o.daa - l.final_daa;
+            }
+        }
+    }
+    Horizons {
+        f_off: l.final_daa - l.accepted_daa,
+        claim_retirement: retirement,
+        last_conviction,
+        first_unreversed,
+        last_accusation,
+        last_default,
+        disclose,
+    }
+}
+
+/// **EXPECTED (C4 - written before the run; the point is to be re-run).** D1's conclusions rest on four numbers of the fold as it is:
+/// an honest quorum's `F_off` (123), the last block that reverses a `Final` by conviction (`Final + claim_retirement`), the last DA
+/// accusation (the same block) and the latest default it produces (`+ W_disclose + 1`). They are measured here under every lane
+/// configuration this fixture CAN arm today and asserted as RELATIONS, so a lane that moves one of them fails this test by name instead of
+/// silently invalidating section 10.2.
+///
+/// **What the fixture cannot arm, stated.** RFC-0010's permissionless Panel (`panel_v3`: a beacon, a draw policy), RFC-0014/0015's kernel
+/// route and Panel-free (OPV) claims (`kernel_route`, a class registry, `palw_panel_free_v1`'s interim 50-DAA window), RFC-0008's
+/// claim-backed work slices and RFC-0011-K2's class registrations all need inputs this fold fixture does not build; their lanes are still in
+/// flight (X8R, OPV-BOOT, K2S, G14-R4). **Measured against what is merged now; to be redone at integration** by adding a variant here
+/// whose extras edit arms the lane and, for a class-bound lane, a `Life` for a claim of that class.
+#[test]
+fn rfc0012_d1_g_the_horizons_hold_under_every_lane_configuration_the_fixture_can_arm() {
+    let court_window_armed: ExtrasEdit =
+        std::sync::Arc::new(|e: &mut kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1| e.model_court_window_active = true);
+    let variants: Vec<(&str, ExtrasEdit)> = vec![
+        ("baseline (as the fixture folds it)", no_edit()),
+        ("palw_model_court_window armed, no class has committed a window", court_window_armed),
+    ];
+    let mut first: Option<Horizons> = None;
+    for (name, edit) in variants {
+        let l = live_life_with(edit);
+        let h = measure_horizons(&l);
+        eprintln!("[d1-g] {name}: {h:?}");
+        assert_eq!(h.f_off, 123, "{name}: an honest quorum finalizes 123 DAA after acceptance");
+        assert_eq!(h.last_conviction, h.claim_retirement, "{name}: the last reversing conviction is Final + claim_retirement");
+        assert_eq!(h.first_unreversed, Some(h.claim_retirement + 1), "{name}: and the next block reverses nothing");
+        assert_eq!(h.last_accusation, h.claim_retirement, "{name}: the DA channel admits through the same block");
+        assert_eq!(h.last_default, h.claim_retirement + h.disclose + 1, "{name}: and its latest default is W_disclose + 1 later");
+        if let Some(f) = &first {
+            assert_eq!(&h, f, "{name}: identical to the baseline");
+        }
+        first.get_or_insert(h);
+    }
+}
+
+// =====================================================================================================================
+// C6 - a class's own court window extends a claim's retention; the maturity must follow it
+// =====================================================================================================================
+
+/// **EXPECTED (C6).** A class that committed its own court window (`palw_model_court_window`) has the claim's `trace_retention_daa` EXTENDED
+/// to a court's deadline when a court opens on it (`CourtOpened`, palw_state_v2.rs:30818) - possibly AFTER `Final`. The record in the delta of
+/// the block that finalized the claim is frozen at that block, so a fact matured on it counted the work at the old instant while a court
+/// still ran and the producer still owed the trace. This is the caution (1) of section 10.2, now closed: `native_facts_of_block_v1`
+/// reads the claim's retention from the sink state too, and a fact is mature at the LATER of the two. Shown here with the extension a
+/// court opened at `Final + 2,900` on a 9,000-DAA class window writes (applied to the claim record by hand, as that code does): the fact
+/// is mature at the extended retention, not at v1's 5,400 after acceptance; and a state where the claim is gone (retired) or unextended
+/// gives the recorded instant, byte for byte what it gave before.
+#[test]
+fn rfc0012_d1_h_a_court_opened_after_final_on_a_class_with_its_own_window_holds_the_work_immature() {
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    let l = live_life();
+    let finalized = native_delta_evidence_v1(&l.final_delta);
+    let real = genesis_classes(&l.p)[1].0;
+    let mut relabelled = NativeDeltaEvidenceV1::default();
+    relabelled.finalized_attempts.push((l.id, {
+        let mut c = finalized.finalized_attempts[0].1.clone();
+        c.class_id = real;
+        c
+    }));
+    let open = BTreeSet::new();
+    let matured_in = |state: &PalwChainStateV2| {
+        let facts =
+            native_facts_of_block_v1(&rules(&l, state, &open), &relabelled, &BTreeSet::new(), (l.accepted_daa, l.accepted_daa));
+        assert_eq!(facts.len(), 1);
+        facts[0].matured_daa
+    };
+    let recorded = l.retention_daa.max(l.final_daa + l.sp.claim_retirement_daa());
+    assert_eq!(matured_in(&l.at_final), recorded, "unextended: the recorded instant");
+    assert_eq!(matured_in(&l.after_retirement), recorded, "retired: the recorded instant");
+    // A court opened at Final + 2,900 on a 9,000-DAA class window.
+    let (window, opened) = (9_000u64, l.final_daa + 2_900);
+    let mut carriage = PalwStateCarriageV2::from_state(&l.at_final);
+    let claim = carriage.claims.get_mut(&l.id).expect("the claim is in state at Final");
+    claim.trace_retention_daa = claim.trace_retention_daa.max(opened + window);
+    let extended = rebuild(&l.p, carriage);
+    assert_eq!(extended.claim(&l.id).unwrap().trace_retention_daa, opened + window);
+    assert_eq!(matured_in(&extended), opened + window, "the work is immature until the court's deadline");
+    assert!(opened + window > recorded, "and that is later than v1's instant ({recorded})");
 }

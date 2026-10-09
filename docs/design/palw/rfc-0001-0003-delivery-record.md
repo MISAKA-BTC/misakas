@@ -19,7 +19,7 @@ node, a real model weight or the t12 network. **No RFC is complete.**
 | 2 | …into a consensus fold (claim visible; receipt checked against the node's row; seat replay; licence) | gateway → fp-submit `plan_submission`/`execute_handoff` → extraction walk → `apply_palw_transition_v7` | `e2e_chain::a_v3_gateway_request_becomes_a_claim_the_fold_holds_…` | IMPLEMENTED_AND_TESTED in process on testnet-12's shipped params (l5 fixtures: fixture bond key, accepting broadcast, signature = the door's other test) |
 | 3 | FP Job V4: gateway normalization → fence → fold, decode-only credit (D10), seat replay | same, fence test-armed at DAA 110 | `e2e_chain::a_v4_gateway_request_is_carried_only_past_the_test_armed_fence_…` | gateway side IMPLEMENTED_AND_TESTED; the fence itself DORMANT_NOT_INTEGRATED; gates G8–G10 (salted flag-day drill, release, activation) EXTERNAL_GATE_PENDING |
 | 4 | Idempotency (`Idempotency-Key` + RFC 8785 request digest): same key+request → same claim, no second inference/commitment/charge; different request → 409; failed/cancelled request frees the key; survives restart; key never on disk | `idempotency` | `idempotency::*`, `e2e::a_retry_with_the_same_key_replays_…`, `…the_same_key_for_a_different_request_is_refused…`, `…a_streaming_retry_of_a_finished_request_is_replayed_as_a_stream…` | IMPLEMENTED_AND_TESTED |
-| 5 | Cancellation on client disconnect: queued request never runs; mid-run request is drained and discarded — no commitment, no outbox file, no charge, trace removed, counters released, key freed | `serving::ClientLink`, `handle_chat` gates | `e2e::a_client_that_disconnects_mid_run_is_never_committed…`, `…a_streaming_client_that_hangs_up…`, `…a_queued_request_whose_client_left_is_not_run_at_all` | IMPLEMENTED_AND_TESTED; aborting a run already on the worker is a CODE_GAP (§4, P1) |
+| 5 | Cancellation on client disconnect: queued request never runs; mid-run request is drained and discarded — no commitment, no outbox file, no charge, trace removed, counters released, key freed | `serving::ClientLink`, `handle_chat` gates | `e2e::a_client_that_disconnects_mid_run_is_never_committed…`, `…a_streaming_client_that_hangs_up…`, `…a_queued_request_whose_client_left_is_not_run_at_all` | IMPLEMENTED_AND_TESTED; aborting a run already on the worker: closed by P1 (SMALL lane, §6) |
 | 6 | `Retry-After` on every 503/429 (the queue-full 503 documented one and wrote none) | `serving::render_head` | `serving::a_503_and_a_429_always_carry_a_retry_after…`, `serving::the_connection_cap_503_reaches_the_client…`, `e2e::a_full_queue_answers_503_with_a_retry_after…` | fixed; IMPLEMENTED_AND_TESTED |
 | 7 | Bounded queue as a CAS reservation released by drop | `serving::QueueGate` | `serving::the_queue_never_holds_more_than_its_cap…`, `…many_threads_never_push…` | IMPLEMENTED_AND_TESTED |
 | 8 | Status `streaming → answered/committed → submitted → final/voided` (+ cancelled, misattributed); streamed chunks say `streaming`, `final:false`; `final`/`voided` only from a settled chain row via the rail's `ClaimTracker`, labelled `UNVERIFIED_REMOTE_STATE`; `GET /v1/requests/<id>` | `status`, `chain::observation_from_claim_reply` | `status::*`, `chain::a_claim_reply_is_folded_…`, `e2e::every_streamed_chunk_says_streaming…`, `e2e::the_status_route_reports_committed_then_submitted…` | mapping IMPLEMENTED_AND_TESTED; the wRPC call (`RpcChainSource::observe_claim`) is compiled, not run against a node (EXTERNAL_GATE_PENDING) |
@@ -77,15 +77,15 @@ adding a field to any of them is a compile error until it has a row and a mutati
 
 | id | finding | severity | disposition |
 |---|---|---|---|
-| F1 | `validate_against_request` never compares the job's `tokenizer_id` (the request carries none; the chain's tokenizer rule is `Dormant`). A worker that stamped another tokenizer returned a result that bound its request. | gateway integrity | **fixed in the gateway** (`binding::check_result_against_manifest`, also class and context) |
-| F2 | `validate_against_request` only CAPS the stop sequences a worker may add, so a worker that dropped the user's `stop` strings returned a result that bound its request, under a job where `stop` does nothing — while the response told the user it applied. | honesty of the response | **fixed in the gateway** (`binding::check_stop_texts_were_spelled`) |
+| F1 | `validate_against_request` never compares the job's `tokenizer_id` (the request carries none; the chain's tokenizer rule is `Dormant`). A worker that stamped another tokenizer returned a result that bound its request. | gateway integrity | **fixed in the gateway** (`binding::check_result_against_manifest`, also class and context); hoisted into consensus-core by P2 (§6) |
+| F2 | `validate_against_request` only CAPS the stop sequences a worker may add, so a worker that dropped the user's `stop` strings returned a result that bound its request, under a job where `stop` does nothing — while the response told the user it applied. | honesty of the response | **fixed in the gateway** (`binding::check_stop_texts_were_spelled`); hoisted into `validate_against_request` by P2 (§6) |
 | F3 | The queue-full 503 documented `Retry-After` and wrote none. | serving | fixed |
 | F4 | Without a key a client retry is a SECOND job: a fresh random `job_nonce` (a different claim id) for the same work, a second inference and budget charge, and a commitment the chain then refuses as `DuplicateWork` (`fp_work_id_v1 = (class, prompt hash, bond)`). | serving/economics | fixed by the idempotency key (opt-in per request) |
 | F5 | The original request and the chat template id are not in any claim field; only the ids the template produced are. A third party can read what the model was shown, not which template made it. | by design | recorded; the receipt carries the request digest and template id; no consensus change proposed |
 | F6 | The rendered text is not in the claim (the ids are); the user reads a tokenizer function of them. | by design | recorded; W5 (stream = rendering of committed ids) + the receipt's shown-text digest |
 | F7 | A point-sampling resampler does not read every raw picture byte: an unsampled byte changes neither the canonical pixels nor the job. | by design | the preprocessing record carries the RAW picture's digest, so the receipt still tells the pictures apart |
 | F8 | **`misaka-palw-fp-rail --evidence-out` has no `PanelDa` guard**: for a mode-2 claim `staged_prompt_ids` returns the worker's PRIVATE ids and they go into the material written to the evidence directory. If that directory is served by a provider anyone can GET (the reference `transport::server` serves every content-addressed path to any caller), the private prompt is disclosed. The gateway refuses `PanelDa` + public providers (at boot and per job); the rail does not. | privacy (C1's file) | **reported to C1/Lead, not edited** |
-| F9 | A worker mid-run cannot be cancelled: the resident protocol has no cancel frame. A cancelled job finishes (≤ the decode cap) and is discarded; killing the worker instead would turn every dropped connection into a model re-map (an amplification attack). | resource | CODE_GAP (P1) |
+| F9 | A worker mid-run cannot be cancelled: the resident protocol has no cancel frame. A cancelled job finishes (≤ the decode cap) and is discarded; killing the worker instead would turn every dropped connection into a model re-map (an amplification attack). | resource | closed by P1 (SMALL lane, §6) |
 
 ## 4. Proposals (versioned amendments / decisions for the Lead — none changes frozen FP V4 semantics)
 
@@ -107,3 +107,47 @@ cargo test --offline -p misaka-palw-gateway --bin misaka-palw-gateway e2e_chain 
 ```
 Dev-dependencies added (tests only; `Cargo.lock` gains three edges): `misaka-palw-sdk`, `misaka-palw-tir-lower`, `misaka-palw-tir-artifact`.
 The base0 tests (`fp_job_v4*`, `fp_job_v4_t12_e2e`) were not re-run: nothing under `misaka-palw-base0`, `consensus` or `kaspad` was edited.
+
+## 6. SMALL lane (2026-10-09): proposals P1–P4 implemented
+
+Nothing here changes FP Job V4 semantics or any consensus id; no fence was armed and no live testnet-12 id moved. Each item is a worker-protocol, validator
+or dormant-door change, with its own tests.
+
+**P1 — worker cancel frame (F9).** `PalwFpWorkerFrameV1::Cancelled { request_hash }` is appended (index 8; 0–7 unchanged) and the cancel request is the
+frame `MPCX ‖ request_hash` (`PALW_FP_WORKER_CANCEL_MAGIC_V1`, `fp_worker_cancel_frame_v1`; no other framing can collide with it). The worker side:
+`misaka-palw-base0::cancel` (a thread-local abort flag, one read in every decode loop after a token is reported — a seat, a court or a drill never sets
+it), `fp_worker::ThreadedFrames` (the request stream read on its own thread so a cancel reaches a run in progress) and
+`run_v3_serve_cancellable_v1` (a cancel for the request in flight stops the run at its NEXT token; exactly one `Cancelled` terminator; no result, no
+retained trace, no commitment; the artifact stays resident; a cancel that arrives after the run ended is ignored; a stale cancel never names a later
+request with the same bytes). The four decode loops (`base0_execute_streaming_select_capped_v1`, the A16 and Qwen3.6 streaming executors and the A16
+stop-id loop of `PalwExecutionBackendV1`) check the flag. The gateway side: `worker_stream` polls `cancelled()` every `CANCEL_POLL_TOKENS` (4) tokens, writes the cancel ONCE, and
+reads on to the terminator so the stream stays in step; `Cancelled` ends the run as `CANCELLED_BY_CLIENT`; a `Cancelled` nobody asked for, or naming another
+request, is a broken stream and the worker is dropped. A worker build that does not know the magic refuses the frame as "not a v3 request": the gateway and
+the worker ship from one tree, so the pair is not supported mixed (an older worker answers the cancel frame with a `Refused` the next request would read).
+Tests: `consensus-core` `a_cancel_frame_names_one_request_and_collides_with_no_other_framing`; `base0` `a_cancel_stops_the_run_at_the_next_token_and_the_worker_serves_the_next_request_unchanged`
+(the next request's result equals the same request on a fresh worker), `a_late_cancel_is_ignored_and_a_serial_source_skips_it`,
+`the_threaded_source_orders_requests_consumes_cancels_and_forgets_them_per_request`; `gateway` `worker_stream::tests`.
+
+**P2 — F1/F2 hoisted.** `PalwFpWorkerResultV3::validate_against_request` now also refuses a result whose job carries fewer stop sequences than
+`max(asked, 1)` when the request carried `stop_texts` (`PalwFpV3Error::StopStringsNotSpelled`, F2), and `validate_against_manifest` /
+`validate_against_request_and_manifest` hold the job's tokenizer, class and context to the manifest the same worker announced (`WorkerManifestMismatch`, F1).
+No wire byte or id moves; what changes is what a result is admitted for, in the validator every caller shares (the gateway, the rail's sign gate, a drill
+client). The gateway's two helpers are now thin `String` forms of them. Test: `the_hoisted_f1_and_f2_checks_are_in_the_shared_validator`.
+
+**P3 — the version-8 commitment convention.** `palw_fp_v5_check_commitment_conventions_v1` / `palw_fp_v5_canonical_commitment_v1` /
+`palw_fp_v5_validate_payload_canonical_v1`: a version-8 claim's `output_root`, `schedule_root` and `trace_manifest_root` are zero, its `trace_chunk_count` 1
+and its `trace_retention_daa` 0 (the chain derives retention as for a tensor claim; a stated deadline would be a promise nothing reads), each refused by field
+name (`CommitmentNotCanonical`). It is a SEPARATE door over the existing one (`palw_fp_v5_validate_payload_v1` and, with it, every FP Job V4 validator are byte
+for byte what they were), reachable only with the `palw_fp_job_v5` fence in force — which is `None` on every preset, and which no node code consults yet (the
+fold does not open version-8 claims) — so the convention rides the V5 fence rather than taking a fence of its own: wiring the door into the fold is that
+fold's step. Test: `a_v5_commitment_follows_the_pipeline_claim_convention_through_its_own_door`.
+
+**P4 — a `Text` arm in the generative worker's frame.** `PalwGenWorkerRequestV2` (frame = `MPGT ‖ borsh`; a V1 request, whose bytes are unchanged, never
+begins with that magic) carries `PalwGenWorkerInputV1::{TokenIds, Text}`. With `Text` the job's `prompt_tokens` and `prompt_token_ids_hash` are left zero
+and the WORKER — which holds the class's tokenizer through `GenPromptTokenizerV1`, refused unless its identity is the class row's — spells the prompt
+(the class's forced prefix, then the encoding with control tokens NOT matched), completes the job and runs it, answering
+`PalwGenWorkerAnswerV1::Completed { job, prompt_ids, binding }` (index 2, appended). The requester checks it with `gen_check_completed_job_v1` (the job is
+the one it sent in every field but the two the worker fills; those two commit to the returned ids; the ids are the forced prefix and then user tokens, within
+`max_prompt_tokens`). The `TokenIds` arm and the V1 frame mean what they always meant. A worker with no tokenizer refuses a `Text` request by name. What is
+NOT here: a concrete tokenizer for a registered generative class, and the gateway route that sends the arm (`/v1/images/generations` still answers 501) —
+both remain the lane that builds the generative worker process. Test: `a_text_request_is_spelled_by_the_worker_which_completes_the_job`.

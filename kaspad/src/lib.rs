@@ -55,6 +55,7 @@ pub mod palw_round_producer;
 /// 2026-10-01 (F2): which claim a seat replays next — closest to quorum first, claims already at quorum
 /// last (node policy).
 pub mod palw_seat_schedule;
+pub mod palw_verified_resync;
 pub mod validator_service;
 
 #[cfg(test)]
