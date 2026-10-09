@@ -13,7 +13,9 @@
 //! - [`wide`]: every exact result as a 256-bit signed integer, range-checked afterwards;
 //! - [`transcendental`]: `>>` as floor division by the definition, constants re-declared;
 //! - [`prims`]: index maps by unravel/ravel of §0, one output element at a time;
-//! - [`eval`]: a step as a pure function of the run state.
+//! - [`eval`]: a step as a pure function of the run state;
+//! - [`tiled`]: RFC-0013 §5 — the same evaluation with a `MatMul`'s or a `Gather`'s param read in row tiles, never whole, so a tensor
+//!   larger than memory can be checked: bit-identical results, with the residency bounded by a tile.
 
 pub mod admit;
 pub mod blake2b;
@@ -27,6 +29,7 @@ pub mod normal_form;
 pub mod prims;
 pub mod program;
 pub mod tensor;
+pub mod tiled;
 pub mod transcendental;
 pub mod types;
 pub mod typing;

@@ -1,5 +1,12 @@
 # ADR-0028: PALW challenge sampling — a scheduler for re-execution, never a verdict
 
+> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
+> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 > **Mission alignment, 2026-10-07:** [ADR-0173](0173-public-verifier-dispute-completeness-is-misaka-purpose.md) governs future PALW design. Where the earlier body conflicts with ordinary non-Panel public-bond prosecution from authenticated public material, without producer-private state, the dated amendment at the end supersedes that direction. Earlier Status, measurements and activation records are preserved; this is not a claim of implementation or activation.
@@ -250,7 +257,8 @@ slashes — targeted verifier griefing has negative return, and a panel that is 
 loses fees and a bounded slash, not its base bond.
 
 **4d. The challenger economy is rivalrous by construction.** The refutation bounty stays
-capped at 10 % of slash (v0.1 §18.4) — deliberately not a living: the reliable challengers are
+capped at 49 % of collected slash under [ADR-0032's 2026-10-10 amendment](0032-palw-fee-bond-escrow.md#palw-challenger-share-amendment--2026-10-10),
+with `B_cap` retained in the credit-overlay flow: the reliable challengers are
 *competitors*. A rival miner who refutes removes competing credit AND collects the bounty, so
 `P_check` rests on rivalry, not altruism; §5's fee-bonded audit calls are the paid probing
 market for everyone else. (This is also why §2 tolerates a predictable panel: grinding a rival
@@ -494,3 +502,12 @@ challenge samplingの検出率は、客観的convictionの成立とは別に報�
 * 将来のlicense/Final、early weight、slice/claimの報酬解放は、証拠保持・proof期間・clock・collectible collateralと整合させる。多数派の署名で有効なfraud proofを無効にしない。DA default、算術conviction、false Validのscope別責任は区別し、verifier不在やローカルtimeoutをproducer fraudにしない。
 
 本amendmentは衝突する将来の設計・受入条件を改定する。既存の実装・測定・fenceの記録はそのまま保持する。変更する合意規則は別のversioned移行を必要とする。Panel=0は[RFC14](../rfc/0014-panel-independent-fraud-prosecution.md)の全completion gatesと[RFC15](../rfc/0015-panel-free-permissionless-verification.md)固有gateが成立するまで有効化しない。
+
+## Bond予算・総影響保存の改定 — 2026-10-10
+
+[ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](../rfc/0015-panel-free-permissionless-verification.md)を適用する。
+
+確率的検出・全constraint coverage・exact courtに、bond/DAAによるclaim発行機会と総経済効果の上限を追加する。計算省略による発行速度優位で枠を増やさない。
+容量倍率の拡大をcheckerのsoundness改善と同一視せず、全claimのerror composition、監視不在、同一seedの相関と期限内の証拠包含・徴収率を再評価する。
+
+本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。

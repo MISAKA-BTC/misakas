@@ -46,9 +46,48 @@ pub fn seat_order_v1(
     role: u8,
     used: &[Hash64],
 ) -> Result<Vec<BondIdV1>, PanelErrorV1> {
+    seat_order_over(snapshot.candidates.iter(), seed, retry, role, used)
+}
+
+/// **Stratum `stratum`'s seed** of a stratified draw: `H("misaka-palw/panel-v3/stratum-seed" ‖ seed ‖ stratum)` — the strata are
+/// independent races over one claim-sealed seed.
+pub fn stratum_seed_v1(seed: Hash64, stratum: u16) -> Hash64 {
+    digest("misaka-palw/panel-v3/stratum-seed", &(seed, stratum))
+}
+
+/// **The ranking of one role in stratum `stratum`** of a stratified draw: [`seat_order_v1`]'s race over the stratum's own seed
+/// ([`stratum_seed_v1`]), the CLASS role restricted to the stratum's members (bit `stratum` of
+/// `PanelSnapshotV1::strata_members`), the OUTSIDER role over the whole outsider population.
+pub fn stratum_seat_order_v1(
+    snapshot: &PanelSnapshotV1,
+    stratum: u16,
+    seed: Hash64,
+    retry: u16,
+    role: u8,
+    used: &[Hash64],
+) -> Result<Vec<BondIdV1>, PanelErrorV1> {
+    if snapshot.strata_members.len() != snapshot.candidates.len() || stratum >= 64 {
+        return Err(PanelErrorV1::InvalidSnapshot);
+    }
+    let members = snapshot
+        .candidates
+        .iter()
+        .zip(&snapshot.strata_members)
+        .filter(|(_, bits)| role != CLASS_ROLE_V1 || *bits & (1u64 << stratum) != 0)
+        .map(|(seat, _)| seat);
+    seat_order_over(members, stratum_seed_v1(seed, stratum), retry, role, used)
+}
+
+fn seat_order_over<'a>(
+    candidates: impl Iterator<Item = &'a SeatCandidateV1>,
+    seed: Hash64,
+    retry: u16,
+    role: u8,
+    used: &[Hash64],
+) -> Result<Vec<BondIdV1>, PanelErrorV1> {
     let used: BTreeSet<_> = used.iter().copied().collect();
     let mut groups: BTreeMap<Hash64, (u64, Vec<&SeatCandidateV1>)> = BTreeMap::new();
-    for seat in &snapshot.candidates {
+    for seat in candidates {
         if seat.roles & role == 0 || used.contains(&seat.operator) {
             continue;
         }

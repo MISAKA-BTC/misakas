@@ -17,6 +17,11 @@ kaspa-hashes.workspace = true
 kaspa-txscript.workspace = true
 # Read-only: the shared onboarding lifecycle codes the registration status is shown in (Registered is not Active).
 misaka-palw-challenge.workspace = true
+# DA16 (public material): the kernel's claim rows (a position is verified by its own classification), the IR program, and the
+# PALWTIR1 container the root-fetch hook writes.
+misaka-palw-kernel.workspace = true
+misaka-palw-tir.workspace = true
+misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact" }
 blake2b_simd.workspace = true
 borsh.workspace = true
 faster-hex.workspace = true
@@ -42,6 +47,8 @@ path = "src/bin/palw-remote-miner.rs"
 required-features = ["rpc"]
 
 [dev-dependencies]
+# DA16: the sketch's fixture weights (an artifact, its inventory, its kernel commitments).
+misaka-palw-tir-sketch = { path = "../misaka-palw-tir-sketch" }
 # Carrier fixtures for the relay tests: a free-prompt commitment built through the shipped builder.
 kaspa-pq-validator-core.workspace = true
 

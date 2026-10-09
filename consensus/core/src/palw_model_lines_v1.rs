@@ -1,5 +1,9 @@
-//! **ADR-0088 — the class keeps its graph; a line keeps its owner, and the owner keeps
-//! publishing.**
+//! **ADR-0088 / ADR-0175 — immutable model registrations; historical version carriage.**
+//!
+//! Past `palw_model_immutable_v1`, a line is a fixed model registration. Further weights or
+//! execution specifications require another registration ID and independent Position/AMM.
+//! The V1 rows, signing messages and enum tags below remain the historical replay format;
+//! they confer no permission to publish, promote or withdraw versions past that fence.
 //!
 //! The pure half of the model registry, kept apart from the fold that applies it (the way
 //! `palw_model_market_v1` is kept apart from ADR-0087's arms): the constants, the rows a line
@@ -59,6 +63,24 @@ fn keyed64(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
 pub fn model_line_id_v1(class_id: &Hash64, founder: &PalwBondKeyV2, name: &[u8]) -> Hash64 {
     let bond = borsh::to_vec(founder).expect("a bond key is borsh-serializable");
     keyed64(b"misaka-palw/model-line/id/v1", &[class_id.as_byte_slice(), &bond, &(name.len() as u32).to_le_bytes(), name])
+}
+
+/// ADR-0175: an immutable registration ID, distinct from the execution/graph class ID.
+/// The existing signed ModelLineFounded carriage already binds every input. Different weights
+/// can use the same graph, founder and name without replacing an earlier registration. Class
+/// semantics (graph, tokenizer, execution/kernel binding) are immutable registry data; `root`
+/// commits the canonical artifact. Historical registrations retain their V1 IDs.
+pub fn model_registration_id_v1(class_id: &Hash64, root: &Hash64, founder: &PalwBondKeyV2, name: &[u8]) -> Hash64 {
+    let bond = borsh::to_vec(founder).expect("a bond key is borsh-serializable");
+    keyed64(
+        b"misaka-palw/model-registration/id/v1",
+        &[class_id.as_byte_slice(), root.as_byte_slice(), &bond, &(name.len() as u32).to_le_bytes(), name],
+    )
+}
+
+/// One derivation for the fold and CLI, resolved at the accepting block's fence.
+pub fn model_line_id_at_v1(class_id: &Hash64, root: &Hash64, founder: &PalwBondKeyV2, name: &[u8], immutable: bool) -> Hash64 {
+    if immutable { model_registration_id_v1(class_id, root, founder, name) } else { model_line_id_v1(class_id, founder, name) }
 }
 
 /// Decision 7: a proposal's id.

@@ -158,6 +158,12 @@ pub struct ChainParticipationGate {
     /// Only a candidate backed by a valid proof may hold it. A peer that cannot produce one has no
     /// claim on this node's time — that is the difference between fail-closed and hostage.
     decision_pending: AtomicBool,
+    /// **LIVE-R1 N2: the partition hold.** Set by the flows' partition watchdog while this node keeps a
+    /// branch its outbound, long-lived peers have left (devnet r1's B); cleared by the same watchdog the
+    /// moment that stops being true. Orthogonal to `state` and never persisted: it is a measurement of the
+    /// present, re-taken after a restart, not a verdict on the chain — so it can neither be laundered by
+    /// an IBD nor outlive the condition that set it.
+    partition_hold: AtomicBool,
 }
 
 impl ChainParticipationGate {
@@ -176,6 +182,7 @@ impl ChainParticipationGate {
             ibd_generation: AtomicU64::new(0),
             enabled,
             persistence: None,
+            partition_hold: AtomicBool::new(false),
         }
     }
 
@@ -561,7 +568,25 @@ impl ChainParticipationGate {
     /// It answers only about this node's confidence in its own chain — callers still apply their
     /// own conditions on top (a miner also needs peers, a validator also needs an active bond).
     pub fn allows_participation(&self) -> bool {
+        !self.enabled || (self.state() == ChainParticipation::Ready && !self.partition_hold.load(Ordering::SeqCst))
+    }
+
+    /// [`Self::allows_participation`] without the partition hold: whether this node's CHAIN is settled.
+    /// The IBD / candidate-recovery machinery asks this, so a partition hold — a statement about peers,
+    /// not about the chain — stops mining and attesting without also restarting chain recovery.
+    pub fn chain_settled(&self) -> bool {
         !self.enabled || self.state() == ChainParticipation::Ready
+    }
+
+    /// LIVE-R1 N2: set or clear the partition hold. Returns whether it changed, so the caller logs the
+    /// transition once. Reversible by construction — see the field.
+    pub fn set_partition_hold(&self, hold: bool) -> bool {
+        self.partition_hold.swap(hold, Ordering::SeqCst) != hold
+    }
+
+    /// Whether the partition watchdog is holding this node out of participation.
+    pub fn partition_hold(&self) -> bool {
+        self.partition_hold.load(Ordering::SeqCst)
     }
 
     /// Whether the review's time floor has passed. **Not** the same question as whether the review
@@ -924,6 +949,23 @@ mod tests {
         fn restore(&self) -> Option<ChainParticipationSnapshot> {
             *self.0.lock().unwrap()
         }
+    }
+
+    /// LIVE-R1 N2: the partition hold closes participation while set, reopens it when cleared, is never
+    /// persisted and leaves the state machine alone; a disabled gate ignores it.
+    #[test]
+    fn the_partition_hold_is_reversible_and_orthogonal_to_the_state() {
+        let gate = ChainParticipationGate::new(true);
+        assert!(gate.allows_participation());
+        assert!(gate.set_partition_hold(true), "a change is reported");
+        assert!(!gate.set_partition_hold(true), "and only once");
+        assert!(!gate.allows_participation(), "held: no mining, no attesting, unsynced");
+        assert_eq!(gate.state(), ChainParticipation::Ready, "the chain itself is not in question");
+        assert!(gate.set_partition_hold(false));
+        assert!(gate.allows_participation(), "released the moment the condition clears");
+        let disabled = ChainParticipationGate::disabled();
+        disabled.set_partition_hold(true);
+        assert!(disabled.allows_participation(), "a disabled gate holds nothing back");
     }
 
     #[test]

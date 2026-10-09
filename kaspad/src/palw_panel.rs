@@ -3785,6 +3785,9 @@ pub struct PalwPanelConfig {
     pub tir_shard_shadow: bool,
     /// **RFC-0006: demand the runs a cell reads on chain** when no capture reaches the seat (`--palw-tir-shard-demand-runs`).
     pub tir_shard_demand_runs: bool,
+    /// **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`, `tir_shard::watch`): verify the shards this bond does
+    /// not seat from public material, accuse as a non-seat bond, demand runs on chain. Never a receipt.
+    pub tir_shard_watch: bool,
     /// **RFC-0006: where an outsider fetches a class it does not hold** (`--palw-tir-shard-mirror=<class container path>`): loaded
     /// on the first sharded duty of a class this node holds no artifact of, and used only if it derives exactly the class and the
     /// inventory root the chain registered.
@@ -10385,6 +10388,18 @@ impl PalwPanelService {
                 if !shard_books.filed.is_empty() {
                     self.tir_shard_resend_v1(bond_key, network_domain, &shard_duties, &mut shard_books).await;
                 }
+                // **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`): the shards of live sharded claims this bond
+                // does not seat, verified from public material; a finding rides the seats' carrier path with this bond as accuser.
+                if self.config.tir_shard_watch
+                    && !self.config.tir_shard_shadow
+                    && self.consensus_config.params.palw_tir_shard_active_at(current_daa)
+                {
+                    let watch = session.palw_tir_shard_watch_duties_v1(bond_key);
+                    if !watch.is_empty() {
+                        self.tir_shard_watch_pass_v1(&session, bond_key, network_domain, current_daa, &watch, &materials, &mut interval_openings, &mut shard_books)
+                            .await;
+                    }
+                }
             }
             // **RFC-0006's pre-fence shadow** (`--palw-tir-shard-shadow`, fence dormant): the cell verifier beside the whole replay.
             // Replays that refuted a claim are queued here; the `Valid`s are queued where their receipts are filed.
@@ -14246,6 +14261,11 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ConformanceCommittedV1 { .. } => "ConformanceCommittedV1",
         PalwConsensusObjectV2::SignedRegistrationV1 { .. } => "SignedRegistrationV1",
         PalwConsensusObjectV2::ConformanceEvidenceV1 { .. } => "ConformanceEvidenceV1",
+        // DA16 (tags 150–153): the provider court.
+        PalwConsensusObjectV2::ProviderLeaseV1 { .. } => "ProviderLeaseV1",
+        PalwConsensusObjectV2::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
+        PalwConsensusObjectV2::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
+        PalwConsensusObjectV2::DaTransferV1 { .. } => "DaTransferV1",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",

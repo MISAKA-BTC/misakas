@@ -827,3 +827,76 @@ fn an_uncovered_claim_never_locks_its_job_and_the_first_covered_claim_holds_it()
     assert_eq!(w.l.claims.values().filter(|r| r.rewarded).count(), 1);
     assert_eq!(w.l.bonds[&PRODUCER].reserved, 0, "the squatter's reservation came back, it earned nothing");
 }
+
+// ── DA16 (RFC-0009 §4.2): a claim whose material obligation moved to bonded providers ─────────────────────────────────────────
+
+/// **A provider-liable default never charges the producer, and a lapse voids without a conviction.** The consumer marks the claim
+/// provider-liable (its court's rows say the material moved): the withheld position's demand defaults as `ProviderLiableDefault` — the
+/// producer's collateral untouched, the claim void (`Unavailable`, not producer-defaulted), the demand bond back, no reward ever. A
+/// second claim lapses through `provider_lapse`; a third, not provider-liable, cannot be lapsed and defaults on the producer as today.
+/// After Final a provider-liable default leaves the producer's reward and reservation alone (the providers pay; the fact is withdrawn).
+#[test]
+fn a_provider_liable_default_never_charges_the_producer_and_a_lapse_voids_without_conviction() {
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let (at, lie) = w.lying(&job, 3);
+    let id = lie.claim.id();
+    w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
+    w.l.provider_liable.insert(id);
+    w.block(12, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
+    let (collateral, burned) = (w.l.bonds[&PRODUCER].collateral, w.l.burned);
+    let ev = w.block(32, vec![]);
+    assert!(
+        ev.contains(&E::ProviderLiableDefault {
+            claim: id,
+            stage: 0,
+            position: at.0,
+            last: None,
+            post_final: false,
+            demanders: vec![OUTSIDER]
+        }),
+        "{ev:?}"
+    );
+    assert!(!ev.iter().any(|e| matches!(e, E::ProducerDefault { .. } | E::Convicted { .. })), "{ev:?}");
+    assert_eq!(w.state(&id), ClaimStateV1::Unavailable { daa: 32, producer_defaulted: false });
+    assert_eq!(w.l.bonds[&PRODUCER].collateral, collateral, "the producer pays nothing for its providers' failure");
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, 0, "its reservation is released whole");
+    assert_eq!(w.l.burned, burned);
+    assert_eq!(w.l.bonds[&OUTSIDER].reserved, 0, "the demand bond returns");
+    w.block(100, vec![]);
+    assert!(!w.l.claims[&id].rewarded && !w.l.claims[&id].convicted, "void: no reward, no conviction");
+
+    // A lapse (every provider charged on its own challenges) voids a live claim the same way.
+    let job = w.post_job(110, &[3, 17, 9], 3, 2);
+    let h = w.honest(&job, 3);
+    let id2 = h.claim.id();
+    w.block(111, vec![h.tx, T::PanelCovered { claim: id2 }]);
+    assert!(w.l.provider_lapse(&id2).is_err(), "not provider-liable: the producer's own claim cannot be lapsed by a court");
+    w.l.provider_liable.insert(id2);
+    let ev = w.l.provider_lapse(&id2).unwrap();
+    assert_eq!(ev, vec![E::ProviderLapsed { claim: id2, post_final: false }]);
+    assert!(matches!(w.state(&id2), ClaimStateV1::Unavailable { producer_defaulted: false, .. }));
+    assert!(w.l.provider_lapse(&id2).unwrap().is_empty(), "a decided claim lapses once");
+    w.block(200, vec![]);
+    assert!(!w.l.claims[&id2].rewarded && !w.l.claims[&id2].convicted);
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, 0);
+
+    // After Final: the providers pay; the producer keeps its reward and its reservation backs its fraud liability.
+    let mut w = World::new();
+    let (id, at, _, _) = final_lying_claim(&mut w);
+    w.l.provider_liable.insert(id);
+    w.block(100, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
+    let collateral = w.l.bonds[&PRODUCER].collateral;
+    let ev = w.block(120, vec![]);
+    assert!(ev.contains(&E::ProviderLiableDefault {
+        claim: id,
+        stage: 0,
+        position: at.0,
+        last: None,
+        post_final: true,
+        demanders: vec![OUTSIDER]
+    }));
+    assert!(matches!(w.state(&id), ClaimStateV1::Final { .. }));
+    assert_eq!(w.l.bonds[&PRODUCER].collateral, collateral);
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, 1000, "held until the liability horizon: a false computation stays the miner's");
+}
