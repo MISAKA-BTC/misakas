@@ -1,0 +1,1632 @@
+{
+ "schema": "opv-measurements/v1",
+ "generated_by": "tools/opv-meas/scripts/summarize.py",
+ "legend": {
+  "measured": "read off a harness run on this host",
+  "derived": "computed from measured values by the stated formula",
+  "assumed": "no run established it"
+ },
+ "host": {
+  "machine": {
+   "v": "Apple M1 Max, 10 cores, 32 GiB, macOS 26.7",
+   "kind": "measured",
+   "src": "sysctl hw.ncpu hw.memsize; sample(1)"
+  },
+  "shared": "yes: 9 devnet kaspad + other lanes' builds ran during every sample; see load and swap per sample",
+  "load1_during_verify_samples": {
+   "n": 44,
+   "median": 57.005126953125,
+   "min": 36.91455078125,
+   "max": 219.6826171875
+  },
+  "swap_used_gb_at_samples": {
+   "n": 37,
+   "median": 18.4,
+   "min": 14.8,
+   "max": 21.2
+  },
+  "verifier_implementation": "reference (misaka-palw-kernel check path): single thread, i128 tensors, every parameter instance cached for the scope (16 bytes/param)",
+  "provider": "files = a directory in the misaka-palw-remote content-addressed layout; http-localhost = its reference HTTP provider on 127.0.0.1 (NO network: the link term is unmeasured)"
+ },
+ "clock": {
+  "s_per_daa_lower_bound": {
+   "v": 120,
+   "kind": "derived",
+   "src": "target_time_per_block of the 2-minute network (rfc-0012-policy-proposal.md): a DAA step needs one heartbeat slot. Used for every DAA conversion (a lower bound makes the DAA budget conservative)"
+  },
+  "s_per_daa_cited": {
+   "v": "125-150",
+   "kind": "assumed",
+   "src": "t12-daa9000-drill-plan.md (~125 measured on a Mac drill) and operational notes (~150): NOT measured by this lane; fleet plan item F1"
+  }
+ },
+ "unit_costs": {
+  "field_mult_gf127_cpu_ns": {
+   "v": 8.860250000000004,
+   "kind": "measured",
+   "src": "micro: Fp::dot, raw field words",
+   "n": 5,
+   "min": 8.380749999999999,
+   "max": 10.042999999999996
+  },
+  "exact_mac_cpu_ns": {
+   "v": 17.17728658307258,
+   "kind": "measured",
+   "src": "micro: checked i128 multiply-accumulate (a localized row's recompute)",
+   "n": 5,
+   "min": 13.368256500387387,
+   "max": 17.685371754272474
+  },
+  "tensor_commitment_cpu_ns_per_element": {
+   "v": 24.16362499999991,
+   "kind": "measured",
+   "src": "micro: dual-root Merkle commitment of an i8 tensor",
+   "n": 5,
+   "min": 22.361875000000087,
+   "max": 25.731125000000297
+  },
+  "read_tensor_cpu_ns_per_element": {
+   "v": 3.757132937552641,
+   "kind": "measured",
+   "src": "micro: container tensor -> i128",
+   "n": 3,
+   "min": 3.0777467862408274,
+   "max": 5.760752060077916
+  }
+ },
+ "classes": {
+  "qwen25-0.5b": {
+   "label": "qwen25-0.5b",
+   "artifact": {
+    "container_bytes": {
+     "v": 660666048,
+     "kind": "measured",
+     "src": "static"
+    },
+    "params": {
+     "v": 502380513,
+     "kind": "measured",
+     "src": "static"
+    },
+    "param_instances": {
+     "v": 1404,
+     "kind": "measured",
+     "src": "static"
+    },
+    "committed_nodes_per_position": {
+     "v": 6570,
+     "kind": "measured",
+     "src": "static"
+    },
+    "token_bound": {
+     "v": 151936,
+     "kind": "measured",
+     "src": "static"
+    },
+    "history_bound": {
+     "v": 262144,
+     "kind": "measured",
+     "src": "static"
+    }
+   },
+   "plan_bounds_k2_v2": {
+    "max_positions_4": {
+     "evidence_bytes_per_position_bound": {
+      "v": 9219634073,
+      "kind": "measured",
+      "src": "static: plan budget at the class's history bound"
+     },
+     "gate_ok": {
+      "v": true,
+      "kind": "measured",
+      "src": "static: public_prosecution_complete_v1"
+     },
+     "worst_filing_bytes": {
+      "v": 544607752,
+      "kind": "measured",
+      "src": "static: gate bound"
+     },
+     "max_verifier_ram_bound": {
+      "v": 9510964346,
+      "kind": "measured",
+      "src": "static: gate bound = artifact_bytes + evidence_bytes_per_position"
+     },
+     "opv_carrier_fit_interim": {
+      "v": false,
+      "kind": "measured",
+      "src": "static: carrier_fit_v1 at the interim 1,583,616-byte carriers"
+     },
+     "opv_carrier_refusal": "a worst-case filing of 9220475296 bytes does not fit a FileProof (1583616)"
+    },
+    "max_positions_64": {
+     "evidence_bytes_per_position_bound": {
+      "v": 9219634073,
+      "kind": "measured",
+      "src": "static: plan budget at the class's history bound"
+     },
+     "gate_ok": {
+      "v": true,
+      "kind": "measured",
+      "src": "static: public_prosecution_complete_v1"
+     },
+     "worst_filing_bytes": {
+      "v": 544607752,
+      "kind": "measured",
+      "src": "static: gate bound"
+     },
+     "max_verifier_ram_bound": {
+      "v": 9510964346,
+      "kind": "measured",
+      "src": "static: gate bound = artifact_bytes + evidence_bytes_per_position"
+     },
+     "opv_carrier_fit_interim": {
+      "v": false,
+      "kind": "measured",
+      "src": "static: carrier_fit_v1 at the interim 1,583,616-byte carriers"
+     },
+     "opv_carrier_refusal": "a worst-case filing of 9220475296 bytes does not fit a FileProof (1583616)"
+    }
+   },
+   "weights_pass_streaming": {
+    "read_cpu_s": {
+     "v": 1.520072999999948,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "commit_once_cpu_s": {
+     "v": 13.075359000000091,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "project_cpu_s": {
+     "v": 13.49829599999996,
+     "kind": "measured",
+     "src": "weights: 2 repetitions of W r over GF(2^127-1)"
+    },
+    "field_mults": {
+     "v": 997785600,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "model_cpu_s_commit_twice": {
+     "v": 41.16908700000009,
+     "kind": "derived",
+     "src": "read + 2 x commit + project (the reference verifier authenticates a weight twice)"
+    },
+    "model_cpu_ns_per_param": {
+     "v": 81.94801735870693,
+     "kind": "derived",
+     "src": "model_cpu_s / params"
+    },
+    "wall_s_under_load": {
+     "v": 30.910786708,
+     "kind": "measured",
+     "src": "weights",
+     "load1_before": 17.19287109375
+    },
+    "peak_rss_bytes": {
+     "v": 2409119744,
+     "kind": "measured",
+     "src": "weights (streaming: one tensor at a time)"
+    }
+   },
+   "producer_side_p3": {
+    "registration_mode": {
+     "v": "PanelLicensed",
+     "kind": "measured",
+     "src": "build-world: OPV first, Panel-licensed when OPV is refused"
+    },
+    "opv_registration_refusal": "RegisterClassV2: not carriable: a worst-case filing of 9220475296 bytes does not fit a FileProof (1583616)",
+    "honest_trace_cpu_s": {
+     "v": 24.889031,
+     "kind": "measured",
+     "src": "build-world: the producer's reference evaluation of 3 positions"
+    },
+    "honest_commitments_cpu_s": {
+     "v": 3.006183000000001,
+     "kind": "measured",
+     "src": "build-world"
+    },
+    "param_commitments_cpu_s": {
+     "v": 15.309039,
+     "kind": "measured",
+     "src": "build-world"
+    },
+    "chain_bytes": {
+     "v": 7707966,
+     "kind": "measured",
+     "src": "build-world: class registration + 6 claims' commitments (Borsh)"
+    }
+   },
+   "da_p3": {
+    "claim_public_material_bytes": {
+     "v": 178650993,
+     "kind": "measured",
+     "src": "build-world: every committed value but the derived ones, 3 positions"
+    },
+    "per_position_bytes": {
+     "v": 59550331.0,
+     "kind": "derived",
+     "src": "da bytes / 3 positions (small history: it grows with the position index)"
+    }
+   },
+   "end_to_end_measured": true,
+   "t_check_p3_outsider_path": {
+    "what": "OutsiderV1::check on an honest 3-position claim: authenticate every served value, the decode relation, check_salted over every relation",
+    "cpu_s": {
+     "v": 140.417784,
+     "kind": "measured",
+     "src": "verify: honest, files",
+     "n": 5,
+     "min": 138.370807,
+     "max": 154.093836
+    },
+    "wall_s_under_load": {
+     "v": 189.616064083,
+     "kind": "measured",
+     "src": "verify: honest, files; the host was shared",
+     "n": 5,
+     "min": 177.871944542,
+     "max": 291.615718125
+    },
+    "total_process_cpu_s": {
+     "v": 141.85024299999998,
+     "kind": "measured",
+     "src": "verify: one fresh process, replay to verdict",
+     "n": 5,
+     "min": 139.660506,
+     "max": 155.38762799999998
+    },
+    "total_process_wall_s": {
+     "v": 192.134044792,
+     "kind": "measured",
+     "src": "verify",
+     "n": 5,
+     "min": 179.513806042,
+     "max": 293.300638833
+    },
+    "peak_rss_bytes_max": {
+     "v": 10444423168,
+     "kind": "measured",
+     "src": "verify: max over samples (macOS ru_maxrss: compressed/swapped pages are not counted, so the minimum is lower)",
+     "min": 4626415616
+    },
+    "peak_rss_per_param_bytes": {
+     "v": 20.78986524702243,
+     "kind": "derived",
+     "src": "peak_rss_max / params"
+    }
+   },
+   "t_check_by_positions_fresh_path": {
+    "what": "FreshVerifierV1::check_salted over an honest claim of P positions (no value authentication, no decode relation): the verifier's relation work",
+    "samples": [
+     {
+      "v": {
+       "P": 8,
+       "da_bytes": 477101528,
+       "cpu": 250.652554,
+       "wall": 498.772159166,
+       "load1": 80.12939453125,
+       "rss": 6879330304
+      },
+      "kind": "measured",
+      "src": "verify --via fresh"
+     },
+     {
+      "v": {
+       "P": 8,
+       "da_bytes": 477101528,
+       "cpu": 247.142178,
+       "wall": 469.3425335,
+       "load1": 122.66357421875,
+       "rss": 10456907776
+      },
+      "kind": "measured",
+      "src": "verify --via fresh"
+     },
+     {
+      "v": {
+       "P": 16,
+       "da_bytes": 956439472,
+       "cpu": 373.668726,
+       "wall": 663.669109375,
+       "load1": 163.4384765625,
+       "rss": 10440179712
+      },
+      "kind": "measured",
+      "src": "verify --via fresh"
+     },
+     {
+      "v": {
+       "P": 16,
+       "da_bytes": 956439472,
+       "cpu": 368.01786000000004,
+       "wall": 752.252749708,
+       "load1": 150.87548828125,
+       "rss": 10570498048
+      },
+      "kind": "measured",
+      "src": "verify --via fresh"
+     },
+     {
+      "v": {
+       "P": 3,
+       "da_bytes": 178650993,
+       "cpu": 131.760132,
+       "wall": 141.777014542,
+       "load1": 64.6767578125,
+       "rss": 10466394112
+      },
+      "kind": "measured",
+      "src": "verify --via fresh"
+     }
+    ],
+    "counters": [
+     {
+      "v": {
+       "P": 8,
+       "field_mults": 1014985984,
+       "exact_elements": 1240191720,
+       "opened_bytes": 1617311248,
+       "param_bytes": 660615904
+      },
+      "kind": "measured",
+      "src": "verify --via fresh: the kernel's CheckCostV1"
+     },
+     {
+      "v": {
+       "P": 8,
+       "field_mults": 1014985984,
+       "exact_elements": 1240191720,
+       "opened_bytes": 1617311248,
+       "param_bytes": 660615904
+      },
+      "kind": "measured",
+      "src": "verify --via fresh: the kernel's CheckCostV1"
+     },
+     {
+      "v": {
+       "P": 16,
+       "field_mults": 1033189888,
+       "exact_elements": 2482079184,
+       "opened_bytes": 2579437888,
+       "param_bytes": 660615904
+      },
+      "kind": "measured",
+      "src": "verify --via fresh: the kernel's CheckCostV1"
+     },
+     {
+      "v": {
+       "P": 16,
+       "field_mults": 1033189888,
+       "exact_elements": 2482079184,
+       "opened_bytes": 2579437888,
+       "param_bytes": 660615904
+      },
+      "kind": "measured",
+      "src": "verify --via fresh: the kernel's CheckCostV1"
+     },
+     {
+      "v": {
+       "P": 3,
+       "field_mults": 1004051584,
+       "exact_elements": 464873175,
+       "opened_bytes": 1018740178,
+       "param_bytes": 660615904
+      },
+      "kind": "measured",
+      "src": "verify --via fresh: the kernel's CheckCostV1"
+     }
+    ],
+    "fit_cpu_s_vs_positions": {
+     "v": {
+      "intercept_s": 95.43462115217395,
+      "per_position_s": 17.530751847826085,
+      "max_abs_residual_s": 16.26674469565222
+     },
+     "kind": "derived",
+     "src": "least squares over the samples above: cpu = a + b P"
+    },
+    "fit_cpu_s_vs_public_material_bytes": {
+     "v": {
+      "intercept_s": 95.85804909961865,
+      "per_byte_s": 2.928527243037639e-07,
+      "max_abs_residual_s": 16.416347099241307
+     },
+     "kind": "derived",
+     "src": "least squares: cpu = a + rho x public-material bytes"
+    }
+   },
+   "fetch": {
+    "files": {
+     "claim_material_bytes": {
+      "v": 178650993,
+      "kind": "measured",
+      "src": "verify"
+     },
+     "claim_material_wall_s": {
+      "v": 0.3534240625,
+      "kind": "measured",
+      "src": "verify: fetch_claim_material_any, every chunk hash-checked against a manifest bound to the claim; provider=files",
+      "n": 16,
+      "min": 0.2878745,
+      "max": 0.982136125
+     },
+     "claim_material_cpu_s": {
+      "v": 0.2592465,
+      "kind": "measured",
+      "src": "verify",
+      "n": 16,
+      "min": 0.24668400000000001,
+      "max": 0.309918
+     },
+     "artifact_bytes": {
+      "v": 660666048,
+      "kind": "measured",
+      "src": "verify"
+     },
+     "artifact_wall_s": {
+      "v": 1.5037846665,
+      "kind": "measured",
+      "src": "verify: manifest check + every chunk hash-checked; provider=files",
+      "n": 16,
+      "min": 1.135760416,
+      "max": 3.993622583
+     },
+     "artifact_cpu_s": {
+      "v": 1.0042239999999998,
+      "kind": "measured",
+      "src": "verify",
+      "n": 16,
+      "min": 0.9359469999999999,
+      "max": 1.232602
+     },
+     "chain_replay_cpu_s": {
+      "v": 0.027679499999999996,
+      "kind": "measured",
+      "src": "verify: strict decode + replay of the registration and the claim blocks",
+      "n": 16,
+      "min": 0.026292,
+      "max": 0.036051
+     }
+    },
+    "http_localhost": {
+     "claim_material_bytes": {
+      "v": 178650993,
+      "kind": "measured",
+      "src": "verify"
+     },
+     "claim_material_wall_s": {
+      "v": 1.451223042,
+      "kind": "measured",
+      "src": "verify: fetch_claim_material_any, every chunk hash-checked against a manifest bound to the claim; provider=http_localhost",
+      "n": 2,
+      "min": 1.380437792,
+      "max": 1.522008292
+     },
+     "claim_material_cpu_s": {
+      "v": 0.3994545,
+      "kind": "measured",
+      "src": "verify",
+      "n": 2,
+      "min": 0.393254,
+      "max": 0.405655
+     },
+     "artifact_bytes": {
+      "v": 660666048,
+      "kind": "measured",
+      "src": "verify"
+     },
+     "artifact_wall_s": {
+      "v": 6.0789526665,
+      "kind": "measured",
+      "src": "verify: manifest check + every chunk hash-checked; provider=http_localhost",
+      "n": 2,
+      "min": 5.960129375,
+      "max": 6.197775958
+     },
+     "artifact_cpu_s": {
+      "v": 1.5722835000000002,
+      "kind": "measured",
+      "src": "verify",
+      "n": 2,
+      "min": 1.4387500000000002,
+      "max": 1.7058170000000001
+     },
+     "chain_replay_cpu_s": {
+      "v": 0.029509,
+      "kind": "measured",
+      "src": "verify: strict decode + replay of the registration and the claim blocks",
+      "n": 2,
+      "min": 0.027183,
+      "max": 0.031835
+     }
+    },
+    "verification_throughput": {
+     "v": {
+      "claim_material_MB_per_cpu_s": 689.1163159386916,
+      "artifact_MB_per_cpu_s": 657.8871327512588
+     },
+     "kind": "derived",
+     "src": "bytes / cpu seconds of fetch_da and fetch_artifact: the CPU ceiling of 'download and hash-check' on this core, with no link in the path"
+    }
+   },
+   "lies": {
+    "early": {
+     "samples": {
+      "v": 2,
+      "kind": "measured",
+      "src": "verify"
+     },
+     "finding": {
+      "v": "Prosecute(Kernel)",
+      "kind": "measured",
+      "src": "verify"
+     },
+     "check_to_verdict_cpu_s": {
+      "v": 12.4292345,
+      "kind": "measured",
+      "src": "verify: check_outsider, which stops at the first fault",
+      "n": 2,
+      "min": 12.400581,
+      "max": 12.457887999999999
+     },
+     "check_to_verdict_wall_s": {
+      "v": 16.338471437499997,
+      "kind": "measured",
+      "src": "verify",
+      "n": 2,
+      "min": 15.924852708,
+      "max": 16.752090167
+     },
+     "fault": {
+      "v": {
+       "has_scalar_openings": true,
+       "kind": 2,
+       "output_value_bytes": 0,
+       "scalar": [
+        0,
+        1,
+        0
+       ]
+      },
+      "kind": "measured",
+      "src": "verify: the kernel's localized fault (kind 1 = element recompute, 2 = matmul row scalar)"
+     },
+     "filing_proof_bytes": {
+      "v": 30333,
+      "kind": "measured",
+      "src": "verify: FaultProofWireV1"
+     },
+     "filing_object_bytes": {
+      "v": 30468,
+      "kind": "measured",
+      "src": "verify: the FileProof route object, strict-encoded"
+     },
+     "fits_route_object_cap": {
+      "v": true,
+      "kind": "measured",
+      "src": "verify: against PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 (1,583,616)"
+     },
+     "refused_at_wire": null,
+     "filing_assemble_cpu_s": {
+      "v": 1.55000000003902e-05,
+      "kind": "measured",
+      "src": "verify: decode + rebuild + encode the proof",
+      "n": 2,
+      "min": 1.3999999999847468e-05,
+      "max": 1.7000000000932936e-05
+     },
+     "court_cpu_s": {
+      "v": 0.002538999999999514,
+      "kind": "measured",
+      "src": "verify: a node replica's court, apply_block",
+      "n": 2,
+      "min": 0.0025370000000002335,
+      "max": 0.0025409999999987942
+     },
+     "court_wall_s": {
+      "v": 0.002539,
+      "kind": "measured",
+      "src": "verify",
+      "n": 2,
+      "min": 0.002537042,
+      "max": 0.002540958
+     },
+     "court_events": {
+      "v": [
+       "Convicted(slashed 100000000000, accuser_reward 50000000000, post_final false)"
+      ],
+      "kind": "measured",
+      "src": "verify"
+     }
+    },
+    "late": {
+     "samples": {
+      "v": 2,
+      "kind": "measured",
+      "src": "verify"
+     },
+     "finding": {
+      "v": "Prosecute(Kernel)",
+      "kind": "measured",
+      "src": "verify"
+     },
+     "check_to_verdict_cpu_s": {
+      "v": 163.8735965,
+      "kind": "measured",
+      "src": "verify: check_outsider, which stops at the first fault",
+      "n": 2,
+      "min": 162.979575,
+      "max": 164.76761799999997
+     },
+     "check_to_verdict_wall_s": {
+      "v": 289.7580585,
+      "kind": "measured",
+      "src": "verify",
+      "n": 2,
+      "min": 285.977588167,
+      "max": 293.538528833
+     },
+     "fault": {
+      "v": {
+       "has_scalar_openings": true,
+       "kind": 2,
+       "output_value_bytes": 0,
+       "scalar": [
+        0,
+        1,
+        0
+       ]
+      },
+      "kind": "measured",
+      "src": "verify: the kernel's localized fault (kind 1 = element recompute, 2 = matmul row scalar)"
+     },
+     "filing_proof_bytes": {
+      "v": 31357,
+      "kind": "measured",
+      "src": "verify: FaultProofWireV1"
+     },
+     "filing_object_bytes": {
+      "v": 31492,
+      "kind": "measured",
+      "src": "verify: the FileProof route object, strict-encoded"
+     },
+     "fits_route_object_cap": {
+      "v": true,
+      "kind": "measured",
+      "src": "verify: against PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 (1,583,616)"
+     },
+     "refused_at_wire": null,
+     "filing_assemble_cpu_s": {
+      "v": 3.250000000498687e-05,
+      "kind": "measured",
+      "src": "verify: decode + rebuild + encode the proof",
+      "n": 2,
+      "min": 3.1000000010550366e-05,
+      "max": 3.399999999942338e-05
+     },
+     "court_cpu_s": {
+      "v": 0.006887000000007859,
+      "kind": "measured",
+      "src": "verify: a node replica's court, apply_block",
+      "n": 2,
+      "min": 0.0056560000000054345,
+      "max": 0.008118000000010284
+     },
+     "court_wall_s": {
+      "v": 0.0567045835,
+      "kind": "measured",
+      "src": "verify",
+      "n": 2,
+      "min": 0.048756459,
+      "max": 0.064652708
+     },
+     "court_events": {
+      "v": [
+       "Convicted(slashed 100000000000, accuser_reward 50000000000, post_final false)"
+      ],
+      "kind": "measured",
+      "src": "verify"
+     },
+     "t_localize_upper_bound_s": {
+      "v": 23.45581249999998,
+      "kind": "derived",
+      "src": "median check-to-verdict CPU of the lying claim minus the median honest check CPU. The fault is in the LAST position, so detection costs what a pass would; the excess bounds localization + proof assembly from above. The host's run-to-run noise on a 140 s check is +-16 s (the fit residual), so a value inside that band is 'not distinguishable from 0'"
+     }
+    },
+    "gather": {
+     "samples": {
+      "v": 2,
+      "kind": "measured",
+      "src": "verify"
+     },
+     "finding": {
+      "v": "Prosecute(Kernel)",
+      "kind": "measured",
+      "src": "verify"
+     },
+     "check_to_verdict_cpu_s": {
+      "v": 12.970883,
+      "kind": "measured",
+      "src": "verify: check_outsider, which stops at the first fault",
+      "n": 2,
+      "min": 12.798068,
+      "max": 13.143698
+     },
+     "check_to_verdict_wall_s": {
+      "v": 18.151829104,
+      "kind": "measured",
+      "src": "verify",
+      "n": 2,
+      "min": 17.310768541,
+      "max": 18.992889667
+     },
+     "fault": {
+      "v": {
+       "has_scalar_openings": false,
+       "kind": 1,
+       "output_value_bytes": 1792,
+       "scalar": [
+        0,
+        0,
+        0
+       ]
+      },
+      "kind": "measured",
+      "src": "verify: the kernel's localized fault (kind 1 = element recompute, 2 = matmul row scalar)"
+     },
+     "filing_proof_bytes": {
+      "v": 272271201,
+      "kind": "measured",
+      "src": "verify: FaultProofWireV1"
+     },
+     "filing_object_bytes": {
+      "v": 272271336,
+      "kind": "measured",
+      "src": "verify: the FileProof route object, strict-encoded"
+     },
+     "fits_route_object_cap": {
+      "v": false,
+      "kind": "measured",
+      "src": "verify: against PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 (1,583,616)"
+     },
+     "refused_at_wire": {
+      "v": "FileProof: 272271336 bytes past the 67108864-byte ceiling",
+      "kind": "measured",
+      "src": "verify: K::decode of the encoded FileProof (the strict wire decode every node runs)"
+     },
+     "filing_assemble_cpu_s": {
+      "v": 0.7026349999999995,
+      "kind": "measured",
+      "src": "verify: decode + rebuild + encode the proof",
+      "n": 2,
+      "min": 0.6347079999999996,
+      "max": 0.7705619999999993
+     },
+     "court_cpu_s": null,
+     "court_wall_s": null,
+     "court_events": {
+      "v": null,
+      "kind": "measured",
+      "src": "verify"
+     }
+    },
+    "elem": {
+     "samples": {
+      "v": 1,
+      "kind": "measured",
+      "src": "verify"
+     },
+     "finding": {
+      "v": "Prosecute(Kernel)",
+      "kind": "measured",
+      "src": "verify"
+     },
+     "check_to_verdict_cpu_s": {
+      "v": 124.099346,
+      "kind": "measured",
+      "src": "verify: check_outsider, which stops at the first fault",
+      "n": 1,
+      "min": 124.099346,
+      "max": 124.099346
+     },
+     "check_to_verdict_wall_s": {
+      "v": 202.360312,
+      "kind": "measured",
+      "src": "verify",
+      "n": 1,
+      "min": 202.360312,
+      "max": 202.360312
+     },
+     "fault": {
+      "v": {
+       "has_scalar_openings": false,
+       "kind": 1,
+       "output_value_bytes": 8,
+       "scalar": [
+        0,
+        0,
+        0
+       ]
+      },
+      "kind": "measured",
+      "src": "verify: the kernel's localized fault (kind 1 = element recompute, 2 = matmul row scalar)"
+     },
+     "filing_proof_bytes": {
+      "v": 92,
+      "kind": "measured",
+      "src": "verify: FaultProofWireV1"
+     },
+     "filing_object_bytes": {
+      "v": 227,
+      "kind": "measured",
+      "src": "verify: the FileProof route object, strict-encoded"
+     },
+     "fits_route_object_cap": {
+      "v": true,
+      "kind": "measured",
+      "src": "verify: against PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 (1,583,616)"
+     },
+     "refused_at_wire": null,
+     "filing_assemble_cpu_s": {
+      "v": 6.0000000043913815e-06,
+      "kind": "measured",
+      "src": "verify: decode + rebuild + encode the proof",
+      "n": 1,
+      "min": 6.0000000043913815e-06,
+      "max": 6.0000000043913815e-06
+     },
+     "court_cpu_s": {
+      "v": 0.003444999999998366,
+      "kind": "measured",
+      "src": "verify: a node replica's court, apply_block",
+      "n": 1,
+      "min": 0.003444999999998366,
+      "max": 0.003444999999998366
+     },
+     "court_wall_s": {
+      "v": 0.003445417,
+      "kind": "measured",
+      "src": "verify",
+      "n": 1,
+      "min": 0.003445417,
+      "max": 0.003445417
+     },
+     "court_events": {
+      "v": [
+       "Convicted(slashed 100000000000, accuser_reward 50000000000, post_final false)"
+      ],
+      "kind": "measured",
+      "src": "verify"
+     },
+     "t_localize_upper_bound_s": {
+      "v": -16.318438000000015,
+      "kind": "derived",
+      "src": "median check-to-verdict CPU of the lying claim minus the median honest check CPU. The fault is in the LAST position, so detection costs what a pass would; the excess bounds localization + proof assembly from above. The host's run-to-run noise on a 140 s check is +-16 s (the fit residual), so a value inside that band is 'not distinguishable from 0'"
+     }
+    },
+    "decode": {
+     "samples": {
+      "v": 2,
+      "kind": "measured",
+      "src": "verify"
+     },
+     "finding": {
+      "v": "Prosecute(Decode)",
+      "kind": "measured",
+      "src": "verify"
+     },
+     "check_to_verdict_cpu_s": {
+      "v": 2.9761875,
+      "kind": "measured",
+      "src": "verify: check_outsider, which stops at the first fault",
+      "n": 2,
+      "min": 2.9398120000000003,
+      "max": 3.012563
+     },
+     "check_to_verdict_wall_s": {
+      "v": 4.2737082915,
+      "kind": "measured",
+      "src": "verify",
+      "n": 2,
+      "min": 3.905095375,
+      "max": 4.642321208
+     },
+     "fault": null,
+     "filing_proof_bytes": null,
+     "filing_object_bytes": {
+      "v": 607896,
+      "kind": "measured",
+      "src": "verify: the FileProof route object, strict-encoded"
+     },
+     "fits_route_object_cap": {
+      "v": true,
+      "kind": "measured",
+      "src": "verify: against PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 (1,583,616)"
+     },
+     "refused_at_wire": null,
+     "filing_assemble_cpu_s": null,
+     "court_cpu_s": {
+      "v": 0.004294500000000201,
+      "kind": "measured",
+      "src": "verify: a node replica's court, apply_block",
+      "n": 2,
+      "min": 0.0042690000000003,
+      "max": 0.0043200000000001015
+     },
+     "court_wall_s": {
+      "v": 0.0046076039999999995,
+      "kind": "measured",
+      "src": "verify",
+      "n": 2,
+      "min": 0.004269333,
+      "max": 0.004945875
+     },
+     "court_events": {
+      "v": [
+       "Convicted(slashed 100000000000, accuser_reward 50000000000, post_final false)"
+      ],
+      "kind": "measured",
+      "src": "verify"
+     }
+    }
+   },
+   "t_localize_model": {
+    "v": {
+     "logits_row_macs": 136134656,
+     "cpu_s": 2.338424000000001
+    },
+    "kind": "derived",
+    "src": "k x n exact i128 multiply-accumulates of the failing lm_head row x the measured exact_mac_cpu_ns; the lie 'late' is in that row"
+   },
+   "demand_flow": {
+    "finding": {
+     "v": "Demand",
+     "kind": "measured",
+     "src": "verify --withhold-pos 0 --serve"
+    },
+    "response_object_bytes": {
+     "v": 59445032,
+     "kind": "measured",
+     "src": "verify: one position's committed values as a Respond object"
+    },
+    "fits_route_object_cap": {
+     "v": false,
+     "kind": "measured",
+     "src": "verify: 1,583,616-byte interim object cap; the harness's replica ledger applied it anyway (it does not enforce the carrier at apply time), so 'Served' there is NOT evidence that a chain would carry it"
+    },
+    "check_after_served_cpu_s": {
+     "v": 139.815862,
+     "kind": "measured",
+     "src": "verify",
+     "n": 1,
+     "min": 139.815862,
+     "max": 139.815862
+    }
+   },
+   "first_pass_samples_skipped_for_host_memory_then_rerun": {
+    "v": [
+     "skip early 1: free 8.9 GB < 9",
+     "skip early 2: free 8.9 GB < 9",
+     "skip gather 1: free 8.9 GB < 9",
+     "skip gather 2: free 8.8 GB < 9",
+     "skip elem 1: free 8.8 GB < 9",
+     "skip elem 2: free 8.7 GB < 9",
+     "skip decode 1: free 8.7 GB < 9",
+     "skip decode 2: free 8.7 GB < 9",
+     "skip honest 1: free 8.3 GB < 9",
+     "skip honest 2: free 8.3 GB < 9",
+     "skip late 1: free 8.3 GB < 9",
+     "skip late 2: free 8.3 GB < 9"
+    ],
+    "kind": "measured",
+    "src": "run-class.sh guard (free+inactive memory below the minimum); matrix2.sh re-ran every one of them, waiting for memory instead of skipping"
+   }
+  },
+  "qwen35-0.8b": {
+   "label": "qwen35-0.8b",
+   "artifact": {
+    "container_bytes": {
+     "v": 1052511616,
+     "kind": "measured",
+     "src": "static"
+    },
+    "params": {
+     "v": 765948807,
+     "kind": "measured",
+     "src": "static"
+    },
+    "param_instances": {
+     "v": 1980,
+     "kind": "measured",
+     "src": "static"
+    },
+    "committed_nodes_per_position": {
+     "v": 9996,
+     "kind": "measured",
+     "src": "static"
+    },
+    "token_bound": {
+     "v": 248320,
+     "kind": "measured",
+     "src": "static"
+    },
+    "history_bound": {
+     "v": 262144,
+     "kind": "measured",
+     "src": "static"
+    }
+   },
+   "plan_bounds_k2_v2": {
+    "max_positions_4": {
+     "evidence_bytes_per_position_bound": {
+      "v": 1830373561,
+      "kind": "measured",
+      "src": "static: plan budget at the class's history bound"
+     },
+     "gate_ok": {
+      "v": true,
+      "kind": "measured",
+      "src": "static: public_prosecution_complete_v1"
+     },
+     "worst_filing_bytes": {
+      "v": 1073807360,
+      "kind": "measured",
+      "src": "static: gate bound"
+     },
+     "max_verifier_ram_bound": {
+      "v": 2386802555,
+      "kind": "measured",
+      "src": "static: gate bound = artifact_bytes + evidence_bytes_per_position"
+     },
+     "opv_carrier_fit_interim": {
+      "v": false,
+      "kind": "measured",
+      "src": "static: carrier_fit_v1 at the interim 1,583,616-byte carriers"
+     },
+     "opv_carrier_refusal": "a worst-case filing of 1831653312 bytes does not fit a FileProof (1583616)"
+    },
+    "max_positions_64": {
+     "evidence_bytes_per_position_bound": {
+      "v": 1830373561,
+      "kind": "measured",
+      "src": "static: plan budget at the class's history bound"
+     },
+     "gate_ok": {
+      "v": true,
+      "kind": "measured",
+      "src": "static: public_prosecution_complete_v1"
+     },
+     "worst_filing_bytes": {
+      "v": 1073807360,
+      "kind": "measured",
+      "src": "static: gate bound"
+     },
+     "max_verifier_ram_bound": {
+      "v": 2386802555,
+      "kind": "measured",
+      "src": "static: gate bound = artifact_bytes + evidence_bytes_per_position"
+     },
+     "opv_carrier_fit_interim": {
+      "v": false,
+      "kind": "measured",
+      "src": "static: carrier_fit_v1 at the interim 1,583,616-byte carriers"
+     },
+     "opv_carrier_refusal": "a worst-case filing of 1831653312 bytes does not fit a FileProof (1583616)"
+    }
+   },
+   "weights_pass_streaming": {
+    "read_cpu_s": {
+     "v": 2.3862480000000046,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "commit_once_cpu_s": {
+     "v": 23.322990000000093,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "project_cpu_s": {
+     "v": 21.473984000000016,
+     "kind": "measured",
+     "src": "weights: 2 repetitions of W r over GF(2^127-1)"
+    },
+    "field_mults": {
+     "v": 1517602816,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "model_cpu_s_commit_twice": {
+     "v": 70.5062120000002,
+     "kind": "derived",
+     "src": "read + 2 x commit + project (the reference verifier authenticates a weight twice)"
+    },
+    "model_cpu_ns_per_param": {
+     "v": 92.05081508795952,
+     "kind": "derived",
+     "src": "model_cpu_s / params"
+    },
+    "wall_s_under_load": {
+     "v": 81.752311917,
+     "kind": "measured",
+     "src": "weights",
+     "load1_before": 36.22998046875
+    },
+    "peak_rss_bytes": {
+     "v": 4114186240,
+     "kind": "measured",
+     "src": "weights (streaming: one tensor at a time)"
+    }
+   },
+   "producer_side_p3": {
+    "registration_mode": {
+     "v": "PanelLicensed",
+     "kind": "measured",
+     "src": "build-world: OPV first, Panel-licensed when OPV is refused"
+    },
+    "opv_registration_refusal": "RegisterClassV2: not carriable: a worst-case filing of 1831653312 bytes does not fit a FileProof (1583616)",
+    "honest_trace_cpu_s": {
+     "v": 57.13616400000001,
+     "kind": "measured",
+     "src": "build-world: the producer's reference evaluation of 3 positions"
+    },
+    "honest_commitments_cpu_s": {
+     "v": 16.212088000000005,
+     "kind": "measured",
+     "src": "build-world"
+    },
+    "param_commitments_cpu_s": {
+     "v": 26.956777000000002,
+     "kind": "measured",
+     "src": "build-world"
+    },
+    "chain_bytes": {
+     "v": 2129206,
+     "kind": "measured",
+     "src": "build-world: class registration + 6 claims' commitments (Borsh)"
+    }
+   },
+   "da_p3": {
+    "claim_public_material_bytes": {
+     "v": 1566268371,
+     "kind": "measured",
+     "src": "build-world: every committed value but the derived ones, 3 positions"
+    },
+    "per_position_bytes": {
+     "v": 522089457.0,
+     "kind": "derived",
+     "src": "da bytes / 3 positions (small history: it grows with the position index)"
+    }
+   },
+   "end_to_end_measured": false,
+   "why_not_end_to_end": {
+    "v": {
+     "min_verifier_ram_bytes": 12255180912,
+     "host_ram_bytes": 34359738368
+    },
+    "kind": "derived",
+    "src": "16 bytes x params: Ctx::param_cache keeps every parameter instance as i128 for the scope (misaka-palw-kernel/src/verify.rs)"
+   },
+   "t_check_lower_bound_cpu_s": {
+    "v": 70.5062120000002,
+    "kind": "derived",
+    "src": "the weight pass alone (read + 2 x commit + projection), measured streaming on the real artifact: a fresh check cannot cost less"
+   },
+   "t_check_estimate_p3_cpu_s": {
+    "v": 622.127369520808,
+    "kind": "assumed",
+    "src": "ASSUMPTION, not a measurement: fixed part = (0.5B intercept / 0.5B weight-pass model) x this class's weight-pass model; per-position part = the 0.5B cost per public-material byte x this class's bytes per position. Replace by a run on a host with the RAM (fleet plan F2)",
+    "fixed_s": 163.44141008263955,
+    "per_position_s": 152.89531981272282,
+    "kappa": 2.3181136164660083
+   },
+   "samples": "none: no claim was verified for this class"
+  },
+  "llama32-1b": {
+   "label": "llama32-1b",
+   "artifact": {
+    "container_bytes": {
+     "v": 1533096320,
+     "kind": "measured",
+     "src": "static"
+    },
+    "params": {
+     "v": 1244998465,
+     "kind": "measured",
+     "src": "static"
+    },
+    "param_instances": {
+     "v": 892,
+     "kind": "measured",
+     "src": "static"
+    },
+    "committed_nodes_per_position": {
+     "v": 4298,
+     "kind": "measured",
+     "src": "static"
+    },
+    "token_bound": {
+     "v": 128256,
+     "kind": "measured",
+     "src": "static"
+    },
+    "history_bound": {
+     "v": 262144,
+     "kind": "measured",
+     "src": "static"
+    }
+   },
+   "plan_bounds_k2_v2": {
+    "max_positions_4": {
+     "evidence_bytes_per_position_bound": {
+      "v": 14028900217,
+      "kind": "measured",
+      "src": "static: plan budget at the class's history bound"
+     },
+     "gate_ok": {
+      "v": true,
+      "kind": "measured",
+      "src": "static: public_prosecution_complete_v1"
+     },
+     "worst_filing_bytes": {
+      "v": 1073807360,
+      "kind": "measured",
+      "src": "static: gate bound"
+     },
+     "max_verifier_ram_bound": {
+      "v": 14619646810,
+      "kind": "measured",
+      "src": "static: gate bound = artifact_bytes + evidence_bytes_per_position"
+     },
+     "opv_carrier_fit_interim": {
+      "v": false,
+      "kind": "measured",
+      "src": "static: carrier_fit_v1 at the interim 1,583,616-byte carriers"
+     },
+     "opv_carrier_refusal": "a worst-case filing of 14029450624 bytes does not fit a FileProof (1583616)"
+    },
+    "max_positions_64": {
+     "evidence_bytes_per_position_bound": {
+      "v": 14028900217,
+      "kind": "measured",
+      "src": "static: plan budget at the class's history bound"
+     },
+     "gate_ok": {
+      "v": true,
+      "kind": "measured",
+      "src": "static: public_prosecution_complete_v1"
+     },
+     "worst_filing_bytes": {
+      "v": 1073807360,
+      "kind": "measured",
+      "src": "static: gate bound"
+     },
+     "max_verifier_ram_bound": {
+      "v": 14619646810,
+      "kind": "measured",
+      "src": "static: gate bound = artifact_bytes + evidence_bytes_per_position"
+     },
+     "opv_carrier_fit_interim": {
+      "v": false,
+      "kind": "measured",
+      "src": "static: carrier_fit_v1 at the interim 1,583,616-byte carriers"
+     },
+     "opv_carrier_refusal": "a worst-case filing of 14029450624 bytes does not fit a FileProof (1583616)"
+    }
+   },
+   "weights_pass_streaming": {
+    "read_cpu_s": {
+     "v": 3.7773820000003484,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "commit_once_cpu_s": {
+     "v": 42.23203699999981,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "project_cpu_s": {
+     "v": 36.85172799999995,
+     "kind": "measured",
+     "src": "weights: 2 repetitions of W r over GF(2^127-1)"
+    },
+    "field_mults": {
+     "v": 2483683328,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "model_cpu_s_commit_twice": {
+     "v": 125.09318399999992,
+     "kind": "derived",
+     "src": "read + 2 x commit + project (the reference verifier authenticates a weight twice)"
+    },
+    "model_cpu_ns_per_param": {
+     "v": 100.4765768928076,
+     "kind": "derived",
+     "src": "model_cpu_s / params"
+    },
+    "wall_s_under_load": {
+     "v": 136.717714208,
+     "kind": "measured",
+     "src": "weights",
+     "load1_before": 46.56689453125
+    },
+    "peak_rss_bytes": {
+     "v": 3294199808,
+     "kind": "measured",
+     "src": "weights (streaming: one tensor at a time)"
+    }
+   },
+   "producer_side_p3": {
+    "registration_mode": {
+     "v": "PanelLicensed",
+     "kind": "measured",
+     "src": "build-world: OPV first, Panel-licensed when OPV is refused"
+    },
+    "opv_registration_refusal": "RegisterClassV2: not carriable: a worst-case filing of 14029450624 bytes does not fit a FileProof (1583616)",
+    "honest_trace_cpu_s": {
+     "v": 71.43616899999999,
+     "kind": "measured",
+     "src": "build-world: the producer's reference evaluation of 3 positions"
+    },
+    "honest_commitments_cpu_s": {
+     "v": 3.6676820000000063,
+     "kind": "measured",
+     "src": "build-world"
+    },
+    "param_commitments_cpu_s": {
+     "v": 45.333734,
+     "kind": "measured",
+     "src": "build-world"
+    },
+    "chain_bytes": {
+     "v": 917814,
+     "kind": "measured",
+     "src": "build-world: class registration + 6 claims' commitments (Borsh)"
+    }
+   },
+   "da_p3": {
+    "claim_public_material_bytes": {
+     "v": 211494465,
+     "kind": "measured",
+     "src": "build-world: every committed value but the derived ones, 3 positions"
+    },
+    "per_position_bytes": {
+     "v": 70498155.0,
+     "kind": "derived",
+     "src": "da bytes / 3 positions (small history: it grows with the position index)"
+    }
+   },
+   "end_to_end_measured": false,
+   "why_not_end_to_end": {
+    "v": {
+     "min_verifier_ram_bytes": 19919975440,
+     "host_ram_bytes": 34359738368
+    },
+    "kind": "derived",
+    "src": "16 bytes x params: Ctx::param_cache keeps every parameter instance as i128 for the scope (misaka-palw-kernel/src/verify.rs)"
+   },
+   "t_check_lower_bound_cpu_s": {
+    "v": 125.09318399999992,
+    "kind": "derived",
+    "src": "the weight pass alone (read + 2 x commit + projection), measured streaming on the real artifact: a fresh check cannot cost less"
+   },
+   "t_check_estimate_p3_cpu_s": {
+    "v": 351.9169434079047,
+    "kind": "assumed",
+    "src": "ASSUMPTION, not a measurement: fixed part = (0.5B intercept / 0.5B weight-pass model) x this class's weight-pass model; per-position part = the 0.5B cost per public-material byte x this class's bytes per position. Replace by a run on a host with the RAM (fleet plan F2)",
+    "fixed_s": 289.98021315748764,
+    "per_position_s": 20.645576750139018,
+    "kappa": 2.3181136164660083
+   },
+   "samples": "none: no claim was verified for this class"
+  },
+  "smollm2-1.7b": {
+   "label": "smollm2-1.7b",
+   "artifact": {
+    "container_bytes": {
+     "v": 1866690944,
+     "kind": "measured",
+     "src": "static"
+    },
+    "params": {
+     "v": 1725946593,
+     "kind": "measured",
+     "src": "static"
+    },
+    "param_instances": {
+     "v": 1332,
+     "kind": "measured",
+     "src": "static"
+    },
+    "committed_nodes_per_position": {
+     "v": 6426,
+     "kind": "measured",
+     "src": "static"
+    },
+    "token_bound": {
+     "v": 49152,
+     "kind": "measured",
+     "src": "static"
+    },
+    "history_bound": {
+     "v": 262144,
+     "kind": "measured",
+     "src": "static"
+    }
+   },
+   "plan_bounds_k2_v2": {
+    "max_positions_4": {
+     "evidence_bytes_per_position_bound": {
+      "v": 10575020761,
+      "kind": "measured",
+      "src": "static: plan budget at the class's history bound"
+     },
+     "gate_ok": {
+      "v": true,
+      "kind": "measured",
+      "src": "static: public_prosecution_complete_v1"
+     },
+     "worst_filing_bytes": {
+      "v": 2147549184,
+      "kind": "measured",
+      "src": "static: gate bound"
+     },
+     "max_verifier_ram_bound": {
+      "v": 10846852282,
+      "kind": "measured",
+      "src": "static: gate bound = artifact_bytes + evidence_bytes_per_position"
+     },
+     "opv_carrier_fit_interim": {
+      "v": false,
+      "kind": "measured",
+      "src": "static: carrier_fit_v1 at the interim 1,583,616-byte carriers"
+     },
+     "opv_carrier_refusal": "a worst-case filing of 10575843552 bytes does not fit a FileProof (1583616)"
+    },
+    "max_positions_64": {
+     "evidence_bytes_per_position_bound": {
+      "v": 10575020761,
+      "kind": "measured",
+      "src": "static: plan budget at the class's history bound"
+     },
+     "gate_ok": {
+      "v": true,
+      "kind": "measured",
+      "src": "static: public_prosecution_complete_v1"
+     },
+     "worst_filing_bytes": {
+      "v": 2147549184,
+      "kind": "measured",
+      "src": "static: gate bound"
+     },
+     "max_verifier_ram_bound": {
+      "v": 10846852282,
+      "kind": "measured",
+      "src": "static: gate bound = artifact_bytes + evidence_bytes_per_position"
+     },
+     "opv_carrier_fit_interim": {
+      "v": false,
+      "kind": "measured",
+      "src": "static: carrier_fit_v1 at the interim 1,583,616-byte carriers"
+     },
+     "opv_carrier_refusal": "a worst-case filing of 10575843552 bytes does not fit a FileProof (1583616)"
+    }
+   },
+   "weights_pass_streaming": {
+    "read_cpu_s": {
+     "v": 4.54862300000032,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "commit_once_cpu_s": {
+     "v": 49.06493999999989,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "project_cpu_s": {
+     "v": 49.55402900000003,
+     "kind": "measured",
+     "src": "weights: 2 repetitions of W r over GF(2^127-1)"
+    },
+    "field_mults": {
+     "v": 3443130368,
+     "kind": "measured",
+     "src": "weights"
+    },
+    "model_cpu_s_commit_twice": {
+     "v": 152.23253200000013,
+     "kind": "derived",
+     "src": "read + 2 x commit + project (the reference verifier authenticates a weight twice)"
+    },
+    "model_cpu_ns_per_param": {
+     "v": 88.20234219147714,
+     "kind": "derived",
+     "src": "model_cpu_s / params"
+    },
+    "wall_s_under_load": {
+     "v": 179.438348292,
+     "kind": "measured",
+     "src": "weights",
+     "load1_before": 56.16259765625
+    },
+    "peak_rss_bytes": {
+     "v": 1757741056,
+     "kind": "measured",
+     "src": "weights (streaming: one tensor at a time)"
+    }
+   },
+   "producer_side_p3": {
+    "registration_mode": {
+     "v": "PanelLicensed",
+     "kind": "measured",
+     "src": "build-world: OPV first, Panel-licensed when OPV is refused"
+    },
+    "opv_registration_refusal": "RegisterClassV2: not carriable: a worst-case filing of 10575843552 bytes does not fit a FileProof (1583616)",
+    "honest_trace_cpu_s": {
+     "v": 78.84989999999999,
+     "kind": "measured",
+     "src": "build-world: the producer's reference evaluation of 3 positions"
+    },
+    "honest_commitments_cpu_s": {
+     "v": 6.95831500000001,
+     "kind": "measured",
+     "src": "build-world"
+    },
+    "param_commitments_cpu_s": {
+     "v": 53.828376999999996,
+     "kind": "measured",
+     "src": "build-world"
+    },
+    "chain_bytes": {
+     "v": 1356854,
+     "kind": "measured",
+     "src": "build-world: class registration + 6 claims' commitments (Borsh)"
+    }
+   },
+   "da_p3": {
+    "claim_public_material_bytes": {
+     "v": 319199553,
+     "kind": "measured",
+     "src": "build-world: every committed value but the derived ones, 3 positions"
+    },
+    "per_position_bytes": {
+     "v": 106399851.0,
+     "kind": "derived",
+     "src": "da bytes / 3 positions (small history: it grows with the position index)"
+    }
+   },
+   "end_to_end_measured": false,
+   "why_not_end_to_end": {
+    "v": {
+     "min_verifier_ram_bytes": 27615145488,
+     "host_ram_bytes": 34359738368
+    },
+    "kind": "derived",
+    "src": "16 bytes x params: Ctx::param_cache keeps every parameter instance as i128 for the scope (misaka-palw-kernel/src/verify.rs)"
+   },
+   "t_check_lower_bound_cpu_s": {
+    "v": 152.23253200000013,
+    "kind": "derived",
+    "src": "the weight pass alone (read + 2 x commit + projection), measured streaming on the real artifact: a fresh check cannot cost less"
+   },
+   "t_check_estimate_p3_cpu_s": {
+    "v": 446.3707639908913,
+    "kind": "assumed",
+    "src": "ASSUMPTION, not a measurement: fixed part = (0.5B intercept / 0.5B weight-pass model) x this class's weight-pass model; per-position part = the 0.5B cost per public-material byte x this class's bytes per position. Replace by a run on a host with the RAM (fleet plan F2)",
+    "fixed_s": 352.89230529829763,
+    "per_position_s": 31.15948623086456,
+    "kappa": 2.3181136164660083
+   },
+   "samples": "none: no claim was verified for this class"
+  }
+ },
+ "not_measured": [
+  "link bandwidth, latency, loss and provider egress (every fetch here is a local file or the localhost HTTP provider)",
+  "chain inclusion of a filing: carrier latency and reorg depth (opv.rs carrier_daa / reorg_slack_daa)",
+  "the number of independent honest verifiers that actually check, and the probability each is present (q, n, P_run)",
+  "any class beyond 0.5B end to end: the reference verifier caches 16 bytes per parameter (0.8B needs >= 12.3 GB, 1B >= 19.9 GB, 1.7B >= 27.6 GB; the host is shared)",
+  "the 9B-8k real artifact (H1's pack is not built)"
+ ]
+}

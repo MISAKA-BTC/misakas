@@ -1,0 +1,93 @@
+{
+ "s_per_daa": 120,
+ "economics": {
+  "participation_q": 1.0,
+  "verifiers_n": 1
+ },
+ "classes": [
+  {
+   "name": "qwen25-0.5b P=16 no-link",
+   "positions": 16,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35
+  },
+  {
+   "name": "qwen25-0.5b P=64 no-link",
+   "positions": 64,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35
+  },
+  {
+   "name": "qwen25-0.5b P=256 no-link",
+   "positions": 256,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35
+  },
+  {
+   "name": "qwen25-0.5b P=1024 no-link",
+   "positions": 1024,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35
+  },
+  {
+   "name": "qwen25-0.5b P=8192 no-link",
+   "positions": 8192,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35
+  },
+  {
+   "name": "qwen25-0.5b P=8192 1Gbps(assumed link)",
+   "positions": 8192,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 125000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35
+  }
+ ]
+}
