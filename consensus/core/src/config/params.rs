@@ -2991,6 +2991,15 @@ pub struct Params {
     /// ([`Self::validate_palw_provider_court_v1`]) with the kernel route it ships beside.
     pub palw_provider_court_v1: Option<ForkActivation>,
 
+    /// **Lane INTF (ADR-0032's 2026-10-10 amendment): the PALW reporter share, 10% → 49%** ([`crate::palw_reporter_share_v2`]).
+    /// Below this height R-1's reward and DA-6's refuted cost are 1,000 bps (`PALW_RCORE_REPORTER_REWARD_BPS_V1`, the share every
+    /// conviction and session on every shipped network was priced at); at or past it 4,900 bps (`PALW_RCORE_REPORTER_REWARD_BPS_V2`).
+    /// R-1 is fixed at the conviction's close, DA-6 at the session's open, so no past amount is re-read. **Dormant, with no
+    /// activation height**: `None` on every preset and in no flag-day list, hashed Some-only (with the 4,900 bps beside it) in both
+    /// fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_reporter_share_v2`]) until the
+    /// full-activation release names its height; needs `palw_rcore_plus` in force at or below it.
+    pub palw_reporter_share_v2: Option<ForkActivation>,
+
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
     /// context ([`crate::palw_v2::PalwJobContextV2::prefix_context_hash_v1`], context version 3), so every claim over the same prefix
@@ -4190,6 +4199,8 @@ impl Params {
         // **RFC-0006 per-segment pricing** (`crate::palw_tir_shard_segment_v2`): refused when armed.
         self.validate_palw_tir_shard_segment_v2()?;
         self.validate_palw_provider_court_v1()?;
+        // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
+        self.validate_palw_reporter_share_v2()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **palw_fp_prefix_inherit** (`crate::palw_fp_prefix_v1`).
         self.validate_palw_fp_prefix_inherit_v1()?;
@@ -6557,6 +6568,10 @@ impl Params {
         // The provider court's fence (DA16), likewise.
         if self.palw_provider_court_v1 == Some(ForkActivation::never()) {
             self.palw_provider_court_v1 = None;
+        }
+        // ADR-0032's amended reporter share (lane INTF), likewise.
+        if self.palw_reporter_share_v2 == Some(ForkActivation::never()) {
+            self.palw_reporter_share_v2 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -10264,6 +10279,7 @@ impl Params {
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
+            palw_reporter_share_v2,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -10538,6 +10554,7 @@ impl Params {
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
             ("palw_tir_shard_segment_v2", *palw_tir_shard_segment_v2),
             ("palw_provider_court_v1", *palw_provider_court_v1),
+            ("palw_reporter_share_v2", *palw_reporter_share_v2),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -10846,6 +10863,13 @@ impl Params {
         if let Some(at) = self.palw_provider_court_v1 {
             h.write(b"palw_provider_court_v1");
             h.write(at.daa_score().to_le_bytes());
+        }
+        // ADR-0032's amended reporter share (lane INTF), NAMED likewise, with the share it arms beside it (the SA-4 rule:
+        // two builds arming one height at different shares must not print one schedule id). Some-only.
+        if let Some(at) = self.palw_reporter_share_v2 {
+            h.write(b"palw_reporter_share_v2");
+            h.write(at.daa_score().to_le_bytes());
+            h.write(crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V2.to_le_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
         if let Some(at) = self.palw_fp_prefix_inherit {
@@ -11528,6 +11552,7 @@ impl Params {
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
+            palw_reporter_share_v2,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -12302,6 +12327,10 @@ impl Params {
         if let Some(activation) = palw_provider_court_v1.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0032's amended reporter share (lane INTF). Some-only.
+        if let Some(activation) = palw_reporter_share_v2.as_mut() {
+            fork(activation, visit);
+        }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
             fork(activation, visit);
@@ -12838,6 +12867,7 @@ impl Params {
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
             palw_provider_court_v1,
+            palw_reporter_share_v2,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -13150,16 +13180,12 @@ impl Params {
             h.write(b"palw_offence_attribution");
             h.write(activation.daa_score().to_le_bytes());
         }
-        // ADR-0152 R-core+: the height and amended reporter share, Some-only; C7's list only
-        // when non-empty (IMPL-6), so presets without R-core+ fingerprint byte-identically to a
-        // build without those fields.
+        // ADR-0152 R-core+: the height only, Some-only, for the floor's reason; and C7's list only
+        // when non-empty (IMPL-6), so every other preset fingerprints byte-identically to a build
+        // without either field.
         if let Some(activation) = palw_rcore_plus {
             h.write(b"palw_rcore_plus");
             h.write(activation.daa_score().to_le_bytes());
-            // ADR-0032, 2026-10-10: PALW's 49% share changes rewards and DA-6 exposure. Builds
-            // using different shares must announce different armed rulesets at the handshake.
-            h.write(b"palw_reporter_reward_bps");
-            h.write(crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V1.to_le_bytes());
         }
         // Lane F1 (the panel seed, post-launch): the height and, beside it, the seed rule's domain —
         // the rule's version rides its fence, so two builds arming different seed rules at one height
@@ -13670,6 +13696,14 @@ impl Params {
         if let Some(activation) = palw_provider_court_v1 {
             h.write(b"palw_provider_court_v1");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0032's amended reporter share (lane INTF), Some-only for the same reason — and the share it arms beside the
+        // height, so a 10% and a 49% build never announce one ruleset (the amendment's handshake rule) while every preset
+        // that leaves the fence dormant (testnet-12's live ruleset included) fingerprints byte-identically to int-12.
+        if let Some(activation) = palw_reporter_share_v2.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_reporter_share_v2");
+            h.write(activation.daa_score().to_le_bytes());
+            h.write(crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V2.to_le_bytes());
         }
         // palw_fp_prefix_inherit, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_inherit {
@@ -14466,6 +14500,7 @@ impl Params {
             palw_signed_registration_v1: self.palw_signed_registration_v1,
             palw_tir_shard_segment_v2: self.palw_tir_shard_segment_v2,
             palw_provider_court_v1: self.palw_provider_court_v1,
+            palw_reporter_share_v2: self.palw_reporter_share_v2,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -15564,6 +15599,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15858,6 +15894,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -16134,6 +16171,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -23487,6 +23525,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_tir_shard_v1();
     // RFC-0006's per-segment pricing, likewise.
     params.sync_palw_tir_shard_segment_v2();
+    // ADR-0032's amended reporter share (lane INTF), likewise.
+    params.sync_palw_reporter_share_v2();
     // RFC-0001 §2.10's adapter class listing, likewise.
     params.sync_palw_adapter_class_v1();
     // ADR-0096's decode constraint, likewise.
@@ -23764,6 +23804,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
     palw_provider_court_v1: None,
+    palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
