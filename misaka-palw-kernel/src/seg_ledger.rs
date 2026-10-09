@@ -253,6 +253,9 @@ impl KernelLedgerV1 {
         Ok(())
     }
 
+    // ADR-0176 hook (lane BUDGET's `palw_bond_budget_v1`, not built): once that engine exists, accepting a segmented claim reserves
+    // Q = 1 and the claim's maximum R (its Final reward) and F (its OPV work credit) against the producer bond over the window W, and
+    // a refused reservation refuses the claim; nothing is returned before `d + W` (`k2-real-scale.md` §8.2).
     pub(crate) fn commit_segmented_claim(
         &mut self,
         claim: &KernelClaimV1,

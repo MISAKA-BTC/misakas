@@ -720,10 +720,7 @@ impl OperandsV1 for FullOperands<'_> {
 
 /// The fewest leaves of either tree holding every flat index of `reads` (ties to the row tree).
 pub fn leaves_covering_v1(t: &Tensor, trees: &TreesV3, reads: &BTreeSet<u64>) -> Vec<LeafOpeningV3> {
-    let l = trees.layout;
-    let rows: BTreeSet<(u64, u64)> = reads.iter().filter_map(|e| l.row_leaf_of(*e).map(|(a, b, _)| (a, b))).collect();
-    let cols: BTreeSet<(u64, u64)> = reads.iter().filter_map(|e| l.col_leaf_of(*e).map(|(a, b, _)| (a, b))).collect();
-    let (axis, set) = if cols.len() < rows.len() { (AXIS_COL, cols) } else { (AXIS_ROW, rows) };
+    let (axis, set, _) = cheaper_cover(&trees.layout, t.shape.len(), t.dtype.width() as u64, reads);
     set.into_iter().filter_map(|(line, tile)| LeafOpeningV3::of_trees(t, trees, axis, line, tile)).collect()
 }
 
@@ -838,10 +835,12 @@ fn build_element_fault(
         .map_err(|MissingV1(i, f)| format!("({p}, {s}, {n}) operand {i} element {f}"))?;
     let reads = ops.reads.into_inner();
     let out_trees = TreesV3::of(out);
-    let output = OperandOpeningV1 {
-        node: opening(p, s, n),
-        leaves: vec![LeafOpeningV3::holding(out, &out_trees, AXIS_ROW, e).ok_or("no output leaf")?],
-    };
+    // The output's one leaf holding `e`, on the tree the price assumes (`cheaper_cover`).
+    let out_leaves = leaves_covering_v1(out, &out_trees, &BTreeSet::from([e]));
+    if out_leaves.len() != 1 {
+        return Err("no output leaf".into());
+    }
+    let output = OperandOpeningV1 { node: opening(p, s, n), leaves: out_leaves };
     let mut inputs = Vec::new();
     let mut token = None;
     for (i, src) in sources.iter().enumerate() {
@@ -1076,35 +1075,74 @@ impl OperandsV1 for CountingOperands {
     }
 }
 
-/// The leaves (count, bytes) covering `reads` of a tensor of `shape` and `dtype`, cheapest tree.
-fn cover_cost(shape: &[usize], dtype: DType, reads: &BTreeSet<u64>) -> (u64, u64) {
-    let l = LayoutV3::of(shape);
-    let w = dtype.width() as u64;
-    let mut best = (u64::MAX, u64::MAX);
-    for axis in [AXIS_ROW, AXIS_COL] {
-        let set: BTreeSet<(u64, u64)> = reads
-            .iter()
-            .filter_map(|e| if axis == AXIS_ROW { l.row_leaf_of(*e) } else { l.col_leaf_of(*e) })
-            .map(|(a, b, _)| (a, b))
-            .collect();
-        let path = (crate::merkle::depth(l.leaves(axis)) + 1) * 64 + 8 * shape.len() as u64 + 32;
-        let bytes: u64 =
-            set.iter().map(|(line, tile)| l.leaf_elements(axis, *line, *tile).map_or(0, |v| v.len() as u64) * w + path).sum();
-        if (set.len() as u64, bytes) < best {
-            best = (set.len() as u64, bytes);
-        }
-    }
-    best
+/// The leaves of tree `axis` covering `reads` of a tensor laid out as `l` (rank `rank`, `width` bytes an element), and the bytes they
+/// file: each leaf priced as [`LeafOpeningV3::byte_len`] at the tree's full depth, an upper bound of its wire form.
+fn axis_cover(l: &LayoutV3, rank: usize, width: u64, axis: u8, reads: &BTreeSet<u64>) -> (BTreeSet<(u64, u64)>, u64) {
+    let set: BTreeSet<(u64, u64)> = reads
+        .iter()
+        .filter_map(|e| if axis == AXIS_ROW { l.row_leaf_of(*e) } else { l.col_leaf_of(*e) })
+        .map(|(a, b, _)| (a, b))
+        .collect();
+    let path = (crate::merkle::depth(l.leaves(axis)) + 1) * 64 + 8 * rank as u64 + 32;
+    let bytes = set.iter().map(|(line, tile)| l.leaf_elements(axis, *line, *tile).map_or(0, |v| v.len() as u64) * width + path).sum();
+    (set, bytes)
 }
 
-/// **The worst element court of `(block, node)`** at the worst `H` a claim of `max_positions` can have (the block's window, at most
-/// the positions): `(bytes, work)`. Priced by running the court's own evaluator over zero operands at the first and the last element
-/// and covering what it reads with the cheapest tree.
+/// **The tree a filing opens for `reads`** (`(axis, leaves, bytes)`): the one whose covering leaves file fewer bytes, the row tree on a
+/// tie. The prover ([`leaves_covering_v1`], every operand and the output) and the price ([`element_court_cost_in_v1`]) use this one
+/// rule, so what the gate holds against the carrier is what a prover files.
+fn cheaper_cover(l: &LayoutV3, rank: usize, width: u64, reads: &BTreeSet<u64>) -> (u8, BTreeSet<(u64, u64)>, u64) {
+    let (rows, rb) = axis_cover(l, rank, width, AXIS_ROW, reads);
+    let (cols, cb) = axis_cover(l, rank, width, AXIS_COL, reads);
+    if cb < rb { (AXIS_COL, cols, cb) } else { (AXIS_ROW, rows, rb) }
+}
+
+/// The leaves (count, bytes) covering `reads` of a tensor of `shape` and `dtype`, on the tree the prover opens.
+fn cover_cost(shape: &[usize], dtype: DType, reads: &BTreeSet<u64>) -> (u64, u64) {
+    let (_, set, bytes) = cheaper_cover(&LayoutV3::of(shape), shape.len(), dtype.width() as u64, reads);
+    (set.len() as u64, bytes)
+}
+
+/// An operand's opening besides its node opening and leaves: the `Option` tag and the leaf vector's length.
+const OPERAND_SHELL_BYTES_V1: u64 = 5;
+
+/// A prompt tile of `ids` ids with `siblings` siblings, as filed: the `Some` tag, the index, the ids' and the siblings' vectors.
+pub fn prompt_tile_bytes_v1(ids: u64, siblings: u64) -> u64 {
+    1 + 4 + (4 + 4 * ids) + (4 + 64 * siblings)
+}
+
+/// **What one element court of a K2-TIR-v4 relation can cost** (`(bytes, work)`), at the history `min(window, max_positions)`. Bytes are
+/// those of the filing's wire form (`SegFaultV1::Element`), and are an upper bound of every element's filing: the first and the last
+/// element are priced (every tile is full but the last of a line, so they hold the widest leaves), a `Concat` prices a leaf of every
+/// input (an element reads one of them), every operand's opening is priced whether or not the element reads it, and the tree of every
+/// leaf is the prover's ([`cheaper_cover`]).
 pub fn element_court_cost_v1(program: &TirProgramV1, block: usize, node: usize, node_count: u64, max_positions: u32) -> (u64, u64) {
+    element_court_cost_in_v1(program, block, node, node_count, max_positions, None)
+}
+
+/// [`element_court_cost_v1`] for a class whose program has job-bound inputs (K2-TIR-v5, [`crate::seg_encoder`]): the ids are filed as
+/// the job's one prompt tile (`L` ids, no sibling), the count as nothing (the job states it).
+pub fn element_court_cost_in_v1(
+    program: &TirProgramV1,
+    block: usize,
+    node: usize,
+    node_count: u64,
+    max_positions: u32,
+    encoder: Option<&crate::seg_encoder::EncoderBindingV1>,
+) -> (u64, u64) {
     let n = &program.blocks[block].nodes[node];
     let h = crate::plan::worst_h(program, block).min(max_positions.max(1) as usize);
+    // A tiled prompt holds at most `max_positions` ids: a tile has at most 4,096 of them and the tile tree's depth of siblings.
+    let token_tile = prompt_tile_bytes_v1(
+        PROMPT_TILE_IDS_V1.min(max_positions.max(1) as usize) as u64,
+        crate::merkle::depth(crate::seg::prompt_tiles_v1(max_positions.max(1)) as u64),
+    );
+    let job_tile = encoder.map_or(0, |b| prompt_tile_bytes_v1(b.l as u64, 0));
     let mut shapes = Vec::new();
     let mut dtypes = Vec::new();
+    // What each input is filed as: 1 a committed value (its node opening, and the leaves the element reads), 2 a param (the leaves
+    // read), 3 the per-position token (a prompt tile), 4 K2-TIR-v5's job ids (the job's one prompt tile), 0 the operand's shell alone
+    // (a const, zeros, a public scalar, K2-TIR-v5's count).
     let mut kinds = Vec::new();
     for r in &n.inputs {
         let t = crate::plan::ref_type(program, block, r);
@@ -1112,7 +1150,11 @@ pub fn element_court_cost_v1(program: &TirProgramV1, block: usize, node: usize, 
         dtypes.push(t.dtype);
         kinds.push(match r {
             Ref::Node(_) | Ref::CarryIn(_) | Ref::State(_) => 1u8,
-            Ref::Param(_) => 2,
+            Ref::Param(j) => match encoder {
+                Some(b) if *j == b.first_input => 4,
+                Some(b) if *j == b.first_input + 1 => 0,
+                _ => 2,
+            },
             Ref::Input(j) if *j == INPUT_TOKEN => 3,
             _ => 0,
         });
@@ -1136,23 +1178,47 @@ pub fn element_court_cost_v1(program: &TirProgramV1, block: usize, node: usize, 
     for e in [0, len.saturating_sub(1)] {
         let ops = CountingOperands { shapes: shapes.clone(), reads: RefCell::new(vec![BTreeSet::new(); shapes.len()]) };
         let _ = element_value_v1(program, n, &sh, e, &ops);
-        let reads = ops.reads.into_inner();
+        let mut reads = ops.reads.into_inner();
+        if matches!(n.prim, Prim::Concat { .. }) {
+            for r in reads.iter_mut() {
+                r.insert(0);
+            }
+        }
         let mut bytes = FAULT_FIXED_BYTES_V1 + node_bytes + out_leaf;
         let mut work = out_leaf / 16 + HASH_WORK_V1 * (crate::merkle::depth(node_count) + 12);
         for (i, r) in reads.iter().enumerate() {
-            match kinds[i] {
-                3 => bytes += PROMPT_TILE_IDS_V1 as u64 * 4 + 64 * 10,
-                1 | 2 if !r.is_empty() => {
-                    let (leaves, b) = cover_cost(&shapes[i], dtypes[i], r);
-                    bytes += b + if kinds[i] == 1 { node_bytes } else { 8 };
-                    work += r.len() as u64 + leaves * HASH_WORK_V1 * 24;
-                }
-                _ => {}
+            // The node opening is filed whether or not the element reads the value (its node is an operand of the relation).
+            bytes += match kinds[i] {
+                1 => node_bytes,
+                2 => 8,
+                3 => OPERAND_SHELL_BYTES_V1 + token_tile,
+                4 => OPERAND_SHELL_BYTES_V1 + job_tile,
+                _ => OPERAND_SHELL_BYTES_V1,
+            };
+            if matches!(kinds[i], 1 | 2) && !r.is_empty() {
+                let (leaves, b) = cover_cost(&shapes[i], dtypes[i], r);
+                bytes += b;
+                work += r.len() as u64 + leaves * HASH_WORK_V1 * 24;
             }
         }
         worst = (bytes.max(worst.0), work.max(worst.1));
     }
     worst
+}
+
+/// **What a decode filing of a class can cost** (`(bytes, work)`): the logits' node opening and the leaves holding the delivered id and
+/// its rival — at most two leaves of the tree the prover opens, each at most a full row leaf. `(0, 0)` for a program with no logits.
+pub fn decode_court_cost_v1(program: &TirProgramV1, node_count: u64, max_positions: u32) -> (u64, u64) {
+    let Some((b, _)) = program.occurrences().last().copied() else { return (0, 0) };
+    let Some(node) = program.blocks.get(b as usize).and_then(|blk| blk.nodes.get(program.logits as usize)) else { return (0, 0) };
+    let h = crate::plan::worst_h(program, b as usize).min(max_positions.max(1) as usize);
+    let shape = node.out.resolve(h);
+    let width = node.out.dtype.width() as u64;
+    let row = axis_cover(&LayoutV3::of(&shape), shape.len(), width, AXIS_ROW, &BTreeSet::from([0u64])).1;
+    // The variant tag, the index and the rival, and the opening's shell around the node opening.
+    let bytes = 1 + 8 + OPERAND_SHELL_BYTES_V1 + node_opening_bytes_v1(node_count) + 2 * row;
+    let work = 2 * (crate::merkle3::TILE_V3 + HASH_WORK_V1 * 24) + HASH_WORK_V1 * (crate::merkle::depth(node_count) + 12);
+    (bytes, work)
 }
 
 #[cfg(test)]
@@ -1379,5 +1445,114 @@ mod tests {
                 assert!(wide >= bytes);
             }
         }
+    }
+
+    /// **The wire form of a leaf is at the dtype's width** (the encoder-court finding, `k2-real-scale.md` §3): every dtype round-trips,
+    /// the encoded length is `byte_len − 2`, a value outside its dtype or an unknown dtype has no wire form, and a count the bytes do not
+    /// carry is refused without allocating it.
+    #[test]
+    fn leaf_openings_file_their_values_at_the_dtype_width() {
+        for dtype in DType::ALL {
+            let data: Vec<i128> =
+                (0..300i128).map(|i| if i % 2 == 0 { dtype.max_value() - i % 64 } else { dtype.min_value() + i % 64 }).collect();
+            let t = Tensor::new(dtype, vec![3, 100], data).unwrap();
+            let trees = TreesV3::of(&t);
+            for axis in [AXIS_ROW, AXIS_COL] {
+                let leaf = LeafOpeningV3::of_trees(&t, &trees, axis, 1, 0).unwrap();
+                let bytes = borsh::to_vec(&leaf).unwrap();
+                let rank = leaf.shape.len() as u64;
+                let want = 94 + 8 * rank + leaf.values.len() as u64 * dtype.width() as u64 + 64 * leaf.siblings.len() as u64;
+                assert_eq!(bytes.len() as u64, want, "{dtype:?} axis {axis}");
+                assert_eq!(leaf.byte_len(), want + 2, "the price is the wire form plus two");
+                let back: LeafOpeningV3 = borsh::from_slice(&bytes).unwrap();
+                assert_eq!(back, leaf, "{dtype:?} axis {axis}: round trip");
+                assert!(back.authenticates(&tensor_commitment_v3(&t)));
+            }
+            if dtype != DType::I128 {
+                let mut out = LeafOpeningV3::of_trees(&t, &trees, AXIS_ROW, 0, 0).unwrap();
+                out.values[0] = dtype.max_value() + 1;
+                assert!(borsh::to_vec(&out).is_err(), "{dtype:?}: a value outside its dtype has no wire form");
+            }
+        }
+        let t = Tensor::new(DType::I8, vec![4], vec![1, -2, 3, -4]).unwrap();
+        let mut leaf = LeafOpeningV3::of_trees(&t, &TreesV3::of(&t), AXIS_ROW, 0, 0).unwrap();
+        let bytes = borsh::to_vec(&leaf).unwrap();
+        assert!(borsh::from_slice::<LeafOpeningV3>(&bytes[..bytes.len() - 1]).is_err(), "truncated");
+        // A count of 2^32 − 1 values over a handful of bytes fails at the first missing element.
+        let mut lie = bytes.clone();
+        let at = 1 + 4 + 8 + 1 + 8 + 8;
+        lie[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(borsh::from_slice::<LeafOpeningV3>(&lie).is_err());
+        leaf.dtype = 9;
+        assert!(borsh::to_vec(&leaf).is_err(), "an unknown dtype has no wire form");
+        let mut unknown = bytes;
+        unknown[0] = 9;
+        assert!(borsh::from_slice::<LeafOpeningV3>(&unknown).is_err());
+    }
+
+    /// **Every filing is within its priced bound**: on the dense-MoE fixture, the filing for the first, a middle and the last element
+    /// of every committed value at the first and the last position (tiled prompt, so the token's tile is filed) is no larger than
+    /// [`element_court_cost_v1`] of its relation at the claim's length, and a decode filing is no larger than
+    /// [`decode_court_cost_v1`] — so the gate's carrier check, which holds the worst price, holds every filing.
+    #[test]
+    fn every_filing_is_within_its_priced_bound() {
+        let f = fx(5);
+        let trace = trace_v1(&f.program, &f.params, &f.tokens).unwrap();
+        let art = |j: u16, l: Option<u16>| f.params.tensors.get(&(j, l)).cloned();
+        let honest = Committed::of(trace.values.clone());
+        let roots = honest.c.segment_roots();
+        let c = ctx(&f, &roots);
+        let pr = PreparedV1::new(&f.program, None).unwrap();
+        let positions = f.tokens.len() as u32;
+        let (mut filed, mut worst) = (0u32, 0f64);
+        for p in [0u32, positions - 1] {
+            for s in 0..pr.w.occurrences.len() as u16 {
+                let b = pr.w.occurrences[s as usize].0 as usize;
+                for n in 0..pr.nodes_in(s).unwrap() {
+                    let priced = element_court_cost_v1(&f.program, b, n as usize, pr.node_count, positions).0;
+                    let len = trace.values[p as usize][s as usize][n as usize].len() as u64;
+                    for e in [0, len / 2, len.saturating_sub(1)] {
+                        let filing = prove_element_v1(&c, &honest, &art, &f.tokens, (p, s, n), e).unwrap();
+                        let bytes = SegFaultV1::Element(filing).to_bytes().len() as u64;
+                        assert!(
+                            bytes <= priced,
+                            "({p}, {s}, {n}) {:?} element {e}: filed {bytes} > priced {priced}",
+                            pr.w.node(s, n).prim
+                        );
+                        worst = worst.max(bytes as f64 / priced as f64);
+                        filed += 1;
+                    }
+                }
+            }
+        }
+        assert!(filed > 100, "{filed} filings");
+        println!("{filed} filings within their prices, the largest at {worst:.3} of its price");
+        // A decode lie: the last delivered id is not the greedy one.
+        let mut lied = fx(5);
+        let bound = f.program.token_bound;
+        lied.generated[1] = (lied.generated[1] + 1) % bound;
+        let lc = ctx(&lied, &roots);
+        let SegFindingV1::Fault(fault) = check_positions_v1(&lc, &honest, &art, &lied.tokens, &[positions - 1]) else {
+            panic!("the decode lie is not found")
+        };
+        assert!(matches!(fault.as_ref(), SegFaultV1::Decode(_)));
+        let (priced, _) = decode_court_cost_v1(&f.program, pr.node_count, positions);
+        assert!(fault.to_bytes().len() as u64 <= priced, "decode filed {} > priced {priced}", fault.to_bytes().len());
+    }
+
+    /// The streamed trace is the trace: every position's values, in order, equal `trace_v1`'s (a history-bearing program).
+    #[test]
+    fn the_streamed_trace_is_the_trace() {
+        let f = fx(9);
+        let full = trace_v1(&f.program, &f.params, &f.tokens).unwrap();
+        let mut seen = 0u32;
+        crate::trace::trace_streaming_v1(&f.program, &f.params, &f.tokens, &mut |p, values| {
+            assert_eq!(values, full.values[p as usize].as_slice(), "position {p}");
+            assert_eq!(p, seen);
+            seen += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, f.tokens.len() as u32);
     }
 }

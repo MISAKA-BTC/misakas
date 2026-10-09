@@ -335,7 +335,7 @@ pub fn plan_for_tir_program_v1(
         }
     }
     let boundaries = expected_boundaries(program);
-    let budgets = derive_budgets(program, &relations, max_positions);
+    let budgets = derive_budgets(descriptor, program, &relations, max_positions);
     let instances = budgets.probabilistic_instances_per_position as u128 * max_positions as u128;
     Ok(VerificationPlanV1 {
         grammar: PLAN_GRAMMAR_V1,
@@ -350,8 +350,16 @@ pub fn plan_for_tir_program_v1(
 }
 
 /// `max_positions` prices K2-TIR-v4's element courts at the history the claim can actually have (`min(window, max_positions)`); the
-/// other courts keep their window-wide pricing.
-pub(crate) fn derive_budgets(program: &TirProgramV1, relations: &[PlanRelationV1], max_positions: u32) -> PlanBudgetsV1 {
+/// other courts keep their window-wide pricing. Under a K2-TIR-v5 descriptor the program's job-bound inputs are priced as the job's
+/// prompt tile; a class with element courts and a decode (every v4 class) also prices its decode filing.
+pub(crate) fn derive_budgets(
+    descriptor: &KernelDescriptorV1,
+    program: &TirProgramV1,
+    relations: &[PlanRelationV1],
+    max_positions: u32,
+) -> PlanBudgetsV1 {
+    let encoder =
+        if crate::descriptor::is_encoder_v1(descriptor) { crate::seg_encoder::encoder_binding_v1(program).ok() } else { None };
     let mut b = PlanBudgetsV1 {
         artifact_bytes: program
             .params
@@ -378,7 +386,14 @@ pub(crate) fn derive_budgets(program: &TirProgramV1, relations: &[PlanRelationV1
         };
         let (work, bytes, cb, cw) = relation_costs(rel, window_rows, row_bytes);
         let (cb, cw) = if rel.court == CourtIdV1::ElementRecompute {
-            crate::element::element_court_cost_v1(program, rel.block as usize, rel.node as usize, node_count, max_positions)
+            crate::element::element_court_cost_in_v1(
+                program,
+                rel.block as usize,
+                rel.node as usize,
+                node_count,
+                max_positions,
+                encoder.as_ref(),
+            )
         } else {
             (cb, cw)
         };
@@ -391,6 +406,13 @@ pub(crate) fn derive_budgets(program: &TirProgramV1, relations: &[PlanRelationV1
         }
         b.worst_court_bytes = b.worst_court_bytes.max(cb);
         b.worst_court_work = b.worst_court_work.max(cw);
+    }
+    // The decode court is a filing too (two leaves of the logits): the gate holds the worst filing of EVERY court against the carrier.
+    // K2-TIR-v5's encoders deliver no id, so they have none.
+    if encoder.is_none() && relations.iter().any(|r| r.court == CourtIdV1::ElementRecompute) {
+        let (db, dw) = crate::element::decode_court_cost_v1(program, node_count, max_positions);
+        b.worst_court_bytes = b.worst_court_bytes.max(db);
+        b.worst_court_work = b.worst_court_work.max(dw);
     }
     b
 }

@@ -304,7 +304,12 @@ pub fn tensor_commitment_v3(t: &Tensor) -> Digest {
 }
 
 /// **One leaf of a committed tensor**, with its path and the other tree's root.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+///
+/// Its wire form (`BorshSerialize` below) carries the values **at the dtype's width**, exactly as the leaf hash reads them: a leaf of
+/// 4,096 `i8` elements files 4,096 bytes of values, not 65,536. Every price of a filing (`byte_len`, the element court's
+/// `element_court_cost_v1`) is a price of this form; the derived `i128`-per-element encoding filed up to 16× the priced bytes, so a court
+/// the gate admitted against the carrier could produce a filing the carrier refuses.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeafOpeningV3 {
     pub dtype: u8,
     pub shape: Vec<u64>,
@@ -314,6 +319,58 @@ pub struct LeafOpeningV3 {
     pub values: Vec<i128>,
     pub siblings: Vec<Digest>,
     pub other_root: Digest,
+}
+
+fn leaf_wire_error(why: &str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, format!("a leaf opening: {why}"))
+}
+
+/// The wire form: `dtype u8 ‖ shape Vec<u64> ‖ axis u8 ‖ line u64 ‖ tile u64 ‖ count u32 ‖ count × value at the dtype's width (little
+/// endian, two's complement; `idx` unsigned) ‖ siblings Vec<Digest> ‖ other_root`. A value outside its dtype, or an unknown dtype, has
+/// no wire form (serializing it is an error, never a silent truncation).
+impl BorshSerialize for LeafOpeningV3 {
+    fn serialize<W: std::io::Write>(&self, w: &mut W) -> std::io::Result<()> {
+        let dtype = self.dtype().ok_or_else(|| leaf_wire_error("an unknown dtype"))?;
+        self.dtype.serialize(w)?;
+        self.shape.serialize(w)?;
+        self.axis.serialize(w)?;
+        self.line.serialize(w)?;
+        self.tile.serialize(w)?;
+        u32::try_from(self.values.len()).map_err(|_| leaf_wire_error("too many values"))?.serialize(w)?;
+        let mut bytes = Vec::with_capacity(self.values.len() * dtype.width());
+        for v in &self.values {
+            if !dtype.contains(*v) {
+                return Err(leaf_wire_error("a value outside its dtype"));
+            }
+            dtype.encode_le(*v, &mut bytes);
+        }
+        w.write_all(&bytes)?;
+        self.siblings.serialize(w)?;
+        self.other_root.serialize(w)
+    }
+}
+
+impl BorshDeserialize for LeafOpeningV3 {
+    fn deserialize_reader<R: std::io::Read>(r: &mut R) -> std::io::Result<Self> {
+        let tag = u8::deserialize_reader(r)?;
+        let dtype = DType::ALL.into_iter().find(|d| d.tag() == tag).ok_or_else(|| leaf_wire_error("an unknown dtype"))?;
+        let shape = Vec::<u64>::deserialize_reader(r)?;
+        let axis = u8::deserialize_reader(r)?;
+        let line = u64::deserialize_reader(r)?;
+        let tile = u64::deserialize_reader(r)?;
+        let count = u32::deserialize_reader(r)? as usize;
+        let width = dtype.width();
+        // Never allocate what the bytes do not carry: a count the reader cannot back fails at its first missing element.
+        let mut values = Vec::with_capacity(count.min(TILE_V3 as usize));
+        let mut buf = [0u8; 16];
+        for _ in 0..count {
+            r.read_exact(&mut buf[..width])?;
+            values.push(dtype.decode_le(&buf[..width]));
+        }
+        let siblings = Vec::<Digest>::deserialize_reader(r)?;
+        let other_root = Digest::deserialize_reader(r)?;
+        Ok(Self { dtype: tag, shape, axis, line, tile, values, siblings, other_root })
+    }
 }
 
 impl LeafOpeningV3 {
@@ -396,7 +453,7 @@ impl LeafOpeningV3 {
         (idx.len() == self.values.len()).then(|| idx.into_iter().zip(self.values.iter().copied()).collect())
     }
 
-    /// Bytes this leaf puts in a filing.
+    /// Bytes this leaf puts in a filing: its wire form's length is `94 + 8·rank + count·width + 64·siblings`; this is that plus two.
     pub fn byte_len(&self) -> u64 {
         let w = self.dtype().map(|d| d.width()).unwrap_or(16) as u64;
         self.values.len() as u64 * w + (self.siblings.len() as u64 + 1) * 64 + 8 * self.shape.len() as u64 + 32

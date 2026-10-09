@@ -162,29 +162,36 @@ fn judge(
     let (bounds, seg) = public_prosecution_complete_v4(descriptor, &plan, program, &ProfileMaterialV1::kernel_route(true), &ROUTE)
         .map_err(|g| format!("the gate refuses {g:?}"))?;
     carrier_fit_v1(&bounds, CARRIER, CARRIER, CARRIER).map_err(|e| format!("carrier: {e}"))?;
-    let worst = plan
+    // The court prices of a K2-TIR-v5 class read its job-bound inputs as the job's prompt tile (as the plan's own budgets do).
+    let enc = if misaka_palw_kernel::descriptor::is_encoder_v1(descriptor) {
+        misaka_palw_kernel::seg_encoder::encoder_binding_v1(program).ok()
+    } else {
+        None
+    };
+    let cost = |r: &misaka_palw_kernel::plan::PlanRelationV1| {
+        misaka_palw_kernel::element::element_court_cost_in_v1(
+            program,
+            r.block as usize,
+            r.node as usize,
+            seg.node_count,
+            positions,
+            enc.as_ref(),
+        )
+    };
+    let mut worst = plan
         .relations
         .iter()
         .map(|r| {
-            let (b, w) = misaka_palw_kernel::element::element_court_cost_v1(
-                program,
-                r.block as usize,
-                r.node as usize,
-                seg.node_count,
-                positions,
-            );
+            let (b, w) = cost(r);
             (b, w, format!("block {} node {}, {}", r.block, r.node, r.family.name()))
         })
         .max_by_key(|x| (x.0, x.1))
         .expect("a relation");
-    let worst_work = plan
-        .relations
-        .iter()
-        .map(|r| {
-            misaka_palw_kernel::element::element_court_cost_v1(program, r.block as usize, r.node as usize, seg.node_count, positions).1
-        })
-        .max()
-        .unwrap_or(0);
+    // The plan's worst court is the gate's; when it is above every element court it is the decode court's.
+    if plan.budgets.worst_court_bytes > worst.0 {
+        worst = (plan.budgets.worst_court_bytes, worst.1, "the decode court".to_string());
+    }
+    let worst_work = plan.budgets.worst_court_work;
     let h = positions.saturating_sub(1) as usize;
     Ok(Judged {
         relations: plan.relations.len(),
@@ -501,6 +508,8 @@ struct World {
     d: KernelDescriptorV1,
     enc: Encoder,
     class: Digest,
+    /// The registered plan's worst court (what the gate holds against the carrier).
+    plan_worst: u64,
 }
 
 impl World {
@@ -515,7 +524,8 @@ impl World {
         let plan: VerificationPlanV1 = plan_for_tir_program_v1(&d, &enc.program, program_root_v1(&bytes), 1).expect("a v5 plan");
         let pc = ParamCommitmentsV1::of_v3(&enc.params);
         let class = single_class_id_v1(d.digest(), &bytes, &plan, &pc, OPV);
-        let mut w = World { l, daa: 0, d: d.clone(), enc, class };
+        let plan_worst = plan.budgets.worst_court_bytes;
+        let mut w = World { l, daa: 0, d: d.clone(), enc, class, plan_worst };
         let ev = w.block(vec![
             LedgerTxV1::SyncBond { bond: PROD, collateral: 1_000_000 },
             LedgerTxV1::SyncBond { bond: OUT, collateral: 1_000_000 },
@@ -705,7 +715,16 @@ fn k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_materi
         for (s, (b, _)) in occ.iter().enumerate() {
             for n in 0..w.enc.program.blocks[*b as usize].nodes.len() {
                 let len = honest.values[0][s][n].len() as u64;
-                let priced = misaka_palw_kernel::element::element_court_cost_v1(&w.enc.program, *b as usize, n, node_count, 1).0;
+                let priced = misaka_palw_kernel::element::element_court_cost_in_v1(
+                    &w.enc.program,
+                    *b as usize,
+                    n,
+                    node_count,
+                    1,
+                    Some(&w.enc.binding),
+                )
+                .0;
+                assert!(priced <= w.plan_worst, "{fixture}: ({s}, {n}): a relation's price is within the plan's worst court");
                 for e in [0, len / 2, len.saturating_sub(1)] {
                     let filing = prove_element_v1(&ctx, &honest, &art, &prompt, (0, s as u16, n as u16), e)
                         .unwrap_or_else(|why| panic!("{fixture}: ({s}, {n}) element {e}: {why}"));

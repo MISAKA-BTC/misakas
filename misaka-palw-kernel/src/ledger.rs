@@ -69,7 +69,7 @@ use misaka_palw_tir::{MapParams, Tensor};
 use crate::check::check_plan_v1;
 use crate::descriptor::{ContextPolicyV1, KernelDescriptorV1, KernelScheduleV1, ModelKernelBindingV1};
 use crate::evidence::{EvidenceHeaderV1, VerificationEvidenceV1};
-use crate::gate::{ProsecutionBoundsV1, ProsecutionPolicyV1, public_pipeline_prosecution_complete_v1};
+use crate::gate::{ProsecutionBoundsV1, ProsecutionPolicyV1, public_pipeline_prosecution_complete_v1, public_prosecution_complete_v1};
 use crate::hash::Digest;
 use crate::job::{BindingFaultV1, DecodeFaultV1, DecodeRuleV1, KernelClaimV1, KernelJobV1, binding_fault_v1, verify_decode_fault_v1};
 use crate::lifecycle::{ClaimEventV1, ClaimLifecycleV1, ClaimStateV1, LifecyclePolicyV1};
@@ -1978,6 +1978,8 @@ impl KernelLedgerV1 {
                 (b, ClaimStateV1::Final { .. }) if !matches!(b, ClaimStateV1::Final { .. }) => {
                     let row = self.claims.get_mut(&id).expect("listed");
                     row.liability_until = Some(daa + self.policy.liability_daa);
+                    // ADR-0176 hook (`palw_bond_budget_v1`, not built): this payout re-checks and consumes the reservation made at
+                    // the claim's acceptance; it never pays what was not reserved.
                     let reward = if row.convicted { 0 } else { self.policy.claim_reward };
                     row.rewarded = reward > 0;
                     out.push(LedgerEventV1::Final { claim: id, reward });
