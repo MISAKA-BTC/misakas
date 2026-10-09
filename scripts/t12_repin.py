@@ -747,6 +747,14 @@ def registry() -> list[Pin]:
                     lambda c: c["from.testnet-12.params_id"][:16], fmt="token", length=16, comment=None))
     # RFC-0002 Phase F: every ruleset's ids as the IR dormancy pins hold them.
     pins += _tirdorm()
+    # Agent SHARD (RFC-0006 x RFC-0010): the unarmed testnet-12 and lane-A folds hashed on the integration line `b676927de`,
+    # before the lane changed anything. History: a fixed fact of that line, never re-pinned by this tool — the test itself is
+    # the guard (a change to the unarmed fold is a test failure to explain, not a value to move).
+    shard_pins = "consensus/core/tests/shard_unarmed_byte_identity.rs"
+    for const_ in ("PIN_T12_FLOW", "PIN_IR_SHARD_FLOW"):
+        pins.append(Pin(key=f"shard_unarmed.{const_}", scope="history", file=shard_pins, anchors=[rf"^const {const_}: &str ="],
+                        value=None, tests=(f"shard_unarmed_byte_identity::the_unarmed_t12_fold_is_byte_identical_to_the_integration_line",
+                                           f"shard_unarmed_byte_identity::the_unarmed_rfc0006_lane_a_fold_is_byte_identical_to_the_integration_line")))
     return pins
 
 

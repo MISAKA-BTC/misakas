@@ -237,6 +237,75 @@ impl MessageSigner for LengthOnlySigner {
     }
 }
 
+/// **RFC-0009 stage C: the executor's redemption authorization over any [`MessageSigner`]** — [`ValidatorKey::build_redemption_authorization_v4`]'s
+/// body, so a miner whose bond key lives in a `kaspa-pq-signer` sidecar signs it THROUGH the daemon (`SigningPurpose::PalwReceiptAuthV4`, visible
+/// only under `palw_receipt_spend_v4`) and the rail never holds the seed. The identical checks run before anything is signed: an empty quantum
+/// range and a fee above the chain's cap are refused here exactly as the chain would refuse them after.
+#[allow(clippy::too_many_arguments)]
+pub fn build_redemption_authorization_v4_with(
+    signer: &dyn MessageSigner,
+    network_domain: Hash64,
+    claim_id: Hash64,
+    executor_bond: TransactionOutpoint,
+    quantum_lo: u32,
+    quantum_hi: u32,
+    builder_fee_bps: u16,
+    expiry_daa: u64,
+) -> Result<(kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthV4, Vec<u8>), String> {
+    use kaspa_consensus_core::palw_receipt_v4::{
+        PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT, PALW_RECEIPT_V4_BEACON_RULE_SLOT, PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS,
+        PALW_RECEIPT_V4_VERSION, PalwRedemptionAuthV4, redeem_auth_id_v4,
+    };
+    if quantum_lo >= quantum_hi {
+        return Err(format!("the quantum range [{quantum_lo}, {quantum_hi}) is empty"));
+    }
+    if builder_fee_bps > PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS {
+        return Err(format!("builder fee {builder_fee_bps} bps is above the chain's {PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS} bps cap"));
+    }
+    let auth = PalwRedemptionAuthV4 {
+        version: PALW_RECEIPT_V4_VERSION,
+        network_domain,
+        claim_id,
+        executor_bond,
+        quantum_lo,
+        quantum_hi,
+        beacon_rule: PALW_RECEIPT_V4_BEACON_RULE_SLOT,
+        builder_fee_bps,
+        expiry_daa,
+    };
+    let signature = signer.sign_message(redeem_auth_id_v4(&auth).as_bytes().as_slice(), PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT)?;
+    Ok((auth, signature))
+}
+
+/// **The `RDA4` bundle over any [`MessageSigner`]** ([`build_redemption_authorization_v4_with`] plus the signer's public key).
+#[allow(clippy::too_many_arguments)]
+pub fn build_redemption_bundle_v4_with(
+    signer: &dyn MessageSigner,
+    network_domain: Hash64,
+    claim_id: Hash64,
+    executor_bond: TransactionOutpoint,
+    quantum_lo: u32,
+    quantum_hi: u32,
+    builder_fee_bps: u16,
+    expiry_daa: u64,
+) -> Result<kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4, String> {
+    let (authorization, signature) = build_redemption_authorization_v4_with(
+        signer,
+        network_domain,
+        claim_id,
+        executor_bond,
+        quantum_lo,
+        quantum_hi,
+        builder_fee_bps,
+        expiry_daa,
+    )?;
+    Ok(kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4 {
+        authorization,
+        executor_pubkey: signer.public_key().to_vec(),
+        signature,
+    })
+}
+
 /// **[`ValidatorKey::build_fp_commitment_tx`]'s body over any [`MessageSigner`]** (ADR-0044 FP-08; RFC-0009 stage A): the identical stateless checks
 /// and price gate before a fee is spent, the claim id signed under [`PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT`] and the funding input's sighash under
 /// [`MLDSA87_TX_CONTEXT`], both through `signer`. A sidecar signer keeps the bond key out of the calling process; the carrier is the same bytes.
@@ -1096,29 +1165,16 @@ impl ValidatorKey {
         builder_fee_bps: u16,
         expiry_daa: u64,
     ) -> Result<(kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthV4, Vec<u8>), String> {
-        use kaspa_consensus_core::palw_receipt_v4::{
-            PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT, PALW_RECEIPT_V4_BEACON_RULE_SLOT, PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS,
-            PALW_RECEIPT_V4_VERSION, PalwRedemptionAuthV4, redeem_auth_id_v4,
-        };
-        if quantum_lo >= quantum_hi {
-            return Err(format!("the quantum range [{quantum_lo}, {quantum_hi}) is empty"));
-        }
-        if builder_fee_bps > PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS {
-            return Err(format!("builder fee {builder_fee_bps} bps is above the chain's {PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS} bps cap"));
-        }
-        let auth = PalwRedemptionAuthV4 {
-            version: PALW_RECEIPT_V4_VERSION,
+        build_redemption_authorization_v4_with(
+            self,
             network_domain,
             claim_id,
             executor_bond,
             quantum_lo,
             quantum_hi,
-            beacon_rule: PALW_RECEIPT_V4_BEACON_RULE_SLOT,
             builder_fee_bps,
             expiry_daa,
-        };
-        let signature = self.sign_with_context(redeem_auth_id_v4(&auth).as_bytes().as_slice(), PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT).to_vec();
-        Ok((auth, signature))
+        )
     }
 
     /// **RFC-0009: the executor's authorization as the one self-checking bundle a miner hands to builders** (`RDA4`). Signs once; the
@@ -1134,7 +1190,8 @@ impl ValidatorKey {
         builder_fee_bps: u16,
         expiry_daa: u64,
     ) -> Result<kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4, String> {
-        let (authorization, signature) = self.build_redemption_authorization_v4(
+        build_redemption_bundle_v4_with(
+            self,
             network_domain,
             claim_id,
             executor_bond,
@@ -1142,12 +1199,7 @@ impl ValidatorKey {
             quantum_hi,
             builder_fee_bps,
             expiry_daa,
-        )?;
-        Ok(kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4 {
-            authorization,
-            executor_pubkey: self.public_key().to_vec(),
-            signature,
-        })
+        )
     }
 
     /// **RFC-0009: the BUILDER's receipt envelope** — this key is the builder's, bound to the header position it builds at, carrying the

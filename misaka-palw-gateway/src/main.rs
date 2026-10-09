@@ -69,6 +69,8 @@ mod derive;
 mod chain;
 // ADR-0077 Decisions 2 and 6 + SA-3: the prompt plan, the stream, and the two bindings.
 mod wire;
+/// RFC-0001 P1: a run's frames, read with a cancel (the gateway's half of the worker's `Cancel` frame).
+mod worker_stream;
 // ADR-0096 Decision 1: the request shape, and every refusal, before the worker.
 mod surface;
 // RFC-0001 §2.7: the worker pool and the per-source bounds.
@@ -700,43 +702,20 @@ impl ResidentWorker {
     }
 
     /// One job on the resident loop. `on_token` sees every generated id in decode order, as soon
-    /// as it is selected — Decision 2's side channel.
+    /// as it is selected — Decision 2's side channel. **`cancelled()` is asked while the tokens stream** (RFC-0001 P1): the moment the
+    /// client is gone the worker is sent a `Cancel` frame and stops at its next token, answering `Cancelled`, and it STAYS resident.
     fn run_job(
         &mut self,
         request: &PalwFpWorkerRequestV3,
         prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
         on_token: &mut dyn FnMut(u32, &[u8]),
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<PalwFpWorkerResultV3, String> {
         let payload = borsh::to_vec(request).map_err(|e| format!("cannot serialize the worker request: {e}"))?;
         let request_hash = fp_worker_request_hash_v3(&payload);
         write_framed(&mut self.stdin, &payload).map_err(|e| format!("cannot write the job frame: {e}"))?;
         self.stdin.flush().map_err(|e| format!("cannot flush the job frame: {e}"))?;
-        loop {
-            let Some(bytes) = wire::read_frame_stream(&mut self.stdout, PALW_V2_MAX_FRAME_BYTES)? else {
-                return Err("the worker stream ended before a terminator frame".to_string());
-            };
-            match borsh::from_slice::<PalwFpWorkerFrameV1>(&bytes).map_err(|e| format!("a worker frame does not decode: {e}"))? {
-                PalwFpWorkerFrameV1::Token { token_id, rendered } => on_token(token_id, &rendered),
-                PalwFpWorkerFrameV1::Result(result) => {
-                    // The caller-side re-binding: the worker is never trusted about what it was
-                    // asked, and `request_hash` is re-derived from OUR canonical encoding.
-                    result
-                        .validate_against_request(request, request_hash, prompt_ids_form)
-                        .map_err(|e| format!("the worker result does not bind the request: {e}"))?;
-                    return Ok(*result);
-                }
-                PalwFpWorkerFrameV1::Refused { reason } => return Err(format!("the worker refused the job: {reason}")),
-                PalwFpWorkerFrameV1::Manifest(_) => {
-                    return Err("the worker re-announced its manifest mid-session".to_string());
-                }
-                PalwFpWorkerFrameV1::Answered(_)
-                | PalwFpWorkerFrameV1::AnsweredBatch(_)
-                | PalwFpWorkerFrameV1::BatchToken { .. }
-                | PalwFpWorkerFrameV1::Embedded(_) => {
-                    return Err("the worker answered a committed job with an answer-only frame".to_string());
-                }
-            }
-        }
+        worker_stream::read_committed_run(&mut self.stdin, &mut self.stdout, request, request_hash, prompt_ids_form, on_token, cancelled)
     }
 
     /// **RFC-0001 §2.6/§2.7: one job, answered with no commitment.** The same request, behind the
@@ -748,6 +727,7 @@ impl ResidentWorker {
         &mut self,
         request: &PalwFpWorkerRequestV3,
         on_token: &mut dyn FnMut(u32, &[u8]),
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<AnswerRun, String> {
         let payload = borsh::to_vec(request).map_err(|e| format!("cannot serialize the worker request: {e}"))?;
         let request_hash = fp_worker_request_hash_v3(&payload);
@@ -755,36 +735,7 @@ impl ResidentWorker {
         framed.extend_from_slice(&payload);
         write_framed(&mut self.stdin, &framed).map_err(|e| format!("cannot write the job frame: {e}"))?;
         self.stdin.flush().map_err(|e| format!("cannot flush the job frame: {e}"))?;
-        loop {
-            let Some(bytes) = wire::read_frame_stream(&mut self.stdout, PALW_V2_MAX_FRAME_BYTES)? else {
-                return Err("the worker stream ended before a terminator frame".to_string());
-            };
-            match borsh::from_slice::<PalwFpWorkerFrameV1>(&bytes).map_err(|e| format!("a worker frame does not decode: {e}"))? {
-                PalwFpWorkerFrameV1::Token { token_id, rendered } => on_token(token_id, &rendered),
-                PalwFpWorkerFrameV1::Answered(answer) => {
-                    if answer.request_hash != request_hash {
-                        return Err("the worker's answer does not bind the request it was asked".to_string());
-                    }
-                    return Ok(AnswerRun::Answered(*answer));
-                }
-                PalwFpWorkerFrameV1::Refused { reason } => {
-                    return if reason.contains("serves no answer-only path") || reason.contains("not a v3 request") {
-                        Ok(AnswerRun::Unsupported)
-                    } else {
-                        Err(format!("the worker refused the job: {reason}"))
-                    };
-                }
-                PalwFpWorkerFrameV1::Result(_)
-                | PalwFpWorkerFrameV1::AnsweredBatch(_)
-                | PalwFpWorkerFrameV1::BatchToken { .. }
-                | PalwFpWorkerFrameV1::Embedded(_) => {
-                    return Err("the worker answered an answer-only request with a frame of another kind".to_string());
-                }
-                PalwFpWorkerFrameV1::Manifest(_) => {
-                    return Err("the worker re-announced its manifest mid-session".to_string());
-                }
-            }
-        }
+        worker_stream::read_answer_run(&mut self.stdin, &mut self.stdout, request_hash, on_token, cancelled)
     }
 
     /// **RFC-0001 §2.8: one embedding.** Bound to the request's bytes; `Unsupported` is a worker that
@@ -877,6 +828,7 @@ enum AnswerBatchRun {
 }
 
 /// What an answer-only request came to.
+#[derive(Debug)]
 enum AnswerRun {
     Answered(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1),
     /// The worker serves no answer-only path: run the committed one.
@@ -981,9 +933,11 @@ impl WorkerSupervisor {
         if slot.is_none() {
             *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
         }
-        let outcome = slot.as_mut().expect("just spawned").run_job(request, prompt_ids_form, on_token);
+        let outcome = slot.as_mut().expect("just spawned").run_job(request, prompt_ids_form, on_token, cancelled);
+        // A cancelled run is not a transport failure: the worker answered `Cancelled` in step and stays resident (RFC-0001 P1).
         if let Err(e) = &outcome
             && !e.starts_with("the worker refused the job")
+            && !serving::is_cancelled(e)
         {
             // The stream is no longer trustworthy: drop the child so the next request maps a
             // fresh artifact instead of talking into a dead pipe forever.
@@ -1008,10 +962,10 @@ impl WorkerSupervisor {
         if slot.is_none() {
             *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
         }
-        let outcome = slot.as_mut().expect("just spawned").run_answer(request, on_token);
+        let outcome = slot.as_mut().expect("just spawned").run_answer(request, on_token, cancelled);
         match &outcome {
             Ok(AnswerRun::Unsupported) => self.answer_only.store(false, Ordering::Relaxed),
-            Err(e) if !e.starts_with("the worker refused the job") => {
+            Err(e) if !e.starts_with("the worker refused the job") && !serving::is_cancelled(e) => {
                 *slot = None;
                 eprintln!("[misaka-palw-gateway] the resident worker was dropped after a transport failure: {e}");
             }
@@ -1693,8 +1647,9 @@ fn handle_chat(
     }
     // **The result against the worker's own manifest** (the binding audit's link 2): the request fixes every other field of the job,
     // but it carries no tokenizer, and no consensus rule compares the job's `tokenizer_id` to anything.
+    // P2: finding F2 (the requested stop strings were spelled into the job) lives in `validate_against_request`, which every runner has
+    // already called; finding F1 (the manifest) is the shared `validate_against_manifest`.
     binding::check_result_against_manifest(&result, manifest)?;
-    binding::check_stop_texts_were_spelled(&request, &result)?;
     // RFC-0001 §A.3 step 7: where the job's own stop rule ended the answer — derived from the job
     // the worker bound and the ids it committed, never taken from the worker's word.
     let v4_stop = result.job.decode.as_ref().filter(|_| result.job.is_v4()).map(|decode| {

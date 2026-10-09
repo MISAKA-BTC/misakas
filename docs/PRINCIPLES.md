@@ -179,4 +179,4 @@ This appendix records where the principle already decides open work. It is a poi
   Where that is unaffordable, aggregated checks (Freivalds/GKR-style) are required, not a lower assumed detection rate.
 - **§2's grinding resistance** is why the sealed-source beacon (v3) and the complete-check bootstrap are prerequisites for any sampled approval.
 - **§3's "no escape to economic Final"** is enforced by the bounded demand/proof/grace deadlines of the kernel route and OPV.
-- **Condition 7 of §6 (reorg consistency)** is why the fork-choice decision (ADR-0175) is a prerequisite of the full-activation release.
+- **Condition 7 of §6 (reorg consistency)** is why the fork-choice decision (ADR-0178) is a prerequisite of the full-activation release.

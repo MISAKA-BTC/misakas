@@ -374,6 +374,20 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::KernelBoundV1 { .. }
         | PalwConsensusObjectV2::ConformanceCommittedV1 { .. }
         | PalwConsensusObjectV2::ConformanceEvidenceV1 { .. } => Ok(()),
+        // DA16 (tags 150–153): provider-court objects ride at every height (A-2) and carry their signer's signature; the fence, the
+        // bonds, the rows and the units are the acceptance layer's and the fold's.
+        PalwConsensusObjectV2::ProviderLeaseV1 { signature, .. }
+        | PalwConsensusObjectV2::ProviderChallengeV1 { signature, .. }
+        | PalwConsensusObjectV2::ProviderAnswerV1 { signature, .. }
+        | PalwConsensusObjectV2::DaTransferV1 { signature, .. }
+            if signature.is_empty() =>
+        {
+            Err("a provider-court object must carry its signer's signature")
+        }
+        PalwConsensusObjectV2::ProviderLeaseV1 { .. }
+        | PalwConsensusObjectV2::ProviderChallengeV1 { .. }
+        | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
+        | PalwConsensusObjectV2::DaTransferV1 { .. } => Ok(()),
         PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
             if signature.is_empty() {
                 Err("a signed registration envelope must carry its signer's signature")
@@ -772,6 +786,24 @@ pub fn palw_bond_registration_binds_its_carrier_v2(tx: &Transaction, object: &Pa
         return Err("a bond's collateral output must pay to the payload the registration names as its payee");
     }
     Ok(())
+}
+
+/// ADR-0175: recognized historical objects that would mutate an existing model definition.
+/// Keep their wire tags and shape checks. Acceptance and the pure fold ask this same policy
+/// before rent, signatures or state writes once the independent immutable fence is active.
+pub fn palw_model_definition_update_v1(object: &PalwConsensusObjectV2) -> Option<&'static str> {
+    match object {
+        PalwConsensusObjectV2::ModelVersionPublished { .. } => Some("ModelVersionPublished"),
+        PalwConsensusObjectV2::ModelVersionPromoted { .. } => Some("ModelVersionPromoted"),
+        PalwConsensusObjectV2::ModelVersionWithdrawn { .. } => Some("ModelVersionWithdrawn"),
+        PalwConsensusObjectV2::LineageHeadRolledBack { .. } => Some("LineageHeadRolledBack"),
+        PalwConsensusObjectV2::ModelLineBenefitsDeclared { tiers, .. }
+            if tiers.iter().any(|t| t.grants & crate::palw_model_benefits_v1::grant::EARLY_VERSION != 0) =>
+        {
+            Some("EARLY_VERSION")
+        }
+        _ => None,
+    }
 }
 
 /// **The bond key a registrant can actually SIGN.**

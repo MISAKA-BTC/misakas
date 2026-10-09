@@ -255,6 +255,130 @@ impl TensorOpeningV1 {
     }
 }
 
+/// One pairing step of a tree level (an unpaired last node is carried up unchanged), as [`root_of`] builds it.
+fn next_level(level: &[Digest]) -> Vec<Digest> {
+    level.chunks(2).map(|c| if c.len() == 2 { node_hash(&c[0], &c[1]) } else { c[0] }).collect()
+}
+
+/// The number of nodes at `level` of a tree over `leaves` leaves (`level` 0 is the leaves): `⌈leaves / 2^level⌉`, and node `i` of it
+/// covers leaves `[i·2^level, (i+1)·2^level) ∩ [0, leaves)`. `None` past the root's level.
+pub fn level_count(leaves: u64, level: u8) -> Option<u64> {
+    if leaves == 0 || level >= 64 {
+        return None;
+    }
+    let count = leaves.div_ceil(1u64 << level);
+    (level == 0 || leaves > (1u64 << (level - 1))).then_some(count)
+}
+
+/// **The row tree of a tensor at `level`** (0 = its row leaves): what an outsider holding the true bytes compares a served run against.
+pub fn row_level_nodes(t: &Tensor, level: u8) -> Option<Vec<Digest>> {
+    let l = LayoutV1::of(&t.shape);
+    level_count(l.rows, level)?;
+    let mut nodes = leaves(t, &l, AXIS_ROW);
+    for _ in 0..level {
+        nodes = next_level(&nodes);
+    }
+    Some(nodes)
+}
+
+/// **A run of row-tree nodes of one committed tensor** (DA16, RFC-0014 §16.3 L3): the nodes `[first, first + nodes.len())` at `level`
+/// (0 = the row leaves) with the boundary hashes that carry the run to the row root, and the column root — enough to recompute the
+/// tensor's commitment. An outsider that holds the TRUE bytes of a tensor and only the commitment of a DIFFERENT one localizes a differing
+/// row with two runs (a coarse level, then the leaves under the differing node) instead of trusting anyone's row hashes.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct TensorRowNodesV1 {
+    pub dtype: u8,
+    pub shape: Vec<u64>,
+    pub level: u8,
+    pub first: u64,
+    pub nodes: Vec<Digest>,
+    /// Bottom-up from `level`: at each level the left neighbour of the run (when it starts at an odd index), then the right neighbour
+    /// (when it ends at an odd index and a node follows) — exactly what [`Self::recomputed_commitment`] consumes, nothing left over.
+    pub frontier: Vec<Digest>,
+    pub col_root: Digest,
+}
+
+impl TensorRowNodesV1 {
+    /// The run `[first, first + count)` at `level` of `t`'s row tree (`None`: empty, or outside the level).
+    pub fn of(t: &Tensor, level: u8, first: u64, count: u64) -> Option<Self> {
+        let l = LayoutV1::of(&t.shape);
+        let width = level_count(l.rows, level)?;
+        if count == 0 || first.checked_add(count)? > width {
+            return None;
+        }
+        let mut cur = row_level_nodes(t, level)?;
+        let nodes = cur[first as usize..(first + count) as usize].to_vec();
+        let (mut lo, mut hi) = (first, first + count);
+        let mut frontier = Vec::new();
+        while cur.len() > 1 {
+            let width = cur.len() as u64;
+            if lo % 2 == 1 {
+                frontier.push(cur[(lo - 1) as usize]);
+                lo -= 1;
+            }
+            if hi % 2 == 1 && hi < width {
+                frontier.push(cur[hi as usize]);
+                hi += 1;
+            }
+            cur = next_level(&cur);
+            (lo, hi) = (lo / 2, hi.div_ceil(2));
+        }
+        Some(Self {
+            dtype: t.dtype.tag(),
+            shape: t.shape.iter().map(|d| *d as u64).collect(),
+            level,
+            first,
+            nodes,
+            frontier,
+            col_root: root_of(leaves(t, &l, AXIS_COL)),
+        })
+    }
+
+    /// The commitment this run is of (`None`: a malformed run — unknown dtype, a shape that overflows, a run outside its level, a
+    /// frontier short or long by one hash).
+    pub fn recomputed_commitment(&self) -> Option<Digest> {
+        let dtype = DType::ALL.into_iter().find(|d| d.tag() == self.dtype)?;
+        let shape: Vec<usize> = self.shape.iter().map(|d| usize::try_from(*d).ok()).collect::<Option<_>>()?;
+        let l = LayoutV1::try_of(&shape)?;
+        let mut width = level_count(l.rows, self.level)?;
+        let count = self.nodes.len() as u64;
+        if count == 0 || self.first.checked_add(count)? > width {
+            return None;
+        }
+        let (mut lo, mut hi) = (self.first, self.first + count);
+        let mut cur = self.nodes.clone();
+        let mut supplied = self.frontier.iter();
+        while width > 1 {
+            if lo % 2 == 1 {
+                cur.insert(0, *supplied.next()?);
+                lo -= 1;
+            }
+            if hi % 2 == 1 && hi < width {
+                cur.push(*supplied.next()?);
+                hi += 1;
+            }
+            cur = next_level(&cur);
+            (lo, hi, width) = (lo / 2, hi.div_ceil(2), width.div_ceil(2));
+        }
+        if supplied.next().is_some() || cur.len() != 1 {
+            return None;
+        }
+        Some(commit(dtype, &shape, &cur[0], &self.col_root))
+    }
+
+    /// Does this run belong to `commitment`?
+    pub fn authenticates(&self, commitment: &Digest) -> bool {
+        self.recomputed_commitment().is_some_and(|c| c == *commitment)
+    }
+
+    /// The leaves node `index` of this run's level covers.
+    pub fn covered_rows(&self, index: u64, rows: u64) -> std::ops::Range<u64> {
+        let span = 1u64 << self.level.min(63);
+        let lo = index.saturating_mul(span).min(rows);
+        lo..lo.saturating_add(span).min(rows)
+    }
+}
+
 /// The Merkle depth of `count` leaves (siblings at most).
 pub fn depth(count: u64) -> u64 {
     if count <= 1 { 0 } else { 64 - (count - 1).leading_zeros() as u64 }
@@ -317,6 +441,62 @@ mod tests {
             }
             assert!(TensorOpeningV1::row(&x, l.rows).is_none());
         }
+    }
+
+    /// DA16: every run of every level of every shape authenticates, and a run moved, shortened, re-ordered, of another level or with a
+    /// spare frontier hash does not; two runs (a coarse level, then the leaves under the differing node) localize a changed row.
+    #[test]
+    fn row_node_runs_authenticate_at_every_level_and_localize_a_changed_row() {
+        for shape in [vec![5], vec![3, 4], vec![7, 2], vec![2, 3, 5], vec![13, 3], vec![1, 7], vec![16, 2]] {
+            let x = t(&shape);
+            let c = tensor_commitment_v2(&x);
+            let rows = LayoutV1::of(&x.shape).rows;
+            let mut level = 0u8;
+            while let Some(width) = level_count(rows, level) {
+                for first in 0..width {
+                    for count in 1..=(width - first) {
+                        let run = TensorRowNodesV1::of(&x, level, first, count).unwrap();
+                        assert!(run.authenticates(&c), "{shape:?} level {level} [{first}, +{count})");
+                        let mut spare = run.clone();
+                        spare.frontier.push([7; 64]);
+                        assert!(!spare.authenticates(&c), "a spare frontier hash is refused");
+                        if !run.frontier.is_empty() {
+                            let mut short = run.clone();
+                            short.frontier.pop();
+                            assert!(!short.authenticates(&c), "a short frontier is refused");
+                        }
+                        let mut bent = run.clone();
+                        bent.nodes[0][0] ^= 1;
+                        assert!(!bent.authenticates(&c), "a changed node is refused");
+                        if width > 1 && count < width {
+                            let mut moved = run.clone();
+                            moved.first = (first + 1) % (width - count + 1);
+                            if moved.first != first {
+                                assert!(!moved.authenticates(&c), "a run cannot pose at another index");
+                            }
+                        }
+                    }
+                }
+                assert!(TensorRowNodesV1::of(&x, level, width, 1).is_none());
+                level += 1;
+            }
+            assert!(level_count(rows, level).is_none() && TensorRowNodesV1::of(&x, level, 0, 1).is_none());
+        }
+        // Localization: change row 9 of 13; the coarse level-2 run names node 2, the leaves under it name row 9.
+        let a = t(&[13, 3]);
+        let mut b = a.clone();
+        b.data[9 * 3 + 1] += 1;
+        let (ta, tb) = (row_level_nodes(&a, 2).unwrap(), TensorRowNodesV1::of(&b, 2, 0, 4).unwrap());
+        assert!(tb.authenticates(&tensor_commitment_v2(&b)));
+        let node = (0..4).find(|i| ta[*i] != tb.nodes[*i]).unwrap();
+        assert_eq!(node, 2);
+        let rows = tb.covered_rows(node as u64, 13);
+        assert_eq!(rows, 8..12);
+        let leaves_b = TensorRowNodesV1::of(&b, 0, rows.start, rows.end - rows.start).unwrap();
+        let leaves_a = row_level_nodes(&a, 0).unwrap();
+        let differing: Vec<u64> =
+            rows.clone().filter(|r| leaves_a[*r as usize] != leaves_b.nodes[(r - rows.start) as usize]).collect();
+        assert_eq!(differing, vec![9]);
     }
 
     #[test]

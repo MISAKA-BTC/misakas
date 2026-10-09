@@ -778,6 +778,10 @@ mod tests {
             "palw_typed_roots_v1" => params.palw_typed_roots_v1 = Some(at),
             "palw_panel_free_v1" => params.palw_panel_free_v1 = Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(at)),
             "palw_signed_registration_v1" => params.palw_signed_registration_v1 = Some(at),
+            // RFC-0006 per-segment pricing (SHARD): refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
+            // DA16's provider court: a bare height, refused when armed by `validate_palw_v2` (which the probe does not run).
+            "palw_provider_court_v1" => params.palw_provider_court_v1 = Some(at),
             // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
             // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
             "palw_dns_retirement_v1" => {
@@ -876,6 +880,7 @@ mod tests {
             "palw_fp_ruleset_caps" => params.palw_fp_ruleset_caps = Some(at),
             "palw_model_market" => params.palw_model_market = Some(at),
             "palw_model_lines" => params.palw_model_lines = Some(at),
+            "palw_model_immutable_v1" => params.palw_model_immutable_v1 = Some(at),
             "palw_model_benefits" => params.palw_model_benefits = Some(at),
             "palw_model_leg_v2" => params.palw_model_leg_v2 = Some(at),
             "palw_model_seed_v2" => params.palw_model_seed_v2 = Some(at),
