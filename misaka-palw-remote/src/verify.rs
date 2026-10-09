@@ -273,6 +273,19 @@ pub struct VerifiedChainV1 {
     pub hashes: Vec<Hash64>,
     pub tip: Header,
     pub not_checked: Vec<&'static str>,
+    /// Each block's point and the root its header commits (its selected parent's post-state) — what L2 checks an opening and an
+    /// attestation against. Index-aligned with `hashes`; each block's predecessor here is its selected parent.
+    pub points: Vec<ChainPointV1>,
+}
+
+/// One verified block, as L2 reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainPointV1 {
+    pub hash: Hash64,
+    pub daa_score: u64,
+    pub blue_score: u64,
+    /// What this header commits: the root of its PREDECESSOR's post-state.
+    pub palw_state_root: Hash64,
 }
 
 /// Two verified chains are the same chain when they name the same blocks from the same checkpoint (the header bytes are fixed by the hashes).
@@ -289,6 +302,9 @@ impl VerifiedChainV1 {
     }
     pub fn contains(&self, block: &Hash64) -> bool {
         self.hashes.contains(block)
+    }
+    pub fn index_of(&self, block: &Hash64) -> Option<usize> {
+        self.hashes.iter().position(|h| h == block)
     }
 }
 
@@ -347,6 +363,7 @@ pub fn verify_header_chain_v1(
         return Err(VerifyErrorV1::TooLong(headers.len(), limits.max_headers));
     }
     let mut hashes = Vec::with_capacity(headers.len());
+    let mut points = Vec::with_capacity(headers.len());
     for (at, h) in headers.iter().enumerate() {
         if kaspa_consensus_core::hashing::header::hash(h) != h.hash {
             return Err(VerifyErrorV1::HeaderHashMismatch { at });
@@ -383,6 +400,12 @@ pub fn verify_header_chain_v1(
             return Err(VerifyErrorV1::FromTheFuture { at, ahead_ms: h.timestamp - now_ms });
         }
         hashes.push(h.hash);
+        points.push(ChainPointV1 {
+            hash: h.hash,
+            daa_score: h.daa_score,
+            blue_score: h.blue_score,
+            palw_state_root: h.palw_state_root,
+        });
     }
     let tip = headers.last().expect("non-empty").clone();
     let age = now_ms.saturating_sub(tip.timestamp);
@@ -390,7 +413,7 @@ pub fn verify_header_chain_v1(
         return Err(VerifyErrorV1::StaleTip { age_ms: age, max_ms: limits.max_tip_age_ms });
     }
     let _ = first;
-    Ok(VerifiedChainV1 { checkpoint: checkpoint.block, hashes, tip, not_checked: L1_NOT_CHECKED_V1.to_vec() })
+    Ok(VerifiedChainV1 { checkpoint: checkpoint.block, hashes, tip, not_checked: L1_NOT_CHECKED_V1.to_vec(), points })
 }
 
 /// **Independent views, by containment only.** One extends the other → the longer is kept; they part → [`VerifyErrorV1::ConflictingForks`],
@@ -473,6 +496,68 @@ pub fn class_on_chain_v1(
     crate::proof::class_at_pin_v1(proof_header, proof_header.hash, proof, class_id).map_err(|e| VerifyErrorV1::Proof(e.to_string()))
 }
 
+/// **The ADR-0043 root a header on the verified chain commits, for L3** — the header's own root below
+/// `palw_fork_choice_commitment_v1`; past it the header commits `H(leaf ‖ root)` of its predecessor's post-state, and the predecessor's
+/// opening (op 203, untrusted until it hashes to the header's root and names the predecessor) unwraps it. Header-bound, exactly as L3
+/// always was: whether the header's root is the fold of its chain is L2's question (`crate::l2::l3_root_under_l2_v1` answers both).
+pub fn l3_root_at_header_v1(
+    chain: &VerifiedChainV1,
+    proof_header: &Header,
+    openings: &[kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceOpeningV1],
+    fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+) -> Result<Hash64, VerifyErrorV1> {
+    use kaspa_consensus_core::palw_fork_choice_commitment_v1::{PalwForkChoicePointV1, palw_fork_choice_committed_at_v1};
+    on_chain(chain, proof_header)?;
+    let at = chain.index_of(&proof_header.hash).ok_or(VerifyErrorV1::ProofHeaderOffChain(proof_header.hash))?;
+    let Some(parent) = at.checked_sub(1).map(|i| chain.points[i]) else {
+        return Err(VerifyErrorV1::Proof(
+            "the checkpoint's own header commits a state before the view: prove at a later header".into(),
+        ));
+    };
+    if !palw_fork_choice_committed_at_v1(fence, Some(parent.daa_score)) {
+        return Ok(proof_header.palw_state_root);
+    }
+    let point = PalwForkChoicePointV1 { block: parent.hash, daa_score: parent.daa_score, blue_score: parent.blue_score };
+    let mut why = format!("no opening of {} was served", parent.hash);
+    for o in openings.iter().filter(|o| o.leaf.block == parent.hash) {
+        match o.verify(&proof_header.palw_state_root, &point, fence) {
+            Ok(_) => return Ok(o.inner_root),
+            Err(e) => why = e.to_string(),
+        }
+    }
+    Err(VerifyErrorV1::Proof(format!(
+        "past the fork-choice commitment the header {} commits an envelope, and it was not opened: {why}",
+        proof_header.hash
+    )))
+}
+
+/// **L3 under an established root**: a bond, proven at a header on the verified chain against `root` (from [`l3_root_at_header_v1`] or
+/// `crate::l2::l3_root_under_l2_v1`). `None` = proven absent.
+pub fn bond_on_chain_under_v1(
+    chain: &VerifiedChainV1,
+    proof_header: &Header,
+    root: Hash64,
+    proof: &PalwFactProofV1,
+    bond: &PalwBondKeyV2,
+) -> Result<Labelled<Option<PalwBondStateV2>>, VerifyErrorV1> {
+    on_chain(chain, proof_header)?;
+    crate::proof::bond_under_root_v1(root, proof_header.hash, proof_header.daa_score, proof, bond)
+        .map_err(|e| VerifyErrorV1::Proof(e.to_string()))
+}
+
+/// **L3 under an established root**: a class (see [`bond_on_chain_under_v1`]). `None` = proven absent.
+pub fn class_on_chain_under_v1(
+    chain: &VerifiedChainV1,
+    proof_header: &Header,
+    root: Hash64,
+    proof: &PalwFactProofV1,
+    class_id: &Hash64,
+) -> Result<Labelled<Option<PalwClassStateV2>>, VerifyErrorV1> {
+    on_chain(chain, proof_header)?;
+    crate::proof::class_under_root_v1(root, proof_header.hash, proof_header.daa_score, proof, class_id)
+        .map_err(|e| VerifyErrorV1::Proof(e.to_string()))
+}
+
 /// What a node SAID about the job (its template facts, its class row), compared with what is proven. A mismatch stops everything.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NodeJobFactsV1 {
@@ -520,6 +605,11 @@ pub fn check_job_facts_v1(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum L2StatusV1 {
     EstablishedAtTrustedCheckpoint,
+    /// RFC-0009 L2 (`crate::l2`): the comparator's inputs opened by this client from a root an issuer it trusts attested, and the chosen
+    /// tip robustly dominating every candidate the configured peers show. `trust` is the line every output prints.
+    EstablishedByAttestation {
+        trust: String,
+    },
     Unverified(&'static str),
 }
 
@@ -549,7 +639,9 @@ pub fn mode_label_v1(own_full_node: bool, l1: bool, l3: bool, l2: &L2StatusV1) -
         return ModeLabelV1::FullNode;
     }
     match (l1, l3, l2) {
-        (true, true, L2StatusV1::EstablishedAtTrustedCheckpoint) => ModeLabelV1::VerifiedRemote,
+        (true, true, L2StatusV1::EstablishedAtTrustedCheckpoint | L2StatusV1::EstablishedByAttestation { .. }) => {
+            ModeLabelV1::VerifiedRemote
+        }
         (true, true, _) => ModeLabelV1::HeaderVerifiedForkChoiceUnverified,
         _ => ModeLabelV1::UnverifiedRemote,
     }

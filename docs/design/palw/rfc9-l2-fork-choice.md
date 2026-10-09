@@ -27,8 +27,16 @@ A remote client can verify the PALW fork choice only if three separate things ho
    independent peer (or an attestation naming a block no peer showed).
 
 Until (1)–(3) hold for the view at hand the label stays `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED` (or lower). On testnet-12 as shipped,
-the DNS BFT veto runs in front of the PALW comparator (armed from DAA 0, not retired), so a **conflict between two branches is a STOP**
-there whatever their keys; conflict resolution by the comparator applies where the overlay is retired (§5.3).
+the DNS BFT gate runs in front of the PALW comparator (armed from DAA 0, not retired), but it refuses only a candidate that abandons a
+**confirmed** DNS-final anchor in the overlay's **Active** stage; live testnet-12's overlay is in **Bootstrap** (nothing confirmed), so
+the gate never refuses there and the comparator decides. The client reads that state from the attestation (the issuer's node's gate
+facts) and resolves a conflict by the comparator only when no attested Active-stage anchor stands on one side alone (§5.3).
+
+A fourth fact comes free with (1): past the fence a header's committed root opens to a leaf that **names the block whose post-state it
+commits — its selected parent**. L1 cannot check GHOSTDAG's selected-parent choice (it does not serve the other parents' headers), so a
+peer could route a view through a merged block whose own root nobody ever checked. Walking openings down from an attested block proves
+the path is that block's selected chain (§2.4); the client reads a path (fork point, finality seal, a DNS anchor's side, D2's base, L3
+below the attested block) only where it was walked.
 
 ## 1. What a full node actually decides
 
@@ -37,15 +45,15 @@ A sink move that is not an extension of the node's previous sink passes `dns_reo
 
 | Step | Rule | Inputs | Light-client view |
 |---|---|---|---|
-| 1 | DNS BFT gate (`dns_bft_gate_refusal`) unless `palw_dns_retirement` is active at the incumbent's DAA | the node's overlay state | not verifiable here → any conflict STOPs while it can run |
+| 1 | DNS BFT gate (`dns_bft_gate_refusal`) unless `palw_dns_retirement` is active at the incumbent's DAA; it refuses only a candidate abandoning a confirmed anchor in the Active stage | the node's overlay state (stage, confirmed anchor) | the issuer's attested gate facts: Bootstrap / nothing confirmed → the comparator decides; an Active anchor on one side only → STOP |
 | 2 | `decide_deep_reorg_v2` — or, past `palw_reorg_strict_economic_win` (read at the incumbent's DAA), `palw_reorg_strict_economic_win_v1` with the shallow-GHOSTDAG tie callback | both candidates' `PalwCandidateOrderV1`; a tie: depth ≤ 2 DAA, DAA not lowered, GHOSTDAG order | orders: from verified openings; the tie callback: evaluated both ways |
-| 3 | ADR-0065 D2 frontier provenance (`palw_frontier_provenance`, `None` on t12) | bonds minted on the challenger's branch after the fork; their panel seats | bounded by `bonds_len` in the leaf (§2.1): if the bound cannot reach a quorum, D2 cannot veto |
+| 3 | ADR-0065 D2 frontier provenance (`palw_frontier_provenance`, `None` on t12) | bonds minted on the challenger's branch after the fork; their panel seats | counted exactly from two verified leaves (the tip's and the fork block's, §2.1): if the count cannot reach a quorum, D2 cannot veto |
 | — | finality: a candidate below the node's finality point is never weighed | finality depth (600 blue on t12) | a conflict whose fork is ≥ `finality_depth` below either tip is a sealed split → STOP |
 | — | IBD commit (`decide_ibd_commit_v2` / `palw_ibd_commit_strict_economic_v1`) | orders | evaluated with the same inputs |
 
-An extension of the sink is GHOSTDAG's (blue work), and the deep-reorg gate is asked only against the node's *previous* sink, so a
-node's canonical chain is path-dependent: two honest nodes can hold two sinks (the open finality/fork-choice analysis, ADR-0175 draft,
-may change the comparator itself — §5.4). A light client therefore cannot claim "the canonical chain"; it can claim exactly this:
+Every rule above is applied by a node to its own previous sink, with its own stores, so a node's answer is node-local; and ADR-0175
+(rule E, adopted 2026-10-09; lane FINX) changes the comparator itself (§5.4). A light client therefore cannot claim "the canonical
+chain"; it can claim exactly this:
 
 > **L2 holds for tip T** iff T's chain is the only chain any configured peer shows past the checkpoint, or T *robustly dominates*
 > every other shown candidate — every in-force decision function, evaluated on attested inputs in both directions with every
@@ -65,7 +73,7 @@ may change the comparator itself — §5.4). A light client therefore cannot cla
 | `safe_frontier_blue_score`, `safe_frontier` | u64, Hash64 | `safe_frontier()` | comparator key 1 (and the frontier block, for reachability checks) |
 | `safe_weight` | u128 | `safe_weight()` | key 2 |
 | `bounded_immature` | u128 | `bounded_immature()` | key 3 (`live_total` is constructed by `PalwCandidateOrderV1::new`, never carried) |
-| `bonds_len` | u64 | `bonds_iter().count()` | D2's bound: the registry is append-only (ADR-0065 D5), so bonds minted after a fork ≤ `bonds_len(tip) − bonds_len(checkpoint)` |
+| `bonds_len` | u64 | `bonds_iter().count()` | D2's count: the registry is append-only (ADR-0065 D5; a bond row is only ever removed by a delta undo), so the bonds minted on a branch after its fork = `bonds_len(tip) − bonds_len(fork block)`, both read off verified leaves |
 
 Every leaf field is already part of the ADR-0043 root except `bonds_len`, which is derived from it; the leaf adds no state.
 
@@ -83,13 +91,15 @@ at/past the fence: header.palw_state_root = BLAKE2b-512_keyed("misaka-palw/state
   `palw_committed_state_root_v1(state, fence)`.
 * **Nothing else moves.** `PalwChainStateV2::state_root()` (the ADR-0043 preimage), the carriage, the deltas, the stores and the delta
   roots keep their bytes; only what a header commits changes. No object tag, delta number, carriage tail or preimage block is taken.
-* **Fence** (PROPOSED name, Lead to allocate): `Params::palw_fork_choice_commitment_v1: Option<ForkActivation>`, `None` on every preset,
-  refused when armed (`validate_palw_fork_choice_commitment_v1`) until the release that arms it; hashed into the params id only when
-  `Some`, so no live id moves.
+* **Fence** (allocated by the Lead, registry §2): `Params::palw_fork_choice_commitment_v1: Option<ForkActivation>`, `None` on every
+  preset, collapsed from `Some(never())`, refused when armed (`validate_palw_fork_choice_commitment_v1`, inside `validate_palw_v2`) until
+  the full-activation release arms it; hashed into both fingerprints only when `Some`, so no live id moves; a `palw_fences_v1` entry and
+  a fork-id probe arm.
 * **Sites** that compare or produce a header root (all in `kaspa-consensus`): chain validation (`header.palw_state_root != parent_root`),
   the template stamp, `palw_state_proof_v1` (op 202), `import_pruning_point_palw_state` (the witness child's root), and
-  `native_settlement`'s roots chain (it holds only delta roots; it rebuilds each leaf backwards from the sink's by reverting the
-  `Weights` / `Frontier` / `LastPoint` / `Bond` entries of each delta — `PalwForkChoiceLeafV1::parent_by_delta`).
+  `native_settlement`'s roots chain (`native_roots_chain_v1`: it holds only delta roots; it rebuilds each leaf backwards from the
+  sink's by reverting the `Weights` / `Frontier` / `LastPoint` / `Bond` entries of each delta — `PalwForkChoiceLeafV1::parent_by`; the
+  leaf part of a delta is kept in the row cache only where the fence is configured, boxed, so a dormant row keeps its size).
 
 Why not a block inside the ADR-0043 preimage: it needs a new state field (a carriage tail and a delta entry to journal the switch),
 the opening would be the whole preimage (≈ 4–8 KB), and its offset would depend on every future Some-only block staying in front of
@@ -107,6 +117,21 @@ leaves room: a v2 leaf can add a collection-tree root).
 4. builds the order with `PalwCandidateOrderV1::new(leaf.safe_frontier_blue_score, leaf.safe_weight, leaf.bounded_immature, B)`.
 
 L3 composes: past the fence, an op-202 proof is checked against `inner_root` (the opened ADR-0043 root), not against the header root.
+
+### 2.4 The leaf names the selected parent (selected-chain verification)
+
+A valid chain block's header commits its **selected parent's** post-state, and past the fence that commitment is an envelope whose leaf
+names the block (`leaf.block`). So for two consecutive headers P, C on a view, an opening with `leaf.block == P` that hashes to
+`C.palw_state_root` proves P is C's selected parent — **provided C's root is itself true**. An attested block D's root is (its issuer's
+node computed D's post-state, which a node does only after every header root on D's selected chain passed its check — a mismatch
+disqualifies the block and every chain descendant before any delta is written, and op 203 serves no opening without the delta). By
+induction, walking openings from D downward (`verify_selected_chain_v1`) proves the walked path is D's selected chain and that every
+root on it is true.
+
+Without the walk, L1's "names the previous header as *a* parent" lets a peer route a view through a merged block: such a block's own
+root is never checked by any node (only chain blocks' roots are), so it can commit a forged state of its parent, and a proof under it
+would be "correct". The client therefore reads no path fact it has not walked. Below the fence there is no leaf and no walk: L3 under L2
+and conflict resolution do not exist there (C1r2's checkpoint rule remains).
 
 **The tip's own post-state is committed by no header until a child is mined** (the header commits its selected parent's state —
 non-circular by design). So a candidate tip is weighed through its attestation; a child header, when present, is the cross-check.
@@ -154,8 +179,11 @@ block, block_daa, committed_root, leaf_version, issued_at_daa, key_id, signature
 * **Lag:** a single-chain view is L2-verified while its tip is ≤ `max_attested_lag_daa` (default 1, C1r2's bound) past the attested
   block on it. For conflict resolution the attestation must be **at each candidate's tip** (lag 0): weighing tips by older states would
   not be the node's inputs.
-* **Binding:** the opening must hash to `committed_root` (§2.3); a chain child of `block` on any verified view must commit the same
-  root, or the issuer is contradicted by the chain and the attestation is refused (named, so the user can drop the issuer).
+* **What it states:** the issuer's full node computed `block`'s post-state (so `block`'s whole selected chain passed validation, every
+  header root included — §2.4) and that post-state commits `committed_root`. An issuer service signs only roots op 203 served.
+* **Binding:** the opening must hash to `committed_root` (§2.3); every header that names `block` as its predecessor on any view must
+  commit the same root, or STOP (named: the issuer is contradicted by the chain — unless that header is invalid or off the selected
+  chain, which the client cannot tell without a second source, so the user drops the issuer only when another source confirms it).
 * **Placement:** `block` must be on some verified view. An attestation of a block outside every view means some peer is hiding a tip
   (or the issuer is on another branch): STOP.
 * **Restart:** nothing is carried over; the verdict is a pure function of the checkpoint, the attestations and the bytes served now.
@@ -168,11 +196,15 @@ From ≥ `min_peers` (default 2) independent peers, each view L1-verified from t
 Views are grouped by containment into maximal chains; each maximal chain's tip is a candidate. One candidate → §4's lag rule.
 Several → every candidate must be weighable (attested at its tip, opening verified); an unweighable candidate is **not** treated as a
 loser — the node that refuses an unweighable challenger is weighing with its own state, which the client does not have — so it STOPs.
+Each candidate's path is then walked (§2.4) from its attested tip down to the deepest fork point it takes part in (and to any DNS anchor
+it must show); a path that does not walk is a STOP. On two walked paths the highest shared block is the fork point of the two selected
+chains (above it they share nothing), so the finality seal, the anchor's side and D2's base are read off verified data.
 
 ### 5.2 Robust dominance (the SAME functions, never a new order)
 
 For candidates c and o with verified orders, `c` robustly dominates `o` iff, for every variant the client's ruleset may have in force
-at either tip's DAA:
+at either tip's DAA **or at the fork point's** (a node's incumbent — whose DAA the node reads its fences at — may stand anywhere between
+them):
 
 * `decide_deep_reorg_v2(o, c) == Allow` and `decide_deep_reorg_v2(c, o) == Refuse`;
 * where `palw_reorg_strict_economic_win` may be active: `palw_reorg_strict_economic_win_v1(o, c, || x) == Allow` and
@@ -188,19 +220,28 @@ follows with the same build.
 
 | Node-local rule | When the client may resolve a conflict | Otherwise |
 |---|---|---|
-| DNS BFT gate | `palw_dns_retirement` active at both tips' DAA (or no `dns_params`) | STOP: "a DNS-final veto decides" (testnet-12 today) |
-| D2 frontier provenance | fence inactive at both tips' DAA, or for the chosen c: `!palw_minted_seats_can_reach_quorum_v1(bonds_len(c) − bonds_len(checkpoint), panel)` | STOP |
+| DNS BFT gate | the gate cannot run at any tip (retired, or no overlay); or every attestation carries the issuer's gate facts and none names an Active-stage confirmed anchor at or above the checkpoint that is not on every candidate's walked selected chain (**Bootstrap**, live testnet-12: nothing confirmed, the gate never refuses) | STOP: "a DNS-final veto may decide" (also when an attestation carries no gate facts) |
+| D2 frontier provenance | fence inactive at every tip and fork DAA, or for the chosen c and each other o: `!palw_minted_seats_can_reach_quorum_v1(bonds_len(c) − bonds_len(fork(c, o)), panel)` | STOP |
 | finality seal | the fork point is < `finality_depth` blue below each tip | STOP: sealed split |
+| a comparator the v1 leaf cannot feed (ADR-0175 rule E, `palw_fork_choice_rule_e_v1`) | its fence inactive at every tip and fork DAA | STOP (`LeafV1Insufficient`) |
 
-### 5.4 A comparator that changes (ADR-0175 draft, rule E)
+### 5.4 A comparator that changes (ADR-0175, rule E)
 
-The draft's keys are fork-relative (work accepted above the fork point) and add bonded participation above the fork. The v1 leaf
-carries absolute keys, so it cannot feed E. The contract: **the leaf is versioned by what the in-force comparator reads; a comparator
-fence that needs more ships its leaf version under the same fence.** For E that is (PROPOSED, not built): a Merkle-sum accumulator of
-`Final` pwu keyed by acceptance position (fork-relative safe weight = a range sum, O(log n) opening), the frontier as the maximum key
-of the accumulator above the fork, and participation from header data — every attempt header above the fork on each branch (signed
-by its bond; L1 already verifies the signature) plus the bond registry at the fork (an L3 opening). The client's robust evaluation
-then calls E's decision function with those inputs; nothing else in §4–§5 changes.
+Rule E (adopted 2026-10-09; implemented by lane FINX behind `palw_fork_choice_rule_e_v1`) weighs each tip by what lies in its own past
+and not the other's, with bonded participation; its inputs are fork-relative, and the v1 leaf carries absolute keys, so it cannot feed
+E. The contract: **the leaf is versioned by what the in-force comparator reads; a comparator fence that needs more ships its leaf
+version under the same fence.** E's leaf (v2) is specified and built by lane FINX under `palw_fork_choice_rule_e_v1` (agreed with this lane 2026-10-09): the v1
+fields at their v1 offsets followed by fixed-size commitments from which a client opens, per candidate, exactly the data E's decision
+reads, verified by consensus-core functions the node itself uses; it adds no state field and leaves `state_root()` unchanged. Until it
+lands the client STOPs a conflict wherever E may be in force (`ForkChoiceRulesV1::rule_e`, `L2StopV1::LeafV1Insufficient`) — a single
+chain needs no comparator and is unaffected. Since `palw_dns_retirement_v1` requires E armed at or below it, every network where the DNS
+gate is retired has E in force: there, v1 openings resolve no conflict, and conflict resolution waits for leaf v2. The robust evaluation
+of §5.2 (every node-local input taken both ways), the walk of §2.4 and the attestation of §4 carry over unchanged; only the inputs
+opened per candidate change. Validation must then require `palw_fork_choice_commitment_v1` armed at or below E (a clause in E's
+validator, written where both fields exist).
+
+**Integration note.** `ForkChoiceRulesV1::of` sets `rule_e: None` because the rule-E fence is not in this branch's `Params`; the merge
+that brings FINX's fence sets it from `params.palw_fork_choice_rule_e_v1`.
 
 ## 6. Cost per verified view (testnet-12)
 
@@ -215,7 +256,7 @@ then calls E's decision function with those inputs; nothing else in §4–§5 ch
 | CPU per refresh | see the MEASURED table below | `l2fc_cost_per_view` (ignored test, `misaka-palw-remote`) |
 | option A, per chain block | one `state_root()` over the state | MEASURED below on a synthetic state of t12's carriage size |
 
-MEASURED (filled by `cargo test -p misaka-palw-remote --lib l2fc_cost -- --ignored --nocapture`): see §9.
+MEASURED: §9.
 
 ## 7. Downgrade behaviour
 
@@ -231,18 +272,52 @@ The gate is asked before inference and again right before the signature (unchang
 
 ## 8. Implementation (this lane) and allocations
 
-* consensus-core: `palw_fork_choice_commitment_v1` (leaf, envelope, opening verify, `parent_by_delta`), the fence field + validator.
-* consensus: the five sites through `palw_committed_state_root_v1`; `palw_fork_choice_opening_v1(block)` on the consensus API.
-* RPC: `getPalwForkChoiceOpening` — **op number requested from the Lead (proposed 203, from C1's reserved 203–209)**.
-* client (`misaka-palw-remote::l2`): attestation, opening verification, candidate grouping, robust dominance, the L2 verdict, labels.
+* consensus-core: `palw_fork_choice_commitment_v1` (leaf, envelope, opening verify, `parent_by`/`parent_by_delta`, the served types and
+  the DNS gate facts), the fence field (Some-only hashed in both fingerprints, `never()` collapse, refused when armed, a fork-id probe arm,
+  a `palw_fences_v1` entry).
+* consensus: the five sites through `palw_committed_root_v1`; `palw_fork_choice_openings_v1(blocks)` on the consensus API (the sink, the
+  tips, ≤ 16 openings, the DNS gate facts).
+* RPC: `getPalwForkChoiceOpening`, **op 203** (allocated), over wRPC and gRPC (fields 1220/1221).
+* client (`misaka-palw-remote::l2`): the attestation, opening verification, candidate grouping, the selected-chain walk, robust
+  dominance (fork-point DAA included), the DNS Bootstrap handling, D2 from verified leaves, the rule-E STOP hook, the L2 verdict with its
+  trust line, L3 under L2 (`l3_root_under_l2_v1`), and `L2StatusV1::EstablishedByAttestation` → `VERIFIED_REMOTE` only with L1 and L3.
+* remote miner (`misaka-palw-remote::miner`): `RemoteVerificationV1::fork_choice` (`RemoteForkChoiceV1`: the issuers, an attestation
+  channel, the rules) makes `remote_mode_v1` decide L2 by attestation — openings asked of every node (`RemoteNode::fork_choice_openings`,
+  op 203), the views weighed (a STOP halts the step), the template checked against the CHOSEN tip, the bond and class proven under the
+  attested root; without a fresh attestation the class is `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED` with L3 at the tip's header (the
+  envelope unwrapped by the predecessor's opening, `verify::l3_root_at_header_v1`). The L2 line (`MinerState::last_l2`) is printed with
+  the mode (`palw-remote-miner`'s `mode` event, field `l2`). The binary implements op 203 for its nodes.
 * tests: §10.
 
-**Allocations requested:** the fence name (`palw_fork_choice_commitment_v1`) and the op number. No object tag, delta number, carriage
-tail or preimage block is needed.
+**Allocations used:** the fence `palw_fork_choice_commitment_v1` and op 203 (registry §2). No object tag, delta number, carriage tail
+or preimage block is taken.
+
+**Not in this lane (stated):** the issuer channel. `palw-remote-miner` configures `fork_choice: None` — there is no issuer service yet
+(nor a flag naming one): a service that signs, for the roots op 203 serves, fresh attestations ≤ 2 DAA old, or the user's own node over
+an authenticated channel. Until one exists the binary's L2 stays C1r2's checkpoint rule (and past the fence its C1 L3 — a proof against
+the header root — fails closed). An attestation needs no new consensus allocation; serving one would take an RPC op (Lead's).
 
 ## 9. Measurements
 
-(Filled at the end of the lane.)
+MEASURED by `l2::tests::l2fc_cost_per_view` (`cargo test -p misaka-palw-remote --lib l2fc_cost -- --ignored --nocapture`, run
+2026-10-09 on this Mac, **debug build**, through `buildslot.sh` at 3 jobs; log `l2fc-m2-cost.log`). Debug timings overstate a release
+binary; they bound it from above.
+
+| Item | MEASURED | Note |
+|---|---|---|
+| L1 over a cold start of 1,000 heartbeat headers | 1.45 ms (1.45 µs/header) | heartbeats carry no signature; an attempt header adds one ML-DSA-87 verification |
+| one ML-DSA-87 verification | 14.6 ms | per attempt header in L1, and per attestation |
+| the L2 verdict, two weighed candidates (attestations checked with the toy primitive, both paths walked, robust dominance) | 21.6 µs | the comparator work is negligible; the cost is the signatures |
+| a heartbeat header, borsh | 764 B | §6's ≈ 0.7 KB |
+| an opening | 258 B | 194-byte leaf + 64-byte inner root |
+| option A, one `state_root()` over a synthetic state of 20,000 bonds (bond table 56.4 MB ≈ t12's carriage) | 151 ms | per chain block re-executed; ≈ 9k DAA × ~3 blocks ⇒ ≈ 70 min of hashing alone for a from-genesis replay (DERIVED) |
+| `PalwForkChoiceOpeningV1::of` on that state (what op 203 pays per block) | 95 ms | one `state_root()` plus the bond count |
+
+DERIVED per refresh (2 peers, one chain, an attestation at the tip): L1 over the new headers (µs each, plus 14.6 ms per attempt
+header), one attestation signature (14.6 ms), one opening hash and the L2 verdict (µs) — **≈ 15–45 ms per refresh in debug**, dominated
+by ML-DSA-87. A conflict adds per candidate one attestation (14.6 ms) and the walk to the fork (one 258-byte opening and one BLAKE2b
+per block). Node side: op 203 rebuilds each named block's state (the same walk as op 202) and hashes it once — ≈ 0.1 s per block at
+t12's carriage size in debug, at most 16 per request.
 
 ## 10. Tests (mandatory list → test)
 
@@ -253,13 +328,26 @@ tail or preimage block is needed.
 | a hidden competing tip is detected through a second peer | `l2::tests::a_hidden_tip_is_found_through_a_second_peer_or_an_attestation` |
 | a stale checkpoint is refused | `l2::tests::a_stale_attestation_or_checkpoint_is_refused_by_name` |
 | restart with a different peer reaches the same verdict | `l2::tests::a_restarted_client_with_another_peer_reaches_the_same_verdict` |
+| a view routed through a merged block with a forged root is refused (L3 and conflict) | `l2::tests::a_path_through_a_merged_block_with_a_forged_root_is_refused` |
+| DNS gate: Bootstrap → the comparator; a one-sided Active anchor → STOP | `l2::tests::the_dns_gate_in_bootstrap_lets_the_comparator_decide_and_a_one_sided_anchor_stops` |
+| an issuer the chain contradicts; an opening that does not hold; below the fence | `l2::tests::an_issuer_the_chain_contradicts_and_an_opening_that_does_not_hold_are_refused` |
+| finality seal, D2 from verified leaves, no walk → STOP | `l2::tests::a_sealed_split_and_an_unbounded_frontier_provenance_veto_stop` |
+| rule E in force → a conflict STOPs, a single chain does not | `l2::tests::a_comparator_whose_inputs_the_leaf_does_not_carry_stops_a_conflict` |
+| robust dominance = the intersection of in-force rules; the digest covers every field | `l2::tests::robust_dominance_is_the_intersection_of_the_in_force_rules`, `l2::tests::the_attestation_digest_covers_every_field` |
 | commitment: dormant = byte-identical, envelope binds every key, parent-by-delta | `palw_fork_choice_commitment_v1::tests::*` |
-| the node commits and serves it past the fence (construction = validation) | `t12_fork_choice_commitment` (pipeline) |
+| the native-settlement roots chain in both forms (dormant, armed, straddling; flat-where-due and forged refused) | `native_settlement::tests::rfc9_l2_the_roots_chain_reads_each_header_in_its_committed_form` |
+| the node commits and serves it past the fence (construction = validation), L1+L2+L3 → `VERIFIED_REMOTE` | `t12_fork_choice_commitment` (pipeline) |
+| op 203 round-trips; simnet serves none | `rpc/core` model tests `test_wrpc_serializer_*palw_fork_choice*`; `rpc_tests::sanity_test` (not run here: the integration crate builds the daemon) |
+| the remote miner: attested → `VERIFIED_REMOTE` with the issuer named; no attestation → `HEADER_VERIFIED` (L3 through the envelope); a lying class row → STOP | `miner::tests::an_attested_fork_choice_lifts_the_miner_to_verified_remote_and_names_the_issuer` |
 
 ## 11. Residuals (stated)
 
 * Trust: `VERIFIED_REMOTE` rests on the attestation issuers having re-executed the fold. Independent verification is FULL_NODE.
 * Eclipse: a tip that no configured peer shows and no issuer attested is invisible; `min_peers` and issuer diversity reduce it.
-* Path dependence: nodes may hold different sinks for the same DAG (§1); the client then STOPs rather than guess.
-* testnet-12 today: the DNS veto makes every conflict a STOP; the fence is dormant everywhere, so until it is armed no header commits a
-  leaf and L2 stays `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED` past the checkpoint (C1r2's checkpoint-is-the-decision-point rule remains).
+* Node-local inputs: where a node's answer could depend on anything the client cannot verify (§1), the client STOPs rather than guess.
+* testnet-12 today: the overlay is in Bootstrap, so the DNS gate would not decide a conflict; but the fence is dormant everywhere, so no
+  header commits a leaf and L2 stays `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED` past the checkpoint (C1r2's checkpoint-is-the-decision-point
+  rule remains).
+* Rule E: where it is in force (every network that retires the DNS gate), conflicts STOP until FINX's leaf v2 (§5.4).
+* A malicious peer can force a STOP (a view through an invalid or merged header next to an attested block, an unweighable tip): STOP is
+  the safe answer and costs liveness only; the client never chooses on such a view.

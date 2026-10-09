@@ -328,6 +328,7 @@ impl RpcApi for GrpcClient {
     route!(get_palw_activation_pool_call, GetPalwActivationPool);
     route!(get_palw_capacity_shadow_call, GetPalwCapacityShadow);
     route!(get_palw_state_proof_call, GetPalwStateProof);
+    route!(get_palw_fork_choice_opening_call, GetPalwForkChoiceOpening);
     route!(get_palw_panel_v3_status_call, GetPalwPanelV3Status);
     route!(get_palw_kernel_claim_call, GetPalwKernelClaim);
     route!(get_palw_kernel_rows_call, GetPalwKernelRows);

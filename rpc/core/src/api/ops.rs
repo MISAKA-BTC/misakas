@@ -279,6 +279,9 @@ pub enum RpcApiOps {
     /// RFC-0009 stage D: one PALW state collection proven against the header that commits it (a remote miner checks it against a block it
     /// pinned). Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwStateProof = 202,
+    /// RFC-0009 L2: the fork-choice openings of blocks' post-states (the comparator's inputs as an O(1) opening of the committed root),
+    /// with the node's sink and DAG tips. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwForkChoiceOpening = 203,
     /// RFC-0010 (lane C2; op range 220–229): a permissionless-Panel claim's status — the rule that governs it, its seal, frozen
     /// snapshot, certified-beacon state, assignment, retries and terminal reason — and the engine's overview, as one versioned
     /// JSON observation. Read-only: no rule reads it. Appended at the tail: a node built before it drops the WebSocket on it.

@@ -127,6 +127,7 @@ impl Factory {
                 GetPalwActivationPool,
                 GetPalwCapacityShadow,
                 GetPalwStateProof,
+                GetPalwForkChoiceOpening,
                 GetPalwPanelV3Status,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,

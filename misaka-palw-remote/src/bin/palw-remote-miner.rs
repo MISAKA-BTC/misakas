@@ -265,6 +265,33 @@ impl RemoteNode for WrpcNode<'_> {
         Ok((header, fact))
     }
 
+    /// RFC-0009 L2's input: op 203's openings of `blocks`' post-states (untrusted; `misaka_palw_remote::l2` checks each against a root).
+    fn fork_choice_openings(
+        &self,
+        blocks: &[Hash64],
+    ) -> Result<Vec<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceOpeningV1>, String> {
+        use kaspa_consensus_core::palw_fork_choice_commitment_v1::{PalwForkChoiceLeafV1, PalwForkChoiceOpeningV1};
+        let served = self
+            .runtime
+            .block_on(self.client.get_palw_fork_choice_opening(kaspa_rpc_core::GetPalwForkChoiceOpeningRequest {
+                block_hashes: blocks.iter().map(|b| b.to_string()).collect(),
+            }))
+            .map_err(|e| format!("getPalwForkChoiceOpening: {e}"))?;
+        if !served.available {
+            return Err(format!("{} serves no fork-choice opening: {}", self.endpoint, served.reason));
+        }
+        Ok(served
+            .entries
+            .iter()
+            .filter(|e| e.available)
+            .filter_map(|e| {
+                let leaf = PalwForkChoiceLeafV1::decode(&e.leaf)?;
+                let inner_root = e.inner_root.parse::<Hash64>().ok()?;
+                Some(PalwForkChoiceOpeningV1 { leaf, inner_root })
+            })
+            .collect())
+    }
+
     fn ruleset(&self) -> Result<misaka_palw_remote::verify::NodeRulesetV1, String> {
         let info = self.runtime.block_on(self.client.get_block_dag_info()).map_err(|e| e.to_string())?;
         let status = self.runtime.block_on(self.client.get_palw_node_status()).map_err(|e| format!("getPalwNodeStatus: {e}"))?;
@@ -616,6 +643,8 @@ fn main() {
                 now_ms: || {
                     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
                 },
+                // RFC-0009 L2 by attestation needs an issuer channel this binary does not have yet: L2 stays the checkpoint rule.
+                fork_choice: None,
             }),
             accept_unverified: args.accept_unverified,
             // Non-custodial: every template must pay this miner's own --pay-address.
@@ -655,7 +684,7 @@ fn main() {
         }
         let outcome = step(&refs, &cfg_step, &mut state, &mut executor, &signer, &network_draw);
         if let Some(mode) = state.last_mode {
-            say("mode", serde_json::json!({ "mode": mode.as_str(), "claim": mode.claim() }));
+            say("mode", serde_json::json!({ "mode": mode.as_str(), "claim": mode.claim(), "l2": state.last_l2 }));
         }
         match outcome {
             Ok(StepOutcome::DrawLost { bucket }) => say("draw-lost", serde_json::json!({ "bucket": bucket })),

@@ -26,16 +26,22 @@ use kaspa_hashes::Hash64;
 
 use crate::attempt::{AttemptError, AttemptExecutor, AttemptParams, AttemptSigner, MountedAttempt, mount_attempt, ready_to_publish};
 use crate::checkpoint::Checkpoint;
+use crate::l2::{
+    ForkChoiceAttestationV1, ForkChoiceEvidenceV1, ForkChoiceRulesV1, L2InputV1, L2LimitsV1, L2StopV1, L2VerdictV1, PeerViewV1,
+    candidate_chains_v1, l3_root_under_l2_v1, openings_wanted_v1, verify_fork_choice_v1,
+};
 use crate::relay::{RelayFailure, RelayReport, Reply, fan_out_verdict};
 use crate::template::{
     AcceptedTemplate, ProducerFactsSummary, TemplatePolicy, TemplateRefusal, check_templates, template_observation_v1,
 };
 use crate::verify::{
     ClientRulesetV1, GateRefusalV1, L2StatusV1, ModeLabelV1, NodeJobFactsV1, NodeRulesetV1, TrustedCheckpointV1, VerifiedChainV1,
-    VerifyErrorV1, VerifyLimitsV1, bond_on_chain_v1, check_job_facts_v1, check_ruleset_v1, check_template_v1, class_on_chain_v1,
-    l2_status_v1, merge_views_v1, mode_label_v1, signing_gate_v1, verify_header_chain_v1,
+    VerifyErrorV1, VerifyLimitsV1, bond_on_chain_under_v1, bond_on_chain_v1, check_job_facts_v1, check_ruleset_v1, check_template_v1,
+    class_on_chain_under_v1, class_on_chain_v1, l2_status_v1, l3_root_at_header_v1, merge_views_v1, mode_label_v1, signing_gate_v1,
+    verify_header_chain_v1,
 };
 use crate::view::{AgreedView, ChainView, CheckpointStatus, Halt as ViewHalt, NodeFacts, QuorumPolicy, ViewError, agree};
+use kaspa_consensus_core::palw_fork_choice_commitment_v1::{PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1, PalwForkChoiceOpeningV1};
 use kaspa_consensus_core::palw_state_proof_v1::PalwFactProofV1;
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 
@@ -79,6 +85,13 @@ pub trait RemoteNode {
         let _ = (block, collection);
         Err("this node serves no state proof".into())
     }
+    /// **RFC-0009 L2's input** (op 203): the fork-choice openings of `blocks`' post-states (at most
+    /// [`PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1`]). Never trusted: `crate::l2` uses an opening only where it hashes to a root it
+    /// established. The default serves none.
+    fn fork_choice_openings(&self, blocks: &[Hash64]) -> Result<Vec<PalwForkChoiceOpeningV1>, String> {
+        let _ = blocks;
+        Err("this node serves no fork-choice opening".into())
+    }
     /// The ruleset the node says it runs (network, genesis, params id, schedule id).
     fn ruleset(&self) -> Result<NodeRulesetV1, String> {
         Err("this node does not say which ruleset it runs".into())
@@ -119,8 +132,9 @@ pub struct MinerConfig {
 
 /// **How a remote miner establishes its view, and which class it accepts.** `verification: None` is the quorum alone
 /// (`UNVERIFIED_REMOTE`); `Some` runs L1 (every node's header chain from the trusted checkpoint, merged by containment), L3 (the bond and
-/// the class proven at the verified tip) and L2 (established only at a trusted checkpoint that is the decision point) — see
-/// [`crate::verify`]. Below `VERIFIED_REMOTE` nothing is executed or signed unless `accept_unverified` names the class.
+/// the class proven at the verified tip) and L2 (established only at a trusted checkpoint that is the decision point, or — with
+/// `fork_choice` — by an attested fork choice, RFC-0009 L2) — see [`crate::verify`] and [`crate::l2`]. Below `VERIFIED_REMOTE` nothing is
+/// executed or signed unless `accept_unverified` names the class.
 #[derive(Clone, Debug, Default)]
 pub struct MinerTrustV1 {
     pub own_full_node: bool,
@@ -140,6 +154,35 @@ pub struct RemoteVerificationV1 {
     pub bond: PalwBondKeyV2,
     /// The client's clock, in ms.
     pub now_ms: fn() -> u64,
+    /// RFC-0009 L2 by attestation. `None`: L2 is C1r2's checkpoint rule.
+    pub fork_choice: Option<RemoteForkChoiceV1>,
+}
+
+/// **RFC-0009 L2 by attestation** ([`crate::l2`]): the issuers the user chose before talking to any node, the channel their fresh
+/// attestations arrive by (an issuer service, or the user's own node over an authenticated channel — the 1-of-1 case), and the rules L2
+/// runs under. Configured, it decides L2 instead of the checkpoint rule: the views are weighed by the node's own decision functions on
+/// opened values, a conflict the comparator cannot settle is a STOP, and L3 is proven under the attested root (`l3_root_under_l2_v1`).
+/// The issuer's trust is printed with the mode (`MinerState::last_l2`).
+#[derive(Clone)]
+pub struct RemoteForkChoiceV1 {
+    pub rules: ForkChoiceRulesV1,
+    pub limits: L2LimitsV1,
+    /// `(key id, public key)` per issuer.
+    pub issuers: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Fresh attestations of these blocks (the views' tips), from the issuers' channel. An error is no attestation: L2 is then not verified.
+    pub attestations: std::sync::Arc<dyn Fn(&[Hash64]) -> Result<Vec<ForkChoiceAttestationV1>, String> + Send + Sync>,
+    /// The signature primitive (ML-DSA-87 in the binaries): `(public key, message, signature)`.
+    pub verify_signature: fn(&[u8], &[u8], &[u8]) -> bool,
+}
+
+impl std::fmt::Debug for RemoteForkChoiceV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteForkChoiceV1")
+            .field("rules", &self.rules)
+            .field("limits", &self.limits)
+            .field("issuers", &self.issuers.iter().map(|(id, _)| String::from_utf8_lossy(id).into_owned()).collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Why a step produced no block. Every one is a STOP with a reason, never a silent retry with another view.
@@ -163,6 +206,8 @@ pub enum MinerHalt {
     Verify(#[from] VerifyErrorV1),
     #[error("{0}")]
     Gate(#[from] GateRefusalV1),
+    #[error("RFC-0009 L2 STOP, before any inference or signature: {0}")]
+    ForkChoice(#[from] L2StopV1),
     #[error(
         "the template pays its block reward to {got}, not to this miner ({want}): a custodial job — refused (non-custodial by default)"
     )]
@@ -198,6 +243,9 @@ pub struct MinerState {
     positions: BTreeMap<Hash64, (Hash64, Block)>,
     /// The security class the last step ran in — every output prints it.
     pub last_mode: Option<ModeLabelV1>,
+    /// With an attested fork choice: the L2 line printed beside the mode — the issuer whose attestation the verdict rests on, or why L2
+    /// is not verified.
+    pub last_l2: Option<String>,
 }
 
 impl MinerState {
@@ -269,14 +317,16 @@ pub fn step(
         bond_pubkey: accepted.observation.facts.bond_pubkey.clone(),
         bond_may_produce: true,
     };
-    let label = remote_mode_v1(nodes, &cfg.trust, cfg.attempt.network_domain, template_header, &job)?;
+    let mode = remote_mode_v1(nodes, &cfg.trust, cfg.attempt.network_domain, template_header, &job)?;
+    let label = mode.label;
     state.last_mode = Some(label);
+    state.last_l2 = mode.l2_line;
     signing_gate_v1(label, cfg.trust.accept_unverified)?;
     // …and again RIGHT BEFORE the signature: the inference took time, so the view is re-verified and the template's parent must still be
     // the verified tip.
     let recheck = || -> Result<(), String> {
         let again = remote_mode_v1(nodes, &cfg.trust, cfg.attempt.network_domain, template_header, &job).map_err(|e| e.to_string())?;
-        signing_gate_v1(again, cfg.trust.accept_unverified).map_err(|e| e.to_string())
+        signing_gate_v1(again.label, cfg.trust.accept_unverified).map_err(|e| e.to_string())
     };
     let gated = GatedSigner { inner: signer, recheck: &recheck };
 
@@ -354,23 +404,32 @@ impl AttemptSigner for GatedSigner<'_> {
     }
 }
 
+/// What [`remote_mode_v1`] established: the class, and (with an attested fork choice) the L2 line printed beside it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteModeV1 {
+    pub label: ModeLabelV1,
+    pub l2_line: Option<String>,
+}
+
 /// **The class a step runs in.** Without `verification`: the quorum alone, `UNVERIFIED_REMOTE` (or `FULL_NODE` when the one node is the
 /// user's own). With it: every node's ruleset must be ours; every node's header chain from the checkpoint must pass L1, and the views must
-/// not conflict (a conflict STOPS — blue work never decides); the template must stand on the verified tip at a sane target; the bond and the
-/// class must be proven at the tip and agree with the node's facts. Any failure is a STOP, not a downgrade: a node that lies about
-/// something it had to prove is not a node to mine through.
+/// not conflict (a conflict STOPS — blue work never decides) unless an attested fork choice weighs them ([`RemoteForkChoiceV1`]); the
+/// template must stand on the verified (or chosen) tip at a sane target; the bond and the class must be proven at the tip and agree with
+/// the node's facts. Any failure is a STOP, not a downgrade: a node that lies about something it had to prove is not a node to mine through.
 pub fn remote_mode_v1(
     nodes: &[&dyn RemoteNode],
     trust: &MinerTrustV1,
     network_domain: Hash64,
     template: &Header,
     job: &NodeJobFactsV1,
-) -> Result<ModeLabelV1, MinerHalt> {
+) -> Result<RemoteModeV1, MinerHalt> {
     let Some(v) = &trust.verification else {
-        return Ok(mode_label_v1(trust.own_full_node, false, false, &L2StatusV1::Unverified("the quorum alone proves nothing")));
+        let label = mode_label_v1(trust.own_full_node, false, false, &L2StatusV1::Unverified("the quorum alone proves nothing"));
+        return Ok(RemoteModeV1 { label, l2_line: None });
     };
     let now = (v.now_ms)();
     let mut views: Vec<VerifiedChainV1> = Vec::new();
+    let mut peers: Vec<PeerViewV1> = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for node in nodes.iter().filter(|n| seen.insert(n.node_id().to_string())) {
         let theirs = node.ruleset().map_err(|why| VerifyErrorV1::WrongRuleset {
@@ -381,7 +440,12 @@ pub fn remote_mode_v1(
         check_ruleset_v1(&v.ruleset, &theirs)?;
         let headers =
             node.header_chain(v.checkpoint.block).map_err(|why| VerifyErrorV1::Proof(format!("{}: {why}", node.node_id())))?;
-        views.push(verify_header_chain_v1(&v.checkpoint, &headers, network_domain, now, &v.limits)?);
+        let chain = verify_header_chain_v1(&v.checkpoint, &headers, network_domain, now, &v.limits)?;
+        peers.push(PeerViewV1 { peer: node.node_id().to_string(), chain: chain.clone() });
+        views.push(chain);
+    }
+    if let Some(fc) = &v.fork_choice {
+        return attested_mode_v1(nodes, trust, fc, &peers, &views, template, job);
     }
     let chain = merge_views_v1(&views)?;
     check_template_v1(template, &chain)?;
@@ -393,7 +457,86 @@ pub fn remote_mode_v1(
     let class = class_on_chain_v1(&chain, &ch, &classes, &job.class_id)?;
     check_job_facts_v1(job, &class, &bond)?;
     let l2 = l2_status_v1(&v.checkpoint, &chain, Some(bh.hash), &v.limits);
-    Ok(mode_label_v1(trust.own_full_node, true, true, &l2))
+    Ok(RemoteModeV1 { label: mode_label_v1(trust.own_full_node, true, true, &l2), l2_line: None })
+}
+
+/// **[`remote_mode_v1`] with an attested fork choice** (RFC-0009 L2, [`crate::l2`]).
+///
+/// The openings `crate::l2` needs are asked of every node (op 203; untrusted, each checked against a root before use), the attestations of
+/// the views' tips of the issuers' channel. A STOP is a halt. Established: the template must stand on the CHOSEN tip, and the bond and the
+/// class are proven under the attested root (`l3_root_under_l2_v1`) — `VERIFIED_REMOTE` with L1, L2 and L3, the issuer named on the L2
+/// line. Not established: the views must still not conflict (a conflict nobody can weigh is a STOP), L3 is proven at the verified tip's
+/// header (`l3_root_at_header_v1`), and the class is at most `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED`, the reason on the L2 line.
+fn attested_mode_v1(
+    nodes: &[&dyn RemoteNode],
+    trust: &MinerTrustV1,
+    fc: &RemoteForkChoiceV1,
+    peers: &[PeerViewV1],
+    views: &[VerifiedChainV1],
+    template: &Header,
+    job: &NodeJobFactsV1,
+) -> Result<RemoteModeV1, MinerHalt> {
+    let v = trust.verification.as_ref().expect("called with a verification config");
+    let candidates = candidate_chains_v1(peers)?;
+    let mut openings: Vec<PalwForkChoiceOpeningV1> = Vec::new();
+    let wanted = openings_wanted_v1(&candidates);
+    for node in nodes {
+        for chunk in wanted.chunks(PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1) {
+            // A node that serves nothing is no evidence of anything: the openings another node served may still verify.
+            if let Ok(served) = node.fork_choice_openings(chunk) {
+                openings.extend(served);
+            }
+        }
+    }
+    let tips: Vec<Hash64> = candidates.iter().map(|c| c.tip_hash()).collect();
+    let attestations = (fc.attestations)(&tips).unwrap_or_default();
+    // Each attestation with an opening of its block: the one that hashes to the attested root if any node served it, else any (refused
+    // by name inside the verdict).
+    let evidence: Vec<ForkChoiceEvidenceV1> = attestations
+        .into_iter()
+        .filter_map(|attestation| {
+            let mut of_block = openings.iter().filter(|o| o.leaf.block == attestation.block);
+            let first = of_block.clone().next().copied();
+            let opening = of_block.find(|o| o.committed_root() == attestation.committed_root).copied().or(first)?;
+            Some(ForkChoiceEvidenceV1 { attestation, opening })
+        })
+        .collect();
+    let input = L2InputV1 {
+        views: peers,
+        evidence: &evidence,
+        chain_openings: &openings,
+        trusted: &fc.issuers,
+        ruleset: &v.ruleset,
+        rules: &fc.rules,
+        limits: &fc.limits,
+    };
+    let verdict = verify_fork_choice_v1(&input, &fc.verify_signature)?;
+    let node = nodes.first().ok_or(VerifyErrorV1::Empty)?;
+    let (bond, class) = match &verdict {
+        L2VerdictV1::Established { chosen, .. } => {
+            check_template_v1(template, chosen)?;
+            let tip = chosen.tip_hash();
+            let (bh, bonds) = node.state_proof(tip, "bonds").map_err(VerifyErrorV1::Proof)?;
+            let (ch, classes) = node.state_proof(tip, "classes").map_err(VerifyErrorV1::Proof)?;
+            let under = |h: &Header| l3_root_under_l2_v1(&verdict, h, &openings, &fc.rules).map_err(VerifyErrorV1::Proof);
+            let bond = bond_on_chain_under_v1(chosen, &bh, under(&bh)?, &bonds, &job.bond)?;
+            let class = class_on_chain_under_v1(chosen, &ch, under(&ch)?, &classes, &job.class_id)?;
+            (bond, class)
+        }
+        L2VerdictV1::Unverified(_) => {
+            let chain = merge_views_v1(views)?;
+            check_template_v1(template, &chain)?;
+            let tip = chain.tip_hash();
+            let (bh, bonds) = node.state_proof(tip, "bonds").map_err(VerifyErrorV1::Proof)?;
+            let (ch, classes) = node.state_proof(tip, "classes").map_err(VerifyErrorV1::Proof)?;
+            let at = |h: &Header| l3_root_at_header_v1(&chain, h, &openings, fc.rules.commitment);
+            let bond = bond_on_chain_under_v1(&chain, &bh, at(&bh)?, &bonds, &job.bond)?;
+            let class = class_on_chain_under_v1(&chain, &ch, at(&ch)?, &classes, &job.class_id)?;
+            (bond, class)
+        }
+    };
+    check_job_facts_v1(job, &class, &bond)?;
+    Ok(RemoteModeV1 { label: mode_label_v1(trust.own_full_node, true, true, &verdict.status()), l2_line: Some(verdict.trust_line()) })
 }
 
 /// Give `block` to every node, idempotently: the hash is the miner's own, a node answering with another never counts, "already known" is
@@ -893,6 +1036,8 @@ mod tests {
         calls: Cell<u32>,
         state: kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         ruleset: crate::verify::NodeRulesetV1,
+        /// RFC-0009 L2: the fork-choice openings this node serves (op 203); empty for a chain below the commitment fence.
+        openings: Vec<PalwForkChoiceOpeningV1>,
     }
 
     fn vheader(parent: Hash64, daa: u64, ts: u64, root: Hash64, salt: u64) -> Header {
@@ -982,7 +1127,38 @@ mod tests {
                     consensus_params_id: "p".into(),
                     consensus_schedule_id: "s".into(),
                 },
+                openings: Vec::new(),
             }
+        }
+        /// RFC-0009 L2, past the commitment fence: every header commits its predecessor's post-state as `H(leaf ‖ root)` (the leaf naming
+        /// the predecessor, the ADR-0043 root the state's), and the node serves every block's opening, the tip's included.
+        fn enveloped(id: &str, pubkey: &[u8], proven_root: Hash64, salt: u64) -> Self {
+            use kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_LEAF_VERSION_V1 as V;
+            let mut node = Self::new(id, pubkey, proven_root, salt);
+            let inner = node.state.state_root();
+            let opening_of = |x: &Header| PalwForkChoiceOpeningV1 {
+                leaf: kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceLeafV1 {
+                    leaf_version: V,
+                    block: x.hash,
+                    daa_score: x.daa_score,
+                    blue_score: x.blue_score,
+                    safe_frontier_blue_score: 0,
+                    safe_frontier: Hash64::default(),
+                    safe_weight: 0,
+                    bounded_immature: 0,
+                    bonds_len: 1,
+                },
+                inner_root: inner,
+            };
+            let mut chain = vec![vheader(h(0xC0), 96, VNOW - 10 * 120_000, inner, 0)];
+            for i in 0..3 {
+                let p = chain.last().unwrap().clone();
+                let root = opening_of(&p).committed_root();
+                chain.push(vheader(p.hash, p.daa_score + 1, p.timestamp + 120_000, root, salt * 100 + i));
+            }
+            node.openings = chain.iter().map(opening_of).collect();
+            *node.chain.borrow_mut() = chain;
+            node
         }
         fn tip(&self) -> Header {
             self.chain.borrow().last().unwrap().clone()
@@ -1041,6 +1217,9 @@ mod tests {
             }
             Ok(chain)
         }
+        fn fork_choice_openings(&self, blocks: &[Hash64]) -> Result<Vec<PalwForkChoiceOpeningV1>, String> {
+            Ok(self.openings.iter().filter(|o| blocks.contains(&o.leaf.block)).copied().collect())
+        }
         fn state_proof(&self, block: Hash64, collection: &str) -> Result<(Header, PalwFactProofV1), String> {
             use kaspa_consensus_core::palw_state_proof_v1::{prove_bonds_v1, prove_classes_v1};
             let header = self.chain.borrow().iter().find(|x| x.hash == block).cloned().ok_or("unknown block")?;
@@ -1070,6 +1249,7 @@ mod tests {
                 limits: VerifyLimitsV1::default(),
                 bond: PalwBondKeyV2(TransactionOutpoint::new(h(21), 0)),
                 now_ms: vnow,
+                fork_choice: None,
             }),
             accept_unverified: accept,
             pay_to: None,
@@ -1086,6 +1266,83 @@ mod tests {
     ) -> Result<StepOutcome, MinerHalt> {
         let refs: Vec<&dyn RemoteNode> = nodes.iter().map(|n| *n as &dyn RemoteNode).collect();
         step(&refs, cfg, state, exec, signer, &|_, _, _| true)
+    }
+
+    /// RFC-0009 L2 by attestation over `node`'s tip: issuer `own-node` (a toy signature: the digest's first three bytes under key `pk`).
+    fn attested_cfg(pubkey: Vec<u8>, node: &VFake, attest: bool, accept: Option<ModeLabelV1>) -> MinerConfig {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        fn toy(pk: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+            pk == b"pk" && sig == &msg[..3]
+        }
+        let tip = node.tip();
+        let opening = *node.openings.iter().find(|o| o.leaf.block == tip.hash).expect("the tip's opening");
+        let mut att = ForkChoiceAttestationV1 {
+            network_id: "testnet-12".into(),
+            consensus_params_id: "p".into(),
+            consensus_schedule_id: "s".into(),
+            block: tip.hash,
+            block_daa: tip.daa_score,
+            committed_root: opening.committed_root(),
+            leaf_version: opening.leaf.leaf_version,
+            dns_gate: None,
+            issued_at_daa: tip.daa_score,
+            key_id: b"own-node".to_vec(),
+            signature: Vec::new(),
+        };
+        att.signature = att.signing_digest().as_bytes().as_slice()[..3].to_vec();
+        let mut c = vcfg(pubkey, &node.chain.borrow()[0], accept);
+        c.trust.verification.as_mut().unwrap().fork_choice = Some(RemoteForkChoiceV1 {
+            rules: ForkChoiceRulesV1 {
+                commitment: Some(ForkActivation::new(0)),
+                strict_win: None,
+                ibd_strict: None,
+                frontier_provenance: None,
+                dns_gate: None,
+                dns_retired: None,
+                rule_e: None,
+                finality_depth: 600,
+                panel: None,
+            },
+            limits: L2LimitsV1::default(),
+            issuers: vec![(b"own-node".to_vec(), b"pk".to_vec())],
+            attestations: std::sync::Arc::new(move |_: &[Hash64]| {
+                if attest { Ok(vec![att.clone()]) } else { Err(String::from("the issuer is unreachable")) }
+            }),
+            verify_signature: toy,
+        });
+        c
+    }
+
+    /// **RFC-0009 L2 by attestation, end to end through the step**: two nodes past the commitment fence, the tip attested by the user's
+    /// issuer — L1 (headers), L2 (the attested root opened and the tip chosen) and L3 (bond and class under the attested root, through the
+    /// walk from the tip) hold: `VERIFIED_REMOTE` with no opt-in, the issuer named on the L2 line. Without a fresh attestation the same
+    /// views are `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED` (L3 at the tip's header, the envelope unwrapped by the predecessor's opening),
+    /// the reason on the L2 line; a lying class row still stops everything before any work.
+    #[test]
+    fn an_attested_fork_choice_lifts_the_miner_to_verified_remote_and_names_the_issuer() {
+        let signer = keypair();
+        let (a, b) = (VFake::enveloped("a", &pk(&signer), h(31), 1), VFake::enveloped("b", &pk(&signer), h(31), 1));
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let out = vrun(&[&a, &b], &attested_cfg(pk(&signer), &a, true, None), &mut state, &mut exec, &signer).unwrap();
+        assert!(matches!(out, StepOutcome::Published(_)), "{out:?}");
+        assert_eq!(state.last_mode, Some(ModeLabelV1::VerifiedRemote));
+        let line = state.last_l2.clone().unwrap();
+        assert!(line.contains("VERIFIED") && line.contains("issuer 'own-node'"), "{line}");
+
+        // No fresh attestation: L2 is not verified, L3 still holds at the header — HEADER_VERIFIED, and only on that opt-in.
+        let (a, b) = (VFake::enveloped("a", &pk(&signer), h(31), 1), VFake::enveloped("b", &pk(&signer), h(31), 1));
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let out = vrun(&[&a, &b], &attested_cfg(pk(&signer), &a, false, None), &mut state, &mut exec, &signer);
+        assert!(matches!(&out, Err(MinerHalt::Gate(g)) if g.label == ModeLabelV1::HeaderVerifiedForkChoiceUnverified), "{out:?}");
+        assert!(state.last_l2.as_deref().is_some_and(|l| l.contains("NOT verified")), "{:?}", state.last_l2);
+        assert_eq!(exec.calls.get(), 0);
+
+        // A lying class row under an attested fork choice: refused before any work.
+        let (a, b) = (VFake::enveloped("a", &pk(&signer), h(0x99), 1), VFake::enveloped("b", &pk(&signer), h(0x99), 1));
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let out = vrun(&[&a, &b], &attested_cfg(pk(&signer), &a, true, None), &mut state, &mut exec, &signer);
+        assert!(matches!(out, Err(MinerHalt::Verify(VerifyErrorV1::ContradictsProof { .. }))), "{out:?}");
+        assert_eq!(exec.calls.get(), 0);
     }
 
     /// **Verified remote, honestly labelled**: two nodes serving the same verified chain and proofs put the miner in

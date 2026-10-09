@@ -3170,6 +3170,70 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     }
 
     // ------------------------------------------------------------------------------------------
+    // RFC-0009 L2 — the fork-choice openings of blocks' post-states, with the node's sink and tips (op 203)
+    // ------------------------------------------------------------------------------------------
+
+    /// A remote client's input to the PALW fork choice: for each named block (or the sink and every tip) the opening of its post-state
+    /// (`kaspa_consensus_core::palw_fork_choice_commitment_v1`). **Nothing here is trusted by the caller** until the opening verifies
+    /// against a root it trusts (an attestation from an issuer it chose, a chain child's header). The node's sink and tips are what it
+    /// shows; a peer hiding a tip is caught by another peer. The DNS BFT gate facts are this node's, for an issuer to attest.
+    async fn get_palw_fork_choice_opening_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwForkChoiceOpeningRequest,
+    ) -> RpcResult<GetPalwForkChoiceOpeningResponse> {
+        use kaspa_consensus_core::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1;
+        // Parsed before a byte of chain state is read: a malformed hash, or too many, is an error.
+        if request.block_hashes.len() > PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1 {
+            return Err(RpcError::General(format!(
+                "at most {PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1} block hashes per request (got {})",
+                request.block_hashes.len()
+            )));
+        }
+        let blocks =
+            request.block_hashes.iter().map(|text| parse_hash64(text.trim(), "blockHashes")).collect::<RpcResult<Vec<_>>>()?;
+        let unavailable = |reason: String| GetPalwForkChoiceOpeningResponse { available: false, reason, ..Default::default() };
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(unavailable("this network has no PALW V2 state".to_string()));
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        match session.spawn_blocking(move |c| c.palw_fork_choice_openings_v1(&blocks)).await {
+            Err(reason) => Ok(unavailable(reason)),
+            Ok(served) => Ok(GetPalwForkChoiceOpeningResponse {
+                available: true,
+                reason: String::new(),
+                sink: served.sink.to_string(),
+                tips: served.tips.iter().map(|t| t.to_string()).collect(),
+                entries: served
+                    .entries
+                    .into_iter()
+                    .map(|(block, entry)| match entry {
+                        Ok(e) => RpcPalwForkChoiceEntry {
+                            block_hash: block.to_string(),
+                            available: true,
+                            reason: String::new(),
+                            header: Some(RpcHeader::from(&e.header)),
+                            leaf: e.opening.leaf.encode(),
+                            inner_root: e.opening.inner_root.to_string(),
+                            committed_root: e.committed_root.to_string(),
+                            committed_form: e.committed_form,
+                        },
+                        Err(reason) => RpcPalwForkChoiceEntry { block_hash: block.to_string(), reason, ..Default::default() },
+                    })
+                    .collect(),
+                dns_overlay: served.dns_gate.is_some(),
+                dns_stage_active: served.dns_gate.is_some_and(|d| d.stage_active),
+                dns_confirmed_anchor: served
+                    .dns_gate
+                    .and_then(|d| d.confirmed_anchor)
+                    .map(|(anchor, _)| anchor.to_string())
+                    .unwrap_or_default(),
+                dns_confirmed_anchor_daa: served.dns_gate.and_then(|d| d.confirmed_anchor).map(|(_, daa)| daa).unwrap_or(0),
+            }),
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
     // RFC-0010 — the permissionless Panel's observation (op 220; read-only)
     // ------------------------------------------------------------------------------------------
 

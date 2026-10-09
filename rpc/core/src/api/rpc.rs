@@ -1030,6 +1030,23 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwStateProofResponse::default())
     }
 
+    /// RFC-0009 L2: the fork-choice openings of blocks' post-states, with the node's sink and tips (op 203). A node built before op 203
+    /// drops the WebSocket on it: ask it last on a connection, or reconnect.
+    async fn get_palw_fork_choice_opening(
+        &self,
+        request: GetPalwForkChoiceOpeningRequest,
+    ) -> RpcResult<GetPalwForkChoiceOpeningResponse> {
+        self.get_palw_fork_choice_opening_call(None, request).await
+    }
+    async fn get_palw_fork_choice_opening_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwForkChoiceOpeningRequest,
+    ) -> RpcResult<GetPalwForkChoiceOpeningResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwForkChoiceOpeningResponse::default())
+    }
+
     /// **RFC-0010: the permissionless Panel's observation** (op 220; read-only) — the engine's overview and the named claims'
     /// seal, snapshot, beacon state, assignment, retries and terminal reason, as one versioned JSON document. A node built before
     /// op 220 drops the WebSocket on it: ask it on a connection of its own.

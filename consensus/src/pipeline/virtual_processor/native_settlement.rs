@@ -30,6 +30,8 @@ use crate::model::{
 };
 use kaspa_consensus_core::{
     BlockHash, Hash64,
+    config::params::ForkActivation,
+    palw_fork_choice_commitment_v1::{PalwForkChoiceDeltaV1, PalwForkChoiceLeafV1, palw_committed_root_of_parts_v1},
     palw_native_readiness_v1::{
         ClaimStageV1, FinalizedReadinessV1, FinalizedWaitV1, HistoryGapV1, NATIVE_READINESS_LISTED_V1, NativeReadinessInputV1,
         NativeSafeReadinessV1, OpenClaimV1, OpenSessionV1, SafeWaitV1, native_maturity_report_v1, native_safe_readiness_v1,
@@ -61,6 +63,50 @@ pub(super) struct NativeChainRow {
     /// (the pruning point, whose contributions are never guessed).
     delta_root: Option<Hash64>,
     evidence: NativeDeltaEvidenceV1,
+    /// RFC-0009 L2: the part of the delta the fork-choice leaf reads, so the roots chain can rebuild each post-state's leaf backwards
+    /// from the sink's and check a header past `palw_fork_choice_commitment_v1` (it commits the leaf with the root). Kept only where that
+    /// fence is configured at all (`None` on every shipped network, and with the delta), and boxed so a dormant row stays its size.
+    fork_choice: Option<Box<PalwForkChoiceDeltaV1>>,
+}
+
+/// **Step 4 of [`VirtualStateProcessor::native_evaluate`], pure: the roots chain.** `rows` is the selected chain newest first (the
+/// sink's row first, each next row the previous row's selected parent); each row's delta root is the PALW state at that block, and the
+/// row before it (its chain child) committed that state in its header. Past `palw_fork_choice_commitment_v1` (read at the committed
+/// state's own point) the header commits `H(leaf ‖ root)`, so each row's leaf is rebuilt backwards from the sink's state, one delta at a
+/// time ([`PalwForkChoiceLeafV1::parent_by`]); dormant, the committed root is the delta root itself and this is the comparison it always
+/// was. `Err` names the first row whose root breaks the chain; a leaf that cannot be rebuilt is compared in the flat form and so breaks
+/// the chain past the fence rather than being assumed.
+fn native_roots_chain_v1(
+    rows: &[Arc<NativeChainRow>],
+    sink_state: &PalwChainStateV2,
+    fence: Option<ForkActivation>,
+) -> Result<(), BlockHash> {
+    let mut leaf = (if fence.is_some() { PalwForkChoiceLeafV1::of(sink_state) } else { None })
+        .filter(|leaf| rows.first().is_some_and(|row| row.hash == leaf.block));
+    for (i, row) in rows.iter().enumerate() {
+        if i > 0 {
+            leaf = match (leaf, rows[i - 1].fork_choice.as_deref()) {
+                (Some(child), Some(delta)) => child.parent_by(delta).ok(),
+                _ => None,
+            };
+        }
+        let Some(root) = row.delta_root else {
+            continue;
+        };
+        let holds = if i == 0 {
+            root == sink_state.state_root()
+        } else {
+            let committed = match leaf.as_ref() {
+                Some(leaf) => palw_committed_root_of_parts_v1(leaf, &root, fence),
+                None => root,
+            };
+            committed == rows[i - 1].header_palw_root
+        };
+        if !holds {
+            return Err(row.hash);
+        }
+    }
+    Ok(())
 }
 
 /// Memory-only, rebuildable index of [`NativeChainRow`]s by block hash. Only blocks that are executed, with
@@ -135,14 +181,15 @@ impl VirtualStateProcessor {
             }
             Err(_) => return Err(WalkFault(HistoryGapV1::ExecutionRowUnreadable, Some(cursor))),
         }
-        let (delta_root, evidence) = if cursor == pruning || header.daa_score < self.evm_activation_daa_score {
-            (None, NativeDeltaEvidenceV1::default())
+        let (delta_root, evidence, fork_choice) = if cursor == pruning || header.daa_score < self.evm_activation_daa_score {
+            (None, NativeDeltaEvidenceV1::default(), None)
         } else {
             // A missing or undecodable delta is a gap in the verified history, not an empty block.
             let Ok((root, delta)) = self.palw_state_v2_store.read().delta_of(cursor) else {
                 return Err(WalkFault(HistoryGapV1::DeltaNotRetained, Some(cursor)));
             };
-            (Some(root), native_delta_evidence_v1(&delta))
+            let fork_choice = self.palw_fork_choice_commitment_v1.is_some().then(|| Box::new(PalwForkChoiceDeltaV1::of(&delta)));
+            (Some(root), native_delta_evidence_v1(&delta), fork_choice)
         };
         let parent =
             self.ghostdag_store.get_selected_parent(cursor).map_err(|_| WalkFault(HistoryGapV1::ParentUnreadable, Some(cursor)))?;
@@ -154,6 +201,7 @@ impl VirtualStateProcessor {
             header_palw_root: header.palw_state_root,
             delta_root,
             evidence,
+            fork_choice,
         });
         self.native_rows.lock().rows.insert(cursor, row.clone());
         Ok(Ok(row))
@@ -283,15 +331,10 @@ impl VirtualStateProcessor {
         let frontier_on_branch =
             frontier != BlockHash::default() && self.reachability_service.try_is_dag_ancestor_of(frontier, sink).unwrap_or(false);
 
-        // 4. The roots chain: each block's delta root is what its child's header committed to as the parent state.
-        for (i, row) in rows.iter().enumerate() {
-            let Some(root) = row.delta_root else {
-                continue;
-            };
-            let expected = if i == 0 { state.state_root() } else { rows[i - 1].header_palw_root };
-            if root != expected {
-                return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(row.hash)));
-            }
+        // 4. The roots chain: each block's delta root is what its child's header committed to as the parent state — in the form
+        //    `palw_fork_choice_commitment_v1` says (RFC-0009 L2; `native_roots_chain_v1`).
+        if let Err(broken) = native_roots_chain_v1(&rows, &state, self.palw_fork_choice_commitment_v1) {
+            return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(broken)));
         }
 
         // 5. Facts: oldest first is not needed, only the set. The pruning point's own delta is never read.
@@ -500,5 +543,87 @@ mod tests {
             std::mem::size_of::<NativeChainRow>()
         );
         assert!(bytes < 512);
+    }
+
+    /// **RFC-0009 L2: the roots chain in both forms.** Three chain blocks over the genesis state; each header commits its selected
+    /// parent's post-state in the form the commitment fence says at that state's point. The pure walk accepts the chain dormant, armed
+    /// from the start, and armed mid-chain (the form is the state's, so the fence straddles cleanly); it refuses a chain whose headers
+    /// committed the flat form where the envelope was due, and names the row whose committed root a forged header breaks.
+    #[test]
+    fn rfc9_l2_the_roots_chain_reads_each_header_in_its_committed_form() {
+        use kaspa_consensus_core::palw_fork_choice_commitment_v1::palw_committed_state_root_v1;
+        use kaspa_consensus_core::palw_state_v2::{
+            PalwBlockContextV2, PalwBondKeyV2, PalwConsensusObjectV2 as Obj, PalwStateParamsV2, apply_palw_transition_v2,
+        };
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+        let h = Hash64::from_u64_word;
+        let params = PalwStateParamsV2::new(100, 1, 1, 1, 500, 1_000, h(1), 4, 1_000, 100, 1_000, 0).unwrap();
+        // One key, one bond: each bond its own key.
+        let bond = |n: u64| Obj::BondRegistered {
+            bond: PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(0xB0 + n), 0)),
+            pubkey: [n.to_le_bytes().to_vec(), vec![7; 2584]].concat(),
+            operator_pubkey: n.to_le_bytes().to_vec(),
+            collateral: 1 << 40,
+            payout_payload: h(0x9A),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        };
+        let genesis = PalwChainStateV2::genesis();
+        let mut states = vec![genesis.clone()];
+        let mut deltas = Vec::new();
+        for n in 1..=3u64 {
+            let cx = PalwBlockContextV2 { block: h(10 + n), daa_score: 4 + n, blue_score: 6 + n, subsidy: 0 };
+            let (s, d) = apply_palw_transition_v2(states.last().unwrap(), &params, &cx, &[bond(n)], None).unwrap();
+            states.push(s);
+            deltas.push(d);
+        }
+        // Rows newest first: block n's header commits states[n - 1] in `form`'s shape; its delta root is states[n]'s root.
+        let rows = |form: Option<ForkActivation>, keep: bool| -> Vec<Arc<NativeChainRow>> {
+            (1..=3usize)
+                .rev()
+                .map(|n| {
+                    Arc::new(NativeChainRow {
+                        hash: h(10 + n as u64),
+                        parent: h(9 + n as u64),
+                        daa: 4 + n as u64,
+                        blue: 6 + n as u64,
+                        header_palw_root: palw_committed_state_root_v1(&states[n - 1], form),
+                        delta_root: Some(states[n].state_root()),
+                        evidence: NativeDeltaEvidenceV1::default(),
+                        fork_choice: keep.then(|| Box::new(PalwForkChoiceDeltaV1::of(&deltas[n - 1]))),
+                    })
+                })
+                .collect()
+        };
+        let sink = &states[3];
+        let (dormant, armed, mid) = (None, Some(ForkActivation::new(0)), Some(ForkActivation::new(6)));
+        assert_eq!(native_roots_chain_v1(&rows(dormant, false), sink, dormant), Ok(()), "dormant: the flat comparison");
+        assert_eq!(native_roots_chain_v1(&rows(armed, true), sink, armed), Ok(()), "armed: every header commits the envelope");
+        assert_eq!(
+            native_roots_chain_v1(&rows(mid, true), sink, mid),
+            Ok(()),
+            "armed at DAA 6: states at 5 flat, at 6 and 7 enveloped"
+        );
+        // Headers that committed the flat form where the envelope was due: the first enveloped row (block 12, at DAA 6) breaks.
+        assert_eq!(native_roots_chain_v1(&rows(dormant, true), sink, mid), Err(h(12)));
+        // Without the deltas' leaf part the leaf cannot be rebuilt past the sink, and is never assumed.
+        assert_eq!(native_roots_chain_v1(&rows(armed, false), sink, armed), Err(h(12)));
+        // A forged header root: block 13's header commits another state for block 12.
+        let mut forged = rows(armed, true);
+        forged[0] = Arc::new(NativeChainRow { header_palw_root: h(0xBAD), ..clone_row(&forged[0]) });
+        assert_eq!(native_roots_chain_v1(&forged, sink, armed), Err(h(12)));
+    }
+
+    fn clone_row(r: &NativeChainRow) -> NativeChainRow {
+        NativeChainRow {
+            hash: r.hash,
+            parent: r.parent,
+            daa: r.daa,
+            blue: r.blue,
+            header_palw_root: r.header_palw_root,
+            delta_root: r.delta_root,
+            evidence: NativeDeltaEvidenceV1::default(),
+            fork_choice: r.fork_choice.clone(),
+        }
     }
 }

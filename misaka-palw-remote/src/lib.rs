@@ -27,6 +27,7 @@ pub mod bondreg;
 pub mod bundle;
 pub mod checkpoint;
 pub mod evidence;
+pub mod l2;
 pub mod miner;
 pub mod proof;
 pub mod register;

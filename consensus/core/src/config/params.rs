@@ -2949,6 +2949,12 @@ pub struct Params {
     /// ([`Self::validate_palw_probabilistic_constraints_v1`]) — the RFC assigns none, and shadow comparison precedes any proposal.
     pub palw_probabilistic_constraints_v1: Option<ForkActivation>,
 
+    /// **RFC-0009 L2: the fork-choice commitment's fence** ([`crate::palw_fork_choice_commitment_v1`]): a post-state whose point stands
+    /// at or past it is committed in headers as `BLAKE2b(fork-choice leaf ‖ ADR-0043 root)`, so a light client opens the comparator's
+    /// inputs in 258 bytes. **Dormant with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only in
+    /// both fingerprints, collapsed from `Some(never())`, and refused when armed ([`Self::validate_palw_fork_choice_commitment_v1`]).
+    pub palw_fork_choice_commitment_v1: Option<ForkActivation>,
+
     /// **RFC-0015: Panel=0 (`OptimisticPublicVerification`) on the kernel route** ([`crate::palw_panel_free_v1`]): the separately named
     /// fence under which a network admits classes registered under the Panel-free verification mode (a fixed public challenge window,
     /// objective fraud proofs, producer reservations; `misaka-palw-kernel`'s `OpvPolicyV1`). **Dormant with no activation height**: `None`
@@ -4156,6 +4162,8 @@ impl Params {
         self.validate_palw_gen_range_twin_v1()?;
         // **RFC-0011 §15.7's dormant fence** (`crate::palw_probabilistic_constraints_v1`): refused when armed.
         self.validate_palw_probabilistic_constraints_v1()?;
+        // **RFC-0009 L2's dormant fence** (`crate::palw_fork_choice_commitment_v1`): refused when armed.
+        self.validate_palw_fork_choice_commitment_v1()?;
         // **RFC-0015's dormant fence** (`crate::palw_panel_free_v1`): refused when armed.
         self.validate_palw_panel_free_v1()?;
         self.validate_palw_signed_registration_v1()?;
@@ -6502,6 +6510,10 @@ impl Params {
         // The probabilistic-constraint fence, likewise.
         if self.palw_probabilistic_constraints_v1 == Some(ForkActivation::never()) {
             self.palw_probabilistic_constraints_v1 = None;
+        }
+        // The fork-choice commitment fence, likewise.
+        if self.palw_fork_choice_commitment_v1 == Some(ForkActivation::never()) {
+            self.palw_fork_choice_commitment_v1 = None;
         }
         // The Panel-free fence, likewise.
         if self.palw_panel_free_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
@@ -10185,6 +10197,7 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_fork_choice_commitment_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_fp_prefix_inherit,
@@ -10455,6 +10468,7 @@ impl Params {
             ("palw_fp_job_v5", *palw_fp_job_v5),
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
+            ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
             ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
@@ -10738,6 +10752,11 @@ impl Params {
         // The probabilistic-constraint fence, NAMED likewise.
         if let Some(at) = self.palw_probabilistic_constraints_v1 {
             h.write(b"palw_probabilistic_constraints_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // The fork-choice commitment fence, NAMED likewise.
+        if let Some(at) = self.palw_fork_choice_commitment_v1 {
+            h.write(b"palw_fork_choice_commitment_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // The Panel-free fence, NAMED likewise.
@@ -11426,6 +11445,7 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_fork_choice_commitment_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_fp_prefix_inherit,
@@ -12175,6 +12195,10 @@ impl Params {
         if let Some(activation) = palw_probabilistic_constraints_v1.as_mut() {
             fork(activation, visit);
         }
+        // The fork-choice commitment fence. Some-only.
+        if let Some(activation) = palw_fork_choice_commitment_v1.as_mut() {
+            fork(activation, visit);
+        }
         // The Panel-free fence. Some-only.
         if let Some(fence) = palw_panel_free_v1.as_mut() {
             fork(&mut fence.activation, visit);
@@ -12713,6 +12737,7 @@ impl Params {
             palw_fp_job_v5,
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
+            palw_fork_choice_commitment_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_fp_prefix_inherit,
@@ -13512,6 +13537,11 @@ impl Params {
         // The probabilistic-constraint fence, Some-only for the same reason.
         if let Some(activation) = palw_probabilistic_constraints_v1 {
             h.write(b"palw_probabilistic_constraints_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // The fork-choice commitment fence, Some-only for the same reason.
+        if let Some(activation) = palw_fork_choice_commitment_v1 {
+            h.write(b"palw_fork_choice_commitment_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         // The Panel-free fence, Some-only for the same reason.
@@ -14314,6 +14344,7 @@ impl Params {
             palw_fp_job_v5: self.palw_fp_job_v5,
             palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
+            palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
             palw_panel_free_v1: self.palw_panel_free_v1.clone(),
             palw_signed_registration_v1: self.palw_signed_registration_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
@@ -15408,6 +15439,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_fork_choice_commitment_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_fp_prefix_inherit: None,
@@ -15698,6 +15730,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_fork_choice_commitment_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_fp_prefix_inherit: None,
@@ -15970,6 +16003,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_fork_choice_commitment_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_fp_prefix_inherit: None,
@@ -23594,6 +23628,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_job_v5: None,
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
+    palw_fork_choice_commitment_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_fp_prefix_inherit: None,

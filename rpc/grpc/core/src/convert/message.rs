@@ -1807,6 +1807,35 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwCapacityShadowResponse>, protowire
         error: None,
     }
 });
+from!(item: &kaspa_rpc_core::GetPalwForkChoiceOpeningRequest, protowire::GetPalwForkChoiceOpeningRequestMessage, {
+    Self { block_hashes: item.block_hashes.clone() }
+});
+from!(item: &kaspa_rpc_core::RpcPalwForkChoiceEntry, protowire::RpcPalwForkChoiceEntry, {
+    Self {
+        block_hash: item.block_hash.clone(),
+        available: item.available,
+        reason: item.reason.clone(),
+        header: item.header.as_ref().map(protowire::RpcBlockHeader::from),
+        leaf: item.leaf.clone(),
+        inner_root: item.inner_root.clone(),
+        committed_root: item.committed_root.clone(),
+        committed_form: item.committed_form,
+    }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwForkChoiceOpeningResponse>, protowire::GetPalwForkChoiceOpeningResponseMessage, {
+    Self {
+        available: item.available,
+        reason: item.reason.clone(),
+        sink: item.sink.clone(),
+        tips: item.tips.clone(),
+        entries: item.entries.iter().map(protowire::RpcPalwForkChoiceEntry::from).collect(),
+        dns_overlay: item.dns_overlay,
+        dns_stage_active: item.dns_stage_active,
+        dns_confirmed_anchor: item.dns_confirmed_anchor.clone(),
+        dns_confirmed_anchor_daa: item.dns_confirmed_anchor_daa,
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::GetPalwStateProofRequest, protowire::GetPalwStateProofRequestMessage, {
     Self { block_hash: item.block_hash.clone(), collection: item.collection.clone() }
 });
@@ -4191,6 +4220,34 @@ try_from!(item: &protowire::GetPalwCapacityShadowResponseMessage, RpcResult<kasp
             .map(kaspa_rpc_core::RpcPalwCapacityAttributionRow::try_from)
             .collect::<RpcResult<Vec<_>>>()?,
         adversary: item.adversary.iter().map(kaspa_rpc_core::RpcPalwCapacityAdversaryRow::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::GetPalwForkChoiceOpeningRequestMessage, kaspa_rpc_core::GetPalwForkChoiceOpeningRequest, {
+    Self { block_hashes: item.block_hashes.clone() }
+});
+try_from!(item: &protowire::RpcPalwForkChoiceEntry, kaspa_rpc_core::RpcPalwForkChoiceEntry, {
+    Self {
+        block_hash: item.block_hash.clone(),
+        available: item.available,
+        reason: item.reason.clone(),
+        header: item.header.as_ref().map(kaspa_rpc_core::RpcHeader::try_from).transpose()?,
+        leaf: item.leaf.clone(),
+        inner_root: item.inner_root.clone(),
+        committed_root: item.committed_root.clone(),
+        committed_form: item.committed_form,
+    }
+});
+try_from!(item: &protowire::GetPalwForkChoiceOpeningResponseMessage, RpcResult<kaspa_rpc_core::GetPalwForkChoiceOpeningResponse>, {
+    Self {
+        available: item.available,
+        reason: item.reason.clone(),
+        sink: item.sink.clone(),
+        tips: item.tips.clone(),
+        entries: item.entries.iter().map(kaspa_rpc_core::RpcPalwForkChoiceEntry::try_from).collect::<RpcResult<Vec<_>>>()?,
+        dns_overlay: item.dns_overlay,
+        dns_stage_active: item.dns_stage_active,
+        dns_confirmed_anchor: item.dns_confirmed_anchor.clone(),
+        dns_confirmed_anchor_daa: item.dns_confirmed_anchor_daa,
     }
 });
 try_from!(item: &protowire::GetPalwStateProofRequestMessage, kaspa_rpc_core::GetPalwStateProofRequest, {

@@ -625,6 +625,10 @@ pub struct VirtualStateProcessor {
     /// Resolved in ONE place, [`Self::palw_kernel_route_at`]. Never armable by a real network (its validation refuses every
     /// height); a test builds the config without that validation.
     pub(super) palw_probabilistic_constraints_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_fork_choice_commitment_v1` (RFC-0009 L2): past it a header commits its selected parent's post-state as
+    /// `BLAKE2b(fork-choice leaf ‖ ADR-0043 root)`. Every site that produces or checks a header root goes through
+    /// [`Self::palw_committed_root_v1`]; `None` everywhere, where that is `state.state_root()` byte for byte.
+    pub(super) palw_fork_choice_commitment_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_panel_free_v1` (RFC-0015): the OPV fence, the network's admission list and the policy's terms. Resolved in ONE place
     /// ([`Self::palw_kernel_opv_fence`]). Never armable by a real network (its validation refuses every height); a test builds the
     /// config without that validation.
@@ -1251,6 +1255,7 @@ impl VirtualStateProcessor {
             palw_kimi_k3: params.palw_kimi_k3_fence(),
             palw_tir_v1: params.palw_tir_v1_fence(),
             palw_probabilistic_constraints_v1: params.palw_probabilistic_constraints_v1,
+            palw_fork_choice_commitment_v1: params.palw_fork_choice_commitment_v1,
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_signed_registration_v1: params.palw_signed_registration_v1,
             palw_gen_v1: params.palw_gen_v1_fence(),
@@ -2473,7 +2478,7 @@ impl VirtualStateProcessor {
                                 // A mismatch disqualifies the block rather than the node: the
                                 // producer built on a state this chain does not have, and that is
                                 // a fact about the block.
-                                let parent_root = state.state_root();
+                                let parent_root = self.palw_committed_root_v1(state);
                                 if header.palw_state_root != parent_root {
                                     info!(
                                         "Block {} is disqualified from virtual chain (PALW state root): committed {}, this chain is at {}",
@@ -14696,6 +14701,13 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// **RFC-0009 L2: the root a header commits for `state`** — the ONE spelling the chain walk, the template, the proof server, the
+    /// pruning-point import and the native-settlement walk share (`palw_fork_choice_commitment_v1`). Below the fence (every shipped
+    /// network) it is `state.state_root()`.
+    pub(crate) fn palw_committed_root_v1(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Hash64 {
+        kaspa_consensus_core::palw_fork_choice_commitment_v1::palw_committed_state_root_v1(state, self.palw_fork_choice_commitment_v1)
+    }
+
     /// **G14 lane D: `Params::palw_probabilistic_constraints_v1` resolved at the block's DAA**, in exactly one place.
     pub(super) fn palw_kernel_route_at(&self, daa_score: u64) -> bool {
         self.palw_probabilistic_constraints_v1.is_some_and(|fence| fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score))
@@ -20506,7 +20518,7 @@ impl VirtualStateProcessor {
                 // this header exists, so stamping it cannot move the hash it would then have to
                 // match. Not the store tip: that row can stand one or more blocks away from this
                 // template's selected parent (testnet-11 2026-09-21 `df80394b`).
-                header.with_palw_state_root(parent_state.state_root())
+                header.with_palw_state_root(self.palw_committed_root_v1(parent_state))
             }
             None => header,
         };
@@ -20991,11 +21003,26 @@ impl VirtualStateProcessor {
                 ),
             ));
         }
+        // **RFC-0009 L2: the witness commits the state in the form its point's fence says** (`palw_committed_root_v1`). Dormant
+        // (every shipped network): the carriage's own check against the flat root, exactly as before. Armed: the carriage is decoded and
+        // checked for consistency, and the committed form of the decoded state is compared with the witness — the same helper the
+        // chain walk uses, so an import and a validation cannot disagree about one state.
+        let flat_check = if self.palw_fork_choice_commitment_v1.is_none() { Some(expected_root) } else { None };
         let state = carriage
             // ADR-0069 Decision 7: the consistency check has to know the rule the snapshot was
             // built under, or it refuses a state for having obeyed it.
-            .into_state_v3(params, Some(expected_root), self.palw_uncertified_weightless_at(witness_daa), self.palw_canonical_work_daa)
+            .into_state_v3(params, flat_check, self.palw_uncertified_weightless_at(witness_daa), self.palw_canonical_work_daa)
             .map_err(|e| PruningImportError::ImportedPalwStateInvalid(pruning_point, expected_root, e.to_string()))?;
+        if flat_check.is_none() {
+            let got = self.palw_committed_root_v1(&state);
+            if got != expected_root {
+                return Err(PruningImportError::ImportedPalwStateInvalid(
+                    pruning_point,
+                    expected_root,
+                    format!("carriage state commits {got} in the header form, not the witness's {expected_root}"),
+                ));
+            }
+        }
         // Written through `set_tip_batch`, which RE-DERIVES the root from the state it is handed —
         // so what becomes durable is a function of what was verified, and a caller cannot store a
         // snapshot under a root it did not compute. The peer's bytes never reach the database.
@@ -21013,6 +21040,81 @@ impl VirtualStateProcessor {
         }
         self.db.write(batch).unwrap();
         Ok(())
+    }
+
+    /// **RFC-0009 L2: the fork-choice opening of `block`'s post-state** — the state this node weighs `block` by
+    /// ([`Self::palw_candidate_state_v2_checked`], the same walk the deep-reorg gate takes), its opening and the root it is committed as.
+    /// `Err` names why this node cannot weigh the block; it never answers from a guess. The walk composes this node's own deltas, and a
+    /// block gets a delta only when its chain validation passed — its header's committed root included (a mismatch disqualifies the block
+    /// and every chain descendant before the transition runs) — so an opening is served only for a block whose whole selected chain this
+    /// node validated. That is what an issuer signs when it attests a served root.
+    pub fn palw_fork_choice_opening_v1_impl(
+        &self,
+        block: BlockHash,
+    ) -> Result<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceServedEntryV1, String> {
+        use kaspa_consensus_core::palw_fork_choice_commitment_v1::{PalwForkChoiceOpeningV1, PalwForkChoiceServedEntryV1};
+        if self.palw_state_params_v2.is_none() {
+            return Err("this network has no PALW V2 state".to_string());
+        }
+        let header = self.headers_store.get_header(block).map_err(|_| format!("the node holds no header for block {block}"))?;
+        let sink_daa = self.virtual_stores.read().state.get().map(|v| v.daa_score).unwrap_or(0);
+        if header.daa_score.saturating_add(PALW_STATE_PROOF_MAX_LAG_DAA) < sink_daa {
+            return Err(format!(
+                "block {block} is {} DAA behind the sink, more than the {PALW_STATE_PROOF_MAX_LAG_DAA} this node rebuilds state for",
+                sink_daa - header.daa_score
+            ));
+        }
+        let state = self.palw_candidate_state_v2_checked(block).map_err(|fault| match fault {
+            PalwWeighFaultV2::NoOpinion => format!("this node cannot weigh block {block}: it holds no PALW history to it"),
+            PalwWeighFaultV2::StoreUnreadable => format!("this node's own PALW store would not read for block {block}"),
+        })?;
+        let opening = PalwForkChoiceOpeningV1::of(&state).ok_or_else(|| "the genesis state has no fork-choice leaf".to_string())?;
+        if opening.leaf.block != block {
+            return Err(format!("the state this node walked to names block {}, not {block}", opening.leaf.block));
+        }
+        let committed_root = self.palw_committed_root_v1(&state);
+        let committed_form = kaspa_consensus_core::palw_fork_choice_commitment_v1::palw_fork_choice_committed_at_v1(
+            self.palw_fork_choice_commitment_v1,
+            Some(opening.leaf.daa_score),
+        );
+        Ok(PalwForkChoiceServedEntryV1 { header: (*header).clone(), opening, committed_root, committed_form })
+    }
+
+    /// Op 203's body: the openings of `blocks` (or of the sink and every tip), with the node's sink and tips.
+    pub fn palw_fork_choice_openings_v1_impl(
+        &self,
+        blocks: &[BlockHash],
+        sink: BlockHash,
+        tips: Vec<BlockHash>,
+    ) -> Result<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        use kaspa_consensus_core::palw_fork_choice_commitment_v1::{
+            PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1, PalwForkChoiceServedV1,
+        };
+        if self.palw_state_params_v2.is_none() {
+            return Err("this network has no PALW V2 state".to_string());
+        }
+        if blocks.len() > PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1 {
+            return Err(format!("at most {PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1} blocks per request (got {})", blocks.len()));
+        }
+        let mut named: Vec<BlockHash> =
+            if blocks.is_empty() { std::iter::once(sink).chain(tips.iter().copied()).collect() } else { blocks.to_vec() };
+        let mut seen = std::collections::HashSet::new();
+        named.retain(|b| seen.insert(*b));
+        named.truncate(PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1);
+        let entries = named.into_iter().map(|block| (block, self.palw_fork_choice_opening_v1_impl(block))).collect();
+        // The gate's inputs as this node holds them (`dns_bft_gate_refusal` reads exactly these): the rollout stage and the
+        // confirmed anchor. An unreadable or unwritten DNS state is reported as nothing confirmed in Bootstrap — what the gate reads it as.
+        let dns_gate = self.dns_params.as_ref().map(|_| {
+            let state = self.dns_state_store.read().get().ok();
+            kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwDnsGateFactV1 {
+                stage_active: state.as_ref().is_some_and(|s| s.rollout_stage == DnsRolloutStage::Active),
+                confirmed_anchor: state
+                    .as_ref()
+                    .filter(|s| s.last_dns_confirmed_anchor != Hash64::default())
+                    .map(|s| (s.last_dns_confirmed_anchor, s.last_dns_confirmed_anchor_daa_score)),
+            }
+        });
+        Ok(PalwForkChoiceServedV1 { sink, tips, entries, dns_gate })
     }
 
     /// **RFC-0009 stage D: the proof of one PALW collection against the header of `block`.**
@@ -21050,10 +21152,12 @@ impl VirtualStateProcessor {
         let (_at, state) = self
             .palw_v2_state_at(parent)
             .ok_or_else(|| format!("this node cannot establish the PALW state as-of {parent}, the selected parent of {block}"))?;
-        if state.state_root() != header.palw_state_root {
+        // RFC-0009 L2: in the form the header commits (`palw_committed_root_v1`). Past `palw_fork_choice_commitment_v1` the proof's
+        // preimage opens the ADR-0043 root inside the envelope; the client unwraps it with the fork-choice opening of `parent`.
+        if self.palw_committed_root_v1(&state) != header.palw_state_root {
             return Err(format!(
-                "the state this node holds as-of {parent} hashes to {}, and the header of {block} commits {}: nothing is served",
-                state.state_root(),
+                "the state this node holds as-of {parent} commits {}, and the header of {block} commits {}: nothing is served",
+                self.palw_committed_root_v1(&state),
                 header.palw_state_root
             ));
         }
