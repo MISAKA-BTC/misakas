@@ -104,7 +104,12 @@ pub(crate) fn readiness_lines(r: &GetPalwSettlementResponse) -> Vec<String> {
             out.push(format!("    on the facts already on the chain, no sooner than {d} DAA from now"));
         }
     }
-    if let Some(w) = &x.finalized.wait {
+    if let Some(head) = &x.finalized.withdrawn_from {
+        out.push(format!(
+            "  FINALIZED LABEL WITHDRAWN: {head} was published as finalized and is still canonical, but the evidence no longer certifies it; \
+             safe and finalized read null until it is certified again"
+        ));
+    } else if let Some(w) = &x.finalized.wait {
         out.push(format!("  finalized: {w:?}"));
     }
     if x.skipped.total() > 0 {
@@ -292,6 +297,7 @@ mod tests {
                 pruning_point: h(1),
                 pruning_blue: Some(0),
                 wait: Some(FinalizedWaitV1::PruningPointNotExecuted),
+                withdrawn_from: None,
             },
             skipped: SkippedEvidenceV1 { bond_not_held: 1, ..Default::default() },
         };
@@ -316,11 +322,17 @@ mod tests {
             safe: None,
             safe_lag_daa: None,
             safe_lag_blue: None,
-            ..readiness
+            ..readiness.clone()
         };
         let lines = readiness_lines(&GetPalwSettlementResponse { native_readiness: Some(stopped), ..answer(false, 0, 0, false) });
         assert_eq!(lines.len(), 1);
         assert!(lines[0].starts_with("  safe is withheld: missing history (DeltaNotRetained) at "), "{}", lines[0]);
+        // A published finalized label that was withdrawn is an alarm line, naming the head (RFC-0012 C11).
+        let mut withdrawn = readiness;
+        withdrawn.finalized.withdrawn_from = Some(h(0xF1));
+        let text = readiness_lines(&GetPalwSettlementResponse { native_readiness: Some(withdrawn), ..answer(false, 1, 0, false) }).join("\n");
+        assert!(text.contains("FINALIZED LABEL WITHDRAWN"), "{text}");
+        assert!(!text.contains("finalized: PruningPointNotExecuted"), "the withdrawal replaces the plain wait line: {text}");
     }
 
     #[test]

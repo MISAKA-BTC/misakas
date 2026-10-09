@@ -7,6 +7,6 @@ mod draw;
 mod state;
 mod types;
 
-pub use draw::{panel_seed_v3, seat_order_v1};
+pub use draw::{panel_seed_v3, seat_order_v1, stratum_seat_order_v1, stratum_seed_v1};
 pub use state::PermissionlessPanelStateV1;
 pub use types::*;

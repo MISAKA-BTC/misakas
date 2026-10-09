@@ -5495,7 +5495,13 @@ mod native_settlement_tests {
             PalwSettlementPolicyV1 { settled_anchor_depth: 2, unique_mature_work: 20, max_operator_permille: 600, max_class_permille: 600 },
             native_maturity_report_v1(3_000, 120),
             SafeWaitV1::Unexecuted,
-            FinalizedReadinessV1 { finalized: None, pruning_point: h(1), pruning_blue: None, wait: Some(FinalizedWaitV1::NoSafePrefix) },
+            FinalizedReadinessV1 {
+                finalized: None,
+                pruning_point: h(1),
+                pruning_blue: None,
+                wait: Some(FinalizedWaitV1::NoSafePrefix),
+                withdrawn_from: None,
+            },
             SkippedEvidenceV1::default(),
         );
         let response = GetPalwSettlementResponse { native_readiness: Some(readiness.clone()), ..Default::default() };

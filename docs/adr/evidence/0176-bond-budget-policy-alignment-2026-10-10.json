@@ -1,0 +1,1444 @@
+{
+  "date": "2026-10-10",
+  "branch": "pre",
+  "head": "e4f3f6f3d81c75166ea6308bfff0b8aeaf836ca5",
+  "scope": "documentation design amendment only; includes all locally present numbered RFC/ADR, preserves earlier dirty-tree changes",
+  "counts": {
+    "existing_ADR": 163,
+    "new_ADR": 1,
+    "RFC": 17,
+    "entrypoint_design_docs": 21,
+    "documents_changed_before_evidence": 202,
+    "header_only_body_preserved": 172,
+    "targeted_existing_amendments": 29,
+    "added_lines": 1435,
+    "removed_lines": 28,
+    "evidence_artifacts": 2
+  },
+  "validation": {
+    "new_local_link_failures": 0,
+    "new_unpaired_fences": 0,
+    "all_RFC_ADR_premise_references": "PASS",
+    "only_authorized_markdown_changed_since_start": "PASS",
+    "source_code_and_activation_unchanged_since_start": "PASS",
+    "runtime_economic_tests_run_for_new_design": false,
+    "git_diff_check": "PASS",
+    "evidence_local_links": "PASS"
+  },
+  "records": [
+    {
+      "path": "README.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "fc3fd16b274824b79f76d3e51c1ea384e2dcc1640c5acb9e1409e87f7ef2285a",
+      "after_sha256": "f177d5301cb83f63425267d13015dd22da7b9debaecda764fac7aaed237a6ca7",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/README.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "0e6df9c06a4e1c48ad9c46c731a14b10384a74565863494cb33fed76ed486535",
+      "after_sha256": "0001bc338dae5cda791663f84909b025c8ed55b9ef6255370af0ba62f62b7c7f",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0001-network-isolation.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "bcc0d9e3a1f399c492fc5e83a42a8aee84da7dc9d32ec79a9b9ab791116372d7",
+      "after_sha256": "dd4c8e20ae51a34b5dcf1526b1d5dd2e0299219809e3853dc47c0f8cb92a36c6",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0002-mldsa65-p2pkh.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "fd925b3eb79b2856e3193b5d4458aab64f0c0822444b481696a63c78dce9c87e",
+      "after_sha256": "132be380ca67c5a2a0eed668db98a696669d4c3597e52aabd4c958e82fd61a06",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0003-lthash-utxo-accumulator.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "ba089cf1b17ae74bb0482cdf390f5a59349cd0b73b273fd5b7fc3e711b7bfce9",
+      "after_sha256": "b4a20266697b74e66ebe1240b0f960f31c6b1579c41fad4501e47643b0b1fc3d",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0004-utxo-commitment64.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "145157c306d1c1faf6f44e4eb8e982ba33e7a9e7d2e1ef7df89d6e5df4174d7e",
+      "after_sha256": "e639101dd7017920f6b7c6ec9dd9702beb6327d7f591e40ec576d0ed79c8d152",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0005-mass-policy.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "fbf37a2e36066b32a63594482ac3a7edc943ce246c76b9b1bc904ba7f838b285",
+      "after_sha256": "6f2002544ac35a73cf75de0fb0897e54bd0e3e100f9920d1c20855a7e72ed719",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0006-rpc-wasm-sdk-types.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "7c032e20aa5615ecb6ce146ecfde307b64fbe0794d121efec07178b587fb1d65",
+      "after_sha256": "1b5619a2ee5bd16adecb09de38d7447a62df9793687137ba880a9167d10acd49",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0007-layered-pow.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "b875b0765e04ea101e4ff0fc78da9c86ac63cf4aee072327d10af4d1ae82c18a",
+      "after_sha256": "29d989b9135c46c9c64cc09519b7b9abc68107d61256d78c6da170e0596bdda6",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0008-hash64-consensus-identity.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "5d90436487d22d25f1c16285d851857551cc81e67a76613e0bfa8ba3bc132701",
+      "after_sha256": "17a96befeaebb297501155c621691e7ec4da439f974e4c38d9ba12ca39350471",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0009-dns-probabilistic-finality.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "4b7641da3a3cd72735ef3af8d3612f4bb39fee5371ebe6e7839d550100aaa2e0",
+      "after_sha256": "f895bf6041e67e957aceab63f71635fdd6e490546df2a50f1983782d6086d36d",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0010-validator-node-architecture.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "c2fa111ca812af30ca1aaf9b42040aa5aca201771cd12b28569ed5ab76dcf862",
+      "after_sha256": "8c06bb028add04425d41680438f075f930b9786f6b827f7071fd7525e20f8f22",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0011-validator-deployment-and-equivocation-safety.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "8262f2e64761ff52d1343377cd3445ca9a76f629a493075c429a48148c7c9e6b",
+      "after_sha256": "c2d7841d915f8dd60468d3e9171ff1e4bc2c1ddfc8b66792dbf146469f38af6d",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0012-mainnet-validator-sortition-commit-reveal.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "d4154b1dc0725536f17f6a7353b793a7d2df113dfcdf2638217d746fa8a248f6",
+      "after_sha256": "2ef2df3b12e0ef5f29c292c84a7e6e03cbc89b7d86befa00381b91934da1d1f4",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0013-validator-reward-distribution.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "4dda982211e1c9b8bee3af7e9f09438227f1db51a23fed5869306ee3afc0f555",
+      "after_sha256": "8e9398fa420d947333dd3b27f126f8d96ffc14c8615285587ae9d902e27fe363",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0014-coordinated-failover-protocol.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "6f3c6002c477ad578a34b0d236422d99f95b28cc0585a14f04ce10cccae66125",
+      "after_sha256": "38ab602e7af9d5ac5cf322d3c3c36b75a984f797786679469d3d642ccb069d78",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0015-remote-signer-hsm-protocol.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "ff1a4b4f84cadd70ffd11d36e92530de284c598d0ae42cfdcfdac550beef07be",
+      "after_sha256": "e34d36d4881da0272c61284ec0060ebb461447102a5e9eaf79b048c571f1238d",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0016-stake-locked-bond-utxos.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "452c97385a912d9daf532d0c4d9e4e768a102adb2bc81d964192cc305de54bc4",
+      "after_sha256": "bf5ed0a60e39c271b46cb649532d281907ec7559c35517c51d8f5de195ee85fb",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0017-all-active-staker-attestation.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "b23f9091106557c49fc957523e8c8b481b7c3efc20ceb4cbd8c45635b8f753ac",
+      "after_sha256": "bb19813f45a7ccb15d22b573551a05fb9188ce7df2e7e8f875343acf3822adc8",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0018-quality-gated-stakescore-inclusion-economics.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "5427588be4bc405e48679bb4d253a02c2742ae5d90d6e431c1b3659cc377e908",
+      "after_sha256": "54518128556f646f62a18f9d00ea689f801eac53f43d732482770e8de5fe0aa0",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0019-mldsa87-migration.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "59f81e61d4e293bdf58c3610a3c1a0744b0a611067103bd7a72bc2e53bcc9b83",
+      "after_sha256": "5f45b6a05f20d0899b72ba95af09ed1c0d15d224f5c559ca6c0e643b2f8a9ac1",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0020-selected-parent-evm-lane.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "6ca9f19c98a53df78f94679c22eb367331817ee8b808af290d09b9bc96838d24",
+      "after_sha256": "466021709099a3a9d3e705331d7a07423a7bb2e537c56f246b95f9deeafde681",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0021-palw-llm-pow.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "0e20554426722e9a2e91dd1af78558b7bafd0f3299d4fcceada33978a28dc479",
+      "after_sha256": "881f9d9eb42f6dbcb46ad1a531c412730bdbe51dcd7912b0d5ca434cf9a73978",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0022-pruned-ibd-evm-overlay-snapshot.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "f56991c4fc8f7105eb689378f379c97eee0c77f8ae49746902a89e5e1554cd55",
+      "after_sha256": "782bd81b2ef65d9e56754ca03c53728e6d1bbc9d1c442ecc220a9120b9f14757",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0023-base-three-lane-execution.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "d462a41af0506117209da3a1eb33d39ed81d2a41b248360e44e47d5e506db358",
+      "after_sha256": "a5831107e2742764d832885af6d0226341b32ee8d70f4b5b05aafc0e292f70d4",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0024-verified-llm-token-weighted-bft.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "68fe69c4e45cbe3848c0786066fa0ac6f11dd39e8768b61e3879e5d227e25126",
+      "after_sha256": "b741b108eb008bed1603a2e762bebf254786c10c838ae3cc7b1db6a78dbbacb8",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0025-chain-participation-and-ibd-candidate-selection.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "c9ac844ff607d61101d6827326fa26a6e26e4f7ae71cf46a69cb6f98e02ac138",
+      "after_sha256": "e0957fd17701581093ca103ddfecae157f5e32d8ad72927270ceb703103304ba",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0026-current-palw-testnet11-architecture.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "4e897b0a6f532be96858b820a803712e35f345b73401fbb7b23068e2fc0c11a4",
+      "after_sha256": "16cc9c698834f89752c3cd132be30b6f1414d2bf22986418ee28d102be7f3b3b",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0026-palw-v2-runtime-separated-verification.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "0e3d2b4540d81b125164d120f5685ca18b9d97f0d3f37f80b51a7cf97c3f1bd0",
+      "after_sha256": "c7bfc71d6945961420d9631e51487eb14663dbad17cb0fa9723e0bb5bf0dbdf5",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0027-palw-slash-unilateral-fraud-proofs.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "5caab53105f5bd18ca356b0e814cf9de823632f8023fefe14836104fc67a7aa2",
+      "after_sha256": "40868a93517ee46c0e5276dee69bc8fc4ce347b1e490fc608f9246b18b235e65",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0028-palw-challenge-sampling-protocol.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "e2ff6467dd98e13c4df3287fd61524b74d08a3ac11bd14d33a636126618b5b17",
+      "after_sha256": "cca326ee300ef675fd04a121569d59abadd758c1852039c4947ad39b8ede35bc",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0029-palw-chain-carriage.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "ddf833a50921f1880b4ead7f15dd13870023a784762b8d3504468f544a95a243",
+      "after_sha256": "df235f6e3d6ceeaac6436ec2d9fddae109bc49ec090123db7c88a1bf176c8998",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0030-palw-step-function-shape-profile.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "f12da03d24e67e4f08fa1cb2eb6473bb02433f3abb0304cdacdd7f106e3cafcd",
+      "after_sha256": "713c338cddf37b92f9d7f84ba54823eec0737b1983b9bd92f81f0f7958cd7963",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0031-palw-canonical-transcendentals.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "c285a21c7ab059acd940cf943ebf5d96b803a5b56c8f5d34a3b0ac47c16cdb05",
+      "after_sha256": "bfd31b4a7ef04db73db99fdf6f067fcb1fac4e8cf8dceb8a352defc548c6eb2e",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0032-palw-fee-bond-escrow.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "2d29685a50419c3208309f11c6b5f393ab683be9c12cab005e0beedaa2b03e87",
+      "after_sha256": "9b9c11d5a55b56c2725a2bcc79fed83657af197c23ec26c6f9855d11aace8a40",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0033-palw-credit-gate-wiring.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "88727903dab4e082d1907aa6de6e6b319024fbcb3c4482f3da9f96fdead20e75",
+      "after_sha256": "b2d9037fa48ad872526679b71b2d2aab5982321ea82a7374a19c031b062e3cd3",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0034-palw-execution-class-model-band-routing.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "08046cea5b908c1711bdc60b11b2d7fe403675fc277cee3793fdafcbd508b246",
+      "after_sha256": "b6726eb4bd1ef6edca0f9179e97f519ecef70d6962039ff77d509dfa4e5235ae",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0035-palw-public-testnet-strategy.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "860bca90765fd8460bb661a644f2936dd5ac3f166682ce0e58c7f6e39d56f2db",
+      "after_sha256": "ccf354c04a229316c9fb69d775e8335deeef030334bac878e765dd2b02f5e2d8",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0036-palw-mainnet-activation-model.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "c6fba80f13e961b0c2a20f43528872b63dd87011bccd4c99078ab6d478d903b8",
+      "after_sha256": "a49cac345272ec2e1d27be39fb787dafd62093f3feea4650f06907b612a181f5",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0037-palw-async-job-state-machine.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "5685a52b2b4736999a258d47defddc6bcb4c3a9bd55426851b8b9ba8ceb0d92a",
+      "after_sha256": "1984e6fa3a919148df1da6491dabb4a76bf67d314f2f18d9028b4d6a6c2ef7c2",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0038-palw-is-the-consensus-work.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "3f6762b90a40ee6a1a659930342a3189f1908299f7d15d084bdabaae5ce3b480",
+      "after_sha256": "504db1dcf606f8fad44768fe4480dbbd46af573d46162aafd14269e40248c269",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0039-palw-only-block-production.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "1d3904d6042a36142eed320e8848fe04ea260108ac43fd71fda07e3e955953c6",
+      "after_sha256": "7f71e38831f1d0604231bf6f92ecb030debc132c8c35fd3a13a527084238da6d",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0040-palw-base-0-integer-arithmetic.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "0a3d00891a936a357367b5a92c97738209e0f7ba735d6560495614df214d991a",
+      "after_sha256": "19dbc31f698a36de8d538209d7aa677050257cf532b91051288d799735d7f6e9",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0041-palw-pruning-proof-verification.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "a37bca99b227658841387047b54e224ced8186f8fbb04b27f1858a2dc25a4e80",
+      "after_sha256": "61a871621fdbd7d8635544fbe7a216270266a1ab86dc92c6492dd6374fd9f489",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0042-palw-mainnet-candidate-ruleset.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "539fa80a7b081a6593b14826d4188da645f70151b5ab99c635f0b695bf290f2b",
+      "after_sha256": "c0c77a640bbaee17f252d691d921c9b742990498dca57b3c574b9577f1932742",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0043-palw-v2-state-root-ordering.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "a0f653ee55f6a1f7ee82ff647a3ae8dd207ec19c47128f9e58ddf9cd7b4f84ab",
+      "after_sha256": "5152ea3f166399c17e3d8bad6cf229894e49873bf7e6cfea8eac1ecccc2ea6f5",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0044-palw-free-prompt-receipts.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "15dd527c455cd175a345de72d1ae852290c38f52079fc524eacb04b9222c6b2b",
+      "after_sha256": "299cfde3deae26f4ef26fc50c11c88925716bef1530ccd46945376fb6e7446ac",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0045-palw-class-economy-on-chain.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "8bb4d917efa22d400e1d39ec85fe5598696ad2b8518fcef406d7dbb9c81eeaaf",
+      "after_sha256": "b9a0631c6668865348ec590f930212f4de89894b283e815ef21f1aae8d60c038",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0046-palw-v2-consensus-object-carriage.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "e113191ae312f3f26b848d3fba928469578cfb4691c4e3eab80b48eb0dabd55b",
+      "after_sha256": "bff1408cfd62c4efce4171ad79c71b7bede2c0e0054a81ea73fb1823cac304d4",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0047-palw-a16-activation-tier.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "887ea18b34b367e6ab970f888a3410ac66af29e6b82b3a622785991db8acdaae",
+      "after_sha256": "95cce0ea64ed22b5bbfd51989d99f2dc31fa87e77b24a57c40b5e91299d7fae2",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0049-palw-adjudication-contract.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "9ea86620442da7888ee02c2af696b9a1cad9c70997265ccc8485849995e7de05",
+      "after_sha256": "212ceb420e36d23145c517d9dc51b444c77df12d02a98986285a994133fb193f",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0050-palw-base0-residual-site.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "104b9d5a0c9a181f26cff2342766058119715c7ff924f2f4953d58eac89b8189",
+      "after_sha256": "aff3655a34b3f3fa0fc05e328e9d623d5efaacc961b89b53a5a0486b06d91420",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0051-palw-metal-gguf-execution-family.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "2a13283a54d3a47634a26d8d0dd08ce207902d0fee21aefdce3cc0ec199f9b84",
+      "after_sha256": "856c148757bbdc97f327c25ba8898badf0cf232c7612106d1f66593bcdede74c",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0052-palw-qwen36-hybrid-class.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "f246ab1f2887d3127e403a10ac2726b42f60f7beba6baecae2ffa66177bc5cff",
+      "after_sha256": "bdc1ecd359a836a77fd24f49a7a386e20a8318abffcdcf3dce4d1cc463078277",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0053-palw-one-execution-family.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "706fe4df8e122bc4b9ae3fa9c1fa61c8f36074b43c7c1c2af4d49ed672ac1339",
+      "after_sha256": "b11d1b152fe7a69ffd227a465edb1873ebf4fb6f16ee1e49050a23087c9b4df5",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0054-palw-share-follows-production.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "d0ccc5a7bb091fc390512c2bea537d56d4d8956b8db6cd07689fc2f8081152ac",
+      "after_sha256": "94cda631c24efb696f4007589911ed26b6cf5be8b5d480884289daace9755dfe",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0055-palw-position-is-earned-not-declared.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "ee5ea7635aa91ed3bb2198e157799a6fdc6d69bbeb608eb2cfabd89209d659f8",
+      "after_sha256": "6a3b11025b2bcfd7f69214b67edad7d5f09cdc20309e84099f3d8844303181be",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0056-palw-permissionless-class-admission-and-share-economy.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "285b68f807a9a3372441b7b4833dc53bc816305bc855562e167bb3777fd37918",
+      "after_sha256": "2b0cfbaab124a2b70c10726ac82ce06392b9a84e462f366df1000f07a1170e33",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0057-palw-base0-runtime-acceleration.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "e287f8268c932f441e25b32b93b26356c545cf6729100b8212dcb39d63ab41ec",
+      "after_sha256": "7abb6b065c226a78f047d6c3deccdbfcd1b28f6e6356b81988808c172302a350",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0058-palw-merged-work-is-counted.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "93d981f6da6cb390e87b5b331270f02094d09c2323404fb3e197507350681198",
+      "after_sha256": "6c51bf229f2c0c1cf19425a6ba33d0c2a3a8da67fb67b490f7f288dcd8b32a7b",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0059-the-10b-premine-cap.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "9bedb44943e2e6a391d33e71fed34df922deb3b37e1ed541629c58acf44893a7",
+      "after_sha256": "bae1c7d9a9fdf37506893558d354c7bba55435f01f3100bd1ffff83618cecf62",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0060-the-liveness-doctrine.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "364386545a4e67a1eca939f9563442400889c0d6784998fd9adeb6cb2f61918c",
+      "after_sha256": "5365ca7c162173dd664f55a5483e025c6dd95c1b28a85d20dece3ad6796ca9f9",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0061-zero-seat-genesis-and-right-sized-collateral.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "226aba9831545adbca928d8a52b7c17d61ad2a6f50ee736ca7d6ef5681ed1895",
+      "after_sha256": "f0156771dddb40c458a738e4133d90af14b06e415bb50ace9ace45d6d4b9f13b",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0062-data-availability-court.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "508cb761eb3cbe051facee6e1b165423721c582856c20312b8e4dae3639429b8",
+      "after_sha256": "dd15e254ad313450e7632697d866a4b5822a80c62b615de51ec94d513a0ce5c5",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0063-operator-tooling-the-missing-half.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "2f3e10c26f0c3913b4ca3940a5e247d7453cb85453e3db4fe0922315f7dd8667",
+      "after_sha256": "1be5e7a588ae61f92fd732a54e880110f6dada2cbfd6716fda9b3863ad2a4529",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0064-trustless-recovery-from-a-total-stop.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "763bd6d44c683e97b560a1c4ab9e787f79284f12a37918ed2ad31f32c8d3e73a",
+      "after_sha256": "b392731db23ccbfce75bcc5c2d7e341b40f86bbeb12ed722e89681169340d5c9",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "e068c73fb5850acada16937dcdd0a7293ec57651db4c3567dbd675dfa2942abe",
+      "after_sha256": "82844c0554e3abedd3654faab5b855aad4804e6899ef42911951c70f79c05d3b",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "0e43557fadcb7c9f3163eb4633565ab9b2dc918db511b826c4115324198ff1fc",
+      "after_sha256": "67128c091c15689f3da0c7ba66b6bf7bc1d90027d89a6e54f383dadc9e5a8168",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0067-classes-are-chain-data-kernels-are-the-build.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "f90155dc9bd10f620cac213bb6cf8f38717fdd2e96398377cb316d1d651c8612",
+      "after_sha256": "9aade0b36dd19ecf30341fb5fad70850d54e78334de9ff3c29f5b46208c5665d",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0068-the-llm-primary-economy-and-the-floors-minimum.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "0f76fade9237ce79c106162f1b277ba53aae71ce4c6cf37902b2290fe4e4c0e8",
+      "after_sha256": "55ecbb9355b8e94d6766bfe784df2ff021de1db05346082aa80bec9c1aa805d5",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0069-e2e-adjudicability-is-the-price-of-weight.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "c647aea1c9af4aac2a5f7eebf666cef586428f85bf22c5043a78b4a19a835408",
+      "after_sha256": "33be176a9e3ffdb82ad29a2540e1fd68245c6997198aaf727ec7584bf7059f63",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0070-the-model-tiers-step-spaces-are-adjudicable.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "29b0965fd7c2615bf3b1a2420fe019a3d044fb4eafb7e0911a4964daf4a320a7",
+      "after_sha256": "5d03fd2868673b18e4390cce81e15671ef51179721f2cd49a829b048da6dd244",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0071-the-attempt-lanes-price-and-the-tickets-bound.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "f3cda3683d5b64755bcf75d5de5a2531a329e377073033550acd192dc9e43f70",
+      "after_sha256": "c875463788636fbc64400d205ecd814957f5f80f81d49b4e2123e309f77a4f3b",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0072-the-ticket-is-the-execution.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "45a1604980e1486a015df2a9269172b0bf9cf02650566001162fcb2af5ab9712",
+      "after_sha256": "b64e752deea9127f7ea9448695e4726139146b4d13c9a82909e60184ced9bd68",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0073-real-demand-work-bears-the-weight.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "4bb7a1a8f7cf0e05c1afaaf7fb3cda95e4e69c272e3603410859c76491c7f834",
+      "after_sha256": "953afd493d90ad385b26392c140bfaaec3b0b7325dfcd479e3945a8da9e77608",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0074-the-attempt-is-a-claim-drawn-by-the-chain.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "f2d5b4a8d5c621f3d84731c145718828491fd34fde8e7110e907782a196d2700",
+      "after_sha256": "2c338e4935db23c110eb211e8d98be40bf08962c665dfa4926f9bcf90dd286ef",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0075-certification-is-a-consensus-object.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "e288cdcf42895b985f15bb6a172bcc62a0f8b808476659cc322e04b5bc7fd1e9",
+      "after_sha256": "8989210d5d8bed2c3dd5b96370373a962be51307ea7e737cd39be34f3555122c",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "221c2b1710410b1a3ddb9474753d5b147e935c14a1bb46419f323c6a1f8b4f22",
+      "after_sha256": "63c4e2f9524ca6d7e58728c1637848b01e3f869ccc238edb5b78da2c5aeffee7",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "6326b9774100e415b441fe96619c2cb5153cb6506175a4c010bfaa4c92aa081e",
+      "after_sha256": "019c102ff7cc16e084bd780e814c471763e2743ac213c6c9cf5be8b1065a3a78",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0078-what-was-made-from-it-is-committed-the-thing-never-rides.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "1a523d9427deaeabf5940633ab6e19d3eaa6af1259f45fa113e5c865bb43acb5",
+      "after_sha256": "8a3f128eb3998e05c041f8af4e1d1fa49a8edc0aedb52e67105268ae520bfdb3",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "f1b60d8a23f2418953277d1e151071f8b3b76294ee289f918b249906c21f9bd5",
+      "after_sha256": "cc1d4e1c5606c0a59620bc6b169b8ab673f7e01bd3062cc939a2cdb45460cae7",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0080-the-answer-is-long-the-verified-unit-is-short.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "bc56b7a8a6fd83672034ea495c698d585d717c7c31b82cfe35c2d747309e57d6",
+      "after_sha256": "d4f6c46dbbd69e81499d31261839139177a795987724619fd5a60e828c8bc054",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0081-long-context-the-input-is-a-state-chain.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "4df5ecd3250055b7848d1eea93d7e04e69aa0703f826343786412e9e0d70af01",
+      "after_sha256": "c2168d71831f75e379079a364ffe2d648665486894e116f0d21ece78109ed87d",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0082-the-close-is-flat-in-the-context.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "7a130860158d33f36c684b01c97529e356a8e8a5481c0bf2429f8e03e0755818",
+      "after_sha256": "099a7c6d746dcaf0b4936ab50798e9863a3d5829f5101520f8b9014aac99ad3e",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0083-the-difficulty-window-counts-only-rows-priced-by-bits.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "cb4527b44f9d5f0bc55b5eee1c7853042203a022092dca992f5ee76b2a994cf4",
+      "after_sha256": "785963b6fb9a9aa8445a07a76627be538e81459c3c02f200e3493b05d9e7b1a0",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0084-the-ids-ride-the-capture-stays-home.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "ba2b44786f97883ccd8d66fff3e6b9a7369c829791c12db2e9c8285832200131",
+      "after_sha256": "9629d7697b4641b86e8f98ef0391d1a54e2af8e83353650bbf123ee589346cce",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0085-the-close-is-assembled-from-what-was-served.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "bf789aa64abbc7f20dff8782a6c5feb449035f9ea1db74aa08bafda5e5329a4e",
+      "after_sha256": "92facbe3d0607ea13bc04e1f0055792deb6e8b28239816f255dc3d976b3f6619",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0086-the-opening-carries-the-fold-not-the-leaves.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "1c437e78989ee34afa4d506013ce28352ea5519e7067226c2da10ef878be601f",
+      "after_sha256": "7caba7e9d66e62560875f0e42eec1111800b2d68a1af91ad8cadecf4b0cb11d7",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "7b6581bb1aae4b9cc6ce0d0d7c51f0f5c40e8771061da484257cc932bcd5bdd8",
+      "after_sha256": "e9447fe89a9fcfe8a65a5adf39120d69b3fef45ce606d7d2a98cca1fad40376e",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "9f15ea42d5d2a648cb64182b3695c02e16a2affa3eee9f712f1a80c4a9fdcda9",
+      "after_sha256": "099a7113fd93a3f7177ddaad2f1ad6564f4fc9f8c4ec2adf3a5d9044527042c5",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "8cd0c143bf73bb4ab3cee5dbff64d50386a42c3fe7cdf4390fe8da67ad2be0ab",
+      "after_sha256": "5815139295377cfb0861dca66e514547398b177c20d95d828ee66f27f27ba0d5",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "5763b5568424b4231af9fee6dcabadfceec0cbb07e877670d8e6889c041631cf",
+      "after_sha256": "143fed731ad78592337505183cc9ade3f48f9bea65f95e98fb7878f7b7a64dda",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "7a194b186c20a91e61cbfdbe3013ade91209bd72ba0b18108a22b9880bca182e",
+      "after_sha256": "65bfd42a295e8018094773e492024d6adfed034c7f8ce3e07c0a8b840b0c6a09",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0092-the-ladder-is-minted-once-and-the-clock-is-what-binds.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "37717a97951fac5e1f27371fe3d58a1473b9bb993253d081596dd383b4c58d8b",
+      "after_sha256": "71c7260a7f80044dc2c96725ea1d967c3dba5e3747049159c38203106896cca3",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0093-the-court-can-try-a-fused-row-and-the-responder-is-what-is-missing.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "233dd8a046ea9c00cbc7e6c35c160ebda3091c469a513d2c567375ed0a9bef7a",
+      "after_sha256": "ee8821e7d79dc85acdc7e257b3e917a29a63747e690364f316286917e7eeb18c",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "55e64a870550e49225bbd1899aff52b56169b2d9e6b13b88ab7eb7fb14dae8bb",
+      "after_sha256": "730f75f8bf56aa2934642f23e4b781b3c4829e4dac53e790768afde8e19985b3",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0095-a-position-is-a-membership-not-an-income.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "95321095467d6f86842987dff42c7bbdfa621df577165297a60515a7b952414e",
+      "after_sha256": "6237e9f66d9d6f4ae63e349d44cdafa9decac091cd4d6e078e697314fe57af6c",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0096-the-app-you-already-use-is-the-entrance-and-the-shape-of-the-answer-is-committed.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "3db3cd10db1c8cca43b6e9e785143b1ab3472ac010076cb14c0d4a57682de8d6",
+      "after_sha256": "aa8cb591c6718b44a958a729c3da9d8b0f23b578b71f5f56c17f91ecbaad667f",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0097-a-models-fit-is-a-lookup-and-the-entrance-says-its-limits-before-the-first-token.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "119f1c3691403d3b2a60c2b8947278b7cd0cbf26e422a33eb1717cd7d2642cd6",
+      "after_sha256": "5bcd01e1096943e440bf246eaef16b37b2f368101854dce1323636807a0b082e",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "4c7a9a59461c6ca74d75648d4ac9d7b228654c98bb923216f4709e2027b103e2",
+      "after_sha256": "9594f475460235a47368f483befe0dca32858ccb392ec516cd1f4c6f6ac2226d",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "ea744b716729a4c2360b38ce835f0a7b3b255d0ceebc915ac9a983121000aced",
+      "after_sha256": "7a8c70d8d60cd2660a6ff667f485e25ea4ce543eba531438b660cdcc15ad87cb",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "4d5a192237b77fcb74687e25d075492db21962e4151d8bbb54dbd991b700f968",
+      "after_sha256": "7cab5e9c7d8c0e165183f8e55432420454b38319713273bc61d3e13b1db0a363",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "7859e467dbffab152b29bbab1693e18f6639c783ae5e209903baf2ad8f4fd0e4",
+      "after_sha256": "25d98d156deaf625090de9f235f5a3d26ef8582be8362def2c0283f47de6998a",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0102-the-embedding-lift-is-read-per-token-and-an-unarmed-kernel-is-not-in-the-identity.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "fa706aed4637cd7415bd1a1cc35e9bb654b06ffffa7c303177f9e8b9fada5371",
+      "after_sha256": "14fbe9cf8df2e6a8fed9df88b7653f00ebd7f06f586369067b08cc764fbed3bb",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "424a91e34a062869014bd851b0d8670069b358fbbecb16b75dd2fd4e548b0d50",
+      "after_sha256": "e38b0ad6ebbb71030e744898eb108bf48cfcf65d981b6ba137c4c015b1b04942",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "709994b90cf2e4470c09941625976ffab542f826599d7c78036b2006a917f22c",
+      "after_sha256": "25fc22a0dc5f5f12346c33bf8afeb40d3390de8a2ea0c250c7081080394fa7a0",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0106-an-inventory-is-a-stream-of-leaves-not-a-copy-of-the-model.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "defde8d2bacb13bc91167333eb70b7004a311e237e9f33ac4e27247a3ff33d4c",
+      "after_sha256": "d598c2d3b3498bd5bbc60a9ebb16cbfd0d542c8d2a5dbca522a9ba159039aa93",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0107-a-share-grows-on-work-that-reached-final.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "2de40f7c45d9c955066771275099022bd9186a535414c2f444a45de893f40196",
+      "after_sha256": "df16a941ed33781248c371b42b0273860675c2cd2b969b1a75731c8b5c407dad",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "1cef86174772161b2347d642a2b3f86b3bb4374637a6779c39a24a00a3417ab2",
+      "after_sha256": "77e79ae5c2ea9af2c14c2b2255833592ae99527671262e8bd48da83fdd7dc76b",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0109-a-lock-is-its-own-claim-and-finality-is-a-label-not-a-pause.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "bed06747092816c0dde0c7fd6f13f0b2f6eaf1a5dcec259b3fbb6152500a0474",
+      "after_sha256": "255465b85741be52d44b248a83a37381492f61a6868841f98fb91f5d10333f9a",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0110-a-context-limit-is-activated-from-reproducible-public-vectors-not-the-maintainers-workstation.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "99ca7a60d18e7f79fe6096c6a7e9d4178ec2113517374afb3237b118b162b706",
+      "after_sha256": "515001e1cd6556443bd9f8d00bc976ebfb30de69342b29095c7fb3fc59043f66",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "2d4312e72a102c9945796ec7136e9ff89c052d543ddbb9e3979c44d5d5bf6cc6",
+      "after_sha256": "dfadd39c68d8503812988dbd1f1d992496f51af17b284491119a59ecf9128192",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "36fb4c1fa51528a90b9a0a56e3b675eded0407a886056afbd588166261535682",
+      "after_sha256": "a49a2dabb8f8c8d183c4e950418cca1e0143119773bb8ef2dd8a50cdff7879e2",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "b85d3fcd3988d9d98f0924afab2db909efa0c5ab0cd647029db971158061bc51",
+      "after_sha256": "640fb909a152157e84e1291f713eca90dfb5c37c43c313cc20b233037410f8da",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0115-a-pending-transaction-is-announced-until-it-lands.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "6996013c2abe1ee7988f6689a848175da4b208d1396bfe7f373d0d391c01095b",
+      "after_sha256": "e992a7b123fb93ecad1d6fe072f74ac87c812d25c0180f590e612a040fe27e61",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "3eb4a0293aaa174f682aeaa65d10f075968a4592fadccfcf9fa808d55d35b8d7",
+      "after_sha256": "c04b0bf6e0f938c6fa0a3f5c394ccd02d8e68b23c3d3a5417d4fc5c382ce89ef",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0117-a-draw-is-one-forward.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "b605f0317be93606ae55d6eb19bb504ebbd5588bede2137cd02976ef18e8de6a",
+      "after_sha256": "8d3cc45dafa9d51f1696e5a623d4780115f60b09953dce118ca4d685afec1b6b",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0118-the-held-regime-arrives-at-a-height-and-a-held-class-carries-its-own-prompt-form.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "3402eacbe893a335e7a5ac1624dd8664ec4c3e9fb2f3f8a9a7206ebf22e91159",
+      "after_sha256": "e72409b97d051321259d5c3c596d749c53de71cc1a4eadaf76477347a9c79239",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0119-a-held-class-is-walked-at-the-regimes-ladder-and-the-chain-records-which-classes-those-are.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "0a2fdccc74d4f0d61f49aee69aebb3ebcb65b90e8105d3bc90888c728211bd95",
+      "after_sha256": "ba813b0f18a9d6944a6a71a026c4178ab32a2e0eabbbd1a887c9f87595d70df6",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "a72fd7192891a4a7467412174a3a522291b958c82cd14c37cf873a29a75da374",
+      "after_sha256": "9d9539527628808d41139d6ff965cb2886d9bbb3d4bb31d8ad98a77d4a0964b1",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0121-a-held-capture-is-served-from-its-fold-as-the-replay-streams-and-a-node-holds-two-ladders.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "596a3789e0f268703bf7f66facfd13ab3045c108e7437952cf76cb515753f726",
+      "after_sha256": "980a2756669f2a283721d061abc1c0f4026f94a89df74b356f870289527a17de",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "9e84e1cd294f62deb8ec95bd23781500b023943ccafc86c5b1677be7ef621ed9",
+      "after_sha256": "8e321d7818a876764b6ef0f55e60afa76c630f87a6652322d8f9012a90e77298",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0123-the-epoch-progressively-releases-unused-class-budget.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "8d0846b90595ebf2888e20774ad8e4e2f03203dcd9b66bc8fb4e8578b1c3b4de",
+      "after_sha256": "c77f30119298078a27bd58a93cd6264fc67eabb274f5f843a2ca6a95edf176cc",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "8276440af95deae368dc3e258d292b423769b2e73b44a435429f063e4963fd13",
+      "after_sha256": "781339e41f3def58501e021faae8bab53a7a3cbeb98772be6e289bcd73f1d3eb",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "012f98e124b491c0edefa648cbed028776894c38a40d9ce70c55209587def92a",
+      "after_sha256": "05ca8219cd7225302185c63dc4ce4eb97d5a6e6a9d13570009830275bf3ce507",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0126-the-validator-carve-drops-to-a-fifth-and-the-stake-reorg-gate-stays.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "f61af8a0425d0b76f6228459f35aa3abec42864abf8c2a389bbea0ab4ad81f52",
+      "after_sha256": "020db9a14037f5155040dfe1f3f6754740e09159616f41c46e02b0a626e12766",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0127-palw-settles-on-its-own-and-its-terms-are-not-dns-terms.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "1d6624afd38f49a5038d4bd05ff8ed61620bce0c4072a3eaee21eba627f6e025",
+      "after_sha256": "8aa87cc9468b20d8b562e1c461d8b709f43647369f9eec81504a9ab2c88e91d8",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "cff2ae066384ff101901af4ce818e4c5305dd554ad57cbaabb370f736499a619",
+      "after_sha256": "431394a41afd3839597198ff6003009b68b6f538806c8da7446651093011b2d8",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0129-a-double-spend-needs-the-anchors-not-the-blocks.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "ec0293526e683c37732ed2b6db6e5fef76c9787eac3273be25a8ad9db290053f",
+      "after_sha256": "3b0664e5b71c8e3f63a871140b1a7f5f8e3286349ea3537f5c2b6a56ad30049a",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0130-bps1-is-hardened-before-it-is-widened.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "103f0793f2b7ee292c5b1d5568e86907450d02f090dd4b8b7e4fab14c09a527e",
+      "after_sha256": "b5371453535680bcd8bd6b3935e3117be4c579508ce31e82a4945c4193d035ec",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "10281951146a6709be75e69c5b19aec27128e6d3b37963258320fb04364bea33",
+      "after_sha256": "199d1e2d66876c86f692231b534d14c071a820f279dca9c77a52beba9bb62038",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "7f226bd77735b6c9b605f9cf5b11fcec181f082953c3eb8f77a6a4a2b1bd9a54",
+      "after_sha256": "0b59566c180ce94e7ce0e670f9e7cbe04b9cd48f15f081739e118f3f998fb8c1",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "9b7f4b036a177262f3f071abff1923657539c5a6eeb03420952a9574d5d03bab",
+      "after_sha256": "020aa0a737360c8460e353ecb315c4d4b6bf31285b18550559c79f11e53db257",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0134-the-compute-overlays-committee-beacon-retires-at-a-height-and-its-machinery-goes.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "f352715a4347607aa75d960ca53513fa4b7c42d24a7d2320cf073b1398f3a5d2",
+      "after_sha256": "b47d1bd2393f0ef1b41ed12eb8f37babb0c71431ff44d52ca950cf4879923004",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "65e1c675f8db69da37252b79505cfcf4e47b171317bc3f26960f9c1a1f331e14",
+      "after_sha256": "2e10a4ccfa8fb56f441ddf98b1f52ede597e42fe6b231fde2f87af2047a09a1b",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0136-an-artifact-is-mapped-not-read-and-a-host-holds-one-copy-of-it.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "369d78a91a9e3b7a0083a24efd0e187c5deab9ac5410344bfb9b770ca181b97d",
+      "after_sha256": "8d8d3ef2b8c8803e68f3bbe17e47dc5b63be28f15fed6b2909bf36f41958f278",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "c462e8829517342b2b576837b0ced21fd7a23d522f8da9f486b5a48c192f1821",
+      "after_sha256": "cda2732e109ced590b58812d9e537340fbfb7e77eb2b4e52fd5b83cd9bcc87f0",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0138-the-daa-score-is-the-anchors-clock.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "be8eaaca0f176bd79684b5508ee1fe4c11b126f0cf6511f73950c73f5a09bc75",
+      "after_sha256": "b0d4f9c616b331422302900241c9d57f8d36355a190ef31a4c31de2b4657c828",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0139-the-execution-lanes-gas-is-one-budget-a-round.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "ceaad817acabf061ec485d70697bb0f0b4375ccc13a5a8e4a35e0f59e7e4e365",
+      "after_sha256": "9050f0feb89c8193f3cb53ccae791db9a4b6f09ca28e78e4df99c482e751ac67",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0140-the-heartbeat-is-the-emergency-generator.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "80207ffcd60fe1db512e8c84d643f9d80665b7a12470607d09a1d3aa2f011e16",
+      "after_sha256": "bdbbf45925d26e22f53e7b730259af9c77cf76dc1395dd0d81edb568d87985ee",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "3c22a362c861ad9d1168c9b785c3ffdc5cd6cedf83927dc3ea9e06fda2e0ca15",
+      "after_sha256": "84d9f369437981a99b763b91cbf96af0f8df0c530ddc05151d9cc4d69a242dbf",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "3571d4737a0e72c26382eef16bdb6c5185933cf8c3d56dab54c1791cd745225c",
+      "after_sha256": "121d919e00a73361f546b9f7891a13b0ce7012ac65712e3aab697d2e1f03b8f9",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0143-an-artifact-root-has-one-owner-on-the-chain.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "08407e367d844d01bd4ed50dada581b9c28b42cd9046893fe1a506c77fda9607",
+      "after_sha256": "d6258dab72de2266a9cdf5e5029df943c4322c796ef7bc081240a81328e9c076",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "0f1c4f67b1ad6bea4f672430381ca8f829606f510d3cd7ffb22b735bb16b5c81",
+      "after_sha256": "5d752dfee58359c105e5aa60bd46c6fef70dc44fe90b0763f74d295f02407758",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0145-canonical-work-is-derived-and-admission-is-earned.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "b784c3f809fc9e7498c50f116bfc328d85c9b99638d08c65b630c340fb82b555",
+      "after_sha256": "a2d499bc739ffdb7d3bf7ebf0318daea27e7c9a1915c91b1865b64e0c8e2e554",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "13f6f9300dda9d8671643a2717c3d88ea5e95d6286657639d194d8b76f552e52",
+      "after_sha256": "6d26c851e30ef07169b8a2eb55f76963705e4aad22af151a7e7521cf2828d94f",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0147-independence-is-drawn-not-declared.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "5d45ac8dd0a2c72e23c661d7b73c4b743b11a8eab16e3613ce490aed0b3c7bdd",
+      "after_sha256": "8f877b8a4004670358415010a837cd74cc7a7de503dfadd190f39cf8b104bada",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0148-the-free-prompt-lane-prices-compute.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "8843dd6252e606ed15957d4474cf9ae08c09831d4cfc789b8395e7434171ddac",
+      "after_sha256": "d72eb508f6f4198a7a846e1e9e50f2e22dd3125d1fc71cd3ca06ccb1e21e3262",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0149-an-attempts-pwu-is-the-derivation.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "a6988c1e6c638e6535c71837989e64a910549dff83d865a1ad67abafd817c9ef",
+      "after_sha256": "f0f7b7f036e93102a9dd0e7dac6ba9d8fa981b4530e48c6f382cb3c912419db9",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0150-the-fingerprint-must-see-the-rule-not-only-the-height.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "3efb4a77744ee6ae9cd96280b435d41214a597c9bc36178f4e10dc7308e21375",
+      "after_sha256": "d56e7e8407f0b4d37a42c1b28b44e7ab1e32b2605930ee146719b13fd27c8144",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0151-liveness-is-structural-collateral-covers-fraud.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "35a26481f5e04361d6f78a28a309df46da41deea6bd011211c96a67096afff56",
+      "after_sha256": "8e1deca2455457e2638785960b304aaa8706aee686501fc220263b2afb94774c",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "e3402c3494ef0dc56f356a75b15487cf3f00f5cc71c5e1727e5be108fc2331ce",
+      "after_sha256": "fa55fb9b6704dab42100b72b1764a238f62b18a4bea9f18983c089d3b99ab6c0",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0163-an-adapter-class-is-its-parent-plus-an-adapter-and-is-listed.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "b6dcb1e9a0b451f9e37ccaa0ea97f80cf51ff6a93d3bdb3cad51c7249e48eb19",
+      "after_sha256": "5e831d39b47a90344dcac5e1c46fa08126e0493decbd9b4255010a03645cd6cb",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0165-the-floor-is-a-reserve-and-the-work-carries-the-clock.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "863516265357980c4acec59336f1b3a720be20e78f577a5490a1e099f9f99dae",
+      "after_sha256": "7ad0b68611ede9236039cef8c7fdf905d75f67cd5560014043e9dbe373604e04",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0166-verifier-unavailability-is-not-producer-fraud.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "3e6969e11c9ef771ab15a96cf3079bf867642f8280f5d37bee91d72572602d79",
+      "after_sha256": "b77553c16bc434d504293f025096a4a1354ad7764174990b8de87a863e534319",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0167-the-x1000-capacity-package-a-fixed-per-daa-reward-budget-riders-and-a-lower-only-breaker.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "a3e5573b26d881812e2b58dcf953cf9cdbbf0188b0bfde50c84f94021ccd0910",
+      "after_sha256": "8589f4c6267b30d642292d6da69402661fd67531b8690bb453887f5ada96496c",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0168-an-execution-block-is-a-third-class-and-the-chain-reaches-it-through-an-anchor.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "c0728431ea47c7c744f7d235fb9b1eb9d842cb4605562887ddbf2c3ad0250943",
+      "after_sha256": "d5bec3fde70d1dbe53bdca32d2ec4d1e90ff55314403795a52f6b5a1ee619927",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "b8b9396e313024e607629e897815485db80165c69932fe983fd6d1dc34a6fbbb",
+      "after_sha256": "ac097e28adb10a6aebfed58d0e13cf645745c6b3dcd1cf3705f0a84925b8fe80",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0170-the-seed-anchor-is-a-window-not-a-span.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "e9a323e0af18d561907fcd161129408bb42b99db4871e39c2c348b9f7a759cdc",
+      "after_sha256": "94229eab4d63308105e2a7f1a76f699844634f3ece669cc7aa0dcb9d2e191a38",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "713e7570c74320655f39a4517ab92937d038c4fef9dea0c88c6bf09a20f3dec8",
+      "after_sha256": "f3f4a2c3cd90d97e3eb9159db44bbf05c3fdb5db47375d749d9d26758e1049e4",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "e497c71adadb90c792e5ef1385d1dbc954d6e72f91318acd2a639272afedaa75",
+      "after_sha256": "005f3779a86d70622fc4ed15d206013333e4348443eb841920776474fd4fb036",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0173-a-seat-holds-a-root-not-a-class-and-possession-gates-activation.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "aa159a9863d57b6f62ede2a7a25a1905ac47c53a5a57a18878f6b9686b62355b",
+      "after_sha256": "56435359de812d07ee0ff0e8ef0ecec9de921908578f31232e9b91ef72a22aef",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "e9fa82200593e61d17b24060effb7db81ba680430c507b53fc889cbe5e486a72",
+      "after_sha256": "0f3b25b172429384bd6bae201869cf913c5ce87f17ffc3749e72bce4c883c92c",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "d03d16ae3d912619fdf03ec5259154f6f31da3e41d42d201e278bc43c2946e7e",
+      "after_sha256": "6b2a3110569fcac89d9e124b6e0be4ab2c5ede59a22122f121f2002471b312a6",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0175-registered-models-are-permanently-immutable.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "9d6cc42eefbcb3506909a5c724be3b0e09dcb8af35204214acf6ad213d942daf",
+      "after_sha256": "ca200c561aaf5901c80fa73d897afc1ab59b4c19d96e1e70111796701be30594",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md",
+      "disposition": "new accepted design mandate; not implemented/activated",
+      "before_sha256": null,
+      "after_sha256": "d77ac2dfd2319ee1d9e5cd0c937f7d3469ca72d12a242bfd5ad9df14c26206e1",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/adr/README.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "a91d7739c031fc565b603bd95ed7da3f77e852098ae1966ab53dc7ea930f1614",
+      "after_sha256": "70889b57ac317b7956c31c2c144b88b39c0d5034d3c55ce60c6bb87bb8a800c5",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/architecture/overview.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "73f2efdb1c1a76b97b639b3ecb7d7ba7e5e3f4a060062e991432c562aaf3a902",
+      "after_sha256": "aa28079371bf2ebbefa92e84549be2a506c91474db51d5582918f276d40b3660",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/design/palw/rfc-0008-implementation-spec.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "db83230e9b408adf616afa36e1d88e3dbd91a5b555ad007b27531375b1fc235c",
+      "after_sha256": "9e77d6fd96f84d4df3b4bf16cc63121c52c724019a3cf4ef389b82db181b8078",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/mainnet-readiness.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "f7411c59c2e0d855cd848a8f6e0c0d5d440d1e106f65d5ad54c78bb66948e052",
+      "after_sha256": "19afbee92b4c4613882ea13f97ca83bc5762b029a5027a160775804ad7cdf7be",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/misaka-palw-model-adjudicability-guide-v0.1-ja.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "f944e8e72fb242d96e90ff47104418904b2e6a769160e1365d1941a0f99d8696",
+      "after_sha256": "34f1523619e6fbac6db16e0716a989ffef6c523b70dbb884d1b7a24311733f8f",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/misaka-palw-ota-secure-update-design-v0.1-ja.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "10d3a9aa3b91c992b51bfb430b605d60ddd6fad16464d7f92f262fa1d6d48679",
+      "after_sha256": "9665a2f6114fbe903bdd1dd4a70ed5edcbfe22fdf7dfae2d0fe2fcd7e2843c9a",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/misaka-palw-pow-detailed-design-v0.1-ja.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "8c720a186e5648b885f1f155e643f24fb03c04574458453d2871a8a071570c9f",
+      "after_sha256": "3fc4cb9247861d4086c4116cdb1c973dc1cc69016c983cb70bd51a51f1fc5616",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/misaka-palw-slash-protocol-design-v0.1.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "827a028d8d9039219a62b9e735c2a12b731188d158e561d9659bd8703faff518",
+      "after_sha256": "18199e09f28393df29d5546b6bf4fbebfe115e0a1fbb9c46a3d6c2722149a63f",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/misaka-palw-vps-canonical-worker-design-v0.1-ja.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "3e316fe191fd2c1572140d7647fb5248864014faf091d3c8656e1fd87263a837",
+      "after_sha256": "a489f36d1f3ce8ef815d0c1bad36c1ceff84ce7faf3e3819c28a58c512888940",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/palw-add-a-model-runbook.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "ef4e80b670df5b55145b0f3facb9317f9a93d831122534711e5ceb490d12ac29",
+      "after_sha256": "9cec457b47dbea5af5be80320d3b25c8420a2ba3e2462968d5b6269af2e635cf",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/palw-certify-a-new-model.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "37c7609af83970dfe73cb10d20119b5b9af006c67427915c5aa918183860d9c7",
+      "after_sha256": "4df7b302d4d55d343b59775f90d1bb03c65b7fba3a90312897413a3fd5e57faf",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/palw-class-activation-gate-status.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "e10ad32c3449ef0bd7dfe5b6371100913489ea860b2a93e90f7b0c89929ead01",
+      "after_sha256": "7f64801bcce91090e15836b68d9740c9fcfe819cf57d863f9b4e44a9ef108080",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/palw-derived-artifacts.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "b5f695a1438f52cb4f3ac051cb1df90fd3ad2b378e2d91cea23ea48a33c8b574",
+      "after_sha256": "074951ef03c6776d92d3e9caf7f96cc631b6421c1918f16b33c8d593531db6a1",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/palw-extension-envelope.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "79f65f412e668a37ef050f1cae60a1895c01553b6f3e1f0c1b83388184991eb6",
+      "after_sha256": "3acd63a6b84e69d90415d75df749b69797c9ed6e5493526419d0c919e6f33837",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/palw-model-onboarding-sdk.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "658a3297de1d323fee17227a74a6fb559f7f3c19d6f6593f1ca6f65943486bd7",
+      "after_sha256": "78b2f312ca3fe00dd5c599f262fb45d503c821b38a7fafa1eb94b4842dd85f41",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/palw-registry-map.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "f11a8947c4930c1d62365ec01dcba5cd01f63bc3640812c609aefc70e6b37320",
+      "after_sha256": "5c92e02e5626a25dd63eb6dbad9108580c2f8c4034f7cecd1791b3fc7c2a703b",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "f5e8fa88d16fc1e6e3b5e764c8901caf84c5f6a816bcf9e532a29229b0b43fb5",
+      "after_sha256": "1ea94bf0a23a2ea9a9529b64f4bf36a2b49598158ebb3c35d2227a40e6cc2b69",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0002-palw-tensor-ir.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "579307ecee541febb6825da60920f2ad2b8a79641620ef93b232a2de693d4c94",
+      "after_sha256": "6b45939aa13d248b0691fdede1563f3861041c543a8ebe38d74fe711666ad9a5",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0003-palw-generative-model-classes.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "a4306cccfe9419524ed8bd0308bef8ac32401d3132ee57ce22e9bdc8290c640f",
+      "after_sha256": "b49c7cca0da152744453ce4837cc353b4301f9fc45a45afd03375b1fe297f4ef",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0004-palw-model-improvement.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "95b035309939ed52b4538de55742284776721610807a282c365638f6cf04d4b1",
+      "after_sha256": "fdbb513be80f8886c0a51f574c3281995143554b626edd4d8cb5d9cca82784bf",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0005-palw-ml-vm.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "052328e13588d289be8119c557413d476520dc049de6c7d7e75cd1538ae433c6",
+      "after_sha256": "570d61b94740d5868e7d2c5d2b42a27e293c2354edfb46f8d5225e310658a577",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0006-palw-layer-sharded-panels.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "c30cab18fed02086956e67adf46317bbcafbd1cb69f8ed3253339d79df9a0dbb",
+      "after_sha256": "45bda4c3da7e050eff67eab1d5ebb5017cf0e3af1de0d1e7d923cb2491b542cb",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "652c4395ef6214a45ccd5a139fce62e718c06f702247e752f3e99055b4564758",
+      "after_sha256": "95987eaef3f70c0b37da219dfccf52180d97411b3bb525bab7e738280083bc5a",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "04e17324bff0003e2578b9d0a3c95db04ccfee1346b247c0663023d9b867dc7a",
+      "after_sha256": "05d5d5f9d5f27b6fbc74686e9d6835114c0dbfebfa9d0a9ff480ebc4e81fe76f",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0009-palw-remote-miner.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "85ca1d4351457eacb6e881547d85ee130fec82fa7d1b08d0a58307313c85df39",
+      "after_sha256": "018f8d44b15b94ddc3c11e63f5765dd332b586a2209205032e256fdfde929ea8",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0010-dormant-implementation.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "d2e57a75ff0377261fcbc207fdd49625ba0be80b842775ae3c47413bef96f684",
+      "after_sha256": "255cda72a3d3c5d3a39aa97ff338e7d536ee222adace3089efca02ec02637ec3",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "9c72fdf89fd53809781d0d1c4fd2226540805dc45f93ab51acf2273e31e8c738",
+      "after_sha256": "8d8de71c73fc140f4c846729991a946cc6019842fe4d178c5837c6555052bbe4",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "eec5d3706a01f4d31208566cf008b7f811079c78018ebb3fdf40cda905428d97",
+      "after_sha256": "dd24e0c38d621610ec13e3f276b8c7e00a9ace50b2fb9b17ce38aa98082b7c8a",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0012-dormant-implementation.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "84d82e7b6f50d5e815d23e513bc8d17d41acfa13af24b5273010c6b0db9a33b7",
+      "after_sha256": "f2f332bc944105eb56c0ee89d65c886e907c71b650f8941aae3325d3cce3273c",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "3f6d2e95f96e67b4465fa3d1f618b93cfcef40ce2ef0b1ec6d0ea80ea945878e",
+      "after_sha256": "32d3eba456423f15f27a05a2e373a0dae56e984d76fe925eede4ab75816d1339",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "b33d7e30ce4315c9568b7f0be99b8d8f3e4042fd84c80b032e1e48825057cba9",
+      "after_sha256": "b3dedc4761c67a805bdec9a25fd4e7848c59c80e75ffab1af33dc35df044136a",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "be2a4e76525589b3e30f3794e0c98bb57b49427b4f3ef2d757d4827125e51206",
+      "after_sha256": "1eb4bc5898b7f290d8fa3fa6385722dfc3413c50757e7181fcb4fec373ed8c29",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "878b519880e379d3c06afd88d43632bd564d2e02b22e3e2644b5b89326ef790e",
+      "after_sha256": "e62abf5ef4cf3a760ea569e341a5da8af08ee4a84bfb300d418f771d52f8ab90",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/rfc/README.md",
+      "disposition": "common premise plus targeted decision/accounting/index amendment",
+      "before_sha256": "b615e9efa81c7b332f6c5675d2f2e2c1bd1466563bb4d01d88bc9de07cb6770d",
+      "after_sha256": "b0216cc92f889260e071ca04fb5b612f415c6e345945db1f91fc7a95ac4c084b",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/spec/README.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "52d40c8abf76534dce457a3bda405b76777daaa76023a0ed5a223cdebad346e8",
+      "after_sha256": "8225925f01eab1e2f8f583d209da59a743d9f632e4ce1666cb7a04be8c8b21fc",
+      "new_missing_local_links": []
+    },
+    {
+      "path": "docs/wiki/README.md",
+      "disposition": "common premise only; prior body byte-identical",
+      "before_sha256": "b9069e5af7620811dd36f7148fada99361a56ee320e052a5f3b524320efe2880",
+      "after_sha256": "8d9e94243d5729976b778f62780cb4f46755a497ae2987a3265bb8052ec471cf",
+      "new_missing_local_links": []
+    }
+  ]
+}

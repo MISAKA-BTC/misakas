@@ -167,7 +167,7 @@ node; a row naming another executor bond is `Misattributed`). One position, one 
 | the carrier built THROUGH the daemon over a real Unix socket matches the in-process key's (shape, outputs, commitment, prompt ids), claim and funding signatures verify, other contexts/sizes refused | `kaspa-pq-signer …the_free_prompt_carrier_is_built_through_the_sidecar_and_the_key_never_leaves_it` | IMPLEMENTED_AND_TESTED (local socket) |
 | a relay forwards a carrier it did not sign; wrong funding amount, flipped claim-signature bit, foreign tx refused before any node is asked | `relay::tests::a_relay_forwards_a_carrier_it_did_not_sign_and_refuses_one_that_cannot_stand` | IMPLEMENTED_AND_TESTED |
 | the rail's new flags (`--signer-socket`, `--relay-signed`) | builds; the pieces they call are the tested ones | IMPLEMENTED_REFERENCE_ONLY (the rail binary has no test harness; **not run against a node**) |
-| the V4 redemption authorization through the sidecar (`--redeem-auth-out` with `--signer-socket`) | refused: the daemon has no `SigningPurpose` for the V4 authorization | **CODE_GAP** (a new purpose in `consensus-core::dns_finality`, Lead-owned) |
+| the V4 redemption authorization through the sidecar (`--redeem-auth-out` with `--signer-socket`) | **closed (SMALL lane)**: `SigningPurpose::PalwReceiptAuthV4 = 8` (appended; 0–7 unchanged), visible only under `palw_receipt_spend_v4` — see "SMALL lane" below | IMPLEMENTED_AND_TESTED (dormant: the fence is `None` on every preset) |
 | funding with more than one input | not built (the rail uses one input; `carrier_funding_signature_valid` requires one) | CODE_GAP |
 | the claim's material path independent of the miner | §5 | CODE_GAP pending public material read (workstream A) |
 | network-bundle (not devnet) pricing in the rail | unchanged (devnet bundle) | CODE_GAP |
@@ -229,7 +229,7 @@ the chain's — the node's admission checks it again. A provider keeps one bundl
 
 * **RPC op number.** `getPalwStateProof = 202` — inside this lane's allocation (the Lead's addendum: C1 owns 202–209; 210–219 / 230–239 are lane D's, 220–229 C2's). 203–209 are unused; the tables touched are `rpc/core/src/api/ops.rs`, `rpc/grpc/core/src/ops.rs`, `messages.proto` 1218/1219, the wRPC router/client lists.
 * **G-EXPIRY / G-RULESET** (above): a signed `valid_until_daa` and `ruleset_id` in a versioned registration message + fence; or accept client-side checks.
-* **`SigningPurpose` for the V4 redemption authorization** (`consensus-core::dns_finality`) so a sidecar-custodied miner can issue authorizations.
+* ~~**`SigningPurpose` for the V4 redemption authorization**~~ — done (SMALL lane, below).
 * **kaspad `--palw-evidence-provider-dir` URL providers** (5 lines in `palw_panel.rs`, `ProviderSpecV1`).
 * **Tree-shaped PALW state commitment** (state-root version bump) if light-client proofs are to become cheap.
 
@@ -276,7 +276,7 @@ template through `validate_and_insert_block`; every PALW object rides a funded c
 Findings for the go/no-go: (1) the leg needs **~19.5 h of chain** at ~125 s/DAA (claim DAA 5 → Final 147 → slot 547: the 400-DAA receipt
 maturity is not in the plan's ~12 h); (2) on public testnet-12 FP commitments on the floor are skipped until FamilyCertified +
 ClassLaneCertified (FreePrompt) are filed — V4 is unreachable there until someone files them; (3) a receipt block is a chain block.
-The sidecar `SigningPurpose` for RDA4 was not needed and not added (CODE_GAP unchanged).
+The sidecar `SigningPurpose` for RDA4 was not needed for that drill; it was added afterwards (SMALL lane, below).
 
 ### P2 — mandatory test 1: verified chain state, three layers
 
@@ -345,7 +345,7 @@ before inference and before signing and a stop path — node-less mining stays (
 | V4 authorization / receipt | altered after signing refused at the header stage (`rfc9_c2`, chain E2E) | the miner leg is the chain's bond record, the builder only ever gets the fee (chain E2E, twin) | any bonded builder redeems the published bundle; the first builder gone → another redeems (`rfc9_c1`, chain E2E race) |
 
 Status: modify / steal IMPLEMENTED_AND_TESTED for all five; obstruct IMPLEMENTED_AND_TESTED in the library. The rail's `--track` is
-stateless, so automatic re-submission through another relay is not wired into `misaka-palw-fp-rail` (CODE_GAP, small).
+stateless; automatic re-submission through another relay is now wired into `misaka-palw-fp-rail` (SMALL lane, below).
 
 ### P4 — mode C (pool) without privilege
 
@@ -373,13 +373,13 @@ Status: IMPLEMENTED_AND_TESTED (driver). A custodial-pool opt-in does not exist 
 
 | Condition | Status |
 |---|---|
-| Local signing / full-tx sighash | IMPLEMENTED_AND_TESTED (class + IR + bond registration detached; rail signer socket). V4 authorization `SigningPurpose`: CODE_GAP |
+| Local signing / full-tx sighash | IMPLEMENTED_AND_TESTED (class + IR + bond registration detached; rail signer socket). V4 authorization `SigningPurpose`: IMPLEMENTED_AND_TESTED (dormant, SMALL lane) |
 | Verified chain state / stale detection | L1 + L3 + labels + gate IMPLEMENTED_AND_TESTED (fixtures, fake nodes); wRPC adapters IMPLEMENTED_REFERENCE_ONLY; **L2 DESIGN_GAP** |
 | Canonical job/input/output binding | unchanged (FP Job V4 DORMANT_NOT_INTEGRATED) |
 | Public authenticated DA | IMPLEMENTED_AND_TESTED (local; now on the chain E2E's panel path); discovery DESIGN_GAP |
 | Objective DA/default | unchanged; provider court DESIGN_GAP (out of this lane) |
 | Miner-bound payout / V4 redemption | **chain-block E2E IMPLEMENTED_AND_TESTED**; multi-node drill EXTERNAL_GATE_PENDING (scripted) |
-| Multi-relay / censorship fallback | IMPLEMENTED_AND_TESTED (library, incl. obstruction); rail auto-resubmit CODE_GAP (small) |
+| Multi-relay / censorship fallback | IMPLEMENTED_AND_TESTED (library, incl. obstruction); rail auto-resubmit IMPLEMENTED_AND_TESTED (SMALL lane; state machine + rail wiring, fake nodes — not run against a live node) |
 | Fresh outsider G14 prosecution | C4r3's (mandatory test 3) |
 
 ### Tests (targeted)
@@ -400,6 +400,45 @@ No RPC op (203–209 unused), object tag, enum discriminant, delta, tail or `Sig
 
 ### Open gaps
 
-L2 (above); the multi-node V4 drill (~19.5 h, the lead's); the RDA4 `SigningPurpose`; rail auto-resubmit; signed-checkpoint files in the
+L2 (above); the multi-node V4 drill (~19.5 h, the lead's); signed-checkpoint files in the
 miner binary (`--checkpoint-trust signed` not taken until a file format and key distribution exist); in-process IR signing inside
 `model add` and HF conversion (OB-P0 / H1); provider court (separate lane); every wRPC path is unexercised against a live node.
+
+---
+
+## SMALL lane (2026-10-09): rail auto-resubmit and the RDA4 `SigningPurpose`
+
+Both former CODE_GAPs are closed; nothing is armed (`palw_receipt_spend_v4` stays `None` on every preset, and no consensus id moved).
+
+**Rail auto-resubmit (RFC-0009 mandatory test 2, "obstruct", wired).** `misaka-palw-remote::resubmit` is a pure state machine
+(`ResubmitStateV1` in a JSON file, `decide_resubmit_v1`, `step_resubmit_v1`); `misaka-palw-fp-rail --track <claim> --bond <o> --relay <a,b,…>
+[--observe <x,y>] --carrier <tx.borsh> --funding-amount <sompi> --resubmit-state <file> [--resubmit-bound <DAA>]` runs one step per invocation
+(from a timer): it polls every relay and observer, decides, and — if a relay's ACK has gone unconfirmed past its bound — sends the SAME bytes
+through the next relay, rewriting the state file atomically.
+
+| Property | How it is held | Test |
+|---|---|---|
+| the same bytes, never a re-sign | the state names the tx id; the id of the bytes about to be sent is recomputed and anything else is `CarrierChanged`; the module holds no key | `a_plan_names_the_bytes_and_refuses_other_bytes`, `a_relay_that_swallows_the_carrier_is_routed_around_with_the_same_bytes_and_asked_once` |
+| an ACK is a relay's word | confirmed only by an INDEPENDENT observer (not the relay judged, not one already found swallowing); with none, `Blind` — nothing is sent | `an_acking_relays_own_word_and_a_suspects_word_confirm_nothing`, `a_claim_naming_another_bond_ends_the_sending_and_is_never_ours` |
+| one liar cannot move time | the clock is the lower median of the answering nodes' DAA | `one_node_reporting_a_far_future_clock_cannot_make_an_ack_look_overdue` |
+| bounded | a swallowing/refusing/tampering/unreachable relay is never asked again; at most `RESUBMIT_MAX_RESENDS_V1` re-sends after a carrier that was SEEN vanished; then `Exhausted` (loud) | `with_every_relay_spent_the_plan_is_exhausted_and_stays_so`, `a_carrier_that_was_seen_and_vanished_is_resent_a_bounded_number_of_times`, `a_relay_that_refuses_or_lies_about_the_id_is_spent_and_the_next_is_tried_in_the_same_step` |
+| a sent copy cannot be a second charge | one funding input, one tx id; a node that already holds it answers `AlreadyKnown` (a success) | `a_relay_that_swallows_the_carrier_…` (the re-sent copy is the same tx id), `the_state_file_round_trips_atomically_and_refuses_what_it_is_not` |
+
+Status: **IMPLEMENTED_AND_TESTED** on fake nodes (`misaka-palw-remote` 98 lib tests); the wRPC adapters of the rail are unexercised against a live node
+(unchanged from §Status above).
+
+**RDA4 `SigningPurpose`.** `SigningPurpose::PalwReceiptAuthV4 = 8` and `SignerMessageDigest::PalwReceiptAuthV4(Hash64)` (borsh index 8) are
+APPENDED — every older discriminant and wire byte is unchanged. The digest is `redeem_auth_id_v4` (total over the authorization), the context
+`PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT`, reserved to this purpose (no other purpose may carry it; this purpose may carry no other). **Visible only under
+`palw_receipt_spend_v4`**: `SigningPurpose::offered_by(params, daa)` is `Params::palw_receipt_spend_v4_active_at`, and a `kaspa-pq-signer` daemon offers the
+purpose only when started with `--palw-receipt-spend-v4` (default off; `--deny-purpose palw-receipt-auth` still wins). A daemon that was not told
+the network arms the fence refuses the request BY NAME before any key is touched, and `misaka-palw-fp-rail --redeem-auth-out` prints that refusal. No journal,
+by decision: the authorization is position-free, non-revocable except by its expiry, and the chain's branch-scoped spent-quantum set is the double-spend
+guard (RFC-0009 §6). The authorization body is built by `kaspa_pq_validator_core::build_redemption_authorization_v4_with` over any `MessageSigner`
+(the in-process key's builder is now a thin wrapper of it), so the sidecar and the seed produce the identical authorization.
+
+| Test | What it pins |
+|---|---|
+| `consensus/core` `signing_purpose_discriminants_are_api_stable`, `the_receipt_authorization_purpose_is_appended_and_its_digest_agrees_with_it` | 0–7 unchanged, 8 appended; digest variant index 8; the purpose/digest/context triple |
+| `consensus/core/tests/palw_receipt_spend_v4_fence.rs` | offered nowhere a preset ships it (t12, mainnet, devnet, rc), never at `never()`, and from the height only where armed; the params/schedule ids are the dormant ruleset's |
+| `kaspa-pq-signer` `the_receipt_authorization_purpose_is_refused_until_the_fence_is_offered`, `the_redemption_bundle_is_built_through_the_sidecar_and_a_dormant_daemon_refuses` | dormant daemon refuses by name; once offered, the bundle verifies with the chain's own check and equals the in-process authorization; context borrowing refused |

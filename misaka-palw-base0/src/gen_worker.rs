@@ -244,8 +244,20 @@ pub struct PalwGenWorkerRequestV1 {
 /// generated ids) — or a refusal naming the rule, never the prompt.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwGenWorkerAnswerV1 {
-    Result { binding: PalwGenStepBindingV1 },
-    Refused { why: String },
+    Result {
+        binding: PalwGenStepBindingV1,
+    },
+    Refused {
+        why: String,
+    },
+    /// **RFC-0001 P4: the answer to a `Text` request** — the job the worker completed (the two prompt fields it alone could fill), the
+    /// ids it tokenized, and the claim's binding. Appended: `Result` and `Refused` keep their indices. The requester holds the job it
+    /// sent and checks this one with [`gen_check_completed_job_v1`] before it builds a commitment on it.
+    Completed {
+        job: PalwFreePromptJobV5,
+        prompt_ids: Vec<u32>,
+        binding: PalwGenStepBindingV1,
+    },
 }
 
 /// **The serving loop's one step**: a request frame's bytes in, an answer out. A request the worker
@@ -263,6 +275,155 @@ pub fn gen_worker_answer_v1<P: PipelineParams>(
     match held.run_v5(&request.job, &request.prompt_ids, &images, &request.source_ids, form) {
         Ok(work) => (PalwGenWorkerAnswerV1::Result { binding: work.binding.clone() }, Some(work)),
         Err(why) => (PalwGenWorkerAnswerV1::Refused { why }, None),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// RFC-0001 P4: a Text arm in the generative worker's frame
+// ---------------------------------------------------------------------------------------------
+
+/// **The first four bytes of a V2 generative request** (RFC-0001 P4). A V1 request begins with its job's `u16` version; these bytes read as
+/// a `u16` are `0x504D`, far above every FP job version, and differ from the other worker magics (`MPAO`, `MPAB`, `MPEM`, `MPCX`), so a V1
+/// request, whose bytes are unchanged, can never be taken for a V2 one nor the reverse.
+pub const PALW_GEN_WORKER_TEXT_MAGIC_V1: [u8; 4] = *b"MPGT";
+
+/// **What a V2 generative request prompts with.** `TokenIds` is the V1 arm (the requester holds the class's tokenizer and the job states the
+/// prompt it hashed); `Text` is the arm the FP worker has had since V3: the requester sends the user's bytes and the WORKER, which holds the
+/// class's tokenizer, spells the ids.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwGenWorkerInputV1 {
+    TokenIds(Vec<u32>) = 0,
+    Text(Vec<u8>) = 1,
+}
+
+/// **A V2 generative request** (the bytes after [`PALW_GEN_WORKER_TEXT_MAGIC_V1`]). With `TokenIds` it means exactly what a V1 request means.
+/// With `Text` the job's `prompt_tokens` and `prompt_token_ids_hash` are **zero and default** — the requester cannot know them, since it does
+/// not tokenize — and the worker completes the job with the ids it spells (the class's forced prompt prefix, then the tokenization of the text).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwGenWorkerRequestV2 {
+    pub job: PalwFreePromptJobV5,
+    pub input: PalwGenWorkerInputV1,
+    pub images: Vec<GenWireImageV1>,
+    /// Empty for a job without a source.
+    pub source_ids: Vec<u32>,
+}
+
+impl PalwGenWorkerRequestV2 {
+    /// The frame's bytes: the magic, then the request.
+    pub fn to_frame(&self) -> Vec<u8> {
+        let mut out = PALW_GEN_WORKER_TEXT_MAGIC_V1.to_vec();
+        out.extend(borsh::to_vec(self).expect("a request serializes"));
+        out
+    }
+}
+
+/// **The class's tokenizer, as the generative worker holds it** (RFC-0001 P4). The chain commits only the class's `tokenizer_id`; the worker is
+/// started with the tokenizer itself, and a `Text` request is refused unless the two identities are one.
+pub trait GenPromptTokenizerV1 {
+    /// The identity the class row commits (`PalwGenClassRecordV1::tokenizer_id`).
+    fn tokenizer_id(&self) -> Hash64;
+    /// Spell a user's text as ids. Added/control tokens are NOT matched: text is a stranger's bytes, and a `<|im_start|>` in it is ordinary
+    /// text (a template that means to emit a control token belongs to the class's forced prefix, not to the user). Refusals name no value.
+    fn encode_user_text(&self, text: &str) -> Result<Vec<u32>, String>;
+}
+
+/// **A `Text` request's job, completed**: the prompt's token count and commitment under the network's form.
+fn complete_job_v1(job: &PalwFreePromptJobV5, ids: &[u32], form: PalwPromptIdsFormV1) -> Result<PalwFreePromptJobV5, String> {
+    let mut done = job.clone();
+    done.v4.prompt_tokens = u32::try_from(ids.len()).map_err(|_| "the prompt is longer than a job can name".to_string())?;
+    done.v4.prompt_token_ids_hash =
+        kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form, ids).map_err(|e| e.to_string())?;
+    Ok(done)
+}
+
+/// **The requester's check of a `Completed` answer** (RFC-0001 P4): the completed job is the job it sent in every field but the two the worker
+/// fills, those two are the commitment and count of the ids returned, and the ids are the forced prefix, then ids the class's tokenizer could
+/// have spelled (their count is bounded by the class's `max_prompt_tokens`). The worker is never trusted about what it was asked.
+pub fn gen_check_completed_job_v1(
+    sent: &PalwFreePromptJobV5,
+    completed: &PalwFreePromptJobV5,
+    prompt_ids: &[u32],
+    forced_prefix: &[u32],
+    max_prompt_tokens: u32,
+    form: PalwPromptIdsFormV1,
+) -> Result<(), String> {
+    let mut expect = sent.clone();
+    expect.v4.prompt_tokens = completed.v4.prompt_tokens;
+    expect.v4.prompt_token_ids_hash = completed.v4.prompt_token_ids_hash;
+    if &expect != completed {
+        return Err("the completed job differs from the job sent in a field the worker may not fill".into());
+    }
+    if completed.v4.prompt_tokens as usize != prompt_ids.len()
+        || !prompt_token_ids_match_v1(form, prompt_ids, &completed.v4.prompt_token_ids_hash)
+    {
+        return Err("the completed job does not commit to the ids returned".into());
+    }
+    if !prompt_ids.starts_with(forced_prefix) || prompt_ids.len() <= forced_prefix.len() {
+        return Err("the returned prompt is not the class's forced prefix and then the user's tokens".into());
+    }
+    if prompt_ids.len() as u64 > max_prompt_tokens as u64 {
+        return Err("the returned prompt is longer than the class offers".into());
+    }
+    Ok(())
+}
+
+/// **The serving loop's one step with the `Text` arm** (RFC-0001 P4). A V1 request (no magic) is [`gen_worker_answer_v1`] unchanged; a V2
+/// request with `TokenIds` means what a V1 one means; a `Text` request needs a `tokenizer` whose identity is the class's, the job's prompt
+/// fields left for the worker, and non-empty UTF-8 text — then the worker spells forced-prefix ++ encoding, completes the job and runs it.
+/// Every refusal names the rule and never the text; the held class stays held.
+pub fn gen_worker_answer_text_v1<P: PipelineParams>(
+    held: &GenHeldClassV1<P>,
+    request: &[u8],
+    form: PalwPromptIdsFormV1,
+    tokenizer: Option<&dyn GenPromptTokenizerV1>,
+) -> (PalwGenWorkerAnswerV1, Option<GenWorkV1>) {
+    let refuse = |why: &str| (PalwGenWorkerAnswerV1::Refused { why: why.to_string() }, None);
+    let Some(body) = request.strip_prefix(&PALW_GEN_WORKER_TEXT_MAGIC_V1) else {
+        return gen_worker_answer_v1(held, request, form);
+    };
+    let request: PalwGenWorkerRequestV2 = match borsh::from_slice(body) {
+        Ok(r) => r,
+        Err(_) => return refuse("the request does not decode"),
+    };
+    let images: Vec<JobImageV1> = request.images.iter().map(|i| JobImageV1 { h: i.h, w: i.w, rgb: i.rgb.clone() }).collect();
+    match &request.input {
+        PalwGenWorkerInputV1::TokenIds(ids) => match held.run_v5(&request.job, ids, &images, &request.source_ids, form) {
+            Ok(work) => (PalwGenWorkerAnswerV1::Result { binding: work.binding.clone() }, Some(work)),
+            Err(why) => (PalwGenWorkerAnswerV1::Refused { why }, None),
+        },
+        PalwGenWorkerInputV1::Text(bytes) => {
+            let Some(tokenizer) = tokenizer else { return refuse("this worker holds no tokenizer for the class: send token ids") };
+            if tokenizer.tokenizer_id() != held.row.tokenizer_id {
+                return refuse("the worker's tokenizer is not the class's");
+            }
+            if request.job.v4.tokenizer_id != held.row.tokenizer_id {
+                return refuse("the job names another tokenizer than the class's");
+            }
+            if request.job.v4.prompt_tokens != 0 || request.job.v4.prompt_token_ids_hash != Hash64::default() {
+                return refuse("a Text request leaves the job's prompt fields for the worker");
+            }
+            if bytes.is_empty() {
+                return refuse("the text arm carries no bytes");
+            }
+            let Ok(text) = std::str::from_utf8(bytes) else { return refuse("the text arm is not UTF-8") };
+            let spelled = match tokenizer.encode_user_text(text) {
+                Ok(ids) if !ids.is_empty() => ids,
+                Ok(_) => return refuse("the text arm tokenized to nothing"),
+                Err(e) => return refuse(&format!("the text arm did not tokenize: {e}")),
+            };
+            let mut ids = held.row.class.offers.forced_prompt_prefix.clone();
+            ids.extend_from_slice(&spelled);
+            let job = match complete_job_v1(&request.job, &ids, form) {
+                Ok(job) => job,
+                Err(why) => return (PalwGenWorkerAnswerV1::Refused { why }, None),
+            };
+            match held.run_v5(&job, &ids, &images, &request.source_ids, form) {
+                Ok(work) => (PalwGenWorkerAnswerV1::Completed { job, prompt_ids: ids, binding: work.binding.clone() }, Some(work)),
+                Err(why) => (PalwGenWorkerAnswerV1::Refused { why }, None),
+            }
+        }
     }
 }
 

@@ -188,8 +188,16 @@ impl VirtualStateProcessor {
             let Ok((root, delta)) = self.palw_state_v2_store.read().delta_of(cursor) else {
                 return Err(WalkFault(HistoryGapV1::DeltaNotRetained, Some(cursor)));
             };
+            #[allow(unused_mut)]
+            let mut evidence = native_delta_evidence_v1(&delta);
+            #[cfg(test)]
+            if let Some(real) = *self.native_relabel_class.lock() {
+                for (_, claim) in evidence.finalized_attempts.iter_mut() {
+                    claim.class_id = real;
+                }
+            }
             let fork_choice = self.palw_fork_choice_commitment_v1.is_some().then(|| Box::new(PalwForkChoiceDeltaV1::of(&delta)));
-            (Some(root), native_delta_evidence_v1(&delta), fork_choice)
+            (Some(root), evidence, fork_choice)
         };
         let parent =
             self.ghostdag_store.get_selected_parent(cursor).map_err(|_| WalkFault(HistoryGapV1::ParentUnreadable, Some(cursor)))?;
@@ -423,6 +431,37 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// **RFC-0012 C11: a published `finalized` that this virtual change withdrew is named, never silent.**
+    ///
+    /// The label is recomputed from the evidence at every change (`finalized` = the validated pruning point under a certified `safe`
+    /// prefix), so it can go from a head to `null` while the head stays canonical. That is fail-closed — a reader sees `null`, never a
+    /// different block — and it is NOT the `FinalizedConflict` alarm (the head is still an ancestor of the sink). It is, however, a
+    /// retreat of a label integrators were told is final, so it is an `ERROR`-level log line and `readiness.finalized.withdrawnFrom`
+    /// until a `finalized` is published again. A recorded conflict is its own signal and is not repeated here.
+    pub(super) fn note_finalized_withdrawal(
+        &self,
+        sink: BlockHash,
+        previous_finalized: Option<BlockHash>,
+        snapshot: &NativeSettlementSnapshotV1,
+    ) {
+        let mut slot = self.native_finalized_withdrawn.lock();
+        if snapshot.finalized.is_some() {
+            *slot = None;
+            return;
+        }
+        if snapshot.stop == Some(SettlementStopV1::FinalizedConflict) {
+            return;
+        }
+        if let Some(head) = previous_finalized {
+            error!(
+                "[native-settlement] FINALIZED LABEL WITHDRAWN: {head} was published as finalized and is still canonical, but at {sink} the \
+                 evidence no longer certifies it (stop {:?}); safe and finalized read null until it is certified again",
+                snapshot.stop
+            );
+            *slot = Some(head);
+        }
+    }
+
     /// **`finalized` and what it waits for.** It is the validated pruning point under a certified safe prefix, so what it waits
     /// for is the pruning point (and an EVM result for it) — never a maturity number.
     fn native_finalized_readiness(&self, snapshot: &NativeSettlementSnapshotV1, pruning: BlockHash) -> FinalizedReadinessV1 {
@@ -440,7 +479,13 @@ impl VirtualStateProcessor {
         } else {
             Some(FinalizedWaitV1::NoSafePrefix)
         };
-        FinalizedReadinessV1 { finalized: snapshot.finalized, pruning_point: pruning, pruning_blue: blue_of(pruning), wait }
+        FinalizedReadinessV1 {
+            finalized: snapshot.finalized,
+            pruning_point: pruning,
+            pruning_blue: blue_of(pruning),
+            wait,
+            withdrawn_from: if snapshot.finalized.is_none() { *self.native_finalized_withdrawn.lock() } else { None },
+        }
     }
 
     /// **RFC-0012 D1: why `safe` stands where it does, at `sink`** — the structured reasons served on `getPalwSettlement`

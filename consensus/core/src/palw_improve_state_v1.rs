@@ -647,8 +647,21 @@ pub enum PalwNoChangeReasonV1 {
 /// **The epoch's decision** (spec 17 §17.9.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwPromotionOutcomeV1 {
-    Promoted { class_id: Hash64, wins: u32, losses: u32 },
-    NoChange { reason: PalwNoChangeReasonV1 },
+    Promoted {
+        class_id: Hash64,
+        wins: u32,
+        losses: u32,
+    },
+    NoChange {
+        reason: PalwNoChangeReasonV1,
+    },
+    /// ADR-0175: appended tag 2. An independently registered candidate won evaluation; the
+    /// parent's head/model/Position never changes. Tags 0 and 1 keep historical encodings.
+    CandidateSelected {
+        class_id: Hash64,
+        wins: u32,
+        losses: u32,
+    },
 }
 
 /// **What a grant pays for** (spec 17 §17.11.3).
@@ -989,6 +1002,20 @@ pub(crate) mod test_rows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn immutable_models_append_a_selection_tag_without_reassigning_historical_outcomes() {
+        let class_id = Hash64::from_bytes([9; 64]);
+        let legacy = PalwPromotionOutcomeV1::Promoted { class_id, wins: 8, losses: 0 };
+        let unchanged = PalwPromotionOutcomeV1::NoChange { reason: PalwNoChangeReasonV1::NoCandidate };
+        let selected = PalwPromotionOutcomeV1::CandidateSelected { class_id, wins: 8, losses: 0 };
+        assert_eq!(borsh::to_vec(&legacy).unwrap()[0], 0);
+        assert_eq!(borsh::to_vec(&unchanged).unwrap(), vec![1, 1]);
+        let bytes = borsh::to_vec(&selected).unwrap();
+        assert_eq!(bytes[0], 2);
+        assert_eq!(&bytes[1..], &borsh::to_vec(&legacy).unwrap()[1..]);
+        assert_eq!(borsh::from_slice::<PalwPromotionOutcomeV1>(&bytes).unwrap(), selected);
+    }
 
     #[test]
     fn teacher_class_bits_are_distinct_and_in_one_byte() {

@@ -109,3 +109,42 @@ fn it_is_refused_without_its_prerequisites_and_off_consensus_v2() {
     v1.palw_receipt_spend_v4 = Some(ForkActivation::new(AT));
     assert!(v1.validate_palw_receipt_spend_v4().is_err(), "a ruleset with no V2 bundle");
 }
+
+/// **RFC-0009 stage C: the signer-sidecar purpose for the executor's authorization is visible only under this fence.** Every older
+/// purpose is offered everywhere (the fence is not theirs); `PalwReceiptAuthV4` is offered nowhere a preset ships it, and from its
+/// height only where the fence is armed — the same `Params::palw_receipt_spend_v4_active_at` the chain's own header stage asks.
+#[test]
+fn the_signing_purpose_for_the_authorization_is_visible_only_under_the_fence() {
+    use kaspa_consensus_core::dns_finality::SigningPurpose;
+    let older = [
+        SigningPurpose::Transaction,
+        SigningPurpose::Attestation,
+        SigningPurpose::TakeoverToken,
+        SigningPurpose::Unbond,
+        SigningPurpose::PalwAttemptV2,
+        SigningPurpose::PalwFpCommitmentV3,
+        SigningPurpose::PalwFpSpendV3,
+        SigningPurpose::PalwDerivedArtifactV1,
+    ];
+    let dormant = armed(None);
+    let live = armed(Some(ForkActivation::new(AT)));
+    for daa in [0, AT - 1, AT, u64::MAX - 1] {
+        for purpose in older {
+            assert!(
+                purpose.offered_by(&dormant, daa) && purpose.offered_by(&live, daa),
+                "{purpose:?} is offered everywhere, as it always was"
+            );
+        }
+        assert!(!SigningPurpose::PalwReceiptAuthV4.offered_by(&dormant, daa), "dormant: never offered (daa {daa})");
+    }
+    assert!(!SigningPurpose::PalwReceiptAuthV4.offered_by(&live, AT - 1), "below the height it is not offered");
+    assert!(SigningPurpose::PalwReceiptAuthV4.offered_by(&live, AT), "from the height it is");
+    // Every shipped ruleset, testnet-12 included, leaves it unoffered.
+    for p in [palw_t12_shipped_params(), mainnet_shipped_params(), devnet_shipped_params(), palw_rc_shipped_params()] {
+        assert!(!SigningPurpose::PalwReceiptAuthV4.offered_by(&p, u64::MAX - 1));
+    }
+    // `never()` is not armed.
+    assert!(!SigningPurpose::PalwReceiptAuthV4.offered_by(&armed(Some(ForkActivation::never())), u64::MAX - 1));
+    // And the new purpose changes no identity: the params/schedule ids are the dormant ruleset's.
+    assert_eq!(ids(&dormant), ids(&armed(None)));
+}
