@@ -7,7 +7,8 @@
 //! envelope-sign     request.json, re-derived and checked against THIS build's network and fork digest  ── the key ──►  envelope.borsh
 //!                   (file it: `misaka palw submit-object --object envelope.borsh`)
 //! status            op 231: the lifecycle state, the attempt, the beacon, the posted evidence, the gate
-//! verify            ops 231 + 212 (+ the artifact): the fresh verifier rebuilds the verdict and says whether it agrees with the chain
+//! verify            ops 231 + 212 (+ 211 for a sealed-source v3 attempt; + the artifact): the fresh verifier rebuilds the verdict
+//!                   and says whether it agrees with the chain
 //! ```
 //!
 //! The seed is read only by `envelope-sign`, from `--key-file` / `--key-stdin` (never an argument, never the environment), and only
@@ -184,6 +185,54 @@ pub(crate) async fn status(ctx: &Ctx, class: &str) -> CliResult {
     Ok(())
 }
 
+/// **A v3 attempt's seal facts from op 211**: every page of the route's rows, rebuilt by the SDK and checked against the served roots.
+/// The roots and header must be the same on every page (a route that moved between pages is refused: read again).
+async fn kernel_sealed_sources(
+    nv: &crate::wallet::NodeView,
+) -> Result<Vec<misaka_palw_sdk::onboarding_chain::SealedSourceV3>, CliError> {
+    use kaspa_rpc_core::GetPalwKernelRowsRequest;
+    let mut rows = Vec::new();
+    let mut request = GetPalwKernelRowsRequest::default();
+    let mut first: Option<(String, String, String)> = None;
+    loop {
+        let page = nv
+            .client
+            .get_palw_kernel_rows(request.clone())
+            .await
+            .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwKernelRows: {e}")))?;
+        if !page.available {
+            return Err(CliError::new(exit::NOT_READY, "this node serves no kernel route rows (op 211)"));
+        }
+        let roots = (page.ledger_root.clone(), page.aux_root.clone(), page.header.clone());
+        match &first {
+            None => first = Some(roots),
+            Some(f) if *f != roots => {
+                return Err(CliError::new(exit::GENERIC, "the route moved while its pages were read: run verify again"));
+            }
+            Some(_) => {}
+        }
+        for r in &page.rows {
+            let table = u8::try_from(r.table).map_err(|_| CliError::new(exit::GENERIC, "the node served a table number past u8"))?;
+            rows.push((table, unhex(&r.key)?, unhex(&r.row)?));
+        }
+        if !page.more {
+            break;
+        }
+        request = GetPalwKernelRowsRequest { has_cursor: true, after_table: page.next_table, after_key: page.next_key, max_bytes: 0 };
+    }
+    let (ledger_root, aux_root, header) = first.expect("at least one page was read");
+    let root = |s: &str| {
+        kaspa_consensus_core::Hash64::from_str(s).map_err(|_| CliError::new(exit::GENERIC, "the node served a malformed root"))
+    };
+    misaka_palw_sdk::onboarding_chain::sealed_sources_from_kernel_rows_v1(
+        &unhex(&header)?,
+        rows,
+        &root(&ledger_root)?,
+        &root(&aux_root)?,
+    )
+    .map_err(refusal)
+}
+
 fn or_dash(s: &str) -> &str {
     if s.is_empty() { "-" } else { s }
 }
@@ -214,10 +263,17 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
             );
         }
     }
+    let attempt_row = unhex(&r.attempt_row)?;
+    // A sealed-source (v3) attempt's beacon reads the route's seals: every page of op 211, rebuilt and checked against its roots.
+    let sealed = borsh::from_slice::<kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1>(&attempt_row)
+        .map(|a| a.is_sealed_source())
+        .unwrap_or(false);
+    let sealed_sources = if sealed { kernel_sealed_sources(&nv).await? } else { Vec::new() };
     let reads = PublicConformanceReadsV1 {
-        attempt_row: unhex(&r.attempt_row)?,
+        attempt_row,
         evidence_row: if r.evidence_row.is_empty() { None } else { Some(unhex(&r.evidence_row)?) },
         events,
+        sealed_sources,
         tip_daa: r.tip_daa,
         program: unhex(&r.program)?,
     };

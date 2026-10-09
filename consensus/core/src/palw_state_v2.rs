@@ -17507,25 +17507,16 @@ impl PalwFoldReadV1<'_> {
             now_daa,
             incoming == PalwGatedClaimV1::Attempt,
         )?;
-        // **G14-for-rewards** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`, past the OPV fence): a class earns reward or consensus
-        // work weight only through the onboarding/G14 path. Refused, it takes no claim on any lane; passed, its claims are admitted on
-        // that ground — the registry lifecycle, the Panel verify deadline and the Panel room (seat readiness) are not asked, only its
-        // in-flight cap. Unarmed or exempt (the base class; a legacy, pre-fence Panel-route class): the rules below, byte for byte.
-        let g14 = self.reward_gate_v1(class_id, now_daa);
-        if let crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { code, why } = &g14 {
-            return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why: why.clone() });
+        // **G14-for-rewards** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`, past the OPV fence): a post-fence class that never passed
+        // the onboarding/G14 path takes no claim on any lane. Every claim this gate sees is a V2-root claim, and a V2 root is not
+        // convictable by the kernel route, so an ONBOARDED class's claims get nothing beyond the old rules below — the registry
+        // lifecycle, the Panel verify deadline and the Panel room are all asked (the Lead's GAP-81 decision: the new rewards are per
+        // CLAIM verification route; only kernel-route claims earn them). Unarmed, exempt or onboarded: the rules below, byte for byte.
+        if let crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { code, why } = self.reward_gate_v1(class_id, now_daa) {
+            return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
         }
-        let g14_passed = g14 == crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Passed;
         let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
         let whole = incoming.whole_claims(self.params.fp_quanta_per_canonical_job as u64);
-        if g14_passed {
-            let Some(row) = self.state.model_lifecycles.get(class_id) else { return Ok(()) };
-            let inflight = self.model_registry_inflight(class_id);
-            if (inflight as u64).saturating_add(whole) > row.profile.max_inflight_claims as u64 {
-                return Err(PalwStateV2Error::ClassInflightCapped { class: *class_id, inflight, cap: row.profile.max_inflight_claims });
-            }
-            return Ok(());
-        }
         if let Some(state) = self.class_lifecycle_refusal(class_id) {
             return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state });
         }
@@ -18381,11 +18372,6 @@ impl PalwFoldReadV1<'_> {
     /// with the fence off) [`Self::bond_class_share_v1`] is `None` and this is `Ok` without
     /// reading anything.
     fn check_bond_class_share(&self, bond: &PalwBondKeyV2, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
-        // G14-for-rewards: a class admitted through the G14 path is not split by Panel licence (its claims are bounded by its in-flight
-        // cap and the kernel route's live caps).
-        if self.reward_gate_v1(class_id, now_daa) == crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Passed {
-            return Ok(());
-        }
         // ADR-0160 F-R: past `palw_capacity_verify_room` the stake-proportional share replaces
         // T-2(a)'s `⌈c/2⌉` (`bond_class_share_for_v1`); below it this is T-2(a) byte for byte.
         // ADR-0160 stage 4 (F-N): past F-N a model class's room is divided by lane N's rule over the class's
@@ -31963,16 +31949,16 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         {
             continue;
         }
-        // **G14-for-rewards** (past the OPV fence): a class activates only through the reward gate — refused, it stays Registered and
-        // earns nothing (`docs/PRINCIPLES.md` §6: registered, never rewarded). A class that PASSED gets a real path to REAL work that
-        // does not wait on Panel seat readiness: at least the minimum grantable share (an onboarding registration asks for none), so
-        // it bears weight and is budgeted, and the epoch's budgets re-derived now rather than at the next boundary.
-        let gate = builder.read().reward_gate_v1(&class_id, ctx.daa_score);
-        if matches!(gate, crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { .. }) {
+        // **G14-for-rewards** (past the OPV fence): a post-fence class that never passed the onboarding/G14 path stays Registered and
+        // earns nothing (`docs/PRINCIPLES.md` §6: registered, never rewarded). An ONBOARDED class activates under the old rules — the
+        // onboarding gate above and the share it registered with: its V2-root claims ride the legacy channel and never earn the new
+        // rewards (the Lead's GAP-81 decision). Its new rewards are its kernel-route claims', gated per claim (`opv_gate_v1`).
+        if matches!(
+            builder.read().reward_gate_v1(&class_id, ctx.daa_score),
+            crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { .. }
+        ) {
             continue;
         }
-        let g14_passed = gate == crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Passed;
-        let share = if g14_passed { share.max(builder.params.min_grantable_share_permille()) } else { share };
         // **A grant that cannot be made freezes the CLASS, not the chain.**
         //
         // This was `?`, and the error propagated out of a transition that is a pure function of
@@ -32020,14 +32006,6 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         builder.write_class(class_id, Some(record));
         // Onboarding P0: a gated class that activated is ACTIVE_REWARDABLE in its conformance record (a no-op for any other class).
         palw_onboarding_fold_v1::note_class_activated_v1(builder, &class_id);
-        if g14_passed {
-            let epoch_index = ctx.daa_score / builder.params.epoch_length;
-            if let Some(budgets) = palw_epoch_budgets_for_v2(&builder.state, builder.params, epoch_index)
-                && builder.state.epoch_budgets.as_ref() != Some(&budgets)
-            {
-                builder.write_epoch_budgets(Some(budgets));
-            }
-        }
     }
     Ok(())
 }

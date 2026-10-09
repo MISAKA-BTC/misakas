@@ -62,6 +62,9 @@ fn conformance_config(eligible: Vec<Hash64>, floor: u16) -> (Config, PalwConsens
     let mut params = config.params.clone();
     let mut fence = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new());
     fence.min_effective_bits = floor;
+    // GAP-70: on the drill floor a sampled conformance is also allowed to gate (refused by validation on any real network); on the
+    // ruled floor the release terms hold — only the complete check gates rewards.
+    fence.sampled_conformance_gates_reward = floor == 0;
     params.palw_panel_free_v1 = Some(fence);
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fences");
     (Config::new(params), bundle, premine, floats)
@@ -426,6 +429,7 @@ impl Cw {
             attempt_row: read.attempt_row.clone().expect("the attempt row"),
             evidence_row: read.evidence_row.clone(),
             events: events.clone(),
+            sealed_sources: Vec::new(),
             tip_daa: self.net.daa(),
             program: read.program.clone().expect("the class's program"),
         };
@@ -444,6 +448,7 @@ impl Cw {
             policy: &policy,
             ctx: &ctx,
             events: &events,
+            sealed: &[],
             tip_daa: self.net.daa(),
             program: &program,
             post: post.as_ref(),
@@ -1030,48 +1035,80 @@ impl Cw {
         self.net.beat_to(binding.final_daa.max(self.net.daa()) + 2).await;
     }
 
-    /// **X8R's helper: the onboarded (Cw) class Active and admitting REAL attempts.** Runs [`Self::pass_conformance`] on a drill-floor
-    /// network ([`Cw::over`]), then asserts what a REAL attempt of the class needs and the pre-gate route did not give it: the class
-    /// Active and ACTIVE_REWARDABLE, holding at least the minimum grantable share (an onboarding registration asks for none) — so it
-    /// bears weight and is budgeted — and `producer`'s REAL-attempt pre-check passing (`ready_to_produce`: no lifecycle, Panel
-    /// room, verify-deadline, seating or bond-share refusal, an epoch budget), none of it from Panel seat readiness. Returns the class.
-    pub(super) async fn active_admitting_real(&mut self, producer: usize) -> Hash64 {
+    /// **The onboarded (Cw) class's V2-root claims stay on the legacy channel** (the Lead's GAP-81 decision, 2026-10-10: the new
+    /// rewards are per CLAIM verification route). Runs [`Self::pass_conformance`] on a drill network ([`Cw::over`]: floor 0, a
+    /// sampled conformance allowed to gate — GAP-70's drill), then asserts that passing the onboarding/G14 path gives the class's
+    /// V2-root claims NOTHING beyond the old rules:
+    /// - the gate does not refuse it (it is onboarded);
+    /// - no share beyond the one it registered with (no grant from the gate);
+    /// - `producer`'s REAL-attempt pre-check is decided by the old rules: no Panel seat proves readiness here, so it is refused —
+    ///   no G14 bypass of the registry lifecycle, the Panel room, the verify deadline, seating or the bond-share split.
+    /// Returns the class and the old rules' refusal.
+    pub(super) async fn onboarded_v2_claims_on_the_legacy_channel(&mut self, producer: usize) -> (Hash64, String) {
+        let asked = match self.net.chain.tip_state().1.class(&self.v2_class).unwrap().status {
+            PalwClassStatusV2::Registered { pending_share_permille, .. } => pending_share_permille,
+            other => panic!("registered before its conformance: {other:?}"),
+        };
         self.pass_conformance().await;
         let state = self.net.chain.tip_state().1;
-        assert!(matches!(state.class(&self.v2_class).unwrap().status, PalwClassStatusV2::Active), "the class activated");
-        assert_eq!(self.attempt().record.state, S::ActiveRewardable);
         assert!(
-            state.class_share_permille(&self.v2_class).is_some_and(|s| s > 0),
-            "a passed class bears share (at least the minimum grantable): {:?}",
+            state.class_share_permille(&self.v2_class).unwrap_or(0) <= asked,
+            "no share beyond the one it registered with ({asked}‰): {:?}",
             state.class_share_permille(&self.v2_class)
         );
         let facts = self.facts(self.v2_class, producer);
-        assert_eq!(facts.class_admission_refusal, None, "the claim gate, seating and the bond share admit the class");
+        let refusal = facts.class_admission_refusal.clone().unwrap_or_default();
+        assert!(!refusal.contains("earns no reward"), "an onboarded class is not refused by the gate: {refusal}");
         let key = TestConsensus::palw_v2_registry_keypair(producer as u64).verification_key.as_ref().to_vec();
-        assert_eq!(facts.ready_to_produce(&key), Ok(()), "a REAL attempt of the onboarded class is admitted");
-        self.v2_class
+        assert!(
+            facts.ready_to_produce(&key).is_err(),
+            "a V2-root REAL attempt of the onboarded class is decided by the old rules, which no seat satisfies here"
+        );
+        (self.v2_class, refusal)
     }
 }
 
-/// **A class that passed the onboarding/G14 path earns through it** (the drill floor: the interim sampled policy is 0 effective
-/// bits, so only a floor of 0 lets a SAMPLED conformance pass E6 here). Before the pass the class is Registered and earns nothing
-/// (its claims refused by the reward gate); after it, X8R's helper holds: Active, share, a REAL attempt admitted. A replay agrees.
+/// **GAP-81: a V2 claim of a kernel-bound class never earns the new reward.** Before its conformance the class is refused by the
+/// gate (`earns no reward`). After it (the drill terms) the class is onboarded, its kernel sibling is derived-eligible for OPV, and
+/// yet its V2-root REAL attempt gets nothing the old rules do not give: no share grant and no bypass — the pre-check is refused by
+/// the old rules. Its new reward is only its kernel-route claims' (the kernel class's OPV claims, gated per claim). A replay agrees.
 #[tokio::test]
-async fn g14_rewards_an_onboarded_class_is_active_and_admits_real_attempts() {
+async fn g14_rewards_a_v2_claim_of_a_kernel_bound_class_never_earns_the_new_reward() {
+    use kaspa_consensus_core::palw_opv_bootstrap_v1::{OpvClassFactsV1, OpvEligibilityViewV1, PalwRewardChannelV1};
     kaspa_core::log::try_init_logger("warn");
     let mut cw = Cw::new().await;
     let refusal = cw.facts(cw.v2_class, PRODUCERS[0]).class_admission_refusal.unwrap_or_default();
     assert!(refusal.contains("earns no reward"), "before its conformance the class earns nothing: {refusal}");
-    cw.active_admitting_real(PRODUCERS[0]).await;
+    let (_, old_rules) = cw.onboarded_v2_claims_on_the_legacy_channel(PRODUCERS[0]).await;
+    assert!(!old_rules.is_empty(), "the old rules' refusal is named: {old_rules}");
+    // The class's new reward channel is its kernel class's OPV claims: derived-eligible on the drill terms (the binding's own path).
+    let route = cw.net.api().expect("the route");
+    let ledger = route.ledger().unwrap();
+    let binding = route.kernel_binding_v1(&cw.v2_class).expect("kernel-bound");
+    let facts = OpvClassFactsV1::of_registered(&ledger, &binding.kernel_class.as_bytes()).expect("the kernel class stands");
+    let policy = route.header.opv.expect("the OPV policy");
+    let view =
+        OpvEligibilityViewV1 { policy: &policy, denied: &[], min_effective_bits: 0, sampled_gates_reward: true, test_eligible: &[] };
+    assert!(
+        route.v2_class_reward_eligibility_v1(&ledger, &cw.v2_class, cw.net.daa(), &view).is_ok(),
+        "E1-E7 hold for its kernel class"
+    );
+    assert_eq!(
+        facts.opv_id,
+        binding.kernel_class.as_bytes(),
+        "bound to its OPV kernel class: that class's claims are the new channel"
+    );
+    // The two channels name their budgets; a V2 root draws the legacy one whatever the class passed.
+    assert_eq!(PalwRewardChannelV1::ALL, [PalwRewardChannelV1::LegacyPanelRoute, PalwRewardChannelV1::KernelRoute]);
     let z = cw.net.replay().await;
     cw.net.assert_same(&z, "replay");
 }
 
-/// **Under the ruled floor of 128 effective bits a 2-bit sampled conformance earns nothing**: the conformance passes (the record is
-/// G14_ELIGIBLE, the onboarding gate Ready), but E6 refuses (`POLICY_NOT_VERIFIED`) — the class stays Registered, holds no share,
-/// and every claim of it is refused by the reward gate.
+/// **On the release terms a sampled conformance earns nothing** (the ruled floor of 128 effective bits, and GAP-70: only the complete
+/// check gates rewards): the conformance passes (the record is G14_ELIGIBLE, the onboarding gate Ready) — a non-reward signal — but
+/// E6 refuses (`POLICY_NOT_VERIFIED`, GAP-70) — the class stays Registered, holds no share, and every claim of it is refused.
 #[tokio::test]
-async fn g14_rewards_under_the_ruled_floor_a_two_bit_conformance_earns_nothing() {
+async fn g14_rewards_on_the_release_terms_a_sampled_conformance_earns_nothing() {
     kaspa_core::log::try_init_logger("warn");
     let mut cw = Cw::over_floor(|c| TestConsensus::new(c), 128).await;
     cw.pass_conformance().await;
@@ -1081,7 +1118,7 @@ async fn g14_rewards_under_the_ruled_floor_a_two_bit_conformance_earns_nothing()
     assert!(matches!(state.class(&cw.v2_class).unwrap().status, PalwClassStatusV2::Registered { .. }), "held Registered");
     assert_eq!(state.class_share_permille(&cw.v2_class), None, "no share");
     let refusal = cw.facts(cw.v2_class, PRODUCERS[0]).class_admission_refusal.unwrap_or_default();
-    assert!(refusal.contains("POLICY_NOT_VERIFIED"), "E6: {refusal}");
+    assert!(refusal.contains("POLICY_NOT_VERIFIED") && refusal.contains("GAP-70"), "E6, GAP-70: {refusal}");
 }
 
 /// **A class that never began onboarding never earns**: registered on a network with the gate armed, it passes its activation DAA
@@ -1154,7 +1191,8 @@ async fn g14_rewards_a_legacy_panel_route_class_keeps_the_old_route_and_never_ea
     let route = net.api().expect("the route");
     let ledger = route.ledger().unwrap();
     let policy = route.header.opv.expect("the OPV policy");
-    let view = OpvEligibilityViewV1 { policy: &policy, denied: &[], min_effective_bits: 0, test_eligible: &[] };
+    let view =
+        OpvEligibilityViewV1 { policy: &policy, denied: &[], min_effective_bits: 0, sampled_gates_reward: true, test_eligible: &[] };
     assert_eq!(route.opv_eligibility_v1(&ledger, &facts, net.daa(), &view), Err(OpvIneligibleV1::NotOnboarded), "OPV needs the gate");
     // ---- a class past the fence: the Panel route's rules alone open nothing ----
     let fresh = onb_fixture(16);

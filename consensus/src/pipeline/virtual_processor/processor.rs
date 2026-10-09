@@ -15204,6 +15204,7 @@ impl VirtualStateProcessor {
                     policy: fence.opv_policy(),
                     denied_classes: fence.denied_classes.clone(),
                     min_effective_bits: fence.min_effective_bits,
+                    sampled_conformance_gates_reward: fence.sampled_conformance_gates_reward,
                     #[cfg(test)]
                     test_eligible: kernel_route_test_opv_eligible_list_v1(),
                     #[cfg(not(test))]

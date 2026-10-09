@@ -928,8 +928,11 @@ pub struct FreshInputV1<'a> {
     pub policy: &'a PostCommitChallengePolicyV1,
     /// The beacon context the chain froze at the commitment (op 231).
     pub ctx: &'a BeaconContextV1,
-    /// Every attributed Final fact the route serves (op 212), any order.
+    /// Every attributed Final fact the route serves (op 212), any order — the v2 (accumulator) policy's sources.
     pub events: &'a [AttributedWorkV1],
+    /// The v3 (sealed-source) policy's facts: `PalwKernelRouteStateV1::beacon_sealed_sources_v1` over the reader's own copy of the
+    /// route (`from_served_rows_v1`, op 211). Read only when the policy is the sealed-source one; empty otherwise.
+    pub sealed: &'a [misaka_palw_challenge::SealedSourceV3],
     /// The DAA the reads were taken at.
     pub tip_daa: u64,
     pub program: &'a TirProgramV1,
@@ -972,26 +975,38 @@ pub fn fresh_verify_v1(input: &FreshInputV1<'_>) -> FreshVerdictV1 {
         leaf_faults: Vec::new(),
         vectors_selected: 0,
     };
-    let beacon = match misaka_palw_challenge::collect_attributed_work_beacon_v1(input.ctx, input.events, input.tip_daa) {
-        Ok(WorkBeaconStateV1::Locked(b)) => {
+    // The beacon under the attempt's own policy: v3 from the seal facts, v2 from the Final facts — the chain's two collectors.
+    let beacon = if input.policy.is_sealed_source() {
+        use misaka_palw_challenge::SealedBeaconStateV3 as S3;
+        match misaka_palw_challenge::collect_sealed_work_beacon_v3(input.ctx, input.sealed, input.tip_daa) {
+            Ok(S3::Locked(b)) => Ok(b),
+            Ok(S3::Sealing { sealed, .. }) => Err(format!("SEALING {sealed} sealed")),
+            Ok(S3::Revealing { revealed, .. }) => Err(format!("REVEALING {revealed} revealed")),
+            Ok(S3::Settling { finals, .. }) => Err(format!("SETTLING {finals} Final")),
+            Ok(S3::Candidate { mixed, lock_position }) => Err(format!("CANDIDATE {mixed} mixed, locks at {lock_position}")),
+            Ok(S3::Unavailable { mixed, need }) => Err(format!("UNAVAILABLE {mixed}/{need}")),
+            Ok(S3::Vetoed { withheld, failed }) => Err(format!("VETOED {withheld} withheld, {failed} failed")),
+            Err(e) => Err(format!("POLICY_INVALID {e}")),
+        }
+    } else {
+        match misaka_palw_challenge::collect_attributed_work_beacon_v1(input.ctx, input.events, input.tip_daa) {
+            Ok(WorkBeaconStateV1::Locked(b)) => Ok(b),
+            Ok(WorkBeaconStateV1::Collecting { have, need }) => Err(format!("COLLECTING {have}/{need}")),
+            Ok(WorkBeaconStateV1::Candidate { have, lock_position }) => {
+                Err(format!("CANDIDATE {have} works, locks at {lock_position}"))
+            }
+            Ok(WorkBeaconStateV1::Unavailable { have, need }) => Err(format!("UNAVAILABLE {have}/{need}")),
+            Err(e) => Err(format!("POLICY_INVALID {e}")),
+        }
+    };
+    let beacon = match beacon {
+        Ok(b) => {
             out.beacon = format!("LOCKED at {}", b.lock_position);
             out.beacon_output = Some(b.output);
             b
         }
-        Ok(WorkBeaconStateV1::Collecting { have, need }) => {
-            out.beacon = format!("COLLECTING {have}/{need}");
-            return out;
-        }
-        Ok(WorkBeaconStateV1::Candidate { have, lock_position }) => {
-            out.beacon = format!("CANDIDATE {have} works, locks at {lock_position}");
-            return out;
-        }
-        Ok(WorkBeaconStateV1::Unavailable { have, need }) => {
-            out.beacon = format!("UNAVAILABLE {have}/{need}");
-            return out;
-        }
-        Err(e) => {
-            out.beacon = format!("POLICY_INVALID {e}");
+        Err(state) => {
+            out.beacon = state;
             return out;
         }
     };

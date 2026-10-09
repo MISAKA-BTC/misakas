@@ -168,6 +168,8 @@ pub struct PalwKernelOpvExtrasV1 {
     pub denied_classes: Vec<Hash64>,
     /// The effective-bits floor a class's conformance policy must reach.
     pub min_effective_bits: u16,
+    /// GAP-70: whether a sampled conformance may satisfy E6 (`false` on every network the validation admits).
+    pub sampled_conformance_gates_reward: bool,
     /// **TEST SEAM, empty in every build that can run a network**: mode-bound class ids a pre-derivation mechanics test treats as
     /// eligible (the processor fills it only under `cfg(test)`, from `kernel_route_test_opv_eligible_v1`, exactly as it fills
     /// `attested_artifacts`). The bootstrap E2E uses none.
@@ -523,6 +525,10 @@ pub struct KernelClaimReadV1 {
 
 /// One page of the route's rows, in `(table, key)` order (ledger tables first, then the consensus tables).
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// The first table number of the route's consensus (aux) tables; the kernel ledger's own tables are numbered below it (op 211 serves
+/// both, in key order, so a page is ledger rows then aux rows).
+pub const PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1: u8 = 32;
+
 pub struct KernelRowsPageV1 {
     pub rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
     /// The cursor to resume after (`None` at the end).
@@ -683,6 +689,41 @@ impl PalwKernelRouteStateV1 {
     /// **A page of rows**, `(table, key, row)` in order, starting after `after` (exclusive; `None` = the beginning) and stopping once
     /// `max_bytes` of keys and rows are gathered (at least one row, so a page always makes progress). A reader that collects every page
     /// and rebuilds a ledger from them must reach [`Self::ledger_root`].
+    /// **A fresh reader's copy of the route, rebuilt from op 211's pages** (G14 condition 9, RFC-0014 §3.4: a non-Panel verifier
+    /// reproduces the whole post-commit path from public reads alone). `header` is op 211's Borsh header; `rows` every
+    /// `(table, key, row)` of every page — the ledger's tables below [`PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1`], the consensus (aux)
+    /// tables from it. Refused unless the rows root to the served `ledger_root` and `aux_root` and no row is served twice. Every read
+    /// of this type then runs on the reader's own copy, by the chain's own functions: the Final facts (`finals_read_v1`), the v3
+    /// seal facts (`beacon_sealed_sources_v1`), an attempt's beacon (`attempt_beacon_v1`). (Authenticating the served roots against
+    /// the chain's committed state is the state proof's job, shared by every public read.)
+    pub fn from_served_rows_v1(
+        header: &[u8],
+        rows: impl IntoIterator<Item = (u8, Vec<u8>, Vec<u8>)>,
+        ledger_root: &Hash64,
+        aux_root: &Hash64,
+    ) -> Result<Self, String> {
+        let header: PalwKernelRouteHeaderV1 =
+            borsh::from_slice(header).map_err(|e| format!("the route header does not decode: {e}"))?;
+        let mut route = Self { header, rows: LedgerRowsV1::new(), aux: BTreeMap::new() };
+        for (table, key, row) in rows {
+            let twice = if table < PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1 {
+                route.rows.insert((table, key), row).is_some()
+            } else {
+                route.aux.insert((table, key), row).is_some()
+            };
+            if twice {
+                return Err(format!("a row of table {table} is served twice"));
+            }
+        }
+        if route.ledger_root() != *ledger_root {
+            return Err("the served rows do not root to the served ledger root".into());
+        }
+        if route.aux_root() != *aux_root {
+            return Err("the served rows do not root to the served aux root".into());
+        }
+        Ok(route)
+    }
+
     pub fn rows_page_v1(&self, after: Option<(u8, Vec<u8>)>, max_bytes: usize) -> KernelRowsPageV1 {
         use std::ops::Bound::{Excluded, Unbounded};
         let total_rows = (self.rows.len() + self.aux.len()) as u64;

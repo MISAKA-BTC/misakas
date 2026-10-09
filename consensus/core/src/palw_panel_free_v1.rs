@@ -46,6 +46,10 @@ pub struct PalwPanelFreeFenceV1 {
     /// SAMPLED conformance under the interim 2-bit policy can make a class eligible — only a complete check can. A drill lowers it
     /// explicitly through the harness's `Config` seam.
     pub min_effective_bits: u16,
+    /// **GAP-70** (the Lead, 2026-10-10): whether a SAMPLED conformance may satisfy E6. For the release only the complete check gates
+    /// rewards, so this is `false` and [`Self::validate_value`] refuses `true` until a digest court exists. A drill sets it
+    /// explicitly through the harness's `Config` seam (as it lowers `min_effective_bits`).
+    pub sampled_conformance_gates_reward: bool,
     pub window: OpvWindowV1,
     pub budgets: OpvBudgetsV1,
     pub economics: OpvEconomicsV1,
@@ -72,6 +76,7 @@ impl PalwPanelFreeFenceV1 {
             activation,
             denied_classes,
             min_effective_bits: PALW_OPV_MIN_EFFECTIVE_BITS_V1,
+            sampled_conformance_gates_reward: false,
             window: OpvWindowV1 { base_challenge_window_daa: 40, verification_horizon_daa: 10 },
             budgets: OpvBudgetsV1 {
                 cold_material_daa: 10,
@@ -121,19 +126,25 @@ impl PalwPanelFreeFenceV1 {
         if self.denied_classes.windows(2).any(|w| w[0] >= w[1]) {
             return Err("the denied class list must be strictly ascending (canonical, unique)".to_string());
         }
+        if self.sampled_conformance_gates_reward {
+            return Err(
+                "a sampled conformance gates no reward until a digest court exists (GAP-70): only the complete check does".to_string()
+            );
+        }
         let ledger = crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default());
         self.opv_policy().validate(&ledger)
     }
 
-    /// The value as the identity hashers write it: the denied ids, the floor and the terms (Borsh), after the activation. (A domain
-    /// tag separates this layout from the retired admission-list one, so no value of either can collide with the other.)
+    /// The value as the identity hashers write it: the denied ids, the floor, GAP-70's switch and the terms (Borsh), after the
+    /// activation. (A domain tag separates this layout from the earlier ones, so no value of any can collide with another.)
     pub(crate) fn write_value_into(&self, h: &mut kaspa_hashes::ConsensusParamsId) {
-        h.write(b"palw_panel_free_v1/derived-eligibility/v2");
+        h.write(b"palw_panel_free_v1/derived-eligibility/v3");
         h.write((self.denied_classes.len() as u64).to_le_bytes());
         for class in &self.denied_classes {
             h.write(class.as_byte_slice());
         }
         h.write(self.min_effective_bits.to_le_bytes());
+        h.write([self.sampled_conformance_gates_reward as u8]);
         h.write(borsh::to_vec(&(self.window, self.budgets, self.economics, self.carrier)).expect("the terms serialize"));
     }
 }
@@ -153,13 +164,14 @@ impl Params {
             && f.validate_value().is_err()
         {
             return Err(PalwModeV2Error::Invalid(
-                "palw_panel_free_v1's value is invalid: the denied class list must be strictly ascending and the OPV terms must satisfy \
-                 every relation OpvPolicyV1::validate states (PalwPanelFreeFenceV1::validate_value names the one that fails)",
+                "palw_panel_free_v1's value is invalid: the denied class list must be strictly ascending, a sampled conformance may not \
+                 gate rewards (GAP-70), and the OPV terms must satisfy every relation OpvPolicyV1::validate states \
+                 (PalwPanelFreeFenceV1::validate_value names the one that fails)",
             ));
         }
         match &self.palw_panel_free_v1 {
             Some(f) if f.activation != ForkActivation::never() => Err(PalwModeV2Error::Invalid(
-                "palw_panel_free_v1 cannot be armed: RFC-0015 §13.3 ACTIVATION_ALLOWED (G14 on a real node, the panel-free lifecycle and collateral review, a coordinated schedule) is not evidenced and this binary has no Panel=0 acceptance rule",
+                "palw_panel_free_v1 cannot be armed: RFC-0015 §13.3 ACTIVATION_ALLOWED (G14 on a real node, the panel-free lifecycle and collateral review, a coordinated schedule) is not evidenced, this binary has no Panel=0 acceptance rule, its rewards are not budgeted (ADR-0176: no palw_bond_budget_v1 engine), and DA16's artifact-availability half (ADR-0177: withdrawn) is still in palw_provider_court_v1 (docs/design/palw/opv-beacon-bootstrap.md §15)",
             )),
             _ => Ok(()),
         }
