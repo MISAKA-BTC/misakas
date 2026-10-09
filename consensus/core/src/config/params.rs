@@ -13018,12 +13018,16 @@ impl Params {
             h.write(b"palw_offence_attribution");
             h.write(activation.daa_score().to_le_bytes());
         }
-        // ADR-0152 R-core+: the height only, Some-only, for the floor's reason; and C7's list only
-        // when non-empty (IMPL-6), so every other preset fingerprints byte-identically to a build
-        // without either field.
+        // ADR-0152 R-core+: the height and amended reporter share, Some-only; C7's list only
+        // when non-empty (IMPL-6), so presets without R-core+ fingerprint byte-identically to a
+        // build without those fields.
         if let Some(activation) = palw_rcore_plus {
             h.write(b"palw_rcore_plus");
             h.write(activation.daa_score().to_le_bytes());
+            // ADR-0032, 2026-10-10: PALW's 49% share changes rewards and DA-6 exposure. Builds
+            // using different shares must announce different armed rulesets at the handshake.
+            h.write(b"palw_reporter_reward_bps");
+            h.write(crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V1.to_le_bytes());
         }
         // Lane F1 (the panel seed, post-launch): the height and, beside it, the seed rule's domain —
         // the rule's version rides its fence, so two builds arming different seed rules at one height
