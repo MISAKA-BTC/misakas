@@ -484,7 +484,9 @@ BILI, ADR-0174; `SOMPI_PER_KASPA` is the legacy name of 1 BILI.)
   `FinalReward` only up to what the `PayJobEscrow` before it in the same batch actually debited; the reference consumer's book refuses
   a `FinalReward` beyond the escrow spent (checked in every ledger test).
 * An escrow no claim can still use goes back to its poster (`ReleaseJobEscrow`, receipt `JobEscrowReturned`) once
-  `job_escrow_ttl_daa` has passed since posting, no live claim holds the job and no producer's seal of it is live.
+  `job_escrow_ttl_daa` has passed since posting, no live claim holds the job and no producer's seal of it is live — and in any case
+  once one more `seal_ttl_daa` has passed, whatever seals are live (C4R4 F-C4R4-03, `a1473a3d9`: a squatter's re-seals no longer
+  hold the escrow, and through it the poster's exit, indefinitely).
 * Interim values: `claim_reward` (the escrow) 5 BILI, `job_fee` 1 BILI, `job_escrow_ttl_daa` 300 DAA (validated: `job_fee > 0`,
   TTL ≥ the seal TTL) — policy values like every other interim term.
 
@@ -547,6 +549,16 @@ The effective detection probability `p` is acquisition-conditional and can be 0 
 `assumed_detection_permille` (interim 500‰) is a POLICY value that must come from MEAS's acquisition-conditional `p` per class.
 
 **F-ECON-3** (one unrevealed seal stalls concurrent attempts) belongs to the GAP-B12 deposit derivation — ECON's; noted only.
+
+**C4R4's three fixes, carried (the Lead's GAP-00, 2026-10-10).** Cherry-picked from `adv/c4r4` and adapted: F-C4R4-03 (`a1473a3d9`,
+the escrow-return rule above); F-C4R4-05 (`2dfcee86e`, `LedgerPolicyV1::dismissal_fee_v1`: a dismissed filing that ran a court pays
+`dismissed_proof_fee` per `1 / max_adjudications_per_block` share of the block's court work its class reserved, at least one fee, so
+one junk filing against the heaviest class no longer holds a valid proof out for one fee a block; light classes pay one fee); F-C4R4-10
+(`63da18025`, an onboarding object stops short of the runs reserved for proofs). C4R4's kernel PoC file `tests/c4r4.rs` comes whole
+(byte-identical to `adv/c4r4`'s, so C4R4's merge adds nothing twice); its node PoC file `conformance/c4r4.rs` is left to C4R4's merge
+(its A-2 tag-113 case needs A2U's central table). **OPVB's `b5d4ba90c` supersedes F-C4R4-10's rule for refutations** (a conformance
+refutation is a proof: it may spend the reserve and pays `dismissed_proof_fee` when it proves nothing): at OPVB's merge, take OPVB's
+`charge_route_budget_v1(.., may_spend_reserve)` and its hostile-evidence expectation.
 
 **OPV-BOOT #1 (tag-113 `Conformance { v2_class }`).** OPVB implemented `palw_conformance_chunk_target_v1(route, v2_class, daa) ->
 Option<u64>` and wired it into the lane on its branch (`opv/bootstrap-beacon` `b5d4ba90c`: the placeholder's body calls it). This
