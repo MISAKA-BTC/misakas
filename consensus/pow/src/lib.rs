@@ -1,7 +1,6 @@
 // public for benchmarks
 #[doc(hidden)]
 pub mod matrix;
-pub mod palw;
 pub mod palw_admission;
 #[cfg(feature = "wasm32-sdk")]
 pub mod wasm;
@@ -18,9 +17,9 @@ use kaspa_consensus_core::{
         PALW_ATTEMPT_V2_L1_TAG_BYTES, PalwAttemptEnvelopeV2, challenge_v2, execution_anchor_v3, execution_commitment_v3, l1_tag_v2,
     },
     pow_layer0::{
-        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_LLM,
-        POW_ALGO_ID_PALW_OLLAMA, POW_ALGO_ID_PALW_RECEIPT_V3, POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES,
-        POW_L1_PALW_OLLAMA_OUT_BYTES, POW_L1_PALW_OUT_BYTES, POW_L1_TAG_MAX_BYTES, PowLayer0Error, argon2id_l1_tag_v1,
+        POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_COMMITTED_V2,
+        POW_ALGO_ID_PALW_RECEIPT_V3, POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES,
+        POW_L1_TAG_MAX_BYTES, PowLayer0Error, argon2id_l1_tag_v1,
         blake2b_sha3_l1_tag_v1, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
     },
 };
@@ -243,12 +242,6 @@ pub struct StateLayer0 {
     /// is the header-validation rule's job (consensus/src), not the
     /// finalizer's.
     pub(crate) pow_algo_id: u8,
-    /// The block's PALW commitment, decoded once, when the header carries one.
-    ///
-    /// Present only where the commitment fence is open — `check_palw_commitment_shape` requires an
-    /// EMPTY `palw_commitment` on every network whose fence is shut, so this is `None` everywhere
-    /// today and the tag path below is byte-identical to before it existed.
-    pub(crate) palw_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1>,
     /// The block's V2 attempt envelope, decoded once, when the header declares the committed-V2
     /// algo id (ADR-0042 Decision 3a, Unit A). This IS the wire carrier: `Header::palw_commitment`
     /// bytes on an algo-6 header are a `PAV2` envelope, and the algo-6 tag arm consumes
@@ -333,7 +326,6 @@ impl StateLayer0 {
             // Decoded, never trusted: a header whose bytes do not decode carries no commitment to
             // bind to, and admission refuses it separately. Silently binding nothing would be the
             // dangerous reading, so the tag only changes when a commitment is actually present.
-            palw_commitment: kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1::decode(&header.palw_commitment).ok(),
             // Same trust posture, other family, decoded per lane by the header's own declared
             // algorithm: the carriage magics are disjoint, so at most one of these could ever
             // succeed anyway — decoding only the declared one says which lane the header CLAIMS
@@ -443,43 +435,6 @@ impl StateLayer0 {
                 let tag = l1_tag_v2(execution_commitment_v3(attempt, anchor));
                 buf[..PALW_ATTEMPT_V2_L1_TAG_BYTES].copy_from_slice(&tag);
                 Ok(PALW_ATTEMPT_V2_L1_TAG_BYTES)
-            }
-            // Phase 4b (algo_id = 5): one deterministic Ollama inference over the same seed;
-            // the tag commits to the greedy response bytes + counts. 72 bytes.
-            POW_ALGO_ID_PALW_OLLAMA => {
-                let tag = palw::palw_ollama_l1_tag(self.pre_pow_hash_64, self.timestamp, nonce, &self.network_id)?;
-                buf[..POW_L1_PALW_OLLAMA_OUT_BYTES].copy_from_slice(&tag);
-                Ok(POW_L1_PALW_OLLAMA_OUT_BYTES)
-            }
-            // Phase 4 (algo_id = 4): one deterministic pinned-LLM inference over the seed derived
-            // from (network, pre_pow_hash, timestamp, nonce). 200 bytes.
-            POW_ALGO_ID_PALW_LLM => {
-                let tag = palw::palw_l1_tag(self.pre_pow_hash_64, self.timestamp, nonce, &self.network_id)?;
-                // Audit P0-1: the block identity hash covers `palw_commitment` and every PoW-path
-                // digest excludes it, so a miner who solved once could swap the trace root, the
-                // output root or the executor bond and mint sibling blocks on the SAME PoW. Binding
-                // the commitment into the tag closes that — one bit of it moves the root, the root
-                // moves the tag, the tag moves the digest, and the PoW fails.
-                //
-                // The inference stays the work. `PalwBlockCommitmentV1::l1_tag_bytes` would REPLACE
-                // it with a free CPU expansion, which is the W1 change and must not land before a
-                // bond's immature exposure is capped in consensus (audit P0-10) — free tags plus
-                // uncapped exposure is what makes fake-root grinding cheap.
-                match self.palw_commitment.as_ref() {
-                    Some(commitment) => {
-                        let challenge = commitment.challenge_for(&self.network_id, self.pre_pow_hash_64, self.timestamp, nonce);
-                        let bound = kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1::bind_l1_tag_v1(
-                            &tag,
-                            commitment.commitment_root(challenge),
-                        );
-                        buf[..bound.len()].copy_from_slice(&bound);
-                        Ok(bound.len())
-                    }
-                    None => {
-                        buf[..POW_L1_PALW_OUT_BYTES].copy_from_slice(&tag);
-                        Ok(POW_L1_PALW_OUT_BYTES)
-                    }
-                }
             }
             // ADR-0044 Decision 6 (algo_id = 7, Unit B): `Expand(spend_id)`. The tag is IDENTITY
             // binding, not a lottery — see `check_pow_layer0`, which is where the difference is
@@ -630,11 +585,6 @@ mod tests_pq {
     use super::*;
     use kaspa_consensus_core::{BlueWorkType, header::Header, pow_layer0::POW_ALGO_ID_KHEAVYHASH};
     use kaspa_hashes::ZERO_HASH64;
-
-    /// Serializes the two PALW tests that read/write the process-global fixture env var —
-    /// without this, the fixture test's `set_var` can land inside the no-worker test's window
-    /// between its guard check and its assertion.
-    static PALW_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn dummy_header(bits: u32, nonce: u64, timestamp: u64) -> Header {
         dummy_header_algo(bits, nonce, timestamp, POW_ALGO_ID_KHEAVYHASH)
@@ -908,86 +858,17 @@ mod tests_pq {
         assert!(any_pass, "easiest target must accept a BLAKE2b-SHA3 nonce");
     }
 
-    /// PALW LLM PoW (algo_id = 4), fixture mode: the Layer-0 verifier dispatches to the PALW
-    /// Layer-1 tag; with `MISAKA_PALW_POW_FIXTURE=1` the tag is the in-process fixture derivation
-    /// over the seed. Asserts dispatch (tag == fixture-of-seed), determinism, timestamp
-    /// sensitivity (the grinding-closure property: a re-stamped header re-pays the tag), and
-    /// easy-target acceptance. Env var is process-global; nothing else in this test binary
-    /// computes algo-4 tags, and the prior value is restored on exit.
-    ///
-    /// The network id is `devnet`, the `NetworkId` display form consensus passes down, because the
-    /// fixture is honored on devnet ONLY — `kaspa_pow::palw::fixture_permitted_on`. This test used
-    /// to say `kaspa-devnet`, which is not a network this codebase names anywhere; it passed
-    /// because the fixture was selected by the variable alone.
+    /// Retired algo 4/5 can no longer dispatch a worker, Ollama or fixture runtime.
     #[test]
-    fn layer0_dispatches_palw_fixture_for_algo_id_4() {
-        use kaspa_consensus_core::pow_layer0::{
-            POW_ALGO_ID_PALW_LLM, POW_L1_PALW_OUT_BYTES, palw_fixture_l1_tag_v1, palw_pow_seed_v1,
-        };
-        const KEY: &str = "MISAKA_PALW_POW_FIXTURE";
-        let _env = PALW_ENV_LOCK.lock().unwrap();
-        let prev = std::env::var(KEY).ok();
-        unsafe { std::env::set_var(KEY, "1") };
-
-        let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_PALW_LLM);
-        let s = StateLayer0::new(&h, b"devnet");
-
-        // Dispatch: the verifier's internal L1 tag must equal the fixture tag for the seed the
-        // verifier is contractually bound to derive — (network, pre_pow_hash, timestamp, nonce).
-        let mut buf = [0u8; POW_L1_TAG_MAX_BYTES];
-        let n = s.calculate_l1_tag(5, &mut buf).unwrap();
-        assert_eq!(n, POW_L1_PALW_OUT_BYTES, "PALW tag is 200 bytes");
-        let seed = palw_pow_seed_v1(s.pre_pow_hash_64, 1_700_000_000, 5, b"devnet");
-        assert_eq!(&buf[..n], palw_fixture_l1_tag_v1(&seed).as_slice(), "algo_id=4 must compute the PALW fixture tag");
-
-        // Determinism + nonce sensitivity of the full Layer-0 digest.
-        let a = s.calculate_pow_layer0(5).unwrap();
-        assert_eq!(a, s.calculate_pow_layer0(5).unwrap(), "PALW Layer-0 digest must be deterministic");
-        assert_ne!(a, s.calculate_pow_layer0(6).unwrap(), "nonce must change the PALW digest");
-
-        // Timestamp sensitivity THROUGH THE TAG: two headers differing only in timestamp share a
-        // pre-PoW hash prefix computation but must produce different L1 tags (the seed binds the
-        // timestamp) — this is what closes the free timestamp-grinding dimension.
-        let h2 = dummy_header_algo(0x207fffff, 0, 1_700_000_001, POW_ALGO_ID_PALW_LLM);
-        let s2 = StateLayer0::new(&h2, b"devnet");
-        let mut buf2 = [0u8; POW_L1_TAG_MAX_BYTES];
-        let n2 = s2.calculate_l1_tag(5, &mut buf2).unwrap();
-        assert_ne!(&buf2[..n2], &buf[..n], "timestamp must change the PALW L1 tag itself, not just the finalizer input");
-
-        // Acceptance: the easiest target accepts at least one PALW nonce in a small scan.
-        let any_pass = (0u64..64).any(|n| s.check_pow_layer0(n).unwrap().0);
-        assert!(any_pass, "easiest target must accept a PALW nonce");
-
-        match prev {
-            Some(v) => unsafe { std::env::set_var(KEY, v) },
-            None => unsafe { std::env::remove_var(KEY) },
-        }
-    }
-
-    /// Without the fixture env and without a registered model runtime, judging a PALW header is
-    /// `PalwUnavailable` — and `calc_block_level_check_pow_layer0` prices that as a failed PoW
-    /// rather than a panic (ADR-0042 Decision 4: a full node without a model is the normal case).
-    ///
-    /// kaspa-pow cannot even LINK the crate that would answer (`no_model_runtime_edge.rs` pins
-    /// the dependency graph), so unlike the pre-PR-02 version of this test, no developer
-    /// environment — a stray `PALW_WORKER`, a live Ollama — can make a real runtime answer here.
-    /// The outcome is exact, not conditional on the machine.
-    #[test]
-    fn layer0_palw_without_worker_is_unavailable_not_a_failed_pow() {
-        use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM;
-        let _env = PALW_ENV_LOCK.lock().unwrap();
-        let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_PALW_LLM);
-        let s = StateLayer0::new(&h, b"simnet");
-        match s.check_pow_layer0(0) {
-            Err(PowLayer0Error::PalwUnavailable(msg)) => {
-                assert!(msg.contains("no PALW model runtime"), "the error must name the missing runtime: {msg}")
+    fn retired_inference_pow_algorithms_fail_without_a_runtime_path() {
+        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA};
+        for network in [&b"devnet"[..], b"testnet-10", b"testnet-11", b"testnet-12", b"mainnet", b"simnet"] {
+            for algo in [POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA] {
+                let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, algo);
+                assert!(matches!(StateLayer0::new(&h, network).check_pow_layer0(0), Err(PowLayer0Error::UnknownAlgoId(id)) if id == algo));
+                assert_eq!(calc_block_level_check_pow_layer0(&h, network, 64), (0, false));
             }
-            other => panic!("expected PalwUnavailable, got {other:?}"),
         }
-        // And the consensus wrapper's verdict on the same header: failed PoW, level 0 — never a
-        // panic, never an accept.
-        let (level, passed) = calc_block_level_check_pow_layer0(&h, b"simnet", 64);
-        assert_eq!((level, passed), (0, false), "an unregistered runtime must price the header as failed PoW");
     }
 
     /// Mainnet-readiness audit **P0-1**: a header with an unrecognised `pow_algo_id` must never

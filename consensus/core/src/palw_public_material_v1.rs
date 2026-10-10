@@ -1,5 +1,11 @@
 //! **Lane DA16 (RFC-0014 §16, RFC-0009 §4): public material — what a unit is, and what it is checked against.**
 //!
+//! **NON-CONSENSUS for every artifact unit (ADR-0177, 2026-10-10).** The chain does not interfere with model acquisition: no fold arm
+//! reads `ArtifactLeaf`, `KernelCommitments`, `KernelRowNodes`, `KernelRow`, the manifest or the binding check any more. They remain the
+//! optional off-chain tooling of `misaka-palw-remote::public_material` and `palw-evidence artifact-*` — a verifier's way to fetch and
+//! check a model against the REGISTERED roots, never a duty anyone owes. The court's only unit is `ClaimPosition`
+//! ([`crate::palw_court_scope_v1`] classifies every unit; the provider court refuses the artifact ones).
+//!
 //! A *unit* ([`PublicUnitV1`]) is the addressable piece of a subject's public material: one leaf of a V2 class's artifact inventory, the
 //! kernel commitments its binding names, a run of row-tree nodes or one row of a bound kernel tensor, one committed position of a kernel
 //! route claim. The SAME unit names a file in the transport (`misaka-palw-remote::public_material`) and a provider-court challenge
@@ -43,7 +49,8 @@ pub const PALW_PUBLIC_MATERIAL_VERSION_V1: u16 = 1;
 pub const PALW_PUBLIC_MATERIAL_MAX_RUN_V1: u32 = 1_024;
 const ARTIFACT_MANIFEST_DOMAIN_V1: &[u8] = b"misaka-palw/public-material/artifact-manifest/v1";
 
-/// **One addressable unit of a subject's public material** (module doc). A challenge names one; an answer opens it.
+/// **One addressable unit of a subject's public material** (module doc). A provider-court challenge may name only `ClaimPosition`;
+/// the artifact variants are off-chain transport addresses (and refused by the court).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]

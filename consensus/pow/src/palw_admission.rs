@@ -32,7 +32,7 @@ use kaspa_consensus_core::dns_finality::{ActiveBondView, StakeBondRecord};
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw_block_commitment::{PalwBlockCommitmentError, PalwBlockCommitmentV1};
 use kaspa_consensus_core::palw_pwu::{palw_ticket_admits_v1, palw_ticket_v1};
-use kaspa_consensus_core::pow_layer0::{PalwAttemptLaneV1, PowLayer0Error, check_palw_commitment_shape_at};
+use kaspa_consensus_core::pow_layer0::{PalwAttemptLaneV1, PowLayer0Error};
 use thiserror::Error;
 
 use crate::StateLayer0;
@@ -143,9 +143,36 @@ where
     F: FnOnce(&kaspa_hashes::Hash64) -> Option<PalwAdmissionClassFacts>,
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
+    check_palw_block_admission_v2(header, bonds, class_facts, network_id, bound, attempt_lane, Default::default(), verify_mldsa87)
+}
+
+/// [`check_palw_block_admission_v1`] with the header carriage forms' owning fences (`Params::palw_header_form_fences_v1`): the shape
+/// gate admits a form added after the live testnet-12 build only where its fence is in force at the header's own DAA, and reads it
+/// as that build reads it below (A-2 uniformity). The UTXO validator — every chain candidate — calls this one.
+#[allow(clippy::too_many_arguments)]
+pub fn check_palw_block_admission_v2<'a, F, V>(
+    header: &Header,
+    bonds: &'a ActiveBondView,
+    class_facts: F,
+    network_id: &[u8],
+    bound: bool,
+    attempt_lane: PalwAttemptLaneV1,
+    header_forms: kaspa_consensus_core::pow_layer0::PalwHeaderFormFencesV1,
+    verify_mldsa87: V,
+) -> Result<PalwAdmission<'a>, PalwAdmissionError>
+where
+    F: FnOnce(&kaspa_hashes::Hash64) -> Option<PalwAdmissionClassFacts>,
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
     // Shape first, and unconditionally: this also enforces the pre-ADR rule when the fence is off,
     // so an unfenced network still refuses a header that carries bytes nothing validates.
-    check_palw_commitment_shape_at(header.pow_algo_id, &header.palw_commitment, bound, attempt_lane)?;
+    kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_with_forms_at(
+        header.pow_algo_id,
+        &header.palw_commitment,
+        bound,
+        attempt_lane,
+        |form| header_forms.in_force_at(form, header.daa_score),
+    )?;
     if !bound {
         return Ok(PalwAdmission::NotBound);
     }

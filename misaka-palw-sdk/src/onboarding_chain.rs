@@ -18,15 +18,15 @@
 //! # The fresh verifier
 //!
 //! [`fresh_verify_from_reads_v1`] takes what a node serves publicly — op 231's attempt and evidence rows and the class's program,
-//! op 212's Final facts — plus, optionally, the artifact from its public source, and re-derives the beacon, the seed, the selection
-//! and the evidence exactly as the chain's fold does (consensus-core's one implementation), then re-reads every selected leaf from
-//! the artifact. It needs no node-private state and no producer state.
+//! op 212's Final facts, and for a sealed-source (v3) attempt the seal facts of op 211's rows ([`sealed_sources_from_kernel_rows_v1`])
+//! — plus, optionally, the artifact from its public source, and re-derives the beacon, the seed, the selection and the evidence
+//! exactly as the chain's fold does (consensus-core's one implementation), then re-reads every selected leaf from the artifact. It
+//! needs no node-private state, no producer state and no Panel (G14 condition 9, RFC-0014 §3.4).
 
 use crate::runtime_pack::commit::{Refusal, hex};
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::palw_conformance_evidence_v1::{
     ConformanceEvidenceActionV1, ConformanceEvidencePostV1, FreshInputV1, FreshVerdictV1, SelectedLeafV1, fresh_verify_v1,
-    palw_onboarding_challenge_policy_v1,
 };
 use kaspa_consensus_core::palw_onboarding_v1::{
     ConformanceAttemptRowV1, PALW_ONBOARDING_MLDSA87_CONTEXT_V1, PALW_SIGNED_REGISTRATION_MLDSA87_CONTEXT_V1,
@@ -35,7 +35,9 @@ use kaspa_consensus_core::palw_onboarding_v1::{
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, palw_class_registration_buyer_v1};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::{Hash, Hash64};
-use misaka_palw_challenge::WorkFinalEventV1;
+use misaka_palw_challenge::AttributedWorkV1;
+/// The v3 seal fact a reader derives from op 211's rows (re-exported so a caller need not depend on the challenge crate).
+pub use misaka_palw_challenge::SealedSourceV3;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -259,8 +261,11 @@ pub struct PublicConformanceReadsV1 {
     pub attempt_row: Vec<u8>,
     /// Table 40's row, raw (op 231 `evidenceRow`), if evidence was posted.
     pub evidence_row: Option<Vec<u8>>,
-    /// Every Final fact with a beacon event (op 212 `workFinalEvent`), any order.
-    pub events: Vec<WorkFinalEventV1>,
+    /// Every Final fact with a beacon event (op 212 `workFinalEvent`: an attributed event — the producer stands behind it, for the
+    /// policy's distinct source rule), any order.
+    pub events: Vec<AttributedWorkV1>,
+    /// A sealed-source (v3) attempt's beacon facts, from op 211's rows ([`sealed_sources_from_kernel_rows_v1`]); empty for v2.
+    pub sealed_sources: Vec<SealedSourceV3>,
     /// The DAA the reads were taken at.
     pub tip_daa: u64,
     /// The class's canonical program bytes (op 231 `program`).
@@ -292,7 +297,16 @@ pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Op
     };
     let program = misaka_palw_tir::TirProgramV1::decode_canonical(&reads.program)
         .map_err(|e| Refusal::new("PROGRAM_MALFORMED", e.to_string()))?;
-    let policy = palw_onboarding_challenge_policy_v1();
+    // The network policy the commitment names (the sampled v2 or the sealed-source v3 one; an unknown id falls to v2 and is refused
+    // as substituted just below).
+    let policy = attempt.policy();
+    if attempt.is_complete_check() {
+        return Err(Refusal::new(
+            "COMPLETE_CHECK",
+            "a complete-check attempt has no beacon or seed to re-derive: verify it with fresh_verify_complete_check_v1 (it re-runs the \
+             whole check from the verifier's own copy of the registered artifact)",
+        ));
+    }
     if policy.id() != attempt.commitment.challenge_policy_id {
         return Err(Refusal::new(
             "POLICY_SUBSTITUTED",
@@ -334,6 +348,7 @@ pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Op
         policy: &policy,
         ctx: &ctx,
         events: &reads.events,
+        sealed: &reads.sealed_sources,
         tip_daa: reads.tip_daa,
         program: &program,
         post: post.as_ref(),
@@ -356,11 +371,125 @@ pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Op
     Ok(FreshReportV1 { verdict, attempt, chain_says_passed, agrees, why })
 }
 
+/// **A v3 attempt's seal facts from op 211's pages**: the reader rebuilds its own copy of the route from every served row
+/// (`PalwKernelRouteStateV1::from_served_rows_v1`, refused unless the rows root to the served roots) and derives the facts with the
+/// chain's own function — no seal-specific read, no node-private state.
+pub fn sealed_sources_from_kernel_rows_v1(
+    header: &[u8],
+    rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    ledger_root: &Hash64,
+    aux_root: &Hash64,
+) -> Result<Vec<SealedSourceV3>, Refusal> {
+    let route =
+        kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(header, rows, ledger_root, aux_root)
+            .map_err(|e| Refusal::new("ROWS_NOT_THE_CHAIN", e))?;
+    route.beacon_sealed_sources_v1().map_err(|e| Refusal::new("ROWS_MALFORMED", e))
+}
+
 fn unhex(s: &str) -> Result<Vec<u8>, String> {
     if s.len() % 2 != 0 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("not hex".into());
     }
     (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())).collect()
+}
+
+// ---- the fresh complete-check verifier (lane G14C, GAP-71b; OPVB's GAP-B10) ---------------------------------------------------
+
+/// **What a node serves publicly about a complete-check attempt** — the post itself is in no served row (it rides its block), so a
+/// fresh verifier re-runs the whole check instead of reading it back.
+pub struct PublicCompleteCheckReadsV1 {
+    /// Table 39's row, raw (op 231 `attemptRow`).
+    pub attempt_row: Vec<u8>,
+    /// The class's canonical program bytes (op 231 `program`).
+    pub program: Vec<u8>,
+    /// The bound kernel class's position bound (its plan's `max_positions`, from op 211's rows).
+    pub max_positions: u32,
+    /// The kernel binding's commitments root (from op 211's rows: the binding the chain holds for the class).
+    pub kernel_param_root: Hash64,
+}
+
+/// The fresh complete-check verifier's report.
+#[derive(Debug)]
+pub struct FreshCompleteReportV1 {
+    /// The id of the honest post: every input and every leaf, recomputed from the verifier's own copy of the registered artifact.
+    pub honest_post_id: [u8; 64],
+    /// The id of the post the chain judged (the attempt row's evidence id), `None` while nothing is posted.
+    pub chain_post_id: Option<[u8; 64]>,
+    /// Whether the honest post passes (`false` only when the artifact's tensors are not the ones the kernel binding committed).
+    pub honest_passes: bool,
+    /// The chain's record says the attempt passed (or the class is past it).
+    pub chain_says_passed: bool,
+    /// The verifier's verdict and the chain's record agree.
+    pub agrees: bool,
+    pub why: String,
+}
+
+/// **Verify a complete-check attempt from public reads and the verifier's own copy of the registered artifact** (ADR-0177: the
+/// verifier acquired the model off-chain; it is authenticated here against the commitment's artifact root before anything else).
+///
+/// The complete check is a pure function of the program, the artifact and the plan's position bound, so the verifier rebuilds the
+/// honest post exactly as the chain's own reference computes it (`complete_check_post_v1`). A post passes in the fold only if its
+/// leaves root to the registered artifact root (so they are the artifact's bytes) and every implementation's roots equal the
+/// reference's, i.e. only if it IS the honest post; so the chain's verdict is right exactly when "passed" coincides with "the judged
+/// post's id is the honest post's id" (and with nothing passing when the binding is not equal).
+pub fn fresh_verify_complete_check_v1(
+    reads: &PublicCompleteCheckReadsV1,
+    artifact: &[kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1],
+) -> Result<FreshCompleteReportV1, Refusal> {
+    use kaspa_consensus_core::palw_opv_bootstrap_v1::{
+        complete_check_post_v1, complete_check_reference_v1, palw_complete_check_domain_v1,
+    };
+    use misaka_palw_challenge::OnboardingStateV1 as S;
+    let attempt: ConformanceAttemptRowV1 =
+        borsh::from_slice(&reads.attempt_row).map_err(|e| Refusal::new("ROW_MALFORMED", format!("attempt row: {e}")))?;
+    if !attempt.is_complete_check() {
+        return Err(Refusal::new("NOT_COMPLETE_CHECK", "a sampled attempt: verify it with fresh_verify_from_reads_v1"));
+    }
+    let program = misaka_palw_tir::TirProgramV1::decode_canonical(&reads.program)
+        .map_err(|e| Refusal::new("PROGRAM_MALFORMED", e.to_string()))?;
+    let domain =
+        palw_complete_check_domain_v1(&program, reads.max_positions).map_err(|e| Refusal::new("NOT_COMPLETELY_CHECKABLE", e))?;
+    let reference = complete_check_reference_v1(&program, &domain, artifact)
+        .map_err(|f| Refusal::new("ARTIFACT_UNREADABLE", format!("{}: {}", f.code, f.detail)))?;
+    if reference.artifact_root.as_bytes() != attempt.commitment.artifact_root {
+        return Err(Refusal::new(
+            "ARTIFACT_NOT_REGISTERED",
+            "the verifier's copy does not root to the registered artifact root: it holds another model",
+        ));
+    }
+    let honest_passes = reference.kernel_param_root == reads.kernel_param_root.as_bytes();
+    let honest = complete_check_post_v1(&program, &domain, attempt.commitment.statement_root(), artifact.to_vec())
+        .map_err(|f| Refusal::new("ARTIFACT_UNREADABLE", format!("{}: {}", f.code, f.detail)))?;
+    let honest_post_id = honest.id();
+    let chain_post_id = attempt.evidence.map(|e| e.evidence_id.as_bytes());
+    let chain_says_passed = matches!(attempt.record.state, S::ConformancePassed | S::G14Eligible | S::ActiveRewardable);
+    let (agrees, why) = match (chain_post_id, chain_says_passed) {
+        (None, false) => (true, "nothing posted yet".to_string()),
+        (None, true) => (false, "the chain passed an attempt with no judged post".to_string()),
+        (Some(id), true) => {
+            let ok = honest_passes && id == honest_post_id;
+            (
+                ok,
+                if ok {
+                    "the judged post is the honest complete check".into()
+                } else {
+                    "the chain passed a post that is not the honest one".into()
+                },
+            )
+        }
+        (Some(id), false) => {
+            let ok = !honest_passes || id != honest_post_id;
+            (
+                ok,
+                if ok {
+                    "the judged post was not the honest complete check; it failed".into()
+                } else {
+                    "the chain failed the honest complete check".into()
+                },
+            )
+        }
+    };
+    Ok(FreshCompleteReportV1 { honest_post_id, chain_post_id, honest_passes, chain_says_passed, agrees, why })
 }
 
 fn parse_bond(s: &str) -> Result<PalwBondKeyV2, String> {

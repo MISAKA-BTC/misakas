@@ -109,19 +109,28 @@ fn the_policy_refuses_every_unknown_algorithm_missing_value_and_mismatched_trans
 
 #[test]
 fn nothing_is_approved_by_default_and_a_weaker_repetition_is_refused() {
-    let p = policy();
+    let p = PostCommitChallengePolicyV1 { security_bits: 128, ..policy() };
     let suite = named_id("checker-suite/k2-freivalds/v1");
     assert_eq!(approved_v1(&[], &suite, &p), Err(PolicyRefusalV1::NotApproved));
+    assert!(shipped_registry_v1().is_empty(), "the shipped registry approves nothing");
     let tuple = ApprovedTupleV1 {
         checker_suite_id: suite,
         challenge_policy_id: p.id(),
         soundness_policy_id: p.soundness_policy_id,
         min_repetitions: 4,
+        relations: vec![RelationSoundnessV1::MilliBits(64_000)],
+        grinding_choices_per_beacon: 1 << 10,
+        beacons_per_attempt: 1,
+        adaptive_queries: 1,
     };
-    approved_v1(&[tuple], &suite, &p).unwrap();
+    approved_v1(std::slice::from_ref(&tuple), &suite, &p).unwrap();
     let mut weaker = p.clone();
     weaker.repetition_count = 3;
-    assert_eq!(approved_v1(&[tuple], &suite, &weaker), Err(PolicyRefusalV1::NotApproved), "another id, fewer repetitions");
+    assert_eq!(
+        approved_v1(std::slice::from_ref(&tuple), &suite, &weaker),
+        Err(PolicyRefusalV1::NotApproved),
+        "another id, fewer repetitions"
+    );
     assert_ne!(p.id(), weaker.id(), "every field is in the policy id");
 }
 

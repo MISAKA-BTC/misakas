@@ -25,8 +25,8 @@ use kaspa_core::{error, info, warn};
 use misaka_palw_sdk::lineage::PalwTirClassEntryV1;
 use misaka_palw_tir::{ParamSource, Tensor};
 use misaka_palw_tir_sketch::{
-    TirCheckPolicyV1, TirMirrorAgreementV1, TirMirrorTotalsV1, TirSeatSketchSecretV1, TirSketchAnalysisV1, TirSketchJobV1, TirSketchKeysV1,
-    TirSketchStoreV1, TirWitnessV1, tir_mirror_agreement_v1, tir_mirror_check_v1, tir_witness_capture_v1,
+    TirCheckPolicyV1, TirMirrorAgreementV1, TirMirrorTotalsV1, TirSeatSketchSecretV1, TirSketchAnalysisV1, TirSketchJobV1,
+    TirSketchKeysV1, TirSketchStoreV1, TirWitnessV1, tir_mirror_agreement_v1, tir_mirror_check_v1, tir_witness_capture_v1,
 };
 
 use super::PALW_PANEL;
@@ -187,7 +187,8 @@ impl PalwSketchServiceV1 {
         let keys = self.secret.keys(&class_bytes, epoch);
         let params = ArtifactParamsV1 { artifact: &entry.artifact, program: &plan.program };
         let started = std::time::Instant::now();
-        let store = TirSketchStoreV1::build(plan, &analysis, &params, &keys).map_err(|e| format!("the sketch store does not build: {e}"))?;
+        let store =
+            TirSketchStoreV1::build(plan, &analysis, &params, &keys).map_err(|e| format!("the sketch store does not build: {e}"))?;
         info!(
             "[{PALW_PANEL}] sketch store of class {class_id} for epoch {epoch} built in {} ms ({:?})",
             started.elapsed().as_millis(),
@@ -222,8 +223,9 @@ impl PalwSketchServiceV1 {
             inner: ArtifactParamsV1 { artifact: &entry.artifact, program: &plan.program },
             held: held.analysis.held_params(&plan.program, 64, &self.policy),
         };
-        let checker = misaka_palw_tir_sketch::TirSketchCheckerV1::new(plan, &held.analysis, &held.store, &held.keys, &params, self.policy)
-            .map_err(|e| format!("the checker does not build: {e}"))?;
+        let checker =
+            misaka_palw_tir_sketch::TirSketchCheckerV1::new(plan, &held.analysis, &held.store, &held.keys, &params, self.policy)
+                .map_err(|e| format!("the checker does not build: {e}"))?;
         Ok(checker.escalate(&refused.job, &Self::job_id_v1(&refused.claim, refused.epoch), &refused.witness, failure, transport))
     }
 
@@ -375,7 +377,12 @@ pub(crate) fn palw_witness_chunks_path_v1(retention_dir: &Path, claim: &Hash64) 
 /// **Keep a claim's witness** as the producer's obligation (RFC-0007 §II.7): the image, and the digests of the exactly-`chunks` pieces it
 /// is cut into (the count the chain pinned the attempt at), each file written beside and renamed so a reader never sees half of one.
 /// Returns the digests.
-pub(crate) fn palw_witness_retain_v1(retention_dir: &Path, claim: &Hash64, image: &[u8], chunks: u32) -> Result<Vec<[u8; 32]>, String> {
+pub(crate) fn palw_witness_retain_v1(
+    retention_dir: &Path,
+    claim: &Hash64,
+    image: &[u8],
+    chunks: u32,
+) -> Result<Vec<[u8; 32]>, String> {
     std::fs::create_dir_all(retention_dir).map_err(|e| format!("cannot create {}: {e}", retention_dir.display()))?;
     let pieces = misaka_palw_tir_sketch::codec::split_into(image, chunks as usize);
     let digests: Vec<[u8; 32]> =
@@ -387,7 +394,9 @@ pub(crate) fn palw_witness_retain_v1(retention_dir: &Path, claim: &Hash64, image
     }
     let put = |path: std::path::PathBuf, bytes: &[u8]| -> Result<(), String> {
         let tmp = path.with_extension("partial");
-        std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, &path)).map_err(|e| format!("cannot write {}: {e}", path.display()))
+        std::fs::write(&tmp, bytes)
+            .and_then(|()| std::fs::rename(&tmp, &path))
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))
     };
     put(palw_witness_path_v1(retention_dir, claim), image)?;
     put(palw_witness_chunks_path_v1(retention_dir, claim), &manifest)?;
@@ -419,7 +428,8 @@ mod tests {
         let image: Vec<u8> = (0..5_000u32).flat_map(|i| i.to_le_bytes()).collect();
         let digests = palw_witness_retain_v1(dir.path(), &claim, &image, 4).expect("kept");
         assert_eq!(digests.len(), 4);
-        let served: Vec<(u32, Vec<u8>)> = (0..4).map(|i| (i, palw_witness_chunk_v1(dir.path(), &claim, i).expect("a chunk"))).collect();
+        let served: Vec<(u32, Vec<u8>)> =
+            (0..4).map(|i| (i, palw_witness_chunk_v1(dir.path(), &claim, i).expect("a chunk"))).collect();
         assert_eq!(misaka_palw_tir_sketch::codec::assemble(served, &digests), Some(image.clone()), "the chunks are the image");
         assert!(palw_witness_chunk_v1(dir.path(), &claim, 4).is_none(), "past the pinned count");
         assert!(palw_witness_chunk_v1(dir.path(), &Hash64::from_bytes([5; 64]), 0).is_none(), "another claim's");
@@ -438,7 +448,11 @@ mod tests {
         let again = palw_sketch_secret_load_v1(dir.path()).expect("loaded");
         let class = [3u8; 64];
         let m = misaka_palw_tir_sketch::TirSketchModulusV1::P61;
-        assert_eq!(first.keys(&class, 1).site_vector(0, 0, m, 8), again.keys(&class, 1).site_vector(0, 0, m, 8), "the same secret both times");
+        assert_eq!(
+            first.keys(&class, 1).site_vector(0, 0, m, 8),
+            again.keys(&class, 1).site_vector(0, 0, m, 8),
+            "the same secret both times"
+        );
         let path = dir.path().join(PALW_SKETCH_SECRET_FILE_V1);
         assert_eq!(std::fs::read(&path).unwrap().len(), 32);
         #[cfg(unix)]

@@ -25,7 +25,8 @@ use std::collections::BTreeMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::descriptor::{
-    KernelScheduleV1, KernelStatusV1, k2_tir_v1_descriptor, k2_tir_v2_descriptor, k2_tir_v3_descriptor,
+    KernelScheduleV1, KernelStatusV1, k2_tir_v1_descriptor, k2_tir_v2_descriptor, k2_tir_v3_descriptor, k2_tir_v4_descriptor,
+    k2_tir_v5_descriptor,
 };
 use misaka_palw_kernel::gate::ProsecutionPolicyV1;
 use misaka_palw_kernel::hash::Digest;
@@ -69,6 +70,28 @@ pub const PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1: u8 = 34;
 /// The block's adjudication budget already spent by earlier objects of the SAME chain block: `[] → (blue score, adjudications, court work)`.
 /// Rewritten by each charged object so the budget bounds the block however the fold is split into single-object rehearsals.
 pub const PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1: u8 = 35;
+
+/// **C4 F-C4R3-03: the route's OWN chunk lane** — `borsh((opener bond, group)) → PalwKernelChunkGroupV1` (the lead's allocation of
+/// 2026-10-08: aux tables 41–42, riding the route's `KernelRouteRow` deltas, tail `0xEC` and root block). A prosecution object larger
+/// than one carrier — a `FileProof` or a position `Respond` of a real class, an onboarding refutation (tag 105) — rides
+/// `KernelRouteChunkV1` (tag 113) here, never in the certification lane's `pending_chunks` (ONE network-wide table of eight groups
+/// that eight junk chunks hold for 4,000 DAA). A group here is keyed by its SIGNING opener's bond, so no bond can occupy another's
+/// room: every bond has [`PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1`] groups of its own, each backed by a deposit forfeited if it never
+/// completes, and none outliving its target's deadline.
+pub const PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1: u8 = 41;
+/// Allocated beside table 41 (2026-10-08) and held unused.
+pub const PALW_KERNEL_ROUTE_TABLE_RESERVED_42_V1: u8 = 42;
+/// The most half-assembled groups one bond may hold open in the route's chunk lane at once.
+pub const PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1: usize = 2;
+/// The longest a group may stay half-assembled (it never outlives its target's deadline either).
+pub const PALW_KERNEL_CHUNK_TTL_MAX_DAA_V1: u64 = 64;
+/// The deposit a group's opener posts per declared part, held from its free collateral until the group completes and FORFEITED
+/// (slashed, burned) if it never does: junk pays, honesty is refunded.
+pub const PALW_KERNEL_CHUNK_DEPOSIT_PER_PART_SOMPI_V1: u64 = SOMPI_PER_KASPA;
+/// The ML-DSA-87 context the opener's bond signs each chunk under.
+pub const PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/kernel-route/chunk/v1";
+/// The domain of a chunk's signed message (network, the chunk's Borsh).
+pub const PALW_KERNEL_CHUNK_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/chunk-message/v1";
 
 /// The most seats one claim's interim assignment draws, and the per-segment quorum the tally needs.
 pub const PALW_KERNEL_ROUTE_INTERIM_SEATS_V1: usize = 3;
@@ -133,17 +156,46 @@ pub struct PalwKernelRouteExtrasV1 {
     /// **Lane DA16: `Params::palw_provider_court_v1`'s activation DAA, where that fence is in force at the block** (`None` below it and on
     /// every network). The provider court's objects fold only with it; a claim committed below it can never move its DA responsibility.
     pub provider_court: Option<u64>,
+    /// **G14R round 3: `Params::palw_verifier_pay_v1`'s activation DAA** (`None` on every network): the kernel ledger's M\*-49 and O2
+    /// terms (`crate::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1`), injected at every load — not in the header or root.
+    pub verifier_pay: Option<u64>,
 }
 
-/// What the processor hands the fold for the OPV mode (RFC-0015): the network's policy and its admission list, both read from
-/// `Params::palw_panel_free_v1` ([`crate::palw_panel_free_v1::PalwPanelFreeFenceV1`]).
+/// What the processor hands the fold for the OPV mode (RFC-0015): the network's policy and the two restrictions of the DERIVED
+/// eligibility, all read from `Params::palw_panel_free_v1` ([`crate::palw_panel_free_v1::PalwPanelFreeFenceV1`]). Eligibility itself is
+/// derived in the fold from chain state (`crate::palw_opv_bootstrap_v1`), never handed in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwKernelOpvExtrasV1 {
     /// The OPV policy, a genesis constant of the route (the fence's terms, activating at the fence's height).
     pub policy: OpvPolicyV1,
-    /// **The class ids (mode-bound) the NETWORK'S policy admits for OPV** — consensus, never a registrant's choice.
-    pub admitted_classes: Vec<Hash64>,
+    /// Mode-bound class ids the network denies OPV (a restriction only).
+    pub denied_classes: Vec<Hash64>,
+    /// The effective-bits floor a class's conformance policy must reach.
+    pub min_effective_bits: u16,
+    /// GAP-70: whether a sampled conformance may satisfy E6 (`false` on every network the validation admits).
+    pub sampled_conformance_gates_reward: bool,
+    /// **TEST SEAM, empty in every build that can run a network**: mode-bound class ids a pre-derivation mechanics test treats as
+    /// eligible (the processor fills it only under `cfg(test)`, from `kernel_route_test_opv_eligible_v1`, exactly as it fills
+    /// `attested_artifacts`). The bootstrap E2E uses none.
+    pub test_eligible: Vec<Hash64>,
+    /// **G14-for-rewards**: `Some` from the fence's activation on (`None` below it, and the gate is unarmed). See
+    /// `crate::palw_opv_bootstrap_v1::palw_reward_gate_v1`.
+    pub reward_gate: Option<PalwRewardGateTermsV1>,
 }
+
+/// The terms of the G14-for-rewards gate at one block (from `Params::palw_panel_free_v1`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRewardGateTermsV1 {
+    /// The fence's activation: a class registered below it keeps earning through the OLD Panel route, in full; one registered at or
+    /// past it earns only through the onboarding/G14 path (the user's ruling of 2026-10-09: the two reward channels never mix).
+    pub fence_activation_daa: u64,
+}
+
+/// **The PALW reporter share on the kernel route, permille** (ADR-0032's 2026-10-10 amendment: 4,900 bps): what an accuser, a
+/// demander or an onboarding challenger is paid of a slash the chain actually collected; the rest is burned. One constant for every
+/// reporter path of the route, so the share cannot drift between them. (`palw_reporter_share_v2` is INTF's fence for the R-core rate;
+/// the kernel route is dormant as a whole, so its share needs no fence of its own: it has never been in force at any other rate.)
+pub const PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1: u16 = 490;
 
 /// **The INTERIM ledger policy.** Windows are short so a drill crosses them; the amounts are sompi. Values are consensus constants
 /// of the (never-armed) fence, written once here: a real activation would revisit every one.
@@ -168,15 +220,28 @@ pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash6
         liability_daa: 200,
         exit_delay_daa: 30,
         dismissed_proof_fee: SOMPI_PER_KASPA / 10,
-        accuser_reward_permille: 500,
+        // ADR-0032 (2026-10-10 amendment): the PALW reporter share is 49 % (4,900 bps) of what a slash actually COLLECTED, the rest
+        // burned. The route's accuser (a conviction), its demanders (a default penalty) and — at the same rate — the onboarding
+        // challenger are PALW reporters, so the interim share is that ceiling, not the 500‰ it was. A self-reporter recovers at most
+        // 49 %: the net loss of a convicted producer is ≥ 51 % of the collected slash, never the gross slash (ADR-0176 D6).
+        accuser_reward_permille: PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1,
         default_penalty: 100 * SOMPI_PER_KASPA,
-        // INTERIM: a reward needs a funded payout path that does not exist (GAP); the mapping to the coinbase queue is exercised.
+        // GAP-5 (the user's ruling: user-pays escrow): the reward is paid out of the job's ESCROW, reserved from the poster's bond at
+        // posting and spent once at the job's first Final — never new money.
         claim_reward: 5 * SOMPI_PER_KASPA,
+        // GAP-5: posting a job burns 1 BILI beside its escrow (a self-posted job is never free), and an escrow no claim can still use
+        // goes back to its poster 300 DAA after posting (past the seal TTL, the check and challenge windows and a court).
+        job_fee: SOMPI_PER_KASPA,
+        job_escrow_ttl_daa: 300,
         max_adjudications_per_block: 64,
+        // C4 F-C4R3-05 (round 2): half of every block's court runs only a proof may spend.
+        prosecution_reserve_permille: 500,
         max_court_work_per_block: 1 << 30,
         // Seal, then reveal: a claim commits over its producer's seal at least one block old; an unrevealed seal lives one check window.
         claim_seal_delay_daa: 1,
         seal_ttl_daa: 100,
+        // OPV-BOOT's sealed-source beacon (v3): a claim seal holds 1 BILI until revealed, forfeited if it expires unrevealed.
+        seal_deposit: SOMPI_PER_KASPA,
         prosecution: ProsecutionPolicyV1 {
             court_deadline_daa: 20,
             max_sessions_per_claim: 1 << 10,
@@ -210,12 +275,19 @@ pub fn palw_kernel_route_template_typed_v1(policy: LedgerPolicyV1, opv: Option<O
 /// The ledger configuration the fold starts every block from (policy, the schedule that arms the K2 descriptors, the descriptors
 /// this binary implements). Rows are loaded over it.
 pub fn palw_kernel_route_template_v1(policy: LedgerPolicyV1) -> KernelLedgerV1 {
-    let (v1, v2, v3) = (k2_tir_v1_descriptor(), k2_tir_v2_descriptor(), k2_tir_v3_descriptor());
+    // K2-TIR-v4 (lane K2S, `docs/design/palw/k2-real-scale.md`): the real-scale suite — segmented claims, element courts, per-position
+    // DA, prompt tiles; its classes register only under OptimisticPublicVerification. Like v1–v3 it is armed here and nowhere else:
+    // the fence refuses every real height.
+    // K2-TIR-v5 (§12 of the same design): K2-TIR-v4 for encoders and heads, ONE position whose ids are the job's; armed here only.
+    let (v1, v2, v3, v4) = (k2_tir_v1_descriptor(), k2_tir_v2_descriptor(), k2_tir_v3_descriptor(), k2_tir_v4_descriptor());
+    let v5 = k2_tir_v5_descriptor();
     let schedule = KernelScheduleV1::default()
         .with(v1.digest(), KernelStatusV1::Active { since_daa: 0 })
         .with(v2.digest(), KernelStatusV1::Active { since_daa: 0 })
-        .with(v3.digest(), KernelStatusV1::Active { since_daa: 0 });
-    KernelLedgerV1::genesis(policy, schedule, vec![v1, v2, v3]).expect("the interim kernel route policy validates")
+        .with(v3.digest(), KernelStatusV1::Active { since_daa: 0 })
+        .with(v4.digest(), KernelStatusV1::Active { since_daa: 0 })
+        .with(v5.digest(), KernelStatusV1::Active { since_daa: 0 });
+    KernelLedgerV1::genesis(policy, schedule, vec![v1, v2, v3, v4, v5]).expect("the interim kernel route policy validates")
 }
 
 /// One seat of an interim assignment.
@@ -259,11 +331,63 @@ pub struct PalwKernelRouteStateV1 {
     pub header: PalwKernelRouteHeaderV1,
     pub rows: LedgerRowsV1,
     pub aux: BTreeMap<(u8, Vec<u8>), Vec<u8>>,
+    /// **GAP 8: the ledger the rows describe, cached** — never state: not hashed, not encoded, not in a delta, equal for every
+    /// comparison. Set by the fold's flush to exactly what [`KernelLedgerV1::from_rows`] would rebuild
+    /// ([`KernelLedgerV1::as_rebuilt_from_v1`]); cleared by every other write of a ledger row or of the header (a delta applied or
+    /// reverted, a row the fold writes outside its flush). A state decoded from a store, a snapshot or a carriage starts without it.
+    #[borsh(skip)]
+    pub ledger_cache: KernelLedgerCacheV1,
+}
+
+/// How many kernel ledger loads were served from the cache in this process (a diagnostic: the fold of a block loads the ledger once
+/// per object, and every load after the block's first is a hit — GAP 8's "a cached ledger per block").
+pub static PALW_KERNEL_LEDGER_CACHE_HITS_V1: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The cached ledger of a [`PalwKernelRouteStateV1`] (see its `ledger_cache`). Clones share the immutable ledger; a load clones it.
+#[derive(Clone, Default)]
+pub struct KernelLedgerCacheV1(Option<std::sync::Arc<KernelLedgerV1>>);
+
+impl KernelLedgerCacheV1 {
+    pub fn get(&self) -> Option<KernelLedgerV1> {
+        self.0.as_ref().map(|l| (**l).clone())
+    }
+
+    pub fn set(&mut self, ledger: KernelLedgerV1) {
+        self.0 = Some(std::sync::Arc::new(ledger));
+    }
+
+    pub fn clear(&mut self) {
+        self.0 = None;
+    }
+
+    pub fn is_set(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
+/// A cache is never part of what a state is: every two caches compare equal.
+impl PartialEq for KernelLedgerCacheV1 {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for KernelLedgerCacheV1 {}
+
+impl std::fmt::Debug for KernelLedgerCacheV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "KernelLedgerCacheV1(cached: {})", self.0.is_some())
+    }
 }
 
 impl PalwKernelRouteStateV1 {
     pub fn new(policy: LedgerPolicyV1, opv: Option<OpvPolicyV1>, scalars: LedgerScalarsV1) -> Self {
         Self::new_typed(policy, opv, None, scalars)
+    }
+
+    /// A route state with nothing in it but its header (a delta that creates it).
+    pub fn with_header(header: PalwKernelRouteHeaderV1) -> Self {
+        Self { header, rows: LedgerRowsV1::new(), aux: BTreeMap::new(), ledger_cache: KernelLedgerCacheV1::default() }
     }
 
     /// [`Self::new`] under the typed-roots fence's activation (RFC-0004 Part II).
@@ -274,6 +398,7 @@ impl PalwKernelRouteStateV1 {
             header: PalwKernelRouteHeaderV1 { policy, config_root, scalars, opv, typed_roots },
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
+            ledger_cache: KernelLedgerCacheV1::default(),
         }
     }
 
@@ -304,8 +429,18 @@ impl PalwKernelRouteStateV1 {
         Hash64::from_bytes(out)
     }
 
-    /// The kernel ledger these rows describe (over the state's own configuration).
+    /// The kernel ledger these rows describe (over the state's own configuration): the cached one when the fold left it (GAP 8: no
+    /// row decoded, no program decoded, no gate recomputed), else rebuilt from the rows. In a debug build the cache is checked against
+    /// the rows every time, so a write path that forgot to clear it fails the tests instead of a node.
     pub fn ledger(&self) -> Result<KernelLedgerV1, String> {
+        if let Some(cached) = self.ledger_cache.get() {
+            PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            debug_assert!(
+                cached.scalars() == self.header.scalars && cached.to_rows() == self.rows,
+                "the cached kernel ledger is not the ledger of the rows (a write did not clear the cache)"
+            );
+            return Ok(cached);
+        }
         KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &self.rows)
     }
 
@@ -329,9 +464,15 @@ impl PalwKernelRouteStateV1 {
         self.aux_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, &borsh::to_vec(claim).expect("a digest serializes")).unwrap_or_default()
     }
 
-    /// What the kernel has reserved against a V2 bond (a claim's collateral, a demand bond): the term V2's committed-collateral
-    /// ledger adds, so no V2 gate counts kernel-reserved collateral as free.
+    /// What the route holds against a V2 bond — the ledger's reservations (a claim's collateral, a demand bond) and the deposits of
+    /// its open chunk groups: the term V2's committed-collateral ledger adds, so no V2 gate counts it as free.
     pub fn reserved_of(&self, bond: &PalwBondKeyV2) -> u64 {
+        self.ledger_reserved_of(bond).saturating_add(self.chunk_deposits_of_v1(bond))
+    }
+
+    /// What the kernel LEDGER has reserved against a V2 bond (its `BondRowV1::reserved`). The ledger is synced net of everything
+    /// else the bond backs — the chunk deposits included — so a deposit is never also a claim's collateral.
+    pub fn ledger_reserved_of(&self, bond: &PalwBondKeyV2) -> u64 {
         let key = borsh::to_vec(&palw_kernel_bond_id_v1(bond)).expect("a digest serializes");
         self.rows
             .get(&(misaka_palw_kernel::rows::TABLE_BONDS_V1, key))
@@ -466,6 +607,10 @@ pub struct KernelClaimReadV1 {
     pub aux_root: Hash64,
 }
 
+/// The first table number of the route's consensus (aux) tables; the kernel ledger's own tables are numbered below it (op 211 serves
+/// both, in key order, so a page is ledger rows then aux rows).
+pub const PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1: u8 = 32;
+
 /// One page of the route's rows, in `(table, key)` order (ledger tables first, then the consensus tables).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KernelRowsPageV1 {
@@ -476,14 +621,15 @@ pub struct KernelRowsPageV1 {
 }
 
 /// One Final of the route, for a reader and for the beacon: the kernel's receipt, how the work reached Final, and — where the route
-/// knows every fact the beacon needs — the borsh `WorkFinalEventV1` (RFC-0010's `BeaconFactSource` input).
+/// knows every fact the beacon needs — the borsh `AttributedWorkV1` (the `WorkFinalEventV1` and who stands behind it).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KernelFinalReadV1 {
     pub receipt: misaka_palw_kernel::opv::FinalReceiptV1,
     /// `PanelIndependent` (an OPV Final, never anything else) or `PanelLicensed` (the interim route does not know the licensing
     /// Panel's seed and epoch, so it exports no beacon event for it).
     pub final_path: &'static str,
-    /// Borsh of `misaka_palw_challenge::WorkFinalEventV1`; `None` for a Panel-licensed Final.
+    /// Borsh of `misaka_palw_challenge::AttributedWorkV1` (the event, then the producer bond and the consumer — `Absent` until the
+    /// route records a job's payer); `None` for a Panel-licensed Final.
     pub event: Option<Vec<u8>>,
     pub statement: &'static str,
 }
@@ -517,7 +663,17 @@ impl PalwKernelRouteStateV1 {
                         panel: None,
                     };
                     let event = receipt.to_work_final_event(&ctx)?;
-                    ("PanelIndependent", Some(borsh::to_vec(&event).map_err(|e| e.to_string())?))
+                    // Who stands behind the work: the producer bond of the Final claim (the route keeps no job poster yet, so the
+                    // consumer is Absent and the distinct rule's consumer clause is a no-op until it does).
+                    let producer = ledger.claims.get(&receipt.claim).map(|r| r.producer).unwrap_or([0u8; 64]);
+                    let attributed = misaka_palw_challenge::AttributedWorkV1 {
+                        event,
+                        attribution: misaka_palw_challenge::SourceAttributionV1 {
+                            producer_id: producer,
+                            consumer_id: misaka_palw_challenge::RootV1::Absent,
+                        },
+                    };
+                    ("PanelIndependent", Some(borsh::to_vec(&attributed).map_err(|e| e.to_string())?))
                 }
                 VerificationModeV1::PanelLicensed => ("PanelLicensed", None),
             };
@@ -538,10 +694,18 @@ impl PalwKernelRouteStateV1 {
                 ("program", record.to_bytes(), borsh::to_vec(&header).map_err(|e| e.to_string())?)
             }
             misaka_palw_kernel::ledger::ClaimBodyV1::Pipeline { .. } => {
-                let (record, _header, _binding) =
+                let (record, header, binding) =
                     ledger.pipeline_public_record(claim).ok_or("a stored pipeline claim has no public record")?;
-                // A pipeline header has no wire form of its own: a reader rebuilds it from the class record.
-                ("pipeline", record.to_bytes(), Vec::new())
+                // GAP 6 closed: the header a pipeline verifier is built with, with the class binding it checks the record against.
+                ("pipeline", record.to_bytes(), borsh::to_vec(&(header, binding)).map_err(|e| e.to_string())?)
+            }
+            // K2-TIR-v4: the segmented record (the class's program, plan and v3 commitments, the evidence, the segment roots, the job's
+            // prompt by length and root and the delivered ids); the header is the class's.
+            misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { .. } => {
+                let record = misaka_palw_kernel::seg_ledger::SegmentedClaimRecordV1::of(&ledger, claim)
+                    .ok_or("a stored segmented claim has no record")?;
+                let header = ledger.classes.get(&row.class_binding_id).map(|c| c.header(row.class_binding_id)).ok_or("no class")?;
+                ("segmented", record.to_bytes(), borsh::to_vec(&header).map_err(|e| e.to_string())?)
             }
             // RFC-0004 Part II: the typed claim's stored body is its public record, and the class's specification its header.
             misaka_palw_kernel::ledger::ClaimBodyV1::Spec(body) => {
@@ -557,6 +721,12 @@ impl PalwKernelRouteStateV1 {
         for ((c, stage, position), sp) in ledger.served.iter() {
             if c == claim {
                 served.push((*stage, *position, borsh::to_vec(sp).map_err(|e| e.to_string())?));
+            }
+        }
+        // A segmented claim keeps no served bytes: its served positions (and the progress of open demands) are borsh `SegProgressV1`.
+        for ((c, stage, position), progress) in ledger.seg_progress.iter() {
+            if c == claim {
+                served.push((*stage, *position, borsh::to_vec(progress).map_err(|e| e.to_string())?));
             }
         }
         let demands = ledger
@@ -617,6 +787,41 @@ impl PalwKernelRouteStateV1 {
     /// **A page of rows**, `(table, key, row)` in order, starting after `after` (exclusive; `None` = the beginning) and stopping once
     /// `max_bytes` of keys and rows are gathered (at least one row, so a page always makes progress). A reader that collects every page
     /// and rebuilds a ledger from them must reach [`Self::ledger_root`].
+    /// **A fresh reader's copy of the route, rebuilt from op 211's pages** (G14 condition 9, RFC-0014 §3.4: a non-Panel verifier
+    /// reproduces the whole post-commit path from public reads alone). `header` is op 211's Borsh header; `rows` every
+    /// `(table, key, row)` of every page — the ledger's tables below [`PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1`], the consensus (aux)
+    /// tables from it. Refused unless the rows root to the served `ledger_root` and `aux_root` and no row is served twice. Every read
+    /// of this type then runs on the reader's own copy, by the chain's own functions: the Final facts (`finals_read_v1`), the v3
+    /// seal facts (`beacon_sealed_sources_v1`), an attempt's beacon (`attempt_beacon_v1`). (Authenticating the served roots against
+    /// the chain's committed state is the state proof's job, shared by every public read.)
+    pub fn from_served_rows_v1(
+        header: &[u8],
+        rows: impl IntoIterator<Item = (u8, Vec<u8>, Vec<u8>)>,
+        ledger_root: &Hash64,
+        aux_root: &Hash64,
+    ) -> Result<Self, String> {
+        let header: PalwKernelRouteHeaderV1 =
+            borsh::from_slice(header).map_err(|e| format!("the route header does not decode: {e}"))?;
+        let mut route = Self { header, rows: LedgerRowsV1::new(), aux: BTreeMap::new(), ledger_cache: KernelLedgerCacheV1::default() };
+        for (table, key, row) in rows {
+            let twice = if table < PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1 {
+                route.rows.insert((table, key), row).is_some()
+            } else {
+                route.aux.insert((table, key), row).is_some()
+            };
+            if twice {
+                return Err(format!("a row of table {table} is served twice"));
+            }
+        }
+        if route.ledger_root() != *ledger_root {
+            return Err("the served rows do not root to the served ledger root".into());
+        }
+        if route.aux_root() != *aux_root {
+            return Err("the served rows do not root to the served aux root".into());
+        }
+        Ok(route)
+    }
+
     pub fn rows_page_v1(&self, after: Option<(u8, Vec<u8>)>, max_bytes: usize) -> KernelRowsPageV1 {
         use std::ops::Bound::{Excluded, Unbounded};
         let total_rows = (self.rows.len() + self.aux.len()) as u64;
@@ -639,11 +844,7 @@ impl PalwKernelRouteStateV1 {
         }
         // `next` is a resume point only if something follows it.
         if let Some(cursor) = &next {
-            let after_last = self
-                .rows
-                .range((Excluded(cursor.clone()), Unbounded))
-                .next()
-                .is_some()
+            let after_last = self.rows.range((Excluded(cursor.clone()), Unbounded)).next().is_some()
                 || self.aux.range((Excluded(cursor.clone()), Unbounded)).next().is_some();
             if !after_last {
                 next = None;
@@ -653,9 +854,242 @@ impl PalwKernelRouteStateV1 {
     }
 }
 
+// ---- the route's own chunk lane (C4 F-C4R3-03; tag 113, aux table 41) --------------------------------------------------------------
+
+/// **What a chunk group serves** — fixed at its first chunk, and what its TTL is bounded by: a group never outlives the last DAA at
+/// which its object could still matter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwKernelChunkTargetV1 {
+    /// A kernel claim: the assembled object is a `FileProof` against it or a `Respond` to a demand on it (tag 110).
+    Claim(Digest) = 0,
+    /// An onboarding artifact binding: the assembled object is its refutation (tag 105).
+    Binding { v2_class: Hash64, kernel_param_root: Hash64 } = 1,
+    /// **OPV-BOOT #1: the conformance attempt of V2 class `v2_class`** — the assembled object is that class's conformance evidence
+    /// (tag 109: a Post by the class's registrant, opening the group itself, or a Refute by anyone), applied by its own arm. Its
+    /// deadline is OPV-BOOT's `palw_conformance_chunk_target_v1(route, v2_class, daa)` (the agreed signature: the attempt's evidence
+    /// deadline for a Post, its refutation window's end for a Refute; `None` when no attempt is open).
+    Conformance { v2_class: Hash64 } = 2,
+}
+
+/// **One chunk of a prosecution object in the route's own lane** (the body of `KernelRouteChunkV1`, tag 113). `group` is
+/// `palw_object_chunk_group_id_v1` of the assembled object's Borsh (a `PalwConsensusObjectV2`), the opener's bond signs every chunk
+/// ([`palw_kernel_chunk_message_v1`]), and `target`/`count` are fixed by the group's first chunk.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwKernelChunkV1 {
+    pub opener: PalwBondKeyV2,
+    pub group: Hash64,
+    pub target: PalwKernelChunkTargetV1,
+    pub index: u8,
+    pub count: u8,
+    pub bytes: Vec<u8>,
+}
+
+/// **A half-assembled group** (aux table 41): its target, its declared part count, its clock and the deposit its opener posted.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwKernelChunkGroupV1 {
+    pub target: PalwKernelChunkTargetV1,
+    pub count: u8,
+    pub opened_daa: u64,
+    /// The last DAA a part may arrive: `min(opened + PALW_KERNEL_CHUNK_TTL_MAX_DAA_V1, the target's deadline)`. Past it the group is
+    /// dropped and its deposit forfeited.
+    pub expires_daa: u64,
+    pub deposit: u64,
+    pub parts: BTreeMap<u8, Vec<u8>>,
+}
+
+/// **The message a chunk's opener signs**: `H(domain; network ‖ len ‖ borsh(chunk))` — every field, the target and the bytes included.
+pub fn palw_kernel_chunk_message_v1(network_domain: Hash64, chunk: &PalwKernelChunkV1) -> Hash64 {
+    let bytes = borsh::to_vec(chunk).expect("a chunk serializes");
+    let mut s = blake2b_simd::Params::new().hash_length(64).key(PALW_KERNEL_CHUNK_DOMAIN_V1).to_state();
+    s.update(network_domain.as_byte_slice());
+    s.update(&(bytes.len() as u64).to_le_bytes());
+    s.update(&bytes);
+    let mut out = [0u8; 64];
+    out.copy_from_slice(s.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// A group's row key: `borsh((opener, group))`.
+pub fn palw_kernel_chunk_group_key_v1(opener: &PalwBondKeyV2, group: &Hash64) -> Vec<u8> {
+    borsh::to_vec(&(*opener, *group)).expect("a bond key and a digest serialize")
+}
+
+/// **Cut `object` into the route lane's chunks** of at most `cap` bytes (unsigned: the opener signs each). At least one chunk, even
+/// when the object fits one carrier; refused past `PALW_OBJECT_CHUNK_MAX_COUNT` chunks or a cap past one carrier.
+pub fn palw_kernel_chunks_v1(
+    object: &crate::palw_state_v2::PalwConsensusObjectV2,
+    opener: PalwBondKeyV2,
+    target: PalwKernelChunkTargetV1,
+    cap: usize,
+) -> Result<Vec<PalwKernelChunkV1>, String> {
+    use crate::palw_state_v2::{PALW_OBJECT_CHUNK_MAX_BYTES, PALW_OBJECT_CHUNK_MAX_COUNT, palw_object_chunk_group_id_v1};
+    if cap == 0 || cap > PALW_OBJECT_CHUNK_MAX_BYTES {
+        return Err(format!("a chunk holds 1..={PALW_OBJECT_CHUNK_MAX_BYTES} bytes"));
+    }
+    let bytes = borsh::to_vec(object).map_err(|e| e.to_string())?;
+    let count = bytes.len().div_ceil(cap).max(1);
+    if count > PALW_OBJECT_CHUNK_MAX_COUNT as usize {
+        return Err(format!("{} bytes need {count} chunks of {cap}, past {PALW_OBJECT_CHUNK_MAX_COUNT}", bytes.len()));
+    }
+    let group = palw_object_chunk_group_id_v1(&bytes);
+    Ok(bytes
+        .chunks(cap)
+        .enumerate()
+        .map(|(i, part)| PalwKernelChunkV1 { opener, group, target, index: i as u8, count: count as u8, bytes: part.to_vec() })
+        .collect())
+}
+
+/// **Is the assembled object a prosecution of the group's target?** A `KernelRouteV1` whose strictly decoded kernel object is a
+/// `FileProof` against, or a `Respond` to a demand on, the target claim; a refutation (tag 105) of the target binding. Nothing else
+/// rides this lane (other objects keep the certification lane's `ObjectChunk`).
+pub fn palw_kernel_chunk_inner_matches_target_v1(
+    inner: &crate::palw_state_v2::PalwConsensusObjectV2,
+    target: &PalwKernelChunkTargetV1,
+) -> bool {
+    use crate::palw_state_v2::PalwConsensusObjectV2 as Obj;
+    use misaka_palw_kernel::route::KernelRouteObjectV1 as K;
+    match (inner, target) {
+        (Obj::KernelRouteV1 { bytes, .. }, PalwKernelChunkTargetV1::Claim(id)) => {
+            matches!(K::decode(bytes), Ok(K::FileProof { claim, .. } | K::Respond { claim, .. }) if claim == *id)
+        }
+        (
+            Obj::ArtifactBindingChallengedV1 { v2_class, kernel_param_root, .. },
+            PalwKernelChunkTargetV1::Binding { v2_class: class, kernel_param_root: root },
+        ) => v2_class == class && kernel_param_root == root,
+        (Obj::ConformanceEvidenceV1 { v2_class, .. }, PalwKernelChunkTargetV1::Conformance { v2_class: class }) => v2_class == class,
+        _ => false,
+    }
+}
+
+/// **OPV-BOOT #1's deadline**: the agreed `palw_conformance_chunk_target_v1(route, v2_class, daa) -> Option<u64>` (the last DAA a part
+/// may arrive; `None`: no attempt can take one — a complete check never needs the lane), implemented over the attempt rows in
+/// [`crate::palw_onboarding_v1::palw_conformance_chunk_target_v1`] and wired here (OPVB).
+pub fn palw_conformance_chunk_target_pending_v1(route: &PalwKernelRouteStateV1, v2_class: &Hash64, daa: u64) -> Option<u64> {
+    crate::palw_onboarding_v1::palw_conformance_chunk_target_v1(route, v2_class, daa)
+}
+
+/// **The last DAA a proof against (or a response on) a claim in `state` could still matter** — an upper bound read from the claim
+/// row and the policy: its liability horizon once Final or defaulted; before that, the latest Final its clock allows plus the
+/// liability horizon. `None`: the claim is decided (convicted, timed out) and nothing it receives can change that.
+pub fn palw_kernel_claim_horizon_bound_v1(
+    policy: &LedgerPolicyV1,
+    committed_daa: u64,
+    liability_until: Option<u64>,
+    state: &misaka_palw_kernel::lifecycle::ClaimStateV1,
+) -> Option<u64> {
+    use misaka_palw_kernel::lifecycle::ClaimStateV1 as S;
+    let tail = policy.court_deadline_daa.saturating_add(policy.proof_grace_daa).saturating_add(policy.liability_daa);
+    match state {
+        S::Final { .. } | S::Unavailable { .. } => liability_until,
+        S::TimedOut { .. } | S::Convicted { .. } => None,
+        S::Checking { deadline_daa, .. } => Some(deadline_daa.saturating_add(policy.challenge_window_daa).saturating_add(tail)),
+        S::ProbabilisticPass { window_end_daa, .. } | S::Challengeable { window_end_daa, .. } | S::WindowClosed { window_end_daa } => {
+            Some(window_end_daa.saturating_add(tail))
+        }
+        S::Disputed { resume, .. } => palw_kernel_claim_horizon_bound_v1(policy, committed_daa, liability_until, resume),
+        S::Committed | S::ChallengeBound { .. } => Some(
+            committed_daa.saturating_add(policy.check_window_daa).saturating_add(policy.challenge_window_daa).saturating_add(tail),
+        ),
+    }
+}
+
+impl PalwKernelRouteStateV1 {
+    /// One group of the route's chunk lane.
+    pub fn chunk_group_v1(&self, opener: &PalwBondKeyV2, group: &Hash64) -> Option<PalwKernelChunkGroupV1> {
+        self.aux_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, &palw_kernel_chunk_group_key_v1(opener, group))
+    }
+
+    /// Every half-assembled group, `(opener, group, row)`, in key order.
+    pub fn chunk_groups_v1(&self) -> Vec<(PalwBondKeyV2, Hash64, PalwKernelChunkGroupV1)> {
+        let t = PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1;
+        self.aux
+            .range((t, Vec::new())..(t + 1, Vec::new()))
+            .filter_map(|((_, key), row)| {
+                let (opener, group) = borsh::from_slice::<(PalwBondKeyV2, Hash64)>(key).ok()?;
+                Some((opener, group, borsh::from_slice::<PalwKernelChunkGroupV1>(row).ok()?))
+            })
+            .collect()
+    }
+
+    /// How many groups `opener` holds open.
+    pub fn chunk_groups_of_v1(&self, opener: &PalwBondKeyV2) -> usize {
+        self.chunk_groups_v1().iter().filter(|(o, _, _)| o == opener).count()
+    }
+
+    /// The deposits `bond`'s open groups hold against its collateral (part of what V2's committed-collateral ledger and both
+    /// withdrawal gates read as the route's reservation).
+    pub fn chunk_deposits_of_v1(&self, bond: &PalwBondKeyV2) -> u64 {
+        self.chunk_groups_v1().iter().filter(|(o, _, _)| o == bond).fold(0u64, |acc, (_, _, g)| acc.saturating_add(g.deposit))
+    }
+
+    /// **The last DAA at which an object for `target` could still change anything** (`None`: nothing can — the claim is decided or
+    /// unknown, the binding refuted or unknown). A group's TTL is never longer.
+    pub fn chunk_target_deadline_v1(&self, target: &PalwKernelChunkTargetV1, daa: u64) -> Option<u64> {
+        match target {
+            PalwKernelChunkTargetV1::Claim(id) => {
+                let key = borsh::to_vec(id).expect("a digest serializes");
+                let row: misaka_palw_kernel::ledger::ClaimRowV1 =
+                    borsh::from_slice(self.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, key))?).ok()?;
+                if row.convicted {
+                    return None;
+                }
+                palw_kernel_claim_horizon_bound_v1(&self.header.policy, row.committed_daa, row.liability_until, &row.life.state)
+            }
+            PalwKernelChunkTargetV1::Binding { v2_class, kernel_param_root } => {
+                let row = self.artifact_binding_v1(v2_class, kernel_param_root)?;
+                // Refutable while `daa < final_daa`.
+                (!row.refuted).then(|| row.final_daa.saturating_sub(1))
+            }
+            PalwKernelChunkTargetV1::Conformance { v2_class } => palw_conformance_chunk_target_pending_v1(self, v2_class, daa),
+        }
+    }
+
+    /// **The object `chunk` completes, if it completes its group**: every part present (the stored ones and this one), coherent with
+    /// the stored group, the assembled bytes hashing to the group id and decoding to one object. `None` otherwise — the fold refuses
+    /// what this cannot assemble. (The acceptance layer checks the assembled object's own signature at this chunk.)
+    pub fn chunk_completion_v1(&self, chunk: &PalwKernelChunkV1) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        if chunk.count == 0 || chunk.index >= chunk.count || chunk.bytes.is_empty() {
+            return None;
+        }
+        let stored = self.chunk_group_v1(&chunk.opener, &chunk.group);
+        let mut parts: BTreeMap<u8, &[u8]> = BTreeMap::new();
+        if let Some(stored) = &stored {
+            if stored.count != chunk.count || stored.target != chunk.target || stored.parts.contains_key(&chunk.index) {
+                return None;
+            }
+            parts.extend(stored.parts.iter().map(|(i, p)| (*i, p.as_slice())));
+        }
+        parts.insert(chunk.index, chunk.bytes.as_slice());
+        if parts.len() != chunk.count as usize {
+            return None;
+        }
+        let mut whole = Vec::with_capacity(parts.values().map(|p| p.len()).sum());
+        for i in 0..chunk.count {
+            whole.extend_from_slice(parts.get(&i)?);
+        }
+        if crate::palw_state_v2::palw_object_chunk_group_id_v1(&whole) != chunk.group {
+            return None;
+        }
+        borsh::from_slice(&whole).ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **C4 F-C4R4-16 (ADR-0032 49 %)**: the route's interim accuser share — and so the demanders' share of a default and the
+    /// onboarding challenger's — is at most 490‰; a self-reporter keeps at most 49 % of a slash, a net loss of at least 51 %.
+    #[test]
+    fn palw_kernel_route_the_interim_reporter_share_is_adr_0032s_49_percent() {
+        let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        assert_eq!(p.accuser_reward_permille, 490);
+        assert_eq!(crate::palw_onboarding_v1::PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1, 490);
+        let kept = p.claim_collateral - p.claim_collateral * u64::from(p.accuser_reward_permille) / 1000;
+        assert!(kept * 100 >= p.claim_collateral * 51, "net loss {kept} of {}", p.claim_collateral);
+    }
 
     #[test]
     fn the_interim_policy_validates_and_the_bond_digest_separates_indices() {
@@ -677,9 +1111,64 @@ mod tests {
         small.max_adjudications_per_block = 4;
         opv.validate(&small).unwrap();
         let state = PalwKernelRouteStateV1::new(p, Some(opv), LedgerScalarsV1::default());
-        assert_eq!(state.ledger().unwrap().root(), state.ledger_root().as_bytes(), "an empty OPV state roots like an empty OPV ledger");
+        assert_eq!(
+            state.ledger().unwrap().root(),
+            state.ledger_root().as_bytes(),
+            "an empty OPV state roots like an empty OPV ledger"
+        );
         let plain = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
         assert_ne!(state.ledger_root(), plain.ledger_root(), "the OPV root form is not the historical one");
+        // OPV-BOOT GAP-B1a: with tables 25 and 26 empty there is no root extension — both forms are what they were before them.
+        let (opv_ledger, plain_ledger) = (state.ledger().unwrap(), plain.ledger().unwrap());
+        assert!(
+            opv_ledger.claim_beacon_salts.is_empty()
+                && opv_ledger.forfeited_claim_seals.is_empty()
+                && opv_ledger.job_posters.is_empty()
+        );
+        assert_eq!(state.ledger_root().as_bytes(), opv_ledger.root_parts_v2().root(), "the OPV form, unextended");
+        assert_eq!(plain.ledger_root().as_bytes(), plain_ledger.root_parts().root(), "the historical form, unextended");
+        // The v3 beacon's window against the interim seal TTL: OPV-BOOT's interim W = 40 needs 2·W ≤ 100.
+        assert!(misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1(&p, 40));
+        assert!(!misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1(&p, p.seal_ttl_daa / 2 + 1));
+    }
+
+    /// GAP 6: a pipeline claim's `record_header` is borsh `(PipelineHeaderV1, PipelineClassV1)` — the header a pipeline verifier is
+    /// built with and the class binding it checks the record against.
+    #[test]
+    fn a_pipeline_claims_record_header_has_a_wire_form() {
+        use misaka_palw_kernel::pipeline::PipelineHeaderV1;
+        use misaka_palw_kernel::pipeline_public::PipelineClassV1;
+        let header = PipelineHeaderV1 { network_domain: [1; 64], ruleset_digest: [2; 64], class_binding_id: [3; 64] };
+        let binding = PipelineClassV1 {
+            descriptor_digest: [4; 64],
+            pipeline_root: [5; 64],
+            plan_root: [6; 64],
+            artifact_roots: vec![[7; 64]],
+            decode: Some(misaka_palw_kernel::job::DecodeRuleV1::Greedy),
+        };
+        let bytes = borsh::to_vec(&(header, binding.clone())).unwrap();
+        let back: (PipelineHeaderV1, PipelineClassV1) = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, (header, binding));
+    }
+
+    /// K2-TIR-v4 is in the route's template (armed there only) and a fresh route state's ledger is the rows' ledger, cached or not.
+    #[test]
+    fn the_route_template_carries_k2_tir_v4_and_the_cache_is_never_state() {
+        let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let template = palw_kernel_route_template_v1(p);
+        let v4 = misaka_palw_kernel::descriptor::k2_tir_v4_descriptor();
+        assert!(template.known.iter().any(|d| d.digest() == v4.digest()));
+        let v5 = misaka_palw_kernel::descriptor::k2_tir_v5_descriptor();
+        assert!(template.known.iter().any(|d| d.digest() == v5.digest()) && v5.digest() != v4.digest());
+        let mut state = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
+        let plain = state.clone();
+        let rebuilt = state.ledger().unwrap().as_rebuilt_from_v1(&state.rows);
+        state.ledger_cache.set(rebuilt);
+        assert_eq!(state, plain, "a cache is not part of what a state is");
+        assert_eq!(borsh::to_vec(&state).unwrap(), borsh::to_vec(&plain).unwrap(), "and never encoded");
+        assert_eq!(state.ledger().unwrap().root(), plain.ledger().unwrap().root());
+        let decoded: PalwKernelRouteStateV1 = borsh::from_slice(&borsh::to_vec(&state).unwrap()).unwrap();
+        assert!(!decoded.ledger_cache.is_set(), "a decoded state starts without it");
     }
 
     /// **RFC-0004 Part II**: an unarmed route (no `palw_typed_roots_v1`) has the historical schedule, `config_root` and root byte for
@@ -721,5 +1210,103 @@ mod tests {
         );
         assert_eq!(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, 35);
         assert!(PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 > 1_000_000);
+        // C4 F-C4R3-03: the route's own chunk lane (the lead's allocation of 2026-10-08), above onboarding's 36–40.
+        assert_eq!((PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, PALW_KERNEL_ROUTE_TABLE_RESERVED_42_V1), (41, 42));
+    }
+
+    fn chunk_bond(i: u32) -> PalwBondKeyV2 {
+        PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(77), i))
+    }
+
+    /// **C4 F-C4R3-03 (the lane's pure half)**: the splitter, the completion (every part, the group id, coherence with the stored
+    /// group), the per-opener room, the deposits that join the route's reservation, the target check and the target's deadline.
+    #[test]
+    fn the_routes_chunk_lane_assembles_only_coherent_groups_and_bounds_them_by_their_target() {
+        use crate::palw_state_v2::PalwConsensusObjectV2 as Obj;
+        use misaka_palw_kernel::route::{KernelRouteObjectV1 as K, ProsecutionV1};
+        let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let mut state = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
+        let (opener, other) = (chunk_bond(0), chunk_bond(1));
+        let claim = [7u8; 64];
+        let proof = K::FileProof { accuser: [1; 64], claim, proof: ProsecutionV1::Kernel(vec![9; 3000]) };
+        let inner = Obj::KernelRouteV1 { bytes: proof.encode(), signer: opener, signature: vec![5; 64] };
+        let target = PalwKernelChunkTargetV1::Claim(claim);
+        let chunks = palw_kernel_chunks_v1(&inner, opener, target, 1024).unwrap();
+        assert!(chunks.len() >= 3);
+        assert!(palw_kernel_chunks_v1(&inner, opener, target, 64).is_err(), "past the chunk count");
+        assert!(palw_kernel_chunk_inner_matches_target_v1(&inner, &target));
+        assert!(!palw_kernel_chunk_inner_matches_target_v1(&inner, &PalwKernelChunkTargetV1::Claim([8; 64])), "another claim");
+        let demand = Obj::KernelRouteV1 {
+            bytes: K::FileDemand { demander: [1; 64], claim, stage: 0, position: 0 }.encode(),
+            signer: opener,
+            signature: vec![5; 64],
+        };
+        assert!(!palw_kernel_chunk_inner_matches_target_v1(&demand, &target), "a demand is not a prosecution object of this lane");
+        // A lone last chunk completes nothing; with the others stored it completes exactly the object.
+        let last = chunks.last().unwrap().clone();
+        assert!(state.chunk_completion_v1(&last).is_none());
+        let mut group =
+            PalwKernelChunkGroupV1 { target, count: last.count, opened_daa: 1, expires_daa: 9, deposit: 3, parts: BTreeMap::new() };
+        for c in &chunks[..chunks.len() - 1] {
+            group.parts.insert(c.index, c.bytes.clone());
+        }
+        state.aux.insert(
+            (PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, palw_kernel_chunk_group_key_v1(&opener, &last.group)),
+            borsh::to_vec(&group).unwrap(),
+        );
+        assert_eq!(state.chunk_completion_v1(&last), Some(inner.clone()));
+        // The same bytes under another opener are another group (rooms are per bond); another target or count is incoherent.
+        assert!(state.chunk_completion_v1(&PalwKernelChunkV1 { opener: other, ..last.clone() }).is_none());
+        assert!(
+            state
+                .chunk_completion_v1(&PalwKernelChunkV1 { target: PalwKernelChunkTargetV1::Claim([8; 64]), ..last.clone() })
+                .is_none()
+        );
+        let mut tampered = last.clone();
+        tampered.bytes[0] ^= 1;
+        assert!(state.chunk_completion_v1(&tampered).is_none(), "the assembled bytes must hash to the group id");
+        // The open group is the opener's room and its deposit is part of what the route holds against the opener.
+        assert_eq!((state.chunk_groups_of_v1(&opener), state.chunk_groups_of_v1(&other)), (1, 0));
+        assert_eq!((state.reserved_of(&opener), state.ledger_reserved_of(&opener)), (3, 0));
+        // An unknown claim and a refuted / unknown binding have no deadline; a claim's is its horizon bound.
+        assert_eq!(state.chunk_target_deadline_v1(&target, 0), None);
+        let binding =
+            PalwKernelChunkTargetV1::Binding { v2_class: Hash64::from_u64_word(3), kernel_param_root: Hash64::from_u64_word(4) };
+        assert_eq!(state.chunk_target_deadline_v1(&binding, 0), None);
+        // OPV-BOOT #1: a conformance attempt's deadline is OPV-BOOT's (pending: no attempt is ever open here yet).
+        let conformance = PalwKernelChunkTargetV1::Conformance { v2_class: Hash64::from_u64_word(3) };
+        assert_eq!(state.chunk_target_deadline_v1(&conformance, 0), None);
+        assert!(!palw_kernel_chunk_inner_matches_target_v1(&inner, &conformance), "a proof is not conformance evidence");
+        {
+            use crate::palw_conformance_evidence_v1::{ConformanceEvidenceActionV1 as A, ConformanceFaultV1 as F};
+            let refute = |class: u64| Obj::ConformanceEvidenceV1 {
+                v2_class: Hash64::from_u64_word(class),
+                action: Box::new(A::Refute {
+                    evidence_id: Hash64::from_u64_word(9),
+                    fault: Box::new(F::VectorTokens { check: 0, kernel_claim: Hash64::from_u64_word(5) }),
+                }),
+                signer: other,
+                signature: vec![5; 64],
+            };
+            assert!(palw_kernel_chunk_inner_matches_target_v1(&refute(3), &conformance), "the class's evidence");
+            assert!(!palw_kernel_chunk_inner_matches_target_v1(&refute(4), &conformance), "another class's evidence");
+            assert!(!palw_kernel_chunk_inner_matches_target_v1(&refute(3), &binding), "evidence is not a binding's refutation");
+            assert!(!palw_kernel_chunk_inner_matches_target_v1(&refute(3), &target), "evidence is not a claim's prosecution");
+        }
+        use misaka_palw_kernel::lifecycle::ClaimStateV1 as S;
+        let bound = |state: &S, liability: Option<u64>| palw_kernel_claim_horizon_bound_v1(&p, 10, liability, state);
+        let tail = p.court_deadline_daa + p.proof_grace_daa + p.liability_daa;
+        let pass = S::ProbabilisticPass { passed_daa: 20, window_end_daa: 70 };
+        assert_eq!(bound(&pass, None), Some(70 + tail), "a passed claim: its latest Final plus the liability horizon");
+        assert_eq!(bound(&S::Disputed { open: 1, resume: Box::new(pass) }, None), Some(70 + tail));
+        assert_eq!(bound(&S::Checking { anchor_daa: 10, deadline_daa: 110 }, None), Some(110 + p.challenge_window_daa + tail));
+        assert_eq!(
+            bound(&S::Unavailable { daa: 40, producer_defaulted: true }, Some(240)),
+            Some(240),
+            "a defaulted claim (F-C4R3-02)"
+        );
+        assert_eq!(bound(&S::Final { final_daa: 60 }, Some(260)), Some(260));
+        assert_eq!(bound(&S::TimedOut { daa: 111 }, None), None, "a claim that ended without passing takes nothing more");
+        assert_eq!(bound(&S::Convicted { daa: 30 }, None), None);
     }
 }

@@ -346,38 +346,8 @@ blocks completely.
 
 ## Decision 7 — Pricing: CU from the executed shape, conservative by construction
 
-The VLT lane's `cu = prefill + 8·decode` (v2, frozen) is a fairness heuristic, not a security
-bound. The receipt lane gets its own rule:
-
-```
-fp_cu_v3 = prompt_tokens · cu_prefill_weight  +  decode_tokens_executed · cu_decode_weight
-```
-
-with weights in the bundle (hence in the ruleset id), chosen from the class calibration harness
-under one invariant:
-
-> **No workload shape may yield more CU per real second than the pure-decode reference shape on
-> the registered hardware class.** Mispricing must only ever under-pay.
-
-Prefill is batched and an order of magnitude cheaper per token than decode, so its weight starts
-heavily discounted (initial: `cu_prefill_weight = 1`, `cu_decode_weight = 64`). The honest
-consequence, stated rather than hidden: a prompt-heavy job earns somewhat less CU per second of
-real compute than a decode-heavy one, and a dedicated miner running decode-heavy garbage prompts
-earns CU at the reference rate. **Usefulness is not adjudicable and this ADR does not pretend to
-adjudicate it** — the guarantee is the draft's own honest one: real usage mines at (nearly) the
-dedicated-mining rate, so the useful and the mercenary pay the same protocol costs, instead of
-useful work being worthless. Chat-shaped usage is decode-dominant, so the discount is small in
-practice.
-
-Variable length is real: `decode_token_limit` is a ceiling, `EndOfGeneration` is a legitimate
-stop (a chat answer that ends, ends), `decode_tokens_executed` is what the trace commits and what
-CU counts, and a replay must reproduce the same EOG step or the trace is refuted. This is a new
-wire version and a new shape/class identity (`…/early-eog-allowed/…`) — the V2 exact-decode
-profile is not edited in place (a second meaning under one id is the fork-bug shape).
-
-Spam floor: tiny jobs are bounded by the commitment transaction's fee and by quantization itself
-(`cu < quantum_cu` certifies but never draws). No minimum-prompt rule pretends to filter "real"
-usage.
+**Withdrawn by [ADR-0074](0074-the-attempt-is-a-claim-drawn-by-the-chain.md) Decision 5.**
+旧 prefill/decode の CU 係数表は実装しない。恣意的な係数で class 間の価格を決めず、step leaves と class の canonical job を基準にするため。
 
 ## Decision 8 — Data availability and privacy, v1
 

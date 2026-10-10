@@ -22,7 +22,7 @@ Today **no fence is armable**. Integration continues; no new fence for rewards, 
 | `palw_audit_1004_v1`, `palw_gen_range_twin_v1`, `palw_model_court_window`, `palw_receipt_spend_v4` (former int-13 list) | ready; processor + chain-block E2E (`t12_int13_flag_day_crossing`, `rfc9_v4_chain_e2e`) | EXTERNAL: the drill that crosses them (template: `t12-daa9000-drill-plan.md`, cancelled for 9,000) | rides the full-activation release |
 | `palw_probabilistic_constraints_v1` (RFC-0011 K2 route + RFC-0014 G14) | real node, dormant; validation refuses arming; 63 `g14_` tests | CODE: C4 round-3 F-05 (OPV lane cap), GAP-R7 accuser seal, GAP-11 flake, GAP-5 FinalReward funding (G14-R4); cached ledger per block instead of O(rows) rebuild (GAP 8); mempool acceptance gate (GAP 10); pipeline claims' header wire form (GAP 6); conformance: a court for vector logits/commit digests, lying-claim griefing of conformance. DESIGN: K2 at real scale — per-position roots, segments ≤ 1,024, a per-prosecution public-byte bound, row-tiled court openings, authenticated prompt tiles (9B-8k refuses on 12.6 TB public bytes, 6.99 GB retained, 8,192 sessions, a 2 GB opening); artifact binding equality — **GAP 1 withdrawn by ADR-0177** (refutable from bytes by any verifier that acquired the model; no availability guarantee). POLICY: the challenge policy's security level (interim 2 bits), interim terms. EXTERNAL: soundness review of the composition, 9B-8k measurement | G14-R4 (running) for the CODE items it owns; a K2-scale lane next |
 | `palw_panel_free_v1` (RFC-0015 OPV) | real node, dormant (struct fence with admission list + terms) | everything of the K2 route above, plus POLICY: the OPV admission list and terms | with the K2 route |
-| `palw_permissionless_panel_v1` (RFC-0010 V3 Panel) | production fold dormant; validation refuses arming | POLICY: an approved beacon scheme (the policy registry's approval list is empty); CODE: the structural guard for V3 receipt/retry expiry vs a non-seat DA default; DESIGN: per-shard V3 draw for sharded classes (RFC-0006). By construction the beacon is unavailable until Panel-independent (OPV) Finals exist, so V3 binds nothing until OPV has run | after the K2/OPV bundle |
+| `palw_permissionless_panel_v1` (RFC-0010 V3 Panel) | production fold, shard draw, non-seat accusation guard and RPC/CLI implemented, dormant; validation refuses arming | POLICY/EXTERNAL: approved production beacon scheme, bias/withholding/participation and economics (approval registry empty). DESIGN/CODE: objective seal finality and an immutable epoch source-profile snapshot (verification currently reads mutable eligibility). EXTERNAL: fresh cohort with the fleet removed, production-beacon → binding → prosecution → Final/redemption, real pruning-proof recovery. Reference-source node tests cannot pass those gates. See [2026-10-10 audit](../../rfc/0010-dormant-implementation.md) | after the K2/OPV bundle |
 | `palw_dns_retirement_v1` (RFC-0012) | dormant; zero-DNS matrix x0–x15 | POLICY: D1 (first `safe` ≥ 5,400 DAA — analysis in `rfc-0012-policy-proposal.md` §10), D, W, operator/class caps, horizon. CODE: a claim reaching Final through the processor with EVM on, real pruned IBD with EVM state, attack tests and `safe` readiness reasons (X12b running). EXTERNAL: wallets/tooling, runbook, drill | X12b (running) |
 | `palw_exec_payload_v2` (RFC-0008 v2) | **verified on its branch** `rfc8/x8r-review` @6246e7942 (x8r-m8: consensus 13 incl. the composed slice × G14 real-node run, core 71, fence 7, sdk 3; no drift); `PALW_EXEC_PAYLOAD_V2_ARMABLE = false`; queued for integration after A2U. Open: the REAL root's own Final + capped settlement on the real node (= the G14-for-rewards gap), pipeline-class slices (K2S), the initial boundary not linked to the REAL output (DESIGN_GAP, record §12.3/§13); test seam `exec_v2_test_admit_class_v1` (cfg(test) only) | CODE: the verification route for slices (G14 on slices), suffix void, relay admission/backpressure; review of every un-gated pipeline path it changes (header validation, `deps_manager`, sync, orphan pool, coinbase). DESIGN: flood residual, schedule credit of settled slice work, post-Final liability for slice legs, permit equivocation evidence, anchoring-window strand. EXTERNAL: capacity/liveness drills, recovery drills | a review + integration lane next |
 
@@ -58,6 +58,13 @@ Today **no fence is armable**. Integration continues; no new fence for rewards, 
 4e. K2 v4 (real-scale) detection policy: the drawn share q of claims re-executed after commit, and how P_run (the chance a drawn
     watcher actually runs and files) is derived. Per-claim detection is q·P_run; until these are set, v4 classes do not earn.
     Source: `k2-real-scale.md` §11 (SG-06). This is Q-01 made concrete.
+4f. ADR-0175 clarifications (INTF audit, 2026-10-10; text proposals for the user, no code change needed):
+    - RFC-0004 §II.3's "promoted … with its root recorded on the line" means a new independent registration (`CandidateSelected`).
+    - ADR-0175 should state that a Memory registration fixes its update rule and initial memory state, while the line's current
+      state evolves as independent material.
+    The full-activation release must arm `palw_model_immutable_v1`. `palw_improvement_v1` is already ARMED on t12, so the
+    ordering is a release-checklist item, not a validation rule. `palw_typed_roots_v1` (dormant) requires
+    `palw_model_immutable_v1` at or below it.
 5. The activation height of the single release, once every row above is clear.
 
 ## 3a. User rulings on the Panel=0 parameters (2026-10-08 ~20:30)
@@ -156,6 +163,131 @@ Panel configuration, an outside verifier who found a fault can carry an objectiv
 | ADR numbering | the user's ADR-0175 is "immutable registrations"; next free is **ADR-0178** | rule E (FINX's `0175-fork-choice-…`) is renumbered **ADR-0178** |
 
 New POLICY items for §3: ADR-0176 `W`, the rho ↔ Q/B/R/F mapping and the cap values; ADR-0177 `f`, its range, the allocation epoch/snapshot and its tie to `W`, and the numeric bar for "publication is overwhelmingly better than closed self-funding" (to be fixed before ECON's evaluation); the activation of `palw_reporter_share_v2` with the single release.
+
+## 3d. G14 completion — the user's top priority (2026-10-10)
+
+The user, 2026-10-10: finish RFC-0015's Panel=0 precondition first. Even if the producer and ALL Panel seats collude, then for
+computation fraud and for job / input / output / state / DA violations covered by an active plan, ONE public bonded verifier outside
+the Panel reaches an objective conviction (or the correct DA default, or the dismissal of an honest claim) from public authenticated
+material only, never the producer's secret state. ADR-0177 makes this conditional on the verifier having the registered model.
+
+The authoritative gap matrix is lane G14C's `docs/design/palw/g14-completion-matrix.md` (branch `g14/completion`, 82a176a77).
+**No reward-bearing plan family meets G14 today.**
+
+Common to every family:
+- no prosecution by a bond registered after genesis (condition 1);
+- no fresh node that prosecutes (condition 2);
+- the RPC leg of the chain path is untested, because ops 210–212 and 231 are never served by a running node (condition 7).
+
+| Owner | Gaps |
+| --- | --- |
+| G14R | GAP-00: carry C4R4's fixes; the salted-seal reorg test; green on `b8ae9412b`. It heads the integration order: G14R + A2U, then OPVB, C4R4, K2S, X8R |
+| G14C | GAP-01..04: one canonical node harness (post-genesis bond, fresh node / IBD / pruned import, RPC, all seats collude, ADR-0177 non-interference); GAP-10 (other K2 lie types); GAP-71b; GAP-50/51 typed roots; GAP-20/21 pipelines |
+| K2S | GAP-32 (merge r4-fixes), GAP-30 (v4 node recovery and lie types), GAP-31 (canonical 8k held), GAP-40 (v5) |
+| DA16 | GAP-05 (artifact availability out of consensus), GAP-06 (claim-specific scope), GAP-52 (snapshot binding) |
+| X8R | GAP-60 (slice DA default on the node), GAP-61 (the real reward gate in place of the test seam), GAP-62 (initial boundary), GAP-63 (merge and rebuild) |
+| OPVB | GAP-71a (public seal read, condition 9), GAP-81 (see below) |
+| MEAS | GAP-07: measured worst-case deadlines (condition 8) |
+
+**Lead decisions (2026-10-10):**
+- **GAP-81.** The new reward gate is per CLAIM verification route. Only claims verified on a G14-complete route pass `palw_reward_gate_v1`. V2-root claims of a kernel-bound class stay on the legacy channel and never earn the new rewards.
+- **GAP-70.** For the release, only the complete conformance check gates rewards. Sampled conformance is a non-reward signal until a digest court exists (DESIGN).
+
+**User decision GAP-80 (2026-10-10): the legacy V2 Panel route must also meet G14.** It is RFC-0014's own core (§4–§7). Two lanes
+behind new dormant fences, because the route is ARMED on testnet-12 and the live int-12 rules must not move:
+- LG14-A: the common seat/non-seat fraud filer, the non-seat dispute reservation and its Final condition, no pre-emption by a session or
+  a court, `ExecutorRefuted` reachable while a court is open, a bystander's accusation never outrun by timeouts.
+- LG14-B: hierarchical commitment and independent localization, the three canonical 8k held/fused DA gaps [C12], and the
+  consistent-garbage-trace (row 0) / borrowed-trace / state / routing / checkpoint / output cases.
+Until both lanes' fences are verified, legacy classes are "not Panel=0, not new-reward eligible".
+
+## 3e. Round / EXEC additional acceptance conditions (user, 2026-10-10)
+
+The user adopted `docs/palw-round-exec-additional-acceptance-2026-10-10.md`:
+- compute-proportional Round tickets from verified CanonicalWork and a shared window (120 is a window's capacity, not a per-claim grant);
+- the bond's remaining Round rights capped BEFORE the draw's candidate set (`T_candidate <= min(T_earned, BondRemainingRoundRights)`);
+- no amplification by bond/operator/claim splitting, resubmission or root/slice repackaging;
+- no status priority for operators, genesis bonds or registration order;
+- small/large model economics evaluated before and after the cap;
+- fee-only Rounds bound either by B_max or by an explicit execution cap.
+
+Eight gates: BUDGET, WORK, WINDOW, NEUTRALITY, SPLIT, SLICE, RECOVERY, ECON. All are UNVERIFIED, and they block the
+unified EXEC and the new economic rules. Owners: BUDGET (BUDGET, WORK, WINDOW, NEUTRALITY, SPLIT, RECOVERY's budget half),
+X8R (SLICE, EXEC's RECOVERY), ECON (ECON). POLICY for the user: whether fee-only Rounds count against B_max or get their own
+execution cap, and whether market fee income counts in R_max.
+
+## 3f. User rulings on ECON's results (2026-10-10)
+
+- **Verifier pay: M\*-49 adopted.** Users pay a per-check fee from the job's escrow, and drawn verifiers are paid first out
+  of the unchanged 49%. It is implemented behind a new dormant fence. The lazy-verifier question stays open.
+- **The default's demander share is held until the liability horizon.** This closes the 441-vs-490 residual of the single
+  49% cap.
+- **Model allocation `f(S_m)` stays in the design** (the model leg is not dropped). Keep searching for an answer and parameters
+  that make publishing overwhelmingly better. Work on the premise that **bond gathered = users gathered**. An adversary able to
+  post more bond than that is read like the same outcome under BFT, outside the security assumption, as a stake majority is
+  for BFT. ECON re-evaluates `f` under that honest-capital-majority assumption.
+- **W is not fixed now.** ECON's derived range is 280–436 DAA at the interim terms.
+- **Follow-up rulings (2026-10-10), on ECON round 2:**
+  - **The design: linear `f` with a verification-attestation gate.** Per model-epoch, stake-drawn verifiers (m = 47, k = 24, both an
+    unapproved interim policy) each check a sampled Final claim with their own copy, and the allocation is paid only when k attest.
+  - **The gate is consistent with ADR-0177 D1.** It withholds only the model-allocation subsidy, and the reason is "verification
+    was not attested", never "the model was not served". Claims, escrow, Final, weight and slashing are untouched, and there is no
+    availability audit and no slash.
+  - **The adversary bound is 1/3** of capital and of verifier stake, as in BFT. The bars fail at 0.40 / 0.44.
+  - **BUDGET implements it now**, as an extension of `palw_model_bond_allocation_v1`. The values are an unapproved policy.
+
+## 3g. ADR-0177 goal changed: bond-aggregation advantage (user, 2026-10-10)
+
+The goal is now "strongly favour models that gather more effective locked miner bond", no longer "favour publication itself".
+Publication is the means by which other miners can join; equal capital is treated equally whoever owns it.
+- "Publish always beats equal self-funding" is removed from the release requirements. ECON's counter-examples stay as the record
+  of the old goal.
+- The curve candidate is `A_m = S_m^α` (α > 1, compare α = 2) inside the fixed PALW budget. α is POLICY. The new acceptance
+  requirement quantifies the advantage: capital range, multiplier, and whether it holds for allocation, actual payment or net
+  profit, below the individual caps.
+- Large-capital concentration, including adversarial capital, is accepted as residual risk. Inflating small capital
+  (double counting, epoch-edge moves, key or claim splitting) stays forbidden.
+- **`p = 0` compute-skipping is a separate, unresolved safety gate.** The curve is never its evidence. Reports split "honest
+  verifiers function" from "every owner closes, p = 0".
+- Unchanged: Q/B/R/F individual caps, the total budget, distinct capital and the common hold. Block issuance, beacon, Final
+  weight and fork choice are not scaled by bond aggregation.
+- The verification-attestation gate (ECON round 2) may continue as a dormant subsidy condition. It is not a p = 0 resolution.
+- **α = 1.5 is the interim policy value (user, 2026-10-10, on ECON round 3).** It passes 52/54 cells against the fixed 2× bar and
+  never caps in the 4–30× range. Concentration is 1.4–1.8× reward share per capital share; after migration the top model has 55% of
+  capital and 81% of rewards. The value is unapproved for production.
+
+## 3h. The Probabilistic–Economic Security Gate (user, 2026-10-10)
+
+`docs/design/palw/probabilistic-economic-security-gate.md` is a release gate across RFC-0007, RFC-0011, RFC-0014 and RFC-0015.
+It applies before any profile becomes ActiveRewardable and before any reward, consensus-weight or Panel=0 fence is armed.
+
+- **Four conditions:** every rewarded relation has a verification path; a proven lower bound on detecting the hardest fault;
+  one non-Panel verifier completes objective adjudication; and a negative EV for the coalition of producer, every Panel seat
+  and related bonds, `E = (1−p)G − pL − C < 0`, with L counted as collectable net of the 49% self-return.
+- **Six test families** T1–T6 and **lane specs** A–F, with ECON, PESG-B, G14 (codex), MEAS and BUDGET as owners.
+- **Three counter-examples, any one of which blocks activation:** a single-site fault that is almost never detected;
+  collateral or profit that escapes before the slash; honest verifiers who cannot participate economically.
+- **Safety bounds independent of economics:** maximum unsettled work weight, maximum external loss, no payout before Final,
+  and the d+W hold kept separate from liability collateral.
+- **Verdicts are PASS / FAIL / UNKNOWN only.** An unknown G, p or L is never PASS.
+- The 128-bit checker soundness `ε_check` and the real conviction probability `p_convict` are never conflated.
+
+**PESG-B result (lane B, merged 96b2060de; `docs/design/palw/pesg-b-detection-bounds.md`).** Exhaustive single-fault search
+on a real 5-position claim (3,570 placements per mode, isolated and self-consistent), run through the real verifiers and courts.
+
+| Profile | `p_check` lower bound | Verdict |
+|---|---|---|
+| v1 / v2 / v3 pipelines, whole-claim read with a private salt | 226 / 150 bits | PASS only if the whole-claim read fits `P_run` (MEAS) |
+| v5, retrieval, complete-check bootstrap; v4 route B on every claim | binding only | PASS (route B costs one re-execution per claim) |
+| v4 route A (sample `m` of `P` positions) | `m/P` (2^-10 at 9B-8k, m=8) | FAIL |
+| Sampled conformance; legacy V2 under full collusion | ~0 / 0 | FAIL |
+| v4 route B on a `q`-sample of claims | `q·(1−ε_src)` at best; the draw is not wired | UNKNOWN |
+
+New blocking finding **F-B1**: generation length is bound by no rule (`job.rs` accepts 1..`max_new_tokens`, reward is per claim),
+so a 1-token claim earns the full reward with no court able to convict it. It is a T1 FAIL for v1–v4 and pipelines until the job
+fixes the length or pay is per verified position. Also open: N1 (conformance logits and commit digests have no court),
+F-B3 (grinding uses the exact escape `1−(1−ε_sel)^G`), F-B4 (interim Panel seeds can be ground from the claim id),
+F-B5 (legacy samplers are slightly biased) and F-B6 (sampled conformance has no power against sparse faults).
 
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 

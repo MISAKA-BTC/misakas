@@ -446,9 +446,18 @@ fn close(
     for (label, built) in palw_tir_close_candidates_v1(&tir, accused, own, index, &rules, !i_am_responder) {
         let proof = built.unwrap_or_else(|e| panic!("the {label} close builds: {e}"));
         assert!(proof.is_tir_v1(), "an IR close");
-        let verdict =
-            kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3(s, &sid, &proof, &court(), LADDER, FORM, false, false, None)
-                .unwrap_or_else(|e| panic!("the {label} close adjudicates: {e}"));
+        let verdict = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3(
+            s,
+            &sid,
+            &proof,
+            &court(),
+            LADDER,
+            FORM,
+            false,
+            false,
+            None,
+        )
+        .unwrap_or_else(|e| panic!("the {label} close adjudicates: {e}"));
         if palw_tir_close_is_mine_v1(verdict, i_am_responder) {
             return (label, proof, verdict);
         }
@@ -1235,7 +1244,8 @@ fn a_challenger_builds_the_dissection_bottom_from_the_on_chain_root_claim() {
             .expect("the bottom from the capture");
     let PalwTirDissectBuiltV1::Close(canonical) = canonical else { panic!("a close") };
     assert_eq!(from_chain, canonical, "the bottom from the chain is the canonical bottom");
-    let verdict = adjudicate_court_close_v3(&s, &sid, &from_chain, &court(), LADDER, FORM, false, false, None).expect("it adjudicates");
+    let verdict =
+        adjudicate_court_close_v3(&s, &sid, &from_chain, &court(), LADDER, FORM, false, false, None).expect("it adjudicates");
     assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest leaf's bottom acquits, whoever builds it");
     let _ = phase;
 }

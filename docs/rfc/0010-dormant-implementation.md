@@ -1,4 +1,4 @@
-# RFC-0010 dormant implementation (reference format v1)
+# RFC-0010 dormant implementation and permissionlessness audit
 
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
@@ -9,9 +9,15 @@
 
 Implemented on `pre`, 2026-10-08. **No network activation, no production beacon, no claim that end-to-end permissionlessness is complete.** All presets leave `palw_permissionless_panel_v1 = None`. `validate_palw_v2` refuses every real height, including custom configurations. `Some(never())` is absence for fingerprints, schedules and the identity visitor. The complete policy is committed Some-only beside its activation in params/schedule identities; a future independently scheduled height changes the fork ID.
 
+**Audit baseline — 2026-10-10:** integration `3730cc90f` (`claude/g14-public-prosecution-integration-9bee39`). The original reference-only description below is updated to match that tree. The production fold, receipt/court handoff, shard draw and observation RPC exist behind the dormant fence. They do not establish an armable release. ECON round 4 and BUDGET round 2 are present; their unapproved economics and open safety hooks do not authorize RFC10 activation.
+
 ## Implemented boundaries
 
-`misaka-palw-panel` is a deterministic, branch-scoped reference transition engine, with no dependency on a producer, local artifact store, RPC, DNS validator set or operator allowlist. `consensus/core/src/palw_permissionless_panel_v1.rs` connects accepted claim records, public structural seat eligibility and the existing one-ledger headroom calculation to it. The public chain adapter **always rejects beacon certificates** until an audited primitive is implemented. Test certificates exist only in integration-test fixtures.
+`misaka-palw-panel` is a deterministic, branch-scoped transition engine, with no dependency on a producer, local artifact store, RPC, DNS validator set or operator allowlist. `consensus/core/src/palw_permissionless_panel_v1.rs` supplies accepted claims and public structural eligibility. `palw_panel_v3_fold_v1.rs` embeds the engine in the production V2 fold, writes ordinary V2 Panel duties on its one exposure ledger, and hands bindings to the existing receipt/court/Final machinery. It also draws per shard and defers non-fraud expiry while an accusation is pending.
+
+The production beacon adapter supports the shared work-beacon contract, including sealed-source v3. The chain history reads kernel-route OPV Finals, attribution, seals and derived OPV eligibility. **The approved Panel policy registry is empty**, so shipped validation refuses activation and shipped adapters reject every beacon proof. The V2 lattice's own Finals remain Panel-licensed and cannot seed their own Panel. Test-supplied histories and policies exercise the adapter; they provide no production approval.
+
+RPC `getPalwPanelV3Status` (op 220) and `misaka palw panel-v3` expose the engine and named claim statuses. The appended `release.activationSupported` and `release.approvedBeaconSchemes` report this binary's release support separately from `overview.active`. A dormant chain can still report a named legacy claim or unknown id. This JSON is read-only and changes no wire object, state root or consensus fingerprint.
 
 The engine provides:
 
@@ -24,7 +30,7 @@ The engine provides:
 - `SealUnavailable`, `BeaconUnavailable`, `NoCapablePanel`, `PanelUnavailable`, with no slash/strike/reward/refund instruction;
 - versioned Borsh carriage, a rooted state, checked import, transactional fold and replay from retained parents; typed JSON observations include seal/snapshot/beacon/assignment/binding/retry/reason facts. Reservation amounts are decimal strings.
 
-Historical V2 state, `PanelBound`, receipt/court signatures, roots and codecs are untouched. `panel_claim_rule_v1` chooses a rule by **accepted DAA**, not a later binder/retry height. `palw_anchor_at_ceiling`'s lane-A prerequisite remains necessary for the historical drain; it is not a qualification rule in the reference automatic binder. BASE-0 remains bonded useful work and heartbeat remains the separate emergency clock lane.
+Below the fence the historical V2 root and carriage bytes remain unchanged; the dormant V3 sub-state uses root block `panel_v3/v1`, deltas 170–173 and carriage tail `0xED`. `PanelBound` and receipt/court signature domains are retained. `panel_claim_rule_v1` chooses a rule by **accepted DAA**, not a later binder/retry height. Historical anchor gates still govern old claims. A V3-rule claim is excluded from their candidate lists and binds automatically through the V3 fold. BASE-0 remains bonded useful work and heartbeat remains the separate emergency clock lane.
 
 ## Exact reference encoding
 
@@ -62,14 +68,30 @@ Receipt deadlines begin at binding. Timeouts release the previous round's reserv
 
 ## Remaining release work (activation prohibited)
 
-1. Specify and implement the independent, unique, bias-bounded beacon, including contributor admission, certified tickets if used, proof verification cost, withholding/private-fork/claim-search/Sybil analysis and the P0-10 fix. Raw future block hashes, signatures and a test certificate are explicitly insufficient.
+1. Approve a concrete production beacon policy only after its bias, withholding, participation, private-fork, claim-search/Sybil and P0-10 analysis. The sealed-source implementation exists, but the approval registry is empty and ECON proves no positive conviction floor. Raw future block hashes, signatures and a test certificate are insufficient.
 2. Specify the objective L1 sealing/finality rule and numeric network economics. Seal depth in the reference engine is not DNS finality or a Panel verdict.
-3. Wire the V3 sidecar/root/delta into the production virtual state fold, stores, pruning/IBD, versioned claim admission and automatic receipt/court/payout handoff. Replace historical anchor gates only for new admitted claims; preserve old lane A until its full configured timeout/court/DA liability drain completes. No old claim migration is performed here.
-4. Add versioned node/worker/RPC/CLI views and independent evidence/public redemption paths. The typed reference JSON is not an enabled network RPC. New encoded verification profiles require their own audited capability/readiness rules; the adapter currently preserves conservative existing eligibility.
-5. Complete independent-node real chain replay, fresh non-genesis cohort registration/onboarding, an operator-free end-to-end Final/redemption drill, RFC14 non-Panel prosecution, published concentration/capture measurements and release rollback/fingerprint review. Binding success alone is not these gates.
+3. Freeze the Panel beacon's source-profile eligibility at a committed pre-entropy point. `ChainPanelBeaconHistoryV1::eligible_profiles` currently re-derives eligibility from the ledger held at proof verification; its documented residual permits later eligibility changes to alter the source set. This needs a versioned epoch snapshot and replay/import tests. The existing V3 sidecar/root/delta and receipt/court wiring are already implemented; authenticated real pruning-proof recovery remains a release drill.
+4. Complete the RFC9 independent evidence, remote verification and public redemption paths, with measured inclusion and prosecution bounds. New encoded verification profiles need audited capability/readiness rules. RPC/CLI presence alone proves observation, not completion.
+5. Run a fresh non-genesis cohort through production admission, independent source generation, automatic binding, public prosecution, Final and miner-owned redemption with the original operator fleet removed. Existing processor tests use a reference source and bypass activation validation. Publish concentration/capture and full splitting/fallback analysis, plus the release fingerprint, old-claim liability drain and rollback runbook.
 
 These are explicit release blockers, not switches that can be enabled by setting a height. RFC10's security argument and end-to-end claim completion are not advertised as finished.
 
+## Audit fixes — 2026-10-10
+
+1. **Uncommitted mirror:** validation checked the top-level fence but the processor executes the V2 state's mirror. A caller could supply an active mirror with no fence and pass that specific guard. Validation now requires exact agreement on absence, height, policy, network and ruleset; a synchronized real fence is still rejected for the pending release gates. Fixtures deliberately bypass validation as before.
+2. **Candidate-cap priority:** the shard fold truncated an oversized population to its largest individual bonds (ties by outpoint). That gave an unsplit large bond entry preference over smaller public bonds and differed from the flat adapter's capacity handling. Both adapters now refuse an oversized snapshot; the production fold follows its deterministic `NoCapablePanel` non-fraud path with no selected subset, slash or new reservation. Capacity remains a bounded liveness limit: an oversized cohort cannot bind until a reviewed larger-capacity or population-selection rule exists.
+3. **Observation:** the CLI returned immediately when the V3 engine was absent, hiding explicitly requested lane-A claim facts and unknown ids. It now renders those facts and the binary's unsupported activation status. A fixture's active engine cannot imply that this release supports activation.
+
+These fixes close defects in the dormant implementation. They do not remove the live eight-genesis anchor rule or claim the unresolved release gates have passed.
+
 ## Validation
 
-`cargo test --locked -p misaka-palw-panel` covers carrier/timeout invariance, signature-equivalent lookup IDs, immutable population, acceptance-order contention, backlog, missing/invalid/late/conflicting beacon, bounded retries, retained duplicate identities, executor exclusions/maturity, outsider roles, exact same-key split weight, terminal release, carriage/reorg/replay and resource limits. `cargo test --locked -p kaspa-consensus-core --test rfc0010_permissionless_panel` covers dormant/refused activation, identities/schedules/fork boundary, historical admission and complete explicit binding facts. These fixture replays **do not meet the independent real-node replay gate**.
+**Run on this audit branch, 2026-10-10: 84/84 selected tests passed** — Panel engine 32, the five RFC10 core suites 45, virtual-processor E2E 4, CLI 3. The changed Rust files pass `rustfmt --check` and the diff passes `git diff --check`. Existing dependency warnings remain; no full-integration or VPS release gate is claimed by this targeted run.
+
+`cargo test --locked -p misaka-palw-panel` covers carrier/timeout invariance, signature-equivalent lookup IDs, immutable population, acceptance-order contention, backlog, missing/invalid/late/conflicting beacon, bounded retries, retained duplicate identities, executor exclusions/maturity, outsider roles, exact same-key split weight, terminal release, carriage/reorg/replay and resource limits.
+
+The core suites `rfc0010_permissionless_panel`, `rfc0010_beacon_adapter`, `rfc0010_production_fold`, `rfc0010_shard_v3` and `rfc0010_g14_guard` cover guarded activation/fingerprints, the beacon verifier, production fold and handoff, public registration, shard prosecution, accusation holds, delta reversal and carriage reload. The new regression cases reject orphan/stale mirrors, show the empty approval registry in observation, and reject candidate-cap priority through the full shard fold.
+
+`cargo test --locked -p kaspa-consensus --lib t12_permissionless_panel_e2e -- --test-threads=1` runs real virtual-processor tests for binding, second-node block replay, reorg/carrier invariance and pre-fence object handling. `cargo test --locked -p misaka-cli palw_panel_v3::tests` checks CLI observation. The node tests' reference entropy and post-build activation bypass **do not meet the operator-free production-beacon/Final/redemption gate**.
+
+The initial CLI run overflowed the existing parsing test's default 2 MiB thread stack. Its assertions passed with `RUST_MIN_STACK=16777216`; the parsing test now uses an explicit 16 MiB thread, matching the CLI's existing test convention, so the ordinary command needs no environment override.

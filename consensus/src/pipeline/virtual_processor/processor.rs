@@ -240,6 +240,36 @@ pub(crate) fn kernel_route_test_attest_artifact_v1(artifact_root: kaspa_hashes::
     }
 }
 
+/// **OPV-BOOT, TEST ONLY: the OPV classes a pre-derivation mechanics test treats as eligible.** RFC-0015 eligibility is DERIVED from
+/// chain state (`palw_opv_bootstrap_v1::opv_eligibility_v1`); the OPV mechanics worlds written against the retired manual admission
+/// list (`g14_opv_*`, `g14_conformance_*`) name their classes here instead. Like the attestation hook it exists only under
+/// `cfg(test)`: the extras field it fills is `Vec::new()` in every build that can run a network (pinned by
+/// `opv_test_eligibility_hook_is_test_only`). Append-only and process-wide, so every node of one test folds the same set.
+#[cfg(test)]
+static KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1: std::sync::Mutex<Vec<kaspa_hashes::Hash64>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn kernel_route_test_opv_eligible_v1(class: kaspa_hashes::Hash64) {
+    let mut list = KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1.lock().unwrap();
+    if !list.contains(&class) {
+        list.push(class);
+    }
+}
+
+/// The seam's inverse (`cfg(test)`): a class taken off the list, so a test can make a component lose its eligibility after a typed
+/// class derived from it registered (lane G14C: the commit-time re-gate of typed claims).
+#[cfg(test)]
+pub(crate) fn kernel_route_test_opv_ineligible_v1(class: kaspa_hashes::Hash64) {
+    KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1.lock().unwrap().retain(|c| *c != class);
+}
+
+#[cfg(test)]
+fn kernel_route_test_opv_eligible_list_v1() -> Vec<kaspa_hashes::Hash64> {
+    let mut list = KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1.lock().unwrap().clone();
+    list.sort();
+    list
+}
+
 #[cfg(test)]
 fn kernel_route_test_attestations_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64> {
     let mut roots: Vec<_> =
@@ -653,12 +683,22 @@ pub struct VirtualStateProcessor {
     /// the route's schedule holds `K2-TR-v1` Active. Resolved in ONE place ([`Self::palw_kernel_typed_roots_at`]). Never armable by a
     /// real network (its validation refuses every height); a test builds the config without that validation.
     pub(super) palw_typed_roots_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_verifier_pay_v1` (G14R round 3): M*-49 verifier pay and the held default share on the kernel route.
+    pub(super) palw_verifier_pay_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
     /// (tag 108). Resolved in ONE place, [`Self::palw_signed_registration_at`]. Never armable by a real network.
     pub(super) palw_signed_registration_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_provider_court_v1` (lane DA16, RFC-0009 §4.2): may the provider court's objects (tags 150–153) be folded. Resolved in
     /// ONE place, [`Self::palw_provider_court_at`]. Never armable by a real network.
     pub(super) palw_provider_court_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_legacy_held_da_v2` (lane LG14-B, RFC-0014 §4–§5 on the legacy V2 route): may the legacy held DA objects (tags
+    /// 157–159) be folded. Resolved in ONE place, [`Self::palw_legacy_held_da_v2_at`]. Never armable by a real network.
+    pub(super) palw_legacy_held_da_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_bond_budget_v1` / `palw_model_bond_allocation_v1` (lane BUDGET, ADR-0176 / ADR-0177), their activations: may a
+    /// capital assignment (tag 140) be folded. Resolved in ONE place, [`Self::palw_model_bond_allocation_at`]. Never armable by a real
+    /// network.
+    pub(super) palw_bond_budget_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_model_bond_allocation_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_gen_v1` (RFC-0003): may a class be a pipeline of PALW-TIR version-2 programs on
     /// this chain. Resolved in ONE place, [`Self::palw_gen_at`], at the block.
     pub(super) palw_gen_v1: Option<kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1>,
@@ -718,6 +758,13 @@ pub struct VirtualStateProcessor {
     /// **RFC-0009: `Params::palw_receipt_spend_v4`**, resolved off a `ConsensusV2` ruleset. `None` on every shipped preset — a `PFS4` header is
     /// then refused by name and no coinbase is ever split.
     pub(super) palw_receipt_spend_v4: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **A-2 uniformity: the header carriage forms' owning fences** (`Params::palw_header_form_fences_v1`), for the UTXO validator's
+    /// block admission: a form added after the live build is read as that build reads it below its fence.
+    pub(super) palw_header_forms: kaspa_consensus_core::pow_layer0::PalwHeaderFormFencesV1,
+    /// **A-2 uniformity: the lifecycle kinds' owning fences** (`Params::palw_lifecycle_kind_fences_v1`). A kind whose fence is not in
+    /// force at a block is the live build's undecodable payload there: the objects-of-block walk drops it before the acceptance walk,
+    /// a chunk group assembling to it is undecodable to the walk, and the UTXO walk burns no rent for it.
+    pub(super) palw_lifecycle_kind_fences: kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleKindFencesV1,
     /// ADR-0152 v2 F2: `Params::palw_offence_attribution` (`Some(0)` on testnet-12 alone), resolved
     /// once in [`Self::palw_offence_attribution_at`]; the `ObjectiveOffence` gate and the fold's
     /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
@@ -827,11 +874,6 @@ pub struct VirtualStateProcessor {
     /// may be spent on, and what an ungraded object costs. See
     /// [`Self::palw_chunk_cap_charge_at`], which is the ONE place this is resolved.
     pub(super) palw_chunk_cap_charge: Option<kaspa_consensus_core::config::params::ForkActivation>,
-
-    /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
-    /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
-    /// and validated identically. Cloned from `Params::palw_credit` at construction.
-    pub(super) palw_credit_params: Option<kaspa_consensus_core::palw_credit::PalwCreditParamsV1>,
 
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4). The lazy
     // chain-context EVM step + canonical head pointers. Inert until
@@ -1291,8 +1333,12 @@ impl VirtualStateProcessor {
             palw_probabilistic_constraints_v1: params.palw_probabilistic_constraints_v1,
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_typed_roots_v1: params.palw_typed_roots_v1,
+            palw_verifier_pay_v1: params.palw_verifier_pay_v1,
             palw_signed_registration_v1: params.palw_signed_registration_v1,
             palw_provider_court_v1: params.palw_provider_court_v1,
+            palw_legacy_held_da_v2: params.palw_legacy_held_da_v2,
+            palw_bond_budget_v1: params.palw_bond_budget_v1.as_ref().map(|fence| fence.activation),
+            palw_model_bond_allocation_v1: params.palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation),
             palw_gen_v1: params.palw_gen_v1_fence(),
             palw_task_heads_v1: params.palw_task_heads_v1_fence(),
             palw_tir_only_v1: params.palw_tir_only_fence(),
@@ -1311,6 +1357,8 @@ impl VirtualStateProcessor {
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
             palw_receipt_spend_v4: params.palw_receipt_spend_v4_fence(),
+            palw_header_forms: params.palw_header_form_fences_v1(),
+            palw_lifecycle_kind_fences: params.palw_lifecycle_kind_fences_v1(),
             palw_offence_attribution: params.palw_offence_attribution_fence(),
             palw_activation_pool: params.palw_activation_pool_fence(),
             palw_rcore_plus: params.palw_rcore_plus_fence(),
@@ -1327,7 +1375,6 @@ impl VirtualStateProcessor {
             palw_slashing_evidence_utxo_genuine: params.palw_slashing_evidence_utxo_genuine,
             palw_lane_accept_parents_first: params.palw_lane_accept_parents_first_fence(),
             finality_depth: params.blockrate.finality_depth,
-            palw_credit_params: params.palw_credit.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),
@@ -7895,6 +7942,16 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a kernel route object was dropped by name below palw_probabilistic_constraints_v1, and the block stands (G14)");
                 continue;
             }
+            // **Lane BUDGET: below `palw_model_bond_allocation_v1` a capital assignment (tag 140) is dropped by name**, first and charged
+            // nothing (an older build cannot decode it and skips it, A-2).
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_bond_budget_v1(&object)
+                && !self.palw_model_bond_allocation_at(point.daa_score)
+            {
+                info!(
+                    "Block {block}: a capital assignment was dropped by name below palw_model_bond_allocation_v1, and the block stands (ADR-0177)"
+                );
+                continue;
+            }
             // **Lane DA16: below `palw_provider_court_v1` a provider-court object (tags 150–153) is dropped by name**, first and charged
             // nothing, for the same reason (an older build cannot decode it and skips it, A-2).
             if kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(&object)
@@ -7902,6 +7959,16 @@ impl VirtualStateProcessor {
             {
                 info!(
                     "Block {block}: a provider-court object was dropped by name below palw_provider_court_v1, and the block stands (DA16)"
+                );
+                continue;
+            }
+            // **Lane LG14-B: below `palw_legacy_held_da_v2` a legacy held object (tags 157–159) — or an int-12 object carrying its
+            // appended unit — is dropped by name**, first and charged nothing, for the same reason (an older build cannot decode it and
+            // skips it, A-2).
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_legacy_held_da_v2(&object) && !self.palw_legacy_held_da_v2_at(point.daa_score)
+            {
+                info!(
+                    "Block {block}: a legacy held DA object was dropped by name below palw_legacy_held_da_v2, and the block stands (LG14-B)"
                 );
                 continue;
             }
@@ -8232,10 +8299,11 @@ impl VirtualStateProcessor {
             // **G14 lane D: a chunk group that carries a kernel route object is not a certification.** The grading cap and its work
             // budget are the family court's; the kernel route's own bounds are its fold's (and the carrier's fee).
             let completes_a_group = completes_a_group
-                && !Self::palw_kernel_chunk_inner(&folded, &object).is_some_and(|inner| {
+                && !self.palw_kernel_chunk_inner(&folded, &object, point.daa_score).is_some_and(|inner| {
                     kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(&inner)
                         || kaspa_consensus_core::palw_state_v2::palw_object_is_onboarding_v1(&inner)
                         || kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(&inner)
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_legacy_held_da_v2(&inner)
                 });
             let is_certification =
                 matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
@@ -13060,8 +13128,9 @@ impl VirtualStateProcessor {
                 // **G14 lane D: a chunk that COMPLETES a group carrying a kernel route object** is where that object's signature is
                 // checked (the fold trusts the acceptance layer for it, as it does for every directly carried one): the assembled
                 // inner is judged exactly as the direct `KernelRouteV1` arm judges it, and an inner the fence or the signature
-                // refuses drops the completing chunk. Every other chunk is the transition's.
-                Obj::ObjectChunk { .. } => match Self::palw_kernel_chunk_inner(state, object) {
+                // refuses drops the completing chunk. Every other chunk is the transition's — and so is one whose inner kind's owning
+                // fence is not in force here, which the live build cannot decode (A2U: `palw_kernel_chunk_inner` answers `None`).
+                Obj::ObjectChunk { .. } => match self.palw_kernel_chunk_inner(state, object, point.daa_score) {
                     Some(Obj::KernelRouteV1 { bytes, signer, signature }) => {
                         self.palw_kernel_route_object_is_signed(state, point.daa_score, &bytes, &signer, &signature)?;
                     }
@@ -13239,6 +13308,28 @@ impl VirtualStateProcessor {
                 Obj::KernelRouteV1 { bytes, signer, signature } => {
                     self.palw_kernel_route_object_is_signed(state, point.daa_score, bytes, signer, signature)?;
                 }
+                // **G14 (tag 113, C4 F-C4R3-03): a chunk of the route's own chunk lane** — the fence, the opener's Active bond and its
+                // ML-DSA-87 signature over the chunk; at the chunk that COMPLETES its group, the assembled object's own signature,
+                // judged exactly as the direct object's arm judges it (an inner the fence or the signature refuses drops the completing
+                // chunk, and the group's deposit is forfeited at its TTL). The group's rows, target and deposit are the fold's.
+                Obj::KernelRouteChunkV1 { chunk, signature } => {
+                    self.palw_kernel_chunk_is_signed(state, point.daa_score, chunk, signature)?;
+                    match state.kernel_route().and_then(|k| k.chunk_completion_v1(chunk)) {
+                        Some(Obj::KernelRouteV1 { bytes, signer, signature }) => {
+                            self.palw_kernel_route_object_is_signed(state, point.daa_score, &bytes, &signer, &signature)?;
+                        }
+                        Some(Obj::ArtifactBindingChallengedV1 { v2_class, kernel_param_root, challenger, proof, signature }) => {
+                            let payload = borsh::to_vec(&(v2_class, kernel_param_root, proof.as_ref())).map_err(|e| e.to_string())?;
+                            self.palw_onboarding_signature_ok(state, point.daa_score, 105, &challenger, &payload, &signature)?;
+                        }
+                        // OPV-BOOT #1: conformance evidence (tag 109), judged as the direct object is.
+                        Some(Obj::ConformanceEvidenceV1 { v2_class, action, signer, signature }) => {
+                            let payload = borsh::to_vec(&(v2_class, action.as_ref())).map_err(|e| e.to_string())?;
+                            self.palw_onboarding_signature_ok(state, point.daa_score, 109, &signer, &payload, &signature)?;
+                        }
+                        _ => {}
+                    }
+                }
                 // **G14 lane D phase 3 (tags 104-107): the onboarding objects** — the fence, an Active signer, the signer's signature over
                 // the object's payload; the rows, the proofs and the V2 class's own facts are the fold's.
                 Obj::ArtifactBoundV1 { v2_class, kernel_param_root, signer, signature } => {
@@ -13280,6 +13371,61 @@ impl VirtualStateProcessor {
                 Obj::DaTransferV1 { claim, producer, signature } => {
                     let payload = borsh::to_vec(claim).map_err(|e| e.to_string())?;
                     self.palw_provider_court_signature_ok(state, point.daa_score, 153, producer, &payload, signature)?;
+                }
+                // **Lane LG14-B (tags 157–159): the legacy held DA** — the fence, the named bond's signature over the object's message,
+                // the close ceiling on what it carries; the units, answers and verdicts are the fold's.
+                Obj::LegacyHeldDemandedV2 { demand } => {
+                    use kaspa_consensus_core::palw_legacy_held_da_v2 as l;
+                    let domain = self.palw_network_domain_v2();
+                    let message = l::palw_legacy_held_demand_message_v2(domain.as_byte_slice(), demand);
+                    let bytes = borsh::to_vec(&demand.binding).map(|b| b.len() as u64).unwrap_or(u64::MAX);
+                    self.palw_legacy_held_signature_ok(
+                        state,
+                        point.daa_score,
+                        &demand.claim,
+                        &demand.accuser,
+                        &message,
+                        &demand.signature,
+                        l::PALW_LEGACY_HELD_DEMAND_MLDSA87_CONTEXT_V2,
+                        bytes,
+                    )?;
+                }
+                Obj::LegacyHeldAnsweredV2 { answer } => {
+                    use kaspa_consensus_core::palw_legacy_held_da_v2 as l;
+                    let domain = self.palw_network_domain_v2();
+                    let message = l::palw_legacy_held_answer_message_v2(domain.as_byte_slice(), answer);
+                    let bytes = l::palw_legacy_held_answer_bytes_v2(&answer.answer);
+                    self.palw_legacy_held_signature_ok(
+                        state,
+                        point.daa_score,
+                        &answer.claim,
+                        &answer.discloser,
+                        &message,
+                        &answer.signature,
+                        l::PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2,
+                        bytes,
+                    )?;
+                }
+                Obj::LegacyLeafRecomputedV2 { accusation } => {
+                    use kaspa_consensus_core::palw_legacy_held_da_v2 as l;
+                    let domain = self.palw_network_domain_v2();
+                    let message = l::palw_legacy_leaf_recompute_message_v2(domain.as_byte_slice(), accusation);
+                    let bytes = l::palw_legacy_leaf_recompute_bytes_v2(accusation);
+                    self.palw_legacy_held_signature_ok(
+                        state,
+                        point.daa_score,
+                        &accusation.claim,
+                        &accusation.accuser_bond,
+                        &message,
+                        &accusation.signature,
+                        l::PALW_LEGACY_LEAF_RECOMPUTE_MLDSA87_CONTEXT_V2,
+                        bytes,
+                    )?;
+                }
+                // **Lane BUDGET (tag 140): a bond's capital assignment** — the fence, an Active signer, its signature; ADR-0177 D3's rules
+                // are the fold's.
+                Obj::BondCapitalAssignedV1 { bond, assignments, sequence, signature } => {
+                    self.palw_capital_assignment_signature_ok(state, point.daa_score, bond, assignments, *sequence, signature)?;
                 }
                 // (tag 108): the acceptance walk replaces the envelope by its registration before this gate; one that reaches it was
                 // not unwrapped (a direct caller of the gate), and is refused.
@@ -13617,7 +13763,22 @@ impl VirtualStateProcessor {
     /// this chunk), the assembled bytes hashing to the declared group id, and a borsh decode that consumes them. `None` for a chunk
     /// that completes nothing, for a group the transition would refuse on its face, and for bytes no object decodes from — the
     /// transition refuses those itself. Bounded by `PALW_OBJECT_CHUNK_MAX_BYTES × PALW_OBJECT_CHUNK_MAX_COUNT`.
-    fn palw_kernel_chunk_inner(
+    ///
+    /// **A-2 uniformity: `None` too for an inner kind whose owning fence is not in force at `daa_score`** — the live build cannot decode
+    /// those bytes, so to it the chunk completes a group of undecodable bytes: it is charged as such (the certification cap's
+    /// structural count, dormant D14) and the transition refuses it as `ChunkedObjectUndecodable`, the block standing.
+    pub(super) fn palw_kernel_chunk_inner(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        Self::palw_chunk_inner_any_kind(state, object)
+            .filter(|inner| self.palw_lifecycle_kind_fences.kind_in_force_at(inner, daa_score))
+    }
+
+    /// [`Self::palw_kernel_chunk_inner`] without the A-2 reading: the decoded inner whatever its kind.
+    fn palw_chunk_inner_any_kind(
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
@@ -13647,6 +13808,88 @@ impl VirtualStateProcessor {
         borsh::from_slice::<Obj>(&whole).ok()
     }
 
+    /// **G14 GAP 10 (lane K2S): the kernel route's acceptance gate at the mempool and the template.** A `0x4b` carrier of a
+    /// `KernelRouteV1` is put through [`Self::palw_kernel_route_object_is_signed`] (the fence, an Active signer, ML-DSA-87, the kernel's
+    /// strict decode, the OPV fence) and a `KernelConstraintReceiptV1` through the receipt arm's checks, both at the tip; `Some(why)`
+    /// refuses it. `None` for every other transaction, and for an object chunk (judged on the assembled whole by the fold, as before).
+    pub(super) fn palw_mempool_kernel_route_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+            return None;
+        }
+        let object = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx))
+            .objects
+            .into_iter()
+            .next()
+            .map(|carried| carried.object)?;
+        if !matches!(object, Obj::KernelRouteV1 { .. } | Obj::KernelConstraintReceiptV1 { .. }) {
+            return None;
+        }
+        if !self.palw_kernel_route_at(virtual_daa_score) {
+            // A-2: below its fence a kernel-route carrier rides unjudged, as every other new kind does — refusing it here
+            // would make a template this release builds differ from one a release that tolerates the kind builds.
+            return None;
+        }
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        match object {
+            Obj::KernelRouteV1 { bytes, signer, signature } => {
+                if bytes.len() > kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 {
+                    return Some(format!("a {}-byte kernel route object past the carrier", bytes.len()));
+                }
+                self.palw_kernel_route_object_is_signed(&state, virtual_daa_score, &bytes, &signer, &signature).err()
+            }
+            Obj::KernelConstraintReceiptV1 { receipt, signature } => {
+                let record = match state.kernel_route().and_then(|k| k.bond_key_of(&receipt.seat_bond)).and_then(|key| state.bond(&key)) {
+                    Some(record) => record,
+                    None => return Some("a kernel receipt is signed by a bond the route never assigned".to_string()),
+                };
+                if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                    return Some("a kernel receipt is signed by a bond that is not Active".to_string());
+                }
+                (!Self::verify_mldsa87_with_context_bool(
+                    &record.pubkey,
+                    &receipt.signing_message(),
+                    &signature,
+                    misaka_palw_kernel::receipt::CONSTRAINT_RECEIPT_MLDSA87_CONTEXT_V1,
+                ))
+                .then(|| "a kernel receipt carries a signature the seat's key does not verify".to_string())
+            }
+            _ => None,
+        }
+    }
+
+    /// **G14 (tag 113, C4 F-C4R3-03): is this chunk of the route's own lane signed by the Active bond that opens its group?**
+    fn palw_kernel_chunk_is_signed(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa_score: u64,
+        chunk: &kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkV1,
+        signature: &[u8],
+    ) -> Result<(), String> {
+        if !self.palw_kernel_route_at(daa_score) {
+            return Err(
+                "a kernel route chunk is refused: palw_probabilistic_constraints_v1 is not in force at this block (G14)".to_string()
+            );
+        }
+        let record = state
+            .bond(&chunk.opener)
+            .ok_or_else(|| "a kernel route chunk is signed by a bond this chain does not have".to_string())?;
+        if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err("a kernel route chunk is signed by a bond that is not Active".to_string());
+        }
+        let message = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_chunk_message_v1(self.palw_network_domain_v2(), chunk);
+        if !Self::verify_mldsa87_with_context_bool(
+            &record.pubkey,
+            message.as_byte_slice(),
+            signature,
+            kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_CHUNK_MLDSA87_CONTEXT_V1,
+        ) {
+            return Err("a kernel route chunk carries a signature its opener's key does not verify".to_string());
+        }
+        Ok(())
+    }
+
     /// **G14 lane D (tag 110): is this kernel route object signed by the bond it names, and is the kernel willing to decode it?**
     fn palw_kernel_route_object_is_signed(
         &self,
@@ -13674,23 +13917,47 @@ impl VirtualStateProcessor {
             return Err("a kernel route object carries a signature its bond's key does not verify".to_string());
         }
         let object = misaka_palw_kernel::route::KernelRouteObjectV1::decode(bytes).map_err(|refusal| format!("{refusal}"))?;
-        // **RFC-0015: a registration under a non-legacy mode (tags 13 / 14) is dropped unless `palw_panel_free_v1` is in force.** The
-        // network declares the OPV policy or it does not; the ledger refuses the rest (admission, economics, carriers).
-        if matches!(
-            object,
-            misaka_palw_kernel::route::KernelRouteObjectV1::RegisterClassV2 { .. }
-                | misaka_palw_kernel::route::KernelRouteObjectV1::RegisterPipelineClassV2 { .. }
-        ) && !self.palw_kernel_opv_at(daa_score)
+        // **A-2 uniformity one level down (`PALW_KERNEL_ROUTE_INNER_KINDS_V1`): an inner kind owned by a fence beyond tag 110's is dropped
+        // unless that fence is in force** — below it a build without the kind refuses it at the kernel's decode, the block standing.
+        // RFC-0015's registrations under a verification mode (inner 13 / 14) are `palw_panel_free_v1`'s: the network declares the OPV
+        // policy or it does not; the ledger refuses the rest (admission, economics, carriers).
+        if let Some(fence) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_kernel_route_inner_fence_v1(&object)
+            && !self.palw_kernel_inner_fence_at(fence, daa_score)
         {
-            return Err("a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)".to_string());
-        }
-        // **RFC-0004 Part II: a typed-root object (inner kind 19) is dropped unless `palw_typed_roots_v1` is in force** (the route's
-        // schedule refuses it too: the second lock).
-        let typed = matches!(object, misaka_palw_kernel::route::KernelRouteObjectV1::Spec { .. });
-        if typed && !self.palw_kernel_typed_roots_at(daa_score) {
-            return Err("a typed-root object is refused: palw_typed_roots_v1 is not in force at this block (RFC-0004 Part II)".into());
+            return Err(match fence {
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => {
+                    "a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)"
+                        .to_string()
+                }
+                // RFC-0004 Part II: a typed-root object (inner kind 19) or a typed-root proof (`ProsecutionV1::Spec` inside a filing) is
+                // dropped unless `palw_typed_roots_v1` is in force (the route's schedule refuses it too: the second lock).
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
+                    "a typed-root object is refused: palw_typed_roots_v1 is not in force at this block (RFC-0004 Part II)".to_string()
+                }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
+                    "a salted typed-root claim is refused: palw_panel_free_v1 and palw_typed_roots_v1 are not both in force at this block"
+                        .to_string()
+                }
+            });
         }
         Ok(())
+    }
+
+    /// Is a kernel-route inner kind's own fence (`PalwKernelInnerFenceV1`) in force at `daa_score`?
+    fn palw_kernel_inner_fence_at(
+        &self,
+        fence: kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1,
+        daa_score: u64,
+    ) -> bool {
+        match fence {
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => self.palw_kernel_opv_at(daa_score),
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
+                self.palw_kernel_typed_roots_at(daa_score)
+            }
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
+                self.palw_kernel_opv_at(daa_score) && self.palw_kernel_typed_roots_at(daa_score)
+            }
+        }
     }
 
     fn verify_mldsa87_with_context_bool(key: &[u8], message: &[u8], sig: &[u8], context: &[u8]) -> bool {
@@ -14855,6 +15122,7 @@ impl VirtualStateProcessor {
             // the V2 kind as dormant after the gate admitted it, and the V1 kind by the old rule
             // after the gate refused it.
             offence_attribution_active: self.palw_offence_attribution_at(daa_score),
+            legacy_held_da_v2_active: self.palw_legacy_held_da_v2_at(daa_score),
             // ADR-0152-adjacent (Activation Pool): R1, R2 and the pool's terms at this block. Written
             // explicitly for the reason every line above gives: an unwritten default here would
             // reclaim a listing by the old rule on a network that has armed the new one.
@@ -14941,6 +15209,96 @@ impl VirtualStateProcessor {
             && self.palw_provider_court_v1.is_some_and(|fence| {
                 fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score)
             })
+    }
+
+    /// **Lane LG14-B: `Params::palw_legacy_held_da_v2` resolved at the block's DAA**, in exactly one place. The legacy held DA rides
+    /// R-core+'s DA court, so `palw_rcore_plus` must be in force too.
+    pub(super) fn palw_legacy_held_da_v2_at(&self, daa_score: u64) -> bool {
+        self.palw_legacy_held_da_v2.is_some_and(|fence| {
+            fence != kaspa_consensus_core::config::params::ForkActivation::never() && fence.is_active(daa_score)
+        })
+    }
+
+    /// **Lane LG14-B: a legacy held object's acceptance** (tags 157–159): the fence, the named bond on this chain, its ML-DSA-87
+    /// signature over the object's message under its context, and the ruleset's close ceiling on what it carries. The claim's roots,
+    /// the units, the answers and the verdict are the fold's.
+    #[allow(clippy::too_many_arguments)]
+    fn palw_legacy_held_signature_ok(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa_score: u64,
+        claim: &kaspa_hashes::Hash64,
+        signer: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        message: &kaspa_hashes::Hash64,
+        signature: &[u8],
+        context: &[u8],
+        bytes: u64,
+    ) -> Result<(), String> {
+        if !self.palw_legacy_held_da_v2_at(daa_score) {
+            return Err(format!("claim {claim}: a legacy held object is refused: palw_legacy_held_da_v2 is not in force at this block (LG14-B)"));
+        }
+        let court = self
+            .palw_court_params_v2
+            .as_ref()
+            .ok_or_else(|| "a legacy held object on a network with no V2 court parameters".to_string())?;
+        if bytes > court.max_close_bytes() {
+            return Err(format!(
+                "claim {claim}: the legacy held object carries {bytes} bytes and this ruleset prices a close at {}",
+                court.max_close_bytes()
+            ));
+        }
+        let record = state.bond(signer).ok_or_else(|| format!("a legacy held object names bond {signer:?} this chain does not have"))?;
+        if !Self::verify_mldsa87_with_context_bool(&record.pubkey, message.as_byte_slice(), signature, context) {
+            return Err(format!("claim {claim}: the legacy held object is not signed by the bond it names"));
+        }
+        Ok(())
+    }
+
+    /// **Lane BUDGET: `Params::palw_model_bond_allocation_v1` resolved at the block's DAA**, in exactly one place (the bond budget's fence
+    /// must be in force too: an assignment's rows are the budget's).
+    pub(super) fn palw_model_bond_allocation_at(&self, daa_score: u64) -> bool {
+        let at = |fence: Option<kaspa_consensus_core::config::params::ForkActivation>| {
+            fence.is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(daa_score))
+        };
+        at(self.palw_bond_budget_v1) && at(self.palw_model_bond_allocation_v1)
+    }
+
+    /// **Lane BUDGET: a capital assignment's acceptance** (tag 140): the allocation fence, an Active signer bond, and the bond's ML-DSA-87
+    /// signature over `(network, bond, assignments, sequence)`. The rules of ADR-0177 D3 (canonical entries, registered models, the
+    /// capital, the sequence) are the fold's.
+    fn palw_capital_assignment_signature_ok(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa_score: u64,
+        bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        assignments: &[(kaspa_hashes::Hash64, u64)],
+        sequence: u64,
+        signature: &[u8],
+    ) -> Result<(), String> {
+        if !self.palw_model_bond_allocation_at(daa_score) {
+            return Err(
+                "a capital assignment is refused: palw_model_bond_allocation_v1 is not in force at this block (ADR-0177)".to_string()
+            );
+        }
+        let record = state.bond(bond).ok_or_else(|| "a capital assignment is signed by a bond this chain does not have".to_string())?;
+        if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err("a capital assignment is signed by a bond that is not Active".to_string());
+        }
+        let message = kaspa_consensus_core::palw_bond_budget_v1::palw_capital_assignment_message_v1(
+            self.palw_network_domain_v2(),
+            bond,
+            assignments,
+            sequence,
+        );
+        if !Self::verify_mldsa87_with_context_bool(
+            &record.pubkey,
+            message.as_byte_slice(),
+            signature,
+            kaspa_consensus_core::palw_bond_budget_v1::PALW_CAPITAL_ASSIGNMENT_MLDSA87_CONTEXT_V1,
+        ) {
+            return Err("a capital assignment carries a signature its bond's key does not verify".to_string());
+        }
+        Ok(())
     }
 
     /// **Lane DA16: a provider-court object's acceptance** (tags 150–153): the court's fence, an Active signer bond, and the signer's
@@ -15129,7 +15487,18 @@ impl VirtualStateProcessor {
                 max_adjudications_per_block: None,
                 opv: self.palw_kernel_opv_fence().map(|fence| kaspa_consensus_core::palw_kernel_route_v1::PalwKernelOpvExtrasV1 {
                     policy: fence.opv_policy(),
-                    admitted_classes: fence.admitted_classes.clone(),
+                    denied_classes: fence.denied_classes.clone(),
+                    min_effective_bits: fence.min_effective_bits,
+                    sampled_conformance_gates_reward: fence.sampled_conformance_gates_reward,
+                    #[cfg(test)]
+                    test_eligible: kernel_route_test_opv_eligible_list_v1(),
+                    #[cfg(not(test))]
+                    test_eligible: Vec::new(),
+                    reward_gate: fence.activation.is_active(daa_score).then(|| {
+                        kaspa_consensus_core::palw_kernel_route_v1::PalwRewardGateTermsV1 {
+                            fence_activation_daa: fence.activation.daa_score(),
+                        }
+                    }),
                 }),
                 typed_roots: self.palw_kernel_typed_roots_activation(),
                 // DA16: the provider court's activation, where its (never armable) fence is in force at this block.
@@ -15137,6 +15506,11 @@ impl VirtualStateProcessor {
                     .palw_provider_court_at(daa_score)
                     .then(|| self.palw_provider_court_v1.map(|f| f.daa_score()))
                     .flatten(),
+                // G14R round 3: M*-49 / O2's dormant fence (refused when armed; a test arms it through the Config seam).
+                verifier_pay: self
+                    .palw_verifier_pay_v1
+                    .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never())
+                    .map(|f| f.daa_score()),
             }
         })
     }
@@ -16557,6 +16931,15 @@ impl VirtualStateProcessor {
                 envelope.spend.claim_id, claim.execution_root
             ));
         }
+        // **Lane BUDGET (ADR-0176 D3, hook H-5): the fold's strict budget draw**, asked here against the PARENT state, so a receipt block
+        // whose commitment's reservation cannot pay it (one block, this block's carve) is refused for the reason the fold would refuse
+        // it. `true` for every unbudgeted claim — every claim of every network that never armed `palw_bond_budget_v1` — and the carve
+        // is not even read then.
+        if !state.bond_budget_spend_fits_v1(state_params, &envelope.spend.claim_id, point.daa_score, || {
+            state_params.worker_carve_at(point.subsidy, self.palw_escrow_for_carrier_at(point.block, point.daa_score, point.daa_score))
+        }) {
+            return Err(format!("claim {}'s bond budget cannot pay this receipt block (ADR-0176)", envelope.spend.claim_id));
+        }
         let slot = fp_draw_slot_v3(final_daa, freeprompt.receipt_maturity_daa())
             .ok_or_else(|| "the draw slot overflows the DAA space".to_string())?;
         // Derived from the block's OWN selected parent, so the walk is the candidate's and the
@@ -17290,6 +17673,21 @@ impl VirtualStateProcessor {
         for (carrier, reason) in &lifecycle.skipped {
             info!("[palw-lifecycle] carrier {carrier} produced no object: {reason}");
         }
+        // **A-2 uniformity: a kind whose owning fence is not in force at this block is the live build's undecodable payload here** —
+        // that build's walk skips its carrier, so this one drops it HERE, before the acceptance walk reads it: no slot, rent, budget,
+        // cap or refund is asked of it, nothing is folded, and the acceptance walk sees exactly the live build's object list
+        // (`PalwLifecycleKindFencesV1`, the A2U review).
+        let (lifecycle_objects, unread): (Vec<_>, Vec<_>) = lifecycle
+            .objects
+            .into_iter()
+            .partition(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, block_daa));
+        for carried in &unread {
+            info!(
+                "[palw-lifecycle] carrier {} produced no object: payload does not decode (A-2: its kind's owning fence is not in force \
+                 at this block, so it is read as the live build reads it)",
+                carried.carrier
+            );
+        }
         // The derived bindings go FIRST: a claim bound by this block may then be licensed by an
         // object the same block carries, which is the order a chain that is catching up needs.
         //
@@ -17349,7 +17747,7 @@ impl VirtualStateProcessor {
                 refund: None,
                 unrefundable: None,
             }))
-            .chain(lifecycle.objects.into_iter().map(|carried| {
+            .chain(lifecycle_objects.into_iter().map(|carried| {
                 let (refund, unrefundable) = refund_of(&carried);
                 PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), refund, unrefundable, object: carried.object }
             }))
@@ -19393,6 +19791,10 @@ impl VirtualStateProcessor {
         if let Some(refusal) = self.palw_mempool_h1_carrier_refusal(&mutable_tx.tx, virtual_daa_score) {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
         }
+        // **G14 GAP 10:** a kernel route carrier the acceptance gate refuses is refused here too (and at the template).
+        if let Some(refusal) = self.palw_mempool_kernel_route_refusal(&mutable_tx.tx, virtual_daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(refusal));
+        }
         Ok(())
     }
 
@@ -19530,6 +19932,9 @@ impl VirtualStateProcessor {
         // manager evicts it rather than leading a template with it. `None` below R-core+.
         if let Some(refusal) = self.palw_mempool_h1_carrier_refusal(tx, virtual_state.daa_score) {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
+        }
+        if let Some(refusal) = self.palw_mempool_kernel_route_refusal(tx, virtual_state.daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(refusal));
         }
         Ok(calculated_fee)
     }
@@ -21804,6 +22209,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::AdapterClassListed { .. } => "AdapterClassListed",
         O::KernelRouteV1 { .. } => "KernelRouteV1",
         O::KernelConstraintReceiptV1 { .. } => "KernelConstraintReceiptV1",
+        O::KernelRouteChunkV1 { .. } => "KernelRouteChunkV1",
         O::ArtifactBoundV1 { .. } => "ArtifactBoundV1",
         O::ArtifactBindingChallengedV1 { .. } => "ArtifactBindingChallengedV1",
         O::KernelBoundV1 { .. } => "KernelBoundV1",
@@ -21814,6 +22220,10 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
         O::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
         O::DaTransferV1 { .. } => "DaTransferV1",
+        O::LegacyHeldDemandedV2 { .. } => "LegacyHeldDemandedV2",
+        O::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
+        O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
+        O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

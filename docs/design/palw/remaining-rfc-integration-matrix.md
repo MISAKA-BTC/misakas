@@ -91,10 +91,39 @@ wire/fence impact · test · real-node result · status.
 | Bond budget + model allocation (BUDGET, ADR-0176/0177, 2026-10-10) | **140–149** (verify unused before first use) | **190–199** | **0xEF** | `palw_bond_budget_v1`, `palw_model_bond_allocation_v1` (dormant, refused when armed); RPC **250–259**; V2 root block `bond_budget/v1` |
 | Reporter share migration (INTF, ADR-0032 2026-10-10) | — | — | — | `palw_reporter_share_v2` (dormant; Some-only hashed) |
 | Immutable registrations (pre, ADR-0175) | — (refuses existing lifecycle tags past it) | — | — | `palw_model_immutable_v1` (dormant) |
+| Legacy V2 Panel route G14, filer/reservation (LG14-A, RFC-0014 §6–§7, 2026-10-10) | **154–156** | **200–204** | **0xE2** | `palw_legacy_public_filer_v1` (dormant, refused); RPC **204–206** |
+| Legacy V2 Panel route G14, held/fused DA + localization (LG14-B, RFC-0014 §4–§5, 2026-10-10) | **157–159** | **205–209** | **0xE3** | `palw_legacy_held_da_v2` (dormant, refused); RPC **207–209** |
+| Kernel `LedgerEventV1` (2026-10-10) | 21–23 G14R, **24 G14R** (approved 10-10), 30–31 DA16 | — | — | — |
+| Verifier pay (G14R, palw_verifier_pay_v1, 2026-10-10) | kernel inner kinds **21** (verifier attestation), **22** (beacon-source opt-in) | — | — | ledger table 27, `LedgerEventV1` 25–26 |
 | `PalwVoidReasonV2` | C2 120–122; X8 one variant (assign an explicit number ≥ 130 at merge) | — | — | — |
 
 No lane edits `PalwConsensusObjectV2`, `PalwDeltaEntryV2`, the root preimage or carriage tails without a Lead commit that adds the
 skeleton first; lanes build on that commit.
+
+**A-2 uniformity rule (A2U, 2026-10-08/09; `a2-uniformity-new-kinds.md`).** Every allocation in this table that the live testnet-12
+build (int-12) cannot read as a newer build does — an object tag, a kernel inner kind or nested variant, a header form, a coinbase
+trailer, a form appended or re-read inside an int-12 kind, an FP job form, a header formula, a state encoding — has a row in the
+central kind→fence table `PALW_A2_KIND_FENCE_TABLE_V1` naming its fence; A2U keeps it, and a lane's merge flips its row to landed (the
+table test holds the code to the row). A new object kind also needs a row in `PALW_LIFECYCLE_NEW_KINDS_V1` and an arm in
+`palw_lifecycle_kind_owner_v1`; a new header form or trailer a `PalwHeaderFormFenceV1` variant; a change inside a type int-12 decodes a
+classification in `PALW_INT12_WIRE_CHANGES_V1`. **Below its owning fence a kind or form rides unjudged**: it is read exactly as int-12
+reads its bytes — the same verdict (0x4b: tolerated and skipped; 0x4a and header forms: refused), the same skip, nothing charged,
+counted or written. Never refuse it at isolation on 0x4b. Its own rule (may-ride, shape, size) is asked only past the fence, in the
+header context, the acceptance walk and the fold. Merge gate: the A2U tests, the mixed-verdict pin test on both rulesets, and the replay
+of its chains through int-12 itself (`scripts/a2u-int12-replay.sh`). The live build's lists are frozen.
+
+**A-2 additions (A2U, 2026-10-10).** (a) The object-tag column above is mirrored in `PALW_A2_TAG_ALLOCATIONS_V1` with each allocation's
+fences; a tag row outside its allocation or naming another lane's fence fails (`every_tag_row_is_inside_its_allocation`) — a new
+allocation is a Lead commit to both. (b) Every landed post-int-12 kind's wire form is pinned (`PALW_A2_NEW_KIND_WIRE_V1`, in the A2U
+test module) and so are int-12's 100 variants (`PALW_A2_INT12_VARIANTS_WIRE_V1`): a lane that creates or changes a kind re-pins it in
+the same commit, keeping the change under its row's fence. **BUDGET (140–149):** in the commit that creates each kind — the variant,
+its owner arm (a `PalwLifecycleKindFenceV1` variant per fence), its `PALW_LIFECYCLE_NEW_KINDS_V1` entry, an `ObjectTags` row naming
+`palw_bond_budget_v1` or `palw_model_bond_allocation_v1`, its pin, and its `StateEncoding` rows flipped to landed. **DA16 (150–153
+re-scope):** the commit removing the `Artifact` lease subject re-pins 150–153 and keeps `palw_provider_court_v1` (or adds a row for
+another fence). (c) Kinds int-12 decodes that a fence judges anew (ADR-0175 `palw_model_immutable_v1`: 27, 28, 29, 81, 37 with
+`EARLY_VERSION` refused by name; 3, 26, 39, 61, 68, 70, 91 folded by state) have `Int12RefusedByName` / `Int12FoldPastFence` rows: past
+the fence the object is not applied and its block stands — never an isolation or header-context refusal. (d) `palw_reporter_share_v2`
+(INTF) has a pending `StateEncoding` row: on `b8ae9412b` the 49% share is unfenced while testnet-12 arms R-core+ at genesis.
 
 ## 3. Waves
 

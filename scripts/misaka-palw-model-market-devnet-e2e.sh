@@ -99,7 +99,7 @@ start_node() {
   if [ -n "${EXTRA_NODE_ARGS:-}" ]; then read -r -a extra <<<"$EXTRA_NODE_ARGS"; args+=("${extra[@]}"); fi
   local j
   for j in $(echo "$peers" | tr ',' ' '); do args+=("--connect=127.0.0.1:$(p2p_of "$j")"); done
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
+  "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
   echo $! > "$WORK_DIR/node-$i.pid"
   log "node-$i pid $(cat "$WORK_DIR/node-$i.pid") peers {${peers:-listen only}} bond $PREMINE_TXID:$i"
 }

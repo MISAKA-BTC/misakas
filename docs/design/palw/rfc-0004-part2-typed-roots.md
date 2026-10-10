@@ -333,14 +333,17 @@ or below its height (`the_fence_is_dormant_everywhere_refused_when_armed_and_has
 * Panel-licensed typed classes (a receipt scope per step / item).
 * RFC-0011 §18 census: a repository that is a complete computation of a supported kind counts in `D_complete` — HFX/COV own the census;
   this lane exposes the predicate (`supported_kinds`).
-* GAP-5 escrow (G14-R4): spec jobs must open the poster's escrow like `PostJob` once that lands (`post_spec_job` already receives the
-  poster; two calls to add at the merge).
+* ~~GAP-5 escrow (G14-R4)~~ — **closed at the G14-R4 merge (2026-10-09)**: `post_spec_job` checks `job_escrow_affordable` before the
+  charge and `apply_spec` opens the poster's escrow after `JobPosted`, exactly as `PostJob`; a typed claim's Final is paid out of it.
 * ~~Memory-line liveness~~ — **closed (R4X successor, 2026-10-09)**: the claim carries its post-state opened and the line records its
   source (§2.5), so the head is always public; no producer can hold a line hostage and no line stalls on unpublished tensors.
 * Withholding after Final (a post-Final default on a memory claim) forfeits the reservation but does not roll the line back: the
   computation is not proven wrong, and the head's tensors are on chain regardless.
-* A memory job posted over a head that has since moved can never be claimed (a claim never commits over a stale head): its escrow must
-  be refundable on expiry once GAP-5 lands (G14-R4's job escrow and timeout).
+* ~~A memory job stranded by a moved head~~ — **closed at the G14-R4 merge**: it can never be claimed (a claim never commits over a
+  stale head), so no claim holds it and no seal of it outlives the seal TTL; the ordinary idle-escrow rule returns its escrow after
+  `job_escrow_ttl_daa` (G14-R4's `release_idle_job_escrows`).
+* Typed claims are OPV-only, so past `palw_panel_free_v1` they reveal **salted** (OPV-BOOT GAP-B1a): `CommitClaimSalted` carrying
+  `SaltedCommitV1::Spec` (inner kind 20; it needs `palw_typed_roots_v1` too, at the node's gate and in the ledger's schedule).
 
 ## 11. Evidence (RFC-0004 §II.4)
 
@@ -382,7 +385,7 @@ matrix: CODE / DESIGN / POLICY / EXTERNAL).
 | 4 bounded localisation and objective adjudication by one outsider | one step (§2.3); the fresh outsider rebuilds every step from the rows, the chain's head and DA | one item (§3.3), one session per prosecution | one stage or edge (§4) | — (shown: kernel `typed_roots::*`, node `r4x_*`, each with a fresh outsider over rows a second node replays) |
 | 5 collectable collateral consistent with the maximum gain | a claim's gain includes the line's future: a lie that reaches Final moves the head every later job computes from; rolled back by a post-Final conviction within the liability horizon, permanent after it | the gain of a promoted / suppressed item is external to the reward | one reservation for the whole pipeline | POLICY: the OPV reservation (interim 1,000 BILI) from max gain ÷ detection probability; DESIGN: a memory class's **line value at risk** belongs in that gain (a per-class declared bound, or a liability horizon that scales with it) |
 | 6 resources, cost and incentive for an honest verifier in time | a whole-claim check is `S` step checks (parallel); the window must fit them | detecting a missed item scans the snapshot: `N · item` bytes fetched once per class (amortised), `N · D` MACs per claim (`retrieval_claim_material_bytes_v1`) | Σ over stages | EXTERNAL (MEAS): `T_check` per kind on real sizes; POLICY: a window ≥ `T_beacon + T_fetch + T_check + T_localize + T_file + T_margin` per class, the accuser reward |
-| 7 dispute, DA/default, Final and reorg consistency | the route's lifecycle; Final advances the line, a post-Final conviction rolls it back, a superseded claim never moves it; the line is ledger rows, folded per block (replayed by a second node) | the route's | the route's | CODE (FINX): rule E (ADR-0178) before the release; CODE (G14-R4, at the merge): GAP-5 escrow for spec jobs and refund of a memory job stranded by a moved head |
+| 7 dispute, DA/default, Final and reorg consistency | the route's lifecycle; Final advances the line, a post-Final conviction rolls it back, a superseded claim never moves it; the line is ledger rows, folded per block (replayed by a second node) | the route's | the route's | CODE (FINX): rule E (ADR-0178) before the release; (closed at the G14-R4 merge: GAP-5 escrow for spec jobs; a memory job stranded by a moved head has its escrow returned by the idle-escrow rule) |
 
 **RFC-0004 §II.4 item 6 (census).** `SUPPORTED_KINDS_V1` is the predicate a census reads: a repository that is a complete computation
 of a supported kind (for example a retriever + index + generator repository as a Composite) belongs in `D_complete` and counts as

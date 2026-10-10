@@ -102,7 +102,7 @@ for ((i=0; i<NODES; i++)); do
   else
     args+=(--connect="127.0.0.1:$P2P_BASE")
   fi
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
+  "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
   node_pid=$!
   pids+=("$node_pid")
   log "node-$i pid $node_pid bond $PREMINE_TXID:$i$([ "$i" -eq 0 ] && echo " — the liar (tamper leaf $TAMPER_LEAF)")"
