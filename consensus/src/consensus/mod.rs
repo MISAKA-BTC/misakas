@@ -1195,6 +1195,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.round_adapt_block_template(template, round, payout)
     }
 
+    fn exec_v2_slice_adapt_block_template(
+        &self,
+        template: BlockTemplate,
+        payout: kaspa_consensus_core::tx::ScriptPublicKey,
+    ) -> Result<BlockTemplate, RuleError> {
+        self.virtual_processor.exec_v2_slice_adapt_block_template(template, payout)
+    }
+
     fn build_block_template_with_selector_factory(
         &self,
         miner_data: MinerData,
@@ -2494,6 +2502,32 @@ impl ConsensusApi for Consensus {
         limit: usize,
     ) -> Option<kaspa_consensus_core::palw_permissionless_panel_v1::PanelV3ObservationV1> {
         self.virtual_processor.palw_panel_v3_observation_v1_impl(ids, limit)
+    }
+
+    fn palw_exec_v2_observation_v1(
+        &self,
+        roots: Vec<kaspa_hashes::Hash64>,
+        block: Option<BlockHash>,
+    ) -> Option<kaspa_consensus_core::palw_exec_v2_verify::PalwExecV2ObservationV1> {
+        self.virtual_processor.palw_exec_v2_observation_v1_impl(roots, block)
+    }
+
+    fn palw_exec_v2_slice_statement_v1(
+        &self,
+        root: kaspa_hashes::Hash64,
+        index: u32,
+        claim: kaspa_hashes::Hash64,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<kaspa_consensus_core::palw_exec_v2::PalwWorkSliceV1, String> {
+        self.virtual_processor.palw_exec_v2_slice_statement_v1_impl(root, index, claim, bond)
+    }
+
+    fn palw_exec_v2_slice_relayable_v1(&self, slice: &kaspa_consensus_core::palw_exec_v2::PalwWorkSliceV1) -> bool {
+        self.virtual_processor.palw_exec_v2_slice_relayable_v1_impl(slice)
+    }
+
+    fn palw_exec_v2_anchored_v1(&self, block: BlockHash) -> bool {
+        self.virtual_processor.palw_exec_v2_anchored_v1_impl(block)
     }
 
     fn palw_v2_class_table(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {

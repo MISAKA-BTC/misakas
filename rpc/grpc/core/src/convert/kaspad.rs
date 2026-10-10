@@ -108,6 +108,7 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(GetPalwLegacyDisputes);
     impl_into_kaspad_request!(GetPalwFraudFilerStatus);
     impl_into_kaspad_request!(GetPalwPanelV3Status);
+    impl_into_kaspad_request!(GetPalwExecV2Status);
     impl_into_kaspad_request!(GetPalwKernelClaim);
     impl_into_kaspad_request!(GetPalwKernelRows);
     impl_into_kaspad_request!(GetPalwKernelFinals);
@@ -306,6 +307,7 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(GetPalwLegacyDisputes);
     impl_into_kaspad_response!(GetPalwFraudFilerStatus);
     impl_into_kaspad_response!(GetPalwPanelV3Status);
+    impl_into_kaspad_response!(GetPalwExecV2Status);
     impl_into_kaspad_response!(GetPalwKernelClaim);
     impl_into_kaspad_response!(GetPalwKernelRows);
     impl_into_kaspad_response!(GetPalwKernelFinals);

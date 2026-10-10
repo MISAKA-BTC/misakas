@@ -16862,6 +16862,8 @@ mod t12_rcore_s7_reporter_gate;
 // past `palw_rcore_plus`, and nothing below it (M4 review, finding 1).
 mod t12_rcore_sr10_door_gate;
 mod t12_round_lane_e2e;
+// RFC-0008 v2: the EXEC payload through the real pipeline — the weightless carriage, the anchor, the slice ledgers, the gates.
+mod t12_exec_v2_carriage;
 // The 2026-09-26 testnet-12 IBD stall from DAA 316: a round lane ties on blue work, so blue-work
 // order is not topological; the node's sync paths order parents first (node-only).
 mod ibd_parents_first;

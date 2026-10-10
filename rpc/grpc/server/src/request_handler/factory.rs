@@ -131,6 +131,7 @@ impl Factory {
                 GetPalwLegacyDisputes,
                 GetPalwFraudFilerStatus,
                 GetPalwPanelV3Status,
+                GetPalwExecV2Status,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,
                 GetPalwKernelFinals,

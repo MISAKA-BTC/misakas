@@ -278,6 +278,33 @@ fn kernel_route_test_attestations_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64
     roots
 }
 
+/// **RFC-0008 v2 (X8R), TEST ONLY: the classes whose REAL attempts skip the model-registry, seating and per-bond-share gates** — the
+/// stand-in, in the composed EXEC-slice × G14 run (`g14_kernel_route_e2e::conformance::exec_slices`), for the admission of the session's
+/// REAL root. **Re-scoped by the Lead's GAP-81 decision (2026-10-10):** a V2 REAL claim of an onboarded class earns only on the LEGACY
+/// channel, whose old rules need Panel seat readiness (possession proofs) that this harness cannot produce — so this stands for that
+/// channel's admission; no reward gate can replace it (the gate grants a V2 root nothing). Named and shaped like
+/// [`kernel_route_test_attest_artifact_v1`]: height-gated and
+/// append-only, so every node of one test, replaying the same blocks, waives the same gates at the same block; empty in every build
+/// that is not a test (`PalwKernelRouteExtrasV1::test_admitted_classes`).
+#[cfg(test)]
+static EXEC_V2_TEST_ADMITTED_CLASSES_V1: std::sync::Mutex<Vec<(kaspa_hashes::Hash64, u64)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn exec_v2_test_admit_class_v1(class_id: kaspa_hashes::Hash64, from_daa: u64) {
+    let mut list = EXEC_V2_TEST_ADMITTED_CLASSES_V1.lock().unwrap();
+    if !list.iter().any(|(class, _)| *class == class_id) {
+        list.push((class_id, from_daa));
+    }
+}
+
+#[cfg(test)]
+fn exec_v2_test_admitted_classes_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64> {
+    let list = EXEC_V2_TEST_ADMITTED_CLASSES_V1.lock().unwrap();
+    let mut classes: Vec<_> = list.iter().filter(|(_, from)| *from <= daa_score).map(|(class, _)| *class).collect();
+    classes.sort();
+    classes
+}
+
 pub struct VirtualStateProcessor {
     // Channels
     receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
@@ -843,6 +870,14 @@ pub struct VirtualStateProcessor {
     /// applies its mergeset parents-first ([`Self::acceptance_ordered_mergeset_without_selected_parent`]).
     /// `None` on every shipped preset — every order below is the consensus order, byte for byte.
     pub(super) palw_lane_accept_parents_first: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **RFC-0008 v2**: `Params::palw_exec_payload_v2_fence`. Past it the EXEC blocks a chain block accepts are the ones its coinbase
+    /// anchor covers, not its mergeset's reds. `None` on every shipped preset.
+    pub(super) palw_exec_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// RFC-0008 v2: the anchor the virtual state was resolved with, keyed by the virtual's selected parent. The template that virtual
+    /// becomes must carry exactly this anchor in its coinbase, or its UTXO commitment (which includes the covered blocks' effects)
+    /// would not be the one its own validation recomputes.
+    pub(super) palw_exec_v2_virtual_anchor:
+        parking_lot::Mutex<Option<(BlockHash, kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorV1)>>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in.
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0138: `Params::palw_anchor_clock` and ADR-0083's receipt fence — the heartbeat miner's
@@ -1370,6 +1405,8 @@ impl VirtualStateProcessor {
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             palw_slashing_evidence_utxo_genuine: params.palw_slashing_evidence_utxo_genuine,
             palw_lane_accept_parents_first: params.palw_lane_accept_parents_first_fence(),
+            palw_exec_v2: params.palw_exec_payload_v2_fence(),
+            palw_exec_v2_virtual_anchor: parking_lot::Mutex::new(None),
             finality_depth: params.blockrate.finality_depth,
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
@@ -2347,6 +2384,19 @@ impl VirtualStateProcessor {
                     let header = self.headers_store.get_header(current).unwrap();
                     let mergeset_data = self.ghostdag_store.get_data(current).unwrap();
                     let pov_daa_score = header.daa_score;
+                    // RFC-0008 v2: past the EXEC payload fence the EXEC blocks this block accepts are the ones its coinbase anchor
+                    // covers. A wrong count or root, a malformed trailer or an anchor on a lane block disqualifies the block from the
+                    // chain like any commitment fault. A block without a trailer, and every block below the fence, is unchanged.
+                    let (mergeset_data, exec_resolved) =
+                        match self.palw_exec_v2_augment(current, &header, palw_state.as_ref(), mergeset_data) {
+                            Ok(pair) => pair,
+                            Err(exec_error) => {
+                                info!("Block {} is disqualified from virtual chain (EXEC anchor): {}", current, exec_error);
+                                self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                chain_disqualified_counter += 1;
+                                continue;
+                            }
+                        };
 
                     let selected_parent_multiset_hash = self.utxo_multisets_store.get(selected_parent).unwrap();
                     let selected_parent_utxo_view = (&stores.utxo_set).compose(&*diff);
@@ -2402,10 +2452,14 @@ impl VirtualStateProcessor {
                             // down, from the same store — the two must agree or the coinbase this
                             // computes is not the coinbase that is checked.
                             use crate::model::stores::daa::DaaStoreReader;
-                            let non_daa = self
-                                .daa_excluded_store
-                                .get_mergeset_non_daa(current)
-                                .expect("the DAA window is written before the UTXO walk reaches this block");
+                            let non_daa = self.palw_exec_v2_non_daa(
+                                &self
+                                    .daa_excluded_store
+                                    .get_mergeset_non_daa(current)
+                                    .expect("the DAA window is written before the UTXO walk reaches this block"),
+                                &ctx.ghostdag_data,
+                                pov_daa_score,
+                            );
                             // The SAME evaluation point the transition builds below, so the
                             // admission this asks and the admission that accepts are asked at one
                             // place on the chain (audit3 S-04).
@@ -2424,10 +2478,14 @@ impl VirtualStateProcessor {
                         .as_ref()
                         .map(|s| {
                             use crate::model::stores::daa::DaaStoreReader;
-                            let non_daa = self
-                                .daa_excluded_store
-                                .get_mergeset_non_daa(current)
-                                .expect("the DAA window is written before the UTXO walk reaches this block");
+                            let non_daa = self.palw_exec_v2_non_daa(
+                                &self
+                                    .daa_excluded_store
+                                    .get_mergeset_non_daa(current)
+                                    .expect("the DAA window is written before the UTXO walk reaches this block"),
+                                &ctx.ghostdag_data,
+                                pov_daa_score,
+                            );
                             self.palw_v2_receipt_v4_payouts(s, &ctx.ghostdag_data, &non_daa, &ctx.palw_v2_unentitled_blues)
                         })
                         .unwrap_or_default();
@@ -2440,10 +2498,14 @@ impl VirtualStateProcessor {
                         .as_ref()
                         .map(|s| {
                             use crate::model::stores::daa::DaaStoreReader;
-                            let non_daa = self
-                                .daa_excluded_store
-                                .get_mergeset_non_daa(current)
-                                .expect("the DAA window is written before the UTXO walk reaches this block");
+                            let non_daa = self.palw_exec_v2_non_daa(
+                                &self
+                                    .daa_excluded_store
+                                    .get_mergeset_non_daa(current)
+                                    .expect("the DAA window is written before the UTXO walk reaches this block"),
+                                &ctx.ghostdag_data,
+                                pov_daa_score,
+                            );
                             let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
                                 block: current,
                                 daa_score: header.daa_score,
@@ -2714,7 +2776,11 @@ impl VirtualStateProcessor {
                                 // state, so order inside the block cannot over-commit a budget.
                                 let merged_non_daa = {
                                     use crate::model::stores::daa::DaaStoreReader;
-                                    self.daa_excluded_store.get_mergeset_non_daa(current).unwrap_or_default()
+                                    self.palw_exec_v2_non_daa(
+                                        &self.daa_excluded_store.get_mergeset_non_daa(current).unwrap_or_default(),
+                                        &ctx.ghostdag_data,
+                                        pov_daa_score,
+                                    )
                                 };
                                 let (merged_owned, merged_preskips) =
                                     self.palw_v2_merged_works(&ctx.ghostdag_data, state, state_params, &merged_non_daa, &point);
@@ -2789,6 +2855,13 @@ impl VirtualStateProcessor {
                                         // ADR-0125: the permits this block accepted, as decided above.
                                         if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
                                             extras.round_permit_uses = verdicts.uses.clone();
+                                        }
+                                        // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
+                                        // re-judged by the fold against its own running state) and the covered set itself.
+                                        if let Some(resolved) = exec_resolved.as_ref() {
+                                            let (anchor, slices) = self.palw_exec_v2_fold_inputs(resolved, point.daa_score);
+                                            extras.exec_v2_anchor = Some(anchor);
+                                            extras.exec_v2_covered = slices;
                                         }
                                         // ADR-0152 v3.1 J-1: the anchor this block's own attempt answers.
                                         extras.own_job_anchor = own_job_anchor;
@@ -3965,10 +4038,34 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
     ) -> Result<Arc<VirtualState>, RuleError> {
         let selected_parent_utxo_view = (&virtual_stores.utxo_set).compose(&*accumulated_diff);
-        let mut ctx = UtxoProcessingContext::new((&virtual_ghostdag_data).into(), selected_parent_multiset);
 
         // Calc virtual DAA score, difficulty bits and past median time
         let virtual_daa_window = self.window_manager.block_daa_window(&virtual_ghostdag_data)?;
+
+        // **RFC-0008 v2: the anchor the block built on this virtual will carry.** Read from the store tip, which IS virtual's selected
+        // parent (the same filter the lock and verdict reads below use). The covered EXEC blocks join virtual's reds, so virtual's UTXO
+        // state, rewards and coinbase accept them exactly as the block that anchors them will; the DAG's own window and the stored
+        // ghostdag data of every real block are untouched.
+        let exec_state = if self.palw_exec_v2_active_at(virtual_daa_window.daa_score) {
+            self.palw_state_params_v2
+                .as_ref()
+                .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
+                .filter(|(block, _)| *block == virtual_ghostdag_data.selected_parent)
+                .map(|(_, state)| state)
+        } else {
+            None
+        };
+        let (virtual_ghostdag_data, exec_anchor) = match exec_state
+            .as_ref()
+            .and_then(|state| self.palw_exec_v2_virtual(&virtual_ghostdag_data, state, virtual_daa_window.daa_score))
+        {
+            Some((augmented, anchor)) => (augmented, Some(anchor)),
+            None => (virtual_ghostdag_data, None),
+        };
+        *self.palw_exec_v2_virtual_anchor.lock() = exec_anchor.map(|anchor| (virtual_ghostdag_data.selected_parent, anchor));
+        let virtual_non_daa =
+            self.palw_exec_v2_non_daa(&virtual_daa_window.mergeset_non_daa, &virtual_ghostdag_data, virtual_daa_window.daa_score);
+        let mut ctx = UtxoProcessingContext::new((&virtual_ghostdag_data).into(), selected_parent_multiset);
         let virtual_bits = self.window_manager.calculate_difficulty_bits(&virtual_ghostdag_data, &virtual_daa_window);
         let virtual_past_median_time = self.window_manager.calc_past_median_time(&virtual_ghostdag_data)?.0;
 
@@ -4018,7 +4115,7 @@ impl VirtualStateProcessor {
             ctx.mergeset_diff,
             ctx.accepted_tx_ids,
             ctx.mergeset_rewards,
-            virtual_daa_window.mergeset_non_daa,
+            virtual_non_daa,
             virtual_ghostdag_data,
         )))
     }
@@ -5861,6 +5958,91 @@ impl VirtualStateProcessor {
             limit,
             after,
         ))
+    }
+
+    /// **RFC-0008 v2: `getPalwExecV2Status` (op 240)** — the EXEC v2 lane's observation over the committed tip (`load_tip_cached`):
+    /// roots, slices and the state of each verification claim, `block`'s refusal record (its delta's `ExecV2Verdict` notes), the lane's
+    /// health. A read: no rule calls it. `None` where the payload is not armed.
+    pub fn palw_exec_v2_observation_v1_impl(
+        &self,
+        roots: Vec<kaspa_hashes::Hash64>,
+        block: Option<BlockHash>,
+    ) -> Option<kaspa_consensus_core::palw_exec_v2_verify::PalwExecV2ObservationV1> {
+        let fence = self.palw_exec_v2?;
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let tip_daa = self.headers_store.get_daa_score(tip).unwrap_or_default();
+        let record = block.map(|hash| {
+            let notes = self
+                .palw_state_v2_store
+                .read()
+                .delta_of(hash)
+                .ok()
+                .map(|(_, delta)| {
+                    delta
+                        .entries
+                        .iter()
+                        .filter_map(|entry| match entry {
+                            kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::ExecV2Verdict { carrier, code } => Some((*carrier, *code)),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            (hash, notes)
+        });
+        let lane = self.palw_exec_v2_health(&state, tip, tip_daa);
+        Some(kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_observation_v1(
+            &state,
+            Some(fence.daa_score()),
+            tip,
+            tip_daa,
+            &roots,
+            record,
+            lane,
+        ))
+    }
+
+    /// **RFC-0008 v2 amendment 1: the slice statement `bond` signs for `(root, index)`, backed by the kernel claim `claim`**, over the
+    /// committed tip (the EXEC_SLICE producer's input). A read.
+    pub fn palw_exec_v2_slice_statement_v1_impl(
+        &self,
+        root: kaspa_hashes::Hash64,
+        index: u32,
+        claim: kaspa_hashes::Hash64,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<kaspa_consensus_core::palw_exec_v2::PalwWorkSliceV1, String> {
+        let state_params = self.palw_state_params_v2.as_ref().ok_or("this network has no PALW state")?;
+        let (_, state) =
+            self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten().ok_or("no PALW tip on this node yet")?;
+        kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_slice_statement_v1(&state, root, index, claim, bond)
+    }
+
+    /// **RFC-0008 v2 amendment 1, §10.3: the relay prefilter of an `EXEC_SLICE` block** against the committed tip: the root is open, the
+    /// executor authorised, the index inside `[next, next + pending depth)`, the verification claim held by the kernel route (where the
+    /// route exists — the fold asks the binding only there). Node-local: validity never reads it.
+    pub fn palw_exec_v2_slice_relayable_v1_impl(&self, slice: &kaspa_consensus_core::palw_exec_v2::PalwWorkSliceV1) -> bool {
+        use kaspa_consensus_core::palw_work_slice_v2::PALW_EXEC_V2_MAX_PENDING_DEPTH;
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return true };
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else { return true };
+        let Some(root) = state.exec_v2_root_v1(&slice.root_claim_id) else { return false };
+        root.is_open()
+            && root.authorises(&slice.executor_bond)
+            && slice.slice_index >= root.next_index
+            && slice.slice_index < root.next_index.saturating_add(PALW_EXEC_V2_MAX_PENDING_DEPTH)
+            && state.kernel_route().is_none_or(|route| {
+                route.rows.contains_key(&(
+                    misaka_palw_kernel::rows::TABLE_CLAIMS_V1,
+                    kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_kernel_key_v1(&slice.evidence_root),
+                ))
+            })
+    }
+
+    /// **RFC-0008 v2: has an anchor on the committed tip's chain covered `block`?** (The covered set within the anchoring window.)
+    pub fn palw_exec_v2_anchored_v1_impl(&self, block: BlockHash) -> bool {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return false };
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else { return false };
+        state.exec_v2_anchored_v1(&block)
     }
 
     /// **RFC-0010: `getPalwPanelV3Status` (op 220)** — the permissionless Panel's observation over the committed tip
@@ -8175,6 +8357,12 @@ impl VirtualStateProcessor {
                 info!("Block {block}: a verification vertex move was dropped by name below palw_verification_vertex_v1, and the block stands (RFC-0007)");
                 continue;
             }
+            // **RFC-0008 v2, likewise**: below `palw_exec_payload_v2` a work-session root declaration is a payload an older build
+            // cannot decode and skips (A-2), so it is dropped here, first, and charged nothing; the fold refuses it too.
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_exec_v2(&object) && !self.palw_exec_v2_at(point.daa_score) {
+                info!("Block {block}: a work-session root declaration was dropped by name below palw_exec_payload_v2, and the block stands (RFC-0008 v2)");
+                continue;
+            }
             // **RFC-0007 Part IV.1, likewise**: a trap commitment or reveal below `palw_audit_mesh_v1` is a payload an older build
             // cannot decode and skips; dropped by name, first, and charged nothing.
             if kaspa_consensus_core::palw_state_v2::palw_object_is_mesh_v1(&object) && !self.palw_audit_mesh_at(point.daa_score) {
@@ -10068,6 +10256,25 @@ impl VirtualStateProcessor {
                         vertex.leaves.len(),
                         vertex.leaves_root,
                         &vertex.signature,
+                        Self::verify_mldsa87_with_context_bool,
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                // **RFC-0008 v2: a work-session root declaration** (tag 130): the fence, its shape (a valid plan partition, set roots,
+                // canonical executors), then the ONE ML-DSA-87 signature of the root claim's bond over the declaration bound to this
+                // network. The claim's phase, prefix, job and quotas are the fold's.
+                Obj::ExecWorkRootOpenedV2 { declaration } => {
+                    if !state_params.exec_v2_active_at(point.daa_score) {
+                        return Err(kaspa_consensus_core::palw_work_slice_v2::PalwWorkRootRefusalV2::Dormant.to_string());
+                    }
+                    declaration.validate_shape().map_err(|e| e.to_string())?;
+                    kaspa_consensus_core::palw_work_slice_v2::palw_work_root_verify_signature_v2(
+                        state,
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        declaration,
                         Self::verify_mldsa87_with_context_bool,
                     )
                     .map_err(|e| e.to_string())?;
@@ -14827,6 +15034,7 @@ impl VirtualStateProcessor {
         ghostdag_data: &GhostdagData,
         daa_score: u64,
     ) -> Option<super::utxo_validation::PalwRoundVerdictsV1> {
+        use kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope;
         use kaspa_consensus_core::palw_execution_lane_v1::{
             PalwExecEnvelopeV1, PalwExecPermitUseV1, palw_execution_permit_of_v2, palw_execution_span_v1,
         };
@@ -14839,13 +15047,67 @@ impl VirtualStateProcessor {
             round_blocks: self.palw_round_blocks_of(ghostdag_data),
             ..Default::default()
         };
+        // **RFC-0008 v2: the covered set is judged in the canonical order — `(round, permit index, hash)` — so two blocks of one permit,
+        // or more payees than a coinbase may pay, have a deterministic winner** (the header rule that bounds a v1 mergeset does not bound
+        // an anchor's closure). Slices carry no round and sort last; they are skipped below. Past the fence only: below it (and where it
+        // is not armed) the order, the checks and the telemetry are the build before RFC-0008 v2's, byte for byte — the header rule
+        // already forbids a duplicate permit and more than the payee bound in a v1 mergeset, but virtual's own mergeset is not a header
+        // the rule judged, so the new checks are not merely redundant there (the X8R review).
+        let exec_v2 = self.palw_exec_v2_active_at(daa_score);
         let mut ordered: Vec<BlockHash> = verdicts.round_blocks.iter().copied().collect();
         ordered.sort();
+        if exec_v2 {
+            ordered.sort_by_key(|block| {
+                let coords = self
+                    .headers_store
+                    .get_header(*block)
+                    .ok()
+                    .and_then(|header| kaspa_consensus_core::palw_exec_v2::palw_exec_lane_coords_v1(&header.palw_commitment).ok());
+                match coords {
+                    Some(kaspa_consensus_core::palw_exec_v2::PalwExecLaneCoordsV1::Permit { round, permit_index, .. }) => {
+                        (0u8, round, permit_index, *block)
+                    }
+                    _ => (1u8, 0, 0, *block),
+                }
+            });
+        }
+        let mut taken: std::collections::BTreeSet<(u64, u64, u16)> = std::collections::BTreeSet::new();
+        let mut payees: std::collections::BTreeSet<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> =
+            std::collections::BTreeSet::new();
         for block in ordered {
             use kaspa_consensus_core::palw_exec_view_v1::{PalwRoundLineageV1, PalwRoundRefusalV1 as Refusal};
+            // **RFC-0008 v2: an `EXEC_SLICE` carrier holds no permit and is judged by no permit verdict** — the fold judges it, by the
+            // six admission rules, against its running state. It is a lane member (in `round_blocks`, so its body is inert) and never
+            // `permitted`, so it pays and accepts nothing here.
+            if exec_v2
+                && self.headers_store.get_header(block).is_ok_and(|header| {
+                    PalwExecV2Envelope::is_v2_carriage(&header.palw_commitment)
+                        && PalwExecV2Envelope::decode(&header.palw_commitment)
+                            .is_ok_and(|envelope| envelope.subtype == kaspa_consensus_core::palw_exec_v2::PalwExecSubtypeV2::Slice)
+                })
+            {
+                continue;
+            }
             let judged = (|| -> Result<(PalwExecPermitUseV1, PalwRoundLineageV1), Refusal> {
                 let header = self.headers_store.get_header(block).map_err(|_| Refusal::EnvelopeUndecodable)?;
-                let envelope = PalwExecEnvelopeV1::decode(&header.palw_commitment).map_err(|_| Refusal::EnvelopeUndecodable)?;
+                // The envelope this block's height admits: v2's `EXEC_TX` permit, or the v1 round envelope (a block merged below
+                // the fence). Both name a round, a permit index, a bond and the key that signed; the checks below are one function
+                // of those four.
+                let envelope = if exec_v2 && PalwExecV2Envelope::is_v2_carriage(&header.palw_commitment) {
+                    let v2 = PalwExecV2Envelope::decode(&header.palw_commitment).map_err(|_| Refusal::EnvelopeUndecodable)?;
+                    let permit = v2.tx_permit.ok_or(Refusal::EnvelopeUndecodable)?;
+                    PalwExecEnvelopeV1 {
+                        version: kaspa_consensus_core::palw_execution_lane_v1::PALW_EXEC_ENVELOPE_VERSION_V1,
+                        network_domain: v2.network_domain,
+                        round: permit.round,
+                        permit_index: permit.permit_index,
+                        bond: v2.executor_bond,
+                        pubkey: v2.pubkey,
+                        signature: Vec::new(),
+                    }
+                } else {
+                    PalwExecEnvelopeV1::decode(&header.palw_commitment).map_err(|_| Refusal::EnvelopeUndecodable)?
+                };
                 let anchor = self.ghostdag_store.get_selected_parent(block).map_err(|_| Refusal::SpanOutsideWindow)?;
                 let span = palw_execution_span_v1(
                     self.headers_store.get_daa_score(anchor).map_err(|_| Refusal::SpanOutsideWindow)?,
@@ -14885,14 +15147,36 @@ impl VirtualStateProcessor {
                 {
                     return Err(Refusal::PayoutMismatch);
                 }
-                if state.round_permit_used(span, envelope.round, envelope.permit_index) {
+                if state.round_permit_used(span, envelope.round, envelope.permit_index)
+                    || (exec_v2 && taken.contains(&(span, envelope.round, envelope.permit_index)))
+                {
                     return Err(Refusal::PermitAlreadyUsed);
+                }
+                // The coinbase pays each permitted bond one aggregate output, so the distinct payees one block may pay are bounded.
+                if exec_v2
+                    && !payees.contains(&envelope.bond)
+                    && payees.len() >= kaspa_consensus_core::palw_execution_lane_v1::PALW_EXEC_MAX_BONDS_PER_MERGESET_V1
+                {
+                    return Err(Refusal::PayeeBound);
                 }
                 let lineage = kaspa_consensus_core::palw_exec_view_v1::palw_round_lineage_v1(state, schedule, permit.quantum_id);
                 Ok((PalwExecPermitUseV1 { span, round: envelope.round, permit_index: envelope.permit_index }, lineage))
             })();
             match judged {
                 Ok((used, lineage)) => {
+                    taken.insert((used.span, used.round, used.permit_index));
+                    if let Some(bond) = self
+                        .headers_store
+                        .get_header(block)
+                        .ok()
+                        .and_then(|header| kaspa_consensus_core::palw_exec_v2::palw_exec_lane_coords_v1(&header.palw_commitment).ok())
+                        .and_then(|coords| match coords {
+                            kaspa_consensus_core::palw_exec_v2::PalwExecLaneCoordsV1::Permit { bond, .. } => Some(bond),
+                            _ => None,
+                        })
+                    {
+                        payees.insert(bond);
+                    }
                     verdicts.permitted.insert(block);
                     verdicts.uses.push(used);
                     verdicts.judged.push((block, Ok(lineage)));
@@ -14914,14 +15198,17 @@ impl VirtualStateProcessor {
         let ledger = palw_round_lane_telemetry_v1();
         for (block, verdict) in &verdicts.judged {
             let Ok(header) = self.headers_store.get_header(*block) else { continue };
-            let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&header.palw_commitment).ok();
+            let coords = kaspa_consensus_core::palw_exec_v2::palw_exec_lane_coords_v1(&header.palw_commitment).ok().and_then(|coords| match coords {
+                kaspa_consensus_core::palw_exec_v2::PalwExecLaneCoordsV1::Permit { round, permit_index, bond } => Some((round, permit_index, bond)),
+                kaspa_consensus_core::palw_exec_v2::PalwExecLaneCoordsV1::Slice { .. } => None,
+            });
             ledger.record(PalwRoundBlockRecordV1 {
                 hash: *block,
                 daa_score: header.daa_score,
                 timestamp_ms: header.timestamp,
-                round: envelope.as_ref().map(|e| e.round).unwrap_or(0),
-                permit_index: envelope.as_ref().map(|e| e.permit_index).unwrap_or(0),
-                bond: envelope.as_ref().map(|e| e.bond),
+                round: coords.map(|c| c.0).unwrap_or(0),
+                permit_index: coords.map(|c| c.1).unwrap_or(0),
+                bond: coords.map(|c| c.2),
                 outcome: match verdict {
                     Ok(lineage) => PalwRoundOutcomeV1::Exec(*lineage),
                     Err(refusal) => PalwRoundOutcomeV1::Refused(*refusal),
@@ -15198,6 +15485,9 @@ impl VirtualStateProcessor {
                 }
             }),
             round_permit_uses: Vec::new(),
+            // RFC-0008 v2: the slice carriers the covered set holds (empty until the closure carriage fills it).
+            exec_v2_covered: Vec::new(),
+            exec_v2_anchor: None,
             // ADR-0126 Decision 3: the carve this block's own attempt escrows at — the block that
             // carried it is this one, and the block that pays it is its selected-chain child, always
             // later, so the lower score is this one's. Explicit for the reason every line above
@@ -15617,6 +15907,11 @@ impl VirtualStateProcessor {
                 max_adjudications_per_block: Some(4),
                 #[cfg(not(test))]
                 max_adjudications_per_block: None,
+                // RFC-0008 v2 (X8R): the composed run's seam (`exec_v2_test_admit_class_v1`); nothing outside a test.
+                #[cfg(test)]
+                test_admitted_classes: exec_v2_test_admitted_classes_v1(daa_score),
+                #[cfg(not(test))]
+                test_admitted_classes: Vec::new(),
                 opv: self.palw_kernel_opv_fence().map(|fence| kaspa_consensus_core::palw_kernel_route_v1::PalwKernelOpvExtrasV1 {
                     policy: fence.opv_policy(),
                     denied_classes: fence.denied_classes.clone(),
@@ -16016,6 +16311,11 @@ impl VirtualStateProcessor {
 
     fn palw_vertex_at(&self, daa_score: u64) -> bool {
         self.palw_state_params_v2.as_ref().is_some_and(|params| params.vertex_active_at(daa_score))
+    }
+
+    /// **RFC-0008 v2's unified EXEC payload, read off the bundle's mirror** (`exec_v2_from_daa`). `false` on every shipped preset.
+    fn palw_exec_v2_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.exec_v2_active_at(daa_score))
     }
 
     /// **RFC-0007 Part IV.1's audit mesh, read off the bundle's mirror** (`audit_mesh_from_daa`).
@@ -19718,6 +20018,27 @@ impl VirtualStateProcessor {
         let Some(lane) = self.palw_execution_lane else {
             return;
         };
+        // **RFC-0008 v2: past `palw_exec_payload_v2` a chain block names no EXEC block as a parent** — the lane reaches the chain
+        // through the anchor trailer of the coinbase. So virtual takes no round parent once its OWN DAA score is at the fence (the score
+        // the header rule judges the template at). A round tip adds no DAA term (it is outside the DAA set, and its past brings no chain
+        // block virtual's selected chain had not: its anchor is on that chain), so virtual's score is the one its non-round parents
+        // give. That score is computed only within one mergeset of the fence (a child's score is at most its selected parent's plus its
+        // mergeset): further below, nothing is asked, and from the fence on, nothing is taken. The X8R review replaced the coarse
+        // `selected + mergeset_size_limit` cut-off, which stopped the v1 lane up to 181 DAA (~8 hours on testnet-12) early on an
+        // upgraded node. (Dormant on every shipped preset: `palw_exec_v2` is `None`.)
+        if let Some(fence) = self.palw_exec_v2 {
+            let selected_daa = self.headers_store.get_daa_score(selected_parent).unwrap_or_default();
+            if fence.is_active(selected_daa) {
+                return;
+            }
+            if fence.is_active(selected_daa.saturating_add(self.mergeset_size_limit).saturating_add(1)) {
+                let base = self.ghostdag_manager.ghostdag(&virtual_parents[..]);
+                match self.window_manager.block_daa_window(&base) {
+                    Ok(window) if !fence.is_active(window.daa_score) => {}
+                    _ => return,
+                }
+            }
+        }
         let envelope_of = |block: BlockHash| {
             self.headers_store.get_header(block).ok().and_then(|h| PalwExecEnvelopeV1::decode(&h.palw_commitment).ok())
         };
@@ -20202,8 +20523,23 @@ impl VirtualStateProcessor {
         // Decision 1.4: the declared subsidy is what descendants read into the reward fan-out —
         // zero is what makes the lane fee-only and the ADR-0059 supply exact.
         let blue_score = template.block.header.blue_score;
+        // **RFC-0008 v2: a heartbeat covers the lane the template's state already accepted.** The anchor trailer rides the template's
+        // coinbase (the virtual accepted the covered EXEC blocks, so the block built on it must say which heads it covers); the
+        // re-serialisation below keeps it, or the beat would commit a UTXO state for blocks it does not name. Read only past the fence:
+        // below it (and where it is not armed) the miner data is exactly the template's, a trailer in a miner's tag being its bytes.
+        let exec_v2 = self.palw_exec_v2_active_at(template.block.header.daa_score);
         let coinbase = &mut template.block.transactions[0];
-        let zeroed = kaspa_consensus_core::coinbase::CoinbaseData { blue_score, subsidy: 0, miner_data: template.miner_data.clone() };
+        let miner_data = match kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(&coinbase.payload)
+            .ok()
+            .filter(|_| exec_v2)
+            .and_then(|(_, anchor)| anchor)
+            .and_then(|anchor| {
+                kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_append(&template.miner_data.extra_data, &anchor).ok()
+            }) {
+            Some(extra) => MinerData::new(template.miner_data.script_public_key.clone(), extra),
+            None => template.miner_data.clone(),
+        };
+        let zeroed = kaspa_consensus_core::coinbase::CoinbaseData { blue_score, subsidy: 0, miner_data };
         coinbase.payload =
             self.coinbase_manager.serialize_coinbase_payload(&zeroed).expect("a payload the manager just built reserializes");
         coinbase.finalize();
@@ -20549,11 +20885,39 @@ impl VirtualStateProcessor {
     ///   no outputs — a round block is never a chain block, so nothing reads the roots or outputs.
     pub fn round_adapt_block_template(
         &self,
-        mut template: BlockTemplate,
+        template: BlockTemplate,
         round: u64,
         payout: kaspa_consensus_core::tx::ScriptPublicKey,
     ) -> Result<BlockTemplate, RuleError> {
-        use kaspa_consensus_core::palw_execution_lane_v1::{PALW_EXEC_ROUND_MS, PalwExecEnvelopeV1, palw_execution_mergeset_rule_v1};
+        self.exec_lane_adapt_block_template(template, Some(round), payout)
+    }
+
+    /// **RFC-0008 v2: re-shape a standard template into an `EXEC_SLICE` block.** The lane block of [`Self::round_adapt_block_template`]
+    /// with no round (a slice holds no permit): the same parents (the lane tips on the sink's chain, and the anchor), the same
+    /// recomputed GHOSTDAG / DAA / bits / median time / pruning point, the same algo 10 with an empty `palw_commitment` for the caller to
+    /// sign after solving — and a body of **its coinbase alone** (a slice has no user transaction batch). Stamped at the template's own
+    /// time, or one past the median if that is later.
+    pub fn exec_v2_slice_adapt_block_template(
+        &self,
+        template: BlockTemplate,
+        payout: kaspa_consensus_core::tx::ScriptPublicKey,
+    ) -> Result<BlockTemplate, RuleError> {
+        if !self.palw_exec_v2_active_at(self.virtual_stores.read().state.get().unwrap().daa_score) {
+            return Err(RuleError::UnknownPowAlgoId(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1));
+        }
+        self.exec_lane_adapt_block_template(template, None, payout)
+    }
+
+    /// The one builder of a lane block's template. `round` is `Some` for a permit holder (a v1 round block, a v2 `EXEC_TX`) and `None`
+    /// for a v2 `EXEC_SLICE`.
+    fn exec_lane_adapt_block_template(
+        &self,
+        mut template: BlockTemplate,
+        round: Option<u64>,
+        payout: kaspa_consensus_core::tx::ScriptPublicKey,
+    ) -> Result<BlockTemplate, RuleError> {
+        use kaspa_consensus_core::palw_exec_v2::{PalwExecLaneCoordsV1, palw_exec_lane_coords_v1};
+        use kaspa_consensus_core::palw_execution_lane_v1::{PALW_EXEC_ROUND_MS, palw_execution_mergeset_rule_v1};
         use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1;
         let virtual_state = self.virtual_stores.read().state.get().unwrap();
         let Some(lane) = self.palw_execution_lane.filter(|lane| lane.activation.is_active(virtual_state.daa_score)) else {
@@ -20571,8 +20935,9 @@ impl VirtualStateProcessor {
         let round_width = lane.width_at_daa(self.headers_store.get_daa_score(anchor).unwrap_or_default());
         let _prune_guard = self.pruning_lock.blocking_read();
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
-        let envelope_of = |block: BlockHash| {
-            self.headers_store.get_header(block).ok().and_then(|h| PalwExecEnvelopeV1::decode(&h.palw_commitment).ok())
+        // Either envelope: a permit holder's coordinates, or a slice (no round).
+        let coords_of = |block: BlockHash| {
+            self.headers_store.get_header(block).ok().and_then(|h| palw_exec_lane_coords_v1(&h.palw_commitment).ok())
         };
         let mut round_tips: Vec<(u64, BlockHash)> =
             self.body_tips_store
@@ -20583,8 +20948,14 @@ impl VirtualStateProcessor {
                 .iter()
                 .copied()
                 .filter(|tip| self.ghostdag_manager.is_round_block(*tip))
-                .filter_map(|tip| envelope_of(tip).map(|envelope| (envelope.round, tip)))
-                .filter(|(tip_round, _)| *tip_round < round)
+                .filter_map(|tip| {
+                    coords_of(tip).map(|coords| match coords {
+                        PalwExecLaneCoordsV1::Permit { round, .. } => (round, tip),
+                        PalwExecLaneCoordsV1::Slice { .. } => (0, tip),
+                    })
+                })
+                // A permit holder merges only rounds older than its own; a slice holds no round and merges any tip.
+                .filter(|(tip_round, _)| round.is_none_or(|round| *tip_round < round))
                 .filter(|(_, tip)| {
                     self.ghostdag_store.get_selected_parent(*tip).ok().is_some_and(|tip_anchor| {
                         self.reachability_service.try_is_chain_ancestor_of(tip_anchor, anchor).unwrap_or(false)
@@ -20620,12 +20991,20 @@ impl VirtualStateProcessor {
             if ghostdag.selected_parent != anchor {
                 continue;
             }
-            let members: Option<Vec<_>> = ghostdag
+            let lane_members: Option<Vec<_>> = ghostdag
                 .unordered_mergeset_without_selected_parent()
                 .filter(|member| self.ghostdag_manager.is_round_block(*member))
-                .map(|member| envelope_of(member).map(|envelope| (envelope.round, envelope.permit_index, envelope.bond)))
+                .map(|member| coords_of(member))
                 .collect();
-            let Some(members) = members else { continue };
+            let Some(lane_members) = lane_members else { continue };
+            let slices = lane_members.iter().filter(|coords| matches!(coords, PalwExecLaneCoordsV1::Slice { .. })).count();
+            let members: Vec<_> = lane_members
+                .iter()
+                .filter_map(|coords| match coords {
+                    PalwExecLaneCoordsV1::Permit { round, permit_index, bond } => Some((*round, *permit_index, *bond)),
+                    PalwExecLaneCoordsV1::Slice { .. } => None,
+                })
+                .collect();
             // **A tip the validator would refuse to merge is not a parent** (the 2026-10-03 execution-lane wedge): a round
             // tip older than the merge-depth window — one no chain block ever merged — made EVERY round template
             // parent on it, and the header stage refused every block (`ViolatingBoundedMergeDepth`, 10,106 times on b0).
@@ -20637,8 +21016,9 @@ impl VirtualStateProcessor {
             {
                 continue;
             }
-            if ghostdag.mergeset_size() as u64 - members.len() as u64 > self.mergeset_size_limit
-                || palw_execution_mergeset_rule_v1(Some(round), &members, round_width, lane.max_per_mergeset).is_err()
+            if ghostdag.mergeset_size() as u64 - (members.len() + slices) as u64 > self.mergeset_size_limit
+                || (members.len() + slices) as u64 > lane.max_per_mergeset
+                || palw_execution_mergeset_rule_v1(round, &members, round_width, lane.max_per_mergeset).is_err()
             {
                 continue;
             }
@@ -20658,11 +21038,22 @@ impl VirtualStateProcessor {
         }
         let bits = self.window_manager.calculate_difficulty_bits(&ghostdag, &daa_window);
         let (past_median_time, _) = self.window_manager.calc_past_median_time(&ghostdag)?;
-        let round_start = self.genesis.timestamp.saturating_add(round.saturating_mul(PALW_EXEC_ROUND_MS));
-        let timestamp = round_start.max(past_median_time + 1);
-        if timestamp >= round_start.saturating_add(PALW_EXEC_ROUND_MS) {
-            return Err(RuleError::TimeTooOld(round_start, past_median_time));
-        }
+        // A permit holder is stamped inside its round; a slice holds no round, so it is stamped at the template's own time.
+        let (round_start, timestamp) = match round {
+            Some(round) => {
+                let round_start = self.genesis.timestamp.saturating_add(round.saturating_mul(PALW_EXEC_ROUND_MS));
+                let timestamp = round_start.max(past_median_time + 1);
+                if timestamp >= round_start.saturating_add(PALW_EXEC_ROUND_MS) {
+                    return Err(RuleError::TimeTooOld(round_start, past_median_time));
+                }
+                (round_start, timestamp)
+            }
+            None => {
+                let timestamp = template.block.header.timestamp.max(past_median_time + 1);
+                (timestamp, timestamp)
+            }
+        };
+        let _ = round_start;
         // **A round the clock floor will refuse is not built** (the 2026-10-03 back-signing waste): the header stage's H5
         // (`step_stamp_admits`) refuses a block stamped before the slot its window's clock cursor opens, and a ticket signed
         // late for an old round is stamped at that round's start — 986 such round blocks were refused on b0. Asked here with the
@@ -20688,6 +21079,10 @@ impl VirtualStateProcessor {
         coinbase.payload = payload;
         coinbase.finalize();
         transactions.insert(0, coinbase);
+        if round.is_none() {
+            // An `EXEC_SLICE` carries no user transaction batch: the coinbase alone.
+            transactions.truncate(1);
+        }
         let version = if daa_window.daa_score >= self.evm_activation_daa_score {
             kaspa_consensus_core::constants::EVM_HEADER_VERSION
         } else {
@@ -21283,6 +21678,24 @@ impl VirtualStateProcessor {
                 )
             })
             .unwrap_or_default();
+        // **RFC-0008 v2: the anchor trailer the covered EXEC blocks need.** Virtual accepted them (they are in its reds), so the block
+        // built on it must say which heads it covers or its own validation would recompute a different UTXO state. Carried by the
+        // miner data's extra bytes, after the miner's tag.
+        let coinbase_miner_data = match self
+            .palw_exec_v2_virtual_anchor
+            .lock()
+            .clone()
+            .filter(|(selected_parent, _)| *selected_parent == virtual_state.ghostdag_data.selected_parent)
+            .filter(|_| self.palw_exec_v2_active_at(virtual_state.daa_score))
+        {
+            Some((_, anchor)) => {
+                match kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_append(&miner_data.extra_data, &anchor) {
+                    Ok(extra) => MinerData::new(miner_data.script_public_key.clone(), extra),
+                    Err(_) => miner_data.clone(),
+                }
+            }
+            None => miner_data.clone(),
+        };
         let coinbase = self
             .coinbase_manager
             .expected_coinbase_transaction(
@@ -21291,7 +21704,7 @@ impl VirtualStateProcessor {
                 // template is derived from it by `heartbeat_adapt_block_template`, which
                 // re-declares the subsidy as zero (ADR-0060 Decision 1.4).
                 self.coinbase_manager.calc_block_subsidy(virtual_state.daa_score),
-                miner_data.clone(),
+                coinbase_miner_data,
                 &virtual_state.ghostdag_data,
                 &virtual_state.mergeset_rewards,
                 &virtual_state.mergeset_non_daa,
@@ -22319,6 +22732,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         O::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         O::VerificationVertexV1 { .. } => "VerificationVertexV1",
+        O::ExecWorkRootOpenedV2 { .. } => "ExecWorkRootOpenedV2",
         O::VertexEquivocationV1 { .. } => "VertexEquivocationV1",
         O::TrapCommittedV1 { .. } => "TrapCommittedV1",
         O::TrapRevealedV1 { .. } => "TrapRevealedV1",
@@ -22473,4 +22887,307 @@ pub(super) fn first_locked_input(
     locked: &std::collections::HashSet<TransactionOutpoint>,
 ) -> Option<TransactionOutpoint> {
     tx.inputs.iter().map(|input| input.previous_outpoint).find(|outpoint| locked.contains(outpoint))
+}
+
+// ---------------------------------------------------------------------------------------------
+// RFC-0008 v2: the weightless carriage
+// ---------------------------------------------------------------------------------------------
+
+/// **RFC-0008 v2: a chain block's anchor, resolved** — the closure its heads cover and the trailer itself.
+pub(super) struct PalwExecV2ResolvedV1 {
+    pub closure: kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2ClosureV1,
+    #[allow(dead_code)]
+    pub anchor: kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorV1,
+}
+
+/// **RFC-0008 v2: the DAG a closure walks**, read from the header and GHOSTDAG stores and reachability, for the block whose selected
+/// parent is `selected_parent`.
+struct ExecV2DagViewV1<'a> {
+    processor: &'a VirtualStateProcessor,
+    selected_parent: BlockHash,
+    span_daa: u64,
+}
+
+impl kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2DagV1 for ExecV2DagViewV1<'_> {
+    fn node(&self, hash: &BlockHash) -> Option<kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2NodeV1> {
+        use kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope;
+        use kaspa_consensus_core::palw_exec_v2_anchor::{PalwExecV2MemberKeyV1, PalwExecV2NodeV1};
+        use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1;
+        let p = self.processor;
+        let header = p.headers_store.get_header(*hash).ok()?;
+        let chain =
+            PalwExecV2NodeV1 { is_lane: false, legacy: false, key: None, anchor_span: 0, anchor_on_chain: true, parents: Vec::new() };
+        let is_lane = header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
+            && p.palw_execution_lane.is_some_and(|lane| lane.activation.is_active(header.daa_score));
+        if !is_lane {
+            return Some(chain);
+        }
+        let anchor = p.ghostdag_store.get_selected_parent(*hash).ok()?;
+        let anchor_daa = p.headers_store.get_daa_score(anchor).ok()?;
+        let anchor_span = palw_execution_span_v1(anchor_daa, self.span_daa);
+        let anchor_on_chain = p.reachability_service.try_is_chain_ancestor_of(anchor, self.selected_parent).unwrap_or(false);
+        let parents = header.direct_parents().to_vec();
+        let lane_node = |legacy: bool, key: Option<PalwExecV2MemberKeyV1>| PalwExecV2NodeV1 {
+            is_lane: true,
+            legacy,
+            key,
+            anchor_span,
+            anchor_on_chain,
+            parents: parents.clone(),
+        };
+        if !PalwExecV2Envelope::is_v2_carriage(&header.palw_commitment) {
+            return Some(lane_node(true, None));
+        }
+        let Ok(envelope) = PalwExecV2Envelope::decode(&header.palw_commitment) else {
+            return Some(lane_node(true, None));
+        };
+        let key = match (&envelope.tx_permit, &envelope.work_slice) {
+            (Some(permit), None) => Some(PalwExecV2MemberKeyV1::Tx { round: permit.round, permit_index: permit.permit_index }),
+            (None, Some(slice)) => {
+                Some(PalwExecV2MemberKeyV1::Slice { root_claim_id: slice.root_claim_id, slice_index: slice.slice_index })
+            }
+            _ => None,
+        };
+        Some(lane_node(false, key))
+    }
+}
+
+impl VirtualStateProcessor {
+    /// **RFC-0008 v2: is the EXEC payload in force for a block at `daa_score`?**
+    pub(super) fn palw_exec_v2_active_at(&self, daa_score: u64) -> bool {
+        self.palw_exec_v2.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **RFC-0008 v2: the closure an anchor with `heads` covers for a block at `daa_score` whose selected parent is
+    /// `selected_parent` and whose parent state is `state`** — the one function the template and the validating walk both call.
+    pub(super) fn palw_exec_v2_closure(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        selected_parent: BlockHash,
+        daa_score: u64,
+        heads: &[BlockHash],
+    ) -> Result<
+        kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2ClosureV1,
+        kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorErrorV1,
+    > {
+        use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1;
+        let lane = self
+            .palw_execution_lane_at(daa_score)
+            .ok_or(kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorErrorV1::BeforeFence)?;
+        let span_daa = lane.schedule_span_daa_at(daa_score);
+        let span_now = palw_execution_span_v1(daa_score, span_daa);
+        let view = ExecV2DagViewV1 { processor: self, selected_parent, span_daa };
+        kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_closure_v1(
+            &view,
+            heads,
+            |block| state.exec_v2_anchored_v1(block),
+            span_now,
+            lane.max_per_mergeset as usize,
+        )
+    }
+
+    /// **RFC-0008 v2: the chain block `current`'s mergeset with the EXEC blocks its anchor covers.** Returns the ghostdag data
+    /// unchanged where the payload is not in force or the coinbase carries no anchor. Otherwise the covered blocks are appended to the
+    /// reds in canonical order — every consumer downstream (the verdicts, the acceptance loop, the coinbase payouts) then sees them
+    /// exactly as it saw a red round block, and the stored ghostdag data (the DAG's own) never changes: the EXEC block adds no blue
+    /// work, no blue score, no DAA term, no pruning level and no k-anticone term to any block, because no block's stored data
+    /// contains it.
+    pub(super) fn palw_exec_v2_augment(
+        &self,
+        current: BlockHash,
+        header: &Header,
+        state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+        mergeset_data: std::sync::Arc<GhostdagData>,
+    ) -> Result<
+        (std::sync::Arc<GhostdagData>, Option<PalwExecV2ResolvedV1>),
+        kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorErrorV1,
+    > {
+        use kaspa_consensus_core::palw_exec_v2_anchor::{
+            PalwExecV2AnchorErrorV1, palw_exec_v2_anchor_split, palw_exec_v2_anchor_verify,
+        };
+        if !self.palw_exec_v2_active_at(header.daa_score) {
+            return Ok((mergeset_data, None));
+        }
+        let Ok(transactions) = self.block_transactions_store.get(current) else {
+            return Ok((mergeset_data, None));
+        };
+        let Some(coinbase) = transactions.first() else {
+            return Ok((mergeset_data, None));
+        };
+        let Some(anchor) = palw_exec_v2_anchor_split(&coinbase.payload)?.1 else {
+            return Ok((mergeset_data, None));
+        };
+        if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 {
+            return Err(PalwExecV2AnchorErrorV1::LaneBlockAnchors);
+        }
+        // No PALW state means no lane to cover: the anchor is refused rather than ignored.
+        let state = state.ok_or(PalwExecV2AnchorErrorV1::BeforeFence)?;
+        let closure = self.palw_exec_v2_closure(state, mergeset_data.selected_parent, header.daa_score, &anchor.heads)?;
+        palw_exec_v2_anchor_verify(&anchor, &closure)?;
+        let mut augmented = (*mergeset_data).clone();
+        {
+            let reds = kaspa_consensus_core::blockhash::BlockHashes::make_mut(&mut augmented.mergeset_reds);
+            reds.extend(closure.members.iter().map(|member| member.hash));
+        }
+        Ok((std::sync::Arc::new(augmented), Some(PalwExecV2ResolvedV1 { closure, anchor })))
+    }
+
+    /// **RFC-0008 v2: the mergeset's non-DAA set with the covered EXEC blocks in it.** The window manager stores the set for the DAG's
+    /// own mergeset; a covered EXEC block is outside the DAA exactly as a red round block always was, so it joins the set wherever the
+    /// augmented mergeset is read. A clone only where there is something to add.
+    ///
+    /// Below the fence (and where it is not armed) this is the stored set, untouched — the read of the build before RFC-0008 v2 (the
+    /// X8R review: gated on the block's own DAA, not on the fence being armed, so an armed node agrees with an unarmed one below it).
+    pub(super) fn palw_exec_v2_non_daa(&self, stored: &BlockHashSet, ghostdag_data: &GhostdagData, daa_score: u64) -> BlockHashSet {
+        if !self.palw_exec_v2_active_at(daa_score) {
+            return stored.clone();
+        }
+        let mut out = stored.clone();
+        out.extend(self.palw_round_blocks_of(ghostdag_data));
+        out
+    }
+
+    /// **RFC-0008 v2: what the fold records of a resolved anchor** — the covered blocks with their anchor spans, the covered slice
+    /// carriers in canonical order, and the clock the window is read at.
+    pub(super) fn palw_exec_v2_fold_inputs(
+        &self,
+        resolved: &PalwExecV2ResolvedV1,
+        daa_score: u64,
+    ) -> (
+        kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1,
+        Vec<kaspa_consensus_core::palw_work_slice_v2::PalwExecV2CoveredSliceV1>,
+    ) {
+        use kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope;
+        use kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2MemberKeyV1;
+        use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1;
+        let span_daa = self.palw_execution_lane_at(daa_score).map(|lane| lane.schedule_span_daa_at(daa_score)).unwrap_or(1).max(1);
+        let anchor_span = |hash: BlockHash| {
+            self.ghostdag_store
+                .get_selected_parent(hash)
+                .ok()
+                .and_then(|anchor| self.headers_store.get_daa_score(anchor).ok())
+                .map(|daa| palw_execution_span_v1(daa, span_daa))
+                .unwrap_or(0)
+        };
+        let mut slices = Vec::new();
+        for member in &resolved.closure.members {
+            if !matches!(member.key, PalwExecV2MemberKeyV1::Slice { .. }) {
+                continue;
+            }
+            let Ok(header) = self.headers_store.get_header(member.hash) else { continue };
+            let Ok(envelope) = PalwExecV2Envelope::decode(&header.palw_commitment) else { continue };
+            if let Some(slice) = envelope.work_slice {
+                slices.push(kaspa_consensus_core::palw_work_slice_v2::PalwExecV2CoveredSliceV1 {
+                    carrier: member.hash,
+                    slice,
+                    pubkey: envelope.pubkey,
+                });
+            }
+        }
+        (
+            kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1 {
+                members: resolved.closure.members.iter().map(|member| (member.hash, anchor_span(member.hash))).collect(),
+                span_now: palw_execution_span_v1(daa_score, span_daa),
+            },
+            slices,
+        )
+    }
+
+    /// **RFC-0008 v2: the lane's tips this node holds** — algo-10 body tips, newest first, with their (header) timestamps.
+    fn palw_exec_v2_lane_tips(&self) -> Vec<(u64, BlockHash)> {
+        let mut tips: Vec<(u64, BlockHash)> = self
+            .body_tips_store
+            .read()
+            .get()
+            .unwrap()
+            .read()
+            .iter()
+            .copied()
+            .filter(|tip| self.ghostdag_manager.is_round_block(*tip))
+            .filter_map(|tip| self.headers_store.get_header(tip).ok().map(|header| (header.timestamp, tip)))
+            .collect();
+        tips.sort_by_key(|(timestamp, tip)| std::cmp::Reverse((*timestamp, *tip)));
+        tips
+    }
+
+    /// **RFC-0008 v2: the lane heads a block built on `selected_parent` should anchor** — this node's lane tips (blocks no block of this
+    /// node has built on), newest first, those whose own closure still covers something, while the union stays inside the lane's leaf
+    /// bound; at most [`kaspa_consensus_core::palw_exec_v2_anchor::PALW_EXEC_V2_MAX_HEADS`]. A stale or foreign tip covers nothing and
+    /// is left out, so the lane's checkpoint — not its wedged head — is what gets anchored.
+    pub(super) fn palw_exec_v2_pick_heads(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        selected_parent: BlockHash,
+        daa_score: u64,
+    ) -> Vec<BlockHash> {
+        use kaspa_consensus_core::palw_exec_v2_anchor::PALW_EXEC_V2_MAX_HEADS;
+        let Some(lane) = self.palw_execution_lane_at(daa_score) else { return Vec::new() };
+        let mut heads: Vec<BlockHash> = Vec::new();
+        for (_, tip) in self.palw_exec_v2_lane_tips().into_iter().take(4 * PALW_EXEC_V2_MAX_HEADS) {
+            if heads.len() >= PALW_EXEC_V2_MAX_HEADS {
+                break;
+            }
+            let Ok(alone) = self.palw_exec_v2_closure(state, selected_parent, daa_score, &[tip]) else { continue };
+            if alone.members.is_empty() {
+                continue;
+            }
+            let mut tentative = heads.clone();
+            tentative.push(tip);
+            match self.palw_exec_v2_closure(state, selected_parent, daa_score, &tentative) {
+                Ok(union) if union.members.len() <= lane.max_per_mergeset as usize => heads = tentative,
+                _ => {}
+            }
+        }
+        heads.sort();
+        heads.dedup();
+        heads
+    }
+
+    /// **RFC-0008 v2: virtual's ghostdag data with the blocks the best anchor covers appended to its reds**, and the anchor itself (what
+    /// the template's coinbase will carry). `None` when there is nothing to cover.
+    pub(super) fn palw_exec_v2_virtual(
+        &self,
+        ghostdag_data: &GhostdagData,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa_score: u64,
+    ) -> Option<(GhostdagData, kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorV1)> {
+        let heads = self.palw_exec_v2_pick_heads(state, ghostdag_data.selected_parent, daa_score);
+        if heads.is_empty() {
+            return None;
+        }
+        let closure = self.palw_exec_v2_closure(state, ghostdag_data.selected_parent, daa_score, &heads).ok()?;
+        if closure.members.is_empty() {
+            return None;
+        }
+        let anchor = kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorV1::of_closure(&heads, &closure).ok()?;
+        let mut augmented = ghostdag_data.clone();
+        kaspa_consensus_core::blockhash::BlockHashes::make_mut(&mut augmented.mergeset_reds)
+            .extend(closure.members.iter().map(|member| member.hash));
+        Some((augmented, anchor))
+    }
+
+    /// **RFC-0008 v2: the lane's health at `sink`** — this node's newest lane head and whether the next anchoring block could still
+    /// cover it. Node-local; `None` where the payload is not in force.
+    pub(super) fn palw_exec_v2_health(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        sink: BlockHash,
+        daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2LaneHealthV1> {
+        if !self.palw_exec_v2_active_at(daa_score) {
+            return None;
+        }
+        let mut health = kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2LaneHealthV1::default();
+        if let Some((_, head)) = self.palw_exec_v2_lane_tips().first().copied() {
+            health.latest_head = Some(head);
+            if let Ok(closure) = self.palw_exec_v2_closure(state, sink, daa_score, &[head]) {
+                health.pending = closure.members.len() as u64;
+                if let Some(reason) = closure.dropped.get(&head) {
+                    health.stale = true;
+                    health.stale_reason = Some(*reason);
+                }
+            }
+        }
+        Some(health)
+    }
 }

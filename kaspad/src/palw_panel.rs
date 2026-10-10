@@ -245,6 +245,11 @@ pub(crate) fn own_claim_events_at_v1(
                     R::SealUnavailable => "seal_unavailable",
                     R::BeaconUnavailable => "beacon_unavailable",
                     R::PermissionlessNoCapablePanel => "permissionless_no_capable_panel",
+                    // RFC-0008 v2: a work session not ready by its expiry voids its claim, uncharged.
+                    R::WorkRootExpired => "work_root_expired",
+                    // RFC-0008 v2 amendment 1: a slice of the session was convicted / defaulted through the kernel route.
+                    R::WorkSliceProvenFalse => "work_slice_proven_false",
+                    R::WorkSliceDefaulted => "work_slice_defaulted",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }
@@ -14583,6 +14588,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ReporterRevealed { .. } => "ReporterRevealed",
         PalwConsensusObjectV2::MaterialDisclosedV2 { .. } => "MaterialDisclosedV2",
         PalwConsensusObjectV2::PanelUnavailableQuorum { .. } => "PanelUnavailableQuorum",
+        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } => "ExecWorkRootOpenedV2",
         PalwConsensusObjectV2::SeatReadinessProvedV2 { .. } => "SeatReadinessProvedV2",
         PalwConsensusObjectV2::ModelLineBenefitsDeclared { .. } => "ModelLineBenefitsDeclared",
         PalwConsensusObjectV2::ModelBuy { .. } => "ModelBuy",

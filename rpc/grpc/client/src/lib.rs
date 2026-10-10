@@ -332,6 +332,7 @@ impl RpcApi for GrpcClient {
     route!(get_palw_legacy_disputes_call, GetPalwLegacyDisputes);
     route!(get_palw_fraud_filer_status_call, GetPalwFraudFilerStatus);
     route!(get_palw_panel_v3_status_call, GetPalwPanelV3Status);
+    route!(get_palw_exec_v2_status_call, GetPalwExecV2Status);
     route!(get_palw_kernel_claim_call, GetPalwKernelClaim);
     route!(get_palw_kernel_rows_call, GetPalwKernelRows);
     route!(get_palw_kernel_finals_call, GetPalwKernelFinals);
