@@ -12943,6 +12943,7 @@ impl PalwPanelService {
                 &session,
                 &mut fraud_filer,
                 &mut reporter_filer,
+                &mut false_valid,
                 current_daa,
                 network_domain,
                 bond_key,

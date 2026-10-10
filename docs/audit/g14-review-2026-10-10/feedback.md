@@ -37,6 +37,30 @@
 
 **予約の共通人数上限の修正（今回の追加）:** 64-live／256-lifetimeの先取りによる締出しを除き、closed replay guardを含む1 bondのretained recordを64に制限した。本人のreleaseでは予算を回復させず、recordのsettlement／retirementで回収する。RPCにも保持件数を追加した。これは固定global RAM上限又は全familyの包含保証を立証したものではない。最終検証は[修正記録](implementation.md)末尾を参照。
 
+## 公開job不正と全Panel追及の追加修正（2026-10-11）
+
+追加の実service試験は **PASS（394.69秒）**。ordinary mature public bondを持つPanel外の1 verifierが、公開blockから再構築したfresh DBと公開・認証済みeventだけで、別jobの実rootsに対するIdentityMismatch proofを提出した。producerの実担保減少、全 **5 Valid署名者**の正額徴収、自身のcommit/reveal、予約解放、正常service終了を確認した。producer materialはverifierへ渡していない。これはfloor canonical attemptのjob identity 1 caseであり、全familyの算術・input・output・state違反又は最大profileを完走した判定ではない。
+
+公開bindingから得た直接kind-4 proofを既存False Valid filerへ渡す接続を追加した。これまではseat replayにしか接続されず、public caseがsettleすると署名者追及が始まらない。また実H1 mempoolは、客観的なwrong-jobの証拠となる認証済みbindingまでDA回答として拒否し、公開carrierの包含を止めていた。
+
+休眠public-filer fence内の要求済みrow-0/tile-0 Eventに限り、同じbindingのIdentityMismatch proofが実acceptance／fold rehearsalで認定される場合にrelay／template包含を許す。署名・サイズ・discloser liability検査を維持し、DA answered bitやconvictionは変更しない。既存規則では最初のkind-3がproducer legも徴収するため、後続kind-4は追加額0になり得る。二重徴収を要求せず、producerの実没収、全Valid signerの制裁、外部verifierの各commit/revealを検証する。[修正と検証記録](implementation.md#公開bindingの直接証拠を全valid署名者の追及へ渡す2026-10-11)。この接続だけを全familyのG14達成とは数えない。
+
+追加の実service試験は、mempool検証がvirtual readを保持したままDNS coinbase policyで再取得し、virtual commitのqueued upgradeとdeadlockすることも示した。policyに検証中のDAA snapshotを渡し、外側のUTXO guardを保持したまま二重readを除く。停止時のnative sampleと、queued writer／旧readerのnegative controlを含む回帰試験を監査記録へ保存する。H1だけを修正して包含・終局を保証したと扱わない。
+
+最終sourceでは上記exact caseとDA非応答case、関連回帰の **77 unique PASS**、通常node binary check成功、fresh shipping harvest／再読込の **361 pin差分なし**を確認した。検証範囲と生logは[実装修正記録](implementation.md)末尾にある。
+
+## 残りの実装順序（2026-10-11）
+
+ユーザー指定どおり、正しい登録モデルを保有するverifierを前提として、次の順で進める。各段階で通常経路の受入試験を追加し、後段の資源・回復条件まで通る前にG14全域を完成扱いしない。
+
+1. **全familyの入口:** F9–F16等の登録・eligibilityを正規経路で通し、test-only admissionで埋めた空白を閉じる。
+2. **公開入力の取得:** job／input／初期stateのbootstrapと、恒久pruneされたFP jobの認証済み再取得を完成させる。producer秘密stateを参照しない。
+3. **全違反の終局:** checkpoint／traceの局所化を完成させ、算術・input・output・state違反を実serviceからproof／commit／reveal／convictionへ通す。producerと全liable Valid signerの徴収も確認する。
+4. **scopeとDA gate:** `cumulative_scope_allows_v1`のstubと64要素hiding tileをresponse／court／reward判定へ接続し、ADR-0177の非再構成制約と追及到達性を同時に満たす。
+5. **最大profileと期限:** 34-session予算、全chunk、adaptive round、material／proofの上限を最大contextで検証し、責任期間内に終局できる条件を決める。
+6. **nodeの回復と接続:** restart／reorg／full・pruned IBD、実RPC／P2Pを通して、状態復旧後も同じ追及を完走させる。
+7. **実運用規模の受入:** 最大model、population、共謀負荷でRAM／処理時間／包含能力を実測し、保証できるprofileと包含・資金の前提を確定する。
+
 ## 初回レビューの判定
 
 **方向は妥当だが、提示されたG14を満たすコード設計としてはまだ十分ではない。**

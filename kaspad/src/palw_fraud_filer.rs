@@ -1117,6 +1117,7 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         book: &mut PalwFraudFilerBookV1,
         reporter: &mut PalwReporterFilerV1,
+        false_valid: &mut crate::palw_filer_false_valid::PalwFalseValidFilerV1,
         current_daa: u64,
         network_domain: Hash64,
         bond_key: PalwBondKeyV2,
@@ -1338,6 +1339,19 @@ impl PalwPanelService {
                 .unwrap_or_else(|e| Err(format!("the public proof worker failed: {e}")));
                 match proof {
                     Ok(Some(filing)) => {
+                        // The public proof refutes the liable Valid signers as well as the
+                        // executor. Keep it before settlement removes this case from pursuit;
+                        // the existing false-Valid scanner independently checks every receipt.
+                        false_valid.note_executor_refuted_v1(
+                            crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                params,
+                                self.config.fee_outpoint.is_some(),
+                                current_daa,
+                            ),
+                            &filing.object,
+                            view.as_ref().map(|v| v.accepted_daa),
+                            current_daa,
+                        );
                         // This proof supersedes any unsent localization carrier. Keep the chain's live obligations until conviction.
                         court_pending
                             .retain(|(held, round, responder, _)| *held != claim || !palw_fraud_filer_queued_v1(*round, *responder));

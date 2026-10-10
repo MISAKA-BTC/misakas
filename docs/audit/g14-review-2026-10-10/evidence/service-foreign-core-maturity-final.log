@@ -1,0 +1,6 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::p2_mint_path::p2_t25_t05_a_leg_is_no_utxo_until_minted_and_then_obeys_decision_a_alone ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 843 filtered out; finished in 0.16s
+

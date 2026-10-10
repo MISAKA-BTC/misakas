@@ -114,3 +114,18 @@ ADR-0177 に従い、G14 は model を取得できた verifier を前提とす�
 `codex/g14-prosecution-bounds`の`20c746436`以後、回答済みunitの公開carrierが失われても追及できるよう、休眠LG14-Aへ署名付き予約DAA・次session番号・期限・unitのtag 156を追加した。historical answeredは保持し、古いaccusationと旧番号を再送して担保や枠を消費することを拒否する。Event／Held／LG14-Bのみ対象で、同じunitの認証済み再公開又はDA defaultへ進める。公開viewのFlat回答範囲も反映する。readerは古いsuffixの欠落を完了とせず、新tipの再公開を読む。最終検証結果は[実装修正記録](../../audit/g14-review-2026-10-10/implementation.md)を参照。
 
 これは全G14達成ではない。次はPanelDA inputを持たないverifierのbootstrap、pruneされたFP jobの認証済み再取得、TIR／pipelineへの接続、全familyの正規registrationとfresh-node実service／包含、累積scopeと最大profile・期限・枠飽和を閉じる。有効化は変更していない。
+
+## Codex追記: 公開job不正から全Valid署名者を追及する接続（2026-10-11）
+
+public bindingから作る直接kind-4 proofも、public caseのsettlement前に既存False Valid filerへ渡す。seat replayだけに接続されていたため、公開proofでproducerを追及しても全Valid signerのscanが始まらない抜けを修正した。公開licenceの認証・依拠したreceipt・liabilityを既存gateへ照会し、reporter commit/evidence/revealを使う。
+
+実PQ mempool試験は、認証済みwrong-job bindingまでH1がDA回答として拒否し、公開証拠の包含を止めることも示した。休眠public-filer fence内のrow-0/tile-0 Eventだけについて、元carrierの認証とlive demand／discloser検査を通し、同じbindingのIdentityMismatch kind-4が実acceptance／fold rehearsalを通る場合にrelay／templateへの包含を許可する。DA回答bitとconvictionは更新しない。public verifierが自分のproofを提出する必要がある。bad signature／binding、未要求unit、unliable discloserは実mempoolで拒否する。
+
+kind-3 identity convictionが先に成立すると、producerの没収もそのrecordに含まれ、後続kind-4には二重の徴収又はrewardが開かない。fixtureはproducerの実collateral減少、全Valid signerの制裁、外部verifierのcommit/reveal、公開IdentityMismatch proofの実block包含を検査する。登録floor modelを別jobで実行したrootsを使い、秘密materialはverifierへ渡さない。最終結果、失敗と再試験、fixture例外は[実装修正記録](../../audit/g14-review-2026-10-10/implementation.md)を参照。
+
+全G14は未達。開示された算術／input／output／state違反のfull service、全familyの正規eligibility、最大context／populationと期限内包含、恒久pruneされたFP job、restart／reorg／pruned IBD、累積scope・64要素hiding tileは引き続き必要である。ADR-0177 D7と有効化拒否を維持する。
+
+実serviceの停止時sampleで、mempoolの外側virtual readとDNS settlementの二重readがqueued commit upgradeとdeadlockすることを確認した。UTXO policyへ既存DAA snapshotを渡し、元のUTXO guardを保ったまま再取得を除く。旧wrapperをnegative controlとするqueued-writer試験を追加した。詳細と最終再試験は上記監査記録を参照。
+
+
+2026-10-11の公開identity追及／H1 carriage／DNS lock修正の最終sourceは、exact serviceとDA非応答serviceの2件を含む **77 unique PASS**、通常node binary check成功、fresh shipping harvest／再読込 **361 pin差分なし**。G14全域は未達である。残りは全familyの正規入口→公開job/input/初期state取得→各違反の局所化・終局→scope/DA gate→最大profile/期限→restart/reorg/IBD/RPC→実運用規模の測定の順で進める。詳細と失敗を含む生logは[監査記録](../../audit/g14-review-2026-10-10/implementation.md)、現在の順序は[フィードバック](../../audit/g14-review-2026-10-10/feedback.md#残りの実装順序2026-10-11)を参照。

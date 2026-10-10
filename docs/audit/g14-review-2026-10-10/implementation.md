@@ -581,3 +581,54 @@ priority queue（reporterとpublic filerが提出するcourt queue）とcommon c
 合計 **70 unique PASS**。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`、default featureで最終sourceを`cargo test -p kaspad --lib palw_service_public_e2e --locked --no-run`によりbuildした同じ`kaspad_lib-a562e45711087c1e`を各filterで実行した。既存unused/dead-code警告は残る。[build](evidence/service-public-build-final.log)、[filer](evidence/service-public-filer-final.log)、[reporter](evidence/service-public-reporter-final.log)、[reader](evidence/service-public-reader-final.log)、[carrier fees](evidence/service-public-fees-final.log)、[FP認証](evidence/service-public-fp-auth-final.log)、[binary check](evidence/service-public-binary-final.log)。
 
 最終sourceのfresh shipping harvestと再読込はexit 0、**361 ok・差分なし**。[repin](evidence/service-public-repin-final.log)、[harvest tests](evidence/service-public-repin-harvest-tests.log)、[harvest lib](evidence/service-public-repin-harvest-lib.log)、[再読込](evidence/service-public-repin-replay-final.log)。consensus source、rooted state、wire、activation height、shipping pinを変更していない。G14全域は未達だが、上記floor canonical attemptのbinding不応答1 caseについては、fresh public verifierの実serviceから包含・終局・正常終了までの空白を閉じた。
+
+## 公開bindingの直接証拠を全Valid署名者の追及へ渡す（2026-10-11）
+
+`c306d1a76`を基点に、public filerが認証済みbindingから組み立てたkind-4直接証拠を、既存のFalse Valid filerへ渡す接続を追加した。これまではseat replayの`replay_made`だけが`note_executor_refuted_v1`へ渡され、公開bindingのIdentityMismatch／shape／prompt／output proofにはこの呼出しがなかった。executorのconvictionでpublic caseがsettleすると、その経路からliable Panel signerのkind-3追及を始められない。
+
+public proofを得た時点で、executor用の同じobjectを既存False Valid bookへ保持する。開始DAAは公開claimのaccepted DAA、armingは既存rcore-plus／funded-node predicateを使う。false-Valid scannerは次のtickで公開licenceの各receiptを認証し、chainが依拠した署名とliabilityを既存adjudicatorへ照会する。対象外のpartial signerを独自に罰せず、reporter doorのcommit／evidence／revealと既存のdedup／budgetをそのまま使う。証拠を二重生成せず、conviction前にpublic caseから退避しても署名者への追及を維持する。consensusのconviction規則、wire、state又はfenceを変更しない。
+
+追加V-node試験`fresh_public_bond_service_convicts_a_public_foreign_job_and_reveals`は、前節と同じordinary mature outsider／全Panel Valid／fresh DB／実serviceを使う。producer役は登録floor modelで別anchorのcanonical jobを実行し、その実execution／trace／output rootsを対象attemptへ載せる。別jobのmaterialはproducer役だけが保持し、公開DA要求後、実answer builderとML-DSA-87署名、funded carrierを使って`MaterialDisclosedV2`を実PQ mempoolへ提出する。verifierのretention／evidence-providerは空で、公開認証済みevent以外からproducerのmaterialを読み込まない。
+
+試験は、直接証拠のkind-4 IdentityMismatchの消費、producerの担保没収、各assigned Valid signerのkind-3正額制裁、外部verifierのcommitが各kind-3 convictionのDAAより前であること、各revealがpending rewardのwinnerへ反映されたことを公開APIと実block bodyで検査する。bindingのDA回答として拒否されたcarrierでも、execution rootに認証されたbindingはwrong-jobの客観的証拠として利用できる。この経路をDA defaultで代替せず、`CourtFraud`と非defaultを検査する。reward window終了後のaward、最大family/profile、socket RPC、ネットワークIBD、restart／reorgの検証ではない。前節のfixture例外とshipping activation拒否を維持する。
+
+初回compileはbackend trait importがなくFAILし、既存`PalwExecutionBackendV1`をimportした。初回node試験はtimestampで抽選templateを変えようとして160.92秒でFAILした。pre-PoW hashはnonceとtimestampを0にするため、同じ実rootsではticketが変わらない。fixtureを実coinbase extra dataが異なるproduction templateの再生成へ修正し、認証済みmaterialのrootsを変更せずdrawする。attempt/context／lotteryのproduction規則は緩めていない。[初回compile log](evidence/service-foreign-build-initial.log)、[timestamp抽選失敗](evidence/service-foreign-node-initial.log)は最終結果と分けて保存する。
+
+次の実node試験は264.21秒で、実H1 mempool policyが認証済みwrong-job bindingのcarrierをJ1として拒否した。[実mempoolの包含阻害](evidence/service-foreign-h1-initial.log)。bindingを正当なDA回答にしない点は正しいが、外部verifierがそれを公開証拠として読む包含経路も止めていた。休眠public-filer fence内で、DA foldが`DaOpeningRefused`を返したrow-0/tile-0 eventに限定し、同じbindingを使ったIdentityMismatch kind-4を既存のacceptance gate／fold rehearsalが実際に認定できた場合に限り、H1のrelay／templateからの拒否を除く。live demand／discloser liability／署名／サイズは先に既存の検査を通す。DA fold、answered bit、claim phase、conviction又はblock ruleは変更しない。public verifierが自分のproofを提出することは引き続き必要である。
+
+追加のnegative probeは、UTXO署名・fundingを持つcarrierのbad disclosure signature、rootを再構築しないbinding、未要求unit、責任を負わないdiscloserを実PQ mempoolが拒否することを検査する。positive carrierを実templateへ包含した直後にも、DA answerは未受理でconvictionはまだないことを読む。このnode-policyの限定例外を、任意の不正なDA回答の受理や全familyの公開proof取得と扱わない。
+
+H1修正後の初回は311.96秒でFAILした。kind-3のIdentityMismatch convictionは署名者だけでなくproducerのlegも徴収するため、先にkind-3が成立すると後続kind-4の追加徴収は0、追加rewardも開かない。テストがkind-4の正額とrewardを無条件に要求した誤りであり、productionの徴収順序又は二重徴収防止は変えていない。公開operator standingでproducerのcollateralが実際に減少すること、全5 Valid署名者の正額制裁と自身のcommit/reveal、実block内kind-4のIdentityMismatchを検査する形へ修正した。kind-4に追加rewardが開く順序では自身のcommit/revealも検査し、開かない順序では追加徴収0を要求する。[二重徴収を要求した失敗](evidence/service-foreign-duplicate-charge.log)。kind-3のrecordはproducer legを含むという既存規則（`convict_false_valid_rcore_v1`）に従う。producerの没収を省略してPASSにする変更ではない。
+
+次の試験は330.54秒で、producer collateralの全額没収を要求したassertがFAILした。現presetのlive CourtFraudはclaimのforfeitとS2 actionであり、観測時のproducer collateralは92,625,936,390,080 sompiで、0ではなかった。全額没収というfixtureの仮定を取り除き、実際の正額debitと各Panel recordの`collected > 0`を検査する。productionの徴収規則を変更していない。[全額没収を要求した失敗](evidence/service-foreign-whole-bond-expectation.log)。
+
+全Panelへの追及の最終再実行では、最初のkind-3 conviction後にmempool／virtual commitが停止した。native thread sampleで、`validate_mempool_transaction_impl`が外側のvirtual read guardを保持したまま`dns_coinbase_settlement`で再度readを取得し、commit threadが同lockのupgradeで既存readerを待っている循環を確認した。processは診断後に停止し、PASS又は通常のtest完了として計上しない。[停止直前log](evidence/service-foreign-nested-read-stall.log)、[native sample](evidence/service-foreign-stall-sample.txt)。同時に動いていたDA試験は533.38秒でPASSしたが、lock修正前の結果である。[修正前DA](evidence/service-foreign-da-pre-lock.log)。
+
+DNS settlementのproduction readerを、mempoolがすでに持つvirtual DAA snapshotからretirementを判断する`dns_coinbase_settlement_at`へ分離し、UTXO validationへ渡す。元のsnapshot guardは保持しており、検証途中にUTXOを更新可能にする修正ではない。single／parallelの両mempool入口が同じUTXO helperを通る。legacy anchorとlong-maturity fallback、block validationの`None`扱いは維持する。元のvirtual read付きwrapperは既存試験とnegative control向けに`cfg(test)`だけへ残す。
+
+新しい`p2_dns_settlement_uses_the_held_virtual_snapshot_with_a_writer_queued`は、実nodeのvirtual guardを保持したままwriterをqueueし、旧wrapperのreadが待つこととsnapshot readerが同じsettlementを返して完了することを検査する。assert前にguardを解放して全threadをjoinするため、negative controlがDBを保持して永久停止することはない。これはmempool/commitのlivenessの修正であり、新しいcoinbase maturity／conviction／fenceを導入しない。
+
+新lock試験の初回compileは`VirtualStateStoreReader`のlocal import不足でFAILした。既存store traitをimportして再buildする。[初回compile](evidence/service-foreign-core-lock-initial.log)。
+
+lock修正後のexact V-node試験は **1 PASS、394.69秒**。公開eventを実PQ mempool／production templateへ包含し、DA answered bitは未受理のまま、外部verifierのproofで`CourtFraud`へ到達した。DA defaultは発生していない。全 **5 Valid署名者**についてkind-3の正額`amount`と`collected`、convictionより前の自身のcommit、pending rewardのbestへ反映された自身のreveal、実block内の各carrierを確認した。producerの公開standingはservice前の93,906,321,001,040から92,625,936,390,080 sompiへ減少した。kind-4 IdentityMismatchはDAA 1175で追加額0として消費され、全5名の確認は1193で完了した。kind-3がすでにproducer legを徴収しているため、kind-4の二重徴収／追加rewardを要求しない。対象reservationの解放、正常service exit／join、callback ownerの解放もPASSした。[最終exact node log](evidence/service-foreign-node-final.log)。
+
+
+同じ最終source／node executableでDA非応答caseも再実行し、**1 PASS、608.10秒**。公開binding要求はDAA 1030で包含され、期限2231の後、2236で`ProducerWithholding`／`DaDefault`、正額のproducer制裁と対象予約の解放に到達した。実block bodyの対象carrier、正常service exit／join、callback owner解放を再確認した。[最終DA node log](evidence/service-foreign-da-final.log)。これはbinding非応答であり、算術不正のconvictionではない。
+
+| 最終sourceの検証 | 結果 |
+| --- | --- |
+| `palw_service_public_e2e`の2 case | **2 V-node PASS**。公開foreign jobのexact courtと全Valid追及、binding非応答のDA default |
+| `palw_filer_false_valid` | **11 V-unit PASS**。[log](evidence/service-foreign-false-valid-final.log) |
+| `palw_fraud_filer` | **20 V-unit PASS**。[log](evidence/service-foreign-filer-final.log) |
+| `reporter_filer::tests` | **21 V-unit PASS**。[log](evidence/service-foreign-reporter-final.log) |
+| `accepted_objects_walk_tests` | **7 V-unit PASS**。[log](evidence/service-foreign-reader-final.log) |
+| `palw_carrier_fees` | **5 V-unit PASS**。[log](evidence/service-foreign-fees-final.log) |
+| `p2_dns_settlement_uses_the_held_virtual_snapshot_with_a_writer_queued` | **1 PASS**。[log](evidence/service-foreign-core-lock-final.log) |
+| `t12_h1_carrier_gate` | **8 PASS**。[log](evidence/service-foreign-core-h1-final.log) |
+| `p2_t25_t05_a_leg_is_no_utxo_until_minted_and_then_obeys_decision_a_alone` | **1 PASS**。[log](evidence/service-foreign-core-maturity-final.log) |
+| `rfc12_x13_the_mempool_stops_reading_a_frozen_dns_anchor_past_the_fence` | **1 PASS**。[log](evidence/service-foreign-core-retirement-final.log) |
+| `cargo check -p kaspad --bin kaspad --locked` | **成功**。[log](evidence/service-foreign-binary-final.log) |
+
+合計 **77 unique PASS**。nodeはdefault feature（EVMを含む）で`cargo test -p kaspad --lib palw_service_public_e2e --locked --no-run`をbuildし、同じ最終`kaspad_lib-a562e45711087c1e`を各filterで実行した。[node build](evidence/service-foreign-build-final.log)。consensusは`--features evm`で最終sourceをbuildした`kaspa_consensus-1eec1b8c750cb2a6`を使用した。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`、既存unused/dead-code警告は残る。初回失敗と修正前のDA PASSは最終77件へ重複計上しない。service fixtureのinert EVMは、通常featureのcompile又は別のconsensus回帰試験のEVMを無効にする意味ではない。
+
+最終sourceのfresh shipping harvestと保存harvestの再読込はともにexit 0、**361 ok・差分なし**。[repin](evidence/service-foreign-repin-final.log)、[harvest tests](evidence/service-foreign-repin-harvest-tests.log)、[harvest lib](evidence/service-foreign-repin-harvest-lib.log)、[再読込](evidence/service-foreign-repin-replay-final.log)。今回consensus moduleのnode policy／mempool livenessは修正したが、block conviction／DA fold規則、rooted state、wire、activation height、shipping pinは変更していない。ADR-0177 D7とshipping activation拒否を維持する。全family／最大profile／累積scope／recoveryを含むG14全域は未達である。

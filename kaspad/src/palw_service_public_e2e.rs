@@ -1,4 +1,4 @@
-//! Actual public-bond service -> PQ mempool -> mining template -> consensus DA terminal.
+//! Actual public-bond service -> PQ mempool -> mining template -> consensus terminal.
 //! Harness-only keys/premine, inert EVM, skipped PoW and a test-armed dormant filer fence.
 //! Court windows, collateral and registration rules retain their preset values.
 //! The shipping activation validator still rejects the fixture fence; this is no network activation.
@@ -14,6 +14,7 @@ use kaspa_consensus_core::config::premine::{
 };
 use kaspa_consensus_core::muhash::MuHashExtensions;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
+use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_state_v2::{
     PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT, PALW_OPERATOR_POSSESSION_MLDSA87_CONTEXT, PalwClaimPhaseV2, PalwLegacyDisputeViewV1,
@@ -273,6 +274,17 @@ impl Chain {
         keep: &dyn Fn(Hash64) -> bool,
         win: bool,
     ) -> (MutableBlock, Hash64) {
+        self.build_attempt_roots(card, step_ms, txs, keep, win, None)
+    }
+    fn build_attempt_roots(
+        &mut self,
+        card: usize,
+        step_ms: u64,
+        txs: Vec<Transaction>,
+        keep: &dyn Fn(Hash64) -> bool,
+        win: bool,
+        roots: Option<&kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1>,
+    ) -> (MutableBlock, Hash64) {
         use kaspa_consensus_core::palw_attempt_v2::{
             PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2,
             PalwAttemptUnsignedV2, attempt_id_v2, attempt_trace_manifest_root_v1, challenge_v2, class_ticket_v3, execution_anchor_v3,
@@ -286,7 +298,7 @@ impl Chain {
             .tc
             .build_block_template(
                 MinerData::new(card_payout_spk(card), vec![]),
-                Box::new(OnetimeTxSelector::new(txs)),
+                Box::new(OnetimeTxSelector::new(txs.clone())),
                 TemplateBuildMode::Standard,
             )
             .expect("a template");
@@ -322,11 +334,43 @@ impl Chain {
         };
         let anchor = execution_anchor_v3(self.network_domain, pre_pow, facts.class_id, &bond.0, header.nonce);
         let mut won = false;
-        for draw in 0u64..4_000_000 {
-            attempt.trace_root = Hash64::from_u64_word((self.nonce << 32) ^ draw ^ 0x7A00_0000_0000_0000);
+        let candidates = if roots.is_some() { 4096 } else { 4_000_000 };
+        for draw in 0u64..candidates {
+            let draw_anchor = if let Some(roots) = roots {
+                // A foreign job's real roots are fixed. Draw by changing the public template,
+                // never by changing the authenticated material or pretending nonces buy tickets.
+                // Timestamp and nonce are blanked in pre-PoW; coinbase extra data changes the
+                // actual transaction root and thus the template's public execution anchor.
+                t = self
+                    .tc
+                    .build_block_template(
+                        MinerData::new(card_payout_spk(card), draw.to_le_bytes().to_vec()),
+                        Box::new(OnetimeTxSelector::new(txs.clone())),
+                        TemplateBuildMode::Standard,
+                    )
+                    .unwrap();
+                t.block.header.timestamp = self.time;
+                t.block.header.nonce = self.nonce;
+                let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&t.block.header);
+                attempt.challenge = challenge_v2(
+                    self.network_domain,
+                    pre_pow,
+                    t.block.header.timestamp,
+                    t.block.header.nonce,
+                    facts.class_id,
+                    &bond.0,
+                );
+                attempt.execution_root = roots.execution_root;
+                attempt.output_root = roots.output_root;
+                attempt.trace_root = roots.trace_root;
+                execution_anchor_v3(self.network_domain, pre_pow, facts.class_id, &bond.0, t.block.header.nonce)
+            } else {
+                attempt.trace_root = Hash64::from_u64_word((self.nonce << 32) ^ draw ^ 0x7A00_0000_0000_0000);
+                anchor
+            };
             attempt.trace_manifest_root = attempt_trace_manifest_root_v1(attempt.trace_root, attempt.trace_chunk_count);
-            let wins = class_ticket_v3(&attempt, anchor) <= facts.class_target;
-            if wins == win && (!win || keep(execution_commitment_v3(&attempt, anchor))) {
+            let wins = class_ticket_v3(&attempt, draw_anchor) <= facts.class_target;
+            if wins == win && (!win || keep(execution_commitment_v3(&attempt, draw_anchor))) {
                 won = true;
                 break;
             }
@@ -441,6 +485,21 @@ async fn pool_heartbeat(chain: &mut Chain, manager: &Arc<ConsensusManager>, pool
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fresh_public_bond_service_carries_reserved_da_to_objective_default() {
+    fresh_public_service(PublicCase::Withholding).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_convicts_a_public_foreign_job_and_reveals() {
+    fresh_public_service(PublicCase::ForeignJob).await;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PublicCase {
+    Withholding,
+    ForeignJob,
+}
+
+async fn fresh_public_service(case: PublicCase) {
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
     let (config, bundle, premine, mut floats) = fixture_config();
     let mut chain = Chain::new(config, bundle, &premine);
@@ -482,7 +541,36 @@ async fn fresh_public_bond_service_carries_reserved_da_to_objective_default() {
     let maturity = chain.config.params.palw_bond_maturity.unwrap().window_daa;
     chain.advance(registered_before + maturity + 1).await;
     eprintln!("[service-public] ordinary bond registered before DAA {registered_before}, maturity {maturity}, now {}", chain.daa());
-    let (attempt, claim) = chain.build_attempt_drawn(0, chain.config.params.target_time_per_block(), vec![], &|_| true, true);
+    let foreign = (case == PublicCase::ForeignJob).then(|| {
+        use misaka_palw_base0::classes::resolve_class_v1;
+        let backend = misaka_palw_base0::backend::Base0Backend::new(
+            resolve_class_v1(
+                &chain.bundle.court,
+                chain.bundle.base_class_id,
+                misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().unwrap(),
+                &[],
+            )
+            .unwrap(),
+        )
+        .with_step_ladder_cap(chain.bundle.court.max_step_leaf_count())
+        .with_prompt_ids_form(chain.config.params.palw_prompt_ids_form_v1());
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0xF0_12_E1_6E)).unwrap();
+        let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(
+            job,
+            chain.config.params.palw_prefill_draw_active_at(chain.daa()),
+        );
+        let outcome = backend.execute(&job, &prompt).unwrap();
+        let event = backend.disclose_trace_event(&outcome.material, 0, 0).unwrap();
+        (outcome, event)
+    });
+    let (attempt, claim) = chain.build_attempt_roots(
+        0,
+        chain.config.params.target_time_per_block(),
+        vec![],
+        &|_| true,
+        true,
+        foreign.as_ref().map(|(outcome, _)| outcome),
+    );
     chain.insert(attempt).await;
     let slot = chain.view(claim).accepted_daa + chain.bundle.panel.anchor_delay();
     chain.advance(slot).await;
@@ -491,6 +579,7 @@ async fn fresh_public_bond_service_carries_reserved_da_to_objective_default() {
     let duties = chain.tc.palw_seat_duties_v2(chain.bonds.clone()).into_iter().filter(|d| d.claim_id == claim).collect::<Vec<_>>();
     assert!(!duties.is_empty());
     assert!(chain.tc.palw_seat_duties_v2(vec![bond]).is_empty());
+    let all_seats = duties.iter().map(|d| d.seat_bond).collect::<BTreeSet<_>>();
     let signed_daa = chain.daa();
     let receipts = duties
         .iter()
@@ -513,6 +602,7 @@ async fn fresh_public_bond_service_carries_reserved_da_to_objective_default() {
     chain.import_fresh(&premine).await;
     assert!(matches!(chain.view(claim).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
     assert!(chain.tc.palw_fraud_filer_candidates_v1(bond).iter().any(|c| c.claim_id == claim && !c.seat));
+    let producer_capital = chain.tc.palw_operator_da_standing_v1(chain.view(claim).producer).unwrap().collateral;
     let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))));
     let config = Arc::new(chain.config.clone());
     let tick = Arc::new(TickService::new());
@@ -568,6 +658,7 @@ async fn fresh_public_bond_service_carries_reserved_da_to_objective_default() {
     let mut next_da_progress = chain.daa() + 100;
     let mut reserved = false;
     let mut demanded = false;
+    let mut answer_submitted = None;
     loop {
         assert!(!running.task.as_ref().unwrap().is_finished(), "production worker unexpectedly stopped");
         assert!(std::time::Instant::now() < deadline, "service made no objective progress: {:?}", chain.view(claim));
@@ -601,6 +692,214 @@ async fn fresh_public_bond_service_carries_reserved_da_to_objective_default() {
         }
         reserved |= view.record.as_ref().is_some_and(|r| r.live.contains_key(&bond));
         demanded |= view.sessions.iter().any(|(accuser, _)| *accuser == bond);
+        if demanded
+            && answer_submitted.is_none()
+            && let Some((_, event)) = &foreign
+        {
+            use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_answer_object_v1};
+            let object = palw_da_answer_object_v1(
+                &chain.network_domain,
+                claim,
+                PalwDaUnitV1::Event { row: 0, tile: 0 },
+                PalwDaAnswerV1::Event(event.clone()),
+                chain.bonds[0],
+                chain.bundle.court.max_close_bytes(),
+                |message, context| Some(signed(0, message, context)),
+            )
+            .unwrap();
+            let mut unsigned = object.clone();
+            if let PalwConsensusObjectV2::MaterialDisclosedV2 { signature, .. } = &mut unsigned {
+                signature[0] ^= 1;
+            }
+            let mut bad_event = event.clone();
+            use kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1;
+            match &mut bad_event {
+                PalwTraceEventDisclosureV1::Flat { binding, .. }
+                | PalwTraceEventDisclosureV1::Tiled { binding, .. }
+                | PalwTraceEventDisclosureV1::OutOfRange { binding } => {
+                    binding.job_context.job_id = Hash64::from_u64_word(0xBAD);
+                }
+            }
+            let forged = palw_da_answer_object_v1(
+                &chain.network_domain,
+                claim,
+                PalwDaUnitV1::Event { row: 0, tile: 0 },
+                PalwDaAnswerV1::Event(bad_event),
+                chain.bonds[0],
+                chain.bundle.court.max_close_bytes(),
+                |message, context| Some(signed(0, message, context)),
+            )
+            .unwrap();
+            let unasked = palw_da_answer_object_v1(
+                &chain.network_domain,
+                claim,
+                PalwDaUnitV1::Event { row: 0, tile: 1 },
+                PalwDaAnswerV1::Event(event.clone()),
+                chain.bonds[0],
+                chain.bundle.court.max_close_bytes(),
+                |message, context| Some(signed(0, message, context)),
+            )
+            .unwrap();
+            let stranger = palw_da_answer_object_v1(
+                &chain.network_domain,
+                claim,
+                PalwDaUnitV1::Event { row: 0, tile: 0 },
+                PalwDaAnswerV1::Event(event.clone()),
+                bond,
+                chain.bundle.court.max_close_bytes(),
+                |message, context| Some(signed(OUTSIDER, message, context)),
+            )
+            .unwrap();
+            let session = manager.consensus().unguarded_session();
+            for (name, refused) in [("signature", unsigned), ("binding", forged), ("unasked unit", unasked), ("discloser", stranger)] {
+                let tx = palw_carrier_fees::build_lifecycle_carrier_v2(
+                    &chain.config,
+                    key(0),
+                    &refused,
+                    floats[0].0,
+                    &floats[0].1,
+                    &[],
+                    None,
+                    chain.daa(),
+                )
+                .unwrap();
+                let refusal = retained_flow
+                    .submit_rpc_transaction(&session, tx, kaspa_mining::mempool::tx::Orphan::Forbidden)
+                    .await
+                    .expect_err("public evidence carriage must not relay unauthenticated or unauthorized answers");
+                assert!(format!("{refusal:?}").contains("PalwH1CarrierRefused"), "{name}: {refusal:?}");
+            }
+            eprintln!("[service-public] H1 refuses bad signature/binding, unasked unit and unliable discloser");
+            let tx = palw_carrier_fees::build_lifecycle_carrier_v2(
+                &chain.config,
+                key(0),
+                &object,
+                floats[0].0,
+                &floats[0].1,
+                &[],
+                None,
+                chain.daa(),
+            )
+            .unwrap();
+            retained_flow
+                .submit_rpc_transaction(&session, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden)
+                .await
+                .expect("the authenticated producer answer passes the real PQ mempool");
+            answer_submitted = Some(tx.id());
+            eprintln!("[service-public] foreign-job authenticated event submitted through the real PQ mempool");
+            let mut included = false;
+            for _ in 0..8 {
+                let block = pool_heartbeat(&mut chain, &manager, &pool).await;
+                if block.transactions.iter().any(|t| t.id() == tx.id()) {
+                    included = true;
+                    break;
+                }
+            }
+            assert!(included, "the production template carries the authenticated fault disclosure");
+            pool_heartbeat(&mut chain, &manager, &pool).await;
+            let disclosed = chain.view(claim);
+            assert!(!disclosed.unit_was_answered_v1(&PalwDaUnitV1::Event { row: 0, tile: 0 }));
+            assert!(!disclosed.executor_refuted && !disclosed.da_defaulted, "carriage itself is neither a DA answer nor conviction");
+            eprintln!("[service-public] authenticated J1 binding carried; DA answer remains refused until the verifier files");
+        }
+        if case == PublicCase::ForeignJob {
+            assert!(!view.da_defaulted, "disclosed job fraud must reach exact conviction, not DA default");
+            let offence =
+                kaspa_consensus_core::palw_offence_attribution_v1::palw_executor_refuted_offence_id_v1(&view.producer.0, &claim);
+            let filing = chain.tc.palw_reporter_filing_read_v1(offence, Hash64::default(), bond, None).unwrap();
+            if let Some(consumed) = &filing.consumed {
+                assert_eq!(consumed.kind, kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::ExecutorRefuted);
+                assert_eq!(consumed.accused, view.producer.0);
+                assert!(matches!(view.phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
+                {
+                    // A kind-3 identity conviction also debits the producer. When it lands first,
+                    // kind 4 records the same fault without charging or rewarding it twice.
+                    let producer_after = chain.tc.palw_operator_da_standing_v1(view.producer).unwrap().collateral;
+                    assert!(producer_capital > 0);
+                    assert!(producer_after < producer_capital, "the proven fraud collects the producer's forfeit and S2 action");
+                    let producer_reward = filing.pending.and_then(|p| p.best);
+                    let mut panels = Vec::new();
+                    for seat in &all_seats {
+                        let key = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim);
+                        let panel = chain.tc.palw_reporter_filing_read_v1(key, Hash64::default(), bond, None).unwrap();
+                        if let (Some(consumed), Some(winner)) = (panel.consumed, panel.pending.and_then(|p| p.best)) {
+                            assert_eq!(consumed.kind, kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2);
+                            assert_eq!(consumed.accused, seat.0);
+                            assert!(consumed.amount > 0);
+                            assert!(consumed.collected > 0, "each relied-on Valid signer actually loses collateral");
+                            assert_eq!(winner.reporter, bond);
+                            assert!(winner.committed_daa < consumed.accepted_daa);
+                            panels.push((*seat, key, winner));
+                        }
+                    }
+                    if panels.len() != all_seats.len() {
+                        for _ in 0..10 {
+                            pool_heartbeat(&mut chain, &manager, &pool).await;
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                    if let Some(best) = &producer_reward {
+                        assert_eq!(best.reporter, bond);
+                        assert!(best.committed_daa < consumed.accepted_daa);
+                    } else {
+                        assert_eq!(consumed.amount, 0, "only a duplicate producer leg has no reporter reward");
+                    }
+                    let carriers = chain.history[service_start..]
+                        .iter()
+                        .flat_map(|b| b.transactions.iter())
+                        .filter_map(|t| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&t.payload).ok())
+                        .map(|p| p.object)
+                        .collect::<Vec<_>>();
+                    assert!(
+                        chain.history[service_start..]
+                            .iter()
+                            .flat_map(|b| b.transactions.iter())
+                            .any(|t| Some(t.id()) == answer_submitted)
+                    );
+                    if let Some(best) = &producer_reward {
+                        assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterCommitted { commitment, reporter, .. } if *commitment == best.commitment && *reporter == bond)));
+                        assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterRevealed { offence_key, reporter, .. } if *offence_key == offence && *reporter == bond)));
+                    }
+                    let evidence = carriers
+                        .iter()
+                        .find_map(|o| match o {
+                            PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence, .. }
+                                if *kind == consumed.kind && *accused == view.producer =>
+                            {
+                                borsh::from_slice::<kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1>(
+                                    evidence,
+                                )
+                                .ok()
+                            }
+                            _ => None,
+                        })
+                        .expect("the verifier's exact proof is included in an actual block");
+                    assert_eq!(evidence.claim_id, claim);
+                    assert!(matches!(
+                        evidence.contradiction,
+                        kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::IdentityMismatch { .. }
+                    ));
+                    for (seat, key, winner) in &panels {
+                        assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ObjectiveOffence { kind, accused, .. } if *kind == kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2 && *accused == *seat)));
+                        assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterCommitted { commitment, reporter, .. } if *commitment == winner.commitment && *reporter == bond)));
+                        assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterRevealed { offence_key, reporter, .. } if *offence_key == *key && *reporter == bond)));
+                    }
+                    assert!(reserved && demanded);
+                    assert!(chain.tc.palw_fraud_filer_status_v1(bond).unwrap().live.iter().all(|r| r.claim_id != claim));
+                    eprintln!(
+                        "[service-public] exact foreign-job conviction plus all {} Valid signer sanctions/reveals at DAA {}, producer collateral {} -> {}, kind4 consumed {} additional amount {}",
+                        panels.len(),
+                        chain.daa(),
+                        producer_capital,
+                        producer_after,
+                        consumed.accepted_daa,
+                        consumed.amount
+                    );
+                    break;
+                }
+            }
+        }
         if view.da_defaulted {
             assert!(matches!(view.phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
             let carriers = chain.history[service_start..]
