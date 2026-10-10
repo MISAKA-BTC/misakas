@@ -369,3 +369,35 @@ open one's own commitment's hashes may slash the binder (ADR-0177 D1 forbids pen
 5. `consensus-core palw_court_scope_v1::palw_kernel_demand_unit_v1`: add `ClaimBodyV1::Segmented` ⇒ `KernelPosition`, so the fold's
    admission and tally cover segmented demands too. Today an unknown body returns `None`, which means kernel-decided and untallied.
 6. `seg_ledger::settle_served_demand_bonds_v4`: G14-R4's burn is §7.4's economic bound.
+
+### 7.9 The cumulative clear budget (F-C4R4-17) — the predicate the kernel ledger calls (`misaka_palw_kernel::scope`)
+
+C4R4's F-C4R4-17 rebuilds 11 of 13 weight matrices from 20 position demands of ONE honest claim. A per-claim or per-requester count
+cannot stop that, because a Sybil spreads it over claims and requesters. A per-model refusal cap would let a producer exhaust the cap
+and block an honest prosecutor. So the bound limits what is **disclosed**, never **whether** a demand is answered:
+
+- `court_clear_position_budget_v1(exposure)`: the positions ONE MODEL may ever serve with model-dependent values in the clear. It is
+  `K_min − 1`, below every model-linear relation's rank, and **0 when any elementwise model relation exists**. That is every LM, since
+  a norm weight is revealed by one position.
+- `court_position_disclosure_v1(served_clear_for_model, exposure)`: `Clear` inside the budget, `CommitmentOnly` past it. A demand is
+  never refused for the budget, so withholding stays the producer's objective default.
+- `court_withheld_mask_v1(program, model_params, disclosure)`: what a response omits. Under `CommitmentOnly` every model-dependent value
+  is owed as leaf hashes at `COURT_HIDING_LEAF_ELEMENTS_V1 = 64` elements. It is never owed as a one-element leaf, whose hash brute-forces
+  to the value.
+- **Reachability for a model holder:**
+  - the verifier re-executes and finds the first differing commitment;
+  - the court recomputes ONE 64-element leaf from authenticated operands and compares hashes, so a lie is convicted;
+  - a withheld response is the producer's default;
+  - an honest claim is dismissed.
+- Model-independent values stay clear (`misaka-palw-kernel/tests/court_scope.rs` pins this on F-C4R4-17's own class).
+- **G14R** wires the ledger hook: a per-model `served_clear` counter, the mask in classify / layout, and the 64-element leaf court.
+- **K2S** must make its v3 row leaves ≤ 64 elements for model-dependent values (v3 is not armed).
+- Mid-claim spot checks under withholding (K2S Route A) are traded for this. Re-execution (Route B) remains.
+
+### 7.10 Identity is fixed (ADR-0175)
+
+There is no lapse, so no availability path re-binds a class. Past `palw_model_immutable_v1`, a class with any binding row (live or
+refuted) refuses a new binding, so a refuted class needs a new registration. Before that fence, lane D's re-bind after a refutation is
+unchanged. The binding is refuted only by tag 105. C4R4's F-C4R4-19 PoC runs un-ignored (`g14_kernel_route_e2e/da16/c4r4.rs`): lane D's
+gate code `AVAILABILITY_REQUIRED` means "binding inside its refutation horizon". Renaming it (here, in `misaka-palw-challenge`, and in
+RPC) is recommended.
