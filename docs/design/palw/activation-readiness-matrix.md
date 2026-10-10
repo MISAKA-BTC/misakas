@@ -227,6 +227,14 @@ execution cap, and whether market fee income counts in R_max.
   post more bond than that is read like the same outcome under BFT, outside the security assumption, as a stake majority is
   for BFT. ECON re-evaluates `f` under that honest-capital-majority assumption.
 - **W is not fixed now.** ECON's derived range is 280–436 DAA at the interim terms.
+- **Follow-up rulings (2026-10-10), on ECON round 2:**
+  - **The design: linear `f` with a verification-attestation gate.** Per model-epoch, stake-drawn verifiers (m = 47, k = 24, both an
+    unapproved interim policy) each check a sampled Final claim with their own copy, and the allocation is paid only when k attest.
+  - **The gate is consistent with ADR-0177 D1.** It withholds only the model-allocation subsidy, and the reason is "verification
+    was not attested", never "the model was not served". Claims, escrow, Final, weight and slashing are untouched, and there is no
+    availability audit and no slash.
+  - **The adversary bound is 1/3** of capital and of verifier stake, as in BFT. The bars fail at 0.40 / 0.44.
+  - **BUDGET implements it now**, as an extension of `palw_model_bond_allocation_v1`. The values are an unapproved policy.
 
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
