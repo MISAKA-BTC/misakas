@@ -52,7 +52,8 @@ const RCORE_FROM_DAA: u64 = 0;
 const COLLUDER2: u64 = 7;
 
 fn rc_params() -> PalwStateParamsV2 {
-    params().with_rcore_plus_mirrors(Some(RCORE_FROM_DAA), 0, Vec::new())
+    // testnet-12's 500‰ work ceiling: A-6's accuser room is the free half above it (at the fixture's 1,000‰ nobody may accuse).
+    params().with_fp_exposure_ceiling(500).expect("a ceiling").with_rcore_plus_mirrors(Some(RCORE_FROM_DAA), 0, Vec::new())
 }
 
 fn rc_extras(armed: bool) -> PalwTransitionExtrasV1 {
