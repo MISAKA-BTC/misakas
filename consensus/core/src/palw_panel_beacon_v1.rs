@@ -14,10 +14,10 @@
 //! * a source that is not REAL useful work (heartbeat, BASE-0 fallback, EXEC, receipt-only, provisional, Panel receipt) — by
 //!   kind, in the challenge contract's eligibility;
 //! * a source whose Final passed through a Panel licence — `FinalPathV1::PanelLicensed` is refused for
-//!   `SubjectKindV1::PanelAssignment` (the circularity work → Panel → Final → beacon → Panel). **Every Final the V2 lattice can
-//!   write is Panel-licensed** ([`ChainPanelBeaconHistoryV1`]), so on today's chain no source is eligible;
-//! * a source whose profile was not Active and G14-complete in the subject's commitment state — the code-derived gate is not
-//!   linked into consensus, so the chain's eligible set is EMPTY;
+//!   `SubjectKindV1::PanelAssignment` (the circularity work → Panel → Final → beacon → Panel). Every Final the V2 lattice writes
+//!   is Panel-licensed; the separate kernel route can supply Panel-independent OPV Finals;
+//! * a source outside the derived OPV-eligible profile set. [`ChainPanelBeaconHistoryV1`] reads the kernel route and OPV extras;
+//!   freezing that set at the epoch's commitment is still a release blocker;
 //! * the claims being assigned, a work accepted before the epoch's start `S`, a duplicate, reordered or substituted contribution,
 //!   a forged accumulator/anchor/output (the contract's recomputation).
 //!
