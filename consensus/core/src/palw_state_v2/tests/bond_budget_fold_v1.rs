@@ -24,13 +24,13 @@ fn test_policy(rho: u32) -> PalwBondBudgetPolicyV1 {
     }
 }
 
-/// A TEST allocation policy: epochs of 10 DAA, one epoch of seasoning, `f` linear to 1,000 and flat after.
+/// A TEST allocation policy: epochs of 10 DAA, one epoch of seasoning, `A = S` (`α = 1`, `alpha_halves = 2`).
 fn test_allocation() -> PalwModelAllocationPolicyV1 {
     PalwModelAllocationPolicyV1 {
-        version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V1,
+        version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V2,
         epoch_daa: 10,
         seasoning_epochs: 1,
-        curve: PalwAllocationCurveV1 { points: vec![(0, 0), (1_000, 1_000)] },
+        curve: PalwAllocationCurveV1 { alpha_halves: 2 },
         max_models_per_bond: 4,
     }
 }
@@ -194,7 +194,7 @@ fn a_capital_assignment_is_refused_below_its_fence_and_by_d3_and_counts_once_sea
     assert!(a3.bond_budget().unwrap().model_row(&h64(1)).is_none(), "an increase waits a full epoch");
     let (a4, _) = apply(&a3, &armed, &ctx(4, 121, 4), &[], None);
     let row = a4.bond_budget().unwrap().model_row(&h64(1)).copied().expect("seasoned");
-    assert_eq!((row.epoch, row.capital, row.weight), (2, 600, 600));
+    assert_eq!((row.epoch, row.capital, row.weight), (2, 600, PalwAllocationWeightV1::from_u64(600)));
     // The realized carve accrues per chain block (a zero-subsidy fixture block accrues zero).
     let (a5, _) = apply(&a4, &armed, &PalwBlockContextV2 { subsidy: 1_000, ..ctx(5, 122, 5) }, &[], None);
     assert_eq!(a5.bond_budget().unwrap().header.allocation.unwrap().accrued_sompi, 620);
@@ -537,4 +537,50 @@ fn retirement_moves_the_granted_weight_and_the_row_leaves_after_its_window() {
     assert_eq!(s7.safe_weight(), 2, "the running total keeps what Final credited");
     assert_eq!(s7.retired_safe_weight(), 2, "the granted F moved, not the contribution of 40");
     assert!(s7.bond_budget().unwrap().claim_row(&claim_id).is_none(), "forgotten, and out of its window");
+}
+
+/// **ADR-0177 as revised (2026-10-10): `A_m = S_m^α` through the fold, replayed.** At `α = 2` a bond's capital split 400:200 over two
+/// registered models is a 4:1 weight and a 4:1 division of the epoch's realized carve (620: 496 and 124, exact), and every block — the
+/// assignment, the epoch roll with its 512-bit weights, the accrual — re-applies, reverts (a reorg) and reloads from its carriage under
+/// its root (an IBD / pruning-point import).
+#[test]
+fn alpha_two_divides_the_realized_carve_four_to_one_and_every_block_replays() {
+    let allocation = PalwModelAllocationPolicyV1 { curve: PalwAllocationCurveV1 { alpha_halves: 4 }, ..test_allocation() };
+    let p = params().with_worker_carve_permille(620).unwrap().with_bond_budget(Some(PalwBondBudgetMirrorV1 {
+        from_daa: 100,
+        policy: test_policy(1),
+        allocation: Some((100, allocation)),
+    }));
+    let mut objects = register_class_and_bond();
+    objects.push(PalwConsensusObjectV2::ClassRegistered {
+        class_id: h64(2),
+        artifact_root: h64(12),
+        slash_value_per_pwu: 5,
+        pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+        initial_target: u128::MAX / 2,
+        share_permille: 0,
+        activation_daa: 0,
+        admission: None,
+    });
+    let genesis = PalwChainStateV2::genesis();
+    let mut chain = vec![apply(&genesis, &p, &ctx(1, 100, 1), &objects, None)];
+    let mut halves = vec![(h64(1), 400), (h64(2), 200)];
+    halves.sort();
+    let steps: Vec<(PalwBlockContextV2, Vec<PalwConsensusObjectV2>)> = vec![
+        (ctx(2, 101, 2), vec![assignment(bond_key(1), halves, 1)]),
+        (ctx(3, 121, 3), vec![]),
+        (PalwBlockContextV2 { subsidy: 1_000, ..ctx(4, 122, 4) }, vec![]),
+    ];
+    for (c, objs) in steps {
+        let parent = chain.last().unwrap().0.clone();
+        let (child, delta) = apply(&parent, &p, &c, &objs, None);
+        assert_replayable(&p, &parent, &child, &delta);
+        chain.push((child, delta));
+    }
+    let budget = chain.last().unwrap().0.bond_budget().unwrap().clone();
+    let (a1, a2) = (budget.model_row(&h64(1)).unwrap().weight, budget.model_row(&h64(2)).unwrap().weight);
+    assert_eq!((a1, a2), (PalwAllocationWeightV1::from_u64(160_000), PalwAllocationWeightV1::from_u64(40_000)), "S^2");
+    assert_eq!(budget.header.allocation.unwrap().accrued_sompi, 620);
+    assert_eq!((budget.model_available(&h64(1)), budget.model_available(&h64(2))), (496, 124), "4:1 of the realized carve");
+    budget.check_consistency().expect("the engine's invariants");
 }
