@@ -957,3 +957,61 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
     let z = cw.net.replay().await;
     cw.net.assert_same(&z, "a node replaying the whole chain");
 }
+
+/// **G14C (GAP-03): ops 231 and 212, served by a node started after the evidence was posted, carry everything the SDK's fresh
+/// verifier needs.** The attempt row, the evidence row and the program arrive as op 231 serves them, the Final facts as op 212 serves
+/// them — each op's own builder over a node that synced by IBD, through the RPC's JSON wire form (`canonical.rs`'s [`Rpc`]) — and
+/// the SDK's verifier over those bytes reaches the verdict the world's own reads reach.
+#[tokio::test]
+async fn g14_canonical_ops_231_and_212_served_by_an_ibd_node_rebuild_the_conformance_verdict() {
+    use super::canonical::{Rpc, ibd_node};
+    kaspa_core::log::try_init_logger("warn");
+    let unhex = |text: &str| {
+        let mut out = vec![0u8; text.len() / 2];
+        faster_hex::hex_decode(text.as_bytes(), &mut out).expect("the RPC serves hex");
+        out
+    };
+    let mut cw = Cw::new().await;
+    cw.commit(0x22).await;
+    cw.source_claims(2).await;
+    cw.until_locked().await;
+    let post = cw.post(|_, _| {});
+    cw.send_post(post.clone(), Some(1024)).await;
+    assert!(cw.attempt().evidence.is_some(), "the evidence is posted");
+
+    let node = ibd_node(&cw.net).await;
+    let rpc = Rpc::of(&node.chain);
+    let read = rpc.conformance(cw.v2_class);
+    assert!(read.available && read.found && read.evidence_posted, "op 231 serves the posted attempt: {read:?}");
+    let mut events: Vec<WorkFinalEventV1> = rpc
+        .finals()
+        .finals
+        .iter()
+        .filter(|f| !f.work_final_event.is_empty())
+        .map(|f| borsh::from_slice(&unhex(&f.work_final_event)).expect("a beacon event"))
+        .collect();
+    events.reverse(); // op 212 serves the newest first; the route's canonical order is the reverse
+    let bytes = |e: &[WorkFinalEventV1]| e.iter().map(|x| borsh::to_vec(x).unwrap()).collect::<Vec<_>>();
+    assert_eq!(bytes(&events), bytes(&cw.events()), "op 212's facts are the route's");
+    let reads = PublicConformanceReadsV1 {
+        attempt_row: unhex(&read.attempt_row),
+        evidence_row: Some(unhex(&read.evidence_row)),
+        events,
+        tip_daa: read.tip_daa,
+        program: unhex(&read.program),
+    };
+    assert_eq!(
+        reads.evidence_row.as_deref().map(|b| borsh::from_slice::<ConformanceEvidencePostV1>(b).unwrap()),
+        Some(post),
+        "op 231 serves the posted material"
+    );
+    let report = fresh_verify_from_reads_v1(&reads, None).expect("the SDK verifier runs over the RPC's bytes");
+    let (verdict, agrees) = cw.fresh();
+    assert_eq!(
+        (report.verdict.beacon_output, report.verdict.seed, &report.verdict.posted),
+        (verdict.beacon_output, verdict.seed, &verdict.posted),
+        "the same beacon, seed and verdict as the world's own reads"
+    );
+    assert_eq!(report.agrees, agrees);
+    assert_eq!(report.verdict.posted, Some(Ok(())), "bound, rebuilt exactly, a pass");
+}

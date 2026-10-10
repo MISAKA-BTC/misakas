@@ -3282,3 +3282,7 @@ mod conformance;
 // Lane DA16: the public-material transport and the provider court (tags 150–153) — an outsider confirms or refutes a binding from the
 // bytes, providers' defaults, a common-mode outage, a false computation still the miner's, reorg and replay: `g14_kernel_route_e2e/da16.rs`.
 mod da16;
+// Lane G14C, milestone 2: the canonical G14 harness — a bond registered after genesis, on a node started after the claim (IBD and
+// pruned import), reading through the RPC ops' own builders, against every seat colluding (Panel) and no Panel (OPV); ADR-0177
+// non-interference: `g14_kernel_route_e2e/canonical.rs`.
+mod canonical;
