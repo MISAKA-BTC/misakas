@@ -24,9 +24,9 @@ use misaka_palw_tir::program_v2::TirProgramV2;
 use crate::descriptor::{KernelDescriptorV1, KernelScheduleV1};
 use crate::gate::{public_pipeline_prosecution_complete_v1, public_prosecution_complete_v1};
 use crate::hash::{Digest, finish, id, keyed, object_id};
-use crate::ledger::{ClaimRowV1, DemandKeyV1, DemandRowV1, KernelLedgerV1, LedgerPolicyV1, PipelineClassRowV1, ClassRowV1, BondRowV1};
-use crate::pipeline::{pipeline_root_v1};
+use crate::ledger::{BondRowV1, ClaimRowV1, ClassRowV1, DemandKeyV1, DemandRowV1, KernelLedgerV1, LedgerPolicyV1, PipelineClassRowV1};
 use crate::opv::{OPV_POLICY_DOMAIN_V1, OPV_STATE_VERSION_V2, OpvClaimRowV1, OpvPolicyV1, StateRootPartsV2};
+use crate::pipeline::pipeline_root_v1;
 use crate::pipeline_public::PipelineClassV1;
 use crate::public::{ProfileMaterialV1, ServedPositionV1};
 use crate::state::{
@@ -315,8 +315,7 @@ fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, Str
         .cloned()
         .ok_or_else(|| "a stored class names a kernel this binary does not implement".to_string())?;
     let program = TirProgramV1::decode_canonical(&r.program_bytes).map_err(|e| format!("a stored class's program: {e}"))?;
-    let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
-    let bounds = public_prosecution_complete_v1(&d, &r.plan, nodes, &ProfileMaterialV1::kernel_route(true), &l.policy.prosecution)
+    let bounds = public_prosecution_complete_v1(&d, &program, &r.plan, &ProfileMaterialV1::kernel_route(true), &l.policy.prosecution)
         .map_err(|g| format!("a stored class is no longer publicly prosecutable: {g:?}"))?;
     Ok(ClassRowV1 {
         descriptor: d,

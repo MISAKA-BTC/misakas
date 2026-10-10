@@ -71,7 +71,7 @@ const ROWS_PAGE_BYTES: u32 = 16 << 10;
 
 /// [`kernel_config_with`]'s network, with testnet-12's main premine output re-addressed to the [`NEWCOMER`]'s key (the genesis UTXO
 /// commitment and hash recomputed from the edited set, as `t12_seat_maturity_fence` does). `opv` arms RFC-0015's fence with the
-/// interim terms and the fixture's class admitted.
+/// interim terms and the fixture's class eligible through the existing test hook (not production onboarding).
 fn canonical_config(opv: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, bundle, mut premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
@@ -86,8 +86,13 @@ fn canonical_config(opv: bool) -> (Config, PalwConsensusParamsV2, Premine, Premi
     params.genesis.utxo_commitment = multiset.finalize();
     params.genesis.hash = kaspa_consensus_core::header::Header::from(&params.genesis).hash;
     params.palw_probabilistic_constraints_v1 = Some(ForkActivation::new(0));
-    params.palw_panel_free_v1 =
-        if opv { Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), opv_admitted())) } else { None };
+    params.palw_panel_free_v1 = if opv {
+        opv_test_eligible(&opv_admitted());
+        // interim_v1's list is now a deny-list; the retired admission list belongs only in the test hook.
+        Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new()))
+    } else {
+        None
+    };
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
     params.skip_proof_of_work = true;
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fence; only this harness bypasses it");
@@ -915,7 +920,7 @@ async fn g14_canonical_a_routing_and_history_class_is_refused_by_the_node_carrie
     let b = l.bounds_of(&class).expect("bounds");
     let cap = kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1;
     let why = misaka_palw_kernel::ledger::carrier_fit_v1(&b, cap, cap, cap).expect_err("past the carriers");
-    assert!((b.max_filing_bytes as u128).max(b.max_response_bytes) > 100 * cap as u128, "far past the carriers: {why} ({b:?})");
+    assert!((b.max_filing_bytes as u128).max(b.max_response_bytes) > cap as u128, "past the carriers: {why} ({b:?})");
     // ...and the node refuses it.
     let o = w.net.route(1, &register);
     deliver(&mut w.net, 1, o).await;

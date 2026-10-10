@@ -616,11 +616,10 @@ impl PalwKernelRouteStateV1 {
             .classes
             .get(&binding.kernel_class.as_bytes())
             .ok_or_else(|| I::NotG14Complete("the bound class is not in the ledger".into()))?;
-        let nodes: u64 = row.program.occurrences().iter().map(|(b, _)| row.program.blocks[*b as usize].nodes.len() as u64).sum();
         let proven = misaka_palw_kernel::gate::public_prosecution_complete_v1(
             &row.descriptor,
+            &row.program,
             &row.plan,
-            nodes,
             &misaka_palw_kernel::public::ProfileMaterialV1::kernel_route(true),
             &ledger.policy.prosecution,
         )

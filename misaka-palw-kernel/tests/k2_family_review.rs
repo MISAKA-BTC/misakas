@@ -197,9 +197,8 @@ fn every_declared_family_has_a_checker_a_public_court_and_a_finite_bound() {
     // The gate derives, for a plan over the reference class, a finite bound for every relation: no relation is unbounded or
     // private. (Pipelines' edges are bounded the same way in `k2_pipeline`.)
     let c = Claim::honest();
-    let nodes: u64 = c.program.occurrences().iter().map(|(b, _)| c.program.blocks[*b as usize].nodes.len() as u64).sum();
     let bounds =
-        public_prosecution_complete_v1(&c.descriptor, &c.plan, nodes, &ProfileMaterialV1::kernel_route(true), &policy).unwrap();
+        public_prosecution_complete_v1(&c.descriptor, &c.program, &c.plan, &ProfileMaterialV1::kernel_route(true), &policy).unwrap();
     assert!(bounds.max_opening_bytes > 0 && bounds.max_court_work > 0 && bounds.max_court_work <= c.descriptor.limits.max_court_work);
     let b = &c.plan.budgets;
     assert!(b.worst_court_bytes > 0 && b.worst_court_bytes <= c.descriptor.limits.max_court_bytes);
@@ -209,5 +208,5 @@ fn every_declared_family_has_a_checker_a_public_court_and_a_finite_bound() {
     }
     // Private material is never prosecutable: the gate refuses a profile whose weights/inputs/state are not public.
     let private = ProfileMaterialV1 { weights_public: false, ..ProfileMaterialV1::kernel_route(true) };
-    assert!(public_prosecution_complete_v1(&c.descriptor, &c.plan, nodes, &private, &policy).is_err());
+    assert!(public_prosecution_complete_v1(&c.descriptor, &c.program, &c.plan, &private, &policy).is_err());
 }

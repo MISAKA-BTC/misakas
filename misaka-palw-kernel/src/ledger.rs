@@ -1104,6 +1104,15 @@ impl KernelLedgerV1 {
                 }
                 self.proof_open(row).map_err(|why| KernelRefusalV1::rule(NAME, why))?;
                 // One seal per (claim, accuser): a re-seal (another proof) replaces the earlier one and its clock restarts.
+                if !self.proof_seals.contains_key(&(*claim, *accuser))
+                    && self.proof_seals.range((*claim, [0; 64])..=(*claim, [u8::MAX; 64])).count()
+                        >= crate::gate::MAX_PROOF_SEALS_PER_CLAIM_V1
+                {
+                    return Err(KernelRefusalV1::rule(
+                        NAME,
+                        "the claim's proof-seal metadata is full; a direct proof remains admissible",
+                    ));
+                }
                 self.proof_seals.insert((*claim, *accuser), SealRowV1 { seal: *seal, daa: self.daa, deposit: 0 });
                 out.push(LedgerEventV1::ProofSealed { claim: *claim, accuser: *accuser });
             }
@@ -1395,11 +1404,11 @@ impl KernelLedgerV1 {
             &declared_param_instances(&program.params, program.schedule.layers.len()),
         )
         .map_err(rule)?;
-        let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
         // The artifact is public by the consumer's attestation (checked above), not by a registrant's flag. PUBLIC_PROSECUTION_COMPLETE
         // is derived from code for every class of every mode; an OPV class has no Panel to fall back on, so there is no exception.
-        let bounds = public_prosecution_complete_v1(&d, plan, nodes, &ProfileMaterialV1::kernel_route(true), &self.policy.prosecution)
-            .map_err(|g| rule(format!("not publicly prosecutable: {g:?}")))?;
+        let bounds =
+            public_prosecution_complete_v1(&d, &program, plan, &ProfileMaterialV1::kernel_route(true), &self.policy.prosecution)
+                .map_err(|g| rule(format!("not publicly prosecutable: {g:?}")))?;
         if bounds.max_court_work > self.policy.max_court_work_per_block {
             return Err(rule("the class's worst court does not fit one block's court budget: nobody could prosecute it".into()));
         }
@@ -2283,6 +2292,11 @@ impl KernelLedgerV1 {
             // Shared progress: a second demander joins the open demand rather than being refused by it (its deadline is the open
             // demand's: joining restarts nothing).
             if !d.demanders.iter().any(|(b, _)| b == demander) {
+                if d.demanders.len() >= crate::gate::MAX_DEMANDERS_PER_SESSION_V1 {
+                    return Err(rule(
+                        "the shared demand's collateral participants are full; its public response/default deadline is unchanged",
+                    ));
+                }
                 d.demanders.push((*demander, need));
                 self.bonds.get_mut(demander).expect("checked").reserved += need;
                 settle(out, *demander, need, SettlementKindV1::ReserveDemand, Some(*claim));
@@ -2654,8 +2668,8 @@ pub fn carrier_fit_v1(b: &ProsecutionBoundsV1, filing_cap: usize, response_cap: 
     if b.max_response_bytes + RESPOND_OVERHEAD_V1 > response_cap as u128 {
         return Err(format!("a position response of {} bytes does not fit a Respond ({response_cap})", b.max_response_bytes));
     }
-    if b.max_retained_state + COMMIT_OVERHEAD_V1 > commit_cap as u128 {
-        return Err(format!("{} bytes of commitments do not fit a claim commitment ({commit_cap})", b.max_retained_state));
+    if b.max_commit_bytes.saturating_add(COMMIT_OVERHEAD_V1) > commit_cap as u128 {
+        return Err(format!("{} bytes of commitments do not fit a claim commitment ({commit_cap})", b.max_commit_bytes));
     }
     Ok(())
 }
@@ -2874,6 +2888,7 @@ mod tests {
             max_opening_bytes: 10,
             max_filing_bytes: 100,
             max_response_bytes: 50,
+            max_commit_bytes: 0,
             max_localization_rounds: 2,
             max_court_work: 0,
             max_verifier_ram: 0,
@@ -2896,10 +2911,11 @@ mod tests {
             max_opening_bytes: 10,
             max_filing_bytes: 1000,
             max_response_bytes: 2000,
+            max_commit_bytes: 5000,
             max_localization_rounds: 2,
             max_court_work: 0,
             max_verifier_ram: 0,
-            max_retained_state: 5000,
+            max_retained_state: 5 << 30,
             max_concurrent_sessions: 1,
             deadline_daa: 1,
         };

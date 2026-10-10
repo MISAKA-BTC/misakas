@@ -1,0 +1,19 @@
+running 1 test
+G14 review registration eligibility: Denied; id [203, 165, 175, 92, 30, 123, 112, 153, 130, 149, 254, 150, 218, 103, 156, 230, 53, 233, 252, 167, 17, 175, 5, 63, 200, 245, 205, 250, 37, 184, 133, 120, 46, 10, 161, 177, 43, 180, 52, 154, 149, 98, 18, 75, 8, 206, 240, 22, 224, 71, 125, 142, 146, 33, 19, 253, 176, 211, 113, 246, 4, 245, 33, 27]; test eligible []
+G14 review kernel refusal: KernelRefusalV1 { object: "RegisterClassV2", kind: Rule, why: "the network policy has not admitted this class for OptimisticPublicVerification" }
+G14 review registration eligibility: Denied; id [203, 165, 175, 92, 30, 123, 112, 153, 130, 149, 254, 150, 218, 103, 156, 230, 53, 233, 252, 167, 17, 175, 5, 63, 200, 245, 205, 250, 37, 184, 133, 120, 46, 10, 161, 177, 43, 180, 52, 154, 149, 98, 18, 75, 8, 206, 240, 22, 224, 71, 125, 142, 146, 33, 19, 253, 176, 211, 113, 246, 4, 245, 33, 27]; test eligible []
+G14 review kernel refusal: KernelRefusalV1 { object: "RegisterClassV2", kind: Rule, why: "the network policy has not admitted this class for OptimisticPublicVerification" }
+
+thread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_quantization_lie_is_convicted_by_the_participant' (1723410) panicked at consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:650:13:
+the OPV class registered through the real path; ledger diagnostic: Ok([ClassRegistered { class: [203, 165, 175, 92, 30, 123, 112, 153, 130, 149, 254, 150, 218, 103, 156, 230, 53, 233, 252, 167, 17, 175, 5, 63, 200, 245, 205, 250, 37, 184, 133, 120, 46, 10, 161, 177, 43, 180, 52, 154, 149, 98, 18, 75, 8, 206, 240, 22, 224, 71, 125, 142, 146, 33, 19, 253, 176, 211, 113, 246, 4, 245, 33, 27] }])
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_quantization_lie_is_convicted_by_the_participant ... FAILED
+
+failures:
+
+failures:
+    pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_quantization_lie_is_convicted_by_the_participant
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 752 filtered out; finished in 0.21s
+
+error: test failed, to rerun pass `-p kaspa-consensus --lib`

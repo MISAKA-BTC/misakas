@@ -176,7 +176,7 @@ fn no_reward_opens_without_a_complete_public_prosecution_of_exactly_that_profile
     let profile = c.header().class_binding_id;
     let public = ProfileMaterialV1::kernel_route(true);
     let nodes: u64 = c.trace.values[0].iter().map(|o| o.len() as u64).sum();
-    let gate = |m: &ProfileMaterialV1| public_prosecution_complete_v1(&d, &c.plan, nodes, m, &POLICY);
+    let gate = |m: &ProfileMaterialV1| public_prosecution_complete_v1(&d, &c.program, &c.plan, m, &POLICY);
     let code = gate(&public);
     let bounds = code.as_ref().expect("every relation of this plan has a public court and finite bounds");
     assert!(bounds.max_opening_bytes > 0 && bounds.max_localization_rounds == 2 && bounds.deadline_daa == POLICY.court_deadline_daa);
@@ -210,12 +210,12 @@ fn no_reward_opens_without_a_complete_public_prosecution_of_exactly_that_profile
     assert!(matches!(gate(&fused), Err(g) if g.contains(&ProsecutionGapV1::PrivateMaterial)));
     // A plan whose court budget passes the ceiling is not either: no unbounded hidden fallback.
     let tight = ProsecutionPolicyV1 { max_public_bytes: 1, ..POLICY };
-    let r = public_prosecution_complete_v1(&d, &c.plan, nodes, &public, &tight);
+    let r = public_prosecution_complete_v1(&d, &c.program, &c.plan, &public, &tight);
     assert!(matches!(r, Err(g) if g.iter().any(|x| matches!(x, ProsecutionGapV1::Unbounded { what: "public bytes", .. }))));
     // A relation whose court is not one this code implements fails the gate (the plan claims coverage it cannot prosecute).
     let mut forged = c.plan.clone();
     forged.relations[0].court = misaka_palw_kernel::family::CourtIdV1::EdgeRecompute;
-    assert!(public_prosecution_complete_v1(&d, &forged, nodes, &public, &POLICY).is_err());
+    assert!(public_prosecution_complete_v1(&d, &c.program, &forged, &public, &POLICY).is_err());
     assert!(matches!(
         reward_eligible_v1(&profile, &armed, &public, &gate(&fused), Some(&complete_gate(profile))),
         Err(RewardBlockV1::NotPubliclyProsecutable(_))
