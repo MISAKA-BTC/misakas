@@ -129,3 +129,9 @@ kind-3 identity convictionが先に成立すると、producerの没収もそのr
 
 
 2026-10-11の公開identity追及／H1 carriage／DNS lock修正の最終sourceは、exact serviceとDA非応答serviceの2件を含む **77 unique PASS**、通常node binary check成功、fresh shipping harvest／再読込 **361 pin差分なし**。G14全域は未達である。残りは全familyの正規入口→公開job/input/初期state取得→各違反の局所化・終局→scope/DA gate→最大profile/期限→restart/reorg/IBD/RPC→実運用規模の測定の順で進める。詳細と失敗を含む生logは[監査記録](../../audit/g14-review-2026-10-10/implementation.md)、現在の順序は[フィードバック](../../audit/g14-review-2026-10-10/feedback.md#残りの実装順序2026-10-11)を参照。
+
+## Codex追記: PublicDA FP V3/V4の通常入口と実service（2026-10-11）
+
+登録floor classに対する正常な公開family drill／graph publication、価格照会、PQ署名済みPublicDAユーザーpromptのFP V3/V4 claim受理をactual-service fixtureへ追加した。新規成熟outsiderと2,065 blocksを検証したfresh DBから、公開foreign-job Eventのexact conviction、producerと全5名のValid signerの徴収・自分のcommit/reveal、予約解放・exitまで通った。V3/V4のwire整数は5/7であり、FP Job V5の試験ではない。V4はfixture内で通常decode-rules fenceをvalidated-armする。production activationは変更していない。
+
+モデルclass自体のpost-genesis登録、canonical prompt省略モード／PanelDAの通常pricing、全family eligibilityとFP V5/Gen/evaluation/prefix-stateは残る。canonical省略モードは現行derived-work pricingが意図的に拒否する。pipelineは単一stageへのconformance流用だけではstage間入力bindingが閉じず、Retrieval snapshotには通常conformanceがない。この前提をwaiveせず第一段階を続ける。試験範囲、fixtureのmempool検証済みtransaction所有修正、途中の失敗、生logは[追加監査記録](../../audit/g14-review-2026-10-10/implementation.md#publicda-fp-v3v4の通常受理から実serviceで全valid署名者を追及する2026-10-11)を参照。

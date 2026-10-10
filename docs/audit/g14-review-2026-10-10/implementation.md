@@ -632,3 +632,31 @@ lock修正後のexact V-node試験は **1 PASS、394.69秒**。公開eventを実
 合計 **77 unique PASS**。nodeはdefault feature（EVMを含む）で`cargo test -p kaspad --lib palw_service_public_e2e --locked --no-run`をbuildし、同じ最終`kaspad_lib-a562e45711087c1e`を各filterで実行した。[node build](evidence/service-foreign-build-final.log)。consensusは`--features evm`で最終sourceをbuildした`kaspa_consensus-1eec1b8c750cb2a6`を使用した。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`、既存unused/dead-code警告は残る。初回失敗と修正前のDA PASSは最終77件へ重複計上しない。service fixtureのinert EVMは、通常featureのcompile又は別のconsensus回帰試験のEVMを無効にする意味ではない。
 
 最終sourceのfresh shipping harvestと保存harvestの再読込はともにexit 0、**361 ok・差分なし**。[repin](evidence/service-foreign-repin-final.log)、[harvest tests](evidence/service-foreign-repin-harvest-tests.log)、[harvest lib](evidence/service-foreign-repin-harvest-lib.log)、[再読込](evidence/service-foreign-repin-replay-final.log)。今回consensus moduleのnode policy／mempool livenessは修正したが、block conviction／DA fold規則、rooted state、wire、activation height、shipping pinは変更していない。ADR-0177 D7とshipping activation拒否を維持する。全family／最大profile／累積scope／recoveryを含むG14全域は未達である。
+
+## PublicDA FP V3/V4の通常受理から実serviceで全Valid署名者を追及する（2026-10-11）
+
+残りの実装順序の第一段階として、既存のactual-service fixtureへFP Job V3/V4の通常受理を追加した。登録済みfloor classを使い、公開の`FamilyCertified` drillを6本の`ObjectChunk` carrierで運び、通常fold自身がgradeしたfamilyで`ClassLaneCertified`を受理する。stateへのprofile注入、admission・signatureのcallback、`test_admitted`は使わない。通常価格照会、chain quote、PQ署名付きFP commitment、実mempool検証、templateとblock foldを通す。モデルclass自体は既存genesis登録であり、別のモデルをpost-genesis登録した証明ではない。
+
+両caseはPublicDAのユーザーpromptをhash-bound IDsとともに公開する。producerは登録floorモデルを実job Bで計算し、同じpromptと異なるnonceのjob Aを宣言する。Aのscheduleは正しく導出し、Bの実execution/trace/output rootsをcommitする。producerだけが持つcaptureはoutsiderへ渡さず、要求されたrow-0/tile-0の署名済みEventだけを公開する。これはjob identity不正のexact convictionであり、算術faultの局所化又は全FP job/state意味論の保証ではない。
+
+outsiderはgenesis外の新規bondで、通常の登録・possession署名・collateral・1,000 DAA成熟を経る。claim公開後の空DBは2,065 public blocksを検証し、自分のConsensus API readsだけでFP candidateと認証済みjob/inputを取得する。登録モデルを保有する実`PalwPanelService`が独立replay、予約、要求、public proof、reporter commit/evidence/revealを進める。実mempool／template／block包含後、producerの正のcollateral debit、全5名の依拠されたValid signerの正の徴収とoutsider自身のcommit/reveal、予約解放、正常exit/joinとcallback owner解放を確認した。kind-3によるproducer徴収後のkind-4追加徴収は0で、二重徴収を認めない。
+
+V3は既存presetを使用する。V4だけはfixture内で通常のdecode-rules fenceをheight 0へ設定し、`validate_palw_v2`の成功を確認してから休眠public-filer fenceをtest-armする。その後はshipping validatorの拒否を引き続きassertする。keys/premine、skip PoW、inert EVMは既存fixture例外で、court期限・料金・bond成熟・collateralはpresetのままである。生logの`Job V5`／`Job V7`は`job.version`のwire整数5／7の表示で、それぞれsemantic FP Job V3／V4であり、RFC-0003のFP Job V5を試験した意味ではない。
+
+途中の失敗も保存する。初回はpresetでV4が未active、次は通常価格に必要な公開work profileが未登録だった。通常family/graph publicationを追加したところ、大きいcarrierで`WrongMass(1,0)`を検出した。fixtureの`Chain::send`がmempoolへ渡したcloneだけに設定されたcontextual storage massを捨てていたため、通常mempool検証済みのtransactionをtemplateへ渡すよう修正した。FP commitmentも同じ所有関係を使う。mass gateやproductionを緩和する修正ではない。
+
+さらにcanonical prompt省略モードは現行derived-work pricingで`FreePromptPromptNotAccountable`となる。価格規則自身が、chainにtoken listを持たないモードを意図的に拒否している。APIへ導出IDsだけを渡してgateを回避せず、通常受理されるPublicDAユーザーpromptを試験対象に変更した。canonical省略モード／PanelDAの通常pricing・registration到達性はこの結果から保証しない。public-job readerのfield名とprofile geometryのprivate importによる初回compile失敗もfixtureを修正してbuildし直した。
+
+| 最終sourceの試験 | 結果 |
+| --- | --- |
+| PublicDA FP Job V3 actual service | 1 PASS、321.28 s、DAA 1259で全5名の徴収・reveal |
+| PublicDA FP Job V4 actual service | 1 PASS、315.40 s、DAA 1249で全5名の徴収・reveal |
+| 既存canonical attemptのforeign-job service | 1 PASS、285.55 s |
+| 既存binding非応答service | 1 PASS、495.64 s、DAA 2236でDA default |
+| public filer／input regression | 20 PASS |
+| False Valid filer regression | 11 PASS |
+| reporter regression | 21 PASS |
+
+上記 **56 unique PASS**。最終sourceを`cargo test -p kaspad --lib palw_service_public_e2e --locked --no-run`でdefault feature（EVMを含む）buildし、同じ`kaspad_lib-a562e45711087c1e`をexact name又はmodule filterで実行した。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`、既存unused/dead-code警告は残る。wrong module filterで0件だった実行、途中sourceのattempt PASSは成功件数に含めない。[build](evidence/service-fp-build-final.log)、[V3](evidence/service-fp-v3-node-final.log)、[V4](evidence/service-fp-v4-node-final.log)、[attempt](evidence/service-fp-attempt-node-final.log)、[DA default](evidence/service-fp-da-node-final.log)、[filer](evidence/service-fp-filer-final.log)、[False Valid](evidence/service-fp-false-valid-final.log)、[reporter](evidence/service-fp-reporter-final.log)。fixture-only変更の今回にshipping repin／production binary checkは再実行していない。直前のproduction修正に対する77 PASS／361 pin検証は前節の記録である。
+
+変更はtest fixtureと監査記録だけで、production、consensus規則、wire、activation、shipping pinは変更していない。この追加だけではF9–F16全familyのPASSにならない。pipelineの正規onboardingとstage間入力binding、Retrieval snapshotのconformance、FP V5／Gen・evaluation・prefix-state等の通常入口と公開bootstrap、恒久prune後のFP job再取得、全算術/input/output/state違反、累積scopeと64要素hiding tile、最大profile・人口・期限内包含、restart/reorg/IBD/socket RPCは引き続き未達。ADR-0177 D7の登録モデル保有前提とshipping activation拒否を維持する。

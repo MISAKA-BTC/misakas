@@ -51,6 +51,8 @@
 
 ## 残りの実装順序（2026-10-11）
 
+第一段階の追加として、PublicDAユーザーpromptのFP Job V3/V4は、通常の公開family証明・graph登録・価格計算・署名済みclaim受理から、fresh DBの実serviceによるproducerと全5名のValid signerの徴収・commit/revealまで通った。登録floor classのjob identity不正に限る。classの新規モデル登録、canonical prompt省略モード、PanelDAの通常pricing、全FP job/state意味論又はF9–F16全体の完了を示すものではない。詳細と失敗を含む[追加記録](implementation.md#publicda-fp-v3v4の通常受理から実serviceで全valid署名者を追及する2026-10-11)を参照。
+
 ユーザー指定どおり、正しい登録モデルを保有するverifierを前提として、次の順で進める。各段階で通常経路の受入試験を追加し、後段の資源・回復条件まで通る前にG14全域を完成扱いしない。
 
 1. **全familyの入口:** F9–F16等の登録・eligibilityを正規経路で通し、test-only admissionで埋めた空白を閉じる。

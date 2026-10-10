@@ -92,7 +92,7 @@ fn card_payout_spk(card: usize) -> ScriptPublicKey {
 fn signed(card: usize, message: &[u8], context: &[u8]) -> Vec<u8> {
     libcrux_ml_dsa::ml_dsa_87::sign(&key(card).signing_key, message, context, [0x5A; 32]).unwrap().as_ref().to_vec()
 }
-fn fixture_config() -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding>) {
+fn fixture_config(fp_v4: bool) -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding>) {
     let mut params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
     let PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else { unreachable!() };
     let mut row = 0;
@@ -130,7 +130,13 @@ fn fixture_config() -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding
     params.skip_proof_of_work = true;
     params.evm_activation_daa_score = u64::MAX;
     params.palw_model_evm = None;
-    params.validate_palw_v2().expect("fixture keys alone preserve the validated preset");
+    if fp_v4 {
+        // Exercise the admitted V4 family under the normal deployable decode-rules fence.
+        // No public-prosecution eligibility/admission callback is substituted.
+        params.palw_fp_decode_rules = Some(ForkActivation::new(0));
+        params.sync_palw_fp_decode_rules();
+    }
+    params.validate_palw_v2().expect("fixture keys and the ordinary decode-rules fence validate");
     params.palw_legacy_public_filer_v1 = Some(ForkActivation::new(0));
     params.sync_palw_legacy_public_filer_v1();
     assert!(params.validate_palw_v2().is_err(), "the shipping activation guard remains closed");
@@ -238,7 +244,9 @@ impl Chain {
             self.daa(),
         )
         .unwrap();
-        self.tc.validate_mempool_transaction(&mut MutableTransaction::from_tx(tx.clone()), &Default::default()).unwrap();
+        let mut validated = MutableTransaction::from_tx(tx);
+        self.tc.validate_mempool_transaction(&mut validated, &Default::default()).unwrap();
+        let tx = validated.tx.as_ref().clone();
         self.heartbeat(vec![tx.clone()]).await;
         self.heartbeat(vec![]).await;
         let index = tx.outputs.len() - 1;
@@ -493,17 +501,167 @@ async fn fresh_public_bond_service_convicts_a_public_foreign_job_and_reveals() {
     fresh_public_service(PublicCase::ForeignJob).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v4_foreign_job() {
+    fresh_public_service(PublicCase::ForeignFpJob).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v3_foreign_job() {
+    fresh_public_service(PublicCase::ForeignFpV3Job).await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PublicCase {
     Withholding,
     ForeignJob,
+    ForeignFpJob,
+    ForeignFpV3Job,
+}
+
+impl PublicCase {
+    fn is_fp(self) -> bool {
+        matches!(self, Self::ForeignFpJob | Self::ForeignFpV3Job)
+    }
+}
+
+/// The producer executes a real registered model under FP job B, then claims the roots
+/// for user-prompt job A. Only its signed Event is later shared with the outsider.
+fn foreign_fp_job(
+    chain: &Chain,
+) -> (
+    kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1,
+    kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
+    Option<(kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3, Vec<u32>)>,
+) {
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_canonical_anchor_v1,
+    };
+    let backend = misaka_palw_base0::backend::Base0Backend::new(
+        misaka_palw_base0::classes::resolve_class_v1(
+            &chain.bundle.court,
+            chain.bundle.base_class_id,
+            misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().unwrap(),
+            &[],
+        )
+        .unwrap(),
+    )
+    .with_step_ladder_cap(chain.bundle.court.max_step_leaf_count())
+    .with_prompt_ids_form(chain.config.params.palw_prompt_ids_form_v1());
+    let facts = chain.tc.palw_producer_facts_v2(chain.bundle.base_class_id, Some(chain.bonds[0].0)).unwrap();
+    let mut job = PalwFreePromptJobV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: chain.network_domain,
+        class_id: chain.bundle.base_class_id,
+        executor_bond: chain.bonds[0].0,
+        executor_pubkey: card_pubkey(0),
+        operator_id: facts.bond.as_ref().unwrap().operator_id,
+        anchor_block: facts.chain_point,
+        anchor_daa: facts.daa_score,
+        job_nonce: [0x47; 32],
+        tokenizer_id: Hash64::default(),
+        prompt_token_ids_hash: Hash64::default(),
+        prompt_tokens: 0,
+        decode_token_limit: 0,
+        max_context_tokens: 0,
+        privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        prompt_mode: PALW_FP_PROMPT_MODE_USER,
+        sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+        temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        decode: None,
+        tail: None,
+    };
+    if chain.config.params.palw_fp_decode_rules_active_at(chain.daa()) {
+        job = job.into_v4(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+    }
+    let derive = |job: &mut PalwFreePromptJobV3| {
+        let (ctx, prompt) = backend.job_for_anchor(fp_canonical_anchor_v1(job)).unwrap();
+        job.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+            backend.prompt_ids_form(),
+            &prompt.iter().map(|t| *t as u32).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        job.prompt_tokens = prompt.len() as u32;
+        job.decode_token_limit = ctx.exact_decode_tokens;
+        job.max_context_tokens = ctx.max_context_tokens;
+        prompt
+    };
+    let prompt = derive(&mut job);
+    let run = backend.execute_free_prompt(&job, &prompt).unwrap();
+    let shape = backend.capture_shape(&run.outcome.material).unwrap();
+    let mut commitment = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(
+        &job,
+        &shape.job_context,
+        &run,
+        chain.daa() + facts.min_trace_retention_daa,
+    )
+    .unwrap();
+    let event = backend.disclose_trace_event(&run.outcome.material, 0, 0).unwrap();
+    // The claimed job A has a fully valid user prompt and schedule; its authenticated
+    // execution material belongs to B. Admission must not require trusting Panel replay.
+    job.job_nonce[0] ^= 1;
+    let ctx = backend.fp_job_context_for_executed_v1(&job, commitment.decode_tokens_executed).unwrap();
+    commitment.job = job;
+    commitment.schedule_root = kaspa_consensus_core::palw_v2::expected_schedule_commitment_v2(
+        &ctx.context_hash(),
+        commitment.job.prompt_tokens,
+        commitment.decode_tokens_executed,
+    )
+    .0;
+    (run.outcome, event, Some((commitment, prompt.into_iter().map(|t| t as u32).collect())))
 }
 
 async fn fresh_public_service(case: PublicCase) {
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
-    let (config, bundle, premine, mut floats) = fixture_config();
+    let (config, bundle, premine, mut floats) = fixture_config(case == PublicCase::ForeignFpJob);
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
+    if case.is_fp() {
+        // Derived-work pricing requires the registered graph to be publicly carried. The
+        // ordinary ClassLaneCertified arm authenticates it by the existing class id and
+        // certified family; do not inject the profile into state or waive the price gate.
+        let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
+            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
+        )
+        .unwrap();
+        assert_eq!(profile.shape_profile_id(), chain.bundle.base_class_id);
+        let publish = PalwConsensusObjectV2::ClassLaneCertified {
+            class_id: chain.bundle.base_class_id,
+            lane: kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::FreePrompt,
+            profile: Box::new(profile.clone()),
+        };
+        let reachable = kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&profile);
+        let covered = chain.tc.palw_certified_families_v1().iter().any(|(lane, _, row)| {
+            *lane == kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::FreePrompt
+                && reachable.is_subset(&row.family.kernel_ids)
+        });
+        if !covered {
+            // Carry the normal public drill evidence; the chain itself grades every fault.
+            // A build-local certificate or test callback does not certify the on-chain lane.
+            let evidence =
+                misaka_palw_base0::e2e_drill::rc_free_prompt_evidence_v1(misaka_palw_base0::e2e_drill::PalwRcFamilyV1::Base0).unwrap();
+            let certificate = PalwConsensusObjectV2::FamilyCertified {
+                evidence: Box::new(kaspa_consensus_core::palw_state_v2::PalwCertificationEvidenceV1::FreePrompt(evidence)),
+            };
+            let carriers =
+                kaspa_consensus_core::palw_state_v2::palw_object_chunks_v1(&certificate).unwrap().unwrap_or_else(|| vec![certificate]);
+            let count = carriers.len();
+            for carrier in carriers {
+                chain.send(0, &carrier, &mut floats[0], &[]).await;
+            }
+            assert!(
+                chain
+                    .tc
+                    .palw_certified_families_v1()
+                    .iter()
+                    .any(|(lane, _, row)| *lane == kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::FreePrompt
+                        && reachable.is_subset(&row.family.kernel_ids))
+            );
+            eprintln!("[service-public] normal FP family certification accepted from {count} public drill carriers");
+        }
+        chain.send(0, &publish, &mut floats[0], &[]).await;
+        eprintln!("[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified");
+    }
     let signed_bond = PalwBondKeyV2(TransactionOutpoint::new(Default::default(), 0));
     let public_key = card_pubkey(OUTSIDER);
     let payout = card_payout_payload(OUTSIDER);
@@ -541,7 +699,10 @@ async fn fresh_public_service(case: PublicCase) {
     let maturity = chain.config.params.palw_bond_maturity.unwrap().window_daa;
     chain.advance(registered_before + maturity + 1).await;
     eprintln!("[service-public] ordinary bond registered before DAA {registered_before}, maturity {maturity}, now {}", chain.daa());
-    let foreign = (case == PublicCase::ForeignJob).then(|| {
+    let foreign = (case != PublicCase::Withholding).then(|| {
+        if case.is_fp() {
+            return foreign_fp_job(&chain);
+        }
         use misaka_palw_base0::classes::resolve_class_v1;
         let backend = misaka_palw_base0::backend::Base0Backend::new(
             resolve_class_v1(
@@ -561,17 +722,83 @@ async fn fresh_public_service(case: PublicCase) {
         );
         let outcome = backend.execute(&job, &prompt).unwrap();
         let event = backend.disclose_trace_event(&outcome.material, 0, 0).unwrap();
-        (outcome, event)
+        (outcome, event, None)
     });
-    let (attempt, claim) = chain.build_attempt_roots(
-        0,
-        chain.config.params.target_time_per_block(),
-        vec![],
-        &|_| true,
-        true,
-        foreign.as_ref().map(|(outcome, _)| outcome),
-    );
-    chain.insert(attempt).await;
+    let claim = if let Some((_, _, Some((commitment, prompt)))) = &foreign {
+        let carried = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&commitment.job, prompt);
+        assert_eq!(&carried, prompt, "ordinary PublicDA FP carries the hash-bound user prompt");
+        let quote = chain
+            .tc
+            .palw_fp_commitment_price_v1(
+                commitment.job.class_id,
+                carried.clone(),
+                commitment.job.prompt_tokens,
+                commitment.decode_tokens_executed,
+                commitment.work_leaves,
+                Some(chain.bonds[0].0),
+            )
+            .unwrap()
+            .price
+            .expect("the ordinary registry admits and prices this FP job");
+        let signer = kaspa_pq_validator_core::ValidatorKey::from_seed([0xB0; 32]);
+        let build = |fee| {
+            signer
+                .build_fp_commitment_tx(
+                    chain.network_domain,
+                    chain.config.params.palw_prompt_ids_form_v1(),
+                    commitment.clone(),
+                    carried.clone(),
+                    kaspa_pq_validator_core::FpCommitmentPriceV1::Chain { quanta: quote.quanta, pwu: quote.pwu },
+                    floats[0].0,
+                    &floats[0].1,
+                    fee,
+                )
+                .unwrap()
+        };
+        let probe = build(250_000);
+        let params = &chain.config.params;
+        let mass = kaspa_consensus_core::mass::MassCalculator::new(
+            params.mass_per_tx_byte,
+            params.mass_per_script_pub_key_byte,
+            params.mass_per_sig_op,
+            params.storage_mass_parameter,
+        );
+        let fee = relay_fee_for_compute_mass(mass.calc_non_contextual_masses(&probe).compute_mass).max(250_000);
+        let mut validated = MutableTransaction::from_tx(build(fee));
+        chain.tc.validate_mempool_transaction(&mut validated, &Default::default()).unwrap();
+        let tx = validated.tx.as_ref().clone();
+        let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment);
+        let block = chain.heartbeat(vec![tx.clone()]).await;
+        assert!(block.transactions.iter().any(|t| t.id() == tx.id()));
+        chain.heartbeat(vec![]).await;
+        let output = tx.outputs.last().unwrap();
+        floats[0] = (
+            TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
+            UtxoEntry::new(output.value, output.script_public_key.clone(), chain.daa(), false),
+        );
+        let view = chain.view(claim);
+        assert_eq!(
+            view.job_identity,
+            kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment),
+            "the normal block fold pins the accepted FP job"
+        );
+        eprintln!(
+            "[service-public] ordinary FP Job V{} admission: claim {claim}, {} quanta, {} pwu, fee {fee}",
+            commitment.job.version, quote.quanta, quote.pwu
+        );
+        claim
+    } else {
+        let (attempt, claim) = chain.build_attempt_roots(
+            0,
+            chain.config.params.target_time_per_block(),
+            vec![],
+            &|_| true,
+            true,
+            foreign.as_ref().map(|(outcome, _, _)| outcome),
+        );
+        chain.insert(attempt).await;
+        claim
+    };
     let slot = chain.view(claim).accepted_daa + chain.bundle.panel.anchor_delay();
     chain.advance(slot).await;
     let (anchor, _) = chain.build_attempt_drawn(7, chain.config.params.target_time_per_block(), vec![], &|_| true, true);
@@ -602,6 +829,10 @@ async fn fresh_public_service(case: PublicCase) {
     chain.import_fresh(&premine).await;
     assert!(matches!(chain.view(claim).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
     assert!(chain.tc.palw_fraud_filer_candidates_v1(bond).iter().any(|c| c.claim_id == claim && !c.seat));
+    if case.is_fp() {
+        let candidate = chain.tc.palw_fraud_filer_candidates_v1(bond).into_iter().find(|c| c.claim_id == claim).unwrap();
+        assert!(candidate.job.free_prompt, "public discovery identifies the ordinarily admitted FP lane");
+    }
     let producer_capital = chain.tc.palw_operator_da_standing_v1(chain.view(claim).producer).unwrap().collateral;
     let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))));
     let config = Arc::new(chain.config.clone());
@@ -694,7 +925,7 @@ async fn fresh_public_service(case: PublicCase) {
         demanded |= view.sessions.iter().any(|(accuser, _)| *accuser == bond);
         if demanded
             && answer_submitted.is_none()
-            && let Some((_, event)) = &foreign
+            && let Some((_, event, _)) = &foreign
         {
             use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_answer_object_v1};
             let object = palw_da_answer_object_v1(
@@ -802,7 +1033,7 @@ async fn fresh_public_service(case: PublicCase) {
             assert!(!disclosed.executor_refuted && !disclosed.da_defaulted, "carriage itself is neither a DA answer nor conviction");
             eprintln!("[service-public] authenticated J1 binding carried; DA answer remains refused until the verifier files");
         }
-        if case == PublicCase::ForeignJob {
+        if case != PublicCase::Withholding {
             assert!(!view.da_defaulted, "disclosed job fraud must reach exact conviction, not DA default");
             let offence =
                 kaspa_consensus_core::palw_offence_attribution_v1::palw_executor_refuted_offence_id_v1(&view.producer.0, &claim);
@@ -888,7 +1119,7 @@ async fn fresh_public_service(case: PublicCase) {
                     assert!(reserved && demanded);
                     assert!(chain.tc.palw_fraud_filer_status_v1(bond).unwrap().live.iter().all(|r| r.claim_id != claim));
                     eprintln!(
-                        "[service-public] exact foreign-job conviction plus all {} Valid signer sanctions/reveals at DAA {}, producer collateral {} -> {}, kind4 consumed {} additional amount {}",
+                        "[service-public] exact {case:?} conviction plus all {} Valid signer sanctions/reveals at DAA {}, producer collateral {} -> {}, kind4 consumed {} additional amount {}",
                         panels.len(),
                         chain.daa(),
                         producer_capital,
