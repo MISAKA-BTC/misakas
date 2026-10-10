@@ -748,3 +748,28 @@ unitの初回は22 PASS・1 FAIL。binding要求のfixtureがDA要求を認め�
 [初回build](evidence/pre-replay-input-build.log)、[unit phase修正build](evidence/pre-replay-input-build-phase-fix.log)、[最終fixture build](evidence/pre-replay-input-build-final.log)、[通常binary check](evidence/pre-replay-input-binary.log)、[初回unit失敗](evidence/pre-replay-input-filer-before-phase-fix.log)、[最終unit](evidence/pre-replay-input-filer-final.log)、[pruned honest](evidence/pre-replay-input-honest.log)、[pruned input非応答](evidence/pre-replay-input-withheld.log)、[通常PublicDA honest](evidence/pre-replay-input-public-honest.log)、[pruned identity](evidence/pre-replay-input-identity.log)、[pruned honest／非応答のbinary hash](evidence/pre-replay-input-test-before-phase-fix.sha256)、[unit phase修正後のhash](evidence/pre-replay-input-test-before-honest-public-fixture.sha256)、[最終fixtureのhash](evidence/pre-replay-input-test-final.sha256)。
 
 wire／rooted state／activation／shipping pinは変更していない。今回shipping harvestは再実行せず、前節の361 pinは以前のsourceの検証として保持する。context取得不能やfull ticket拒否でもbootstrapを保持する分岐はcodeとunit policyで確認したが、その資源条件を実serviceへ加えた試験はまだない。未解決はpre-fence永久消失jobの取得、最大inputの全chunk／session／carrier予算、initial/prefix-state、全familyの通常入口と算術・output・stateの終局、scope／hiding、最大負荷・包含期限、restart／reorg／network pruned import。input非応答はproducer DA defaultの検証で、全Panelの金銭制裁や全G14の完成を立証しない。ADR-0177 D7の登録モデル保有前提を維持する。
+
+
+## 保存metadataもないFP claimの公開binding追及（2026-10-11）
+
+元のFP commitment body/acceptance rowとrooted `public_fp_jobs` metadataの両方がないと、filerはPendingで再取得を待つだけだった。小さいbinding ticketでcaseを保持し、再計算を起動せず、既存のReserve→Event(0,0)→公開binding→direct proof又はDA defaultへ進める。後でjobを回復できた場合も、開始済み予約を実worker判定後に既存tag 155で解放する。
+
+ローカルの実行・capture枠又はseatのreplay枠が埋まっていても、FP metadataの確認を妨げない。busy時はaccepted commitment prefixだけをprojectionし、prompt/signature vectorをdecode/copyせず、backend生成・full ticket取得・追加worker起動より前に返す。実行中の同一candidateは選ばない。projectionは受理済みtransaction idとfull commitment hash/recorded job pinを照合するreader専用で、peer envelopeのadmissionやreplayに流用しない。単体のprojection試験ではhostile witness lengthを持つprefixも検査したが、そのenvelopeがchainで受理されることを意味しない。
+
+新しいactual-service fixtureは、LG14-A job保存fenceをDAA 1060に置き、その前のDAA 1032で通常FP V3 claimを受理する。通常family証明・graph登録・PQ署名・料金・全5名のValid receiptsと2,065 public blocksのfresh DB検証を通し、rooted metadataが**作成されなかった**ことをassertする。fence到達後に元body/acceptance rowをactual storeから削除する。metadata mapへの削除・jobやverdictの注入はない。immutable recorded job pinは残る。
+
+| 同一最終binaryの検証 | 結果 |
+| --- | --- |
+| filer/input unit | 26 PASS、3.37 s |
+| 元bodyと保存metadataの両方がないforeign job | 1 PASS、314.21 s、DAA 1283 |
+| 元bodyと保存metadataの両方がないbinding非応答 | 1 PASS、536.03 s、DAA 2282 |
+| 既存pruned input取得・実worker Honest・予約解放 | 1 PASS、299.59 s |
+| 通常node binary check | PASS、7.07 s |
+
+今回 **29 unique PASS**。以前の23/27/124件と重複加算しない。identity caseは公開Eventだけからproducer collateral `93906321001040 → 93906210966308`、全5名のValid signerの徴収・outsider commit/revealまで確認した。kind-4追加徴収0は先行kind-3の徴収済みを示す。binding非応答はproducerへの客観的DA defaultであり、算術convictionの証拠ではない。正常exit/joinとcallback owner解放も両caseでassertする。
+
+private target、default features、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で最終buildは25.93 s。productionを段階的に修正した初期/中間/最終buildのlogを残す。pruned honestの最初のexact filterは名前を誤り0件だったためPASS数へ含めず、正しい名前で1件を再実行した。通常PublicDA honestの追加回帰はこの記録時点で実行中。
+
+[最終build](evidence/unretained-job-build-metadata.log)、[初期build](evidence/unretained-job-build-initial.log)、[中間build](evidence/unretained-job-build-final.log)、[filer/input](evidence/unretained-job-filer.log)、[metadata無しidentity](evidence/unretained-job-identity.log)、[metadata無しbinding非応答](evidence/unretained-job-withheld.log)、[pruned honest回帰](evidence/unretained-job-pruned-honest-regression.log)、[0件filter](evidence/unretained-job-pruned-honest.log)、[node binary check](evidence/unretained-job-binary.log)、[test executable SHA256](evidence/unretained-job-test.sha256)。
+
+この区切りではwire/rooted state/activationを変更していない。shipping harvestを再実行しておらず、以前の361 pin検証を今回の検証へ読み替えない。**正しいbindingの後でjob本体が永久消失していればまだWaitとなる。** その認証済みjob-preimage取得courtは次の実装であり、今回の成功を完全なjob取得・算術追及の成功としない。busy selectorとmemory ticketのpolicyはunitで確認し、実serviceの枠飽和は未検証。最大input/session、初期/prefix state、全familyの正規入口と各終局、scope/hiding、回復・最大負荷・期限内包含が残る。ADR-0177 D7と有効化拒否を維持し、G14全域は未達。

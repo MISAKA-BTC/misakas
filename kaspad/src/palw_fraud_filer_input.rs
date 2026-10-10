@@ -15,6 +15,25 @@ pub(in crate::palw_panel) fn palw_fraud_filer_fp_payload_v1(
     candidate: &PalwFraudFilerCandidateV1,
     domain: Hash64,
 ) -> Result<PalwFpCommitmentTxPayloadV3, String> {
+    palw_fraud_filer_fp_payload_read_v1(consensus, candidate, domain, true)
+}
+
+/// The same accepted-job authentication without copying any prompt/signature witnesses.
+/// A busy replay lane uses only this bounded descriptor projection.
+pub(in crate::palw_panel) fn palw_fraud_filer_fp_metadata_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    candidate: &PalwFraudFilerCandidateV1,
+    domain: Hash64,
+) -> Result<PalwFpCommitmentTxPayloadV3, String> {
+    palw_fraud_filer_fp_payload_read_v1(consensus, candidate, domain, false)
+}
+
+fn palw_fraud_filer_fp_payload_read_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    candidate: &PalwFraudFilerCandidateV1,
+    domain: Hash64,
+    include_witnesses: bool,
+) -> Result<PalwFpCommitmentTxPayloadV3, String> {
     use kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1;
     let target = consensus.palw_fraud_filer_target_v1(candidate.claim_id).ok_or("the FP claim's recorded target is unavailable")?;
     if !candidate.job.free_prompt
@@ -63,9 +82,7 @@ pub(in crate::palw_panel) fn palw_fraud_filer_fp_payload_v1(
                 if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
                     continue;
                 }
-                let Ok(payload) = borsh::from_slice::<PalwFpCommitmentTxPayloadV3>(&tx.payload) else {
-                    continue;
-                };
+                let Ok(payload) = public_fp_payload_projection(&tx.payload, include_witnesses) else { continue };
                 if payload.claim_id() != candidate.claim_id {
                     continue;
                 }
@@ -103,6 +120,20 @@ pub(in crate::palw_panel) fn palw_fraud_filer_fp_payload_v1(
     };
     validate(&payload)?;
     Ok(payload)
+}
+
+/// Project only an already accepted envelope's commitment prefix. The accepted transaction id,
+/// whole commitment hash and recorded pin authenticate it; this projection is never an admission
+/// payload. No peer-declared prompt/signature vector is decoded by a metadata probe.
+fn public_fp_payload_projection(bytes: &[u8], include_witnesses: bool) -> Result<PalwFpCommitmentTxPayloadV3, std::io::Error> {
+    if include_witnesses {
+        return borsh::from_slice(bytes);
+    }
+    use borsh::BorshDeserialize;
+    let mut remaining = bytes;
+    let version = u16::deserialize(&mut remaining)?;
+    let commitment = kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3::deserialize(&mut remaining)?;
+    Ok(PalwFpCommitmentTxPayloadV3 { version, commitment, prompt_token_ids: vec![], signature: vec![] })
 }
 
 /// Read just the authenticated input prefix of a public FPM1/FPC1/FPA1. A capture/answer tail is checked for wire length but
@@ -325,6 +356,28 @@ pub(in crate::palw_panel) mod tests {
             prompt_token_ids: ids,
             signature: vec![],
         }
+    }
+
+    #[test]
+    fn accepted_metadata_projection_copies_no_input_or_signature_and_preserves_the_claim_pin() {
+        let p = payload();
+        let bytes = borsh::to_vec(&p).unwrap();
+        let metadata = public_fp_payload_projection(&bytes, false).unwrap();
+        assert_eq!(metadata.commitment, p.commitment);
+        assert_eq!(metadata.claim_id(), p.claim_id());
+        assert_eq!(
+            kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&metadata.commitment),
+            kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&p.commitment)
+        );
+        assert!(metadata.prompt_token_ids.is_empty() && metadata.signature.is_empty());
+        // Only the recorded accepted job is projected; a malformed witness is not decoded or
+        // silently turned into usable replay input. Full replay reads still refuse this wire.
+        let mut only_commitment = borsh::to_vec(&p.version).unwrap();
+        only_commitment.extend(borsh::to_vec(&p.commitment).unwrap());
+        only_commitment.extend(u32::MAX.to_le_bytes());
+        assert!(public_fp_payload_projection(&only_commitment, true).is_err());
+        assert_eq!(public_fp_payload_projection(&only_commitment, false).unwrap().commitment, p.commitment);
+        assert!(public_fp_payload_projection(&bytes[..2], false).is_err());
     }
 
     #[test]

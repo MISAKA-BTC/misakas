@@ -198,3 +198,6 @@ cargo test -p misaka-palw-kernel --test g14_review_regressions --locked -- --noc
 
 
 2026-10-11のpre-replay input follow-upでは、LG14-B内のuser inputを小さいticketで先に認証し、context／full replay ticket取得前から公開binding／PromptIdsのcourtへ進める。pruned PublicDAもexact jobの公開prefixを再取得でき、capture tailはコピー・実行しない。通常の完全な公開inputはworker起動前にbootstrapを外し、余分な予約を作らない。最終filer/input 23 unit、実serviceのpruned honest（実workerのHonest判定を直接assert）、input非応答、通常PublicDA honest／対象予約なし、pruned identity／producerと全5 Valid signer徴収・revealの4件がPASS（今回27 unique）。node binary checkもPASS。context取得不能／full ticket拒否の実service負荷試験、最大inputのsession予算、pre-fence永久消失job、initial/prefix-state、全family、scope／hiding、回復・最大負荷は引き続き未達。shipping validatorとADR-0177 D7を維持する。[実装・失敗・最終証拠](implementation.md#再計算前のユーザーinput-bootstrap2026-10-11)。
+
+
+2026-10-11のmetadata無しFP follow-upでは、job保存fence前に通常受理し、元body/acceptance rowも削除したfresh outsiderが、再計算前の公開bindingだけからidentity conviction/producerと全5 Valid signerの徴収・reveal（314.21 s）、又はbinding非応答DA default（536.03 s）まで1件ずつPASSした。filer/input 26件、既存pruned honest取得/replay/release回帰1件もPASS、今回29 unique。busy replay/capture/seat枠の外でaccepted descriptorだけを確認し、実行中の同一candidateを再probeせず、prompt/signature vectorsをコピーしない。正しいbinding後のjob本体取得は依然未達で、そのcourt実装へ進む。wire/activationはこの区切りで変更せず、shipping harvestは再実行していない。[証拠と限界](implementation.md#保存metadataもないfp-claimの公開binding追及2026-10-11)。

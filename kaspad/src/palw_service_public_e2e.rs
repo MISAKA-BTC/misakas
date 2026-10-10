@@ -92,7 +92,11 @@ fn card_payout_spk(card: usize) -> ScriptPublicKey {
 fn signed(card: usize, message: &[u8], context: &[u8]) -> Vec<u8> {
     libcrux_ml_dsa::ml_dsa_87::sign(&key(card).signing_key, message, context, [0x5A; 32]).unwrap().as_ref().to_vec()
 }
-fn fixture_config(fp_v4: bool, fp_input_bootstrap: bool) -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding>) {
+fn fixture_config(
+    fp_v4: bool,
+    fp_input_bootstrap: bool,
+    before_job_retention: bool,
+) -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding>) {
     let mut params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
     let PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else { unreachable!() };
     let mut row = 0;
@@ -137,7 +141,7 @@ fn fixture_config(fp_v4: bool, fp_input_bootstrap: bool) -> (Config, PalwConsens
         params.sync_palw_fp_decode_rules();
     }
     params.validate_palw_v2().expect("fixture keys and the ordinary decode-rules fence validate");
-    params.palw_legacy_public_filer_v1 = Some(ForkActivation::new(0));
+    params.palw_legacy_public_filer_v1 = Some(ForkActivation::new(if before_job_retention { 1060 } else { 0 }));
     params.sync_palw_legacy_public_filer_v1();
     if fp_input_bootstrap {
         // Reacquiring omitted/pruned IDs uses LG14-B's binding/PromptIds bootstrap.
@@ -536,6 +540,16 @@ async fn fresh_public_bond_service_replays_public_fp_input_without_opening_a_dis
     fresh_public_service(PublicCase::HonestFpV3Job).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_convicts_an_unretained_fp_job_after_its_history_is_pruned() {
+    fresh_public_service(PublicCase::UnretainedForeignFpV3Job).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_defaults_on_a_withheld_binding_without_fp_job_metadata() {
+    fresh_public_service(PublicCase::UnretainedWithheldFpV3Binding).await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PublicCase {
     Withholding,
@@ -546,6 +560,8 @@ enum PublicCase {
     PrunedHonestFpV3Job,
     PrunedWithheldFpV3Input,
     HonestFpV3Job,
+    UnretainedForeignFpV3Job,
+    UnretainedWithheldFpV3Binding,
 }
 
 impl PublicCase {
@@ -553,13 +569,19 @@ impl PublicCase {
         !matches!(self, Self::Withholding | Self::ForeignJob)
     }
     fn pruned_fp(self) -> bool {
-        matches!(self, Self::PrunedForeignFpV3Job | Self::PrunedHonestFpV3Job | Self::PrunedWithheldFpV3Input)
+        matches!(self, Self::PrunedForeignFpV3Job | Self::PrunedHonestFpV3Job | Self::PrunedWithheldFpV3Input) || self.unretained_fp()
+    }
+    fn unretained_fp(self) -> bool {
+        matches!(self, Self::UnretainedForeignFpV3Job | Self::UnretainedWithheldFpV3Binding)
     }
     fn identity_fault(self) -> bool {
-        matches!(self, Self::ForeignJob | Self::ForeignFpJob | Self::ForeignFpV3Job | Self::PrunedForeignFpV3Job)
+        matches!(
+            self,
+            Self::ForeignJob | Self::ForeignFpJob | Self::ForeignFpV3Job | Self::PrunedForeignFpV3Job | Self::UnretainedForeignFpV3Job
+        )
     }
     fn da_default(self) -> bool {
-        matches!(self, Self::Withholding | Self::PrunedWithheldFpV3Input)
+        matches!(self, Self::Withholding | Self::PrunedWithheldFpV3Input | Self::UnretainedWithheldFpV3Binding)
     }
 }
 
@@ -656,7 +678,7 @@ fn public_fp_job(
 async fn fresh_public_service(case: PublicCase) {
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
     let (config, bundle, premine, mut floats) =
-        fixture_config(case == PublicCase::ForeignFpJob, case.pruned_fp() || case == PublicCase::HonestFpV3Job);
+        fixture_config(case == PublicCase::ForeignFpJob, case.pruned_fp() || case == PublicCase::HonestFpV3Job, case.unretained_fp());
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
     if case.is_fp() {
@@ -871,13 +893,32 @@ async fn fresh_public_service(case: PublicCase) {
     assert!(matches!(chain.view(claim).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
     chain.import_fresh(&premine).await;
     assert!(matches!(chain.view(claim).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+    if case.unretained_fp() {
+        assert!(chain.daa() < 1060, "the job was admitted before retention activation");
+        assert!(chain.view(claim).public_fp_job.is_none(), "no metadata is injected or removed");
+        chain.advance(1060).await;
+        assert!(chain.config.params.palw_legacy_public_filer_active_at(chain.daa()));
+    }
     assert!(chain.tc.palw_fraud_filer_candidates_v1(bond).iter().any(|c| c.claim_id == claim && !c.seat));
     if case.is_fp() {
         let candidate = chain.tc.palw_fraud_filer_candidates_v1(bond).into_iter().find(|c| c.claim_id == claim).unwrap();
         assert!(candidate.job.free_prompt, "public discovery identifies the ordinarily admitted FP lane");
-        let public_job = chain.view(claim).public_fp_job.expect("the ordinary accepted extractor retained authenticated job metadata");
-        let stored: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3 = borsh::from_slice(&public_job).unwrap();
-        assert_eq!(kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&stored), claim);
+        let stored = chain
+            .view(claim)
+            .public_fp_job
+            .map(|wire| borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>(&wire).unwrap());
+        if case.unretained_fp() {
+            assert!(stored.is_none());
+            assert!(candidate.accepted_daa < 1060);
+            assert_ne!(chain.view(claim).job_identity, Hash64::default());
+        } else {
+            assert_eq!(
+                kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(
+                    stored.as_ref().expect("the ordinary accepted extractor retained authenticated job metadata")
+                ),
+                claim
+            );
+        }
         if case.pruned_fp() {
             use kaspa_consensus::model::stores::acceptance_data::AcceptanceDataStore;
             use kaspa_consensus::model::stores::block_transactions::BlockTransactionsStore;
@@ -900,11 +941,16 @@ async fn fresh_public_service(case: PublicCase) {
             assert!(chain.tc.get_block(commitment_block).is_err());
             assert!(chain.tc.get_block_acceptance_data(candidate.job.accepted_block).is_err());
             let reacquired =
-                super::palw_fraud_filer::palw_fraud_filer_fp_payload_v1(chain.tc.as_ref().as_ref(), &candidate, chain.network_domain)
-                    .expect("public rooted metadata starts prosecution despite missing original accepted block history");
-            assert_eq!(reacquired.commitment, stored);
-            assert!(reacquired.prompt_token_ids.is_empty());
-            assert!(reacquired.signature.is_empty());
+                super::palw_fraud_filer::palw_fraud_filer_fp_payload_v1(chain.tc.as_ref().as_ref(), &candidate, chain.network_domain);
+            if case.unretained_fp() {
+                assert!(reacquired.is_err(), "neither accepted history nor rooted metadata can supply the old FP body");
+                assert!(chain.view(claim).public_fp_job.is_none());
+            } else {
+                let reacquired = reacquired.expect("public rooted metadata survives missing original history");
+                assert_eq!(reacquired.commitment, stored.unwrap());
+                assert!(reacquired.prompt_token_ids.is_empty());
+                assert!(reacquired.signature.is_empty());
+            }
             assert!(
                 chain.tc.palw_fraud_filer_candidates_v1(bond).iter().any(|c| c.claim_id == claim && !c.seat),
                 "ordinary candidate discovery survives missing commitment history"
@@ -914,7 +960,8 @@ async fn fresh_public_service(case: PublicCase) {
                 "the input bootstrap's own dormant fence is active in this fixture"
             );
             eprintln!(
-                "[service-public] original FP commitment body and acceptance rows pruned; only rooted public job metadata remains"
+                "[service-public] original FP body/acceptance rows pruned; rooted job metadata present = {}",
+                !case.unretained_fp()
             );
         }
     }
@@ -1032,6 +1079,7 @@ async fn fresh_public_service(case: PublicCase) {
         reserved |= view.record.as_ref().is_some_and(|r| r.live.contains_key(&bond));
         demanded |= view.sessions.iter().any(|(accuser, _)| *accuser == bond);
         if demanded
+            && case != PublicCase::UnretainedWithheldFpV3Binding
             && answer_submitted.is_none()
             && let Some((_, event, _)) = &foreign
         {

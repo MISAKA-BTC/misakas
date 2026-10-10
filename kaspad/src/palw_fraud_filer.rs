@@ -42,7 +42,7 @@ use super::*;
 use std::collections::BTreeSet;
 #[path = "palw_fraud_filer_input.rs"]
 pub(super) mod input;
-pub(super) use input::{palw_fraud_filer_fp_input_v1, palw_fraud_filer_fp_payload_v1};
+pub(super) use input::{palw_fraud_filer_fp_input_v1, palw_fraud_filer_fp_metadata_v1, palw_fraud_filer_fp_payload_v1};
 
 use super::reporter_filer::{
     PalwConvictionDoorV1, PalwConvictionFilingV1, PalwFileOutcomeV1, PalwFilingOriginV1, PalwReporterFilerV1,
@@ -304,6 +304,9 @@ pub(super) struct PalwFraudFilerCaseV1 {
     pub(super) runs: u8,
     input_retry_at: u64,
     pub(super) fp_bootstrap: Option<PalwFraudFilerFpBootstrapV1>,
+    /// Binding-only pursuit when the original FP job is unavailable; held through a later replay.
+    fp_job_pending: bool,
+    _fp_job_reservation: Option<Arc<crate::palw_memory_ledger::PalwMemoryReservationV1>>,
     /// Keep a completed bootstrap in the book until its on-chain reservation is relinquished.
     release_pending: bool,
     awaiting_public: Option<(PalwLegacyProbeV1, u64)>,
@@ -327,6 +330,8 @@ impl PalwFraudFilerCaseV1 {
             runs: 0,
             input_retry_at: 0,
             fp_bootstrap: None,
+            fp_job_pending: false,
+            _fp_job_reservation: None,
             release_pending: false,
             awaiting_public: None,
             sent: None,
@@ -338,11 +343,11 @@ impl PalwFraudFilerCaseV1 {
     pub(super) fn pursued(&self) -> bool {
         self.release_pending
             || matches!(self.verdict, PalwFraudFilerVerdictV1::Mismatch(_))
-            || (matches!(self.verdict, PalwFraudFilerVerdictV1::Pending) && self.fp_bootstrap.is_some())
+            || (matches!(self.verdict, PalwFraudFilerVerdictV1::Pending) && (self.fp_bootstrap.is_some() || self.fp_job_pending))
     }
 
     pub(super) fn learn(&mut self, probe: PalwLegacyProbeV1, answer: &PalwDaBuiltAnswerV1) -> Result<(), String> {
-        if let Some(bootstrap) = self.fp_bootstrap.as_mut() {
+        if self.fp_bootstrap.is_some() || self.fp_job_pending {
             match (probe, answer) {
                 (PalwLegacyProbeV1::Binding { row: 0, tile: 0 }, PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event))) => {
                     if !kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(
@@ -364,7 +369,10 @@ impl PalwFraudFilerCaseV1 {
                     if self.binding.as_ref() != Some(&answer.0) {
                         return Err("bootstrap input carries another binding".into());
                     }
-                    bootstrap.learn(&answer.0, unit, &answer.1)?;
+                    self.fp_bootstrap
+                        .as_mut()
+                        .ok_or("bootstrap still has no authenticated FP job/input")?
+                        .learn(&answer.0, unit, &answer.1)?;
                     self.legacy_wanted = None;
                     self.input_retry_at = 0;
                     return Ok(());
@@ -594,17 +602,20 @@ impl PalwFraudFilerBookV1 {
         self.cases.values().filter(|case| matches!(case.verdict, PalwFraudFilerVerdictV1::Mismatch(_))).count()
     }
 
-    /// **The next claim to replay**: none while one runs or the held runs are at their cap; else the oldest pending case this bond
-    /// files as a non-seat (not a seat of its panel), oldest acceptance first.
+    /// The next replay or FP metadata probe. A busy replay lane may probe a pending FP body,
+    /// so its binding/direct proof is not held behind captures; it never starts another execution.
     #[cfg(test)]
     pub(super) fn next_replay(&self) -> Option<Hash64> {
         self.next_replay_at(0)
     }
 
+    #[cfg(test)]
     fn next_replay_at(&self, current_daa: u64) -> Option<Hash64> {
-        if self.running.is_some() || self.held_runs() >= PALW_FRAUD_FILER_HELD_RUNS_V1 {
-            return None;
-        }
+        self.next_probe_at(current_daa, true)
+    }
+
+    fn next_probe_at(&self, current_daa: u64, replay_room: bool) -> Option<Hash64> {
+        let busy = !replay_room || self.running.is_some() || self.held_runs() >= PALW_FRAUD_FILER_HELD_RUNS_V1;
         self.cases
             .values()
             .filter(|case| {
@@ -614,6 +625,8 @@ impl PalwFraudFilerBookV1 {
                             || input.payload.commitment.job.prompt_mode
                                 == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL
                     })
+                    && self.running.as_ref().is_none_or(|running| running.candidate != case.candidate)
+                    && (!busy || (case.candidate.job.free_prompt && case.fp_bootstrap.is_none()))
                     && !case.candidate.seat
                     && current_daa >= case.input_retry_at
             })
@@ -649,9 +662,11 @@ impl PalwFraudFilerBookV1 {
     pub(super) fn judge(&mut self, claim: Hash64, result: Result<PalwFraudFilerRunV1, String>) -> Option<&PalwFraudFilerVerdictV1> {
         let case = self.cases.get_mut(&claim)?;
         case.runs = case.runs.saturating_add(1);
-        let bootstrapped = case.fp_bootstrap.is_some();
+        let bootstrapped = case.fp_bootstrap.is_some() || case.fp_job_pending;
         if result.is_ok() {
             case.fp_bootstrap = None;
+            case.fp_job_pending = false;
+            case._fp_job_reservation = None;
         }
         case.verdict = match result {
             Ok(run)
@@ -669,6 +684,8 @@ impl PalwFraudFilerBookV1 {
             bootstrapped && matches!(case.verdict, PalwFraudFilerVerdictV1::Honest | PalwFraudFilerVerdictV1::Unjudged(_));
         if case.release_pending {
             case.fp_bootstrap = None;
+            case.fp_job_pending = false;
+            case._fp_job_reservation = None;
         }
         if case.pursued() {
             // Earlier walks did not collect answers for this case while it was pending, even if its acceptance is newer than
@@ -769,6 +786,8 @@ impl PalwFraudFilerBookV1 {
             case.verdict = verdict;
             case.release_pending = false;
             case.fp_bootstrap = None;
+            case.fp_job_pending = false;
+            case._fp_job_reservation = None;
         }
         self.answers.retain(|(held, _), _| held != claim);
         if let Some(case) = self.cases.get_mut(claim) {
@@ -838,19 +857,19 @@ pub(super) fn palw_fraud_filer_bootstrap_step_v1(
     if facts.session_open || !facts.accusable {
         return PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait);
     }
-    let Some(input) = case.fp_bootstrap.as_ref() else {
-        return PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait);
-    };
-    if (input.ready() && case.binding.is_some())
-        || (case.binding.is_some()
-            && input.payload.commitment.job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL)
-    {
-        return PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait);
-    }
-    let probe = if case.binding.is_none() {
+    let probe = if case.binding.is_none() && (case.fp_bootstrap.is_some() || case.fp_job_pending) {
         PalwLegacyProbeV1::Binding { row: 0, tile: 0 }
-    } else {
+    } else if let Some(input) = case.fp_bootstrap.as_ref() {
+        if input.ready()
+            || input.payload.commitment.job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL
+        {
+            return PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait);
+        }
         PalwLegacyProbeV1::HeldNode { unit: PalwLegacyHeldUnitV2::PromptIds { chunk: input.chunk } }
+    } else {
+        // Direct proofs can use this authenticated binding without the original job. A correct
+        // binding still needs a separate authenticated job-preimage reacquisition route.
+        return PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait);
     };
     let answered = view.is_some_and(|v| v.unit_was_answered_v1(&probe.unit()));
     match (answered, read(&probe.unit())) {
@@ -1251,7 +1270,7 @@ impl PalwPanelService {
                 _ => {}
             }
         }
-        if seat_replay_room && let Some(claim) = book.next_replay_at(current_daa) {
+        if let Some(claim) = book.next_probe_at(current_daa, seat_replay_room) {
             self.fraud_filer_start_replay_v1(
                 session,
                 book,
@@ -1259,6 +1278,7 @@ impl PalwPanelService {
                 network_domain,
                 current_daa,
                 public_materials.get(&claim).map(Vec::as_slice).unwrap_or(&[]),
+                seat_replay_room,
             )
             .await;
         }
@@ -1469,7 +1489,7 @@ impl PalwPanelService {
                 let Some(case) = book.cases.get(&claim) else { break };
                 let legacy = params.palw_legacy_held_da_v2_active_at(current_daa)
                     && matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if run.legacy.is_some());
-                let step = if case.fp_bootstrap.is_some() {
+                let step = if case.fp_bootstrap.is_some() || case.fp_job_pending {
                     palw_fraud_filer_bootstrap_step_v1(role, view.as_ref(), &bond_key, reservable, case, |unit| {
                         book.answers.contains_key(&(claim, *unit))
                     })
@@ -1724,6 +1744,30 @@ impl PalwPanelService {
         }
     }
 
+    fn fraud_filer_hold_missing_fp_job_v1(&self, book: &mut PalwFraudFilerBookV1, claim: Hash64) -> bool {
+        let Some(case) = book.cases.get_mut(&claim) else { return false };
+        if case.fp_job_pending {
+            return true;
+        }
+        let Ok(ticket) = crate::palw_memory_ledger::host_ledger_v1().reserve(
+            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                role: "public-fp-job-binding",
+                class_id: case.candidate.job.class_id,
+                job: claim,
+            },
+            2 * self.config.court.max_close_bytes(),
+        ) else {
+            return false;
+        };
+        case.fp_job_pending = true;
+        case._fp_job_reservation = Some(Arc::new(ticket));
+        book.walked_from = None;
+        book.walked_to = None;
+        book.walk = None;
+        book.read_at = None;
+        true
+    }
+
     /// Retain the authenticated public FP job under a small input ticket. In particular, canonical
     /// input proofs must be reachable before a full replay ticket or a backend ceiling context exists.
     fn fraud_filer_hold_fp_input_v1(
@@ -1784,6 +1828,7 @@ impl PalwPanelService {
         network_domain: Hash64,
         current_daa: u64,
         public_material: &[Vec<u8>],
+        replay_room: bool,
     ) {
         let Some(case) = book.cases.get(&claim) else { return };
         let candidate = case.candidate.clone();
@@ -1793,31 +1838,62 @@ impl PalwPanelService {
             debug!("[{PALW_PANEL}] claim {claim}: the fraud filer does not judge it — {why}");
             book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(why));
         };
-        let Some(artifact_root) = job.artifact_root else { return unjudged(book, "its class is gone from the registry".into()) };
-        let mut backend = match self.resolve_backend(session, job.class_id, artifact_root) {
-            Ok(backend) => backend,
-            Err(why) => return unjudged(book, format!("its class does not resolve on this host ({why})")),
-        };
-        let prompt_form = self.class_prompt_ids_form(job.class_id);
-        // The transaction and recorded claim authenticate the FP job. Missing history/input remains pending and spends no run.
-        let mut prepared_only = false;
-        let (ctx, mut prompt, fp_payload) = if job.free_prompt {
+        let metadata_only = !replay_room || book.running.is_some() || book.held_runs() >= PALW_FRAUD_FILER_HELD_RUNS_V1;
+        let fp_payload = if job.free_prompt {
             let snapshot = candidate.clone();
             let payload = if let Some(input) = book.cases.get(&claim).and_then(|c| c.fp_bootstrap.as_ref()) {
                 Ok(input.payload.as_ref().clone())
             } else {
-                session.clone().spawn_blocking(move |c| palw_fraud_filer_fp_payload_v1(c, &snapshot, network_domain)).await
+                session
+                    .clone()
+                    .spawn_blocking(move |c| {
+                        if metadata_only {
+                            palw_fraud_filer_fp_metadata_v1(c, &snapshot, network_domain)
+                        } else {
+                            palw_fraud_filer_fp_payload_v1(c, &snapshot, network_domain)
+                        }
+                    })
+                    .await
             };
-            let payload = match payload {
-                Ok(payload) => payload,
+            match payload {
+                Ok(payload) => Some(payload),
                 Err(why) => {
+                    // Binding/job/shape proofs and the existing binding DA obligation do not
+                    // require the accepted FP body, or an executable backend context.
+                    self.fraud_filer_hold_missing_fp_job_v1(book, claim);
                     if let Some(case) = book.cases.get_mut(&claim) {
                         case.input_retry_at = current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
                     }
-                    debug!("[{PALW_PANEL}] claim {claim}: the fraud filer's public FP commitment waits: {why}");
+                    debug!("[{PALW_PANEL}] claim {claim}: public FP job unavailable; pursuing its binding: {why}");
                     return;
                 }
-            };
+            }
+        } else {
+            None
+        };
+        // A probe selected while a replay/capture occupies the lane must not instantiate a
+        // backend or reserve/start an extra replay. Missing-body binding pursuits were held above.
+        if metadata_only {
+            book.cases.get_mut(&claim).expect("held above").input_retry_at =
+                current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+            return;
+        }
+        let Some(artifact_root) = job.artifact_root else { return unjudged(book, "its class is gone from the registry".into()) };
+        let mut backend = match self.resolve_backend(session, job.class_id, artifact_root) {
+            Ok(backend) => backend,
+            Err(why) => {
+                if book.cases.get(&claim).is_some_and(|case| case.fp_job_pending) {
+                    book.cases.get_mut(&claim).expect("held above").input_retry_at =
+                        current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+                    debug!("[{PALW_PANEL}] claim {claim}: model resolution waits while public binding pursuit remains live: {why}");
+                    return;
+                }
+                return unjudged(book, format!("its class does not resolve on this host ({why})"));
+            }
+        };
+        let prompt_form = self.class_prompt_ids_form(job.class_id);
+        let mut prepared_only = false;
+        let (ctx, mut prompt, fp_payload) = if let Some(payload) = fp_payload {
             let fp_job = &payload.commitment.job;
             let canonical = fp_job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL;
             let user = fp_job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER;
@@ -1859,7 +1935,7 @@ impl PalwPanelService {
                     // A fresh complete public input should not open an unnecessary reservation
                     // while the ordinary replay runs. An existing court bootstrap stays held
                     // until its replay verdict releases or prosecutes its live reservation.
-                    prepared_only = !held;
+                    prepared_only = !held && !book.cases.get(&claim).is_some_and(|case| case.fp_job_pending);
                 }
             }
             // Budget the declared ceiling, even if the producer claims an early stop. Only the verifier's run decides its context.
@@ -2143,6 +2219,101 @@ pub(super) mod tests {
             book.refresh(vec![new], 301);
             assert!(!book.cases[&c.claim_id].release_pending, "old replay cannot release a different branch's reservation");
         }
+    }
+
+    #[tokio::test]
+    async fn a_missing_fp_body_can_be_probed_while_the_local_capture_lane_is_full() {
+        let mut book = PalwFraudFilerBookV1::default();
+        let first = candidate(1, 100, false);
+        let second = candidate(2, 101, false);
+        let mut fp = candidate(3, 102, false);
+        fp.job.free_prompt = true;
+        let attempt = candidate(4, 103, false);
+        book.refresh(vec![first.clone(), second.clone(), fp.clone(), attempt.clone()], 100);
+        book.judge(first.claim_id, Ok(run(Hash64::default(), Hash64::default())));
+        book.judge(second.claim_id, Ok(run(Hash64::default(), Hash64::default())));
+        assert_eq!(book.held_runs(), PALW_FRAUD_FILER_HELD_RUNS_V1);
+        assert_eq!(book.next_replay_at(100), Some(fp.claim_id), "a public binding proof does not need a capture slot");
+        book.cases.get_mut(&fp.claim_id).unwrap().input_retry_at = 130;
+        assert_eq!(book.next_replay_at(129), None, "busy probes neither bypass their retry nor execute the pending attempt");
+        assert_eq!(book.next_replay_at(130), Some(fp.claim_id));
+        assert_eq!(book.cases[&fp.claim_id].runs, 0);
+        book.settle(&first.claim_id, PalwFraudFilerVerdictV1::Unjudged("done".into()));
+        let mut other_fp = candidate(5, 104, false);
+        other_fp.job.free_prompt = true;
+        book.refresh(vec![first, second, fp.clone(), attempt, other_fp.clone()], 130);
+        book.running =
+            Some(PalwFraudFilerReplayV1 { candidate: fp.clone(), handle: tokio::spawn(async { Err("unused worker result".into()) }) });
+        assert_eq!(
+            book.next_probe_at(130, false),
+            Some(other_fp.claim_id),
+            "seat pressure cannot stop metadata probing, and the running acceptance is not probed twice"
+        );
+        assert!(book.running.take().unwrap().handle.await.unwrap().is_err());
+    }
+
+    #[test]
+    fn binding_only_fp_bootstrap_authenticates_without_a_replay_and_keeps_its_ticket_until_settlement() {
+        use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1, PalwMemoryReservationKeyV1};
+        let payload = input::tests::payload();
+        let backend = crate::palw_panel::seat_s_tests::floor_backend();
+        let executed = backend
+            .execute_free_prompt(&payload.commitment.job, &payload.prompt_token_ids.iter().map(|id| *id as usize).collect::<Vec<_>>())
+            .unwrap();
+        let event = backend.disclose_trace_event(&executed.outcome.material, 0, 0).unwrap();
+        let mut c = candidate(3, 300, false);
+        c.job.free_prompt = true;
+        c.job.execution_root = payload.commitment.execution_root;
+        c.job.trace_root = payload.commitment.trace_root;
+        c.job.output_root = payload.commitment.output_root;
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(4096), || None);
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![c.clone()], 300);
+        let case = book.cases.get_mut(&c.claim_id).unwrap();
+        case.fp_job_pending = true;
+        case._fp_job_reservation = Some(Arc::new(
+            ledger
+                .reserve(PalwMemoryReservationKeyV1 { role: "binding-test", class_id: c.job.class_id, job: c.claim_id }, 2048)
+                .unwrap(),
+        ));
+        assert!(case.pursued());
+        assert!(case.fp_bootstrap.is_none());
+        let mut v = view(3, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 300 });
+        v.execution_root = c.job.execution_root;
+        v.trace_root = c.job.trace_root;
+        let me = bond(1);
+        let mut record = PalwDisputeClaimV1::default();
+        record.live.insert(me, PalwDisputeReservationRowV1 { reserved_daa: 300, deposit: 1, sessions_opened: 0 });
+        v.record = Some(record);
+        let probe = PalwLegacyProbeV1::Binding { row: 0, tile: 0 };
+        assert_eq!(
+            palw_fraud_filer_bootstrap_step_v1(PalwFilerRoleV1::PublicBond, Some(&v), &me, true, case, |_| false),
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(probe))
+        );
+        let mut bad = event.clone();
+        match &mut bad {
+            kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat { binding, .. }
+            | kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Tiled { binding, .. }
+            | kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::OutOfRange { binding } => {
+                binding.job_context.job_id = Hash64::default()
+            }
+        }
+        assert!(case.learn(probe, &PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(bad))).is_err());
+        assert!(case.binding.is_none());
+        case.learn(probe, &PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event))).unwrap();
+        assert_eq!(case.runs, 0);
+        assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::Pending));
+        assert_eq!(
+            palw_fraud_filer_bootstrap_step_v1(PalwFilerRoleV1::PublicBond, Some(&v), &me, true, case, |_| false),
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait),
+            "a correct binding alone cannot invent the missing full job"
+        );
+        let mut own = run(c.job.execution_root, c.job.trace_root);
+        own.output_root = c.job.output_root;
+        assert!(matches!(book.judge(c.claim_id, Ok(own)), Some(PalwFraudFilerVerdictV1::Honest)));
+        assert!(book.cases[&c.claim_id].release_pending, "a job later recovered must still release its earlier binding reservation");
+        assert!(!book.cases[&c.claim_id].fp_job_pending);
+        assert_eq!(ledger.reserved_bytes(), 0);
     }
 
     /// A run whose roots are `execution_root` / `trace_root`, opening no range (the tests never read one).
