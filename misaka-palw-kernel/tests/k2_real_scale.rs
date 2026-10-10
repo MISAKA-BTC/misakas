@@ -1020,3 +1020,153 @@ fn k2s_every_tile_and_part_constant_fits_the_node_carrier() {
     assert!(PROMPT_TILE_IDS_V1 * 4 + 64 * 16 < misaka_palw_kernel::route::MAX_POST_PROMPT_TILE_BYTES_V1);
     assert!(misaka_palw_kernel::route::MAX_POST_PROMPT_TILE_BYTES_V1 < CARRIER);
 }
+
+fn conformance_world() -> W {
+    let fx = wide128_v1(73);
+    let mut w = W::new(fx.program, fx.params, 32);
+    w.l =
+        KernelLedgerV1::genesis(w.l.policy, w.l.schedule.clone(), w.l.known.clone()).unwrap().with_opv_policy(opv_example()).unwrap();
+    w.l.sync_bond(PROD, 1_000_000);
+    w.l.sync_bond(ANY, 1_000_000);
+    w.l.attest_artifact(w.pc.root());
+    w.l.begin_block(1).unwrap();
+    w.daa = 1;
+    w
+}
+
+fn candidate(w: &W, max_positions: u32) -> O {
+    let bytes = w.program.encode();
+    O::RegisterConformanceClass {
+        descriptor: w.d.digest(),
+        program_bytes: bytes.clone(),
+        plan: plan_for_tir_program_v1(&w.d, &w.program, program_root_v1(&bytes), max_positions).unwrap(),
+        param_commitments: w.pc.clone(),
+    }
+}
+
+#[test]
+fn conformance_candidate_is_rooted_replayable_and_grants_no_execution_rights() {
+    use misaka_palw_kernel::rows::{TABLE_CONFORMANCE_CLASSES_V1, config_root_of, diff_rows, root_of_rows};
+    let mut w = conformance_world();
+    let o = candidate(&w, 32);
+    assert_eq!(o.encode()[..2], [1, 21]);
+    assert_eq!(O::decode(&o.encode()).unwrap(), o);
+    let before = w.l.to_rows();
+    let root = w.l.root();
+    let bonds = w.l.bonds.clone();
+    let ev = w.l.apply_object(&o, &AuthV1 { signer_bond: PROD }).unwrap();
+    assert_eq!(ev, vec![E::ConformanceClassRegistered { class: w.class }]);
+    assert!(w.l.conformance_classes.contains_key(&w.class));
+    assert!(w.l.classes.is_empty() && w.l.opv.classes.is_empty() && w.l.opv.admitted.is_empty());
+    assert_eq!(w.l.bonds, bonds, "no reward, reservation or collateral transfer");
+    assert!(w.l.claims.is_empty() && w.l.claim_beacon_salts.is_empty() && w.l.seals.is_empty());
+    assert_ne!(root, w.l.root());
+    let mut empty = w.l.clone();
+    empty.conformance_classes.clear();
+    assert_eq!(empty.root(), root, "empty table preserves the historical root grammar");
+    assert!(w.l.budget_used().court_work > 0, "candidate shares admission work, not only the run limit");
+    let rows = w.l.to_rows();
+    assert!(rows.keys().any(|(t, _)| *t == TABLE_CONFORMANCE_CLASSES_V1));
+    assert_eq!(
+        root_of_rows(&w.l.policy, config_root_of(&w.l.schedule, &w.l.known), w.l.scalars(), w.l.opv_policy(), &rows),
+        w.l.root()
+    );
+    let restored = KernelLedgerV1::from_rows(&w.l, w.l.scalars(), &rows).unwrap();
+    assert_eq!(restored.root(), w.l.root());
+    assert_eq!(restored.to_rows(), rows);
+    let journal = diff_rows(&before, &rows);
+    let mut rolled = rows.clone();
+    for (k, old, _) in &journal {
+        match old {
+            Some(v) => {
+                rolled.insert(k.clone(), v.clone());
+            }
+            None => {
+                rolled.remove(k);
+            }
+        }
+    }
+    assert_eq!(rolled, before);
+    for (k, _, new) in &journal {
+        match new {
+            Some(v) => {
+                rolled.insert(k.clone(), v.clone());
+            }
+            None => {
+                rolled.remove(k);
+            }
+        }
+    }
+    assert_eq!(rolled, rows);
+    let mut wrong_key = rows.clone();
+    let value = wrong_key.remove(&(TABLE_CONFORMANCE_CLASSES_V1, borsh::to_vec(&w.class).unwrap())).unwrap();
+    wrong_key.insert((TABLE_CONFORMANCE_CLASSES_V1, borsh::to_vec(&[0xCCu8; 64]).unwrap()), value);
+    assert!(KernelLedgerV1::from_rows(&w.l, w.l.scalars(), &wrong_key).is_err());
+    let job = KernelJobV1 {
+        class_binding_id: w.class,
+        prompt: vec![1, 3, 5],
+        max_new_tokens: 1,
+        decode: DecodeRuleV1::Greedy,
+        nonce: [1; 64],
+    };
+    assert!(w.l.apply_object(&O::PostJob { job }, &AuthV1 { signer_bond: ANY }).is_err());
+    let tiled = TiledJobV1 {
+        class_binding_id: w.class,
+        prompt_len: 3,
+        prompt_root: prompt_root_of_ids_v1(&[1, 3, 5]),
+        max_new_tokens: 1,
+        decode: DecodeRuleV1::Greedy,
+        nonce: [2; 64],
+    };
+    assert!(w.l.apply_object(&O::PostTiledJob { job: tiled }, &AuthV1 { signer_bond: ANY }).is_err());
+    let registration = w.register(OPV);
+    let LedgerTxV1::Object { object, auth } = registration else { unreachable!() };
+    assert!(w.l.apply_object(&object, &auth).is_err(), "ordinary registration still needs eligibility");
+    assert_eq!(w.l.root(), restored.root(), "refusals changed no rooted state");
+    w.l.begin_block(2).unwrap();
+    w.l.admit_optimistic_class(w.class).unwrap(); // consumer-derived eligibility is tested on the actual node separately.
+    assert_eq!(w.l.apply_object(&object, &auth).unwrap(), vec![E::ClassRegistered { class: w.class }]);
+    assert!(w.l.conformance_classes.is_empty());
+    assert!(w.l.classes.contains_key(&w.class) && w.l.opv.classes.contains(&w.class));
+    w.l.opv_invariants().unwrap();
+}
+
+#[test]
+fn conformance_candidate_is_limited_by_bond_and_shared_block_work_and_refuses_bad_metadata() {
+    use misaka_palw_kernel::ledger::{BlockBudgetV1, MAX_CONFORMANCE_CLASSES_PER_BOND_V1};
+    let mut w = conformance_world();
+    for i in 1..=MAX_CONFORMANCE_CLASSES_PER_BOND_V1 {
+        w.l.begin_block(i as u64).unwrap();
+        w.l.apply_object(&candidate(&w, i as u32), &AuthV1 { signer_bond: PROD }).unwrap();
+    }
+    w.l = KernelLedgerV1::from_rows(&w.l, w.l.scalars(), &w.l.to_rows()).unwrap();
+    w.l.begin_block(9).unwrap();
+    let root = w.l.root();
+    let err = w.l.apply_object(&candidate(&w, 9), &AuthV1 { signer_bond: PROD }).unwrap_err();
+    assert!(err.why.contains("candidate limit"));
+    assert_eq!(w.l.root(), root);
+    w.l.apply_object(&candidate(&w, 9), &AuthV1 { signer_bond: ANY }).unwrap();
+    let mut w = conformance_world();
+    w.l.restore_budget(BlockBudgetV1 { adjudications: 0, court_work: w.l.policy.admission_work_limit_v1() });
+    let root = w.l.root();
+    let err = w.l.apply_object(&candidate(&w, 32), &AuthV1 { signer_bond: PROD }).unwrap_err();
+    assert_eq!(err.kind, misaka_palw_kernel::route::RefusalKindV1::OverBudget);
+    assert_eq!(w.l.root(), root);
+    assert!(w.l.conformance_classes.is_empty());
+    for kind in 0..5 {
+        w.l.begin_block(2 + kind).unwrap();
+        let mut o = candidate(&w, 32);
+        let O::RegisterConformanceClass { descriptor, program_bytes, plan, param_commitments } = &mut o else { unreachable!() };
+        match kind {
+            0 => *descriptor = [0; 64],
+            1 => program_bytes.push(0),
+            2 => plan.max_positions = 0,
+            3 => param_commitments.by_instance.clear(),
+            _ => w.l.attested_artifacts.clear(),
+        }
+        let root = w.l.root();
+        assert!(w.l.apply_object(&o, &AuthV1 { signer_bond: PROD }).is_err());
+        assert_eq!(w.l.root(), root);
+        assert!(w.l.conformance_classes.is_empty());
+    }
+}

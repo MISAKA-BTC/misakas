@@ -125,6 +125,7 @@ impl KernelRowsSnapshotV1 {
         let kernel = ledger
             .classes
             .get(&binding.kernel_class.as_bytes())
+            .or_else(|| ledger.conformance_classes.get(&binding.kernel_class.as_bytes()).map(|(_, row)| row))
             .ok_or_else(|| Refusal::new("NO_KERNEL_CLASS", "the bound program is absent from this snapshot"))?;
         if attempt.commitment.candidate_id != class.as_bytes()
             || attempt.commitment.program_root != kernel.plan.program_root

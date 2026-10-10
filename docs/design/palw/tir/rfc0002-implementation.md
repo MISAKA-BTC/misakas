@@ -1124,3 +1124,88 @@ The confirmed terminal failed node compiler's cache was removed even though its 
 ended in `-working`; the process/session was already terminal, and no live compiler cache was
 removed. The preserved baseline executable and final logs distinguish code/profile scopes.
 No model weights, private trace captures or compiled executables were committed.
+
+## 2026-10-11 — conformance-only OPV metadata, with no premature execution rights
+
+The registration/onboarding metadata cycle is resolved by a distinct public object,
+`RegisterConformanceClass` (outer 110, inner 21, route wire version 1). Its checked metadata
+lives in ledger table 28 as `(preparing bond, ClassRecordV1)` under the eventual canonical OPV
+class id. It uses the same class validation as ordinary registration, omitting only the
+eligibility prerequisite that depends on acquiring conformance. The existing route and
+`palw_panel_free_v1` fences still apply; neither network activation validation nor GAP-70's
+sampled release-reward refusal was changed.
+
+Preparation validates canonical program bytes, exact plan, active known descriptor, ranges,
+parameter-instance coverage, independently attested root, prosecution bounds, court budget,
+OPV economic/resource envelope and node carrier fit. It spends an ordinary adjudication run
+and the derived admission work under the same block budget as claims, without borrowing the
+proof reserve. Each preparing bond can hold at most eight candidates. A derived bounded owner
+index avoids scanning all candidates for that actor's cap; reconstruction rebuilds that index
+and refuses wrong class keys, absent policy/bond, over-cap ownership or duplicate execution
+registrations. This is a bounded preparation catalog, not evidence that every remaining
+network-wide storage, capital and honest-liveness requirement is complete.
+
+The class-collection and OPV execution sets are unchanged until promotion. `PostJob`,
+`PostTiledJob`, seals/claims, escrow, rewards, Final facts/weight and beacon sources cannot use
+candidate metadata as an execution registration. Onboarding's metadata reads and derived
+eligibility can resolve a candidate, retaining the exact V2 program/artifact/plan binding and
+all conformance, clocks, policy and resource checks. The SDK's authenticated paged snapshot
+reconstruction accepts the same metadata for conformance verification, without asserting
+that it grants execution eligibility. Ordinary `RegisterClassV2` must still pass derived
+eligibility before promoting the identical class id and removing the candidate. Promotion
+can be signed by another bonded actor: preparation does not assign model ownership or an
+operator/registration priority. Kernel-ledger withdrawal removes that actor's candidates.
+
+Table 28 adds a versioned root extension only while nonempty. The previous root, including
+OPV, segmented, typed, beacon and verifier-pay extensions, remains byte-identical when there
+are no candidate rows. The table's collection domain and conditional extension domain are
+recorded in RFC §14.12. Older route discriminants and registration records are unchanged.
+
+Verification includes actual signed node carriers, matured real artifact-binding rows,
+refused premature registration/job, complete conformance judged in the fold, a fresh IBD
+node's public paged RPC snapshot plus its own independently authenticated artifact, rejection
+of another artifact, promotion by a different actor, honest Final, one-time coinbase
+redemption, and independent replay. The node fixture is **small, synthetic and stateless v2**,
+with dormant fences explicitly armed through the existing test configuration seam. It uses
+**no OPV eligibility or parameter-attestation hook**. Segmented v4 preparation, no ordinary or
+tiled job rights, per-bond/shared-block caps and row/root replay are additionally exercised
+at the kernel level. This is not a full real-checkpoint onboarding or a large/stateful
+conformance result. A stateful candidate still cannot use the small complete-check policy;
+sampled conformance still cannot authorize release rewards.
+
+Final verification: **187 distinct tests passed**: 97 kernel library tests (one existing
+manual hash benchmark ignored), 22 route/state tests, 28 OPV tests, 15 segmented ledger tests,
+3 row tests, 13 node onboarding tests, 2 fence-table tests and 7 SDK snapshot tests. Repeats
+are not counted twice. The corrected final suites all exited successfully.
+
+Final results and exact source digests are in
+[`rfc02-conformance-candidate-verdict.json`](evidence/rfc02-conformance-candidate-verdict.json).
+The full RFC02 goal remains open: large/stateful release conformance and actual-weight
+onboarding; original-checkpoint/full-task/full-context fidelity; all required common features
+and independent G14 paths; complete shared resource/capital accounting and honest liveness;
+and shipping activation under the unreduced gates remain required.
+
+Reproduction:
+
+```sh
+cargo test --locked -p misaka-palw-kernel --lib \
+  --test k2_real_scale --test k2_rows --test k2_ledger_route --test k2_opv
+cargo test --locked -p kaspa-consensus --lib \
+  --config 'profile.dev.package.kaspa-consensus.incremental=false' \
+  --config 'profile.dev.package.kaspa-consensus-core.incremental=false' \
+  opv_bootstrap -- --nocapture
+cargo test --locked -p kaspa-consensus-core --lib \
+  --config 'profile.dev.package.kaspa-consensus-core.incremental=false' \
+  --config 'profile.dev.package.kaspa-consensus-core.debug=0' \
+  every_kernel_inner_kind_has_exactly_one_row -- --nocapture
+cargo test --locked -p misaka-palw-sdk --test onboarding_snapshot \
+  --config 'profile.dev.package.kaspa-consensus-core.incremental=false'
+```
+
+The core fence tests keep the normal optimization and debug-assertion settings but omit
+package debug symbols to reduce local build output. Node tests retain their normal debug
+symbols. Compilation failures from local ENOSPC were recovered without changing source
+limits or activation terms. An old unused-tag assertion was updated for inner tag 21. Cache
+cleanup also removed two transitive archives needed at node linking; those were regenerated
+before accepting the final verification. No other task's checkout/cache, model weights or
+private traces were removed or committed.

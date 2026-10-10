@@ -85,6 +85,8 @@ pub const TABLE_FORFEITED_CLAIM_SEALS_V1: u8 = 26;
 pub const BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-beacon-seal-extension/v1";
 /// **Table 27** (`palw_verifier_pay_v1`, G14R round 3): check-fee escrows, claim draws and held default shares, key `(kind, digest)`.
 pub const TABLE_VERIFIER_PAY_V1: u8 = 27;
+/// RFC-0002: class id → (preparing bond, ClassRecordV1), separate from reward registrations.
+pub const TABLE_CONFORMANCE_CLASSES_V1: u8 = 28;
 /// The root extension table 27 adds once it holds a row (every older root unchanged).
 pub const VERIFIER_PAY_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-verifier-pay-extension/v1";
 
@@ -107,6 +109,7 @@ fn collection_domain(table: u8) -> Vec<u8> {
     let name = match table {
         TABLE_BONDS_V1 => "bonds",
         TABLE_CLASSES_V1 => "classes",
+        TABLE_CONFORMANCE_CLASSES_V1 => "conformance-classes",
         TABLE_PIPELINE_CLASSES_V1 => "pipeline-classes",
         TABLE_JOBS_V1 => "jobs",
         TABLE_PIPELINE_JOBS_V1 => "pipeline-jobs",
@@ -146,6 +149,9 @@ impl KernelLedgerV1 {
         let mut rows = LedgerRowsV1::new();
         for (k, v) in &self.bonds {
             rows.insert((TABLE_BONDS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, (owner, c)) in &self.conformance_classes {
+            rows.insert((TABLE_CONFORMANCE_CLASSES_V1, bytes_of(k)), bytes_of(&(*owner, c.record())));
         }
         for (k, c) in &self.classes {
             rows.insert((TABLE_CLASSES_V1, bytes_of(k)), bytes_of(&c.record()));
@@ -248,6 +254,33 @@ impl KernelLedgerV1 {
                 TABLE_CLASSES_V1 => {
                     let record: ClassRecordV1 = dec(row, "class")?;
                     l.classes.insert(dec(key, "class key")?, class_row_of(&l, &record)?);
+                }
+                TABLE_CONFORMANCE_CLASSES_V1 => {
+                    let (owner, record): (Digest, ClassRecordV1) = dec(row, "conformance class")?;
+                    let class: Digest = dec(key, "conformance class key")?;
+                    let binding = crate::ledger::single_class_binding_v1(
+                        record.descriptor,
+                        &record.program_bytes,
+                        &record.plan,
+                        &record.param_commitments,
+                    );
+                    if class
+                        != crate::mode::class_id_for_mode_v1(
+                            &binding.class_binding_id(),
+                            crate::mode::VerificationModeV1::OptimisticPublicVerification,
+                        )
+                    {
+                        return Err("a conformance row is stored under another class identity".into());
+                    }
+                    if l.opv.policy.is_none() || l.classes.contains_key(&class) || !l.bonds.contains_key(&owner) {
+                        return Err("a conformance row lacks its policy/bond or duplicates an execution registration".into());
+                    }
+                    let owned = l.conformance_class_owners.entry(owner).or_default();
+                    if owned.len() >= crate::ledger::MAX_CONFORMANCE_CLASSES_PER_BOND_V1 {
+                        return Err("stored conformance rows exceed the bond's candidate limit".into());
+                    }
+                    owned.insert(class);
+                    l.conformance_classes.insert(class, (owner, class_row_of(&l, &record)?));
                 }
                 TABLE_PIPELINE_CLASSES_V1 => {
                     let record: PipelineClassRecordV1 = dec(row, "pipeline class")?;
@@ -538,11 +571,23 @@ pub fn root_of_rows(
         base
     };
     // `palw_verifier_pay_v1`: table 27 extends the root only once it holds a row.
-    if by_table.contains_key(&TABLE_VERIFIER_PAY_V1) {
+    let base = if by_table.contains_key(&TABLE_VERIFIER_PAY_V1) {
         verifier_pay_root_extension_v1(&base, &coll(TABLE_VERIFIER_PAY_V1))
     } else {
         base
+    };
+    if by_table.contains_key(&TABLE_CONFORMANCE_CLASSES_V1) {
+        conformance_root_extension_v1(&base, &coll(TABLE_CONFORMANCE_CLASSES_V1))
+    } else {
+        base
     }
+}
+
+/// Versioned, conditional extension: historical roots remain identical with no candidates.
+pub fn conformance_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
+    let mut s = keyed(b"misaka-palw/kernel/ledger-conformance-extension/v1");
+    s.update(base).update(table);
+    finish(s)
 }
 
 /// `H(extension; root ‖ table 27)` (`palw_verifier_pay_v1`).

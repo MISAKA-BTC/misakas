@@ -1,0 +1,99 @@
+{
+  "schema": "misaka.rfc02.conformance-candidate.verdict.v1",
+  "base_commit": "679101735b8b8da9a2b34b6033cb845084560bb6",
+  "status": "verified candidate metadata path; full RFC02 goal remains open",
+  "metadata_cycle_broken": true,
+  "pre_conformance_execution_rights": false,
+  "complete_check_judged_by_actual_node": true,
+  "fresh_candidate_public_rpc_snapshot_reverified_before_promotion": true,
+  "wrong_artifact_refused": true,
+  "promotion_by_another_bond": true,
+  "honest_final_and_single_coinbase_redemption": true,
+  "independent_chain_replay": true,
+  "node_eligibility_hook_used": false,
+  "node_parameter_attestation_hook_used": false,
+  "dormant_fences_test_armed": true,
+  "shipping_activation": false,
+  "shipping_activation_validation_changed": false,
+  "sampled_release_reward_gate_changed": false,
+  "large_or_stateful_release_conformance_proven": false,
+  "actual_weight_onboarding_proven": false,
+  "full_rfc02_complete": false,
+  "scopes": {
+    "node": "synthetic small stateless v2 complete-check fixture through signed real carriers",
+    "kernel": "synthetic segmented v4 metadata, codec, no job rights, shared work cap, per-bond cap, promotion and rooted replay"
+  },
+  "not_established": [
+    "shipping activation",
+    "real-weight onboarding",
+    "large/stateful release conformance",
+    "original-model fidelity or full task/context",
+    "full RFC02 completion",
+    "all system-wide resource and honest-liveness bounds"
+  ],
+  "tests": {
+    "kernel-tests.log": {
+      "passed": 165,
+      "failed": 0,
+      "ignored": 1
+    },
+    "node-tests.log": {
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0
+    },
+    "fence-tests.log": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "central-fence.log": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "sdk-snapshot-tests.log": {
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "distinct_passed": 187,
+  "node_binary": {
+    "path": "target/debug/deps/kaspa_consensus-3ece596cc17e0f8c",
+    "sha256": "0de94d33453de0c2bbab28bb375159c8914a683e727ee7a3b84ce83b5410816d",
+    "package_incremental": {
+      "kaspa-consensus": false,
+      "kaspa-consensus-core": false
+    },
+    "debug_symbols": "normal"
+  },
+  "fence_binary": {
+    "path": "target/debug/deps/kaspa_consensus_core-38863d86af2a1f17",
+    "sha256": "ef127a4ade97de212ddd502dba557bebb01b6b28f6ba89eaa8d3d259f781fd99",
+    "core_package_debug_symbols": false,
+    "normal_optimization_and_debug_assertions": true
+  },
+  "source_sha256": {
+    "consensus/core/src/palw_kernel_route_fold_v1.rs": "ac28d9e763379cbeb35559eb8a6427bdc58df28e854ec6ee92b813ae5be2adf5",
+    "consensus/core/src/palw_lifecycle_objects_v2.rs": "af7455e28a7237856f8be0414efb77edf4a3e69c5ad5a44ccf4c4b6ea7652441",
+    "consensus/core/src/palw_onboarding_v1.rs": "626f7a6867b7d5cd59d815ef63b0c23e81cef5b69fd7974013faa9151a0438f8",
+    "consensus/core/src/palw_opv_bootstrap_v1.rs": "5fba2fd2d69982207c8f2c05950ad43c278ec9a47defa6268a84c0e2a76c71b1",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/opv_bootstrap.rs": "020e02cd932cac4ad8b34bfd5c17ae95c2feea3658718e5da76a28ee792d00eb",
+    "misaka-palw-kernel/src/ledger.rs": "2325079944791b0867062b5c73da40d8e9e5efda5a24729607bf94c23217a0dd",
+    "misaka-palw-kernel/src/route.rs": "e516955b7d9428ef06bf939cea4b0baeb47559c70fa702f50f01aeb159f6cf58",
+    "misaka-palw-kernel/src/rows.rs": "d36a73ecdd7759a704f955c44ee4e0f04a0c19de16a29237dee473701eda77b2",
+    "misaka-palw-kernel/src/state.rs": "19513913681a983152388b62cecb5c356153625428ef60f441c5be747969f3b3",
+    "misaka-palw-kernel/tests/k2_real_scale.rs": "622fce445294e6826cd539396ceb4c9e2242560981f42201b144d140c49742f7",
+    "misaka-palw-sdk/src/onboarding_snapshot.rs": "c70c699ee9a7f054356d3de0331e9721194e3f08076f9461dd59abb580c220db"
+  },
+  "evidence_sha256": {
+    "rfc02-conformance-candidate-kernel-tests.log": "828001ba358b1f5096a66f0b0d732cf179242edcb78c4449f90847871f0b0e13",
+    "rfc02-conformance-candidate-node-tests.log": "d6ce60049fbf998f79207f70dfe1de1f0d4566dc00837d9eaf0742a3db236591",
+    "rfc02-conformance-candidate-fence-tests.log": "73edd7caab0ee9e3bf0ea3d2107b88d671340d31572fc9e69e97b66933414ac7",
+    "rfc02-conformance-candidate-central-fence.log": "0d7c36ece5dc230591100714e652fadb2aeffb94a03deb2593eb889bdae89dbd",
+    "rfc02-conformance-candidate-sdk-snapshot-tests.log": "690806e6b0a492cbdab9f41f816e087dd6315812fe6a7e1bef57789cc7320a08",
+    "rfc02-conformance-candidate-protocol.json": "a20ed845135f6fd965201b4f7753d32bb9c96af7c6455d66f254b2f8272629bf"
+  },
+  "stored_log_normalization": "Trailing blank lines removed; test output content preserved. Original captures remain in /tmp."
+}

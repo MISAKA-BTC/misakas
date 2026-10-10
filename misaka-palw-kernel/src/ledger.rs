@@ -507,6 +507,10 @@ pub enum LedgerEventV1 {
         tx: &'static str,
         why: String,
     } = 0,
+    /// A conformance candidate, with no execution or economic rights.
+    ConformanceClassRegistered {
+        class: Digest,
+    } = 32,
     ClassRegistered {
         class: Digest,
     } = 1,
@@ -767,6 +771,9 @@ fn check_commitment_set(
     Ok(())
 }
 
+/// Maximum live preparation records per bonded actor; promotion releases a slot.
+pub const MAX_CONFORMANCE_CLASSES_PER_BOND_V1: usize = 8;
+
 #[derive(Clone, Debug)]
 pub struct KernelLedgerV1 {
     pub policy: LedgerPolicyV1,
@@ -776,6 +783,11 @@ pub struct KernelLedgerV1 {
     pub daa: u64,
     pub bonds: BTreeMap<Digest, BondRowV1>,
     pub classes: BTreeMap<Digest, ClassRowV1>,
+    /// Conformance-only OPV identities, keyed class id: (preparing bond, checked metadata).
+    /// No execution or payment path reads this table. Promotion removes the candidate.
+    pub conformance_classes: BTreeMap<Digest, (Digest, ClassRowV1)>,
+    /// Derived index, never committed: candidate admission reads only this bond's bounded set.
+    pub(crate) conformance_class_owners: BTreeMap<Digest, BTreeSet<Digest>>,
     pub pipeline_classes: BTreeMap<Digest, PipelineClassRowV1>,
     pub jobs: BTreeMap<Digest, KernelJobV1>,
     pub pipeline_jobs: BTreeMap<Digest, PipelineJobPostV1>,
@@ -882,6 +894,8 @@ impl KernelLedgerV1 {
             daa: 0,
             bonds: BTreeMap::new(),
             classes: BTreeMap::new(),
+            conformance_classes: BTreeMap::new(),
+            conformance_class_owners: BTreeMap::new(),
             pipeline_classes: BTreeMap::new(),
             jobs: BTreeMap::new(),
             pipeline_jobs: BTreeMap::new(),
@@ -1006,6 +1020,17 @@ impl KernelLedgerV1 {
         self.authorize(obj, auth)?;
         let mut out = Vec::new();
         match obj {
+            KernelRouteObjectV1::RegisterConformanceClass { descriptor, program_bytes, plan, param_commitments } => {
+                let class = self.register_class_impl(
+                    VerificationModeV1::OptimisticPublicVerification,
+                    descriptor,
+                    program_bytes,
+                    plan,
+                    param_commitments,
+                    Some(auth.signer_bond),
+                )?;
+                out.push(LedgerEventV1::ConformanceClassRegistered { class });
+            }
             KernelRouteObjectV1::RegisterClass { descriptor, program_bytes, plan, param_commitments } => {
                 let class =
                     self.register_class(VerificationModeV1::PanelLicensed, descriptor, program_bytes, plan, param_commitments)?;
@@ -1224,6 +1249,11 @@ impl KernelLedgerV1 {
                     Some(b) if b.exit_requested.is_some_and(|at| daa >= at + delay) && b.reserved == 0 => {
                         let amount = b.collateral;
                         self.bonds.remove(bond);
+                        if let Some(classes) = self.conformance_class_owners.remove(bond) {
+                            for class in classes {
+                                self.conformance_classes.remove(&class);
+                            }
+                        }
                         out.push(LedgerEventV1::Withdrawn { bond: *bond, amount });
                         settle(&mut out, *bond, amount, SettlementKindV1::Withdraw, None);
                     }
@@ -1476,7 +1506,25 @@ impl KernelLedgerV1 {
         plan: &VerificationPlanV1,
         pc: &ParamCommitmentsV1,
     ) -> Result<Digest, KernelRefusalV1> {
-        let name: &'static str = if mode.is_optimistic() { "RegisterClassV2" } else { "RegisterClass" };
+        self.register_class_impl(mode, descriptor, program_bytes, plan, pc, None)
+    }
+
+    fn register_class_impl(
+        &mut self,
+        mode: VerificationModeV1,
+        descriptor: &Digest,
+        program_bytes: &[u8],
+        plan: &VerificationPlanV1,
+        pc: &ParamCommitmentsV1,
+        candidate_owner: Option<Digest>,
+    ) -> Result<Digest, KernelRefusalV1> {
+        let name: &'static str = if candidate_owner.is_some() {
+            "RegisterConformanceClass"
+        } else if mode.is_optimistic() {
+            "RegisterClassV2"
+        } else {
+            "RegisterClass"
+        };
         let rule = |why: String| KernelRefusalV1::rule(name, why);
         let d = self.known_descriptor(descriptor).map_err(rule)?;
         if crate::descriptor::is_segmented_v1(&d) && !mode.is_optimistic() {
@@ -1495,7 +1543,14 @@ impl KernelLedgerV1 {
             return Err(rule("the class is already registered".into()));
         }
         let opv = if mode.is_optimistic() { Some(self.opv_register_gate(name)?) } else { None };
-        if mode.is_optimistic() {
+        if let Some(owner) = candidate_owner {
+            if self.conformance_classes.contains_key(&class) {
+                return Err(rule("the conformance class is already prepared".into()));
+            }
+            if self.conformance_class_owners.get(&owner).is_some_and(|classes| classes.len() >= MAX_CONFORMANCE_CLASSES_PER_BOND_V1) {
+                return Err(rule("the bond's conformance candidate limit is full".into()));
+            }
+        } else if mode.is_optimistic() {
             self.opv_class_admitted(name, &class)?;
         }
         if !self.attested_artifacts.contains(&binding.artifact_root) {
@@ -1558,9 +1613,29 @@ impl KernelLedgerV1 {
             bounds,
         };
         self.check_admission_work_v1(row.admission_work_v1().map_err(rule)?).map_err(rule)?;
-        self.classes.insert(class, row);
-        if mode.is_optimistic() {
-            self.opv.classes.insert(class);
+        if let Some(owner) = candidate_owner {
+            // The run was charged before decoding. Candidates additionally consume the same
+            // admission byte-work budget as claims, without spending a second run or the proof reserve.
+            let work = row.admission_work_v1().map_err(rule)?;
+            let total =
+                self.budget.court_work.checked_add(work).filter(|w| *w <= self.policy.admission_work_limit_v1()).ok_or_else(|| {
+                    KernelRefusalV1::new(name, RefusalKindV1::OverBudget, "the shared admission work budget is spent")
+                })?;
+            self.budget.court_work = total;
+            self.conformance_classes.insert(class, (owner, row));
+            self.conformance_class_owners.entry(owner).or_default().insert(class);
+        } else {
+            self.classes.insert(class, row);
+            if let Some((owner, _)) = self.conformance_classes.remove(&class) {
+                let classes = self.conformance_class_owners.get_mut(&owner).expect("candidate owner index");
+                classes.remove(&class);
+                if classes.is_empty() {
+                    self.conformance_class_owners.remove(&owner);
+                }
+            }
+            if mode.is_optimistic() {
+                self.opv.classes.insert(class);
+            }
         }
         Ok(class)
     }

@@ -577,9 +577,9 @@ pub(super) fn apply_kernel_route_object_v1(
     };
     // A class registers only if its worst filing, response and commitments can actually be carried (chunking counted).
     for event in &events {
-        if let LedgerEventV1::ClassRegistered { class } = event {
+        if let LedgerEventV1::ClassRegistered { class } | LedgerEventV1::ConformanceClassRegistered { class } = event {
             // Every kind's bounds: single program, pipeline, typed (RFC-0004 Part II).
-            let bounds = ledger.bounds_of(class);
+            let bounds = ledger.bounds_of(class).or_else(|| ledger.conformance_classes.get(class).map(|(_, row)| row.bounds));
             let fits = bounds.is_some_and(|b| {
                 misaka_palw_kernel::ledger::carrier_fit_v1(
                     &b,

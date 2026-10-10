@@ -155,6 +155,11 @@ impl Net {
 /// (104), the binding windows, legacy kernel classes over the bound roots, and 106 under each spec's policy (the complete check, or
 /// the sampled policy).
 async fn onboard_all(net: &mut Net, specs: Vec<Spec>) -> Vec<Onb> {
+    onboard_all_under(net, specs, false).await
+}
+
+/// Prepare OPV identities directly when `candidate` is true; the legacy path remains covered separately.
+async fn onboard_all_under(net: &mut Net, specs: Vec<Spec>, candidate: bool) -> Vec<Onb> {
     let mut v2s = Vec::new();
     for s in &specs {
         let o = net.v2_registration(&s.v2, s.card, net.daa() + 30);
@@ -179,11 +184,20 @@ async fn onboard_all(net: &mut Net, specs: Vec<Spec>) -> Vec<Onb> {
     let d = k2_tir_v2_descriptor();
     let mut items = Vec::new();
     for s in &specs {
-        let register = K::RegisterClass {
-            descriptor: d.digest(),
-            program_bytes: s.kernel.program.encode(),
-            plan: s.kernel.plan.clone(),
-            param_commitments: s.kernel.pc.clone(),
+        let register = if candidate {
+            K::RegisterConformanceClass {
+                descriptor: d.digest(),
+                program_bytes: s.kernel.program.encode(),
+                plan: s.kernel.plan.clone(),
+                param_commitments: s.kernel.pc.clone(),
+            }
+        } else {
+            K::RegisterClass {
+                descriptor: d.digest(),
+                program_bytes: s.kernel.program.encode(),
+                plan: s.kernel.plan.clone(),
+                param_commitments: s.kernel.pc.clone(),
+            }
         };
         items.push((s.card, net.route(s.card, &register)));
     }
@@ -200,9 +214,14 @@ async fn onboard_all(net: &mut Net, specs: Vec<Spec>) -> Vec<Onb> {
     let mut items = Vec::new();
     let mut out = Vec::new();
     for (s, v2) in specs.into_iter().zip(v2s) {
-        let legacy = class_id(&s.kernel, VerificationModeV1::PanelLicensed);
         let opv = class_id(&s.kernel, VerificationModeV1::OptimisticPublicVerification);
-        assert!(net.ledger().classes.contains_key(&legacy), "the legacy kernel class registered over the matured binding");
+        let legacy = if candidate { opv } else { class_id(&s.kernel, VerificationModeV1::PanelLicensed) };
+        if candidate {
+            assert!(net.ledger().conformance_classes.contains_key(&opv), "conformance metadata prepared over the matured binding");
+            assert!(!net.ledger().classes.contains_key(&opv), "no execution registration yet");
+        } else {
+            assert!(net.ledger().classes.contains_key(&legacy), "the legacy kernel class registered over the matured binding");
+        }
         let policy = Hash64::from_bytes(if s.complete {
             complete
         } else if s.sealed {
@@ -1257,4 +1276,76 @@ async fn g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_an
     };
     let refusal = fresh_verify_complete_check_v1(&reads, &ops_of(&onbs[1].f)).expect_err("another model's artifact");
     assert_eq!(refusal.code, "ARTIFACT_NOT_REGISTERED");
+}
+
+/// A direct OPV candidate breaks the registration/conformance dependency without a legacy
+/// Panel class or eligibility hook. Test-armed dormant fences; no shipping activation claim.
+#[tokio::test]
+async fn g14_conformance_candidate_grants_no_rights_then_promotes_only_after_a_real_complete_check() {
+    kaspa_core::log::try_init_logger("warn");
+    let (cfg, bundle, premine, floats) = boot_config(128, Vec::new());
+    let mut params = cfg.params.clone();
+    params.palw_panel_free_v1.as_mut().unwrap().sampled_conformance_gates_reward = false;
+    assert!(params.validate_palw_v2().is_err(), "shipping activation remains refused");
+    let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new);
+    net.beat_to(1).await;
+    let o = onboard_all_under(&mut net, vec![Spec::honest(67, BOOT, true)], true).await.pop().unwrap();
+    assert_eq!(o.legacy, o.opv, "binding names the candidate's eventual OPV identity");
+    let old_panel = class_id(&o.kernel, VerificationModeV1::PanelLicensed);
+    assert!(!net.ledger().classes.contains_key(&old_panel));
+    assert_eq!(eligibility_release(&net, &o), Err(OpvIneligibleV1::ConformanceNotPassed));
+    assert!(!register_opv(&mut net, BOOT, &o).await);
+    let job = KernelJobV1 {
+        class_binding_id: o.opv,
+        prompt: vec![3, 17, 9],
+        max_new_tokens: 3,
+        decode: DecodeRuleV1::Greedy,
+        nonce: [0xB1; 64],
+    };
+    let post = net.route(BOOT, &K::PostJob { job: job.clone() });
+    net.send(vec![(BOOT, post)]).await;
+    assert!(!net.ledger().jobs.contains_key(&job.id()), "candidate cannot open an execution job or escrow");
+    assert!(net.ledger().claims.is_empty());
+    assert!(net.ledger().job_escrows.is_empty());
+    assert!(net.ledger().opv.classes.is_empty());
+    assert!(net.api().unwrap().finals_read_v1().unwrap().is_empty());
+    assert!(net.attributed_events().is_empty(), "candidate contributes no beacon source");
+    let replay_candidate = net.replay().await;
+    net.assert_same(&replay_candidate, "candidate replay");
+
+    commit(&mut net, &o, 0xB2).await;
+    let post = complete_post(&net, &o);
+    let evidence = net.evidence(BOOT, o.v2, ConformanceEvidenceActionV1::PostComplete(Box::new(post)));
+    net.send(vec![(BOOT, evidence)]).await;
+    assert_eq!(net.attempt(o.v2).record.state, S::G14Eligible);
+    assert_eq!(eligibility_release(&net, &o), Ok(OpvEligibleV1::Derived { v2_class: o.v2 }));
+    {
+        use super::canonical::{Rpc, ibd_node};
+        use misaka_palw_sdk::onboarding_chain::{PublicOnboardingReadsV1, fresh_verify_complete_check_v1};
+        let node = ibd_node(&net).await;
+        let rpc = Rpc::of(&node.chain);
+        let PublicOnboardingReadsV1::CompleteCheck(reads) = rpc.onboarding(o.v2) else { panic!("complete-check candidate snapshot") };
+        let report = fresh_verify_complete_check_v1(&reads, &ops_of(&o.f))
+            .expect("independent model holder verifies candidate before promotion");
+        assert!(report.agrees && report.honest_passes && report.chain_says_passed);
+        assert!(fresh_verify_complete_check_v1(&reads, &ops_of(&onb_fixture(68))).is_err(), "another artifact is refused");
+    }
+    assert!(register_opv(&mut net, PRODUCERS[0], &o).await, "another bonded actor can promote the same checked identity");
+    assert!(!net.ledger().conformance_classes.contains_key(&o.opv), "promotion consumes the candidate");
+    assert!(net.ledger().classes.contains_key(&o.opv));
+    assert!(!net.ledger().classes.contains_key(&old_panel));
+    let before = minted_and_owed(&net, &net.chain, PRODUCERS[0]);
+    let reward = net.ledger().policy.claim_reward;
+    let jobs = post_jobs(&mut net, BOOT, o.opv, 1, 0xB3).await;
+    let id = claims(&mut net, &o.kfx(), o.opv, &jobs, &PRODUCERS[..1]).await[0];
+    assert!(net.ledger().claims.contains_key(&id));
+    until_final(&mut net, &id).await;
+    assert_eq!(net.attributed_events().iter().filter(|w| w.event.source_profile_id == o.opv).count(), 1);
+    let paid = minted_and_owed(&net, &net.chain, PRODUCERS[0]);
+    assert_eq!(paid.0 + paid.1 - before.0 - before.1, reward);
+    net.beat_to(net.daa() + 2).await;
+    assert_eq!(minted_and_owed(&net, &net.chain, PRODUCERS[0]), (paid.0 + paid.1, 0), "Final reward redeemed exactly once");
+    let replay = net.replay().await;
+    net.assert_same(&replay, "promoted candidate replay");
+    assert_eq!(minted_and_owed(&net, &replay, PRODUCERS[0]), (paid.0 + paid.1, 0));
 }

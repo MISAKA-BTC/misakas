@@ -2396,9 +2396,9 @@ check. The separate V2 inventory root is not registered or confused with the ker
 These mechanics do not establish model onboarding, public DA acquisition or whole-claim G14.
 The full requirement and these gates remain in force.
 
-The segmented bootstrap currently has a cycle: only OPV can register v4/v5, OPV eligibility
-requires kernel binding/conformance, and kernel binding requires a registered class. A
-conformance-only candidate path must break this cycle **without granting executable claims,
+The segmented bootstrap had a metadata cycle: only OPV can register v4/v5, OPV eligibility
+requires kernel binding/conformance, and kernel binding required a registered class. The
+conformance-only candidate path in §14.12 breaks this dependency **without granting executable claims,
 rewards, Final weight or beacon-source rights** before the existing independent gates pass.
 The legacy Panel bootstrap is not an allowed fallback for segmented classes. Sampled
 conformance remains a non-reward signal pending its digest/refutation courts; its signal or
@@ -2411,3 +2411,39 @@ merely to count elements during repeated ledger reconstruction. No descriptor, p
 commitment preimage, resource ceiling or activation flag changes. Final test evidence and
 remaining full-scope work are recorded in the
 [RFC02 implementation ledger](../design/palw/tir/rfc0002-implementation.md).
+
+
+### 14.12 Conformance-only class preparation
+
+`RegisterConformanceClass` is route version 1, new inner tag **21** of outer tag 110.
+It requires both the existing route fence and `palw_panel_free_v1`; shipping fence validation
+is unchanged. The preparing signer must be a non-exiting bonded actor. It carries exactly a
+known descriptor, canonical program, exact verification plan and parameter commitments. No
+model name, `ModelSpec`, frontend vendor or compiler approval participates in this contract.
+
+Preparation calls the same registration validation for active kernel semantics, ranges,
+parameter instances, independently attested parameter root, prosecution bounds, court work,
+OPV economics and carrier envelopes. It omits only the eligibility prerequisite that would
+otherwise depend on the conformance it is being prepared to obtain. A successful candidate
+consumes one ordinary adjudication run and its derived admission byte work from the shared
+block budget; it cannot spend the public-proof reserve. At most **eight candidates per bond**
+can stand. The ordinary wire ceiling still applies. This per-bond catalog bound is not a
+proof of the remaining system-wide resource and honest-liveness requirements.
+
+A candidate lives in ledger **table 28**, keyed by its eventual OPV class id, with value
+`borsh(preparing bond, ClassRecordV1)`. The root is extended only when that table is nonempty:
+`H("misaka-palw/kernel/ledger-conformance-extension/v1"; previous root || collection root)`.
+The collection domain is `misaka-palw/kernel/ledger-collection/conformance-classes/v1`.
+Older object discriminants, metadata encodings and roots of ledgers with no candidates remain
+unchanged. Row reconstruction checks the candidate's key against its canonical OPV identity.
+The preparing bond receives no exclusive ownership of the computation or promotion priority.
+
+`KernelBoundV1`, conformance checking and derived eligibility can read the checked candidate
+metadata. They still require the same V2 canonical program, live binding over that exact
+parameter root, conformance statement, policy, resources and clocks. Execution paths read
+only ordinary registered classes: preparation alone opens no job/escrow/claim, pays no reward,
+creates no Final, supplies no Final weight and contributes no work-beacon source. Ordinary
+`RegisterClassV2` promotes the same identity only after its independent derived eligibility
+passes, and consumes the candidate. The candidate cannot make a stateful or large class
+eligible for the small-stateless complete check; sampled evidence still does not gate release
+rewards pending GAP-70. No production activation is implied.

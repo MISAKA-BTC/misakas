@@ -1,0 +1,14 @@
+
+running 1 test
+[a2u] rows awaiting their lane's merge:
+  CoinbaseTrailer { magic: [80, 88, 65, 50] } → palw_exec_payload_v2 (X8R anchor trailer)
+  Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" } → palw_task_heads_v1 (HFX task heads: PalwGenProfileV1::Head = 6, the class's hand-read profile byte inside tag 68 (re-read))
+  Int12Inner { key: "consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1" } → palw_task_heads_v1 (HFX task heads: PalwGenProfileOffersV1::Head (3), inside tag 68 (appended))
+  FpJobForm { what: "PalwGenBodyV1::Head (2) inside a generative job" } → palw_task_heads_v1 (HFX task heads)
+  HeaderFormula { what: "header.palw_state_root = H(fork-choice leaf || ADR-0043 root) past the fence" } → palw_fork_choice_commitment_v1 (L2FC)
+  StateEncoding { what: "bond budget engine Q/B/R/F (deltas 190–199, tail 0xEF, root block bond_budget/v1)" } → palw_bond_budget_v1 (BUDGET (ADR-0176))
+  StateEncoding { what: "model coinbase allocated by distinct locked miner capital f(S_m) inside the budget" } → palw_model_bond_allocation_v1 (BUDGET (ADR-0177))
+  StateEncoding { what: "R-1 reporter share and DA-6 exposure: 1,000 bps below, 4,900 bps past" } → palw_reporter_share_v2 (INTF (ADR-0032 amendment))
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3612 filtered out; finished in 0.10s

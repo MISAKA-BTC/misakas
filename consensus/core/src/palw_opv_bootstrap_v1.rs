@@ -620,6 +620,7 @@ impl PalwKernelRouteStateV1 {
         let row = ledger
             .classes
             .get(&binding.kernel_class.as_bytes())
+            .or_else(|| ledger.conformance_classes.get(&binding.kernel_class.as_bytes()).map(|(_, row)| row))
             .ok_or_else(|| I::NotG14Complete("the bound class is not in the ledger".into()))?;
         // The class's own gate (K2-TIR-v4 for segmented descriptors, v1 otherwise), with the program the bounds are priced from.
         let proven = misaka_palw_kernel::gate::class_prosecution_bounds_v1(
@@ -646,6 +647,7 @@ impl PalwKernelRouteStateV1 {
         let bounds = ledger
             .classes
             .get(&binding.kernel_class.as_bytes())
+            .or_else(|| ledger.conformance_classes.get(&binding.kernel_class.as_bytes()).map(|(_, row)| row))
             .map(|row| row.bounds)
             .ok_or_else(|| I::ResourceUnbounded("the bound class's bounds are not in the ledger".into()))?;
         let p = view.policy;

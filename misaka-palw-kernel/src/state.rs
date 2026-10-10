@@ -220,13 +220,24 @@ impl KernelLedgerV1 {
             )
         };
         // `palw_verifier_pay_v1` (table 27): an extension only once it holds a row.
-        if self.verifier_pay.is_empty() {
-            return base;
+        let base = if self.verifier_pay.is_empty() {
+            base
+        } else {
+            crate::rows::verifier_pay_root_extension_v1(
+                &base,
+                &collection_root(&d("verifier-pay"), self.verifier_pay.len(), self.verifier_pay.iter()),
+            )
+        };
+        if self.conformance_classes.is_empty() {
+            base
+        } else {
+            let records: std::collections::BTreeMap<Digest, (Digest, ClassRecordV1)> =
+                self.conformance_classes.iter().map(|(k, (owner, c))| (*k, (*owner, c.record()))).collect();
+            crate::rows::conformance_root_extension_v1(
+                &base,
+                &collection_root(&d("conformance-classes"), records.len(), records.iter()),
+            )
         }
-        crate::rows::verifier_pay_root_extension_v1(
-            &base,
-            &collection_root(&d("verifier-pay"), self.verifier_pay.len(), self.verifier_pay.iter()),
-        )
     }
 
     /// RFC-0004 Part II: `(table, collection root)` of every NON-EMPTY typed table, in root order (empty for an untyped ledger).

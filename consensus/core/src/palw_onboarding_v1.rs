@@ -426,11 +426,17 @@ impl PalwKernelRouteStateV1 {
             .fold(0u64, |acc, r| acc.saturating_add(r))
     }
 
-    /// Whether the route's ledger holds the kernel class (it registered only after `PUBLIC_PROSECUTION_COMPLETE`).
+    /// Checked metadata for onboarding: an execution registration or a conformance-only candidate.
+    /// Both passed `PUBLIC_PROSECUTION_COMPLETE`; this read alone grants no execution or payment rights.
     pub fn kernel_class_record_v1(&self, kernel_class: &Hash64) -> Option<misaka_palw_kernel::state::ClassRecordV1> {
         let key = borsh::to_vec(&kernel_class.as_bytes()).expect("a digest serializes");
-        let row = self.rows.get(&(misaka_palw_kernel::rows::TABLE_CLASSES_V1, key))?;
-        borsh::from_slice(row).ok()
+        if let Some(row) = self.rows.get(&(misaka_palw_kernel::rows::TABLE_CLASSES_V1, key.clone())) {
+            return borsh::from_slice(row).ok();
+        }
+        // A prepared class can acquire conformance evidence, but is absent from every execution registry.
+        let row = self.rows.get(&(misaka_palw_kernel::rows::TABLE_CONFORMANCE_CLASSES_V1, key))?;
+        let (_, record): (misaka_palw_kernel::hash::Digest, misaka_palw_kernel::state::ClassRecordV1) = borsh::from_slice(row).ok()?;
+        Some(record)
     }
 
     /// **The activation gate of a V2 class** (`activate_due_classes`): a class with no kernel binding follows the legacy path; a
