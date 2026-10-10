@@ -358,6 +358,103 @@ pub fn palw_attempt_prompt_root_v1(
     crate::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form, &ids).ok()
 }
 
+type PalwPromptRootMemoKeyV2 = (Hash64, Hash64, u32, Hash64);
+
+/// Per-block work observations, never consensus state. Measuring does not create a cache: callers
+/// can verify that the production acceptance/fold paths actually establish their own block scope.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwPromptRootWorkV2 {
+    pub recomputed_roots: u64,
+    pub recomputed_prompt_ids: u64,
+    pub block_cache_hits: u64,
+    pub block_uncached_roots: u64,
+    pub outside_block_calls: u64,
+}
+
+struct PalwBlockPromptRootMemoV2 {
+    block: Hash64,
+    roots: std::collections::BTreeMap<PalwPromptRootMemoKeyV2, Option<Hash64>>,
+    retained_weight: u64,
+}
+
+std::thread_local! {
+    // These are synchronous, thread-local computation scopes, not a process-wide admission rule.
+    // A block's acceptance walk and its nested single-object rehearsals run on this same thread.
+    static PALW_BLOCK_PROMPT_ROOT_MEMO_V2: std::cell::RefCell<Option<PalwBlockPromptRootMemoV2>> = const { std::cell::RefCell::new(None) };
+    static PALW_PROMPT_ROOT_WORK_V2: std::cell::RefCell<Option<PalwPromptRootWorkV2>> = const { std::cell::RefCell::new(None) };
+}
+
+fn note_prompt_root_work_v2(note: impl FnOnce(&mut PalwPromptRootWorkV2)) {
+    PALW_PROMPT_ROOT_WORK_V2.with(|work| {
+        if let Some(work) = work.borrow_mut().as_mut() {
+            note(work);
+        }
+    });
+}
+
+/// Observe actual memo calls without changing their answers, cache or admission. Nested observations
+/// and unwinding restore the previous observer. This is also usable by local profiling callers.
+pub fn palw_measure_prompt_root_work_v2<T>(run: impl FnOnce() -> T) -> (T, PalwPromptRootWorkV2) {
+    struct Restore(Option<PalwPromptRootWorkV2>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            PALW_PROMPT_ROOT_WORK_V2.with(|work| *work.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(PALW_PROMPT_ROOT_WORK_V2.with(|work| work.replace(Some(PalwPromptRootWorkV2::default()))));
+    let result = run();
+    let work = PALW_PROMPT_ROOT_WORK_V2.with(|work| work.borrow().unwrap_or_default());
+    (result, work)
+}
+
+/// Keep a synchronous block's roots through acceptance AND the final fold. This guard cannot move
+/// to another thread. The chain processor holds it across both phases; standalone callers use the
+/// closure form below. It is computation-only, never rooted or serialized.
+#[must_use = "keep the guard alive through this block's acceptance and fold"]
+pub struct PalwPromptRootBlockGuardV2 {
+    previous: Option<PalwBlockPromptRootMemoV2>,
+    owns_scope: bool,
+    _same_thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl PalwPromptRootBlockGuardV2 {
+    pub fn enter(block: Hash64) -> Self {
+        PALW_BLOCK_PROMPT_ROOT_MEMO_V2.with(|memo| {
+            let mut memo = memo.borrow_mut();
+            let owns_scope = !memo.as_ref().is_some_and(|memo| memo.block == block);
+            let previous = if owns_scope {
+                memo.replace(PalwBlockPromptRootMemoV2 { block, roots: Default::default(), retained_weight: 0 })
+            } else {
+                None
+            };
+            Self { previous, owns_scope, _same_thread: std::marker::PhantomData }
+        })
+    }
+}
+
+impl Drop for PalwPromptRootBlockGuardV2 {
+    fn drop(&mut self) {
+        if self.owns_scope {
+            PALW_BLOCK_PROMPT_ROOT_MEMO_V2.with(|memo| *memo.borrow_mut() = self.previous.take());
+        }
+    }
+}
+
+/// Keep every root this block has recomputed until this synchronous pass ends. Nested rehearsals
+/// of the SAME block share the scope; another block gets its own scope and restores the outer one.
+/// A chain block's outer guard shares acceptance's results with its final fold. A standalone
+/// acceptance walk or fold starts cold and has its own heavy budget.
+/// No process-cache warmth, thread interleaving or eviction changes admission or an answer.
+///
+/// Retained entries have total weight at most the heavy-id budget (at least one per entry). The
+/// budgeted callers admit at most one root input per authenticated claim and charge before hashing,
+/// so their roots fit and never evict. An unbudgeted caller that exceeds this cache's envelope still
+/// gets the pure answer, uncached; it cannot evict roots the block already retained.
+pub fn palw_with_prompt_root_block_memo_v2<T>(block: Hash64, run: impl FnOnce() -> T) -> T {
+    let _guard = PalwPromptRootBlockGuardV2::enter(block);
+    run()
+}
+
 /// **[`palw_attempt_prompt_root_v1`], remembered** (ADR-0152 v3.1 addendum §4-bis.3; the Phase 3
 /// review's heavy-budget finding). A `PromptNotAnchored { Whole }` recomputes an anchor's whole
 /// prompt root — 13.6 ms at 2M — and one block asks it of the processor's gate, the acceptance walk's
@@ -365,8 +462,9 @@ pub fn palw_attempt_prompt_root_v1(
 /// claim ONCE, so a second Whole on it must cost nothing, and that is only true if the root is not
 /// recomputed. The function is pure, so the memo changes no answer, only the time: keyed by
 /// everything the root is a function of (the profile's id, the anchor, the prefill, the class's
-/// form), bounded to [`PALW_PROMPT_ROOT_MEMO_ENTRIES_V1`] entries (a block's budget computes at most
-/// one 2M root, so a handful covers every block a node folds twice).
+/// form). Inside a block scope roots are retained through that pass, bounded by the heavy-id budget.
+/// Outside a scope the eight-entry process cache is only a best-effort speedup: it is not evidence
+/// that once-per-claim accounting bounds actual recomputation.
 pub fn palw_attempt_prompt_root_memo_v1(
     profile: &PalwShapeProfileV3,
     anchor: &Hash64,
@@ -374,10 +472,34 @@ pub fn palw_attempt_prompt_root_memo_v1(
     network_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Option<Hash64> {
     use std::sync::{Mutex, OnceLock};
-    type Key = (Hash64, Hash64, u32, Hash64);
-    static MEMO: OnceLock<Mutex<std::collections::VecDeque<(Key, Hash64)>>> = OnceLock::new();
+    static MEMO: OnceLock<Mutex<std::collections::VecDeque<(PalwPromptRootMemoKeyV2, Hash64)>>> = OnceLock::new();
     let form = crate::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(network_form, profile);
-    let key: Key = (profile.shape_profile_id(), *anchor, prefill, crate::palw_prompt_ids_v1::prompt_ids_form_id_v1(form));
+    let key = (profile.shape_profile_id(), *anchor, prefill, crate::palw_prompt_ids_v1::prompt_ids_form_id_v1(form));
+    let scoped = PALW_BLOCK_PROMPT_ROOT_MEMO_V2.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        let memo = memo.as_mut()?;
+        if let Some(root) = memo.roots.get(&key) {
+            note_prompt_root_work_v2(|work| work.block_cache_hits += 1);
+            return Some(*root);
+        }
+        let root = palw_attempt_prompt_root_v1(profile, anchor, prefill, network_form);
+        let weight = u64::from(prefill).max(1);
+        let fits = memo.retained_weight.saturating_add(weight) <= PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1;
+        note_prompt_root_work_v2(|work| {
+            work.recomputed_roots += 1;
+            work.recomputed_prompt_ids += u64::from(prefill);
+            work.block_uncached_roots += u64::from(!fits);
+        });
+        if fits {
+            memo.retained_weight += weight;
+            memo.roots.insert(key, root);
+        }
+        Some(root)
+    });
+    if let Some(root) = scoped {
+        return root;
+    }
+    note_prompt_root_work_v2(|work| work.outside_block_calls += 1);
     let memo = MEMO.get_or_init(|| Mutex::new(std::collections::VecDeque::new()));
     if let Ok(entries) = memo.lock()
         && let Some((_, root)) = entries.iter().find(|(k, _)| *k == key)
@@ -385,6 +507,10 @@ pub fn palw_attempt_prompt_root_memo_v1(
         return Some(*root);
     }
     let root = palw_attempt_prompt_root_v1(profile, anchor, prefill, network_form)?;
+    note_prompt_root_work_v2(|work| {
+        work.recomputed_roots += 1;
+        work.recomputed_prompt_ids += u64::from(prefill);
+    });
     if let Ok(mut entries) = memo.lock() {
         if entries.len() >= PALW_PROMPT_ROOT_MEMO_ENTRIES_V1 {
             entries.pop_front();
@@ -495,6 +621,105 @@ mod tests {
     use super::*;
     use crate::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
     use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+
+    /// The previous process-cache assumption has a deterministic counterexample with concurrent
+    /// unrelated work: evicting eight entries between the same claim's checks recomputes it again.
+    #[test]
+    fn process_prompt_memo_eviction_does_not_bound_a_claims_actual_work() {
+        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap();
+        let form = PalwPromptIdsFormV1::MerkleV1;
+        let anchor = Hash64::from_u64_word(0xE810_FFFF);
+        let (_, work) = palw_measure_prompt_root_work_v2(|| {
+            for round in 0..3 {
+                if round > 0 {
+                    let profile = profile.clone();
+                    std::thread::spawn(move || {
+                        for n in 0..9 {
+                            let other = Hash64::from_u64_word(0xE810_0000 + round * 32 + n);
+                            assert!(palw_attempt_prompt_root_memo_v1(&profile, &other, 8191, form).is_some());
+                        }
+                    }).join().unwrap();
+                }
+                assert!(palw_attempt_prompt_root_memo_v1(&profile, &anchor, 262_143, form).is_some());
+            }
+        });
+        assert_eq!((work.recomputed_roots, work.recomputed_prompt_ids, work.outside_block_calls), (3, 3 * 262_143, 3));
+        assert!(work.recomputed_prompt_ids > PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1);
+    }
+
+    #[test]
+    fn block_prompt_roots_survive_more_than_eight_claims_and_each_pass_starts_cold() {
+        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap();
+        let form = PalwPromptIdsFormV1::MerkleV1;
+        let anchors: Vec<_> = (0..9).map(|n| Hash64::from_u64_word(0xB10C_0000 + n)).collect();
+        let expected: Vec<_> = anchors.iter().map(|a| palw_attempt_prompt_root_v1(&profile, a, 8191, form)).collect();
+        for block in [Hash64::from_u64_word(1), Hash64::from_u64_word(2)] {
+            let (_, work) = palw_measure_prompt_root_work_v2(|| {
+                palw_with_prompt_root_block_memo_v2(block, || {
+                    for _ in 0..4 {
+                        // A nested same-block rehearsal must retain the outer walk's roots.
+                        palw_with_prompt_root_block_memo_v2(block, || {
+                            for (anchor, root) in anchors.iter().zip(&expected) {
+                                assert_eq!(palw_attempt_prompt_root_memo_v1(&profile, anchor, 8191, form), *root);
+                            }
+                        });
+                    }
+                });
+            });
+            assert_eq!(work, PalwPromptRootWorkV2 {
+                recomputed_roots: 9, recomputed_prompt_ids: 9 * 8191, block_cache_hits: 27,
+                block_uncached_roots: 0, outside_block_calls: 0,
+            });
+        }
+    }
+
+    #[test]
+    fn block_prompt_memo_is_bounded_and_restores_other_blocks_threads_and_unwinding() {
+        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap();
+        let form = PalwPromptIdsFormV1::MerkleV1;
+        let a = Hash64::from_u64_word(0xB10C_1000);
+        let b = Hash64::from_u64_word(0xB10C_1001);
+        let (_, work) = palw_measure_prompt_root_work_v2(|| {
+            palw_with_prompt_root_block_memo_v2(a, || {
+                let root = palw_attempt_prompt_root_memo_v1(&profile, &a, 8191, form).unwrap();
+                let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    palw_with_prompt_root_block_memo_v2(b, || {
+                        assert_eq!(palw_attempt_prompt_root_memo_v1(&profile, &a, 8191, form), Some(root));
+                        panic!("exercise scope restoration");
+                    });
+                }));
+                assert!(panic.is_err());
+                assert_eq!(palw_attempt_prompt_root_memo_v1(&profile, &a, 8191, form), Some(root));
+                let profile = profile.clone();
+                let (_, separate) = std::thread::spawn(move || {
+                    palw_measure_prompt_root_work_v2(|| {
+                        palw_with_prompt_root_block_memo_v2(a, || {
+                            assert_eq!(palw_attempt_prompt_root_memo_v1(&profile, &a, 8191, form), Some(root));
+                        });
+                    })
+                }).join().unwrap();
+                assert_eq!(separate.recomputed_roots, 1, "another thread starts cold, even for the same block");
+                assert_eq!(separate.outside_block_calls, 0);
+            });
+        });
+        assert_eq!((work.recomputed_roots, work.block_cache_hits, work.outside_block_calls), (2, 1, 0));
+        let (_, work) = palw_measure_prompt_root_work_v2(|| {
+            palw_with_prompt_root_block_memo_v2(a, || {
+                let n = PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1 as u32;
+                let root = palw_attempt_prompt_root_memo_v1(&profile, &a, n, form).unwrap();
+                for _ in 0..2 {
+                    assert_eq!(palw_attempt_prompt_root_memo_v1(&profile, &b, 1, form), palw_attempt_prompt_root_v1(&profile, &b, 1, form));
+                }
+                PALW_BLOCK_PROMPT_ROOT_MEMO_V2.with(|memo| {
+                    let memo = memo.borrow();
+                    let memo = memo.as_ref().unwrap();
+                    assert_eq!((memo.roots.len(), memo.retained_weight), (1, PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1));
+                });
+                assert_eq!(palw_attempt_prompt_root_memo_v1(&profile, &a, n, form), Some(root), "overflow cannot evict a budgeted root");
+            });
+        });
+        assert_eq!((work.recomputed_roots, work.block_uncached_roots, work.block_cache_hits), (3, 2, 1));
+    }
 
     /// The loop as `base0_rc_job_v1` spelled it, kept here as the reference the moved function is
     /// held to (the golden test in `misaka-palw-base0` holds the producer's own copy to it too).

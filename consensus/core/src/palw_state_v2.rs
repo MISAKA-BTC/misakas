@@ -29956,6 +29956,35 @@ pub fn apply_palw_transition_v7(
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
+    crate::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(ctx.block, || {
+        apply_palw_transition_v7_inner(
+            parent, params, admission, ctx, accepted_objects, block_work, merged_work, own_execution_key,
+            unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_palw_transition_v7_inner(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    // **B-4: the block's OWN attempt's pre_pow-inclusive execution commitment**, computed by the
+    // processor from this block's header (the fold holds no pre_pow). `Hash64::default()` when the
+    // block carries no attempt, and unread below `palw_audit_2026_09_11_deep`. A wrapper that has no
+    // header (rehearsal / genesis / sync) passes `default` — its fold carries no merged work, so the
+    // own-vs-merged dedup cannot fire there and the own attempt is applied identically either way.
+    own_execution_key: Hash64,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
     // 1. Context monotonicity: blue score strictly increases along a chain, DAA never decreases.
     if let Some(last) = &parent.last_point {
         if ctx.blue_score <= last.blue_score {

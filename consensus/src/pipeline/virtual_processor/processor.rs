@@ -2608,6 +2608,9 @@ impl VirtualStateProcessor {
                         // success.
                         let palw_v2_staged = match palw_state.as_mut() {
                             Some(state) => {
+                                // One block's paid whole-root work survives the acceptance walk,
+                                // nested rehearsals and final fold, despite other threads' work.
+                                let _prompt_roots = kaspa_consensus_core::palw_attempt_rules_v1::PalwPromptRootBlockGuardV2::enter(current);
                                 let state_params =
                                     self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are");
                                 // Unit C step 5: the header commits to the state this block's
@@ -7949,6 +7952,27 @@ impl VirtualStateProcessor {
     /// The acceptance filter, and — the 2026-09-23 Position route matrix, P-B1 — the refunds owed to
     /// the carrier-borne market moves it refused, in acceptance order.
     fn palw_v2_accepted_objects_and_refunds(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<PalwCarriedObjectV1>,
+        block: BlockHash,
+        // The class of the block's own attempt (from its header), `None` for a block with none: past
+        // `palw_audit_2026_09_23` the fold's step 3 holds room for it on the class gate, and the
+        // rehearsal must refuse the commitments the fold will (2026-09-24 DoS audit review of #11).
+        own_attempt_class: Option<kaspa_hashes::Hash64>,
+    ) -> (
+        Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    ) {
+        kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
+            self.palw_v2_accepted_objects_and_refunds_inner(state, state_params, point, objects, block, own_attempt_class)
+        })
+    }
+
+    fn palw_v2_accepted_objects_and_refunds_inner(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,

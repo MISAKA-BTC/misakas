@@ -497,3 +497,27 @@ heavy課金は現行のonce-per-claimを引き継ぐ。ソース上、whole-root
 最終sourceの`--shipping --drift-only`は **361 ok、差分なし、exit 0**。fresh harvestのlog再読込もexit 0。shipping pinを変更していない。[repin](evidence/canonical-fp-repin-final.log)、[harvest tests](evidence/canonical-fp-repin-harvest-tests.log)、[harvest lib](evidence/canonical-fp-repin-harvest-lib.log)、[再読込](evidence/canonical-fp-repin-replay-final.log)。
 
 初回node試験のcorrect-input twinはfixtureのlegacy prompt generator／network-wide Flat formを使い、classのCoreV1／Merkle formと合わずFAILした。fixtureを正しいfamily ruleとclass formへ修正し、productionの検証predicateやfenceを緩めていない。[初回log](evidence/canonical-fp-node-initial.log)。最終PASSだけを上記へ計上した。
+
+## whole-prompt rootをblockの受入から最終foldまで保持する
+
+`3bb912bec`を基点に、once-per-claimのheavy課金と実際のroot再計算を対応させた。従来の共有8-entry FIFOは、別threadが9件のrootを計算するだけで対象rootを退避できる。新しいnegative controlでは262,143 idsの同じrootを3回検査すると786,429 idsを再計算した。これはroot関数のcache反例であり、RPC経由の攻撃又は許可blockの反例を立証するものではない。
+
+`PalwPromptRootBlockGuardV2`は同じblockの同期受入・single-object rehearsal・最終foldにthread-local memoを共有する。実chain processorは両phaseを覆うouter guardを保持し、単独の受入／fold入口も自身のcold scopeを作る。block内ではprocess cacheのwarmthを使わず、認証済みclaimのrootを退避しない。保持weightは262,144 ids以下、各entryは少なくとも1を消費する。budget外の呼出しがoverflowした場合も純粋なrootを返すがcacheしないため、既存rootを追い出せない。scopeは別block、別thread、panic/unwindから復元・隔離され、guardは別threadへ移せない。観測helperはcacheを作成・拡張せず、実呼出し回数を測るだけである。state、root値、wire、fence、activation heightは変更していない。
+
+新node試験は2Mのsynthetic committed rootsを持つactual own attemptと全PanelのValid licenceを使う。3本の失敗Bystander kind-3、正しい全seat kind-3、executor kind-4の5本をactual rent 13,107,150 sompiでsigned carrierとして個別に重量測定した。合計transient massは357,140で500,000以下。productionのpriced accepted filterとactual foldを通す。単独の受入は1 root・262,143 ids・9 hits、単独foldは1 root・262,143 ids・1 hit。実chainと同じouter guardで両phaseを連結し、途中で別threadが旧process cacheを退避させても、全体は1 root・262,143 ids・11 hitsで、scope外／overflowの呼出しは0。cold scopeから2回再現し、CourtFraud、executor offence消費、full-seat lockの取得、carriage reloadを確認した。
+
+class admissionは既存fixture seam、commitmentsは入力検査用syntheticである。個別carrierの重量測定は同じfixture funding outpointを再利用するため、5本の実UTXO spendが同じblockへ包含できる証明ではない。fresh-node startup／RPC／mempool／coinbase／実採掘の一続きのV-node試験とは数えない。初回の9-claim cycling fixtureは合計mass 1,486,700で上限を超え、反例として棄却した。したがって前節の多claim案を許可blockの攻撃成立と扱わない。[mass上限で拒否された初回試験](evidence/block-prompt-node-mass-initial.log)。helper名の初回compile失敗も記録し、最終結果だけを計上する。[初回compile log](evidence/block-prompt-node-initial.log)。
+
+| 最終sourceの検証 | 結果 |
+| --- | --- |
+| core `palw_attempt_rules_v1` | **12 V-unit PASS**。9 roots・4巡、cold pass、scope復元／thread隔離／overflow、旧process cacheのnegative control |
+| core `palw_offence` | **40 V-unit PASS**。canonical FP・既存attribution／heavy課金の回帰 |
+| core `palw_legacy` | **19 V-unit PASS**。公開filer／held DA回帰 |
+| consensus `t47_model_class_attribution::` | **15 PASS**。新しいprocess-cache退避のpriced gate／受入／fold、既存block budget／slot fairness／各contradictionの回帰 |
+| `cargo check -p kaspad --bin kaspad --locked` | **成功**。通常feature（EVM含む）のnode binary |
+
+合計 **86 unique PASS**。先行する`t18u_`の4件はT47の15件へ含まれるので重複計上しない。coreはdefault feature、consensusは`--features evm`、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`。core offence／legacyとT47の直実行は同じ最終sourceをcargoでbuildしたlib-test binaryを使う。既存警告は残る。[core root](evidence/block-prompt-core-final.log)、[offence](evidence/block-prompt-core-offence-final.log)、[legacy](evidence/block-prompt-core-legacy-final.log)、[t18u subset](evidence/block-prompt-node-final.log)、[T47](evidence/block-prompt-node-attribution-final.log)、[binary check](evidence/block-prompt-binary-final.log)。
+
+最終sourceのshipping repinとfresh harvest再読込はexit 0、**361 ok・差分なし**。pinを書き換えていない。[repin](evidence/block-prompt-repin-final.log)、[harvest tests](evidence/block-prompt-repin-harvest-tests.log)、[harvest lib](evidence/block-prompt-repin-harvest-lib.log)、[再読込](evidence/block-prompt-repin-replay-final.log)。
+
+次の提出阻害を発見した。`kaspad/src/palw_panel.rs::build_lifecycle_tx_priced_v1`はcompute-mass relay feeだけを使い、protocol rentを含めない。重いwhole proofの必要rent 13,107,150 sompiを満たさずprocessorで落ちるcarrierを作り得る。`palw_fee_funding_floor_v1`も2倍のstandard relay feeだけを基準にするため、重いproofの必要額未満でrefillを止め得る。fee builderとfunding policyの修正を次の優先事項とする。今回のテストはrentを明示的に支払っており、nodeの現builderの提出到達性を立証していない。G14全域の残条件（最大context/session、恒久prune FP job、prefix/state・全family、full service、人口／model peak・期限、累積scope）は引き続き未達。

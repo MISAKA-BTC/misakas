@@ -702,6 +702,10 @@ impl H {
     /// kind-3 object cannot be chunked, so one that failed here could never reach a block. Returns
     /// the transient mass.
     fn fits_one_carrier(&self, object: &Obj) -> u64 {
+        self.fits_one_carrier_with_fee(object, 300_000)
+    }
+
+    fn fits_one_carrier_with_fee(&self, object: &Obj, carrier_fee: u64) -> u64 {
         use kaspa_consensus_core::palw_lifecycle_objects_v2::{
             PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2, validate_palw_lifecycle_tx,
         };
@@ -715,7 +719,7 @@ impl H {
         let mut tx = Transaction::new(
             crate::constants::TX_VERSION,
             vec![TransactionInput::new(outpoint, vec![], 0, 1)],
-            vec![TransactionOutput::new(entry.amount - 300_000, super::t12_round_lane_e2e::card_payout_spk(BYSTANDER))],
+            vec![TransactionOutput::new(entry.amount.checked_sub(carrier_fee).expect("the carrier can pay its rent"), super::t12_round_lane_e2e::card_payout_spk(BYSTANDER))],
             0,
             kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
             0,
