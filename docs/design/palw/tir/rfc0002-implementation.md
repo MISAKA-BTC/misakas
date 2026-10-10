@@ -1209,3 +1209,98 @@ limits or activation terms. An old unused-tag assertion was updated for inner ta
 cleanup also removed two transitive archives needed at node linking; those were regenerated
 before accepting the final verification. No other task's checkout/cache, model weights or
 private traces were removed or committed.
+
+
+## 2026-10-11 — bounded v3 artifact identity and actual-weight registration without identity hooks
+
+The V2 inventory/kernel bridge previously offered only the legacy whole-row proof. That
+opening cannot authenticate a v3 tile commitment, leaving the two-root identity statement
+without a bounded v3 byte refutation. Tag 105 now appends proof discriminant 2, `TileV3`.
+It authenticates the full carried commitment map, a bounded tile of its named instance, and
+one canonical V2 inventory opening against the class's root, then judges metadata or common
+bytes. Row and strided column coordinates are compared exactly. The column court also
+convicts a forged column tree paired with a truthful row root; truthful row comparisons
+alone would leave that false binding unrefutable.
+
+The new wrapper checks rank/value/path lengths before allocating their bodies (4/4096/64)
+while keeping the kernel leaf's wire bytes unchanged. Inventory pieces/path lengths are
+checked before hashing (32768/32). Legacy proof discriminants, encodings and fold behavior
+are unchanged. The new tariff is filing bytes plus stored canonical program bytes plus
+16 bytes per opened element. It spends one run and this work in the existing shared block
+budget, before decoding the stored program or running the judge. Charged no-fault judgements
+pay the ledger's proportional dismissal tariff from challenger free collateral, persist
+budget/fee and leave the honest binder's reservation intact. Over-budget objects run no
+court; a fresh block can run one again. A valid fault uses the existing one-time reservation
+slash and reporter share. Dormant shipping fences and sampled release gating are unchanged.
+
+The generic SDK producer streams an inventory opening from ranges with a single 32 KiB
+piece buffer, bounded read-ahead and sibling-subtree frontiers. It retains neither a full
+weight tensor nor a vector of all 1,445,797 inventory hashes. The public core builder uses
+the same judge as the node. Model acquisition remains conditional and creates no provider
+availability obligation. The trial includes a public authenticated opening of the bound
+tensor. Possession of the true model alone cannot reveal an arbitrary opaque false root's
+opening; closing that withholding case remains a binding/prosecution requirement.
+
+The actual trial uses all 1,636 parameters from the pinned Qwen2.5 source already recorded
+above, at the same 32-position scope. The original lowered artifact had an unset logits
+scheme and was correctly refused by V2 admission. The existing SDK `declare-layout` produced
+a separate declared artifact with the explicit tiled scheme, tile length 128, h_tile 2 and
+checkpoint interval 65536, without changing parameter declarations or bytes. The new
+canonical program is committed separately: its SHA-256 is
+`a4de8e80ecd4c8dfcbf6ad2faac54779609c373afb40602f1372d2bd63c2d516`.
+The declared container SHA-256 is
+`ff19dd4e4e5a1f18199c4ee5fde8015a5d7883b46080f2530bf02d51ee6db288`.
+Both inventory and v3 parameter roots remain equal to the earlier authenticated source.
+The original artifact/program, native trace and delivery-court records remain separate;
+their old plan/claim roots are not substituted for this declared program's roots.
+
+Every instance was reauthenticated from bounded raw reads before producing the public
+witness. Changing the first element of parameter 3, layer 0, changes only that tensor's
+commitment. Each honest/false filing is **114,371 bytes**; the bundle, including declared
+class and complete parameter maps, is **369,866 bytes**. The final preparation took **58.61 s**
+wall time with **32,604,160 bytes maximum RSS** on this host. These measurements cover root
+preparation and witness generation, not execution, full computation prosecution, conformance
+or performance at the original model context.
+
+The actual node accepts the signed V2 declaration, holds the true binding, charges an
+outsider's no-fault filing without slashing the binder, convicts another class's false
+binding once, matures only the true root, and prepares the full actual v4 candidate through
+32 KiB ordinary object chunks. `KernelBound` resolves that candidate. No parameter-attestation
+or OPV eligibility hook is called. Execution classes/jobs/claims remain empty, release
+eligibility remains held and the small-stateless complete-check domain refuses the actual
+stateful program. An independent node replays the carrier history and committed state.
+This is actual-weight identity/metadata onboarding evidence, **not completed reward-bearing
+onboarding** or a model/task/context support PASS.
+
+Final verification: **22 distinct tests passed** — 9 core onboarding tests (6 new bounded
+court tests), 6 streamed-inventory SDK tests, 5 actual-node binding tests (3 new, 2 regression),
+and 2 central allocation/dormancy checks. All final sessions exited successfully. The first
+node build had test-helper visibility/type errors, then the undeclared artifact was refused
+for its unset scheme; both were corrected before accepting the final results. Old completed
+compilation objects in this checkout were removed to reclaim disk space; archives, live
+compiler output, other checkouts, model sources and private traces were preserved.
+
+The protocol, source digests, raw final logs, witness hash and limitations are recorded in
+[`rfc02-artifact-tile-verdict.json`](evidence/rfc02-artifact-tile-verdict.json).
+Full RFC02 remains open: large/stateful release conformance (GAP-70), the v5 bridge's explicit
+model-weight/job-input role contract, complete real-computation G14, original-checkpoint
+full-task/full-context fidelity, all required common features and shared capital/resource
+and honest-liveness bounds, and shipping activation under the unreduced gates.
+
+Reproduction (the containers remain local source artifacts):
+
+```sh
+palw-class declare-layout --network testnet-12 --out qwen25-32-declared.palwtir \
+  --max-context 32 --tile-len 128 --h-chunk 2 --logits-scheme tiled --logits-tile 128 \
+  qwen25-32.palwtir
+cargo run --locked -p misaka-palw-sdk --example prepare-artifact-tile-court -- \
+  qwen25-32-declared.palwtir params.borsh new-bundle.borsh 64 4096
+cargo test --locked -p kaspa-consensus-core --lib \
+  --config 'profile.dev.package.kaspa-consensus-core.incremental=false' \
+  --config 'profile.dev.package.kaspa-consensus-core.debug=0' palw_onboarding -- --nocapture
+cargo test --locked -p misaka-palw-sdk --lib \
+  --config 'profile.dev.package.kaspa-consensus-core.incremental=false' tir_stream -- --nocapture
+cargo test --locked -p kaspa-consensus --lib \
+  --config 'profile.dev.package.kaspa-consensus.incremental=false' \
+  --config 'profile.dev.package.kaspa-consensus-core.incremental=false' artifact_binding -- --nocapture
+```

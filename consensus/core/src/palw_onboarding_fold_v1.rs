@@ -148,9 +148,39 @@ pub(super) fn apply_artifact_challenged_v1(
     }
     let class = builder.state.classes.get(v2_class).ok_or_else(|| refused("no such V2 class"))?;
     let tir = builder.state.tir_class_v1(v2_class).ok_or_else(|| refused("not an IR class"))?;
-    let program = misaka_palw_tir::TirProgramV1::decode_canonical(tir.program.as_slice())
-        .map_err(|_| refused("the class's stored program does not decode"))?;
-    verify_artifact_mismatch_v1(&program, class.artifact_root, *kernel_param_root, proof).map_err(refused)?;
+    let artifact_root = class.artifact_root;
+    // Only the appended tile court changes tariff semantics. Legacy instance/row
+    // proofs retain their judgement and state roots. Charge before decoding the
+    // stored program or hashing either opening, including a dismissed accusation.
+    let tile_fee = if let ArtifactMismatchProofV1::TileV3 { kernel_tile, .. } = proof {
+        let filing = borsh::to_vec(proof).map_err(|_| refused("the tile proof has no wire form"))?.len() as u64;
+        let work = filing
+            .checked_add(tir.program.len() as u64)
+            .and_then(|n| n.checked_add(kernel_tile.leaf().values.len() as u64 * 16))
+            .ok_or_else(|| refused("the tile court work overflows"))?;
+        let fee = route_ledger_policy_v1(builder)?.dismissal_fee_v1(work) as u128;
+        let collateral = builder.state.bonds.get(challenger).map(|b| b.collateral as u128).unwrap_or(0);
+        if collateral.saturating_sub(builder.committed_at(challenger, ctx.daa_score)) < fee {
+            return Err(refused("the refuter's free collateral does not cover the dismissed tile fee"));
+        }
+        if !charge_route_budget_v1(builder, ctx, work, true)? {
+            return Ok(());
+        }
+        Some(fee)
+    } else {
+        None
+    };
+    let tir = builder.state.tir_class_v1(v2_class).ok_or_else(|| refused("not an IR class"))?;
+    let judgement = misaka_palw_tir::TirProgramV1::decode_canonical(tir.program.as_slice())
+        .map_err(|_| "the class's stored program does not decode")
+        .and_then(|program| verify_artifact_mismatch_v1(&program, artifact_root, *kernel_param_root, proof));
+    if let Err(why) = judgement {
+        if let Some(fee) = tile_fee {
+            builder.slash_bond(*challenger, fee)?;
+            return Ok(()); // preserve the charged budget and fee in the rehearsal
+        }
+        return Err(refused(why));
+    }
     // The fraud is proven: the reservation is forfeit (the slash's burn at release takes its half), the rest pays the challenger.
     let slashed = builder.slash_bond(row.binder, row.reserved as u128)?;
     let reward = slashed.saturating_mul(PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1) / 1000;

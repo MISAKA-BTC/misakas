@@ -12,7 +12,9 @@
 //! produces.
 
 use kaspa_consensus_core::Hash64;
-use kaspa_consensus_core::palw_artifact::{PalwArtifactMerkleFrontierV1, artifact_leaf_parts_v1};
+use kaspa_consensus_core::palw_artifact::{
+    PalwArtifactMerkleFrontierV1, PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_parts_v1,
+};
 use kaspa_consensus_core::palw_tir_artifact_v1::{
     PALW_TIR_ROW_PIECE_BYTES_V1, PalwTirInventoryRowV1, palw_tir_inventory_leaf_count_v1, palw_tir_visit_inventory_rows_v1,
 };
@@ -27,6 +29,20 @@ use std::sync::Mutex;
 /// width, as the container stores it.
 pub trait PalwTirRangeSourceV1 {
     fn read_range(&self, param: u16, layer: Option<u16>, range: Range<u64>, out: &mut [u8]) -> Result<(), String>;
+}
+
+/// Reproducible local evidence consumed by the actual-node identity test. This
+/// contains no private trace or weights beyond the two bounded openings, and is
+/// not a conformance, fidelity, activation or reward certificate.
+#[derive(Clone, Debug, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct ArtifactTileCourtBundleV3 {
+    pub version: u16,
+    pub program_bytes: Vec<u8>,
+    pub class: kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1,
+    pub inventory_root: Hash64,
+    pub params: misaka_palw_kernel::trace::ParamCommitmentsV1,
+    pub honest: kaspa_consensus_core::palw_onboarding_v1::ArtifactMismatchProofV1,
+    pub false_binding: kaspa_consensus_core::palw_onboarding_v1::ArtifactMismatchProofV1,
 }
 
 /// **The inventory root and leaf count**, streamed. Equal to `palw_tir_inventory_root_v1` over the
@@ -53,6 +69,90 @@ pub fn palw_tir_inventory_root_streamed_v1(program: &TirProgramV1, src: &dyn Pal
     }
     debug_assert_eq!(frontier.leaf_count(), count as u64);
     Ok((frontier.root().ok_or("the program declares no param")?, count))
+}
+
+/// Open one inventory leaf while retaining a single piece and Merkle frontiers,
+/// rather than all tensor bytes or all leaf digests. Sibling intervals partition
+/// the other leaves; each interval's frontier computes exactly its promoted subtree.
+/// The returned root must still be compared with the registered class's root.
+pub fn palw_tir_open_leaf_streamed_v1(
+    program: &TirProgramV1,
+    src: &dyn PalwTirRangeSourceV1,
+    index: u32,
+) -> Result<(Hash64, PalwArtifactOpeningV1), String> {
+    let count = palw_tir_inventory_leaf_count_v1(program).map_err(|e| e.to_string())?;
+    if index >= count {
+        return Err("the selected leaf is outside the inventory".into());
+    }
+    let (mut at, mut width, mut level) = (index as u64, count as u64, 0u32);
+    let mut siblings = Vec::new();
+    while width > 1 {
+        if !(at == width - 1 && width % 2 == 1) {
+            let sibling = at ^ 1;
+            siblings.push((sibling << level, ((sibling + 1) << level).min(count as u64), PalwArtifactMerkleFrontierV1::new()));
+        }
+        at /= 2;
+        width = width.div_ceil(2);
+        level += 1;
+    }
+    // Keep path order in `siblings`; walk the disjoint intervals in stream order.
+    let mut order: Vec<usize> = (0..siblings.len()).collect();
+    order.sort_unstable_by_key(|k| siblings[*k].0);
+    let mut interval = 0usize;
+    let mut frontier = PalwArtifactMerkleFrontierV1::new();
+    let mut buf = vec![0u8; PALW_TIR_ROW_PIECE_BYTES_V1 as usize];
+    let mut selected = None;
+    let mut failure = None;
+    palw_tir_visit_inventory_rows_v1(program, &mut |row| {
+        if failure.is_some() {
+            return;
+        }
+        let bytes = &mut buf[..row.len as usize];
+        let start = row.row_start as u64;
+        if let Err(e) = src.read_range(row.param, row.layer, start..start + row.len as u64, bytes) {
+            failure = Some(e);
+            return;
+        }
+        let name = &program.params[row.param as usize].name;
+        let i = frontier.leaf_count();
+        let hash = artifact_leaf_parts_v1(name, row.layer, row.row_start, bytes);
+        frontier.push(hash);
+        if i == index as u64 {
+            selected = Some(PalwArtifactOperandV1 {
+                tensor_name: name.clone(),
+                layer: row.layer,
+                row_start: row.row_start,
+                bytes: bytes.to_vec(),
+            });
+        } else {
+            while interval < order.len() && i >= siblings[order[interval]].1 {
+                interval += 1;
+            }
+            let Some(&k) = order.get(interval) else {
+                failure = Some("the proof intervals do not cover the inventory".into());
+                return;
+            };
+            if i < siblings[k].0 {
+                failure = Some("the proof intervals leave an inventory gap".into());
+                return;
+            }
+            siblings[k].2.push(hash);
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    let path = siblings.iter().map(|(_, _, f)| f.root().ok_or("an empty sibling interval".to_string())).collect::<Result<_, _>>()?;
+    let root = frontier.root().ok_or("an empty inventory")?;
+    let opening = PalwArtifactOpeningV1 {
+        operand: selected.ok_or("the inventory omitted the selected leaf")?,
+        leaf_index: index,
+        leaf_count: count,
+        path,
+    };
+    kaspa_consensus_core::palw_artifact::verify_artifact_opening_v1(&opening, root).map_err(|e| e.to_string())?;
+    Ok((root, opening))
 }
 
 /// How much a [`ContainerRanges`] reads ahead.
@@ -100,8 +200,10 @@ pub(crate) fn pread(file: &std::fs::File, buf: &mut [u8], at: u64) -> std::io::R
 
 impl PalwTirRangeSourceV1 for ContainerRanges<'_> {
     fn read_range(&self, param: u16, layer: Option<u16>, range: Range<u64>, out: &mut [u8]) -> Result<(), String> {
-        let (off, bytes) =
-            self.c.locate(param, layer).ok_or_else(|| format!("param {param} (layer {layer:?}) is not in {}", self.c.path.display()))?;
+        let (off, bytes) = self
+            .c
+            .locate(param, layer)
+            .ok_or_else(|| format!("param {param} (layer {layer:?}) is not in {}", self.c.path.display()))?;
         if range.end > bytes || out.len() as u64 != range.end - range.start {
             return Err(format!("bytes {range:?} of a tensor of {bytes}"));
         }
@@ -138,7 +240,8 @@ impl<'s> ChunkedRanges<'s> {
 
 impl PalwTirRangeSourceV1 for ChunkedRanges<'_> {
     fn read_range(&self, param: u16, layer: Option<u16>, range: Range<u64>, out: &mut [u8]) -> Result<(), String> {
-        let t = self.artifact.tensors.get(&(param, layer)).ok_or_else(|| format!("param {param} (layer {layer:?}) was never produced"))?;
+        let t =
+            self.artifact.tensors.get(&(param, layer)).ok_or_else(|| format!("param {param} (layer {layer:?}) was never produced"))?;
         if range.end > t.bytes || out.len() as u64 != range.end - range.start {
             return Err(format!("bytes {range:?} of a tensor of {}", t.bytes));
         }
@@ -147,7 +250,11 @@ impl PalwTirRangeSourceV1 for ChunkedRanges<'_> {
         while done < out.len() {
             let k = (at / PALW_TIR_CHUNK_BYTES_V1 as u64) as usize;
             let c = t.chunks.get(k).ok_or_else(|| format!("no chunk {k} in param {param}'s {} chunks", t.chunks.len()))?;
-            let want = if k + 1 < t.chunks.len() { PALW_TIR_CHUNK_BYTES_V1 as u32 } else { (t.bytes - k as u64 * PALW_TIR_CHUNK_BYTES_V1 as u64) as u32 };
+            let want = if k + 1 < t.chunks.len() {
+                PALW_TIR_CHUNK_BYTES_V1 as u32
+            } else {
+                (t.bytes - k as u64 * PALW_TIR_CHUNK_BYTES_V1 as u64) as u32
+            };
             if c.len != want {
                 return Err(format!("chunk {k} of param {param} is {} bytes, canonical chunking needs {want}", c.len));
             }
@@ -195,7 +302,10 @@ mod tests {
             ln_theta_gen_q: LN_THETA_10000_GEN_Q,
             eps_q: 1,
         };
-        let a = Base0ArtifactV1::derive_deterministic(shape, 0x3F3).expect("shape").with_a16_params(derived_a16_store(&shape)).expect("store");
+        let a = Base0ArtifactV1::derive_deterministic(shape, 0x3F3)
+            .expect("shape")
+            .with_a16_params(derived_a16_store(&shape))
+            .expect("store");
         let path = std::env::temp_dir().join(format!("tir-stream-{tag}-{}.palwtir", std::process::id()));
         convert_a16_to_tir(&a, HISTORY_BOUND_V1_SMALL, &path, "{}".into()).expect("converted");
         path
@@ -207,11 +317,37 @@ mod tests {
             let path = converted(tag, layers, vocab);
             let c = PalwTirContainerV1::open(&path).expect("opens");
             let want = palw_tir_inventory_root_v1(&c.program, &PalwTirContainerSourceV1(&c)).expect("consensus root");
-            let got = palw_tir_inventory_root_streamed_v1(&c.program, &ContainerRanges::open(&c).expect("ranges")).expect("streamed root");
+            let got =
+                palw_tir_inventory_root_streamed_v1(&c.program, &ContainerRanges::open(&c).expect("ranges")).expect("streamed root");
             assert_eq!(got, want, "{tag}");
             assert_eq!(palw_tir_inventory_root_of_file_v1(&path).expect("of file"), want);
             let _ = std::fs::remove_file(&path);
         }
+    }
+
+    #[test]
+    fn streamed_openings_match_the_consensus_paths_including_promoted_tails() {
+        use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_open_leaf_v1;
+        let path = converted("openings", 1, 17);
+        let c = PalwTirContainerV1::open(&path).unwrap();
+        let ranges = ContainerRanges::open_with_window(&c, 32768).unwrap();
+        let source = PalwTirContainerSourceV1(&c);
+        let (root, count) = palw_tir_inventory_root_v1(&c.program, &source).unwrap();
+        assert!(!count.is_power_of_two());
+        for index in [0, 1, 2, count / 2, count - 3, count - 2, count - 1] {
+            let (got, opening) = palw_tir_open_leaf_streamed_v1(&c.program, &ranges, index).unwrap();
+            assert_eq!(got, root);
+            assert_eq!(opening, palw_tir_open_leaf_v1(&c.program, &source, index).unwrap());
+        }
+        assert!(palw_tir_open_leaf_streamed_v1(&c.program, &ranges, count).is_err());
+        struct Missing;
+        impl PalwTirRangeSourceV1 for Missing {
+            fn read_range(&self, _: u16, _: Option<u16>, _: Range<u64>, _: &mut [u8]) -> Result<(), String> {
+                Err("missing".into())
+            }
+        }
+        assert_eq!(palw_tir_open_leaf_streamed_v1(&c.program, &Missing, 0).unwrap_err(), "missing");
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -257,7 +393,14 @@ mod tests {
         let out = std::env::temp_dir().join(format!("tir-stream-lowered-{name}{tag}-{}.palwtir", std::process::id()));
         let store = std::env::temp_dir().join(format!("tir-stream-lowered-{name}{tag}-{}.chunks", std::process::id()));
         let meta = |_: &misaka_palw_tir_lower::lower::StreamMaterialised| serde_json::json!({"fixture": name});
-        let opts = ConvertOpts { stream: StreamOpts { defer_min_elems: 0, block_elems: 64 }, layout: Vec::new(), tokenizer_id: [4u8; 64], meta: &meta, keep_chunks: false, math: misaka_palw_tir_lower::detmath::MathMode::LibmV1 };
+        let opts = ConvertOpts {
+            stream: StreamOpts { defer_min_elems: 0, block_elems: 64 },
+            layout: Vec::new(),
+            tokenizer_id: [4u8; 64],
+            meta: &meta,
+            keep_chunks: false,
+            math: misaka_palw_tir_lower::detmath::MathMode::LibmV1,
+        };
         convert_to_container(&prep, &loader, &stats, &QuantPolicy::default(), &store, &out, &opts, &|_, _| {}).expect("converted");
         out
     }
@@ -267,7 +410,8 @@ mod tests {
         use crate::tir_manifest::PalwTirManifestV1;
         for name in ["llama", "mixtral", "qwen3_5", "gemma2"] {
             let path = lowered(name);
-            let (a, b) = (PalwTirManifestV1::derive(&path).expect("derive"), PalwTirManifestV1::derive_streamed(&path).expect("streamed"));
+            let (a, b) =
+                (PalwTirManifestV1::derive(&path).expect("derive"), PalwTirManifestV1::derive_streamed(&path).expect("streamed"));
             assert_eq!(a, b, "{name}");
             assert!(a.leaf_count > 100, "{name}");
             // The checked manifest round-trips and agrees with the file.
@@ -286,7 +430,8 @@ mod tests {
         let (one, many) = (pool(1), pool(7));
         for name in ["llama", "gemma2", "qwen3_5", "mamba2", "phi3_longrope"] {
             let (a, b) = (one.install(|| lowered_as(name, "-t1")), many.install(|| lowered_as(name, "-t7")));
-            let (ra, rb) = (PalwTirManifestV1::derive_streamed(&a).expect("root"), PalwTirManifestV1::derive_streamed(&b).expect("root"));
+            let (ra, rb) =
+                (PalwTirManifestV1::derive_streamed(&a).expect("root"), PalwTirManifestV1::derive_streamed(&b).expect("root"));
             assert_eq!(ra.inventory_root, rb.inventory_root, "{name}: the root depends on the thread count");
             assert_eq!(ra, rb, "{name}");
             let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));

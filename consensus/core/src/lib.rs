@@ -505,6 +505,7 @@ pub mod palw_kernel_route_v1;
 /// G14 lane D phase 3: the onboarding objects (artifact binding and its refutation, the kernel binding, the conformance commitment,
 /// the signed registration envelope) and the activation gate they feed — rows in the kernel route's aux tables.
 pub mod palw_onboarding_v1;
+mod palw_onboarding_tile_v3;
 /// G14 onboarding P0: conformance evidence on chain (tag 109) — the evidence core shared with the runtime pack, the network's
 /// interim challenge policy, the fold's judgement of posted evidence and of a refutation, and the fresh verifier.
 pub mod palw_conformance_evidence_v1;

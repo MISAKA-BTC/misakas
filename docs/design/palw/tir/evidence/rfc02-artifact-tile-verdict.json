@@ -1,0 +1,144 @@
+{
+  "schema": "misaka.rfc02.artifact-tile.verdict.v1",
+  "base_commit": "b7de3aca3f5b85d435cf53cfc9c9f4d570722d91",
+  "distinct_tests_passed": 22,
+  "final_sessions_terminal_success": true,
+  "source_sha256": {
+    "consensus/core/src/lib.rs": "db151d4a7cca9d9edffcd1c1c833ab7c7499646d5e0ccf60c0f35c0348a36b0f",
+    "consensus/core/src/palw_onboarding_v1.rs": "2f57bf08db64454700bcbdec4dbb92e93d8bbb1d4390d8ff6a08c5d60ced4a38",
+    "consensus/core/src/palw_onboarding_tile_v3.rs": "cb0156675d91dd9396c86d70a506965c60e268fff78f86b450a44aada5c9af6e",
+    "consensus/core/src/palw_onboarding_fold_v1.rs": "bccf3a2c0173468577bd0841941e0feff474aff717d49d9f16fb54b7f636a544",
+    "consensus/core/src/palw_public_material_v1.rs": "e2dffb33e3db87d1d724e5f3a04743f5fecc2fc3fa7105d784d42954e98366d2",
+    "consensus/core/src/palw_court_scope_v1.rs": "998233936dc1c15d1fe47f698216a549a218ba6a5762a19d0ed7f599da4f6896",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs": "027063ab91a661033ee7bcdb96ebc19e9366bf111ca2dd76481b66521a59c7f2",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/artifact_tile.rs": "fcff8b9b6d8e1d6e590d10805a7bef857a8f19a6828757ce27b7500caad13e7e",
+    "misaka-palw-sdk/src/tir_stream.rs": "332851fabd1d44662b0f30c0301274e170e83529396c658b879ef6bef636c3ed",
+    "misaka-palw-sdk/examples/prepare-artifact-tile-court.rs": "36a35a06ec6a3530abbd6ee03775f2efe7271b51f451d47886dfd65b8fea60eb"
+  },
+  "assets_sha256": {
+    "docs/design/palw/tir/evidence/qwen25-real-artifact-tile-court.borsh": "d979eacef34c923e247a57ce09df78fffcfb4c097e7befa5047eeff8fd958feb",
+    "docs/design/palw/tir/evidence/qwen25-real-declared-program.tir": "a4de8e80ecd4c8dfcbf6ad2faac54779609c373afb40602f1372d2bd63c2d516",
+    "docs/design/palw/tir/evidence/qwen25-real-params-v3-commitments.borsh": "a45721593036993c53eb29ad1526906ca190fcdf7d7272fbf7aa3f0b62d19ef1"
+  },
+  "binary_sha256": {
+    "target/debug/deps/kaspa_consensus-3ece596cc17e0f8c": "1c2a022dd11a50f2579c203a78cb576b7cd6c93a112f2029b52f170064fee506",
+    "target/debug/deps/kaspa_consensus_core-38863d86af2a1f17": "76c8e3b123e0a6cf71ca8bef91edc1918db8cfe384b1b8a92020aa3969d5bd00",
+    "target/debug/deps/misaka_palw_sdk-22610ee8cd5786fe": "47bb118c9cf3cf3aa16a5cf83873fa88173fd393cd56f6daba80482cf2af3b28",
+    "target/debug/examples/prepare-artifact-tile-court": "069670b9e2f186249445f22c79df1b67eb7c4c2a5e076284d7be3f3ef3366488",
+    "target/debug/palw-class": "3aea5e3a6bdba0b4589b4cc51e2eeb0aa96fec9ff19a34f1d12d7697f9b30e71"
+  },
+  "final_logs": {
+    "core": {
+      "path": "docs/design/palw/tir/evidence/rfc02-artifact-tile-core.log",
+      "sha256": "5492cb3c261ebe037483d20db340507a1b8d2a7d580c6a93731cd002f4c5a898",
+      "bytes": 3295,
+      "passed": 9,
+      "failed": 0,
+      "elapsed_seconds": 2.03,
+      "exit_code": 0,
+      "raw_sha256": "52c97686b505e8545d6106b06af06adf92c111367e48b33ad6c9120a4d1a4eaf"
+    },
+    "sdk": {
+      "path": "docs/design/palw/tir/evidence/rfc02-artifact-tile-sdk.log",
+      "sha256": "1a1185cbdb6874f021f85fe07696e91486c5594a65c20ec22b3b5876d23c4580",
+      "bytes": 11397,
+      "passed": 6,
+      "failed": 0,
+      "elapsed_seconds": 3.04,
+      "exit_code": 0,
+      "raw_sha256": "9b7de42fdb034c851459104291838a3aed2106cefc39ca20a5c59745cce4c427"
+    },
+    "node": {
+      "path": "docs/design/palw/tir/evidence/rfc02-artifact-tile-node.log",
+      "sha256": "d6824171e32f6a873151729b1e4b8cc483fd5f295485570e53c8d5f59caf568f",
+      "bytes": 47595,
+      "passed": 5,
+      "failed": 0,
+      "elapsed_seconds": 10.3,
+      "exit_code": 0,
+      "raw_sha256": "026f9a595aacda99044ec264315d52a24815173ad3fa31a95b742e45ce01107b"
+    },
+    "allocation": {
+      "path": "docs/design/palw/tir/evidence/rfc02-artifact-tile-allocation.log",
+      "sha256": "c48ba35c42d5e25821e29e72e45bbcee8d8cd1c84a0bd8ccd6f8a178f4bcb87a",
+      "bytes": 209,
+      "passed": 1,
+      "failed": 0,
+      "elapsed_seconds": 0.01,
+      "exit_code": 0,
+      "raw_sha256": "512478047dd5187f54ea136a6296c68b39d268f49ab1bc83fa89c7815c920256"
+    },
+    "dormancy": {
+      "path": "docs/design/palw/tir/evidence/rfc02-artifact-tile-dormancy.log",
+      "sha256": "47b83417dd935bb1b732d11faa5ac797abaeb5627d7164d058cd3af4a49b8819",
+      "bytes": 1476,
+      "passed": 1,
+      "failed": 0,
+      "elapsed_seconds": 0.13,
+      "exit_code": 0,
+      "raw_sha256": "dfa882755017445121162a8b689ec089f11c504c5f7b7a9e8be6c178c96eab15"
+    },
+    "actual-preparation": {
+      "path": "docs/design/palw/tir/evidence/rfc02-artifact-tile-actual-preparation.json",
+      "sha256": "317469709f18cddcc4f2a53703853b7f5422ce2630cd792755a94caf34bb00b1",
+      "bytes": 760
+    },
+    "actual-preparation-time": {
+      "path": "docs/design/palw/tir/evidence/rfc02-artifact-tile-actual-preparation-time.log",
+      "sha256": "bf6349fa9fcee3fd772ea385d285ecd159d7cf0ddc4a70771d0f5bcdb70aa821",
+      "bytes": 777
+    },
+    "declaration": {
+      "path": "docs/design/palw/tir/evidence/rfc02-artifact-tile-declaration.log",
+      "sha256": "ad6ae76de5718824238bd8a6b60324954ddc67c2228dd643e8bff61abca0a33a",
+      "bytes": 734
+    },
+    "declaration-time": {
+      "path": "docs/design/palw/tir/evidence/rfc02-artifact-tile-declaration-time.log",
+      "sha256": "6339fb126bcf83d86ef55bc70f63718fe1ff91ac526b683935e376e41707511d",
+      "bytes": 777
+    }
+  },
+  "actual_preparation": {
+    "bundle_bytes": 369866,
+    "conformance_fidelity_activation_or_final_proven": false,
+    "elapsed_ms": 58229,
+    "false_binding_proven": true,
+    "false_filing_bytes": 114371,
+    "false_kernel_root": "9cd49ee32129236f21d84bd885d18fa9e48f459a75fd2eedc557be9005f0f3410c69ca33a46b2ed4e7394e1befc5780466a464344b9e604ef5601969c27e8f11",
+    "honest_filing_bytes": 114371,
+    "honest_proves_no_fault": true,
+    "instances_authenticated": 1636,
+    "inventory_root": "5c02fc51ad06f17066c64dca3b79c4bbf986fdd399b7e583a6384ff8d00580d13aeefb2f42c3cbec3a1499f639b6463e792ac40394ba590bc902e1b65fbeed9a",
+    "layer": 0,
+    "param": 3,
+    "schema": "misaka.palw.artifact-tile-court.v3",
+    "true_kernel_root": "1c07cbbadb1ec7166361a6ffdda43c7c5740183dbb8ecd9659e7c4c5c906cf5495ac5df4fd25617829628b3cec7969e43eeee06bed08c0beeaa51d76b023f729"
+  },
+  "actual_preparation_max_rss_bytes": 32604160,
+  "actual_preparation_wall_seconds": 58.61,
+  "actual_node": "1636 actual v3 parameters, canonical declared class, signed V2 registration and two-root binding, no-fault fee, outsider conviction and one slash, true binding maturation, v4 conformance-only metadata and KernelBound, independent replay",
+  "parameter_attestation_hook_used": false,
+  "opv_eligibility_hook_used": false,
+  "test_armed_dormant_activation": true,
+  "shipping_activation_changed": false,
+  "sampled_reward_gate_changed": false,
+  "not_established": [
+    "large/stateful release conformance",
+    "v5 model-weight versus job-input role binding at V2 inventory bridge",
+    "full computation G14 from actual weights",
+    "original-model full-task/context fidelity",
+    "all network-wide resource and honest-liveness guarantees",
+    "shipping activation",
+    "full RFC02 completion",
+    "refutation of an arbitrary opaque false parameter commitment when no authenticated opening of that bound tensor is public"
+  ],
+  "recovered_failures": [
+    "node helper private method and missing map-key borrow; changed only test helper",
+    "undeclared source program correctly refused for unset logits scheme; used existing generic SDK declare-layout without changing source weights or admission rules"
+  ],
+  "cache_cleanup": "only completed old compilation objects and incremental caches in this checkout; no archives, sources, live output or other checkout removed",
+  "original_raw_logs_preserved_in_tmp": true,
+  "log_normalization": "Only trailing empty lines removed from committed test logs; original terminal captures retained in /tmp with raw_sha256 recorded.",
+  "bound_opening_assumption": "The verifier has the true model inventory and an authenticated public tile opening of the bound tensor. True model bytes alone do not reveal a false opaque root's opening; this court adds no model-weight availability default."
+}

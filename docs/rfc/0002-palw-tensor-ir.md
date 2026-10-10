@@ -2447,3 +2447,48 @@ creates no Final, supplies no Final weight and contributes no work-beacon source
 passes, and consumes the candidate. The candidate cannot make a stateful or large class
 eligible for the small-stateless complete check; sampled evidence still does not gate release
 rewards pending GAP-70. No production activation is implied.
+
+
+### 14.13 Bounded v3 artifact-identity refutation
+
+Tag 105 appends `ArtifactMismatchProofV1::TileV3` as proof discriminant **2**.
+The old instance-set and row variants retain discriminants 0/1, encoding, judgement and
+fold behavior. The new court binds a carried parameter map to the exact bonded kernel root,
+authenticates one v3 tile against the named instance, and authenticates the canonical V2
+inventory piece against the registered class root. Authenticated dtype/shape differences or
+different bytes at common coordinates refute the binding. Rank, dtype, instance, leaf index,
+leaf count, canonical piece length and both roots are checked. A copied or disjoint opening
+proves no fault. Both row and strided column tiles are supported: a forged column tree must
+remain refutable even when its paired row root is truthful.
+
+`ArtifactTileOpeningV3` uses the existing leaf wire bytes, with lengths checked before
+allocation: rank ≤ 4, elements ≤ 4,096, path ≤ 64. It does not change the kernel leaf codec.
+The inventory material is checked before hashing against its 32 KiB piece and 32-level path
+ceilings. This court opens neither a full model tensor nor a whole execution trace.
+
+Only this appended proof spends the shared block court/run budget, before decoding the
+stored program or judging either opening. Its work tariff is serialized proof bytes plus
+stored canonical program bytes plus 16 times opened element count. A refutation may use the
+existing proof reserve. A charged judgement that proves nothing slashes the challenger's
+free collateral by `dismissal_fee_v1(work)` and persists that fee and budget as an accepted
+dismissal. An over-budget object runs no court and pays no judgement fee. Neither outcome
+slashes/defaults the honest binder. A valid proof uses the existing one-time reservation
+slash and reporter share. The dormant route fence and shipping validation remain unchanged.
+
+The SDK can stream one V2 inventory opening with a 32 KiB piece buffer, its existing bounded
+read-ahead window and logarithmic sibling-subtree frontiers, rather than retaining all
+weights or all inventory leaf hashes. The core `tile_refutation_v3` builder checks public
+openings through the same pure court. Model acquisition remains conditional; this adds no
+consensus model-weight retention or provider obligation. Refutation here requires an authenticated
+opening of the **bound** tensor as well as the verifier's true inventory bytes. An arbitrary
+opaque false commitment with no public opening is not made refutable by this comparison
+alone; that residual binding/prosecution requirement remains open. The generic
+`prepare-artifact-tile-court` diagnostic reauthenticates all v3 instances before producing
+an honest and a one-element false-binding witness; it consults no model/compiler allowlist.
+
+The predeclared tests and full-scope exclusions are recorded in
+[`rfc02-artifact-tile-protocol.json`](../design/palw/tir/evidence/rfc02-artifact-tile-protocol.json).
+This identity court cannot substitute for stateful release conformance, full computation
+verification, source fidelity, full task/context support or shipping activation. The v5
+bridge must still explicitly distinguish artifact parameters from its two job-input roles;
+v3 root preparation alone does not resolve that inventory contract.

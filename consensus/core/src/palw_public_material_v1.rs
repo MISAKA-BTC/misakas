@@ -380,6 +380,29 @@ pub fn row_refutation_v1(
     None
 }
 
+/// Build a v3 binding refutation from a verifier's inventory opening and a public
+/// opening of the bound tensor. Both roots and the declared instance/coordinates
+/// are checked by the same pure judge as signed tag 105; nothing trusts a manifest
+/// or grants model-weight availability duties to a claim-witness provider.
+pub fn tile_refutation_v3(
+    program: &TirProgramV1,
+    artifact_root: Hash64,
+    bound: &ParamCommitmentsV1,
+    param: u16,
+    layer: Option<u16>,
+    kernel_tile: misaka_palw_kernel::merkle3::LeafOpeningV3,
+    v2_opening: PalwArtifactOpeningV1,
+) -> Option<ArtifactMismatchProofV1> {
+    let proof = ArtifactMismatchProofV1::TileV3 {
+        commitments: bound.clone(),
+        param,
+        layer,
+        kernel_tile: crate::palw_onboarding_v1::ArtifactTileOpeningV3::new(kernel_tile).ok()?,
+        v2_opening,
+    };
+    verify_artifact_mismatch_v1(program, artifact_root, Hash64::from_bytes(bound.root()), &proof).ok().map(|_| proof)
+}
+
 // ---- the artifact manifest (an index, never a root of trust) ---------------------------------------------------------------
 
 /// **The artifact's manifest**: the class record and every leaf's hash, so a fetcher checks each leaf on its own. Accepted only after

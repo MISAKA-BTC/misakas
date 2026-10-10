@@ -53,6 +53,7 @@ use crate::palw_artifact::{PalwArtifactOpeningV1, verify_artifact_opening_v1};
 use crate::palw_conformance_evidence_v1::ConformanceEvidencePostV1;
 use crate::palw_kernel_route_v1::PalwKernelRouteStateV1;
 use crate::palw_mode_v2::PalwModeV2Error;
+pub use crate::palw_onboarding_tile_v3::ArtifactTileOpeningV3;
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::palw_tir_artifact_v1::{palw_tir_inventory_leaf_count_v1, palw_tir_leaf_index_v1, palw_tir_param_instances_v1};
 use misaka_palw_challenge::{BeaconContextV1, ConformanceCommitmentV1, OnboardingFailureV1, OnboardingRecordV1, OnboardingStateV1};
@@ -866,6 +867,15 @@ pub enum ArtifactMismatchProofV1 {
         kernel_row: TensorOpeningV1,
         v2_opening: PalwArtifactOpeningV1,
     },
+    /// Appended wire variant 2: a bounded v3 row or column tile against the registered V2
+    /// inventory. Variants 0 and 1 retain their original encoding and judgement.
+    TileV3 {
+        commitments: ParamCommitmentsV1,
+        param: u16,
+        layer: Option<u16>,
+        kernel_tile: ArtifactTileOpeningV3,
+        v2_opening: PalwArtifactOpeningV1,
+    },
 }
 
 /// **Verify a refutation** against what the chain holds: the V2 class's program and registered `artifact_root`, and the bound kernel
@@ -878,7 +888,9 @@ pub fn verify_artifact_mismatch_v1(
     proof: &ArtifactMismatchProofV1,
 ) -> Result<(), &'static str> {
     let commitments = match proof {
-        ArtifactMismatchProofV1::Instances { commitments } | ArtifactMismatchProofV1::Row { commitments, .. } => commitments,
+        ArtifactMismatchProofV1::Instances { commitments }
+        | ArtifactMismatchProofV1::Row { commitments, .. }
+        | ArtifactMismatchProofV1::TileV3 { commitments, .. } => commitments,
     };
     if commitments.root() != kernel_param_root.as_bytes() {
         return Err("the carried commitments do not root to the bound kernel root");
@@ -889,6 +901,84 @@ pub fn verify_artifact_mismatch_v1(
         .flat_map(|(j, layers)| layers.into_iter().map(move |l| (j as u16, l)))
         .collect();
     match proof {
+        ArtifactMismatchProofV1::TileV3 { commitments, param, layer, kernel_tile, v2_opening } => {
+            if !declared.contains(&(*param, *layer)) {
+                return Err("the program declares no such tensor instance");
+            }
+            let decl = program.params.get(*param as usize).ok_or("the program declares no such param")?;
+            let commitment = commitments.by_instance.get(&(*param, *layer)).ok_or("the bound commitments hold no such instance")?;
+            let leaf = kernel_tile.leaf();
+            if !leaf.authenticates(commitment) {
+                return Err("the kernel tile does not authenticate against the bound commitment");
+            }
+            let op = &v2_opening.operand;
+            // Reject oversize inventory material before hashing it. An inventory of
+            // u32 leaves can have no path deeper than 32.
+            if op.bytes.len() > crate::palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1 as usize || v2_opening.path.len() > 32 {
+                return Err("the inventory opening exceeds the tile court's bounds");
+            }
+            verify_artifact_opening_v1(v2_opening, v2_artifact_root)
+                .map_err(|_| "the V2 opening does not reach the registered artifact root")?;
+            if op.tensor_name != decl.name || op.layer != *layer {
+                return Err("the V2 opening names another tensor instance");
+            }
+            if Some(v2_opening.leaf_index) != palw_tir_leaf_index_v1(program, *param, *layer, op.row_start as u64)
+                || palw_tir_inventory_leaf_count_v1(program).ok() != Some(v2_opening.leaf_count)
+            {
+                return Err("the V2 opening is not at the leaf the program's layout puts these bytes in");
+            }
+            let row_bytes = crate::palw_tir_artifact_v1::palw_tir_row_bytes_v1(program, *param);
+            let within_row = (op.row_start as u64).checked_rem(row_bytes).ok_or("an empty declared inventory row")?;
+            let piece = crate::palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1;
+            if !within_row.is_multiple_of(piece) || op.bytes.len() as u64 != (row_bytes - within_row).min(piece) {
+                return Err("the inventory opening is not a whole canonical inventory piece");
+            }
+            let shape: Vec<u64> = decl.shape.iter().map(|d| *d as u64).collect();
+            if leaf.dtype != decl.dtype.tag() || leaf.shape != shape {
+                return Ok(());
+            }
+            let layout = leaf.layout().ok_or("the kernel tile's shape overflows")?;
+            let width = decl.dtype.width() as u64;
+            let (leaf_start, leaf_end) = (op.row_start as u64, op.row_start as u64 + op.bytes.len() as u64);
+            let mut shared = false;
+            // A column tile is strided. Comparing its bounding byte interval would
+            // confuse intervening columns with opened values. Map every bounded
+            // element to its exact row-major coordinate instead, without another
+            // index vector. Authentication already checked axis, count and shape.
+            for (i, value) in leaf.values.iter().enumerate() {
+                let within = leaf
+                    .tile
+                    .checked_mul(misaka_palw_kernel::merkle3::TILE_V3)
+                    .and_then(|n| n.checked_add(i as u64))
+                    .ok_or("the kernel tile's element offset overflows")?;
+                let flat = if leaf.axis == AXIS_ROW || leaf.shape.len() <= 1 {
+                    leaf.line.checked_mul(layout.row_len).and_then(|n| n.checked_add(within))
+                } else {
+                    (leaf.line / layout.n)
+                        .checked_mul(layout.m)
+                        .and_then(|n| n.checked_add(within))
+                        .and_then(|n| n.checked_mul(layout.n))
+                        .and_then(|n| n.checked_add(leaf.line % layout.n))
+                }
+                .ok_or("the kernel tile's element index overflows")?;
+                let start = flat.checked_mul(width).ok_or("the kernel tile's byte offset overflows")?;
+                let end = start.checked_add(width).ok_or("the kernel tile's byte range overflows")?;
+                let (lo, hi) = (start.max(leaf_start), end.min(leaf_end));
+                if lo < hi {
+                    shared = true;
+                    let raw = value.to_le_bytes();
+                    for at in lo..hi {
+                        if op.bytes[(at - leaf_start) as usize] != raw[(at - start) as usize] {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            if !shared {
+                return Err("the two openings cover no common byte");
+            }
+            Err("the two openings agree on every byte they share")
+        }
         ArtifactMismatchProofV1::Instances { commitments } => {
             let committed: BTreeSet<(u16, Option<u16>)> = commitments.by_instance.keys().copied().collect();
             if committed == declared { Err("the bound commitments hold exactly the program's declared instances") } else { Ok(()) }
