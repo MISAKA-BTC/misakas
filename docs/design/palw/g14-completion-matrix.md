@@ -581,3 +581,14 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   `g14_`/`r4x_` at `b8ae9412b`: 76 pass, 4 ignored (the known FAILs), 1 failed — `g14_registration_replay_on_a_second_node_and_across_a_reorg`,
   the known GAP-11 race (fixed on `g14/r4-fixes` by `39e4ea441`). GAP-01..04 move to verified at node level for F1 (the socket hop of
   GAP-03 stays a drill: a kaspad with the route armed is refused by validation).
+* 2026-10-10 — milestone 3 (G14C, run `g14c-m3`, on `86ade72ba` = r4-fixes merged): `Rules` switched to G14R's rules (accuser
+  seal-then-reveal; a pre-Final default keeps the rest of the reservation liable; escrow-funded Final reward; the OPV admission fee and
+  the F-C4R4-05 dismissal fee accounted). GAP-10 on the canonical harness, both modes, the participant on its own fresh node:
+  **verified** — quantization/rounding (a rounding `Div` off by one), a substituted delivered token (decode court), a self-consistent
+  garbage trace under other weights (convicted against the registered weights); **refused at inclusion** — a fabricated segment
+  boundary, a copied claim (the job paid once), a borrowed trace of another prompt. 24/24 `g14_canonical_*` pass.
+  **Residual (not reachable on the node):** routing (TopK) and history (derived window) need a class that has them; the sketch's
+  dense + MoE class is taken by the kernel ledger but refused by the route's carrier fit — worst filing ~193 MB under K2-TIR-v2's
+  whole-instance courts vs 1.58 MB carriable (pinned: `g14_canonical_a_routing_and_history_class_is_refused_by_the_node_carrier_fit_until_element_courts`).
+  Owner: K2S (K2-TIR-v4 element courts, GAP-30/31). GAP-71b (SDK fresh complete-check verifier) waits on OPVB's `PostComplete`,
+  which is not on the integration line.

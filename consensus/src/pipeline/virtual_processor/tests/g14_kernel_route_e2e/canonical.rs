@@ -29,9 +29,8 @@
 //!   the chain has no input to react with — while a verifier that acquired the weights from another peer (authenticated against the
 //!   registered commitments; a peer serving other weights is refused) convicts exactly as before. Every node ends on one root.
 //!
-//! **The conviction path's branch-specific parts are behind [`Rules`]** (the filing objects and what each outcome pays). Switching
-//! this harness to G14R's `g14/r4-fixes` (accuser seal-then-reveal, the pre-Final default that keeps the reservation liable, the
-//! escrow-funded Final reward) replaces `Rules` and nothing else.
+//! **The conviction path's branch-specific parts are behind [`Rules`]** (the filing objects and what each outcome pays), now
+//! G14R's rules (accuser seal-then-reveal, the pre-Final default that keeps the reservation liable, the escrow-funded Final reward).
 //!
 //! The fences are armed WITHOUT their validation, exactly as in the parent module (its doc): nothing here can run on a network.
 use super::*;
@@ -55,6 +54,7 @@ use kaspa_rpc_core::{
 };
 use misaka_palw_kernel::job::DecodeFaultV1;
 use misaka_palw_kernel::ledger::LedgerPolicyV1;
+use misaka_palw_kernel::ledger::proof_seal_v1;
 use misaka_palw_kernel::opv::OpvPolicyV1;
 use misaka_palw_kernel::rows::LedgerRowsV1;
 
@@ -428,16 +428,31 @@ fn registered_root(fresh: &Fresh, claim: &Digest) -> Digest {
 
 // ---- the conviction path on this branch (the adapter G14R's merge replaces) -----------------------------------------------------
 
-/// **The conviction path's specifics on the integration line (`b8ae9412b`)**: what a filing is, and what each outcome pays. The only
-/// code that changes when `g14/r4-fixes` is merged (there: an accuser seals its proof before revealing it; a pre-Final default takes
-/// the penalty split like a slash and keeps the rest of the reservation liable; the Final reward comes from the poster's escrow).
+/// **The conviction path's specifics on the integration line since `86ade72ba` (G14R's `g14/r4-fixes` merged)**: what a filing is,
+/// and what each outcome pays. An accuser seals its proof first (GAP-R7: the bounty goes to the earliest seal of the convicting bytes,
+/// so a copyist lifting the public carrier pays the sealer); a pre-Final default takes the penalty split like a slash and keeps the
+/// rest of the reservation liable through `default + liability_daa` (F-C4R3-02); the Final reward is paid once out of the poster's
+/// escrow (GAP-5). Everything else in this module is branch-independent.
 struct Rules;
 
 impl Rules {
-    /// File `proof` against `claim` from `node`, signed by actor `card`: one `FileProof`, through `node`'s mempool and template.
+    /// File `proof` against `claim` from `node`, signed by actor `card`: its seal, then (one seal delay later) the `FileProof`, each
+    /// through `node`'s mempool and template.
     async fn file_proof(node: &mut Net, card: usize, claim: Digest, proof: ProsecutionV1) {
-        let o = node.route(card, &K::FileProof { accuser: node.kid(card), claim, proof });
-        node.send(vec![(card, o)]).await;
+        let accuser = node.kid(card);
+        let seal = node.route(card, &K::SealProof { accuser, claim, seal: proof_seal_v1(&claim, &accuser, &proof) });
+        node.send(vec![(card, seal)]).await;
+        let o = node.route(card, &K::FileProof { accuser, claim, proof });
+        // A filing larger than one carrier rides the route's own chunk lane (tag 113, F-C4R3-03), signed per chunk by the filer.
+        match kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&o, 50_000).expect("chunks") {
+            None => {
+                node.send(vec![(card, o)]).await;
+            }
+            Some(_) => {
+                let chunks = node.kernel_chunks(card, &o, PalwKernelChunkTargetV1::Claim(claim), 50_000);
+                node.send(chunks.into_iter().map(|c| (card, c)).collect()).await;
+            }
+        }
     }
 
     /// Demand `position` of `claim` from `node`, signed by actor `card`.
@@ -446,23 +461,31 @@ impl Rules {
         node.send(vec![(card, o)]).await;
     }
 
+    /// What admitting the producer's claim costs it outright (F-C4R3-05: an OPV admission fee, burned whatever becomes of the claim;
+    /// a Panel-licensed claim pays none).
+    fn admission_cost(w: &World, mode: Mode) -> u64 {
+        match mode {
+            Mode::Panel => 0,
+            Mode::Opv => w.net.api().unwrap().header.opv.expect("an OPV network").economics.admission_fee,
+        }
+    }
+
     /// The accuser's share of a conviction that slashed `slashed`.
     fn bounty(policy: &LedgerPolicyV1, slashed: u64) -> u64 {
         slashed * u64::from(policy.accuser_reward_permille) / 1000
     }
 
-    /// A sole demander's share of the producer's default (an OPV default burns a share first).
+    /// A sole demander's share of the producer's default (the parent's `default_share`: split like a slash, an OPV claim's capped).
     fn default_share(policy: &LedgerPolicyV1, opv: Option<&OpvPolicyV1>) -> u64 {
-        let burned = opv.map_or(0, |o| policy.default_penalty * u64::from(o.economics.default_burn_permille) / 1000);
-        policy.default_penalty - burned
+        default_share(policy, opv)
     }
 
-    /// What stays reserved on the producer after a pre-Final default (here: nothing, the rest is released).
-    fn reserved_after_default(_policy: &LedgerPolicyV1, _reservation: u64) -> u128 {
-        0
+    /// What stays reserved on the producer after a pre-Final default: the rest of the reservation, liable until the horizon.
+    fn reserved_after_default(policy: &LedgerPolicyV1, reservation: u64) -> u128 {
+        u128::from(reservation - policy.default_penalty)
     }
 
-    /// What the coinbase queue owes the producer at its claim's Final (here: the route's own INTERIM reward).
+    /// What the coinbase queue owes the producer at its claim's Final: the job's escrow (the route's reward), paid once.
     fn final_reward(policy: &LedgerPolicyV1) -> u64 {
         policy.claim_reward
     }
@@ -533,7 +556,7 @@ async fn canonical(mode: Mode, start: Start, outcome: Outcome) {
     kaspa_core::log::try_init_logger("warn");
     let mut w = world(mode).await;
     let funding = newcomer_funding(&w.net);
-    let before = w.net.collateral(0);
+    let before = w.net.collateral(0) - Rules::admission_cost(&w, mode);
     let lie = outcome != Outcome::WrongChallengeDismissed;
     let (claim, seats) = claimed(&mut w, mode, 0, lie).await;
     let floor = final_floor(&w, mode, &claim.id);
@@ -574,6 +597,7 @@ async fn canonical(mode: Mode, start: Start, outcome: Outcome) {
             let OutsiderFindingV1::Prosecute(proof) = fresh.check(claim.id, &da, &model) else {
                 panic!("the participant's verifier finds the lie from public material")
             };
+            let seats_slashed: Vec<(usize, u64)> = seats.iter().map(|c| (*c, w.net.slashed(*c))).collect();
             Rules::file_proof(&mut node, NEWCOMER, claim.id, proof).await;
             sync(&node, &mut w.net).await;
             let ledger = w.net.ledger();
@@ -581,8 +605,8 @@ async fn canonical(mode: Mode, start: Start, outcome: Outcome) {
             assert_eq!(w.net.collateral(0), before - slashed, "the REAL producer bond lost the reservation");
             assert_eq!(w.net.kernel_reserved(0), 0);
             assert_eq!(w.net.owed(NEWCOMER), Rules::bounty(&policy, slashed), "the participant's share of the slash is queued");
-            for card in &seats {
-                assert_eq!(w.net.slashed(*card), 0, "the colluding seats are not charged by the producer's conviction");
+            for (card, before) in &seats_slashed {
+                assert_eq!(w.net.slashed(*card), *before, "the colluding seats are not charged by the producer's conviction");
             }
             let read = Rpc::of(&node.chain).claim(&claim.id);
             assert!(read.convicted, "the participant's own node serves the verdict");
@@ -652,7 +676,10 @@ async fn canonical(mode: Mode, start: Start, outcome: Outcome) {
             Rules::file_proof(&mut node, NEWCOMER, claim.id, wrong).await;
             sync(&node, &mut w.net).await;
             assert!(!w.net.ledger().claims[&claim.id].convicted, "a wrong challenge convicts nothing");
-            assert_eq!(w.net.collateral(NEWCOMER), mine - policy.dismissed_proof_fee, "and costs its filer the dismissal fee");
+            // F-C4R4-05: a dismissed filing pays one fee per share of the block's court work it was charged, at least one fee.
+            let paid = mine - w.net.collateral(NEWCOMER);
+            let (fee, most) = (policy.dismissed_proof_fee, policy.dismissed_proof_fee * u64::from(policy.max_adjudications_per_block));
+            assert!(paid >= fee && paid <= most, "and costs its filer the dismissal fee: {paid} not in [{fee}, {most}]");
             assert_eq!(w.net.collateral(0), before, "the honest producer is not charged");
             w.net.beat_to(floor).await;
             let ClaimStateV1::Final { final_daa } = w.net.claim_state(&claim.id) else {
@@ -742,7 +769,7 @@ async fn non_interference(mode: Mode) {
     kaspa_core::log::try_init_logger("warn");
     let mut w = world(mode).await;
     let funding = newcomer_funding(&w.net);
-    let liar_before = w.net.collateral(4);
+    let liar_before = w.net.collateral(4) - Rules::admission_cost(&w, mode);
     let (honest, _) = claimed(&mut w, mode, 0, false).await;
     let (lie, _) = claimed(&mut w, mode, 4, true).await;
     let floor = final_floor(&w, mode, &honest.id);
@@ -817,4 +844,351 @@ async fn g14_canonical_panel_a_peer_refusing_the_model_changes_no_verdict_reward
 #[tokio::test]
 async fn g14_canonical_opv_a_peer_refusing_the_model_changes_no_verdict_reward_weight_or_final() {
     non_interference(Mode::Opv).await;
+}
+
+// ==== Milestone 3 (GAP-10): the other K2 lie types, on the canonical harness ====================================================
+//
+// Each lie is placed in what the producer commits for the parent's single-program class (`wide128_v1(7)`: an embedding gather, a
+// wide MatMul, a rounding division and clamps, the logits), every seat covers it (Panel) or nobody does (OPV), and the participant
+// of milestone 2 — a bond registered after the claim, on its own node started after it — finds it from the RPC reads and convicts it
+// through its own mempool and template. The three inclusion faults (a fabricated segment boundary, a copied claim, a borrowed trace)
+// are refused at inclusion: the participant's node serves no such claim and the job stays the honest producer's.
+//
+// **Routing and history are NOT reachable on the node yet.** A class that has them (the sketch's dense + MoE program: attention over
+// a derived history window, a TopK router) declares a worst filing of ~193 MB under K2-TIR-v2's whole-instance courts, and the route
+// refuses to register a class whose worst filing, response or commitment cannot be carried (1.58 MB). The test below pins that
+// refusal with the measured bounds; the remedy is K2-TIR-v4's element courts (lane K2S, `k2/real-scale`, GAP-30/31), not this lane.
+
+const DENSE_MAX_POSITIONS: u32 = 6;
+
+/// The dense + MoE fixture as a registered kernel class (its artifact attested by the test hook, as the parent's).
+fn dense_fixture() -> Fixture {
+    let fx = misaka_palw_tir_sketch::fixture::dense_moe_v1(7);
+    let d = k2_tir_v2_descriptor();
+    let plan = plan_for_tir_program_v1(&d, &fx.program, program_root_v1(&fx.program.encode()), DENSE_MAX_POSITIONS).unwrap();
+    let pc = ParamCommitmentsV1::of(&fx.params);
+    kernel_route_test_attest_artifact_v1(Hash64::from_bytes(pc.root()), 0);
+    Fixture { program: fx.program, params: fx.params, plan, pc }
+}
+
+/// **One object from `net`, signed by actor `card`**: one carrier when it fits, else `ObjectChunk`s (judged on the assembled whole).
+async fn deliver(net: &mut Net, card: usize, object: Obj) {
+    match kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&object, 50_000).expect("chunks") {
+        None => {
+            net.send(vec![(card, object)]).await;
+        }
+        Some(chunks) => {
+            net.send(chunks.into_iter().map(|c| (card, c)).collect()).await;
+        }
+    }
+}
+
+/// **A class with routing and history is refused by the node's carrier fit** (the GAP-10 residual, module note above): the kernel
+/// ledger itself takes the dense + MoE class, but its worst filing under K2-TIR-v2 is far past what the route can carry, so the node
+/// drops the registration and no claim of it can ever exist. Pinned with the measured bound.
+#[tokio::test]
+async fn g14_canonical_a_routing_and_history_class_is_refused_by_the_node_carrier_fit_until_element_courts() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = world(Mode::Panel).await; // the parent's class registered first: the route exists
+    let fx = dense_fixture();
+    let d = k2_tir_v2_descriptor();
+    let register = K::RegisterClass {
+        descriptor: d.digest(),
+        program_bytes: fx.program.encode(),
+        plan: fx.plan.clone(),
+        param_commitments: fx.pc.clone(),
+    };
+    // The kernel ledger alone takes it...
+    let mut l = w.net.ledger();
+    l.begin_block(w.net.daa() + 1).expect("a later block");
+    l.attest_artifact(fx.pc.root());
+    l.sync_bond(w.net.kid(1), w.net.collateral(1));
+    let events =
+        l.apply_object(&register, &misaka_palw_kernel::route::AuthV1 { signer_bond: w.net.kid(1) }).expect("the ledger takes it");
+    let class = events
+        .iter()
+        .find_map(|e| match e {
+            misaka_palw_kernel::ledger::LedgerEventV1::ClassRegistered { class } => Some(*class),
+            _ => None,
+        })
+        .expect("registered in the ledger");
+    let b = l.bounds_of(&class).expect("bounds");
+    let cap = kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1;
+    let why = misaka_palw_kernel::ledger::carrier_fit_v1(&b, cap, cap, cap).expect_err("past the carriers");
+    assert!((b.max_filing_bytes as u128).max(b.max_response_bytes) > 100 * cap as u128, "far past the carriers: {why} ({b:?})");
+    // ...and the node refuses it.
+    let o = w.net.route(1, &register);
+    deliver(&mut w.net, 1, o).await;
+    assert!(!w.net.ledger().classes.contains_key(&class), "the node drops a class it could not prosecute: {why}");
+}
+
+/// A job of `prompt` posted by card 1.
+async fn job_of(w: &mut World, prompt: Vec<u32>) -> KernelJobV1 {
+    w.jobs += 1;
+    let job = KernelJobV1 { class_binding_id: w.class, prompt, max_new_tokens: 3, decode: DecodeRuleV1::Greedy, nonce: [w.jobs; 64] };
+    let o = w.net.route(1, &K::PostJob { job: job.clone() });
+    w.net.send(vec![(1, o)]).await;
+    assert!(w.net.ledger().jobs.contains_key(&job.id()), "the job posted");
+    job
+}
+
+/// The first node at or after position `from` whose primitive `pick` accepts.
+fn find_node(program: &TirProgramV1, from: u32, pick: impl Fn(&misaka_palw_tir::Prim) -> bool) -> (u32, u16, u16) {
+    for (s, (b, _)) in program.occurrences().iter().enumerate() {
+        for (n, node) in program.blocks[*b as usize].nodes.iter().enumerate() {
+            if pick(&node.prim) {
+                return (from, s as u16, n as u16);
+            }
+        }
+    }
+    panic!("the program has no such node")
+}
+
+/// **A claim the producer reveals**: `object` (a `CommitClaim`) sealed by `producer` in one block, revealed in the next (salted where
+/// the ledger requires it). Returns the claim id and whether the ledger committed it.
+async fn reveal(w: &mut World, producer: usize, object: &K) -> (Digest, bool) {
+    let ledger = w.net.ledger();
+    let K::CommitClaim { claim, .. } = object else { panic!("a single-program commit") };
+    let id = claim.id();
+    let (seal, reveal) = seal_and_reveal(&ledger, w.net.kid(producer), object);
+    let o = w.net.route(producer, &seal);
+    w.net.send(vec![(producer, o)]).await;
+    let o = w.net.route(producer, &reveal);
+    deliver(&mut w.net, producer, o).await;
+    (id, w.net.ledger().claims.contains_key(&id))
+}
+
+/// The other lie types a committed claim can carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lie {
+    /// A rounding division's committed result off by one (the exact quantization / rounding families).
+    Quantize,
+    /// The last delivered token not the greedy selection over its committed logits (output / decode).
+    Decode,
+    /// Every weight perturbed and the whole trace and tokens recomputed consistently under them (a self-consistent garbage trace).
+    Garbage,
+}
+
+/// **The producer's lying claim of `job`**, revealed, and (Panel) covered by every seat; returns it and its seats.
+async fn lying_claim(w: &mut World, mode: Mode, producer: usize, job: &KernelJobV1, lie: Lie) -> (Claim, Vec<usize>) {
+    let ledger = w.net.ledger();
+    let weights = match lie {
+        Lie::Garbage => {
+            let mut g = w.fx.params.clone();
+            for t in g.tensors.values_mut() {
+                for i in 0..t.data.len() {
+                    bump(t, i);
+                }
+            }
+            g
+        }
+        _ => w.fx.params.clone(),
+    };
+    let fx = Fixture { program: w.fx.program.clone(), params: weights, plan: w.fx.plan.clone(), pc: w.fx.pc.clone() };
+    let mut generated = greedy(&fx, &ledger, &w.class, &job.prompt, job.max_new_tokens as usize);
+    if lie == Lie::Decode {
+        let last = generated.len() - 1;
+        generated[last] = (generated[last] + 1) % misaka_palw_tir_sketch::fixture::FX_V;
+    }
+    let program = w.fx.program.clone();
+    let at = match lie {
+        Lie::Quantize => find_node(&program, 1, |p| matches!(p, misaka_palw_tir::Prim::Div { .. })),
+        Lie::Decode | Lie::Garbage => (0, 0, 0),
+    };
+    let produced = produce(&fx, &ledger, &w.class, job, w.net.kid(producer), generated, |t| {
+        let v = &mut t.values[at.0 as usize][at.1 as usize][at.2 as usize];
+        let before = v.clone();
+        match lie {
+            Lie::Quantize => bump(v, 0),
+            Lie::Decode | Lie::Garbage => return,
+        }
+        assert_ne!(*v, before, "the lie changes the committed value");
+    });
+    let (id, committed) = reveal(w, producer, &produced.object).await;
+    assert!(committed, "the lying claim is committed (its lie is in a relation, not in its structure)");
+    let claim = Claim { id, producer, trace: produced.trace, at };
+    let seats = if mode == Mode::Panel {
+        let seats = w.seats(&id);
+        w.cover(&id).await; // every assigned seat signs a passing receipt
+        seats
+    } else {
+        Vec::new()
+    };
+    (claim, seats)
+}
+
+/// **One lie, found and convicted by the participant** (milestone 2's path): its node started after the claim, its bond registered
+/// after it, its verifier from ops 211/210, the registered model from a peer; the conviction through its own mempool and template.
+async fn lie_convicted(mode: Mode, start: Start, lie: Lie) {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = world(mode).await;
+    let funding = newcomer_funding(&w.net);
+    let before = w.net.collateral(0) - Rules::admission_cost(&w, mode);
+    let job = job_of(&mut w, vec![3, 17, 9]).await;
+    let (claim, seats) = lying_claim(&mut w, mode, 0, &job, lie).await;
+    let slashed = reservation(&w, mode);
+    let policy = w.policy();
+    let mut node = start_node(&mut w.net, start).await;
+    let bond = register_newcomer(&mut node, funding).await;
+    sync(&node, &mut w.net).await;
+    know_newcomer(&mut w.net, bond);
+    assert!(!seats.contains(&NEWCOMER));
+    let rpc = Rpc::of(&node.chain);
+    let fresh = rpc.verifier(&claim.id, 0x3C);
+    let model = acquire(&[ModelPeer::Serves(w.fx.params.clone())], &registered_root(&fresh, &claim.id)).expect("the model");
+    let OutsiderFindingV1::Prosecute(proof) = fresh.check(claim.id, &claim.published(&w.fx, &[]), &model) else {
+        panic!("{lie:?}: the participant's verifier finds the lie from public material")
+    };
+    match lie {
+        Lie::Decode => assert!(matches!(proof, ProsecutionV1::Decode(_)), "{lie:?}: the decode court's fault"),
+        _ => assert!(matches!(proof, ProsecutionV1::Kernel(_)), "{lie:?}: a kernel relation's fault"),
+    }
+    let seats_slashed: Vec<(usize, u64)> = seats.iter().map(|c| (*c, w.net.slashed(*c))).collect();
+    Rules::file_proof(&mut node, NEWCOMER, claim.id, proof).await;
+    sync(&node, &mut w.net).await;
+    assert!(w.net.ledger().claims[&claim.id].convicted, "{lie:?}: convicted");
+    assert_eq!(w.net.collateral(0), before - slashed, "{lie:?}: the REAL producer bond lost the reservation");
+    assert_eq!(w.net.owed(NEWCOMER), Rules::bounty(&policy, slashed), "{lie:?}: the participant's share");
+    for (card, before) in &seats_slashed {
+        assert_eq!(w.net.slashed(*card), *before, "the colluding seats are not charged");
+    }
+    let read = Rpc::of(&node.chain).claim(&claim.id);
+    assert!(read.convicted && read.state.starts_with("Convicted"), "{lie:?}: op 210 serves the verdict: {}", read.state);
+    let ttpb = w.net.ttpb();
+    w.net.chain.heartbeat(ttpb, Vec::new()).await;
+    sync(&w.net, &mut node).await;
+    agree(&w.net, &node, "the participant's node");
+}
+
+/// The inclusion faults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unbound {
+    /// A segment's entry state root that is not its predecessor's exit (a fabricated checkpoint).
+    Boundary,
+    /// Another bond re-signing a published, held claim for the same job.
+    Copy,
+    /// A valid trace of another job's prompt, claimed for this job.
+    Borrowed,
+}
+
+/// **An inclusion fault is refused, and the job stays the honest producer's**: the faulty reveal commits nothing (the participant's
+/// node serves no such claim), then the honest claim of the same job commits and reaches Final with its reward.
+async fn unbound_refused(mode: Mode, fault: Unbound) {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = world(mode).await;
+    let policy = w.policy();
+    let job = job_of(&mut w, vec![3, 17, 9]).await;
+    let ledger = w.net.ledger();
+    let honest_tokens = greedy(&w.fx, &ledger, &w.class, &job.prompt, job.max_new_tokens as usize);
+    let honest = produce(&w.fx, &ledger, &w.class, &job, w.net.kid(0), honest_tokens.clone(), |_| {});
+    let K::CommitClaim { claim, evidence, commitments } = honest.object.clone() else { unreachable!() };
+    let (faulty, faulty_producer) = match fault {
+        Unbound::Boundary => {
+            let mut forged = evidence.clone();
+            assert!(forged.segments.len() >= 2, "a multi-segment claim");
+            forged.segments[1].entry_state_root = [0xEE; 64];
+            let c = KernelClaimV1 { evidence_root: forged.root(), ..claim.clone() };
+            (K::CommitClaim { claim: c, evidence: forged, commitments: commitments.clone() }, 0)
+        }
+        Unbound::Copy => {
+            // The original commits (and, Panel, is covered) first; the copy names another producer bond.
+            let (id, committed) = reveal(&mut w, 0, &honest.object).await;
+            assert!(committed);
+            if mode == Mode::Panel {
+                w.cover(&id).await;
+            }
+            let c = KernelClaimV1 { producer_bond: w.net.kid(4), ..claim.clone() };
+            (K::CommitClaim { claim: c, evidence: evidence.clone(), commitments: commitments.clone() }, 4)
+        }
+        Unbound::Borrowed => {
+            // A valid trace of another prompt (another job's input), claimed for this job.
+            let other = KernelJobV1 { prompt: vec![5, 1, 2], ..job.clone() };
+            let tokens = greedy(&w.fx, &ledger, &w.class, &other.prompt, other.max_new_tokens as usize);
+            let borrowed = produce(&w.fx, &ledger, &w.class, &other, w.net.kid(0), tokens, |_| {});
+            let K::CommitClaim { claim: bc, evidence: be, commitments: bm } = borrowed.object else { unreachable!() };
+            let c = KernelClaimV1 { job_id: job.id(), ..bc };
+            (K::CommitClaim { claim: c, evidence: be, commitments: bm }, 0)
+        }
+    };
+    let (faulty_id, committed) = reveal(&mut w, faulty_producer, &faulty).await;
+    assert!(!committed, "{fault:?}: refused at inclusion");
+    // The participant's node, started now, serves no such claim.
+    let node = ibd_node(&w.net).await;
+    let read = Rpc::of(&node.chain).claim(&faulty_id);
+    assert!(read.available && !read.found, "{fault:?}: op 210 serves no such claim");
+    // The job is the honest producer's to take (Copy: it already holds it) and reaches Final with its reward.
+    let honest_id = claim.id();
+    if fault != Unbound::Copy {
+        let (id, committed) = reveal(&mut w, 0, &honest.object).await;
+        assert!(committed && id == honest_id, "{fault:?}: the honest claim of the job commits");
+        if mode == Mode::Panel {
+            w.cover(&id).await;
+        }
+    }
+    assert_eq!(w.net.ledger().job_claims.get(&job.id()), Some(&honest_id), "{fault:?}: the honest claim holds the job");
+    let floor = final_floor(&w, mode, &honest_id);
+    w.net.beat_to(floor).await;
+    assert!(matches!(w.net.claim_state(&honest_id), ClaimStateV1::Final { .. }), "{:?}", w.net.claim_state(&honest_id));
+    assert_eq!(w.net.owed(0), Rules::final_reward(&policy), "{fault:?}: the honest producer is paid once");
+    assert_eq!(w.net.owed(4), 0, "{fault:?}: the copyist is paid nothing");
+}
+
+#[tokio::test]
+async fn g14_canonical_panel_a_quantization_lie_every_seat_covered_is_convicted_by_the_participant() {
+    lie_convicted(Mode::Panel, Start::Ibd, Lie::Quantize).await;
+}
+
+#[tokio::test]
+async fn g14_canonical_opv_a_quantization_lie_is_convicted_by_the_participant() {
+    lie_convicted(Mode::Opv, Start::PrunedImport, Lie::Quantize).await;
+}
+
+#[tokio::test]
+async fn g14_canonical_panel_a_substituted_token_every_seat_covered_is_convicted_by_the_decode_court() {
+    lie_convicted(Mode::Panel, Start::PrunedImport, Lie::Decode).await;
+}
+
+#[tokio::test]
+async fn g14_canonical_opv_a_substituted_token_is_convicted_by_the_decode_court() {
+    lie_convicted(Mode::Opv, Start::Ibd, Lie::Decode).await;
+}
+
+#[tokio::test]
+async fn g14_canonical_panel_a_self_consistent_garbage_trace_every_seat_covered_is_convicted_against_the_registered_weights() {
+    lie_convicted(Mode::Panel, Start::Ibd, Lie::Garbage).await;
+}
+
+#[tokio::test]
+async fn g14_canonical_opv_a_self_consistent_garbage_trace_is_convicted_against_the_registered_weights() {
+    lie_convicted(Mode::Opv, Start::PrunedImport, Lie::Garbage).await;
+}
+
+#[tokio::test]
+async fn g14_canonical_panel_a_fabricated_segment_boundary_is_refused_at_inclusion() {
+    unbound_refused(Mode::Panel, Unbound::Boundary).await;
+}
+
+#[tokio::test]
+async fn g14_canonical_opv_a_fabricated_segment_boundary_is_refused_at_inclusion() {
+    unbound_refused(Mode::Opv, Unbound::Boundary).await;
+}
+
+#[tokio::test]
+async fn g14_canonical_panel_a_copied_claim_is_refused_and_the_job_paid_once() {
+    unbound_refused(Mode::Panel, Unbound::Copy).await;
+}
+
+#[tokio::test]
+async fn g14_canonical_opv_a_copied_claim_is_refused_and_the_job_paid_once() {
+    unbound_refused(Mode::Opv, Unbound::Copy).await;
+}
+
+#[tokio::test]
+async fn g14_canonical_panel_a_borrowed_trace_of_another_prompt_is_refused_at_inclusion() {
+    unbound_refused(Mode::Panel, Unbound::Borrowed).await;
+}
+
+#[tokio::test]
+async fn g14_canonical_opv_a_borrowed_trace_of_another_prompt_is_refused_at_inclusion() {
+    unbound_refused(Mode::Opv, Unbound::Borrowed).await;
 }
