@@ -49,6 +49,7 @@ Amounts are in BILI.
 | **B12** | The seal deposit is derived. A withheld seal stalls 83 DAA. An abandoned one stalls 151 DAA (MEASURED) for 52 BILI. Parity gives `d* = c_ab·T_w/T_ab ≈ 28.6` BILI. A deposit above `d*` buys nothing. The deterred delay value is 0.345/`N_c` BILI per victim-DAA. `d*` exceeds the honest-race ceiling of 1 BILI, so the prices must be split (S3). | **DERIVED** (§4). |
 | **F1–F5** | **Open versus closed for `f(S_m)`.** F1: split-proof and merge-proof together force `f` linear. F2: equal self-funding beats publishing for every `f`. F3: the publish premium *is* a concentration premium. F4: at `p` = 0, a closed model out-earns an open one by `1/(1 − λ)` for every `f`. F5: the budget and the per-bond cap saturate. | **PROVEN** (§5). Grid DERIVED from an ASSUMED market. |
 | **F-BFT** | **Under the user's premise (§3f)**, a verified-work gate makes publishing overwhelmingly better with **linear `f`**. The gate pays a model's epoch allocation only if ≥ `k` of `m` verifiers, drawn by stake from the global pool, attest a checked claim; at `σ` = 1/3, `m` = 47 and `k` = 24. Open/closed is ≥ 38.5×. A closed model is paid with probability 0.9%, so the stake-only residual is ≤ 0.30% of the model budget, and payment stays tied to verified work. It breaks at an adversary share of 0.40 (the 1% and 99% bars) and of 0.44 (the 2× bar), and at 50% closed and open are paid alike. | DERIVED under A-BFT (§5c). The ADR-0177 D1 reading needs the user. |
+| **AGG** | **The revised ADR-0177 goal** (§5d): `A_m = S_m^α`, with the 2× net-profit bar fixed first over 4–30× capital, below the caps. α = 1.5 passes 52 of 54 cells and never caps in range. α = 2 passes 16 of 18 and caps at about 10% of capital, withholding 19% of the budget at 30×. Every failing cell is one where honest mining is unprofitable for any α. Concentration premium: 1.4–1.8 at α = 1.5, 2.0–2.8 at α = 2; the operator's advantage is 2.0× at 10% of capital. `p = 0` stays separate: the whole model budget is fraud revenue there, for any α. | DERIVED (§5d). Recommended α = 1.5. |
 | **GATE** | **Round/EXEC ECON gate** (acceptance §4–§5), with nine criteria fixed before judging (§5a). Tickets track canonical work exactly. Revenue per compute cost is equal across model sizes. Saturation and splitting are size-neutral. It **fails** on net revenue per compute: the interim per-claim overhead is 65% of a small job's escrow against 3.6% of a large one's, a 2.7× gap. It also **fails** on capital-bound marginal revenue for the large model: a 28.8-BILI escrow fills the R cap after one job, before the Round cap. | 7 PASS, 2 FAIL. DERIVED from an ASSUMED market (§5a). |
 | **P-list** | BUDGET P-1..P-11. P-1 and P-11 together leave `280 ≤ W ≤ 436` DAA: below that, claims outlive the window; above it, the 65,536 per-span bound stops the shared window from ever saturating. Theorem Y gives P-2's `r` ceiling. G6 gives P-2's `q·ρ` floor. §2.5 gives the open-claim cap. | DERIVED where stated; the rest PROPOSED (§5b). |
 | **F-bar** | **No curve makes publication "overwhelmingly better".** No `f` beats equal self-funding (F2). On the grid, no `f` meets the proposed bar against a closed model that can forge. The one curve that meets it against a non-forging closed model, `S²`, fails the concentration bar with a premium of 1.9–2.8. | **COUNTEREXAMPLE** (§5.4). |
@@ -812,6 +813,141 @@ based *only* on acquisition failure, and with PRINCIPLES §6 condition 6. **The 
 
 ---
 
+## 5d. ADR-0177's revised goal: favour models that gather more bond (`A_m = S_m^α`; readiness §3g)
+
+The user changed ADR-0177's goal. Models that gather more effective locked miner bond are strongly favoured. Publication is the means,
+and equal capital gets equal treatment. "Publish beats equal self-funding" is no longer a requirement: §5, F2–F4 and §5c stay as the
+record of the old goal. Model §12 evaluates the new one.
+
+### 5d.1 Definitions (`d` is not `1/(1 − λ)`)
+
+**The real rules the model applies:**
+* `R_m = R_PALW · S_m^α / Σ_j S_j^α`;
+* each bond is paid pro rata to its capital inside its model;
+* each bond's payment is capped at `y_cap·C` per epoch (ADR-0176's `R_max`); anything above that is withheld, never redistributed.
+
+**Variable costs per BILI of model-leg payment** (ASSUMED until measured):
+
+| Symbol | Meaning |
+|---|---|
+| `κ` | the compute that the claim-work requirement imposes |
+| `φ` | the share of that compute users already pay through escrow; users need no weights to post jobs, so a closed honest model has the same `φ` |
+| `o` | per-claim fees |
+| `v` | a joiner's cost to obtain, store and serve the public model |
+
+**Margins per BILI paid:**
+
+```text
+public              m_pub = 1 − o − κ(1 − φ) − v
+closed, region H    m_H   = 1 − o − κ(1 − φ)       (the owner computes honestly)
+closed, region Z    m_Z   = 1 − o + κφ             (p = 0: it forges, and keeps its users' escrow)
+d = m_closed / m_pub
+```
+
+**Values of `d`** (DERIVED; `κ` = 0.5, `o` = 0.05, `v` = 0.02):
+
+| `φ` | `d_H` | `d_Z` |
+|---|---|---|
+| 0 | 1.047 | 2.21 |
+| 0.5 | 1.029 | 1.77 |
+| 1 | 1.022 | 1.56 |
+
+`1/(1 − λ)` is only the special case `φ = 0, o = v = 0` of `d_Z`.
+
+### 5d.2 The bar, fixed before judging (PROPOSED)
+
+| Item | Bar |
+|---|---|
+| quantity | per-unit-capital **net profit** (after compute, fees, access and a capital cost of ¼ of the average yield) |
+| multiplier | joining the large public model ≥ **2×** self-mining the small closed model, with the public net profit > 0 |
+| capital range | `S_public / S_closed` ∈ **[4, 30]**, with `S_closed` = 1% of all model capital |
+| region | region H, wherever the public model is below the per-bond cap |
+| cost grid | κ ∈ {0.3, 0.5, 0.7}, φ ∈ {0, 0.5, 1}, `v` ∈ {0.02, 0.05} |
+| network (ASSUMED) | 100 units of model capital; the rest spread over 20 models; `y_cap` = 2× the average yield |
+
+### 5d.3 Results (DERIVED)
+
+| α | Allocation ratio at 4 / 10 / 30 | Cap reached at `S_public` ≈ | Bar: cells passing below the cap | Failing cells |
+|---|---|---|---|---|
+| 1 | 1 / 1 / 1 | never | 0 / 54 | all |
+| 1.25 | 1.41 / 1.78 / 2.34 | never | 37 / 54 | low ratios, high `κ` |
+| **1.5** | **2.0 / 3.2 / 5.5** | **never in range** | **52 / 54** | only `κ` = 0.7, φ = 0 |
+| 2 | 4 / 10 / 30 | 10% of capital | 16 / 18 | only `κ` = 0.7, φ = 0 |
+| 3 | 16 / 100 / 900 | 6.8% of capital | 16 / 18 | only `κ` = 0.7, φ = 0 |
+
+**The simplified ratio.** `(S_pub/S_closed)^(α−1)/d` is exact for allocation and for payment below the caps, with `d_H` ≈ 1.03. Net
+profit amplifies it, because a small closed model's per-unit payment barely covers its capital cost.
+
+**The failing cells.** In every failing cell (κ = 0.7, φ = 0), honest public mining itself is unprofitable: the model leg must fund all
+of the compute. No `α` fixes that. It needs users paying for compute, or `κ ≤ 0.5`.
+
+**Where the caps take the advantage away.** Past the cap, the payment ratio stops at `y_cap / ρ_closed`, and the excess allocation is
+withheld:
+
+| α | at `S_public/S_closed` = 30 |
+|---|---|
+| 2 | payment ratio 22.8 against allocation 30; **19%** of the budget withheld |
+| 3 | 37% of the budget withheld |
+
+### 5d.4 Concentration (accepted residual risk; quantified, not judged)
+
+**Reward share / capital share of one holder** whose capital sits on one model, the rest spread over 20 models, before the caps:
+
+| α | x = 0.05 | x = 0.1 | x = 0.2 | x = 0.33 |
+|---|---|---|---|---|
+| 1.5 | 1.02 | 1.42 | 1.79 | 1.84 |
+| 2 | 1.05 | 1.98 | 2.78 | 2.51 |
+| 3 | 1.10 | 3.54 | 4.31 | 2.97 |
+
+**The operator's initial-capital advantage at α = 2.**
+
+| The operator's model holds | its reward share | relative to its capital share |
+|---|---|---|
+| 2% of capital | 0.8% | 0.4× |
+| 5% | 5.2% | 1.0× |
+| 10% | **19.8%** | **2.0×** (at the cap's edge) |
+
+**Participant movement.** When 50 units migrate to the best per-unit model, the top model ends with 55% of the capital and takes:
+
+| α | its reward share |
+|---|---|
+| 1.5 | 81% |
+| 2 | 94% |
+
+The cap clips this at `y_cap` per unit.
+
+### 5d.5 `p = 0` is a separate region
+
+**Region H (honest verifiers function).** The bar above applies. ADR-0176 D6 holds where `p > 0`, with M\*-49 and §2.
+
+**Region Z (every owner closes, `p = 0`).**
+* **Fraud revenue** is the **whole paid model budget, every epoch, for any α**. The curve only moves it toward larger capital.
+  Closed models' users' escrow comes on top.
+* The net ratio in Z (the last column of model §12) reaches ≥ 2× at α ≥ 1.5 too. In region Z that means larger closed coalitions
+  forge more. It is not safety.
+* **Consensus impact.** Forged claims carry Final weight up to each bond's `F_max(C, W)`: capital-proportional, and not scaled by α
+  (ADR-0177 revision).
+* **The curve is not the resolution.** Nor is the dormant attestation gate of §5c. `p = 0` stays an open safety gate.
+
+### 5d.6 Recommendation (POLICY)
+
+**α = 1.5.**
+* It meets the 2× net bar across the whole 4–30× range below the caps, in every cost cell where honest mining is profitable at all.
+* It does not reach the cap anywhere in that range.
+* Its concentration premium (1.4–1.8) is below α = 2's (2.0–2.8).
+
+**α = 2**, if the user wants stronger favour.
+* The advantage saturates at about 10% of capital at `y_cap` = 2× the average yield.
+* Past that point it withholds budget, 19% at 30× capital.
+* Raising `y_cap` moves the saturation point out, but raises every bond's ceiling.
+
+**Limits common to both:**
+* users must pay compute, or `κ ≤ 0.5`;
+* inside a model the split is pro rata, with no per-model cap (a cap would reward model splits) and no saturation term;
+* region Z is unaffected.
+
+---
+
 ## 5a. The Round/EXEC ECON gate (`docs/palw-round-exec-additional-acceptance-2026-10-10.md` §4–§5)
 
 Model §9 compares small and large models on the same bond and period, before and after the cap, with the window unsaturated and
@@ -963,7 +1099,7 @@ Every reward, consensus-weight and Panel=0 fence stays refused:
 | D-M\* | Adopt M\*-49 as the direction for verifier pay: per-check fees from the user's escrow, and drawn sealers first inside the 49% | **Adopt.** It is the only design here that satisfies both halves of P0. Keep T6 open, and keep every reward fence refused until T6 is closed |
 | D-q | `q`, `m`, `F`, `B_cap = m·G` per class | Derive them from `p_min` (§3.3) and MEAS's costs. None is set now |
 | D-B12 | The seal deposit | `d_src = c_ab·T_w/T_ab` (28.6 at the interim terms and 49%) on an opt-in source seal (S3). Also S2 (vetoes do not count) and S4 as a concurrency cap `N_max`. `γ*` is set through `D`, not `d` |
-| D-F | Model coinbase at `p` = 0 (the user kept the leg, §3f) | **Linear `f` with the verified-work gate** (§5c): `m` = 47, `k` = 24 at `σ_max` = 1/3; no saturation; no per-model cap; owner leg optional, ≤ 10%. It needs the user to confirm the ADR-0177 D1 reading and to accept `σ_max` = 1/3 for both capital and verifier stake |
+| D-F | Model coinbase (the goal revised in §3g) | **α = 1.5** (or α = 2 for stronger favour, saturating at about 10% of capital); pro-rata split; no per-model cap. `p = 0` is a separate open gate (§5d.5). The §5c attestation gate may stay dormant |
 | D-bar | The numeric bar for "overwhelmingly better" | Fix Φ\* (2 proposed), the `S_0` and `e` ranges, and λ and `r` before any curve is evaluated. Record that F2 and F4 make the bar unattainable by `f` alone |
 | D-snap | The allocation snapshot | Time-integrated capital, locked for at least the epoch plus `W`. Never a point snapshot |
 | D-hold | Hold the default's demander share until the liability horizon (O2 on top of F-C4R4-15) | **Yes**, in the single release. It removes the 441 vs 490 residual. Optional if M\*-49 lands first |
