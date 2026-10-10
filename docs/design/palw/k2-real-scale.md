@@ -797,3 +797,19 @@ This section supersedes §13's untested `own()` plumbing proposal. The review br
 flag already prevents a class from earning was incorrect. Cumulative scope for the older route, adaptive deadlines and maximum
 chunked response inclusion remain open. These small-value court tests do not establish full G14 or authorize activation.
 - `palw_onboarding_v1::onboarding_gate_v1` was fixed here (`dbc6b24d6`).
+
+### Whole-value price revision 2 before activation (RFC02 implementation, 2026-10-10)
+
+A flat lookup (`Gather`, rank-one data, axis 0, batch_dims 0, output shape equal to index shape)
+has no coordinate transformation. Its element evaluator reads the index at the output's flat
+position, refuses an out-of-range index, then reads the table at that index. Price revision 2
+uses 16 abstract work units per output before the factor 64; the previous generic evaluator's
+32 units cover coordinate construction. Full operand authentication and the two output tree
+hashes keep their prices. This tariff is not a conversion from measured CPU time.
+
+The withholding mask still uses the revision-1 conservative bound, so material disclosure and
+commitment roots do not change. Both dormant v4/v5 descriptor semantics digests identify the
+price revision; plans and class bindings must be rebuilt under the new identities. No network
+activation or resource ceiling changes. The real pilot program's static 32-position refusal is
+closed, while its full real-weight public execution/court/Final path remains unproven. See the
+[RFC02 implementation ledger](tir/rfc0002-implementation.md) for reproducible evidence and limits.

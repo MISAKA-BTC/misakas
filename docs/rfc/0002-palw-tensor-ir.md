@@ -2287,3 +2287,22 @@ features before choosing tests. RFC03 supplies encoder/image/audio stage binding
 supply whole-claim verification and G14. Conditional verification (A) remains: obtain the correct
 model externally; do not reintroduce model-distribution consensus. Missing source access or a
 zero detection floor remains a failed security condition, never repaired by type/cost checks.
+
+#### 14.7 Bounded flat Gather courts and a real-program static regression
+
+The dormant segmented decoder/encoder kernels identify whole-value pricing revision 2 in new
+v4/v5 descriptor digests. A rank-one axis-0, unbatched Gather with output shape equal to its index
+shape uses allocation-free direct lookup, with the same index refusal, operand reads and exact
+result as the reference. Only this evaluator's per-output price changes (32 to 16 abstract units,
+then the existing factor 64); authenticated bytes and both commitment hashes retain their prices.
+The previous conservative DA16b withholding selection remains fixed. No resource limit, primitive
+semantics, v1–v3 descriptor or activation fence changes.
+
+The exact real Qwen2.5 pilot's 32-position TIR is committed as static regression material; its
+worst court work is 473,589,248, below the unchanged guaranteed proof reservation 536,870,912.
+Its direct TIR route is hypothetically eligible and remains inactive in the shipping schedule.
+This closes the pilot's previous static court-price refusal only. A vocabulary-sized synthetic
+court and differential/reference/root tests verify the optimization; they do not prove the
+real-weight node path, source fidelity, long context, model security or Final/redemption. Evidence,
+commands and remaining full-scope gates are in the implementation ledger's
+[whole-value Gather pricing revision](../design/palw/tir/rfc0002-implementation.md).

@@ -656,13 +656,78 @@ integer reference byte for byte (54.03 s total). These are measured real-weight 
 against the native f32 HL evaluator, **not** an independent Hugging Face reference, long-context
 coverage, instruction/translation/code quality, public conviction or Final/redemption.
 
-Crucially the real program does **not** pass the hypothetical public node gate even at 32
-positions: K2-TIR-v4 reports guaranteed proof work `629171712 > 536870912`. No work limit was
-raised and no fence was activated to manufacture a PASS. Its registered public-court/evidence
-path still needs repair; the next resource investigation must address this measured blocker.
+At the pre-revision measurement, the real program did **not** pass the hypothetical public node
+gate even at 32 positions: K2-TIR-v4 reported guaranteed proof work `629171712 > 536870912`.
+No work limit was raised and no fence was activated. The following Gather pricing revision
+supersedes this static refusal; the registered real-weight public-court/evidence path remains open.
 The preliminary source/metric/bit-match result does not make this checkpoint supported.
 All predeclared inputs, source hashes, material/binary hashes, results, logs and the refusal are
 saved under `evidence/qwen25-real-*`. The large artifact and venv are local ignored `target/`
 material, not repository payload. Source identity is conditional on the official HTTPS metadata
 observation; it is not chain-enforced model acquisition. Full RFC02 scope and the remaining
 A6/A8, feature, fidelity, resource/economic and public execution/court/Final gates remain open.
+
+### Whole-value Gather pricing revision 2 (2026-10-10)
+
+The real Qwen2.5 pilot's dominant whole-value court is the final 151,936-output lookup-table
+Gather. For a rank-one table, axis 0, batch_dims 0 and an output shape equal to the index tensor's
+shape, the output flat position is exactly the index tensor's flat position. The element court
+now reads that index, checks its range, then reads the table directly. It allocates no strides or
+coordinates per output. Every other Gather retains its coordinate evaluator. Invalid indices
+still refuse before reading the table, and missing operands have the same error and dependency
+reads as before. Integer semantics and all commitment preimages are unchanged.
+
+Whole-value price revision 2 charges this specialized evaluator 16 rather than 32 abstract work
+units per output, before the existing factor 64. Operand authentication and both output commitment
+trees retain their complete byte prices. These units are a bounded consensus tariff, not CPU
+instructions or milliseconds. No court/block/reservation limit is raised. The DA16b withholding
+predicate deliberately retains the previous conservative price: lowering execution cost does not
+change which values are owed in clear or committed form. The dormant v4 **and v5 descriptor
+semantics digests change** to identify the revised admission price; rebuilding a plan changes its
+root/class identity. This preactivation revision does not reinterpret a class under an unchanged
+kernel identity, arm a network fence, or change v1–v3 descriptors.
+
+The committed real pilot `evidence/qwen25-real-pilot-program.tir` is the exact 14,011-byte program
+(SHA-256 `16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1`). Its same 32-position
+plan now has worst court bytes 629,606 and work 473,589,248, down from 629,171,712. It fits the
+unchanged node guaranteed proof reservation 536,870,912. Direct TIR CLI and SDK report hypothetical
+`ELIGIBLE_AT`, shipping `KERNEL_NOT_ACTIVE`. The new static regression uses that exact canonical
+program without a model name, configuration, frontend or weights. This supersedes the previous
+pilot's **static** resource refusal only. It proves no registration, source acquisition, public
+real-weight conviction, economic eligibility, long-context fidelity or Final/redemption.
+
+Differential tests cover all six dtypes and scalar through rank-four indices, the independent
+whole-tensor TIR evaluator, the frozen previous coordinate evaluator and identical dependency
+reads, out-of-range indices, missing operands, axis/batch variants, and unchanged conservative
+withholding across small/large shapes. A synthetic 151,936-output court dismisses an honest claim,
+convicts a fresh verifier's output-lie filing and refuses substituted/omitted param openings;
+its 608,815-byte filing is within its bound. A separate 151,936-output i64 lookup measurement
+includes both output commitment trees and compares all roots to both references. Six alternating
+warmed **debug** trials measured medians 106.61 ms (frozen coordinates) and 25.96 ms (direct flat
+lookup). These are local synthetic diagnostics, not real-checkpoint court latency or a
+hardware-independent performance guarantee. Raw profiles, verdicts and logs are saved in
+`evidence/qwen25-real-gather-v2-*` and `evidence/qwen25-real-kernel-preflight-gather-v2.json`.
+
+Reproduction:
+
+```sh
+cargo test --locked -p misaka-palw-kernel --lib --test k2_real_scale --test typed_roots
+cargo test --locked -p misaka-palw-sdk --lib preflight::kernel
+cargo test --locked -p misaka-palw-sdk --test kernel_preflight_cli
+cargo test --locked -p kaspa-consensus --lib \
+  g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_and_its_own_artifact -- --test-threads=1
+cargo run --locked -p misaka-palw-kernel --example profile-courts -- \
+  docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir 32
+cargo run --locked -p misaka-palw-sdk --bin palw-class -- kernel-preflight \
+  docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir --positions 32 --json
+```
+
+Validation: 90 kernel unit tests, 13 segmented ledger/scale tests, 15 typed-root tests, five SDK
+preflight tests, two direct CLI tests and one canonical node complete-check test passed (126
+distinct tests). The existing manual producer hash benchmark remains ignored.
+
+Full RFC02 remains incomplete. The next checkpoint evidence must bind real artifact operands,
+registered roots, authenticated public material, fresh checking/court and Final through the node
+path. Independent floating reference/task fidelity, long context and other common model features,
+A6/A8 coverage and aggregate resource/economic gates remain required; synthetic/static success
+must not replace them.

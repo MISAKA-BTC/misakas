@@ -1,0 +1,140 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.22s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 91 tests
+test beacon::tests::late_inclusion_and_malformed_policies_are_refused ... ok
+test beacon::tests::grinding_is_counted_into_the_network_bound ... ok
+test assurance::tests::a_union_bound_over_probabilistic_results_and_no_number_for_a_legacy_or_judged_one ... ok
+test descriptor::tests::any_change_to_a_descriptor_or_binding_is_a_new_identity ... ok
+test descriptor::tests::locked_in_activates_at_its_daa_and_deprecation_stops_new_work ... ok
+test descriptor::tests::segmented_pricing_revision_has_new_descriptor_identities_and_arms_no_schedule ... ok
+test challenge::tests::the_seed_moves_with_every_commitment_and_labels_separate_streams ... ok
+test beacon::tests::no_seed_exists_until_the_window_is_on_chain_and_final ... ok
+test descriptor::tests::the_builtin_kernel_is_implemented_not_active ... ok
+test element::tests::leaf_openings_file_their_values_at_the_dtype_width ... ok
+test beacon::tests::a_reorg_of_the_window_is_a_counted_rebind_and_too_many_time_out ... ok
+test family::tests::every_tir_v1_primitive_has_one_family_and_none_is_media ... ok
+test element::tests::flat_gather_refuses_invalid_indices_before_table_reads_and_preserves_missing_operands ... ok
+test field::tests::an_integer_error_below_the_moduli_product_survives_in_some_modulus ... ok
+test field::tests::integers_map_with_sign_and_round_trip_small_values ... ok
+test field::tests::multiplication_agrees_with_double_and_add_for_every_modulus ... ok
+test element::tests::nonflat_gather_axes_and_batches_still_match_the_independent_reference ... ok
+test improve::tests::a_candidate_is_a_new_admitted_class_of_the_parents_family_under_a_pinned_kernel ... ok
+test improve::tests::promotion_keeps_statistics_and_computational_error_apart_and_refuses_unpinned_suites ... ok
+test improve::tests::the_sign_test_table_is_exact_in_integers ... ok
+test job::tests::a_job_is_refused_at_posting_outside_the_class ... ok
+test job::tests::greedy_takes_the_lowest_index_on_a_tie ... ok
+test ledger::tests::a_class_must_fit_its_filing_response_and_commitments_in_the_route_objects ... ok
+test ledger::tests::a_filing_past_the_class_envelope_is_dismissed_before_any_court_runs ... ok
+test lifecycle::tests::a_challengeable_claim_has_no_tally_and_a_tally_event_is_an_error_never_a_no_op ... ok
+test lifecycle::tests::a_covered_claim_finalizes_only_after_its_window_and_retention ... ok
+test lifecycle::tests::a_dispute_blocks_an_optimistic_final_a_dismissal_resumes_and_a_conviction_voids ... ok
+test lifecycle::tests::a_dispute_blocks_final_a_dismissal_resumes_and_a_conviction_voids ... ok
+test lifecycle::tests::a_service_holds_an_optimistic_final_until_its_proof_grace_has_elapsed ... ok
+test lifecycle::tests::a_service_holds_final_until_its_proof_grace_has_elapsed ... ok
+test lifecycle::tests::an_optimistic_claim_finalizes_by_the_explicit_window_rule_alone_with_no_tally ... ok
+test lifecycle::tests::coverage_during_a_dispute_starts_the_window_and_final_waits_for_the_verdict ... ok
+test lifecycle::tests::disputes_are_open_to_any_bond_and_bounded_by_count_and_court_work ... ok
+test lifecycle::tests::missing_material_is_the_da_path_not_a_conviction ... ok
+test lifecycle::tests::silence_and_partial_coverage_never_pass ... ok
+test lifecycle::tests::the_network_bound_charges_attempts_and_the_environment ... ok
+test merkle3::tests::a_wire_shape_that_overflows_is_malformed_never_a_panic ... ok
+test element::tests::flat_gather_preserves_results_and_dependency_reads_for_all_dtypes_and_ranks ... ok
+test merkle3::tests::buffered_leaf_hashes_preserve_every_dtype_and_update_boundary ... ok
+test merkle3::tests::producer_hash_cost_against_original_scalar_updates ... ignored, manual producer hash benchmark; hardware timing, not a consensus gate
+test merkle::tests::an_opening_whose_shape_overflows_is_malformed_never_a_panic ... ok
+test merkle::tests::every_row_and_column_opens_against_the_commitment_and_nothing_else_does ... ok
+test merkle::tests::row_node_runs_authenticate_at_every_level_and_localize_a_changed_row ... ok
+test merkle::tests::the_commitment_binds_dtype_shape_and_every_element ... ok
+test mode::tests::the_legacy_mode_keeps_its_historical_id_and_another_mode_is_another_class ... ok
+test mode::tests::the_mode_wire_discriminants_are_declared_and_an_unknown_one_is_never_success ... ok
+test opv::tests::saturating_the_court_for_the_whole_exposure_must_cost_more_than_the_claims_maximum_gain ... ok
+test opv::tests::the_assurance_statement_never_claims_correctness ... ok
+test opv::tests::the_clock_facts_a_fresh_verifier_plans_by ... ok
+test opv::tests::the_example_policy_satisfies_every_relation_and_each_relation_is_load_bearing ... ok
+test opv::tests::the_receipt_path_follows_the_mode_and_a_licence_is_never_fabricated_or_hidden ... ok
+test opv::tests::the_reservation_rule_reads_gain_penalty_and_the_assumed_detection ... ok
+test public::wire_overflow_tests::a_wire_tensor_whose_shape_overflows_is_refused_never_a_panic ... ok
+test route::tests::every_declared_discriminant_is_the_variants_borsh_byte_and_has_a_ceiling ... ok
+test route::tests::malformed_and_oversized_encodings_are_refused_with_their_kind ... ok
+test route::tests::the_salted_reveal_is_kind_20_carries_its_commits_own_tag_and_opens_only_its_v2_seal ... ok
+test route::tests::the_wire_form_is_version_discriminant_then_the_fields ... ok
+test scope::tests::a_state_written_from_model_bytes_is_model_bytes_at_the_next_position ... ok
+test scope::tests::the_budget_stays_below_every_relation_and_never_refuses ... ok
+test scope::tests::the_exposure_names_the_one_position_and_the_k_position_relations ... ok
+test scope::tests::the_node_materials_separate_weights_copies_and_activations ... ok
+test scope::tests::the_per_requester_tally_bounds_each_requester_and_never_another ... ok
+test seg::tests::every_node_opens_against_the_segment_roots_and_nothing_else_does ... ok
+test seg::tests::prompt_tiles_open_against_the_prompt_root ... ok
+test seg::tests::segment_roots_from_position_roots_alone_are_the_commitments_own ... ok
+test element::tests::the_streamed_trace_is_the_trace ... ok
+test element::tests::the_element_evaluator_agrees_with_the_reference_on_every_element_of_every_value ... ok
+test seg_encoder::tests::a_program_without_the_two_trailing_inputs_has_no_encoder_binding ... ok
+test element::tests::a_malformed_value_a_forged_decode_and_tampered_openings_are_judged_objectively ... ok
+test spec::composite::tests::a_prompt_concatenates_its_sources_in_order ... ok
+test spec::memory::tests::a_line_advances_at_final_is_superseded_by_a_stale_claim_and_rolls_back_on_a_late_conviction ... ok
+test spec::memory::tests::the_memory_root_binds_slots_and_commitments ... ok
+test spec::retrieval::tests::a_malformed_snapshot_leaf_is_judged_and_an_entry_demand_serves_the_claims_own_item ... ok
+test spec::retrieval::tests::a_slice_is_served_whole_and_a_forged_one_is_a_fake_opening ... ok
+test spec::retrieval::tests::a_wrong_item_and_a_missed_better_item_are_convicted_and_honest_entries_are_not ... ok
+test spec::retrieval::tests::every_path_verifies_and_nothing_else_does ... ok
+test spec::retrieval::tests::inclusion_refuses_a_misordered_duplicate_or_out_of_range_result ... ok
+test spec::retrieval::tests::the_rule_is_the_sort_with_ties_to_the_lowest_id ... ok
+test spec::tests::a_combination_outside_the_four_is_refused_by_name_and_a_version_too ... ok
+test spec::tests::the_extension_is_its_own_descriptor_and_well_formed ... ok
+test seg_detect::tests::the_descent_finds_the_first_divergent_position_in_at_most_log2_s_probes ... ok
+test seg_scope::tests::flat_lookup_price_changes_only_element_work_and_keeps_conservative_disclosure ... ok
+test merkle3::tests::every_row_range_proves_against_the_commitment ... ok
+test merkle3::tests::direct_row_and_column_hashing_preserves_original_roots_and_openings ... ok
+test element::tests::vocabulary_sized_flat_lookup_roots_match_the_frozen_coordinate_evaluator ... ok
+test seg_da::tests::the_fast_layout_is_the_reference_layout ... ok
+test element::tests::vocabulary_sized_lookup_whole_court_dismisses_honest_convicts_lie_and_refuses_missing_or_substituted_inputs ... ok
+test element::tests::element_courts_are_priced_by_the_tile_not_the_tensor ... ok
+test element::tests::every_filing_is_within_its_priced_bound ... ok
+test element::tests::a_lie_in_any_value_is_found_and_convicted_and_no_honest_element_is ... ok
+test merkle3::tests::every_leaf_of_both_trees_opens_and_holds_its_elements has been running for over 60 seconds
+test merkle3::tests::every_leaf_of_both_trees_opens_and_holds_its_elements ... ok
+
+test result: ok. 90 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 143.50s
+
+     Running tests/k2_real_scale.rs (target/debug/deps/k2_real_scale-cefa5ee20d4c5c8f)
+
+running 13 tests
+test k2s_every_tile_and_part_constant_fits_the_node_carrier ... ok
+test k2s_the_gate_rederives_the_plan_and_prices_decoded_working_memory_and_all_progress ... ok
+test k2s_raw_tensor_aliases_of_public_bytes_cannot_authenticate ... ok
+test k2s_full_shared_demand_and_join_limits_do_not_block_an_outside_proof_or_default ... ok
+test f_b1_a_segmented_prefix_cannot_complete_a_fixed_reward_job ... ok
+test k2s_fresh_streaming_replay_uses_only_registered_model_and_authenticated_public_material ... ok
+test k2s_a_withheld_position_is_demanded_then_defaults_never_a_conviction ... ok
+test k2s_a_lie_in_one_segment_is_localized_to_one_element_and_convicted_with_bounded_bytes ... ok
+test k2s_small_model_values_are_never_served_and_a_model_holder_convicts_from_commitments ... ok
+test k2s_a_position_is_served_in_parts_and_its_demand_bonds_wait_for_the_grace ... ok
+test k2s_a_tiled_prompt_past_4096_ids_commits_as_a_multi_segment_claim_and_an_honest_one_finalizes ... ok
+test k2s_a_reexecuting_verifier_finds_any_lie_with_certainty_reading_two_positions ... ok
+test k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers has been running for over 60 seconds
+test k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 88.63s
+
+     Running tests/typed_roots.rs (target/debug/deps/typed_roots-c3b667570ba3ace2)
+
+running 15 tests
+test an_unarmed_ledger_refuses_every_spec_object_and_an_untyped_ledger_roots_as_before ... ok
+test bounds_per_kind_fit_the_carriers_and_refuse_past_each_ceiling_by_name ... ok
+test memory_registration_and_inclusion_refusals_are_by_name ... ok
+test retrieval_inclusion_refuses_a_misordered_or_short_result ... ok
+test retrieval_a_wrong_item_and_a_missed_better_item_are_each_convicted_and_a_withheld_slice_defaults ... ok
+test memory_a_lied_token_is_convicted_by_the_decode_court_of_its_step ... ok
+test composite_registration_refuses_memory_components_nesting_and_kind_mismatches_by_name ... ok
+test composite_a_lie_in_the_model_stage_is_convicted_at_the_model_stage ... ok
+test composite_a_lie_in_the_tool_stage_is_convicted_at_that_stage_and_a_filing_against_the_honest_model_is_dismissed ... ok
+test memory_a_lie_that_finalized_is_convicted_after_final_and_the_line_rolls_back ... ok
+test weights_only_spec_is_byte_for_byte_the_legacy_registration_in_both_modes ... ok
+test memory_a_withheld_pre_state_is_a_default_and_a_served_one_completes_the_check ... ok
+test composite_the_logits_to_query_edge_court_convicts_a_carried_query_that_is_not_the_upstream_logits ... ok
+test memory_test_time_parameter_updates_are_a_parameter_subset_slot ... ok
+test memory_end_to_end_a_lie_in_one_step_is_convicted_and_memory_is_carried_across_two_jobs ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s

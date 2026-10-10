@@ -55,6 +55,10 @@ fn all_leaves_bytes(shape: &[usize], dtype: DType) -> u64 {
 /// by every leaf (whichever is larger), a param by every leaf, a token or job ids by their tile. A filer opens only what the elements
 /// read, so every filing is within it.
 pub fn whole_value_court_cost_v1(program: &TirProgramV1, s: usize, n: usize, node_count: u64) -> (u64, u64) {
+    whole_value_court_cost_in_v1(program, s, n, node_count, true)
+}
+
+fn whole_value_court_cost_in_v1(program: &TirProgramV1, s: usize, n: usize, node_count: u64, flat_gather: bool) -> (u64, u64) {
     let occurrences = program.occurrences();
     let block = occurrences[s].0 as usize;
     let node = &program.blocks[block].nodes[n];
@@ -88,9 +92,20 @@ pub fn whole_value_court_cost_v1(program: &TirProgramV1, s: usize, n: usize, nod
     }
     let layout = LayoutV3::of(&node.out.resolve(h));
     let first_shape = || crate::plan::ref_type(program, block, &node.inputs[0]).resolve(h);
+    let flat = flat_gather
+        && matches!(node.prim, Prim::Gather { axis: 0, batch_dims: 0 })
+        && crate::element::flat_gather_v1(
+            node,
+            &node.inputs.iter().map(|r| crate::plan::ref_type(program, block, r).resolve(h)).collect::<Vec<_>>(),
+            &node.out.resolve(h),
+        );
     // Whole-value verification invokes the element evaluator once per output. A matrix product reads its full contraction
     // for EACH output; TopK sorts its reduction line for each selected index. Counting the input tensors once underprices both.
     let element_work = match node.prim {
+        // Two direct authenticated reads and an index bounds check, without per-element
+        // stride/coordinate construction. Wire authentication and both output hashes retain
+        // their separate byte prices below. The unit is abstract bounded work, not CPU time.
+        Prim::Gather { .. } if flat => 16,
         Prim::MatMul => first_shape().last().copied().unwrap_or(1) as u64 * 4,
         Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => first_shape()[axis as usize] as u64 * 2,
         Prim::TopK { axis, .. } => {
@@ -127,7 +142,9 @@ pub fn seg_withheld_mask_v1(program: &TirProgramV1) -> Vec<Vec<bool>> {
                     if !m {
                         return false;
                     }
-                    let (bytes, work) = whole_value_court_cost_v1(program, s, n, node_count);
+                    // Keep the established DA selection conservative and unchanged: lowering a
+                    // court's execution price must not silently withhold additional values.
+                    let (bytes, work) = whole_value_court_cost_in_v1(program, s, n, node_count, false);
                     bytes <= SEG_WHOLE_VALUE_COURT_MAX_BYTES_V1 && work <= SEG_WHOLE_VALUE_COURT_MAX_WORK_V1
                 })
                 .collect()
@@ -164,4 +181,79 @@ pub fn seg_scope_report_v1(program: &TirProgramV1) -> SegScopeReportV1 {
         r.clear_masked += (*m && !*w) as u64;
     }
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use misaka_palw_tir::builder::ProgramBuilder;
+    use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, INPUT_TOKEN};
+    use misaka_palw_tir::{Dim, TensorType};
+
+    fn lookup_program(len: u32) -> TirProgramV1 {
+        let mut pb = ProgramBuilder::new(len, HISTORY_BOUND_V1_SMALL);
+        let embedding = pb.param("embedding", DType::I16, &[len, 1], false);
+        let table = pb.param("lookup", DType::I16, &[63], false);
+        let indices = pb.param("indices", DType::I32, &[len], false);
+        let pre = {
+            let mut b = pb.block("pre", vec![]);
+            let x = b.gather(embedding, Ref::Input(INPUT_TOKEN), 0, 0);
+            let x = b.cast(x, DType::I32);
+            b.finish(&[x])
+        };
+        let post = {
+            let mut b = pb.block("post", vec![TensorType::fixed(DType::I32, &[1])]);
+            let x = b.broadcast(Ref::CarryIn(0), &[Dim::Fixed(len)]);
+            let x = b.add(x, indices, DType::I32);
+            let x = b.clamp(x, 0, 62, DType::I32);
+            let x = b.gather(table, x, 0, 0);
+            let x = b.cast(x, DType::I32);
+            b.commit(x);
+            b.finish(&[])
+        };
+        let logits = (pb.blocks[post as usize].nodes.len() - 1) as u16;
+        pb.finish(pre, vec![], post, logits)
+    }
+
+    #[test]
+    fn flat_lookup_price_changes_only_element_work_and_keeps_conservative_disclosure() {
+        let mut programs = vec![
+            misaka_palw_tir_sketch::fixture::dense_moe_v1(7).program,
+            misaka_palw_tir_sketch::fixture::wide128_v1(7).program,
+            misaka_palw_tir_sketch::fixture::dense_moe_windowed_v1(7, 4).program,
+        ];
+        // Both sides of the one-MiB disclosure bound; large declarations require no tensor allocation.
+        programs.extend([64, 151_936, 190_000, 300_000, 20_000_000].map(lookup_program));
+        let mut specialized = 0;
+        for p in programs {
+            let model = crate::scope::court_model_dependent_mask_v1(&p, seg_model_params_v1(&p));
+            let mask = seg_withheld_mask_v1(&p);
+            let count = model.iter().map(|o| o.len() as u64).sum();
+            for (s, (b, _)) in p.occurrences().iter().enumerate() {
+                for (n, node) in p.blocks[*b as usize].nodes.iter().enumerate() {
+                    let old = whole_value_court_cost_in_v1(&p, s, n, count, false);
+                    let new = whole_value_court_cost_v1(&p, s, n, count);
+                    assert_eq!(old.0, new.0, "authenticated byte bound changed");
+                    assert_eq!(
+                        mask[s][n],
+                        model[s][n] && old.0 <= SEG_WHOLE_VALUE_COURT_MAX_BYTES_V1 && old.1 <= SEG_WHOLE_VALUE_COURT_MAX_WORK_V1
+                    );
+                    let h = crate::plan::worst_h(&p, *b as usize);
+                    let inputs = node.inputs.iter().map(|r| crate::plan::ref_type(&p, *b as usize, r).resolve(h)).collect::<Vec<_>>();
+                    let out = node.out.resolve(h);
+                    if crate::element::flat_gather_v1(node, &inputs, &out) {
+                        specialized += 1;
+                        assert_eq!(
+                            old.1 - new.1,
+                            LayoutV3::of(&out).len * 16 * 64,
+                            "wire authentication and hashes retain their entire price"
+                        );
+                    } else {
+                        assert_eq!(old, new, "unrelated primitive price changed");
+                    }
+                }
+            }
+        }
+        assert!(specialized >= 5);
+    }
 }

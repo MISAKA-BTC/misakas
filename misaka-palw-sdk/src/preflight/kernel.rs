@@ -177,6 +177,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn real_qwen25_pilot_tir_fits_unchanged_node_proof_reservation_but_remains_inactive() {
+        // Actual lowered program from the pinned real-weight pilot, without its weights.
+        // This tests static admission only, never source fidelity, public conviction or Final.
+        let bytes =
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir"));
+        let program = TirProgramV1::decode_canonical(bytes).unwrap();
+        let root = misaka_palw_kernel::public::program_root_v1(bytes);
+        let hex = root.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        assert_eq!(
+            hex,
+            "a1360976cdff92e473dff36769bf468140e4fb5a03150ed3be67d7af3ca72d0a5e21f4d1bf70aa4e39678aa5d6d82bdb499556f3b01999be362adb9e7a560f3d"
+        );
+        let d = k2_tir_v4_descriptor();
+        let plan = misaka_palw_kernel::plan::plan_for_tir_program_v1(&d, &program, root, 32).unwrap();
+        assert_eq!(plan.budgets.worst_court_bytes, 629_606);
+        assert_eq!(plan.budgets.worst_court_work, 473_589_248);
+        let policy = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(
+            kaspa_hashes::Hash64::from_bytes([0; 64]),
+            kaspa_hashes::Hash64::from_bytes([0; 64]),
+        );
+        assert_eq!(policy.guaranteed_proof_work_v1(), 536_870_912);
+        let armed = KernelScheduleV1::default().with(d.digest(), KernelStatusV1::Active { since_daa: 0 });
+        assert!(node_program_outcome(&armed, &d, &program, root, 32, 0).is_eligible());
+        let route = kernel_route_of(&program, 32, 0);
+        assert_eq!(
+            (route.shipped.as_str(), route.hypothetical.as_str(), route.bucket.as_str()),
+            ("KERNEL_NOT_ACTIVE", "ELIGIBLE_AT", "kernel_extension_gap")
+        );
+    }
+
+    #[test]
     fn node_bounds_choose_segmented_moe_and_keep_the_proven_i128_relation() {
         let fx = misaka_palw_tir_sketch::fixture::dense_moe_v1(1);
         let k = kernel_route_of(&fx.program, 64, 0);

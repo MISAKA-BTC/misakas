@@ -275,6 +275,13 @@ pub fn element_value_v1(
     e: u64,
     ops: &dyn OperandsV1,
 ) -> Result<Option<i128>, MissingV1> {
+    // A rank-one lookup table gathered by an arbitrary-shaped index tensor has no
+    // coordinate transform: its output's flat position IS the index tensor's position.
+    // Check the index before touching the table, exactly as the generic branch does.
+    if flat_gather_v1(node, &sh.inputs, &sh.out) {
+        let index = ops.get(1, e)?;
+        return Ok(if index < 0 || index >= sh.inputs[0][0] as i128 { None } else { Some(ops.get(0, index as u64)?) });
+    }
     let out_dtype = node.out.dtype;
     let ost = strides(&sh.out);
     let o = unravel(e, &ost);
@@ -398,6 +405,12 @@ pub fn element_value_v1(
             }
         }
     })
+}
+
+/// The shared structural predicate for the allocation-free element lookup and its price.
+/// Other Gather axes/batch dimensions retain the general coordinate evaluator.
+pub(crate) fn flat_gather_v1(node: &Node, inputs: &[Vec<usize>], out: &[usize]) -> bool {
+    matches!(node.prim, Prim::Gather { axis: 0, batch_dims: 0 }) && inputs.len() == 2 && inputs[0].len() == 1 && inputs[1] == out
 }
 
 /// The program's per-position structure the courts read: the wiring and the flat index of each occurrence's first node.
@@ -1579,6 +1592,146 @@ mod tests {
     use misaka_palw_tir::MapParams;
     use misaka_palw_tir_sketch::fixture::dense_moe_v1;
 
+    /// Deliberately retains the old coordinate algorithm as a differential oracle. The
+    /// independently implemented whole-tensor TIR evaluator is checked as well.
+    fn coordinate_gather(node: &Node, sh: &ElementShapesV1, e: u64, ops: &dyn OperandsV1) -> Result<Option<i128>, MissingV1> {
+        let Prim::Gather { axis, batch_dims } = node.prim else { panic!("not Gather") };
+        let (a, b) = (axis as usize, batch_dims as usize);
+        let o = unravel(e, &strides(&sh.out));
+        let m = sh.inputs[1].len() - b;
+        let mut xi = o[..b].to_vec();
+        xi.extend_from_slice(&o[a..a + m]);
+        let v = ops.get(1, ravel(&xi, &strides(&sh.inputs[1])))?;
+        if v < 0 || v >= sh.inputs[0][a] as i128 {
+            return Ok(None);
+        }
+        let mut di = o[..a].to_vec();
+        di.push(v as usize);
+        di.extend_from_slice(&o[a + m..]);
+        Ok(Some(ops.get(0, ravel(&di, &strides(&sh.inputs[0])))?))
+    }
+
+    struct LookupOperands {
+        tensors: Vec<Tensor>,
+        missing: Option<MissingV1>,
+        reads: RefCell<Vec<(usize, u64)>>,
+    }
+    impl OperandsV1 for LookupOperands {
+        fn get(&self, i: usize, e: u64) -> Result<i128, MissingV1> {
+            self.reads.borrow_mut().push((i, e));
+            if self.missing == Some(MissingV1(i, e)) {
+                return Err(MissingV1(i, e));
+            }
+            self.tensors.get(i).and_then(|t| t.data.get(e as usize)).copied().ok_or(MissingV1(i, e))
+        }
+    }
+
+    #[test]
+    fn flat_gather_preserves_results_and_dependency_reads_for_all_dtypes_and_ranks() {
+        let program = dense_moe_v1(7).program;
+        for dtype in DType::ALL {
+            let data = Tensor::new(dtype, vec![7], vec![dtype.min_value(), dtype.max_value(), 0, 1, 2, 3, 4]).unwrap();
+            for shape in [vec![], vec![19], vec![3, 5], vec![2, 3, 4], vec![2, 2, 3, 4]] {
+                let len = shape.iter().product::<usize>();
+                let indices = Tensor::new(DType::Idx, shape.clone(), (0..len).map(|e| ((e * 11 + 3) % 7) as i128).collect()).unwrap();
+                let node = Node {
+                    prim: Prim::Gather { axis: 0, batch_dims: 0 },
+                    inputs: vec![Ref::Param(0), Ref::Param(1)],
+                    out: misaka_palw_tir::TensorType::fixed(dtype, &shape.iter().map(|n| *n as u32).collect::<Vec<_>>()),
+                    commit: true,
+                };
+                let sh = ElementShapesV1 {
+                    out: shape.clone(),
+                    inputs: vec![data.shape.clone(), shape.clone()],
+                    in_dtypes: vec![dtype, DType::Idx],
+                    hist: None,
+                };
+                let expected = eval_primitive(&node.prim, &[data.clone(), indices.clone()], dtype, &shape).unwrap();
+                let ops = LookupOperands { tensors: vec![data.clone(), indices], missing: None, reads: RefCell::new(vec![]) };
+                assert!(flat_gather_v1(&node, &sh.inputs, &sh.out));
+                for e in 0..len as u64 {
+                    ops.reads.borrow_mut().clear();
+                    let fast = element_value_v1(&program, &node, &sh, e, &ops);
+                    let reads = ops.reads.take();
+                    let old = coordinate_gather(&node, &sh, e, &ops);
+                    assert_eq!(fast, old, "{dtype:?} {shape:?} {e}");
+                    assert_eq!(fast, Ok(Some(expected.data[e as usize])));
+                    assert_eq!(reads, ops.reads.take(), "proof dependencies changed");
+                    assert_eq!(reads.len(), 2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn flat_gather_refuses_invalid_indices_before_table_reads_and_preserves_missing_operands() {
+        let program = dense_moe_v1(7).program;
+        let node = Node {
+            prim: Prim::Gather { axis: 0, batch_dims: 0 },
+            inputs: vec![Ref::Param(0), Ref::Param(1)],
+            out: misaka_palw_tir::TensorType::fixed(DType::I16, &[6]),
+            commit: true,
+        };
+        let sh =
+            ElementShapesV1 { out: vec![6], inputs: vec![vec![3], vec![6]], in_dtypes: vec![DType::I16, DType::I128], hist: None };
+        let tensors = vec![
+            Tensor::new(DType::I16, vec![3], vec![-7, 0, 32767]).unwrap(),
+            Tensor::new(DType::I128, vec![6], vec![-1, 3, i128::MIN, i128::MAX, 0, 2]).unwrap(),
+        ];
+        for missing in [None, Some(MissingV1(1, 0)), Some(MissingV1(1, 5)), Some(MissingV1(0, 2))] {
+            let ops = LookupOperands { tensors: tensors.clone(), missing, reads: RefCell::new(vec![]) };
+            for e in 0..6 {
+                ops.reads.borrow_mut().clear();
+                let fast = element_value_v1(&program, &node, &sh, e, &ops);
+                let reads = ops.reads.take();
+                assert_eq!(fast, coordinate_gather(&node, &sh, e, &ops));
+                assert_eq!(reads, ops.reads.take());
+                if e < 4 {
+                    assert!(reads.iter().all(|(operand, _)| *operand == 1));
+                }
+            }
+        }
+        // Neither an axis/batch variant nor a mismatched output shape enters the specialization.
+        for prim in [Prim::Gather { axis: 1, batch_dims: 0 }, Prim::Gather { axis: 0, batch_dims: 1 }, Prim::Reshape] {
+            let mut other = node.clone();
+            other.prim = prim;
+            assert!(!flat_gather_v1(&other, &sh.inputs, &sh.out));
+        }
+        assert!(!flat_gather_v1(&node, &[vec![3, 1], vec![6]], &[6]));
+        assert!(!flat_gather_v1(&node, &sh.inputs, &[2, 3]));
+    }
+
+    #[test]
+    fn nonflat_gather_axes_and_batches_still_match_the_independent_reference() {
+        let program = dense_moe_v1(7).program;
+        for (axis, batch, data_shape, index_shape, out_shape, indices) in [
+            (0, 0, vec![3, 2], vec![2], vec![2, 2], vec![2, 0]),
+            (1, 0, vec![2, 3], vec![2], vec![2, 2], vec![2, 0]),
+            (1, 1, vec![2, 3], vec![2, 2], vec![2, 2], vec![2, 0, 1, 2]),
+        ] {
+            let data = Tensor::new(DType::I32, data_shape.clone(), (0..6).map(|i| i * 71 - 120).collect()).unwrap();
+            let ix = Tensor::new(DType::Idx, index_shape.clone(), indices).unwrap();
+            let node = Node {
+                prim: Prim::Gather { axis, batch_dims: batch },
+                inputs: vec![Ref::Param(0), Ref::Param(1)],
+                out: misaka_palw_tir::TensorType::fixed(DType::I32, &out_shape.iter().map(|n| *n as u32).collect::<Vec<_>>()),
+                commit: true,
+            };
+            let sh = ElementShapesV1 {
+                out: out_shape.clone(),
+                inputs: vec![data_shape, index_shape],
+                in_dtypes: vec![DType::I32, DType::Idx],
+                hist: None,
+            };
+            assert!(!flat_gather_v1(&node, &sh.inputs, &sh.out));
+            let expected = eval_primitive(&node.prim, &[data.clone(), ix.clone()], DType::I32, &out_shape).unwrap();
+            let ops = LookupOperands { tensors: vec![data, ix], missing: None, reads: RefCell::new(vec![]) };
+            for e in 0..expected.len() as u64 {
+                assert_eq!(element_value_v1(&program, &node, &sh, e, &ops), Ok(Some(expected.data[e as usize])));
+            }
+        }
+    }
+
     /// The claim a producer committed, as values (honest or not), with its segment roots.
     struct Committed {
         values: Vec<Vec<Vec<Tensor>>>,
@@ -1640,6 +1793,167 @@ mod tests {
             decode: DecodeRuleV1::Greedy,
             encoder: None,
         }
+    }
+
+    #[test]
+    fn vocabulary_sized_flat_lookup_roots_match_the_frozen_coordinate_evaluator() {
+        const N: usize = 151_936;
+        struct Direct(Vec<Tensor>);
+        impl OperandsV1 for Direct {
+            fn get(&self, i: usize, e: u64) -> Result<i128, MissingV1> {
+                self.0.get(i).and_then(|t| t.data.get(e as usize)).copied().ok_or(MissingV1(i, e))
+            }
+        }
+        let p = dense_moe_v1(7).program;
+        let node = Node {
+            prim: Prim::Gather { axis: 0, batch_dims: 0 },
+            inputs: vec![Ref::Param(0), Ref::Param(1)],
+            out: misaka_palw_tir::TensorType::fixed(DType::I64, &[N as u32]),
+            commit: true,
+        };
+        let sh =
+            ElementShapesV1 { out: vec![N], inputs: vec![vec![63], vec![N]], in_dtypes: vec![DType::I64, DType::I32], hist: None };
+        let ops = Direct(vec![
+            Tensor::new(DType::I64, vec![63], (0..63).map(|i| i * 1051 - 1798).collect()).unwrap(),
+            Tensor::new(DType::I32, vec![N], (0..N).map(|i| ((i * 37 + 19) % 63) as i128).collect()).unwrap(),
+        ]);
+        let evaluate = |fast: bool| {
+            (0..N as u64)
+                .map(|e| {
+                    let e = std::hint::black_box(e);
+                    if fast { element_value_v1(&p, &node, &sh, e, &ops) } else { coordinate_gather(&node, &sh, e, &ops) }
+                        .unwrap()
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        let old = evaluate(false);
+        let new = evaluate(true);
+        let reference = eval_primitive(&node.prim, &ops.0, DType::I64, &[N]).unwrap();
+        assert_eq!(old, reference.data);
+        assert_eq!(new, old);
+        let root = tensor_commitment_v3(&reference);
+        // Alternating warmed trials include both output commitment trees. Timings are a
+        // local diagnostic, never a hardware-dependent consensus or test threshold.
+        let mut times = [Vec::new(), Vec::new()];
+        for trial in 0..6 {
+            for fast in if trial % 2 == 0 { [false, true] } else { [true, false] } {
+                let start = std::time::Instant::now();
+                let data = evaluate(fast);
+                let t = Tensor::new(DType::I64, vec![N], data).unwrap();
+                assert_eq!(tensor_commitment_v3(&t), root);
+                times[fast as usize].push(start.elapsed().as_nanos());
+            }
+        }
+        for values in &mut times {
+            values.sort_unstable()
+        }
+        eprintln!(
+            "151936-output lookup + both commitment trees: frozen median {} ns, flat median {} ns; six alternating trials, all roots equal",
+            times[0][3], times[1][3]
+        );
+    }
+
+    /// Actual vocabulary-sized court, deliberately synthetic weights. This exercises the
+    /// proof format/authentication at 151,936 outputs; it is not checkpoint fidelity evidence.
+    #[test]
+    fn vocabulary_sized_lookup_whole_court_dismisses_honest_convicts_lie_and_refuses_missing_or_substituted_inputs() {
+        use misaka_palw_tir::builder::ProgramBuilder;
+        use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
+        use misaka_palw_tir::{Dim, TensorType};
+        const VOCAB: u32 = 151_936;
+        let mut pb = ProgramBuilder::new(VOCAB, HISTORY_BOUND_V1_SMALL);
+        let embeddings = pb.param("embedding", DType::I16, &[VOCAB, 1], false);
+        let table = pb.param("lookup", DType::I16, &[63], false);
+        let indices = pb.param("indices", DType::I32, &[VOCAB], false);
+        let carry = vec![TensorType::fixed(DType::I32, &[1])];
+        let pre = {
+            let mut b = pb.block("pre", vec![]);
+            let x = b.gather(embeddings, Ref::Input(INPUT_TOKEN), 0, 0);
+            let x = b.cast(x, DType::I32);
+            b.finish(&[x])
+        };
+        let post = {
+            let mut b = pb.block("post", carry);
+            let x = b.broadcast(Ref::CarryIn(0), &[Dim::Fixed(VOCAB)]);
+            let x = b.add(x, indices, DType::I32);
+            let x = b.clamp(x, 0, 62, DType::I32);
+            let y = b.gather(table, x, 0, 0);
+            b.commit(y);
+            let logits = b.cast(y, DType::I32);
+            b.commit(logits);
+            b.finish(&[])
+        };
+        let node = pb.blocks[post as usize]
+            .nodes
+            .iter()
+            .position(|n| flat_gather_v1(n, &[vec![63], vec![VOCAB as usize]], &[VOCAB as usize]))
+            .unwrap() as u16;
+        let logits = (pb.blocks[post as usize].nodes.len() - 1) as u16;
+        let program = pb.finish(pre, vec![], post, logits);
+        misaka_palw_tir::validate::validate(&program).unwrap();
+        let params = MapParams {
+            tensors: BTreeMap::from([
+                ((0, None), Tensor::new(DType::I16, vec![VOCAB as usize, 1], vec![0; VOCAB as usize]).unwrap()),
+                ((1, None), Tensor::new(DType::I16, vec![63], (0..63).map(|i| i * 31 - 900).collect()).unwrap()),
+                ((2, None), Tensor::new(DType::I32, vec![VOCAB as usize], (0..VOCAB).map(|i| (i % 63) as i128).collect()).unwrap()),
+            ]),
+        };
+        let tokens = vec![3, 62];
+        let f = Fx { pc: ParamCommitmentsV1::of_v3(&params), program, params, tokens, prompt: vec![3], generated: vec![62, 62] };
+        let values = trace_v1(&f.program, &f.params, &f.tokens).unwrap().values;
+        let honest = Committed::of(values.clone());
+        let roots = honest.c.segment_roots();
+        let hc = ctx(&f, &roots);
+        let pr = PreparedV1::new(&f.program, None).unwrap();
+        assert!(pr.is_withheld(1, node));
+        let art = |j: u16, l: Option<u16>| f.params.tensors.get(&(j, l)).cloned();
+        let loaded = load_opened_positions_for_element(&hc, &pr, &honest, &[0]).unwrap();
+        let resolved = resolve_operands(&hc, &pr, &loaded, &art, &f.tokens, (0, 1, node)).unwrap();
+        let whole = build_whole_value_fault(&hc, &pr, &loaded, &resolved, &f.tokens, (0, 1, node)).unwrap();
+        let proof = SegFaultV1::WholeValue(whole.clone());
+        let count = f.program.occurrences().iter().map(|(b, _)| f.program.blocks[*b as usize].nodes.len() as u64).sum();
+        let (bytes, work) = crate::seg_scope::whole_value_court_cost_v1(&f.program, 1, node as usize, count);
+        assert!(proof.to_bytes().len() as u64 <= bytes);
+        assert!(work <= 536_870_912, "whole court exceeds default proof reservation: {work}");
+        let started = std::time::Instant::now();
+        assert_eq!(verify_seg_fault_v1(&hc, &proof), Err(DismissalV1::NoFault));
+        eprintln!(
+            "151936-output whole court: {} proof bytes, {} abstract work, {:?} honest verification",
+            proof.to_bytes().len(),
+            work,
+            started.elapsed()
+        );
+        // Bounds are compared to the pre-specialization price, without changing disclosure.
+        let conservative_work = work + VOCAB as u64 * 16 * 64;
+        let model_mask = crate::scope::court_model_dependent_mask_v1(&f.program, crate::seg_scope::seg_model_params_v1(&f.program));
+        assert!(model_mask[1][node as usize]);
+        assert!(
+            bytes <= crate::seg_scope::SEG_WHOLE_VALUE_COURT_MAX_BYTES_V1
+                && conservative_work <= crate::seg_scope::SEG_WHOLE_VALUE_COURT_MAX_WORK_V1
+        );
+        for missing in [false, true] {
+            let mut tampered = whole.clone();
+            if missing {
+                tampered.inputs[0].leaves.clear()
+            } else {
+                tampered.inputs[0].leaves[0].values[0] ^= 1;
+            }
+            assert!(matches!(verify_seg_fault_v1(&hc, &SegFaultV1::WholeValue(tampered)), Err(DismissalV1::NotAuthentic(_))));
+        }
+        let mut lying_values = values;
+        lying_values[0][1][node as usize].data[VOCAB as usize - 1] += 1;
+        let lying = Committed::of(lying_values);
+        let lr = lying.c.segment_roots();
+        let lc = ctx(&f, &lr);
+        let SegFindingV1::Fault(fault) = check_positions_v1(&lc, &lying, &art, &f.tokens, &[0]) else {
+            panic!("fresh verifier missed lookup lie")
+        };
+        assert!(matches!(fault.as_ref(), SegFaultV1::WholeValue(_)));
+        assert_eq!(fault.at(), Some((0, 1, node)));
+        assert!(fault.to_bytes().len() as u64 <= bytes);
+        assert_eq!(verify_seg_fault_v1(&lc, &fault).unwrap().kind, SegConvictionKindV1::WholeValue);
+        assert!(matches!(verify_seg_fault_v1(&hc, &fault), Err(DismissalV1::NotAuthentic(_))));
     }
 
     #[test]
