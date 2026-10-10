@@ -378,7 +378,7 @@ impl Rpc {
             };
         }
         assert_eq!(Some(seen), total, "every row exactly once, over {pages} page(s)");
-        let state = PalwKernelRouteStateV1 { header: header.expect("a first page"), rows, aux };
+        let state = PalwKernelRouteStateV1 { header: header.expect("a first page"), rows, aux, ledger_cache: Default::default() };
         let (ledger_root, aux_root) = roots.expect("a first page");
         assert_eq!(state.ledger_root().to_string(), ledger_root, "the served rows root to the served ledger root");
         assert_eq!(state.aux_root().to_string(), aux_root, "and the served aux rows to the served aux root");

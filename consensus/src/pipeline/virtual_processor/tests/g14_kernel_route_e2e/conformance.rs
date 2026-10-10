@@ -1033,7 +1033,7 @@ async fn g14_canonical_ops_231_and_212_served_by_an_ibd_node_rebuild_the_conform
     let rpc = Rpc::of(&node.chain);
     let read = rpc.conformance(cw.v2_class);
     assert!(read.available && read.found && read.evidence_posted, "op 231 serves the posted attempt: {read:?}");
-    let mut events: Vec<WorkFinalEventV1> = rpc
+    let mut events: Vec<misaka_palw_challenge::AttributedWorkV1> = rpc
         .finals()
         .finals
         .iter()
@@ -1041,12 +1041,13 @@ async fn g14_canonical_ops_231_and_212_served_by_an_ibd_node_rebuild_the_conform
         .map(|f| borsh::from_slice(&unhex(&f.work_final_event)).expect("a beacon event"))
         .collect();
     events.reverse(); // op 212 serves the newest first; the route's canonical order is the reverse
-    let bytes = |e: &[WorkFinalEventV1]| e.iter().map(|x| borsh::to_vec(x).unwrap()).collect::<Vec<_>>();
+    let bytes = |e: &[misaka_palw_challenge::AttributedWorkV1]| e.iter().map(|x| borsh::to_vec(x).unwrap()).collect::<Vec<_>>();
     assert_eq!(bytes(&events), bytes(&cw.events()), "op 212's facts are the route's");
     let reads = PublicConformanceReadsV1 {
         attempt_row: unhex(&read.attempt_row),
         evidence_row: Some(unhex(&read.evidence_row)),
         events,
+        sealed_sources: Vec::new(),
         tip_daa: read.tip_daa,
         program: unhex(&read.program),
     };
