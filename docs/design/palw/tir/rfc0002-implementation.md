@@ -813,3 +813,82 @@ registration/evidence preparation needed for the same-node public execution/chec
 That path, authenticated public material, outsider conviction and independent Final/redemption
 must still be measured with real artifact operands; root preparation cannot stand in for those
 gates. All previously listed fidelity, context, feature, resource/economic and A6/A8 gates remain.
+
+
+### Exact-context real-artifact node executor comparison (2026-10-10)
+
+The generic node conformance function now refuses a request of zero positions or more than the
+canonical program's `history_bound`, before acquiring any reference parameter or creating an
+execution. It previously clamped the request to a different length. A successful report now
+covers exactly the caller's requested length. This changes local conformance diagnostics, not
+integer semantics, commitment preimages, descriptors, network activation or economic rights.
+
+`misaka-palw-sdk/examples/check-kernel-node-execution.rs` accepts an arbitrary canonical
+PALWTIR1 artifact and a prepared decoder v3 parameter map. It checks positive explicit hash,
+payload and reference-tensor limits, refuses the requested context before payload reads,
+recomputes every instance commitment using the bounded streamed producer, and compares the
+complete map with the supplied map before execution. It then uses `TirArtifactV1` and
+`tir_executor_conformance_against_v1`: the same typed CPU executor code used by the node,
+against the integer reference interpreter with lazy one-tensor-at-a-time acquisition. It
+consults no ModelSpec, config, model name, or official compiler registry. This diagnostic is a
+local comparison; it does not replace the registered-model authentication in public checkers
+or provide an immutable-source guarantee. Source SHA-256 observations before and after the
+completed measurement both match the established real artifact.
+
+The protocol was fixed before execution in
+[evidence/qwen25-real-node-execution-protocol.json](evidence/qwen25-real-node-execution-protocol.json).
+It fixes two positions, tokens `[13, 7932]`, a 64-MiB hash-workspace cap, 4-GiB total model payload
+cap and 8-GiB reference-tensor cap. The latter covers the largest raw tensor plus its i128
+expansion and a small allocation allowance, **not** total process/verifier RAM. Acceptance
+requires all 1,636 actual parameter instances to match the prior map and exact bit agreement
+at every compared commit and full-vocabulary logits for both requested positions. No latency
+or throughput admission criterion is claimed by this diagnostic.
+
+The actual full-weight Qwen2.5 pilot artifact passed those criteria. All **790 commit points**
+and both positions' **151,936-vocabulary logits** match. The second position carries the first
+position's KV/history state into both executions. Roots match the previously published
+program, descriptor and real parameter map; no reduced or generated weights were substituted.
+
+| Measurement | Observed value |
+|---|---:|
+| Requested / compared positions | 2 / 2 |
+| Parameter instances authenticated first | 1,636 |
+| Commit points compared | 790 |
+| Reference tensor acquisitions | 3,490 |
+| Execution comparison elapsed | 381.881 s |
+| Process wall time, including parameter authentication | 440.00 s |
+| Maximum process RSS | 6,442,958,848 bytes |
+| Largest decoded reference tensor | 3,733,979,136 bytes |
+| Largest raw-plus-decoded reference tensor bound | 4,201,775,104 bytes |
+
+This was a local debug run with the workspace's existing package optimizations, CPU execution,
+fused kernels off and no Metal feature. Process RSS includes hashing, reference evaluation,
+typed execution and the mapped artifact; it is **not isolated producer memory or ordinary
+verifier memory**. SHA-256 and parameter authentication read the file before comparison, so
+this is not a cold-cache measurement. The comparison time combines reference and typed
+execution, and does not establish the producer's throughput or economic profitability.
+
+Reproduce over the existing real artifact and prepared map:
+
+```sh
+cargo test --locked -p misaka-palw-tir-exec --features node --test node_conformance
+cargo build --locked -p misaka-palw-sdk --example check-kernel-node-execution
+/usr/bin/time -l target/debug/examples/check-kernel-node-execution \
+  target/rfc02-real/qwen25-pilot/qwen25-32.palwtir \
+  target/rfc02-real/qwen25-pilot/kernel-params-v3.borsh 2 64 4096 8192
+```
+
+All four node conformance tests passed: the node suites' exact commits/logits, a different
+weight rejected by position, deterministic in-range prompts, and invalid context requests
+refused before reference acquisition. The measurement's result, raw run log, tests, build,
+source observations and code/binary hashes are saved under `evidence/qwen25-real-node-execution-*`.
+The verdict is
+[evidence/qwen25-real-node-execution-verdict.json](evidence/qwen25-real-node-execution-verdict.json).
+
+**Full RFC02 scope remains open.** These two positions prove local actual-weight integer
+execution agreement. They do not prove the complete 32-position pilot context, task quality,
+independent source floating-model fidelity, same-node-binary registration, authenticated
+public claim material, outsider conviction, independent Final/redemption, or A6/A8 and economic
+gates. The next node evidence must bind the actual inventory and kernel roots and carry an
+actual-weight segmented claim through public checking and its terminal court. Preserve all
+remaining shared-feature, complete-task, resource aggregate and coverage requirements.

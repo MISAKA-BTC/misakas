@@ -51,7 +51,7 @@ fn every_program_of_the_node_suites_conforms_streamed_and_sampled() {
     for (name, program, params) in programs() {
         let path = write(&dir.0, &name, &program, &params);
         let got = tir_executor_conformance_of_file_v1(&path, TIR_CONFORMANCE_POSITIONS_V1).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert_eq!(got.positions, TIR_CONFORMANCE_POSITIONS_V1.min(program.history_bound as usize), "{name}");
+        assert_eq!(got.positions, TIR_CONFORMANCE_POSITIONS_V1, "{name}");
         assert!(got.commits > 0, "{name}: commit points were compared");
         if !params.tensors.is_empty() {
             assert!(got.reference_param_reads > 0, "{name}: the reference read its params through the lazy source");
@@ -118,4 +118,23 @@ fn the_prompt_is_the_same_for_every_seat() {
         assert_eq!(a, tir_conformance_prompt_v1(program.token_bound, 3));
         assert!(a.iter().all(|t| *t < program.token_bound.max(1)));
     }
+}
+
+#[test]
+fn invalid_position_requests_refuse_before_reference_reads_or_execution() {
+    struct NoReads;
+    impl ParamSource for NoReads {
+        fn param(&self, _: u16, _: Option<u16>) -> Option<Tensor> {
+            panic!("invalid context reached parameter acquisition");
+        }
+    }
+    let dir = Scratch::new("exact-context");
+    let (name, program, params) = programs().into_iter().next().unwrap();
+    let path = write(&dir.0, &name, &program, &params);
+    let artifact = TirArtifactV1::open(&path).unwrap();
+    for positions in [0, program.history_bound as usize + 1, usize::MAX] {
+        let why = tir_executor_conformance_against_v1(&artifact, &NoReads, positions).unwrap_err();
+        assert!(why.contains("requested positions"), "{why}");
+    }
+    assert_eq!(tir_executor_conformance_of_file_v1(&path, 1).unwrap().positions, 1);
 }

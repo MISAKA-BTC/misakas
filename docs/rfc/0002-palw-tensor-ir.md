@@ -2325,3 +2325,26 @@ change no wire preimage, kernel identity, resource price, network activation or 
 They do not prove source-model fidelity, execution, public node prosecution or Final. Commands,
 bounds, raw evidence and the remaining full-scope work are in the
 [RFC02 implementation ledger](../design/palw/tir/rfc0002-implementation.md).
+
+
+### 14.9 Exact context and actual-weight node execution evidence
+
+Local executor conformance must compare exactly the requested positive number of positions,
+within the canonical program's history bound. It must refuse zero or oversized requests before
+reference parameter acquisition, rather than silently substitute a shorter context.
+
+The generic `check-kernel-node-execution` SDK example first checks every actual decoder
+parameter instance against a supplied prepared v3 map under explicit off-chain limits, then
+compares the node's typed CPU executor with the integer reference. It requires no ModelSpec,
+model name or official compiler. This is a local diagnostic, separate from registered-model
+public verification and chain admission.
+
+On the full real Qwen2.5 pilot artifact, the predeclared two-position protocol authenticated
+all 1,636 instances and compared 790 commit points and both complete vocabulary logits;
+every comparison matched. Four node conformance tests passed. Comparison elapsed was
+381.881 s; whole-process maximum RSS was 6,442,958,848 bytes. That process includes reference
+and native execution plus preparation; it does not establish native producer speed, ordinary
+verifier memory bounds, source-model fidelity, full context/task support, public conviction or
+Final. The same-node-binary registration and actual-weight public claim/court path remain
+required. Protocol, commands, scope, raw results and hashes are in the
+[RFC02 implementation ledger](../design/palw/tir/rfc0002-implementation.md).

@@ -130,7 +130,12 @@ pub fn tir_executor_conformance_against_v1(
         return Err("a composite candidate is tested as its parent is (its params are the parent's)".into());
     }
     let program = &artifact.container().program;
-    let prompt = tir_conformance_prompt_v1(program.token_bound, positions.clamp(1, program.history_bound.max(1) as usize));
+    // The result must cover the caller's exact request. A zero or oversized context is not
+    // evidence for a silently substituted one-position or shorter job.
+    if positions == 0 || positions > program.history_bound as usize {
+        return Err(format!("requested positions {positions} outside 1..={}", program.history_bound));
+    }
+    let prompt = tir_conformance_prompt_v1(program.token_bound, positions);
     let interp = Interpreter::new(program).map_err(|e| e.to_string())?;
     let mut exec = TirExecutor::new(artifact.plan(), artifact.params()).map_err(|e| e.to_string())?;
     let mut state = RunState::default();
