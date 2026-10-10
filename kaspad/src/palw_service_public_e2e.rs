@@ -521,6 +521,16 @@ async fn fresh_public_bond_service_convicts_fp_v3_after_original_commitment_hist
     fresh_public_service(PublicCase::PrunedForeignFpV3Job).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_reacquires_pruned_fp_input_replays_and_releases_an_honest_job() {
+    fresh_public_service(PublicCase::PrunedHonestFpV3Job).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_defaults_when_pruned_fp_input_is_withheld() {
+    fresh_public_service(PublicCase::PrunedWithheldFpV3Input).await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PublicCase {
     Withholding,
@@ -528,18 +538,31 @@ enum PublicCase {
     ForeignFpJob,
     ForeignFpV3Job,
     PrunedForeignFpV3Job,
+    PrunedHonestFpV3Job,
+    PrunedWithheldFpV3Input,
 }
 
 impl PublicCase {
     fn is_fp(self) -> bool {
-        matches!(self, Self::ForeignFpJob | Self::ForeignFpV3Job | Self::PrunedForeignFpV3Job)
+        !matches!(self, Self::Withholding | Self::ForeignJob)
+    }
+    fn pruned_fp(self) -> bool {
+        matches!(self, Self::PrunedForeignFpV3Job | Self::PrunedHonestFpV3Job | Self::PrunedWithheldFpV3Input)
+    }
+    fn identity_fault(self) -> bool {
+        matches!(self, Self::ForeignJob | Self::ForeignFpJob | Self::ForeignFpV3Job | Self::PrunedForeignFpV3Job)
+    }
+    fn da_default(self) -> bool {
+        matches!(self, Self::Withholding | Self::PrunedWithheldFpV3Input)
     }
 }
 
 /// The producer executes a real registered model under FP job B, then claims the roots
-/// for user-prompt job A. Only its signed Event is later shared with the outsider.
-fn foreign_fp_job(
+/// for user-prompt job A when identity_fault is requested. Otherwise the commitment is honest.
+/// Only requested signed public Event/input answers are shared with the outsider.
+fn public_fp_job(
     chain: &Chain,
+    identity_fault: bool,
 ) -> (
     kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1,
     kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
@@ -610,7 +633,9 @@ fn foreign_fp_job(
     let event = backend.disclose_trace_event(&run.outcome.material, 0, 0).unwrap();
     // The claimed job A has a fully valid user prompt and schedule; its authenticated
     // execution material belongs to B. Admission must not require trusting Panel replay.
-    job.job_nonce[0] ^= 1;
+    if identity_fault {
+        job.job_nonce[0] ^= 1;
+    }
     let ctx = backend.fp_job_context_for_executed_v1(&job, commitment.decode_tokens_executed).unwrap();
     commitment.job = job;
     commitment.schedule_root = kaspa_consensus_core::palw_v2::expected_schedule_commitment_v2(
@@ -624,8 +649,7 @@ fn foreign_fp_job(
 
 async fn fresh_public_service(case: PublicCase) {
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
-    let (config, bundle, premine, mut floats) =
-        fixture_config(case == PublicCase::ForeignFpJob, case == PublicCase::PrunedForeignFpV3Job);
+    let (config, bundle, premine, mut floats) = fixture_config(case == PublicCase::ForeignFpJob, case.pruned_fp());
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
     if case.is_fp() {
@@ -713,7 +737,7 @@ async fn fresh_public_service(case: PublicCase) {
     eprintln!("[service-public] ordinary bond registered before DAA {registered_before}, maturity {maturity}, now {}", chain.daa());
     let foreign = (case != PublicCase::Withholding).then(|| {
         if case.is_fp() {
-            return foreign_fp_job(&chain);
+            return public_fp_job(&chain, case.identity_fault());
         }
         use misaka_palw_base0::classes::resolve_class_v1;
         let backend = misaka_palw_base0::backend::Base0Backend::new(
@@ -847,30 +871,44 @@ async fn fresh_public_service(case: PublicCase) {
         let public_job = chain.view(claim).public_fp_job.expect("the ordinary accepted extractor retained authenticated job metadata");
         let stored: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3 = borsh::from_slice(&public_job).unwrap();
         assert_eq!(kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&stored), claim);
-        if case == PublicCase::PrunedForeignFpV3Job {
+        if case.pruned_fp() {
             use kaspa_consensus::model::stores::acceptance_data::AcceptanceDataStore;
             use kaspa_consensus::model::stores::block_transactions::BlockTransactionsStore;
-            let commitment_block = chain.history.iter().find(|b| b.transactions.iter().any(|t| {
-                t.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
-                    && borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3>(&t.payload)
-                        .is_ok_and(|p| p.claim_id() == claim)
-            })).unwrap().hash();
+            let commitment_block = chain
+                .history
+                .iter()
+                .find(|b| {
+                    b.transactions.iter().any(|t| {
+                        t.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+                            && borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3>(&t.payload)
+                                .is_ok_and(|p| p.claim_id() == claim)
+                    })
+                })
+                .unwrap()
+                .hash();
             // Delete real DB rows and caches, rather than substituting a read API. This tests lost history,
             // independently of the still-open network pruned-import/recovery requirement.
             chain.tc.block_transactions_store.delete(commitment_block).unwrap();
             chain.tc.acceptance_data_store.delete(candidate.job.accepted_block).unwrap();
             assert!(chain.tc.get_block(commitment_block).is_err());
             assert!(chain.tc.get_block_acceptance_data(candidate.job.accepted_block).is_err());
-            let reacquired = super::palw_fraud_filer::palw_fraud_filer_fp_payload_v1(chain.tc.as_ref().as_ref(), &candidate, chain.network_domain)
-                .expect("public rooted metadata starts prosecution despite missing original accepted block history");
+            let reacquired =
+                super::palw_fraud_filer::palw_fraud_filer_fp_payload_v1(chain.tc.as_ref().as_ref(), &candidate, chain.network_domain)
+                    .expect("public rooted metadata starts prosecution despite missing original accepted block history");
             assert_eq!(reacquired.commitment, stored);
             assert!(reacquired.prompt_token_ids.is_empty());
             assert!(reacquired.signature.is_empty());
-            assert!(chain.tc.palw_fraud_filer_candidates_v1(bond).iter().any(|c| c.claim_id == claim && !c.seat),
-                "ordinary candidate discovery survives missing commitment history");
-            assert!(chain.config.params.palw_legacy_held_da_v2_active_at(chain.daa()),
-                "the input bootstrap's own dormant fence is active in this fixture");
-            eprintln!("[service-public] original FP commitment body and acceptance rows pruned; only rooted public job metadata remains");
+            assert!(
+                chain.tc.palw_fraud_filer_candidates_v1(bond).iter().any(|c| c.claim_id == claim && !c.seat),
+                "ordinary candidate discovery survives missing commitment history"
+            );
+            assert!(
+                chain.config.params.palw_legacy_held_da_v2_active_at(chain.daa()),
+                "the input bootstrap's own dormant fence is active in this fixture"
+            );
+            eprintln!(
+                "[service-public] original FP commitment body and acceptance rows pruned; only rooted public job metadata remains"
+            );
         }
     }
     let producer_capital = chain.tc.palw_operator_da_standing_v1(chain.view(claim).producer).unwrap().collateral;
@@ -930,6 +968,7 @@ async fn fresh_public_service(case: PublicCase) {
     let mut reserved = false;
     let mut demanded = false;
     let mut answer_submitted = None;
+    let mut input_chunks = BTreeSet::new();
     loop {
         assert!(!running.task.as_ref().unwrap().is_finished(), "production worker unexpectedly stopped");
         assert!(std::time::Instant::now() < deadline, "service made no objective progress: {:?}", chain.view(claim));
@@ -1069,11 +1108,166 @@ async fn fresh_public_service(case: PublicCase) {
             assert!(included, "the production template carries the authenticated fault disclosure");
             pool_heartbeat(&mut chain, &manager, &pool).await;
             let disclosed = chain.view(claim);
-            assert!(!disclosed.unit_was_answered_v1(&PalwDaUnitV1::Event { row: 0, tile: 0 }));
+            assert_eq!(disclosed.unit_was_answered_v1(&PalwDaUnitV1::Event { row: 0, tile: 0 }), !case.identity_fault());
             assert!(!disclosed.executor_refuted && !disclosed.da_defaulted, "carriage itself is neither a DA answer nor conviction");
-            eprintln!("[service-public] authenticated J1 binding carried; DA answer remains refused until the verifier files");
+            let output = tx.outputs.last().unwrap();
+            floats[0] = (
+                TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
+                UtxoEntry::new(output.value, output.script_public_key.clone(), chain.daa(), false),
+            );
+            eprintln!("[service-public] authenticated binding carried; answered = {}", !case.identity_fault());
         }
-        if case != PublicCase::Withholding {
+        if case == PublicCase::PrunedHonestFpV3Job {
+            use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+            use kaspa_consensus_core::palw_legacy_held_da_v2::{
+                PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2, PALW_LEGACY_HELD_VERSION_V2, PalwLegacyHeldAnswerCarriageV2,
+                PalwLegacyHeldAnswerV2, PalwLegacyHeldUnitV2, palw_legacy_held_answer_message_v2, palw_legacy_prompt_answer_v2,
+            };
+            let requested: Vec<u32> = chain
+                .view(claim)
+                .sessions
+                .iter()
+                .filter(|(who, _)| *who == bond)
+                .flat_map(|(_, session)| session.units.iter())
+                .filter_map(|unit| match unit {
+                    PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk }) => Some(*chunk),
+                    _ => None,
+                })
+                .collect();
+            for chunk in requested {
+                if input_chunks.contains(&chunk) {
+                    continue;
+                }
+                let (_, event, Some((_, ids))) = foreign.as_ref().unwrap() else { unreachable!() };
+                let binding = event.binding().clone();
+                let answer =
+                    palw_legacy_prompt_answer_v2(&binding, ids, chunk, chain.config.params.palw_prompt_ids_form_v1()).unwrap();
+                let mut carriage = PalwLegacyHeldAnswerCarriageV2 {
+                    version: PALW_LEGACY_HELD_VERSION_V2,
+                    claim,
+                    unit: PalwLegacyHeldUnitV2::PromptIds { chunk },
+                    binding,
+                    answer,
+                    discloser: chain.bonds[0],
+                    signature: vec![],
+                };
+                // A correctly signed but hash-inconsistent input cannot poison the public accumulator.
+                let mut corrupt = carriage.clone();
+                let PalwLegacyHeldAnswerV2::PromptIds { ids, .. } = &mut corrupt.answer else { unreachable!() };
+                ids[0] ^= 1;
+                let message = palw_legacy_held_answer_message_v2(chain.network_domain.as_byte_slice(), &corrupt);
+                corrupt.signature = signed(0, message.as_byte_slice(), PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
+                let session = manager.consensus().unguarded_session();
+                let object = PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer: Box::new(corrupt) };
+                let tx = palw_carrier_fees::build_lifecycle_carrier_v2(
+                    &chain.config,
+                    key(0),
+                    &object,
+                    floats[0].0,
+                    &floats[0].1,
+                    &[],
+                    None,
+                    chain.daa(),
+                )
+                .unwrap();
+                // Carriage and an authenticated answer are separate: a signed invalid input may
+                // be carried, but the fold must not settle its unit and the reader must not learn it.
+                retained_flow
+                    .submit_rpc_transaction(&session, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden)
+                    .await
+                    .expect("the signed invalid input carrier can be published without becoming an answer");
+                let mut included = false;
+                for _ in 0..8 {
+                    let block = pool_heartbeat(&mut chain, &manager, &pool).await;
+                    if block.transactions.iter().any(|t| t.id() == tx.id()) {
+                        included = true;
+                        break;
+                    }
+                }
+                assert!(included, "the malformed signed input was actually carried");
+                pool_heartbeat(&mut chain, &manager, &pool).await;
+                let still_waiting = chain.view(claim);
+                assert!(
+                    !still_waiting.unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk })),
+                    "an invalid input chunk cannot satisfy the public obligation"
+                );
+                assert!(still_waiting.sessions.iter().any(|(who, session)| *who == bond
+                    && session.units.contains(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk }))));
+                assert!(!still_waiting.executor_refuted && !still_waiting.court_convicted && !still_waiting.da_defaulted);
+                let output = tx.outputs.last().unwrap();
+                floats[0] = (
+                    TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
+                    UtxoEntry::new(output.value, output.script_public_key.clone(), chain.daa(), false),
+                );
+                let message = palw_legacy_held_answer_message_v2(chain.network_domain.as_byte_slice(), &carriage);
+                carriage.signature = signed(0, message.as_byte_slice(), PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
+                let object = PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer: Box::new(carriage) };
+                let tx = palw_carrier_fees::build_lifecycle_carrier_v2(
+                    &chain.config,
+                    key(0),
+                    &object,
+                    floats[0].0,
+                    &floats[0].1,
+                    &[],
+                    None,
+                    chain.daa(),
+                )
+                .unwrap();
+                retained_flow
+                    .submit_rpc_transaction(&session, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden)
+                    .await
+                    .expect("the authenticated public input is admitted by the ordinary PQ mempool");
+                let mut included = false;
+                for _ in 0..8 {
+                    let block = pool_heartbeat(&mut chain, &manager, &pool).await;
+                    if block.transactions.iter().any(|t| t.id() == tx.id()) {
+                        included = true;
+                        break;
+                    }
+                }
+                assert!(included, "ordinary mining template includes the requested public input");
+                pool_heartbeat(&mut chain, &manager, &pool).await;
+                assert!(
+                    chain.view(claim).unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk }))
+                );
+                let output = tx.outputs.last().unwrap();
+                floats[0] = (
+                    TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
+                    UtxoEntry::new(output.value, output.script_public_key.clone(), chain.daa(), false),
+                );
+                input_chunks.insert(chunk);
+                eprintln!(
+                    "[service-public] authenticated public FP input chunk {chunk} mined; the verifier receives no private capture"
+                );
+            }
+            let honest = chain.view(claim);
+            assert!(!honest.executor_refuted && !honest.court_convicted && !honest.da_defaulted);
+            if honest.record.as_ref().is_some_and(|record| record.closed.contains(&bond)) {
+                assert!(!input_chunks.is_empty(), "the full input was reacquired through real public carriers");
+                assert!(honest.record.as_ref().unwrap().live.get(&bond).is_none());
+                let carriers: Vec<_> = chain.history[service_start..]
+                    .iter()
+                    .flat_map(|b| b.transactions.iter())
+                    .filter_map(|tx| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload).ok())
+                    .map(|p| p.object)
+                    .collect();
+                assert!(
+                    carriers.iter().any(|object| matches!(object,
+                    PalwConsensusObjectV2::DisputeReleasedV1 { claim: c, reserver, .. } if *c == claim && *reserver == bond)),
+                    "independent successful replay releases the input-bootstrap reservation through the actual service"
+                );
+                assert!(!carriers.iter().any(|object| matches!(object,
+                    PalwConsensusObjectV2::ObjectiveOffence { evidence, .. }
+                        if borsh::from_slice::<kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1>(evidence)
+                            .is_ok_and(|e| e.claim_id == claim))));
+                eprintln!(
+                    "[service-public] honest pruned FP input reacquired, independently replayed and reservation released at DAA {}",
+                    chain.daa()
+                );
+                break;
+            }
+        }
+        if case.identity_fault() {
             assert!(!view.da_defaulted, "disclosed job fraud must reach exact conviction, not DA default");
             let offence =
                 kaspa_consensus_core::palw_offence_attribution_v1::palw_executor_refuted_offence_id_v1(&view.producer.0, &claim);
@@ -1172,6 +1366,7 @@ async fn fresh_public_service(case: PublicCase) {
             }
         }
         if view.da_defaulted {
+            assert!(case.da_default(), "an honest answered input must never default");
             assert!(matches!(view.phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
             let carriers = chain.history[service_start..]
                 .iter()
@@ -1186,6 +1381,14 @@ async fn fresh_public_service(case: PublicCase) {
                     .any(|o| matches!(o,PalwConsensusObjectV2::DefaultAccused {claim:c,accuser,..} if *c==claim && *accuser==bond)),
                 "the actual blocks include this verifier DA demand"
             );
+            if case == PublicCase::PrunedWithheldFpV3Input {
+                assert!(answer_submitted.is_some(), "the producer disclosed the correct binding first");
+                assert!(carriers.iter().any(|object| matches!(object,
+                    PalwConsensusObjectV2::LegacyHeldDemandedV2 { demand }
+                        if demand.claim == claim && demand.accuser == bond
+                            && matches!(demand.unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }))),
+                    "the default follows an actual authenticated-input obligation, not a missing binding");
+            }
             let carried = carriers.len();
             assert!(reserved && demanded && carried >= 2);
             let offence = kaspa_consensus_core::palw_da_rcore_v1::palw_da_offence_id_v1(&view.producer.0, &claim);

@@ -71,6 +71,8 @@ pub(super) const PALW_FRAUD_FILER_RESERVE_ROUND_V1: u32 = u32::MAX - 10;
 /// The court queue's round of this filer's demand on a claim (one open at a time: DA-1's one session per accuser).
 pub(super) const PALW_FRAUD_FILER_DEMAND_ROUND_V1: u32 = u32::MAX - 11;
 pub(super) const PALW_FRAUD_FILER_TERMINAL_ROUND_V2: u32 = u32::MAX - 12;
+/// An input bootstrap that finds an honest claim relinquishes its held reservation.
+pub(super) const PALW_FRAUD_FILER_RELEASE_ROUND_V1: u32 = u32::MAX - 13;
 /// The host ledger's role for this filer's replays.
 pub(super) const PALW_FRAUD_FILER_REPLAY_ROLE_V1: &str = "fraud-filer";
 /// Mismatched runs held in memory at once (each keeps its capture for the localizer's own ranges).
@@ -95,7 +97,8 @@ pub(super) fn palw_fraud_filer_queued_v1(round: u32, responder: bool) -> bool {
     !responder
         && (round == PALW_FRAUD_FILER_RESERVE_ROUND_V1
             || round == PALW_FRAUD_FILER_DEMAND_ROUND_V1
-            || round == PALW_FRAUD_FILER_TERMINAL_ROUND_V2)
+            || round == PALW_FRAUD_FILER_TERMINAL_ROUND_V2
+            || round == PALW_FRAUD_FILER_RELEASE_ROUND_V1)
 }
 
 /// **One honest run of a claim's job on this host** — the filer's own material, never the producer's: the roots its replay
@@ -131,6 +134,7 @@ pub(super) enum PalwFraudFilerVerdictV1 {
 pub(super) enum PalwFraudFilerSentV1 {
     Reserve,
     Demand(PalwLegacyProbeV1),
+    Release,
     Reacquire { probe: PalwLegacyProbeV1, session_number: u8 },
     Terminal { leaf: u64 },
 }
@@ -300,6 +304,8 @@ pub(super) struct PalwFraudFilerCaseV1 {
     pub(super) runs: u8,
     input_retry_at: u64,
     pub(super) fp_bootstrap: Option<PalwFraudFilerFpBootstrapV1>,
+    /// Keep a completed bootstrap in the book until its on-chain reservation is relinquished.
+    release_pending: bool,
     awaiting_public: Option<(PalwLegacyProbeV1, u64)>,
     /// The last item sent, when, and how many times.
     pub(super) sent: Option<(PalwFraudFilerSentV1, u64, u8)>,
@@ -321,6 +327,7 @@ impl PalwFraudFilerCaseV1 {
             runs: 0,
             input_retry_at: 0,
             fp_bootstrap: None,
+            release_pending: false,
             awaiting_public: None,
             sent: None,
             direct_handed: 0,
@@ -329,7 +336,8 @@ impl PalwFraudFilerCaseV1 {
     }
 
     pub(super) fn pursued(&self) -> bool {
-        matches!(self.verdict, PalwFraudFilerVerdictV1::Mismatch(_))
+        self.release_pending
+            || matches!(self.verdict, PalwFraudFilerVerdictV1::Mismatch(_))
             || (matches!(self.verdict, PalwFraudFilerVerdictV1::Pending) && self.fp_bootstrap.is_some())
     }
 
@@ -641,6 +649,7 @@ impl PalwFraudFilerBookV1 {
     pub(super) fn judge(&mut self, claim: Hash64, result: Result<PalwFraudFilerRunV1, String>) -> Option<&PalwFraudFilerVerdictV1> {
         let case = self.cases.get_mut(&claim)?;
         case.runs = case.runs.saturating_add(1);
+        let bootstrapped = case.fp_bootstrap.is_some();
         if result.is_ok() {
             case.fp_bootstrap = None;
         }
@@ -656,6 +665,11 @@ impl PalwFraudFilerBookV1 {
             Err(_) if case.runs < PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1 => PalwFraudFilerVerdictV1::Pending,
             Err(why) => PalwFraudFilerVerdictV1::Unjudged(format!("the replay failed twice: {why}")),
         };
+        case.release_pending =
+            bootstrapped && matches!(case.verdict, PalwFraudFilerVerdictV1::Honest | PalwFraudFilerVerdictV1::Unjudged(_));
+        if case.release_pending {
+            case.fp_bootstrap = None;
+        }
         if case.pursued() {
             // Earlier walks did not collect answers for this case while it was pending, even if its acceptance is newer than
             // the old floor. Backfill every newly pursued case; do not skip it using another case's completed watermark.
@@ -753,6 +767,7 @@ impl PalwFraudFilerBookV1 {
     pub(super) fn settle(&mut self, claim: &Hash64, verdict: PalwFraudFilerVerdictV1) {
         if let Some(case) = self.cases.get_mut(claim) {
             case.verdict = verdict;
+            case.release_pending = false;
             case.fp_bootstrap = None;
         }
         self.answers.retain(|(held, _), _| held != claim);
@@ -1267,6 +1282,54 @@ impl PalwPanelService {
                 book.settle(&claim, PalwFraudFilerVerdictV1::Settled(facts.outcome.unwrap_or(PalwFilerPhaseV1::Expired)));
                 continue;
             }
+            if book.cases.get(&claim).is_some_and(|case| case.release_pending) {
+                // Stop unsent bootstrap moves; a handed-off reservation may still land. Observe it
+                // for one resend interval before forgetting a currently unreserved case.
+                court_pending.retain(|(held, round, responder, _)| {
+                    *held != claim || !palw_fraud_filer_queued_v1(*round, *responder) || *round == PALW_FRAUD_FILER_RELEASE_ROUND_V1
+                });
+                if !facts.reserved {
+                    court_pending
+                        .retain(|(held, round, responder, _)| *held != claim || !palw_fraud_filer_queued_v1(*round, *responder));
+                    let case = book.cases.get_mut(&claim).expect("held above");
+                    let reservation_in_flight = matches!(case.sent,
+                        Some((PalwFraudFilerSentV1::Reserve, at, _))
+                        if current_daa.saturating_sub(at) < PALW_FRAUD_FILER_RESEND_DAA_V1);
+                    if !reservation_in_flight {
+                        case.release_pending = false;
+                        case.sent = None;
+                    }
+                } else if !facts.session_open
+                    && !court_pending
+                        .iter()
+                        .any(|(held, round, responder, _)| *held == claim && palw_fraud_filer_queued_v1(*round, *responder))
+                {
+                    self.fraud_filer_queue_v1(
+                        book,
+                        claim,
+                        PalwFraudFilerSentV1::Release,
+                        current_daa,
+                        court_pending,
+                        court_due,
+                        || {
+                            let mut signed = true;
+                            let object = kaspa_consensus_core::palw_legacy_public_filer_v1::palw_dispute_released_object_v1(
+                                network_domain,
+                                claim,
+                                bond_key,
+                                |m| {
+                                    self.sign(m, PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1).unwrap_or_else(|| {
+                                        signed = false;
+                                        Vec::new()
+                                    })
+                                },
+                            );
+                            if signed { Ok(object) } else { Err("no signing key for reservation release".into()) }
+                        },
+                    );
+                }
+                continue;
+            }
             // Even a disclosure the session arm refused can carry a complete cryptographic proof of a wrong job.
             // Judge the binding against the recorded target BEFORE a mismatched count can stop subtree descent.
             // The reporter door rehearses the actual gate; an open colluder court cannot veto a valid direct proof.
@@ -1637,6 +1700,7 @@ impl PalwPanelService {
             Ok(object) => {
                 let round = match item {
                     PalwFraudFilerSentV1::Reserve => PALW_FRAUD_FILER_RESERVE_ROUND_V1,
+                    PalwFraudFilerSentV1::Release => PALW_FRAUD_FILER_RELEASE_ROUND_V1,
                     PalwFraudFilerSentV1::Demand(_) | PalwFraudFilerSentV1::Reacquire { .. } => PALW_FRAUD_FILER_DEMAND_ROUND_V1,
                     PalwFraudFilerSentV1::Terminal { .. } => PALW_FRAUD_FILER_TERMINAL_ROUND_V2,
                 };
@@ -1824,8 +1888,7 @@ impl PalwPanelService {
                             kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION
                                 | kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION
                         ))
-                        || payload.commitment.job.prompt_mode
-                            == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER)
+                        || payload.commitment.job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER)
                         && self.consensus_config.params.palw_legacy_held_da_v2_active_at(current_daa)
                     {
                         self.fraud_filer_hold_fp_input_v1(book, claim, payload, prompt_form);

@@ -702,3 +702,20 @@ canonical FP prompt証拠tag 2の既存follow-upにもA2の分類漏れがあっ
 今回のnative object field変更を使うSDKにも`cargo check -p misaka-palw-sdk --locked`を実施し成功した。[SDK check](evidence/public-fp-metadata-sdk-check-final.log)。
 
 `cargo test -p kaspa-consensus --lib --no-run --locked`も成功し、変更したconsensus test用constructorを含む別crateのコンパイルを確認した。test実行件数には加算しない。[consensus test build](evidence/public-fp-metadata-consensus-build-final.log)。
+
+
+## 履歴消失後の公開input取得・非応答・予約解放（2026-10-11）
+
+公開job保存の前節は、foreign-job bindingによる直接証明で終局するため、全input取得を検証していなかった。今回、通常の公開family／graph登録と価格計算・PQ署名・FP V3受理を保ち、正しいregistered floor jobを使うcaseを追加した。fresh DBで2,065 public blocksを再検証してから、元commitment block bodyとaccepted blockのacceptance rowを実storeから削除する。登録モデルを持つ新規成熟outsiderにproducer captureを渡さず、要求された署名済みbindingとinput answerだけを公開する。
+
+input bootstrap後に独立replayが一致した場合、従来はHonestへ移ってfilerの対象から外れ、予約をhard deadlineまで残していた。node policyへ`release_pending`と既存tag 155の署名付きreleaseを追加した。終了したinput ticketは手放す一方、チェーン上の予約が消えるまでcaseを保持し、開いたsessionを勝手に閉じない。未観測のReserve handoffは1 resend intervalだけ待ち、reorg／candidate変更／objective outcomeでは既存queue invalidationと共に破棄する。releaseはprotocolのrefundではなく、live予約を閉じる操作である。閉じたguardとdepositの寿命・burn/refund規則、1 bondあたりのretained-record上限は変更しない。これだけでpopulation／全枠飽和の保証を閉じたとはしない。
+
+input非応答caseは正しいbindingを実PQ mempool・templateへ包含し、unitを回答済みにした後、outsiderの実serviceからPromptIds chunk 0を要求した。全PanelはValidとし、その後は誰もinputを提供しない。**1 PASS（568.20 s、DAA 2281）**で、実際のtag 157 input義務、ProducerWithholding void、kind-5 producer徴収、予約解放と正常service終了を確認した。bindingの非応答によるdefaultへ読み替えない。sampleは稼働中processに対する観察で、観察timeoutだけでは停止・再実行しなかった。
+
+正しいinput取得caseの初回は、署名済みの不正inputがmempoolへ入らないことを期待して286.36 sでFAILした。carriageと認証済み回答は別であり、mempoolはその署名済みcarrierを受理した。試験を、実際に不正carrierを包含してもunit／sessionが回答済みにならず、公開readerが採用しないことを確認し、続いて正しいinputで独立replay／releaseへ進む形へ修正した。修正後は **1 PASS（346.73 s、DAA 1107）**。対象claimの実service logで独立replay開始と `replay reproduces the claim — honest` の判定、続く署名付きtag 155 releaseの包含を確認した。release単体は最終Unjudgedでも発生し得るため、それだけをHonestの証明にはしない。次の回帰では実workerのHonest判定をread-only observerから直接assertする。
+
+現時点の回帰はfiler/input 20 PASS、既存のpruned foreign-job actual service 1 PASS（343.39 s、DAA 1249でproducerと全5 Valid signerの徴収・commit/reveal）。通常node binary checkはPASS。両serviceはnegative input fixture修正前のbinary、production sourceは修正後と同一である。SHA-256を別々に保存し、修正後のhonest caseは別hashでPASSした。今回の20 unit＋3 serviceは23 unique PASSであり、前節の124件との重複を累積加算しない。core／wire／activation／shipping pinsの変更はないため、今回のnode policy変更にshipping harvestを再実行していない。前節の361 pin結果は前節のsourceに対する証拠である。
+
+[初回build](evidence/pruned-fp-input-build-initial.log)、[修正後build](evidence/pruned-fp-input-build-repair.log)、[通常binary check](evidence/pruned-fp-input-binary-initial.log)、[初回binary SHA-256](evidence/pruned-fp-input-binary-initial.sha256)、[修正後binary SHA-256](evidence/pruned-fp-input-binary-repair.sha256)、[filer/input](evidence/pruned-fp-input-filer-initial.log)、[honest case初回失敗](evidence/pruned-fp-input-honest-initial.log)、[honest case修正後](evidence/pruned-fp-input-honest-repair.log)、[input非応答](evidence/pruned-fp-input-withheld-initial.log)、[identity回帰](evidence/pruned-fp-input-identity-initial.log)、[稼働中sample](evidence/pruned-fp-input-withheld-sample.txt)。
+
+保存前のFP job本体をbindingなしで要求する経路は現在のtag 156／Event／Held再取得に存在せず、別の認証済みjob-body bootstrap又はmigration設計が必要である。今回その経路を実装したとはしない。最大input・34 sessionsの適合、pre-replay ticket／contextが取得不能なjobの直接証明、全family、initial/prefix-state、cumulative scope／hiding、deadline/inclusionとrestart／reorg／network pruned importは引き続き未達。登録モデル保有のADR-0177 D7とfull G14 objectiveを維持する。

@@ -138,3 +138,6 @@ kind-3 identity convictionが先に成立すると、producerの没収もそのr
 
 
 2026-10-11の公開job保存follow-upでは、ordinary FP／evaluationのoriginal commitmentをnative-only skipped metadataとして抽出し、post-fence claim-lifetime map（root block `public_fp_jobs/v1`、delta 201、tail 0xF0）へ保持する。元transaction/bodyが消えても公開claim viewからjobを再取得し、公開binding／PromptIds courtでinputを取得する。core 74件・node unit 48件・通常FP V4 service 1件はPASS。履歴消失V3はfixtureのLG14-B有効化漏れを修正し、344.67秒でproducerと全5 Valid signerの徴収・commit/revealまで1件PASSした。合計124 unique PASS、fresh shipping 361 pin差分なし。job identity不正に限る証明で、全PromptIds chunkの取得又は算術fault局所化の成功を意味しない。凍結pinは変更せず、tag-51 opaque canonical proofのA2分類はCarriedRereadへ是正した。pre-fence永久消失jobの移行、evaluation tail／prefix-state、全familyと最大資源・回復試験は残る。途中失敗も監査記録に保存する。
+
+
+2026-10-11の公開input follow-upでは、元FP V3 commitment body・acceptance rowを削除したfresh verifierの実serviceで、正しい公開bindingの後のinput非応答からDA default／producer徴収へ1 PASS（568.20 s）、不正input carrierを採用せず正しいchunkから独立replayのHonest判定／署名付き予約解放へ1 PASS（346.73 s）を確認した。input bootstrapの完了後もnode policyがcaseを保持し、既存tag 155でlive予約を解放する。filer/input 20件、pruned identity service 1件の回帰もPASS（今回23 unique）。閉じたguard/deposit上限、最大input、全family、scope、回復・最大負荷は未達。単独releaseだけではHonestを証明せず、今回の実worker判定はlogで確認した。[証拠と限界](../../audit/g14-review-2026-10-10/implementation.md#履歴消失後の公開input取得非応答予約解放2026-10-11)。
