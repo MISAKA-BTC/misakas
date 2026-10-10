@@ -226,22 +226,27 @@ pub fn palw_legacy_held_answer_v2(
     roots: PalwClaimRootsV1,
     form: PalwPromptIdsFormV1,
 ) -> Result<PalwLegacyHeldAnswerV2, String> {
-    let node_answer = |tree: &PalwLegacyTreeV2<'_>, level: u8, index: u64| {
+    fn node_answer(tree: &PalwLegacyTreeV2<'_>, level: u8, index: u64) -> Result<PalwLegacyHeldAnswerV2, String> {
         palw_legacy_node_answer_from_oracle_v2(tree.leaf_count(), level, index, &|l, i| tree.own_node(l, i), &|i| tree.leaf_hash(i))
             .ok_or_else(|| format!("node ({level}, {index}) is not in this retention's tree"))
-    };
+    }
     match *unit {
         PalwLegacyHeldUnitV2::StepNode { level, index } => node_answer(step_tree, level, index),
         PalwLegacyHeldUnitV2::CheckpointNode { level, index } => node_answer(checkpoint_tree, level, index),
         PalwLegacyHeldUnitV2::KernelWitness { leaf } => {
             let work_leaves = step_tree.leaf_count();
-            let refutation = backend.fp_leaf_refutation_v1(
+            // The family's own leaf prover first (a fold builds it from the tree and the blocks the step reads), the whole-capture
+            // prover after it — `palw_leaf_evidence_from_capture_v1`'s order.
+            let refutation = match backend.fp_leaf_refutation_v1(
                 capture,
                 prompt_ids,
                 PalwClaimRootsV1 { output_root: None, ..roots },
                 work_leaves,
                 leaf,
-            )?;
+            ) {
+                Ok(refutation) => refutation,
+                Err(_) => backend.refutation_for_free_prompt_index(capture, leaf, prompt_ids)?,
+            };
             let refutation = kaspa_consensus_core::palw_shard_court_v1::palw_one_move_refutation_v2(refutation);
             let (refutation, prompt_ids_opening) =
                 kaspa_consensus_core::palw_step_refute::palw_refutation_prompt_carriage_v1(form, refutation)
