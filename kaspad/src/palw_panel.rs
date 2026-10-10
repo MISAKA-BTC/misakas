@@ -14541,6 +14541,48 @@ pub(crate) fn walk_accepted_lifecycle_objects_v1(
     }
 }
 
+/// Read one bounded page of accepted lifecycle history from `start`. `Some(next)` is the first selected-chain block not read;
+/// `None` means the floor or the chain's root was reached. Missing retained data is an error, never a completed range. Callers
+/// keep the page's original tip while resuming, so blocks arriving during backfill are read by the subsequent walk.
+pub(crate) fn walk_accepted_lifecycle_page_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    start: Hash64,
+    not_before_daa: u64,
+    max_chain_blocks: usize,
+    visit: &mut dyn FnMut(PalwConsensusObjectV2),
+) -> Result<Option<Hash64>, String> {
+    let mut cursor = start;
+    for _ in 0..max_chain_blocks {
+        let header = consensus.get_header(cursor).map_err(|e| format!("history header {cursor}: {e}"))?;
+        if header.daa_score < not_before_daa {
+            return Ok(None);
+        }
+        let acceptance = consensus.get_block_acceptance_data(cursor).map_err(|e| format!("history acceptance {cursor}: {e}"))?;
+        for merged in acceptance.iter().rev() {
+            if merged.accepted_transactions.is_empty() {
+                continue;
+            }
+            let block = consensus.get_block(merged.block_hash).map_err(|e| format!("history block {}: {e}", merged.block_hash))?;
+            for entry in merged.accepted_transactions.iter().rev() {
+                let tx = block.transactions.get(entry.index_within_block as usize).ok_or_else(|| {
+                    format!("history block {} has no accepted transaction {}", merged.block_hash, entry.index_within_block)
+                })?;
+                if tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
+                    && let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload)
+                {
+                    visit(payload.object);
+                }
+            }
+        }
+        let ghostdag = consensus.get_ghostdag_data(cursor).map_err(|e| format!("history selected parent {cursor}: {e}"))?;
+        if ghostdag.selected_parent == cursor {
+            return Ok(None);
+        }
+        cursor = ghostdag.selected_parent;
+    }
+    Ok(Some(cursor))
+}
+
 /// **Will the court open this root claim's output tile at `daa`?** (ADR-0119 Decision 4.)
 ///
 /// The court opens a fused site's rows under `palw_attn_opening_cap_v1`: the structural `2^22`
@@ -18530,6 +18572,18 @@ mod accepted_objects_walk_tests {
         fn get_block(&self, hash: BlockHash) -> ConsensusResult<Block> {
             self.blocks.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
         }
+        fn is_chain_ancestor_of(&self, low: BlockHash, mut high: BlockHash) -> ConsensusResult<bool> {
+            loop {
+                if low == high {
+                    return Ok(true);
+                }
+                let parent = *self.parents.get(&high).ok_or(ConsensusError::HeaderNotFound(high))?;
+                if parent == high {
+                    return Ok(false);
+                }
+                high = parent;
+            }
+        }
     }
 
     fn hash(n: u64) -> BlockHash {
@@ -18553,6 +18607,91 @@ mod accepted_objects_walk_tests {
             }
             _ => panic!("only the test's objects ride this chain"),
         }
+    }
+
+    fn append(chain: &mut Chain, n: u64, daa: u64, parent: u64) {
+        let mut header = Header::from_precomputed_hash(hash(n), vec![hash(parent)]);
+        header.daa_score = daa;
+        chain.headers.insert(hash(n), Arc::new(header.clone()));
+        chain.parents.insert(hash(n), hash(parent));
+        chain.blocks.insert(hash(n), Block::new(header, vec![lifecycle(n)]));
+        chain.acceptance.insert(
+            hash(n),
+            Arc::new(vec![MergesetBlockAcceptanceData {
+                block_hash: hash(n),
+                accepted_transactions: vec![AcceptedTxEntry { transaction_id: Default::default(), index_within_block: 0 }],
+            }]),
+        );
+        chain.sink = hash(n);
+    }
+
+    fn repeated_daa_chain() -> Chain {
+        let mut chain = Chain::default();
+        for n in 1..=8 {
+            append(&mut chain, n, 100 + n / 4, n.saturating_sub(1).max(1));
+        }
+        chain
+    }
+
+    #[test]
+    fn paged_history_reads_every_block_even_when_daa_does_not_count_the_blocks() {
+        let chain = repeated_daa_chain();
+        let mut old = Vec::new();
+        // The old filer used DAA difference as the block cap: three blocks cannot cover this eight-block interval.
+        walk_accepted_lifecycle_objects_v1(&chain, 100, 102 - 100 + 1, &mut |o| old.push(claim_of(&o)));
+        assert_eq!(old, vec![8, 7, 6]);
+        let mut seen = Vec::new();
+        let mut cursor = Some(chain.sink);
+        let mut pages = 0;
+        while let Some(start) = cursor {
+            cursor = walk_accepted_lifecycle_page_v1(&chain, start, 100, 3, &mut |o| seen.push(claim_of(&o))).unwrap();
+            pages += 1;
+        }
+        assert_eq!(pages, 3);
+        assert_eq!(seen, vec![8, 7, 6, 5, 4, 3, 2, 1], "no gap or duplicate at page boundaries");
+    }
+
+    #[test]
+    fn a_missing_header_acceptance_block_or_parent_never_completes_a_history_page() {
+        let mut chain = repeated_daa_chain();
+        let read = |chain: &Chain| walk_accepted_lifecycle_page_v1(chain, hash(8), 100, 3, &mut |_| {});
+        let header = chain.headers.remove(&hash(8)).unwrap();
+        assert!(read(&chain).unwrap_err().contains("history header"));
+        chain.headers.insert(hash(8), header);
+        let accepted = chain.acceptance.remove(&hash(8)).unwrap();
+        assert!(read(&chain).unwrap_err().contains("history acceptance"));
+        chain.acceptance.insert(hash(8), accepted);
+        let block = chain.blocks.remove(&hash(8)).unwrap();
+        assert!(read(&chain).unwrap_err().contains("history block"));
+        chain.blocks.insert(hash(8), block);
+        let parent = chain.parents.remove(&hash(8)).unwrap();
+        assert!(read(&chain).unwrap_err().contains("history selected parent"));
+        chain.parents.insert(hash(8), parent);
+        assert_eq!(read(&chain).unwrap(), Some(hash(5)), "the same page can be retried once data is restored");
+    }
+
+    #[test]
+    fn the_filer_resumes_at_its_original_tip_and_restarts_backfill_after_a_reorg() {
+        use super::palw_fraud_filer::palw_fraud_filer_read_page_v1 as page;
+        let mut chain = repeated_daa_chain();
+        let wanted = BTreeMap::new();
+        let (first, reset, _) = page(&chain, 100, 100, None, 3, &wanted).unwrap();
+        assert!(!reset);
+        assert_eq!((first.anchor, first.anchor_daa, first.next), (hash(8), 102, Some(hash(5))));
+        append(&mut chain, 9, 150, 8);
+        let (second, reset, _) = page(&chain, 100, 100, Some(first), 3, &wanted).unwrap();
+        assert!(!reset);
+        assert_eq!((second.anchor, second.anchor_daa, second.next), (hash(8), 102, Some(hash(2))));
+        let (complete, _, _) = page(&chain, 100, 100, Some(second), 3, &wanted).unwrap();
+        assert_eq!((complete.anchor_daa, complete.next), (102, None), "arrivals do not move the in-progress watermark");
+        let (recent, reset, _) = page(&chain, 100, 140, Some(complete), 3, &wanted).unwrap();
+        assert!(!reset);
+        assert_eq!((recent.anchor, recent.floor, recent.next), (hash(9), 140, None));
+        // Another branch forks below the completed incremental floor. Its old answers must be read, not skipped at DAA 140.
+        append(&mut chain, 20, 150, 3);
+        let (fork, reset, _) = page(&chain, 100, 140, Some(recent), 2, &wanted).unwrap();
+        assert!(reset);
+        assert_eq!((fork.anchor, fork.floor, fork.next), (hash(20), 100, Some(hash(2))));
     }
 
     /// **ADR-0093 Decision 7's read: accepted objects only, newest first, down to the height.**

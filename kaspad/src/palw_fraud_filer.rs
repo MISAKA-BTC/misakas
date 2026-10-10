@@ -64,8 +64,7 @@ pub(super) const PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1: u8 = 2;
 pub(super) const PALW_FRAUD_FILER_SENDS_V1: u8 = 2;
 /// A queued item not on chain this long after it was sent is taken as lost.
 pub(super) const PALW_FRAUD_FILER_RESEND_DAA_V1: u64 = 30;
-/// Chain blocks one walk of the accepted objects reads at most (the first walk after a start reaches back to the oldest pursued
-/// claim's acceptance; later walks read what the tip added, plus a reorg margin).
+/// Chain blocks one page reads at most. A partial page resumes from its cursor; DAA difference is not a bound on chain blocks.
 pub(super) const PALW_FRAUD_FILER_WALK_BLOCKS_V1: usize = 40_000;
 /// DAA a later walk re-reads below the last one's tip, for a reorg.
 pub(super) const PALW_FRAUD_FILER_WALK_MARGIN_DAA_V1: u64 = 64;
@@ -108,6 +107,75 @@ pub(super) enum PalwFraudFilerVerdictV1 {
 pub(super) enum PalwFraudFilerSentV1 {
     Reserve,
     Demand(PalwLegacyProbeV1),
+}
+
+/// One history walk, anchored to the tip where it started. Its watermark advances only when `next` is `None`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PalwFraudFilerWalkV1 {
+    pub(super) floor: u64,
+    pub(super) anchor: Hash64,
+    pub(super) anchor_daa: u64,
+    pub(super) next: Option<Hash64>,
+}
+
+/// Only units the contiguous localizer reads enter its cache. Authentication and deduplication then bound the accumulated
+/// answers to one binding plus at most 32 ranges per pursued claim, even under repeated carriers and unused valid ranges.
+fn palw_fraud_filer_cache_unit_v1(unit: &PalwDaUnitV1, leaf_count: Option<u64>) -> bool {
+    use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
+    use kaspa_consensus_core::palw_legacy_public_filer_v1::{
+        PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1, PALW_LEGACY_BISECT_FINAL_RANGE_V1,
+    };
+    match *unit {
+        PalwDaUnitV1::Event { row: 0, tile: 0 } => true,
+        PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first, count }) => {
+            let Some(leaves) = leaf_count else { return false };
+            PalwLegacyBisectV1::max_demands(leaves) <= u64::from(PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1)
+                && first < leaves
+                && first % PALW_LEGACY_BISECT_FINAL_RANGE_V1 == 0
+                && u64::from(count) == (leaves - first).min(PALW_LEGACY_BISECT_FINAL_RANGE_V1)
+        }
+        _ => false,
+    }
+}
+
+/// Read/resume one page. A reorg beyond the old anchor restarts at the current tip and the oldest pursued claim, including when
+/// a recent incremental floor would otherwise hide the new branch's old answers. No watermark is returned on a read failure.
+pub(super) fn palw_fraud_filer_read_page_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    oldest: u64,
+    floor: u64,
+    previous: Option<PalwFraudFilerWalkV1>,
+    max_blocks: usize,
+    wanted: &BTreeMap<Hash64, Hash64>,
+) -> Result<(PalwFraudFilerWalkV1, bool, Vec<((Hash64, PalwDaUnitV1), PalwDaAnswerV1)>), String> {
+    let tip = consensus.get_sink();
+    let same_branch = previous.is_none_or(|p| p.anchor == tip || consensus.is_chain_ancestor_of(p.anchor, tip).unwrap_or(false));
+    let reset = !same_branch;
+    let continuing = previous.filter(|p| same_branch && p.next.is_some());
+    let floor = continuing.map_or(if reset { oldest } else { floor }, |p| p.floor);
+    let anchor = continuing.map_or(tip, |p| p.anchor);
+    let anchor_daa = continuing.map_or_else(
+        || consensus.get_header(anchor).map(|h| h.daa_score).map_err(|e| format!("history anchor {anchor}: {e}")),
+        |p| Ok(p.anchor_daa),
+    )?;
+    let start = continuing.and_then(|p| p.next).unwrap_or(tip);
+    let mut answers = BTreeMap::new();
+    let next = crate::palw_panel::walk_accepted_lifecycle_page_v1(consensus, start, floor, max_blocks, &mut |object| {
+        if let PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, .. } = object
+            && let Some(root) = wanted.get(&claim)
+            && kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(&unit, &answer, root)
+            && palw_fraud_filer_cache_unit_v1(
+                &unit,
+                match &answer {
+                    PalwDaAnswerV1::Held(c) => Some(c.binding.step_leaf_count),
+                    _ => None,
+                },
+            )
+        {
+            answers.entry((claim, unit)).or_insert(answer);
+        }
+    })?;
+    Ok((PalwFraudFilerWalkV1 { floor, anchor, anchor_daa, next }, reset, answers.into_iter().collect()))
 }
 
 /// **One case** — a candidate claim and this node's pursuit of it.
@@ -169,12 +237,14 @@ pub(super) struct PalwFraudFilerBookV1 {
     pub(super) cases: BTreeMap<Hash64, PalwFraudFilerCaseV1>,
     read_at: Option<u64>,
     running: Option<(Hash64, tokio::task::JoinHandle<Result<PalwFraudFilerRunV1, String>>)>,
-    /// `(claim, unit) → answer`, every `MaterialDisclosedV2` the accepted blocks carried for a pursued claim.
+    /// `(claim, unit) → authenticated answer`, only the binding and consecutive ranges this localizer reads.
     pub(super) answers: BTreeMap<(Hash64, PalwDaUnitV1), PalwDaAnswerV1>,
     /// The DAA the walks have read down to (`None`: never walked since the start).
     walked_from: Option<u64>,
-    /// The tip's DAA at the last walk.
+    /// The original tip's DAA at the last COMPLETED walk.
     walked_to: Option<u64>,
+    /// The current page's cursor and branch anchor, or the last completed walk's anchor.
+    walk: Option<PalwFraudFilerWalkV1>,
     /// This bond's role (an operator's genesis bond, or any other) — read once per refresh.
     role: Option<PalwFilerRoleV1>,
 }
@@ -253,24 +323,43 @@ impl PalwFraudFilerBookV1 {
             Err(_) if case.runs < PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1 => PalwFraudFilerVerdictV1::Pending,
             Err(why) => PalwFraudFilerVerdictV1::Unjudged(format!("the replay failed twice: {why}")),
         };
+        if case.pursued() {
+            // Earlier walks did not collect answers for this case while it was pending, even if its acceptance is newer than
+            // the old floor. Backfill every newly pursued case; do not skip it using another case's completed watermark.
+            self.walked_from = None;
+            self.walked_to = None;
+            self.walk = None;
+            self.read_at = None;
+        }
         Some(&case.verdict)
     }
 
-    /// **Where the next walk of the accepted objects starts**, or `None` when nothing is pursued: the oldest pursued claim's
-    /// acceptance on the first walk (or once a newly pursued claim is older than what was walked), else the last walk's tip less a
-    /// reorg margin.
+    /// The active backfill's floor, else the oldest pursued claim's acceptance before the first completed walk, else the last
+    /// completed walk's original tip less a reorg margin. Every new pursuit invalidates the shared completion watermark.
     pub(super) fn walk_floor(&self) -> Option<u64> {
         let oldest = self.cases.values().filter(|case| case.pursued()).map(|case| case.candidate.accepted_daa).min()?;
+        if let Some(walk) = self.walk.filter(|w| w.next.is_some()) {
+            return Some(walk.floor);
+        }
         Some(match (self.walked_from, self.walked_to) {
             (Some(from), Some(to)) if from <= oldest => to.saturating_sub(PALW_FRAUD_FILER_WALK_MARGIN_DAA_V1),
             _ => oldest,
         })
     }
 
-    /// Record a walk from `floor` to the tip at `tip_daa` and the answers it read for pursued claims.
-    pub(super) fn walked(&mut self, floor: u64, tip_daa: u64, answers: Vec<((Hash64, PalwDaUnitV1), PalwDaAnswerV1)>) {
-        self.walked_from = Some(self.walked_from.map_or(floor, |from| from.min(floor)));
-        self.walked_to = Some(tip_daa);
+    /// Record only the range actually read. Partial pages retain their cursor and original tip; a branch restart discards the
+    /// old branch's watermark/cache. Authenticated answers from a successful page can be used before the backfill completes.
+    pub(super) fn walked(&mut self, walk: PalwFraudFilerWalkV1, reset: bool, answers: Vec<((Hash64, PalwDaUnitV1), PalwDaAnswerV1)>) {
+        if reset {
+            self.walked_from = None;
+            self.walked_to = None;
+            self.answers.clear();
+        }
+        if walk.next.is_none() {
+            self.walked_from = Some(self.walked_from.map_or(walk.floor, |from| from.min(walk.floor)));
+            self.walked_to = Some(walk.anchor_daa);
+        }
+        self.walk = Some(walk);
         for (key, answer) in answers {
             if self.cases.get(&key.0).is_some_and(|case| {
                 case.pursued()
@@ -288,11 +377,12 @@ impl PalwFraudFilerBookV1 {
         self.answers.retain(|(claim, _), _| pursued.contains(claim));
     }
 
-    /// Settle a case: its run (and the capture's reservation) is let go.
+    /// Settle a case: its run (and the capture's reservation) and cached answers are let go.
     pub(super) fn settle(&mut self, claim: &Hash64, verdict: PalwFraudFilerVerdictV1) {
         if let Some(case) = self.cases.get_mut(claim) {
             case.verdict = verdict;
         }
+        self.answers.retain(|(held, _), _| held != claim);
     }
 }
 
@@ -375,24 +465,26 @@ impl PalwPanelService {
                 book.role = Some(if operator { PalwFilerRoleV1::Operator } else { PalwFilerRoleV1::PublicBond });
             }
             if let Some(floor) = book.walk_floor() {
-                let wanted: BTreeSet<Hash64> = book.pursued().into_iter().collect();
-                let span = current_daa.saturating_sub(floor).saturating_add(PALW_FRAUD_FILER_WALK_MARGIN_DAA_V1);
-                let span = usize::try_from(span).unwrap_or(usize::MAX).min(PALW_FRAUD_FILER_WALK_BLOCKS_V1);
-                let answers = session
+                let wanted: BTreeMap<Hash64, Hash64> = book
+                    .cases
+                    .values()
+                    .filter(|case| case.pursued())
+                    .map(|case| (case.candidate.claim_id, case.candidate.job.execution_root))
+                    .collect();
+                let oldest = book.cases.values().filter(|case| case.pursued()).map(|case| case.candidate.accepted_daa).min().unwrap();
+                let previous = book.walk;
+                let result = session
                     .clone()
                     .spawn_blocking(move |c| {
-                        let mut answers = Vec::new();
-                        crate::palw_panel::walk_accepted_lifecycle_objects_v1(c, floor, span, &mut |object| {
-                            if let PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, .. } = object
-                                && wanted.contains(&claim)
-                            {
-                                answers.push(((claim, unit), answer));
-                            }
-                        });
-                        answers
+                        palw_fraud_filer_read_page_v1(c, oldest, floor, previous, PALW_FRAUD_FILER_WALK_BLOCKS_V1, &wanted)
                     })
                     .await;
-                book.walked(floor, current_daa, answers);
+                match result {
+                    Ok((walk, reset, answers)) => book.walked(walk, reset, answers),
+                    Err(why) => {
+                        warn!("[{PALW_PANEL}] the fraud filer's public history page is unavailable: {why}; watermark unchanged")
+                    }
+                }
             }
         }
         // The replay in flight, polled every tick until it returns.
@@ -809,10 +901,51 @@ mod tests {
         book.refresh(vec![candidate(3, 300, false), candidate(4, 400, false)], 10);
         book.judge(Hash64::from_u64_word(4), Ok(run(Hash64::from_u64_word(1), Hash64::default())));
         assert_eq!(book.walk_floor(), Some(400));
-        book.walked(400, 1_000, Vec::new());
+        book.walked(
+            PalwFraudFilerWalkV1 { floor: 400, anchor: Hash64::from_u64_word(1_000), anchor_daa: 1_000, next: None },
+            false,
+            Vec::new(),
+        );
         assert_eq!(book.walk_floor(), Some(1_000 - PALW_FRAUD_FILER_WALK_MARGIN_DAA_V1));
         book.judge(Hash64::from_u64_word(3), Ok(run(Hash64::from_u64_word(1), Hash64::default())));
         assert_eq!(book.walk_floor(), Some(300), "an older pursuit walks back to its acceptance");
+    }
+
+    #[test]
+    fn partial_pages_and_newer_pursuits_do_not_inherit_a_completed_watermark() {
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![candidate(3, 300, false), candidate(4, 400, false)], 10);
+        book.judge(Hash64::from_u64_word(3), Ok(run(Hash64::from_u64_word(1), Hash64::default())));
+        let anchor = Hash64::from_u64_word(1_000);
+        let partial = PalwFraudFilerWalkV1 { floor: 300, anchor, anchor_daa: 1_000, next: Some(Hash64::from_u64_word(800)) };
+        book.walked(partial, false, Vec::new());
+        assert_eq!((book.walked_from, book.walked_to), (None, None));
+        assert_eq!(book.walk_floor(), Some(300));
+        book.walked(PalwFraudFilerWalkV1 { next: None, ..partial }, false, Vec::new());
+        assert_eq!(book.walk_floor(), Some(1_000 - PALW_FRAUD_FILER_WALK_MARGIN_DAA_V1));
+        // The newer claim's responses were not collected while its replay was pending, although the walk crossed its acceptance.
+        book.judge(Hash64::from_u64_word(4), Ok(run(Hash64::from_u64_word(1), Hash64::default())));
+        assert_eq!(book.walk_floor(), Some(300), "a new pursuit forces backfill even when its acceptance is above the old floor");
+        assert_eq!((book.walked_from, book.walked_to, book.walk), (None, None, None));
+        assert!(book.stale(10), "start backfill on the next tick even if DAA has not advanced");
+    }
+
+    #[test]
+    fn the_history_cache_cannot_accumulate_unused_range_units() {
+        use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
+        let range = |first, count| PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first, count });
+        assert!(palw_fraud_filer_cache_unit_v1(&PalwDaUnitV1::Event { row: 0, tile: 0 }, None));
+        assert!(!palw_fraud_filer_cache_unit_v1(&PalwDaUnitV1::Event { row: 1, tile: 0 }, None));
+        let leaves = 2_049;
+        for first in 0..leaves {
+            for count in [0, 1, 1_024] {
+                let expected = matches!((first, count), (0 | 1_024, 1_024) | (2_048, 1));
+                assert_eq!(palw_fraud_filer_cache_unit_v1(&range(first, count), Some(leaves)), expected);
+            }
+        }
+        assert!(palw_fraud_filer_cache_unit_v1(&range(31 * 1_024, 1_024), Some(32 * 1_024)));
+        assert!(!palw_fraud_filer_cache_unit_v1(&range(0, 1_024), Some(32 * 1_024 + 1)), "an over-cap ladder is not this fallback's");
+        assert!(!palw_fraud_filer_cache_unit_v1(&range(0, 1_024), None));
     }
 
     /// **The tick wires the filer behind no flag, after lane B, with the seat's replay room** (a source pin).

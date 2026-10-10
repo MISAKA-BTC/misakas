@@ -210,3 +210,22 @@ upstream `7d8c31270`（実装`91eb1bfd4`）を`b6a90a0d0`で統合した。epoch
 [engine stages](evidence/beacon-freeze-stages.log)、[production fold](evidence/beacon-freeze-fold.log)。この統合はsource setの後変更という残件を修正するもので、G14のscope・追及期限・大型filerの残件を閉じるものではない。
 
 統合後の`--shipping --drift-only`も **差分なし**。検査対象の全pin・gateを通過した。[repin結果](evidence/beacon-repin.log)、[integration tests詳細](evidence/beacon-repin-harvest-tests.log)、[lib tests詳細](evidence/beacon-repin-harvest-lib.log)。
+
+## legacy履歴paginationとfresh pursuitのbackfill
+
+`aa99174ae`のnode readerには、DAA差をselected-chain block数の上限とし、件数上限で止まった走査を完了と扱う経路があった。1 DAAに複数blockが入ると過去の回答を読み落とし、tipの`answered(unit)`だけを見て`AwaitAnswer`に留まる。別claimが後からMismatchになった場合も、そのclaimがPendingだった間の走査は回答を収集していないのに、別caseの完了watermarkを継承していた。
+
+実際に使うnode readerを`walk_accepted_lifecycle_page_v1`へ変更した。1ページの件数は固定上限で制限し、未読の次blockを返す。要求floor又はchain rootへ到達した時だけ完了とする。header、acceptance、merged block、selected parentを取得できない場合はerrorとして返し、完了範囲を更新しない。新しくMismatchになったcaseはbackfillを開始する。
+
+ページを跨いでも開始時のtipとDAAを維持し、走査中に到着したblockは次のwalkで読む。開始tipが現在tipのancestorでなくなった時は、oldest pursued claimのacceptanceまで新しいbranchを読み直す。最近のincremental floorだけでdeep reorg後の古い回答を飛ばさない。成功したpartial pageの認証済み回答は、backfillの終了前でも追及に利用できる。
+
+読出し時にもclaim execution rootへ認証し、現在の連続範囲localizerが実際に読むunitだけをmapへ保存する。binding 1件と最大32範囲／pursued claimであり、同じunitの重複carrierや任意の位置・幅のrangeを並べてもcache件数は増えない。これは本fallbackのcache件数の上限であり、未接続のLG14-Bや全node RAMの完成を意味しない。
+
+| 検証 | 結果と範囲 |
+| --- | --- |
+| `cargo test -p kaspad --lib palw_fraud_filer --locked` | **7 PASS**。新規・後発pursuitのbackfill、partial pageでwatermarkを進めないこと、cache対象unitの上限を含む |
+| `cargo test -p kaspad --lib accepted_objects_walk_tests --locked` | **4 PASS**。実際のConsensus API adapterとpaged readerを使い、8 block / 3 DAAの取りこぼし、ページ境界、新規tip、reorg、header/acceptance/block/parentの取得失敗と復旧を確認 |
+
+[filer](evidence/filer-history-book-final.log)、[reader](evidence/filer-history-page-final.log)。default feature（EVMを含む）、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で実行した。レベルは **V-unit**。実nodeのlate startからこのserviceでconvictionするC2全経路は未検証である。node-policyだけの修正で、consensus encodingやfenceは変更していない。
+
+恒久的にprune済みの回答の復元は残件である。`palw_state_v2.rs`のDA admissionは既回答unitの再要求を`DaUnitAlreadyAnswered`として拒否する。取得できない古い回答を完了と偽る経路は塞いだが、claimの責任期間中の保持・公開取得又は認証付き再要求と、その期限まで閉じる必要がある。

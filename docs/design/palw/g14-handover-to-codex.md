@@ -13,6 +13,7 @@
 - LG14-Bの大型tree/fused court本番接続、fresh verifier自身の公開readからの完走、reservation全枠の占有対策、期限内包含は未達。小型fallbackは34-session枠を超えるclaimをUnjudgedとする。
 - G14Rのverifier-payとPESGはintegration `0b73fd33f`から統合済み。F-MEAS-07のnet徴収計算も現行`required_reservation`では自己還流分を控除する項を含み、下記の総額だけを数えるという記述は現HEADに当てはまらない。
 - integration `7d8c31270`のbeacon source-set freezeを`b6a90a0d0`で統合した。検証結果とscopeは監査記録へ記載する。
+- legacyの公開履歴readerを件数制限付きpaginationへ変更し、開始tipの固定、新しいMismatchのbackfill、reorg時の読み直し、認証済みの利用対象unitだけのcacheを実装した。filer 7件とConsensus API adapter reader 4件、計11 V-unit PASS。恒久的なprune後の取得・再要求とfresh-node追及のV-node試験は残る。
 
 G14全域の完成判定はしていない。ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
 

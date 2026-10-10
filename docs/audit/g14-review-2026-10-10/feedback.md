@@ -15,11 +15,11 @@
 2. **累積scopeとcourtの両立:** 64要素hiding tileと累積scopeを実際のresponse/court/reward gateへ接続する。`cumulative_scope_allows_v1`のstubとF-C4R4-17は残る。scope報告関数の成功だけでreward eligibilityを認めない。
 3. **DAと包含の期限:** 最大Respond、全chunk、adaptiveな探索round、proof処理が責任期間内に収まる条件を実nodeで立証する。9B/8kの1 positionは2,029 partsであり、現行の固定20 DAAだけでは十分性を示せない。
 4. **共謀者による枠の占有:** claim共通のlive 64・生涯256 reservation枠を先取りされても、outsiderが必要materialを取得できる設計が必要。別bondのreservationが1件ある試験は、全枠飽和への耐性ではない。
-5. **正規eligibilityと測定:** 各active familyをtest-only admissionなしで登録し、fresh verifier自身のnode/RPC、最大profileの実測RAM・時間、restart/IBD/reorgを確認する。shape計算や小型fixtureだけで代替しない。legacy readerの途中で打ち切られた履歴走査も、全区間を読み終えたものとして扱わない（下記）。
+5. **正規eligibilityと測定:** 各active familyをtest-only admissionなしで登録し、fresh verifier自身のnode/RPC、最大profileの実測RAM・時間、restart/IBD/reorgを確認する。shape計算や小型fixtureだけで代替しない。legacy readerの途中走査の取りこぼしは修正したが、恒久的にprune済みの回答の取得・再要求とfresh-node追及の実node試験は残る（下記）。
 
 有効化fenceは変更していない。以下は比較用に保持した初回レビューであり、解決済みのcompile・資源バグを現HEADの未解決事項として再掲するものではない。
 
-**追加のC2コード読解所見:** `kaspad/src/palw_fraud_filer.rs`はDAA差をblock件数へ変換して履歴を走査し、`walked`で要求したfloorまで読んだと記録する。一方、`walk_accepted_lifecycle_objects_v1`は件数上限・header/ghostdag取得失敗で途中returnしても完了範囲を返さない。DAA差はselected-chain block数の上限ではない。読み落としたunitがtipでは`answered`であると、filerは`AwaitAnswer`に留まり、次の走査は直近marginへ進む。再開cursorと実際に読んだ範囲を返すpagination、後から追及を開始したcaseのbackfill、pruned/missing block時の明示的な処理が必要。これはコード上の到達性の穴であり、現在の5件のkaspad unit testと「conviction後のfresh-node read」試験では塞がれていない。実nodeでのlate-start再現と修正は未実施。
+**C2履歴readerの修正:** 以前はDAA差をblock件数へ変換し、途中で打ち切った走査も要求floorまで読んだと記録していた。公開済みunitが`AwaitAnswer`に留まる経路を、再開cursor・開始tipの固定・完了範囲の記録・新しい追及のbackfill・branch変更時の読み直しで修正した。認証済みの利用対象unitだけを重複なくcacheする。node-policyの **11 V-unit PASS**（filer 7、Consensus API adapterのreader 4）がある。これはfresh-node追及のV-node試験ではない。恒久的にpruneされた回答は今回の修正でも取得できず、完了扱いをせず再試行する。現行consensusは既回答unitの再要求も拒否するため、保持・取得・再要求の経路と期限を別途完成させる必要がある。詳細とlogは[修正記録](implementation.md)の履歴pagination節を参照。
 
 ## 初回レビューの判定
 

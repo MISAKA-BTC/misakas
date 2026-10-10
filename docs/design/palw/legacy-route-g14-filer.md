@@ -428,3 +428,17 @@ reorg correction stays inside the production two-DAA shallow tie window; it does
 not a single all-green eight-case batch. Disk-full build/run interruptions are recorded separately from code failures. Logs and
 the test boundaries are in [the audit implementation record](../../audit/g14-review-2026-10-10/implementation.md). The default-feature
 `kaspad --lib palw_fraud_filer` suite also passes **5/5** after the task's regenerable build cache was cleaned.
+
+### History reader follow-up
+
+The production filer now reads resumable pages of accepted history. DAA distance is not a chain-block count. Only reaching the
+requested floor or chain root completes a walk; missing headers, acceptance, bodies or selected parents leave the watermark
+unchanged. A backfill retains its original tip, so arrivals during it are read afterwards. A new pursuit backfills its own old
+answers even when newer than an earlier case, and a reorg outside the anchor restarts from the oldest pursued claim on the new
+branch. Only authenticated units used by the contiguous localizer enter the deduplicated cache: one binding and at most 32 ranges
+per pursued claim. Filer **7 V-unit PASS** and accepted-history reader **4 V-unit PASS** cover pagination, repeated DAA, later tips,
+reorgs, read failures/restoration and the cache unit bound. This does not establish full C2 on a freshly started real node.
+
+Permanent pruning remains unresolved: an unavailable historical response is retried explicitly, while current DA admission
+rejects a repeated demand for an already answered unit. Retention/public acquisition or an authenticated re-demand path must
+last through the liability window. The [audit record](../../audit/g14-review-2026-10-10/implementation.md) contains the logs.
