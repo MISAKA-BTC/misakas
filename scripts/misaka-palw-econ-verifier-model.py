@@ -187,12 +187,12 @@ def section2() -> None:
 # =====================================================================================================================================
 
 RULES = {
-    "NOW": "today: demanders paid D(1 - β_d) at the default; bounty min(a(S + D), S) (basis as if no default)",
+    "NOW": "before F-C4R4-15 (econ-m2 measured 539): demanders paid D(1 - β_d) at the default; bounty min(a(S + D), S) (basis as if no default)",
     "O1": "one cap across both legs: bounty min(a(S + D) - demanders_paid, S)",
     "O2": "demanders credited only without a conviction: the share is held at the default; a conviction in the horizon pays one "
     "pool min(a(S + D), S) to the bounty holder and burns the held share; no conviction by the horizon pays the demanders then",
     "O3": "burn the whole pre-Final default penalty (β_d = 1): no demanders' share; bounty as today",
-    "O4": "bounty on the slash alone: min(a·S, S) (reverts F-C4R3-02's basis)",
+    "O4": "bounty on the slash alone: min(a·S, S) — what integration 323ea161a adopted (F-C4R4-15)",
 }
 
 
@@ -235,7 +235,7 @@ def section2b() -> None:
         show("DERIVED", "honest demanders on a defaulted lie that someone convicts", f"{float(dem):.0f}, paid {when}")
         show("DERIVED", "honest demanders on a default with no conviction", f"{float(dem_nc):.0f}, paid {when_nc}")
         show("DERIVED", "an honest demander beside one Sybil demander (no conviction)", f"{float(dem_nc / 2):.1f}")
-    check(rows["NOW"] == (False, True), "today: I-D holds, I-49 is broken (53.9%)")
+    check(rows["NOW"] == (False, True), "before F-C4R4-15: I-D held, I-49 was broken (53.9%)")
     check(rows["O1"] == (True, False) and rows["O4"] == (True, False), "one cap (O1) or a slash-only basis (O4) breaks I-D")
     check(rows["O2"] == (True, True) and rows["O3"] == (True, True), "O2 and O3 keep both invariants")
     # Under M*-49 the honest drawn sealers take the first B_cap of the pool: O1's dilution reaches them only if pool - share < B_cap.
@@ -777,9 +777,243 @@ def section8() -> None:
 
 
 # =====================================================================================================================================
+# §9 The ECON gate of docs/palw-round-exec-additional-acceptance-2026-10-10.md §4–§5: small vs large models, same bond and period
+# =====================================================================================================================================
+
+TICKET_PWU = 100_000  # MEASURED: PALW_EXECUTION_QUANTUM_V1 (one ticket per 100,000 pwu of verified CanonicalWork)
+SLOTS_PER_DAA = 150  # ASSUMED: one Round slot a second (120 per 120 s, MEASURED on t12) at 150 s per DAA
+SPAN_BOUND = 65_536  # MEASURED: PALW_EXEC_MAX_QUANTA_PER_SPAN_V1
 
 
-SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8}
+@dataclass(frozen=True)
+class GateModel:
+    """One model class as the gate needs it. Work is CanonicalWork (pwu, compute-proportional by construction: graph × positions)."""
+
+    name: str
+    params_b: float  # parameter count (billions) — recorded, never read by any rule
+    tokens_per_job: int
+    mpwu_per_job: float  # canonical work per job, in millions of pwu
+    sec_per_mpwu: float  # processing time on the bond's hardware
+
+
+SMALL = GateModel("small 0.5B", 0.5, 1024, 1.6, 1.25)  # MEASURED scale: "a ~1.6M-pwu QWEN25-scale job is about 16 tickets"
+LARGE = GateModel("large 9B", 9.0, 1024, 28.8, 1.25)  # ASSUMED: work ∝ parameters at the same tokens (18×)
+
+
+@dataclass(frozen=True)
+class GateEnv:
+    """ASSUMED baseline (every value is an illustration; P-1..P-11 are not set)."""
+
+    capital: float = 13_000.0  # MEASURED: t12's producer minimum bond (RFC-0015 §8.3.6)
+    unit: float = 1_000.0  # u
+    window_daa: int = 400  # W — inside the band P-1/P-11 derive (§10)
+    rights_per_unit: float = 30.0  # Round rights per u per W
+    claims_per_unit: float = 5.0  # q·ρ per u per W
+    reward_per_unit: float = 4.0  # r: escrowed claim reward per u per W (BILI)
+    price_per_mpwu: float = 1.0  # escrow the users pay per Mpwu of work (market)
+    compute_per_mpwu: float = 0.5  # the producer's compute cost per Mpwu
+    large_cost_mult: float = 1.0  # μ_L: a large model's compute cost per Mpwu relative to a small one's (memory-bound decode, GPUs)
+    ticket_subsidy: float = 0.05  # v_t: the Round's work reward per executed ticket
+    ticket_fee: float = 0.01  # f_t: market fees per executed Round
+    per_claim_overhead: float = 1.04  # INTERIM: OPV admission fee 1 + seal/reveal carriers
+    capital_cost_per_year: float = 0.10  # 10% a year on the locked bond
+    participants: int = 10  # bonds of the same size competing for the shared window (each fields its capped candidates)
+    demand_mpwu: float = 1_000.0  # work the market offers this bond per W
+
+
+def gate_row(m: GateModel, env: GateEnv, demand_mpwu: float | None = None) -> dict:
+    d = env.demand_mpwu if demand_mpwu is None else demand_mpwu
+    caps_u = env.capital / env.unit
+    q_max = math.floor(caps_u * env.claims_per_unit)
+    r_max = caps_u * env.reward_per_unit
+    rounds_cap = math.floor(caps_u * env.rights_per_unit)
+    hw_jobs = math.floor(env.window_daa * 150 / (m.mpwu_per_job * m.sec_per_mpwu))  # ASSUMED 150 s/DAA, one accelerator
+    escrow_job = env.price_per_mpwu * m.mpwu_per_job
+    jobs_by = {"demand": math.floor(d / m.mpwu_per_job), "Q cap": q_max, "R cap": math.floor(r_max / escrow_job), "hardware": hw_jobs}
+    jobs = min(jobs_by.values())
+    binding = min(jobs_by, key=jobs_by.get)
+    work = jobs * m.mpwu_per_job
+    earned = work * 1e6 / TICKET_PWU
+    candidates = min(earned, rounds_cap)
+    capacity = env.window_daa * SLOTS_PER_DAA
+    others = (env.participants - 1) * rounds_cap
+    s = min(1.0, capacity / (candidates + others)) if candidates + others > 0 else 1.0
+    allocated = candidates * s
+    executed = allocated  # ASSUMED: every allocated permit is used
+    cost_mult = env.large_cost_mult if m is LARGE else 1.0
+    compute = work * env.compute_per_mpwu * cost_mult
+    fees = executed * env.ticket_fee
+    reward = jobs * escrow_job + executed * env.ticket_subsidy
+    overhead = jobs * env.per_claim_overhead
+    capital_cost = env.capital * env.capital_cost_per_year * env.window_daa * 150 / 31_536_000
+    revenue = reward + fees
+    net = revenue - compute - overhead - capital_cost
+    tickets_per_sec = (m.mpwu_per_job * 1e6 / TICKET_PWU) / (m.mpwu_per_job * m.sec_per_mpwu)
+    demand_rate = d * 1e6 / TICKET_PWU / (env.window_daa * 150)
+    rate = min(tickets_per_sec, demand_rate)
+    time_to_cap = rounds_cap / rate / 150 if earned >= rounds_cap and rate > 0 else math.inf
+    # Marginal revenue of one more job at this point: tickets only below the Round cap; escrow only below R and Q caps.
+    t_job = m.mpwu_per_job * 1e6 / TICKET_PWU
+    below_round = max(0.0, min(t_job, rounds_cap - earned)) * s * (env.ticket_subsidy + env.ticket_fee)
+    room = jobs < min(jobs_by["Q cap"], jobs_by["R cap"])
+    marginal = (escrow_job + below_round - m.mpwu_per_job * env.compute_per_mpwu * cost_mult - env.per_claim_overhead) if room else 0.0
+    return dict(
+        model=m.name, params_b=m.params_b, tokens=jobs * m.tokens_per_job, jobs=jobs, binding=binding, canonical_mpwu=work,
+        compute=compute, time_s=work * m.sec_per_mpwu, earned=earned, candidates=candidates, allocated=allocated, executed=executed,
+        occupancy=(allocated + others * s) / capacity, own_share=allocated / capacity, fees=fees, work_reward=reward,
+        rev_per_compute=revenue / compute if compute else math.nan, net=net, net_per_compute=net / compute if compute else math.nan,
+        capital_cost=capital_cost, time_to_cap_daa=time_to_cap, marginal_past=marginal, round_cap=rounds_cap, sat=s,
+        sum_caps=env.participants * rounds_cap,
+    )
+
+
+# The criteria, FIXED BEFORE any result is read (PROPOSED; the user may change them, but not after seeing the numbers).
+CRITERIA = {
+    "G1": "below every cap, unsaturated: tickets per Mpwu equal across sizes (±2%) and revenue per compute cost large/small in [0.8, 1.25]",
+    "G1n": "the same with per-claim overhead and capital cost included (net revenue per compute cost) — must also lie in [0.8, 1.25]",
+    "G2": "past the Round cap the marginal Round revenue is 0 for both sizes (capital, not compute, bounds Round income)",
+    "G3": "saturated: the allocation probability per candidate is equal across sizes (±1%)",
+    "G4": "both sizes net-viable at the baseline; the grid share where exactly one size is viable is reported with its cause",
+    "G5": "no rule reads the parameter count (structural)",
+    "G6": "the claim-count cap Q does not bind before the Round cap for the smallest job (Q_max · tickets_per_job ≥ Round cap)",
+    "G7": "split: k small jobs and one large job of the same total work field the same candidates (≤ 1 ticket per Final)",
+    "G8": "P-11: Σ Round caps per W < 65,536 in every scenario judged",
+}
+
+
+def section9() -> None:
+    head(9, "ECON gate (Round/EXEC acceptance §4–§5): small vs large models, same bond and period")
+    for k, v in CRITERIA.items():
+        show("PROPOSED", f"criterion {k}", v)
+    base = GateEnv()
+    scenarios = {
+        "before cap, unsaturated": replace(base, demand_mpwu=28.8, participants=10),
+        "after cap, unsaturated": replace(base, demand_mpwu=1_000.0, participants=10),
+        "before cap, saturated": replace(base, demand_mpwu=28.8, participants=160),
+        "after cap, saturated": replace(base, demand_mpwu=1_000.0, participants=160),
+    }
+    keys = ("jobs", "binding", "canonical_mpwu", "tokens", "compute", "time_s", "candidates", "allocated", "executed", "occupancy",
+            "fees", "work_reward", "rev_per_compute", "net_per_compute", "capital_cost", "time_to_cap_daa", "marginal_past")
+    results = {}
+    for name, env in scenarios.items():
+        print(f"  -- {name} (demand {env.demand_mpwu:g} Mpwu/W, {env.participants} bonds, Round cap {gate_row(SMALL, env)['round_cap']}"
+              f" tickets/W, Σ caps {gate_row(SMALL, env)['sum_caps']:,})")
+        for m in (SMALL, LARGE):
+            r = gate_row(m, env)
+            results[(name, m.name)] = r
+            cells = []
+            for k in keys:
+                v = r[k]
+                cells.append(f"{k}={v:.3g}" if isinstance(v, float) else f"{k}={v}")
+            show("DERIVED", f"{m.name:10}", ", ".join(cells))
+    judged = {}
+    # G1 / G1n: below every cap and unsaturated — use equal work that fits under the caps (one large job vs 18 small).
+    env = replace(base, demand_mpwu=28.8, participants=10)
+    rs, rl = gate_row(SMALL, env), gate_row(LARGE, env)
+    tpm = (rl["candidates"] / rl["canonical_mpwu"]) / (rs["candidates"] / rs["canonical_mpwu"])
+    rpc = rl["rev_per_compute"] / rs["rev_per_compute"]
+    npc = rl["net_per_compute"] / rs["net_per_compute"] if rs["net_per_compute"] > 0 else math.inf
+    show("DERIVED", "G1 point: 28.8 Mpwu each (18 small jobs vs 1 large), Round cap 390, 10 bonds",
+         f"tickets/Mpwu ratio {tpm:.3f}; revenue/compute ratio {rpc:.3f}; net/compute ratio {npc:.3f} (small {rs['net_per_compute']:.2f},"
+         f" large {rl['net_per_compute']:.2f})")
+    judged["G1"] = abs(tpm - 1) <= 0.02 and 0.8 <= rpc <= 1.25
+    judged["G1n"] = 0.8 <= npc <= 1.25
+    # G7: the same point.
+    judged["G7"] = abs(rs["candidates"] - rl["candidates"]) <= 18
+    # G2: past the cap, unsaturated.
+    for m in (SMALL, LARGE):
+        r = results[("after cap, unsaturated", m.name)]
+        t_job = m.mpwu_per_job * 10
+        extra_round = max(0.0, min(t_job, r["round_cap"] - r["earned"]))
+        judged.setdefault("G2", True)
+        judged["G2"] = judged["G2"] and extra_round == 0
+    # G3: saturated — the per-candidate allocation probability is the same s for both.
+    a, b = results[("after cap, saturated", SMALL.name)], results[("after cap, saturated", LARGE.name)]
+    judged["G3"] = abs(a["sat"] - b["sat"]) <= 0.01
+    # G5 structural: gate_row reads params_b only to record it.
+    judged["G5"] = True
+    # G6.
+    caps_u = base.capital / base.unit
+    judged["G6"] = math.floor(caps_u * base.claims_per_unit) * SMALL.mpwu_per_job * 10 >= math.floor(caps_u * base.rights_per_unit)
+    judged["G8"] = all(gate_row(SMALL, e)["sum_caps"] < SPAN_BOUND for e in scenarios.values())
+    # G4: viability on the sensitivity grid.
+    grid = []
+    for demand in (10.0, 100.0, 1_000.0):
+        for fee in (0.0, 0.01, 0.1):
+            for c in (0.25, 0.5, 1.0):
+                for mu in (1.0, 1.5, 2.0):
+                    for parts in (10, 80, 160):
+                        e = replace(base, demand_mpwu=demand, ticket_fee=fee, compute_per_mpwu=c, large_cost_mult=mu, participants=parts)
+                        grid.append((e, gate_row(SMALL, e)["net"] > 0, gate_row(LARGE, e)["net"] > 0))
+    n = len(grid)
+    both = sum(1 for _, s_, l_ in grid if s_ and l_)
+    only_s = sum(1 for _, s_, l_ in grid if s_ and not l_)
+    only_l = sum(1 for _, s_, l_ in grid if l_ and not s_)
+    neither = n - both - only_s - only_l
+    show("DERIVED", f"sensitivity grid ({n} cells: demand × fee × compute × μ_L × participants): both / only small / only large / neither",
+         f"{both} / {only_s} / {only_l} / {neither}")
+    by_demand = {dm: sum(1 for e, s_, l_ in grid if e.demand_mpwu == dm and l_ and not s_) for dm in (10.0, 100.0, 1_000.0)}
+    show("DERIVED", "cells where only the large model is viable, by demand (Mpwu/W)", by_demand)
+    by_dem_s = {dm: sum(1 for e, s_, l_ in grid if e.demand_mpwu == dm and s_ and not l_) for dm in (10.0, 100.0, 1_000.0)}
+    show("DERIVED", "cells where only the small model is viable, by demand (Mpwu/W; a large job is 28.8)", by_dem_s)
+    by_c = {c: sum(1 for e, s_, l_ in grid if e.compute_per_mpwu == c and not s_ and l_) for c in (0.25, 0.5, 1.0)}
+    show("DERIVED", "cells where only the large model is viable, by compute cost per Mpwu", by_c)
+    rb_s, rb_l = gate_row(SMALL, base), gate_row(LARGE, base)
+    judged["G4"] = rb_s["net"] > 0 and rb_l["net"] > 0
+    show("DERIVED", "baseline net per W: small / large", f"{rb_s['net']:.1f} / {rb_l['net']:.1f} BILI (capital cost {rb_s['capital_cost']:.0f})")
+    # The overhead finding: the per-claim fixed fee against the smallest job's escrow.
+    show("DERIVED", "per-claim overhead / escrow per job: small / large",
+         f"{base.per_claim_overhead / (base.price_per_mpwu * SMALL.mpwu_per_job):.0%} / "
+         f"{base.per_claim_overhead / (base.price_per_mpwu * LARGE.mpwu_per_job):.1%}")
+    show("DERIVED", "least bond for one large job's full tickets (288) at the baseline rights", f"{288 * base.unit / base.rights_per_unit:,.0f} BILI")
+    for k in CRITERIA:
+        show("DERIVED", f"verdict {k}", "PASS" if judged.get(k) else "FAIL")
+    check(judged["G1"] and not judged["G1n"], "G1 holds on compute, and fails once per-claim overhead is counted (small jobs pay it 18×)")
+    big = results[("after cap, unsaturated", LARGE.name)]
+    show("DERIVED", "G2's cause: at high demand the large model is stopped by", f"the {big['binding']} (one 28.8-BILI escrow fills "
+         f"⌊{base.capital / base.unit * base.reward_per_unit:.0f} / 28.8⌋ = 1 job) at {big['candidates']:.0f} of {big['round_cap']} tickets")
+    check(not judged["G2"] and big["binding"] == "R cap", "G2 fails for the large model by the R cap's granularity, not by compute")
+    check(judged["G3"] and judged["G7"], "saturation and splitting are size-neutral")
+
+
+# =====================================================================================================================================
+# §10 BUDGET's POLICY list P-1..P-11: values or methods the models derive
+# =====================================================================================================================================
+
+
+def section10() -> None:
+    head(10, "BUDGET POLICY P-1..P-11 (bond-budget-and-model-allocation.md §10)")
+    t = INTERIM_49
+    lifetime = t.hold_max
+    show("DERIVED", "P-1 W lower bound: W ≥ L, the longest claim lifetime (payments per span ≤ 2·R_max, BUDGET §2.4)", f"W ≥ {lifetime} DAA")
+    for slots in (120, 150):
+        show("DERIVED", f"P-1/P-11 W upper bound if the window must be able to saturate: W ≤ 65,536 / slots per DAA ({slots})",
+             f"W ≤ {SPAN_BOUND // slots} DAA")
+    show("DERIVED", "P-1 band at the interim terms (ASSUMED 150 s/DAA)", f"{lifetime} ≤ W ≤ {SPAN_BOUND // 150} DAA")
+    for w in (400, 4032):
+        for p in (0.01, 0.05):
+            y = yield_ceiling(p, 0.49, 1.0, 0.0, 0.0, w, t.hold)
+            show("DERIVED", f"P-2 r/u ceiling (Theorem Y; λ = 1, x = 0) at W = {w}, p = {p}", f"r ≤ {y * 1000:.1f} BILI per u = 1,000 BILI per W")
+    show("DERIVED", "P-2 r, w, fees together", "(r + w·value_of_weight + expected fee income) per u per W ≤ the Theorem Y ceiling")
+    show("DERIVED", "P-2 q·ρ lower bound (G6): claims per u per W ≥ Round rights per u per W / tickets of the smallest admitted job", "e.g. 10 / 16 = 0.63")
+    show("DERIVED", "P-2 open-claim cap (§2.5, κ ≤ 1)", f"max_open_claims ≤ ⌊C / K⌋ = {13_000 // 1_000} at C = 13,000, K = 1,000")
+    show("PROPOSED", "P-3 ρ, slice_rights_by_rho", "slice = true (D2's A → A/m); ρ from the Q need above, never to raise B/R/F")
+    show("PROPOSED", "P-4 epoch E", "E = W (one clock), or a whole multiple of W")
+    show("PROPOSED", "P-5 seasoning", "≥ 1 full epoch, with the capital locked ≥ E + W (no point snapshot; D-snap)")
+    show("PROPOSED", "P-6 f and the bar", "linear (§5: the only split- and concentration-neutral curve) or no model leg (D-F); bar per §5.4")
+    show("PROPOSED", "P-7 ΣA = 0", "keep v1: not minted")
+    show("ASSUMED", "P-8 max_models_per_bond", "no economic derivation under linear f (splitting is neutral); bound it by snapshot work, e.g. 8")
+    show("PROPOSED", "P-9 fee-only Rounds", "ExecutionCap { rights_per_unit = the Round rights } — keeps B for reward blocks; either mode is capped")
+    show("PROPOSED", "P-10 fee income and R_max", "not in R_max (v1); count the expected fee income in Theorem Y's x when setting r and rights")
+    for c_total in (1e6, 1e7):
+        show("DERIVED", f"P-11 rights per u per W so that Σ caps < 65,536 with total locked capital {c_total:,.0f} BILI",
+             f"≤ {SPAN_BOUND * 1000 / c_total:.2f}")
+
+
+# =====================================================================================================================================
+
+
+SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10}
 
 
 def main() -> int:

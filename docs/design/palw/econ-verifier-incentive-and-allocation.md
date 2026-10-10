@@ -1,6 +1,7 @@
 # The verifier's incentive, self-dealing at 49%, the seal deposit, and model-bond allocation (lane ECON, 2026-10-10)
 
-Branch `econ/verifier-incentive` (integration head `b8ae9412b` merged; G14-R4 and OPV-BOOT merged earlier for the PoCs).
+Branch `econ/verifier-incentive`: integration head `323ea161a` merged. It carries BUDGET's engine, G14R round 2's single 49% cap
+(F-C4R4-15), INTF's 49% fence and the Round/EXEC acceptance conditions.
 Supersedes the first-milestone note `verifier-incentive-and-seal-economics.md` (10-09, at a 50% accuser share), which stays as the
 record of that milestone.
 
@@ -37,7 +38,7 @@ Amounts are in BILI.
 | Id | Statement | Status |
 |---|---|---|
 | **M0** | **Capture.** Today the earliest seal of the exact convicting bytes takes the bounty. On every self-dealing path, the liar's own Sybil takes the whole 49%, and the honest verifier who found the lie earns 0. Checking an honest claim also earns 0. | **COUNTEREXAMPLE**. MEASURED at 49% (`econ_bounty`). |
-| **E1** | **The 49% does not bound a self-dealer.** After a self-inflicted pre-Final default, the coalition recoups the demanders' share and the bounty: 539 of 1,000 collected. Its net loss is 46.1%, below ADR-0032's 51%. Over every penalty `D`, the loss can fall to `(1 − a)²·K` = 26%. Capping it naively (O1) lets a Sybil demander dilute an honest accuser again. Rule O2 keeps both invariants. | **FINDING**. MEASURED (`econ_bounty`) and DERIVED. Options and the trade-off: §2.2. |
+| **E1** | **The 49% did not bound a self-dealer** (before F-C4R4-15). After a self-inflicted pre-Final default, the coalition recoups the demanders' share and the bounty: 539 of 1,000 collected. Its net loss is 46.1%, below ADR-0032's 51%. Over every penalty `D`, the loss can fall to `(1 − a)²·K` = 26%. Capping it naively (O1) lets a Sybil demander dilute an honest accuser again. Rule O2 keeps both invariants. Integration now runs O4 (F-C4R4-15): every self-dealing path loses exactly 51% (MEASURED, econ-m3). The residual: after the coalition's self-default an honest accuser gets 441 instead of 490 (MEASURED). | **FIXED** for I-49 by F-C4R4-15. **RESIDUAL** for I-D. Recommendation in §2.2. |
 | **S** | **Self-dealing never pays** (self-fraud, self-accusation, bounty receipt, check fees). With E1 fixed (rule O2, or O1/O3; §2.2), a coalition that convicts its own lie loses at least `(1 − a)` of what was collected. An honest claim cannot be convicted. Self-dealing only turns gross `K` into `L_net = (1 − a_eff)·K` inside ADR-0176 D6. | **PROVEN** (§2.3). |
 | **Y** | **Per bond and window** (ADR-0176). With fully backed reservations, every forging strategy is deterred only if reward / capital per window `< p·(1 − a_eff)·W / (H_L·(λ + x − p·r_risk))`. At `p` = 0 no positive reward yield is safe. | **PROVEN** (§2.4). |
 | **C** | **Correlation and shared collateral.** With fully backed reservations (`κ ≤ 1`), expected collection is linear and correlation is irrelevant. With `κ > 1`, the worst case (comonotone detection, which a forger can induce) divides deterrence by `κ`. | **PROVEN** (§2.5). |
@@ -47,6 +48,8 @@ Amounts are in BILI.
 | **T6** | Whether a drawn verifier really checks (the lazy verifier) can be made observable on chain. | **OPEN**. |
 | **B12** | The seal deposit is derived. A withheld seal stalls 83 DAA. An abandoned one stalls 151 DAA (MEASURED) for 52 BILI. Parity gives `d* = c_ab·T_w/T_ab ≈ 28.6` BILI. A deposit above `d*` buys nothing. The deterred delay value is 0.345/`N_c` BILI per victim-DAA. `d*` exceeds the honest-race ceiling of 1 BILI, so the prices must be split (S3). | **DERIVED** (§4). |
 | **F1–F5** | **Open versus closed for `f(S_m)`.** F1: split-proof and merge-proof together force `f` linear. F2: equal self-funding beats publishing for every `f`. F3: the publish premium *is* a concentration premium. F4: at `p` = 0, a closed model out-earns an open one by `1/(1 − λ)` for every `f`. F5: the budget and the per-bond cap saturate. | **PROVEN** (§5). Grid DERIVED from an ASSUMED market. |
+| **GATE** | **Round/EXEC ECON gate** (acceptance §4–§5), with nine criteria fixed before judging (§5a). Tickets track canonical work exactly. Revenue per compute cost is equal across model sizes. Saturation and splitting are size-neutral. It **fails** on net revenue per compute: the interim per-claim overhead is 65% of a small job's escrow against 3.6% of a large one's, a 2.7× gap. It also **fails** on capital-bound marginal revenue for the large model: a 28.8-BILI escrow fills the R cap after one job, before the Round cap. | 7 PASS, 2 FAIL. DERIVED from an ASSUMED market (§5a). |
+| **P-list** | BUDGET P-1..P-11. P-1 and P-11 together leave `280 ≤ W ≤ 436` DAA: below that, claims outlive the window; above it, the 65,536 per-span bound stops the shared window from ever saturating. Theorem Y gives P-2's `r` ceiling. G6 gives P-2's `q·ρ` floor. §2.5 gives the open-claim cap. | DERIVED where stated; the rest PROPOSED (§5b). |
 | **F-bar** | **No curve makes publication "overwhelmingly better".** No `f` beats equal self-funding (F2). On the grid, no `f` meets the proposed bar against a closed model that can forge. The one curve that meets it against a non-forging closed model, `S²`, fails the concentration bar with a premium of 1.9–2.8. | **COUNTEREXAMPLE** (§5.4). |
 
 ### 0.2 Verdicts
@@ -128,6 +131,12 @@ and no fee. An honest outsider later finds the lie. MEASURED:
 
 On every path, burn + payouts = collected + fees.
 
+**After merging integration `323ea161a` (F-C4R4-15), MEASURED in econ-m3:**
+* every self-dealing path loses exactly 510 (51%); after a self-inflicted default the Sybil is paid 49 + 441 = 490;
+* when the coalition self-defaults but an honest outsider holds the bounty, the honest accuser is paid **441**, against 490 for the
+  same lie with no default. The Sybil demander keeps 49
+  (`after_a_self_inflicted_default_the_honest_accuser_is_paid_441_not_490`).
+
 Three honest claims checked clean earn the verifier 0 (`checking_honest_claims_pays_the_verifier_nothing`).
 
 ### 2.2 E1: a leak in the 49% bound, and its fix
@@ -184,6 +193,18 @@ no-conviction default; that is remedy B's dilution, which only M\*-49's per-chec
 
 Under M\*-49, O1's dilution never reaches an honest **drawn** verifier. The drawn sealers take the first `B_cap` = 40, and the pool left
 after the demanders' share is still 441. The dilution falls on the earliest sealer's remainder, usually the liar's Sybil.
+
+**Integration chose O4** (G14R round 2, F-C4R4-15): the bounty is the share of what the conviction itself collected. I-49 holds
+(MEASURED: 490 of 1,000 on every path). The residual is I-D: after a self-inflicted default the honest accuser gets 49% of `(K − D)`
+instead of 49% of `K`, which is 441 instead of 490 (MEASURED). The difference is `⌊a·D⌋`, at most 49 BILI at the interim terms, or 10%
+of the honest bounty. It is bounded by `D/K` of the honest bounty for any `D`.
+
+**Should the default's demander share be held until the liability horizon?** That is O2 on top of F-C4R4-15: at a conviction inside
+the horizon, the held share joins the one pool, and the pool is paid on the basis `K`.
+* **Recommended: yes, as part of the single release.** It closes the only remaining way a liar who expects detection shifts money from
+  the honest accuser to itself. It costs one held-share row per defaulted claim and a 200-DAA deferral of a true DA default's share.
+* If M\*-49 is adopted first, the residual never reaches a drawn verifier: the drawn verifiers take the first `B_cap` = 40 of 441. O2
+  then becomes optional hardening.
 
 **Recommendation: O2.** It keeps I-49 and I-D and still pays the demanders of a true DA default. O3 keeps both invariants only by
 dropping that incentive, so it fits only alongside M\*-49. If M\*-49 is adopted, O1 is the simpler acceptable alternative.
@@ -672,19 +693,133 @@ The user fixes Φ\* = 2, the ranges and the market assumptions.
 
 ---
 
+## 5a. The Round/EXEC ECON gate (`docs/palw-round-exec-additional-acceptance-2026-10-10.md` §4–§5)
+
+Model §9 compares small and large models on the same bond and period, before and after the cap, with the window unsaturated and
+saturated.
+
+### 5a.1 The setting
+
+The rules the model applies are BUDGET's §3b, all MEASURED from the design:
+* Round candidates are `min(T_earned, remaining rights)`, with `T_earned = CanonicalWork / 100,000` pwu;
+* the shared window holds one Round slot per second;
+* allocation is proportional to candidates;
+* the caps are Q (claims), R (escrowed reward) and the Round rights per bond per `W`.
+
+**ASSUMED baseline:**
+
+| Input | Value |
+|---|---|
+| bond | 13,000 BILI (t12's minimum) |
+| `W` | 400 DAA (inside the P-1 band, §5b) |
+| Round rights | 30 per 1,000 BILI per `W`, so 390 per bond |
+| `q·ρ` | 5 per 1,000 BILI per `W` |
+| `r` | 4 BILI per 1,000 BILI per `W` |
+| escrow | 1.0 BILI per Mpwu |
+| compute | 0.5 BILI per Mpwu |
+| executed Round | 0.05 subsidy + 0.01 fee |
+| per-claim overhead | 1.04 (INTERIM admission fee + carriers) |
+| capital cost | 10% a year |
+| small job | 0.5B parameters, 1.6 Mpwu = 16 tickets (MEASURED scale, from the code comment) |
+| large job | 9B parameters, 28.8 Mpwu = 288 tickets (ASSUMED ∝ parameters), same 1,024 tokens |
+
+### 5a.2 The criteria, fixed before judging (PROPOSED)
+
+| Id | Criterion |
+|---|---|
+| G1 | Below every cap, unsaturated: tickets per Mpwu are equal across sizes (±2%), and revenue per compute cost large/small lies in [0.8, 1.25] |
+| G1n | The same net of per-claim overhead and capital cost |
+| G2 | Past the Round cap, marginal Round revenue is 0 for both sizes |
+| G3 | Saturated: the allocation probability per candidate is equal across sizes |
+| G4 | Both sizes are net-viable at the baseline; the cells where only one is viable are reported with their cause |
+| G5 | No rule reads the parameter count |
+| G6 | The Q cap does not bind before the Round cap for the smallest job |
+| G7 | `k` small jobs and one large job of equal work field equal candidates (≤ 1 ticket per Final) |
+| G8 | P-11: Σ Round caps < 65,536 in every judged scenario |
+
+### 5a.3 Results (DERIVED)
+
+At 28.8 Mpwu of work (18 small jobs against 1 large one), both sizes field 288 candidates, and revenue per compute cost is 3.2 for both.
+But net revenue per compute cost is 0.73 against 1.96: **G1n FAILS**, because the per-claim overhead is 65% of a small job's escrow
+and 3.6% of a large job's.
+
+At high demand:
+* the small model is capped at 390 tickets, after 15.6 DAA, by the Round cap and then by the R cap;
+* the large model is capped by the **R cap after one job**, at 288 of 390 tickets. One 28.8-BILI escrow fills `⌊52/28.8⌋` = 1 job.
+  So "time to cap" for the Round rights never arrives, and **G2 FAILS** for the large model, by granularity.
+
+Under saturation (160 bonds, Σ caps 62,400), every candidate is allocated with probability 0.96 regardless of size, so **G3 passes**.
+Splitting passes too (**G7**).
+
+| Scenario | Model | Jobs | Binding | Candidates / allocated | Revenue / compute | Net / compute | Time to cap | Marginal past the cap |
+|---|---|---|---|---|---|---|---|---|
+| before cap, unsaturated | small | 18 | demand | 288 / 288 | 3.20 | 0.73 | — | +0.72 per job |
+| before cap, unsaturated | large | 1 | demand | 288 / 288 | 3.20 | 1.96 | — | 0 (next job exceeds R) |
+| after cap, saturated | small | 32 | R cap | 390 / 375 | 2.88 | 0.48 | 15.6 DAA | 0 |
+| after cap, saturated | large | 1 | R cap | 288 / 277 | 3.16 | 1.91 | never (R first) | 0 |
+
+**Sensitivity** (243 cells: demand × fee × compute cost × μ_L × participants):
+
+| Outcome | Cells | Cause |
+|---|---|---|
+| both viable | 126 | — |
+| only small | 63 | all at 10 Mpwu of demand: below one large job |
+| only large | 12 | all at compute 1.0 per Mpwu: the small model's overhead tips it |
+| neither | 42 | — |
+
+**Verdicts:**
+
+| Criterion | Verdict |
+|---|---|
+| G1, G3, G4, G5, G6, G7, G8 | PASS |
+| G1n | **FAIL** |
+| G2 | **FAIL** |
+
+No conclusion rests on ticket counts.
+
+**What the failures ask for (POLICY):**
+* **G1n:** keep a per-claim fixed fee under a small share of the smallest admitted job's escrow, or make it proportional to work.
+* **G2:** `r` must be large enough that one large job's escrow does not exhaust `R_max`. Equivalently, a large-model producer needs a
+  larger bond. 9,600 BILI is the least bond whose Round rights cover one large job's 288 tickets; `R_max` needs about 28.8 BILI per
+  job. That is capital proportional to work, not a fixed preference.
+
+---
+
+## 5b. BUDGET POLICY P-1..P-11 (`bond-budget-and-model-allocation.md` §10)
+
+| Item | Recommendation | Label |
+|---|---|---|
+| P-1 `W` | **`L ≤ W ≤ 65,536 / slots-per-DAA`**, i.e. **280 ≤ W ≤ 436 DAA** at the interim terms and 150 s/DAA (546 at 120 s). Below `L`, payments per span exceed `2·R_max` (BUDGET §2.4). Above the upper bound, P-11 keeps Σ Round rights below one `W` of slots, so the shared window can never saturate | DERIVED |
+| P-2 `r` | `r/u ≤ p·(1 − a)·W / (H_L·(λ + x))` (Theorem Y), counting weight value and expected fee income in the same budget. At `W` = 400: ≤ 8.2 (p = 0.01) or ≤ 40.8 (p = 0.05) BILI per 1,000 BILI | DERIVED (`p` ASSUMED) |
+| P-2 `q·ρ` | ≥ Round rights / tickets of the smallest admitted job (G6) | DERIVED |
+| P-2 open-claim cap | ≤ `⌊C/K⌋` (§2.5, `κ ≤ 1`) | DERIVED |
+| P-2 `u`, `b`, `w` | no derivation: `w` shares the Theorem Y budget with `r` | — |
+| P-3 | `slice_rights_by_rho = true`; ρ only to meet the Q need | PROPOSED |
+| P-4 | `E = W` (or a whole multiple) | PROPOSED |
+| P-5 | seasoning ≥ 1 epoch, capital locked ≥ `E + W` | PROPOSED |
+| P-6 | linear `f`, or no model leg (§5.4, D-F); the bar in §5.4 | PROPOSED |
+| P-7 | keep v1: not minted | PROPOSED |
+| P-8 | no economic derivation under linear `f`; bound by snapshot work, e.g. 8 | ASSUMED |
+| P-9 | `ExecutionCap { rights_per_unit = Round rights }`: keeps `B` for reward blocks. Both modes are capped | PROPOSED |
+| P-10 | not in `R_max`; count expected fee income in Theorem Y's `x` instead | PROPOSED |
+| P-11 | rights per 1,000 BILI per `W` ≤ `65,536·1,000 / C_total`: 65.5 at 1M BILI locked, 6.55 at 10M | DERIVED |
+
+---
+
 ## 6. Status, proofs, POLICY
 
 ### 6.1 Implemented, verified, armable
 
 * **Implemented:** nothing in consensus. The PoCs and the model.
-* **Verified:** the PoCs `econ_bounty.rs` and `econ_seal_veto.rs`, see §7; the model, with every check holding.
+* **Verified:** the PoCs `econ_bounty.rs` (3 tests) and `econ_seal_veto.rs` (2 tests) passed on the merged tree (econ-m3, after
+  `323ea161a`); before the merge, econ-m2 measured the 53.9% leak. The model holds every check.
 * **Armable:** nothing.
 
 Every reward, consensus-weight and Panel=0 fence stays refused:
 * condition 6 is unmet today (M0);
 * M\*-49 is not built;
 * T6 is open;
-* E1 is unfixed;
+* the I-D residual of F-C4R4-15 is open (D-hold);
 * BUDGET's `palw_bond_budget_v1` does not exist;
 * `palw_model_bond_allocation_v1` has no admissible `f` (§5.4).
 
@@ -712,6 +847,9 @@ Every reward, consensus-weight and Panel=0 fence stays refused:
 | D-F | Model coinbase at `p` = 0 | **(a)** no model coinbase leg in the release: rewards are user-paid escrow only. **(b)** if the user wants the leg: linear `f`, an explicit cap on its share of `R_PALW`, and an amendment to ADR-0176 §1 accepting a capital-proportional residual for closed models. ECON recommends **(a)** |
 | D-bar | The numeric bar for "overwhelmingly better" | Fix Φ\* (2 proposed), the `S_0` and `e` ranges, and λ and `r` before any curve is evaluated. Record that F2 and F4 make the bar unattainable by `f` alone |
 | D-snap | The allocation snapshot | Time-integrated capital, locked for at least the epoch plus `W`. Never a point snapshot |
+| D-hold | Hold the default's demander share until the liability horizon (O2 on top of F-C4R4-15) | **Yes**, in the single release. It removes the 441 vs 490 residual. Optional if M\*-49 lands first |
+| D-gate | The ECON gate's criteria and inputs (§5a) | Fix G1–G8 and the market inputs. Then resolve G1n (the per-claim fee as a share of the smallest job, or proportional to work) and G2 (`r` large enough for one large job's escrow) |
+| D-W | `W` | 280–436 DAA at the interim terms (§5b), unless the per-span bound changes |
 
 ---
 

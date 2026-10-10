@@ -13,9 +13,12 @@
 //! * **M0 — capture.** The earliest seal of the exact convicting bytes takes the bounty. A liar's own Sybil seals its proof one block
 //!   after the commit (a proof seal has no deposit and no fee), so it takes the bounty of every conviction of that claim, on every
 //!   path, and the honest verifier who found the lie is paid nothing. On an honest claim a verifier is paid nothing either.
-//! * **E1 — the 49% does not bound a self-dealer on the default path.** After a self-inflicted pre-Final default the coalition
-//!   recoups the demanders' share `D·(1 − β_d) = 49` AND the bounty `min(a·K, K − D) = 490`: 539 of the 1,000 collected, so its net
-//!   loss is 461 = 46.1% of the collected amount, below ADR-0032's "at least 51%". Direct and post-Final paths lose exactly 51%.
+//! * **The default-before-conviction rule (F-C4R4-15, integration `323ea161a`).** One reporter pool per claim: the bounty is the
+//!   share of what the conviction itself collected. After a self-inflicted pre-Final default the coalition recoups the demanders'
+//!   share 49 plus the bounty `⌊0.49 · 900⌋ = 441` = 490 of the 1,000 collected: every self-dealing path loses exactly 51%. (Before
+//!   F-C4R4-15 this path recouped 539, 53.9%: run econ-m2 on the pre-merge ledger.)
+//! * **The residual (I-D).** When the coalition defaults through its own Sybil demander but an HONEST outsider holds the bounty, the
+//!   honest accuser is paid 441 instead of the 490 it gets without the default: the Sybil demander keeps 49 of it.
 //! * Conservation: on every path the burn plus the payouts equal what was collected plus the fees.
 //!
 //! Nothing here changes consensus code. Interim values are not production values.
@@ -54,6 +57,9 @@ enum Path {
     AfterSelfDefault,
     /// The lie reaches Final (the producer is paid the poster's escrow); then the Sybil's sealed proof convicts post-Final.
     AfterFinal,
+    /// The Sybil demands and the producer withholds (a pre-Final default), but the Sybil never seals a proof: the HONEST outsider
+    /// holds the bounty and convicts in the default's liability horizon.
+    HonestAfterSelfDefault,
 }
 
 struct Outcome {
@@ -93,15 +99,19 @@ fn run_m0(path: Path) -> Outcome {
     let canonical = sybil_proof == honest_proof;
 
     // The Sybil seals at once (and, on the default path, demands the lying position).
-    let mut txs = vec![T::SealProof { accuser: SPAM1, claim: id, seal: proof_seal_v1(&id, &SPAM1, &sybil_proof) }];
-    if path == Path::AfterSelfDefault {
+    let sybil_seals = path != Path::HonestAfterSelfDefault;
+    let mut txs = vec![];
+    if sybil_seals {
+        txs.push(T::SealProof { accuser: SPAM1, claim: id, seal: proof_seal_v1(&id, &SPAM1, &sybil_proof) });
+    }
+    if matches!(path, Path::AfterSelfDefault | Path::HonestAfterSelfDefault) {
         txs.push(T::FileDemand { demander: SPAM1, claim: id, stage: 0, position: at.0 });
     }
     w.block(11, txs);
 
     let (seal_at, file_at) = match path {
         Path::Direct => (30, 31),
-        Path::AfterSelfDefault => {
+        Path::AfterSelfDefault | Path::HonestAfterSelfDefault => {
             let ev = w.block(31, vec![]);
             assert!(ev.iter().any(|e| matches!(e, E::ProducerDefault { claim, .. } if *claim == id)), "{ev:?}");
             assert!(matches!(w.state(&id), ClaimStateV1::Unavailable { .. }));
@@ -115,16 +125,17 @@ fn run_m0(path: Path) -> Outcome {
     };
     // The honest outsider seals (naming the claim) and files a block later — after the Sybil's filing in the same block.
     w.block(seal_at, vec![T::SealProof { accuser: OUTSIDER, claim: id, seal: proof_seal_v1(&id, &OUTSIDER, &honest_proof) }]);
-    let ev = w.block(
-        file_at,
-        vec![
-            T::FileProof { accuser: SPAM1, claim: id, proof: sybil_proof },
-            T::FileProof { accuser: OUTSIDER, claim: id, proof: honest_proof },
-        ],
-    );
+    let mut filings = vec![];
+    if sybil_seals {
+        filings.push(T::FileProof { accuser: SPAM1, claim: id, proof: sybil_proof });
+    }
+    filings.push(T::FileProof { accuser: OUTSIDER, claim: id, proof: honest_proof });
+    let ev = w.block(file_at, filings);
     assert!(convicted(&ev).is_some(), "the lie is convicted: {ev:?}");
-    assert!(ev.contains(&E::Duplicate { claim: id }), "the honest filing comes second: a duplicate, no fee: {ev:?}");
-    assert_eq!(wealth(&w, &[OUTSIDER]), honest0, "the honest verifier neither paid a fee nor was paid anything");
+    if sybil_seals {
+        assert!(ev.contains(&E::Duplicate { claim: id }), "the honest filing comes second: a duplicate, no fee: {ev:?}");
+        assert_eq!(wealth(&w, &[OUTSIDER]), honest0, "the honest verifier neither paid a fee nor was paid anything");
+    }
     // The producer lost the admission fee, the default penalty (if any) and the conviction's slash; the reward it was paid after
     // Final is in `paid`, not in its collateral.
     let collected = producer0 - w.l.bonds[&PRODUCER].collateral - 3;
@@ -138,25 +149,23 @@ fn run_m0(path: Path) -> Outcome {
     }
 }
 
-/// The closed form of the conviction loop (slash, bounty, demanders' share; fees and the reward excluded), the model's `loop_net`:
-/// direct `−K + ⌊a·K⌋`; after a self-inflicted default `−K + (D − ⌊D·β_d⌋) + min(⌊a·K⌋, K − D)`.
+/// The closed form of the conviction loop under F-C4R4-15 (slash, bounty, demanders' share; fees and the reward excluded): direct
+/// `−K + ⌊a·K⌋`; after a self-inflicted default `−K + (D − ⌊D·β_d⌋) + ⌊a·(K − D)⌋`.
 fn loop_net(k: i128, a: i128, d: i128, beta_d: i128, after_default: bool) -> i128 {
-    let bounty = k * a / 1000;
-    if after_default { -k + (d - d * beta_d / 1000) + bounty.min(k - d) } else { -k + bounty }
+    if after_default { -k + (d - d * beta_d / 1000) + ((k - d) * a / 1000).min(k - d) } else { -k + k * a / 1000 }
 }
 
-/// **PoC — capture and the E1 leak at 49%, on every self-dealing path.**
+/// **PoC — capture at 49%, on every self-dealing path; one reporter pool per claim (F-C4R4-15).**
 ///
 /// | path | coalition net | of which the loop | Sybil paid | collected | loss / collected |
 /// |---|---|---|---|---|---|
 /// | direct | −513 | −510 = −(1 − a)·K | 490 | 1,000 | 51.0% |
-/// | after a self-inflicted default | −464 | −461 = −K + 49 + 490 | 539 | 1,000 | **46.1%** (E1) |
-/// | after Final | −506 | −510, +7 reward from the poster's escrow | 490 | 1,000 | 51.0% (50.3% with the reward) |
+/// | after a self-inflicted default | −513 | −510 = −K + 49 + ⌊0.49 · 900⌋ | 490 | 1,000 | 51.0% |
+/// | after Final | −506 | −510, +7 reward from the poster's escrow | 490 | 1,000 | 51.0% |
 ///
-/// The honest verifier is paid 0 on every path. Burn + payouts = collected + the job fee 2 + the admission fee 3 (+ the reward 7,
-/// paid from the poster's escrow, after Final).
+/// The honest verifier is paid 0 on every path. Burn + payouts = collected + the job fee 2 + the admission fee 3.
 #[test]
-fn at_49_percent_a_liars_own_sybil_takes_every_bounty_and_the_default_path_recoups_more_than_49_percent() {
+fn at_49_percent_a_liars_own_sybil_takes_every_bounty_and_every_self_dealing_path_loses_51_percent() {
     let (k, a, d, beta_d) = (1_000i128, A_PERMILLE as i128, 100i128, 1_000 - A_PERMILLE as i128);
     let (admission_fee, reward, job_fee) = (3i128, 7i128, 2u64);
     for (path, closed) in [
@@ -168,15 +177,15 @@ fn at_49_percent_a_liars_own_sybil_takes_every_bounty_and_the_default_path_recou
         assert!(o.canonical, "the convicting bytes do not depend on the verifier's salt");
         assert_eq!(o.honest_paid, 0, "{path:?}: the honest verifier is paid nothing");
         assert_eq!(o.coalition_net, closed - admission_fee, "{path:?}: the coalition's net is the model's closed form");
-        assert!(o.coalition_net < 0, "{path:?}: self-dealing never pays");
         assert_eq!(o.collected, 1_000, "{path:?}: the producer lost its whole reservation (penalty + slash)");
-        // Conservation: what was collected and the fees are either burned or paid to the Sybil.
         assert_eq!(
             o.burned + o.sybil_paid,
             o.collected + job_fee + admission_fee as u64,
             "{path:?}: burn + payouts = collected + fees"
         );
+        assert_eq!(o.sybil_paid, 490, "{path:?}: one 49% pool per claim");
         let loop_loss = -(o.coalition_net + admission_fee - if path == Path::AfterFinal { reward } else { 0 });
+        assert_eq!(loop_loss, 510, "{path:?}: exactly 51% of the collected amount");
         eprintln!(
             "[ECON M0 49%] {path:?}: honest paid {}, Sybil paid {}, coalition net {}, burned {}, loss/collected {:.1}%",
             o.honest_paid,
@@ -185,19 +194,22 @@ fn at_49_percent_a_liars_own_sybil_takes_every_bounty_and_the_default_path_recou
             o.burned,
             100.0 * loop_loss as f64 / o.collected as f64
         );
-        match path {
-            Path::Direct | Path::AfterFinal => {
-                assert_eq!(o.sybil_paid, 490);
-                assert_eq!(loop_loss, 510, "{path:?}: exactly 51% of the collected amount");
-            }
-            Path::AfterSelfDefault => {
-                assert_eq!(o.sybil_paid, 539, "bounty 490 + the demanders' share 49");
-                // E1: the self-dealer recoups 53.9% of what was collected — more than ADR-0032's 49%.
-                assert_eq!(loop_loss, 461);
-                assert!(loop_loss * 1000 < 510 * o.collected as i128, "E1: the net loss is below 51% of the collected amount");
-            }
-        }
     }
+}
+
+/// **PoC — the residual dilution of an honest accuser (I-D) under F-C4R4-15.** The coalition defaults through its own Sybil demander
+/// but does not seal a proof; the honest outsider seals and convicts in the liability horizon. It is paid `⌊0.49 · 900⌋ = 441`
+/// instead of the 490 it gets on the same lie without the default; the Sybil demander keeps the default's share 49.
+#[test]
+fn after_a_self_inflicted_default_the_honest_accuser_is_paid_441_not_490() {
+    let o = run_m0(Path::HonestAfterSelfDefault);
+    assert_eq!(o.honest_paid, 441, "the honest accuser: 49% of what the conviction collected");
+    assert_eq!(o.sybil_paid, 49, "the Sybil demander: the default's share");
+    assert_eq!(o.honest_paid + o.sybil_paid, 490, "together still one 49% pool");
+    eprintln!(
+        "[ECON I-D] honest accuser after the coalition's self-default: {} (490 without it); Sybil demander {}",
+        o.honest_paid, o.sybil_paid
+    );
 }
 
 /// **PoC — on an honest claim a verifier is paid nothing at all.** Three honest OPV claims, each checked clean by an outsider, reach
