@@ -111,6 +111,7 @@ palw-tir-metal = ["misaka-palw-sdk/metal"]
 workspace = true
 
 [dev-dependencies]
+kaspa-muhash.workspace = true
 # RFC-0002 Phase F (F6): the IR class e2e writes a PALWTIR1 container from a golden program vector.
 misaka-palw-tir.workspace = true
 misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact" }

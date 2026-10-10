@@ -63,6 +63,10 @@ use kaspa_pq_validator_core::relay_fee_for_compute_mass;
 use kaspa_txscript::MLDSA87_TX_CONTEXT;
 use kaspa_utils::triggers::SingleTrigger;
 
+#[cfg(test)]
+#[path = "palw_service_public_e2e.rs"]
+mod palw_service_public_e2e;
+
 #[path = "palw_carrier_fees.rs"]
 mod palw_carrier_fees;
 
@@ -8042,10 +8046,12 @@ impl PalwPanelService {
             // ADR-0084 Decision 2: the material when it fits the transport, the claim's answer
             // envelope when it does not — decided here, by the party holding the directory, so
             // the transport is never handed what it would refuse.
-            let me = self.clone();
+            // The service owns this gossip center through FlowContext. A strong callback owner
+            // would retain the service, its model holdings and both databases after shutdown.
+            let me = std::sync::Arc::downgrade(self);
             self.flow_context
                 .palw_gossip()
-                .set_material_resolver(std::sync::Arc::new(move |claim| me.serve_material_or_answer(claim)));
+                .set_material_resolver(std::sync::Arc::new(move |claim| me.upgrade()?.serve_material_or_answer(claim)));
             // The directory this node serves from, published to the wallet-facing RPC so a
             // submitter on this host stages where this panel reads (ADR-0084 Decision 5) — and
             // CREATED here, before it is named: a submitter refuses a directory that does not
@@ -15052,9 +15058,10 @@ impl PalwPanelService {
     /// depends on. The bond is what bounds the requester (collateral, and a per-bond rate);
     /// membership would bound nothing further.
     fn opening_authorizer(self: &Arc<Self>, network_domain: Hash64) -> kaspa_p2p_flows::palw_gossip::PalwOpeningAuthorizer {
-        let me = self.clone();
+        let me = std::sync::Arc::downgrade(self);
         std::sync::Arc::new(move |request: &kaspa_p2p_flows::palw_gossip::PalwOpeningRequestV1<'_>| {
             use kaspa_p2p_flows::palw_gossip::{OPENING_REQUEST_FRESHNESS_DAA, PalwServeRefusalV1};
+            let me = me.upgrade().ok_or(PalwServeRefusalV1::NotServing)?;
             let session = me.consensus_manager.consensus().unguarded_session();
             let here = session.get_virtual_daa_score();
             if request.requested_daa.abs_diff(here) > OPENING_REQUEST_FRESHNESS_DAA {
@@ -15433,9 +15440,9 @@ impl PalwPanelService {
     /// registers neither serves nothing and refuses nobody.
     pub fn install_fp_interval_serving(self: &Arc<Self>, network_domain: Hash64) {
         self.flow_context.palw_gossip().set_opening_authorizer(self.opening_authorizer(network_domain));
-        let me = self.clone();
+        let me = std::sync::Arc::downgrade(self);
         self.flow_context.palw_gossip().set_interval_opening_resolver(std::sync::Arc::new(move |claim, index, leaf| {
-            me.open_retained_interval(claim, index, leaf)
+            me.upgrade()?.open_retained_interval(claim, index, leaf)
         }));
     }
 

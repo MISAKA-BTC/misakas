@@ -36,6 +36,8 @@ whole-rootの課金済みrootが共有FIFOから退避され再計算される�
 
 共謀者による予約人数の先取り対策として、claim共通の64-live／256-lifetime capを除き、closed replay guardを含む各bond自身のretained record 64件へ上限を移した。旧閾値を超えた新bondのsession/defaultと、小型PanelDAの公開input→own replay→conviction/defaultをV-foldで確認した。133件の関連回帰とshipping pin 361件は通過。owner数に比例する最大state／response負荷、fresh-node包含と全familyは未完。詳細は[監査記録](../../audit/g14-review-2026-10-10/implementation.md)末尾を参照。
 
+2026-10-11の追加試験では、genesis外の新規bondが通常1,000 DAA maturityを待ち、公開block 2,051件を空DBで再検証した後、実verifier service自身の読み取り／floor model replayからreservationとbinding要求を実PQ mempoolへ提出した。全Panel Validのcanonical attemptが、production templateと実block foldを経てDAA 2236でDA default、producer制裁、予約解放となり、service正常終了まで通過した。関連回帰を含む70 unique PASS、通常binary check成功、shipping 361 pin差分なし。終了を妨げた3 gossip callbackのservice強参照をWeakへ修正した。このbinding非応答1 caseは上記のfull-service未検証の一部を閉じるが、算術／binding exact conviction、全family、socket RPC、ネットワークIBD／pruned import、restart／reorg、最大profile／populationと累積scopeは残る。fixtureはtest keys／premine、skip PoW、inert EVM、休眠fenceのtest armingを使い、shipping activation validatorは拒否を維持する。範囲と生logは監査記録末尾を参照。
+
 ## 統合ブランチ
 
 `claude/g14-public-prosecution-integration-9bee39`（origin）。

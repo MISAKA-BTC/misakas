@@ -486,7 +486,7 @@ kind-3／kind-4はpublic-filer fence前にこの追加proofを明示的に拒否
 
 nodeはcanonical input admissionの失敗でも、認証済みaccepted FP payloadをPending bootstrapとして保持し、公開bindingのreservation／demandへ進める。保持はaccepted jobの認証直後、小さいinput用host ticketで行い、backendのceiling context導出やfull replayのメモリ予約より前に置く。full replayのメモリ待ちだけで直接証明を止めない。canonical Pendingは入力ids未保持でもreplay retry対象へ残し、メモリが使えるようになれば正しいjobの独立replayへ進める。bindingを得たらproducerのprompt idsを要求せず、公開jobとbindingからkind-4 reporter filingへ進む。binding非応答は既存`ProducerWithholding`に進む。ordinary V3／V4 canonical jobを対象とし、PublicDA／PanelDAを認める。prefix/eval/tensor-tail等の別job意味論をこのproofへ混ぜない。
 
-G14全域は未達。最大contextのinput session予算、恒久pruneされたaccepted FP jobの取得、prefix/state等のbootstrap、全familyの正規eligibility、checkpoint/trace局所化、fresh-node full-service／包含／restart／IBD／reorg、最大population/profileの実測RAM・期限、累積scopeは残る。登録モデル保有を前提とするADR-0177 D7と、activationのfail-closed方針を維持する。
+G14全域は未達。この時点では最大contextのinput session予算、恒久pruneされたaccepted FP jobの取得、prefix/state等のbootstrap、全familyの正規eligibility、checkpoint/trace局所化、fresh-node full-service／包含／restart／IBD／reorg、最大population/profileの実測RAM・期限、累積scopeが残る。登録モデル保有を前提とするADR-0177 D7と、activationのfail-closed方針を維持する。後続のfresh service試験は末尾に範囲を限定して記録する。
 
 heavy課金は現行のonce-per-claimを引き継ぐ。ソース上、whole-root memoは8 entryのFIFOであり、より多い小promptのclaimを交互に提出すると退避済みrootを再計算し得る。claim集合の課金済みflagだけではその実workを束縛しない。今回の単独claimのroot判定PASSを、多claim下の実CPU上限又はproof spamへの期限内包含の証明と扱わない。この予算／memo退避の反例を実際のblockで検証して閉じることは、次の残課題である。
 
@@ -551,3 +551,33 @@ priority queue（reporterとpublic filerが提出するcourt queue）とcommon c
 初回compileはfixtureのsampling seedへ整数を渡して失敗し、正しい32-byte arrayへ修正した。[初回compile log](evidence/carrier-rent-node-initial.log)。初回のclock試験は、testnet-12のmodel-lines clockもrent徴収を有効にすることを見落とし、certification rentだけをoffにした期待がFAILした。fixtureでmodel-linesをoffにして対象clockを隔離し、productionのOR条件やburn価格を緩めていない。[初回clock試験](evidence/carrier-rent-node-fence-initial.log)。最終PASSだけを計上した。
 
 最終sourceのshipping repinとfresh harvest再読込はexit 0、**361 ok・差分なし**。[repin](evidence/carrier-rent-repin-final.log)、[harvest tests](evidence/carrier-rent-repin-harvest-tests.log)、[harvest lib](evidence/carrier-rent-repin-harvest-lib.log)、[再読込](evidence/carrier-rent-repin-replay-final.log)。価格定数、consensus source、rooted state、wire、activation height、shipping pinを変更していない。G14全域は引き続き未達で、ADR-0177 D7の登録モデル保有前提を維持する。
+
+## 新規公開bondとfresh DBから実serviceでDA不応答を追及する（2026-10-11）
+
+`11bead78a`を基点に、`palw_service_public_e2e::fresh_public_bond_service_carries_reserved_da_to_objective_default`を追加した。genesis外の9番目のkeyを、実ML-DSA-87のbond登録署名とoperator possession署名、実collateral outputを持つcarrierで登録する。登録済みDAAが0より大きいことを公開APIで確認し、presetの1,000 DAA maturityを短縮せず待つ。capable classesは空で、このverifierは対象claimのseatではない。全assigned Panelは誤ったexecution/output/trace rootsを持つfloor attemptへ実Valid署名し、実quorum assemblerとfunded licence carrierを通す。
+
+新しい空DBへ公開genesis UTXOをimportし、履歴2,051 blockを実`validate_and_insert_block`で再検証する。DAA 1025のlicense状態と外部candidateを公開APIで確認した後、旧DB／processorsを終了する。producerのcapture、state file、artifact、evidence-providerを新DB又はverifierへ渡さない。verifierはADR-0177 D7どおりbuiltin floorの正しい登録モデルを独立に再実行する。`PalwPanelService`の実`AsyncService::start`、`FlowContext`、PQ設定を持つ`MiningManager`、通常のcarrier signer／submitterとproduction block templateを使用する。controller book／queueへの試験注入は行わない。予約とbindingのDA要求を、観測したmempoolだけでなく対象claim／reserverを照合した実block bodyで確認する。
+
+この試験はraw block historyのfresh validationと直接`ConsensusApi`読み取りを使用する。P2P peer、socket RPC、ネットワークIBD orchestration、pruned-state importではない。test-only keys／premine、skip PoW、inert EVM、未有効public-filer fenceをfixture内で0に置く例外がある。fenceを置く前のpreset validationが成功し、置いた後のshipping activation validatorは拒否することをassertする。通常のregistration／collateral／court windowsは維持する。node lib-testと通常binaryはdefault featureでEVMを含めてcompileするが、このfixtureのEVMは実行しない。
+
+誤ったrootsはDA経路を起動するsynthetic commitmentであり、producerにモデル計算の特定faultを注入・局所化した試験ではない。登録済みfloor modelのown replayは実行するが、bindingを返さないproducerの`ProducerWithholding`／`DaDefault`を対象とする。算術不正又はbinding不正のexact convictionと区別する。全familyの通常admission、最大context／population、開示されたfaultのreporter commit/reveal、全Panelのfalse-Valid制裁、restart／reorg／pruned IBD、累積scopeと64要素hiding tileの受入条件は残る。
+
+初回は試験用key fileの0644 permissionsにより既存seed guardがserviceを無効化し、419.59秒でFAILした。fixtureを0600へ直し、既存key readerによるpreflightを追加した。production guardを緩めていない。[初回key log](evidence/service-public-key-initial.log)。次の実行はDA defaultへ到達したが、mempoolの間欠観測から作った包含counterが採掘loop中のcarrierを取りこぼした。実block bodyの検査へ直した。さらに終了時の`DbLifetime`が4 strong refsを検出してpanicした。[包含／終了失敗log](evidence/service-public-inclusion-cycle-initial.log)。
+
+後者はproductionの所有関係の不具合も示した。serviceが`FlowContext`経由で所有するgossip centerのmaterial resolver、opening authorizer、interval opening resolverがservice自身の`Arc`を保持し、model holdingsと両DBが終了後も残る。3 callbackを`Weak` captureへ変更し、live ownerへのupgradeに成功した時だけ既存の認証・scope検査／回答を実行する。ownerが失われたauthorizerは`NotServing`、resolverは`None`を返す。試験は正常exitをjoinしてからservice親をdropし、gossipの`FlowContext`を保持したままserviceのWeakがupgradeできないこととexpired authorizerの拒否を確認する。service親が保持される間のstop後の回答停止や、最大profileの実測RAMをこの検査から主張しない。
+
+最終V-node試験は **1 PASS、504.08秒**。reservationはDAA 1025、binding要求は1034で包含され、期限2235の後、2236で客観的DA defaultへ到達した。service開始後のblock bodyに対象claimの予約と要求を含む3 lifecycle object（別claimの予約を1本含む）がある。公開APIから`Voided(ProducerWithholding)`、producer宛ての正額の`DaDefault`制裁消費、対象reservationの解放を確認し、正常start／exitのjoinとcallback owner解放まで成功した。[最終node log](evidence/service-public-node-final.log)。
+
+| 最終sourceの検証 | 結果 |
+| --- | --- |
+| `palw_service_public_e2e` | **1 V-node PASS**。fresh DB／ordinary mature bond／実serviceとmempool・template・block fold・default・正常終了 |
+| `palw_fraud_filer` | **20 V-unit PASS** |
+| `reporter_filer::tests` | **21 V-unit PASS** |
+| `accepted_objects_walk_tests` | **7 V-unit PASS** |
+| `palw_carrier_fees` | **5 V-unit PASS** |
+| `palw_fp_seat::tests` | **16 V-unit PASS**。requestの署名と認証の回帰 |
+| `cargo check -p kaspad --bin kaspad --locked` | **成功**。通常default featureのnode binary |
+
+合計 **70 unique PASS**。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`、default featureで最終sourceを`cargo test -p kaspad --lib palw_service_public_e2e --locked --no-run`によりbuildした同じ`kaspad_lib-a562e45711087c1e`を各filterで実行した。既存unused/dead-code警告は残る。[build](evidence/service-public-build-final.log)、[filer](evidence/service-public-filer-final.log)、[reporter](evidence/service-public-reporter-final.log)、[reader](evidence/service-public-reader-final.log)、[carrier fees](evidence/service-public-fees-final.log)、[FP認証](evidence/service-public-fp-auth-final.log)、[binary check](evidence/service-public-binary-final.log)。
+
+最終sourceのfresh shipping harvestと再読込はexit 0、**361 ok・差分なし**。[repin](evidence/service-public-repin-final.log)、[harvest tests](evidence/service-public-repin-harvest-tests.log)、[harvest lib](evidence/service-public-repin-harvest-lib.log)、[再読込](evidence/service-public-repin-replay-final.log)。consensus source、rooted state、wire、activation height、shipping pinを変更していない。G14全域は未達だが、上記floor canonical attemptのbinding不応答1 caseについては、fresh public verifierの実serviceから包含・終局・正常終了までの空白を閉じた。
