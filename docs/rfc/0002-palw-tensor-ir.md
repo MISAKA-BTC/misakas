@@ -3194,3 +3194,54 @@ Gather case; it is not all-feature real-node or real-checkpoint acceptance. RPC
 transport/retention, proof pre-emption seals, aggregate load/honest liveness,
 execution Final, checkpoint fidelity/complete tasks, A6/A8 and economics remain
 open. The shipping fences stay dormant; RFC02 completion is not established.
+
+
+### §14.28 — Versioned local replay budgets over the frozen flat scope (2026-10-11)
+
+`flat_replay6::FlatReplayEnvelopeV6` is a new, read-only resource projection over
+the independently checked flat-v5 scope. Its new v6 domain binds the unchanged
+v5 scope root. No existing v3 statement, v5 resource serialization/root, court
+profile, route discriminant or shipping fence is reinterpreted. The native
+`flat_model_vector_replay_envelope_v6` read API derives it from the authenticated
+stored candidate view; the local verifier independently rederives all fields.
+
+The registered-model replay adapter checks acquired dtype, shape and element
+count against the program declaration before canonical-value scanning or full
+commitment hashing, even if a substituted tensor has the supplied parameter
+root. The acquisition provider must separately cap its own allocation/transport
+before constructing and returning a Tensor.
+
+The projection reports reference tensor **payload**, separately from artifact
+storage: every `Tensor.data` value is an i128 even for i8 storage. It derives
+maximum position payload, largest operand payload and retained history-row
+payload from bounded shapes and actual layer occurrences, without allocating
+weights, tensors, trees or position arrays. It prices full v3 acquired-parameter
+commitment hashing, both v3/flat node hashing (including earlier sub-64 H and
+filing trees), node reads and bounded hash localization replies. Each public
+provider call reserves a full ten-KiB native response allowance, including
+missing or cached responses; this is a reservation, not measured wire bytes.
+Other transports must enforce that carrier bound before parsing.
+
+`FlatReplaySessionV6` carries chosen local ceilings across DA responses. Before
+model acquisition or replay it verifies the entire derived envelope and the
+class extent, checks tensor payload ceilings and reserves one whole worst-case
+replay's parameter/trace hash allowance. A withheld or inconsistent attempt
+still spends that allowance. Provider calls spend session-wide node/hash/read
+byte quotas before delegation. Attempt/hash/read exhaustion returns an explicit
+limit result, never a clean verdict or a producer conviction. Cached reads and
+repeated requests cannot reset the same session's counters. The native late-leaf
+trial uses this path from independently derived node resources to a successful
+court and payout replay.
+
+These are **local verifier limits**, not a new source of economic rights or
+network admission. A caller starting a new local session must pay/account for
+that work separately. The existing unbounded v5 checker remains available as
+a lower-level API. The payload quantities are not peak allocator memory: model
+residency, position copies, transient evaluator/sort buffers and allocator
+capacity still require complete accounting. They also do not prove wall-clock
+or CPU maxima, metadata/prompt/path-verification hash costs, RPC/retention costs,
+whole-job deadline feasibility or aggregate per-block/per-bond/network load.
+These remaining quantities must join the shared complete resource vector and
+its consensus admission before practical or reward acceptance. Proof pre-emption
+(including equivalent proof encodings), real checkpoint/task/fidelity acceptance,
+execution Final, A6/A8 and the other full RFC02 conditions stay open.

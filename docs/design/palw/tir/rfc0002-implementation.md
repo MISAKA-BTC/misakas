@@ -21,6 +21,7 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | Flat-v5 typed node component | Explicit dormant inner 31/32 candidate statements bind the independently derived terminal scope; court folds recheck it, use shared block budgets and share original collateral/eight-statement catalogs with v2 | General public acquisition/localization, proof pre-emption seals, complete execution/checker/DA/network resource vector and execution Final; component tests are not full checkpoint/G14 acceptance |
 | Flat-v5 native public acquisition | Dormant inner 33/34/35 fetch authenticated node/hash units into public read-API state; bounded service/default, original collateral and four requester slots shared with v2 | Deployed RPC/transport, retention/pruning, whole-job acquisition/deadline guarantees, proof pre-emption seals, complete shared resources/DA/network load and execution Final; no full real-checkpoint/privacy/liveness acceptance |
 | Flat-v5 streamed detector | Generic exact replay consumes public node/hash paths and acquired registered weights; all 25 primitive, state/history, encoder and decode synthetic trials; the native late-leaf case now uses the generic detector | Shared complete verifier/retry/hash/delivery accounting, optimized acquisition/localization, deadlines/honest liveness, all-feature real-node cases and real-checkpoint/full-task execution Final |
+| Flat replay v6 local session budget | New projection binds unchanged v5 scope; native read API and verifier independently derive i128 tensor payload, parameter/trace hash and response bounds; one session charges retries and cached reads | Full peak memory/CPU/metadata/transport/retention accounting, shared consensus admission and per-block/per-bond/network aggregate enforcement, real-size deadline/liveness evidence |
 | Real models and coverage | Dated census reports exist; fixture/structural passes are not full-task passes | Revision/task/context/storage/arithmetic/plan records, real sizes, complete modalities via RFC03, independent Final references, A6 and A8 denominators/confidence/residuals |
 
 The source review names dense baselines, MoE/MXFP4, GDN/KDA with unequal head counts, sparse indexers,
@@ -1856,3 +1857,38 @@ position copy and replay after each demand must still be priced in the complete
 resource vector and checked at real sizes. Whole-job DA/transport/retention and
 deadline/honest-liveness bounds, proof pre-emption seals, execution Final and the
 remaining full RFC02 acceptance rows stay open. No shipping fence is armed.
+
+
+## Verified increment — local replay resource envelope/session v6, 2026-10-11
+
+Added `flat_replay6`: a separate projection anchored to the unchanged v5 scope.
+Native read API and verifier independently derive reference i128 position/operand/
+history payload, acquired-parameter and trace/tree hash allowances, node/hash
+reads and ten-KiB native reply reservations. `FlatReplaySessionV6` preserves chosen
+local tensor/hash/read/attempt ceilings across replies, charges withheld or
+inconsistent retries and cached calls, and stops before delegation beyond quotas.
+Limits return an explicit result, never a clean verdict or a conviction.
+
+The shared registered-model replay adapter now refuses acquired dtype/shape/count
+substitution before canonical-value scanning and hashing, even with the substituted
+tensor's supplied commitment. The provider remains responsible for its own bounded
+acquisition allocation/transport. Seven new tests exercise these guards and
+independently compare actual primitive/state/history payloads with the projection.
+The late-leaf actual-node trial obtains the native envelope, retains one session
+through DA replies, checks reservations and convicts/redeems with independent replay.
+
+**77 distinct tests pass:** 51 related kernel, one legacy descent, 12 core wire/
+identity and 13 actual-node model-conformance tests. Production consensus-core
+compilation, formatting and diff checks pass. Compiler caching alone is disabled
+with `CARGO_INCREMENTAL=0`; arithmetic, profiles, stack and network policy are
+unchanged. Exact commands, logs, source/binary hashes and build provenance are
+in the [verdict](evidence/rfc02-flat-replay-v6-verdict.json). The final native run
+was repeated after the metadata guard changed; earlier runs are not added to the
+count. Core codec tests cover unchanged wire/identity code, not that replay guard.
+
+These are local budget and synthetic/node component results. Payload is not peak
+allocator memory; complete CPU, metadata/prompt/path hashing, transport/retention,
+consensus and aggregate load accounting, whole-job deadlines/honest liveness,
+equivalent-proof pre-emption, checkpoint fidelity/tasks/performance, execution
+Final and the other full RFC02 requirements remain open. Historical scope and
+statement roots, route grammars and shipping fences stay unchanged.

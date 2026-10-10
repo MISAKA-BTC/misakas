@@ -1364,6 +1364,23 @@ async fn flat_hash_da_node_fresh_public_reads_localize_late_leaf_and_convict_wit
     let view = net.api().unwrap().flat_model_vector_view_v3(&vector).unwrap();
     let job = view.trace.job.inline_prompt.as_ref().unwrap();
     let max = flat_material_bounds_v5(DType::I8, &[2048]).unwrap().localization_replies + 1;
+    use misaka_palw_kernel::flat_replay6::*;
+    assert_eq!(FLAT_REPLAY_REPLY_BYTES_V6, FLAT_VECTOR_ANSWER_MAX_BYTES_V3 as u128);
+    let envelope = net.api().unwrap().flat_model_vector_replay_envelope_v6(&vector).unwrap();
+    assert_eq!(envelope.base_scope, view.scope.root());
+    let attempts = (max + 1) as u32;
+    let limits = FlatReplayLimitsV6 {
+        position_tensor_bytes: envelope.position_tensor_bytes,
+        operand_tensor_bytes: envelope.largest_operand_tensor_bytes,
+        history_tensor_bytes: envelope.history_rows_tensor_bytes,
+        parameter_hash_bytes: envelope.parameter_hash_bytes_per_attempt * attempts as u128,
+        trace_hash_bytes: envelope.trace_hash_bytes_per_attempt * attempts as u128,
+        node_reads: envelope.node_reads_per_attempt * attempts as u128,
+        hash_reads: envelope.hash_reads_per_attempt * attempts as u128,
+        reply_bytes: envelope.reply_bytes_per_attempt * attempts as u128,
+        attempts,
+    };
+    let mut session = FlatReplaySessionV6::new(envelope.clone(), limits);
     let mut queried = Vec::new();
     let mut terminal = None;
     for _ in 0..=max {
@@ -1375,10 +1392,16 @@ async fn flat_hash_da_node_fresh_public_reads_localize_late_leaf_and_convict_wit
                 let unit = FlatVectorUnitV3 { position: u.position, occurrence: u.occurrence, node: u.node, leaf: u.leaf };
                 decode_flat_vector_answer_v3(&api.flat_vector_public_answer_v3(&vector, &unit)?).ok()
             };
-            check_flat_claim_v5(&view.context(), &PublicChain { read: &read }, &|i, l| f.params.tensors.get(&(i, l)).cloned(), job)
+            session.check(
+                &view.context(),
+                &view.scope,
+                &PublicChain { read: &read },
+                &|i, l| f.params.tensors.get(&(i, l)).cloned(),
+                job,
+            )
         };
         match finding {
-            FlatFindingV5::Demand(u) => {
+            FlatReplayResultV6::Finding(FlatFindingV5::Demand(u)) => {
                 assert_eq!((u.position, u.occurrence, u.node), (0, 0, 0));
                 let unit = FlatVectorUnitV3 { position: u.position, occurrence: u.occurrence, node: u.node, leaf: u.leaf };
                 let demand = ask_flat_vector(&mut net, vector, 7, 0, &unit).await.unwrap();
@@ -1389,13 +1412,25 @@ async fn flat_hash_da_node_fresh_public_reads_localize_late_leaf_and_convict_wit
                 assert!(answer.authenticates(&api.flat_vector_demand_v3(&demand).unwrap()));
                 queried.push(unit);
             }
-            FlatFindingV5::Fault(fault) => {
+            FlatReplayResultV6::Finding(FlatFindingV5::Fault(fault)) => {
                 terminal = Some(fault);
                 break;
             }
             other => panic!("bad relation did not yield a filing: {other:?}"),
         }
     }
+    assert!(session.attempts() > 1 && session.attempts() <= attempts);
+    assert_eq!(
+        session.reserved_hash_bytes(),
+        (
+            envelope.parameter_hash_bytes_per_attempt * session.attempts() as u128,
+            envelope.trace_hash_bytes_per_attempt * session.attempts() as u128
+        )
+    );
+    let (nodes, hashes, bytes) = session.public_reads();
+    assert!(nodes <= envelope.node_reads_per_attempt * attempts as u128);
+    assert!(hashes <= envelope.hash_reads_per_attempt * attempts as u128);
+    assert!(bytes <= envelope.reply_bytes_per_attempt * attempts as u128);
     let fault = terminal.expect("generic verifier localized a late leaf within the bound");
     match &fault {
         misaka_palw_kernel::flat_court5::FlatFaultV5::Leaf(f) => assert_eq!(f.leaf.index, 1900 / 64),

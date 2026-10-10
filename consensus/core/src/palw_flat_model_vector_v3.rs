@@ -156,6 +156,15 @@ impl PalwKernelRouteStateV1 {
         let row: FlatModelVectorRowV3 = self.aux_row(FLAT_MODEL_VECTOR_TABLE_V3, &borsh::to_vec(id).ok()?)?;
         (row.header.id() == *id).then_some(row)
     }
+    /// Read-only v6 replay projection over the authenticated, unchanged v5 scope.
+    /// This does not grant an execution Final or enforce aggregate network limits.
+    pub fn flat_model_vector_replay_envelope_v6(
+        &self,
+        id: &Hash64,
+    ) -> Result<misaka_palw_kernel::flat_replay6::FlatReplayEnvelopeV6, String> {
+        let v = self.flat_model_vector_view_v3(id)?;
+        misaka_palw_kernel::flat_replay6::flat_replay_envelope_v6(&v.trace.program, &v.scope, v.trace.encoder.as_ref())
+    }
     /// Every court rebuilds the exact typed context and independently checks its
     /// persisted resource ceilings. No new scope can weaken an earlier admission.
     pub fn flat_model_vector_view_v3(&self, id: &Hash64) -> Result<FlatModelVectorViewV3, String> {

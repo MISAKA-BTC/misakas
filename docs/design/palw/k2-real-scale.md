@@ -892,3 +892,22 @@ binding, decode and bad acquisition/material. These are synthetic trials.
 Whole-job resource/retry/transport/retention and deadline proofs, proof pre-emption,
 real checkpoint fidelity/performance/tasks and execution Final remain open.
 See RFC02 §14.27; this is not full RFC02 or G14 acceptance.
+
+
+### Local replay resource/session v6 component — 2026-10-11
+
+A new `flat_replay6` projection anchors the unchanged v5 scope and prices i128
+reference tensor payload, acquired-parameter/trace hashing, public node/hash
+reads and native reply reservations. The native read API and retained local
+session independently derive/check it. Retry/hash/read quotas include cached
+and withheld responses. Acquired tensor metadata now has to match the program
+before full canonical-value scanning and commitment hashing.
+
+The [component verdict](tir/evidence/rfc02-flat-replay-v6-verdict.json) records
+77 distinct passes: 51 related kernel, one legacy descent, 12 core codec/identity
+and 13 native-node tests, plus production compilation. Seven new tests and the
+updated native late-leaf trial cover budget refusal, replay/resource forgery,
+actual tensor payloads and acquired tensor substitution. RFC02 §14.28 separates
+these local quotas from peak memory/CPU, full shared/aggregate consensus resource
+limits, transport/retention, deadlines, economic rights and execution Final.
+No shipping fence is changed and full RFC02/G14 acceptance remains unproven.

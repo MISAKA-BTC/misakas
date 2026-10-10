@@ -72,6 +72,7 @@ pub(crate) fn replay_values_v1(
         None
     };
     struct RegisteredModel<'a> {
+        program: &'a misaka_palw_tir::program::TirProgramV1,
         params: &'a crate::trace::ParamCommitmentsV1,
         source: &'a dyn Fn(u16, Option<u16>) -> Option<Tensor>,
         job_inputs: Option<(u16, Tensor, Tensor)>,
@@ -88,6 +89,16 @@ pub(crate) fn replay_values_v1(
                 }
             }
             let t = (self.source)(index, layer)?;
+            let declared = self.program.params.get(index as usize)?;
+            // Resource envelopes price declared shapes and storage. Refuse a
+            // substituted tensor before walking its values or hashing it. The
+            // acquisition provider must separately cap allocation/transport.
+            let shape: Vec<_> = declared.shape.iter().map(|d| *d as usize).collect();
+            let len = crate::merkle3::LayoutV3::try_of(&shape).map(|l| l.len);
+            if t.dtype != declared.dtype || t.shape != shape || len != Some(t.data.len() as u64) {
+                *self.error.borrow_mut() = Some(format!("param {index}/{layer:?} metadata differs from its program declaration"));
+                return None;
+            }
             if !crate::verify::canonical_tensor_v1(&t)
                 || self.params.by_instance.get(&(index, layer)) != Some(&crate::merkle3::tensor_commitment_v3(&t))
             {
@@ -97,7 +108,7 @@ pub(crate) fn replay_values_v1(
             Some(t)
         }
     }
-    let registered = RegisteredModel { params: c.params, source: artifact, job_inputs, error: Default::default() };
+    let registered = RegisteredModel { program: c.program, params: c.params, source: artifact, job_inputs, error: Default::default() };
     let fed = if c.encoder.is_some() { &[0u32][..] } else { tokens };
     let end = through.map_or(fed.len(), |p| (p as usize).saturating_add(1).min(fed.len()));
     let result = crate::trace::trace_streaming_v1(c.program, &registered, &fed[..end], visit);
