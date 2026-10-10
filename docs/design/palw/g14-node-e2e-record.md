@@ -609,6 +609,14 @@ route and OPV at or below it; fork-id probe arm; A2U row; kernel ledger table 27
 * **O2.** A pre-Final default collects only its burned part; the demanders' share stays reserved on the producer's bond. A conviction
   inside the horizon slashes it into the one pool `⌊49 % × everything collected⌋` — ECON's measured case now pays the honest
   accuser **490** (was 441) and the Sybil demander 0; with no conviction the share is paid to the demanders at the horizon.
+* **C9 (ECON round 4, §5e).** The interim fee is `F = F_min + ⌈r_w · S_pool / (q·m·N)⌉` = 0.86 + 0.50 = **1.36 BILI**
+  (`check_fee_with_stake_capital_v1`; every input POLICY); core `palw_verifier_pay_c9_…` shows an honest watcher's books ≥ 0 over a
+  fault-free window at any stake share, and in the red at `F = F_min`.
+* **S3/S4 (ECON §4.4, F-ECON-3).** An opt-in beacon-source seal (`opt_in_beacon_source_v1`, consumer-called until an object carries
+  it) reserves `d_src − d` beside the 1-BILI race seal (interim `d_src = d*` = 28.6 BILI), returned at the reveal, forfeited with the
+  seal; it feeds exactly ONE attempt (a second opt-in is refused) and a class's beacon-source seals feed at most `N_max` = 2 open
+  attempts. `beacon_source_seals_for_attempt_v1` lists only an attempt's opted-in seals; a race seal is no attempt's source. OPVB's
+  v3 reader must switch to it at integration (CODE). Kernel `s3_s4_one_deposit_buys_at_most_one_attempts_worth_of_veto`.
 * Tests: kernel `tests/verifier_pay.rs` (the measured case, the horizon payout, C4R4's F-C4R4-15 coalition ≤ 49 %, the fee escrow and
   attestation with exact conservation, pay on fate and drawn sealers first); core fence pin. **Not wired:** the draw (OPVB's v3
   `ClaimVerification` beacon and the watcher pool) and the attestation object (an inner kind needs an allocation) — the node injects

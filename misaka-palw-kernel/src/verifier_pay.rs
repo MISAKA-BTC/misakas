@@ -35,6 +35,7 @@ use crate::settle::SettlementKindV1;
 pub const VERIFIER_PAY_FEE_ESCROW_V1: u8 = 0;
 pub const VERIFIER_PAY_DRAW_V1: u8 = 1;
 pub const VERIFIER_PAY_HELD_SHARE_V1: u8 = 2;
+pub const VERIFIER_PAY_BEACON_SOURCE_V1: u8 = 3;
 
 /// **The verifier-pay terms** (POLICY, interim and unapproved). Consumer-injected, not part of the state or its root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -47,6 +48,21 @@ pub struct VerifierPayPolicyV1 {
     pub slots: u8,
     /// `B_cap = m·G`: what the drawn sealers of a convicting proof share, first, out of the bounty.
     pub bounty_cap: u64,
+    /// `d_src = d*` (ECON §4.4, S3): the deposit of an opt-in beacon-source seal, the only kind of seal that can veto a beacon.
+    pub source_deposit: u64,
+    /// `N_max` (ECON §4.4, S4): the open attempts of one class beacon-source seals may feed at once.
+    pub max_open_attempts_per_class: u8,
+}
+
+/// **C9 (ECON §5e): the check fee pays the watcher stake's capital cost too** — `F = F_min + ⌈r_w · S_pool / (q·m·N)⌉`, every input
+/// POLICY: `f_min` the per-check cost floor (check, fetch, carrier, demand burn, acquisition share), `r_w_ppm` the stake's capital
+/// cost per epoch (parts per million), `s_pool` the watcher pool's stake, `q_ppm` the checked share of claims, `m` the slots per
+/// checked claim, `n` the claims per epoch. A fee of exactly `f_min` loses money in a fault-free period; this one does not.
+pub fn check_fee_with_stake_capital_v1(f_min: u64, r_w_ppm: u64, s_pool: u64, q_ppm: u64, m: u64, n: u64) -> u64 {
+    let draws_ppm = (q_ppm as u128) * (m as u128) * (n as u128);
+    let capital = (r_w_ppm as u128) * (s_pool as u128);
+    let term = if draws_ppm == 0 { u128::MAX } else { capital.div_ceil(draws_ppm) };
+    (f_min as u128).saturating_add(term).min(u64::MAX as u128) as u64
 }
 
 /// **Table 27** rows (key `(kind, digest)`).
@@ -62,6 +78,19 @@ pub enum VerifierPayRowV1 {
     /// Key `(2, claim)`: a pre-Final default's demanders' share, still reserved on the producer's bond; `burned` is what the default
     /// itself collected (and burned).
     HeldShare { held: u64, burned: u64, demanders: Vec<Digest> } = 2,
+    /// Key `(3, H(job ‖ producer ‖ sealed_daa))`: an opt-in beacon-source seal (S3) bound to ONE attempt — `extra` (`d_src − d`)
+    /// reserved beside the seal's own deposit until the seal is revealed (returned) or forfeited (burned with it); kept afterwards
+    /// as the attempt's source record. `open`: the seal is still live.
+    BeaconSource { attempt: Digest, class: Digest, job: Digest, producer: Digest, sealed_daa: u64, extra: u64, open: bool } = 3,
+}
+
+/// The table-27 key of a beacon-source seal.
+pub fn beacon_source_key_v1(job: &Digest, producer: &Digest, sealed_daa: u64) -> Digest {
+    let mut bytes = Vec::with_capacity(136);
+    bytes.extend_from_slice(job);
+    bytes.extend_from_slice(producer);
+    bytes.extend_from_slice(&sealed_daa.to_le_bytes());
+    crate::hash::id(b"misaka-palw/kernel/beacon-source-seal/v1", &bytes)
 }
 
 fn settle(out: &mut Vec<LedgerEventV1>, bond: Digest, amount: u64, kind: SettlementKindV1, claim: Option<Digest>) {
@@ -324,6 +353,112 @@ impl KernelLedgerV1 {
         settle(out, producer, burn, SettlementKindV1::Burn, Some(*claim));
         out.push(LedgerEventV1::DefaultShareHeld { claim: *claim, held: taken, outcome: "paid_to_demanders" });
         held
+    }
+}
+
+impl KernelLedgerV1 {
+    /// **S3/S4: opt a live salted seal into ONE beacon attempt as a source** (the consumer's call until an object carries it): the
+    /// producer reserves `d_src − d` more, so withholding it costs `d_src = d*` (ECON parity: no cheaper than abandoning). One seal
+    /// feeds one attempt — a second opt-in of the same seal is refused — and a class's beacon-source seals feed at most `N_max` open
+    /// attempts at once. Only beacon-source seals are listed for an attempt ([`Self::beacon_source_seals_for_attempt_v1`]); the
+    /// 1-BILI job-race seal is never a source, so one race deposit vetoes nothing.
+    pub fn opt_in_beacon_source_v1(
+        &mut self,
+        producer: &Digest,
+        job: &Digest,
+        attempt: &Digest,
+    ) -> Result<Vec<LedgerEventV1>, KernelRefusalV1> {
+        const NAME: &str = "OptInBeaconSource";
+        let rule = |why: &str| KernelRefusalV1::rule(NAME, why);
+        let p = self.verifier_pay_in_force().ok_or_else(|| rule("palw_verifier_pay_v1 is not in force"))?;
+        let seal = *self.seals.get(&(*job, *producer)).ok_or_else(|| rule("no live seal of this job by this producer"))?;
+        if !self.salted_seals_from().is_some_and(|at| seal.daa >= at) {
+            return Err(rule("only a salted seal can be a beacon source"));
+        }
+        let key = (VERIFIER_PAY_BEACON_SOURCE_V1, beacon_source_key_v1(job, producer, seal.daa));
+        if self.verifier_pay.contains_key(&key) {
+            return Err(rule("this seal already feeds an attempt: one deposit, one attempt"));
+        }
+        let class = self
+            .jobs
+            .get(job)
+            .map(|j| j.class_binding_id)
+            .or_else(|| self.pipeline_jobs.get(job).map(|j| j.class_binding_id))
+            .ok_or_else(|| rule("no such job"))?;
+        let mut open: Vec<Digest> = self
+            .verifier_pay
+            .values()
+            .filter_map(|r| match r {
+                VerifierPayRowV1::BeaconSource { attempt, class: c, open: true, .. } if *c == class => Some(*attempt),
+                _ => None,
+            })
+            .collect();
+        open.sort();
+        open.dedup();
+        if !open.contains(attempt) && open.len() >= usize::from(p.max_open_attempts_per_class) {
+            return Err(rule("the class's beacon-source seals already feed the most open attempts allowed (S4)"));
+        }
+        let extra = p.source_deposit.saturating_sub(seal.deposit);
+        let b = self.bonds.get(producer).ok_or_else(|| rule("the producer bond is not registered"))?;
+        if b.free() < extra {
+            return Err(rule("the producer's free collateral does not cover the beacon-source deposit"));
+        }
+        self.bonds.get_mut(producer).expect("checked").reserved += extra;
+        let row = VerifierPayRowV1::BeaconSource {
+            attempt: *attempt,
+            class,
+            job: *job,
+            producer: *producer,
+            sealed_daa: seal.daa,
+            extra,
+            open: true,
+        };
+        self.verifier_pay.insert(key, row);
+        let mut out = Vec::new();
+        settle(&mut out, *producer, extra, SettlementKindV1::ReserveSealDeposit, None);
+        Ok(out)
+    }
+
+    /// The beacon-source extra of a seal that leaves the live set: returned at its reveal, forfeited (burned) with the seal.
+    pub(crate) fn close_beacon_source_v1(
+        &mut self,
+        job: &Digest,
+        producer: &Digest,
+        sealed_daa: u64,
+        forfeit: bool,
+        out: &mut Vec<LedgerEventV1>,
+    ) {
+        let key = (VERIFIER_PAY_BEACON_SOURCE_V1, beacon_source_key_v1(job, producer, sealed_daa));
+        let Some(VerifierPayRowV1::BeaconSource { extra, open, .. }) = self.verifier_pay.get_mut(&key) else { return };
+        if !*open {
+            return;
+        }
+        *open = false;
+        let extra = *extra;
+        let collateral = self.bonds.get(producer).map_or(0, |b| b.collateral);
+        let taken = if forfeit { extra.min(collateral) } else { 0 };
+        if let Some(b) = self.bonds.get_mut(producer) {
+            b.reserved = b.reserved.saturating_sub(extra);
+            b.collateral -= taken;
+        }
+        self.burned += taken;
+        settle(out, *producer, taken, SettlementKindV1::ForfeitSealDeposit, None);
+        settle(out, *producer, extra - taken, SettlementKindV1::ReleaseSealDeposit, None);
+        settle(out, *producer, taken, SettlementKindV1::Burn, None);
+    }
+
+    /// **The sources of one beacon attempt** past the fence: the claim beacon seals opted into `attempt` (live, revealed or
+    /// forfeited), in seal order. A job-race seal that never opted in is no attempt's source.
+    pub fn beacon_source_seals_for_attempt_v1(&self, attempt: &Digest) -> Vec<crate::ledger::ClaimBeaconSealV1> {
+        self.claim_beacon_seals_v1()
+            .into_iter()
+            .filter(|s| {
+                matches!(
+                    self.verifier_pay.get(&(VERIFIER_PAY_BEACON_SOURCE_V1, beacon_source_key_v1(&s.job, &s.producer, s.sealed_daa))),
+                    Some(VerifierPayRowV1::BeaconSource { attempt: a, .. }) if a == attempt
+                )
+            })
+            .collect()
     }
 }
 

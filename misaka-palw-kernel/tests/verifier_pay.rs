@@ -13,13 +13,21 @@ use misaka_palw_kernel::verifier_pay::VerifierPayPolicyV1;
 
 const FEE: u64 = 3;
 const CAP: u64 = 40;
+const SRC: u64 = 29;
 
 /// A world at ADR-0032's 49 % with the verifier-pay terms in force (`F` = 3, `m` = 4, `B_cap` = 40).
 fn world() -> World {
     let mut pol = policy();
     pol.accuser_reward_permille = 490;
     let mut w = World::with(pol);
-    w.l.verifier_pay_policy = Some(VerifierPayPolicyV1 { activation_daa: 0, check_fee: FEE, slots: 4, bounty_cap: CAP });
+    w.l.verifier_pay_policy = Some(VerifierPayPolicyV1 {
+        activation_daa: 0,
+        check_fee: FEE,
+        slots: 4,
+        bounty_cap: CAP,
+        source_deposit: SRC,
+        max_open_attempts_per_class: 2,
+    });
     w
 }
 
@@ -193,4 +201,57 @@ fn m49_a_conviction_pays_every_drawn_slot_and_drawn_sealers_share_the_cap_first(
     assert_eq!(w.consumer.paid(&OUTSIDER), FEE + reward, "the drawn sealer: its fee, the cap, and (earliest sealer) the rest");
     assert_eq!(w.consumer.paid(&SPAM1), 0, "the copyist filer: nothing");
     assert!(matches!(w.state(&id), ClaimStateV1::Convicted { .. }));
+}
+
+/// **ECON §4.4 S3/S4 — one deposit, many attempts (F-ECON-3), closed.** A withheld beacon-source seal costs `d_src` (the race seal
+/// `d` plus the opt-in's extra, both forfeited at expiry), feeds exactly ONE attempt (a second opt-in of the same seal is refused, so
+/// one deposit vetoes at most one attempt), and a class's beacon-source seals feed at most `N_max` open attempts. The 1-BILI job-race
+/// seal is no attempt's source.
+#[test]
+fn s3_s4_one_deposit_buys_at_most_one_attempts_worth_of_veto() {
+    use common::opv_world::{HONEST, SQUATTER};
+    use misaka_palw_kernel::ledger::claim_seal_v2;
+    let mut w = World::new_opv();
+    w.l.verifier_pay_policy = Some(VerifierPayPolicyV1 {
+        activation_daa: 0,
+        check_fee: FEE,
+        slots: 4,
+        bounty_cap: CAP,
+        source_deposit: SRC,
+        max_open_attempts_per_class: 2,
+    });
+    let d = w.l.policy.seal_deposit;
+    let (a, b, c) = ([0xA1; 64], [0xB2; 64], [0xC3; 64]);
+    let jobs: Vec<_> = (1..=3u8).map(|n| w.post_job(1 + u64::from(n), &[3, 17, 9], 3, n)).collect();
+    let seal = |n: u8| claim_seal_v2(&[n; 64], &[0x77; 64]);
+    w.block(
+        10,
+        vec![
+            T::SealClaim { producer: SQUATTER, job: jobs[0].id(), seal: seal(1) },
+            T::SealClaim { producer: HONEST, job: jobs[1].id(), seal: seal(2) },
+            T::SealClaim { producer: SPAM1, job: jobs[2].id(), seal: seal(3) },
+        ],
+    );
+    let (c0, r0) = (w.l.bonds[&SQUATTER].collateral, w.l.bonds[&SQUATTER].reserved);
+    let ev = w.l.opt_in_beacon_source_v1(&SQUATTER, &jobs[0].id(), &a).unwrap();
+    absorb(&mut w, ev);
+    assert_eq!(w.l.bonds[&SQUATTER].reserved, r0 + (SRC - d), "the opt-in reserves d_src − d beside the race seal's d");
+    let again = w.l.opt_in_beacon_source_v1(&SQUATTER, &jobs[0].id(), &b).unwrap_err();
+    assert!(again.why.contains("one deposit, one attempt"), "{again:?}");
+    // S4: the class feeds attempts A and B; a third open attempt is refused.
+    let ev = w.l.opt_in_beacon_source_v1(&HONEST, &jobs[1].id(), &b).unwrap();
+    absorb(&mut w, ev);
+    let third = w.l.opt_in_beacon_source_v1(&SPAM1, &jobs[2].id(), &c).unwrap_err();
+    assert!(third.why.contains("S4"), "{third:?}");
+    let src = |w: &World, at: &Digest| w.l.beacon_source_seals_for_attempt_v1(at).iter().map(|s| s.producer).collect::<Vec<_>>();
+    assert_eq!((src(&w, &a), src(&w, &b), src(&w, &c)), (vec![SQUATTER], vec![HONEST], vec![]), "each seal feeds one attempt");
+    // The squatter withholds: at expiry it forfeits d_src in all, and its veto stays with attempt A alone.
+    let ttl = w.l.policy.seal_ttl_daa;
+    w.block(10 + ttl + 1, vec![]);
+    assert_eq!(w.l.bonds[&SQUATTER].collateral, c0 - SRC, "the withheld beacon-source seal cost d_src");
+    assert_eq!(w.l.bonds[&SQUATTER].reserved, r0 - d, "nothing of it is left reserved");
+    assert_eq!(src(&w, &a), vec![SQUATTER], "forfeited, it vetoes attempt A");
+    assert!(!src(&w, &b).contains(&SQUATTER) && src(&w, &c).is_empty(), "and no other attempt");
+    // The race seal that never opted in (SPAM1's) is no attempt's source.
+    assert!([a, b, c].iter().all(|at| !src(&w, at).contains(&SPAM1)));
 }

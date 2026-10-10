@@ -1640,6 +1640,8 @@ impl KernelLedgerV1 {
         // releases yet), plus any verifier bounty a later conviction could pay — refusing the commit when the budget is spent, as
         // `need` above refuses it when collateral is. Until the engine exists every reward fence stays refused (arming list, CODE).
         settle(out, producer, seal_credit, SettlementKindV1::ReleaseSealDeposit, Some(id));
+        // S3 (`palw_verifier_pay_v1`): a revealed beacon-source seal returns its extra deposit.
+        self.close_beacon_source_v1(&job, &producer, sealed_daa, false, out);
         settle(out, producer, need, SettlementKindV1::ReserveClaim, Some(id));
         settle(out, producer, fee, SettlementKindV1::AdmissionFee, Some(id));
         settle(out, producer, fee, SettlementKindV1::Burn, Some(id));
@@ -2452,6 +2454,8 @@ impl KernelLedgerV1 {
     /// exclusion. Called at expiry (the tick) and, past the fence, when a re-seal replaces it (ECON fix S1).
     fn forfeit_claim_seal(&mut self, job: Digest, producer: Digest, row: SealRowV1, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
+        // S3 (`palw_verifier_pay_v1`): a forfeited beacon-source seal forfeits its extra deposit too (`d_src` in all).
+        self.close_beacon_source_v1(&job, &producer, row.daa, true, out);
         if self.salted_seals_from().is_some_and(|at| row.daa >= at) {
             self.forfeited_claim_seals.insert((job, producer, row.daa), ForfeitedSealRowV1 { seal: row.seal, forfeited_daa: daa });
         }
