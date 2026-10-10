@@ -140,6 +140,8 @@ fn the_state_root_is_versioned_canonical_and_pinned_by_a_golden_vector() {
     assert_eq!(got, GOLDEN_PARTS, "a change of the canonical encoding of any collection is a new root version");
     assert_eq!(hex(&l.root()), GOLDEN_ROOT);
     assert_eq!(l.root(), parts.root());
+    // OPV-BOOT GAP-B1a: tables 25 and 26 are empty below `palw_panel_free_v1`, so they add nothing — this golden is the int-12-era root.
+    assert!(l.claim_beacon_salts.is_empty() && l.forfeited_claim_seals.is_empty() && l.job_posters.is_empty());
     // Deterministic: the same fold twice, and a clone, agree.
     assert_eq!(small_state().root(), l.root());
     assert_eq!(l.clone().root(), l.root());
@@ -148,7 +150,9 @@ fn the_state_root_is_versioned_canonical_and_pinned_by_a_golden_vector() {
 /// The first 8 bytes of each collection's root, for `small_state()`: header, bonds, classes, pipeline classes, jobs, pipeline jobs,
 /// claims, demands, served, attested artifacts.
 const GOLDEN_PARTS: [&str; 10] = [
-    "5966cb0f285d7ec3",
+    // The header moved with the G14-R4 fixes of GAP-5 (`LedgerPolicyV1::job_fee`, `job_escrow_ttl_daa`) and F-C4R3-05
+    // (`prosecution_reserve_permille`), and OPV-BOOT's bonded seals (`seal_deposit`).
+    "09043da9ac9f16cb",
     "801771b3f093df1f",
     "365486291ac886c2",
     "589b62088e37616b",
@@ -159,8 +163,10 @@ const GOLDEN_PARTS: [&str; 10] = [
     "c46a4586dcf73c2d",
     "b7a5cb38db702693",
 ];
+/// The root moved with the G14-R4 fixes of GAP-R7, GAP-5, F-C4R3-05, the bonded seals and the served-demand bonds (the accusers' proof seals and the posters' job escrows joined the root
+/// as their own collections, and the policy in the header gained the job fee and the escrow TTL).
 const GOLDEN_ROOT: &str =
-    "d64d45545c9faceb3117b18e6293aee4be780032cbbc8a3b702f4e4af2b0d737776503766d468a42dc6cb6b13d3cf71e972ba5668b7ebc7f54b19f5573568f40";
+    "f0dcae31c547757c6ef7329d6e382be012d4618fe82f39fe232510075d0d7bef4403616fd5f481f2430b2faf424d4f13050f35cca405dd325bf1b88984359fa5";
 
 #[test]
 fn each_collection_has_its_own_root_and_the_root_covers_the_state_and_nothing_else() {
@@ -458,7 +464,7 @@ fn an_over_budget_object_is_refused_without_a_fee_and_a_later_block_still_convic
     assert!(convicted(&ev).is_none());
     assert_eq!(w.l.bonds[&SPAM1].collateral, 1000 - 4 * 5, "the spammer paid for every court run; the outsider paid nothing");
     assert_eq!(w.l.bonds[&OUTSIDER].collateral, 1000);
-    assert_eq!(w.l.burned, 20);
+    assert_eq!(w.l.burned, 20 + 2, "four fees (and the job's non-refundable posting fee: GAP-5)");
     // The budget is per block: the same proof, in the next block, convicts. The spam bought one block of delay at 4 fees.
     let ev = w.block(21, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
     assert_eq!(convicted(&ev), Some((1000, 500, false)), "{ev:?}");
@@ -531,8 +537,8 @@ fn invalid_challenge_spam_is_priced_by_free_collateral_and_bounded_by_the_block_
     assert_eq!(dismissed, 200, "1000 / 5");
     assert_eq!(priced_out, 40 * 8 - 200, "once the free collateral cannot cover the fee a filing is refused outright: no court run");
     assert_eq!(w.l.bonds[&SPAM1].collateral, 0);
-    assert_eq!(w.l.burned, 1000);
-    assert_eq!(w.consumer.book.burned, 1000, "the whole fee was burned, by explicit instructions");
+    assert_eq!(w.l.burned, 1000 + 2, "every fee (and the job's posting fee: GAP-5)");
+    assert_eq!(w.consumer.book.burned, 1000 + 2, "the whole fee was burned, by explicit instructions");
 }
 
 // ── simultaneous public challengers, duplicates, restarts ────────────────────────────────────────────────────────────────
@@ -570,7 +576,7 @@ fn simultaneous_public_challengers_convict_once_and_the_second_is_a_duplicate_wi
     assert_eq!(w.consumer.paid(&OUTSIDER), 500);
     assert_eq!(w.consumer.paid(&SPAM1), 0, "no reward for the duplicate");
     assert_eq!(w.l.bonds[&SPAM1].collateral, 1000, "and no fee: a duplicate is not a dismissal");
-    assert_eq!(w.consumer.book.slashed, 1000);
+    assert_eq!(w.consumer.book.slashed, 1000 + 2, "one slash (and the job's posting fee: GAP-5)");
     // The exact instructions of the conviction.
     assert_eq!(
         settlements(&w, 20),
@@ -669,6 +675,148 @@ fn a_direct_proof_inside_the_grace_pre_empts_final_whether_sessions_are_settled_
 
 // ── settlements are explicit ─────────────────────────────────────────────────────────────────────────────────────────────
 
+/// **OPV-BOOT's sealed-source beacon (v3) primitives.** A claim seal is BONDED: `seal_deposit` of the producer's free collateral is
+/// reserved when it seals (a re-seal keeps the one deposit and restarts the clock), returned when the claim commits over it, and
+/// FORFEITED (slashed, burned) if it expires unrevealed — withholding a sealed reveal is never free. The claim row keeps the seal's DAA
+/// (`sealed_daa`), so the beacon can order sources by their seal position after the reveal.
+#[test]
+fn a_claim_seal_is_bonded_kept_on_the_claim_row_and_forfeited_when_withheld() {
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let h = w.honest(&job, 3);
+    let (id, seal) = (h.claim.id(), misaka_palw_kernel::ledger::claim_seal_v1(&h.claim.id()));
+    let ev = w.block(5, vec![T::SealClaim { producer: PRODUCER, job: job.id(), seal }]);
+    assert!(ev.contains(&E::ClaimSealed { job: job.id(), producer: PRODUCER }), "{ev:?}");
+    assert_eq!(settlements(&w, 5), vec![S { bond: PRODUCER, amount: 1, kind: K::ReserveSealDeposit, claim: None }]);
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, 1);
+    // A re-seal keeps the one deposit; its clock restarts (the harness re-seals at the ledger's clock before the reveal).
+    w.block(6, vec![T::SealClaim { producer: PRODUCER, job: job.id(), seal }]);
+    assert_eq!((w.l.bonds[&PRODUCER].reserved, w.l.seals[&(job.id(), PRODUCER)].daa), (1, 6));
+    w.block(8, vec![h.tx, T::PanelCovered { claim: id }]);
+    assert_eq!(w.l.claims[&id].sealed_daa, 6, "the seal's position survives the reveal, on the claim row");
+    assert!(settlements(&w, 8).contains(&ix(PRODUCER, 1, K::ReleaseSealDeposit, id)), "the deposit returns at the reveal");
+    assert_eq!(w.l.bonds[&PRODUCER].reserved, 1000, "the claim's reservation alone");
+    // A seal nobody reveals expires and forfeits its deposit.
+    let job2 = w.post_job(20, &[3, 17, 9], 3, 2);
+    w.block(21, vec![T::SealClaim { producer: PRODUCER, job: job2.id(), seal: [0x5E; 64] }]);
+    let (collateral, burned) = (w.l.bonds[&PRODUCER].collateral, w.l.burned);
+    let ev = w.block(21 + 100 + 1, vec![]);
+    assert!(ev.contains(&E::SealForfeited { job: job2.id(), producer: PRODUCER, forfeited: 1 }), "{ev:?}");
+    assert_eq!((w.l.bonds[&PRODUCER].collateral, w.l.burned), (collateral - 1, burned + 1));
+    assert!(w.l.seals.is_empty());
+    assert!(w.l.forfeited_claim_seals.is_empty(), "below palw_panel_free_v1 a forfeited seal leaves no row (the historical root)");
+    // A producer with no free collateral for the deposit cannot seal.
+    w.block(130, vec![T::RegisterBond { bond: SPAM2, collateral: 0 }]);
+    let ev = w.block(131, vec![T::SealClaim { producer: SPAM2, job: job2.id(), seal: [0x5F; 64] }]);
+    assert!(refused(&ev).unwrap().contains("seal deposit"), "{ev:?}");
+}
+
+/// **A seal that lost its job to another claim is forfeited too — deliberately.** One claim per job: once another producer's claim
+/// holds the job, a rival's live seal of it can never be revealed, and it expires like a withheld one. Refunding it would make
+/// grinding free: N bonds each seal the same job (one honest output, N claim ids) and the last to act reveals the one whose id suits
+/// the sealed-source beacon — the others would come back. The forfeit prices that choice at one deposit per discarded seal; an honest
+/// producer reads the seals already on chain before it seals a job.
+#[test]
+fn a_seal_on_a_job_another_claim_took_is_forfeited_at_its_expiry() {
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    w.block(4, vec![T::SealClaim { producer: OUTSIDER, job: job.id(), seal: [0x5A; 64] }]);
+    assert_eq!(w.l.bonds[&OUTSIDER].reserved, 1, "the rival's seal holds its deposit");
+    let h = w.honest(&job, 3);
+    let id = h.claim.id();
+    w.block(8, vec![h.tx, T::PanelCovered { claim: id }]);
+    assert!(w.l.claims.contains_key(&id), "the producer's claim holds the job");
+    let ev = w.block(9, vec![T::SealClaim { producer: OUTSIDER, job: job.id(), seal: [0x5B; 64] }]);
+    assert!(refused(&ev).unwrap().contains("another claim already holds the job"), "{ev:?}");
+    assert_eq!(w.l.seals[&(job.id(), OUTSIDER)].deposit, 1, "the live seal stays, unrevealable");
+    w.block(100, vec![]);
+    let (collateral, burned) = (w.l.bonds[&OUTSIDER].collateral, w.l.burned);
+    let ev = w.block(4 + 100 + 1, vec![]);
+    assert!(ev.contains(&E::SealForfeited { job: job.id(), producer: OUTSIDER, forfeited: 1 }), "{ev:?}");
+    assert_eq!((w.l.bonds[&OUTSIDER].collateral, w.l.bonds[&OUTSIDER].reserved, w.l.burned), (collateral - 1, 0, burned + 1));
+}
+
+/// **GAP-5 (the user's ruling: user-pays escrow): a Final reward is paid out of the job's escrow, once — nothing is issued.** Every
+/// posted job reserves `claim_reward` of its poster's free collateral (`ReserveJobEscrow`) and burns `job_fee` (`JobFee` + `Burn`).
+/// The job's first Final debits the escrow (`PayJobEscrow`) and pays exactly that (`FinalReward`). A post-Final conviction frees the
+/// job but the next claim of it finalizes with no reward; an escrow no claim can use goes back to its poster after
+/// `job_escrow_ttl_daa`; a poster that cannot cover escrow + fee posts nothing; a producer answering its own job is paid its own
+/// escrow back and is down the fee. The money identity holds throughout: every payout is routed out of a debit of a real bond in the
+/// same batch (the test consumer's book refuses a `FinalReward` with no spent escrow behind it, in every ledger test).
+#[test]
+fn a_final_reward_is_paid_once_out_of_the_posters_escrow_and_nothing_is_ever_issued() {
+    use common::chain::{POSTER, POSTER_COLLATERAL};
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    assert_eq!(
+        settlements(&w, 2),
+        vec![
+            S { bond: POSTER, amount: 7, kind: K::ReserveJobEscrow, claim: None },
+            S { bond: POSTER, amount: 2, kind: K::JobFee, claim: None },
+            S { bond: POSTER, amount: 2, kind: K::Burn, claim: None },
+        ]
+    );
+    assert_eq!(w.l.job_escrows[&job.id()].amount, 7);
+    assert_eq!((w.l.bonds[&POSTER].collateral, w.l.bonds[&POSTER].reserved), (POSTER_COLLATERAL - 2, 7));
+    // A lie finalizes unprosecuted: it is paid out of the escrow, which is spent.
+    let (_, lie) = w.lying(&job, 3);
+    let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[]));
+    w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
+    assert_eq!(w.block(60, vec![]), vec![E::Final { claim: id, reward: 7 }]);
+    assert_eq!(
+        settlements(&w, 60),
+        vec![ix(POSTER, 7, K::PayJobEscrow, id), ix(PRODUCER, 7, K::FinalReward, id)],
+        "the poster pays exactly what the producer is paid"
+    );
+    assert!(w.l.job_escrows.is_empty(), "an escrow pays once");
+    assert_eq!((w.l.bonds[&POSTER].collateral, w.l.bonds[&POSTER].reserved), (POSTER_COLLATERAL - 2 - 7, 0));
+    // Convicted inside its liability horizon: the job is free again (the paid reward is not clawed back) — and a second claim of the
+    // same job finalizes with NO reward: one escrow, one reward.
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!() };
+    w.block(61, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+    assert!(w.l.claims[&id].convicted);
+    let h = w.honest(&job, 3);
+    let hid = h.claim.id();
+    w.block(70, vec![h.tx, T::PanelCovered { claim: hid }]);
+    assert_eq!(w.block(120, vec![]), vec![E::Final { claim: hid, reward: 0 }]);
+    assert!(!w.l.claims[&hid].rewarded);
+    assert_eq!((w.consumer.book.final_rewards, w.consumer.book.escrow_spent), (7, 7));
+    // An escrow no claim can use goes back after its TTL (posted 130 + 300); while a producer's seal of the job is live it waits.
+    let idle = w.post_job(130, &[3, 17, 9], 3, 2);
+    w.block(400, vec![T::SealClaim { producer: PRODUCER, job: idle.id(), seal: [0x11; 64] }]);
+    w.block(431, vec![]);
+    assert!(w.l.job_escrows.contains_key(&idle.id()), "past its TTL, but a live seal of the job keeps its escrow (until 500)");
+    w.block(501, vec![]);
+    assert!(!w.l.job_escrows.contains_key(&idle.id()), "returned once the seal expired");
+    assert_eq!(w.l.bonds[&POSTER].reserved, 0);
+    assert!(
+        w.events
+            .iter()
+            .any(|e| matches!(e, E::JobEscrowReturned { job, poster, amount: 7 } if *job == idle.id() && *poster == POSTER))
+    );
+    // A poster that cannot cover escrow + fee posts nothing (and pays nothing).
+    w.block(510, vec![T::RegisterBond { bond: POSTER, collateral: 8 }]);
+    let ev = w.block(511, vec![T::PostJob { job: KernelJobV1 { nonce: [9; 64], ..job.clone() } }]);
+    assert!(refused(&ev).unwrap().contains("escrow and fee"), "{ev:?}");
+    assert_eq!(w.l.bonds[&POSTER].collateral, 8);
+    // A self-posted job: the producer posts and answers its own job — paid its own escrow back, it is down the fee: never a gain.
+    let own = KernelJobV1 { nonce: [8; 64], ..job.clone() };
+    let before = w.l.bonds[&PRODUCER].collateral + w.consumer.paid(&PRODUCER);
+    direct(&mut w, &O::PostJob { job: own.clone() }, PRODUCER).unwrap();
+    let h = w.honest(&own, 3);
+    let hid = h.claim.id();
+    w.block(520, vec![h.tx, T::PanelCovered { claim: hid }]);
+    assert_eq!(w.block(570, vec![]), vec![E::Final { claim: hid, reward: 7 }]);
+    let after = w.l.bonds[&PRODUCER].collateral + w.consumer.paid(&PRODUCER);
+    assert_eq!(before - after, 2, "a self-posted job costs exactly its non-refundable fee");
+    // The money identity over the whole run: every payout came out of a debit, none was issued.
+    let b = &w.consumer.book;
+    let paid: u64 = b.paid.values().sum();
+    assert_eq!(b.slashed, b.routed, "every debit is routed: paid out or burned");
+    assert!(paid + b.burned <= b.slashed, "Σ payouts ≤ Σ fees + slashes + spent escrows (no source counted twice)");
+    assert_eq!(b.final_rewards, b.escrow_spent, "every Final reward is a spent escrow");
+}
+
 #[test]
 fn every_money_decision_is_an_explicit_settlement_instruction_and_nothing_is_minted_internally() {
     let mut w = World::new();
@@ -676,9 +824,10 @@ fn every_money_decision_is_an_explicit_settlement_instruction_and_nothing_is_min
     let (at, lie) = w.lying(&job, 3);
     let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[at]));
     w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
-    assert_eq!(settlements(&w, 10), vec![ix(PRODUCER, 1000, K::ReserveClaim, id)]);
-    // A demand that defaults: bond reserved, then default slash, the demander's share, no burn remainder, the bond back, the rest
-    // of the reservation released.
+    // (the claim's seal deposit returns at its reveal: OPV-BOOT's bonded seals)
+    assert_eq!(settlements(&w, 10), vec![ix(PRODUCER, 1, K::ReleaseSealDeposit, id), ix(PRODUCER, 1000, K::ReserveClaim, id)]);
+    // A demand that defaults: bond reserved, then default slash, the demander's share of it and the burned rest (a default is split
+    // like a slash, C4 F-C4R3-02), the bond back. The rest of the reservation is HELD through the default's liability horizon.
     let OutsiderFindingV1::Demand(_) = outsider(&w, id, &da) else { panic!() };
     w.block(11, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
     assert_eq!(settlements(&w, 11), vec![ix(OUTSIDER, 10, K::ReserveDemand, id)]);
@@ -687,9 +836,9 @@ fn every_money_decision_is_an_explicit_settlement_instruction_and_nothing_is_min
         settlements(&w, 31),
         vec![
             ix(PRODUCER, 100, K::SlashDefault, id),
-            ix(OUTSIDER, 100, K::DemanderShare, id),
+            ix(OUTSIDER, 50, K::DemanderShare, id),
+            ix(PRODUCER, 50, K::Burn, id),
             ix(OUTSIDER, 10, K::ReleaseDemand, id),
-            ix(PRODUCER, 900, K::ReleaseClaim, id),
         ]
     );
     // An honest claim: Final pays the reward by instruction, and the liability horizon's end releases the reservation.
@@ -700,9 +849,18 @@ fn every_money_decision_is_an_explicit_settlement_instruction_and_nothing_is_min
     w.block(151, vec![]);
     w.block(352, vec![]);
     assert_eq!(
-        settlements(&w, 101),
-        vec![ix(PRODUCER, 1000, K::ReserveClaim, hid), ix(PRODUCER, 7, K::FinalReward, hid), ix(PRODUCER, 1000, K::ReleaseClaim, hid)]
+        settlements(&w, 101).into_iter().filter(|s| s.claim == Some(hid)).collect::<Vec<_>>(),
+        vec![
+            ix(PRODUCER, 1, K::ReleaseSealDeposit, hid),
+            ix(PRODUCER, 1000, K::ReserveClaim, hid),
+            // GAP-5: the Final reward is the poster's escrow, debited and routed to the producer — never issued.
+            ix(common::chain::POSTER, 7, K::PayJobEscrow, hid),
+            ix(PRODUCER, 7, K::FinalReward, hid),
+            ix(PRODUCER, 1000, K::ReleaseClaim, hid)
+        ]
     );
+    // The defaulted claim's horizon (31 + 200) ended with no valid proof: its reservation is released, never slashed for withholding.
+    assert!(settlements(&w, 352).contains(&ix(PRODUCER, 900, K::ReleaseClaim, id)));
     // A dismissed filing's fee is slashed from the accuser's free collateral and burned.
     let job = w.post_job(400, &[3, 17, 9], 3, 3);
     let h = w.honest(&job, 3);

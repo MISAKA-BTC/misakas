@@ -15,6 +15,11 @@ use kaspa_txscript::ScriptPolicy;
 #[derive(Clone)]
 pub struct TransactionValidator {
     palw_dns_retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
+    /// **A-2 uniformity: the lifecycle kinds' owning fences** (`Params::palw_lifecycle_kind_fences_v1`). Isolation, which holds no
+    /// height, judges a kind the live testnet-12 build cannot decode as that build judges its bytes; the header context asks the kind's
+    /// own stateless rule only where this says its fence is in force at the containing block. `Default` (every fence unarmed) is the
+    /// live build's reading, and every shipped preset's.
+    palw_lifecycle_kind_fences: kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleKindFencesV1,
     max_tx_inputs: usize,
     max_tx_outputs: usize,
     max_signature_script_len: usize,
@@ -188,6 +193,7 @@ impl TransactionValidator {
     ) -> Self {
         Self {
             palw_dns_retirement: None,
+            palw_lifecycle_kind_fences: Default::default(),
             max_tx_inputs,
             max_tx_outputs,
             max_signature_script_len,
@@ -219,6 +225,15 @@ impl TransactionValidator {
             palw_fp_decode_constraint_fence: None,
             palw_fp_constraint_v2_fence: None,
         }
+    }
+
+    /// A-2 uniformity: declare the lifecycle kinds' owning fences (`Params::palw_lifecycle_kind_fences_v1`).
+    pub fn with_lifecycle_kind_fences(
+        mut self,
+        fences: kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleKindFencesV1,
+    ) -> Self {
+        self.palw_lifecycle_kind_fences = fences;
+        self
     }
 
     /// ADR-0082 D10/D11 + RFC-0001 §A.4: declare the decode-rules fence
@@ -335,6 +350,7 @@ impl TransactionValidator {
     ) -> Self {
         Self {
             palw_dns_retirement: None,
+            palw_lifecycle_kind_fences: Default::default(),
             max_tx_inputs,
             max_tx_outputs,
             max_signature_script_len,

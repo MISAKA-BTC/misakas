@@ -210,6 +210,8 @@ impl ConsensusServices {
         // RFC-0001 §A.4 (FP Job V4): the V4 job's two doors, where the ruleset carries the decode-rules
         // fence. `None` on every shipped preset, which keeps each network's transaction validity as is.
         .with_dns_retirement(params.palw_dns_retirement)
+        // A-2 uniformity: a lifecycle kind the live build cannot decode meets its own stateless rule only past its owning fence.
+        .with_lifecycle_kind_fences(params.palw_lifecycle_kind_fences_v1())
         .with_fp_decode_rules_fence(params.palw_fp_decode_rules_fence())
         // RFC-0003 §I.4.4 (the tensor claim, FP job version 10): its two doors, where the ruleset carries
         // `palw_fp_job_v5`. `None` on every shipped preset.
@@ -278,8 +280,8 @@ impl ConsensusServices {
             params.palw_single_lottery,
             is_consensus_exiting,
         )
-        // RFC-0008 v2: a proof header's `PXE2` envelope passes the shape gate only where the fence is in force at its DAA.
-        .with_palw_exec_v2(params.palw_exec_payload_v2_fence()),
+        // A-2 uniformity: a header carriage form added after the live build is read as that build reads it below its fence.
+        .with_header_forms(params.palw_header_form_fences_v1()),
         );
 
         let sync_manager = SyncManager::new(

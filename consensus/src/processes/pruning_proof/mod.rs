@@ -158,10 +158,11 @@ pub struct PruningProofManager {
     /// checked with the same rule the header pipeline uses — checking them with the fence off made a
     /// proof fail its own PoW and no new node could join by a pruned sync.
     palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    /// **RFC-0008 v2: `Params::palw_exec_payload_v2_fence`.** A proof header's `PXE2` algo-10 envelope passes the shape gate only where
-    /// the fence is in force at the header's own DAA — the gate the pipeline's header stage asks — so a proof cannot carry a `PXE2`
-    /// header a node without the fence refuses. `None` on every shipped preset ([`Self::with_palw_exec_v2`]).
-    palw_exec_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **A-2 uniformity: the header carriage forms' owning fences.** A proof is how a fresh node learns the history it will trust, and
+    /// this path runs only the shape gate, so a form whose fence is not in force at a proof header's DAA is read exactly as the live
+    /// testnet-12 build reads it (a `PFS4` receipt carriage refused for its `PFS3` magic). `Default` (every fence unarmed) until
+    /// [`Self::with_header_forms`].
+    palw_header_forms: kaspa_consensus_core::pow_layer0::PalwHeaderFormFencesV1,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -242,15 +243,15 @@ impl PruningProofManager {
             palw_heartbeat_transparent,
             palw_round_lane,
             palw_single_lottery,
-            palw_exec_v2: None,
+            palw_header_forms: Default::default(),
 
             is_consensus_exiting,
         }
     }
 
-    /// RFC-0008 v2: the EXEC payload's fence for the proof header gate (a builder, so the long constructor keeps its arity).
-    pub fn with_palw_exec_v2(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
-        self.palw_exec_v2 = fence;
+    /// The header forms' owning fences (`Params::palw_header_form_fences_v1`), for the proof header gate.
+    pub fn with_header_forms(mut self, forms: kaspa_consensus_core::pow_layer0::PalwHeaderFormFencesV1) -> Self {
+        self.palw_header_forms = forms;
         self
     }
 
@@ -323,12 +324,13 @@ impl PruningProofManager {
         let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
         // ADR-0072 SA-3: pre-fence proof headers validate under the old envelope version, which is
         // the whole point of a fence on a chain that keeps its history.
-        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_exec_at(
+        // A2U: and a carriage form added after the live build only where its fence is in force at the proof header's own DAA.
+        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_with_forms_at(
             header.pow_algo_id,
             &header.palw_commitment,
             commitment_bound,
             attempt_lane,
-            self.palw_exec_v2.is_some_and(|fence| fence.is_active(header.daa_score)),
+            |form| self.palw_header_forms.in_force_at(form, header.daa_score),
         )
         .map_err(|e| PruningImportError::PruningProofBadPalwCommitment(header.hash, level, e.to_string()))?;
         Ok(())

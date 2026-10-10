@@ -80,8 +80,10 @@ const PALW_SIGNED_REGISTRATION_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/onboardi
 pub const PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1: u64 = 100 * SOMPI_PER_KASPA;
 pub const PALW_ONBOARDING_BINDING_WINDOW_DAA_V1: u64 = 40;
 pub const PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1: u64 = 200;
-/// The challenger's share of a refuted binding's slash (permille); the rest is burned (the slash's burn at release).
-pub const PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1: u64 = 500;
+/// The challenger's share of a refuted binding's slash (permille); the rest is burned (the slash's burn at release). The PALW reporter
+/// share of ADR-0032 (49 %), the route's one rate (`PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1`).
+pub const PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1: u64 =
+    crate::palw_kernel_route_v1::PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1 as u64;
 
 /// **The message an onboarding object's signer signs**: `H(domain; network ‖ kind ‖ signer ‖ len ‖ payload)`. `payload` is the
 /// object's Borsh with its signature field left out, so the signature covers every other field.
@@ -370,13 +372,8 @@ impl PalwKernelRouteStateV1 {
                 (PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1, Vec::new())..(PALW_ONBOARDING_TABLE_ARTIFACT_BINDINGS_V1 + 1, Vec::new()),
             )
             .filter_map(|((_, key), row)| {
-                let (class, root) = borsh::from_slice::<(Hash64, Hash64)>(key).ok()?;
+                let (_, root) = borsh::from_slice::<(Hash64, Hash64)>(key).ok()?;
                 let row = borsh::from_slice::<ArtifactBindingRowV1>(row).ok()?;
-                // DA16: a binding whose artifact pair lapsed after it was bound (every provider charged) attests nothing — its bytes
-                // stopped being publicly obtainable inside its refutation horizon. (No lapse row exists below the court's fence.)
-                if self.provider_pair_lapsed_since_v1(&class, &root, row.bound_daa) {
-                    return None;
-                }
                 matches!(row.state_at(daa), ArtifactBindingStateV1::Matured | ArtifactBindingStateV1::Final).then_some(root)
             })
             .collect();
@@ -428,14 +425,7 @@ impl PalwKernelRouteStateV1 {
                 why: "the kernel class the V2 class is bound to is not registered in the route",
             };
         }
-        let row = self.artifact_binding_v1(class, &binding.kernel_param_root);
-        if row.is_some_and(|row| self.provider_pair_lapsed_since_v1(class, &binding.kernel_param_root, row.bound_daa)) {
-            return PalwOnboardingGateV1::Held {
-                code: "AVAILABILITY_REQUIRED",
-                why: "the artifact's bytes stopped being publicly obtainable inside the binding's horizon (every provider was charged): re-bind over live leases",
-            };
-        }
-        match row.map(|row| row.state_at(daa)) {
+        match self.artifact_binding_v1(class, &binding.kernel_param_root).map(|row| row.state_at(daa)) {
             Some(ArtifactBindingStateV1::Final) => {}
             Some(ArtifactBindingStateV1::Refuted) | None => {
                 return PalwOnboardingGateV1::Held {
@@ -849,8 +839,16 @@ mod tests {
         }
         let g = Hash64::from_bytes([3; 64]);
         let (now, later) = ([10u64, 20], [10u64, 20, 5_000_000]);
-        assert_eq!(palw_envelope_fork_digest_v1(g, &now, 15), palw_envelope_fork_digest_v1(g, &later, 15), "a future fence moves nothing");
-        assert_ne!(palw_envelope_fork_digest_v1(g, &now, 15), palw_envelope_fork_digest_v1(g, &now, 25), "a fence fired since signing");
+        assert_eq!(
+            palw_envelope_fork_digest_v1(g, &now, 15),
+            palw_envelope_fork_digest_v1(g, &later, 15),
+            "a future fence moves nothing"
+        );
+        assert_ne!(
+            palw_envelope_fork_digest_v1(g, &now, 15),
+            palw_envelope_fork_digest_v1(g, &now, 25),
+            "a fence fired since signing"
+        );
         assert_ne!(
             palw_envelope_fork_digest_v1(g, &now, 15),
             palw_envelope_fork_digest_v1(Hash64::from_bytes([4; 64]), &now, 15),

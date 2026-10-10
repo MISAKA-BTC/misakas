@@ -260,11 +260,9 @@ impl Cw {
             let generated = greedy(fx, &ledger, &class, &job.prompt, job.max_new_tokens as usize);
             let produced = produce(fx, &ledger, &class, job, self.net.kid(producer), generated, |_| {});
             let id = produced.claim.id();
-            seals.push((
-                producer,
-                self.net.route(producer, &K::SealClaim { producer: self.net.kid(producer), job: job.id(), seal: claim_seal_v1(&id) }),
-            ));
-            reveals.push((producer, produced.object));
+            let (seal, reveal) = seal_and_reveal(&ledger, self.net.kid(producer), &produced.object);
+            seals.push((producer, self.net.route(producer, &seal)));
+            reveals.push((producer, reveal));
             ids.push(id);
         }
         self.net.send(seals).await;
@@ -782,8 +780,8 @@ async fn g14_conformance_forged_evidence_is_refuted_withheld_evidence_defaults_a
 
 /// **Hostile evidence never panics, never passes, and is never judged for free.** A refutation with a junk opening (absurd leaf count,
 /// wrong coordinates, ragged bytes) and one naming a check that does not exist are dismissed — each charging the block's adjudication
-/// budget; five in one block: the four-adjudication test block judges four and the fifth is not charged. Evidence carrying an outcome
-/// the seed never selected, or two outcomes for one check, is a forgery: CONFORMANCE_FAILED, counted. The chain carries on.
+/// budget; five in one block: the four-adjudication test block judges two (two runs are reserved for proofs, C4 F-C4R4-10) and the
+/// rest are not charged. Evidence carrying an outcome the seed never selected, or two outcomes for one check, is a forgery: CONFORMANCE_FAILED, counted. The chain carries on.
 #[tokio::test]
 async fn g14_conformance_hostile_evidence_is_dismissed_or_failed_spends_budget_and_never_stops_the_chain() {
     kaspa_core::log::try_init_logger("warn");
@@ -819,7 +817,7 @@ async fn g14_conformance_hostile_evidence_is_dismissed_or_failed_spends_budget_a
     assert_eq!(cw.attempt(), posted, "every junk refutation is dismissed");
     let (blue, adjudications, _work): (u64, u32, u64) =
         borsh::from_slice(&cw.budget_row().expect("the budget row")).expect("a budget row decodes");
-    assert_eq!(adjudications, 4, "four junk refutations spent the four-adjudication block; the fifth found it spent");
+    assert_eq!(adjudications, 2, "junk refutations stop short of the two runs reserved for proofs (C4 F-C4R4-10)");
     assert!(blue > 0);
     cw.net.beat_to(posted.evidence.unwrap().window_end_daa + 1).await;
     assert_eq!(state(&cw).0, S::G14Eligible, "the honest evidence passed through the junk");
@@ -981,3 +979,60 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
 
 // RFC-0008 v2 (X8R): the composed run — a REAL root on this world's kernel-bound class, its slices verified through the route.
 mod exec_slices;
+/// **G14C (GAP-03): ops 231 and 212, served by a node started after the evidence was posted, carry everything the SDK's fresh
+/// verifier needs.** The attempt row, the evidence row and the program arrive as op 231 serves them, the Final facts as op 212 serves
+/// them — each op's own builder over a node that synced by IBD, through the RPC's JSON wire form (`canonical.rs`'s [`Rpc`]) — and
+/// the SDK's verifier over those bytes reaches the verdict the world's own reads reach.
+#[tokio::test]
+async fn g14_canonical_ops_231_and_212_served_by_an_ibd_node_rebuild_the_conformance_verdict() {
+    use super::canonical::{Rpc, ibd_node};
+    kaspa_core::log::try_init_logger("warn");
+    let unhex = |text: &str| {
+        let mut out = vec![0u8; text.len() / 2];
+        faster_hex::hex_decode(text.as_bytes(), &mut out).expect("the RPC serves hex");
+        out
+    };
+    let mut cw = Cw::new().await;
+    cw.commit(0x22).await;
+    cw.source_claims(2).await;
+    cw.until_locked().await;
+    let post = cw.post(|_, _| {});
+    cw.send_post(post.clone(), Some(1024)).await;
+    assert!(cw.attempt().evidence.is_some(), "the evidence is posted");
+
+    let node = ibd_node(&cw.net).await;
+    let rpc = Rpc::of(&node.chain);
+    let read = rpc.conformance(cw.v2_class);
+    assert!(read.available && read.found && read.evidence_posted, "op 231 serves the posted attempt: {read:?}");
+    let mut events: Vec<WorkFinalEventV1> = rpc
+        .finals()
+        .finals
+        .iter()
+        .filter(|f| !f.work_final_event.is_empty())
+        .map(|f| borsh::from_slice(&unhex(&f.work_final_event)).expect("a beacon event"))
+        .collect();
+    events.reverse(); // op 212 serves the newest first; the route's canonical order is the reverse
+    let bytes = |e: &[WorkFinalEventV1]| e.iter().map(|x| borsh::to_vec(x).unwrap()).collect::<Vec<_>>();
+    assert_eq!(bytes(&events), bytes(&cw.events()), "op 212's facts are the route's");
+    let reads = PublicConformanceReadsV1 {
+        attempt_row: unhex(&read.attempt_row),
+        evidence_row: Some(unhex(&read.evidence_row)),
+        events,
+        tip_daa: read.tip_daa,
+        program: unhex(&read.program),
+    };
+    assert_eq!(
+        reads.evidence_row.as_deref().map(|b| borsh::from_slice::<ConformanceEvidencePostV1>(b).unwrap()),
+        Some(post),
+        "op 231 serves the posted material"
+    );
+    let report = fresh_verify_from_reads_v1(&reads, None).expect("the SDK verifier runs over the RPC's bytes");
+    let (verdict, agrees) = cw.fresh();
+    assert_eq!(
+        (report.verdict.beacon_output, report.verdict.seed, &report.verdict.posted),
+        (verdict.beacon_output, verdict.seed, &verdict.posted),
+        "the same beacon, seed and verdict as the world's own reads"
+    );
+    assert_eq!(report.agrees, agrees);
+    assert_eq!(report.verdict.posted, Some(Ok(())), "bound, rebuilt exactly, a pass");
+}

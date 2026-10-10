@@ -77,34 +77,20 @@ pub(super) fn apply_artifact_bound_v1(
 ) -> Result<(), PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
     registrant_class(builder, v2_class, signer)?;
-    // DA16: past the provider court's fence a binding whose pair LAPSED after it was bound is no longer live — the registrant may bind
-    // again over fresh leases (the new row replaces the old, whose reservation it releases). Below the fence nothing lapses.
-    let court = builder.extras.kernel_route.as_ref().and_then(|k| k.provider_court).is_some();
-    let route = route_of(builder)?;
-    let live: Vec<(Hash64, ArtifactBindingRowV1)> = route
-        .artifact_bindings_of_v1(v2_class)
-        .into_iter()
-        .filter(|(root, row)| !row.refuted && !(court && route.provider_pair_lapsed_since_v1(v2_class, root, row.bound_daa)))
-        .collect();
     // One live binding per class: an artifact is one set of bytes, so two different kernel roots cannot both be true of it.
-    if live.iter().any(|(root, _)| root == kernel_param_root) {
+    let live = route_of(builder)?.artifact_bindings_of_v1(v2_class);
+    if live.iter().any(|(root, row)| !row.refuted && root == kernel_param_root) {
         return Err(refused("this artifact binding already exists"));
     }
-    if !live.is_empty() {
+    if live.iter().any(|(_, row)| !row.refuted) {
         return Err(refused("the class is already bound to another kernel root, and is not refuted"));
     }
-    // DA16: past the provider court's fence the pair must be publicly obtainable under bonded obligation for the binding's whole
-    // refutation horizon — ≥ 2 live leases of distinct operators serving through it — so the two roots' equality is something an
-    // outsider confirms or refutes from the bytes, never a declaration nobody could check.
-    if court {
-        let subject =
-            crate::palw_provider_court_v1::ProviderSubjectV1::Artifact { v2_class: *v2_class, kernel_param_root: *kernel_param_root };
-        let horizon = ctx.daa_score.saturating_add(PALW_ONBOARDING_BINDING_LIABILITY_DAA_V1);
-        if !builder.state.provider_availability_v1(&subject, ctx.daa_score, horizon, None).ready {
-            return Err(refused(
-                "the artifact pair is not publicly available: two live leases of distinct operators must serve it through the binding's horizon (palw_provider_court_v1)",
-            ));
-        }
+    // ADR-0175 (past `palw_model_immutable_v1`): a class's binding is fixed once accepted. A refuted one ends the class's kernel route —
+    // the model is a new registration — so no path re-binds it to another root (and none on availability: ADR-0177 has no lapse).
+    if builder.extras.model_immutable_active && !live.is_empty() {
+        return Err(refused(
+            "a registered class's artifact binding is immutable (ADR-0175): a refuted class needs a new registration",
+        ));
     }
     // The statement is bonded: a slice of the signer's FREE collateral is held until the refutation horizon ends.
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);

@@ -789,6 +789,18 @@ ClaimRewardEligible(claim)
 許可unit・累積scopeと必要model operandの認証をADR177 D2に従って確定する。
 取得できないという申告だけでは適格なcourt開始、void、Slash、反証期間延長にならない。
 
+**実装（lane DA16、2026-10-10、休眠 `palw_provider_court_v1`）:** 全 route の demand／opening／challenge unit を
+`consensus-core palw_court_scope_v1` の inventory（`palw_court_unit_scope_v1`）として claim 固有（input/trace/state/output/witness hash）と
+model bytes（weights／その複写・関数／file range）に分類し、compel できる unit は claim 固有のものだけとする（`palw_court_demand_allowed_v1`）。
+累積 scope は、モデル bytes 開示が要求回数によらず claim・model ごとに 0、claim 固有 unit は claim ごとに 1 回、(claim, 要求 operator) ごとに
+16 unit まで（他の要求者の枠を消費しないため G14 の starvation-freedom を保つ）。kernel route では fence 以上で snapshot slice と登録 `M0` の
+pre-state を拒否し、retrieval claim 自身の entry（stage `0xC0 + s`）を claim 固有の demand unit とした（malformed／junk leaf に対しても
+court が全域で裁定する、G14C GAP-52）。verifier が自分の copy から出す model operand は登録 root（kernel class の `ParamCommitmentsV1` root、
+V2 `artifact_root`）に対して `palw_verify_verifier_model_operand_v1` で認証する。node 単位の model-bytes mask（K2S が v4/v5 の owed set で
+呼ぶ）、活性値から関係を復元しうる残余（Level 2 は利用者判断）、t12 で武装済みのモデル bytes を compel する route（held `StepLeaf`、
+dissection の root claim、readiness）と新しい休眠 fence の提案、各 unit class の G14 到達性は
+[DA16 design](../design/palw/da16-transport-and-provider-court.md) §7。状態は implemented（armable ではない）。
+
 ### 16.5 重複しないモデル別miner元本
 
 受理済み配分snapshotにおいて、各bondのmodel別適格拘束元本を`C_{b,m}(t)`とする。
