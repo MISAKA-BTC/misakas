@@ -23,6 +23,25 @@ fn world() -> World {
     w
 }
 
+/// **A fresh outsider under the verifier-pay terms**: a node that replays the chain with the same injected terms (the draws are the
+/// consumer's calls, taken from the live ledger as a node takes them from its draw), then checks `claim` from `da` alone.
+fn outsider(w: &World, claim: Digest, da: &Da) -> OutsiderFindingV1 {
+    let mut fresh = w.genesis.clone();
+    fresh.verifier_pay_policy = w.l.verifier_pay_policy;
+    for b in &w.blocks {
+        fresh.apply_block(b);
+    }
+    for (k, row) in &w.l.verifier_pay {
+        if k.0 == misaka_palw_kernel::verifier_pay::VERIFIER_PAY_DRAW_V1 {
+            fresh.verifier_pay.insert(*k, row.clone());
+        }
+    }
+    assert_eq!(fresh.root(), w.l.root(), "a fresh node under the same terms reaches the same state");
+    misaka_palw_kernel::ledger::OutsiderV1 { ledger: &fresh, claim, material: da, artifact: &w.params, salt: [0x5A; 64] }
+        .check()
+        .unwrap()
+}
+
 /// Feed a consumer-called ledger method's events to the book (as the node's fold applies them).
 fn absorb(w: &mut World, ev: Vec<E>) -> Vec<E> {
     w.consumer.absorb(&w.l, &ev);
@@ -159,9 +178,9 @@ fn m49_a_conviction_pays_every_drawn_slot_and_drawn_sealers_share_the_cap_first(
     let (_, lie) = w.lying(&job, 3);
     let (id, full) = (lie.claim.id(), Da::publishing(&lie.trace, &[]));
     w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &full) else { panic!() };
     let ev = w.l.assign_drawn_v1(&id, &[OUTSIDER, SPAM2]).unwrap();
     absorb(&mut w, ev);
-    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &full) else { panic!() };
     w.block(11, vec![T::SealProof { accuser: OUTSIDER, claim: id, seal: proof_seal_v1(&id, &OUTSIDER, &proof) }]);
     let ev = w.block(20, vec![T::FileProof { accuser: SPAM1, claim: id, proof }]);
     let (slashed, reward, _) = convicted(&ev).expect("convicted");
