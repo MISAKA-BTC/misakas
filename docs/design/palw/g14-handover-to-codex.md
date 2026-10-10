@@ -14,6 +14,7 @@
 - G14Rのverifier-payとPESGはintegration `0b73fd33f`から統合済み。F-MEAS-07のnet徴収計算も現行`required_reservation`では自己還流分を控除する項を含み、下記の総額だけを数えるという記述は現HEADに当てはまらない。
 - integration `7d8c31270`のbeacon source-set freezeを`b6a90a0d0`で統合した。検証結果とscopeは監査記録へ記載する。
 - legacyの公開履歴readerを件数制限付きpaginationへ変更し、開始tipの固定、新しいMismatchのbackfill、reorg時の読み直し、認証済みの利用対象unitだけのcacheを実装した。filer 7件とConsensus API adapter reader 4件、計11 V-unit PASS。恒久的なprune後の取得・再要求とfresh-node追及のV-node試験は残る。
+- LG14-B producer応答を既存DA workerへ接続した。検証済みbase0-codecのdense/fold保持からstep node・checkpoint node・CKWを作り、認証・scope・close ceiling・署名・carrier検査を通るtag 158をqueueする。DA policy 8 V-unit、LG14-B 6 V-fold、IR回帰19件がPASS。outsiderの大型descent/terminalとproduction-serviceのV-nodeは残る。
 
 G14全域の完成判定はしていない。ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
 

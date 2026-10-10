@@ -16,8 +16,9 @@
 //!
 //! **The producer's half** — the answers an honest producer owes from its retention ([`palw_legacy_held_answer_v2`]): a node's
 //! frontier and siblings from its fold (the retained level, a replayed block below it), a leaf's committed half from its own leaf
-//! prover. Wiring both halves into the node's tick is LG14-A's common filer (`palw_fraud_filer`); until it lands these are pure
-//! functions the E2E drives through the fold.
+//! prover. The node's DA worker (`palw_panel::rcore_da_answers_v1`) now dispatches due legacy units to this responder under its
+//! verified-material and memory-reservation path, then queues signed tag-158 carriers. The verifier's large-tree descent and
+//! terminals still need wiring into LG14-A's common filer (`palw_fraud_filer`); those remain pure functions driven through the fold.
 
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1};
 use kaspa_consensus_core::palw_legacy_held_da_v2::{
@@ -89,7 +90,15 @@ impl<'a> PalwLegacyTreeV2<'a> {
     pub fn fold_v1(backend: &'a dyn PalwExecutionBackendV1, capture: &'a [u8], prompt_ids: &'a [u32]) -> Result<Self, String> {
         let material = misaka_palw_base0::produce::base0_fp_material_decode_v2(capture)
             .map_err(|e| format!("the retention is not a fold: {e:?}"))?;
-        let tree = &material.step_tree;
+        Self::from_fold_v1(backend, capture, prompt_ids, &material.step_tree)
+    }
+
+    fn from_fold_v1(
+        backend: &'a dyn PalwExecutionBackendV1,
+        capture: &'a [u8],
+        prompt_ids: &'a [u32],
+        tree: &misaka_palw_base0::fp_capture::Base0SparseStepTreeV1,
+    ) -> Result<Self, String> {
         let retain_level = u8::try_from(tree.retain_level()).map_err(|_| "the retained level is past any tree".to_string())?;
         let mut upper = vec![tree.retained_nodes().to_vec()];
         while upper.last().is_some_and(|l| l.len() > 1) {
@@ -210,6 +219,85 @@ impl PalwLegacyOwnTreeV2 for PalwLegacyTreeV2<'_> {
 }
 
 // ---- the producer's half -----------------------------------------------------------------------------------------------------
+
+/// Build a tag-158 answer from a verified family capture on the node's DA worker. All base0-codec families share this path:
+/// folded captures keep the retained level and replay blocks on demand, while dense captures rebuild their own committed tree.
+/// The public answer is checked with the consensus predicate before it is signed; unsupported codecs are explicit refusals.
+pub fn palw_legacy_held_capture_answer_v2(
+    backend: &dyn PalwExecutionBackendV1,
+    capture: &[u8],
+    prompt_ids: &[u32],
+    roots: PalwClaimRootsV1,
+    form: PalwPromptIdsFormV1,
+    unit: &PalwLegacyHeldUnitV2,
+) -> Result<(PalwStepBindingV2, PalwLegacyHeldAnswerV2), String> {
+    use misaka_palw_base0::produce::{Base0RetentionV1, base0_dense_step_leaves_capped_v1, base0_material_decode_any_v1};
+    let retention = base0_material_decode_any_v1(capture).map_err(|e| format!("no legacy held responder for this capture: {e:?}"))?;
+    let binding = retention.binding();
+    if binding.committed_execution_root != roots.execution_root || binding.full_logits_trace_root != roots.trace_root {
+        return Err("the legacy held capture is not the claim's binding".into());
+    }
+    let (context_hash, _, checkpoint_profile_hash) = kaspa_consensus_core::palw_step_leg::verify_binding_v1(binding)
+        .map_err(|e| format!("the legacy held binding does not verify: {e}"))?;
+    kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_demand_v2(&roots.execution_root, unit, binding)
+        .map_err(|e| format!("the legacy held unit cannot be compelled: {e}"))?;
+    let step_tree = match &retention {
+        Base0RetentionV1::Folded(m) => PalwLegacyTreeV2::from_fold_v1(backend, capture, prompt_ids, &m.step_tree)?,
+        Base0RetentionV1::Dense((binding, tiles, ..)) => PalwLegacyTreeV2::leaves_v1(
+            base0_dense_step_leaves_capped_v1(binding, tiles, binding.step_leaf_count)
+                .ok_or("the dense legacy held capture has no complete step tree")?,
+        ),
+    };
+    if step_tree.leaf_count() != binding.step_leaf_count || step_tree.root() != Some(binding.step_merkle_root) {
+        return Err("the legacy held retention does not reproduce the claim's step tree".into());
+    }
+    // Other units do not read the checkpoint tree. Avoid rebuilding a dense capture's state chunks for every step-node demand.
+    let checkpoint_hashes = if matches!(unit, PalwLegacyHeldUnitV2::CheckpointNode { .. }) {
+        match &retention {
+            Base0RetentionV1::Folded(m) => m
+                .checkpoint_leaves
+                .iter()
+                .map(|leaf| {
+                    kaspa_consensus_core::palw_step_leg::checkpoint_leaf_hash_v2(
+                        &context_hash,
+                        &checkpoint_profile_hash,
+                        &binding.state_chunk_map_id,
+                        leaf,
+                    )
+                })
+                .collect(),
+            Base0RetentionV1::Dense((_, _, _, _, chunks)) => {
+                misaka_palw_base0::legs::Base0CheckpointCaptureV1::from_chunks_v1(
+                    &binding.job_context,
+                    &binding.shape_profile,
+                    &binding.checkpoint_profile,
+                    chunks,
+                )
+                .map_err(|e| format!("the dense checkpoint leg does not rebuild: {e:?}"))?
+                .leaf_hashes
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let checkpoint_tree = PalwLegacyTreeV2::leaves_v1(checkpoint_hashes);
+    if matches!(unit, PalwLegacyHeldUnitV2::CheckpointNode { .. })
+        && (checkpoint_tree.leaf_count() != u64::from(binding.checkpoint_count)
+            || checkpoint_tree.root() != Some(binding.checkpoint_merkle_root))
+    {
+        return Err("the legacy held retention does not reproduce the claim's checkpoint tree".into());
+    }
+    let answer = palw_legacy_held_answer_v2(unit, &step_tree, &checkpoint_tree, backend, capture, prompt_ids, roots, form)?;
+    kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v2(
+        &roots.execution_root,
+        unit,
+        binding,
+        &answer,
+        binding.step_leaf_count,
+    )
+    .map_err(|e| format!("the built legacy held answer does not authenticate: {e}"))?;
+    Ok((binding.clone(), answer))
+}
 
 /// **A producer's answer to one legacy held unit, from its own retention** — a node's frontier (leaf hashes at level 0) and its
 /// siblings from `tree` (the step tree, or the checkpoint tree for a `CheckpointNode`), or a leaf's committed half from the family's

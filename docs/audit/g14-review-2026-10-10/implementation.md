@@ -229,3 +229,21 @@ upstream `7d8c31270`（実装`91eb1bfd4`）を`b6a90a0d0`で統合した。epoch
 [filer](evidence/filer-history-book-final.log)、[reader](evidence/filer-history-page-final.log)。default feature（EVMを含む）、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で実行した。レベルは **V-unit**。実nodeのlate startからこのserviceでconvictionするC2全経路は未検証である。node-policyだけの修正で、consensus encodingやfenceは変更していない。
 
 恒久的にprune済みの回答の復元は残件である。`palw_state_v2.rs`のDA admissionは既回答unitの再要求を`DaUnitAlreadyAnswered`として拒否する。取得できない古い回答を完了と偽る経路は塞いだが、claimの責任期間中の保持・公開取得又は認証付き再要求と、その期限まで閉じる必要がある。
+
+## LG14-B producer応答のDA worker接続
+
+`4de664175`でも、実サービスの`palw_da_claim_answers_v1`は`LegacyHeldV2`を「tag 158専用」として拒否していた。pure responderはあるがdue dutyから呼ばれず、honest producerが対応materialを保持していても応答を作れない。
+
+既存の`rcore_da_answers_v1`から、materialの検証・必要ならjob再実行・memory ledger予約を維持してtag-158 responderを呼ぶよう変更した。base0-codecのfold保持はretained levelと必要なblock replayで、dense保持は自身のtile hashからstep treeを作る。checkpoint要求には保持checkpoint leaf又はchunkからtreeを作り、CKWは既存のleaf proverを使う。scopeとclaim bindingを先に検査し、作った応答をconsensusの`palw_legacy_held_check_answer_v2`で認証する。署名前にclose ceiling、署名後にcarrier rideを検査する。既回答・session終了後のtag 158はqueueから外す。tag 55の既存builderも共通dispatchから使う。
+
+| 検証 | 結果と範囲 |
+| --- | --- |
+| `cargo test -p kaspad --lib p2_7_disclosure_policy --locked` | **8 V-unit PASS**。dense保持のstep node・checkpoint node・CKW、planted materialの検証と再実行、model-copy CKW拒否、違うclaim/unit・unsigned・close ceiling超過の拒否、既存のDA policy |
+| `cargo test -p kaspad --lib lg14b_ --locked` | **6 V-fold PASS**。honest foldの試験は実workerと共通署名builderでstep/checkpoint/CKWを作り、transitionでsessionが閉じることを確認。残る5件は既存pure planner/terminalのfold回帰 |
+| `cargo test -p kaspad --lib tir_court_e2e --locked` | **19 PASS**。tag 55のIR event・step・dense/fold responderと既存courtの回帰 |
+| `cargo test -p kaspad --lib the_panel_pursues_a_named_leaf_serves_its_evidence_and_answers_the_held_court --locked` | **1 PASS**。既存のsource wiring pinを新dispatchへ更新 |
+| `cargo test -p kaspad --lib palw_fraud_filer --locked` | **7 V-unit PASS**。履歴/cache/filerの回帰 |
+
+[DA policy](evidence/legacy-responder-policy-final.log)、[LG14-B fold](evidence/legacy-responder-fold-final.log)、[IR回帰](evidence/legacy-responder-ir-final.log)、[dispatch pin](evidence/legacy-responder-dispatch-pin-final.log)、[filer](evidence/legacy-responder-filer-final.log)。default feature、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で実行した。初回は新しいnode-local answer enumに未対応のIR test patternを修正した。dense CKWのfixtureもleaf 0のembeddingを要求してscope検査に拒否されたため、対象を計算leafへ変更し、embedding要求の拒否を別途assertした。model-copyの開示制限を緩めていない。
+
+これはproducer応答の接続である。outsiderの共通filerはまだLG14-B descent・tag 159・fused terminalを使わず、公開tag-158履歴の収集も未接続。上記fold fixtureはfree-prompt worker factsを使っており、実serviceのtickからcanonical node上で完走するV-node試験ではない。非base0 codec、全familyの正規eligibility、最大profileのRAM・時間・期限内包含も完成判定していない。consensus encodingとactivation fenceは変更していない。

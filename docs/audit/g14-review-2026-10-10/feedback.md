@@ -11,7 +11,7 @@
 
 次の条件が閉じるまで「producer + 全Panel共謀でも1 verifierで全対象違反を終局まで追及できる」とは判定しない。
 
-1. **大型legacyの本番接続:** authenticated subtree descent、checkpoint・traceの不一致、model-copyを開示しないleaf recompute、fused courtを、登録モデルと公開readから共通filerで完走させる。小型fallbackの連続scanは34-session枠を超えるclaimをUnjudgedとする。
+1. **大型legacyの本番接続:** authenticated subtree descent、checkpoint・traceの不一致、model-copyを開示しないleaf recompute、fused courtを、登録モデルと公開readから共通filerで完走させる。producer側のtag-158応答は既存DA workerへ接続し、denseとfoldで検証したが、outsider側の共通filerはまだ大型descentを使わない。小型fallbackの連続scanは34-session枠を超えるclaimをUnjudgedとする。
 2. **累積scopeとcourtの両立:** 64要素hiding tileと累積scopeを実際のresponse/court/reward gateへ接続する。`cumulative_scope_allows_v1`のstubとF-C4R4-17は残る。scope報告関数の成功だけでreward eligibilityを認めない。
 3. **DAと包含の期限:** 最大Respond、全chunk、adaptiveな探索round、proof処理が責任期間内に収まる条件を実nodeで立証する。9B/8kの1 positionは2,029 partsであり、現行の固定20 DAAだけでは十分性を示せない。
 4. **共謀者による枠の占有:** claim共通のlive 64・生涯256 reservation枠を先取りされても、outsiderが必要materialを取得できる設計が必要。別bondのreservationが1件ある試験は、全枠飽和への耐性ではない。

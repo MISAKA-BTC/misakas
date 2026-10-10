@@ -868,6 +868,7 @@ async fn lg14b_withheld_descent_and_witness_units_default_never_convict() {
 /// outsider pays; and the claim reaches `Final`.
 #[tokio::test(flavor = "multi_thread")]
 async fn lg14b_an_honest_claim_survives_a_malicious_outsider() {
+    use crate::palw_panel::{PalwDaClaimFactsV1, PalwDaLaneV1, palw_da_built_answer_object_v1, palw_da_claim_answers_v1};
     let f = Fixture::new(false);
     let honest = &f.d;
     let (s, claim) = rc_licensed(honest, &f.canonical, &f.profile, f.root);
@@ -882,34 +883,56 @@ async fn lg14b_an_honest_claim_survives_a_malicious_outsider() {
     );
     // The honest producer's own fold answers a malicious demand at the root and at a checkpoint node.
     let producer_tree = PalwLegacyTreeV2::fold_v1(&honest.backend, &honest.material, &honest.ids).expect("a fold");
-    let checkpoint_tree = PalwLegacyTreeV2::leaves_v1(checkpoint_leaf_hashes(&honest.material));
     let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(binding.step_leaf_count);
     let c_height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(u64::from(binding.checkpoint_count));
     let mut units = vec![PalwLegacyHeldUnitV2::StepNode { level: height, index: 0 }];
     if c_height >= 1 {
         units.push(PalwLegacyHeldUnitV2::CheckpointNode { level: c_height, index: 0 });
     }
+    units.push(PalwLegacyHeldUnitV2::KernelWitness { leaf: honest.leaf });
     let before = bonds_collateral(&w.s);
+    let facts = PalwDaClaimFactsV1 {
+        claim_id: claim,
+        class_id: honest.fp_job.class_id,
+        executor_bond: bond_key(PRODUCER),
+        execution_root: honest.execution_root,
+        trace_root: honest.trace_root,
+        work_leaves: binding.step_leaf_count,
+        form: honest.backend.prompt_ids_form(),
+        lane: PalwDaLaneV1::FreePrompt { panel_da_admissible: false },
+        job_pin: None,
+    };
     for unit in units {
         w.block(vec![o.demand(claim, unit, &binding)]).expect("a malicious demand still opens a session");
-        let answer = palw_legacy_held_answer_v2(
-            &unit,
-            &producer_tree,
-            &checkpoint_tree,
+        let mut built = palw_da_claim_answers_v1(
             &honest.backend,
-            &honest.material,
-            &honest.ids,
-            honest.roots(),
-            honest.backend.prompt_ids_form(),
+            &facts,
+            [honest.served()],
+            |_| panic!("the kept honest capture already verifies"),
+            &[PalwDaUnitV1::LegacyHeldV2(unit)],
+            binding.job_context.exact_decode_tokens,
+            false,
+            None,
         )
-        .expect("an honest producer answers from its fold");
-        let object = palw_legacy_held_answer_object_v2(&h64(999), claim, unit, binding.clone(), answer, bond_key(PRODUCER), |_, _| {
-            Some(SIG.to_vec())
-        })
+        .expect("the node worker answers from verified fold retention");
+        assert!(!built.remade);
+        let answer = built.answers.pop().expect("one duty").expect("not covered by a Flat").expect("the fold opens");
+        let object = palw_da_built_answer_object_v1(
+            &h64(999),
+            claim,
+            PalwDaUnitV1::LegacyHeldV2(unit),
+            answer,
+            bond_key(PRODUCER),
+            u64::MAX,
+            |_, _| Some(SIG.to_vec()),
+        )
         .expect("built");
+        assert!(matches!(&object, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }), "the worker sends tag 158");
         w.block(vec![object]).expect("an honest fold's frontier authenticates");
         assert!(w.s.da_sessions_of(&claim).next().is_none(), "refuted and closed");
     }
+    // The same fold reader used by the worker does block replay below its retained level.
+    producer_tree.leaf_hash(0).expect("replayed from the honest retention");
     let (replays, _) = producer_tree.resources();
     assert!(replays >= 1, "below the retained level the honest producer replays a block, never the whole run");
     // A recompute of an honest non-fused leaf: the court recomputes the committed tile — a false accusation.

@@ -2458,7 +2458,7 @@ pub(crate) fn palw_da_unit_answer_v1(
                 "pipeline step node ({stage}, {level}, {index}): answered by the pipeline responder, not the capture path (RFC-0004 Phase F)"
             ));
         }
-        // LG14-B (dormant): a legacy held unit is answered by tag 158, built by `palw_legacy_held_responder`, never by tag 55.
+        // The claim worker dispatches these units to the tag-158 builder before entering the tag-55 builder.
         PalwDaUnitV1::LegacyHeldV2(unit) => {
             return Err(format!(
                 "{unit:?}: a legacy held unit is answered by tag 158 (LG14-B's responder), not by MaterialDisclosedV2"
@@ -2498,6 +2498,95 @@ pub(crate) fn palw_da_unit_answer_v1(
     Ok(palw_da_held_answer_v1(facts.claim_id, missing, binding, disclosure))
 }
 
+/// A DA worker's unsigned answer. Legacy held answers have their own tag and signing context, never a tag-55 encoding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PalwDaBuiltAnswerV1 {
+    Rcore(kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1),
+    LegacyHeldV2(
+        Box<(
+            kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+            kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2,
+        )>,
+    ),
+}
+
+fn palw_da_legacy_answer_v2(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    facts: &PalwDaClaimFactsV1,
+    material: &PalwDaCaptureV1,
+    unit: &kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2,
+) -> Result<PalwDaBuiltAnswerV1, String> {
+    let (capture, prompt, roots) = match (material, &facts.lane) {
+        (PalwDaCaptureV1::FreePrompt(payload), PalwDaLaneV1::FreePrompt { .. }) => {
+            (payload.capture.as_slice(), payload.material.prompt_token_ids.clone(), facts.roots_v1(Some(&payload.material.job)))
+        }
+        (PalwDaCaptureV1::Attempt(capture), PalwDaLaneV1::Attempt { job, .. }) => {
+            let (_, prompt) = job.as_ref().ok_or("the claim's block is not in this node's store")?;
+            let prompt = prompt
+                .iter()
+                .map(|id| u32::try_from(*id).map_err(|_| format!("prompt id {id} does not fit a u32")))
+                .collect::<Result<Vec<_>, _>>()?;
+            (capture.as_slice(), prompt, facts.roots_v1(None))
+        }
+        _ => return Err("the legacy held capture is not in the claim's lane".into()),
+    };
+    crate::palw_legacy_held_v2::palw_legacy_held_capture_answer_v2(backend, capture, &prompt, roots, facts.form, unit)
+        .map(|answer| PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new(answer)))
+}
+
+/// The DA service's common signed-carrier builder, with the close ceiling and lifecycle ride checks for both tags.
+pub(crate) fn palw_da_built_answer_object_v1(
+    network_domain: &Hash64,
+    claim: Hash64,
+    unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1,
+    answer: PalwDaBuiltAnswerV1,
+    discloser: PalwBondKeyV2,
+    max_close_bytes: u64,
+    sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Result<PalwConsensusObjectV2, String> {
+    match answer {
+        PalwDaBuiltAnswerV1::Rcore(answer) => kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_object_v1(
+            network_domain,
+            claim,
+            unit,
+            answer,
+            discloser,
+            max_close_bytes,
+            sign,
+        )
+        .map_err(|e| e.to_string()),
+        PalwDaBuiltAnswerV1::LegacyHeldV2(answer) => {
+            let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(unit) = unit else {
+                return Err("a legacy held answer cannot answer a tag-55 unit".into());
+            };
+            let (binding, answer) = *answer;
+            kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v2(
+                &binding.committed_execution_root,
+                &unit,
+                &binding,
+                &answer,
+                binding.step_leaf_count,
+            )
+            .map_err(|e| format!("the legacy held answer is not this unit: {e}"))?;
+            let bytes = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_answer_bytes_v2(&answer);
+            if bytes > max_close_bytes {
+                return Err(format!("legacy held answer has {bytes} bytes, above close ceiling {max_close_bytes}"));
+            }
+            let object = crate::palw_legacy_held_v2::palw_legacy_held_answer_object_v2(
+                network_domain,
+                claim,
+                unit,
+                binding,
+                answer,
+                discloser,
+                sign,
+            )?;
+            kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).map_err(|e| e.to_string())?;
+            Ok(object)
+        }
+    }
+}
+
 /// **One claim's R-core answers, built off the loop** (P2-7): what [`palw_da_claim_answers_v1`] returns.
 #[derive(Debug)]
 pub(crate) struct PalwDaClaimAnswersV1 {
@@ -2506,7 +2595,7 @@ pub(crate) struct PalwDaClaimAnswersV1 {
     /// One entry a unit asked, in order: `None` for an event unit a `Flat` of this claim already
     /// answers (IMPL-16) — one queued or sent before, or one built here — so no carrier is paid for
     /// an answer the fold refuses `DaUnitAlreadyAnswered`.
-    pub answers: Vec<Option<Result<kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1, String>>>,
+    pub answers: Vec<Option<Result<PalwDaBuiltAnswerV1, String>>>,
 }
 
 /// **P2-7: every due unit of one claim answered from ONE load of its material** — loaded and checked
@@ -2534,9 +2623,14 @@ pub(crate) fn palw_da_claim_answers_v1(
             answers.push(None);
             continue;
         }
-        let answer = palw_da_unit_answer_v1(backend, facts, &material, *unit, tir);
-        flat |= matches!(answer, Ok(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })))
-            || matches!(&answer, Ok(PalwDaAnswerV1::TirEvent(disclosure)) if disclosure.is_flat());
+        let answer = match unit {
+            kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(unit) => {
+                palw_da_legacy_answer_v2(backend, facts, &material, unit)
+            }
+            _ => palw_da_unit_answer_v1(backend, facts, &material, *unit, tir).map(PalwDaBuiltAnswerV1::Rcore),
+        };
+        flat |= matches!(&answer, Ok(PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. }))))
+            || matches!(&answer, Ok(PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::TirEvent(disclosure))) if disclosure.is_flat());
         answers.push(Some(answer));
     }
     Ok(PalwDaClaimAnswersV1 { remade, answers })
@@ -10303,7 +10397,7 @@ impl PalwPanelService {
             // Past `palw_rcore_plus` an accusation opens a session in `da_sessions` and never touches
             // the claim's phase (DA-1), so the loop above finds nothing there, and the v1 answers it
             // built are refused (`DaV1AnswerRetired`). Here each unit an open session demands of this
-            // node is answered with one `MaterialDisclosedV2` (`palw_da_answer_object_v1`): as the
+            // node is answered with a tag-55 or legacy tag-158 object (`palw_da_built_answer_object_v1`): as the
             // claim's PRODUCER at once, or as a COVERING SIGNER — a live lock whose mask covers the
             // unit, the fold's own predicate, so exactly the units a default would charge it S4 for —
             // once the producer has had its turn (`palw_disclosure_due_v1`). The material is what
@@ -10332,6 +10426,9 @@ impl PalwPanelService {
                 disclosure.duties.iter().map(|duty| (duty.claim_id, duty.unit)).collect();
             court_pending.retain(|(_, _, _, object)| match object {
                 PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, .. } => owed.contains(&(*claim, *unit)),
+                PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } => {
+                    owed.contains(&(answer.claim, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(answer.unit)))
+                }
                 _ => true,
             });
             if da_armed && !disclosure.duties.is_empty() {
@@ -16431,7 +16528,7 @@ impl PalwPanelService {
         }
     }
 
-    /// **ADR-0152 DA-4 / X7 (P2-7): the `MaterialDisclosedV2`s that answer one claim's due units**,
+    /// **ADR-0152 DA-4 / X7 (P2-7): the tag-55 or legacy tag-158 objects that answer one claim's due units**,
     /// `duties` (one claim's, soonest deadline first), each signed by its duty's discloser — this
     /// node's bond: the producer, or a covering signer.
     ///
@@ -16450,7 +16547,7 @@ impl PalwPanelService {
     /// The producer answers on the executor's kept instance (its walk, as the v1 held answer does); a
     /// covering signer on a fresh one through the one resolve door, which neither releases nor keeps
     /// the executor's (the review's LOW). Each object is built by the ONE builder the real-claim tests
-    /// carry through the gate and the fold (`palw_da_answer_object_v1`), inside the ruleset's close
+    /// carry through the gate and the fold (`palw_da_built_answer_object_v1`), inside the ruleset's close
     /// ceiling (DA-8). One entry a duty, in order: `Ok(None)` for a unit a `Flat` answers.
     async fn rcore_da_answers_v1(
         &self,
@@ -16553,7 +16650,7 @@ impl PalwPanelService {
             .map(|(duty, answer)| match answer {
                 None => Ok(None),
                 Some(Err(why)) => Err(why),
-                Some(Ok(answer)) => kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_object_v1(
+                Some(Ok(answer)) => palw_da_built_answer_object_v1(
                     &network_domain,
                     duty.claim_id,
                     duty.unit,
@@ -16562,8 +16659,7 @@ impl PalwPanelService {
                     self.config.court.max_close_bytes(),
                     |message, context| self.sign(message, context),
                 )
-                .map(Some)
-                .map_err(|e| e.to_string()),
+                .map(Some),
             })
             .collect())
     }
@@ -19301,7 +19397,7 @@ mod court_responder_coverage_pin {
             "which builds through the core's held builder"
         );
         let rcore = body("async fn rcore_da_answers_v1(");
-        for reached in ["palw_da_claim_answers_v1(", "palw_da_answer_object_v1("] {
+        for reached in ["palw_da_claim_answers_v1(", "palw_da_built_answer_object_v1("] {
             assert!(rcore.contains(reached), "R-core's answer reaches {reached}");
         }
         let unit = top("pub(crate) fn palw_da_unit_answer_v1(");
@@ -22494,7 +22590,7 @@ mod p2_7_disclosure_policy {
     /// the same capture by the one held builder; an answer is the form the ONE object builder takes.
     #[test]
     fn a_claims_units_are_answered_from_one_load_and_one_flat_answers_its_run() {
-        use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, palw_da_answer_object_v1};
+        use kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1;
         use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
         use kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1;
         let (backend, facts, job, ids, capture) = fp_claim();
@@ -22509,7 +22605,7 @@ mod p2_7_disclosure_policy {
         let built = answer(&backend, &facts, vec![honest], &units, false).0.expect("loaded once");
         assert_eq!(built.answers.len(), 3);
         let first = built.answers[0].clone().expect("asked").expect("opens");
-        if matches!(first, PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })) {
+        if matches!(first, PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. }))) {
             assert_eq!(built.answers[1], None, "the Flat built for row 0 answers row 1 of a two-row run");
         } else {
             assert!(built.answers[1].is_some(), "no Flat, so row 1 is answered on its own");
@@ -22517,9 +22613,109 @@ mod p2_7_disclosure_policy {
         let held = built.answers[2].clone().expect("asked").expect("the prompt tile opens from the capture's job");
         let bond = facts.executor_bond;
         for (unit, answer) in [(units[0], first), (units[2], held)] {
-            palw_da_answer_object_v1(&Hash64::from_u64_word(0xD0), facts.claim_id, unit, answer, bond, u64::MAX, |_, _| Some(vec![1]))
-                .expect("the form the fold takes");
+            palw_da_built_answer_object_v1(&Hash64::from_u64_word(0xD0), facts.claim_id, unit, answer, bond, u64::MAX, |_, _| {
+                Some(vec![1])
+            })
+            .expect("the form the fold takes");
         }
+    }
+
+    /// An actual dense claim's retained capture answers all legacy unit forms through the production worker and carrier builder.
+    /// A planted capture is remade first; wrong-unit, unsigned and over-ceiling carriers never leave this node.
+    #[test]
+    fn legacy_held_due_units_use_tag158_from_verified_dense_material() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{palw_fp_capture_encode_v1, palw_fp_material_encode_v1};
+        use kaspa_consensus_core::palw_legacy_held_da_v2::{PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2, PalwLegacyHeldUnitV2};
+        let (backend, facts, job, ids, capture) = fp_claim();
+        let retention = misaka_palw_base0::produce::base0_material_decode_any_v1(&capture).expect("this family's capture");
+        assert!(matches!(retention, misaka_palw_base0::produce::Base0RetentionV1::Dense(_)), "the floor keeps dense tiles");
+        let binding = retention.binding();
+        let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(binding.step_leaf_count);
+        let c_height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(u64::from(binding.checkpoint_count));
+        let witness_leaf = (0..binding.step_leaf_count)
+            .find(|leaf| !kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_ckw_leaf_is_model_copy_v2(binding, *leaf))
+            .expect("a computation leaf, not a model-copy gather");
+        let mut units = vec![
+            PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::StepNode { level: height, index: 0 }),
+            PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::KernelWitness { leaf: witness_leaf }),
+        ];
+        if c_height >= 1 {
+            units.push(PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::CheckpointNode { level: c_height, index: 0 }));
+        }
+        let honest = palw_fp_capture_encode_v1(&job, &ids, &capture);
+        let refused = answer(
+            &backend,
+            &facts,
+            vec![honest.clone()],
+            &[PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::KernelWitness { leaf: 0 })],
+            false,
+        )
+        .0
+        .expect("the honest capture is loaded");
+        assert!(
+            matches!(&refused.answers[0], Some(Err(why)) if why.contains("registered model")),
+            "model-copy CKW remains out of scope"
+        );
+        let built = answer(&backend, &facts, vec![honest.clone()], &units, true).0.expect("one verified load");
+        assert!(!built.remade);
+        let garbage = palw_fp_capture_encode_v1(&job, &ids, b"planted material");
+        let (remade, kept) = answer(&backend, &facts, vec![garbage], &units, true);
+        let remade = remade.expect("the public job can remake the producer's retention");
+        assert!(remade.remade);
+        assert_eq!(kept.as_deref(), Some(honest.as_slice()));
+        assert_eq!(remade.answers, built.answers);
+        let domain = Hash64::from_u64_word(0xD0);
+        for (unit, answer) in units.iter().zip(&built.answers) {
+            let answer = answer.clone().expect("Flat never covers a legacy unit").expect("the committed unit opens");
+            let object = palw_da_built_answer_object_v1(
+                &domain,
+                facts.claim_id,
+                *unit,
+                answer.clone(),
+                facts.executor_bond,
+                u64::MAX,
+                |_, context| {
+                    assert_eq!(context, PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
+                    Some(vec![1])
+                },
+            )
+            .expect("the signed tag-158 object can ride");
+            assert!(matches!(object, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }));
+            assert!(
+                palw_da_built_answer_object_v1(&domain, facts.claim_id, *unit, answer.clone(), facts.executor_bond, 0, |_, _| panic!(
+                    "ceiling checked before signing"
+                ))
+                .is_err()
+            );
+            assert!(
+                palw_da_built_answer_object_v1(
+                    &domain,
+                    facts.claim_id,
+                    *unit,
+                    answer.clone(),
+                    facts.executor_bond,
+                    u64::MAX,
+                    |_, _| None
+                )
+                .is_err()
+            );
+            assert!(
+                palw_da_built_answer_object_v1(
+                    &domain,
+                    facts.claim_id,
+                    PalwDaUnitV1::Event { row: 0, tile: 0 },
+                    answer,
+                    facts.executor_bond,
+                    u64::MAX,
+                    |_, _| panic!("wrong unit checked before signing")
+                )
+                .is_err()
+            );
+        }
+        let mut wrong_claim = facts.clone();
+        wrong_claim.execution_root = Hash64::from_u64_word(0xBAD);
+        let (refused, kept) = answer(&backend, &wrong_claim, vec![honest, palw_fp_material_encode_v1(&job, &ids)], &units, false);
+        assert!(refused.is_err() && kept.is_none(), "no copy or remake answers another claim's commitment");
     }
 
     /// **An attempt claim's material: kept and verified, or re-made from its block's job** — which is
