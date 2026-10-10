@@ -69,7 +69,7 @@ for ((i=0; i<NODES; i++)); do
   # blocking tasks — the code path the .113 hang analysis moved off the runtime).
   if [ -n "${EXTRA_NODE_ARGS:-}" ]; then read -r -a extra <<<"$EXTRA_NODE_ARGS"; args+=("${extra[@]}"); fi
   if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:16310); fi
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
+  "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
   pid=$!
   pids+=("$pid")
   log "node-$i pid $pid bond $PREMINE_TXID:$i pay $addr"

@@ -563,7 +563,7 @@ pub struct PalwEconomicFactsV1 {
 /// lives beside the remedy rather than on the registration because `max_leverage_holds_v1`
 /// must be able to reach it without a registration in hand;
 /// [`crate::palw_registry::PalwClassRegistrationV1::one_job_payout_sompi`] and
-/// [`crate::palw_credit::PalwCreditParamsV1::one_job_ceiling_sompi`] both delegate here.
+/// the retired V1 credit gate both delegate here.
 ///
 /// Every step saturates. `q` is `u16` and `ρ_v` is per-mille, so the product is bounded in
 /// practice — but a saturated payout must read as "enormous", which fails the inequality,

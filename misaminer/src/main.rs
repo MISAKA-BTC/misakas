@@ -103,12 +103,6 @@ async fn main() {
     // rejected PALW attempt) without touching the default rig output.
     kaspa_core::log::try_init_logger(&std::env::var("MISAMINER_LOG").unwrap_or_else(|_| "INFO".into()));
 
-    // ADR-0042 Decision 4: the consensus build carries no model runtime, so whoever wants
-    // inference-priced tags (algo 4/5) registers the driver. Inert until a PALW template
-    // arrives; without it every PALW attempt would refuse as "no runtime registered" even
-    // with PALW_WORKER correctly set.
-    misaka_palw_pow_driver::install();
-
     if args.threads > 0
         && let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(args.threads).build_global()
     {
@@ -260,45 +254,18 @@ async fn main() {
             }
         };
 
-        // Grind the nonce. Two regimes:
-        //
-        // * PALW LLM PoW (algo_id = 4): ONE ATTEMPT = ONE FULL INFERENCE (seconds). The rayon
-        //   all-nonce scan below would fork-bomb LLM worker subprocesses, so PALW mines
-        //   sequentially: a handful of attempts against this template, then a refetch so the
-        //   timestamp stays ahead of the moving past-median (the seed binds the timestamp, so a
-        //   refetched template legitimately re-prices every nonce).
-        // * Hash algos (1/2/3): the multi-threaded Layer-0 scan. `StateLayer0` caches the
-        //   nonce-independent pre-PoW state; `check_pow_layer0(n)` varies n.
-        let state = kaspa_pow::StateLayer0::new(&header, &network_id);
-        let palw_ids =
-            [kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM, kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_OLLAMA];
-        // **An algo this miner cannot search is a refusal, not a fallback.**
-        //
-        // The `else` below is the Layer-0 HASH scan. Every algo id that is not in `palw_ids` used
-        // to land there, including the ConsensusV2 lanes — so on a network running algo 6 this
-        // miner searched a hash target no algo-6 header is graded by. It never terminates and it
-        // never finds anything, while the loop logs a healthy fetch-search-refetch the whole time.
-        // Measured in the field: four hours at 400% CPU, zero blocks, and the operator had to read
-        // this file against the consensus preset to find out why.
-        //
-        // Implementing the search here is not the fix: an algo-6 nonce is won by running the class's
-        // pinned model, which is what `kaspad --palw-produce` does and what a generic miner has no
-        // way to do. Saying so is.
-        if !palw_ids.contains(&header.pow_algo_id) && header.pow_algo_id >= kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM {
+        // This external miner searches hash algorithms only. Current PALW lanes use the node's
+        // producer, and retired inference algorithms 4/5 have no execution path.
+        if header.pow_algo_id >= kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM {
             log::error!(
-                "this network mines with PoW algo {} (a ConsensusV2 inference lane) and this miner cannot search it — \
-                 a nonce there is won by running the class's pinned model. Blocks on such a network are produced by \
-                 `kaspad --palw-produce` with a bonded producer key; there is no external-miner client for it. \
-                 Stopping rather than searching a hash target no header of this algo is graded by.",
+                "this miner cannot search PoW algo {}. Legacy inference algos 4/5 are removed; \
+                 current ConsensusV2 blocks are produced by `kaspad --palw-produce` with a bonded producer key.",
                 header.pow_algo_id
             );
             return;
         }
-        let found = if palw_ids.contains(&header.pow_algo_id) {
-            mine_palw_sequential(&state, PALW_TEMPLATE_REFRESH)
-        } else {
-            (0u64..u64::MAX).into_par_iter().find_any(|&n| state.check_pow_layer0(n).map(|(ok, _)| ok).unwrap_or(false))
-        };
+        let state = kaspa_pow::StateLayer0::new(&header, &network_id);
+        let found = (0u64..u64::MAX).into_par_iter().find_any(|&n| state.check_pow_layer0(n).map(|(ok, _)| ok).unwrap_or(false));
         let Some(nonce) = found else {
             log::debug!("no nonce found for this template; refetching");
             continue;
@@ -341,51 +308,6 @@ fn num_threads_label() -> String {
         Ok(n) => format!("{} (all cores)", n.get()),
         Err(_) => "all cores".to_string(),
     }
-}
-
-/// How long to keep attempting nonces on one PALW template before refetching. At ~1-3 s per
-/// inference this is a handful of attempts; refetching keeps the template timestamp ahead of the
-/// chain's moving past-median while other miners land blocks.
-const PALW_TEMPLATE_REFRESH: std::time::Duration = std::time::Duration::from_secs(20);
-
-/// PALW (algo_id = 4) sequential grind: one worker inference per nonce until the target passes or
-/// the refresh deadline lapses. The nonce walk starts at a clock-derived point so independent rigs
-/// don't all re-execute the same (cheapest-first) attempts — with a deterministic tag, duplicated
-/// nonces are duplicated work with zero new lottery tickets.
-fn mine_palw_sequential(state: &kaspa_pow::StateLayer0, refresh: std::time::Duration) -> Option<u64> {
-    let deadline = std::time::Instant::now() + refresh;
-    let mut nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
-    let mut attempts = 0u64;
-    while std::time::Instant::now() < deadline {
-        let started = std::time::Instant::now();
-        match state.check_pow_layer0(nonce) {
-            Ok((true, _)) => {
-                log::info!("PALW attempt {} accepted (nonce={nonce}, inference {:?})", attempts + 1, started.elapsed());
-                return Some(nonce);
-            }
-            Ok((false, _)) => {
-                attempts += 1;
-                log::debug!("PALW attempt {attempts} rejected by target (inference {:?})", started.elapsed());
-            }
-            Err(e @ kaspa_consensus_core::pow_layer0::PowLayer0Error::PalwUnavailable(_)) => {
-                // Configuration error — retrying cannot help. Fail loud like the node does.
-                eprintln!(
-                    "refusing to mine: {e}\nSet PALW_WORKER (+ MISAKA_PALW_GGUF) for the worker algo, or \
-                     MISAKA_PALW_OLLAMA_MODEL (+ a running `ollama serve`) for the Ollama algo, or export \
-                     MISAKA_PALW_POW_FIXTURE=1 (devnet) to mine the model-free fixture rules."
-                );
-                std::process::exit(1);
-            }
-            Err(e) => {
-                // Transient worker trouble (timeout, crash): log and keep trying — each nonce is
-                // its own subprocess, so one bad run does not poison the next.
-                log::warn!("PALW attempt failed (nonce={nonce}): {e}; continuing");
-                std::thread::sleep(std::time::Duration::from_millis(250));
-            }
-        }
-        nonce = nonce.wrapping_add(1);
-    }
-    None
 }
 
 #[cfg(test)]

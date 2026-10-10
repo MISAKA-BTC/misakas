@@ -95,7 +95,7 @@ one that does not.
 | well-formed carriage | `validate_shape` + `validate_against_class_v1` | **done** |
 | all six, one call | `kaspa_pow::palw_admission::check_palw_block_admission_v1` | **done** |
 | the call | `verify_expected_utxo_state` | **wired** |
-| the class target | folded from the block's own chain in `palw_class_facts_for_block` | **done** |
+| the former V1 class target | V1 class resolver removed; V2 uses its own class-state fold | **retired** |
 
 **Correction to this ADR's own text.** Decision A writes the lottery clause as
 `palw_ticket < class_target`. The implementation admits on `<=`, and the ADR text is the outlier:

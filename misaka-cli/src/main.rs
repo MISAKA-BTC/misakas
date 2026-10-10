@@ -19,6 +19,7 @@
 //! `exit`) so systemd / shell / monitors can branch on them.
 
 mod ask;
+mod ollama;
 mod bond;
 mod bootstrap;
 mod config;

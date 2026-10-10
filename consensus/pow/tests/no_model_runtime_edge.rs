@@ -18,8 +18,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-/// The crates that define validity. `kaspa-consensus-core` carries the pure tag/seed/projection
-/// helpers, `kaspa-pow` the finalizer and the runtime SLOT, `kaspa-consensus` the pipeline that
+/// The crates that define validity. `kaspa-consensus-core` carries pure consensus helpers,
+/// helpers, `kaspa-pow` the finalizer, `kaspa-consensus` the pipeline that
 /// consumes them. If any of these could reach a runtime crate, "the full node runs no model"
 /// would be a fact about today's call sites instead of a fact about the build.
 const GUARDED: &[&str] = &["kaspa-consensus", "kaspa-consensus-core", "kaspa-pow"];
@@ -30,7 +30,7 @@ const GUARDED: &[&str] = &["kaspa-consensus", "kaspa-consensus-core", "kaspa-pow
 /// the design, not a leak.
 const FORBIDDEN: &[&str] = &[
     "misaka-palw",            // VLT compute bridge: spawns the pinned worker as a subprocess
-    "misaka-palw-pow-driver", // the legacy algo-4/5 tag driver PR-02 extracts out of kaspa-pow
+    "misaka-palw-pow-driver", // retired; retain the guard against reintroducing the dependency
     "misaka-palw-worker",     // the pinned llama.cpp harness itself
     "misaka-palw-agent",      // its UDS supervisor
     "misaka-palw-reexecutor", // re-execution client
@@ -118,13 +118,9 @@ fn consensus_reaches_no_model_runtime_crate() {
     }
 }
 
-/// The daemon is the composition root: it MAY link the driver (`misaka-palw-pow-driver`) and the
-/// VLT compute bridge (`misaka-palw`) to wire the legacy lane in where a network demands it. It
-/// must never link the runtime itself — the worker and its supervisor are separate PROCESSES,
-/// and folding either into the daemon binary would put a model loader back inside the node that
-/// Decision 4 just removed it from.
+/// The daemon must keep model runtimes in sidecar processes.
 #[test]
-fn the_daemon_links_drivers_not_runtimes() {
+fn the_daemon_keeps_model_runtimes_in_sidecars() {
     let graph = workspace_graph();
     let closure = compiled_closure(&graph, "kaspad");
     for runtime in ["misaka-palw-worker", "misaka-palw-agent"] {

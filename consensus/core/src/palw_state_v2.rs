@@ -27310,7 +27310,7 @@ impl<'a> TransitionBuilder<'a> {
     /// and the charge for being WRONG is intact and symmetric — `slash_dissenting_seats` takes the
     /// `reserved` from a `Withheld` seat when the quorum licenses, and from a `Valid` seat when the
     /// quorum defaults the producer. What is missing is the other side of the ledger: **nothing in
-    /// this transition ever PAYS a `PalwPanelSeatV2`.** ADR-0033's `PalwPaidAttesterV1` pays the
+    /// this transition ever PAYS a `PalwPanelSeatV2`.** ADR-0033's retired V1 attester accounting pays the
     /// V1 credit lane's attesters, `palw_credit` is `None` on every shipped preset, and the block's
     /// escrowed carve is released to the worker, not to the panel. So answering carries a downside
     /// and no upside, and the seat that maximises its own outcome files nothing — after which the

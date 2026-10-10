@@ -198,9 +198,9 @@ where they came from Kaspa (`kaspa-*`).
 | `misaka-palw-sdk/` | **live**: the one interface every model class passes through, plus the `palw-class` binary |
 | `misaka-palw-base0-ref2/`, `misaka-palw-reference2/` | **reference**: independent second implementations used by tests to check the canonical arithmetic |
 | `misaka-palw-derive/`, `misaka-palw-extension/` | **operator tools**: derived artifacts and extension manifests |
-| `misaka-palw-gateway/`, `misaka-palw-fp-submit/`, `misaka-palw-constraint/` | **operator services**: the free-prompt gateway and its submit path |
+| `misaka-palw-gateway/`, `misaka-palw-fp-submit/`, `misaka-palw-constraint/` | **operator services**: the loopback-only free-prompt gateway and its submit path |
 | `tools/palw-job-replay/`, `tools/palw-jobs-export/` | **operator tools**: replay a job on this machine, export jobs for the explorer |
-| `misaka-palw/`, `misaka-palw-worker/`, `misaka-palw-agent/`, `misaka-palw-pow-driver/` | **legacy**: the V1 worker runtime and PoW tag path. The worker is excluded from default builds, and no registered class runs on it |
+| `misaka-palw/`, `misaka-palw-worker/`, `misaka-palw-agent/` | Shared supervisor and diagnostic replay tooling. The native diagnostic worker is excluded from default builds. The old algo-4/5 PoW driver and runtime dispatch are removed |
 | `misaka-palw-reexecutor/`, `misaka-palw-shadow/` | **drill / legacy**: Stage-0 capability agent and shadow drill, consensus-inert |
 
 ### Node and operator binaries

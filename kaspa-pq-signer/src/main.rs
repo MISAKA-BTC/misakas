@@ -55,7 +55,7 @@ mod unix_daemon {
         #[arg(long = "allowed-uid")]
         allowed_uids: Vec<u32>,
         /// Refuse to sign for these purposes (repeatable): `transaction`, `attestation`, `unbond`,
-        /// `takeover`, `palw-attempt`, `palw-fp-commitment`, `palw-fp-spend`, `palw-derived`.
+        /// `palw-attempt`, `palw-fp-commitment`, `palw-fp-spend`, `palw-derived`.
         /// E.g. a validator-only signer can pass `--deny-purpose transaction` so it never signs
         /// arbitrary transactions, and a signer that must never spend a free-prompt quantum can
         /// pass `--deny-purpose palw-fp-spend`. Default: none denied.
@@ -76,7 +76,7 @@ mod unix_daemon {
             SigningPurpose::Transaction => "transaction",
             SigningPurpose::Attestation => "attestation",
             SigningPurpose::Unbond => "unbond",
-            SigningPurpose::TakeoverToken => "takeover",
+            SigningPurpose::TakeoverToken => "retired-purpose-2",
             SigningPurpose::PalwAttemptV2 => "palw-attempt",
             SigningPurpose::PalwFpCommitmentV3 => "palw-fp-commitment",
             SigningPurpose::PalwFpSpendV3 => "palw-fp-spend",
@@ -84,13 +84,12 @@ mod unix_daemon {
         }
     }
 
-    /// Every purpose a signer can be asked for. The array length is the only hand-kept fact, and
+    /// Every active purpose a signer accepts. Tag 2 remains reserved on the wire. The array length is the only hand-kept fact, and
     /// `every_signing_purpose_can_be_denied` checks it against the discriminants.
-    const ALL_SIGNING_PURPOSES: [SigningPurpose; 8] = [
+    const ALL_SIGNING_PURPOSES: [SigningPurpose; 7] = [
         SigningPurpose::Transaction,
         SigningPurpose::Attestation,
         SigningPurpose::Unbond,
-        SigningPurpose::TakeoverToken,
         SigningPurpose::PalwAttemptV2,
         SigningPurpose::PalwFpCommitmentV3,
         SigningPurpose::PalwFpSpendV3,
@@ -103,7 +102,6 @@ mod unix_daemon {
         match want.as_str() {
             "tx" => return Ok(SigningPurpose::Transaction),
             "attest" => return Ok(SigningPurpose::Attestation),
-            "takeover-token" => return Ok(SigningPurpose::TakeoverToken),
             _ => {}
         }
         ALL_SIGNING_PURPOSES.into_iter().find(|p| purpose_cli_name(*p) == want).ok_or_else(|| {
@@ -289,22 +287,20 @@ mod unix_daemon {
                 assert_eq!(parse_purpose(name), Ok(purpose), "--deny-purpose {name} must name {purpose:?}");
                 assert_eq!(parse_purpose(&name.to_ascii_uppercase()), Ok(purpose), "and case must not matter");
             }
-            // The array is the whole enum: discriminants 0..8, each mapped to a distinct name.
+            // Purpose 2 is retired; active wire tags remain unchanged.
             let names: std::collections::BTreeSet<&str> = ALL_SIGNING_PURPOSES.into_iter().map(purpose_cli_name).collect();
             assert_eq!(names.len(), ALL_SIGNING_PURPOSES.len(), "no two purposes share a name");
             let mut discriminants: Vec<u8> = ALL_SIGNING_PURPOSES.iter().map(|p| *p as u8).collect();
             discriminants.sort_unstable();
-            assert_eq!(
-                discriminants,
-                (0u8..8).collect::<Vec<_>>(),
-                "the array is the whole enum: every discriminant present, none twice"
-            );
+            assert_eq!(discriminants, vec![0, 1, 3, 4, 5, 6, 7], "all active purpose tags are present, with the retired tag reserved");
             // The four the audit found, named individually.
             for name in ["palw-attempt", "palw-fp-commitment", "palw-fp-spend", "palw-derived"] {
                 assert!(parse_purpose(name).is_ok(), "{name} must be deniable");
             }
             // The shipped aliases still work, and an unknown name still fails with the full list.
             assert_eq!(parse_purpose("tx"), Ok(SigningPurpose::Transaction));
+            assert!(parse_purpose("takeover").is_err());
+            assert!(parse_purpose("takeover-token").is_err());
             let e = parse_purpose("nonsense").expect_err("unknown purposes are refused");
             assert!(e.contains("palw-fp-spend"), "the error lists what is available: {e}");
         }

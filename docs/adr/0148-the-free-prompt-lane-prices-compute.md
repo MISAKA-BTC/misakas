@@ -179,7 +179,7 @@ stands for, and the room is the bond's — but it moves who can mine with a give
   case; the default stays 200‰ for a gateway strangers reach. The drill passes
   `GATEWAY_PUBLIC_BUDGET_PERMILLE` [1000].
 * **The gateway names the case.** A claim larger than the whole window's budget is refused with
-  "no public job can commit at this setting — raise --public-job-budget-permille … or the bond's
+  "no local job can commit at this setting — raise --claim-budget-permille … or the bond's
   room", not "spent (0 of …)".
 * **The client repeats the verdict.** MISAKA Studio had logged "free-prompt claim committed" off
   the claim id and counted the job `Committed` while the gateway said `committed: false`; it now

@@ -3694,25 +3694,11 @@ pub struct Params {
     /// (devnet/simnet keep fast local PoW). Genesis (the parentless trusted root) is exempt.
     pub pow_blake2b_sha3_activation: ForkActivation,
 
-    /// MISAKA Phase 4 PoW: activation of the **PALW deterministic pinned-LLM** Layer-1
-    /// (`POW_ALGO_ID_PALW_LLM = 4`). Past this DAA score every block header MUST declare
-    /// `algo_id = 4` and its PoW digest is the Layer-0 finalizer over one deterministic
-    /// Qwen3.5-2B inference transcript (see `pow_layer0::POW_ALGO_ID_PALW_LLM`); it supersedes
-    /// BLAKE2b-SHA3 where both are active. `always()` ⇒ PALW from genesis (devnet — the
-    /// 0.1-bps LLM-PoW network); `never()` ⇒ inert (mainnet/testnet/simnet until their own
-    /// fork ADR). Genesis (the parentless trusted root) is exempt. Validating nodes need the
-    /// pinned worker (`PALW_WORKER` + `MISAKA_PALW_GGUF`) or the explicit fixture mode
-    /// (`MISAKA_PALW_POW_FIXTURE=1`).
+    /// Reserved legacy algo-4 activation. Never armed by current network presets;
+    /// the inference PoW implementation is removed. Retained as fingerprint input.
     pub pow_palw_activation: ForkActivation,
 
-    /// MISAKA Phase 4b PoW: activation of the **PALW-via-Ollama** Layer-1
-    /// (`POW_ALGO_ID_PALW_OLLAMA = 5`), superseding every other algo where active. Same seed /
-    /// prompt / grinding closure as Phase 4; the runtime is a host-local Ollama server running
-    /// the pinned Qwen model (the runtime an Ubuntu VPS fleet operates), and the tag commits to
-    /// the greedy response bytes + token counts (Ollama exposes no per-decode logits).
-    /// `always()` ⇒ from genesis (testnet-10 — the public PALW network); `never()` elsewhere
-    /// (devnet keeps the stronger algo-4 worker tag). Nodes need `MISAKA_PALW_OLLAMA_MODEL`
-    /// (+ optional `MISAKA_PALW_OLLAMA_URL`) or the devnet-only fixture env.
+    /// Reserved legacy algo-5 activation, retained as fingerprint input only.
     pub pow_palw_ollama_activation: ForkActivation,
 
     /// kaspa-pq: PQ-only enforcement mode for this network (ADR-0019 /
@@ -23489,8 +23475,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
-    // proof-of-work.** This was `always()` — devnet as the algo-4 pinned-Qwen (or
-    // `MISAKA_PALW_POW_FIXTURE=1`) V1 network — but `validate_palw_v2` refuses a V1 PoW fence
+    // proof-of-work.** `validate_palw_v2` refuses a V1 PoW fence
     // beside a V2 ruleset, and `devnet_shipped_params` installs the V2 bundle on this base.
     // The const alone is therefore the BASE identity (hash-only), exactly the shape
     // `palw_rc_base_params` has for testnet-11; what a node actually runs is
