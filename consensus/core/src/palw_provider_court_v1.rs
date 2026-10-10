@@ -1,38 +1,44 @@
-//! **Lane DA16: the provider court (RFC-0009 §4.2) and artifact availability (RFC-0014 §16.4) on the kernel route** — dormant behind
+//! **Lane DA16: the provider court (RFC-0009 §4.2) on the kernel route** — the claim-material court, dormant behind
 //! `Params::palw_provider_court_v1`, which no network can arm (and which needs the kernel route's own never-armable fence).
 //!
 //! ```text
-//! 150 ProviderLease (a provider bond)     a bonded promise to serve every unit of a subject until serve_until — reserves `reserved`
-//!                                         of its FREE collateral (V2's committed-collateral ledger and both withdrawal gates see it)
-//! 151 ProviderChallenge (another operator) ONE unit of ONE lease, on chain; a challenge bond; deadline now + 20 DAA (inside the lease)
-//! 152 ProviderAnswer (the provider)        the unit, verified against the CHAIN's root by the deadline ⇒ cleared (fee burned from the
-//!                                         challenger's bond); a wrong answer neither clears nor defaults — the clock decides
+//! 150 ProviderLease (a provider bond)     a bonded promise to serve every committed position of ONE kernel claim until serve_until —
+//!                                         reserves `reserved` of its FREE collateral (V2's committed-collateral ledger and both
+//!                                         withdrawal gates see it)
+//! 151 ProviderChallenge (another operator) ONE claim position of ONE lease, on chain; a challenge bond; deadline now + 20 DAA
+//! 152 ProviderAnswer (the provider)        the position, verified against the claim's commitments (the kernel's own classification)
+//!                                         by the deadline ⇒ cleared (fee burned from the challenger's bond); a wrong answer neither
+//!                                         clears nor defaults — the clock decides
 //!     tick                                 deadline passed unanswered ⇒ THAT lease is charged: its reservation slashed, the challenger
-//!                                         paid 500‰ of it, the rest burned; once per (subject, provider)
+//!                                         paid the PALW reporter share (49%, ADR-0032) before Final, the rest burned (all of it after
+//!                                         Final); once per (subject, provider)
 //! 153 DaTransfer (the claim's producer)    a kernel claim's DA responsibility moves to its leases (≥ 2 live, distinct operators, none the
 //!                                         producer's, Σ reservations ≥ the claim's, serving through its liability bound) — irreversible
 //!     kernel demand default on a transferred claim ⇒ `ProviderLiableDefault`: every live lease charged, the producer pays nothing
 //!     no live, uncharged lease left on a transferred claim ⇒ the claim LAPSES: void (Unavailable, not producer-defaulted), never convicted
 //! ```
 //!
-//! A **subject** is an artifact PAIR (`Artifact { v2_class, kernel_param_root }`: the V2 class's inventory under its registered root AND the
-//! kernel commitments the pair names — a provider recomputes both from the bytes before leasing) or a kernel claim's material. Units and
-//! their verification are [`crate::palw_public_material_v1`]'s: always against the chain's own root.
+//! **ADR-0177 re-scope (2026-10-10).** The chain does not interfere with model acquisition: the `Artifact { v2_class, kernel_param_root }`
+//! subject (availability leases of model bytes), the READY / LAPSED availability of an artifact pair, the tag-104 gate on it and the
+//! `AVAILABILITY_REQUIRED` hold are WITHDRAWN. The variant still decodes (discriminant 0 stays reserved, so the bytes ride exactly as
+//! before below the fence), and past the fence every object naming it is refused: no row, no reservation, no charge, at any height. A
+//! court unit is claim-specific or nothing ([`crate::palw_court_scope_v1`]): a provider is never charged for not serving model bytes.
 //!
-//! **Availability of an artifact pair** ([`crate::palw_state_v2::PalwChainStateV2::provider_availability_v1`]): READY with ≥ 2 live,
-//! uncharged leases from distinct operators; LAPSED from the first block none is left. Past the fence an artifact binding (tag 104) needs
-//! its pair READY through its whole refutation horizon, and a pair that lapsed after the binding attests nothing and holds the class
-//! `AVAILABILITY_REQUIRED` — so a binding is attested only after its bytes were publicly obtainable, under bonded obligation, for its whole
-//! horizon: equality of the two roots is something an outsider confirms (or refutes, tag 105) from the bytes.
+//! **The challenger's share is the PALW reporter share (G14).** A producer's own Sybil challengers can void its claim by charging its
+//! own leases and collect the share. With the share at ADR-0032's 49% — the share an accuser of a conviction gets (G14-R4's one 490‰
+//! constant; here `PALW_RCORE_REPORTER_REWARD_BPS_V1`, the same 49%) — a self-lapse nets the coalition a loss of ≥ 51% of Σ leases ≥
+//! 51% of the claim's reservation: exactly the floor a self-reported conviction leaves, so voiding is never the cheaper escape. (The
+//! former 500‰ beside a 10% accuser share was a discount; the transfer's Σ leases ≥ the claim's reservation is what makes the floors
+//! meet.) After Final the charge is burned whole — the kernel's post-Final rule, under which demanders are not paid either.
 //!
 //! **What never moves collateral**: a Panel's local timeout or a local fetch failure (not inputs at all), a lease alone (a promise with no
-//! challenge), a wrong answer, a challenge of a unit the subject does not commit or outside the lease (refused). **One failure, one
-//! party**: a claim committed below the fence, or never transferred, keeps its producer's demand/default path byte for byte; a provider is
-//! charged at most once per subject; a transferred claim's producer is never charged for its material (a false computation still
-//! convicts it through the kernel's unchanged `FileProof`, and a false kernel root slashes the BINDER through tag 105).
+//! challenge), a wrong answer, a challenge of a position the claim does not commit or outside the lease (refused), anything about model
+//! bytes. **One failure, one party**: a claim committed below the fence, or never transferred, keeps its producer's demand/default path
+//! byte for byte; a provider is charged at most once per subject; a transferred claim's producer is never charged for its material (a
+//! false computation still convicts it through the kernel's unchanged `FileProof`).
 //!
 //! Rows live in the kernel route's aux tables 43–45 (written through the route's one journaled writer, delta 160, tail `0xEC`, root
-//! `kernel-route/v1`); RPC op 211 already pages them.
+//! `kernel-route/v1`); RPC op 211 already pages them. Table 45's claim row also holds the court scope's per-requester tally.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeSet;
@@ -72,8 +78,14 @@ pub const PALW_PROVIDER_RESPONSE_WINDOW_DAA_V1: u64 = 20;
 pub const PALW_PROVIDER_MIN_PROVIDERS_V1: usize = 2;
 /// Open challenges one bond may hold (its collateral bounds it too).
 pub const PALW_PROVIDER_MAX_OPEN_CHALLENGES_V1: usize = 8;
-/// Of a charged lease's slash, the challenger's share (permille); the rest is burned.
-pub const PALW_PROVIDER_CHALLENGER_REWARD_PERMILLE_V1: u64 = 500;
+
+/// **The court's reporter share** — what a challenger (of a charged lease) or the demanders (of a provider-liable default, of at most the
+/// route's `default_penalty` of the charge) are paid before Final: ADR-0032's PALW reporter share (49%), the rest burned. The same rate
+/// as the route's accuser and demander shares (G14-R4's `PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1` = 490‰; at its merge this reads that
+/// constant), so the two reporter paths of a claim cannot drift.
+pub fn palw_provider_reporter_share_v1(slashed: u64) -> u64 {
+    (slashed as u128 * crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V1 as u128 / 10_000) as u64
+}
 
 // ---- the fence ---------------------------------------------------------------------------------------------------------------
 
@@ -101,14 +113,19 @@ impl Params {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum ProviderSubjectV1 {
-    /// A V2 IR class's artifact under BOTH roots: its inventory (the class's registered `artifact_root`) and the kernel commitments
-    /// `kernel_param_root` names.
+    /// **WITHDRAWN (ADR-0177 D1)**: a V2 class's artifact under both roots. It decodes (so it rides below the fence exactly as before)
+    /// and is refused past it at every height: model availability is not a consensus matter.
     Artifact { v2_class: Hash64, kernel_param_root: Hash64 } = 0,
     /// A kernel route claim's committed material (every position of every stage).
     KernelClaim { claim: Hash64 } = 1,
 }
 
 impl ProviderSubjectV1 {
+    /// Whether this subject is the withdrawn artifact one.
+    pub const fn is_withdrawn(&self) -> bool {
+        matches!(self, Self::Artifact { .. })
+    }
+
     pub fn key(&self) -> Vec<u8> {
         borsh::to_vec(self).expect("a subject serializes")
     }
@@ -160,16 +177,19 @@ pub struct ProviderChallengeRowV1 {
     pub answered: bool,
 }
 
-/// What the court remembers of a subject, keyed by the subject.
+/// What the court remembers of a (kernel claim) subject, keyed by the subject.
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProviderSubjectRowV1 {
     /// A kernel claim whose DA responsibility moved to its leases (tag 153), and when.
     pub transferred_daa: Option<u64>,
-    /// The last DAA at which the subject was left with no live, uncharged lease after a charge (a lapse; an artifact pair bound before
-    /// it attests nothing).
+    /// The DAA at which a transferred claim was left with no live, uncharged lease after a charge (a lapse: void, never convicted).
     pub lapsed_daa: Option<u64>,
     /// Every provider charged for this subject (each at most once), ascending.
     pub charged: Vec<PalwBondKeyV2>,
+    /// **The court scope's per-requester tally** (ADR-0177 D2, [`crate::palw_court_scope_v1`]): the distinct `(stage, position)` units
+    /// each requester OPERATOR has demanded of this claim through the kernel's `FileDemand`, ascending by operator; at most
+    /// `PALW_COURT_SCOPE_MAX_UNITS_PER_REQUESTER_V1` per operator.
+    pub requested: Vec<(Hash64, Vec<(u8, u32)>)>,
 }
 
 pub fn palw_provider_lease_key_v1(subject: &ProviderSubjectV1, provider: &PalwBondKeyV2) -> Vec<u8> {
@@ -314,12 +334,6 @@ impl PalwKernelRouteStateV1 {
                 .map(|(_, provider, unit, row)| (provider, unit, row))
                 .collect(),
         }
-    }
-
-    /// **Did an artifact pair lapse at or after `since_daa`?** (A binding bound at `since_daa` then attests nothing.)
-    pub fn provider_pair_lapsed_since_v1(&self, v2_class: &Hash64, kernel_param_root: &Hash64, since_daa: u64) -> bool {
-        let subject = ProviderSubjectV1::Artifact { v2_class: *v2_class, kernel_param_root: *kernel_param_root };
-        self.provider_subject_v1(&subject).and_then(|row| row.lapsed_daa).is_some_and(|at| at >= since_daa)
     }
 }
 

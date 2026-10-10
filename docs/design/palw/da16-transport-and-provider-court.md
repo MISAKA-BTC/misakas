@@ -1,259 +1,371 @@
-# DA16 — public artifact / claim-material transport and the provider court
+# DA16 — the claim-material provider court, the court scope, and the (off-chain) public-material transport
 
-Lane DA16 (`da16/transport-provider-court`). Closes two items of the single future full-activation release (no DAA-9,000 flag day):
+Lane DA16 (`da16/transport-provider-court`). Re-scoped on 2026-10-10 by [ADR-0177](../../adr/0177-model-bond-allocation-without-availability-consensus.md)
+("the chain does not interfere with model acquisition"). The lane now owns three things:
 
-1. **RFC-0014 §16 transport** — artifact bytes and claim material are publicly fetchable by any outsider for the liability horizon
-   (manifest, providers, chunk addressing, retention, fetch/verify by root), so the onboarding artifact binding (V2 `artifact_root` ↔
-   kernel `ParamCommitmentsV1` root, lane D record §5–§6 GAP 1) becomes something an outsider **confirms or refutes from the bytes**.
-2. **RFC-0009 §4.2 provider court** — the objective transfer of a miner's DA responsibility to bonded providers.
+1. **The claim-material provider court** (RFC-0009 §4.2): moving a kernel claim's DA responsibility to bonded providers. Dormant behind
+   `palw_provider_court_v1`.
+2. **The court scope** (ADR-0177 D2, RFC-0014 §16.4): what any court may demand, the cumulative bound, and how a verifier's own model
+   operand is authenticated. This is G14C's GAP-06; GAP-05 (availability out of consensus) and GAP-52 (snapshot leaf well-formedness) close
+   here too. See §7.
+3. **The public-material transport** (`misaka-palw-remote::public_material`, `palw-evidence artifact-*`): optional, non-consensus
+   tooling for the artifact half. The claim half serves the court.
 
-Everything consensus-side is dormant behind a NEW fence (proposed name **`palw_provider_court_v1`**) that no network can arm. Amounts
-are BILI (1 BILI = 10^8 sompi). Status words follow the integration matrices; nothing here was run against a live node or network.
+Amounts are BILI (1 BILI = 10^8 sompi). Status words are the user's three levels (implemented / verified / armable); nothing here is
+armable, and nothing ran against a live node or network.
 
 ## 0. Decisions in one table
 
 | Question | Decision | Why |
 |---|---|---|
-| `misaka-model-transport` crate or extend `misaka-palw-remote` | **extend `misaka-palw-remote`** (new module `public_material`); the pure, consensus-relevant half in `kaspa-consensus-core::palw_public_material_v1` | The external transport (BEP52 / libtorrent / daemon) cannot be imported in this lane (no network) and RFC-0014 §16.2 forbids linking it into a validator anyway. `misaka-palw-remote` already owns the provider seam, HTTP/dir providers, read-back upload, availability, repair and the retention monitor; a second crate would fork the layout and the fetch policy. A later BEP52 import is one more provider behind the same verify-by-root (RFC-0014 L3) and needs no consensus change. |
-| Root of trust of every byte | **the chain's own root**, never a manifest or a provider signature | artifact leaf → class `artifact_root` (`verify_artifact_opening_v1`); kernel side → bound `kernel_param_root` (`ParamCommitmentsV1::root`, `TensorOpeningV1::authenticates`); claim position → the claim's committed values (`classify_position_response_v1`); V2 held unit → the claim's `execution_root` (`palw_held_da_check_disclosure_v1`). A manifest is an index only. |
-| Where the court's state lives | **the kernel route's aux tables** (journaled by delta 160, carried by tail `0xEC`, rooted in `kernel-route/v1`) | exactly lane D's onboarding precedent: reorg, replay, restart and pruned import come for free, one writer. |
-| What moves DA responsibility | an explicit, irreversible, fence-gated **`DaTransferV1`** by the claim's producer, over ≥ 2 live leases | "version or fence": claims committed below the fence, and claims never transferred, stay their producer's; one failure is one party's. |
-| How the kernel learns it | one consumer-derived input `KernelLedgerV1::provider_liable` (like `attested_artifacts`, injected per load from the court's rows, only where the fence is in force) + two receipts `LedgerEventV1::ProviderLiableDefault` (discriminant 30) and `ProviderLapsed` (31) (Lead allocation: 21–23 are G14-R4's) + `KernelLedgerV1::provider_lapse(claim)` | the demand/default rules stay the kernel's; only the payer of a default changes. |
+| Model availability in consensus | **Withdrawn.** The `Artifact` lease subject, the READY/LAPSED state of an artifact pair, the tag-104 gate on it, `AVAILABILITY_REQUIRED` from a lapse, and every charge for not serving model bytes are gone. | ADR-0177 D1: a model not being served may never void, hold, slash or delay anything. |
+| The `Artifact` variant's bytes | **Kept decodable; refused past the fence at every height.** Discriminant 0 stays reserved. | A-2: below the fence the bytes ride unjudged exactly as before, so no mixed-release split. Past the fence the fold refuses before reading any row, bond or class. |
+| What the court may compel | **Claim-specific units only** (input, trace, state, output, witness hashes). Model bytes come only from a verifier's own copy, authenticated against the REGISTERED root. | ADR-0177 D2. One predicate, `palw_court_scope_v1`, consulted by every demand path the lane can reach. |
+| Cumulative bound | **Bytes:** model-byte disclosure is 0 per claim and per model, for any number of demands. **Count:** each unit at most once per claim, and ≤ 16 distinct units per (claim, requester operator). | No count cap is shared between requesters, so nothing can starve an honest prosecutor (G14). |
+| A claim charge's reporter share | **ADR-0032's 49% before Final** (it was 500‰), for the 151 challenger and the provider-liable demanders alike; burned whole after Final. | It is the same rate as the route's accuser and demander shares (G14-R4's 490‰ constant), so a self-lapse leaves the coalition the same ≥ 51% floor as a self-reported conviction; see §2.3. |
+| Snapshot leaf well-formedness (GAP-52) | **Make the court total** instead of attesting at registration. A retrieval claim's own entries become a claim-specific demand unit. | A junk leaf has no preimage, so no registration attestation is refutable. See §7.6. |
+| Transport crate | Extend `misaka-palw-remote` (unchanged); the artifact half is **non-consensus**. | Model distribution is off-chain and voluntary (ADR-0177 D1, D2). |
 
-## 1. Transport (item 1)
+## 1. The public-material transport (non-consensus for artifacts)
 
-### 1.1 Units (chunk addressing) and their verification
+`consensus/core/src/palw_public_material_v1.rs` and `misaka-palw-remote/src/public_material.rs` are kept as they were. Each now carries a
+module-level NON-CONSENSUS label for the artifact half. It covers:
+- the units and their single verification function (artifact leaf, kernel commitments, row-tree node run, kernel row, claim position);
+- the manifests (checked against the chain before any byte);
+- the read-back publish, per-provider availability (a local observation), repair and the retention monitor;
+- the CLI `palw-evidence artifact-fetch | -verify | -status | -repair | -hook`.
 
-`PublicUnitV1` names one unit; `PublicUnitAnswerV1` carries it. The same enum is the court's challenge unit (§2) and the transport's file
-name, so an off-chain fetch and an on-chain answer are checked by ONE function per unit.
+A verifier uses it to obtain a model and check it against the REGISTERED roots. No fold arm reads its result, no lease backs it, and a
+provider that serves no model bytes is never charged. The claim half (`ClaimPosition`, V2 held units) is what the provider court and the
+kernel's demand serve.
 
-| Unit | Subject | Bytes | Verified against (on chain) |
-|---|---|---|---|
-| `ArtifactLeaf { index }` | artifact | `PalwArtifactOpeningV1` (operand + path) | the V2 class's registered `artifact_root`, at the leaf the program's closed-form layout puts it (`palw_tir_inventory_leaf_count_v1`, `palw_tir_leaf_index_v1`) |
-| `KernelCommitments` | artifact | `ParamCommitmentsV1` | `root() == kernel_param_root` |
-| `KernelRowNodes { param, layer, level, first, count ≤ 1,024 }` | artifact | node hashes of the instance's row tree at `level` + boundary frontier + col root | recomputes the instance's tensor commitment → `commitments.by_instance[(param, layer)]` (bounded localization: two rounds reach a row of a 2^20-row tensor) |
-| `KernelRow { param, layer, row }` | artifact | `TensorOpeningV1` (row) | `authenticates(commitments.by_instance[(param, layer)])` |
-| `ClaimPosition { stage, position }` | kernel claim | `PositionResponseV1` (what `Respond` carries) | the claim row's committed values (`classify_position_response_v1`, the kernel's own) |
-| `HeldUnit(PalwHeldMissingV1)` (transport only, §4) | V2 held claim | `PalwHeldDisclosureV1` | `palw_held_da_check_disclosure_v1` against the claim's `execution_root` and authenticated binding |
-
-**Binding confirmation from bytes** (`binding_check_from_bytes_v1`): fetch every leaf, rebuild the V2 root (must equal the class's), reassemble
-each declared instance from its leaves, compute `ParamCommitmentsV1`, compare its root with the binding's. Equal ⇒ **CONFIRMED** (a local
-verdict; the chain records only the absence of a refutation inside an *available* horizon, §3). Different ⇒ the differing instances; with
-the bound `KernelCommitments` and `KernelRowNodes` → the first differing row → its `KernelRow` (from the providers' transport, or forced
-on chain by a court challenge) → tag 105's existing `ArtifactMismatchProofV1::Row` (`refutation_from_bytes_v1`). The refuter never needs
-the false bytes in advance: the provider that leased the pair must serve them or be slashed.
-
-### 1.2 Manifests
-
-* `ArtifactManifestV1 { version, network_domain, v2_class, artifact_root, kernel_param_root, leaf_count, leaf_hashes, retain_until_daa }` —
-  checked against the chain BEFORE any byte: `leaf_count` is the program's closed form and `artifact_root_v1(leaf_hashes) == artifact_root`;
-  then every leaf verifies alone (`artifact_leaf_v1(operand) == leaf_hashes[i]`, at the coordinates the program fixes).
-* `ClaimMaterialManifestV1 { version, network_domain, claim, positions: [(stage, position, len, hash)], retain_until_daa }` — an index; every
-  unit is classified against the claim row read from public rows (op 211 / `palw_kernel_route_v1`).
-* `HeldMaterialManifestV1 { version, network_domain, claim, execution_root, binding, units, retain_until_daa }` — the binding is
-  authenticated against the claim's `execution_root` first.
-
-### 1.3 Providers, layout, retention
-
-Content-addressed layout added beside `claims/` and `chunks/` (same dir and HTTP providers, same reference server, strict path parser):
-
-```text
-artifacts/<class>/<artifact root>.manifest            ArtifactManifestV1 (written LAST)
-artifacts/<artifact root>/leaf/<index>.unit           PalwArtifactOpeningV1 without path (the operand; the path is rebuilt from the manifest)
-artifacts/<artifact root>/kernel/<kernel root>/commitments.unit
-artifacts/<artifact root>/kernel/<kernel root>/<param>-<layer|g>/row/<row>.unit
-material/<claim>/manifest                             ClaimMaterialManifestV1 / HeldMaterialManifestV1 (written LAST)
-material/<claim>/<unit key hex>.unit
-```
-
-Upload is read-back verified (`publish_artifact_v1`, `publish_claim_material_v1`); availability is per provider per unit
-(`LOCAL_OBSERVATION`, never evidence); repair re-seeds a thin provider from verified copies; the retention monitor watches subjects until
-their `retain_until_daa`, which must cover the chain horizon (artifact: the binding's liability horizon; claim: its liability end).
-`palw-evidence artifact-publish | artifact-fetch | artifact-verify | material-publish | material-fetch` drive it; `artifact-fetch` doubles as a
-`--palw-root-fetch-cmd` for `kaspad/src/palw_root_fetch.rs` (same argv contract: class, root, `drop_dir=`), so the node's root-fetch hook
-uses the public transport without a kaspad change. Discovery stays a configured provider list (DESIGN_GAP: no on-chain discovery beyond the
-lease rows, which name provider BONDS, not endpoints).
-
-## 2. The provider court (item 2)
+## 2. The provider court (claim material only)
 
 ### 2.1 Fence
 
-`Params::palw_provider_court_v1: Option<ForkActivation>` — the `palw_probabilistic_constraints_v1` pattern: `None` on every preset and in no
-flag-day list, hashed Some-only into `consensus_params_id` and `consensus_schedule_id`, collapsed from `Some(never())`, listed in
-`palw_fences_v1()`, a fork-id probe arm, and `validate_palw_provider_court_v1` REFUSES every armed height. Where in force (harness only)
-the route's fence must also be in force; below it tags 150–153 are dropped by name before any slot, rent or budget (A-2 uniform: an older
-build cannot decode them), and the fold refuses them as the second lock. The existing `palw_evidence_court_v1` (the pure, V2-free-prompt
-twin of `palw_da_court`) is untouched; its rules are this court's spec and its pure machine is used as a differential oracle in tests.
+`Params::palw_provider_court_v1: Option<ForkActivation>` follows the usual dormant pattern:
+- `None` on every preset, Some-only hashed, `never()` collapsed;
+- listed in `palw_fences_v1()`, with a fork-id probe arm;
+- `validate_palw_provider_court_v1` refuses every armed height.
 
-### 2.2 Objects (tags 150–153, ML-DSA-87 by a V2 bond over `H(network ‖ kind ‖ signer ‖ payload)`, context `misaka-palw/provider-court/object/v1`)
+Where in force (harness only), the kernel route's fence must be in force too. Below it, tags 150–153 are dropped by name before any slot,
+rent or budget (A-2 uniform), and the fold refuses them as the second lock. The same fence also gates the court scope (§7.3) on the kernel
+route.
+
+### 2.2 Objects (tags 150–153, ML-DSA-87 by a V2 bond, context `misaka-palw/provider-court/object/v1`)
 
 | Tag | Object | Signer | Effect |
 |---|---|---|---|
-| 150 | `ProviderLeaseV1 { subject, reserved, serve_until_daa }` | the provider | a bonded promise to serve every unit of `subject` until `serve_until_daa`; reserves `reserved ≥ 100 BILI` of the provider's FREE collateral (mirrored into V2's committed-collateral ledger and both withdrawal gates) until `serve_until`; one lease per (subject, provider) |
-| 151 | `ProviderChallengeV1 { subject, provider, unit, valid_until_daa }` | any bond of another operator | one unit of one lease, on chain; reserves a 10 BILI challenge bond; deadline `now + 20 DAA` (inside the lease); one challenge per (lease, unit) until its deadline; ≤ 8 open per challenger. **Replay-safe**: the signed `valid_until_daa` must satisfy `now ≤ valid_until_daa ≤ now + 20`, and the row stays (answered: a tombstone) until the deadline — a replay of the signed object by anyone meets the row or its own expiry, never re-opening a closed challenge on its signer's account |
-| 152 | `ProviderAnswerV1 { subject, provider, unit, answer }` | the lease's provider | the unit, verified against the chain's root (§1.1) by the deadline ⇒ cleared (challenger: bond back minus a 1 BILI fee, burned; the row kept as a tombstone until the deadline). A wrong answer neither clears nor defaults (dropped); the clock decides. Spends one adjudication of the block's shared kernel-route budget (as `Respond` does) |
-| 153 | `DaTransferV1 { claim }` | the claim's producer | moves the claim's DA responsibility to its leases (§2.3) |
+| 150 | `ProviderLeaseV1 { subject: KernelClaim { claim }, reserved, serve_until_daa }` | the provider | A bonded promise to serve every committed position of the claim. Reserves `reserved ≥ 100 BILI` of FREE collateral, mirrored into V2's committed collateral and both withdrawal gates. One lease per (claim, provider); never the producer's operator. |
+| 151 | `ProviderChallengeV1 { subject, provider, unit: ClaimPosition, valid_until_daa }` | another operator's bond | Challenges one committed position of one lease. Reserves a 10 BILI bond; deadline `now + 20`; signed expiry plus a tombstone, so a replay never re-opens it; ≤ 8 open per challenger. **The unit must pass the scope predicate:** an artifact unit is refused as model bytes. |
+| 152 | `ProviderAnswerV1 { …, answer: ClaimPosition { bytes } }` | the provider | Classified by the kernel's own `classify_served_position_v1`. Valid by the deadline ⇒ cleared, and the challenger pays a 1 BILI fee. A wrong answer neither clears nor defaults. |
+| 153 | `DaTransferV1 { claim }` | the claim's producer | Moves the claim's DA responsibility to its leases (§2.3). |
 
-`subject` is `Artifact { v2_class, kernel_param_root }` (the pair a provider vouches for: it recomputes both roots from the bytes before
-leasing) or `KernelClaim { claim }`.
+`ProviderSubjectV1::Artifact { … }` (discriminant 0) is **withdrawn**: 150, 151 and 152 naming it are refused first, by `claim_subject`.
 
-### 2.3 Rules (RFC-0009 §4.2, word for word)
+### 2.3 Rules (RFC-0009 §4.2)
 
-* **Liability moves only with a provider bond, an on-chain chunk challenge, an opening deadline and a default that slashes the provider.**
-  `DaTransferV1` is accepted only: claim committed at or after the fence; not terminal, not convicted; **no open demand and no default so far**
-  (a failure in flight is never re-assigned); ≥ 2 live, uncharged leases of distinct operators (none the producer's), each serving through
-  the claim's liability bound; Σ lease reservations ≥ the claim's reservation (moving liability never makes withholding cheaper).
-  Irreversible.
-* **Default slashes the provider.** A 151 unanswered at its deadline charges THAT lease: its reservation is slashed (`slash_bond`, burned at
-  release), the challenger gets its bond back and 500‰ of the slash (kernel payout queue), the rest is burned; the provider's other open
-  challenges on the subject settle moot. **Each provider is charged at most once per subject.** **After Final of a claim subject the
-  charge is burned whole** (no challenger share): a share would let the producer's own Sybil challengers recycle half of what
-  withholding costs — the kernel's own post-Final rule (a post-Final default is burned whole, demanders unpaid). Without this, a
-  coalition could charge its own leases through its own challengers at half price and then withhold for free.
-* **The kernel's public demand stays THE material demand.** On a transferred claim a `FileDemand` that nobody answers by its deadline is
-  `ProviderLiableDefault`: the producer pays nothing; every live lease of the claim is charged (any of them could have answered with a
-  `Respond` — they all failed one public, on-chain challenge); demanders share `min(pool, default_penalty)` pre-Final (post-Final the pool
-  is burned whole, as the producer path does); the claim is void.
-* **Common-mode outage voids, never convicts.** When no live, uncharged lease is left on a transferred claim the claim LAPSES
-  (`provider_lapse`): `Unavailable { producer_defaulted: false }` before Final (no reward; the producer's reservation released, never
-  slashed), the OPV fact withdrawn after Final. Never `Convicted`, never `SlashFraud`/`SlashDefault` of the miner.
-* **A false root or a false computation stays the miner's.** Providers are charged only for not serving bytes that verify against the
-  chain's root; the bytes they serve convict the producer through the kernel's unchanged `FileProof` (a transferred claim keeps its
-  reservation until its liability ends). An artifact binding whose kernel root is false is refuted by tag 105 and slashes the BINDER; a
-  provider that answers with the false tree's openings has served what it promised and is cleared.
-* **Never a slash:** a single Panel's timeout or a local fetch failure (not inputs at all); a lease alone (a pre-signed promise with no
-  challenge); a wrong answer before the deadline; a challenge outside the lease or of a unit the subject does not commit (refused).
-* **Old vs new.** Below the fence, and for every claim never transferred, the producer's demand/default path is byte-for-byte today's.
-  A possession challenge against a lease on an untransferred claim charges only the provider's own promise (a separate obligation, never
-  the producer's failure).
+* **Transfer.** Accepted only when all of these hold:
+  - the claim was committed at or after the fence, is not terminal, has no open demand and no default so far;
+  - at least 2 live, uncharged leases from distinct operators (none the producer's) serve through the claim's horizon bound;
+  - Σ lease reservations ≥ the claim's reservation.
 
-### 2.4 Artifact availability and the binding (RFC-0014 §16.4)
+  The transfer is irreversible.
+* **An unanswered 151 charges THAT lease, once per (claim, provider).** The reservation is slashed; the challenger gets its bond back and
+  is paid **the PALW reporter share (49%, ADR-0032) before Final**; the rest is burned (all of it after Final). The provider's other
+  challenges on the claim settle moot.
+  - *Why 49% (G14):* a coalition can void its own claim by charging its own leases through its own Sybil challengers. At 49% it nets a
+    loss of ≥ 51% of Σ leases ≥ 51% of the claim's reservation. That is exactly the floor a self-reported conviction leaves at G14-R4's
+    490‰ accuser share, so voiding is never the cheaper escape.
+  - The former 500‰, beside a 10% accuser share, was a discount. The transfer rule Σ leases ≥ the reservation is what makes the two
+    floors meet.
+* **The kernel's `FileDemand` stays THE material demand.** On a transferred claim, an unanswered demand is `ProviderLiableDefault`:
+  - every live lease is charged; the producer pays nothing;
+  - before Final, the demanders share 49% of `min(pool, default_penalty)` (the producer path's rate at G14-R4's merge) and the rest is
+    burned; after Final, everything is burned. The coalition's floor is Σ leases − 0.49 × penalty ≥ 0.51 × penalty;
+  - the claim is void.
+* **Common-mode outage voids, never convicts.** With no live lease left, the claim lapses: `Unavailable { producer_defaulted: false }` (no
+  reward; the producer's reservation released, never slashed), or the OPV fact is withdrawn after Final.
+* **A false root or a false computation stays the miner's.** Bytes the providers serve still convict through the kernel's unchanged
+  `FileProof`.
+* **Never a slash:**
+  - a Panel's local timeout or a local fetch failure;
+  - a lease alone, or a wrong answer before the deadline;
+  - a position the claim does not commit;
+  - **anything about model bytes.**
+* **Old vs new:** below the fence, and for every claim never transferred, the producer's path is byte for byte today's.
 
-`artifact_availability_v1(class, kernel_root)`: **READY** with ≥ 2 live, uncharged leases of the pair from distinct operators;
-**LAPSED** at the first block where none is left (recorded with its DAA). Past the fence (all gated, below it lane D's behaviour is
-unchanged):
+### 2.4 Artifact availability — WITHDRAWN (ADR-0177 D1)
 
-* tag 104 is accepted only when the pair is READY with every counted lease serving through `bound + 200 DAA` (the binding's whole
-  refutation horizon is covered by bonded availability);
-* a binding whose pair LAPSED at or after it was bound attests nothing (`onboarding_attested_roots_v1`) and its class is held
-  `AVAILABILITY_REQUIRED`; the registrant may re-bind with fresh leases (a lapsed binding is not "live" for the one-binding rule). A lapse
-  is PROVEN unavailability (every provider failed a public challenge), so it holds the class whenever it happens, inside the refutation
-  horizon or after it (claims of the class need the bytes for their own liability horizons); a lease merely expiring is not a lapse.
+The former §2.4 is removed from consensus:
+- tag 104 needing ≥ 2 live leases;
+- a lapsed pair attesting nothing;
+- `AVAILABILITY_REQUIRED` on a lapse.
 
-So a binding can be attested, and its class activated, only after the bytes were publicly obtainable under bonded obligation for its whole
-refutation horizon — **binding equality is outsider-checkable** (confirm from bytes; refute via 105 with a kernel row the lease forces out).
+Lane D's onboarding is back to its own behaviour: `palw_onboarding_{v1,fold_v1}.rs` are restored byte for byte from before DA16. A
+binding is refutable by any verifier that holds the bytes (tag 105), with no availability guarantee. See §7.7 for the residual this
+re-opens.
 
-### 2.5 Rows (kernel route aux tables 43–45, Lead allocation)
+### 2.5 Rows (kernel route aux tables 43–45)
 
 | Table | Key | Row |
 |---|---|---|
 | **43** leases | `(subject, provider)` | `ProviderLeaseRowV1 { reserved, filed_daa, serve_until_daa, charged }` |
 | **44** challenges | `(subject, provider, unit)` | `ProviderChallengeRowV1 { challenger, bond, filed_daa, deadline_daa, answered }` |
-| **45** subjects | `subject` | `ProviderSubjectRowV1 { transferred_daa, lapsed_daa, charged }` |
+| **45** claim subjects | `KernelClaim { claim }` | `ProviderSubjectRowV1 { transferred_daa, lapsed_daa, charged, requested }` |
 
-The closing tick (`tick_provider_court_v1`, before the kernel's tick; a no-op below the fence) sweeps due challenges (an answered one's
-tombstone goes, an unanswered one charges), releases expired leases, records lapses; it never fails a block on a court row (a provider
-bond that is gone is skipped). The kernel's `ProviderLiableDefault` receipts are settled right after the kernel tick. Reads:
-`ConsensusApi::palw_kernel_route_v1` and RPC op 211 already serve aux rows; the typed read `PalwKernelRouteStateV1::provider_court_read_v1`
-decodes one subject's rows (no new RPC op).
+`requested` is the court scope's per-requester tally (§7.3). The closing tick, the `ProviderLiableDefault` settlement and the typed read
+`provider_court_read_v1` are unchanged.
 
 ### 2.6 INTERIM numbers (drill values, not security values)
 
-lease reservation floor 100 BILI; challenge bond 10 BILI, cleared-challenge fee 1 BILI; response window 20 DAA (the kernel's court
-deadline; inside the binding window of 40); min providers 2; ≤ 8 open challenges per challenger; challenger share 500‰. Provider cost,
-redundancy, bandwidth, worst-case cold-fetch budgets (RFC-0014 §16.6) and Sybil-independence are EXTERNAL_GATE.
+- lease reservation floor: 100 BILI;
+- challenge bond: 10 BILI; cleared-challenge fee: 1 BILI;
+- response window: 20 DAA; minimum providers: 2; ≤ 8 open challenges per challenger;
+- reporter share: 49% before Final (`palw_provider_reporter_share_v1`, ADR-0032), burned after Final;
+- court scope: ≤ 16 distinct units per (claim, requester operator).
 
-## 3. G14 check
+Provider economics and Sybil-independence are EXTERNAL_GATE.
 
-One outside bonded verifier, public material only: it fetches the artifact from any provider and checks it against the chain's roots
-(confirm), or forces the unit it needs on chain (151) and either receives authenticated bytes (→ 105 / `FileProof` conviction) or obtains a
-correctly classified default (the PROVIDER's, or the producer's on an untransferred claim). Withholding is never fraud: every default is an
-availability outcome (`Unavailable { producer_defaulted }`, a provider charge), never `Convicted`.
+## 3. G14 — the DA half
+
+The setting: the producer and ALL Panel seats collude.
+
+- **Withholding.** One public bonded verifier outside the Panel reaches the correct objective DA default for a withheld claim-specific
+  unit: a kernel `FileDemand`, or the retrieval entry demand of §7.6. Any bond may file it; seats have no power in this court.
+- **Starvation-freedom.** The per-requester tally never touches another requester's allowance, so it cannot be exhausted against the
+  prosecutor.
+- **No re-assignment of failures.** A transfer is refused while a demand is in flight.
+- **No discounted self-lapse.** A self-lapse leaves the coalition the same ≥ 51% floor as a self-reported conviction (§2.3).
+- **Conviction and dismissal.** Fraud is convicted from served material or from the verifier's own model copy. An honest claim is
+  dismissed, and reaches Final even when nobody serves the model.
+
+The E2E tests are listed in §6.1.
 
 ## 4. Held 8k material
 
-* **V2 held class** (ADR-0103 units: prompt tiles, checkpoint state chunks, step ranges, step leaves): the transport carries and verifies
-  them (`HeldUnit`, verified by `palw_held_da_check_disclosure_v1` against the claim's `execution_root`), with retention to the claim's horizon.
-  The **on-chain transfer** for V2 held claims is NOT made: their default path is the V2 held DA court's (`DefaultDisputed`), which does not
-  read this court; moving it is a V2 claim-fold change (GAP, stated). Until then a held claim's producer stays liable — correct, never
-  double.
-* **Kernel-route long context** (K2S segmented claims, multi-part positions): `ClaimPosition` addresses a position; multi-part units get a
-  `part` index when K2S lands (`ClaimPositionPart`, reserved in the design; the verifier is K2S's). The provider court's transfer hooks the
-  kernel's demand default generically, so a per-segment demand default is a `ProviderLiableDefault` on a transferred claim with no change here.
+V2 held claims are transport-only. Their default path is the V2 held DA court; that court is ARMED and its `StepLeaf` is in §7.5. K2S
+segmented positions reach this court's hook generically.
 
 ## 5. Coordination
 
-* **K2S** — per-segment demands: no conflict (the hook is in the default path, not the demand shape); served bytes stay out of the ledger.
-* **G14-R4** — demand-bond fate and escrow: `ProviderLiableDefault` returns the demand bonds exactly as the producer path does today; if R4
-  changes the producer path's demand-bond fate, the provider path must follow it (one function, noted at the hook).
-* **OPV-BOOT** — conformance evidence (tag 109) rides on chain already; its leaf refutation reads the public artifact this transport serves.
-* **A2U** — tags 150–153 → `palw_provider_court_v1` in the central kind→fence table.
+* **A2U.** Tags 150–153 stay on `palw_provider_court_v1` in the central kind→fence table. Their bytes (including the withdrawn `Artifact`
+  discriminant 0) still ride unjudged below the fence. A2U should add one row: "tag 150–152 with subject discriminant 0 → refused past the
+  fence at every height (not judged)".
+* **K2S.** The call sites are in §7.8.
+* **R4X.**
+  - Snapshot slices and the registered `M0` pre-state are refused past the fence (§7.3).
+  - Retrieval entries are a new demand stage, `0xC0 + s` (§7.6).
+  - `r4x_retrieval_…_a_withheld_slice_defaults` asserts behaviour ADR-0177 withdraws once the court scope is in force. It still passes
+    because its harness does not arm `palw_provider_court_v1`.
+* **G14-R4.** The demand-bond fate (a burn when a served position's claim is not convicted) is the economic half of the relational bound
+  (§7.4).
 
-## 6. Implementation status (DA16 successor, 2026-10-09)
-
-Everything below is code on `da16/transport-provider-court`, DORMANT behind `palw_provider_court_v1` (refused when armed; no live id
-moves). Nothing was run against a live node or network; the E2E runs on the test harness's real node (mempool → template → fold).
+## 6. Implementation status (DA16b, 2026-10-10)
 
 | Piece | Where | Status |
 |---|---|---|
-| Units, answers, binding check from bytes, manifest | `consensus/core/src/palw_public_material_v1.rs` | CODE + unit tests |
-| Row-tree runs (`TensorRowNodesV1`, `level_count`, `row_level_nodes`) | `misaka-palw-kernel/src/merkle.rs` | CODE + exhaustive small-shape test |
-| Kernel hook (`provider_liable`, `ProviderLiableDefault` = 30, `ProviderLapsed` = 31, `provider_lapse`, `classify_served_position_v1`) | `misaka-palw-kernel/src/ledger.rs` | CODE + `k2_ledger` test |
-| Fence, tags 150–153, rows 43–45, typed read | `consensus/core/src/palw_provider_court_v1.rs`, `config/params.rs`, `fork_id_v1.rs` | CODE (dormant, Some-only hashed, probe arm, refused) |
-| Fold arms + tick | `consensus/core/src/palw_provider_court_fold_v1.rs`, hooks in `palw_kernel_route_fold_v1.rs` / `palw_onboarding_*` | CODE |
-| Acceptance (drop by name below the fence, signature, chunked 152) | `consensus/src/pipeline/virtual_processor/processor.rs` | CODE |
-| Transport: artifacts, claim positions, held units, read-back publish, availability, repair, retention monitor, server gate | `misaka-palw-remote/src/public_material.rs`, `transport.rs` | CODE + tests |
-| CLI `palw-evidence artifact-fetch / -verify / -status / -repair / -hook` | `misaka-palw-remote/src/bin/palw-evidence.rs` | CODE (the hook is not exercised against a running kaspad here) |
-| Real-node E2E | `consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/da16.rs` | see §6.1 |
+| Court re-scope: `Artifact` refused, artifact paths out of the fold, reporter share 49% (challenger and demanders), burned after Final | `consensus/core/src/palw_provider_court_{v1,fold_v1}.rs` | implemented |
+| §2.4 removed: onboarding restored | `consensus/core/src/palw_onboarding_{v1,fold_v1}.rs` (= `eae67be30^`) | implemented |
+| Court scope: inventory, rule, per-requester tally, node masks, exposure, verifier-operand authentication | `consensus/core/src/palw_court_scope_v1.rs` | implemented, unit tests |
+| Kernel-route enforcement (FileDemand admission + tally past the fence) | `consensus/core/src/palw_kernel_route_fold_v1.rs` → `court_scope_admit_demand_v1` | implemented |
+| GAP-52: court totality over malformed leaves; entry demands | `misaka-palw-kernel/src/spec/{retrieval,ledger_impl,mod}.rs` | implemented, unit test |
+| Transport artifact half labelled non-consensus | `misaka-palw-remote`, `palw_public_material_v1` | implemented (docs only) |
 
 ### 6.1 E2E (harness node, fences test-armed without their validation)
 
-* `da16_an_outsider_confirms_an_honest_binding_from_the_bytes_its_bonded_providers_serve` — no lease / one operator: binding refused; two
-  leases: bound; an outsider fetches cold (one provider corrupt, one empty), every leaf against the chain's root → CONFIRMED; on-chain
-  challenges answered (a wrong answer refused first); fees only; a replayed challenge never re-opens (tombstone, then signed expiry).
-* `da16_a_false_binding_is_refuted_from_the_bytes_and_the_bound_side_the_court_forces_out` — KERNEL_ROOT_DIFFERS from the bytes; the bound
-  commitments, a run of row leaves and one row forced out of the pair's provider, each read OFF THE CHAIN; tag 105 refutes (the binder
-  slashed); the silent provider is charged; the serving one is cleared.
-* `da16_unanswered_challenges_slash_the_providers_and_a_lapsed_pair_attests_nothing_until_rebound` — charged once per subject (other
-  challenges moot), lapse → attests nothing → re-bind over fresh leases → attested again.
-* `da16_a_transfer_needs_two_operators_through_the_bound_reserving_at_least_the_claim` — own lease, short lease, Σ < claim, demand in
-  flight: refused; then moved, irreversible.
-* `da16_a_transferred_claims_unanswered_demand_charges_every_provider_never_the_producer` — `Unavailable { producer_defaulted: false }`, no
-  reward, never convicted, producer untouched, every lease charged, the demander paid the penalty.
-* `da16_a_common_mode_provider_outage_voids_the_claim_without_a_miner_slash` — both leases charged on 151s (one block, two challengers) →
-  lapse → void, no reward, no miner slash, each challenger paid 500‰ of its charge.
-* `da16_a_reorg_takes_the_transfer_back_and_the_producer_is_liable_again` — a heavier branch from before the transfer wins on a replaying
-  node: the court's rows equal the fork's (leased, not transferred), the root equals the branch's fresh replay, and on that branch an
-  unanswered demand is the PRODUCER's default (providers untouched). The court's rows are kernel-route aux rows, journaled (delta 160)
-  like every other route row, so a reorg undoes a charge or a lapse the same way.
-* `da16_a_false_computation_on_a_transferred_claim_still_convicts_the_miner` — a provider serves the withheld position from the transport
-  (kernel `Respond`, and a 152 answer); the outsider's `FileProof` slashes the MINER; providers untouched.
-* `da16_below_the_fence_court_objects_are_dropped_and_an_older_claim_stays_its_producers` — A-2 drop by name below the fence; a claim
-  committed below it cannot be transferred and defaults on its producer exactly as today.
+* `da16_model_availability_never_gates_a_binding_and_the_artifact_subject_is_refused`:
+  - 104 binds with no provider;
+  - an `Artifact` lease, challenge and answer are each refused: no row in 43–45, nothing reserved;
+  - the transport confirms the binding off chain;
+  - every provider directory is deleted, and the binding still matures and attests.
+* `da16_a_false_binding_is_refuted_from_the_verifiers_own_bytes_and_the_binders_published_tree`: tag 105 from the verifier's own copy and
+  the binder's voluntary publication. The binder is slashed; no court row exists.
+* Claim side, unchanged in substance:
+  - transfer rules;
+  - a provider-liable default (it now also asserts the scope tally and the demander's 49% with conservation);
+  - **common-mode outage**: charged once (one challenge moot), **49% to each challenger and the rest burned (conservation)**, an artifact
+    unit refused, bonds back, no fee;
+  - reorg; false computation convicts the miner (it now asserts the 1 BILI fee); below-the-fence A-2.
+* `r4x_typed_roots_e2e::da16_scope` (R4X's harness with the court fence armed):
+  - `…a_snapshot_is_never_demanded_and_a_retrieval_claims_own_entries_reach_every_terminal`: a slice demand is refused and an honest claim
+    reaches Final; a wrong item is convicted from the verifier's own copy; an entry is demanded and served, or withheld ⇒ the producer's
+    default;
+  - `…the_registered_memory_is_never_demanded_and_a_carried_pre_state_is`.
 
-Every test ends with a replaying node reaching the same sink, PALW root, route rows and per-block delta roots.
+### 6.2 Residuals
 
-### 6.2 Review fixes made by the successor (beyond the WIP)
+* **Pre-Final self-lapse.** A coalition can still void its own claim before Final, at the ≥ 51% floor (§2.3). The honest demander whose
+  demand was open is refunded but not paid. Whether a lapse with open demands should pay them first is an ECON/G14-R4 decision.
+* **Shared adjudication budget.** A 152 spends the route's per-block budget (EXTERNAL_GATE, MEAS).
+* **V2 held claims.** Transport only (§4). K2S multi-part positions are handled by K2S's own call sites (§7.8).
 
-1. **Challenge replay** (P1): a signed 151 had no expiry and its row was deleted on answer, so anyone could re-carry it to re-open the
-   challenge (charging its signer a fee each time and forcing the provider to answer again). Now: signed `valid_until_daa`, and the row is
-   kept (answered) until the deadline.
-2. **Post-Final recycling** (P1): a coalition could charge its own leases of a Final claim through its own challengers (getting 500‰ back)
-   and then withhold for free. Now a charge of a Final claim's subject is burned whole.
-3. **Tick robustness**: the closing tick never fails a block on a court row (a vanished provider bond is skipped); a challenge whose
-   subject the chain no longer holds settles moot (bond back, no charge); an answer needs only the class RECORD, not a live status (a class
-   leaving Registered cannot turn open challenges into charges).
-4. A `ProviderLiableDefault` charges only LIVE leases; the tick and the ledger's `provider_liable` injection are no-ops below the fence.
+## 7. The court scope (ADR-0177 D2, RFC-0014 §16.4) — G14C GAP-06, GAP-52
 
-### 6.3 Residuals (stated, not hidden)
+### 7.1 Inventory
 
-* **Pre-Final self-lapse** — a coalition can void its own claim before Final by letting its own leases be charged (≈ 50 % of Σ leases ≥ 50 %
-  of the claim's reservation, the challenger share recycled). The claim earns nothing; a proof filed before the void still convicts (a proof
-  convicts in the block that carries it; a lapse needs ≥ 20 DAA). This is the kernel's existing pre-Final semantics (a void claim has no
-  gain to deter), not a new escape. After Final the charge is burned whole (§6.2.2).
-* **Shared adjudication budget** — a 152 spends the route's per-block budget, as the producer's `Respond` does; a budget flood can delay an
-  answer within its 20-DAA window. Cost of such a flood vs the window: EXTERNAL_GATE (MEAS).
-* **A2U** — the chunk-completion path for a chunked 152 below the fence follows lane D's 105/109 pattern (the gate refuses the completing
-  chunk); the mixed-verdict pin against live int-12's handling of undecodable assembled bytes is A2U's (central kind→fence table).
-* V2 held claims: transport only (§4, GAP). K2S multi-part positions: `ClaimPositionPart` reserved (§4). Discovery: DESIGN_GAP (§1.3).
-  INTERIM numbers, provider economics, cold-fetch budgets and Sybil-independence of providers: EXTERNAL_GATE (§2.6).
+The executable form is `palw_court_unit_scope_v1`; its test pins the lists below.
+- **Material:** C = claim-specific (input / trace / state / output / witness hashes); M = model bytes (weights / derived copies / file
+  ranges).
+- **Supplier:** D = compelled under a demand; P = the producer's opening move; S = a seat's condition; V = the verifier's own copy.
+
+| Route (fence on t12) | Unit | Material | Supplier | Under this rule |
+|---|---|---|---|---|
+| Kernel route (dormant) | `FileDemand` position (K2 v3; K2S v4 parts) | C trace* | D | allowed; *the owed set must exclude model-bytes nodes (§7.2, K2S) |
+| | stage inputs; v4 part 0 (position root, path) | C input / witness | D | allowed |
+| | v4 `PostPromptTile` | C input | public | allowed |
+| | row-tiled opening of a committed value in a filing | C trace | V | allowed |
+| | param row / column / tile opening (`FileProof`, `InstanceRecompute`, `ElementRecompute`) | M weights | V | allowed (verifier's copy, §7.5) |
+| | R4X snapshot slice (`0x80 + s`) | M file range | D | **refused** past the fence |
+| | R4X registered `M0` pre-state (`0x40`, `pre_source = None`) | M file range | D | **refused** |
+| | R4X carried pre-state (`pre_source = Some`) | C state | D | allowed (already public) |
+| | R4X retrieval item opening (`WrongItem`, `MissedBetter`) | M file range | V | allowed |
+| | **retrieval entry (`0xC0 + s`, new)** | C output | D | allowed (GAP-52) |
+| Onboarding (dormant) | 105 `Instances` (commitments) | C witness | V | allowed |
+| | 105 `Row` (V2 leaf + bound row) | M | V (+ the binder's own tree) | allowed |
+| | 109 `Post` (outcome digests, no leaves) | C witness | D | allowed |
+| | 109 `LeafDecode` | M file range | V | allowed |
+| | 109 `VectorTokens` | C output | public | allowed |
+| Provider court (dormant) | `ClaimPosition` | C trace | D | allowed |
+| | `ArtifactLeaf` / `KernelRow` (and the hash units `KernelCommitments` / `KernelRowNodes`) | M (C) | D | **refused** (subject withdrawn) |
+| R-core / held DA (ARMED, DAA 0) | `Event` (logits) | C output | D | unchanged |
+| | `PromptIdsTile`, `StateChunk`, `StepRange` | C | D | unchanged |
+| | **`StepLeaf`: its answer carries `artifact_openings` (weight rows) from the producer** | **M** | **D** | **armed: unchanged; §7.5** |
+| TIR / pipeline courts (ARMED, 3,600 / 5,300) | step leaf / node / row node / run | C trace | D | unchanged |
+| Dissections (ARMED) | **attention root-claim `operand_openings`; IR / generative root-claim `params`** | **M** | **P** | **armed: unchanged; §7.5** |
+| | accuser openings (shard, TIR shard, held close, `ObjectiveOffence`, court close) | M | V | unchanged (allowed) |
+| Readiness (ARMED) | **~16 plaintext artifact leaves per (class, bond, span)** | **M** | **S** | **armed: unchanged; §7.5** |
+
+Per-claim caps on the armed side: R-core DA-8 allows 1 named + 3 drawn units per session; non-seat bonds get 3 open and 16 ever; seats
+get 4. Weight bytes have **no cumulative cap**. Spread over a class's claims, `StepLeaf` demands can enumerate every weight row its leaves
+read, and readiness proofs cover the inventory over time.
+
+### 7.2 The rule (allowed units)
+
+`palw_court_demand_allowed_v1(kind)`: a unit a party can be compelled to supply (D / P / S) must be claim-specific. Model bytes reach a
+court only as V.
+
+At the node level, `palw_court_node_materials_v1(program, model_params)` classifies every committed value `[occurrence][node]`, aligned
+with `derived_mask_v1`:
+- `Public`: consts only;
+- `Claim`: model-independent;
+- `ModelDependent`: an activation;
+- `ModelCopy`: copies of weight elements selected by claim data, e.g. a `Gather` of an embedding row;
+- `ModelOnly`: a function of the weights alone, e.g. a transposed or dequantised weight.
+
+States and carries are solved to a fixpoint. `model_params` separates real weights from a TIR v2 stage's lifted inputs.
+
+- **Level 1** (`palw_court_model_bytes_mask_v1`, the rule): `ModelCopy` and `ModelOnly` are never owed in the clear.
+- **Level 2** (`palw_court_model_dependent_mask_v1`, a user decision, §7.4): every model-dependent value is owed as commitment hashes
+  only.
+
+### 7.3 The cumulative bound, and the kernel-route enforcement
+
+* **Bytes.** Model-byte disclosure is 0 per claim and per model, for any sequence of demands. Each unit's material is fixed by its kind,
+  and model bytes are never compellable. Repeated demands can never return a weight, a file range or a copy of either.
+* **Per claim.** Every claim-specific unit at most once (served ⇒ public ⇒ refused again). The claim's disclosure ⊆ its own committed
+  material.
+* **Per (claim, requester operator).** ≤ `PALW_COURT_SCOPE_MAX_UNITS_PER_REQUESTER_V1 = 16` distinct units (INTERIM, as R-core DA-8's
+  "16 ever"). Kept in table 45's `requested`. This counts against nobody else, so it is G14-safe. One prosecution needs ≤ 2 positions +
+  ≤ 10 root probes (K2S §2, §11.2), or one entry.
+* **Per model.** The union over the model's claims. It grows only with claims producers commit, never with demands.
+* **Enforced** in `apply_kernel_route_object_v1` past the fence, by `court_scope_admit_demand_v1`:
+  - the demanded `(claim, stage, position)` is classified by `palw_kernel_demand_unit_v1`;
+  - a model-content unit is dropped;
+  - the tally is recorded only once the kernel accepts the demand.
+* **Enforced** in tag 151 by `claim_unit_in_scope`.
+
+### 7.4 The relational residual (Level 1) — a decision for the user
+
+A clear activation is claim-specific, but enough of them reveal a model relation:
+- `y = x ⊙ g` reveals `g` from one position;
+- `y = W x` reveals `W` from `K` positions, where `K` is the contracted dimension.
+
+`palw_court_model_exposure_v1(program)` reports both per program. No count cap can stop a Sybil extractor without also being a cap a
+producer can exhaust against an honest prosecutor. Two non-griefable options:
+
+1. **Economic (keeps Level 1).** G14-R4's demand-bond burn on a served, non-convicted claim prices reconstruction at
+   `≥ K × demand_bond` per dense relation, and `≥ demand_bond` per elementwise relation. An honest prosecutor of a fraud is refunded.
+2. **Level 2.** The court owes model-dependent values only as commitment hashes. The court terminal becomes:
+   - hash bisection by the verifier, from its own re-execution;
+   - then recompute-and-compare of one element against the producer's authenticated leaf hash.
+
+   Reachability is preserved for a model holder (ADR-0177 D7). Mid-claim spot checks under withholding are lost (K2S Route A); Route B,
+   re-execution, remains. This needs element-granular leaf hashes in K2S's v3 tree, and is the only option that makes "never rebuild"
+   literal.
+
+### 7.5 The verifier's own model operand, and the armed t12 routes
+
+**Authentication** is `palw_verify_verifier_model_operand_v1(roots, operand)`, against the class's REGISTERED roots (immutable, ADR-0175):
+- a row or column of `(param, layer)`: `commitments.root() == registered kernel_param_root`, then
+  `opening.authenticates(commitments.by_instance[(param, layer)])`. The commitments map is on chain in the kernel class registration, so
+  the verifier copies it and needs nothing from the producer;
+- a V2 inventory leaf: `verify_artifact_opening_v1(opening, registered artifact_root)` at the registered leaf count.
+
+Root equality is not proof of computation; the court still evaluates the relation.
+
+**Armed t12 routes that compel model bytes (not changed).** These are:
+- the held `StepLeaf` answer's `artifact_openings`;
+- the attention / IR / generative dissection root claims' parameter openings;
+- seat readiness leaves.
+
+**Proposed new dormant fence (the Lead allocates the name, e.g. `palw_court_model_scope_v1`):**
+1. a `StepLeaf` answer owes only its claim part (the refutation's step openings, the prompt-ids opening); the accuser supplies
+   `artifact_openings` from its own copy in the one-move verdict filing;
+2. a dissection's root claim names parameter coordinates only, and the challenger supplies the openings;
+3. readiness stops publishing plaintext leaves (a user decision: it is a Panel seating condition, PoR-like under ADR-0177 D1).
+
+**Reachability:**
+- (1) the one-move verdict needs the openings, and any holder of the model supplies them, so withholding the claim part is still the
+  producer's default;
+- (2) a dissection's terminal reads the same openings from either side;
+- (3) is not a court.
+
+### 7.6 GAP-52 — snapshot leaf well-formedness, by making the court total
+
+A registration-time "every leaf is well-formed" attestation cannot be refuted: a leaf with no preimage has nothing anyone can open. So
+the court is made total instead (`misaka-palw-kernel/src/spec/retrieval.rs`):
+- the item at an id is authenticated by its leaf alone;
+- a malformed one is no item the rule retrieves: `WrongItem` convicts a claim that names it, and `MissedBetter` dismisses it;
+- a retrieval claim's own entries are a demand stage, `0xC0 + s` (position = entry index). `classify_entry_response_v1` serves the item
+  at the entry's id (any shape) or nothing.
+
+Reachability, with the producer and every seat colluding:
+- a junk leaf can be opened by no one, so an entry naming it is the producer's **default**;
+- a malformed leaf is served, then **convicted** by `WrongItem`;
+- a wrong item is **convicted** from the verifier's copy;
+- an honest claim is **dismissed** and reaches Final with nobody serving the snapshot.
+
+The entry is the claim's own stated output (C), never the snapshot (M). This also replaces the withdrawn slice DA.
+
+### 7.7 The identity binding without the provider court
+
+Tag 105's `Row` refutation needs a row of the BOUND tensor. Before the re-scope, the provider court forced it out; now it can come only
+from the binder's voluntary publication, unless the instance sets differ (`Instances`).
+
+**Proposal (allocation needed):**
+- a binder-scoped demand of HASH units only (`KernelRowNodes` runs of the bound tree; no bytes), answered by the binder, with default ⇒
+  binding refuted;
+- a tag-105 variant `RowLeaf { path, bound_leaf_hash }` that convicts when `H(true row from the verifier's own V2 bytes) ≠` the bound
+  tree's authenticated leaf hash.
+
+No model bytes are compelled, and a false binding becomes refutable without the binder's cooperation. **Decision:** whether failing to
+open one's own commitment's hashes may slash the binder (ADR-0177 D1 forbids penalties only for not serving the model).
+
+### 7.8 Where K2S must call the predicate (K2 v4/v5; demand types untouched)
+
+1. `seg_da::{declared_values, position_parts_v1, position_material_v1}`: drop `palw_court_model_bytes_mask_v1(program, real)[occ][node]`
+   values from a position's owed parts. Under Level 2, drop `palw_court_model_dependent_mask_v1`. A dropped value is owed as its
+   row-tree leaf hashes (commitment structure).
+2. `seg_da::{classify_part_v1, assemble_position_v1}`: classify against that layout.
+3. `element::{operand_sources, element_value_v1}`:
+   - a masked operand comes from the filer's recomputation; its leaves authenticate against the committed node commitment when the value
+     is right;
+   - a WRONG masked value is convicted by recomputing one leaf from verifier-supplied param leaves, compared with the producer's
+     authenticated leaf hash;
+   - param leaves are authenticated by `palw_verify_verifier_model_operand_v1` (the registered v3 commitments).
+4. The base kernel: `KernelLedgerV1::derived_mask` (`ledger.rs`) ORs the Level-1 mask. `verify.rs` resolves a masked node from verifier
+   openings, the same way as a derived one.
+5. `consensus-core palw_court_scope_v1::palw_kernel_demand_unit_v1`: add `ClaimBodyV1::Segmented` ⇒ `KernelPosition`, so the fold's
+   admission and tally cover segmented demands too. Today an unknown body returns `None`, which means kernel-decided and untallied.
+6. `seg_ledger::settle_served_demand_bonds_v4`: G14-R4's burn is §7.4's economic bound.

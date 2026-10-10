@@ -372,6 +372,18 @@ pub(super) fn apply_kernel_route_object_v1(
     {
         ledger.sync_bond(producer, builder.kernel_synced_collateral(&key, ctx.daa_score));
     }
+    // DA16 / ADR-0177 D2: past `palw_provider_court_v1` a demand names a claim-specific unit or nothing, within its requester's tally.
+    let scope = match &object {
+        KernelRouteObjectV1::FileDemand { claim, stage, position, .. }
+            if builder.extras.kernel_route.as_ref().is_some_and(|k| k.provider_court.is_some()) =>
+        {
+            match super::palw_provider_court_fold_v1::court_scope_admit_demand_v1(builder, &ledger, signer, claim, *stage, *position) {
+                Ok(scope) => scope,
+                Err(_) => return Ok(()),
+            }
+        }
+        _ => None,
+    };
     let events = match ledger.apply_object(&object, &AuthV1 { signer_bond: kid }) {
         Ok(events) => events,
         Err(_refusal) => {
@@ -425,6 +437,9 @@ pub(super) fn apply_kernel_route_object_v1(
     apply_settlements(builder, &events, true)?;
     persist_budget(builder, ctx, &ledger);
     flush(builder, &ledger, &before);
+    if let Some((subject, row)) = scope {
+        super::palw_provider_court_fold_v1::write_court_scope_row_v1(builder, &subject, &row);
+    }
     Ok(())
 }
 

@@ -8516,8 +8516,8 @@ pub enum PalwConsensusObjectV2 {
     // Tags 150–153 are lane DA16's provider court (RFC-0009's reservation; the lead's allocation of 2026-10-09). Dropped by name below
     // `palw_provider_court_v1`; rows in the kernel route's aux tables 43–45. Every signature: the signer's ML-DSA-87 over
     // [`crate::palw_provider_court_v1::palw_provider_court_message_v1`] (kind = the tag, payload = the Borsh of the other fields).
-    /// **(tag 150): a provider's bonded lease** of a subject's public material until `serve_until_daa`, reserving `reserved` of its
-    /// free collateral. **Tag 150.**
+    /// **(tag 150): a provider's bonded lease** of a kernel claim's committed material until `serve_until_daa`, reserving `reserved` of
+    /// its free collateral. A lease of the withdrawn `Artifact` subject (ADR-0177 D1) decodes and is refused past the fence. **Tag 150.**
     ProviderLeaseV1 {
         subject: crate::palw_provider_court_v1::ProviderSubjectV1,
         reserved: u64,
@@ -8536,7 +8536,8 @@ pub enum PalwConsensusObjectV2 {
         challenger: PalwBondKeyV2,
         signature: Vec<u8>,
     } = 151,
-    /// **(tag 152): the provider's answer** — the unit, verified against the chain's own root. Large answers ride `ObjectChunk`s.
+    /// **(tag 152): the provider's answer** — the claim position, verified against the claim's commitments. Large answers ride
+    /// `ObjectChunk`s.
     /// **Tag 152.**
     ProviderAnswerV1 {
         subject: crate::palw_provider_court_v1::ProviderSubjectV1,

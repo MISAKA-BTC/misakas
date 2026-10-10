@@ -163,6 +163,8 @@ storage receipt は**保管の約束**であり、将来の全 Panel からの�
 
 この客観的 court を用意できないなら「miner は送信後に必ず PC を切れて、配信事故の slash リスクもない」とは約束しない。その場合は miner 自身が provider を手配して責任を持つ段階で止める。
 
+**実装（lane DA16、2026-10-10 に ADR-0177 で再範囲化）:** provider court は claim 固有 material だけを対象にする（tags 150–153、休眠 fence `palw_provider_court_v1`、kernel route aux table 43–45）。lease の subject は kernel claim のみで、challenge unit は claim の committed position のみ。モデル／artifact bytes の可用性 lease（旧 `Artifact` subject）、READY/LAPSED、tag 104 の可用性 gate、モデル bytes 不提供への charge は合意から撤回した（bytes は decode 可能なまま fence 以下で従来どおり無判定で通り、fence 以上では常に拒否）。provider の charge のうち Final 前は challenger／demander に PALW reporter share（ADR-0032 の 49%、kernel route の accuser・demander と同率）を払い残りを burn、Final 後は全額 burn（自作自演の lapse でも損失は自己申告の有罪と同じ 51% 以上）。共通障害は claim を失効させ有罪にしない。偽 root・不正計算は miner の責任に残る。どの court も compel できる unit は claim 固有のものだけで、累積 scope（モデル bytes 開示 0、unit ごとに 1 回、(claim, 要求 operator) ごとに 16）を `palw_court_scope_v1` が一元判定する。設計・試験は [DA16 design](../design/palw/da16-transport-and-provider-court.md) §2・§7。状態は implemented（armable ではない）。
+
 ## 5. executor と receipt block builder の分離
 
 ### 5.1 公開 redemption authorization
@@ -279,7 +281,7 @@ L2 を健全にするために必要な DAG 履歴と state transition の量は
 | Verified chain state / stale detection | 無効 job への計算浪費・無効 claim への署名 | L1（header/DAG）と L3（claim state）の検証、4 段階の表示、推論前・署名直前の gate は IMPLEMENTED_AND_TESTED。PALW fork-choice の検証（L2）は DESIGN_GAP で、その間は `HEADER_VERIFIED_FORK_CHOICE_UNVERIFIED` に留まり opt-in なしでは署名しない |
 | Canonical job/input/output binding | 計算の流用・job 差し替え | FP Job V4 は凍結済み（DORMANT_NOT_INTEGRATED）。claim 署名は commitment に bind |
 | Public authenticated DA | miner 停止後に検証不能 | manifest・複数 provider・共通 fetch は IMPLEMENTED_AND_TESTED（local）。discovery は DESIGN_GAP |
-| Objective DA/default | 通信障害で誤 slash | kernel route の demand/default は実ノード E2E あり（fence 未武装）。provider への責任移転（provider court）は DESIGN_GAP |
+| Objective DA/default | 通信障害で誤 slash | kernel route の demand/default は実ノード E2E あり（fence 未武装）。provider への責任移転（provider court、claim material のみ、ADR-0177 で再範囲化）は implemented（`palw_provider_court_v1` 休眠、実ノード E2E: DA16 design §6.1） |
 | Miner-bound payout / V4 redemption | builder による横取り・報酬消失 | chain-block E2E（miner offline、別 builder が redemption、payout は miner、手数料 500 bps）は IMPLEMENTED_AND_TESTED。複数ノード drill は EXTERNAL_GATE_PENDING |
 | Multi-relay / censorship fallback | 少数 node への依存 | 改変・横取りの拒否と、妨害時の同一 bytes 別 relay 再送（library）は IMPLEMENTED_AND_TESTED。rail の自動再送は CODE_GAP |
 | Fresh outsider G14 prosecution | pool/Panel 共謀時の不正承認 | 必須試験 3 は実ノードで合格（Panel あり/Panel=0、node-less relay 経路、fence 未武装）。第 3 ラウンドの P1 2 件は修正中 |
