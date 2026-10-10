@@ -858,3 +858,52 @@ settings were used. Scoped rustfmt checks for the new core query/test and node h
 block, the common-guard text/order comparison, and `git diff --check` passed.
 No public fence activation, push or deployment was performed. All remaining RFC obligations above
 remain open; these successes are not soundness, whole-node resource, archival/P2P or economic approval.
+
+
+### Carried Origin per-block verification budget (2026-10-11)
+
+Starting from `b6404f59e`, direct Origin and completed Origin chunks use an explicit ceiling
+of two eligible header decode/authentication attempts per block. The node filter and whole fold
+enforce the same rule with independent ephemeral counters. Failed attempts consume the counter;
+state restore does not refund spent work, and a new block starts fresh. Cheap metadata is checked
+before charging, and the existing full reader repeats its checks and authenticates independently.
+No verified flag, permit or caller-supplied authority is passed to the writer. A one-object
+rehearsal starts with a fresh counter and cannot exhaust this ceiling.
+
+Completed Origin chunks no longer consume FamilyCertified grading slots. Before EXEC's owning
+fence they remain unknown to the inner classifier, preserving dormant accounting. The generic
+inner classifier now checks the writer's structural count/index/size limits before assembly.
+The ceiling is an initial dormant-lane bound, chosen from the former incidental two-completion
+limit under dormant grading accounting; it is not a calibrated throughput, latency, fee or
+availability approval. No public preset, Round ticket code, wire, carriage or state-root layout
+changed, and no public activation was performed.
+
+The new core test checks missing-claim refusal without a charge, two rejected nonce lies,
+non-refund after checkpoint restore, refusal of a third valid proof, fresh-block success and
+dormant refusal. The extended actual-processor fixture uses three admitted signed REAL headers,
+two coherent partial chunk groups and an independently admissible Base0 certificate. It checks
+Origin/certification isolation, the shared direct/chunk ceiling, next-block retry, repeated
+rejected completion charging, a coherent oversized chunk's structural refusal, raw whole-fold
+refusal of three proofs without changing the parent, and delta undo. Existing missing-source-
+header Root and H1/rehearsal oracle assertions remain. The documented model/seat/share waiver,
+synthetic REAL trace, skip-PoW and simulated-node limitations remain: this does not prove native
+REAL Final/payment, historical migration liveness, pruning or network/P2P availability.
+
+For one acceptance-filter pass followed by one committed fold, the conservative carried-Origin
+cryptographic parent-input bound is `3,060B` (4,895,788,860 bytes at the header cap). Raw chunk
+assembly/group hashes, cheap rejected traffic, repeated invocations, native capture, state
+cloning/roots, RSS and elapsed time are outside this bound. Eligible malicious attempts may
+exhaust the honest proof slots; next-block acceptance is tested, automatic requeue is not promised.
+The dated release observations remain historical evidence from `5d8efa11e`; no fresh whole-node
+resource approval or service-rate/fee calibration is claimed. The broader four-RFC goal remains open.
+
+Validation with jobs 2, dev/test debug 0 and incremental 0:
+
+- `cargo test --locked -p kaspa-consensus-core --features evm --lib -- --test-threads=2`: **3,643 passed, 0 failed, 13 ignored**, 69.55s runtime, 0.18s cached build. Log `/tmp/rfc8-origin-budget-core-full.log`. The earlier one-test smoke is included here, not counted again; the ignored cases remain explicit probes/dumps/measurements.
+- EVM node Origin fixture: **1 passed, 0 failed, 0 ignored**, 204.66s runtime after a 3m55s build. Log `/tmp/rfc8-origin-budget-node.log`. Two additional actual signed REAL admissions extend the fixture; its total runtime is not a header-reader performance measurement.
+- From that exact EVM node executable, sequential regression filters: `chunk` **8 passed** (46.18s), `certification` **4 passed** (58.32s), H1 caller **1 passed** (0.00s), `t12_a2u_` **3 passed** (26.79s), and the existing Family two-drill cap **1 passed** (20.02s). All have zero failures/ignored. Two cases overlap between chunk/certification: these are 15 distinct regressions, or 16 distinct node tests including Origin. Logs `/tmp/rfc8-origin-budget-node-{chunk,certification,h1_the_template_asks_the_carrier_gate_the_mempool_asks,t12_a2u_,grading-cap}.log`.
+- `cargo check --locked -p kaspad --features evm`: success in 35.78s, existing warnings. Log `/tmp/rfc8-origin-budget-daemon.log`.
+- Scoped rustfmt checks of the new budget type/core test/metadata reader/node charging and classification/node fixture, plus `git diff --check`: success. After compilation only placement of a Rust documentation comment was corrected; tested behavior was unchanged.
+
+No public activation, push or deployment was performed. These results do not close the remaining
+resource, fee/rate, migration availability, historical coverage, soundness or economic gates.

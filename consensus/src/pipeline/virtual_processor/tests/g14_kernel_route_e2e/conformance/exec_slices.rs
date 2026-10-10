@@ -455,6 +455,10 @@ async fn x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_abse
         assert_eq!(legacy.claim(&real.claim), native.claim(&real.claim));
         assert!(legacy.exec_v2_origin_v1(&real.claim).is_none());
     }
+    let mut other_reals = Vec::new();
+    for seed in [0xA77F, 0xA780] {
+        other_reals.push(real_attempt(&mut cw, ROOT_CARD, class, seed).await);
+    }
     let initial = palw_exec_v2_token_state_root_v1(&[&real.stream()]);
     let draft = declaration(&cw, &real, Hash64::default(), initial);
     let (prefix, _, _) = kernel_claims(&mut cw, &real, &draft, false, |_| false, Vec::new()).await;
@@ -543,6 +547,104 @@ async fn x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_abse
         assert_eq!(off.palw_object_rehearsal_v1_on(&old, p, &point, &proof), Verdict::NotAccepted(why.into()));
         assert_eq!(off.palw_h1_carrier_refusal_on(&old, p, &point, &proof), Some(why.into()));
     }
+    // The actual block filter and fold share one direct/chunk Origin work budget, separate from family grading.
+    {
+        use kaspa_consensus_core::palw_state_v2::{PalwCertificationEvidenceV1, palw_object_chunks_with_cap_v1};
+        use misaka_palw_base0::e2e_drill::{PalwRcFamilyV1, rc_attempt_evidence_v1};
+        let mut missing = PalwStateCarriageV2::from_state(&old);
+        let mut proofs = vec![proof.clone()];
+        for run in &other_reals {
+            let row = state.exec_v2_origin_v1(&run.claim).unwrap();
+            let header = vp.headers_store.get_header(row.source_block).unwrap();
+            missing.exec_v2_origins.remove(&run.claim);
+            proofs.push(Obj::ExecOriginRecordedV1 {
+                witness: Box::new(kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginWitnessV1 {
+                    claim: run.claim,
+                    header: borsh::to_vec(header.as_ref()).unwrap(),
+                }),
+            });
+        }
+        let missing = missing.into_state(p, None).unwrap();
+        // Leave two real groups one part short in prior blocks, then complete both in this one.
+        let mut base = missing.clone();
+        let mut completions = Vec::new();
+        for (index, origin) in proofs[..2].iter().enumerate() {
+            let bytes = borsh::to_vec(origin).unwrap();
+            let mut chunks = palw_object_chunks_with_cap_v1(origin, bytes.len().div_ceil(2)).unwrap().unwrap();
+            let final_chunk = chunks.pop().unwrap();
+            let earlier = PalwBlockContextV2 {
+                block: Hash64::from_u64_word(0xB100 + index as u64),
+                blue_score: point.blue_score + index as u64,
+                ..point
+            };
+            base = vp.palw_v2_fold_accepted_with_delta_for_tests(&base, p, &earlier, &chunks).unwrap().0;
+            completions.push(final_chunk);
+        }
+        let now = PalwBlockContextV2 { block: Hash64::from_u64_word(0xB110), blue_score: point.blue_score + 2, ..point };
+        // Grading is real: first prove the certificate is independently admitted, so a drop cannot be mistaken for isolation.
+        let certificate = Obj::FamilyCertified {
+            evidence: Box::new(PalwCertificationEvidenceV1::Attempt(rc_attempt_evidence_v1(PalwRcFamilyV1::Base0).unwrap())),
+        };
+        let (control, _) = vp.palw_v2_accepted_objects_and_state_for_tests(&base, p, &now, vec![certificate.clone()], now.block);
+        assert_eq!(control, vec![certificate.clone()]);
+        let mut mixed = completions.clone();
+        mixed.push(certificate);
+        let (accepted, rehearsed) = vp.palw_v2_accepted_objects_and_state_for_tests(&base, p, &now, mixed.clone(), now.block);
+        assert_eq!(accepted, mixed, "Origin completions never steal family grading slots");
+        let (committed, delta) = vp.palw_v2_fold_accepted_with_delta_for_tests(&base, p, &now, &accepted).unwrap();
+        assert_eq!(committed.exec_v2_origin_count_v1(), rehearsed.exec_v2_origin_count_v1());
+        assert_eq!(committed.exec_v2_origin_count_v1(), base.exec_v2_origin_count_v1() + 2);
+        assert_eq!(kaspa_consensus_core::palw_state_v2::revert_delta_v2(&committed, &delta, p).unwrap().state_root(), base.state_root());
+        // A direct third proof uses the same budget and is deferred without invalidating the block.
+        mixed.insert(2, proofs[2].clone());
+        let (limited, _) = vp.palw_v2_accepted_objects_and_state_for_tests(&base, p, &now, mixed, now.block);
+        assert_eq!(limited, accepted);
+        let later = PalwBlockContextV2 { block: Hash64::from_u64_word(0xB111), blue_score: now.blue_score + 1, ..now };
+        let (retry, _) = vp.palw_v2_accepted_objects_and_state_for_tests(&committed, p, &later, vec![proofs[2].clone()], later.block);
+        assert_eq!(retry, vec![proofs[2].clone()], "the next block starts a fresh work budget");
+        // Rejected attempts still spent header work. Repeat the same coherent but lying completed group.
+        let Obj::ExecOriginRecordedV1 { witness } = &proofs[0] else { unreachable!() };
+        let mut fake: kaspa_consensus_core::header::Header = borsh::from_slice(&witness.header).unwrap();
+        fake.nonce += 1;
+        let fake = Obj::ExecOriginRecordedV1 {
+            witness: Box::new(kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginWitnessV1 {
+                claim: witness.claim,
+                header: borsh::to_vec(&fake).unwrap(),
+            }),
+        };
+        let fake_bytes = borsh::to_vec(&fake).unwrap();
+        let mut fake_chunks = palw_object_chunks_with_cap_v1(&fake, fake_bytes.len().div_ceil(2)).unwrap().unwrap();
+        let fake_completion = fake_chunks.pop().unwrap();
+        let fake_base = vp.palw_v2_fold_accepted_with_delta_for_tests(&missing, p, &point, &fake_chunks).unwrap().0;
+        let (denied, unchanged) = vp.palw_v2_accepted_objects_and_state_for_tests(
+            &fake_base,
+            p,
+            &now,
+            vec![fake_completion.clone(), fake_completion, proofs[2].clone()],
+            now.block,
+        );
+        assert!(denied.is_empty(), "two refused completed groups do not refund the budget for a third");
+        assert!(unchanged.exec_v2_origin_v1(&other_reals[1].claim).is_none());
+        let Obj::ObjectChunk { group, .. } = &fake_chunks[0] else { unreachable!() };
+        assert_eq!(unchanged.pending_chunk_group(group), fake_base.pending_chunk_group(group));
+        // Coherent oversized chunks cannot masquerade as a completion and spend verification budget.
+        let mut too_big = proofs[0].clone();
+        let Obj::ExecOriginRecordedV1 { witness } = &mut too_big else { unreachable!() };
+        witness.header.resize(kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 1, 0);
+        let whole = borsh::to_vec(&too_big).unwrap();
+        let oversized = Obj::ObjectChunk {
+            group: kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_id_v1(&whole),
+            index: 0,
+            count: 1,
+            bytes: whole,
+        };
+        assert!(vp.palw_kernel_chunk_inner(&missing, &oversized, now.daa_score).is_none());
+        let parent_root = missing.state_root();
+        let raw_error = vp.palw_v2_fold_accepted_with_delta_for_tests(&missing, p, &now, &proofs).unwrap_err();
+        assert!(raw_error.to_string().contains("verification budget"), "the whole fold enforces the second lock: {raw_error}");
+        assert_eq!(missing.state_root(), parent_root, "a refused block never leaves two partial clock writes");
+    }
+
     assert!(vp.palw_h1_carrier_refusal_on(&state, p, &point, &object).is_none(), "full header positive control");
     let (full, full_delta) = vp.palw_v2_fold_accepted_with_delta_for_tests(&state, p, &point, std::slice::from_ref(&object)).unwrap();
     vp.headers_store.delete(origin.source_block).unwrap();

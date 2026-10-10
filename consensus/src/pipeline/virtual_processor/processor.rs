@@ -1733,7 +1733,7 @@ impl VirtualStateProcessor {
         self.palw_h1_carrier_refusal_on(state, state_params, &point, object)
     }
 
-    /// Origin has no extra fallible writer operation after its shared guards and full proof check.
+    /// The single-Origin writer starts with a fresh work budget, so this one proof cannot exhaust it.
     /// Ask the core's read-only verdict once, retaining the no-V2-bundle gate and both refusal variants.
     fn palw_exec_origin_rehearsal_v1_on(
         &self,
@@ -8149,6 +8149,7 @@ impl VirtualStateProcessor {
         // 1,016-row queue, a row maturing in the same block, and a same-block conviction.
         let exact_queue = audit_active && self.palw_audit_2026_09_23_at(point.daa_score);
         let mut certifications_graded = 0usize;
+        let mut exec_origin_budget = kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginBudgetV1::default();
         // ADR-0080 design A, W9: how many declared closes this block has already completed.
         let mut court_closes_completed = 0usize;
         // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
@@ -8586,13 +8587,35 @@ impl VirtualStateProcessor {
             };
             // **G14 lane D: a chunk group that carries a kernel route object is not a certification.** The grading cap and its work
             // budget are the family court's; the kernel route's own bounds are its fold's (and the carrier's fee).
+            let chunk_inner = self.palw_kernel_chunk_inner(&folded, &object, point.daa_score);
+            // Origin proof work has its own direct/chunk budget. A dormant inner still answers None (A-2).
+            let origin_witness = match &object {
+                kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ExecOriginRecordedV1 { witness } => Some(witness),
+                _ => match &chunk_inner {
+                    Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ExecOriginRecordedV1 { witness }) => Some(witness),
+                    _ => None,
+                },
+            };
+            if let Some(witness) = origin_witness {
+                if let Err(why) = folded.exec_v2_origin_witness_metadata_admissible_v1(state_params, point.daa_score, witness) {
+                    info!("Block {block}: an EXEC origin proof was dropped before header decoding, and the block stands: {why}");
+                    continue;
+                }
+                if let Err(why) = exec_origin_budget.charge() {
+                    info!("Block {block}: an EXEC origin proof was dropped before header verification, and the block stands: {why}");
+                    continue;
+                }
+            }
             let completes_a_group = completes_a_group
-                && !self.palw_kernel_chunk_inner(&folded, &object, point.daa_score).is_some_and(|inner| {
-                    kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(&inner)
-                        || kaspa_consensus_core::palw_state_v2::palw_object_is_onboarding_v1(&inner)
-                        || kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(&inner)
-                        || kaspa_consensus_core::palw_state_v2::palw_object_is_legacy_held_da_v2(&inner)
+                && !chunk_inner.as_ref().is_some_and(|inner| {
+                    (state_params.exec_v2_active_at(point.daa_score)
+                        && matches!(inner, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ExecOriginRecordedV1 { .. }))
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(inner)
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_onboarding_v1(inner)
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(inner)
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_legacy_held_da_v2(inner)
                 });
+
             let is_certification =
                 matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
                     || completes_a_group;
@@ -14087,7 +14110,12 @@ impl VirtualStateProcessor {
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2 as Obj, palw_object_chunk_group_id_v1};
         let Obj::ObjectChunk { group, index, count, bytes } = object else { return None };
-        if *count == 0 || *index >= *count || bytes.is_empty() {
+        if *count == 0
+            || *count > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT
+            || *index >= *count
+            || bytes.is_empty()
+            || bytes.len() > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES
+        {
             return None;
         }
         let mut parts: std::collections::BTreeMap<u8, &[u8]> = Default::default();

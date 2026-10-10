@@ -19474,6 +19474,8 @@ struct TransitionBuilder<'a> {
     unavailable_abstains: bool,
     /// ADR-0087: moves folded in this block, the disambiguator of their payout keys.
     model_moves: u32,
+    /// RFC8: Origin header decode/hash attempts in this block; failures still spent work. Never carried.
+    exec_origin_budget: crate::palw_work_slice_v2::PalwExecOriginBudgetV1,
     /// ADR-0071 SA-1..SA-4, resolved by the caller from `Params::palw_capability_bound` at this
     /// block's DAA. It rides the builder for the reason `unavailable_abstains` does: it is a fact
     /// about the BLOCK, constant for the whole fold, and threading it through every object arm
@@ -20005,6 +20007,7 @@ impl<'a> TransitionBuilder<'a> {
             entries: Vec::new(),
             unavailable_abstains,
             model_moves: 0,
+            exec_origin_budget: Default::default(),
             capability_bound,
             uncertified_weightless,
             da_court,
@@ -35317,6 +35320,8 @@ fn apply_object(
             palw_exec_v2_fold::apply_root_declared_v2(builder, ctx, declaration)?;
         }
         PalwConsensusObjectV2::ExecOriginRecordedV1 { witness } => {
+            builder.state.exec_v2_origin_witness_metadata_admissible_v1(builder.params, ctx.daa_score, witness)?;
+            builder.exec_origin_budget.charge().map_err(|error| PalwStateV2Error::ExecV2Refused(error.to_string()))?;
             let row = builder.state.exec_v2_origin_witness_admissible_v1(builder.params, ctx.daa_score, witness)?;
             builder.write_exec_origin(witness.claim, Some(row));
         }

@@ -287,9 +287,37 @@ where
     }
 }
 
+/// Explicit Origin decode/hash attempts per block, independent of FamilyCertified's grading slots.
+/// Initial dormant-lane bound preserves the former two chunk-completion ceiling for Origin;
+/// it is not a release latency, fee or availability approval, and also bounds direct carriage.
+pub const PALW_EXEC_ORIGIN_VERIFICATIONS_PER_BLOCK_V1: usize = 2;
+
+/// Ephemeral work accounting, not state or a proof-authentication hint. Refused work is not refunded.
+#[derive(Default)]
+pub struct PalwExecOriginBudgetV1 {
+    charged: usize,
+}
+
+impl PalwExecOriginBudgetV1 {
+    /// Charge before decoding/hashing an eligible Origin's header; the writer still authenticates afresh.
+    pub fn charge(&mut self) -> Result<(), PalwWorkRootRefusalV2> {
+        if self.charged >= PALW_EXEC_ORIGIN_VERIFICATIONS_PER_BLOCK_V1 {
+            return Err(PalwWorkRootRefusalV2::OriginVerificationBudget);
+        }
+        self.charged += 1;
+        Ok(())
+    }
+
+    pub fn charged(&self) -> usize {
+        self.charged
+    }
+}
+
 /// Why a root declaration was refused (each leaves no row).
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwWorkRootRefusalV2 {
+    #[error("the block has exhausted its EXEC original-header verification budget")]
+    OriginVerificationBudget,
     #[error("the REAL job authorization header is unavailable or does not match its native claim")]
     AuthorizationOrigin,
     #[error("the REAL job has no recorded original authorization clock; legacy provenance migration is required")]

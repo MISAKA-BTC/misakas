@@ -837,6 +837,26 @@ no validated flag, reusable permit or cache to a writer: actual object acceptanc
 and native capture continue to authenticate independently. Other object rehearsal paths retain
 their writer. Any new fallible Origin writer condition must also enter the read-only verdict.
 
+The block filter and the whole fold additionally share the same explicit Origin work-accounting
+rule: at most **two eligible header decode/authentication attempts per block**, direct and
+chunk-completed together. This is the initial dormant-lane ceiling, matching Origin's former
+incidental two-completion limit below the grading-accounting fences; it is not a calibrated
+latency, fee, throughput or availability approval. `PalwExecOriginBudgetV1` is ephemeral, not
+state/carriage or an authentication hint. The node charges before the existing acceptance/writer
+checks; the whole fold charges independently before its own header reader. Refused header work
+is not refunded or reset by state restore. A new block starts a fresh budget. The node drops
+excess attempts while the carrier block stands; a raw unfiltered fold refuses a third attempt.
+A single-object rehearsal has a fresh budget, so its one proof always fits this ceiling.
+
+Only cheap metadata is examined before charging: owning fence, nonempty bounded header bytes,
+an existing Attempt claim and no clock already recorded. Passing these checks authenticates
+nothing; the full identity and anchor checks still follow. Wrong nonce/class/body and other
+eligible decode/authentication failures consume the attempt. The node rejects metadata failures
+before cloning a writer. A completed Origin chunk has its own budget and consumes no
+`FamilyCertified` grading slot. Before its owning fence, the inner remains undecodable and the
+old unknown-chunk accounting remains unchanged. The inner-object classifier also refuses invalid
+chunk count/index/size before assembly, matching the writer's structural limits.
+
 Pool, template, reorg and chunk-completion repetitions, actual block folding and native capture
 still need their own resource inventory. The standalone origin-reader resource probe does not
 measure those composite paths. Eight active chunk groups are a concurrency bound, not by themselves
@@ -851,6 +871,16 @@ each compressed run expands at most 255 times. Thus parent input is at most `255
 (`815,964,810` bytes). These are conservative cryptographic input bounds, not allocated vectors,
 elapsed-time bounds, per-block bounds or bounds for uncapped fresh native capture. Header footer
 bytes, level length prefixes, decoding, extras, state loading and repeated consumers add work.
+For **one acceptance-filter pass plus one committed fold** processing these carried proofs,
+the conservative parent-input bound is `2 × (1,020B + 510B) = 3,060B`, at most
+`4,895,788,860` bytes at the header cap. The direct path may check once at acceptance, once in
+its rehearsal writer, then once in the committed fold; a chunk completion checks no more than
+that. This bounds this particular sequence's carried-Origin cryptographic input, including
+charged refusals, not raw chunk assembly/group hashing, cheap rejected metadata traffic, repeated
+invocations of the sequence, fresh native capture, state clones/roots, elapsed time or node RSS.
+The ceiling of two alone does not prove sufficient service rate or honest migration liveness.
+The outstanding admission/rate/fee and historical coverage gates still apply.
+
 The release origin-reader probe measures the actual public admission function on structural
 fixtures. Its large pinned control is not native-admitted; its eight-refusal sequence is not
 chunk/P2P or block admission evidence. A median and whole-process RSS observation cannot establish

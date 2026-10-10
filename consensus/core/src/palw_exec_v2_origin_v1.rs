@@ -218,13 +218,14 @@ pub(super) fn deserialize<R: std::io::Read>(reader: &mut R, max: usize) -> std::
 }
 
 impl PalwChainStateV2 {
-    /// Permissionless, self-contained legacy provenance. Neither local headers nor extras can supply its clock.
-    pub fn exec_v2_origin_witness_admissible_v1(
+    /// Cheap admission metadata only: no header decode, digest or authentication authority.
+    /// Used to charge the block's decode/hash budget before the expensive reader; the reader rechecks it.
+    pub fn exec_v2_origin_witness_metadata_admissible_v1(
         &self,
         params: &PalwStateParamsV2,
         now: u64,
         witness: &crate::palw_work_slice_v2::PalwExecOriginWitnessV1,
-    ) -> Result<PalwExecOriginV1, PalwStateV2Error> {
+    ) -> Result<(), PalwStateV2Error> {
         if !params.exec_v2_active_at(now) {
             return Err(refuse(PalwWorkRootRefusalV2::Dormant));
         }
@@ -238,6 +239,18 @@ impl PalwChainStateV2 {
         if self.exec_v2_origins.contains_key(&witness.claim) {
             return Err(refuse(PalwWorkRootRefusalV2::AuthorizationRecorded));
         }
+        Ok(())
+    }
+
+    /// Permissionless, self-contained legacy provenance. Neither local headers nor extras can supply its clock.
+    pub fn exec_v2_origin_witness_admissible_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        now: u64,
+        witness: &crate::palw_work_slice_v2::PalwExecOriginWitnessV1,
+    ) -> Result<PalwExecOriginV1, PalwStateV2Error> {
+        self.exec_v2_origin_witness_metadata_admissible_v1(params, now, witness)?;
+        let claim = &self.claims[&witness.claim];
         let row = PalwExecOriginV1 {
             source_block: claim.accepted_block,
             issued_daa: verify_header_bytes(witness.claim, claim, &witness.header)?,

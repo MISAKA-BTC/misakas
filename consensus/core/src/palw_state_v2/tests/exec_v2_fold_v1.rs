@@ -1085,6 +1085,45 @@ fn legacy_origin_world_at(
     (p, s, id, witness)
 }
 
+/// The per-block work budget counts refused decodes/hashes and is never a reusable authentication.
+#[test]
+fn exec_v2_origin_budget_is_spent_before_verification_and_not_refunded_by_restore() {
+    let (p, state, id, witness) = legacy_origin_world();
+    let extras = xx_declare();
+    let point = ctx(21, 110, 21);
+    let mut builder = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+    let checkpoint = builder.checkpoint();
+    let mut borrowed = witness.clone();
+    borrowed.claim = h64(0xBAD);
+    assert!(apply_object(&mut builder, &point, &PalwConsensusObjectV2::ExecOriginRecordedV1 { witness: Box::new(borrowed) }).is_err());
+    assert_eq!(builder.exec_origin_budget.charged(), 0, "missing claims refuse before header work");
+    let mut header: crate::header::Header = borsh::from_slice(&witness.header).unwrap();
+    header.nonce += 1;
+    let fake = PalwExecOriginWitnessV1 { claim: id, header: borsh::to_vec(&header).unwrap() };
+    assert!(state.exec_v2_origin_witness_metadata_admissible_v1(&p, point.daa_score, &fake).is_ok());
+    let fake = PalwConsensusObjectV2::ExecOriginRecordedV1 { witness: Box::new(fake) };
+    for charged in 1..=PALW_EXEC_ORIGIN_VERIFICATIONS_PER_BLOCK_V1 {
+        let error = apply_object(&mut builder, &point, &fake).unwrap_err();
+        assert_eq!(error.to_string(), PalwStateV2Error::ExecV2Refused(PalwWorkRootRefusalV2::AuthorizationOrigin.to_string()).to_string());
+        assert_eq!(builder.exec_origin_budget.charged(), charged);
+        assert!(builder.entries.is_empty());
+        assert_eq!(builder.state.state_root(), state.state_root());
+    }
+    builder.restore(checkpoint);
+    let good = PalwConsensusObjectV2::ExecOriginRecordedV1 { witness: Box::new(witness) };
+    let error = apply_object(&mut builder, &point, &good).unwrap_err();
+    assert_eq!(error.to_string(), PalwStateV2Error::ExecV2Refused(PalwWorkRootRefusalV2::OriginVerificationBudget.to_string()).to_string());
+    assert_eq!(builder.exec_origin_budget.charged(), PALW_EXEC_ORIGIN_VERIFICATIONS_PER_BLOCK_V1);
+    assert!(builder.state.exec_v2_origin_v1(&id).is_none());
+    // A new block has a fresh budget, but it must still do the full proof check before writing.
+    let migrated = step_with(&state, &p, 22, 111, std::slice::from_ref(&good), &extras).unwrap().0;
+    assert_eq!(migrated.exec_v2_origin_v1(&id).unwrap().issued_daa, 100);
+    let dormant = p.clone().with_exec_v2_from_daa(None);
+    let mut builder = TransitionBuilder::new(&state, &dormant, false, false, false, false, &extras);
+    assert!(apply_object(&mut builder, &point, &good).is_err());
+    assert_eq!(builder.exec_origin_budget.charged(), 0);
+}
+
 /// Compare the clone-free query with the old acceptance-reader + one-object writer oracle.
 /// The verdict is scoped to this exact state/point/proof and never installs an authority row.
 #[test]
