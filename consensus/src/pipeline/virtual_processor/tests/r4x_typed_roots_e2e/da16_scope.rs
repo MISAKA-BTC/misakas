@@ -105,7 +105,9 @@ async fn da16_scope_a_snapshot_is_never_demanded_and_a_retrieval_claims_own_entr
         l.claims[&c4].life.state
     );
     assert!(!l.claims[&c4].convicted, "a withheld entry is a default, never fraud");
-    assert_eq!(net.collateral(5), before - l.policy.default_penalty, "the fixed default penalty");
+    // (and the non-refundable OPV admission fee burned at the commit: G14-R4's F-C4R3-05)
+    let fee = net.api().unwrap().header.opv.unwrap().economics.admission_fee;
+    assert_eq!(net.collateral(5), before - l.policy.default_penalty - fee, "the fixed default penalty and the admission fee");
     net.assert_replays().await;
 }
 
