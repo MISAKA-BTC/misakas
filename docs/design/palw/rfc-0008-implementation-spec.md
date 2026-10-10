@@ -496,3 +496,17 @@ outside bond from the fresh verifier's finding; at the demand's deadline the rou
 same block's sync defaults the slice, voids its suffix, the root and the REAL claim (`WorkSliceDefaulted`) and charges the root bond
 nothing. Rule 4 (continuity) is exercised on the node too: a slice whose kernel job's prompt does not continue the stream is carried,
 anchored and refused `PredecessorMismatch`, crediting nothing.
+
+## 11. The user's Round / EXEC additional acceptance conditions (2026-10-10) — the activation gates they add
+
+Source: `docs/palw-round-exec-additional-acceptance-2026-10-10.md` (adopted by the user; integrated at `f325d6696`). None of the eight
+gates passes today, and the unified EXEC stays unarmable (`PALW_EXEC_PAYLOAD_V2_ARMABLE = false`) until all eight and every earlier gate hold.
+
+| Gate | Owner | What this branch already shows (implemented; verified only where a run is named) | Open |
+| --- | --- | --- | --- |
+| SLICE | X8R (the Lead) | a plan is a partition with no gap or overlap (`a_plan_is_a_partition_with_no_gap_and_no_overlap`); more slices pay no more (`splitting_a_range_into_more_slices_pays_no_more`); a used index, a skip, an overlap and a replay credit nothing (`a_used_index_a_skip_an_overlap_and_a_replay_credit_nothing`); the root settles once and the allocation is conserved (`the_root_settles_once_…`); one job work id per root (`JobWorkAlreadyUsed`); the prefix claim's job nonce binds the root claim id, so another root cannot reuse a prefix (GAP-62); one budget per work, legs net of the route reward (ADR-0176 D2, §10.9) | a node test that a second root naming the same prefix claim, and a duplicate Final of one kernel claim backing two slices, are refused / credited once; the X8R round-3 build itself (queued) |
+| RECOVERY (EXEC half) | X8R | restart / replay / IBD / reorg of the carriage and the ledgers (`t12_exec_v2_carriage`), the salted-seal and slice-verification reorg cases | the prefix stage across a reorg |
+| BUDGET, WORK, WINDOW, NEUTRALITY, SPLIT, RECOVERY (budget half) | BUDGET (`palw_bond_budget_v1`) | — (EXEC carriers mint nothing: `B` = 0 per carrier; hooks H-3 / H-3a / H-3b, §10.9) | the pre-draw cap `T_candidate <= min(T_earned, BondRemainingRoundRights)` on the shared window; fee-only Rounds under B_max or an explicit execution cap (POLICY); split invariance; role-swap neutrality |
+| ECON | ECON | — | small/large model economics before/after the cap and window saturation, with criteria fixed before the run |
+
+EXEC_TX / EXEC_SLICE weight, blue score and DAA contribution stay 0; a slice's verification and reward aggregate to its root.
