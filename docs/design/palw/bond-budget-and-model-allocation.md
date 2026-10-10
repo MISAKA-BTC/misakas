@@ -233,14 +233,55 @@ Epoch `t = ⌊(daa − activation) / E⌋` (POLICY `E`). The first block of epoc
 Snapshot work is bounded by the number of assignment rows. Each row cost a carried, signed object, and each holds at most
 `max_models_per_bond` entries.
 
-### 3.3 The allocation curve `f` (POLICY)
+### 3.3 The allocation curve `A_m = S_m^α` (ADR-0177 as revised 2026-10-10; POLICY)
 
-`f` is a piecewise-linear table `[(S₀ = 0, A₀ = 0), (S₁, A₁), …]` with strictly increasing `S` and non-decreasing `A`, and it is
-flat after the last point (the cap). This one representation covers linear, concave, convex and capped shapes. Validation
-enforces `f(0) = 0`, monotonicity and non-negativity (D4), and requires `u128` products to fit. **The shape is the user's
-decision**, made together with ECON's open-versus-closed evaluation (D6). The engine does not claim that any curve makes
-publication "overwhelmingly better" than closed self-funding. Same `S_m` gives the same allocation, whoever owns the capital
-(D6).
+The goal changed on 2026-10-10. The allocation now strongly favours models with more effective locked miner bond. It no longer
+favours publication itself, and equal capital gets equal treatment whoever owns it. The piecewise-linear `f` of the old goal
+(policy version 1) was never armed. It is removed, and version 1 is refused.
+
+**The curve.** `A_m = ⌊S_m^α⌋` and `R_m = ⌊R_PALW · A_m / Σ_j A_j⌋`.
+* `S_m` is in base units of capital.
+* `α` is set in half steps: `alpha_halves = 2α`, in `2..=8`, so `α ∈ {1, 1.5, …, 4}`.
+* The interim value is `α = 1.5` (`alpha_halves = 3`), the user's pick in ECON round 3. It is unapproved. It is the preset of
+  `unapproved_probe_v1`, and the fence stays refused.
+* The tests run at `α = 1`, `1.5` and `2`.
+* There is no saturation and no per-model cap. The bonds' own Q/B/R/F caps bound what a claim is paid.
+
+**Exact arithmetic.** `A_m = isqrt(S_m^(2α))`.
+* `S_m` is clamped to 64 bits. The clamp is unreachable, because the supply is below `2^64`.
+* `S_m^(2α)` is an exact integer below `2^512`.
+* `isqrt(n) = max{r : r² ≤ n}` uses Newton's method from above (`palw_isqrt_u512_v1`). It returns the floor of the real `S_m^α`.
+  For an integer `α` that is `S_m^α` exactly.
+* Weights and their sum are 512-bit integers (`kaspa_math::Uint512`). Each weight is below `2^256`. Their sum over any number of models
+  is below `2^320`, and so is `accrued · A_m`. No step saturates or rounds except the documented floors.
+
+**Remainder rule and the budget bound.**
+* There are exactly two floors: the weight `⌊S^α⌋` and the share `⌊R·A_m/ΣA⌋`.
+* `Σ_m ⌊R·A_m/ΣA⌋ ≤ Σ_m R·A_m/ΣA = R`. So the allocation never exceeds `R_PALW`.
+* The remainder `R − Σ R_m` is below the number of models. It is allocated to nobody and never minted (P-7).
+
+**Splits never gain, at any `α ≥ 1`.**
+* `⌊x^α⌋ + ⌊y^α⌋ ≤ ⌊x^α + y^α⌋ ≤ ⌊(x + y)^α⌋`.
+* The share `x / (x + B)` grows with `x`.
+* So the same capital spread over two models never out-weighs it on one.
+* A bond split is invisible, because `S_m` is the assigned capital whoever holds it.
+
+**Unchanged.**
+* The individual Q/B/R/F caps.
+* Distinct capital: no double counting; seasoning stops epoch-edge moves; amounts are clipped pro rata.
+* The common hold `d + W`.
+* The total budget.
+* Nothing scales block issuance, the beacon, Final weight or fork choice.
+* A capped bond gains nothing from a steeper curve (test `a_capped_bond_gains_nothing_more_from_a_steeper_curve`).
+* Large-capital concentration, adversarial capital included, is accepted as residual risk (ADR-0177 revision).
+* **`p = 0` compute-skipping is a separate, unresolved gate.** This curve is not evidence for it.
+
+**The verification-attestation gate** (ECON round 2, readiness §3f) is not implemented on this branch. If it lands, it is a separate
+optional policy switch, off by default, and it is not evidence for `p = 0` either. Its design is in ECON §5c.
+* Draw: `m` verifiers by stake from the M\*-49 pool, seeded by the RFC-0007 Part VI v3 beacon.
+* Pay rule: `k`-of-`m` attestations release the model-epoch subsidy.
+* Hold: Final reward is held in vesting until the gate resolves, and burned (never minted) on withholding.
+* Allocations: tags 141–143, deltas 194–196 and RPC 254–255 stay reserved for it.
 
 ### 3.4 The realized PALW budget and a model's available budget
 
@@ -502,7 +543,7 @@ All four show "fence dormant" until armed.
 * **P-3** ρ and whether rights are sliced per claim by ρ (`slice_rights_by_rho`).
 * **P-4** the allocation epoch `E` and its tie to `W`.
 * **P-5** seasoning.
-* **P-6** the curve `f`, its cap and its increasing range, plus the numeric bar for "publication is overwhelmingly better".
+* **P-6** `α` of `A_m = S_m^α` (interim, unapproved: 1.5), and the acceptance quantification ADR-0177's revision asks for: the capital range, the multiplier, and whether the advantage holds for allocation, actual payment or net profit below the individual caps.
 * **P-7** the rule for unallocated budget when `ΣA = 0` (v1: not minted).
 * **P-8** `max_models_per_bond`.
 * **P-9** fee-only Rounds: `CountAgainstBlocks` (each allocated ticket one block of `B_max`) or `ExecutionCap { rights_per_unit }`.
@@ -549,6 +590,21 @@ non-zero tickets needs a heavier class fixture. It is open.
 
 Failures on this tree that are not this lane's: the `a2u` pins for tags 109 (changed) and 113 (unpinned), and
 `dns_finality::TakeoverToken (gone)` missing from `PALW_INT12_WIRE_CHANGES_V1`.
+
+**Round 2 (2026-10-10, ADR-0177 revision).** The curve `A_m = S_m^α` is implemented and verified. There are 8 of 8 Sim tests and
+the engine and fold filters pass, built on integration `d4e37155e`. Whether it is armable: no. The tests are:
+* `curve_validation_isqrt_and_exact_powers`, which checks the floor root on random 512-bit inputs and exact powers to `α = 4` at
+  `S = 2^64 − 1`;
+* `two_to_one_capital_is_four_to_one_at_alpha_two_and_two_to_one_at_alpha_one` (2:1, 2.83:1, 4:1);
+* `model_budgets_sum_within_accrued_and_zero_denominator_is_zero` (Σ ≤ R, loss below one per model);
+* `splitting_a_model_or_a_bond_never_raises_the_total`;
+* `a_capped_bond_gains_nothing_more_from_a_steeper_curve`;
+* fold `alpha_two_divides_the_realized_carve_four_to_one_and_every_block_replays` (delta, revert and carriage reload);
+* Sim `alpha_one_one_and_a_half_and_two_divide_the_budget_by_s_to_the_alpha_on_the_real_fold_and_replay`, which measured
+  640,169,300,160 : 320,084,650,080 at `α = 1`, 709,431,897,488 : 250,822,052,751 at `α = 1.5` (2.8284) and
+  768,203,160,192 : 192,050,790,048 at `α = 2`.
+
+The verification-attestation gate is not implemented (see §3.3).
 
 `scripts/t12-repin.sh --shipping --drift-only` on this tree: no drift (361 ok, 29 history, 3 label). The testnet-12
 params id `5ee7fd8e…` and schedule id `1678e073…` are unchanged.

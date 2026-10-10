@@ -28,7 +28,9 @@ use crate::palw_state_v2::PalwBondKeyV2;
 pub const PALW_BUDGET_BLOCK_UNIT_V1: u64 = 1_000_000;
 /// The policy versions this binary reads.
 pub const PALW_BOND_BUDGET_POLICY_VERSION_V1: u16 = 1;
-pub const PALW_MODEL_ALLOCATION_POLICY_VERSION_V1: u16 = 1;
+/// The allocation policy's version: 2 is the power curve `A_m = S_m^α` (ADR-0177's revised goal, 2026-10-10). Version 1, the piecewise
+/// linear `f` of the "favour publication" goal, was never armed anywhere and is refused.
+pub const PALW_MODEL_ALLOCATION_POLICY_VERSION_V2: u16 = 2;
 /// The engine state's own version (its header).
 pub const PALW_BOND_BUDGET_STATE_VERSION_V1: u16 = 1;
 /// The V2 carriage tail of the engine (the Lead's allocation; present only when the engine exists).
@@ -41,8 +43,17 @@ const PALW_CAPITAL_ASSIGNMENT_MESSAGE_DOMAIN_V1: &[u8] = b"misaka-palw/capital-a
 const PALW_BOND_BUDGET_POLICY_DOMAIN_V1: &[u8] = b"misaka-palw/bond-budget/policy/v1";
 const PALW_BOND_BUDGET_HEADER_DOMAIN_V1: &[u8] = b"misaka-palw/bond-budget/header/v1";
 const PALW_ROUND_RIGHTS_ROW_DOMAIN_V1: &[u8] = b"misaka-palw/bond-budget/round-rights-row/v1";
-/// At most this many points describe the allocation curve `f`.
-pub const PALW_ALLOCATION_CURVE_MAX_POINTS_V1: usize = 32;
+/// The largest exponent the curve takes, in half steps: `α ≤ 4` (`α` itself is POLICY). With `S_m` held to 64 bits, `S_m^(2α) < 2^512`
+/// is computed exactly before its integer square root, and `A_m = ⌊S_m^α⌋ < 2^256`, so every weight, their sum over any number of models
+/// a state can hold and `accrued · A_m` fit [`PalwAllocationWeightV1`] (512 bits) exactly.
+pub const PALW_ALLOCATION_ALPHA_HALVES_MAX_V1: u8 = 8;
+
+/// **The interim, UNAPPROVED exponent** the user picked (ECON round 3, 2026-10-10): `α = 1.5`, in half steps. Interim only — it is not
+/// an approved activation value, and the fence stays refused.
+pub const PALW_ALLOCATION_ALPHA_HALVES_INTERIM_V1: u8 = 3;
+
+/// A model's allocation weight `A_m` and their sum `Σ A` — exact 512-bit integers.
+pub type PalwAllocationWeightV1 = kaspa_math::Uint512;
 
 /// The engine's tables (delta 190 names them; a table added later takes an id, not a delta number).
 pub const PALW_BUDGET_TABLE_BONDS_V1: u8 = 1;
@@ -339,49 +350,65 @@ impl PalwBondBudgetFenceV1 {
     }
 }
 
-/// **The allocation curve `f` (ADR-0177 D4; POLICY)**: piecewise linear through `points`, `(S, A)` with `S` in base units of capital,
-/// flat past the last point (the cap). Valid only with `f(0) = 0`, `S` strictly increasing and `A` non-decreasing.
+/// **The allocation curve (ADR-0177 D4 as revised 2026-10-10; POLICY)**: `A_m = ⌊S_m^α⌋`, `S_m` in base units of capital, `α` in half
+/// steps (`alpha_halves = 2α`: 2 is linear, 3 is the interim 1.5, 4 is the comparison value 2). `α = 1` is neutral to splitting and
+/// merging; `α > 1` strongly favours a model with more effective locked bond — a fixed budget's share, never more issuance
+/// (`R_m = ⌊R_PALW · A_m / Σ_j A_j⌋`). No saturation and no per-model cap: the bonds' own Q/B/R/F caps bound what a claim is paid.
+///
+/// **Rounding (exact and deterministic).** `A_m = isqrt(S_m^(2α))`: the power `S_m^(2α)` is an exact integer (`2α` is), and
+/// `isqrt(n) = max { r : r² ≤ n }` is the floor of the real `S_m^α` — for an integer `α` the root of a perfect square, so `S_m^α` exactly.
+/// Then `R_m = ⌊R_PALW · A_m / ΣA⌋`, the one division, floored. **Proof that `Σ_m R_m ≤ R_PALW`:** `Σ_m ⌊R·A_m/ΣA⌋ ≤ Σ_m R·A_m/ΣA = R`.
+/// The remainder `R − Σ R_m` is below the number of models, is allocated to nobody and is never minted (P-7). Flooring the weights
+/// keeps the split property: `⌊x^α⌋ + ⌊y^α⌋ ≤ ⌊x^α + y^α⌋ ≤ ⌊(x+y)^α⌋` for `α ≥ 1`, so two models never out-weigh one with their capital.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwAllocationCurveV1 {
-    pub points: Vec<(u64, u64)>,
+    /// `2α`, in `2..=PALW_ALLOCATION_ALPHA_HALVES_MAX_V1` (`α ∈ {1, 1.5, 2, …, 4}`).
+    pub alpha_halves: u8,
 }
 
 impl PalwAllocationCurveV1 {
+    /// The interim, unapproved `α = 1.5`.
+    pub const fn interim_unapproved_v1() -> Self {
+        Self { alpha_halves: PALW_ALLOCATION_ALPHA_HALVES_INTERIM_V1 }
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.points.len() < 2 || self.points.len() > PALW_ALLOCATION_CURVE_MAX_POINTS_V1 {
-            return Err("the allocation curve needs between 2 and 32 points");
-        }
-        if self.points[0] != (0, 0) {
-            return Err("the allocation curve must start at f(0) = 0");
-        }
-        for w in self.points.windows(2) {
-            if w[1].0 <= w[0].0 {
-                return Err("the allocation curve's capital points must be strictly increasing");
-            }
-            if w[1].1 < w[0].1 {
-                return Err("the allocation curve must be non-decreasing");
-            }
-        }
-        if self.points.last().is_some_and(|p| p.1 == 0) {
-            return Err("an allocation curve that is zero everywhere allocates nothing");
+        if self.alpha_halves < 2 || self.alpha_halves > PALW_ALLOCATION_ALPHA_HALVES_MAX_V1 {
+            return Err("the allocation exponent must be alpha = alpha_halves / 2 in 1..=4 (alpha_halves in 2..=8)");
         }
         Ok(())
     }
 
-    /// `f(s)`, floor-interpolated (monotone: each segment's floor is non-decreasing and meets the next at its end point).
-    pub fn eval(&self, s: u64) -> u64 {
-        let Some(last) = self.points.last() else { return 0 };
-        if s >= last.0 {
-            return last.1;
+    /// `A_m = ⌊S_m^α⌋ = isqrt(S_m^(2α))`, exact. `S_m` is held to 64 bits first: no state can lock more than `u64::MAX` base units (the
+    /// supply is below it), so the clamp is unreachable and only keeps the 512-bit bound a property of the code.
+    pub fn weight(&self, capital: u128) -> PalwAllocationWeightV1 {
+        let s = u64::try_from(capital).unwrap_or(u64::MAX);
+        let mut power = PalwAllocationWeightV1::from_u64(1);
+        for _ in 0..self.alpha_halves.min(PALW_ALLOCATION_ALPHA_HALVES_MAX_V1) {
+            let (next, overflow) = power.overflowing_mul_u64(s);
+            debug_assert!(!overflow, "S < 2^64 and 2 alpha <= 8 keep S^(2 alpha) below 2^512");
+            power = next;
         }
-        let i = self.points.partition_point(|p| p.0 <= s);
-        if i == 0 {
-            return 0;
+        palw_isqrt_u512_v1(power)
+    }
+}
+
+/// **`isqrt(n) = max { r : r² ≤ n }`** for a 512-bit `n`, exactly (Newton's method from above: `x₀ ≥ √n`, `x ← ⌊(x + ⌊n/x⌋)/2⌋` while
+/// it decreases; the first non-decrease is the floor root). Deterministic, no floating point.
+pub fn palw_isqrt_u512_v1(n: PalwAllocationWeightV1) -> PalwAllocationWeightV1 {
+    if n.is_zero() {
+        return n;
+    }
+    // x₀ = 2^⌈bits/2⌉ > √n.
+    let (mut x, _) = PalwAllocationWeightV1::from_u64(1).overflowing_shl(n.bits().div_ceil(2));
+    loop {
+        let (q, _) = n.div_rem(x);
+        let (sum, _) = x.overflowing_add(q);
+        let (y, _) = sum.overflowing_shr(1);
+        if y >= x {
+            return x;
         }
-        let (s0, a0) = self.points[i - 1];
-        let (s1, a1) = self.points[i];
-        let rise = (a1 - a0) as u128 * (s - s0) as u128 / (s1 - s0) as u128;
-        a0 + rise as u64
+        x = y;
     }
 }
 
@@ -393,6 +420,7 @@ pub struct PalwModelAllocationPolicyV1 {
     pub epoch_daa: u64,
     /// Full epochs an increase waits before it counts (short-term borrowing; decreases apply at once).
     pub seasoning_epochs: u32,
+    /// `A_m = S_m^α` (POLICY: `α`).
     pub curve: PalwAllocationCurveV1,
     /// Entries one assignment may name.
     pub max_models_per_bond: u16,
@@ -402,16 +430,16 @@ impl PalwModelAllocationPolicyV1 {
     /// **NOT A PROPOSAL** (as [`PalwBondBudgetPolicyV1::unapproved_probe_v1`]).
     pub fn unapproved_probe_v1() -> Self {
         Self {
-            version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V1,
+            version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V2,
             epoch_daa: 1,
             seasoning_epochs: 1,
-            curve: PalwAllocationCurveV1 { points: vec![(0, 0), (1, 1)] },
+            curve: PalwAllocationCurveV1::interim_unapproved_v1(),
             max_models_per_bond: 1,
         }
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.version != PALW_MODEL_ALLOCATION_POLICY_VERSION_V1 {
+        if self.version != PALW_MODEL_ALLOCATION_POLICY_VERSION_V2 {
             return Err("the allocation policy's version is not one this binary reads");
         }
         if self.epoch_daa == 0 {
@@ -670,13 +698,20 @@ pub fn palw_rider_block_attribution_v1(riders: u64) -> (u64, u64) {
     (PALW_BUDGET_BLOCK_UNIT_V1 - each.saturating_mul(riders), each)
 }
 
-/// **A model's available reward budget** (design §3.4): `⌊accrued · A_m / ΣA⌋ − reserved_m`; `0` when `ΣA = 0` or `A_m = 0` (the zero
-/// denominator rule). `A_m ≤ ΣA` keeps the share within `accrued`, and the floors keep `Σ_m` share within it too.
-pub fn palw_model_available_v1(accrued: u64, a_m: u64, sum_a: u128, reserved_m: u64) -> u64 {
-    if sum_a == 0 || a_m == 0 {
+/// **A model's available reward budget** (design §3.4): `⌊accrued · A_m / ΣA⌋ − reserved_m`, exact in 512 bits; `0` when `ΣA = 0` or
+/// `A_m = 0` (the zero denominator rule). `A_m ≤ ΣA` keeps the share within `accrued`, and the floors keep `Σ_m` share within it too:
+/// the remainders are never allocated (and never minted, P-7).
+pub fn palw_model_available_v1(accrued: u64, a_m: &PalwAllocationWeightV1, sum_a: &PalwAllocationWeightV1, reserved_m: u64) -> u64 {
+    if sum_a.is_zero() || a_m.is_zero() {
         return 0;
     }
-    let share = floor_mul_div(accrued as u128, a_m as u128, sum_a).min(accrued as u128) as u64;
+    let (product, overflow) = a_m.overflowing_mul_u64(accrued);
+    if overflow {
+        // Unreachable under PALW_ALLOCATION_ALPHA_HALVES_MAX_V1 (A_m < 2^256, accrued < 2^64); refuse to allocate rather than guess.
+        return 0;
+    }
+    let (share, _) = product.div_rem(*sum_a);
+    let share = if share > PalwAllocationWeightV1::from_u64(accrued) { accrued } else { share.as_u64() };
     share.saturating_sub(reserved_m)
 }
 
@@ -755,8 +790,8 @@ pub struct PalwBondBudgetHeaderV1 {
 pub struct PalwAllocationEpochV1 {
     pub index: u64,
     pub start_daa: u64,
-    /// `Σ_m A_m` of the snapshot.
-    pub sum_a: u128,
+    /// `Σ_m A_m` of the snapshot (exact).
+    pub sum_a: PalwAllocationWeightV1,
     /// The worker carve of every chain block of this epoch so far (`R_PALW(t)` as realized).
     pub accrued_sompi: u64,
 }
@@ -808,8 +843,8 @@ pub struct PalwModelBudgetRowV1 {
     pub epoch: u64,
     /// `S_m`.
     pub capital: u128,
-    /// `A_m = f(S_m)` (with `S_m` saturated to a `u64` for the curve).
-    pub weight: u64,
+    /// `A_m = S_m^α` (exact).
+    pub weight: PalwAllocationWeightV1,
     pub reserved_sompi: u64,
 }
 
@@ -930,7 +965,7 @@ impl PalwBondBudgetStateV1 {
     pub fn model_available(&self, model: &Hash64) -> u64 {
         let Some(epoch) = self.header.allocation else { return 0 };
         let Some(row) = self.models.get(model).filter(|row| row.epoch == epoch.index) else { return 0 };
-        palw_model_available_v1(epoch.accrued_sompi, row.weight, epoch.sum_a, row.reserved_sompi)
+        palw_model_available_v1(epoch.accrued_sompi, &row.weight, &epoch.sum_a, row.reserved_sompi)
     }
 
     /// The table roots and the header digest the V2 root block writes, in table order.
@@ -1447,10 +1482,11 @@ impl PalwBondBudgetStateV1 {
         for model in stale {
             put(&mut self.models, PALW_BUDGET_TABLE_MODELS_V1, &model, None, j);
         }
-        let mut sum_a: u128 = 0;
+        let mut sum_a = PalwAllocationWeightV1::ZERO;
         for (model, capital) in s {
-            let weight = policy.curve.eval(u64::try_from(capital).unwrap_or(u64::MAX));
-            sum_a += weight as u128;
+            let weight = policy.curve.weight(capital);
+            // Below 2^320 for any number of models a state can hold (each weight < 2^256): exact.
+            sum_a = sum_a.saturating_add(weight);
             put(
                 &mut self.models,
                 PALW_BUDGET_TABLE_MODELS_V1,
@@ -1761,10 +1797,10 @@ mod tests {
     fn delta_round_trip_and_revert() {
         let p = policy(3, true);
         let ap = PalwModelAllocationPolicyV1 {
-            version: 1,
+            version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V2,
             epoch_daa: 10,
             seasoning_epochs: 1,
-            curve: PalwAllocationCurveV1 { points: vec![(0, 0), (1_000 * BILI, 1_000)] },
+            curve: PalwAllocationCurveV1 { alpha_halves: 4 },
             max_models_per_bond: 4,
         };
         let mut s = PalwBondBudgetStateV1::new(0, &p);
@@ -1835,52 +1871,221 @@ mod tests {
 
     // ---- ADR-0177 ----
 
-    fn ap(seasoning: u32) -> PalwModelAllocationPolicyV1 {
+    /// A TEST allocation at `α = halves / 2`.
+    fn ap_alpha(seasoning: u32, halves: u8) -> PalwModelAllocationPolicyV1 {
         PalwModelAllocationPolicyV1 {
-            version: 1,
+            version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V2,
             epoch_daa: 10,
             seasoning_epochs: seasoning,
-            curve: PalwAllocationCurveV1 { points: vec![(0, 0), (1_000 * BILI, 1_000), (5_000 * BILI, 2_000)] },
+            curve: PalwAllocationCurveV1 { alpha_halves: halves },
             max_models_per_bond: 4,
         }
     }
 
-    #[test]
-    fn curve_validation_and_monotone_eval() {
-        assert!(ap(1).validate().is_ok());
-        let bad = |points: Vec<(u64, u64)>| PalwAllocationCurveV1 { points }.validate().is_err();
-        assert!(bad(vec![(0, 0)]));
-        assert!(bad(vec![(0, 1), (5, 5)]), "f(0) = 0");
-        assert!(bad(vec![(0, 0), (5, 5), (5, 6)]), "strictly increasing S");
-        assert!(bad(vec![(0, 0), (5, 5), (6, 4)]), "non-decreasing");
-        assert!(bad(vec![(0, 0), (5, 0)]), "zero everywhere");
-        let c = ap(1).curve;
-        let mut rng = Rng(0x5eed_0005);
-        let mut last = 0;
-        let mut s = 0u64;
-        for _ in 0..10_000 {
-            s = s.saturating_add(rng.below(10 * BILI));
-            let a = c.eval(s);
-            assert!(a >= last, "f is monotone");
-            last = a;
-        }
-        assert_eq!(c.eval(0), 0);
-        assert_eq!(c.eval(u64::MAX), 2_000, "flat past the last point");
+    /// The TEST allocation the older rows use: the interim `α = 1.5` (unapproved).
+    fn ap(seasoning: u32) -> PalwModelAllocationPolicyV1 {
+        ap_alpha(seasoning, PALW_ALLOCATION_ALPHA_HALVES_INTERIM_V1)
+    }
+
+    fn w(n: u64) -> PalwAllocationWeightV1 {
+        PalwAllocationWeightV1::from_u64(n)
     }
 
     #[test]
+    fn curve_validation_isqrt_and_exact_powers() {
+        for halves in 2..=PALW_ALLOCATION_ALPHA_HALVES_MAX_V1 {
+            assert!(ap_alpha(1, halves).validate().is_ok());
+        }
+        assert!(PalwAllocationCurveV1 { alpha_halves: 1 }.validate().is_err(), "alpha >= 1");
+        assert!(PalwAllocationCurveV1 { alpha_halves: 9 }.validate().is_err(), "alpha <= 4");
+        assert_eq!(PalwModelAllocationPolicyV1::unapproved_probe_v1().curve.alpha_halves, 3, "the interim preset is alpha = 1.5");
+        let mut old = ap(1);
+        old.version = 1;
+        assert!(old.validate().is_err(), "version 1 (the piecewise-linear f) is refused");
+        // isqrt is the floor root: r² ≤ n < (r + 1)², on random and edge inputs up to 2^512 − 1.
+        let mut rng = Rng(0x5eed_15c7);
+        let one = w(1);
+        let mut inputs = vec![PalwAllocationWeightV1::ZERO, one, w(2), w(3), w(4), w(15), w(16), w(17), PalwAllocationWeightV1::MAX];
+        for _ in 0..500 {
+            let limbs = 1 + rng.below(8) as usize;
+            let mut x = PalwAllocationWeightV1::ZERO;
+            for l in 0..limbs {
+                x.0[l] = rng.next();
+            }
+            inputs.push(x);
+        }
+        for n in inputs {
+            let r = palw_isqrt_u512_v1(n);
+            assert!(r.bits() <= 256 && r.overflowing_mul(r).0 <= n, "r² ≤ n");
+            // `overflowing_mul` drops (unflagged) the partial products past 512 bits, so square only below 2^256: at or above it
+            // `(r + 1)² ≥ 2^512 > n` already.
+            let r1 = r + one;
+            assert!(r1.bits() > 256 || r1.overflowing_mul(r1).0 > n, "(r + 1)² > n");
+        }
+        let c = |halves| PalwAllocationCurveV1 { alpha_halves: halves };
+        assert_eq!(c(2).weight(7), w(7));
+        assert_eq!(c(4).weight(7), w(49));
+        assert_eq!(c(3).weight(4), w(8), "4^1.5 = 8 exactly");
+        assert_eq!(c(3).weight(2), w(2), "2^1.5 = 2.83, floored");
+        assert_eq!(c(3).weight(1_000_000), w(1_000_000_000));
+        assert_eq!(c(4).weight(3_000 * BILI as u128), PalwAllocationWeightV1::from_u128((3_000 * BILI as u128).pow(2)));
+        assert_eq!(c(2).weight(0), PalwAllocationWeightV1::ZERO);
+        // The largest S at the largest alpha: exact, no overflow.
+        let s = w(u64::MAX);
+        assert_eq!(c(8).weight(u64::MAX as u128), s * s * s * s);
+        assert!(c(7).weight(u64::MAX as u128).bits() <= 224);
+        // Monotone in S at every alpha.
+        for halves in 2..=PALW_ALLOCATION_ALPHA_HALVES_MAX_V1 {
+            let (mut last, mut s) = (PalwAllocationWeightV1::ZERO, 0u128);
+            for _ in 0..1_000 {
+                s += rng.below(u64::MAX / 2_000) as u128;
+                let a = c(halves).weight(s);
+                assert!(a >= last);
+                last = a;
+            }
+        }
+    }
+
+    /// **The revision's headline: a 2:1 bond is a 4:1 allocation at `α = 2`** (before any cap), `2^1.5 = 2.83:1` at the interim `α = 1.5`
+    /// and 2:1 at `α = 1` — exact, from the engine's own snapshot and availability.
+    #[test]
+    fn two_to_one_capital_is_four_to_one_at_alpha_two_and_two_to_one_at_alpha_one() {
+        let s1 = 2_000 * BILI;
+        let s2 = 1_000 * BILI;
+        let r = 1_000 * BILI;
+        // α = 1.5: ⌊S^1.5⌋ by isqrt, then ⌊R·A/ΣA⌋ — computed here independently in u128/f64-free integer steps.
+        let a15 = |s: u64| {
+            let cube = PalwAllocationWeightV1::from_u64(s) * s * s;
+            palw_isqrt_u512_v1(cube)
+        };
+        let (x, y) = (a15(s1), a15(s2));
+        let share = |a: PalwAllocationWeightV1| ((a * r).div_rem(x + y).0).as_u64();
+        for (halves, expect) in [(2u8, (2 * r / 3, r / 3)), (3, (share(x), share(y))), (4, (4 * r / 5, r / 5))] {
+            let a = ap_alpha(1, halves);
+            let mut s = PalwBondBudgetStateV1::new(0, &policy(1, false));
+            let mut j = Vec::new();
+            s.assign(&a, bond(1), &[(h(1), s1)], 1, s1, 0, |_| true, &mut j).unwrap();
+            s.assign(&a, bond(2), &[(h(2), s2)], 1, s2, 0, |_| true, &mut j).unwrap();
+            s.roll_epoch(&a, 2, 20, |b| if *b == bond(1) { (s1, true) } else { (s2, true) }, &mut j);
+            s.accrue(r, &mut j);
+            let (big, small) = (s.model_available(&h(1)), s.model_available(&h(2)));
+            assert_eq!((big, small), expect, "alpha = {halves}/2");
+            assert!(big + small <= r, "within R_PALW; the remainder is never allocated");
+            assert!(r - (big + small) < 2, "and only the floors are lost");
+            if halves == 4 {
+                assert_eq!(s.model_row(&h(1)).unwrap().weight, s.model_row(&h(2)).unwrap().weight * 4u64);
+            }
+            if halves == 3 {
+                // 2^1.5 ≈ 2.8284: the big model's share is 2.8284 / 3.8284 of R.
+                assert!(big.abs_diff(r * 28_284 / 38_284) <= r / 10_000, "2^1.5 : 1 ({big} : {small})");
+            }
+        }
+    }
+
+    /// **Σ R_m ≤ R_PALW** for random capitals up to the 64-bit limit, any number of models and every `α` (1 to 4 in half steps, the
+    /// interim 1.5 among them); the zero-denominator rule.
+    #[test]
     fn model_budgets_sum_within_accrued_and_zero_denominator_is_zero() {
         let mut rng = Rng(0x5eed_0006);
-        for _ in 0..2_000 {
+        for i in 0..2_000u64 {
+            let halves = 2 + (i % 7) as u8;
+            let curve = PalwAllocationCurveV1 { alpha_halves: halves };
             let accrued = rng.below(u64::MAX / 4);
             let models = 1 + rng.below(20) as usize;
-            let weights: Vec<u64> = (0..models).map(|_| rng.below(1 << 40)).collect();
-            let sum: u128 = weights.iter().map(|w| *w as u128).sum();
-            let total: u128 = weights.iter().map(|w| palw_model_available_v1(accrued, *w, sum, 0) as u128).sum();
-            assert!(total <= accrued as u128);
+            let weights: Vec<PalwAllocationWeightV1> = (0..models)
+                .map(|_| curve.weight(if rng.below(4) == 0 { u64::MAX as u128 } else { rng.below(1 << 50) as u128 }))
+                .collect();
+            let sum = weights.iter().fold(PalwAllocationWeightV1::ZERO, |acc, w| acc + *w);
+            let total: u128 = weights.iter().map(|w| palw_model_available_v1(accrued, w, &sum, 0) as u128).sum();
+            assert!(total <= accrued as u128, "alpha = {halves}/2");
+            if !sum.is_zero() {
+                assert!(total + models as u128 > accrued as u128, "only the floors (< one per model) are lost");
+            }
         }
-        assert_eq!(palw_model_available_v1(1_000, 5, 0, 0), 0);
-        assert_eq!(palw_model_available_v1(1_000, 0, 7, 0), 0);
+        assert_eq!(palw_model_available_v1(1_000, &w(5), &PalwAllocationWeightV1::ZERO, 0), 0);
+        assert_eq!(palw_model_available_v1(1_000, &PalwAllocationWeightV1::ZERO, &w(7), 0), 0);
+    }
+
+    /// **Splitting a model, or a bond, never raises the total** at any `α ≥ 1`: `A` is superadditive (`(x+y)^α ≥ x^α + y^α`) and the
+    /// share `x / (x + B)` grows with `x`, so two models holding the same capital never out-earn one; and a bond's split is invisible
+    /// (S_m is the capital, whoever holds it).
+    #[test]
+    fn splitting_a_model_or_a_bond_never_raises_the_total() {
+        let mut rng = Rng(0x5eed_0177);
+        for i in 0..600 {
+            let alpha = 2 + (i % 7) as u8;
+            let a = ap_alpha(1, alpha);
+            let mine = 1 + rng.below(10_000) * BILI;
+            let other = 1 + rng.below(10_000) * BILI;
+            let cut = rng.below(mine);
+            let accrued = rng.below(1 << 50);
+            // `models`: (bond, model, amount).
+            let run = |models: &[(u32, u64, u64)]| {
+                let mut s = PalwBondBudgetStateV1::new(0, &policy(1, false));
+                let mut j = Vec::new();
+                for (b, m, amount) in models.iter().filter(|(_, _, x)| *x > 0) {
+                    s.assign(&a, bond(*b), &[(h(*m), *amount)], 1, *amount, 0, |_| true, &mut j).unwrap();
+                }
+                let caps: BTreeMap<PalwBondKeyV2, u64> = models.iter().map(|(b, _, x)| (bond(*b), *x)).collect();
+                s.roll_epoch(&a, 2, 20, |b| (caps.get(b).copied().unwrap_or(0), true), &mut j);
+                s.accrue(accrued, &mut j);
+                (s.model_available(&h(1)), s.model_available(&h(2)), s.model_available(&h(3)))
+            };
+            let (whole, rest, _) = run(&[(1, 1, mine), (9, 2, other)]);
+            // A model split: the same capital over models 1 and 3.
+            let (p1, rest_split, p3) = run(&[(1, 1, mine - cut), (2, 3, cut), (9, 2, other)]);
+            assert!(p1 + p3 <= whole + 1, "alpha {alpha}: alpha_halves {alpha}: a model split never gains ({p1} + {p3} > {whole})");
+            assert!(rest_split + 1 >= rest, "and the other model never loses to it");
+            // A bond split: two bonds on one model are one model.
+            let (b1, b_rest, _) = run(&[(1, 1, mine - cut), (2, 1, cut), (9, 2, other)]);
+            assert_eq!((b1, b_rest), (whole, rest), "alpha_halves {alpha}: a bond split changes nothing");
+        }
+    }
+
+    /// **A capped bond gains nothing more** (ADR-0176 caps unchanged): with the per-claim reward right binding, a model's larger share at
+    /// `α = 2` leaves the reservation where `α = 1` put it, and once the bond's window is full no `α` admits another claim.
+    #[test]
+    fn a_capped_bond_gains_nothing_more_from_a_steeper_curve() {
+        let p = policy(1, true);
+        let (r_claim, _) = palw_bond_budget_claim_ceilings_v1(&p).unwrap();
+        let run = |halves: u8| {
+            let a = ap_alpha(1, halves);
+            let mut s = PalwBondBudgetStateV1::new(0, &p);
+            let mut j = Vec::new();
+            s.assign(&a, bond(1), &[(h(1), 3_000 * BILI)], 1, 3_000 * BILI, 0, |_| true, &mut j).unwrap();
+            s.assign(&a, bond(2), &[(h(2), 1_000 * BILI)], 1, 1_000 * BILI, 0, |_| true, &mut j).unwrap();
+            s.roll_epoch(&a, 2, 20, |b| if *b == bond(1) { (3_000 * BILI, true) } else { (1_000 * BILI, true) }, &mut j);
+            s.accrue(1_000_000 * BILI, &mut j);
+            let share = s.model_available(&h(1));
+            let ask = PalwBudgetAskV1 { block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: u64::MAX / 2, final_weight: 1 };
+            let mut admitted = Vec::new();
+            for i in 0..1_000u64 {
+                match s.reserve_claim_v1(
+                    &p,
+                    3_000 * BILI,
+                    h(100 + i),
+                    bond(1),
+                    Some(h(1)),
+                    21,
+                    ask,
+                    PalwBudgetOriginV1::Attempt,
+                    &mut j,
+                ) {
+                    Ok(r) => admitted.push(r.reward_sompi),
+                    Err(_) => break,
+                }
+            }
+            (share, admitted)
+        };
+        let (share1, linear) = run(2);
+        let (share15, interim) = run(3);
+        let (share2, square) = run(4);
+        assert!(share15 > share1 && share2 > share15);
+        assert_eq!(linear, interim, "alpha = 1.5 gains a capped bond nothing either");
+        assert!(share2 > share1, "the steeper curve gives the larger model more of the budget ({share2} vs {share1})");
+        assert_eq!(linear, square, "but a capped bond is reserved exactly the same claims and reward");
+        assert!(linear.iter().all(|r| *r == r_claim), "each at its per-claim reward right");
+        assert_eq!(linear.len() as u64, palw_bond_budget_caps_v1(&p, 3_000 * BILI).block_units / PALW_BUDGET_BLOCK_UNIT_V1);
     }
 
     #[test]
