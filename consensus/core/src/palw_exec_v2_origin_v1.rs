@@ -84,7 +84,8 @@ fn decode_header(mut bytes: &[u8]) -> std::io::Result<crate::header::Header> {
 
 fn verify_header_bytes(id: Hash64, claim: &PalwClaimStateV2, bytes: &[u8]) -> Result<u64, PalwStateV2Error> {
     let header = decode_header(bytes).map_err(|_| refuse(PalwWorkRootRefusalV2::AuthorizationOrigin))?;
-    if crate::hashing::header::hash(&header) != claim.accepted_block || !crate::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
+    if crate::hashing::header::hash_with_parent_run_cache(&header) != claim.accepted_block
+        || !crate::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
     {
         return Err(refuse(PalwWorkRootRefusalV2::AuthorizationOrigin));
     }
@@ -92,7 +93,7 @@ fn verify_header_bytes(id: Hash64, claim: &PalwClaimStateV2, bytes: &[u8]) -> Re
         .map_err(|_| refuse(PalwWorkRootRefusalV2::AuthorizationOrigin))?;
     let anchor = crate::palw_attempt_v2::execution_anchor_v3(
         envelope.attempt.network_domain,
-        crate::hashing::header::pre_pow_hash_64(&header),
+        crate::hashing::header::pre_pow_hash_with_parent_run_cache(&header),
         envelope.attempt.class_id,
         &envelope.attempt.executor_bond,
         header.nonce,

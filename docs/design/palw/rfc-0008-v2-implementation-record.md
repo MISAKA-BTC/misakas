@@ -572,3 +572,79 @@ against the later state point. This changes only the dormant EXEC profile, not n
 income, weight or existing wire fields. All previously admissible clock pairs remain admissible.
 The reversed pair's provenance/fold regression is an arithmetic fixture, not a validated live DAG
 counterexample. Actual multi-process DAG/activation/pruning evidence remains required.
+
+### EXEC origin hashing: bounded run scratch (2026-10-11)
+
+The original header writer borrows `CompressedParents::expanded_iter`; its worst-case nearly
+408 MB of parent input per digest was never a single expanded allocation. It does, however,
+iterate and submit each hash again at every repeated level. EXEC origin verification now uses
+the same frozen preimage with repeated run bytes cached in at most 2 MiB of temporary scratch.
+Each expanded level still writes its own length and all the original hash bytes in the same order.
+Runs larger than 32,768 hashes fall back to the original writer; no header is rejected by this
+scratch choice. It is not a new consensus/admission cap or a migration-coverage decision.
+
+Only EXEC native capture/carried-proof verification calls the optimized identity and pre-PoW
+functions. Those calls already require the dormant EXEC profile. Ordinary block/PoW/Round callers
+retain the original parent writer. Both paths share the existing field writer and its version,
+algo, state-root and commitment gates. No domain, wire id, fingerprint, native entitlement or
+Root authorization/expiry policy changes. No cache enters state or survives its hashing invocation.
+
+The parent-byte oracle compares the entire written sequence against the original expanded
+writer, including empty/single parents, mixed runs, level 255 and below/at/above the scratch bound.
+Full identity/pre-PoW digests are compared on nonzero fields across versions 0–3 and algo ids 0–10;
+an arbitrary cached header hash is ignored. An above-bound header exercises the fallback without
+imposing the witness carriage cap on ordinary native capture. The explicit timing test compares
+the original and cached writers on the same synthetic headers, alternates order and checks both
+digests first. Its largest case fits the witness byte cap and repeats its run across 255 levels;
+it is adversarial structural work, not an actually accepted native header or a valid EXEC claim.
+The cryptographic input bytes, worst CPU budget, release resource approval and shared eight-slot
+chunk transport availability remain separate gates.
+
+The explicit timing run passed once (the ordinary regression keeps it ignored), using Rust 1.93.0
+on macOS aarch64, jobs 2, dev/test debug 0 and incremental 0. The test profile prints
+`[unoptimized]`, but the workspace overrides consensus-core, hashes and blake2b to opt-level 2.
+Each row reports one identity digest, not two-digest provenance verification, node admission or
+throughput under load. Six samples alternate writer order; the table uses sorted sample index 3.
+These are observations, not an approved maximum latency or RSS bound.
+
+| Parents in run | Repeated levels | Borsh bytes | Parent input bytes/digest | Original | Cached | Cached/original |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 1 | 8,892 | 0 | 6.031 µs | 6.030 µs | 1.000 |
+| 1 | 255 | 8,956 | 16,320 | 20.728 µs | 20.765 µs | 1.002 |
+| 10 | 8 | 9,532 | 5,120 | 9.967 µs | 9.637 µs | 0.967 |
+| 64 | 255 | 12,988 | 1,044,480 | 781.716 µs | 695.000 µs | 0.889 |
+| 24,859 | 255 | 1,599,868 | 405,698,880 | 299.763458 ms | 265.722500 ms | 0.886 |
+
+Reproduce with `cargo test --locked -p kaspa-consensus-core --lib exec_origin_header_parent_run_timing -- --ignored --nocapture --test-threads=1`
+and the environment above. `/tmp/rfc-exec-origin-hash-timing.log` records **1 passed, 0 failed**,
+4.91 seconds of test runtime; timing is deliberately not a pass/fail threshold. The largest row's
+direct parent count exceeds the native u8 parent-count limit, reinforcing its structural-only
+scope. The measured roughly 11% reduction justifies retaining the bounded scratch optimization;
+it does not close the release resource or historical coverage gates.
+
+The final broad core run passed **469 tests, 0 failed, 1 ignored**, in 36.07 seconds
+(4m 02s build including artifact-lock waiting). The ignored test is the timing test explicitly
+run above. Command: `cargo test --locked -p kaspa-consensus-core --lib -- exec_origin_header hashing::header:: header::tests:: exec_v2 palw_exec palw_lifecycle palw_vesting_read_v1 rfc0012 da_ court_ provider_ rider --test-threads=2`.
+This includes the three new parity/fallback tests and existing EXEC, court, DA, provider, rider,
+vesting and RFC12 core regressions; do not add the earlier narrow parity run to this count.
+Log: `/tmp/rfc-exec-origin-run-cache-core.log`.
+
+The EVM-enabled node regression also passed **1 test, 0 failed** in 52.28 seconds (4m 02s
+build): `cargo test --locked -p kaspa-consensus --features evm --lib -- x8_g14_root_admission --test-threads=1`.
+It exercises native capture from an actually admitted signed header, then removes that header
+from the node store and compares snapshot authority and carried-proof migration, state/delta
+equality and undo. The existing class/Panel/synthetic-trace test seams remain; this is not a
+multi-process pruning/P2P or historical activation approval.
+Log: `/tmp/rfc-exec-origin-run-cache-node.log`.
+
+The unfiltered payload-fence suite passed **7 tests, 0 failed** in 0.36 seconds (3m 57s build):
+`cargo test --locked -p kaspa-consensus-core --test palw_exec_payload_v2_fence -- --test-threads=1`.
+It preserves public non-armability while allowing the existing salted private drill.
+Log: `/tmp/rfc-exec-origin-run-cache-fence.log`.
+
+`cargo check --locked -p kaspad --features evm` completed successfully in 4m 34s, with existing
+warnings (`/tmp/rfc-exec-origin-run-cache-daemon.log`). `git diff --check` and rustfmt checks for
+the three changed Rust files passed. The final distinct ordinary regression total is **477 passed,
+0 failed, 1 ignored** (469 core + 1 node + 7 fence); the separately invoked timing test passed once.
+No public activation fence was armed, no deployment/push was performed, and broader requirements
+remain open as documented above.

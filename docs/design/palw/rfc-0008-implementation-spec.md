@@ -805,6 +805,17 @@ can delay a proof; no floor on timely migration is claimed. A producer/archive m
 original bytes before pruning destroys all copies, or an authenticated pre-activation migration
 must preserve them. Actual multi-process activation/pruning/P2P recovery remains unverified.
 
+Origin verification uses a byte-identical parent-run writer for its two digests. A repeated run
+of at most 32,768 hashes serializes its hash bytes once, then writes the same length and bytes at
+each expanded level. The scratch is at most 2 MiB per invocation and is discarded after that run;
+larger runs use the original streaming writer. This is a performance scratch bound, not an
+admission or historical-header size limit. Ordinary block identity, PoW and Round hashing keep
+their original streaming parent writer; both paths share the unchanged remaining header preimage.
+No representation cast or new digest domain is used. The original writer already borrowed the
+compressed parents: the nearly 408 MB above describes repeated hash input, not a materialized
+408-MB vector. The optimization reduces update/iteration overhead, not that cryptographic byte work.
+It cannot substitute for worst-case release latency, resident-memory or shared-lane availability gates.
+
 The node regression re-folds an actually admitted signed REAL header with EXEC dormant, proving
 the native row is unchanged and has no clock. It then uses a legacy-shaped authenticated snapshot
 with the same native data and prefix, deletes the actual source header from the node store, and
