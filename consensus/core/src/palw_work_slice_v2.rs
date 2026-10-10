@@ -10,7 +10,8 @@
 //! ```text
 //! roots[root_claim_id]          -> PalwWorkRootV2     RootWorkBudget: job identity, plan, accepted/verified work, lifecycle
 //! slices[(root_claim_id, i)]    -> PalwWorkSliceRowV2 WorkSliceUse: range, roots, carrier, stage, executor
-//! jobs[job_work_id]             -> root_claim_id      JobWorkUse: the one-use history rule for a job's computation
+//! jobs[job_work_id]             -> root_claim_id      active root index
+//! job_uses[job_work_id]         -> PalwExecJobUseV1    finite authenticated one-use history, retained after claim retirement
 //! ```
 //!
 //! They are separate from the round-permit ledger (`round_permits_used`): a permit's consumption creates no work credit and a
@@ -62,6 +63,30 @@ pub const PALW_EXEC_V2_MAX_SLICES_PER_BLOCK: usize = 8;
 
 /// The most DAA a root may stay open from its declaration (a hard cap on the declared expiry).
 pub const PALW_EXEC_V2_MAX_ROOT_LIFETIME_DAA: u64 = 100_000;
+
+/// Version-1 REAL authorization is finite and never renewed by later acceptance or a new root.
+pub const PALW_EXEC_V2_JOB_AUTHORIZATION_DAA_V1: u64 = 100_000;
+/// A structural history bound, not a reward/production budget or approved activation parameter.
+pub const PALW_EXEC_V2_MAX_JOB_USES_V1: usize = 100_000;
+pub const PALW_EXEC_V2_JOB_USE_SWEEP_V1: usize = PALW_EXEC_V2_MAX_OPEN_ROOTS;
+
+/// Authenticated one-use history survives its native claim, without retaining collateral or material beyond signed terms.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwExecJobUseV1 {
+    pub owner_root: Hash64,
+    pub class_id: Hash64,
+    pub canonical_job_id: Hash64,
+    pub input_root: Hash64,
+    pub source_block: Hash64,
+    pub issued_daa: u64,
+    pub expires_daa: u64,
+}
+
+impl PalwExecJobUseV1 {
+    pub fn work_id(&self) -> Hash64 {
+        palw_exec_job_work_id_v1(&self.class_id, &self.canonical_job_id, &self.input_root)
+    }
+}
 
 /// The most canonical work one root may plan (2^48): a bound on the plan, not a price. The reward is the claim's own funded
 /// allocation split by work share, so a larger plan only dilutes the share per unit.
@@ -235,6 +260,10 @@ where
 /// Why a root declaration was refused (each leaves no row).
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwWorkRootRefusalV2 {
+    #[error("the REAL job authorization header is unavailable or does not match its native claim")]
+    AuthorizationOrigin,
+    #[error("the REAL job authorization has expired or its finite expiry overflows")]
+    AuthorizationExpired,
     #[error("the work-slice lane is not in force at this height")]
     Dormant,
     #[error("the root's {0} is unset (all zero)")]
@@ -275,6 +304,8 @@ pub enum PalwWorkRootRefusalV2 {
     ExecutorUnfunded,
     #[error("the lane already holds the most open roots, or this bond the most of its own")]
     RootQuota,
+    #[error("the finite job-use history is full; no root may evict unexpired authorization")]
+    JobHistoryQuota,
     #[error("checked arithmetic overflowed")]
     Overflow,
     /// Amendment 1 (spec §10.1): where the kernel route is in force a session opens only on a G14-complete class — one bound to a kernel

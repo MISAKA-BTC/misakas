@@ -349,8 +349,9 @@ A proven-false or defaulted slice voids **itself and every later accepted slice 
 becomes `Voided { from_index }` and the root claim is voided — `WorkSliceProvenFalse` (void reason 131) or `WorkSliceDefaulted` (132).
 Neither reason charges at the V2 level: the evidence-bound liability is the kernel route's conviction or default penalty on the slice
 executor's kernel reservation, already collected; a second V2 forfeit would charge the root bond for another bond's lie. No prefix or
-partial payment is made (section 6: "no independent prefix payment"); the extra executors' exposure returns; the job's one-use
-tombstone stays until the claim retires. A slice that was `Verified` and whose claim is convicted later (inside the route's liability
+partial payment is made (section 6: "no independent prefix payment"); the extra executors' exposure returns.
+Active execution rows stay until claim retirement; the independent authenticated job-use history
+then survives until the original authorization closes (§12.6). A slice that was `Verified` and whose claim is convicted later (inside the route's liability
 horizon), or whose claim forfeits its reservation to a post-Final default (10.5's revision), is handled the same way while its root has
 not settled.
 
@@ -612,8 +613,9 @@ suffixes, using small committable operations that fit the program byte cap. A se
 Concat/Slice DAG represents `2^200` paths to one weight with only 400 structural nodes; its work
 derivation visits each node once rather than expanding those paths.
 
-The remaining WORK work is the bounded pruning / authorization-expiry rule, release measurements
-for the most expensive graph shapes and root populations, and stronger pruned replay attack evidence.
+Section 12.6 implements finite authorization and retirement-independent history. The remaining WORK
+work includes release measurements for the most expensive graph shapes and root populations,
+source-header availability across pruning, and stronger multi-process pruned replay attack evidence.
 BUDGET and WINDOW remain separate blockers: correct costs alone do not stop early payout
 or retain post-Final collectible liability.
 
@@ -656,6 +658,53 @@ occurrences; it never enumerates positions or tensor elements. Structural weight
 uses a visited set, so shared Concat/Slice paths do not expand exponentially. The bounded
 structural-cap measurement is evidence for this algorithm, not proof that every allowed graph
 and 256-root restart fits the node's release latency budget.
+
+
+### 12.6 Finite REAL authorization and retirement-independent job-use history
+
+The original REAL header, identified by the native claim's accepted block hash, authorizes root opening
+only while `source_daa <= accepted_daa <= opening_daa < source_daa + 100_000`. The sum is checked;
+an overflow or a terminal `u64::MAX` deadline is refused. This is a fixed v1 authorization profile,
+not a lease renewed by later acceptance, claim retirement or root opening. It does not shorten an
+already opened root's signed execution/material terms or extend any collateral hold.
+
+For each declaration the production pipeline supplies the original serialized header from its
+header store. The fold recomputes its full hash, requires a REAL attempt algorithm, decodes the
+attempt, and binds its attempt id, class, executor bond and recomputed execution anchor to the
+accepted native claim. Missing or substituted bytes are refused. The cached header hash alone is
+insufficient. Core arithmetic fixtures have an explicitly named test-only source-time seam; it
+is absent from the production extras type. An execution anchor may repeat among same-template,
+same-nonce-bucket sibling headers; uniqueness of a hash or a different claim id is not a replay proof.
+
+`exec_v2_job_uses[job_work_id]` stores the first owner root, class, canonical REAL job, authenticated
+input, source block and immutable source/expiry DAA. Native claim retirement removes the active
+root/slices/job index but retains this separate authenticated history. A later root with the same
+work key is refused while its recorded authorization is open. Once the record is deleted, opening
+still requires a valid original authorization, so absence is never permission to renew old work.
+Fresh authorization may repeat legitimate inputs; a new root id or owner label alone cannot.
+
+The map admits at most 100,000 rows and refuses admission when full; it never evicts unexpired
+history. A derived ordered expiry index contains only rows whose owner root has retired. A block
+removes at most 256 expired rows, ordered by deadline and work key. Retained roots keep their rows
+even after authorization closes, to authenticate their live execution ledger. Index updates are
+incremental in ordinary writes and journal application/rollback; restore rebuilds the index from
+primary rows. One encoded key and row uses 400 bytes before map overhead, so the structural cap is
+40 MB of primary entries before carriage framing, clones, journal and allocator costs. This is
+not an approved release-memory/latency budget or an economic admission cap.
+
+The history has a conditional state-root domain `exec_v2_job_uses/v1`, optional carriage tail `0xF2`,
+and inner `ExecV2Row` table 7. No new top-level object tag or existing root/slice wire field is added.
+Empty history adds no bytes/domain; existing optional tails keep their encoding. The decoder refuses a count above the cap before reading rows and requires strictly ordered unique
+keys. Duplicate or truncated tails and live roots without history are refused. Private armed snapshots from before
+this profile cannot synthesize authorization terms; their migration/replay needs an explicit
+procedure. Public activation remains refused. Snapshot authentication and journal rollback are
+local recovery evidence, not proof of transport/pruning availability or multi-process P2P replay.
+In particular, root admission currently reads the original header from the local header store.
+Before activation, prove that every eligible live REAL claim's original header is retained and
+transferred to joining nodes, or capture its authenticated original clock in canonical state at
+native admission. A source's later acceptance time is not a substitute. Local header presence
+must never decide consensus differently between a full node and a pruned joiner. The present
+history mechanism alone does not close that provenance requirement.
 
 
 ## 13. BUDGET correction — root Final authorizes bound kernel fees

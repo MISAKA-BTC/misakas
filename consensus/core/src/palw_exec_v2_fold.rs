@@ -426,6 +426,7 @@ impl PalwChainStateV2 {
             }
         }
         if self.exec_v2.is_empty() {
+            self.assert_exec_job_uses()?;
             return Ok(());
         }
         for (claim_id, root) in &self.exec_v2.roots {
@@ -601,6 +602,7 @@ impl PalwChainStateV2 {
                 return Err(bad(format!("job {job} names a root that does not hold it")));
             }
         }
+        self.assert_exec_job_uses()?;
         Ok(())
     }
 }
@@ -610,7 +612,7 @@ impl PalwChainStateV2 {
 // ---------------------------------------------------------------------------------------------
 
 impl TransitionBuilder<'_> {
-    fn write_exec_v2_row<K, V>(
+    pub(super) fn write_exec_v2_row<K, V>(
         &mut self,
         table: u8,
         key: K,
@@ -640,7 +642,14 @@ impl TransitionBuilder<'_> {
 
     /// The one writer of `RootWorkBudget` rows.
     pub(super) fn write_exec_root(&mut self, key: Hash64, new: Option<PalwWorkRootV2>) {
+        let previous = self.state.exec_v2.roots.get(&key).cloned();
         self.write_exec_v2_row(PALW_EXEC_V2_TABLE_ROOTS_V1, key, new, |s| &mut s.exec_v2.roots);
+        if let Some(root) = previous {
+            super::palw_exec_v2_history_v1::root_changed(&mut self.state, &root, false);
+        }
+        if let Some(root) = self.state.exec_v2.roots.get(&key).cloned() {
+            super::palw_exec_v2_history_v1::root_changed(&mut self.state, &root, true);
+        }
     }
 
     /// The one writer of `WorkSliceUse` rows.
@@ -725,7 +734,18 @@ pub(super) fn apply_exec_v2_row_v1(
         Ok(())
     }
     match table {
-        PALW_EXEC_V2_TABLE_ROOTS_V1 => swap(&mut state.exec_v2.roots, key, old, new, revert),
+        PALW_EXEC_V2_TABLE_ROOTS_V1 => {
+            let id: Hash64 = borsh::from_slice(key).map_err(|_| PalwStateV2Error::DeltaMismatch("EXEC root key does not decode"))?;
+            let previous = state.exec_v2.roots.get(&id).cloned();
+            swap(&mut state.exec_v2.roots, key, old, new, revert)?;
+            if let Some(root) = previous {
+                super::palw_exec_v2_history_v1::root_changed(state, &root, false);
+            }
+            if let Some(root) = state.exec_v2.roots.get(&id).cloned() {
+                super::palw_exec_v2_history_v1::root_changed(state, &root, true);
+            }
+            Ok(())
+        }
         PALW_EXEC_V2_TABLE_SLICES_V1 => swap(&mut state.exec_v2.slices, key, old, new, revert),
         PALW_EXEC_V2_TABLE_JOBS_V1 => swap(&mut state.exec_v2.jobs, key, old, new, revert),
         PALW_EXEC_V2_TABLE_ANCHORED_V1 => swap(&mut state.exec_v2.anchored, key, old, new, revert),
@@ -739,6 +759,15 @@ pub(super) fn apply_exec_v2_row_v1(
             Ok(())
         }
         PALW_EXEC_V2_TABLE_REWARD_HOLDS_V1 => swap(&mut state.exec_v2_reward_holds, key, old, new, revert),
+        PALW_EXEC_V2_TABLE_JOB_USES_V1 => {
+            let id: Hash64 =
+                borsh::from_slice(key).map_err(|_| PalwStateV2Error::DeltaMismatch("EXEC job-use key does not decode"))?;
+            let previous = state.exec_v2_job_uses.get(&id).cloned();
+            swap(&mut state.exec_v2_job_uses, key, old, new, revert)?;
+            let installed = state.exec_v2_job_uses.get(&id).cloned();
+            super::palw_exec_v2_history_v1::index_replace(state, id, previous.as_ref(), installed.as_ref());
+            Ok(())
+        }
         _ => Err(PalwStateV2Error::DeltaMismatch("an exec v2 row names no table")),
     }
 }
@@ -867,8 +896,14 @@ pub(super) fn apply_root_declared_v2(
         return Err(no(R::BadExpiry));
     }
     let job_work_id = declaration.job_work_id(&claim.class_id);
-    if builder.state.exec_v2.jobs.contains_key(&job_work_id) {
+    if builder.state.exec_v2.jobs.contains_key(&job_work_id)
+        || builder.state.exec_v2_job_uses.get(&job_work_id).is_some_and(|row| daa < row.expires_daa)
+    {
         return Err(no(R::JobWorkAlreadyUsed));
+    }
+    let job_use = super::palw_exec_v2_history_v1::authorize(builder.extras, declaration, &claim, daa)?;
+    if builder.state.exec_v2_job_uses.len() >= crate::palw_work_slice_v2::PALW_EXEC_V2_MAX_JOB_USES_V1 {
+        return Err(no(R::JobHistoryQuota));
     }
     // An executor stands behind the root exactly as its producer does: the claim's own reservation.
     let exposure = claim.reserved;
@@ -902,6 +937,7 @@ pub(super) fn apply_root_declared_v2(
         )?;
     }
     builder.write_exec_job(job_work_id, Some(claim_id));
+    builder.write_exec_job_use(job_work_id, Some(job_use));
     builder.write_exec_root(
         claim_id,
         Some(PalwWorkRootV2 {
@@ -1178,7 +1214,7 @@ fn release_executor_exposure_v2(
 
 /// **The claim was voided** (by any route): the root and its pending slices go void with it, the extra executors' exposure
 /// returns, nobody is paid and nobody is charged here — a slashing is a conviction's, proven where it is proven. The rows stay
-/// (the job's one-use tombstone with them) until the claim retires. A settled root has already returned exposure.
+/// until the claim retires. The separate job-use history survives until authorization closes. A settled root has already returned exposure.
 pub(super) fn on_claim_voided_v2(
     builder: &mut TransitionBuilder<'_>,
     claim_id: &Hash64,
@@ -1220,10 +1256,9 @@ pub(super) fn on_claim_voided_v2(
     Ok(())
 }
 
-/// **The claim retired**: its root, its slice rows and its job's one-use tombstone leave with it — the ledgers live exactly as long
-/// as the claim they hang from, so they are bounded by the claim table's own retirement. (Replay after retirement is closed by the
-/// job identity being the REAL claim's own execution anchor, which a new claim cannot reproduce; recorded as a gate in the
-/// implementation record.) A no-op for a claim with no root.
+/// **The claim retired**: remove its active root, slices and job index. The authenticated job-use history
+/// remains independently until the original REAL header's finite authorization closes; retirement never renews it.
+/// A no-op for a claim with no root.
 pub(super) fn on_claim_retired_v2(builder: &mut TransitionBuilder<'_>, claim_id: &Hash64) {
     let Some(root) = builder.state.exec_v2.roots.get(claim_id).cloned() else { return };
     let keys: Vec<(Hash64, u32)> =
@@ -1239,6 +1274,7 @@ pub(super) fn on_claim_retired_v2(builder: &mut TransitionBuilder<'_>, claim_id:
 /// Run before objects; release job escrows without reward or debit. This bounds reservation retention
 /// independently of court progress. Bounded by [`PALW_EXEC_V2_MAX_OPEN_ROOTS`].
 pub(super) fn sweep_expired_roots_v2(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    super::palw_exec_v2_history_v1::sweep(builder, ctx.daa_score);
     if builder.state.exec_v2.roots.is_empty() {
         return Ok(());
     }

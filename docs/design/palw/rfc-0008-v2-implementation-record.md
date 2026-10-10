@@ -508,3 +508,20 @@ to say what it now stands for. No code here calls the gate, and OPVB was not mer
 
 **Follow-up (OPVB / Lead).** When OPVB integrates, `PalwRewardGateV1::channel()` names the channel each leg draws from. The composed
 run's seam goes only when a harness can prove seat readiness, or when the Lead lets a session's root be a kernel-route claim.
+
+
+## Later audit correction: finite job authorization
+
+The original milestone's active `jobs` index retires with its claim. It is not the current replay
+protection boundary. RFC8 implementation spec §12.6 adds an independent authenticated one-use
+history, keyed by class / REAL authorization / authenticated input, and a fixed 100,000-DAA
+source-header authorization. Inner delta table 7 and optional carriage tail `0xF2` record the
+history; tables 5/6 and tails F0/F1 are the later reward/hold amendments. Root/slice wire fields
+and top-level object/delta numbers are unchanged. History admits at most 100,000 rows and expires
+at most 256 retired-owner rows per block, without evicting unexpired rows.
+
+Claim retirement cannot renew the original source's deadline. A different claim id is not evidence
+that an execution anchor cannot recur. The public fence remains refused; source-clock provenance
+for pruned joiners, multi-process replay and release resource bounds are separate open requirements.
+Current verification is recorded in the RFC6/7/8/12 design audit, rather than inferred from the
+original milestone's counts above.

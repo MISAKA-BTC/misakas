@@ -1753,7 +1753,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for_objects(point, std::slice::from_ref(object)),
+            &self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)),
         )
         .err()
         .map(|why| why.to_string())
@@ -2842,7 +2842,7 @@ impl VirtualStateProcessor {
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &{
-                                        let mut extras = self.palw_transition_extras_for_objects(&point, &objects);
+                                        let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
                                         if let Some(staged) = evm_staged.as_ref() {
                                             extras.evm_actions = staged.result.market_actions.clone();
                                         }
@@ -5104,7 +5104,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for_objects(point, std::slice::from_ref(object)),
+            &self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)),
         ) {
             Ok(_) => PalwObjectRehearsalV1::Accepted,
             Err(why) => PalwObjectRehearsalV1::Refused(why),
@@ -5374,7 +5374,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for_objects(point, std::slice::from_ref(object)),
+            &self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)),
         ) {
             Ok(_) => check,
             Err(why) => Check::Refused(why.to_string()),
@@ -7511,7 +7511,7 @@ impl VirtualStateProcessor {
             self.palw_da_court_at(point.daa_score),
             // The extras the BLOCK fold builds for its objects (the per-model court windows included): under an armed
             // `palw_model_court_window` a registration the node accepts needs the window the node derives for it.
-            &self.palw_transition_extras_for_objects(point, objects),
+            &self.palw_transition_extras_for_objects(state, point, objects),
         )
         .map(|(next, _, _)| next)
     }
@@ -8781,7 +8781,7 @@ impl VirtualStateProcessor {
                         &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                             own_attempt_class,
                             model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                            ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
+                            ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
                         },
                     ) {
                         Ok(next) => rehearsed_registration = Some(next),
@@ -8933,7 +8933,7 @@ impl VirtualStateProcessor {
                             &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 own_attempt_class,
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                                ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
+                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
                             },
                         )
                     } else {
@@ -8952,7 +8952,7 @@ impl VirtualStateProcessor {
                             self.palw_da_court_at(point.daa_score),
                             &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                                ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
+                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
                             },
                         )
                         .map(|(next, _)| next)
@@ -15359,6 +15359,7 @@ impl VirtualStateProcessor {
             round_permit_uses: Vec::new(),
             // RFC-0008 v2: the slice carriers the covered set holds (empty until the closure carriage fills it).
             exec_v2_covered: Vec::new(),
+            exec_v2_origin_headers: Default::default(),
             exec_v2_anchor: None,
             // ADR-0126 Decision 3: the carve this block's own attempt escrows at — the block that
             // carried it is this one, and the block that pays it is its selected-chain child, always
@@ -15859,12 +15860,24 @@ impl VirtualStateProcessor {
 
     fn palw_transition_extras_for_objects(
         &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
     ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
         let mut extras = self.palw_transition_extras_for(point);
         extras.model_court_window_active = self.palw_model_court_window_active_at(point.daa_score);
         extras.class_court_windows = self.palw_class_court_windows_for_objects(objects, point.daa_score);
+        for object in objects {
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ExecWorkRootOpenedV2 { declaration } = object {
+                if let Some(claim) = state.claim(&declaration.root_claim_id) {
+                    if let Ok(header) = self.headers_store.get_header(claim.accepted_block) {
+                        if let Ok(bytes) = borsh::to_vec(header.as_ref()) {
+                            extras.exec_v2_origin_headers.insert(claim.accepted_block, bytes);
+                        }
+                    }
+                }
+            }
+        }
         extras
     }
 

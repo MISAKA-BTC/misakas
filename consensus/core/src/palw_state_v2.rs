@@ -134,6 +134,8 @@ mod palw_vertex_fold_v1;
 mod palw_exec_v2_fold;
 #[path = "palw_exec_v2_rewards_v1.rs"]
 mod palw_exec_v2_rewards_v1;
+#[path = "palw_exec_v2_history_v1.rs"]
+mod palw_exec_v2_history_v1;
 #[path = "palw_mesh_fold_v1.rs"]
 mod palw_mesh_fold_v1;
 #[path = "palw_kernel_route_fold_v1.rs"]
@@ -11538,6 +11540,8 @@ pub struct PalwChainStateV2 {
     exec_v2_rewards: BTreeMap<Hash64, crate::palw_work_slice_v2::PalwExecV2RewardRowV1>,
     // Actor-specific tier-freeze extensions; independent of other payees on the same root.
     exec_v2_reward_holds: BTreeMap<(Hash64, PalwBondKeyV2), u64>,
+    exec_v2_job_uses: BTreeMap<Hash64, crate::palw_work_slice_v2::PalwExecJobUseV1>,
+    exec_v2_job_use_deadlines: BTreeSet<(u64, Hash64)>,
     // Derived from additional reward legs; not rooted or carried.
     exec_v2_reward_payees: BTreeMap<PalwBondKeyV2, BTreeSet<Hash64>>,
     /// **RFC-0006: each IR class's layer-shard plan**, declared once by its registrant (`TirShardPlanDeclared`), with the
@@ -12087,6 +12091,8 @@ impl PalwChainStateV2 {
             exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1::default(),
             exec_v2_rewards: BTreeMap::new(),
             exec_v2_reward_holds: BTreeMap::new(),
+            exec_v2_job_uses: BTreeMap::new(),
+            exec_v2_job_use_deadlines: BTreeSet::new(),
             exec_v2_reward_payees: BTreeMap::new(),
             tir_shard_plans: BTreeMap::new(),
             tir_shard_claims: BTreeMap::new(),
@@ -14902,6 +14908,10 @@ impl PalwChainStateV2 {
             state.update(b"exec_v2_reward_holds/v1");
             state.update(collection_root(b"exec_v2_reward_holds", &self.exec_v2_reward_holds).as_byte_slice());
         }
+        if !self.exec_v2_job_uses.is_empty() {
+            state.update(b"exec_v2_job_uses/v1");
+            state.update(collection_root(b"exec_v2_job_uses", &self.exec_v2_job_uses).as_byte_slice());
+        }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -16916,6 +16926,7 @@ pub const PALW_EXEC_V2_TABLE_JOBS_V1: u8 = 3;
 pub const PALW_EXEC_V2_TABLE_ANCHORED_V1: u8 = 4;
 pub const PALW_EXEC_V2_TABLE_REWARDS_V1: u8 = 5;
 pub const PALW_EXEC_V2_TABLE_REWARD_HOLDS_V1: u8 = 6;
+pub const PALW_EXEC_V2_TABLE_JOB_USES_V1: u8 = 7;
 
 /// The full effect one block application had on the state, in application order. Applying it to
 /// the same parent reproduces the transition's output exactly ([`apply_delta_v2`]); reverting it
@@ -39336,6 +39347,10 @@ pub struct PalwTransitionExtrasV1 {
     /// `Params::palw_exec_payload_v2` is in force at the block, and then `Default` is byte-identical to the transition before the
     /// field existed.
     pub exec_v2_covered: Vec<crate::palw_work_slice_v2::PalwExecV2CoveredSliceV1>,
+    /// Validated original REAL headers for root authorization, keyed by carrying block. Missing is fail-closed.
+    pub exec_v2_origin_headers: BTreeMap<Hash64, Vec<u8>>,
+    #[cfg(test)]
+    pub exec_v2_test_origin_daa: Option<u64>,
     /// **TEST ONLY — the verification door a real route will one day own.** Slices `(root claim, index)` to mark positively verified
     /// at this block, after the covered set. A field of the extras only so the fold's tests can reach the `#[cfg(test)]` writer; it
     /// does not exist in any build that is not a test, and no node can name it.
@@ -41884,6 +41899,7 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
     state.da_by_accuser = da_by_accuser;
     rebuild_improvement_indices_v1(state);
     palw_improve_material_fold_v1::rebuild_improvement_material_indices_v1(state);
+    palw_exec_v2_history_v1::rebuild(state);
 }
 
 /// **The two DA indexes (M3), from the rooted maps alone** — the one derivation the rebuild, the
@@ -42091,6 +42107,7 @@ pub struct PalwStateCarriageV2 {
     pub exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1,
     pub exec_v2_rewards: BTreeMap<Hash64, crate::palw_work_slice_v2::PalwExecV2RewardRowV1>,
     pub exec_v2_reward_holds: BTreeMap<(Hash64, PalwBondKeyV2), u64>,
+    pub exec_v2_job_uses: BTreeMap<Hash64, crate::palw_work_slice_v2::PalwExecJobUseV1>,
     /// RFC-0006: the layer-shard plans, in tail `0xE1` (with the claims'), present only when either is non-empty.
     pub tir_shard_plans: BTreeMap<Hash64, crate::palw_tir_shard_v1::PalwTirShardPlanV1>,
     /// RFC-0006: the per-shard claim records, in tail `0xE1`.
@@ -42450,6 +42467,7 @@ const PALW_CARRIAGE_VERTEX_TAIL_V1: u8 = 0xE4;
 const PALW_CARRIAGE_EXEC_V2_TAIL_V1: u8 = 0xEE;
 const PALW_CARRIAGE_EXEC_V2_REWARDS_TAIL_V1: u8 = 0xF0;
 const PALW_CARRIAGE_EXEC_V2_REWARD_HOLDS_TAIL_V1: u8 = 0xF1;
+const PALW_CARRIAGE_EXEC_V2_JOB_USES_TAIL_V1: u8 = 0xF2;
 
 /// **RFC-0006's tail** (`tir_shard_plans`, then `tir_shard_claims`): `0xE1`, the next byte after the court windows'.
 /// Present only when either table is non-empty, which nothing can make so below `Params::palw_tir_shard_v1`.
@@ -42823,6 +42841,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_EXEC_V2_REWARD_HOLDS_TAIL_V1.serialize(writer)?;
             self.exec_v2_reward_holds.serialize(writer)?;
         }
+        if !self.exec_v2_job_uses.is_empty() {
+            PALW_CARRIAGE_EXEC_V2_JOB_USES_TAIL_V1.serialize(writer)?;
+            self.exec_v2_job_uses.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -43021,6 +43043,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_exec_v2_rewards = false;
         let mut exec_v2_reward_holds = BTreeMap::new();
         let mut seen_exec_v2_reward_holds = false;
+        let mut exec_v2_job_uses = BTreeMap::new();
+        let mut seen_exec_v2_job_uses = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -43284,6 +43308,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_exec_v2_rewards = true;
                     exec_v2_rewards = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_EXEC_V2_JOB_USES_TAIL_V1 if !seen_exec_v2_job_uses => {
+                    seen_exec_v2_job_uses = true;
+                    exec_v2_job_uses = palw_exec_v2_history_v1::deserialize(reader)?;
+                }
                 PALW_CARRIAGE_EXEC_V2_REWARD_HOLDS_TAIL_V1 if !seen_exec_v2_reward_holds => {
                     seen_exec_v2_reward_holds = true;
                     exec_v2_reward_holds = BTreeMap::deserialize_reader(reader)?;
@@ -43451,6 +43479,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             exec_v2,
             exec_v2_rewards,
             exec_v2_reward_holds,
+            exec_v2_job_uses,
         })
     }
 }
@@ -43572,6 +43601,7 @@ impl PalwStateCarriageV2 {
             exec_v2: state.exec_v2.clone(),
             exec_v2_rewards: state.exec_v2_rewards.clone(),
             exec_v2_reward_holds: state.exec_v2_reward_holds.clone(),
+            exec_v2_job_uses: state.exec_v2_job_uses.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -43796,6 +43826,8 @@ impl PalwStateCarriageV2 {
             exec_v2: self.exec_v2,
             exec_v2_rewards: self.exec_v2_rewards,
             exec_v2_reward_holds: self.exec_v2_reward_holds,
+            exec_v2_job_uses: self.exec_v2_job_uses,
+            exec_v2_job_use_deadlines: BTreeSet::new(),
             exec_v2_reward_payees: BTreeMap::new(),
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
@@ -62024,6 +62056,7 @@ pub(crate) mod tests {
             exec_v2: _,
             exec_v2_rewards: _,
             exec_v2_reward_holds: _,
+            exec_v2_job_uses: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -71955,6 +71988,9 @@ pub(crate) mod tests {
                 round_lane: None,
                 round_permit_uses: Vec::new(),
                 exec_v2_covered: Vec::new(),
+                exec_v2_origin_headers: BTreeMap::new(),
+                #[cfg(test)]
+                exec_v2_test_origin_daa: None,
                 #[cfg(test)]
                 exec_v2_test_verified: Vec::new(),
                 #[cfg(test)]
@@ -72221,6 +72257,9 @@ pub(crate) mod tests {
                 round_lane: None,
                 round_permit_uses: Vec::new(),
                 exec_v2_covered: Vec::new(),
+                exec_v2_origin_headers: BTreeMap::new(),
+                #[cfg(test)]
+                exec_v2_test_origin_daa: None,
                 #[cfg(test)]
                 exec_v2_test_verified: Vec::new(),
                 #[cfg(test)]
