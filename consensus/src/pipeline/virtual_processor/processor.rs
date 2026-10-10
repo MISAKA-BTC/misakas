@@ -13807,7 +13807,9 @@ impl VirtualStateProcessor {
             return None;
         }
         if !self.palw_kernel_route_at(virtual_daa_score) {
-            return Some("palw_probabilistic_constraints_v1 is not in force at this tip (G14)".to_string());
+            // A-2: below its fence a kernel-route carrier rides unjudged, as every other new kind does — refusing it here
+            // would make a template this release builds differ from one a release that tolerates the kind builds.
+            return None;
         }
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
