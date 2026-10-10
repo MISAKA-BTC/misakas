@@ -13730,6 +13730,17 @@ impl VirtualStateProcessor {
                             return Err("the reacquired input response cannot fit the court/carrier ceiling".into());
                         }
                     }
+                    if request.unit == kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(
+                        kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob,
+                    ) {
+                        let binding = request.binding.as_ref().ok_or("FP job reacquisition needs its binding")?;
+                        let binding_bytes = borsh::to_vec(binding).map_err(|e| e.to_string())?.len() as u64;
+                        let limit = court.max_close_bytes().min(kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
+                        if kaspa_consensus_core::palw_legacy_held_da_v2::PALW_LEGACY_FP_JOB_MAX_BYTES_V2
+                            .saturating_add(1).saturating_add(binding_bytes) > limit {
+                            return Err("the reacquired FP job response cannot fit the court/carrier ceiling".into());
+                        }
+                    }
                     self.palw_legacy_dispute_signature_ok(
                         state, point.daa_score,
                         kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_DISPUTE_REACQUIRE_TAG_V1,
@@ -13764,6 +13775,13 @@ impl VirtualStateProcessor {
                             return Err("the input response and binding cannot fit the court/carrier ceiling".into());
                         }
                     }
+                    if demand.unit == l::PalwLegacyHeldUnitV2::FpJob {
+                        let court = self.palw_court_params_v2.as_ref().ok_or("FP job disclosure needs V2 court parameters")?;
+                        let limit = court.max_close_bytes().min(kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
+                        if l::PALW_LEGACY_FP_JOB_MAX_BYTES_V2.saturating_add(1).saturating_add(bytes) > limit {
+                            return Err("the FP job descriptor and binding cannot fit the court/carrier ceiling".into());
+                        }
+                    }
                     self.palw_legacy_held_signature_ok(
                         state,
                         point.daa_score,
@@ -13780,7 +13798,7 @@ impl VirtualStateProcessor {
                     let domain = self.palw_network_domain_v2();
                     let message = l::palw_legacy_held_answer_message_v2(domain.as_byte_slice(), answer);
                     let mut bytes = l::palw_legacy_held_answer_bytes_v2(&answer.answer);
-                    if matches!(answer.unit, l::PalwLegacyHeldUnitV2::PromptIds { .. }) {
+                    if matches!(answer.unit, l::PalwLegacyHeldUnitV2::PromptIds { .. } | l::PalwLegacyHeldUnitV2::FpJob) {
                         bytes = bytes.saturating_add(borsh::to_vec(&answer.binding).map_err(|e| e.to_string())?.len() as u64);
                         if bytes > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64 {
                             return Err("the input answer cannot fit a single carrier".into());

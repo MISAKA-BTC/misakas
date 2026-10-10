@@ -201,3 +201,10 @@ cargo test -p misaka-palw-kernel --test g14_review_regressions --locked -- --noc
 
 
 2026-10-11のmetadata無しFP follow-upでは、job保存fence前に通常受理し、元body/acceptance rowも削除したfresh outsiderが、再計算前の公開bindingだけからidentity conviction/producerと全5 Valid signerの徴収・reveal（314.21 s）、又はbinding非応答DA default（536.03 s）まで1件ずつPASSした。filer/input 26件、既存pruned honest取得/replay/release回帰1件もPASS、通常PublicDA honest回帰（290.18 s）もPASS、今回30 unique。busy replay/capture/seat枠の外でaccepted descriptorだけを確認し、実行中の同一candidateを再probeせず、prompt/signature vectorsをコピーしない。正しいbinding後のjob本体取得は依然未達で、そのcourt実装へ進む。wire/activationはこの区切りで変更せず、shipping harvestは再実行していない。[証拠と限界](implementation.md#保存metadataもないfp-claimの公開binding追及2026-10-11)。
+
+
+## 公開job取得courtの進捗と次の実装（2026-10-11）
+
+metadataと元取引が全てないケースの小さいFP jobについて、公開bindingからjob preimageとinputを認証して独立replay/予約解放へ進む実service、又はjob非応答からDA default/producer徴収へ進む実serviceを実装・確認した。Accepted commitmentとDisclosed descriptorを分け、元commitmentの付随fieldを捏造しない。metadata無しidentity convictionの実service回帰もproducerと全5 Valid signer徴収・revealまでPASS。今回63 unique PASS、以前のbatchと重複加算しない。
+
+次は最大jobのtransportとadmission/profileの適合を閉じる。現行64 KiB boundを超える最大constraint tail＋headerは回答できず、単一carrierとbindingも同時に収まる必要がある。このまま全profileへ有効化すれば不可能な義務を作り得る。wallet builderの48 KiB capはconsensus-wideな安全根拠ではない。multipart job取得、答えられる範囲の証明、追加session/期限/メモリ予算を実装・検証する。その後も初期/prefix state、non-prompt input、全familyの通常入口と算術/output/state終局、scope/hiding、最大負荷・包含期限、restart/reorg/network IBDが必要。shipping validatorとADR-0177 D7を維持し、G14全域の完了とはしない。[生log・hash・失敗を含む監査記録](implementation.md#公開fp-job-preimageの取得court2026-10-11)。

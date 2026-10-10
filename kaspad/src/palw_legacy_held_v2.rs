@@ -457,6 +457,7 @@ pub fn palw_legacy_held_answer_v2(
             .ok_or_else(|| format!("node ({level}, {index}) is not in this retention's tree"))
     }
     match *unit {
+        PalwLegacyHeldUnitV2::FpJob => Err("FP job preimages are answered from the retained FP envelope, not a bare capture".into()),
         PalwLegacyHeldUnitV2::PromptIds { chunk } => kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_prompt_answer_v2(
             &step_tree_binding(capture)?,
             prompt_ids,

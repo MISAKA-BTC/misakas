@@ -1287,8 +1287,8 @@ async fn lg14b_public_fp_bootstrap_own_replay_localizes_and_convicts_after_collu
 #[tokio::test]
 async fn lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_state() {
     use crate::palw_panel::palw_fraud_filer::{
-        PalwFraudFilerBookV1, PalwFraudFilerCaseV1, PalwFraudFilerFpBootstrapV1, PalwFraudFilerVerdictV1, palw_fraud_filer_execute_v1,
-        palw_fraud_filer_fp_input_v1,
+        PalwFraudFilerBookV1, PalwFraudFilerCaseV1, PalwFraudFilerFpBootstrapV1, PalwFraudFilerFpDescriptorV1,
+        PalwFraudFilerVerdictV1, palw_fraud_filer_execute_v1, palw_fraud_filer_fp_input_v1,
     };
     use kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3;
     use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PalwFpCommitmentTxPayloadV3};
@@ -1365,8 +1365,13 @@ async fn lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_sta
         let own = f.seat();
         let form = own.prompt_ids_form();
         assert!(palw_fraud_filer_fp_input_v1(&own, &payload, form, &[]).is_err(), "no public input yet");
-        case.fp_bootstrap =
-            Some(PalwFraudFilerFpBootstrapV1 { payload: Arc::new(payload.clone()), form, ids: vec![], chunk: 0, _reservation: None });
+        case.fp_bootstrap = Some(PalwFraudFilerFpBootstrapV1 {
+            payload: Arc::new(PalwFraudFilerFpDescriptorV1::Accepted(payload.clone())),
+            form,
+            ids: vec![],
+            chunk: 0,
+            _reservation: None,
+        });
         assert!(case.pursued());
         assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::Pending));
         let before = bonds_collateral(&w.s);
@@ -1391,7 +1396,7 @@ async fn lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_sta
             w.chain.clear();
             case = PalwFraudFilerCaseV1::new(case.candidate.clone());
             case.fp_bootstrap = Some(PalwFraudFilerFpBootstrapV1 {
-                payload: Arc::new(payload.clone()),
+                payload: Arc::new(PalwFraudFilerFpDescriptorV1::Accepted(payload.clone())),
                 form,
                 ids: vec![],
                 chunk: 0,
@@ -1406,7 +1411,7 @@ async fn lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_sta
         assert_eq!(input.ids, d.ids, "only the public input answers were learned");
         assert!(w.chain.iter().any(|o| matches!(o, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } if answer.unit == PalwLegacyHeldUnitV2::PromptIds { chunk: 0 })));
         let ids = input.ids.clone();
-        let job = input.payload.commitment.job.clone();
+        let job = input.payload.job().clone();
         let ceiling = own.fp_job_context_v1(&job).unwrap();
         let replay =
             tokio::task::spawn_blocking(move || palw_fraud_filer_execute_v1(Box::new(own), ceiling, ids, form, None, Some(job), None))
@@ -1421,7 +1426,16 @@ async fn lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_sta
         assert!(case.fp_bootstrap.is_none());
         if !lie {
             assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::Honest));
-            assert!(!case.pursued());
+            assert!(case.pursued(), "keep observing the claim until that release lands");
+            assert!(w.s.legacy_dispute_v1(&claim).unwrap().live.contains_key(&bond_key(OUTSIDER)));
+            w.block(vec![kaspa_consensus_core::palw_legacy_public_filer_v1::palw_dispute_released_object_v1(
+                h64(999),
+                claim,
+                bond_key(OUTSIDER),
+                |_| SIG.to_vec(),
+            )])
+            .expect("an honest replay releases its input-acquisition reservation");
+            assert!(!w.s.legacy_dispute_v1(&claim).unwrap().live.contains_key(&bond_key(OUTSIDER)));
             assert_eq!(bonds_collateral(&w.s), before);
             continue;
         }
@@ -1803,8 +1817,8 @@ fn public_prompt_binding(
 #[tokio::test]
 async fn lg14b_canonical_fp_bad_input_reaches_public_conviction_before_replay_and_after_final() {
     use crate::palw_panel::palw_fraud_filer::{
-        PalwFraudFilerBookV1, PalwFraudFilerCaseV1, PalwFraudFilerFpBootstrapV1, PalwFraudFilerStepV1, PalwFraudFilerVerdictV1,
-        palw_fraud_filer_fp_input_v1, palw_fraud_filer_public_filing_with_fp_v2,
+        PalwFraudFilerBookV1, PalwFraudFilerCaseV1, PalwFraudFilerFpBootstrapV1, PalwFraudFilerFpDescriptorV1, PalwFraudFilerStepV1,
+        PalwFraudFilerVerdictV1, palw_fraud_filer_fp_input_v1, palw_fraud_filer_public_filing_with_fp_v2,
     };
     use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1};
     use kaspa_consensus_core::palw_freeprompt_v3::{
@@ -1919,8 +1933,13 @@ async fn lg14b_canonical_fp_bad_input_reaches_public_conviction_before_replay_an
                 .find(|c| c.claim_id == claim)
                 .unwrap();
         let mut case = PalwFraudFilerCaseV1::new(candidate);
-        case.fp_bootstrap =
-            Some(PalwFraudFilerFpBootstrapV1 { payload: Arc::new(payload), form, ids: vec![], chunk: 0, _reservation: None });
+        case.fp_bootstrap = Some(PalwFraudFilerFpBootstrapV1 {
+            payload: Arc::new(PalwFraudFilerFpDescriptorV1::Accepted(payload)),
+            form,
+            ids: vec![],
+            chunk: 0,
+            _reservation: None,
+        });
         assert!(case.pursued());
         let mut retry = PalwFraudFilerBookV1::default();
         retry.cases.insert(claim, case);

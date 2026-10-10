@@ -2528,6 +2528,25 @@ fn palw_da_legacy_answer_v2(
     material: &PalwDaCaptureV1,
     unit: &kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2,
 ) -> Result<PalwDaBuiltAnswerV1, String> {
+    if *unit == kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob {
+        let (PalwDaCaptureV1::FreePrompt(payload), PalwDaLaneV1::FreePrompt { .. }) = (material, &facts.lane) else {
+            return Err("FP job reacquisition does not disclose an attempt's material".into());
+        };
+        let binding = backend.disclose_trace_event(&payload.capture, u32::MAX, 0)?.binding().clone();
+        if binding.committed_execution_root != facts.execution_root
+            || binding.full_logits_trace_root != facts.trace_root
+            || facts.job_pin != Some(kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context))
+            || payload.material.job.class_id != facts.class_id
+            || payload.material.job.executor_bond != facts.executor_bond.0
+        {
+            return Err("the retained FP job does not reproduce the recorded claim".into());
+        }
+        let answer = kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2::FpJob(Box::new(payload.material.job.clone()));
+        kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
+            &facts.execution_root, unit, &binding, &answer, binding.step_leaf_count, facts.form,
+        ).map_err(|e| e.to_string())?;
+        return Ok(PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((binding, answer))));
+    }
     let (capture, prompt, roots) = match (material, &facts.lane) {
         (PalwDaCaptureV1::FreePrompt(payload), PalwDaLaneV1::FreePrompt { .. }) => {
             (payload.capture.as_slice(), payload.material.prompt_token_ids.clone(), facts.roots_v1(Some(&payload.material.job)))
@@ -2583,7 +2602,7 @@ pub(crate) fn palw_da_built_answer_object_v1(
             )
             .map_err(|e| format!("the legacy held answer is not this unit: {e}"))?;
             let mut bytes = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_answer_bytes_v2(&answer);
-            if matches!(unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }) {
+            if matches!(unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. } | kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob) {
                 bytes = bytes.saturating_add(borsh::to_vec(&binding).map_err(|e| e.to_string())?.len() as u64);
                 if bytes > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64 {
                     return Err("the input answer cannot fit a single carrier".into());
@@ -23032,6 +23051,28 @@ mod p2_7_disclosure_policy {
         assert!(built.is_err() && kept.is_none(), "another job's pin: no answer, nothing kept");
         facts.lane = PalwDaLaneV1::Attempt { anchor: Hash64::default(), attempt_draw: None, job: None };
         assert_eq!(facts.roots_v1(None).job_pin, None, "the attempt lane never carries a free-prompt pin");
+    }
+
+    #[test]
+    fn a_public_job_answer_serves_only_the_pinned_descriptor_from_retained_fp_material() {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpCaptureV1, PalwFpMaterialV1};
+        use kaspa_consensus_core::palw_legacy_held_da_v2::{PalwLegacyHeldAnswerV2, PalwLegacyHeldUnitV2};
+        let (backend, mut facts, job, ids, capture) = fp_claim();
+        let binding = backend.disclose_trace_event(&capture, u32::MAX, 0).unwrap().binding().clone();
+        facts.job_pin = Some(kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context));
+        let material = PalwDaCaptureV1::FreePrompt(PalwFpCaptureV1 {
+            material: PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: ids }, capture,
+        });
+        let answer = palw_da_legacy_answer_v2(&backend, &facts, &material, &PalwLegacyHeldUnitV2::FpJob).unwrap();
+        let PalwDaBuiltAnswerV1::LegacyHeldV2(opened) = answer else { panic!("a signed tag-158 descriptor is required") };
+        assert_eq!(opened.0, binding);
+        assert_eq!(opened.1, PalwLegacyHeldAnswerV2::FpJob(Box::new(job)));
+        // The enum's sole payload is the public job; no prompt ids or capture tail can be served.
+        facts.job_pin = Some(Hash64::from_u64_word(0xBAD));
+        assert!(palw_da_legacy_answer_v2(&backend, &facts, &material, &PalwLegacyHeldUnitV2::FpJob).is_err());
+        facts.lane = PalwDaLaneV1::Attempt { anchor: Hash64::default(), attempt_draw: None, job: None };
+        assert!(palw_da_legacy_answer_v2(&backend, &facts, &material, &PalwLegacyHeldUnitV2::FpJob).is_err());
     }
 
     #[test]

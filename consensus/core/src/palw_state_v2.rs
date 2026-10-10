@@ -31348,6 +31348,12 @@ fn open_da_session_legacy_held_v2(
     if builder.state.tir_classes.contains_key(&class_id) {
         return Err(refused("an IR claim's tree is descended by TirStepNode, on the IR route".to_string()));
     }
+    if demand.unit == crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob {
+        let claim = builder.state.claims.get(&claim_id).expect("read above");
+        if !matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }) || claim.job_identity == Hash64::default() {
+            return Err(refused("FP job reacquisition needs a free-prompt claim with a recorded job pin".into()));
+        }
+    }
     palw_legacy_held_check_demand_v3(&execution_root, &demand.unit, &demand.binding, builder.extras.prompt_ids_form_v1()).map_err(|e| refused(e.to_string()))?;
     if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &demand.binding) {
         return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
@@ -31377,6 +31383,15 @@ fn apply_legacy_held_answer_v2(
     }
     let unit = crate::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(carriage.unit);
     let (claim, record, in_run) = da_answer_admitted_v1(builder, ctx, claim_id, &unit, carriage.discloser)?;
+    if let crate::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2::FpJob(job) = &carriage.answer {
+        if carriage.unit != crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob
+            || !matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. })
+            || claim.job_identity == Hash64::default()
+            || job.class_id != claim.class_id || job.executor_bond != claim.bond.0
+        {
+            return Err(refused("FP job preimage differs from the recorded claim/lane/domain".into()));
+        }
+    }
     let network = builder.extras.held_context_ladder.unwrap_or(crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
     let ladder = builder.state.class_step_ladder_v1(&claim.class_id, network);
     palw_legacy_held_check_answer_v3(&claim.execution_root, &carriage.unit, &carriage.binding, &carriage.answer, ladder, builder.extras.prompt_ids_form_v1())

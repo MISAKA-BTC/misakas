@@ -550,6 +550,16 @@ async fn fresh_public_bond_service_defaults_on_a_withheld_binding_without_fp_job
     fresh_public_service(PublicCase::UnretainedWithheldFpV3Binding).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_reacquires_an_unretained_job_and_input_then_replays_and_releases() {
+    fresh_public_service(PublicCase::UnretainedHonestFpV3Job).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_defaults_on_a_withheld_job_preimage_after_a_correct_binding() {
+    fresh_public_service(PublicCase::UnretainedWithheldFpV3Job).await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PublicCase {
     Withholding,
@@ -562,6 +572,8 @@ enum PublicCase {
     HonestFpV3Job,
     UnretainedForeignFpV3Job,
     UnretainedWithheldFpV3Binding,
+    UnretainedHonestFpV3Job,
+    UnretainedWithheldFpV3Job,
 }
 
 impl PublicCase {
@@ -572,7 +584,13 @@ impl PublicCase {
         matches!(self, Self::PrunedForeignFpV3Job | Self::PrunedHonestFpV3Job | Self::PrunedWithheldFpV3Input) || self.unretained_fp()
     }
     fn unretained_fp(self) -> bool {
-        matches!(self, Self::UnretainedForeignFpV3Job | Self::UnretainedWithheldFpV3Binding)
+        matches!(
+            self,
+            Self::UnretainedForeignFpV3Job
+                | Self::UnretainedWithheldFpV3Binding
+                | Self::UnretainedHonestFpV3Job
+                | Self::UnretainedWithheldFpV3Job
+        )
     }
     fn identity_fault(self) -> bool {
         matches!(
@@ -581,7 +599,13 @@ impl PublicCase {
         )
     }
     fn da_default(self) -> bool {
-        matches!(self, Self::Withholding | Self::PrunedWithheldFpV3Input | Self::UnretainedWithheldFpV3Binding)
+        matches!(
+            self,
+            Self::Withholding | Self::PrunedWithheldFpV3Input | Self::UnretainedWithheldFpV3Binding | Self::UnretainedWithheldFpV3Job
+        )
+    }
+    fn reacquire_honest(self) -> bool {
+        matches!(self, Self::PrunedHonestFpV3Job | Self::UnretainedHonestFpV3Job)
     }
 }
 
@@ -1023,6 +1047,7 @@ async fn fresh_public_service(case: PublicCase) {
     let mut demanded = false;
     let mut answer_submitted = None;
     let mut input_chunks = BTreeSet::new();
+    let mut job_preimage_submitted = false;
     loop {
         assert!(!running.task.as_ref().unwrap().is_finished(), "production worker unexpectedly stopped");
         assert!(std::time::Instant::now() < deadline, "service made no objective progress: {:?}", chain.view(claim));
@@ -1194,7 +1219,78 @@ async fn fresh_public_service(case: PublicCase) {
             );
             eprintln!("[service-public] authenticated binding carried; answered = {}", !case.identity_fault());
         }
-        if case == PublicCase::PrunedHonestFpV3Job {
+        if case == PublicCase::UnretainedHonestFpV3Job
+            && !job_preimage_submitted
+            && chain.view(claim).sessions.iter().any(|(who, s)| {
+                *who == bond
+                    && s.units.contains(&kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(
+                        kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob,
+                    ))
+            })
+        {
+            use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+            use kaspa_consensus_core::palw_legacy_held_da_v2::{
+                PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2, PALW_LEGACY_HELD_VERSION_V2, PalwLegacyHeldAnswerCarriageV2,
+                PalwLegacyHeldAnswerV2, PalwLegacyHeldUnitV2, palw_legacy_held_answer_message_v2,
+            };
+            let (_, event, Some((commitment, _))) = foreign.as_ref().unwrap() else { unreachable!() };
+            let correct_job = commitment.job.clone();
+            for corrupt in [true, false] {
+                let mut job = correct_job.clone();
+                if corrupt {
+                    job.job_nonce[0] ^= 1;
+                }
+                let mut answer = PalwLegacyHeldAnswerCarriageV2 {
+                    version: PALW_LEGACY_HELD_VERSION_V2,
+                    claim,
+                    unit: PalwLegacyHeldUnitV2::FpJob,
+                    binding: event.binding().clone(),
+                    answer: PalwLegacyHeldAnswerV2::FpJob(Box::new(job)),
+                    discloser: chain.bonds[0],
+                    signature: vec![],
+                };
+                let message = palw_legacy_held_answer_message_v2(chain.network_domain.as_byte_slice(), &answer);
+                answer.signature = signed(0, message.as_byte_slice(), PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
+                let tx = palw_carrier_fees::build_lifecycle_carrier_v2(
+                    &chain.config,
+                    key(0),
+                    &PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer: Box::new(answer) },
+                    floats[0].0,
+                    &floats[0].1,
+                    &[],
+                    None,
+                    chain.daa(),
+                )
+                .unwrap();
+                let session = manager.consensus().unguarded_session();
+                retained_flow
+                    .submit_rpc_transaction(&session, tx.clone(), kaspa_mining::mempool::tx::Orphan::Forbidden)
+                    .await
+                    .expect("the signed descriptor carrier passes ordinary PQ admission");
+                let mut included = false;
+                for _ in 0..8 {
+                    let block = pool_heartbeat(&mut chain, &manager, &pool).await;
+                    if block.transactions.iter().any(|t| t.id() == tx.id()) {
+                        included = true;
+                        break;
+                    }
+                }
+                assert!(included, "the job descriptor was actually carried");
+                pool_heartbeat(&mut chain, &manager, &pool).await;
+                let view = chain.view(claim);
+                assert_eq!(view.unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::FpJob)), !corrupt);
+                assert!(view.public_fp_job.is_none(), "court reacquisition never fabricates original commitment metadata");
+                assert!(!view.executor_refuted && !view.court_convicted && !view.da_defaulted);
+                let output = tx.outputs.last().unwrap();
+                floats[0] = (
+                    TransactionOutpoint::new(tx.id(), (tx.outputs.len() - 1) as u32),
+                    UtxoEntry::new(output.value, output.script_public_key.clone(), chain.daa(), false),
+                );
+            }
+            job_preimage_submitted = true;
+            eprintln!("[service-public] wrong job refused, authenticated job preimage acquired through signed public carriers");
+        }
+        if case.reacquire_honest() {
             use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
             use kaspa_consensus_core::palw_legacy_held_da_v2::{
                 PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2, PALW_LEGACY_HELD_VERSION_V2, PalwLegacyHeldAnswerCarriageV2,
@@ -1321,6 +1417,9 @@ async fn fresh_public_service(case: PublicCase) {
             assert!(!honest.executor_refuted && !honest.court_convicted && !honest.da_defaulted);
             if honest.record.as_ref().is_some_and(|record| record.closed.contains(&bond)) {
                 assert!(!input_chunks.is_empty(), "the full input was reacquired through real public carriers");
+                if case.unretained_fp() {
+                    assert!(job_preimage_submitted, "the job was reacquired before the input or replay");
+                }
                 assert!(
                     service.fraud_filer_honest_replays.lock().unwrap().contains(&claim),
                     "release alone is insufficient: the real replay worker must have judged the three roots Honest"
@@ -1469,6 +1568,23 @@ async fn fresh_public_service(case: PublicCase) {
                         if demand.claim == claim && demand.accuser == bond
                             && matches!(demand.unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }))),
                     "the default follows an actual authenticated-input obligation, not a missing binding");
+            }
+            if case == PublicCase::UnretainedWithheldFpV3Job {
+                assert!(answer_submitted.is_some(), "the producer disclosed the correct binding first");
+                assert!(
+                    carriers.iter().any(|object| matches!(object,
+                    PalwConsensusObjectV2::LegacyHeldDemandedV2 { demand }
+                        if demand.claim == claim && demand.accuser == bond
+                            && demand.unit == kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob)),
+                    "the default must follow the publicly authenticated missing-job obligation"
+                );
+                assert!(
+                    !carriers.iter().any(|object| matches!(object,
+                    PalwConsensusObjectV2::LegacyHeldDemandedV2 { demand }
+                        if demand.claim == claim && matches!(demand.unit,
+                            kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }))),
+                    "input acquisition cannot start before an authenticated job exists"
+                );
             }
             let carried = carriers.len();
             assert!(reserved && demanded && carried >= 2);

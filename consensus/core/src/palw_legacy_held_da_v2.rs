@@ -119,6 +119,8 @@ pub enum PalwLegacyHeldUnitV2 {
     KernelWitness { leaf: u64 },
     /// One authenticated input chunk; no execution or model operand is disclosed.
     PromptIds { chunk: u32 },
+    /// The FP job preimage of the authenticated binding's job id. No input, capture or model bytes.
+    FpJob,
 }
 
 /// **Which committed tree a descent walks.**
@@ -160,7 +162,7 @@ impl PalwLegacyHeldUnitV2 {
         match *self {
             Self::StepNode { level, index } => Some((PalwLegacyTreeV2::Step, level, index)),
             Self::CheckpointNode { level, index } => Some((PalwLegacyTreeV2::Checkpoint, level, index)),
-            Self::KernelWitness { .. } | Self::PromptIds { .. } => None,
+            Self::KernelWitness { .. } | Self::PromptIds { .. } | Self::FpJob => None,
         }
     }
 }
@@ -186,6 +188,36 @@ pub enum PalwLegacyHeldAnswerV2 {
     KernelWitness(Box<PalwCommittedKernelWitnessV2>),
     /// Merkle input: ids of one aligned subtree and its outer path. Flat input: all ids, no tree/path.
     PromptIds { ids: Vec<u32>, tree_root: Option<Hash64>, siblings: Vec<Hash64> },
+    /// A job descriptor, authenticated independently of the original commitment envelope.
+    FpJob(Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>),
+}
+
+/// The descriptor alone must fit the existing single-carrier court, beside its binding.
+/// Larger job tails require a separate bounded multipart acquisition protocol before activation.
+pub const PALW_LEGACY_FP_JOB_MAX_BYTES_V2: u64 = 64 * 1024;
+
+/// Authenticate a job preimage against a binding already pinned to the claim. The context's
+/// executed count is authenticated by the recorded FP pin at the caller, not invented here.
+pub fn palw_legacy_fp_job_check_v2(
+    binding: &PalwStepBindingV2,
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+) -> Result<(), PalwLegacyHeldError> {
+    use crate::palw_fp_execution_v3::palw_fp_execution_seed_v3;
+    use crate::palw_freeprompt_v3::fp_job_id_v3;
+    let ctx = &binding.job_context;
+    if borsh::to_vec(job).map_or(true, |b| b.len() as u64 > PALW_LEGACY_FP_JOB_MAX_BYTES_V2)
+        || fp_job_id_v3(job) != ctx.job_id
+        || palw_fp_execution_seed_v3(job) != ctx.execution_seed
+        || job.tokenizer_id != ctx.tokenizer_id
+        || job.prompt_token_ids_hash != ctx.prompt_token_ids_hash
+        || job.prompt_tokens != ctx.declared_prefill_tokens
+        || job.max_context_tokens != ctx.max_context_tokens
+        || ctx.exact_decode_tokens == 0
+        || ctx.exact_decode_tokens > job.decode_token_limit
+    {
+        return Err(PalwLegacyHeldError::WitnessNotCommitted("the FP job does not reproduce the authenticated context".into()));
+    }
+    Ok(())
 }
 
 /// **Tag 157's payload: a demand of one legacy held unit**, with the claim's binding (authenticated against its `execution_root`,
@@ -590,6 +622,7 @@ pub fn palw_legacy_held_check_demand_v3(
         PalwLegacyHeldUnitV2::PromptIds { chunk } => {
             palw_legacy_prompt_chunk_bounds_v2(binding, chunk, network)?;
         }
+        PalwLegacyHeldUnitV2::FpJob => {}
         PalwLegacyHeldUnitV2::KernelWitness { leaf } => {
             if leaf >= binding.step_leaf_count {
                 return Err(outside("the step space ends before the leaf"));
@@ -675,6 +708,7 @@ pub fn palw_legacy_held_check_answer_v3(
         (PalwLegacyHeldUnitV2::PromptIds { chunk }, PalwLegacyHeldAnswerV2::PromptIds { ids, tree_root, siblings }) => {
             palw_legacy_prompt_check_v2(binding, *chunk, ids, *tree_root, siblings, network)
         }
+        (PalwLegacyHeldUnitV2::FpJob, PalwLegacyHeldAnswerV2::FpJob(job)) => palw_legacy_fp_job_check_v2(binding, job),
         _ => Err(PalwLegacyHeldError::AnswerIsAnotherUnit),
     }
 }
@@ -761,6 +795,7 @@ pub const fn palw_legacy_held_unit_scope_v2(unit: &PalwLegacyHeldUnitV2) -> Palw
         PalwLegacyHeldUnitV2::PromptIds { .. } => {
             PalwLegacyHeldScopeV2 { material: "ClaimInput", supplier: "Demanded", model_bytes: false }
         }
+        PalwLegacyHeldUnitV2::FpJob => PalwLegacyHeldScopeV2 { material: "ClaimWitness", supplier: "Demanded", model_bytes: false },
         PalwLegacyHeldUnitV2::KernelWitness { .. } => {
             PalwLegacyHeldScopeV2 { material: "ClaimTrace", supplier: "Demanded", model_bytes: false }
         }
@@ -1011,6 +1046,76 @@ mod tests {
 
     fn h(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
+    }
+
+    #[test]
+    fn fp_job_preimage_authenticates_every_field_without_an_original_commitment() {
+        use crate::palw_freeprompt_v3::*;
+        let mut binding = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, None).binding;
+        let ctx = &binding.job_context;
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: h(900),
+            class_id: binding.shape_profile.shape_profile_id(),
+            executor_bond: crate::tx::TransactionOutpoint::new(h(901), 0),
+            executor_pubkey: vec![7; 2592],
+            operator_id: h(902),
+            anchor_block: h(903),
+            anchor_daa: 10,
+            job_nonce: [4; 32],
+            tokenizer_id: ctx.tokenizer_id,
+            prompt_token_ids_hash: ctx.prompt_token_ids_hash,
+            prompt_tokens: ctx.declared_prefill_tokens,
+            decode_token_limit: ctx.exact_decode_tokens,
+            max_context_tokens: ctx.max_context_tokens,
+            privacy_mode: PALW_FP_PRIVACY_PANEL_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            decode: None,
+            tail: None,
+        };
+        binding.job_context.job_id = fp_job_id_v3(&job);
+        binding.job_context.execution_seed = crate::palw_fp_execution_v3::palw_fp_execution_seed_v3(&job);
+        binding.committed_execution_root = crate::palw_step_leg::binding_commitment_root_v1(&binding);
+        let answer = PalwLegacyHeldAnswerV2::FpJob(Box::new(job.clone()));
+        let check = |a: &PalwLegacyHeldAnswerV2| {
+            palw_legacy_held_check_answer_v2(
+                &binding.committed_execution_root,
+                &PalwLegacyHeldUnitV2::FpJob,
+                &binding,
+                a,
+                binding.step_leaf_count,
+            )
+        };
+        check(&answer).unwrap();
+        for change in 0..6 {
+            let mut bad = job.clone();
+            match change {
+                0 => bad.job_nonce[0] ^= 1,
+                1 => bad.prompt_tokens += 1,
+                2 => bad.anchor_block = h(904),
+                3 => bad.network_domain = h(905),
+                4 => bad.privacy_mode = PALW_FP_PRIVACY_PUBLIC_DA,
+                _ => bad.executor_bond.index += 1,
+            }
+            assert!(check(&PalwLegacyHeldAnswerV2::FpJob(Box::new(bad))).is_err());
+        }
+        assert!(check(&PalwLegacyHeldAnswerV2::PromptIds { ids: vec![], tree_root: None, siblings: vec![] }).is_err());
+        assert_eq!(borsh::to_vec(&PalwLegacyHeldUnitV2::FpJob).unwrap(), vec![4]);
+        assert_eq!(borsh::to_vec(&PalwLegacyHeldUnitV2::PromptIds { chunk: 3 }).unwrap(), vec![3, 3, 0, 0, 0]);
+        let mut wrong_root = binding.clone();
+        wrong_root.committed_execution_root = h(906);
+        assert!(
+            palw_legacy_held_check_answer_v2(
+                &binding.committed_execution_root,
+                &PalwLegacyHeldUnitV2::FpJob,
+                &wrong_root,
+                &answer,
+                binding.step_leaf_count
+            )
+            .is_err()
+        );
     }
 
     /// Input proofs use global counts/indices, including the final ragged subtree; no execution or model oracle is used.

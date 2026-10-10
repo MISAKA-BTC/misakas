@@ -773,3 +773,34 @@ private target、default features、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で�
 [最終build](evidence/unretained-job-build-metadata.log)、[初期build](evidence/unretained-job-build-initial.log)、[中間build](evidence/unretained-job-build-final.log)、[filer/input](evidence/unretained-job-filer.log)、[metadata無しidentity](evidence/unretained-job-identity.log)、[metadata無しbinding非応答](evidence/unretained-job-withheld.log)、[pruned honest回帰](evidence/unretained-job-pruned-honest-regression.log)、[0件filter](evidence/unretained-job-pruned-honest.log)、[node binary check](evidence/unretained-job-binary.log)、[test executable SHA256](evidence/unretained-job-test.sha256)。
 
 この区切りではwire/rooted state/activationを変更していない。shipping harvestを再実行しておらず、以前の361 pin検証を今回の検証へ読み替えない。**正しいbindingの後でjob本体が永久消失していればまだWaitとなる。** その認証済みjob-preimage取得courtは次の実装であり、今回の成功を完全なjob取得・算術追及の成功としない。busy selectorとmemory ticketのpolicyはunitで確認し、実serviceの枠飽和は未検証。最大input/session、初期/prefix state、全familyの正規入口と各終局、scope/hiding、回復・最大負荷・期限内包含が残る。ADR-0177 D7と有効化拒否を維持し、G14全域は未達。
+
+## 公開FP job-preimageの取得court（2026-10-11）
+
+元commitment body、acceptance row、保存metadataの全てがなくても、正しい公開bindingのjob idに対するpreimageを既存のLG14-B courtで要求する。`FpJob`をunit ordinal 4、answer ordinal 3へappendし、既存ordinal/tag 157–158と署名contextは維持する。FP claimの非zero recorded pin、bindingのexecution/trace rootとjob pin、job全体のcanonical hash、導出execution seed、tokenizer、input hash/count、context/decode ceilingを照合する。誤ったnonceなどのjobは義務を満たさない。既存session/defaultとtag 156の再取得を使用する。
+
+取得jobは`Disclosed` descriptorとして保持し、受理済み`Accepted` payloadと区別する。元commitmentのmanifest、stop reason、claim hashや署名を捏造しない。job ticketは取得・認証のbufferを計上し、input ticketを確保してからidsを蓄積する。正しいjobとinputが揃って初めてverifier自身の登録モデルで実行し、3 rootを判定する。producerの応答workerはverified retained FP envelopeからjobだけを開示し、verifierへcapture/model/秘密状態を渡さない。成功・終局ではdescriptor/ticketを解放する。
+
+actual-serviceの2ケースは、前節と同じ通常family/graph登録、成熟したpublic bond、全5名のValid receipt、PQ mempool/template/block、fresh DBによる2,065 public blocks検証を使用する。job保存fence前の受理によりmetadataが一度も作られなかったことをassertし、元body/acceptance rowはactual storeから削除する。正しい公開bindingの後、honestケースは誤ったjob carrierを包含しても未回答のまま、続く正しいjobとinputを取得する。実workerのHonest判定をread-only test observerからassertし、署名付きreleaseと正常exit/joinまで確認する。非応答ケースはFpJob demandが実際に包含され、PromptIds demandを出す前にproducerへの客観的DA defaultと正の徴収へ進む。
+
+| 検証 | 結果 |
+| --- | --- |
+| consensus-core legacy held unit | 10 PASS、1.55 s |
+| node filer/inputとproduction DA responder policy | 35 PASS、5.60 s |
+| legacy court V-fold回帰 | 15 PASS、18.31 s |
+| metadata無しjob/input取得・実worker Honest・署名付きrelease | 1 PASS、306.57 s、DAA 1187 |
+| 正しいbinding後のjob非応答・producer DA default | 1 PASS、554.56 s、DAA 2308 |
+| metadata無しidentity conviction・producerと全5 Valid signer徴収/reveal回帰 | 1 PASS、332.88 s、DAA 1285 |
+| 通常node binary check | PASS、2m 51s（build lock待ちを含む） |
+| shipping fresh integration harvest＋同一core binaryの3 goldensを再読込 | 361 pin差分なし、dry run |
+
+初回core compileはtest closureのtemporary lifetimeでE0716、初回node compileは旧payload型を使用する4箇所のfixture adapterで失敗した。修正後core buildは4m 51s、node buildは2m 48s。legacy回帰初回は14 PASS/1 FAILで、Honest replay後もpublic releaseを待つ現在のpolicyに対して旧fixtureが`!pursued()`を要求していた。fixtureを署名付きreleaseのfoldとlive予約の消滅まで確認するよう更新し、再build 27.37 s後に15 PASSした。production codeはこのfixture修正では変更していない。
+
+今回 **63 unique PASS**、以前の30/27/23件と重複加算しない。最終node binaryでmetadata無しforeign-job回帰もproducer collateral `93906321001040 → 93906210966308`、全5名のValid signerの徴収・outsider commit/reveal、予約解放、exit/joinまでPASSした。kind-4追加額0はkind-3が既にproducerを徴収したためである。[最終identity回帰log](evidence/fp-job-preimage-identity-regression.log)。shippingの13 integration targetと3 goldensは上記63件とは別のpin/gate確認である。
+
+shipping harvestのlib再buildはdisk不足で失敗した。新しいintegration harvestの13 targetは成功している。先に成功したcore test executableのSHA256が保存値と一致することを確認し、その同じbinaryで3つの指定goldenを実行して、両logを`--from-log`で再読込した。結果は361 ok/no driftで、pinの書換えはない。失敗したharvestを成功へ読み替えない。
+
+core binary SHA256は`9a09922f2a86801a3e42fe957087ab6a8d45d297eb3dd3228715ac9ab73f0f71`、35 unitと新actual-service 2件のnode binaryは`829c1f3035059e7a0015fcd48b0cf6e9833d4b00debb6f5e5cc71ee7b6cc27cd`、release fixture修正後のnode binaryは`7e528dd30dbaf4ebfcaa177fe5be0138603b913c81315bf25e98002763db9fe9`。private target、default features、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`を使用した。fixtureのinert EVM、skip PoW、鍵/premineと休眠fenceのtest-armを使用し、bond成熟、court期限、料金、通常のfamily/graph入口は緩和していない。
+
+[core初回失敗](evidence/fp-job-preimage-core.log)、[core成功](evidence/fp-job-preimage-core-final.log)、[core hash](evidence/fp-job-preimage-core-test.sha256)、[node初回失敗](evidence/fp-job-preimage-node-build.log)、[node成功](evidence/fp-job-preimage-node-build-final.log)、[35 unit](evidence/fp-job-preimage-node-units.log)、[honest service](evidence/fp-job-preimage-honest.log)、[job非応答service](evidence/fp-job-preimage-withheld.log)、[legacy初回失敗](evidence/fp-job-preimage-legacy-regression.log)、[legacy成功](evidence/fp-job-preimage-legacy-regression-final.log)、[release fixture再build](evidence/fp-job-preimage-node-build-release-final.log)、[前node hash](evidence/fp-job-preimage-node-test.sha256)、[最終node hash](evidence/fp-job-preimage-node-test-release-final.sha256)、[node binary check](evidence/fp-job-preimage-binary.log)、[shipping harvest失敗](evidence/fp-job-preimage-repin.log)、[fresh integration harvest](evidence/fp-job-preimage-repin-harvest-tests.log)、[disk不足lib log](evidence/fp-job-preimage-repin-harvest-lib.log)、[同一core binaryの3 goldens](evidence/fp-job-preimage-repin-lib-final.log)、[361 pin再読込](evidence/fp-job-preimage-repin-final.log)。生logの末尾空行はそのまま保存し、source diffのwhitespace確認とは区別する。
+
+**G14全域は未達。** このjob courtは64 KiBのpreimageを対象とし、bindingと合わせてcourt/single-carrier ceilingへ収まることをdemand/reacquisitionで検査する。しかし最大64 KiB constraint tailとheaderはこのjob boundを超える。48 KiBのFP payload capはwallet builderに存在するだけで、今回の最大job取得保証の根拠としては扱わない。最大jobをadmissionできる一方でこの単一answerでは回答できないなら、不可能な義務となるため有効化してはならない。次の実装ではmultipart/transportとadmission/profile適合を共に閉じる必要がある。大きいbinding、追加session予算、最大input、initial/prefix-state、non-prompt input、全familyの正規入口と算術/output/state終局、scope/hiding、restart/reorg/network IBD、最大負荷・期限内包含は残る。shipping validatorは引き続きarmingを拒否し、ADR-0177 D7とfull objectiveを維持する。
