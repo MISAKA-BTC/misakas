@@ -766,9 +766,9 @@ wire／rooted state／activation／shipping pinは変更していない。今回
 | 既存pruned input取得・実worker Honest・予約解放 | 1 PASS、299.59 s |
 | 通常node binary check | PASS、7.07 s |
 
-今回 **29 unique PASS**。以前の23/27/124件と重複加算しない。identity caseは公開Eventだけからproducer collateral `93906321001040 → 93906210966308`、全5名のValid signerの徴収・outsider commit/revealまで確認した。kind-4追加徴収0は先行kind-3の徴収済みを示す。binding非応答はproducerへの客観的DA defaultであり、算術convictionの証拠ではない。正常exit/joinとcallback owner解放も両caseでassertする。
+今回 **30 unique PASS**（通常PublicDA honest回帰の追記を含む）。以前の23/27/124件と重複加算しない。identity caseは公開Eventだけからproducer collateral `93906321001040 → 93906210966308`、全5名のValid signerの徴収・outsider commit/revealまで確認した。kind-4追加徴収0は先行kind-3の徴収済みを示す。binding非応答はproducerへの客観的DA defaultであり、算術convictionの証拠ではない。正常exit/joinとcallback owner解放も両caseでassertする。
 
-private target、default features、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で最終buildは25.93 s。productionを段階的に修正した初期/中間/最終buildのlogを残す。pruned honestの最初のexact filterは名前を誤り0件だったためPASS数へ含めず、正しい名前で1件を再実行した。通常PublicDA honestの追加回帰はこの記録時点で実行中。
+private target、default features、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で最終buildは25.93 s。productionを段階的に修正した初期/中間/最終buildのlogを残す。pruned honestの最初のexact filterは名前を誤り0件だったためPASS数へ含めず、正しい名前で1件を再実行した。通常PublicDA honestの追加回帰も同じtest binaryで **1 PASS（290.18 s）**。実worker Honest・対象予約なし・正常exit/joinをassertした。[追加回帰log](evidence/unretained-job-normal-honest.log)。
 
 [最終build](evidence/unretained-job-build-metadata.log)、[初期build](evidence/unretained-job-build-initial.log)、[中間build](evidence/unretained-job-build-final.log)、[filer/input](evidence/unretained-job-filer.log)、[metadata無しidentity](evidence/unretained-job-identity.log)、[metadata無しbinding非応答](evidence/unretained-job-withheld.log)、[pruned honest回帰](evidence/unretained-job-pruned-honest-regression.log)、[0件filter](evidence/unretained-job-pruned-honest.log)、[node binary check](evidence/unretained-job-binary.log)、[test executable SHA256](evidence/unretained-job-test.sha256)。
 
