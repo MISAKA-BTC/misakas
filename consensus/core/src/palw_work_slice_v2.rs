@@ -375,7 +375,7 @@ pub struct PalwWorkRootV2 {
     /// The other authorised executors, ascending.
     pub extra_executors: Vec<PalwBondKeyV2>,
     /// What each extra executor stands behind for this root (the root claim's own reservation), held in `reserved_exposure` for the
-    /// root's life. Recorded so the release returns exactly what the open took.
+    /// root's life once its first signed slice is accepted. Listed nonparticipants reserve nothing.
     pub executor_exposure: u128,
     /// The REAL chain anchor: the block that carried the root claim.
     pub anchor: BlockHash,
@@ -667,6 +667,8 @@ pub enum PalwSliceRefusalV2 {
     VerificationRewardBound,
     #[error("5: the transferred kernel claim lacks provider terms or collateral covering the EXEC horizon")]
     VerificationProviderHorizon,
+    #[error("6: the first signed slice's executor lacks Work room for its root reservation")]
+    ExecutorUnfunded,
 }
 
 impl PalwSliceRefusalV2 {
@@ -706,6 +708,7 @@ impl PalwSliceRefusalV2 {
             R::VerificationAlreadyPaid => 29,
             R::VerificationRewardBound => 30,
             R::VerificationProviderHorizon => 31,
+            R::ExecutorUnfunded => 32,
         }
     }
 
@@ -744,6 +747,7 @@ impl PalwSliceRefusalV2 {
             29 => "verification_already_paid",
             30 => "verification_reward_bound",
             31 => "verification_provider_horizon",
+            32 => "executor_unfunded",
             _ => "unknown",
         }
     }

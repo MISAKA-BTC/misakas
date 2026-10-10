@@ -5945,7 +5945,7 @@ impl VirtualStateProcessor {
             (hash, notes)
         });
         let lane = self.palw_exec_v2_health(&state, tip, tip_daa);
-        Some(kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_observation_v1(
+        Some(kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_observation_with_retention_v2(
             &state,
             Some(fence.daa_score()),
             tip,
@@ -5953,6 +5953,7 @@ impl VirtualStateProcessor {
             &roots,
             record,
             lane,
+            Some(state_params.window_court()),
         ))
     }
 
@@ -5966,9 +5967,12 @@ impl VirtualStateProcessor {
         bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
     ) -> Result<kaspa_consensus_core::palw_exec_v2::PalwWorkSliceV1, String> {
         let state_params = self.palw_state_params_v2.as_ref().ok_or("this network has no PALW state")?;
-        let (_, state) =
+        let (tip, state) =
             self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten().ok_or("no PALW tip on this node yet")?;
-        kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_slice_statement_v1(&state, state_params, root, index, claim, bond)
+        let tip_daa = self.headers_store.get_daa_score(tip).map_err(|error| error.to_string())?;
+        kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_slice_statement_at_depth_v2(
+            &state, state_params, root, index, claim, bond, self.palw_settled_anchor_depth_at(tip_daa),
+        )
     }
 
     /// **RFC-0008 v2 amendment 1, §10.3: the relay prefilter of an `EXEC_SLICE` block** against the committed tip: the root is open, the

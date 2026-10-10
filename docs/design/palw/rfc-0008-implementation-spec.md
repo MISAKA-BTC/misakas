@@ -318,7 +318,8 @@ and only that route can verify, convict or default it.** Concretely:
 2. **Each slice names its verification claim.** `slice.evidence_root` is the id of a kernel-route *program* claim, and admission rule
    5 gains the **verification binding** (refused by name, no write): the route holds that claim; it is not failed (convicted,
    unavailable, timed out); its producer is the slice executor's kernel bond (`palw_kernel_bond_id_v1`); its job's class is the
-   bound kernel class; its job's `nonce` is the **slice job nonce** `H("misaka-palw/exec-v2/slice-job-nonce/v1"; root claim ‖ index ‖
+   bound kernel class; its job's `nonce` uses the **retention-bound slice job nonce** of §15.6. Its v1 base is
+   `H("misaka-palw/exec-v2/slice-job-nonce/v1"; root claim ‖ index ‖
    range ‖ canonical job ‖ plan root)` — so one kernel job, hence one kernel claim, can back exactly one
    `(root, index, range)`; `slice.predecessor_state_root` is the **token state** `H("misaka-palw/exec-v2/token-state/v1"; n ‖ tokens)`
    of the job's prompt; `slice.result_state_root` is the token state of the prompt followed by the claim's generated tokens;
@@ -946,3 +947,56 @@ These changes do not close the complete WINDOW gate. Explicit worker authorizati
 consumer binding, provider transport/retrieval through restart and pruning, full public actor/tier evidence and worst-case
 resources remain required before activation. This section does not establish `p_check`, a conviction floor, economical
 provider independence, or 128-bit soundness. All public activation validation and fence heights remain unchanged.
+
+
+### 15.6 Worker consent to reservation and retention
+
+An extra-executor allow-list is the root owner's permission, not the listed workers' consent. Opening a root checks that
+listed bonds are distinct, canonical and active, but reserves no extra worker's collateral. An executor's first accepted
+signature-bearing slice reserves the root's native reservation once, using that block's Work gate and raw second-clock
+depth. Further slices by that executor reserve nothing more. Insufficient current room is lane refusal 32,
+`executor_unfunded`; no slice/index, reward entitlement or consumer extension is written. Codes 0–31 are unchanged.
+
+The node producer uses the authenticated tip's required second-clock depth, matching canonical fold admission.
+`None` means the DAA-only profile; it is not an unknown-depth conservative value. A standalone legacy preflight
+without that receipt uses `Some(u64::MAX)` and the existing bounded DAA escape, so it cannot release held capital
+early by assuming a missing clock. The depth is the required settlement threshold, not an observed settlement count.
+
+The accepted slice rows identify participating extra executors. Live-root exposure is re-derived from this distinct set,
+not from the allow-list. Root Final/void returns exactly these reservations, including when the last slice is missing;
+unused listed workers have nothing to return. Replay and carriage validation use the same projection. A retained live
+root's reservation must match its native claim, its roster is canonical and each recorded executor remains authorized.
+These checks do not permit a root owner to consume a third party's bond merely by naming it.
+
+A worker's kernel job uses the v2 slice-nonce domain. Define the canonical terms before signing:
+
+```
+H_exec = expiry + max(native_window_court, kernel_liability) + kernel_court_deadline + kernel_proof_grace
+policy_root = H(retention-policy/v1; native_window_court || Borsh(full kernel LedgerPolicyV1))
+nonce_v2 = H(slice-job-nonce/v2; nonce_v1 || expiry || H_exec || executor_exposure_sompi || policy_root)
+```
+
+Additions are checked and reject overflow/MAX. Integers use canonical little-endian bytes (DAAs u64, exposure u128),
+with full 64-byte digests. The executor's signed kernel claim commits its job id, which commits this nonce; its signed
+WorkSlice names that same claim. An old v1 nonce is not a fallback. A truthful trace/valid signature cannot attach to a
+different expiry, reservation or policy. Fresh consent requires a new job id and signed claim. The root bond's own prefix
+retains its existing nonce: the same bond directly signs the declaration including expiry under the network's fixed policy.
+
+A job prepared before root declaration must preserve the proposed expiry when filling the subsequently obtained
+prefix claim id. Refreshing expiry after job signing changes the authorized terms and requires a fresh job and claim.
+
+Admission, the producer statement helper and restoration check the v2 terms against the actual rooted interval and
+network policy. The pure worker helpers also prepare jobs before declaration. Op 240 appends `retentionTerms` and
+`nextJobNonce` from the node's actual native window. Exposure is a decimal sompi string, not a lossy JSON number.
+Missing policy/window data produces unknown terms/nonce; a terminal root has no next nonce. The historical observation
+wrapper cannot infer a native window and must not fabricate one. These fields do not create consensus authority.
+
+This profile is required under the still-dormant EXEC-v2 fence. No public activation height, Round ticket rule, wire tag,
+root/slice carriage layout or state collection is changed. Historical v1 hash/work-binding helpers remain for readers;
+production admission uses only v2. A private harness that bypassed public activation validation must rebuild old unsigned
+retention fixtures; this is not a migration of a publicly armed EXEC-v2 network.
+
+Cryptographic consent to a finite reservation/retention term is not a sufficient price contract. Workers must inspect the
+terms before signing. A minimum offered compensation, capital/retention cost, abort/timeout economics and measured class
+costs remain required; neither voluntary signing nor a policy hash proves profitability or positive detection probability.
+This section does not resolve the full WINDOW/ECON or pruned public-material/actor/resource acceptance gates.

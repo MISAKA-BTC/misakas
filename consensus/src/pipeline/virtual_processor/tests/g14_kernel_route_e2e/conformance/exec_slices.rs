@@ -48,7 +48,8 @@ use kaspa_consensus_core::palw_exec_v2::{
     PALW_EXEC_V2_WIRE_VERSION, PalwExecSubtypeV2, PalwExecV2Envelope, PalwWorkSliceV1, palw_work_slice_payload_root_v2,
 };
 use kaspa_consensus_core::palw_exec_v2_verify::{
-    palw_exec_v2_prefix_job_nonce_v1, palw_exec_v2_real_job_v1, palw_exec_v2_slice_job_nonce_v1, palw_exec_v2_token_state_root_v1,
+    palw_exec_v2_prefix_job_nonce_v1, palw_exec_v2_real_job_v1, palw_exec_v2_retention_terms_v1, palw_exec_v2_slice_job_nonce_v1,
+    palw_exec_v2_slice_job_nonce_v2, palw_exec_v2_token_state_root_v1,
 };
 use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwVoidReasonV2};
 use kaspa_consensus_core::palw_work_slice_v2::{
@@ -118,6 +119,7 @@ async fn active_world() -> Cw {
 /// The REAL root's public job and run: the claim, the prompt its anchor names and its committed run (GAP-62).
 struct RealRun {
     claim: Hash64,
+    executor_exposure_sompi: u128,
     prompt: Vec<u32>,
     run: Vec<u32>,
 }
@@ -220,7 +222,8 @@ async fn real_attempt(cw: &mut Cw, card: usize, class: Hash64, nonce: u64) -> Re
     let row = state.claim(&claim).unwrap_or_else(|| panic!("the fold took no claim of the onboarded class (block {hash})"));
     assert!(matches!(row.phase, PalwClaimPhaseV2::Provisional), "a fresh REAL claim: {:?}", row.phase);
     assert_eq!(row.job_identity, anchor, "the claim's job identity is its execution anchor");
-    RealRun { claim, prompt, run }
+    let executor_exposure_sompi = cw.net.chain.tip_state().1.claim(&claim).unwrap().reserved;
+    RealRun { claim, prompt, run, executor_exposure_sompi }
 }
 
 /// The session one REAL claim opens: three `RUN`-token slices with registered IR costs, the binding's kernel plan, the
@@ -299,6 +302,23 @@ struct SliceClaim {
     claim: Claim,
 }
 
+fn worker_nonce(
+    cw: &Cw,
+    real: &RealRun,
+    decl: &PalwWorkRootDeclarationV2,
+    index: u32,
+    range: kaspa_consensus_core::palw_exec_v2::PalwWorkRangeV1,
+) -> Hash64 {
+    let terms = palw_exec_v2_retention_terms_v1(
+        decl.expiry_daa,
+        real.executor_exposure_sompi,
+        cw.net.bundle.state.window_court(),
+        &cw.net.ledger().policy,
+    )
+    .unwrap();
+    palw_exec_v2_slice_job_nonce_v2(&slice_key(cw, real, decl, index, range), &terms)
+}
+
 /// **The kernel side of a session, all through the route as any producer**: the prefix job (the anchored prompt, the prefix job
 /// nonce) and the three slice jobs (each prompt the stream so far, each nonce the slice job nonce of `(root, index, range, job, plan)`),
 /// posted by the registrant in one block; the root card's prefix claim of the REAL run (lying where `lie_prefix`) and each
@@ -325,7 +345,7 @@ async fn kernel_claims(
     let mut stream = real.stream();
     for index in 0..3u32 {
         let range = palw_work_plan_range_v2(&decl.boundaries, index).expect("a planned slice");
-        let nonce = palw_exec_v2_slice_job_nonce_v1(&slice_key(cw, real, decl, index, range));
+        let nonce = worker_nonce(cw, real, decl, index, range);
         let job = KernelJobV1 {
             class_binding_id: kernel_class,
             prompt: stream.clone(),
@@ -404,7 +424,7 @@ async fn x8_g14_kernel_claims_accept_a_canonical_prefix_and_its_continuations() 
     let (prompt, context) = palw_exec_v2_real_job_v1(&facts, &identity, cw.net.config.params.palw_prompt_ids_form_at(cw.net.daa()))
         .expect("a canonical public job");
     let run = greedy(&cw.cand, &cw.net.ledger(), &cw.kernel_class, &prompt, context.exact_decode_tokens.max(1) as usize);
-    let real = RealRun { claim: Hash64::from_u64_word(0xA77F), prompt, run };
+    let real = RealRun { claim: Hash64::from_u64_word(0xA77F), prompt, run, executor_exposure_sompi: 0 };
     let initial = palw_exec_v2_token_state_root_v1(&[&real.stream()]);
     let draft = declaration_for_job(&cw, &real, Hash64::default(), initial, 1, identity);
     let (_, slices, _) = kernel_claims(&mut cw, &real, &draft, false, |_| false, Vec::new()).await;
@@ -592,7 +612,10 @@ async fn opened(
     let draft = declaration(cw, &real, Hash64::default(), initial);
     let extra = extra(cw, &real, &draft);
     let (prefix, slices, extras) = kernel_claims(cw, &real, &draft, lie_prefix, lie, extra).await;
-    let decl = declaration(cw, &real, Hash64::from_bytes(prefix.claim.id), initial);
+    let mut decl = declaration(cw, &real, Hash64::from_bytes(prefix.claim.id), initial);
+    // Jobs have already been signed: preserve the agreed expiry rather than
+    // refreshing it from the later tip while filling the prefix claim id.
+    decl.expiry_daa = draft.expiry_daa;
     let root = send_root(cw, decl).await.unwrap_or_else(|| panic!("the session did not open on the REAL claim"));
     assert_eq!(root.phase, PalwWorkRootPhaseV2::Open);
     assert_eq!(root.root_bond, cw.net.bond(ROOT_CARD));
@@ -619,6 +642,78 @@ async fn session(cw: &mut Cw, lie_prefix: bool, lie: impl Fn(usize) -> bool) -> 
         state.claim(&s.real.claim).unwrap().phase
     );
     s
+}
+
+/// A real signed legacy job has no worker retention consent. Its truthful trace
+/// is insufficient to attach it to EXEC; the worker must sign the v2 job instead.
+#[tokio::test]
+async fn x8_g14_a_signed_legacy_job_cannot_attach_without_worker_retention_terms_on_the_real_node() {
+    let mut cw = active_world().await;
+    let s = opened(
+        &mut cw,
+        false,
+        |_| false,
+        |cw, real, decl| {
+            let range = palw_work_plan_range_v2(&decl.boundaries, 0).unwrap();
+            vec![(
+                EXECUTORS[0],
+                KernelJobV1 {
+                    class_binding_id: cw.kernel_class,
+                    prompt: real.stream(),
+                    max_new_tokens: RUN,
+                    decode: DecodeRuleV1::Greedy,
+                    nonce: palw_exec_v2_slice_job_nonce_v1(&slice_key(cw, real, decl, 0, range)).as_bytes(),
+                },
+            )]
+        },
+    )
+    .await;
+    let native = s.real.claim;
+    let legacy = &s.extras[0];
+    let before = cw.net.chain.tip_state().1;
+    let before_row = cw.net.ledger().claims[&legacy.claim.id].clone();
+    for executor in EXECUTORS {
+        assert_eq!(before.reserved_exposure(&cw.net.bond(executor)), 0, "a signed root declaration cannot commit another worker");
+    }
+    assert!(
+        cw.net
+            .chain
+            .vp()
+            .palw_exec_v2_slice_statement_v1_impl(native, 0, Hash64::from_bytes(legacy.claim.id), cw.net.bond(legacy.claim.producer))
+            .unwrap_err()
+            .contains("job nonce")
+    );
+    let statement = untrusted_slice_statement(&cw, native, 0, legacy);
+    let (_, _, anchor) = carry_slice_statement_raw(&mut cw, statement, legacy.claim.producer).await;
+    let after = cw.net.chain.tip_state().1;
+    assert_eq!(after.exec_v2_root_v1(&native).unwrap().next_index, 0);
+    assert!(after.exec_v2_slice_v1(&native, 0).is_none());
+    let after_row = &cw.net.ledger().claims[&legacy.claim.id];
+    assert_eq!(after_row.liability_until, before_row.liability_until);
+    assert_eq!(after_row.reserved, before_row.reserved);
+    assert_eq!(after.exec_v2_reward_vesting_v1(&native), before.exec_v2_reward_vesting_v1(&native));
+    let read = cw.net.chain.ctx.consensus.palw_exec_v2_observation_v1(vec![native], Some(anchor)).unwrap();
+    assert!(read.block.as_ref().unwrap().verdicts.iter().any(|v| v.code == 26));
+    let root = &read.roots[0];
+    let terms = root.retention_terms.expect("the actual network terms are public before a worker signs");
+    let expected = palw_exec_v2_retention_terms_v1(
+        after.exec_v2_root_v1(&native).unwrap().expiry_daa,
+        after.exec_v2_root_v1(&native).unwrap().executor_exposure,
+        cw.net.bundle.state.window_court(),
+        &cw.net.ledger().policy,
+    )
+    .unwrap();
+    assert_eq!(terms, expected);
+    assert_eq!(root.next_job_nonce.as_deref(), Some(Hash64::from_bytes(s.slices[0].job.nonce).to_string().as_str()));
+    let json: serde_json::Value = serde_json::from_str(&read.to_json()).unwrap();
+    assert_eq!(json["roots"][0]["retentionTerms"]["liabilityUntil"], terms.liability_until);
+    assert_eq!(json["roots"][0]["nextJobNonce"], Hash64::from_bytes(s.slices[0].job.nonce).to_string());
+    assert_eq!(json["roots"][0]["retentionTerms"]["executorExposureSompi"], terms.executor_exposure_sompi.to_string());
+    carry_slice(&mut cw, native, 0, &s.slices[0].claim).await;
+    let consenting = cw.net.chain.tip_state().1;
+    assert_eq!(consenting.exec_v2_root_v1(&native).unwrap().next_index, 1);
+    assert_eq!(consenting.reserved_exposure(&cw.net.bond(EXECUTORS[0])), terms.executor_exposure_sompi);
+    assert_eq!(consenting.reserved_exposure(&cw.net.bond(EXECUTORS[1])), 0);
 }
 
 /// **(a) G14 on a slice**: the executor of slice 1 commits a kernel claim whose trace lies (one MatMul value). An outsider — a fresh
@@ -758,7 +853,7 @@ async fn x8_g14_a_withheld_slice_is_demanded_by_an_outsider_and_defaults_its_suf
         |_| false,
         |cw, real, decl| {
             let range = palw_work_plan_range_v2(&decl.boundaries, 1).expect("slice 1");
-            let nonce = palw_exec_v2_slice_job_nonce_v1(&slice_key(cw, real, decl, 1, range));
+            let nonce = worker_nonce(cw, real, decl, 1, range);
             vec![(
                 EXECUTORS[1],
                 KernelJobV1 {
@@ -860,7 +955,7 @@ async fn x8_g14_a_signed_tiny_run_is_refused_as_a_larger_work_cell_on_the_real_n
                     prompt: real.stream(),
                     max_new_tokens: RUN - 1,
                     decode: DecodeRuleV1::Greedy,
-                    nonce: palw_exec_v2_slice_job_nonce_v1(&slice_key(cw, real, decl, 0, range)).as_bytes(),
+                    nonce: worker_nonce(cw, real, decl, 0, range).as_bytes(),
                 },
             )]
         },
@@ -916,9 +1011,11 @@ async fn x8_g14_a_lying_real_run_is_convicted_through_its_prefix_claim_and_voids
     let (prefix, slices, _) = kernel_claims(&mut cw, &real, &draft, true, |_| false, Vec::new()).await;
     let prefix_id = Hash64::from_bytes(prefix.claim.id);
     // A boundary the root bond chose — the prompt without the run — is not the REAL output: the fold drops it.
-    let wrong = declaration(&cw, &real, prefix_id, palw_exec_v2_token_state_root_v1(&[&real.prompt]));
+    let mut wrong = declaration(&cw, &real, prefix_id, palw_exec_v2_token_state_root_v1(&[&real.prompt]));
+    wrong.expiry_daa = draft.expiry_daa;
     assert!(send_root(&mut cw, wrong).await.is_none(), "a wrong initial boundary opens nothing");
-    let linked = declaration(&cw, &real, prefix_id, initial);
+    let mut linked = declaration(&cw, &real, prefix_id, initial);
+    linked.expiry_daa = draft.expiry_daa;
     let root = send_root(&mut cw, linked).await.expect("the linked boundary opens");
     assert_eq!(root.prefix, PalwWorkPrefixStageV2::Pending);
     let mut lane = Vec::new();

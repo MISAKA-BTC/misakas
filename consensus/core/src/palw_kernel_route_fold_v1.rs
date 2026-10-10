@@ -390,12 +390,9 @@ pub(super) fn exec_liability_floor_v1(
     native_window: u64,
     policy: &misaka_palw_kernel::ledger::LedgerPolicyV1,
 ) -> Result<u64, PalwStateV2Error> {
-    expiry
-        .checked_add(native_window.max(policy.liability_daa))
-        .and_then(|until| until.checked_add(policy.court_deadline_daa))
-        .and_then(|until| until.checked_add(policy.proof_grace_daa))
-        .filter(|until| *until < u64::MAX)
-        .ok_or_else(|| refused("EXEC liability horizon overflows"))
+    crate::palw_exec_v2_verify::palw_exec_v2_retention_terms_v1(expiry, 0, native_window, policy)
+        .map(|terms| terms.liability_until)
+        .map_err(refused)
 }
 
 /// A transfer changes who owes material, not the term signed by its providers.

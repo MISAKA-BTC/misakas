@@ -329,12 +329,44 @@ fn a_root_opens_on_an_accepted_claim_and_earns_nothing() {
     assert_eq!((s1.safe_weight, s1.bounded_immature), weight, "no weight");
     assert_eq!(s1.pending_payouts_iter().count(), payouts, "no payout");
     assert_eq!(s1.claim(&claim).unwrap().phase, s0.claim(&claim).unwrap().phase, "the claim is untouched");
-    // The extra executors stand behind the root: the claim's own reservation, in the one committed ledger.
+    // Listing a worker cannot reserve its collateral; its first signed slice is the consent.
     let reserved = s0.claim(&claim).unwrap().reserved;
     assert!(reserved > 0);
     assert_eq!(root.executor_exposure, reserved);
-    assert_eq!(s1.reserved_exposure(&bond_key(20)), exposure_20 + reserved);
-    assert_eq!(s1.reserved_exposure(&bond_key(21)), exposure_20 + reserved);
+    assert_eq!(s1.reserved_exposure(&bond_key(20)), exposure_20);
+    assert_eq!(s1.reserved_exposure(&bond_key(21)), s0.reserved_exposure(&bond_key(21)));
+}
+
+#[test]
+fn a_listed_executor_reserves_nothing_until_its_first_signed_slice_and_is_reserved_once() {
+    let (p, mut initial, claim) = world(Some(0));
+    let collateral = initial.bonds[&bond_key(20)].collateral;
+    initial.bonds.get_mut(&bond_key(20)).unwrap().collateral = 1;
+    let s = open(&p, &initial, decl(claim)).expect("an allow-list cannot bind another worker's collateral");
+    let exposure = s.exec_v2_root_v1(&claim).unwrap().executor_exposure;
+    assert!(exposure > 1);
+    assert_eq!(s.reserved_exposure(&bond_key(20)), 0);
+    assert_eq!(s.reserved_exposure(&bond_key(21)), 0);
+    let slice = slice_of(&s, claim, 0, bond_key(20));
+    assert_eq!(s.exec_v2_admit_slice_v1(&p, 120, &slice, 0), Err(PalwSliceRefusalV2::ExecutorUnfunded));
+    let (refused, delta) = step_with(&s, &p, 50, 120, &[], &xx_slices(vec![slice.clone()])).unwrap();
+    assert!(delta.entries.iter().any(|entry| matches!(entry, PalwDeltaEntryV2::ExecV2Verdict { code: 32, .. })));
+    assert_eq!(refused.exec_v2_root_v1(&claim).unwrap().next_index, 0);
+    assert_eq!(refused.reserved_exposure(&bond_key(20)), 0);
+    assert!(refused.pending_payouts_iter().next().is_none());
+    let mut funded = refused;
+    funded.bonds.get_mut(&bond_key(20)).unwrap().collateral = collateral;
+    let first = fold_slices(&p, &funded, 51, 121, vec![slice]);
+    assert_eq!(first.reserved_exposure(&bond_key(20)), exposure);
+    assert_eq!(first.reserved_exposure(&bond_key(21)), 0, "unused workers hold nothing");
+    let second = fold_slices(&p, &first, 52, 122, vec![slice_of(&first, claim, 1, bond_key(21))]);
+    let third = fold_slices(&p, &second, 53, 123, vec![slice_of(&second, claim, 2, bond_key(20))]);
+    assert_eq!(third.reserved_exposure(&bond_key(20)), exposure, "a second signed slice does not reserve twice");
+    assert_eq!(third.reserved_exposure(&bond_key(21)), exposure);
+    let (expired, _) = step(&third, &p, 60, third.exec_v2_root_v1(&claim).unwrap().expiry_daa, &[]).unwrap();
+    assert_eq!(expired.reserved_exposure(&bond_key(20)), 0);
+    assert_eq!(expired.reserved_exposure(&bond_key(21)), 0);
+    assert!(expired.pending_payouts_iter().next().is_none());
 }
 
 #[test]
@@ -845,7 +877,8 @@ fn an_unfinished_session_voids_its_claim_uncharged_at_its_expiry() {
     let s = fold_slices(&p, &s, 50, 120, vec![slice_of(&s, claim, 0, bond_key(20))]);
     let collateral: Vec<(PalwBondKeyV2, u64)> = s.bonds.iter().map(|(k, b)| (*k, b.collateral)).collect();
     let (a, b) = (bond_key(20), bond_key(21));
-    assert!(s.reserved_exposure(&a) > 0 && s.reserved_exposure(&b) > 0);
+    assert!(s.reserved_exposure(&a) > 0);
+    assert_eq!(s.reserved_exposure(&b), 0, "a listed worker who signed no slice was never reserved");
     // Before the expiry nothing happens (the claim waits); at it, the claim voids.
     let waiting = step(&s, &p, 70, 4_999, &[]).unwrap().0;
     assert!(!waiting.claim(&claim).unwrap().phase.is_terminal(), "a session within its expiry holds the claim, not voids it");
@@ -1013,7 +1046,7 @@ fn a_corrupted_ledger_is_caught_by_the_consistency_check() {
         x.reserved_exposure.insert(bond_key(20), 1);
     });
     corrupt(&|x| {
-        x.reserved_exposure.remove(&bond_key(21));
+        x.reserved_exposure.remove(&bond_key(20));
     });
 }
 
@@ -1212,8 +1245,8 @@ mod amendment_1 {
     use super::*;
     use crate::palw_attempt_rules_v1::palw_attempt_output_root_v1;
     use crate::palw_exec_v2_verify::{
-        palw_exec_v2_kernel_key_v1, palw_exec_v2_prefix_job_nonce_v1, palw_exec_v2_real_job_v1, palw_exec_v2_slice_job_nonce_v1,
-        palw_exec_v2_token_state_root_v1,
+        palw_exec_v2_kernel_key_v1, palw_exec_v2_prefix_job_nonce_v1, palw_exec_v2_real_job_v1, palw_exec_v2_retention_terms_v1,
+        palw_exec_v2_slice_job_nonce_v2, palw_exec_v2_token_state_root_v1,
     };
     use crate::palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1, palw_kernel_route_policy_v1};
     use crate::palw_onboarding_v1::{KernelBindingRowV1, PALW_ONBOARDING_TABLE_KERNEL_BINDINGS_V1};
@@ -1379,6 +1412,7 @@ mod amendment_1 {
 
     impl KernelSlice {
         fn new(
+            p: &PalwStateParamsV2,
             s: &PalwChainStateV2,
             root: Hash64,
             index: u32,
@@ -1388,12 +1422,19 @@ mod amendment_1 {
             reserved: u64,
         ) -> Self {
             let mut covered = slice_of(s, root, index, executor);
+            let terms = palw_exec_v2_retention_terms_v1(
+                s.exec_v2_root_v1(&root).unwrap().expiry_daa,
+                s.exec_v2_root_v1(&root).unwrap().executor_exposure,
+                p.window_court(),
+                &s.kernel_route.as_ref().unwrap().header.policy,
+            )
+            .unwrap();
             let job = KernelJobV1 {
                 class_binding_id: digest(h64(KERNEL_CLASS)),
                 prompt: prompt.to_vec(),
                 max_new_tokens: generated.len() as u32,
                 decode: DecodeRuleV1::Greedy,
-                nonce: digest(palw_exec_v2_slice_job_nonce_v1(&covered.slice)),
+                nonce: digest(palw_exec_v2_slice_job_nonce_v2(&covered.slice, &terms)),
             };
             let kernel_bond = palw_kernel_bond_id_v1(&executor);
             let (evidence, commitments) = provider_material_fixture(generated.len(), 0xE0 + index as u64);
@@ -1550,7 +1591,7 @@ mod amendment_1 {
         let executors = [bond_key(20), bond_key(21), bond_key(20)];
         let mut slices = Vec::new();
         for (i, executor) in executors.iter().enumerate() {
-            let k = KernelSlice::new(&s, claim, i as u32, *executor, &prompt_of(&pre.stream, i), &RUNS[i], reserved);
+            let k = KernelSlice::new(&p, &s, claim, i as u32, *executor, &prompt_of(&pre.stream, i), &RUNS[i], reserved);
             k.install(&mut s);
             slices.push(k);
         }
@@ -1566,20 +1607,141 @@ mod amendment_1 {
     }
 
     #[test]
+    fn exec_slice_signed_for_one_retention_term_cannot_attach_to_a_longer_fork() {
+        let (p, original, native, slices, _) = session_with(1_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
+        let old = &slices[0];
+        let (_, mut fork, same_native) = world_with(p.clone());
+        assert_eq!(native, same_native);
+        with_route(&mut fork, native, Some(PLAN));
+        let pre = Prefix::new(&mut fork, native, ClaimStateV1::Final { final_daa: 105 }, false);
+        let mut declaration = pre.decl(native);
+        declaration.expiry_daa = original.exec_v2_root_v1(&native).unwrap().expiry_daa + 1;
+        let mut fork = open(&p, &fork, declaration).unwrap();
+        old.install(&mut fork);
+        let job_before = fork.kernel_route.as_ref().unwrap().rows.clone();
+        assert_eq!(
+            fork.exec_v2_admit_slice_v1(&p, 120, &old.covered, 0),
+            Err(PalwSliceRefusalV2::VerificationClaimNotBound("job nonce"))
+        );
+        assert!(
+            crate::palw_exec_v2_verify::palw_exec_v2_slice_statement_v1(
+                &fork,
+                &p,
+                native,
+                0,
+                old.claim_id,
+                old.covered.slice.executor_bond
+            )
+            .unwrap_err()
+            .contains("job nonce")
+        );
+        let refused = fold_slices(&p, &fork, 50, 120, vec![old.covered.clone()]);
+        assert_eq!(refused.exec_v2_root_v1(&native).unwrap().next_index, 0);
+        assert_eq!(refused.kernel_route.as_ref().unwrap().rows, job_before, "refusal extends no reservation or fee hold");
+        let new = KernelSlice::new(&p, &refused, native, 0, old.covered.slice.executor_bond, &old.job.prompt, &RUNS[0], 1_000);
+        assert_ne!(new.job.id(), old.job.id());
+        assert_ne!(new.claim_id, old.claim_id, "the worker must sign a new kernel claim");
+        let mut renewed = refused;
+        new.install(&mut renewed);
+        let admitted = fold_slices(&p, &renewed, 51, 121, vec![new.covered.clone()]);
+        assert_eq!(admitted.exec_v2_root_v1(&native).unwrap().next_index, 1);
+        assert!(admitted.pending_payouts_iter().next().is_none());
+        let prepared = crate::palw_exec_v2_verify::palw_exec_v2_slice_job_nonce_at_root_v2(&fork, &p, &native, 0).unwrap();
+        assert_eq!(new.job.nonce, prepared.as_bytes());
+        let mut stale = admitted.clone();
+        // A different native window changes the policy commitment as well as the horizon;
+        // a carried old job is not consent to a new network policy on restoration.
+        stale.kernel_route.as_mut().unwrap().header.policy.claim_reward += 1;
+        assert!(stale.assert_exec_v2_consistency_v1(&p).unwrap_err().to_string().contains("did not authorize its retention terms"));
+        assert!(PalwStateCarriageV2::from_state(&stale).into_state(&p, None).is_err());
+    }
+
+    #[test]
+    fn exec_worker_preflight_preserves_a_second_clock_lock_until_the_actual_depth_is_known() {
+        use crate::palw_exec_v2_verify::{palw_exec_v2_slice_statement_at_depth_v2, palw_exec_v2_slice_statement_v1};
+        let (p, mut s, native, slices) = session(1_000);
+        let worker = slices[0].covered.slice.executor_bond;
+        let now = s.last_point().unwrap().daa_score;
+        let previous = h64(0xC10C);
+        // An old native lock has spent its DAA term but not its settlement count.
+        // This read-only fixture isolates the gate; no root/slice consent exists yet.
+        s.slashable_locks.insert(
+            (worker, previous),
+            crate::palw_panel_var_v1::PalwSlashableLockV1 {
+                claim: previous,
+                amount: u128::from(s.bonds[&worker].collateral),
+                expiry_daa: now - 1,
+                settled_at_final: 0,
+                attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                segments: 0,
+            },
+        );
+        s.settled_attempt_finals = 1;
+        s.recent_anchor_daas = vec![now];
+        assert_eq!(s.reserved_exposure(&worker), 0);
+        assert_eq!(
+            s.exec_v2_admit_slice_at_depth_v2(&p, now, &slices[0].covered, 0, Some(5)),
+            Err(PalwSliceRefusalV2::ExecutorUnfunded)
+        );
+        assert!(
+            palw_exec_v2_slice_statement_at_depth_v2(&s, &p, native, 0, slices[0].claim_id, worker, Some(5))
+                .unwrap_err()
+                .contains("lacks Work room")
+        );
+        assert!(
+            palw_exec_v2_slice_statement_v1(&s, &p, native, 0, slices[0].claim_id, worker).unwrap_err().contains("lacks Work room")
+        );
+        assert!(
+            s.exec_v2_admit_slice_at_depth_v2(&p, now, &slices[0].covered, 0, None).is_ok(),
+            "known DAA-only clock releases the old lock"
+        );
+        assert_eq!(
+            palw_exec_v2_slice_statement_at_depth_v2(&s, &p, native, 0, slices[0].claim_id, worker, None).unwrap(),
+            slices[0].covered.slice
+        );
+        assert_eq!(s.exec_v2_root_v1(&native).unwrap().next_index, 0, "preflight writes no consent or exposure");
+        assert_eq!(s.reserved_exposure(&worker), 0);
+    }
+
+    #[test]
+    fn exec_retention_read_exposes_the_actual_worker_nonce_and_never_invents_missing_terms() {
+        use crate::palw_exec_v2_verify::{palw_exec_v2_observation_v1, palw_exec_v2_observation_with_retention_v2};
+        let (p, s, native, slices, _) = session_with(1_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
+        let read = palw_exec_v2_observation_with_retention_v2(&s, Some(0), h64(1), 110, &[native], None, None, Some(p.window_court()));
+        let terms = read.roots[0].retention_terms.unwrap();
+        assert_eq!(terms.expiry_daa, s.exec_v2_root_v1(&native).unwrap().expiry_daa);
+        assert_eq!(read.roots[0].next_job_nonce.as_deref(), Some(Hash64::from_bytes(slices[0].job.nonce).to_string().as_str()));
+        let json: serde_json::Value = serde_json::from_str(&read.to_json()).unwrap();
+        assert_eq!(json["roots"][0]["retentionTerms"]["liabilityUntil"], terms.liability_until);
+        assert_eq!(json["roots"][0]["retentionTerms"]["policyRoot"], terms.policy_root.to_string());
+        assert_eq!(json["roots"][0]["retentionTerms"]["executorExposureSompi"], terms.executor_exposure_sompi.to_string());
+        let unknown = palw_exec_v2_observation_v1(&s, Some(0), h64(1), 110, &[native], None, None);
+        assert!(unknown.roots[0].retention_terms.is_none());
+        assert!(unknown.roots[0].next_job_nonce.is_none());
+    }
+
+    #[test]
     fn a_self_consistent_tiny_kernel_run_cannot_claim_a_larger_ir_execution_cell() {
         let (p, mut s, claim, honest) = session(1_000);
-        let tiny = KernelSlice::new(&s, claim, 0, honest[0].covered.slice.executor_bond, &honest[0].job.prompt, &[1], 1_000);
+        let tiny = KernelSlice::new(&p, &s, claim, 0, honest[0].covered.slice.executor_bond, &honest[0].job.prompt, &[1], 1_000);
         tiny.install(&mut s);
         let binding = s.kernel_route.as_ref().unwrap().kernel_binding_v1(&tiny.covered.slice.class_id).unwrap();
         // The old token/nonce/class/evidence binding accepts this self-consistent statement.
         // Its committed run is shorter than the root's registered two-token cell.
-        crate::palw_exec_v2_verify::palw_exec_v2_verification_binding_v1(
+        crate::palw_exec_v2_verify::palw_exec_v2_verification_binding_v2(
             &tiny.covered.slice,
             &binding,
             &tiny.row,
             Some(&tiny.job),
             &palw_kernel_bond_id_v1(&tiny.covered.slice.executor_bond),
             120,
+            &palw_exec_v2_retention_terms_v1(
+                s.exec_v2_root_v1(&claim).unwrap().expiry_daa,
+                s.exec_v2_root_v1(&claim).unwrap().executor_exposure,
+                p.window_court(),
+                &s.kernel_route.as_ref().unwrap().header.policy,
+            )
+            .unwrap(),
         )
         .unwrap();
         let before = s.state_root();
@@ -2968,10 +3130,12 @@ mod amendment_1 {
         fund_jobs(&mut s, &pre, &slices, 1_000);
         let own = bond_key(20);
         let collateral = s.bonds[&own].collateral;
-        let (s, _) = aggregate_exec_actor(&s, &p, own, 110, O::Contradiction { tag: 9 });
-        assert_eq!(s.bond_freezes[&own].forfeited_sompi, collateral);
         let s = license(&p, &s, claim, 45, 111);
         let s = carry_all(&p, &s, &slices);
+        // Work was signed/admitted before the freeze. A previously unconsenting
+        // worker cannot create a first Work reservation after full confiscation.
+        let (s, _) = aggregate_exec_actor(&s, &p, own, 121, O::Contradiction { tag: 9 });
+        assert_eq!(s.bond_freezes[&own].forfeited_sompi, collateral);
         let s = kernel_block(&p, &s, 60, 130, slices.iter().map(|k| k.write(ClaimStateV1::Final { final_daa: 130 }, false)).collect());
         let (s, delta) = run_to_terminal_with_delta(&p, s, claim, 70, 131);
         assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Settled { .. }));
@@ -3373,6 +3537,7 @@ mod amendment_1 {
             VerificationAlreadyPaid,
             VerificationRewardBound,
             VerificationProviderHorizon,
+            ExecutorUnfunded,
         ];
         let codes: std::collections::BTreeSet<u8> = all.iter().map(|r| r.code()).collect();
         assert_eq!(codes.len(), all.len());
@@ -3380,6 +3545,8 @@ mod amendment_1 {
         for r in &all {
             assert_ne!(PalwSliceRefusalV2::name_of_code(r.code()), "unknown", "{r:?}");
         }
+        assert_eq!(ExecutorUnfunded.code(), 32);
+        assert_eq!(PalwSliceRefusalV2::name_of_code(32), "executor_unfunded");
         assert_eq!(VerificationProviderHorizon.code(), 31);
         assert_eq!(PalwSliceRefusalV2::name_of_code(31), "verification_provider_horizon");
     }

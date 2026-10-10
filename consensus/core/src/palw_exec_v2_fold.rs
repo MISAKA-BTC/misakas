@@ -28,15 +28,15 @@ use super::*;
 use crate::palw_exec_v2::PalwWorkRangeV1;
 use crate::palw_exec_v2_verify::{
     PalwExecV2PrefixInputsV1, PalwSliceVerificationV1, palw_exec_v2_claim_outcome_v1, palw_exec_v2_kernel_key_v1,
-    palw_exec_v2_leg_cap_v1, palw_exec_v2_prefix_binding_v1, palw_exec_v2_real_job_v1, palw_exec_v2_route_reward_v1,
-    palw_exec_v2_verification_binding_v1,
+    palw_exec_v2_leg_cap_v1, palw_exec_v2_prefix_binding_v1, palw_exec_v2_real_job_v1, palw_exec_v2_retention_terms_v1,
+    palw_exec_v2_root_slice_job_nonce_v2, palw_exec_v2_route_reward_v1, palw_exec_v2_verification_binding_v2,
 };
 use crate::palw_work_slice_v2::{
-    PALW_EXEC_V2_MAX_OPEN_ROOTS, PALW_EXEC_V2_MAX_OPEN_ROOTS_PER_BOND, PALW_EXEC_V2_MAX_PENDING_DEPTH,
-    PALW_EXEC_V2_MAX_PENDING_PER_BOND, PALW_EXEC_V2_MAX_ROOT_LIFETIME_DAA, PALW_EXEC_V2_MAX_SLICES_PER_BLOCK,
-    PalwExecV2CoveredSliceV1, PalwExecV2StateV1, PalwSliceAdmissionV2, PalwSliceRefusalV2, PalwWorkPrefixStageV2,
-    PalwWorkRootDeclarationV2, PalwWorkRootPhaseV2, PalwWorkRootRefusalV2, PalwWorkRootV2, PalwWorkSliceRowV2, PalwWorkSliceStageV2,
-    palw_work_plan_range_v2, settle_root_v2,
+    PALW_EXEC_V2_MAX_EXTRA_EXECUTORS, PALW_EXEC_V2_MAX_OPEN_ROOTS, PALW_EXEC_V2_MAX_OPEN_ROOTS_PER_BOND,
+    PALW_EXEC_V2_MAX_PENDING_DEPTH, PALW_EXEC_V2_MAX_PENDING_PER_BOND, PALW_EXEC_V2_MAX_ROOT_LIFETIME_DAA,
+    PALW_EXEC_V2_MAX_SLICES_PER_BLOCK, PalwExecV2CoveredSliceV1, PalwExecV2StateV1, PalwSliceAdmissionV2, PalwSliceRefusalV2,
+    PalwWorkPrefixStageV2, PalwWorkRootDeclarationV2, PalwWorkRootPhaseV2, PalwWorkRootRefusalV2, PalwWorkRootV2, PalwWorkSliceRowV2,
+    PalwWorkSliceStageV2, palw_work_plan_range_v2, settle_root_v2,
 };
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
@@ -157,14 +157,27 @@ impl PalwChainStateV2 {
         })
     }
 
-    /// **The exposure the live roots hold on their extra executors' bonds**, re-derived from the rows — what the consistency check
-    /// adds to the claims' own commitments so `reserved_exposure` is still exactly the sum of its sources.
+    /// An allow-list is not the listed workers' consent. An extra executor becomes
+    /// a participant only through an accepted slice carrying its own signature.
+    fn exec_v2_participants_v1(&self, id: &Hash64, root: &PalwWorkRootV2) -> BTreeSet<PalwBondKeyV2> {
+        self.exec_v2
+            .slices
+            .range((*id, 0)..=(*id, u32::MAX))
+            .map(|(_, row)| row.executor)
+            .filter(|bond| root.extra_executors.binary_search(bond).is_ok())
+            .collect()
+    }
+
+    /// Exactly one reservation per consenting participant of each live root.
+    /// Slice rows are also the authoritative consent record on replay/restoration.
     pub(super) fn exec_v2_exposure_rows(&self) -> impl Iterator<Item = (PalwBondKeyV2, u128)> + '_ {
         self.exec_v2
             .roots
-            .values()
-            .filter(|root| matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete))
-            .flat_map(|root| root.extra_executors.iter().map(move |bond| (*bond, root.executor_exposure)))
+            .iter()
+            .filter(|(_, root)| matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete))
+            .flat_map(move |(id, root)| {
+                self.exec_v2_participants_v1(id, root).into_iter().map(move |bond| (bond, root.executor_exposure))
+            })
     }
 
     /// **The six admission rules, in the spec's order, against THIS state** (§3). Pure: it reads and returns; a refusal names the
@@ -176,6 +189,21 @@ impl PalwChainStateV2 {
         daa_score: u64,
         covered: &PalwExecV2CoveredSliceV1,
         folded_in_block: usize,
+    ) -> Result<PalwSliceAdmissionV2, PalwSliceRefusalV2> {
+        // With no receipt of the required second-clock depth, use its conservative
+        // upper bound. The canonical fold always supplies its actual depth/None.
+        self.exec_v2_admit_slice_at_depth_v2(params, daa_score, covered, folded_in_block, Some(u64::MAX))
+    }
+
+    /// Canonical fold admission uses its own raw second-clock depth, matching the
+    /// other Work gates. Public preflight may pass the authenticated tip's depth.
+    pub fn exec_v2_admit_slice_at_depth_v2(
+        &self,
+        params: &PalwStateParamsV2,
+        daa_score: u64,
+        covered: &PalwExecV2CoveredSliceV1,
+        folded_in_block: usize,
+        raw_depth: Option<u64>,
     ) -> Result<PalwSliceAdmissionV2, PalwSliceRefusalV2> {
         use PalwSliceRefusalV2 as R;
         if !params.exec_v2_active_at(daa_score) {
@@ -277,13 +305,21 @@ impl PalwChainStateV2 {
                     .rows
                     .get(&(misaka_palw_kernel::rows::TABLE_JOBS_V1, borsh::to_vec(&row.job_id).expect("a digest serializes")))
                     .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::job::KernelJobV1>(bytes).ok());
-                palw_exec_v2_verification_binding_v1(
+                let terms = palw_exec_v2_retention_terms_v1(
+                    root.expiry_daa,
+                    root.executor_exposure,
+                    params.window_court(),
+                    &kernel.header.policy,
+                )
+                .map_err(|_| R::Overflow)?;
+                palw_exec_v2_verification_binding_v2(
                     slice,
                     &binding,
                     &row,
                     job.as_ref(),
                     &crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&slice.executor_bond),
                     daa_score,
+                    &terms,
                 )?;
                 self.exec_v2_check_kernel_work_v1(
                     params,
@@ -293,14 +329,14 @@ impl PalwChainStateV2 {
                     job.as_ref().ok_or(R::ExecutionScopeMismatch)?,
                 )
                 .map_err(|_| R::ExecutionScopeMismatch)?;
-                let until = super::palw_kernel_route_fold_v1::exec_liability_floor_v1(
-                    root.expiry_daa,
-                    params.window_court(),
-                    &kernel.header.policy,
+                super::palw_kernel_route_fold_v1::require_exec_provider_horizon_v1(
+                    self,
+                    &slice.evidence_root,
+                    &row,
+                    daa_score,
+                    terms.liability_until,
                 )
-                .map_err(|_| R::Overflow)?;
-                super::palw_kernel_route_fold_v1::require_exec_provider_horizon_v1(self, &slice.evidence_root, &row, daa_score, until)
-                    .map_err(|_| R::VerificationProviderHorizon)?;
+                .map_err(|_| R::VerificationProviderHorizon)?;
                 match dependency_outcome(self, &slice.evidence_root, &row, daa_score) {
                     PalwSliceVerificationV1::Verified { final_daa } => Some((
                         final_daa,
@@ -321,6 +357,13 @@ impl PalwChainStateV2 {
         }
         if folded_in_block >= PALW_EXEC_V2_MAX_SLICES_PER_BLOCK {
             return Err(R::BlockQuota);
+        }
+        if slice.executor_bond != root.root_bond
+            && !self.exec_v2_participants_v1(&slice.root_claim_id, root).contains(&slice.executor_bond)
+            && palw_rcore_gate_room_v1(self, params, &slice.executor_bond, daa_score, raw_depth, PalwRcoreGateV1::Work)
+                < root.executor_exposure
+        {
+            return Err(R::ExecutorUnfunded);
         }
         let work = planned.work().ok_or(R::Overflow)?;
         Ok(PalwSliceAdmissionV2 {
@@ -404,6 +447,17 @@ impl PalwChainStateV2 {
                 }
             }
             let claim = self.claims.get(claim_id).ok_or_else(|| bad(format!("root {claim_id} outlives its claim")))?;
+            if root.extra_executors.len() > PALW_EXEC_V2_MAX_EXTRA_EXECUTORS
+                || root.extra_executors.windows(2).any(|pair| pair[0] >= pair[1])
+                || root.extra_executors.contains(&root.root_bond)
+            {
+                return Err(bad(format!("root {claim_id}'s executor allow-list is not canonical")));
+            }
+            if matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete)
+                && root.executor_exposure != claim.reserved
+            {
+                return Err(bad(format!("root {claim_id}'s executor reservation differs from its native claim")));
+            }
             if claim.class_id != root.class_id
                 || claim.job_identity != root.canonical_job_id
                 || claim.bond != root.root_bond
@@ -450,6 +504,9 @@ impl PalwChainStateV2 {
             let mut verified = 0u64;
             let mut pending = 0u32;
             for (position, ((_, index), row)) in rows.iter().enumerate() {
+                if !root.authorises(&row.executor) {
+                    return Err(bad(format!("root {claim_id}'s slice {index} has an unauthorized executor")));
+                }
                 if *index as usize != position {
                     return Err(bad(format!("root {claim_id}'s slice rows skip an index")));
                 }
@@ -473,6 +530,18 @@ impl PalwChainStateV2 {
                             let misaka_palw_kernel::ledger::ClaimBodyV1::Program { claim, .. } = &kernel_claim.body else {
                                 return Err(bad(format!("root {claim_id}'s slice {index} is not a program claim")));
                             };
+                            let terms = palw_exec_v2_retention_terms_v1(
+                                root.expiry_daa,
+                                root.executor_exposure,
+                                params.window_court(),
+                                &kernel.header.policy,
+                            )
+                            .map_err(|why| bad(why.into()))?;
+                            let nonce =
+                                palw_exec_v2_root_slice_job_nonce_v2(claim_id, *index, root, &terms).map_err(|why| bad(why.into()))?;
+                            if job.nonce != nonce.as_bytes() {
+                                return Err(bad(format!("root {claim_id}'s slice {index} did not authorize its retention terms")));
+                            }
                             if job.max_new_tokens as usize != claim.generated.len()
                                 || plan.check_slice_job(*index as usize, job.prompt.len(), claim.generated.len()).is_err()
                             {
@@ -811,13 +880,14 @@ pub(super) fn apply_root_declared_v2(
     {
         return Err(no(R::RootQuota));
     }
-    // Extra executors: distinct from the root bond, active, and with room for the claim's reservation on their own collateral.
+    // This is the root owner's allow-list, not the listed workers' consent.
+    // Funding is checked only when each worker's first signed slice is accepted.
     for bond in &declaration.extra_executors {
         if *bond == claim.bond {
             return Err(no(R::ExecutorsNotCanonical));
         }
         let active = builder.state.bonds.get(bond).is_some_and(|record| matches!(record.status, PalwBondStatusV2::Active));
-        if !active || builder.gate_room(bond, daa, PalwRcoreGateV1::Work) < exposure {
+        if !active {
             return Err(no(R::ExecutorUnfunded));
         }
     }
@@ -830,11 +900,6 @@ pub(super) fn apply_root_declared_v2(
             declaration.expiry_daa,
             daa,
         )?;
-    }
-    for bond in &declaration.extra_executors {
-        let held = builder.state.reserved_exposure.get(bond).copied().unwrap_or(0);
-        let next = held.checked_add(exposure).ok_or(PalwStateV2Error::Overflow("exec v2 executor exposure"))?;
-        builder.write_exposure(*bond, Some(next));
     }
     builder.write_exec_job(job_work_id, Some(claim_id));
     builder.write_exec_root(
@@ -884,7 +949,13 @@ pub(super) fn apply_covered_slices_v2(
     let mut verdicts = Vec::with_capacity(covered.len());
     let mut folded = 0usize;
     for carrier in covered {
-        let verdict = match builder.state.exec_v2_admit_slice_v1(builder.params, ctx.daa_score, carrier, folded) {
+        let verdict = match builder.state.exec_v2_admit_slice_at_depth_v2(
+            builder.params,
+            ctx.daa_score,
+            carrier,
+            folded,
+            palw_settled_anchor_depth_v1(builder.extras),
+        ) {
             Ok(admission) => {
                 accept_slice_v2(builder, ctx, carrier, admission)?;
                 folded += 1;
@@ -921,6 +992,13 @@ fn accept_slice_v2(
             root.expiry_daa,
             ctx.daa_score,
         )?;
+    }
+    if slice.executor_bond != root.root_bond
+        && !builder.state.exec_v2_participants_v1(&slice.root_claim_id, &root).contains(&slice.executor_bond)
+    {
+        let held = builder.state.reserved_exposure.get(&slice.executor_bond).copied().unwrap_or(0);
+        let next = held.checked_add(root.executor_exposure).ok_or(PalwStateV2Error::Overflow("exec v2 executor exposure"))?;
+        builder.write_exposure(slice.executor_bond, Some(next));
     }
     builder.write_exec_slice(
         (slice.root_claim_id, slice.slice_index),
@@ -1077,19 +1155,23 @@ pub(super) fn settle_at_final_v2(
         }
     }
     settlement.slice_legs.retain(|(_, leg)| *leg > 0);
-    release_executor_exposure_v2(builder, &root)?;
+    release_executor_exposure_v2(builder, claim_id, &root)?;
     root.phase = PalwWorkRootPhaseV2::Settled { settled_daa: final_daa };
     builder.write_exec_root(*claim_id, Some(root));
     Ok((settlement.root_leg, settlement.slice_legs))
 }
 
-/// Return the exposure a root held on each extra executor's bond (exactly what the open took).
-fn release_executor_exposure_v2(builder: &mut TransitionBuilder<'_>, root: &PalwWorkRootV2) -> Result<(), PalwStateV2Error> {
-    for bond in &root.extra_executors {
-        let held = builder.state.reserved_exposure.get(bond).copied().unwrap_or(0);
+/// Return exactly one exposure for each worker who accepted a slice of this root.
+fn release_executor_exposure_v2(
+    builder: &mut TransitionBuilder<'_>,
+    id: &Hash64,
+    root: &PalwWorkRootV2,
+) -> Result<(), PalwStateV2Error> {
+    for bond in builder.state.exec_v2_participants_v1(id, root) {
+        let held = builder.state.reserved_exposure.get(&bond).copied().unwrap_or(0);
         let next =
             held.checked_sub(root.executor_exposure).ok_or(PalwStateV2Error::Overflow("exec v2 executor exposure underflow"))?;
-        builder.write_exposure(*bond, if next == 0 { None } else { Some(next) });
+        builder.write_exposure(bond, if next == 0 { None } else { Some(next) });
     }
     Ok(())
 }
@@ -1128,7 +1210,7 @@ pub(super) fn on_claim_voided_v2(
         builder.write_exec_slice(key, Some(row));
     }
     if matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
-        release_executor_exposure_v2(builder, &root)?;
+        release_executor_exposure_v2(builder, claim_id, &root)?;
     } else {
         super::palw_exec_v2_rewards_v1::burn(builder, *claim_id)?;
     }
@@ -1388,7 +1470,7 @@ pub(super) fn void_suffix_v2(
         builder.write_exec_slice((root_id, index), Some(row));
     }
     if !settled {
-        release_executor_exposure_v2(builder, &root)?;
+        release_executor_exposure_v2(builder, &root_id, &root)?;
     }
     let mut voided = root;
     voided.phase = PalwWorkRootPhaseV2::Voided { from_index, voided_daa: daa };
@@ -1435,7 +1517,7 @@ pub(super) fn void_prefix_v2(
         builder.write_exec_slice(key, Some(row));
     }
     if !settled {
-        release_executor_exposure_v2(builder, &root)?;
+        release_executor_exposure_v2(builder, &root_id, &root)?;
     }
     let mut voided = root;
     voided.prefix = cause;
