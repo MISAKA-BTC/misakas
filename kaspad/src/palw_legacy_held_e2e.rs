@@ -46,9 +46,10 @@ const SIG: [u8; 8] = [0x6B; 8];
 
 // ---- the fold: R-core+ in force, the fence test-armed -----------------------------------------------------------------------------
 
-/// R-core+ in force from DAA 104: the registry, the claim, the panel and the licence fold as T54g's (100–103), and every DA
-/// session, answer and court move after them under R-core+ — a fence crossing, not a mixed fold.
-const RCORE_FROM_DAA: u64 = 104;
+/// R-core+ in force from genesis, as on testnet-12.
+const RCORE_FROM_DAA: u64 = 0;
+/// A third colluding seat: R-core+'s licence needs the colluding quorum (three backed `Valid`s).
+const COLLUDER2: u64 = 7;
 
 fn rc_params() -> PalwStateParamsV2 {
     params().with_rcore_plus_mirrors(Some(RCORE_FROM_DAA), 0, Vec::new())
@@ -155,7 +156,8 @@ fn rc_licensed(
         bond: bond_key(n),
         pubkey: vec![n as u8; 4],
         operator_pubkey: op_key(20 + n),
-        collateral: 1_000_000_000,
+        // Deep enough that each seat's R-core+ lock fits its work room (the backed subset licenses).
+        collateral: 1_000_000_000_000_000,
         payout_payload: Hash64::from_u64_word(0x9A00 + n),
         capable_classes: Default::default(),
         signature: Vec::new(),
@@ -175,6 +177,7 @@ fn rc_licensed(
         bond(SEAT),
         bond(COLLUDER),
         bond(OUTSIDER),
+        bond(COLLUDER2),
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
             artifact_root,
@@ -219,17 +222,22 @@ fn rc_licensed(
     let seats = vec![
         PalwPanelSeatV2 { bond: bond_key(SEAT), operator_id: palw_operator_id_v2(&op_key(20 + SEAT)) },
         PalwPanelSeatV2 { bond: bond_key(COLLUDER), operator_id: palw_operator_id_v2(&op_key(20 + COLLUDER)) },
+        PalwPanelSeatV2 { bond: bond_key(COLLUDER2), operator_id: palw_operator_id_v2(&op_key(20 + COLLUDER2)) },
     ];
     let s = rc_step(&s, 102, &[PalwConsensusObjectV2::PanelBound { claim, anchor: h64(77), seats }]).expect("the panel");
     let valid = |seat: u64| PalwSeatReceiptV2 {
-        claim: Hash64::default(),
+        claim,
         verdict: PalwReceiptVerdictV2::Valid,
         seat_bond: bond_key(seat),
-        signed_daa: 0,
+        signed_daa: 103,
         signature: Vec::new(),
     };
-    let s = rc_step(&s, 103, &[PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: vec![valid(SEAT), valid(COLLUDER)] }])
-        .expect("both seats license the lie");
+    let s = rc_step(
+        &s,
+        103,
+        &[PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: vec![valid(SEAT), valid(COLLUDER), valid(COLLUDER2)] }],
+    )
+    .expect("both seats license the lie");
     assert!(
         matches!(phase_of(&s, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }),
         "licensed by every seat: {:?}",
