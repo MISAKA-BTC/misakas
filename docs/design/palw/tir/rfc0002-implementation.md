@@ -1304,3 +1304,36 @@ cargo test --locked -p kaspa-consensus --lib \
   --config 'profile.dev.package.kaspa-consensus.incremental=false' \
   --config 'profile.dev.package.kaspa-consensus-core.incremental=false' artifact_binding -- --nocapture
 ```
+
+## Descriptor-scoped model inventory foundation — 2026-10-11
+
+The v5 root producer excludes the last two job-input parameters, but old 104/105 judge every
+parameter in the legacy V2 class inventory. Feeding an honest model-only PC map into that
+old instance-set judge therefore reports a missing tensor. This was reproduced explicitly;
+the old statement is not silently reinterpreted to hide the mismatch.
+
+The new `PalwTirModelInventoryV2` borrows the complete structurally validated program and
+accepts exact current v4/v5 descriptors. It selects the prefix by the descriptor's defined
+role contract, rejects altered semantics even with the same memory-model field, and exposes
+only derived model instances, leaf count/index and row visits. No caller-selected prefix is
+public. Legacy layout functions use the same private piece/position logic with the full
+parameter set, preserving their byte/hash grammar. The pure v2 judge uses this scope for
+instances and opening positions; v1 remains all-parameter. New v2 byte comparisons require
+bounded v3 tiles. The SDK streams model-only roots and public openings with the same bounded
+piece buffer and Merkle-frontier algorithm as the historical inventory.
+
+Final verification: **22 distinct tests passed** (6 core inventory, 9 onboarding/court,
+6 streamed-root/opening regressions and 1 weighted fixture test covering both encoders).
+All final sessions exited successfully. Verification and source hashes are recorded in
+`evidence/rfc02-model-inventory-verdict.json`.
+The weighted BERT and XLM-R fixtures exercise lowering/materialisation, exactly matching the
+existing v5 PC producer, materialised reference roots, no job-input reads, honest no-fault,
+changed/missing/surplus model weights, copied-root/path rejection and early invalid-shape/
+descriptor rejection. The core schedule/piece regression checks all coordinates against the
+historical v4 inventory. These are mechanics tests, not full-size encoder/task support PASS.
+
+**Still required:** a new authenticated node statement binding descriptor/program/model root/
+PC root, its rooted collateral/reservation and maturity, shared admission/refutation budgets,
+matching candidate attestation and actual-node replay tests. No new object/table allocation or
+shipping activation is made by this foundation. The old v5-to-104 bridge is still unsuitable;
+full RFC02 remains open under the complete scope in §II.14.

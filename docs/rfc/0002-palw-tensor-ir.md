@@ -2492,3 +2492,37 @@ This identity court cannot substitute for stateful release conformance, full com
 verification, source fidelity, full task/context support or shipping activation. The v5
 bridge must still explicitly distinguish artifact parameters from its two job-input roles;
 v3 root preparation alone does not resolve that inventory contract.
+
+### 14.14 Descriptor-scoped model inventory and job-input roles
+
+A model artifact binding must authenticate **descriptor identity, complete canonical program,
+model inventory root and kernel parameter root together**. The challenger cannot choose the
+role contract. K2-TIR-v4 treats all declared params as artifact bytes. K2-TIR-v5 treats its
+validated trailing `input.ids` and `input.count` as job inputs, leaving the preceding params
+as model bytes. Identical tensor names under v4 do not grant the v5 exclusion. Unknown kernel
+semantics cannot copy a memory-model number to gain it; a new implemented descriptor needs
+its own explicit contract.
+
+The role scope retains the complete validated program, including its input references. It
+must not remove the last two declarations and validate a rewritten graph, read synthetic
+job placeholders from the model source, or count job inputs as missing model tensors.
+Inventory leaves retain the existing tensor-name/layer/byte-offset hash grammar and
+32 KiB piece limit. Their count and index are derived from the descriptor's model instances.
+The entire scope belongs to the authenticated statement, even when two scopes share a root.
+
+`PalwTirModelInventoryV2`, bounded streamed model roots/openings and the pure
+`verify_artifact_mismatch_v2` judge implement this role foundation for exact current v4/v5
+identities. The new judge accepts instance-set proofs and bounded v3 tiles; legacy whole-row
+proofs remain in the old judge. The BERT and XLM-R weight-bearing fixture trial tests honest
+no-fault, changed/missing/surplus model weights, copied source/kernel roots and rejection of
+unknown semantics. It proves mechanics at the fixture's scope, not a full checkpoint task.
+
+**Node integration remains required.** Historical `ArtifactBoundV1` (104) and its challenge
+(105) retain their all-parameter inventory and existing wire meaning. They cannot be converted
+into v5 statements using a later binding or names inferred from an untrusted proof. A new
+versioned, signed and rooted statement must persist the full scope, apply collateral and
+shared resource budgets, and expose only a matching matured attestation before a v5 candidate
+can pass through the ordinary node. The new pure APIs do not supply that statement, activate
+an encoder, establish release conformance, resolve opaque-root withholding, or prove RFC02
+completion. Large/stateful conformance, full-task public G14 and the other §II.14 requirements
+remain mandatory.

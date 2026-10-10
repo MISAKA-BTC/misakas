@@ -16,7 +16,8 @@ use kaspa_consensus_core::palw_artifact::{
     PalwArtifactMerkleFrontierV1, PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_parts_v1,
 };
 use kaspa_consensus_core::palw_tir_artifact_v1::{
-    PALW_TIR_ROW_PIECE_BYTES_V1, PalwTirInventoryRowV1, palw_tir_inventory_leaf_count_v1, palw_tir_visit_inventory_rows_v1,
+    PALW_TIR_ROW_PIECE_BYTES_V1, PalwTirInventoryRowV1, PalwTirModelInventoryV2, palw_tir_inventory_leaf_count_v1,
+    palw_tir_visit_inventory_rows_v1,
 };
 use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir_artifact::PalwTirContainerV1;
@@ -48,22 +49,40 @@ pub struct ArtifactTileCourtBundleV3 {
 /// **The inventory root and leaf count**, streamed. Equal to `palw_tir_inventory_root_v1` over the
 /// same tensors.
 pub fn palw_tir_inventory_root_streamed_v1(program: &TirProgramV1, src: &dyn PalwTirRangeSourceV1) -> Result<(Hash64, u32), String> {
-    let count = palw_tir_inventory_leaf_count_v1(program).map_err(|e| e.to_string())?;
+    inventory_root_streamed(Inventory::Legacy(program), src)
+}
+
+/// Stream only the model bytes selected by an exact descriptor-scoped inventory. Job-bound
+/// tensors need not exist in the range source. The root is meaningful only together with this
+/// descriptor/program scope; it does not replace a historical V2 registry artifact root.
+pub fn palw_tir_model_inventory_root_streamed_v2(
+    inventory: &PalwTirModelInventoryV2<'_>,
+    src: &dyn PalwTirRangeSourceV1,
+) -> Result<(Hash64, u32), String> {
+    inventory_root_streamed(Inventory::Model(inventory), src)
+}
+
+fn inventory_root_streamed(inventory: Inventory<'_>, src: &dyn PalwTirRangeSourceV1) -> Result<(Hash64, u32), String> {
+    let program = inventory.program();
+    let count = inventory.leaf_count()?;
     let mut frontier = PalwArtifactMerkleFrontierV1::new();
     let mut buf = vec![0u8; PALW_TIR_ROW_PIECE_BYTES_V1 as usize];
     let mut failure: Option<String> = None;
-    palw_tir_visit_inventory_rows_v1(program, &mut |row: PalwTirInventoryRowV1| {
-        if failure.is_some() {
-            return;
-        }
-        let bytes = &mut buf[..row.len as usize];
-        let at = row.row_start as u64;
-        match src.read_range(row.param, row.layer, at..at + row.len as u64, bytes) {
-            Ok(()) => frontier.push(artifact_leaf_parts_v1(&program.params[row.param as usize].name, row.layer, row.row_start, bytes)),
-            Err(e) => failure = Some(e),
-        }
-    })
-    .map_err(|e| e.to_string())?;
+    inventory
+        .visit_rows(&mut |row: PalwTirInventoryRowV1| {
+            if failure.is_some() {
+                return;
+            }
+            let bytes = &mut buf[..row.len as usize];
+            let at = row.row_start as u64;
+            match src.read_range(row.param, row.layer, at..at + row.len as u64, bytes) {
+                Ok(()) => {
+                    frontier.push(artifact_leaf_parts_v1(&program.params[row.param as usize].name, row.layer, row.row_start, bytes))
+                }
+                Err(e) => failure = Some(e),
+            }
+        })
+        .map_err(|e| e.to_string())?;
     if let Some(e) = failure {
         return Err(e);
     }
@@ -80,7 +99,52 @@ pub fn palw_tir_open_leaf_streamed_v1(
     src: &dyn PalwTirRangeSourceV1,
     index: u32,
 ) -> Result<(Hash64, PalwArtifactOpeningV1), String> {
-    let count = palw_tir_inventory_leaf_count_v1(program).map_err(|e| e.to_string())?;
+    open_leaf_streamed(Inventory::Legacy(program), src, index)
+}
+
+/// Bounded public opening in the model-only inventory, using the same leaf hash and Merkle
+/// grammar as v1. The descriptor and program must accompany any authenticated root statement.
+pub fn palw_tir_model_open_leaf_streamed_v2(
+    inventory: &PalwTirModelInventoryV2<'_>,
+    src: &dyn PalwTirRangeSourceV1,
+    index: u32,
+) -> Result<(Hash64, PalwArtifactOpeningV1), String> {
+    open_leaf_streamed(Inventory::Model(inventory), src, index)
+}
+
+enum Inventory<'a> {
+    Legacy(&'a TirProgramV1),
+    Model(&'a PalwTirModelInventoryV2<'a>),
+}
+impl Inventory<'_> {
+    fn program(&self) -> &TirProgramV1 {
+        match self {
+            Self::Legacy(p) => p,
+            Self::Model(i) => i.program(),
+        }
+    }
+    fn leaf_count(&self) -> Result<u32, String> {
+        match self {
+            Self::Legacy(p) => palw_tir_inventory_leaf_count_v1(p).map_err(|e| e.to_string()),
+            Self::Model(i) => Ok(i.leaf_count()),
+        }
+    }
+    fn visit_rows(&self, visit: &mut dyn FnMut(PalwTirInventoryRowV1)) -> Result<(), String> {
+        match self {
+            Self::Legacy(p) => palw_tir_visit_inventory_rows_v1(p, visit),
+            Self::Model(i) => i.visit_rows(visit),
+        }
+        .map_err(|e| e.to_string())
+    }
+}
+
+fn open_leaf_streamed(
+    inventory: Inventory<'_>,
+    src: &dyn PalwTirRangeSourceV1,
+    index: u32,
+) -> Result<(Hash64, PalwArtifactOpeningV1), String> {
+    let program = inventory.program();
+    let count = inventory.leaf_count()?;
     if index >= count {
         return Err("the selected leaf is outside the inventory".into());
     }
@@ -103,43 +167,44 @@ pub fn palw_tir_open_leaf_streamed_v1(
     let mut buf = vec![0u8; PALW_TIR_ROW_PIECE_BYTES_V1 as usize];
     let mut selected = None;
     let mut failure = None;
-    palw_tir_visit_inventory_rows_v1(program, &mut |row| {
-        if failure.is_some() {
-            return;
-        }
-        let bytes = &mut buf[..row.len as usize];
-        let start = row.row_start as u64;
-        if let Err(e) = src.read_range(row.param, row.layer, start..start + row.len as u64, bytes) {
-            failure = Some(e);
-            return;
-        }
-        let name = &program.params[row.param as usize].name;
-        let i = frontier.leaf_count();
-        let hash = artifact_leaf_parts_v1(name, row.layer, row.row_start, bytes);
-        frontier.push(hash);
-        if i == index as u64 {
-            selected = Some(PalwArtifactOperandV1 {
-                tensor_name: name.clone(),
-                layer: row.layer,
-                row_start: row.row_start,
-                bytes: bytes.to_vec(),
-            });
-        } else {
-            while interval < order.len() && i >= siblings[order[interval]].1 {
-                interval += 1;
-            }
-            let Some(&k) = order.get(interval) else {
-                failure = Some("the proof intervals do not cover the inventory".into());
-                return;
-            };
-            if i < siblings[k].0 {
-                failure = Some("the proof intervals leave an inventory gap".into());
+    inventory
+        .visit_rows(&mut |row| {
+            if failure.is_some() {
                 return;
             }
-            siblings[k].2.push(hash);
-        }
-    })
-    .map_err(|e| e.to_string())?;
+            let bytes = &mut buf[..row.len as usize];
+            let start = row.row_start as u64;
+            if let Err(e) = src.read_range(row.param, row.layer, start..start + row.len as u64, bytes) {
+                failure = Some(e);
+                return;
+            }
+            let name = &program.params[row.param as usize].name;
+            let i = frontier.leaf_count();
+            let hash = artifact_leaf_parts_v1(name, row.layer, row.row_start, bytes);
+            frontier.push(hash);
+            if i == index as u64 {
+                selected = Some(PalwArtifactOperandV1 {
+                    tensor_name: name.clone(),
+                    layer: row.layer,
+                    row_start: row.row_start,
+                    bytes: bytes.to_vec(),
+                });
+            } else {
+                while interval < order.len() && i >= siblings[order[interval]].1 {
+                    interval += 1;
+                }
+                let Some(&k) = order.get(interval) else {
+                    failure = Some("the proof intervals do not cover the inventory".into());
+                    return;
+                };
+                if i < siblings[k].0 {
+                    failure = Some("the proof intervals leave an inventory gap".into());
+                    return;
+                }
+                siblings[k].2.push(hash);
+            }
+        })
+        .map_err(|e| e.to_string())?;
     if let Some(e) = failure {
         return Err(e);
     }

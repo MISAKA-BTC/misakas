@@ -818,3 +818,156 @@ fn k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_materi
         assert!(ev.iter().any(|e| matches!(e, E::Final { claim, .. } if *claim == honest.claim.id())), "{fixture}: {ev:?}");
     }
 }
+
+/// The new role scope is independent of the legacy V2 binding wire. Real lowered fixture
+/// weights are sufficient to compute/open the model root: no synthetic job placeholders
+/// are loaded into either the inventory or the kernel parameter map.
+#[test]
+fn descriptor_scoped_encoder_artifact_binding_uses_only_model_weights() {
+    use kaspa_consensus_core::Hash64;
+    use kaspa_consensus_core::palw_artifact::{artifact_leaf_parts_v1, artifact_root_v1};
+    use kaspa_consensus_core::palw_onboarding_v1::{
+        ArtifactMismatchProofV1, ArtifactTileOpeningV3, verify_artifact_mismatch_v1, verify_artifact_mismatch_v2,
+    };
+    use kaspa_consensus_core::palw_tir_artifact_v1::{
+        PalwTirModelInventoryV2, palw_tir_inventory_leaf_count_v1, palw_tir_visit_inventory_rows_v1,
+    };
+    use misaka_palw_kernel::merkle3::{LeafOpeningV3, tensor_commitment_v3};
+    use misaka_palw_sdk::tir_stream::{
+        PalwTirRangeSourceV1, palw_tir_model_inventory_root_streamed_v2, palw_tir_model_open_leaf_streamed_v2,
+    };
+    use std::cell::Cell;
+    struct Weights<'a> {
+        params: &'a MapParams,
+        model_count: usize,
+        reads: Cell<usize>,
+    }
+    impl PalwTirRangeSourceV1 for Weights<'_> {
+        fn read_range(&self, param: u16, layer: Option<u16>, range: std::ops::Range<u64>, out: &mut [u8]) -> Result<(), String> {
+            assert!((param as usize) < self.model_count, "job input must never be read from a model artifact");
+            self.reads.set(self.reads.get() + 1);
+            let t = self.params.param(param, layer).ok_or("missing model tensor")?;
+            let bytes: Vec<_> = t.data.iter().flat_map(|v| v.to_le_bytes()[..t.dtype.width()].to_vec()).collect();
+            out.copy_from_slice(bytes.get(range.start as usize..range.end as usize).ok_or("outside model tensor")?);
+            Ok(())
+        }
+    }
+    for fixture in ["hf-enc/bert", "hf-cls/xlmr_rerank"] {
+        let enc = tiny_encoder(fixture, 12);
+        let d5 = k2_tir_v5_descriptor();
+        let scope = PalwTirModelInventoryV2::new(&d5, &enc.program).unwrap();
+        let v4 = PalwTirModelInventoryV2::new(&k2_tir_v4_descriptor(), &enc.program).unwrap();
+        assert_eq!(scope.descriptor_digest(), d5.digest());
+        assert_eq!(scope.model_param_count(), enc.binding.first_input as usize);
+        assert_eq!(v4.model_param_count(), enc.program.params.len());
+        assert_eq!(v4.leaf_count(), palw_tir_inventory_leaf_count_v1(&enc.program).unwrap());
+        assert_eq!(v4.leaf_count(), scope.leaf_count() + 2, "ids/count are two legacy inventory leaves");
+        assert_eq!(scope.leaf_index(enc.binding.first_input, None, 0), None);
+        assert_eq!(scope.leaf_index(enc.binding.first_input + 1, None, 0), None);
+        let src = Weights { params: &enc.params, model_count: scope.model_param_count(), reads: Cell::new(0) };
+        let (root, count) = palw_tir_model_inventory_root_streamed_v2(&scope, &src).unwrap();
+        let mut expected = Vec::new();
+        palw_tir_visit_inventory_rows_v1(&enc.program, &mut |r| {
+            if (r.param as usize) < scope.model_param_count() {
+                let t = enc.params.param(r.param, r.layer).unwrap();
+                let bytes: Vec<_> = t.data.iter().flat_map(|v| v.to_le_bytes()[..t.dtype.width()].to_vec()).collect();
+                let piece = &bytes[r.row_start as usize..(r.row_start + r.len) as usize];
+                expected.push(artifact_leaf_parts_v1(&enc.program.params[r.param as usize].name, r.layer, r.row_start, piece));
+            }
+        })
+        .unwrap();
+        assert_eq!(Some(root), artifact_root_v1(&expected));
+        assert_eq!(count as usize, expected.len());
+        let pc = ParamCommitmentsV1::of_v3(&enc.params);
+        let prepared =
+            misaka_palw_sdk::kernel_params::prepare_kernel_params_v3(&d5, &enc.program, &src, 1 << 26, 1 << 28, &mut |_, _, _| {})
+                .unwrap();
+        assert_eq!(prepared.params, pc, "root preparation uses exactly the same model role set");
+        let pc_root = Hash64::from_bytes(pc.root());
+        let instances = ArtifactMismatchProofV1::Instances { commitments: pc.clone() };
+        assert!(verify_artifact_mismatch_v2(&scope, root, pc_root, &instances).is_err(), "truthful v5 root is not fraud");
+        assert!(
+            verify_artifact_mismatch_v1(&enc.program, root, pc_root, &instances).is_ok(),
+            "old wire still includes both trailing params"
+        );
+        assert!(verify_artifact_mismatch_v2(&v4, root, pc_root, &instances).is_ok(), "the same names confer no v4 input exclusion");
+        let (key, tensor) =
+            enc.params.tensors.iter().find(|((p, _), t)| (*p as usize) < scope.model_param_count() && !t.data.is_empty()).unwrap();
+        let index = scope.leaf_index(key.0, key.1, 0).unwrap();
+        let (opened_root, opening) = palw_tir_model_open_leaf_streamed_v2(&scope, &src, index).unwrap();
+        assert_eq!(opened_root, root);
+        let honest = ArtifactMismatchProofV1::TileV3 {
+            commitments: pc.clone(),
+            param: key.0,
+            layer: key.1,
+            kernel_tile: ArtifactTileOpeningV3::new(LeafOpeningV3::of(tensor, 0, 0, 0).unwrap()).unwrap(),
+            v2_opening: opening.clone(),
+        };
+        assert!(verify_artifact_mismatch_v2(&scope, root, pc_root, &honest).is_err());
+        let old_row = ArtifactMismatchProofV1::Row {
+            commitments: pc.clone(),
+            param: key.0,
+            layer: key.1,
+            kernel_row: misaka_palw_kernel::merkle::TensorOpeningV1::row(tensor, 0).unwrap(),
+            v2_opening: opening.clone(),
+        };
+        assert_eq!(
+            verify_artifact_mismatch_v2(&scope, root, pc_root, &old_row),
+            Err("a model-only v2 binding requires a bounded v3 tile, not a legacy tensor row")
+        );
+        assert!(verify_artifact_mismatch_v2(&v4, root, pc_root, &honest).is_err(), "model-only path cannot be copied into v4 scope");
+        let mut changed = tensor.clone();
+        changed.data[0] = if changed.data[0] == 0 { 1 } else { 0 };
+        let mut false_pc = pc.clone();
+        false_pc.by_instance.insert(*key, tensor_commitment_v3(&changed));
+        let false_root = Hash64::from_bytes(false_pc.root());
+        let lie = ArtifactMismatchProofV1::TileV3 {
+            commitments: false_pc,
+            param: key.0,
+            layer: key.1,
+            kernel_tile: ArtifactTileOpeningV3::new(LeafOpeningV3::of(&changed, 0, 0, 0).unwrap()).unwrap(),
+            v2_opening: opening,
+        };
+        assert!(verify_artifact_mismatch_v2(&scope, root, false_root, &lie).is_ok(), "public openings convict changed model bytes");
+        assert!(
+            verify_artifact_mismatch_v2(&scope, root, pc_root, &lie).is_err(),
+            "a proof for another bound kernel root has no force"
+        );
+        assert!(
+            verify_artifact_mismatch_v2(&scope, Hash64::from_bytes([9; 64]), false_root, &lie).is_err(),
+            "a copied inventory path has no force against another source root"
+        );
+        let mut forged_tile = lie.clone();
+        if let ArtifactMismatchProofV1::TileV3 { v2_opening, .. } = &mut forged_tile {
+            v2_opening.leaf_count += 2;
+        }
+        assert!(verify_artifact_mismatch_v2(&scope, root, false_root, &forged_tile).is_err());
+        let mut missing = pc.clone();
+        missing.by_instance.remove(key);
+        let missing_root = Hash64::from_bytes(missing.root());
+        assert!(
+            verify_artifact_mismatch_v2(&scope, root, missing_root, &ArtifactMismatchProofV1::Instances { commitments: missing })
+                .is_ok()
+        );
+        let mut surplus = pc.clone();
+        surplus.by_instance.insert((enc.binding.first_input, None), *pc.by_instance.get(key).unwrap());
+        let surplus_root = Hash64::from_bytes(surplus.root());
+        assert!(
+            verify_artifact_mismatch_v2(&scope, root, surplus_root, &ArtifactMismatchProofV1::Instances { commitments: surplus })
+                .is_ok()
+        );
+        let before = src.reads.get();
+        assert!(palw_tir_model_open_leaf_streamed_v2(&scope, &src, count).is_err());
+        assert_eq!(src.reads.get(), before, "out-of-range opening refuses before reading bytes");
+        let mut forged = d5.clone();
+        forged.semantics_digest[0] ^= 1;
+        assert!(PalwTirModelInventoryV2::new(&forged, &enc.program).is_err());
+        let mut malformed = enc.program.clone();
+        malformed.params[0].shape = vec![u32::MAX; 4];
+        assert!(PalwTirModelInventoryV2::new(&d5, &malformed).is_err(), "invalid shape is rejected before inventory arithmetic");
+        println!(
+            "[rfc02-model-inventory] {fixture}: {} model params, {count} leaves; honest no-fault, changed/missing/surplus convicted; no job-input reads",
+            scope.model_param_count()
+        );
+    }
+}

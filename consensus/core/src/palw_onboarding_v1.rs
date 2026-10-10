@@ -887,6 +887,63 @@ pub fn verify_artifact_mismatch_v1(
     kernel_param_root: Hash64,
     proof: &ArtifactMismatchProofV1,
 ) -> Result<(), &'static str> {
+    verify_artifact_mismatch_inventory(ArtifactInventory::Legacy(program), v2_artifact_root, kernel_param_root, proof)
+}
+
+/// Pure judge for a descriptor-scoped model inventory. The scope must come from the authenticated
+/// statement, never from a challenger-selected descriptor. This API does not reinterpret 104/105
+/// or grant attestation, conformance, execution or reward eligibility.
+pub fn verify_artifact_mismatch_v2(
+    inventory: &crate::palw_tir_artifact_v1::PalwTirModelInventoryV2<'_>,
+    model_inventory_root: Hash64,
+    kernel_param_root: Hash64,
+    proof: &ArtifactMismatchProofV1,
+) -> Result<(), &'static str> {
+    if matches!(proof, ArtifactMismatchProofV1::Row { .. }) {
+        return Err("a model-only v2 binding requires a bounded v3 tile, not a legacy tensor row");
+    }
+    verify_artifact_mismatch_inventory(ArtifactInventory::Model(inventory), model_inventory_root, kernel_param_root, proof)
+}
+
+enum ArtifactInventory<'a> {
+    Legacy(&'a TirProgramV1),
+    Model(&'a crate::palw_tir_artifact_v1::PalwTirModelInventoryV2<'a>),
+}
+
+impl ArtifactInventory<'_> {
+    fn program(&self) -> &TirProgramV1 {
+        match self {
+            Self::Legacy(p) => p,
+            Self::Model(i) => i.program(),
+        }
+    }
+    fn instances(&self) -> Vec<Vec<Option<u16>>> {
+        match self {
+            Self::Legacy(p) => palw_tir_param_instances_v1(p),
+            Self::Model(i) => i.instances(),
+        }
+    }
+    fn leaf_index(&self, param: u16, layer: Option<u16>, offset: u64) -> Option<u32> {
+        match self {
+            Self::Legacy(p) => palw_tir_leaf_index_v1(p, param, layer, offset),
+            Self::Model(i) => i.leaf_index(param, layer, offset),
+        }
+    }
+    fn leaf_count(&self) -> Option<u32> {
+        match self {
+            Self::Legacy(p) => palw_tir_inventory_leaf_count_v1(p).ok(),
+            Self::Model(i) => Some(i.leaf_count()),
+        }
+    }
+}
+
+fn verify_artifact_mismatch_inventory(
+    inventory: ArtifactInventory<'_>,
+    v2_artifact_root: Hash64,
+    kernel_param_root: Hash64,
+    proof: &ArtifactMismatchProofV1,
+) -> Result<(), &'static str> {
+    let program = inventory.program();
     let commitments = match proof {
         ArtifactMismatchProofV1::Instances { commitments }
         | ArtifactMismatchProofV1::Row { commitments, .. }
@@ -895,11 +952,8 @@ pub fn verify_artifact_mismatch_v1(
     if commitments.root() != kernel_param_root.as_bytes() {
         return Err("the carried commitments do not root to the bound kernel root");
     }
-    let declared: BTreeSet<(u16, Option<u16>)> = palw_tir_param_instances_v1(program)
-        .into_iter()
-        .enumerate()
-        .flat_map(|(j, layers)| layers.into_iter().map(move |l| (j as u16, l)))
-        .collect();
+    let declared: BTreeSet<(u16, Option<u16>)> =
+        inventory.instances().into_iter().enumerate().flat_map(|(j, layers)| layers.into_iter().map(move |l| (j as u16, l))).collect();
     match proof {
         ArtifactMismatchProofV1::TileV3 { commitments, param, layer, kernel_tile, v2_opening } => {
             if !declared.contains(&(*param, *layer)) {
@@ -922,8 +976,8 @@ pub fn verify_artifact_mismatch_v1(
             if op.tensor_name != decl.name || op.layer != *layer {
                 return Err("the V2 opening names another tensor instance");
             }
-            if Some(v2_opening.leaf_index) != palw_tir_leaf_index_v1(program, *param, *layer, op.row_start as u64)
-                || palw_tir_inventory_leaf_count_v1(program).ok() != Some(v2_opening.leaf_count)
+            if Some(v2_opening.leaf_index) != inventory.leaf_index(*param, *layer, op.row_start as u64)
+                || inventory.leaf_count() != Some(v2_opening.leaf_count)
             {
                 return Err("the V2 opening is not at the leaf the program's layout puts these bytes in");
             }
@@ -1001,8 +1055,8 @@ pub fn verify_artifact_mismatch_v1(
             if op.tensor_name != decl.name || op.layer != *layer {
                 return Err("the V2 opening names another tensor instance");
             }
-            if Some(v2_opening.leaf_index) != palw_tir_leaf_index_v1(program, *param, *layer, op.row_start as u64)
-                || palw_tir_inventory_leaf_count_v1(program).ok() != Some(v2_opening.leaf_count)
+            if Some(v2_opening.leaf_index) != inventory.leaf_index(*param, *layer, op.row_start as u64)
+                || inventory.leaf_count() != Some(v2_opening.leaf_count)
             {
                 return Err("the V2 opening is not at the leaf the program's layout puts these bytes in");
             }
