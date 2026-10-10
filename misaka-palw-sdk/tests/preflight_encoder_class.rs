@@ -194,3 +194,26 @@ fn a_base_tokenizer_of_the_same_vocabulary_replaces_the_missing_tokenizer_blocke
     let wrong = run(&dir, &offer(vocab + 1)).expect("preflight");
     assert!(missing(&wrong), "another vocabulary is not the base's tokenizer for this table");
 }
+
+/// **A `…ForMaskedLM` repository is a masked-LM class for the `fill-mask` task and its encoder for anything else** (HFX 2026-10-10): the
+/// task picks the reading (`Options::task`, the census row's task), the architecture alone never does. The masked-LM class is the `Head`
+/// profile's (hypothetically: `FENCE_NOT_ARMED(palw_task_heads_v1)`), `[L, vocab]` over the padded token axis, and its K2-TIR-v5 route is
+/// reported beside.
+#[test]
+fn a_masked_lm_repository_is_the_head_class_for_fill_mask_and_the_encoder_otherwise() {
+    for rel in ["hf-heads/bert_mlm", "hf-heads/roberta_mlm", "hf-heads/distilbert_mlm"] {
+        let dir = with_tokenizer(&fixture(rel), "mlm");
+        let fill_mask = Options { task: Some("fill-mask".into()), ..judged(9_000) };
+        let r = run(&dir, &fill_mask).expect("preflight");
+        let p = r.pipeline.as_ref().unwrap_or_else(|| panic!("{rel}: the declared class is reported: {:?}", r.blockers().iter().map(|b| &b.code).collect::<Vec<_>>()));
+        assert_eq!(p.kind, "encoder:masked_lm", "{rel}");
+        assert!(head_fence(&r) && !r.registrable(), "{rel}");
+        assert!(r.notes.iter().any(|n| n.contains("masked_lm head, [12, 64]")), "{rel}: {:?}", r.notes);
+        let k = r.kernel.as_ref().unwrap_or_else(|| panic!("{rel}: no kernel route"));
+        assert!(k.kernel.starts_with("K2-TIR-v5"), "{rel}: {k:?}");
+        eprintln!("{rel}: {k:?}");
+        // Any other task reads the checkpoint as its encoder (or, with no adapter for the architecture, refuses it).
+        let other = run(&dir, &Options { task: Some("feature-extraction".into()), ..judged(9_000) }).expect("preflight");
+        assert!(other.pipeline.as_ref().is_none_or(|p| p.kind != "encoder:masked_lm"), "{rel}");
+    }
+}

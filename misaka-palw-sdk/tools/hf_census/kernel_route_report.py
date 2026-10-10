@@ -43,8 +43,7 @@ def rows_of(path):
 
 
 def stratum_of(row, strata):
-    for s in row.get("strata", []) if isinstance(row.get("strata"), list) else [row.get("strata")]:
-        pass
+    """The row's design stratum: its declared task (`head-<task>`)."""
     t = (row.get("task") or {}).get("task")
     return f"head-{t}" if t else None
 

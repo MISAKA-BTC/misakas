@@ -14,6 +14,14 @@ snapshot `2026-10-03T131904Z`, re-measured offline in `snapshots/…/hfx/` (no H
 | 2c | the bidirectional encoder's class declared shape-only and judged by the generative admission (an embedding as `Embedding`, a head as `Head`, hypothetically); a span head over a token-type table refused by name (`ARCH_NEEDS_FEATURE(ENC_PAIR_SEGMENTS_V1)`) | preflight / census | `NOT_RUN_PIPELINE_ADMISSION` of every embedding repository |
 | 5 | task inference v4: transformers 5.17's auto-model tables (814 classes listed under exactly one task), llama.cpp @030ebb55's converter registrations (31 GGUF architectures); a GGUF of a llama.cpp model architecture is a model class (never `no-config`) | census (data) | `TASK_UNKNOWN` 54,160; the D_complete leak |
 | — | a causal LM tagged summarization / translation / text2text is served by the text decoder class (the Lead's decision) | census | GenText-tagged decoders |
+| 6 | `ENC_PAIR_SEGMENTS_V1`: BERT-type segment ids (type 1 after the first separator) computed IN the program from the job's ids (`lower::bidir::BidirExtras::pair_sep`); a span head over a token-type table is declared, not refused | lowering | `question-answering` over BERT / ALBERT (3,977+ repositories) |
+| 7 | `OutputSpec::MaskedLm`: a `…ForMaskedLM` head (HEAD_TRANSFORM_V1 over every row, the tied vocabulary projection) for BERT, RoBERTa / XLM-R / CamemBERT and DistilBERT, chosen by the TASK (`fill-mask`; `hf_schema::masked_lm_adapter_for`), never by architecture alone (the same checkpoint is also a sentence embedder) | lowering + data | `fill-mask`: BertForMaskedLM 7,209, RobertaForMaskedLM 4,444, DistilBertForMaskedLM 2,769, CamembertForMaskedLM 1,433, XLMRobertaForMaskedLM 1,004 repositories (listing, by architecture) |
+| 8 | image classifiers: `VisionOut::Classify` (ViT, `vit-imgcls`), `CnnHead` (ResNet, ConvNeXt, MobileNetV1 / V2: the classifier is no longer ignored), the shape-only image class (`model::route::lower_image_class_shape_v1`) judged as the `Head` profile's IMAGE task and its K2-TIR-v3 route reported | lowering + preflight + data | `image-classification` (ViT 13,561, ResNet 2,012, ConvNeXt 393, MobileNet ≈ 170 of 29,479) |
+| 9 | task heads for ALBERT, DeBERTa-v2 / v3 (the ContextPooler) and CamemBERT (`albert-*`, `deberta-v2-*`, the RoBERTa head's match lists) | data | `text-classification` / `token-classification` / `question-answering` / zero-shot NLI (DeBERTa NLI is the largest family of zero-shot) |
+| 10 | the legacy `LayerNorm.gamma` / `.beta` spelling UNDER the checkpoint's prefix (`bert.embeddings.LayerNorm.gamma`): the rename was tried on the un-prefixed name only, so every old-spelling task checkpoint was `TENSOR_MISSING(embed.norm.gain)` | frontend | 7.4 % of the head-task frame in the head cohort |
+| 11 | a module BUFFER (`embeddings.position_ids`, an I64 range) is no weight of the class: it counted as "a bound tensor stored as a type no descriptor claims" (`QUANT_NO_DESCRIPTOR(safetensors/I64)` on MiniLM, MPNet, SapBERT … — 28 sampled rows) | preflight | sentence-transformers |
+| 12 | `Options::base_tokenizer` / `--tokenizer-bases`: a class with no tokenizer file binds its pinned base's, accepted only for the same declared vocabulary | preflight + census | `TOKENIZER_MISSING` — measured small (below) |
+| 13 | the bidirectional encoder's class judged under **K2-TIR-v5** beside the generative verdict (`preflight::kernel::encoder_route_of`; lane K2S `k2-real-scale.md` §12) | preflight | every encoder / head class the generative route refuses by position-sized bounds |
 
 ## 2. Vision (item 3): what exists, and the gap
 
@@ -21,7 +29,9 @@ snapshot `2026-10-03T131904Z`, re-measured offline in `snapshots/…/hfx/` (no H
 programs and admit them alone; `JobImage` (binding tag 6) binds an image slot; the `Head` profile defines `IMAGE`, `DETECTION` and
 `SEGMENTATION` tasks with their output headers (`[1, labels]`, `[queries, labels + 1 + 4]`, `[h·w, labels]`).
 
-**Gap 1 — the heads are not lowered.** `lower::cnn` lists a checkpoint's classifier among the tensors it never reads by design, and
+**Closed for classifiers (2026-10-10, row 8 above):** a ViT's class row through the final layernorm and `classifier`, a CNN's pooled vector through its linear `classifier` (`classifier.1` of ResNet's `Sequential`) are lowered, checked against transformers' logits (float 1e-7, integer cosine 0.976–0.99998), declared as a one-stage `JobImage` pipeline and judged. DETR's set-prediction head, SegFormer's all-MLP decoder and the backbones' Embedding-profile class are not.
+
+**Gap 1 (as of 2026-10-08) — the heads are not lowered.** `lower::cnn` lists a checkpoint's classifier among the tensors it never reads by design, and
 the ViT route stops at the encoder's rows. Needed, generically: (a) a pooled image head — the CNN's global average pool (a `ReduceSum`
 over the spatial axes and a `Div`) or ViT's `[CLS]` row / mean, the final norm, then `classifier` to `labels` logits (one adapter row
 per family: ResNet `classifier.1`, ConvNeXt `classifier` after `layernorm`, ViT `classifier` after `layernorm`, MobileNet
@@ -31,7 +41,7 @@ segmentation head (SegFormer's all-MLP decoder: per-stage linear, a fixed-ratio 
 resize is RFC-0003 §II.4's pinned resampling matrices. (a) is the bulk (`image-classification` 30,862 of the 55,581); (b) and (c)
 are new decoders.
 
-**Gap 2 — a vision class is not declarable shape-only.** `preflight::model` routes a vision / CNN class to
+**Gap 2 (as of 2026-10-08; closed for classifiers 2026-10-10) — a vision class is not declarable shape-only.** `preflight::model` routes a vision / CNN class to
 `PIPELINE_CLASS_UNDECLARED` ("lowers from the checkpoint's weights (calibration)"). As item 2c showed for the bidirectional encoder,
 a program's STRUCTURE does not depend on the weights or the calibration (they fill params at materialisation), so the same
 shape-only declaration applies: `JobImage` at the processor's declared size, the backbone, the head. Not built here.
@@ -94,13 +104,13 @@ user: may the census range-read `pytorch_model.bin`'s zip directory and `data.pk
   already admits the body (it decodes) — no further threading is needed;
 * the worker (`misaka-palw-base0::gen_worker`) and the gateway (`misaka-palw-gateway::tensor`) run and submit a `Head` job as they do an
   embedding job (same output kind); the node's court treats a `Head` class as a tensor class (built);
-* the masked-LM head (`…ForMaskedLM` at a position) — the task-driven adapter choice and a third lifted input;
-* BERT-type pair segments (`ENC_PAIR_SEGMENTS_V1`) for `PAIR` / `SPAN_QA` classes over a model with token types (a span head over one
-  is refused by name today; a pair task's hypothetical class is a `SEQUENCE` class over the concatenated ids, the same function only
-  without token types);
-* the vision heads (§2) and the masked-LM head: the census maps `image-classification`, `object-detection`, `image-segmentation` and
-  `fill-mask` to the `Head` profile because the profile defines them, but no class of theirs is lowered yet — arming the fence alone
-  would not close them;
+* ~~the masked-LM head~~ **built 2026-10-10 as `[L, vocab]` over every row** (no third lifted input: the row at the masked position is what
+  a user reads). The profile's own MASKED_LM task (`[1, vocab]` at a job-scalar position) is a different class form this lowering does not
+  build; the generative judge asks the real shape as the `TOKEN` task (labels = the vocabulary);
+* ~~BERT-type pair segments~~ **built 2026-10-10** for `SPAN_QA`; a `PAIR` sequence class (zero-shot NLI, a cross-encoder) over a model
+  with token types is still a `SEQUENCE` class over the concatenated ids — the same function only without token types;
+* the vision heads: classifiers **built 2026-10-10** (§2); detection and segmentation heads, and Swin / BEiT / DeiT / SigLIP / ConvNeXtV2 /
+  EfficientNet / MobileViT classifiers are not;
 * **reward is not claimed**: a `Head` class's verification coverage, public material, Panel-independent prosecution (G14) and
   collateral are this profile's PRINCIPLES §6 conditions and are not shown by this lane. The fence is refused when armed until the
   full-activation release. (2026-10-10, ADR-0177: G14 is conditional on the verifier having acquired the registered model, and the
