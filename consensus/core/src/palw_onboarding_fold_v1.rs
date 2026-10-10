@@ -85,6 +85,13 @@ pub(super) fn apply_artifact_bound_v1(
     if live.iter().any(|(_, row)| !row.refuted) {
         return Err(refused("the class is already bound to another kernel root, and is not refuted"));
     }
+    // ADR-0175 (past `palw_model_immutable_v1`): a class's binding is fixed once accepted. A refuted one ends the class's kernel route —
+    // the model is a new registration — so no path re-binds it to another root (and none on availability: ADR-0177 has no lapse).
+    if builder.extras.model_immutable_active && !live.is_empty() {
+        return Err(refused(
+            "a registered class's artifact binding is immutable (ADR-0175): a refuted class needs a new registration",
+        ));
+    }
     // The statement is bonded: a slice of the signer's FREE collateral is held until the refutation horizon ends.
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
     let free = collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score));

@@ -661,3 +661,6 @@ async fn da16_below_the_fence_court_objects_are_dropped_and_an_older_claim_stays
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
 }
+
+// C4R4 round 4b (F-C4R4-19): ADR-0177 non-interference, un-ignored after the re-scope.
+mod c4r4;
