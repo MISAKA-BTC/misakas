@@ -104,8 +104,7 @@ per-class receipt retarget normalises across classes anyway — while `pwu` stay
 floor claim and a QWEN36 claim weigh in one unit. The class state holds no profile, so the
 transition prices from the class's rule and the bundle's `quanta_per_canonical_job`
 (`PalwStateParamsV2::with_fp_quanta`, held equal to the free-prompt params by `validate()`).
-`PalwFpCuWeightsV3`, `fp_cu_v3`, `QUANTUM_CU` and `PWU_PER_QUANTUM` are withdrawn (their text
-stays in ADR-0044 as the record). A free-prompt claim's exposure is its own `pwu` — the work it
+`PalwFpCuWeightsV3`, `fp_cu_v3`, `QUANTUM_CU` and `PWU_PER_QUANTUM` are withdrawn (ADR-0044 retains the withdrawal reason). A free-prompt claim's exposure is its own `pwu` — the work it
 claims — not a whole canonical job. The attempt lane's
 pwu is already leaves (`pwu_per_inference = canonical_step_leaf_count` by genesis rule), so
 `safe_weight` becomes one unit and ADR-0073 Decision 3 is discharged. The seat verifies the price

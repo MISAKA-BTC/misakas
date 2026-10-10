@@ -130,13 +130,9 @@ less — its prompt is on chain, its capture is served, its leaves adjudicate in
 its ticket is drawn by a beacon that does not exist when the claim is fixed (nothing to grind,
 cf. the ADR-0072 review).
 
-What "self-dealing" means here, stated so it stops being an objection: an executor who submits
-prompts to itself has run an inference the chain can convict, priced by the leaves it executed.
-That is a canonical job by another name, and it is exactly as good as one. The only self-dealing
-that matters is *shape-crafting* — choosing prompts that price above their cost — and Decision 3
-removes the surface by pricing the leaves themselves.
+自己生成 prompt を canonical job と同じ PALW-reward 対象とする旧主張は撤回した。誰も必要としない出力の計算は、ユーザーの有用なローカル推論という目的を満たさないため。[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P1–P3 に従う。
 
-Activation is gated, not dated: a class's FP lane bears weight when (i) Decision 1 has landed and
+Activation also requires ADR-0144 §6 items 2–3; the following technical conditions alone are insufficient. A class's FP lane bears weight when (i) Decision 1 has landed and
 the class is FP-certified (1f), and (ii) Decision 3 has landed so the weight is in the unit the
 retarget and the share table already read. Until both hold, a spent quantum keeps adding exactly
 what it adds today.
@@ -152,7 +148,7 @@ the claim is refused structurally.
 3b. A quantum is a leaf count, not a CU count. *As landed (ADR-0074 Decision 5):* not a
 network-wide `QUANTUM_LEAVES` but a fraction of the class's own canonical job —
 `max(1, canonical_leaves / 8)` — so every class's job is eight draws and `pwu` stays in leaves. `PalwFpCuWeightsV3`, `QUANTUM_CU`, `PWU_PER_QUANTUM` are withdrawn
-from the bundle (their text stays in ADR-0044 as the record). The "no shape prices above the
+from the bundle (ADR-0044 retains the withdrawal reason). The "no shape prices above the
 pure-decode reference" invariant becomes a theorem instead of a calibration: leaves are the work.
 
 3c. The lottery discipline, stated once for both lanes: **a draw is a paid execution, drawn from a
@@ -243,7 +239,7 @@ the `UnadjudicableCommitment` refusal) and `palw_fp_devnet_v3.rs` ("court 2400";
 | Decision | Status after this ADR |
 |---|---|
 | ADR-0044 Decision 4 — receipts are weightless, `algo_id_carries_no_chain_position(7)` | stands through Phases ①–③; flips at Phase ④ activation (Decision 4a) |
-| ADR-0044 Decision 7 — CU weights price the lane | withdrawn at Phase ③ (Decision 3b); the text stays as the record |
+| ADR-0044 Decision 7 — CU weights price the lane | withdrawn at Phase ③ (Decision 3b); ADR-0044 retains the reason |
 | ADR-0066 — a lane has weight iff its blocks are priced | honoured: receipt blocks become priced before they weigh |
 | ADR-0068 — the LLM-primary economy, the floor's minimum | refined: real demand is the primary lane; the attempt lane is the floor doctrine's fallback |
 | ADR-0069 — a certified family may bear weight | extended: certification names the lane; the FP bit gates Decision 2 |

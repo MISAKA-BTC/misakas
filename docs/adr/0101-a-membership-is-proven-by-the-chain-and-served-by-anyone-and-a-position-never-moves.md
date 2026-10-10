@@ -107,10 +107,7 @@ grant, an unknown bit, a grant the line does not declare, the chain's own grant,
 grant with no root, a root the chain does not name for the line, an origin grant under a
 stranger's key, a signature that does not verify. The verdict says `Origin` or `Open`.
 
-**Decision 4 — discovery is not chain state.** A descriptor is transport-agnostic JSON: a
-provider serves its own at a well-known path, anyone mirrors it, a directory collects them —
-none of it the chain's (ADR-0067 Decision 6; ADR-0095 §8, "it is a URL, it rots"). A client
-trusts no directory: every descriptor it shows is checked against the chain by Decision 3.
+**Decision 4 — discovery is not chain state (withdrawn).** 公開 descriptor・mirror・directory の発見基盤は PALW work として実装しない。第三者 inference marketplace は [ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P1 の対象外だからである。
 
 **Decision 5 — a Position is a membership and never money** (settled by the operator,
 2026-09-10). A Position is bought from the curve and sold back to it; it does not move from one
@@ -122,17 +119,9 @@ collateralised in Positions. The three pins of §5 fail on a third writer of a h
 object that moves a Position between holders, and on a facade that answers `transfer`. A proposal
 to the contrary is a new ADR that supersedes this decision by name, never an edit to a pin.
 
-**Decision 6 — serving stays unadjudicated.** The chain cannot see a download, a queue position
-or an answered ticket, so it does not judge them: a provider that does not serve loses its
-clients, never a bond (ADR-0095 §8's "a bond behind the promise" stays rejected), and a line that
-wants a grant no longer offered stops declaring it — which makes every descriptor offering it
-fail Decision 3's check at once. There is no list of providers for a line to curate or revoke.
+**Decision 6 — serving stays unadjudicated (withdrawn).** marketplace の serving・執行モデルは実装しない。ADR-0144 P1 のローカル推論という目的から外れるため。
 
-**Decision 7 — order of work.** 1. `feat/adr-0095-membership-serving` merges (the reference
-check). 2. The gateway serves its own signed descriptor at `/.well-known/misaka-service.json`
-beside the challenge it already issues. 3. The site renders, per line, the descriptors it has
-checked, with the verdict. 4. A directory, of any transport. 5. ADR-0095 §7 step 7 (the holder
-mark) at its own activation.
+**Decision 7 — order of work.** 公開 serving 用 gateway・site・directory（旧 steps 2–4）は実装しない。Decision 4/6 と同じ理由による。実装済み membership check と holder mark は ADR-0095 に従う。
 
 ## 4. What this costs
 

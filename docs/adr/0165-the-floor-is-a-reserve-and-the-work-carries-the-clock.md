@@ -336,35 +336,17 @@ BASE-0 and heartbeat remain different lanes with different admission, collateral
 
 ## 3. How the rule got here (and A′, superseded)
 
-Revision 1's hysteresis ledger (dormant at ≥ 12 Final real claims in 60 DAA) was withdrawn for a single number, the DAA of the last
-accepted REAL attempt. Revision 2's A′ retired the floor outright — not safe alone: with few REAL producers a stretch would be
-heartbeat-only (unbonded, ~0 weight, cheap to rewrite). Revision 3 kept the floor as the fallback behind that single number with
-K = 20. Its two flaws, found on P2's replay: it could not tell a BLUE attempt from a RED one, so a RED attempt (which verifies
-nothing about the chain being free of floors) held the floor off as long as a BLUE one; and it had no answer for the first REAL
-attempt after an idle stretch, which met the resumed floors and went RED. Revision 4's machine fixes both: BLUE is verified success
-and holds the floor off (Normal); a RED attempt in Idle opens a bounded Probe for the next one to land clean and never extends
-anything; and a RED-only stream is bounded by the cooldown.
+旧 hysteresis ledger は last accepted REAL attempt の記録で足りるため撤回した。A′ の floor 全廃は、REAL producer が少ない期間を安価に書き換えられる unbonded heartbeat だけにしてしまうため不採用。現在の A″ は BLUE による成功確認と bounded Probe・cooldown で bonded floor の停止と復帰を制御する。
 
 ## 4. B — see 00.6
 
 ## 5. FALLBACK-V1 integration - WITHDRAWN 2026-10-07
 
-The earlier proposal combined the heartbeat lane (algo 8) with a bond requirement, an idle-only economic gate and floor-equivalent fallback credit, retiring the independent heartbeat. **That direction is withdrawn.** It is neither a new block kind to build nor the next fence.
-
-The algo-8 lane remains the independent heartbeat of ADR-0066/0140: bondless, claimless, no panel, fee-only, no useful-work subsidy, epsilon weight. This ADR adds no fallback envelope or bond signature requirement and does not make an existing unsigned heartbeat invalid. Its fixed header/slot validity rules remain independent of the floor's state. Local miner policy may yield to attempts under B; it does not make consensus heartbeat validity conditional on Idle or on useful-work production.
-
-BASE-0 remains the bonded minimum useful-work model class under A″, with its existing claim, panel/court, weight and reward. Its floor claim is admitted while Idle. It does not become an algo-8 heartbeat substitute.
+heartbeat と bonded floor を FALLBACK-V1 に統合する案は採用しない。claim・collateral・有用計算報酬を持つ floor と emergency clock を混同し、独立した heartbeat の役割を失わせるため。BASE-0 と bondless・fee-only・epsilon-weight の heartbeat は別 lane として維持する。
 
 ## 6. Fallback accounting - WITHDRAWN 2026-10-07
 
-Withdraw all accounting introduced solely for the former FALLBACK-V1 proposal:
-
-* `fallback_weight` and floor-equivalent `w_fb` credit on heartbeat blocks;
-* the `safe_weight + fallback_weight` fork-choice key;
-* one fallback credit per bond per slot and its rooted per-bond ledger;
-* the `REAL >= 2*w_fb` requirement, including `max(pwu-derived weight, 2*w_fb)`.
-
-Existing BASE-0 useful-work weight/reward, REAL pwu-derived weight/reward and heartbeat epsilon/fee-only accounting remain separate. No replacement credit, reward carve or minimum REAL weight is chosen here.
+統合専用の fallback credit・fork-choice key・ledger は実装しない。FALLBACK-V1 自体を撤回したため。既存 REAL・BASE-0 の work/reward と heartbeat の会計は維持する。
 
 ## 7. Security consequence of keeping the lanes separate
 
@@ -372,7 +354,7 @@ The bonded floor continues to provide its existing useful-work collateral and cl
 
 ## 8. Implementation boundary
 
-The former FALLBACK-V1 envelope, heartbeat retirement, rooted fallback weight, per-bond slot map and REAL weight floor are not implementation work authorized by this ADR. No migration, fingerprint, fence or activation is introduced for them. `rcore/consensus-accounting-v2` remains excluded. Retain A″ and B with their existing validation and release record; any further consensus change needs a separate decision.
+本 ADR が扱う実装は A″ と B の既存検証・release record に限る。撤回した FALLBACK-V1 用の fence・migration は追加しない。
 
 ## 9. Prerequisites and the release
 

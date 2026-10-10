@@ -467,20 +467,7 @@ lifecycle object still does not exist.
 
 ## 9. What the first draft decided, and why it was withdrawn
 
-The draft (commit `4f198f6e`) chose weights by an exam: candidates proposed by any bond with a
-burned rent, frozen before the questions existed; questions drawn by the ADR-0073 SA-1 beacon
-from a permissionless pool of pure integer programs emitting token ids; answers as court-triable
-claims graded by an id-prefix comparison; succession by two integer inequalities on wins and
-losses; a chained index of accepted improvements as the benchmark; the registrant leg split with
-the head's author; an optional bounty. It answered "who may strengthen a model" with "anyone who
-wins", and it was consistent — but it put the choice of a 27B model's next weights in a
-consensus verdict over a syllabus somebody had to write, with a residual (its A1) that a
-well-funded author could bend a window's exam. The operator's reframing removes the verdict:
-the developer chooses, the chain records, the market judges. What the draft got right is kept —
-the class keeps its graph; roots in force with a grace; claims name their root and the court
-replays it; the fence pattern; rows in the root only when non-empty; a position never moves —
-and its exam machinery (the VM, the pool, the draw, the verdict, the index, the author split,
-the bounty) is withdrawn entire.
+model の次の weights を consensus exam で選ぶ案は採用しない。syllabus を書く主体と資金力で評価を偏らせられ、ユーザーと developer による model 選択を chain の verdict に置き換えるため。developer が weights を選び、chain は version・root・grace を記録する現行方式を採用する。
 
 ## 10. What is deliberately not decided
 

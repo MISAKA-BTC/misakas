@@ -355,10 +355,7 @@ S12 `misaka node security-report` reports the backend actually in force — a te
 | R-08 | ADR-0078 Q-05's confinement gate for external toolchains | S11 green; the `code` row does not ship without it |
 | R-09 | §7's mapping table folded into `docs/` as the answer to "where is the model registry" | a reader finds the field, not a proposal to add it |
 
-**Done when** a node can be a public LLM entrance on a host that also holds a bond, and the operator
-can state — from a report the node prints, not from a promise — that the model process has no
-network, no environment, no filesystem beyond two directories, no key material, and a ceiling; while
-the chain holds not one byte about any of it.
+**Done when** the local host and loopback worker report and enforce their network, environment, filesystem, key and resource boundaries. Public commercial serving as a PALW-reward goal is withdrawn: it is outside ADR-0144 P1's useful local inference purpose.
 
 ## 7. Disposition of the proposal, item by item
 

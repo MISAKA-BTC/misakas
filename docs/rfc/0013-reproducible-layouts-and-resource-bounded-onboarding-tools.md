@@ -6,7 +6,7 @@
 * Status: Revised Draft, 2026-10-08. Existing tooling remediation plus proposed post-commit conformance records; **no runtime implementation, consensus activation or ceiling increase from this revision**. Earlier test results retain their original scope.
 * Source baseline: `808baa6b9adcb029e64fffe51fcd84027f82e7c0`; the working-tree fixes accompanying this RFC are not yet a released binary or a main deployment.
 * Validation record: [0013-onboarding-tool-validation.json](evidence/0013-onboarding-tool-validation.json). Real-run stage status is explicit; a test result does not certify registration or source fidelity.
-* Related: [RFC04](0004-palw-model-improvement.md), [RFC05](0005-palw-ml-vm.md), [RFC11](0011-permissionless-model-and-long-context-onboarding.md), [RFC02](0002-palw-tensor-ir.md), [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md).
+* Related: [RFC04](0004-palw-model-improvement.md), [Kernel design](../design/palw/versioned-kernels.md), [RFC11](0011-permissionless-model-and-long-context-onboarding.md), [RFC02](0002-palw-tensor-ir.md), [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md).
 
 ## 0. 日本語での結論と範囲
 
@@ -16,7 +16,7 @@ layoutによるcourtのサイズ超過、異なるDAAの審査、packの記録�
 **最終の512-context候補はlive preflightで受理可能と返ったが、登録transactionはまだ送信していない。**
 
 RFC11にあるclose-sizing・長context・資源認定の方針は維持する。
-RFC05のversioned Kernel拡張、RFC04の評価・昇格方針も変更しない。
+[versioned Kernel 設計](../design/palw/versioned-kernels.md)の拡張方針、RFC04の評価・昇格方針も変更しない。
 追加するのは、**同じartifact・layout・rulesetを各ツールで受け渡し、巨大artifactでも検査を省略せず、
 失敗した段階から再開できる具体的なtoolchain契約**である。
 これを実装しても全モデル・任意contextの無条件登録を保証しない。必要なKernelや資源・権限・証拠が
@@ -100,7 +100,7 @@ Other optional SKIPPED checks are reported separately, never called full source 
 | Court tile/MAC, root and terminal close bytes, sizing work | RFC11 §§1,4A,12–13: bounded sizing, legal layouts, compositional Kernel plans | Operational evidence and exact layout handoff; keep protocol caps unchanged. |
 | 9B recurrent calibration/context metadata and long calibration | RFC11 §§1–4,11–13 | Shared exact-statistics format and stage identity, not a new calibration safety waiver. |
 | 2M context cap, IR held rejection, inline canonical prompt cap and DA reach | RFC11 §§2,4B,12–13 | None to consensus. The Llama run did not test 2M; enough CPU does not remove these format gates. |
-| Missing operators/formats, model extension | RFC05 §§K.1–K.7 and RFC11 §16; frontend for existing semantics, reviewed Kernel update otherwise | Header-only diagnostics cannot misclassify a supported weight-backed conversion as missing semantics. |
+| Missing operators/formats, model extension | [Kernel design §§K.1–K.7](../design/palw/versioned-kernels.md) and RFC11 §16; frontend for existing semantics, reviewed Kernel update otherwise | Header-only diagnostics cannot misclassify a supported weight-backed conversion as missing semantics. |
 | Candidate/adapters, evaluation and promotion | RFC04, including unchanged class identity/composite bindings | Same exact pack contract for standalone classes; composite binding must name its parent before support is claimed. |
 | Small probabilistic normal checks; exact dispute court | RFC11 §15, RFC07 Part V, ADR0171/0172 | Unchanged. Offline executor conformance is not normal per-claim full replay. |
 | Pack exact layout, historical versus live gate, independent large-artifact checks | RFC02 runtime-pack requirements and RFC11 general parity/split-stage obligations, but no complete concrete contract for these failures | §§3–7 define it; these tool-only blockers cannot be solved merely by activating a probabilistic Kernel. |

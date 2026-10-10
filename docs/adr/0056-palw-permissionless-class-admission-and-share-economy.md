@@ -161,34 +161,7 @@ frees the spammer's collateral only by also freeing the share they squatted.
 
 ## Decision 4 — Withdrawn: the share walk is ADR-0054's, not this one's
 
-**Withdrawn 2026-08-27 at the merge, in favour of ADR-0054 Decision 1.** Two branches wrote a
-share-movement rule the same afternoon. They agree on everything that matters — the signal is a
-class's own FILLED BUDGET and nothing else, because jobs are self-originated on this network and
-every other "demand" signal is manufacturable by the class's own operators at no cost; the step is
-bounded per epoch; the floor is the reservoir and conservation is a construction rather than an
-assertion. This one is not kept, and the reason is a measurement rather than a preference.
-
-This decision's step was a STREAK: *n* consecutive epochs at or above a fill threshold buys one
-permille. ADR-0054's is proportional: a class that filled its budget takes
-`max(1‰, share × g / 1000)` at every qualifying boundary. On a minimum-share class the streak rule
-has no reachable input at all — the grant floor is defined so that `expected = 1` for every
-entrant on every network, and ADR-0045 Decision 2's budget then caps the same class at one block
-per epoch, so its only two states are "produced 0" (the retarget skips it, audit H1) and
-"produced 1" (`expected == observed`, an exact no-op). Measured on a two-class chain carrying the
-real `PALW-QWEN36` class over four epochs in both states: the target never moved. A rule keyed to
-those states is a rule with no input on exactly the class that most needs to grow.
-
-The proportional step is also the faster one where speed is the point: an entrant reaches a few
-percent of cadence in a fortnight instead of months, which is the difference between a public
-network with two model tiers and a public network with two demonstrations attached.
-
-**What this ADR still owns of the economy:** Decision 3 (a live registration is EXPOSURE against
-its registrant's bond, so registering a thousand classes costs a thousand reservations) and
-Decision 5 below (a class that produces nothing for `reclaim_epochs` gives the seat back). Those
-two are what make admission permissionless without making it free, and ADR-0054 explicitly leaves
-both undecided. The floor's protected permille, which all three lines arrived at independently, is
-one field — `min_base_class_share_permille`, the audit's name, because its version landed first
-and closes a measured critical — and every path that can move a permille checks it.
+連続 epoch の streak で一 permille ずつ増やす旧 share 調整は採用しない。minimum-share class の budget では必要な変化を観測できず、実測で target が動かなかったため。[ADR-0054](0054-palw-share-follows-production.md) の比例調整を採用する。Decision 3 の登録 exposure と Decision 5 の reclamation は維持する。
 
 ## Decision 5 — Reclamation: dead classes give the network back
 

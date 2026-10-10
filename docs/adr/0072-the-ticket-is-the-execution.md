@@ -78,8 +78,7 @@ fact, checked where the header is and never re-derived in the transition.
 
 **Decision 5 — One draw is one execution.**
 `palw_pwu_v1(target, per_inference) = max(1, expected_draws(target)) × per_inference`. ADR-0071
-Decision 2's `>> PALW_TICKET_NONCE_BUCKET_LOG2` is withdrawn (its text stays in that ADR as the
-record); the bucket constant itself stands, because it is what names which execution a nonce was
+Decision 2's `>> PALW_TICKET_NONCE_BUCKET_LOG2` is withdrawn (that ADR retains the withdrawal reason); the bucket constant itself stands, because it is what names which execution a nonce was
 paid for by. The `DerivedV1` equality (ADR-0045) is untouched — a producer still claims exactly the
 derived value.
 

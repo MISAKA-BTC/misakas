@@ -34,6 +34,7 @@ The code, current `main` CLI `--help` and ADR decisions are authoritative. This 
 - [ADR index](adr/README.md)
 - [PQ specification](kaspa-pq-spec.md)
 - [ML-DSA-87 design](kaspa-pq-design-mldsa87.md)
+- [PALW versioned Kernel design](design/palw/versioned-kernels.md)
 - [PALW registry map](palw-registry-map.md)
 - [PALW extension envelope](palw-extension-envelope.md)
 

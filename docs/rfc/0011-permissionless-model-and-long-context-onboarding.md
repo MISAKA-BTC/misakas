@@ -16,7 +16,7 @@ Registration checks a bounded `VerificationPlanV1`: semantic bindings, coverage 
 
 **Revision boundary.** This replaces §13.1's former requirement for a model-specific, exhaustive deterministic admission proof as the preferred route. Small existing classes may retain exact sizing/replay. The old 9B/2M failures and coverage audit remain historical evidence. Probabilistic execution acceptance does not permit probabilistic parser/memory safety: every permitted query and terminal dispute must still fit enforced bounds, established through reusable approved kernel-primitive rules and composition. An unknown dynamic access can use an authenticated-memory constraint and bounded opening; it cannot be omitted from verification. §15 defines the new route; where earlier release gates mention exact bounds they refer to resource safety and terminal semantics, not full normal-path replay.
 
-**Kernel-only revision, 2026-10-06:** [ADR-0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) and [RFC05 §§K.0–K.8](0005-palw-ml-vm.md) withdraw the BVM/GVM fallback. Model extensibility uses declarative plans within active kernels or a coordinated, versioned kernel extension when semantics/checkers/courts are missing (§16). The probabilistic, encoded-constraint acceptance policy in §15 is unchanged. This is not a claim that all finite models fit today's kernels or that a SegWit-style extension is automatically a soft fork.
+**Kernel-only revision, 2026-10-06:** [ADR-0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) and [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md) withdraw the BVM/GVM fallback. Model extensibility uses declarative plans within active kernels or a coordinated, versioned kernel extension when semantics/checkers/courts are missing (§16). The probabilistic, encoded-constraint acceptance policy in §15 is unchanged. This is not a claim that all finite models fit today's kernels or that a SegWit-style extension is automatically a soft fork.
 
 **The coverage claim this RFC is intended to enable is not “90% of decoder fixtures” or “90% of local LLMs”; it is `registered_full_task / D_all ≥ 0.90` for a dated, reproducible census of all public Hugging Face model repositories (§7).** `registered_full_task` requires an accepted on-chain class registration under the target rules, or independently reproduced equivalence to an already registered class (§11.2), not a passing config parser, a draft artifact, a catalogue entry, a short-context substitute or a model-market line. This proposal does not assert that today's implementation meets that threshold; it defines the evidence that must exist before anyone may say it does.
 
@@ -484,7 +484,7 @@ target in §15 stay in force. Static bounds/identity checks remain deterministic
 
 The removed path is `unsupported model → BVM/GVM/Universal VM`. It is replaced by
 `unsupported relation → precise missing kernel capability → reviewed versioned upgrade → retry`.
-The full kernel descriptor, class binding and activation design is [RFC05 §§K.0–K.8](0005-palw-ml-vm.md).
+The full kernel descriptor, class binding and activation design is [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md).
 
 ### 16.2 Registration outcomes, independently of hardware
 
@@ -560,7 +560,7 @@ performance claim follows from choosing the kernel-only implementation strategy.
 
 This is a proposed semantic lifecycle for the new route, not a change to current Rust enums, legacy registration,
 active classes or network rules. [RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)
-alone defines the policy, sources, seed/sampling and interactive transcript rules. RFC05 binds the policy to the
+alone defines the policy, sources, seed/sampling and interactive transcript rules. The [Kernel design](../design/palw/versioned-kernels.md) binds the policy to the
 Kernel; RFC02 binds it into new class/plan identity; RFC13 records commitment/evidence and resumable tooling.
 
 ```text

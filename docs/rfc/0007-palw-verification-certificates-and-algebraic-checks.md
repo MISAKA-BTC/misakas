@@ -16,7 +16,7 @@
 > **Revision precedence:** Part VI owns new post-commit source eligibility, ordering, seed derivation, sampling, interactive-round timing and recovery; other RFCs reference it instead of defining competing seeds. Part V owns checker/receipt coverage. Part II's private sketches and Parts III/IV's older assignment/audit sources are historical or legacy protocols, not substitutions for the new public challenge source. Existing consensus is governed by [spec 18](../spec/palw/18-verification-certificates.md), not retroactively changed by this RFC.
 
 > **Kernel-only boundary (2026-10-06):** [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)
-> and [RFC05 §§K.0–K.8](0005-palw-ml-vm.md) govern Part V. Checkers are approved versioned kernel
+> and [Kernel design §§K.0–K.8](../design/palw/versioned-kernels.md) govern Part V. Checkers are approved versioned kernel
 > relations; registration, claims, receipts and transcripts bind descriptor/plan identity. GKR's
 > generality does not authorize arbitrary uploaded programs, guests or universal CPU circuits.
 > Missing relations require a coordinated kernel upgrade and matching bounded court, not a VM
