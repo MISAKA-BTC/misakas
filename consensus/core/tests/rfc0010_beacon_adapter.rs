@@ -161,7 +161,13 @@ fn an_independent_source_inside_the_window_locks_and_verifies() {
     assert!(matches!(state(&empty, RELEASE + 3), PanelBeaconStateV1::Accumulator(WorkBeaconStateV1::Collecting { have: 0, need: 1 })));
     assert!(matches!(state(&history, RELEASE + 2), PanelBeaconStateV1::Accumulator(WorkBeaconStateV1::Candidate { have: 1, .. })));
     assert!(matches!(state(&history, RELEASE + 3), PanelBeaconStateV1::Accumulator(WorkBeaconStateV1::Locked(_))));
-    assert!(matches!(state(&empty, RELEASE + 1 + 10), WorkBeaconStateV1::Unavailable { have: 0, need: 1 }), "BEACON_UNAVAILABLE");
+    assert!(
+        matches!(
+            state(&empty, RELEASE + 1 + 10),
+            PanelBeaconStateV1::Accumulator(WorkBeaconStateV1::Unavailable { have: 0, need: 1 })
+        ),
+        "BEACON_UNAVAILABLE"
+    );
 }
 
 #[test]
