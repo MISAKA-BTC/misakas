@@ -222,6 +222,8 @@ pub enum PipelineFaultWireV1 {
     Edge { stage: u8, input: u16, position: u32, claimed: TensorWireV1, upstream: Vec<TensorWireV1> },
     /// Delivered id `index` is not the decode of the committed logits row that selects it.
     Decode { index: u32, logits: TensorWireV1 },
+    /// Expected input commitment differs. Upstream values are verifier-computed and authenticated; no producer input opening.
+    EdgeCommitment { stage: u8, input: u16, position: u32, upstream: Vec<TensorWireV1> },
 }
 
 impl PipelineFaultWireV1 {
@@ -354,6 +356,38 @@ impl FreshPipelineVerifierV1 {
         self.check_salted(materials, self.record.beacon)
     }
 
+    /// Exact computation, edge and decode check with no producer node/input values or fault-location hint.
+    pub fn reexecute(&self, materials: &[&dyn MaterialV1]) -> Result<PipelineFindingV1, String> {
+        use crate::pipeline::PipelineReexecutionV1;
+        Ok(match crate::pipeline::reexecute_pipeline_v1(&self.ctx(), materials)? {
+            PipelineReexecutionV1::StageFault { stage, proof } => {
+                PipelineFindingV1::Fault(PipelineFaultWireV1::Stage { stage, proof: FaultProofWireV1::of(&proof) })
+            }
+            PipelineReexecutionV1::EdgeFault { stage, input, position, upstream } => {
+                PipelineFindingV1::Fault(PipelineFaultWireV1::EdgeCommitment {
+                    stage,
+                    input,
+                    position,
+                    upstream: upstream.iter().map(TensorWireV1::of).collect(),
+                })
+            }
+            PipelineReexecutionV1::Match { outputs } => {
+                if let (Some((si, from, _, _)), Some(rule)) = (self.stream(), self.decode) {
+                    for (r, id) in self.record.generated.iter().enumerate() {
+                        let t = outputs[si].get(from as usize + r).ok_or("no replay stream output")?;
+                        if rule.select(t) != Some(*id) {
+                            return Ok(PipelineFindingV1::Fault(PipelineFaultWireV1::Decode {
+                                index: r as u32,
+                                logits: TensorWireV1::of(t),
+                            }));
+                        }
+                    }
+                }
+                PipelineFindingV1::Pass
+            }
+        })
+    }
+
     /// [`Self::check`] with the checker's OWN randomness (`salt` replaces the public beacon in every stage's challenge): grinding
     /// the beacon gains a producer nothing against such a checker, and the courts never read the vectors.
     pub fn check_salted(&self, materials: &[&dyn MaterialV1], salt: Digest) -> PipelineFindingV1 {
@@ -426,6 +460,13 @@ impl FreshPipelineVerifierV1 {
                     Some(t) if t == id => Err("no fault: the delivered id is the decode".into()),
                     _ => Ok(()),
                 }
+            }
+            PipelineFaultWireV1::EdgeCommitment { stage, input, position, upstream } => {
+                pipeline_structure_v1(&ctx)?;
+                let upstream = upstream.iter().map(TensorWireV1::decode).collect::<Result<Vec<_>, _>>()?;
+                crate::pipeline::verify_edge_commitment_fault_v1(&ctx, stage, input, position, &upstream)
+                    .map(|_| ())
+                    .map_err(|e| format!("{e:?}"))
             }
         }
     }

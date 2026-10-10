@@ -188,6 +188,9 @@ pub enum FaultKindV1 {
     /// commitment of what its authenticated inputs and rows rebuild. Proved without the producer's bytes: the proof carries the
     /// inputs and the rows, never the output.
     Misderived,
+    /// Exact recomputation from authenticated operands has a different output commitment. The producer's output is not read.
+    /// This generalizes the derived-value court to every covered primitive, with separately priced whole-instance work.
+    CommitmentMismatch,
 }
 
 /// **A fault localized to one primitive instance**, with every opening the court needs.
@@ -314,9 +317,18 @@ struct Ctx<'a> {
     derived_cache: RefCell<BTreeMap<(u32, u16, u16), Tensor>>,
 }
 
+pub(crate) fn canonical_tensor_v1(t: &Tensor) -> bool {
+    t.shape.iter().try_fold(1usize, |n, d| n.checked_mul(*d)) == Some(t.data.len()) && t.data.iter().all(|v| t.dtype.contains(*v))
+}
+
 impl Ctx<'_> {
     /// Is `t` the value `src` names? Public sources are recomputed.
     fn authentic(&self, src: &SourceV1, t: &Tensor) -> Result<bool, String> {
+        // A locally supplied Tensor must have the same integer interpretation as its canonical wire bytes. In particular,
+        // out-of-range i128 values must not authenticate through the wire dtype's truncation and change replay arithmetic.
+        if !canonical_tensor_v1(t) {
+            return Ok(false);
+        }
         Ok(match src {
             SourceV1::Const(j) => const_tensor(self.c.program, *j).map(|c| c == *t).unwrap_or(false),
             SourceV1::Param { index, layer } => {
@@ -880,6 +892,113 @@ fn check_instance(
     }
 }
 
+/// Exact local replay found no differing commitment, or a proof of the first difference. Logits are the verifier's computed
+/// values (authenticated by the matching commitments), so a caller can check delivered output without a producer trace.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReexecutionV1 {
+    Match {
+        logits: Vec<Tensor>,
+        /// The final position's nodes by occurrence, authenticated by the matching commitments. Typed memory callers use
+        /// these values for the next step's state overlay, without reading a producer's state-write openings.
+        final_values: Vec<Vec<Tensor>>,
+    },
+    Fault(KernelFaultProofV1),
+}
+
+fn checked_reexecution_bounds(c: &ClaimContextV1<'_>) -> Result<(u128, u64, u64), String> {
+    let expected = crate::plan::plan_for_tir_program_v1(c.descriptor, c.program, c.plan.program_root, c.plan.max_positions)
+        .map_err(|(_, why)| why)?;
+    if c.plan.grammar != expected.grammar
+        || c.plan.relations != expected.relations
+        || c.plan.boundaries != expected.boundaries
+        || c.plan.budgets != expected.budgets
+    {
+        return Err("the replay plan is not derived from this program".into());
+    }
+    let b = crate::plan::reexecution_bounds_v1(c.program, c.plan);
+    if b.0 > c.descriptor.limits.max_claim_verifier_work
+        || b.1 > c.descriptor.limits.max_court_bytes
+        || b.2 > c.descriptor.limits.max_court_work
+    {
+        return Err("exact replay or its commitment court exceeds the descriptor's resources".into());
+    }
+    Ok(b)
+}
+
+/// Re-execute using the acquired artifact and public inputs. `source.node_value` is NEVER called: every node comes from local
+/// execution and is compared with the public trace commitments in dependency order. The first mismatch has authenticated
+/// predecessors, so its proof is independent of all producer disclosures and of any guessed fault location.
+pub fn reexecute_claim_v1(c: &ClaimContextV1<'_>, source: &dyn MaterialV1) -> Result<ReexecutionV1, String> {
+    let w = WiringV1::for_stage(c.program, c.stage).map_err(|e| e.to_string())?;
+    let ctx = Ctx {
+        c,
+        w,
+        param_cache: RefCell::new(BTreeMap::new()),
+        cost: RefCell::new(CheckCostV1::default()),
+        derived_cache: RefCell::new(BTreeMap::new()),
+    };
+    shape_and_binding(&ctx)?;
+    checked_reexecution_bounds(c)?;
+    struct Computed<'a> {
+        source: &'a dyn MaterialV1,
+        nodes: RefCell<BTreeMap<(u32, u16, u16), Tensor>>,
+    }
+    impl MaterialV1 for Computed<'_> {
+        fn node_value(&self, p: u32, s: u16, n: u16) -> Option<Tensor> {
+            self.nodes.borrow().get(&(p, s, n)).cloned()
+        }
+        fn param(&self, i: u16, l: Option<u16>) -> Option<Tensor> {
+            self.source.param(i, l)
+        }
+        fn stage_input(&self, k: u16, p: u32) -> Option<Tensor> {
+            self.source.stage_input(k, p)
+        }
+    }
+    let computed = Computed { source, nodes: RefCell::new(BTreeMap::new()) };
+    let mut logits = Vec::with_capacity(c.tokens.len());
+    for p in 0..c.tokens.len() as u32 {
+        for s in 0..ctx.w.occurrences.len() as u16 {
+            let block = ctx.w.occurrences[s as usize].0 as usize;
+            for n in 0..c.program.blocks[block].nodes.len() as u16 {
+                let (inputs, prior_rows) =
+                    ctx.operands(&computed, (p, s, n)).map_err(|why| format!("local replay operand: {why:?}"))?;
+                let value = eval_node(c.program, ctx.w.node(s, n), &inputs, &prior_rows, ctx.w.h(s, p));
+                let committed = c.trace.at(p, s, n).ok_or("no committed replay instance")?;
+                if !value.as_ref().is_ok_and(|v| tensor_commitment(v) == *committed) {
+                    let proof = KernelFaultProofV1 {
+                        position: p,
+                        occurrence: s,
+                        node: n,
+                        kind: FaultKindV1::CommitmentMismatch,
+                        output: Tensor::zeros(DType::Idx, &[]),
+                        inputs,
+                        prior_rows,
+                        scalar: None,
+                    };
+                    verify_fault_proof_v1(c, &proof).map_err(|e| format!("replay's proof did not authenticate: {e:?}"))?;
+                    return Ok(ReexecutionV1::Fault(proof));
+                }
+                computed.nodes.borrow_mut().insert((p, s, n), value.map_err(|e| e.to_string())?);
+            }
+        }
+        let post = (ctx.w.occurrences.len() - 1) as u16;
+        logits.push(computed.node_value(p, post, c.program.logits).ok_or("no replay logits")?);
+    }
+    let p = c.tokens.len() as u32 - 1;
+    let final_values = ctx
+        .w
+        .occurrences
+        .iter()
+        .enumerate()
+        .map(|(s, (block, _))| {
+            (0..c.program.blocks[*block as usize].nodes.len())
+                .map(|n| computed.node_value(p, s as u16, n as u16).ok_or("no final replay value".to_string()))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ReexecutionV1::Match { logits, final_values })
+}
+
 /// **The terminal court**: re-authenticate the proof's openings from public material and recompute.
 pub fn verify_fault_proof_v1(c: &ClaimContextV1<'_>, proof: &KernelFaultProofV1) -> Result<ConvictionV1, DismissalV1> {
     let w = WiringV1::for_stage(c.program, c.stage)
@@ -912,10 +1031,17 @@ pub fn verify_fault_proof_v1(c: &ClaimContextV1<'_>, proof: &KernelFaultProofV1)
         }
     };
     let misderived = proof.kind == FaultKindV1::Misderived;
+    let commitment_only = proof.kind == FaultKindV1::CommitmentMismatch;
+    if commitment_only {
+        checked_reexecution_bounds(c).map_err(na)?;
+        if proof.output != Tensor::zeros(DType::Idx, &[]) || proof.scalar.is_some() {
+            return Err(na("a commitment court carries no producer output or scalar openings".into()));
+        }
+    }
     if misderived && !ctx.w.is_derived(s, n) {
         return Err(na("only a derived value is tried without its output".into()));
     }
-    if !misderived {
+    if !misderived && !commitment_only {
         check(&SourceV1::Node { position: p, occurrence: s, node: n }, &proof.output, "the output")?;
     }
     if proof.inputs.len() != node.inputs.len() {
@@ -932,7 +1058,7 @@ pub fn verify_fault_proof_v1(c: &ClaimContextV1<'_>, proof: &KernelFaultProofV1)
         check(src, t, "a history row")?;
     }
     let convicted = ConvictionV1 { position: p, occurrence: s, node: n, kind: proof.kind.clone() };
-    if misderived {
+    if misderived || commitment_only {
         // The court rebuilds the value from the authenticated inputs and rows and compares commitments.
         let committed = ctx.commitment_of(&SourceV1::Node { position: p, occurrence: s, node: n }).map_err(na)?;
         return match eval_node(c.program, node, &proof.inputs, &proof.prior_rows, ctx.w.h(s, p)) {
@@ -950,7 +1076,9 @@ pub fn verify_fault_proof_v1(c: &ClaimContextV1<'_>, proof: &KernelFaultProofV1)
             Ok(v) if v == proof.output => Err(DismissalV1::NoFault),
             _ => Ok(convicted),
         },
-        FaultKindV1::MatMulScalar { .. } | FaultKindV1::Misderived => Err(na("unreachable: tried by its own court".into())),
+        FaultKindV1::MatMulScalar { .. } | FaultKindV1::Misderived | FaultKindV1::CommitmentMismatch => {
+            Err(na("unreachable: tried by its own court".into()))
+        }
     }
 }
 

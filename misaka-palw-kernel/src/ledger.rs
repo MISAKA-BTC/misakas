@@ -2759,6 +2759,41 @@ impl MaterialV1 for StageMaterial<'_> {
 }
 
 impl OutsiderV1<'_> {
+    /// Deterministically check a program or pipeline claim's computation and decode from public commitments, job and the acquired
+    /// registered artifact. No producer node values are requested, even when every position is withheld. Missing/incorrect
+    /// artifact bytes are a verifier acquisition error, never producer misconduct. DA duties are checked separately by `check`.
+    pub fn check_computation(&self) -> Result<OutsiderFindingV1, String> {
+        let row = self.ledger.claims.get(&self.claim).ok_or("no such claim")?;
+        if matches!(&row.body, ClaimBodyV1::Pipeline { .. }) {
+            return self.check_pipeline_mode(row, true);
+        }
+        let ClaimBodyV1::Program { claim, .. } = &row.body else {
+            return Err("a typed claim: replay with crate::spec::outsider::SpecOutsiderV1".into());
+        };
+        let class = self.ledger.classes.get(&row.class_binding_id).ok_or("no such class")?;
+        let job = self.ledger.jobs.get(&row.job_id).ok_or("no such job")?;
+        let (record, header) = self.ledger.public_record(&self.claim).ok_or("no public record")?;
+        let fresh = FreshVerifierV1::from_public_bytes(&record.to_bytes(), &self.ledger.known, header)?;
+        let material = StageMaterial { o: self, stage: 0, program: 0, commitments: &class.param_commitments };
+        match fresh.reexecute(&material)? {
+            crate::verify::ReexecutionV1::Fault(proof) => {
+                Ok(OutsiderFindingV1::Prosecute(ProsecutionV1::Kernel(crate::public::FaultProofWireV1::of(&proof).to_bytes())))
+            }
+            crate::verify::ReexecutionV1::Match { logits, .. } => {
+                for r in 0..claim.generated.len() {
+                    let t = logits.get(claim.select_position(job, r) as usize).ok_or("no replay decode position")?;
+                    if job.decode.select(t) != Some(claim.generated[r]) {
+                        return Ok(OutsiderFindingV1::Prosecute(ProsecutionV1::Decode(DecodeFaultV1 {
+                            index: r as u32,
+                            logits: TensorWireV1::of(t),
+                        })));
+                    }
+                }
+                Ok(OutsiderFindingV1::Clean)
+            }
+        }
+    }
+
     fn node(&self, stage: u8, p: u32, s: u16, n: u16) -> Option<Tensor> {
         if let Some(sp) = self.ledger.served.get(&(self.claim, stage, p)) {
             return sp.values.get(s as usize)?.get(n as usize)?.as_ref()?.decode().ok();
@@ -2844,6 +2879,10 @@ impl OutsiderV1<'_> {
     }
 
     fn check_pipeline(&self, row: &ClaimRowV1) -> Result<OutsiderFindingV1, String> {
+        self.check_pipeline_mode(row, false)
+    }
+
+    fn check_pipeline_mode(&self, row: &ClaimRowV1, commitments_only: bool) -> Result<OutsiderFindingV1, String> {
         let l = self.ledger;
         let class = l.pipeline_classes.get(&row.class_binding_id).ok_or("no such class")?;
         let (record, header, binding) = l.pipeline_public_record(&self.claim).ok_or("no record")?;
@@ -2862,7 +2901,7 @@ impl OutsiderV1<'_> {
             })
             .collect();
         let refs: Vec<&dyn MaterialV1> = mats.iter().map(|m| m as &dyn MaterialV1).collect();
-        match fresh.check_salted(&refs, self.salt) {
+        match if commitments_only { fresh.reexecute(&refs)? } else { fresh.check_salted(&refs, self.salt) } {
             PipelineFindingV1::Pass => Ok(OutsiderFindingV1::Clean),
             PipelineFindingV1::Fault(w) => Ok(OutsiderFindingV1::Prosecute(ProsecutionV1::Pipeline(w.to_bytes()))),
             PipelineFindingV1::Unavailable(what) => Err(format!("unavailable with every value in hand: {what}")),

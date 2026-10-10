@@ -235,6 +235,8 @@ fn prosecution_bounds_for_view_v1(
         }
     }
     let b = &plan.budgets;
+    let (reexecution_work, commitment_bytes, commitment_work) = crate::plan::reexecution_bounds_v1(program, plan);
+    let court_bytes = b.worst_court_bytes.max(commitment_bytes);
     let positions = plan.max_positions as u128;
     let occurrences = program.occurrences();
     let nodes_per_position: u64 = occurrences.iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
@@ -260,12 +262,12 @@ fn prosecution_bounds_for_view_v1(
     }
     let bounds = ProsecutionBoundsV1 {
         max_public_bytes: response.saturating_mul(positions).saturating_add(b.artifact_bytes).saturating_add(commit),
-        max_opening_bytes: b.worst_court_bytes,
-        max_filing_bytes: b.worst_court_bytes.saturating_mul(2).saturating_add(FILING_HEADER_BYTES_V1),
+        max_opening_bytes: court_bytes,
+        max_filing_bytes: court_bytes.saturating_mul(2).saturating_add(FILING_HEADER_BYTES_V1),
         max_response_bytes: response,
         max_commit_bytes: commit,
         max_localization_rounds: 2,
-        max_court_work: b.worst_court_work,
+        max_court_work: b.worst_court_work.max(commitment_work),
         max_verifier_ram: verifier_ram_bound_v1(program, plan, commit, response),
         max_retained_state: retained_state_bound_v1(commit, response, plan.max_positions),
         max_concurrent_sessions: plan.max_positions,
@@ -273,6 +275,7 @@ fn prosecution_bounds_for_view_v1(
     };
     let l = &descriptor.limits;
     for (what, required, limit) in [
+        ("exact localization work", reexecution_work, l.max_claim_verifier_work),
         ("public bytes", bounds.max_public_bytes, policy.max_public_bytes),
         ("opening bytes", bounds.max_opening_bytes as u128, l.max_court_bytes as u128),
         ("court work", bounds.max_court_work as u128, l.max_court_work as u128),
@@ -331,16 +334,21 @@ pub fn public_pipeline_prosecution_complete_v1(
         deadline_daa: policy.court_deadline_daa,
     };
     let mut upstream_bytes: Vec<u128> = Vec::new();
+    let mut replay_work = 0u128;
+    let mut structural_work = 0u128;
     for (si, (st, sp)) in pipeline.stages.iter().zip(&plan.stages).enumerate() {
         let Some(prog) = programs.get(st.program as usize) else {
             gaps.push(G::WrongDescriptor);
             continue;
         };
         let v = crate::pipeline::stage_view_v1(prog);
+        replay_work = replay_work.saturating_add(crate::plan::reexecution_bounds_v1(&v.view, sp).0);
         match prosecution_bounds_for_view_v1(descriptor, &v.view, crate::public::program_root_v1(&prog.encode()), sp, material, &open)
         {
             Err(g) => gaps.push(G::Stage { stage: si as u8, gaps: g }),
             Ok(b) => {
+                // A pipeline court authenticates the surrounding pipeline record, not just its accused stage.
+                structural_work = structural_work.saturating_add((b.max_commit_bytes as u128).saturating_mul(16));
                 // A stage position's response carries its stage inputs too.
                 let inputs: u128 = plan
                     .edges
@@ -378,7 +386,24 @@ pub fn public_pipeline_prosecution_complete_v1(
     }
     let edge_filing = upstream_bytes.iter().copied().max().unwrap_or(0).saturating_add(FILING_HEADER_BYTES_V1 as u128);
     total.max_filing_bytes = total.max_filing_bytes.max(edge_filing.min(u64::MAX as u128) as u64);
+    let edge_work = plan.edges.iter().fold(0u128, |sum, e| {
+        let positions = plan.stages.get(e.stage as usize).map_or(0, |s| s.max_positions as u128);
+        sum.saturating_add((e.elements as u128).saturating_mul(positions).saturating_mul(128))
+    });
+    let record_work = structural_work
+        .saturating_add((pipeline.encode().len() as u128).saturating_mul(16))
+        .saturating_add(programs.iter().map(|p| p.encode().len() as u128).sum::<u128>().saturating_mul(16));
+    let court_work = (total.max_court_work as u128).saturating_add(record_work).max(
+        upstream_bytes.iter().copied().max().unwrap_or(0).saturating_mul(64).saturating_add(edge_work).saturating_add(record_work),
+    );
+    total.max_court_work = court_work.min(u64::MAX as u128) as u64;
     for (what, required, limit) in [
+        (
+            "exact pipeline localization work",
+            replay_work.saturating_add(edge_work).saturating_add(record_work),
+            descriptor.limits.max_claim_verifier_work,
+        ),
+        ("pipeline court work", court_work, descriptor.limits.max_court_work as u128),
         ("public bytes", total.max_public_bytes, policy.max_public_bytes),
         ("verifier RAM", total.max_verifier_ram, policy.max_verifier_ram),
         ("retained state", total.max_retained_state, policy.max_retained_state),

@@ -19,7 +19,7 @@ use crate::job::DecodeRuleV1;
 use crate::ledger::{ClaimBodyV1, ClassRowV1, KernelLedgerV1, OutsiderFindingV1, ProsecutionV1, PublicArtifactV1, PublicSourceV1};
 use crate::public::{FaultProofWireV1, FreshVerifierV1, PublicClaimRecordV1, TensorWireV1};
 use crate::trace::{ParamCommitmentsV1, derived_mask_v1, tensor_commitment};
-use crate::verify::{MaterialV1, ScopeV1, ScopeVerdictV1};
+use crate::verify::{MaterialV1, ReexecutionV1, ScopeV1, ScopeVerdictV1};
 
 use super::composite::{
     ComponentV1, QuerySourceV1, StageClaimV1, StageInputV1, model_stage_record_v1, stage_claim_v1, stage_job_v1, stage_prompt_v1,
@@ -168,6 +168,17 @@ impl SpecOutsiderV1<'_> {
 
     /// **Check the claim.**
     pub fn check(&self) -> Result<OutsiderFindingV1, String> {
+        self.check_mode(false)
+    }
+
+    /// Check computation, output and state using the acquired registered model and authenticated public pre-state/snapshot.
+    /// No producer node value is read. Snapshot/pre-state acquisition can still produce a public DA demand; `check` retains
+    /// the separate node-disclosure checks of the historical response protocol.
+    pub fn check_computation(&self) -> Result<OutsiderFindingV1, String> {
+        self.check_mode(true)
+    }
+
+    fn check_mode(&self, commitments_only: bool) -> Result<OutsiderFindingV1, String> {
         let l = self.ledger;
         let row = l.claims.get(&self.claim).ok_or("no such claim")?;
         let ClaimBodyV1::Spec(body) = &row.body else { return Err("not a typed claim".into()) };
@@ -181,24 +192,63 @@ impl SpecOutsiderV1<'_> {
                 let public = l.memory_state_tensors_v1(&row.class_binding_id, body.pre_source.as_ref(), pre, self.artifact);
                 let pre_values: Vec<Option<Tensor>> = (0..root.slots.len())
                     .map(|k| {
-                        self.node(MEMORY_PRE_STATE_STAGE_V1, 0, 0, k as u16)
-                            .filter(|t| tensor_commitment(t) == pre[k])
-                            .or_else(|| public.as_ref().map(|v| v[k].clone()))
+                        public.as_ref().map(|v| v[k].clone()).or_else(|| {
+                            self.node(MEMORY_PRE_STATE_STAGE_V1, 0, 0, k as u16).filter(|t| tensor_commitment(t) == pre[k])
+                        })
                     })
                     .collect();
                 if pre_values.iter().any(Option::is_none) {
                     missing.push((MEMORY_PRE_STATE_STAGE_V1, 0));
                 }
                 let offsets = step_offsets_v1(&c.steps);
-                for (i, st) in c.steps.iter().enumerate() {
-                    missing.extend(self.missing_positions(0, offsets[i], &rule.program, &st.commitments));
+                if !commitments_only {
+                    for (i, st) in c.steps.iter().enumerate() {
+                        missing.extend(self.missing_positions(0, offsets[i], &rule.program, &st.commitments));
+                    }
                 }
                 if !missing.is_empty() {
                     return Ok(OutsiderFindingV1::Demand(missing));
                 }
                 let states = boundary_states_v1(writers, pre, &c.steps).ok_or("the boundary states do not derive")?;
                 let (post, logits) = rule.logits_at();
+                let mut replay_state = pre_values.iter().cloned().collect::<Option<Vec<_>>>().ok_or("no replay pre-state")?;
                 for (i, st) in c.steps.iter().enumerate() {
+                    if commitments_only {
+                        let overlay = overlay_v1(&rule.param_commitments, &root.slots, &states[i]);
+                        let slots = root.slots.iter().zip(&replay_state).map(|(s, v)| (s.param, v.clone())).collect();
+                        let mat = KernelMaterial { o: self, stage: 0, offset: offsets[i], program: 0, commitments: &overlay, slots };
+                        let record = step_record_v1(&self.claim, i as u32, rule, st, &overlay, &j.chunks[i]);
+                        let fresh = FreshVerifierV1::from_public_bytes(
+                            &record.to_bytes(),
+                            &l.known,
+                            step_header_v1(rule, &row.class_binding_id, &overlay),
+                        )?;
+                        match fresh.reexecute(&mat)? {
+                            ReexecutionV1::Fault(p) => {
+                                return Ok(spec(SpecFaultV1::MemoryStep {
+                                    step: i as u32,
+                                    proof: FaultProofWireV1::of(&p).to_bytes(),
+                                }));
+                            }
+                            ReexecutionV1::Match { logits, final_values } => {
+                                let t = logits.last().ok_or("no replay memory logits")?;
+                                if DecodeRuleV1::Greedy.select(t) != Some(c.generated[i]) {
+                                    return Ok(spec(SpecFaultV1::MemoryDecode { step: i as u32, logits: TensorWireV1::of(t) }));
+                                }
+                                replay_state = writers
+                                    .iter()
+                                    .map(|(s, n)| {
+                                        final_values
+                                            .get(*s as usize)
+                                            .and_then(|v| v.get(*n as usize))
+                                            .cloned()
+                                            .ok_or("no replay state writer")
+                                    })
+                                    .collect::<Result<_, _>>()?;
+                            }
+                        }
+                        continue;
+                    }
                     let last = offsets[i + 1] - 1;
                     let t = self.node(0, last, post, logits).ok_or("the step's logits vanished")?;
                     if DecodeRuleV1::Greedy.select(&t) != Some(c.generated[i]) {
@@ -239,7 +289,9 @@ impl SpecOutsiderV1<'_> {
                 for (s, (st, comp)) in c.stages.iter().zip(components).enumerate() {
                     match (st, comp) {
                         (StageClaimV1::Model { commitments, .. }, ComponentV1::Model(m)) => {
-                            missing.extend(self.missing_positions(s as u8, 0, &m.program, commitments))
+                            if !commitments_only {
+                                missing.extend(self.missing_positions(s as u8, 0, &m.program, commitments))
+                            }
                         }
                         (StageClaimV1::Retrieval { .. }, ComponentV1::Retrieval(r)) => {
                             match self.snapshot(SNAPSHOT_STAGE_BASE_V1 + s as u8, r)? {
@@ -255,6 +307,7 @@ impl SpecOutsiderV1<'_> {
                 if !missing.is_empty() {
                     return Ok(OutsiderFindingV1::Demand(missing));
                 }
+                let mut replay_logits: BTreeMap<usize, Tensor> = BTreeMap::new();
                 for (s, ((cs, st), comp)) in root.stages.iter().zip(&c.stages).zip(components).enumerate() {
                     match (st, comp) {
                         (StageClaimV1::Retrieval { query, result, .. }, ComponentV1::Retrieval(r)) => {
@@ -265,8 +318,11 @@ impl SpecOutsiderV1<'_> {
                                     return Err("the upstream stage is not a model".into());
                                 };
                                 let (post, node) = m.logits_at();
-                                let logits =
-                                    self.node(t, commitments.len() as u32 - 1, post, node).ok_or("the upstream logits vanished")?;
+                                let logits = if commitments_only {
+                                    replay_logits.get(&(t as usize)).cloned().ok_or("no replay upstream logits")?
+                                } else {
+                                    self.node(t, commitments.len() as u32 - 1, post, node).ok_or("the upstream logits vanished")?
+                                };
                                 let same =
                                     logits.data.len() == query.len() && logits.data.iter().zip(query).all(|(a, b)| *a == *b as i128);
                                 if !same {
@@ -284,6 +340,36 @@ impl SpecOutsiderV1<'_> {
                             let prompt = stage_prompt_v1(sources, j, &c.stages).ok_or("a source of another kind")?;
                             let sub_job = stage_job_v1(&cs.component, &row.job_id, s as u8, prompt, *max_new_tokens);
                             let sub_claim = stage_claim_v1(&sub_job, &row.producer, generated, evidence);
+                            if commitments_only {
+                                let record =
+                                    model_stage_record_v1(&self.claim, s as u8, m, &sub_job, &sub_claim, evidence, commitments);
+                                let mat = model_material(self, s as u8, m);
+                                let fresh = FreshVerifierV1::from_public_bytes(&record.to_bytes(), &l.known, m.header(cs.component))?;
+                                match fresh.reexecute(&mat)? {
+                                    ReexecutionV1::Fault(p) => {
+                                        return Ok(spec(SpecFaultV1::StageKernel {
+                                            stage: s as u8,
+                                            proof: FaultProofWireV1::of(&p).to_bytes(),
+                                        }));
+                                    }
+                                    ReexecutionV1::Match { logits, .. } => {
+                                        for r in 0..generated.len() {
+                                            let t = logits
+                                                .get(sub_claim.select_position(&sub_job, r) as usize)
+                                                .ok_or("no replay stage logits")?;
+                                            if sub_job.decode.select(t) != Some(generated[r]) {
+                                                return Ok(spec(SpecFaultV1::StageDecode {
+                                                    stage: s as u8,
+                                                    index: r as u32,
+                                                    logits: TensorWireV1::of(t),
+                                                }));
+                                            }
+                                        }
+                                        replay_logits.insert(s, logits.last().cloned().ok_or("no final stage logits")?);
+                                    }
+                                }
+                                continue;
+                            }
                             let (post, logits) = m.logits_at();
                             for r in 0..generated.len() {
                                 let p = sub_claim.select_position(&sub_job, r);

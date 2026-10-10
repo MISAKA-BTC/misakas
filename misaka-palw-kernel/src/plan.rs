@@ -303,6 +303,70 @@ pub(crate) fn relation_costs(rel: &PlanRelationV1, window_rows: u64, row_bytes: 
     (work, out_bytes, court_bytes.min(u64::MAX as u128) as u64, court_work)
 }
 
+/// Exact re-execution and the commitment-mismatch court. This court computes the whole output commitment: price authenticated
+/// operands, history, hashing and multiplication. The caller must re-derive the plan from the validated program first.
+pub fn reexecution_bounds_v1(program: &TirProgramV1, plan: &VerificationPlanV1) -> (u128, u64, u64) {
+    let mut total = 0u128;
+    let mut bytes = 0u128;
+    let mut court = 0u128;
+    for r in &plan.relations {
+        let node = &program.blocks[r.block as usize].nodes[r.node as usize];
+        let (prior_elements, prior_bytes, prior_rows) = match node.prim {
+            Prim::HistAppend { state } => {
+                let st = &program.states[state as usize];
+                let rows = match st.kind {
+                    StateKind::Hist { window } => (window as u128).min(plan.max_positions as u128).saturating_sub(1),
+                    _ => 0,
+                };
+                let elems = st.shape.iter().fold(1u128, |n, d| n.saturating_mul(*d as u128));
+                (rows.saturating_mul(elems), rows.saturating_mul(elems).saturating_mul(st.dtype.width() as u128), rows)
+            }
+            _ => (0, 0, 0),
+        };
+        let reads =
+            r.in_elements.iter().fold(r.out_elements as u128, |n, e| n.saturating_add(*e as u128)).saturating_add(prior_elements);
+        let multiply = r.matmul.map_or(0, |d| {
+            (d.batch as u128).saturating_mul(d.m as u128).saturating_mul(d.k as u128).saturating_mul(d.n as u128).saturating_mul(2)
+        });
+        // Include hashing, nonlinear semantics and checking/copying operands, not only the dot product.
+        let work = reads.saturating_mul(64).saturating_add(multiply).saturating_add(128);
+        let wire = r
+            .in_elements
+            .iter()
+            .zip(&r.in_dtypes)
+            .fold(prior_bytes, |n, (e, t)| n.saturating_add((*e as u128).saturating_mul(width(*t))))
+            .saturating_add((r.out_elements as u128).saturating_mul(width(r.out_dtype)))
+            .saturating_add((prior_rows + r.in_elements.len() as u128 + 1).saturating_mul(128));
+        // The localizer authenticates computed commitments and independently checks a fault before returning it.
+        total = total
+            .saturating_add(work.saturating_mul(r.occurrences as u128).saturating_mul(plan.max_positions as u128).saturating_mul(2));
+        bytes = bytes.max(wire);
+        court = court.max(work);
+    }
+    // Each public court currently rebuilds and authenticates the complete public record, not only its local operands.
+    // Include inline commitments, evidence/segment headers, artifact commitment metadata and program/plan validation.
+    let nodes =
+        program.occurrences().iter().fold(0u128, |n, (b, _)| n.saturating_add(program.blocks[*b as usize].nodes.len() as u128));
+    let instances = program
+        .params
+        .iter()
+        .fold(0u128, |n, p| n.saturating_add(if p.per_layer { program.schedule.layers.len() as u128 } else { 1 }));
+    let record = nodes
+        .saturating_mul(64)
+        .saturating_add(160 + 4 * program.occurrences().len() as u128)
+        .saturating_mul(plan.max_positions as u128)
+        .saturating_add(instances.saturating_mul(128))
+        .saturating_add(program.encode().len() as u128)
+        .saturating_add(plan.encoded_len() as u128)
+        .saturating_add(16 * 1024);
+    let structural_work = record.saturating_mul(16);
+    (
+        total.saturating_add(structural_work.saturating_mul(4)),
+        bytes.min(u64::MAX as u128) as u64,
+        court.saturating_add(structural_work).min(u64::MAX as u128) as u64,
+    )
+}
+
 /// The whole-claim error a suite derives (bits): `t·b − ⌈log2 instances⌉` (`b` the descriptor's per-repetition bits), then the binding
 /// term by a union bound (`min − 1`). Exact relations contribute nothing; `None` when no probabilistic
 /// relation exists (the bound is then the binding term alone).

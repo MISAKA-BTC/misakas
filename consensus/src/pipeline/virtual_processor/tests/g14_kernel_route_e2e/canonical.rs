@@ -1025,12 +1025,21 @@ async fn lying_claim(w: &mut World, mode: Mode, producer: usize, job: &KernelJob
 /// **One lie, found and convicted by the participant** (milestone 2's path): its node started after the claim, its bond registered
 /// after it, its verifier from ops 211/210, the registered model from a peer; the conviction through its own mempool and template.
 async fn lie_convicted(mode: Mode, start: Start, lie: Lie) {
+    lie_convicted_using(mode, start, lie, false, false).await;
+}
+
+async fn lie_convicted_using(mode: Mode, start: Start, lie: Lie, commitments_only: bool, after_final: bool) {
     kaspa_core::log::try_init_logger("warn");
     let mut w = world(mode).await;
     let funding = newcomer_funding(&w.net);
     let before = w.net.collateral(0) - Rules::admission_cost(&w, mode);
     let job = job_of(&mut w, vec![3, 17, 9]).await;
     let (claim, seats) = lying_claim(&mut w, mode, 0, &job, lie).await;
+    if after_final {
+        let floor = final_floor(&w, mode, &claim.id);
+        w.net.beat_to(floor).await;
+        assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }));
+    }
     let slashed = reservation(&w, mode);
     let policy = w.policy();
     let mut node = start_node(&mut w.net, start).await;
@@ -1041,7 +1050,21 @@ async fn lie_convicted(mode: Mode, start: Start, lie: Lie) {
     let rpc = Rpc::of(&node.chain);
     let fresh = rpc.verifier(&claim.id, 0x3C);
     let model = acquire(&[ModelPeer::Serves(w.fx.params.clone())], &registered_root(&fresh, &claim.id)).expect("the model");
-    let OutsiderFindingV1::Prosecute(proof) = fresh.check(claim.id, &claim.published(&w.fx, &[]), &model) else {
+    struct NoProducerValues;
+    impl misaka_palw_kernel::ledger::PublicSourceV1 for NoProducerValues {
+        fn node(&self, _: u8, _: u32, _: u16, _: u16) -> Option<misaka_palw_tir::Tensor> {
+            panic!("the public verifier must not read a producer node value")
+        }
+    }
+    let finding = if commitments_only {
+        assert!(fresh.ledger.demands.is_empty() && fresh.ledger.served.is_empty());
+        misaka_palw_kernel::ledger::OutsiderV1 {
+            ledger: &fresh.ledger, claim: claim.id, material: &NoProducerValues, artifact: &model, salt: fresh.salt,
+        }.check_computation().expect("exact replay from authenticated public commitments and the registered artifact")
+    } else {
+        fresh.check(claim.id, &claim.published(&w.fx, &[]), &model)
+    };
+    let OutsiderFindingV1::Prosecute(proof) = finding else {
         panic!("{lie:?}: the participant's verifier finds the lie from public material")
     };
     match lie {
@@ -1058,11 +1081,23 @@ async fn lie_convicted(mode: Mode, start: Start, lie: Lie) {
         assert_eq!(w.net.slashed(*card), *before, "the colluding seats are not charged");
     }
     let read = Rpc::of(&node.chain).claim(&claim.id);
-    assert!(read.convicted && read.state.starts_with("Convicted"), "{lie:?}: op 210 serves the verdict: {}", read.state);
+    let phase = if after_final { "Final" } else { "Convicted" };
+    assert!(read.convicted && read.state.starts_with(phase), "{lie:?}: op 210 serves the verdict: {}", read.state);
     let ttpb = w.net.ttpb();
     w.net.chain.heartbeat(ttpb, Vec::new()).await;
     sync(&w.net, &mut node).await;
     agree(&w.net, &node, "the participant's node");
+}
+
+#[tokio::test]
+async fn g14_canonical_no_producer_disclosures_pre_and_post_final() {
+    for mode in [Mode::Panel, Mode::Opv] {
+        for after_final in [false, true] {
+            for lie in [Lie::Quantize, Lie::Garbage, Lie::Decode] {
+                lie_convicted_using(mode, Start::PrunedImport, lie, true, after_final).await;
+            }
+        }
+    }
 }
 
 /// The inclusion faults.

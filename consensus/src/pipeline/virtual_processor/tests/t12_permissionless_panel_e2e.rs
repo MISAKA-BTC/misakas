@@ -100,7 +100,9 @@ fn reference_source() -> PalwPanelV3BeaconSourceV1 {
             final_path: FinalPathV1::PanelIndependent,
         })
         .collect();
-    PalwPanelV3BeaconSourceV1::Reference { events, eligible_profiles: BTreeSet::from([PROFILE]) }
+    PalwPanelV3BeaconSourceV1::Reference {
+        events, eligible_profiles: BTreeSet::from([PROFILE]), works: Vec::new(), sealed: Vec::new(),
+    }
 }
 
 /// testnet-12 with harness cards and the permissionless Panel armed at [`FENCE`] on a copy of the params (see the module doc).
