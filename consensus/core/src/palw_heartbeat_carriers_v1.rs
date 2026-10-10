@@ -211,6 +211,10 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::ProviderChallengeV1 { .. }
         | O::ProviderAnswerV1 { .. }
         | O::DaTransferV1 { .. }
+        // Lane LG14-A (tags 154–155): a reservation holds a claim's clocks rather than convicting; it is in the fee market, never a
+        // halt's obligation (the policy stays H-1's enumeration).
+        | O::DisputeReservedV1 { .. }
+        | O::DisputeReleasedV1 { .. }
         | O::LineageHeadRolledBack { .. }
         | O::ImprovementPoolFunded { .. }
         // RFC-0007 Part I (tags 91, 92): a vertex is verification traffic, in the fee market beside the licence it replaces; the

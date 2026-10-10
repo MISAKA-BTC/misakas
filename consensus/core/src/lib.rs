@@ -534,6 +534,10 @@ pub mod palw_provider_court_v1;
 /// Lane INTF (ADR-0032's 2026-10-10 amendment): the PALW reporter share, 10% below and 49% at or past the dormant fence
 /// `palw_reporter_share_v2` (refused when armed) — R-1 fixed at the conviction's close, DA-6 at the session's open.
 pub mod palw_reporter_share_v2;
+/// Lane LG14-A (RFC-0014 §6–§8 on the legacy V2 Panel route): the non-seat dispute reservation (tags 154–155) that holds a claim's ends
+/// to the claim's own hard deadline, the reserved DA budget, direct proofs over open sessions, and the common filer's pure half — fence
+/// `palw_legacy_public_filer_v1` (dormant, refused when armed).
+pub mod palw_legacy_public_filer_v1;
 /// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
 pub mod palw_state_proof_v1;
 /// Lane PA: the 2026-10-04 audit's consensus fixes behind one dormant fence (`palw_audit_1004_v1`).

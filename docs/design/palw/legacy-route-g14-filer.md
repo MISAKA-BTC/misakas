@@ -157,7 +157,8 @@ A DA demand by a bond that holds a live reservation on the claim (any demand obj
 `DefaultAccused`, `DefaultAccusedHeld`, `DefaultAccusedTirStep`, `DefaultAccusedPipelineStep`, and LG14-B's tag 157, all of which go
 through `open_da_session_rcore_v1`) is a **reserved session**:
 
-- it is admitted on the RESERVATION's budget — at most 16 sessions per reservation, one open at a time (DA-1) — not on DA-8's
+- it is admitted on the RESERVATION's budget — at most 34 sessions per reservation (`PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1`:
+  the localizer's worst case is `⌈log₂ ⌈n / 1,024⌉⌉ + 3` demands, 33 at `n = 2⁴⁰` leaves), one open at a time (DA-1) — not on DA-8's
   shared non-seat budget (three open, sixteen ever), which it neither reads nor spends;
 - it is seat-like for DA-5 (`accuser_is_seat = true`): it pauses the claim while open and its pause is credited back at its close,
   exactly as a seat's — so a session opened just before `hard_deadline` still runs to its own deadline;
@@ -202,8 +203,11 @@ Discover → ResolvePlan → Check → Mismatch → ReservePursuit → Localize 
 - Adapters: a public read (the tip state and accepted lifecycle objects through `ConsensusApi` / the RPC ops of §6), a family
   checker (the honest replay of the claim's job on the verifier's own model copy, authenticated against the registered root), a
   localizer, and a carrier builder (sign, fee, submit).
-- Localizers: the legacy step-leaf bisection over disclosed `StepLeaf` units (non-held floor classes; `⌈log₂ n⌉ + 1` demands, each
-  a reserved session), and LG14-B's tree descent (`PalwLegacyLocalizerV2::next_v2`) where it lands.
+- Localizers: the legacy bisection (`PalwLegacyBisectV1`): the binding read (`DefaultAccused` of event `(0, 0)`, whose answer carries
+  the step binding the fold authenticated against `execution_root`), width-1 `StepRange` demands halving the interval that holds the
+  first leaf differing from the verifier's own run until it fits one 1,024-leaf range, that range, then the `StepLeaf` terminal —
+  `⌈log₂ ⌈n / 1,024⌉⌉ + 3` reserved sessions at most; LG14-B's tree descent replaces the halving where it lands, and a fused located
+  leaf is its held dissection's (`HeldRoute`).
 - Terminals: a guilty disclosed leaf convicts in the fold itself; otherwise the engine builds `StepArithmetic` → `ExecutorRefuted`
   from the disclosed openings and its own artifact rows (P2-8's builder), with R-3's commit–reveal for the reporter reward.
 
@@ -222,7 +226,13 @@ descends. The operator module's producer/signer filter is a discovery preference
   answered units, the claim's phase. It never reuses an opening or receipt from a block a reorg removed (it reads the units the
   canonical state marks answered, from the accepted blocks of the canonical chain only). A proof re-sent after a restart is a no-op
   in the fold (one offence per claim / per seat and claim), so the producer is never charged twice.
-- `--palw-fraud-filer` turns the engine on for the node's bond (`--palw-fee-outpoint` funds its carriers).
+- No flag: identity arms it, as lane B's duty — a node that carries (`--palw-fee-outpoint`) runs the engine for its bond past the
+  fence, and is a clean no-op below it. The node module is `kaspad/src/palw_fraud_filer.rs` (a child of `palw_panel`): one replay in
+  flight in the seat's spare replay slot, at most two mismatched captures held, one queued item a case on the court lane (rounds
+  `u32::MAX − 10` reserve, `u32::MAX − 11` demand), each item sent at most twice. Nothing is persisted: the candidates and the case
+  facts come from the tip (`palw_fraud_filer_candidates_v1`, `palw_legacy_dispute_v1`), the answers from a walk of the accepted
+  blocks back to the oldest pursued claim's acceptance, the honest run from a fresh replay. A seat's claim is left to the seat's own
+  duties (P2-6, P2-8b/8d), which are not yet rewired onto the engine.
 
 ## 5. Pre-emption and resources (RFC-0014 §7.4)
 
@@ -235,7 +245,7 @@ descends. The operator module's producer/signer filter is a discovery preference
 | Sybils fill a claim's 256-reserver lifetime | ≥ 256 burned deposits, ≥ 25.6 · S_P at r = 10% |
 | misdirection ("the lie is at leaf j") | nothing on chain is a claim about where the lie is; the shared progress is only the units the fold authenticated, and every verifier compares them with its own replay |
 | serial reservations to hold an honest claim | the hard deadline is absolute; each reservation is a deposit at risk |
-| spam against an honest producer | each reserved session is a DA session: its units are answered once for every session (DA-4) and a refuted one costs `r · S_P`, held and burned at retirement; at most 64 × 16 per claim |
+| spam against an honest producer | each reserved session is a DA session: its units are answered once for every session (DA-4) and a refuted one costs `r · S_P`, held and burned at retirement; at most 64 × 34 per claim |
 
 **Residuals, named.**
 - **Reward front-running by the producer.** A guilty disclosed leaf rewards the accuser whose session demanded the unit FIRST. A
@@ -252,7 +262,11 @@ descends. The operator module's producer/signer filter is a discovery preference
   `hard_deadline`, the deadline DL-1 gives, the live reservations and `dismissed_held`, the open DA sessions with their units, the
   answered units, the open courts, and whether its kind-4 / court / DA-default offences are recorded.
 - **205 `getPalwLegacyDisputes { reserver?, limit }`** — the claims with a live reservation (by reserver when given).
-- **206 `getPalwFraudFilerStatus`** — the node's own engine: its role and bond, each case's phase, deadline and last carrier.
+- **206 `getPalwFraudFilerStatus { bond }`** — one bond's standing as a filer, read off the tip (so any node answers it for any
+  bond): the fence, its live reservations (deposit, sessions opened, hard deadline), the deposits held on it, its exposure.
+
+204 and 206 answer a versioned camelCase JSON document (`PalwLegacyDisputeObservationV1`, `PalwFraudFilerStatusV1`), as op 220 does;
+205 answers claim ids. Proto payloads 1222–1227 (the op-to-payload rule `1214 + 2 (op − 200)`).
 
 ## 7. Economics (RFC-0014 §8), as far as the conviction path needs them
 

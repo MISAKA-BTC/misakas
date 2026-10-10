@@ -419,6 +419,33 @@ pub struct PalwIdentityRulesV1 {
     pub da_signer_liability: bool,
 }
 
+/// **RFC-0014 §7.4: does another bond's open court refuse a direct proof?** (lane LG14-A.)
+///
+/// Below `Params::palw_legacy_public_filer_v1` — every block of every shipped network — kinds 3, 4 and 7 are refused while any court
+/// is open on the claim (`ClaimUnderSession`), as int-12 refuses them. Past it the proof is judged on its merits whatever session is
+/// open: a court opened first (by the producer's Sybil, a colluding seat or anyone) cannot make a complete objective proof
+/// unreceivable, and the conviction's void closes every court session neutrally and every DA session with its exposure returned
+/// (ADR-0152 §4-ter C3, DA-6) — one deterministic transition. A DA session never refused a proof (post-edit 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwSessionRuleV1 {
+    /// int-12's rule: an open court on the claim refuses the proof.
+    RefusedUnderSession,
+    /// Past the fence: the proof lands; the sessions end with the conviction.
+    DirectProofFirst,
+}
+
+impl PalwSessionRuleV1 {
+    /// The rule in force where `legacy_public_filer_active` says whether the fence is.
+    pub fn at(legacy_public_filer_active: bool) -> Self {
+        if legacy_public_filer_active { Self::DirectProofFirst } else { Self::RefusedUnderSession }
+    }
+
+    /// Does this rule refuse a proof against `claim_id` in `state`?
+    pub fn refuses(self, state: &PalwChainStateV2, claim_id: &Hash64) -> bool {
+        self == Self::RefusedUnderSession && state.open_courts_of(claim_id) > 0
+    }
+}
+
 /// **Which identity check a binding failed** — the first, in the addendum's order (§4-bis.2):
 /// J2, J1, J3, J5a, J5b, J4, J6, J7.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1696,6 +1723,31 @@ pub fn palw_check_panel_false_valid_v2(
     rules: PalwIdentityRulesV1,
     sig: Option<PalwFalseValidSigCheckV1<'_>>,
 ) -> Result<PalwFalseValidFindingV1, PalwOffenceVerifyError> {
+    palw_check_panel_false_valid_at_v2(
+        state,
+        accused,
+        evidence,
+        fp_decode_rules_active,
+        reporter_armed,
+        rules,
+        sig,
+        PalwSessionRuleV1::RefusedUnderSession,
+    )
+}
+
+/// [`palw_check_panel_false_valid_v2`] under the session rule the block's fence gives ([`PalwSessionRuleV1`]): the processor's gate
+/// and the fold's consumer call this form, so the two read one rule; every other caller keeps the old one (int-12's).
+#[allow(clippy::too_many_arguments)]
+pub fn palw_check_panel_false_valid_at_v2(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    fp_decode_rules_active: bool,
+    reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
+    sig: Option<PalwFalseValidSigCheckV1<'_>>,
+    sessions: PalwSessionRuleV1,
+) -> Result<PalwFalseValidFindingV1, PalwOffenceVerifyError> {
     if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
         return Err(PalwOffenceVerifyError::EvidenceTooLarge);
     }
@@ -1733,7 +1785,7 @@ pub fn palw_check_panel_false_valid_v2(
         }
     }
     let target = palw_offence_target_v1(state, &payload.claim_id).ok_or(PalwOffenceVerifyError::NoTarget)?;
-    if state.open_courts_of(&target.claim_id) > 0 {
+    if sessions.refuses(state, &target.claim_id) {
         return Err(PalwOffenceVerifyError::ClaimUnderSession);
     }
     // ADR-0152 N9 (M3): `ProducerWithholding` is admitted against a `Valid` signer exactly when a
@@ -1898,6 +1950,18 @@ pub fn palw_check_tir_identity_mismatch_v1(
     reporter_armed: bool,
     rules: PalwIdentityRulesV1,
 ) -> Result<PalwExecutorRefutedFindingV1, PalwOffenceVerifyError> {
+    palw_check_tir_identity_mismatch_at_v1(state, accused, evidence, reporter_armed, rules, PalwSessionRuleV1::RefusedUnderSession)
+}
+
+/// [`palw_check_tir_identity_mismatch_v1`] under the block's session rule ([`PalwSessionRuleV1`]).
+pub fn palw_check_tir_identity_mismatch_at_v1(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
+    sessions: PalwSessionRuleV1,
+) -> Result<PalwExecutorRefutedFindingV1, PalwOffenceVerifyError> {
     if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
         return Err(PalwOffenceVerifyError::EvidenceTooLarge);
     }
@@ -1916,7 +1980,7 @@ pub fn palw_check_tir_identity_mismatch_v1(
     if *accused != target.executor_bond {
         return Err(PalwOffenceVerifyError::AccusedNotTheExecutor);
     }
-    if state.open_courts_of(&target.claim_id) > 0 {
+    if sessions.refuses(state, &target.claim_id) {
         return Err(PalwOffenceVerifyError::ClaimUnderSession);
     }
     let record = state
@@ -2038,6 +2102,29 @@ pub fn palw_check_executor_refuted_v1(
     reporter_armed: bool,
     rules: PalwIdentityRulesV1,
 ) -> Result<PalwExecutorRefutedFindingV1, PalwOffenceVerifyError> {
+    palw_check_executor_refuted_at_v1(
+        state,
+        accused,
+        evidence,
+        fp_decode_rules_active,
+        reporter_armed,
+        rules,
+        PalwSessionRuleV1::RefusedUnderSession,
+    )
+}
+
+/// [`palw_check_executor_refuted_v1`] under the block's session rule ([`PalwSessionRuleV1`]): past `palw_legacy_public_filer_v1` an
+/// objective refutation lands whatever court another bond holds open on the claim (RFC-0014 §7.4), and the conviction's void closes
+/// every session in the same transition.
+pub fn palw_check_executor_refuted_at_v1(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    fp_decode_rules_active: bool,
+    reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
+    sessions: PalwSessionRuleV1,
+) -> Result<PalwExecutorRefutedFindingV1, PalwOffenceVerifyError> {
     if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
         return Err(PalwOffenceVerifyError::EvidenceTooLarge);
     }
@@ -2059,7 +2146,7 @@ pub fn palw_check_executor_refuted_v1(
     if *accused != target.executor_bond {
         return Err(PalwOffenceVerifyError::AccusedNotTheExecutor);
     }
-    if state.open_courts_of(&target.claim_id) > 0 {
+    if sessions.refuses(state, &target.claim_id) {
         return Err(PalwOffenceVerifyError::ClaimUnderSession);
     }
     let admission = palw_executor_refuted_admission_v1(&payload.contradiction)?;

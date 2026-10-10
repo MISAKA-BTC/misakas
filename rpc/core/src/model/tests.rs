@@ -2680,6 +2680,57 @@ mod mockery {
     }
     test!(GetPalwPanelV3StatusResponse);
 
+    // Lane LG14-A: ops 204-206 round-trip.
+    impl Mock for GetPalwLegacyDisputeRequest {
+        fn mock() -> Self {
+            GetPalwLegacyDisputeRequest { claim_id: mock_hex() }
+        }
+    }
+    test!(GetPalwLegacyDisputeRequest);
+
+    impl Mock for GetPalwLegacyDisputeResponse {
+        fn mock() -> Self {
+            GetPalwLegacyDisputeResponse {
+                available: mock(),
+                observation_version: mock(),
+                json: format!("{{\"version\":{}}}", mock::<u32>()),
+            }
+        }
+    }
+    test!(GetPalwLegacyDisputeResponse);
+
+    impl Mock for GetPalwLegacyDisputesRequest {
+        fn mock() -> Self {
+            GetPalwLegacyDisputesRequest { reserver: format!("{}:{}", mock_hex(), mock::<u32>()), limit: mock() }
+        }
+    }
+    test!(GetPalwLegacyDisputesRequest);
+
+    impl Mock for GetPalwLegacyDisputesResponse {
+        fn mock() -> Self {
+            GetPalwLegacyDisputesResponse { available: mock(), claim_ids: vec![mock_hex(), mock_hex()] }
+        }
+    }
+    test!(GetPalwLegacyDisputesResponse);
+
+    impl Mock for GetPalwFraudFilerStatusRequest {
+        fn mock() -> Self {
+            GetPalwFraudFilerStatusRequest { bond: format!("{}:{}", mock_hex(), mock::<u32>()) }
+        }
+    }
+    test!(GetPalwFraudFilerStatusRequest);
+
+    impl Mock for GetPalwFraudFilerStatusResponse {
+        fn mock() -> Self {
+            GetPalwFraudFilerStatusResponse {
+                available: mock(),
+                observation_version: mock(),
+                json: format!("{{\"version\":{}}}", mock::<u32>()),
+            }
+        }
+    }
+    test!(GetPalwFraudFilerStatusResponse);
+
     // G14 lane D: ops 210 and 211 and their parts round-trip.
     impl Mock for GetPalwKernelClaimRequest {
         fn mock() -> Self {

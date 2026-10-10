@@ -1468,6 +1468,24 @@ from!(item: &kaspa_rpc_core::GetPalwPanelV3StatusRequest, protowire::GetPalwPane
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwPanelV3StatusResponse>, protowire::GetPalwPanelV3StatusResponseMessage, {
     Self { available: item.available, observation_version: item.observation_version, json: item.json.clone(), error: None }
 });
+from!(item: &kaspa_rpc_core::GetPalwLegacyDisputeRequest, protowire::GetPalwLegacyDisputeRequestMessage, {
+    Self { claim_id: item.claim_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwLegacyDisputeResponse>, protowire::GetPalwLegacyDisputeResponseMessage, {
+    Self { available: item.available, observation_version: item.observation_version, json: item.json.clone(), error: None }
+});
+from!(item: &kaspa_rpc_core::GetPalwLegacyDisputesRequest, protowire::GetPalwLegacyDisputesRequestMessage, {
+    Self { reserver: item.reserver.clone(), limit: item.limit }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwLegacyDisputesResponse>, protowire::GetPalwLegacyDisputesResponseMessage, {
+    Self { available: item.available, claim_ids: item.claim_ids.clone(), error: None }
+});
+from!(item: &kaspa_rpc_core::GetPalwFraudFilerStatusRequest, protowire::GetPalwFraudFilerStatusRequestMessage, {
+    Self { bond: item.bond.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwFraudFilerStatusResponse>, protowire::GetPalwFraudFilerStatusResponseMessage, {
+    Self { available: item.available, observation_version: item.observation_version, json: item.json.clone(), error: None }
+});
 from!(item: &kaspa_rpc_core::RpcPalwKernelServed, protowire::RpcPalwKernelServed, {
     Self { stage: item.stage, position: item.position, bytes: item.bytes.clone() }
 });
@@ -3854,6 +3872,24 @@ try_from!(item: &protowire::GetPalwPanelV3StatusRequestMessage, kaspa_rpc_core::
     Self { claim_ids: item.claim_ids.clone(), limit: item.limit }
 });
 try_from!(item: &protowire::GetPalwPanelV3StatusResponseMessage, RpcResult<kaspa_rpc_core::GetPalwPanelV3StatusResponse>, {
+    Self { available: item.available, observation_version: item.observation_version, json: item.json.clone() }
+});
+try_from!(item: &protowire::GetPalwLegacyDisputeRequestMessage, kaspa_rpc_core::GetPalwLegacyDisputeRequest, {
+    Self { claim_id: item.claim_id.clone() }
+});
+try_from!(item: &protowire::GetPalwLegacyDisputeResponseMessage, RpcResult<kaspa_rpc_core::GetPalwLegacyDisputeResponse>, {
+    Self { available: item.available, observation_version: item.observation_version, json: item.json.clone() }
+});
+try_from!(item: &protowire::GetPalwLegacyDisputesRequestMessage, kaspa_rpc_core::GetPalwLegacyDisputesRequest, {
+    Self { reserver: item.reserver.clone(), limit: item.limit }
+});
+try_from!(item: &protowire::GetPalwLegacyDisputesResponseMessage, RpcResult<kaspa_rpc_core::GetPalwLegacyDisputesResponse>, {
+    Self { available: item.available, claim_ids: item.claim_ids.clone() }
+});
+try_from!(item: &protowire::GetPalwFraudFilerStatusRequestMessage, kaspa_rpc_core::GetPalwFraudFilerStatusRequest, {
+    Self { bond: item.bond.clone() }
+});
+try_from!(item: &protowire::GetPalwFraudFilerStatusResponseMessage, RpcResult<kaspa_rpc_core::GetPalwFraudFilerStatusResponse>, {
     Self { available: item.available, observation_version: item.observation_version, json: item.json.clone() }
 });
 try_from!(item: &protowire::RpcPalwKernelServed, kaspa_rpc_core::RpcPalwKernelServed, {

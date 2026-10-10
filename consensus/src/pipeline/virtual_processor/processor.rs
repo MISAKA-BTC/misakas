@@ -4770,6 +4770,72 @@ impl VirtualStateProcessor {
     /// to** — at the tip, for the DAA the virtual's next block folds at, under the extras that block
     /// folds with (the second clock A-6's room reads, the in-run rows' fence), so an accusation the
     /// seat files is one the fold opens a session for. `None` with no tip state.
+    /// **Lane LG14-A (RPC 204): one claim's dispute view at the tip.**
+    pub fn palw_legacy_dispute_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
+        state.palw_legacy_dispute_view_v1(state_params, &claim)
+    }
+
+    /// **Lane LG14-A (RPC 205): the claims a live reservation holds at the tip.**
+    pub fn palw_legacy_disputes_v1_impl(
+        &self,
+        reserver: Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+        limit: usize,
+    ) -> Vec<kaspa_consensus_core::Hash64> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_v2_reader_state(state_params).ok().flatten() else { return Vec::new() };
+        state.palw_legacy_disputes_live_v1(reserver.as_ref(), limit)
+    }
+
+    /// **Lane LG14-A: would the next block take this reservation?** The fold's tag-154 arm on the tip, at the virtual's next DAA, under
+    /// the extras that block folds with (the fence below it refuses, as the fold does).
+    pub fn palw_legacy_dispute_reservation_check_v1_impl(
+        &self,
+        reservation: &kaspa_consensus_core::palw_legacy_public_filer_v1::PalwDisputeReservationV1,
+    ) -> Option<Result<u128, String>> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
+        let now_daa = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score)?;
+        let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: now_daa,
+            blue_score: 0,
+            subsidy: 0,
+        });
+        Some(
+            kaspa_consensus_core::palw_state_v2::palw_legacy_dispute_reservation_check_v1(&state, state_params, &extras, reservation, now_daa)
+                .map_err(|e| e.to_string()),
+        )
+    }
+
+    /// **Lane LG14-A: the claims `me`'s fraud filer may pursue at the tip** (at the virtual's DAA; empty below the fence).
+    pub fn palw_fraud_filer_candidates_v1_impl(
+        &self,
+        me: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_v2_reader_state(state_params).ok().flatten() else { return Vec::new() };
+        let Some(now_daa) = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score) else {
+            return Vec::new();
+        };
+        state.palw_fraud_filer_candidates_v1(state_params, me, now_daa)
+    }
+
+    /// **Lane LG14-A (RPC 206): one bond's standing as a public filer at the tip.**
+    pub fn palw_fraud_filer_status_v1_impl(
+        &self,
+        bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFraudFilerStatusV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
+        let now_daa = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score)?;
+        state.palw_fraud_filer_status_v1(state_params, bond, now_daa)
+    }
+
     pub fn palw_da_accusation_check_v1_impl(
         &self,
         claim: kaspa_consensus_core::Hash64,
@@ -7898,6 +7964,16 @@ impl VirtualStateProcessor {
             {
                 info!(
                     "Block {block}: a provider-court object was dropped by name below palw_provider_court_v1, and the block stands (DA16)"
+                );
+                continue;
+            }
+            // **Lane LG14-A: below `palw_legacy_public_filer_v1` a dispute object (tags 154–155) is dropped by name**, first and charged
+            // nothing, for the same reason (the live int-12 build cannot decode it and skips it, A-2).
+            if kaspa_consensus_core::palw_legacy_public_filer_v1::palw_object_is_legacy_dispute_v1(&object)
+                && !self.palw_legacy_public_filer_at(point.daa_score)
+            {
+                info!(
+                    "Block {block}: a dispute object was dropped by name below palw_legacy_public_filer_v1, and the block stands (LG14-A)"
                 );
                 continue;
             }
@@ -11632,7 +11708,7 @@ impl VirtualStateProcessor {
                                 {
                                     return Err("a Windowed receipt below palw_capacity_batch_licence (ADR-0160 F-B)".to_string());
                                 }
-                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_v2(
+                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_at_v2(
                                     state,
                                     accused,
                                     evidence,
@@ -11650,6 +11726,8 @@ impl VirtualStateProcessor {
                                         ),
                                         verify: &Self::verify_mldsa87_with_context_bool,
                                     }),
+                                    // Lane LG14-A (RFC-0014 §7.4): the fold's session rule at this block.
+                                    self.palw_session_rule_at(point.daa_score),
                                 )
                                 .map_err(|e| e.to_string())?;
                                 let offence_id = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(
@@ -11675,13 +11753,14 @@ impl VirtualStateProcessor {
                                 if kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != *evidence_id {
                                     return Err(PalwOffenceVerifyError::EvidenceIdMismatch.to_string());
                                 }
-                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_executor_refuted_v1(
+                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_executor_refuted_at_v1(
                                     state,
                                     accused,
                                     evidence,
                                     state_params.fp_decode_rules_at(point.daa_score),
                                     false,
                                     self.palw_identity_rules_v1(point.daa_score),
+                                    self.palw_session_rule_at(point.daa_score),
                                 )
                                 .map_err(|e| e.to_string())?;
                                 let offence_id =
@@ -11712,12 +11791,13 @@ impl VirtualStateProcessor {
                                 if kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != *evidence_id {
                                     return Err(PalwOffenceVerifyError::EvidenceIdMismatch.to_string());
                                 }
-                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_tir_identity_mismatch_v1(
+                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_tir_identity_mismatch_at_v1(
                                     state,
                                     accused,
                                     evidence,
                                     false,
                                     self.palw_identity_rules_v1(point.daa_score),
+                                    self.palw_session_rule_at(point.daa_score),
                                 )
                                 .map_err(|e| e.to_string())?;
                                 let offence_id = kaspa_consensus_core::palw_offence_attribution_v1::palw_tir_identity_offence_id_v1(
@@ -13262,6 +13342,30 @@ impl VirtualStateProcessor {
                     let payload = borsh::to_vec(claim).map_err(|e| e.to_string())?;
                     self.palw_provider_court_signature_ok(state, point.daa_score, 153, producer, &payload, signature)?;
                 }
+                // **Lane LG14-A (tags 154–155): the dispute reservation and its release** — the fence, an Active signer, its signature
+                // over the payload; the claim, the caps, the deposit and the hold are the fold's.
+                Obj::DisputeReservedV1 { reservation, signature } => {
+                    let payload = kaspa_consensus_core::palw_legacy_public_filer_v1::palw_dispute_reserved_payload_v1(reservation);
+                    self.palw_legacy_dispute_signature_ok(
+                        state,
+                        point.daa_score,
+                        kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_DISPUTE_RESERVED_TAG_V1,
+                        &reservation.reserver,
+                        &payload,
+                        signature,
+                    )?;
+                }
+                Obj::DisputeReleasedV1 { claim, reserver, signature } => {
+                    let payload = kaspa_consensus_core::palw_legacy_public_filer_v1::palw_dispute_released_payload_v1(claim);
+                    self.palw_legacy_dispute_signature_ok(
+                        state,
+                        point.daa_score,
+                        kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_DISPUTE_RELEASED_TAG_V1,
+                        reserver,
+                        &payload,
+                        signature,
+                    )?;
+                }
                 // (tag 108): the acceptance walk replaces the envelope by its registration before this gate; one that reaches it was
                 // not unwrapped (a direct caller of the gate), and is refused.
                 Obj::SignedRegistrationV1 { .. } => {
@@ -13351,6 +13455,53 @@ impl VirtualStateProcessor {
     /// **ADR-0152 v3.1 J-5: what the identity checks read besides the evidence** — the network's
     /// prompt-id form and the base class — the same two values the fold reads from its extras and
     /// its bundle, so the gate and the fold judge one identity rule.
+    /// **Lane LG14-A: `Params::palw_legacy_public_filer_v1` resolved at the block's DAA**, in exactly one place — read off the V2
+    /// bundle's mirror, the same field the fold reads (`PalwStateParamsV2::legacy_public_filer_active_at`), so the gate and the fold
+    /// cannot disagree about the fence. `false` on every shipped preset.
+    pub(super) fn palw_legacy_public_filer_at(&self, daa_score: u64) -> bool {
+        self.palw_v2_bundle.as_ref().is_some_and(|bundle| bundle.state.legacy_public_filer_active_at(daa_score))
+    }
+
+    /// **RFC-0014 §7.4: the session rule a direct proof is judged under at `daa_score`** (the fold's `session_rule_v1`).
+    fn palw_session_rule_at(&self, daa_score: u64) -> kaspa_consensus_core::palw_offence_attribution_v1::PalwSessionRuleV1 {
+        kaspa_consensus_core::palw_offence_attribution_v1::PalwSessionRuleV1::at(self.palw_legacy_public_filer_at(daa_score))
+    }
+
+    /// **Lane LG14-A: a dispute object's acceptance** (tags 154–155): the fence, an Active signer bond, and the signer's ML-DSA-87
+    /// signature over `(network, kind, signer, payload)`. The claim, the caps, the deposit and the hold are the fold's.
+    fn palw_legacy_dispute_signature_ok(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa_score: u64,
+        kind: u8,
+        signer: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> Result<(), String> {
+        if !self.palw_legacy_public_filer_at(daa_score) {
+            return Err("a dispute object is refused: palw_legacy_public_filer_v1 is not in force at this block (LG14-A)".to_string());
+        }
+        let record = state.bond(signer).ok_or_else(|| "a dispute object is signed by a bond this chain does not have".to_string())?;
+        if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err("a dispute object is signed by a bond that is not Active".to_string());
+        }
+        let message = kaspa_consensus_core::palw_legacy_public_filer_v1::palw_legacy_dispute_message_v1(
+            self.palw_network_domain_v2(),
+            kind,
+            signer,
+            payload,
+        );
+        if !Self::verify_mldsa87_with_context_bool(
+            &record.pubkey,
+            message.as_byte_slice(),
+            signature,
+            kaspa_consensus_core::palw_legacy_public_filer_v1::PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1,
+        ) {
+            return Err("a dispute object carries a signature its bond's key does not verify".to_string());
+        }
+        Ok(())
+    }
+
     fn palw_identity_rules_v1(&self, daa_score: u64) -> kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
         kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
             prompt_ids_form: self.palw_prompt_ids_form_at(daa_score),
@@ -21790,6 +21941,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
         O::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
         O::DaTransferV1 { .. } => "DaTransferV1",
+        O::DisputeReservedV1 { .. } => "DisputeReservedV1",
+        O::DisputeReleasedV1 { .. } => "DisputeReleasedV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

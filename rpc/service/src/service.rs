@@ -3199,6 +3199,69 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     }
 
     // ------------------------------------------------------------------------------------------
+    // Lane LG14-A — the legacy route's public dispute reads (ops 204-206; read-only)
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_legacy_dispute_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwLegacyDisputeRequest,
+    ) -> RpcResult<GetPalwLegacyDisputeResponse> {
+        // The request is parsed before a byte of chain state is read: a malformed id is an error, never an absence.
+        let claim = parse_hash64(&request.claim_id, "claim id")?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwLegacyDisputeResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(view) = session.spawn_blocking(move |c| c.palw_legacy_dispute_v1(claim)).await else {
+            return Ok(GetPalwLegacyDisputeResponse::default());
+        };
+        let observation = kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeObservationV1::of(&view);
+        Ok(GetPalwLegacyDisputeResponse {
+            available: true,
+            observation_version: u32::from(observation.version),
+            json: observation.to_json(),
+        })
+    }
+
+    async fn get_palw_legacy_disputes_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwLegacyDisputesRequest,
+    ) -> RpcResult<GetPalwLegacyDisputesResponse> {
+        const DEFAULT_LIMIT: usize = 64;
+        const MAX_LIMIT: usize = 1_024;
+        let reserver = if request.reserver.is_empty() {
+            None
+        } else {
+            Some(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(parse_bond_outpoint(&request.reserver)?))
+        };
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwLegacyDisputesResponse::default());
+        }
+        let limit = if request.limit == 0 { DEFAULT_LIMIT } else { (request.limit as usize).min(MAX_LIMIT) };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let claims = session.spawn_blocking(move |c| c.palw_legacy_disputes_v1(reserver, limit)).await;
+        Ok(GetPalwLegacyDisputesResponse { available: true, claim_ids: claims.iter().map(|claim| claim.to_string()).collect() })
+    }
+
+    async fn get_palw_fraud_filer_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwFraudFilerStatusRequest,
+    ) -> RpcResult<GetPalwFraudFilerStatusResponse> {
+        let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(parse_bond_outpoint(&request.bond)?);
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwFraudFilerStatusResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(status) = session.spawn_blocking(move |c| c.palw_fraud_filer_status_v1(bond)).await else {
+            return Ok(GetPalwFraudFilerStatusResponse::default());
+        };
+        Ok(GetPalwFraudFilerStatusResponse { available: true, observation_version: u32::from(status.version), json: status.to_json() })
+    }
+
+    // ------------------------------------------------------------------------------------------
     // G14 lane D — the kernel route's public read (ops 210, 211)
     // ------------------------------------------------------------------------------------------
 

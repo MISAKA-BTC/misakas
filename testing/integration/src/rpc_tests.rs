@@ -1204,6 +1204,46 @@ async fn sanity_test() {
                     assert!(!read.available && read.json.is_empty());
                 })
             }
+            KaspadPayloadOps::GetPalwLegacyDispute => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // LG14-A (op 204): a malformed claim id is an error before any state is read; a well-formed read on a network
+                    // that is not ConsensusV2 answers `available: false` with no document.
+                    let bad = GetPalwLegacyDisputeRequest { claim_id: "x".to_string() };
+                    assert!(rpc_client.get_palw_legacy_dispute_call(None, bad).await.is_err());
+                    let read = rpc_client
+                        .get_palw_legacy_dispute_call(None, GetPalwLegacyDisputeRequest { claim_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.json.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwLegacyDisputes => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // LG14-A (op 205): a malformed reserver is an error; off ConsensusV2 the list is unavailable and empty.
+                    let bad = GetPalwLegacyDisputesRequest { reserver: "nope".to_string(), limit: 0 };
+                    assert!(rpc_client.get_palw_legacy_disputes_call(None, bad).await.is_err());
+                    let read = rpc_client.get_palw_legacy_disputes_call(None, GetPalwLegacyDisputesRequest::default()).await.unwrap();
+                    assert!(!read.available && read.claim_ids.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwFraudFilerStatus => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // LG14-A (op 206): a malformed bond is an error; off ConsensusV2 the status is unavailable.
+                    let bad = GetPalwFraudFilerStatusRequest { bond: "nope".to_string() };
+                    assert!(rpc_client.get_palw_fraud_filer_status_call(None, bad).await.is_err());
+                    let read = rpc_client
+                        .get_palw_fraud_filer_status_call(
+                            None,
+                            GetPalwFraudFilerStatusRequest { bond: format!("{}:0", "00".repeat(64)) },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.json.is_empty());
+                })
+            }
             KaspadPayloadOps::GetPalwKernelClaim => {
                 let rpc_client = client.clone();
                 tst!(op, {

@@ -373,6 +373,10 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::ProviderChallengeV1 { .. }
         | PalwConsensusObjectV2::ProviderAnswerV1 { .. }
         | PalwConsensusObjectV2::DaTransferV1 { .. } => Ok(()),
+        // Lane LG14-A (tags 154–155): the dispute reservation and its release ride at every height with NO stateless refusal — the live
+        // int-12 build cannot decode them and tolerates their bytes, so refusing any shape here would mark invalid a block it accepts
+        // (A-2). The fence, the signature, the bond and the rules are the acceptance layer's and the fold's.
+        PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. } => Ok(()),
         PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
             if signature.is_empty() {
                 Err("a signed registration envelope must carry its signer's signature")

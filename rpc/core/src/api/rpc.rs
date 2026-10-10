@@ -1045,6 +1045,49 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwPanelV3StatusResponse::default())
     }
 
+    /// **Lane LG14-A: one legacy V2 claim's dispute view** (op 204; read-only) — RFC-0014 §6.3's public read, as one versioned JSON
+    /// document. A node built before op 204 drops the WebSocket on it.
+    async fn get_palw_legacy_dispute(&self, request: GetPalwLegacyDisputeRequest) -> RpcResult<GetPalwLegacyDisputeResponse> {
+        self.get_palw_legacy_dispute_call(None, request).await
+    }
+    async fn get_palw_legacy_dispute_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwLegacyDisputeRequest,
+    ) -> RpcResult<GetPalwLegacyDisputeResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwLegacyDisputeResponse::default())
+    }
+
+    /// **Lane LG14-A: the claims a live dispute reservation holds** (op 205; read-only), every one or one reserver's.
+    async fn get_palw_legacy_disputes(&self, request: GetPalwLegacyDisputesRequest) -> RpcResult<GetPalwLegacyDisputesResponse> {
+        self.get_palw_legacy_disputes_call(None, request).await
+    }
+    async fn get_palw_legacy_disputes_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwLegacyDisputesRequest,
+    ) -> RpcResult<GetPalwLegacyDisputesResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwLegacyDisputesResponse::default())
+    }
+
+    /// **Lane LG14-A: one bond's standing as a public filer** (op 206; read-only).
+    async fn get_palw_fraud_filer_status(
+        &self,
+        request: GetPalwFraudFilerStatusRequest,
+    ) -> RpcResult<GetPalwFraudFilerStatusResponse> {
+        self.get_palw_fraud_filer_status_call(None, request).await
+    }
+    async fn get_palw_fraud_filer_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwFraudFilerStatusRequest,
+    ) -> RpcResult<GetPalwFraudFilerStatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwFraudFilerStatusResponse::default())
+    }
+
     /// G14 lane D (op 210): one kernel-route claim, everything public about it.
     async fn get_palw_kernel_claim(&self, request: GetPalwKernelClaimRequest) -> RpcResult<GetPalwKernelClaimResponse> {
         self.get_palw_kernel_claim_call(None, request).await

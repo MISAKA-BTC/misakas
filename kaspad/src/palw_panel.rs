@@ -79,6 +79,12 @@ mod palw_filer_replay;
 #[path = "palw_operator_da.rs"]
 mod palw_operator_da;
 
+/// Lane LG14-A (RFC-0014 §6): the common fraud filer — any carrying bond's pursuit, as a non-seat, of a claim its own replay refutes:
+/// a dispute reservation, then reserved DA demands that localize the first divergent step to a terminal the fold adjudicates (node
+/// policy; a clean no-op below `palw_legacy_public_filer_v1`, which no shipped preset arms).
+#[path = "palw_fraud_filer.rs"]
+mod palw_fraud_filer;
+
 /// ADR-0160 F-Q (stage 2, rcore/cap-s1): the operator's audit duty — an operator node in a credited
 /// claim's audit pool replays it and posts a receipt batch when it reproduces (a child module, so it
 /// reads the replay runner and the court queue's seams).
@@ -8189,6 +8195,8 @@ impl PalwPanelService {
         // Lane B (panel-seed stopgap (B)): the operator's non-seat accusations; armed by identity alone.
         let mut operator_da =
             palw_operator_da::PalwOperatorDaBookV1::new(palw_operator_da::palw_operator_registrations_v1(&self.consensus_config.params));
+        // Lane LG14-A: the common fraud filer's book — a cache of the chain and this node's replays; nothing persists (§6.3).
+        let mut fraud_filer = palw_fraud_filer::PalwFraudFilerBookV1::default();
         // ADR-0160 F-Q (stage 2): the audit duty's book; armed by identity (a bond in a credited claim's pool).
         let mut audit_duty = palw_audit_duty::PalwAuditDutyV1::new();
         audit_duty.replays.configure_slots(self.config.seat_replay_slots);
@@ -12712,6 +12720,24 @@ impl PalwPanelService {
             )
             .await;
 
+            // --- lane LG14-A: the common fraud filer (`palw_fraud_filer`; RFC-0014 §6) ---
+            //
+            // Past `palw_legacy_public_filer_v1`, any carrying bond replays the claims it can and, where its replay refutes one, reserves
+            // it and localizes the lie through reserved DA demands to a terminal the fold adjudicates — as a non-seat (a claim this bond
+            // seats is the seat's duties'). Identity arms it; no flag does. A clean no-op below the fence.
+            self.fraud_filer_tick_v1(
+                &session,
+                &mut fraud_filer,
+                current_daa,
+                network_domain,
+                bond_key,
+                seat_replays.has_room(false),
+                &mut court_pending,
+                &mut court_due,
+                &mut court_moved,
+            )
+            .await;
+
             // --- ADR-0160 F-Q (stage 2): the operator's audit duty (`palw_audit_duty`) ---
             //
             // Past `palw_capacity_audit_door` a credited claim reaches Final only through `k_aud` receipts
@@ -14266,6 +14292,9 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ProviderChallengeV1 { .. } => "ProviderChallengeV1",
         PalwConsensusObjectV2::ProviderAnswerV1 { .. } => "ProviderAnswerV1",
         PalwConsensusObjectV2::DaTransferV1 { .. } => "DaTransferV1",
+        // Lane LG14-A (tags 154–155): the legacy route's dispute reservation.
+        PalwConsensusObjectV2::DisputeReservedV1 { .. } => "DisputeReservedV1",
+        PalwConsensusObjectV2::DisputeReleasedV1 { .. } => "DisputeReleasedV1",
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => "DefaultAccusedTirStep",
