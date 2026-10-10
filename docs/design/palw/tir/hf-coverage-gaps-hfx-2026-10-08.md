@@ -103,7 +103,9 @@ user: may the census range-read `pytorch_model.bin`'s zip directory and `data.pk
   would not close them;
 * **reward is not claimed**: a `Head` class's verification coverage, public material, Panel-independent prosecution (G14) and
   collateral are this profile's PRINCIPLES §6 conditions and are not shown by this lane. The fence is refused when armed until the
-  full-activation release.
+  full-activation release. (2026-10-10, ADR-0177: G14 is conditional on the verifier having acquired the registered model, and the
+  effective detection probability can be 0 for a model nobody serves; ADR-0176: any reward would draw on `palw_bond_budget_v1`,
+  which does not exist yet.)
 
 ## 6. Re-measurement (RFC-0011 §18's three numbers), 2026-10-09
 

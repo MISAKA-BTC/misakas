@@ -168,12 +168,17 @@ fn capped(mut v: Vec<String>) -> Vec<String> {
     v
 }
 
-/// The `quantization_config` of a configuration (the text decoder's, when the model nests it).
-fn quantization_config(config: &serde_json::Value) -> Option<&serde_json::Value> {
-    config
-        .get("quantization_config")
-        .filter(|q| !q.is_null())
-        .or_else(|| config.get("text_config").and_then(|t| t.get("quantization_config")).filter(|q| !q.is_null()))
+/// The quantisation block of a configuration, as the lowering reads it (`misaka_palw_tir_lower::prequant::quant_block`: a
+/// `quantization_config`, or MLX's `quantization` block named `quant_method: "mlx"`), else the text decoder's
+/// `quantization_config` when the model nests it. A block the lowering refuses (a `quantization` that is not MLX's, two that
+/// disagree) is not a storage description: the lowering's own refusal names it.
+fn quantization_config(config: &serde_json::Value) -> Option<serde_json::Value> {
+    let root = config.as_object()?;
+    match misaka_palw_tir_lower::prequant::quant_block(root) {
+        Ok(Some(q)) => Some(q),
+        Ok(None) => config.get("text_config").and_then(|t| t.get("quantization_config")).filter(|q| !q.is_null()).cloned(),
+        Err(_) => None,
+    }
 }
 
 fn float_dtype(d: &str) -> bool {
@@ -715,7 +720,7 @@ fn storage_of(src: &Source, reg: &QuantRegistry) -> (StorageInfo, Vec<Blocker>) 
         }
         let q = src.config.as_ref().and_then(quantization_config);
         let mut described: Option<DescriptorRef> = None;
-        if let Some(q) = q {
+        if let Some(q) = q.as_ref() {
             let method = q.get("quant_method").and_then(|m| m.as_str()).unwrap_or("unknown").to_ascii_lowercase();
             let name = match q.get("format").and_then(|f| f.as_str()) {
                 Some(f) => format!("{method}/{f}"),
@@ -857,8 +862,10 @@ fn tensor_check(
         Some(check_weights(&prep.hl, &prep.binding, m))
     } else if src.shapes_known() {
         let hs = HeaderSource::new(&src.shards);
+        let no_entries = BTreeMap::new();
+        let entries = prep.spec.hf.quant.as_ref().map_or(&no_entries, |q| &q.module_params);
         match prep.spec.hf.quant.as_ref().filter(|q| q.fmt.is_virtual()).and_then(|q| q.fmt.binding()) {
-            Some((f, params)) => match misaka_palw_tir_lower::weights::described::DescribedSource::new(Box::new(hs), f, params) {
+            Some((f, params)) => match misaka_palw_tir_lower::weights::described::DescribedSource::new_with(Box::new(hs), f, params, entries) {
                 Ok(d) => {
                     info.checked = "shapes".into();
                     Some(check_weights(&prep.hl, &prep.binding, &d))

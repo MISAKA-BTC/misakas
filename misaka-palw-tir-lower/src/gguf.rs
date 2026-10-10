@@ -1728,6 +1728,7 @@ impl GgufModel {
             skip: Vec::new(),
             only: None,
             per_module,
+            module_params: Default::default(),
         })
     }
 

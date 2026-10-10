@@ -130,7 +130,8 @@ def main() -> int:
         type=int,
         default=0,
         help="RFC-0011 §18 number 2's numerator: repositories registered on chain as their full advertised task at their full advertised "
-        "context (evidence: real checkpoint → .palwart → G14 → chain registration), counted by the caller from the evidence; never inferred here",
+        "context (evidence: real checkpoint → .palwart → G14 verification, conditional on the verifier having acquired the registered "
+        "model (ADR-0177) → chain registration), counted by the caller from the evidence; never inferred here",
     )
     ap.add_argument(
         "--mined-funded-final",
@@ -139,7 +140,24 @@ def main() -> int:
         help="RFC-0011 §18 number 3's numerator: of those, the repositories whose class reached mining and a funded Final reward",
     )
     ap.add_argument("--registration-evidence", default="none supplied", help="where numbers 2 and 3 come from (printed beside them)")
+    ap.add_argument(
+        "--registrations",
+        default=None,
+        help="RFC-0011 §18 numbers 2 and 3 from registration records (JSONL, `registrations.py`), counted under ADR-0175: a repository "
+        "counts through a record of its snapshot revision only, once, on the public chain, at its full task and full context; another "
+        "revision's record is other content, never an update. Replaces --registered-full-task / --mined-funded-final",
+    )
     a = ap.parse_args()
+    reg_count = None
+    if a.registrations:
+        if a.registered_full_task or a.mined_funded_final:
+            sys.exit("--registrations counts numbers 2 and 3 itself: give it alone, without --registered-full-task / --mined-funded-final")
+        from registrations import count as count_registrations, load as load_registrations, snapshot_revisions
+
+        records = load_registrations(a.registrations)
+        revisions = snapshot_revisions(Path(a.snapshot).expanduser() / "dall.listing-v2.jsonl.gz", {r["repo"] for r in records})
+        reg_count = count_registrations(records, revisions)
+        a.registered_full_task, a.mined_funded_final = reg_count["registered_full_task"], reg_count["mined_funded_final"]
     snap = Path(a.snapshot).expanduser()
     out = Path(a.out).expanduser()
     out.mkdir(parents=True, exist_ok=True)
@@ -495,6 +513,9 @@ def main() -> int:
                 },
                 "d_complete_rule": "D_all minus MISSING_WEIGHTS, GATED, ADAPTER_BASE_MISSING, NO_MODEL_TASK (buckets.py EXTERNAL); every "
                 "architecture and task this build does not support stays in it as a failure",
+                "registrations": reg_count
+                if reg_count is not None
+                else "counted by the caller (--registered-full-task / --mined-funded-final), not from records",
             }
             if post_strat:
                 results[ruleset] = res_v

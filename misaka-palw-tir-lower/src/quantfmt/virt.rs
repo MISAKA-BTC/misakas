@@ -17,6 +17,12 @@
 //! export reads this one unchanged. A source that serves them ([`crate::weights::described`]) lists the
 //! served names instead of the packed ones; an element range of the served tensor is evaluated without
 //! materialising the rest.
+//!
+//! A descriptor may name the served tensor `<module><serve_suffix>` instead. MLX's affine quantisation
+//! (`MLX_AFFINE`) keeps a module's packed codes under the float export's own name, `<module>.weight` (`U32`),
+//! beside `<module>.scales` and `<module>.biases`; with `serve_suffix: ".weight"` and the codes as the first
+//! (anchor) role, a `U32` `.weight` with its two companions is served as the float `<module>.weight`, and a
+//! float `.weight` (a module MLX left unquantised) is not a module of the format and passes through.
 
 use super::desc::{ConfigDesc, DecodeDesc, LayoutDesc, QuantFormatDesc};
 use super::expr::{Col, DslError, Mask, Node, R, compile, eval};
@@ -40,11 +46,13 @@ pub struct VirtualFormat {
     checks: Vec<(Node, String)>,
     value: Node,
     consts: Vec<String>,
+    /// The served tensor is `<module><serve_suffix>` (empty: `<module>`).
+    serve_suffix: String,
 }
 
 impl VirtualFormat {
     pub fn compile(d: &QuantFormatDesc) -> R<VirtualFormat> {
-        let LayoutDesc::Virtual { roles, axes, shape, checks } = &d.layout else {
+        let LayoutDesc::Virtual { roles, axes, shape, checks, serve_suffix } = &d.layout else {
             return Err(DslError("not a virtual layout".into()));
         };
         let DecodeDesc { target, group, q, scale, zero, min, value, code, offset_term, order } = &d.decode;
@@ -64,6 +72,18 @@ impl VirtualFormat {
         let rs = compile_roles(roles, &lane_names)?;
         if rs.is_empty() || !rs[0].required {
             return Err(DslError("a virtual layout's first role is required: it names the module".into()));
+        }
+        if serve_suffix.as_deref() == Some("") {
+            return Err(DslError("a virtual layout's serve_suffix, when declared, is not empty".into()));
+        }
+        let serve_suffix = serve_suffix.clone().unwrap_or_default();
+        // A served name may be a role's own name only when that role is the anchor (MLX: the packed codes sit under the float export's
+        // `<module>.weight`): then the anchor's dtype tells a packed module from a float one, and every other role is hidden beside it.
+        if let Some(r) = rs.iter().skip(1).find(|r| !serve_suffix.is_empty() && r.suffix == serve_suffix) {
+            return Err(DslError(format!(
+                "the served name `<module>{serve_suffix}` is the role `{}`'s, which is not the anchor",
+                r.name
+            )));
         }
         let mut tables = Vec::new();
         for (name, t) in &d.tables {
@@ -95,6 +115,7 @@ impl VirtualFormat {
             checks: chk,
             value,
             consts,
+            serve_suffix,
         })
     }
 
@@ -106,6 +127,16 @@ impl VirtualFormat {
     /// The suffix of the first role: a tensor ending with it is a module of this format.
     pub fn anchor_suffix(&self) -> &str {
         &self.roles[0].suffix
+    }
+
+    /// The suffix of the served tensor's name after the module's (`""`: the served tensor is `<module>`).
+    pub fn serve_suffix(&self) -> &str {
+        &self.serve_suffix
+    }
+
+    /// The name the module `module` is served under.
+    pub fn served_name(&self, module: &str) -> String {
+        format!("{module}{}", self.serve_suffix)
     }
 
     pub fn rank(&self) -> usize {
