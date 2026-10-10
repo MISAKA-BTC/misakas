@@ -37,7 +37,7 @@ use crate::seg::{
 /// The caller supplies fed ids (prompt + generated ids except the last), or the complete prompt for a v5 encoder. They are
 /// checked against the public job before use. The callback chooses what survives streaming replay; this function reads no producer
 /// values. `through` bounds the prefix needed for a localized court.
-fn replay_values_v1(
+pub(crate) fn replay_values_v1(
     c: &SegClaimContextV1<'_>,
     artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
     tokens: &[u32],

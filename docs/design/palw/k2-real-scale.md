@@ -874,3 +874,21 @@ streamed verification/localization, deployed RPC transport, retention/pruning,
 pre-emption seals, complete aggregate resources, execution Final, real checkpoint
 or privacy/economic/honest-liveness acceptance. Evidence:
 `tir/evidence/rfc02-flat-hash-da-v3-verdict.json`.
+
+
+### Generic streamed flat-v5 detector component — 2026-10-11
+
+The dormant flat-v5 candidate profile now has `flat_detect5::check_flat_claim_v5`:
+exact replay from acquired registered weights and the public job, a generic
+node/hash-only read provider, first divergent relation localization and existing
+whole/leaf/decode court construction. The actual-node late-leaf trial uses this
+generic detector through native public reads and demand/answer transactions.
+
+The [component verdict](tir/evidence/rfc02-flat-stream-v5-verdict.json) records
+138 full-kernel passes (one existing manual benchmark ignored), 13 native-node
+passes and production compilation. Six new detector tests cover all 25 primitives,
+state/history/generated-token feedback, I128 and small values, encoder input
+binding, decode and bad acquisition/material. These are synthetic trials.
+Whole-job resource/retry/transport/retention and deadline proofs, proof pre-emption,
+real checkpoint fidelity/performance/tasks and execution Final remain open.
+See RFC02 §14.27; this is not full RFC02 or G14 acceptance.

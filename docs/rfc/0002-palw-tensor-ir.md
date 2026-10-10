@@ -3143,3 +3143,54 @@ localization across all relations, proof pre-emption seals, public retention/
 pruning, the complete shared resource vector and aggregate DA/network load,
 execution Final, privacy/economics and honest liveness remain open. No shipping
 fence is activated; full RFC02 completion is still unproven.
+
+
+### §14.27 — Generic streamed flat-v5 detection (dormant component, 2026-10-11)
+
+`flat_detect5::check_flat_claim_v5` consumes the authenticated public job, an
+independently acquired model checked against registered v3 parameter commitments,
+and a public provider exposing only node commitments and flat hash paths. It
+uses the frozen streaming integer evaluator, visits positions/occurrences/nodes
+in order and authenticates each node path against the statement's segment roots.
+`Clean` requires exact agreement at every node and every delivered greedy id; it
+is not a sampled security receipt or an execution Final.
+
+The first divergent large value is localized with at most the layout's derived
+`localization_replies` hash probes. A small value uses the existing sub-64 whole
+relation. The verifier records the dependency union, opens only its own values,
+authenticates earlier-node sources and registered weights, and constructs the
+existing bounded flat-v5 filing. This covers common primitive wiring, carry,
+initial zero states, previous state writes, previous history windows, constants,
+public position/token ids, and encoder job ids/padding/count. Decode uses its own
+logits and at most two value leaves, including the lowest-index tie rule and
+out-of-logits ids. Every emitted filing survives the strict wire roundtrip and
+the same terminal court the node uses. No new primitive or statement grammar is
+introduced.
+
+Missing or borrowed paths and invalid hash metadata yield an exact point DA
+request, never a clean verdict. A malformed committed tensor for which the
+producer cannot serve the expected typed hash path still needs the existing
+DA service/default process; this detector does not invent a malformed-header
+conviction. Wrong/missing acquired weights, an inconsistent job or failed
+reference evaluation are reported as inconsistent, not as producer guilt.
+
+The detector retains current/previous position values, with an extra previous
+position copy alongside the existing replay engine, and the replay engine's
+bounded history rows. It does not retain all positions. It still hashes all
+reference values, reads all node paths in a clean scan and builds full own
+Merkle trees for filing operands. A retry after a DA request replays the prefix;
+caching public responses does not remove that execution cost. Consequently this
+component does **not** prove real-size practicality, bounded whole-job delivery,
+shared verifier/resource accounting, or completion before the liability horizon.
+Those requirements remain mandatory before practical or reward acceptance.
+
+Synthetic tests cover all 25 primitives, state/history across positions and
+generated-token feedback, small and I128 intermediate values, encoder inputs,
+decode ties/out-of-logits ids, bad acquisition and public-path withholding or
+substitution. The actual-node late-leaf trial now drives this generic detector
+from persisted public answer bytes through point requests, a court, challenger
+payout redemption and independent replay. Native evidence remains a synthetic
+Gather case; it is not all-feature real-node or real-checkpoint acceptance. RPC
+transport/retention, proof pre-emption seals, aggregate load/honest liveness,
+execution Final, checkpoint fidelity/complete tasks, A6/A8 and economics remain
+open. The shipping fences stay dormant; RFC02 completion is not established.

@@ -1349,46 +1349,61 @@ async fn flat_hash_da_node_fresh_public_reads_localize_late_leaf_and_convict_wit
     producer.values[0][0][0].data[1900] += 1;
     let producer_tree = FlatTreeV5::of(&producer.values[0][0][0]).unwrap();
     drop(producer);
-    let unit = FlatVectorUnitV3 { position: 0, occurrence: 0, node: 0, leaf: None };
-    let demand = ask_flat_vector(&mut net, vector, 7, 0, &unit).await.unwrap();
-    let reply = flat_server_answer(&server, None, &unit);
-    send(&mut net, 4, &K::AnswerFlatModelVectorV3 { demand: demand.as_bytes(), answer: reply }).await;
-    // Fresh verifier reads chain facts only and executes its independently acquired model.
-    let view = net.api().unwrap().flat_model_vector_view_v3(&vector).unwrap();
-    let job = view.trace.job.inline_prompt.as_ref().unwrap();
-    let own_trace = misaka_palw_kernel::trace::trace_v1(&view.trace.program, &f.params, job).unwrap();
-    let expected = FlatTreeV5::of(&own_trace.values[0][0][0]).unwrap();
-    let answer = decode_flat_vector_answer_v3(&net.api().unwrap().flat_vector_public_answer_v3(&vector, &unit).unwrap()).unwrap();
-    assert!(answer.authenticates(&net.api().unwrap().flat_vector_demand_v3(&demand).unwrap()));
-    let node = answer.opening;
-    assert_ne!(node.commitment, expected.commitment());
-    let max = flat_material_bounds_v5(own_trace.values[0][0][0].dtype, &[2048]).unwrap().localization_replies;
-    let mut probe = 0;
-    let mut terminal = None;
-    let mut queried = vec![unit.clone()];
-    for _ in 0..max {
-        let unit = FlatVectorUnitV3 { leaf: Some(probe), ..unit.clone() };
-        let demand = ask_flat_vector(&mut net, vector, 7, 0, &unit).await.unwrap();
-        let reply = flat_server_answer(&server, Some(&producer_tree), &unit);
-        send(&mut net, 4, &K::AnswerFlatModelVectorV3 { demand: demand.as_bytes(), answer: reply }).await;
-        let api = net.api().unwrap();
-        let answer = decode_flat_vector_answer_v3(&api.flat_vector_public_answer_v3(&vector, &unit).unwrap()).unwrap();
-        assert!(answer.authenticates(&api.flat_vector_demand_v3(&demand).unwrap()));
-        queried.push(unit);
-        let leaf = answer.leaf.unwrap();
-        match leaf.descend(&node.commitment, &expected).unwrap() {
-            FlatDescentV5::Probe(next) => probe = next,
-            FlatDescentV5::DivergentLeaf(index) => {
-                assert_eq!(index, 1900 / 64);
-                terminal = Some(leaf);
-                break;
-            }
-            FlatDescentV5::Matched => panic!("false relation matched"),
+    use misaka_palw_kernel::flat_detect5::*;
+    struct PublicChain<'a> {
+        read: &'a dyn Fn(FlatReadV5) -> Option<FlatVectorAnswerV3>,
+    }
+    impl FlatPublicReadsV5 for PublicChain<'_> {
+        fn node(&self, u: FlatReadV5) -> Option<misaka_palw_kernel::seg::NodeOpeningV1> {
+            (self.read)(u).map(|a| a.opening)
+        }
+        fn hash(&self, u: FlatReadV5) -> Option<FlatLeafHashV5> {
+            (self.read)(u).and_then(|a| a.leaf)
         }
     }
-    let leaf = terminal.expect("bounded localization reached the late divergent leaf");
+    let view = net.api().unwrap().flat_model_vector_view_v3(&vector).unwrap();
+    let job = view.trace.job.inline_prompt.as_ref().unwrap();
+    let max = flat_material_bounds_v5(DType::I8, &[2048]).unwrap().localization_replies + 1;
+    let mut queried = Vec::new();
+    let mut terminal = None;
+    for _ in 0..=max {
+        // Every retry reads native stored bytes. The generic verifier executes
+        // its own model; it never receives the producer's tensor or tree.
+        let finding = {
+            let api = net.api().unwrap();
+            let read = |u: FlatReadV5| {
+                let unit = FlatVectorUnitV3 { position: u.position, occurrence: u.occurrence, node: u.node, leaf: u.leaf };
+                decode_flat_vector_answer_v3(&api.flat_vector_public_answer_v3(&vector, &unit)?).ok()
+            };
+            check_flat_claim_v5(&view.context(), &PublicChain { read: &read }, &|i, l| f.params.tensors.get(&(i, l)).cloned(), job)
+        };
+        match finding {
+            FlatFindingV5::Demand(u) => {
+                assert_eq!((u.position, u.occurrence, u.node), (0, 0, 0));
+                let unit = FlatVectorUnitV3 { position: u.position, occurrence: u.occurrence, node: u.node, leaf: u.leaf };
+                let demand = ask_flat_vector(&mut net, vector, 7, 0, &unit).await.unwrap();
+                let reply = flat_server_answer(&server, u.leaf.map(|_| &producer_tree), &unit);
+                send(&mut net, 4, &K::AnswerFlatModelVectorV3 { demand: demand.as_bytes(), answer: reply }).await;
+                let api = net.api().unwrap();
+                let answer = decode_flat_vector_answer_v3(&api.flat_vector_public_answer_v3(&vector, &unit).unwrap()).unwrap();
+                assert!(answer.authenticates(&api.flat_vector_demand_v3(&demand).unwrap()));
+                queried.push(unit);
+            }
+            FlatFindingV5::Fault(fault) => {
+                terminal = Some(fault);
+                break;
+            }
+            other => panic!("bad relation did not yield a filing: {other:?}"),
+        }
+    }
+    let fault = terminal.expect("generic verifier localized a late leaf within the bound");
+    match &fault {
+        misaka_palw_kernel::flat_court5::FlatFaultV5::Leaf(f) => assert_eq!(f.leaf.index, 1900 / 64),
+        other => panic!("wrong terminal court: {other:?}"),
+    }
     assert!(queried.len() > 2, "initial leaf matched; subsequent probes were needed");
-    let fault = flat_first_relation_fault_from_reads(&view, node, Some(&leaf), &f.params);
+    assert!(queried.len() as u64 <= max);
+    let fault = fault.to_bytes().unwrap();
     send(&mut net, 7, &K::RefuteFlatModelVectorV3 { vector: vector.as_bytes(), proof: fault }).await;
     assert!(net.api().unwrap().flat_model_vector_header_v3(&vector).unwrap().refuted);
     assert_eq!(net.owed(7), mega(49));

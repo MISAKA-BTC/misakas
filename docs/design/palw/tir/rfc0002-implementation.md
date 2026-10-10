@@ -19,7 +19,8 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | Work/economic conservation | Existing canonical work, RFC8/BUDGET and ADR176 paths must be audited at their call sites | Root/slice/rider/model-copy uniqueness, shared capital/window accounting, no splitting or excess-PWU rights gain, role-swap tests |
 | Public dispute completeness | Kernel and TIR court modules exist; this alone proves no detection or end-to-end gate | Fresh outsider from public material through all relation classes, bounded terminal court, invalid-proof flood and honest liveness trials |
 | Flat-v5 typed node component | Explicit dormant inner 31/32 candidate statements bind the independently derived terminal scope; court folds recheck it, use shared block budgets and share original collateral/eight-statement catalogs with v2 | General public acquisition/localization, proof pre-emption seals, complete execution/checker/DA/network resource vector and execution Final; component tests are not full checkpoint/G14 acceptance |
-| Flat-v5 native public acquisition | Dormant inner 33/34/35 fetch authenticated node/hash units into public read-API state; bounded service/default, original collateral and four requester slots shared with v2 | Deployed RPC/transport, retention/pruning, general streamed first-fault verification, proof pre-emption seals, complete shared resources/DA/network load and execution Final; no full real-checkpoint/privacy/liveness acceptance |
+| Flat-v5 native public acquisition | Dormant inner 33/34/35 fetch authenticated node/hash units into public read-API state; bounded service/default, original collateral and four requester slots shared with v2 | Deployed RPC/transport, retention/pruning, whole-job acquisition/deadline guarantees, proof pre-emption seals, complete shared resources/DA/network load and execution Final; no full real-checkpoint/privacy/liveness acceptance |
+| Flat-v5 streamed detector | Generic exact replay consumes public node/hash paths and acquired registered weights; all 25 primitive, state/history, encoder and decode synthetic trials; the native late-leaf case now uses the generic detector | Shared complete verifier/retry/hash/delivery accounting, optimized acquisition/localization, deadlines/honest liveness, all-feature real-node cases and real-checkpoint/full-task execution Final |
 | Real models and coverage | Dated census reports exist; fixture/structural passes are not full-task passes | Revision/task/context/storage/arithmetic/plan records, real sizes, complete modalities via RFC03, independent Final references, A6 and A8 denominators/confidence/residuals |
 
 The source review names dense baselines, MoE/MXFP4, GDN/KDA with unequal head counts, sparse indexers,
@@ -1821,3 +1822,37 @@ resource/aggregate DA/network bounds and worst-job localization/deadline livenes
 remain open. The original checkpoint/task/context/fidelity, privacy, economics,
 execution Final/redemption and A6/A8 requirements are unchanged. Shipping fences
 remain dormant, and the full RFC02 goal stays active.
+
+
+## Verified increment — generic streamed flat-v5 detection, 2026-10-11
+
+The new `flat_detect5::check_flat_claim_v5` uses the registered acquired model
+and authenticated job to replay the frozen semantics. A public provider exposes
+only node commitments and hash paths. The detector checks nodes in execution
+order, requests missing/invalid units, localizes a large divergent value within
+the declared hash-reply bound and constructs the existing terminal filing from
+its own operand values. Small values and greedy decode use the existing v5
+whole/decode courts. It wire-roundtrips and court-checks every emitted filing.
+
+Six new tests exercise all 25 primitives, state/history and generated-id feedback,
+I128/small downstream values, inline/tiled encoder ids/padding/count, decode ties
+and out-of-logits ids, bad model acquisition, substituted jobs and missing/borrowed
+public material. The native late-leaf case now drives this same generic detector
+using persisted public answer bytes and independently acquired weights, then
+convicts, redeems and reproduces the result on an independent replay node. Other
+primitive/state/encoder cases remain synthetic kernel trials, not complete real
+checkpoint or all-feature native acceptance.
+
+**151 distinct tests passed:** the full kernel suite has 138 passes and one
+pre-existing ignored manual hardware benchmark; all 13 model-conformance native
+tests pass. Production consensus-core compilation, formatting and diff checks
+pass. Commands use `CARGO_INCREMENTAL=0` for compiler caching only, with unchanged
+arithmetic, build profile, runtime stack and network policy. Exact test names,
+logs and source/binary hashes are in the
+[verdict](evidence/rfc02-flat-stream-v5-verdict.json).
+
+The linear node scan, reference hashing, full own operand trees, extra previous
+position copy and replay after each demand must still be priced in the complete
+resource vector and checked at real sizes. Whole-job DA/transport/retention and
+deadline/honest-liveness bounds, proof pre-emption seals, execution Final and the
+remaining full RFC02 acceptance rows stay open. No shipping fence is armed.
