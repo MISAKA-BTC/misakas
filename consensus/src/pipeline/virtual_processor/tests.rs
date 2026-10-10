@@ -17385,8 +17385,8 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
     };
     let catalog = palw_v2_test_catalog();
     let bundle = palw_v2_test_bundle(&catalog);
-    // Validated WITHOUT the retirement, which is set afterwards: the release's validation requires `palw_fork_choice_rule_e_v1` armed
-    // at or below it (ADR-0175), a fence this fixture does not arm; the test is about the retirement's own behaviour.
+    // The complete copy is validated again after retirement is set and before constructing the node. ADR-0177 withdrew the old
+    // model-acquisition Rule E prerequisite; it does not justify bypassing current params validation.
     let mut config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
@@ -17411,6 +17411,7 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
         },
         legacy_evidence_horizon_daa: 10,
     });
+    config.params.validate_palw_v2().expect("complete retirement params validate before creating the node");
     let mut ctx = TestContext::new(TestConsensus::new(&config));
     for _ in 0..16 {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();

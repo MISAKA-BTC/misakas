@@ -2847,3 +2847,4 @@ async fn capacity_probe_w_t6c_lane_a_keeps_a_non_operators_private_claims_create
 
 // LIVE-R1 (2026-10-08): H1's devnet partition that healed on the wire and stayed split.
 mod partition_rejoin;
+mod private_final;

@@ -139,7 +139,7 @@ follow-up added. **Nothing here changes a shipped preset, a params / schedule / 
 | D1-2 | Compare 5,400 / 3,000 / 1,000 / 600: attacks, EVM finality time, what else must change | 10.2, 10.3.4 | `d1_a` (exact instants), `d1_f` (lags against the node's 600-blue bound) | IMPLEMENTED (analysis + tests); hours are DERIVED from 24 and 30 DAA/h |
 | D1-3a | Producer + every Panel seat colluding | `rfc0012_safe_maturity_attacks.rs` (rules exist only there) | `d1_d`: v1 and `Final + 3,000` never retracted; `Final + 1,000` / `+ 600` retract for 2,000 / 2,400 blocks of convictions; `d1_b`: the last reversing block is `Final + 3,000` | IMPLEMENTED_AND_TESTED at the fold level; a fork **race** is a **GAP** |
 | D1-3b | Evidence / material withholding | same | `d1_c` (DA accusation admitted through `Final + 3,000`; an open session holds the claim past retirement; default as late as `Final + 4,201`), `d1_e` (no rule counts a claim under accusation); `rfc12_r3` (the node's own lost history is a named retention gap) | IMPLEMENTED_AND_TESTED; **corrects an inference in 10.2** (stated there) |
-| D1-3c | A private fork released late | none new (fork choice unchanged) | existing `hb_probe_e` (322 s) and `hb_probe_d` (629 s) re-run: both PASS — the comparator refuses a branch lacking a `Final` claim from `Final` on, and only the 600-blue finality depth stops a heartbeat-only reorg; `rfc12_r5` (labels withdrawn, no conflict alarm) | IMPLEMENTED_AND_TESTED for a branch that lacks the claim; a branch carrying its OWN `Final` claim is a **GAP** (capacity security) |
+| D1-3c | A private fork released late | fork choice unchanged; §8 adds a complete-params private Final race | recorded `hb_probe_e` (322 s) / `hb_probe_d` (629 s) and `rfc12_r5`; §8's private floor claim reaches actual node Final and wins a pre-safe race | Own Final pre-safe race MEASURED (§8); certified useful-work / 5,400-DAA effect attacks and capacity security remain OPEN |
 | D1-3d | Deep reorg across the would-be `safe` point; what `safe` / `finalized` do per value | `native_evaluate` (labels are recomputed; the conflict alarm is only for abandoning the finalized block) | `rfc12_r5` (two worlds: mature / not yet), `d1_f` | IMPLEMENTED_AND_TESTED; the harness has no real clock (`matured_daa` against DAA 1 to 2) |
 | D1-4 | `safe` readiness as structured reasons on the existing RFC-0012 RPC; ask before a new op | `palw_native_readiness_v1.rs`, `native_settlement.rs`, rpc files above | core 11 (agreement with the certificate on 400 generated chains, exact and tight promise, non-monotone evidence), processor `rfc12_r1`–`r4`, wRPC v3 byte-compat, gRPC round trip, CLI | IMPLEMENTED_AND_TESTED; **no new op was needed** |
 | D1-5 | The explorer renders the reasons | — | — | **CODE_GAP** (small; `contrib/misakascan-t12` reads the snapshot only) |
@@ -187,7 +187,7 @@ shown. No params / schedule / identity id moves, and `palw_dns_retirement_v1` is
 | C4 | Re-measure D1 with the other lanes armed | fixture: `ExtrasEdit`, `live_life_with`, `try_step_with`, `try_step_for` | `d1_g` (tripwire) | **PASS** against the merged tree (baseline and `palw_model_court_window` armed: F_off 123, the last reversing conviction and the last DA accusation at `Final + claim_retirement`, the latest default `W_disclose + 1` later). OPV / permissionless panel / kernel route / RFC-0008 slices / K2 classes are not armable in the fixture: **redo at integration** |
 | C5 | The maturity rule v2 | - | - | SKIPPED (no D1 other than v1 chosen) |
 | C6 | A class's own court window extends retention | `palw_native_settlement_v1.rs`: `live_retention` in `native_facts_and_skips_v1` | `d1_h` | **PASS** |
-| C7 | Preset and release wiring; **requires `palw_fork_choice_rule_e_v1` (ADR-0178) armed at or below** the retirement height (Lead, 2026-10-09) | none (checklist only) | - | READY-TO-APPLY CHECKLIST (policy proposal 12.8, step 3) |
+| C7 | Preset and release wiring; the recorded 2026-10-09 acquisition-fence prerequisite is superseded under ADR-0177; current complete-params validation and claim-specific security gates apply (§8) | none (checklist only) | - | READY-TO-APPLY CHECKLIST (policy proposal 12.8, step 3) |
 | C8 | Explorer renders `nativeReadiness` | `contrib/misakascan-t12/app.js` | `tests/native-settlement.cjs` | **PASS** |
 | C9 | Release-build cost at 100k+ blocks | none | `rfc0012_c9_release_cost.rs` (two `#[ignore]`d tests) | DESIGNED; compiles; NOT RUN (by order: fleet-class hardware, release profile) |
 | C10 | DNS all-equivocating case | none | `rfc12_x16` | **PASS** |
@@ -243,3 +243,45 @@ node contrib/misakascan-t12/tests/native-settlement.cjs
 
 **Still open for this lane's items:** the C3 fill (GAP above); `rfc12_c1_c` and the C9 measurement (once, on the release candidate); C4 again at
 integration with the in-flight lanes' fences armed; C2's UTXO-set / overlay / P2P halves (the multi-node drill on the shipped binary); C7 (release only).
+
+## 8. Complete fixture validation and private Final race (2026-10-11)
+
+ADR-0177 withdrew the old model-acquisition Rule E fence; `palw_fork_choice_rule_e_v1` and its prerequisite
+are absent from current Params. The bypass described in §7.2 item 1 is historical, not a current requirement.
+`rfc12_zero_dns_matrix::parts_custom` now validates the full copy including retirement before constructing
+the node. The standalone `rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor` does likewise.
+No production validation or fence is weakened. Passing structural validation does not approve claim-specific
+Final/court, economic, provenance or PRINCIPLES §6 gates. Those remain prerequisites for release.
+
+`hb_fork_choice_probe/private_final.rs` adds the predeclared private-Final case omitted by D1-3c:
+two nodes share a prefix, then carry conflicting payments and their own distinct post-fork claims. The test
+controls all genesis Panel keys, supplies an actual signed quorum on each branch and advances each claim
+through node processing to Final. It does not plant a Final, frontier or evidence fact. The private claim is
+delayed, so its frontier can be deeper; the expected outcome is a valid private branch reversing the pre-safe
+payment despite the incumbent's own Final claim. Release and capacity fence sets are all armed at DAA 1 in
+the private copy, along with retirement. ConfigBuilder and complete `validate_palw_v2` run before either node.
+
+This is a scoped residual measurement, not a proof of an invalid computation or a settled-effect reversal:
+the parent harness skips PoW, grinds synthetic floor trace commitments, simulates the clock and keeps EVM
+inert. The D=1/W=1/1000-permille policy and finite horizon 5 are TEST values only. Floor claims are excluded
+from the native useful-work certificate. A 5,400-DAA certified effect, real native execution validity,
+effective detection/collection floors, multi-process transport and actual pruning remain separate gates.
+
+Run evidence (Rust 1.93.0, macOS aarch64, jobs 2, dev/test debug 0, incremental 0; every command `--locked`):
+
+* `cargo test --locked -p kaspa-consensus --features evm --lib -- rfc12_x rfc12_r rfc12_c1_a rfc12_c1_b rfc12_c2 rfc12_c3 --test-threads=1`:
+  **25 passed, 0 failed, 0 ignored**, 10.71 s, build 5m14s. `/tmp/rfc12-full-params-matrix.log`.
+  Every shared matrix/C-item setup validates retirement as part of the full params. Existing planted-fact/frontier,
+  relabelled-work and partial pruning-import seams remain; their PASS is not live fleet or genuine useful-work evidence.
+* `cargo test --locked -p kaspa-consensus --features evm --lib -- rfc12_private_final rfc0012_retirement_uses_incumbent --test-threads=1 --nocapture`:
+  **2 passed, 0 failed, 0 ignored**, 5.19 s, build 2m56s including lock wait. `/tmp/rfc12-private-final-evm.log`.
+  The complete-params standalone retirement fixture passes. In the new fork race, both safe/live weights are
+  6,042,506,112; public/private frontiers are 8/24. All 302 offered private blocks validate. The victim stays public
+  while private work is immature, then switches at block 302 when the private claim is Final. X is absent and Y present.
+  EVM is compiled in but intentionally inert for this fork race. No actual native Safe/Finalized label is certified.
+
+The first default-feature build of the new test failed on the existing harness's private `beat_until` method;
+the test now uses its own bounded heartbeat loop. The final runs above compile and execute that correction.
+`git diff --check` and rustfmt checks of the new small test and matrix pass. No production gate, wire id, preset,
+network identity or monetary/comparator behavior is changed. Multi-process/private certified-effect security,
+100k release costs, market fills and the other RFC6/7/8/12 gates are not marked complete by this regression.

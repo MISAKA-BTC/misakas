@@ -128,11 +128,9 @@ pub(super) fn parts_with(fence: Option<u64>, bft: bool) -> Parts {
 
 /// [`parts_with`] and then `edit` on the params copy (a test value, never a preset).
 ///
-/// **Built as a `Config` directly, never through `ConfigBuilder::build`.** The copy (the harness cards, the EVM lane as shipped,
-/// the BFT gate when `bft`, then `edit`) is validated by `validate_palw_v2` WITHOUT the retirement, so everything else in it is
-/// still a validated ruleset; the retirement is set afterwards. The release's validation requires `palw_fork_choice_rule_e_v1`
-/// armed at or below the retirement (ADR-0175), a fence this harness does not arm: these tests exercise the retirement's own
-/// behaviour and must not depend on it.
+/// The complete params copy, including retirement, is validated before constructing the test Config. The old model-acquisition
+/// Rule E fence was withdrawn under ADR-0177; it is not a reason to bypass today's validation. This is still a private test policy,
+/// not an approved release schedule or evidence of the remaining settlement/security gates.
 pub(super) fn parts_custom(
     fence: Option<u64>,
     bft: bool,
@@ -149,12 +147,12 @@ pub(super) fn parts_custom(
         });
     }
     edit(&mut params);
-    params.validate_palw_v2().expect("testnet-12 with the harness cards and the test edits validates");
     if let Some(at) = fence {
         let retirement = test_retirement(at);
         assert!(retirement.settlement.valid() && retirement.legacy_evidence_horizon_daa > 0, "a complete test retirement");
         params.palw_dns_retirement = Some(retirement);
     }
+    params.validate_palw_v2().expect("testnet-12 with the harness cards, test edits and retirement validates");
     params.skip_proof_of_work = true;
     (Config::new(params), bundle, premine, floats)
 }
