@@ -393,6 +393,10 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
         | PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }
         | PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => Ok(()),
+        // Lane BUDGET (tag 140): a capital assignment rides at every height with NO shape check here — not even its signature's presence
+        // (A2U finding #1: an isolation-time refusal of bytes an older build tolerates is a split). The fence, the signature and ADR-0177
+        // D3's rules are the acceptance walk's and the fold's, which DROP it; the block stands.
+        PalwConsensusObjectV2::BondCapitalAssignedV1 { .. } => Ok(()),
         PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
             if signature.is_empty() {
                 Err("a signed registration envelope must carry its signer's signature")
@@ -1110,16 +1114,20 @@ pub enum PalwLifecycleKindFenceV1 {
     /// `Params::palw_legacy_held_da_v2` — lane LG14-B's legacy held DA (tags 157–159, and the appended `PalwDaUnitV1::LegacyHeldV2`
     /// inside tags 55 / 67 / 83).
     LegacyHeldDaV2 = 4,
+    /// `Params::palw_model_bond_allocation_v1` — lane BUDGET's capital assignment (tag 140, ADR-0177 D3). In force only where
+    /// `palw_bond_budget_v1` is too (the assignment's rows are the budget's), as the processor's `palw_model_bond_allocation_at` reads it.
+    ModelBondAllocationV1 = 5,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
         Self::ProviderCourtV1,
         Self::LegacyHeldDaV2,
+        Self::ModelBondAllocationV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1130,6 +1138,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::PermissionlessPanelV1 => "palw_permissionless_panel_v1",
             Self::ProviderCourtV1 => "palw_provider_court_v1",
             Self::LegacyHeldDaV2 => "palw_legacy_held_da_v2",
+            Self::ModelBondAllocationV1 => "palw_model_bond_allocation_v1",
         }
     }
 }
@@ -1281,6 +1290,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::LegacyHeldDemandedV2 { .. } | O::LegacyHeldAnsweredV2 { .. } | O::LegacyLeafRecomputedV2 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2)
         }
+        // Lane BUDGET: a bond's capital assignment (140).
+        O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
     }
 }
 
@@ -1403,6 +1414,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (111, "KernelConstraintReceiptV1", PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1),
     (113, "KernelRouteChunkV1", PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1),
     (120, "PanelBeaconProofV3", PalwLifecycleKindFenceV1::PermissionlessPanelV1),
+    (140, "BondCapitalAssignedV1", PalwLifecycleKindFenceV1::ModelBondAllocationV1),
     (150, "ProviderLeaseV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
     (151, "ProviderChallengeV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
     (152, "ProviderAnswerV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
@@ -1476,6 +1488,16 @@ impl crate::config::params::Params {
                         }
                     }
                     PalwLifecycleKindFenceV1::LegacyHeldDaV2 => self.palw_legacy_held_da_v2,
+                    // Lane BUDGET: in force where BOTH the allocation's and the budget's fences are (`palw_model_bond_allocation_at`).
+                    PalwLifecycleKindFenceV1::ModelBondAllocationV1 => {
+                        let never = crate::config::params::ForkActivation::never();
+                        match (self.palw_model_bond_allocation_v1.as_ref(), self.palw_bond_budget_v1.as_ref()) {
+                            (Some(a), Some(b)) if a.activation != never && b.activation != never => Some(
+                                crate::config::params::ForkActivation::new(a.activation.daa_score().max(b.activation.daa_score())),
+                            ),
+                            _ => None,
+                        }
+                    }
                 },
             )
         })
@@ -1815,10 +1837,9 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::ObjectTags { lo: 120, hi: 120 }, "palw_permissionless_panel_v1", "RFC-0010 V3 production fold", true),
     // 130 `ExecWorkRootOpenedV2` (X8R, `rfc8/x8r-review`).
     a2_row(PalwA2SlotV1::ObjectTags { lo: 130, hi: 139 }, "palw_exec_payload_v2", "X8R RFC-0008 v2", false),
-    // 140–149: BUDGET (ADR-0176/0177, allocated 2026-10-10) — no row until its kinds exist: BUDGET adds one row per kind range with
-    // the fence that owns it (`palw_bond_budget_v1` or `palw_model_bond_allocation_v1`, `PALW_A2_TAG_ALLOCATIONS_V1`) in the commit
-    // that creates the kinds. A kind there without its row fails `every_kind_in_the_enum_has_exactly_one_owner` and
-    // `every_landed_kind_sits_in_its_row_with_the_rows_fence`.
+    // 140–149: BUDGET (ADR-0176/0177, allocated 2026-10-10). 140 `BondCapitalAssignedV1` (landed, owned by the allocation fence, which
+    // needs `palw_bond_budget_v1` at or below it); 141–149 unallocated within the lane: no row until a kind lands there.
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 140, hi: 140 }, "palw_model_bond_allocation_v1", "BUDGET capital assignment", true),
     // DA16: lease, challenge, answer, transfer. A change to their wire form (DA16's re-scope: the `Artifact` lease subject removed
     // under this fence) re-pins `PALW_A2_NEW_KIND_WIRE_V1` in the same commit and keeps this row's fence, or adds a row for another.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 150, hi: 153 }, "palw_provider_court_v1", "DA16 provider court", true),
@@ -4041,6 +4062,8 @@ pub(crate) mod tests {
             (111, 0x2d490db20d075bfe),
             (113, 0xca1188bcd2f663d2),
             (120, 0xcbb24fb8f993e5c6),
+            // BUDGET's capital assignment (ADR-0177 D3), under `palw_model_bond_allocation_v1`.
+            (140, 0xa4ab9f7696775588),
             (150, 0x5fb8c8b2822f8386),
             (151, 0x6a81242ebaeba7fd),
             (152, 0xc48f175fa3456d1e),

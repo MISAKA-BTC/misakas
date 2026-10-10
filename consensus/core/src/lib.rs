@@ -531,6 +531,10 @@ pub mod palw_public_material_v1;
 /// Lane DA16 (RFC-0009 §4.2): the provider court on the kernel route — leases, unit challenges, answers, the DA transfer, its rows and its
 /// fence `palw_provider_court_v1` (dormant, refused when armed).
 pub mod palw_provider_court_v1;
+/// Lane BUDGET (ADR-0176 / ADR-0177): the bond budget (Q/B/R/F reserved at acceptance, consumed by every reward writer, released only at
+/// `accepted_daa + W`) and the model-bond allocation — fences `palw_bond_budget_v1` and `palw_model_bond_allocation_v1` (dormant, refused
+/// when armed).
+pub mod palw_bond_budget_v1;
 /// Lane DA16: the court scope (ADR-0177 D2, RFC-0014 §16.4) — what a court may demand (claim-specific units only), what a verifier
 /// supplies from its own copy against the registered root, the node-level model-bytes masks and the cumulative bound.
 pub mod palw_court_scope_v1;

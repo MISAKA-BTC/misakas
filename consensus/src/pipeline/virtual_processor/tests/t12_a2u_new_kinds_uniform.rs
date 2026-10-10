@@ -126,6 +126,23 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             }
             PalwLifecycleKindFenceV1::ProviderCourtV1 => params.palw_provider_court_v1 = Some(at),
             PalwLifecycleKindFenceV1::LegacyHeldDaV2 => params.palw_legacy_held_da_v2 = Some(at),
+            // Lane BUDGET: the allocation needs the budget at or below it; both with the unapproved probe policies, mirrored.
+            PalwLifecycleKindFenceV1::ModelBondAllocationV1 => {
+                // Caps per base unit of capital (a TEST policy, never binding here): this harness judges kinds, not budgets.
+                let policy = kaspa_consensus_core::palw_bond_budget_v1::PalwBondBudgetPolicyV1 {
+                    block_units_per_unit: kaspa_consensus_core::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1,
+                    reward_per_unit_sompi: 1_000,
+                    final_weight_per_unit: 1_000_000,
+                    max_open_claims_per_bond: u32::MAX,
+                    window_daa: 1_000,
+                    ..kaspa_consensus_core::palw_bond_budget_v1::PalwBondBudgetPolicyV1::unapproved_probe_v1()
+                };
+                params.palw_bond_budget_v1 =
+                    Some(kaspa_consensus_core::palw_bond_budget_v1::PalwBondBudgetFenceV1 { activation: at, policy });
+                params.palw_model_bond_allocation_v1 =
+                    Some(kaspa_consensus_core::palw_bond_budget_v1::PalwModelBondAllocationFenceV1::at(at));
+                params.sync_palw_bond_budget_v1();
+            }
         }
     }
     for form in PalwHeaderFormFenceV1::ALL {
@@ -152,6 +169,7 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_signed_registration_v1"
             | "palw_permissionless_panel_v1"
             | "palw_provider_court_v1"
+            | "palw_model_bond_allocation_v1"
             | "palw_receipt_spend_v4"
             | "palw_panel_free_v1"
             | "palw_typed_roots_v1"

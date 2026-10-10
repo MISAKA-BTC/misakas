@@ -139,6 +139,10 @@ mod palw_onboarding_fold_v1;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
 #[path = "palw_provider_court_fold_v1.rs"]
 mod palw_provider_court_fold_v1;
+// Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's fold — the engine's journal as deltas 190/191, the capital assignment's arm (tag
+// 140), the per-block clock and the reservation / consumption hooks. A child module for the same reason as the others.
+#[path = "palw_bond_budget_fold_v1.rs"]
+mod palw_bond_budget_fold_v1;
 // RFC-0001 §2.10 (ADR-0163): the adapter class listing's fold arm — a child module for the same reason.
 #[path = "palw_adapter_class_fold_v1.rs"]
 mod palw_adapter_class_fold_v1;
@@ -1765,6 +1769,11 @@ pub struct PalwStateParamsV2 {
     /// reads it). `None` on every shipped preset, and `validate_palw_permissionless_panel_v1` refuses every armed one.
     #[borsh(skip)]
     panel_v3: Option<crate::palw_permissionless_panel_v1::PalwPanelV3ParamsV1>,
+    /// **Lane BUDGET (ADR-0176 / ADR-0177): `Params::palw_bond_budget_v1` and `palw_model_bond_allocation_v1`, mirrored by
+    /// `Params::sync_palw_bond_budget_v1`** — the fences' heights and policies (the fold's budget hooks read it). `None` on every shipped
+    /// preset, and validation refuses both armed.
+    #[borsh(skip)]
+    bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1>,
     /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the
     /// 2026-10-04 audit's fixes read it). `None` on every shipped preset.
     #[borsh(skip)]
@@ -2011,6 +2020,7 @@ impl PalwStateParamsV2 {
             floor_reserve_from_daa: None,
             anchor_window_from_daa: None,
             panel_v3: None,
+            bond_budget: None,
             audit_1004_from_daa: None,
             reporter_share_v2_from_daa: None,
         })
@@ -2433,6 +2443,23 @@ impl PalwStateParamsV2 {
     /// The permissionless Panel's mirror, if the network arms it.
     pub fn panel_v3(&self) -> Option<&crate::palw_permissionless_panel_v1::PalwPanelV3ParamsV1> {
         self.panel_v3.as_ref()
+    }
+
+    /// **Lane BUDGET: the bond budget's mirror** — written by `Params::sync_palw_bond_budget_v1` and by nothing else (and by fixtures);
+    /// `None` where the fence is not armed.
+    pub fn with_bond_budget(mut self, mirror: Option<crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1>) -> Self {
+        self.bond_budget = mirror;
+        self
+    }
+
+    /// The bond budget's mirror, if the network arms the fence.
+    pub fn bond_budget(&self) -> Option<&crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1> {
+        self.bond_budget.as_ref()
+    }
+
+    /// **Is the bond budget in force at `daa_score`?** `false` on every shipped preset.
+    pub fn bond_budget_active_at(&self, daa_score: u64) -> bool {
+        self.bond_budget.as_ref().is_some_and(|mirror| mirror.active_at(daa_score))
     }
 
     /// **Which rule binds a claim accepted at `accepted_daa`?** `true`: the permissionless Panel (V3) — the fence is in force at
@@ -3877,6 +3904,8 @@ pub fn palw_bond_backs_live_duty_v1(state: &PalwChainStateV2, key: &PalwBondKeyV
         || state.kernel_reserved(key) > 0
         || state.onboarding_reserved(key) > 0
         || state.provider_court_reserved(key) > 0
+        // Lane BUDGET (ADR-0176 D4): the capital that earned a budget window stays until the window has passed (design §2.4).
+        || state.bond_budget_window_holds(key, now_daa)
     {
         return true;
     }
@@ -3918,6 +3947,8 @@ pub fn palw_bond_backs_live_duty_v2(
         || state.kernel_reserved(key) > 0
         || state.onboarding_reserved(key) > 0
         || state.provider_court_reserved(key) > 0
+        // Lane BUDGET (ADR-0176 D4): the capital that earned a budget window stays until the window has passed (design §2.4).
+        || state.bond_budget_window_holds(key, now_daa)
     {
         return true;
     }
@@ -8633,6 +8664,13 @@ pub enum PalwConsensusObjectV2 {
     /// and the accuser's own model rows, without the output preimage. A direct objective proof: it lands whatever session or court
     /// is open on the claim. Signed by the accuser's bond. **Tag 159.**
     LegacyLeafRecomputedV2 { accusation: Box<crate::palw_legacy_held_da_v2::PalwLegacyLeafRecomputeV2> } = 159,
+    // Tags 140–149 are lane BUDGET's (ADR-0176 / ADR-0177; the lead's allocation of 2026-10-10). Dropped by name below
+    // `palw_model_bond_allocation_v1`; rows in the bond budget's table 4.
+    /// **(tag 140): a bond's signed capital assignment** (ADR-0177 D3) — the amounts of its locked capital it assigns to registered models
+    /// (strictly ascending model ids, every amount positive, `Σ ≤` the bond's capital) under a sequence above its last. It replaces the
+    /// bond's pending assignment, which counts toward `S_m` only once seasoned (a decrease at once). Capital is never derived from claims.
+    /// `signature`: the bond's ML-DSA-87 over [`crate::palw_bond_budget_v1::palw_capital_assignment_message_v1`]. **Tag 140.**
+    BondCapitalAssignedV1 { bond: PalwBondKeyV2, assignments: Vec<(Hash64, u64)>, sequence: u64, signature: Vec<u8> } = 140,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -8675,6 +8713,12 @@ pub fn palw_object_is_legacy_held_da_v2(object: &PalwConsensusObjectV2) -> bool 
         PalwConsensusObjectV2::DefaultAccusedPipelineStep { accusation } => accusation.unit.is_legacy_held_v2(),
         _ => false,
     }
+    }
+/// **Is this object a bond-budget object (tag 140, lane BUDGET)** — a variant an older build cannot decode and skips (A-2)? Below
+/// `Params::palw_model_bond_allocation_v1` the acceptance walk drops it by name before any slot, rent or budget is charged for it; the
+/// fold refuses it as the second lock.
+pub fn palw_object_is_bond_budget_v1(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::BondCapitalAssignedV1 { .. })
 }
 
 /// **Is this object the signed registration envelope (tag 108)?**
@@ -9038,6 +9082,10 @@ struct PalwAttemptOriginV1 {
     /// **ADR-0165: what this attempt is to the floor state machine** — see [`PalwFloorEventSourceV1`]. The machine's one
     /// reader is `apply_attempt`; a rider ([`Self::rider`]) is [`PalwFloorEventSourceV1::Rider`] and moves nothing.
     floor_event: PalwFloorEventSourceV1,
+    /// **Lane BUDGET (ADR-0176 D2): the reward-block units this claim takes** — one block for an attempt block's own or a merged
+    /// block's attempt, a rider's share of its lead's one block for a rider ([`crate::palw_bond_budget_v1::palw_rider_block_attribution_v1`]).
+    /// Read only past `palw_bond_budget_v1`.
+    budget_block_units: u64,
 }
 
 /// **ADR-0165: where an attempt's event for the floor state machine comes from** — whether it is an event at all, and its
@@ -11116,6 +11164,16 @@ pub enum PalwStateV2Error {
     /// **G14: a kernel route move the fold refuses** (below the fence, or the stored state does not rebuild), by the reason.
     #[error("a kernel route move is refused: {0}")]
     KernelRouteRefused(String),
+    /// **Lane BUDGET (ADR-0176 / ADR-0177): a bond-budget move the fold refuses** (a capital assignment below its fence, from a bond
+    /// that is not Active, or breaking a rule of ADR-0177 D3), by the rule's own reason. Dropped by the acceptance rehearsal; the block
+    /// stands.
+    #[error("a bond-budget move is refused: {0}")]
+    BondBudgetRefused(String),
+    /// **ADR-0176 D1: the producer bond's budget refuses this claim** (its window has no room, or it holds its open-claim cap) — checked
+    /// before the path's first write, so step 4 skips a refused own attempt (its carve withheld as a skipped attempt's, never minted) and
+    /// 4b a merged one; a free-prompt commitment or a rider batch is refused by name.
+    #[error("bond {bond:?}'s budget refuses the claim: {why} (ADR-0176)")]
+    BondBudgetExhausted { bond: PalwBondKeyV2, why: String },
     /// **RFC-0007 Parts II and IV: a mesh move the fold refuses** (a trap object below its fence, an inadmissible commit or reveal,
     /// an audit leaf below `palw_audit_mesh_v1`), by the rule's own reason.
     #[error("an audit mesh move is refused: {0}")]
@@ -11430,6 +11488,11 @@ pub struct PalwChainStateV2 {
     /// `Params::palw_probabilistic_constraints_v1` — which no network can arm — so a dormant network roots exactly as before.
     /// One Some-only root block (`kernel-route/v1`) and one carriage tail (`0xEC`) once `Some`.
     kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>,
+    /// **Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's engine** ([`crate::palw_bond_budget_v1`]) — every budgeted claim's
+    /// reservation and consumption, the bonds' windows and release queue, the capital assignments and the models' allocation. `None`
+    /// until the first block at or past `Params::palw_bond_budget_v1` — which no network can arm — so a dormant network roots exactly as
+    /// before. One Some-only root block (`bond_budget/v1`), carriage tail `0xEF`, deltas 190/191.
+    bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1>,
     /// **ADR-0124 Decisions 2 and 3: the seats on duty for each live claim, and when each
     /// discharged it.** A row is written when a panel is bound past `Params::palw_panel_economy`,
     /// one entry per drawn seat at `0`; an entry becomes the DAA at which the chain credited that
@@ -11948,6 +12011,7 @@ impl PalwChainStateV2 {
             seat_availability: BTreeMap::new(),
             seat_root_readiness: BTreeMap::new(),
             kernel_route: None,
+            bond_budget: None,
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
             round_span: 0,
@@ -14721,6 +14785,17 @@ impl PalwChainStateV2 {
             state.update(b"panel_v3/v1");
             state.update(panel.root().as_byte_slice());
         }
+        // **Lane BUDGET (ADR-0176 / ADR-0177): the bond budget, ONE Some-only block** after the permissionless Panel's — the engine
+        // exists only from the first block at or past `palw_bond_budget_v1`, which no network can arm, so a network that never arms it
+        // roots as before. The header's digest, then its five tables' roots.
+        if let Some(budget) = &self.bond_budget {
+            state.update(b"bond_budget/v1");
+            let (header, tables) = budget.root_parts();
+            state.update(header.as_byte_slice());
+            for table in tables {
+                state.update(table.as_byte_slice());
+            }
+        }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -14788,6 +14863,11 @@ impl PalwChainStateV2 {
         self.assert_mesh_consistency_v1()?;
         // RFC-0010: the permissionless Panel's engine is internally consistent and agrees with the claims, panels and duty rows.
         self.assert_panel_v3_consistency_v1(params)?;
+        // Lane BUDGET: the bond budget's own invariants (windows = Σ in-window reservations, open counts, releases, consumption within
+        // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.
+        if let Some(budget) = &self.bond_budget {
+            budget.check_consistency().map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("bond budget: {why}")))?;
+        }
         let mut exposure: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
         let mut safe: u128 = 0;
         // The same sum with Decision 7 switched OFF: the most `safe_weight` this claim set could
@@ -14895,10 +14975,11 @@ impl PalwChainStateV2 {
                         // ADR-0160 F-W (D-3): both sums under the C7 ceiling, as `finalize_claim` and
                         // `retire_claim` price a new-rule claim (the identity on every other).
                         let final_safe = |c: u128| crate::palw_weight_cap_v1::palw_weight_final_safe_v1(params, claim, c);
-                        safe = safe.checked_add(final_safe(contribution)).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
-                        safe_ceiling = safe_ceiling
-                            .checked_add(final_safe(canonical.unwrap_or(claim.pwu as u128)))
-                            .ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+                        // Lane BUDGET: a budgeted claim weighs what its Final was granted, in both sums.
+                        let credited = self.bond_budget_weight_or(id, final_safe(contribution));
+                        let ceiling = self.bond_budget_weight_or(id, final_safe(canonical.unwrap_or(claim.pwu as u128)));
+                        safe = safe.checked_add(credited).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+                        safe_ceiling = safe_ceiling.checked_add(ceiling).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                     }
                     // A free-prompt Final licenses; only SPENT quanta weighed blocks.
                     PalwClaimSourceV2::FreePrompt { quanta, spent } => {
@@ -14908,6 +14989,8 @@ impl PalwChainStateV2 {
                         let spent_weight = per_quantum
                             .checked_mul(spent.len() as u128)
                             .ok_or(PalwStateV2Error::Overflow("consistency spent weight"))?;
+                        // Lane BUDGET: a budgeted claim's spends added what they were granted.
+                        let spent_weight = self.bond_budget_weight_or(id, spent_weight);
                         // **The free-prompt lane is NOT priced by Decision 7** — see the open
                         // question recorded at `apply_receipt_spend`. It contributes identically to
                         // both sums, so the bound below neither tightens nor loosens around it.
@@ -16685,6 +16768,15 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1>,
         new: Option<crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1>,
     } = 161,
+    /// **Lane BUDGET (delta number 190, declared explicitly; 190–199 are the bond budget's): a row of the bond budget** was written,
+    /// rewritten or dropped — `table` names the table ([`crate::palw_bond_budget_v1::PALW_BUDGET_TABLE_BONDS_V1`] …), the key and row
+    /// ride as their Borsh bytes. One entry for every table. Dormant: `palw_bond_budget_v1` is armed on no network.
+    BondBudgetRow { table: u8, key: Vec<u8>, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 190,
+    /// **Lane BUDGET (delta number 191): the bond budget's header** — `None → Some` creates the engine (the fence's first block).
+    BondBudgetHeader {
+        old: Option<crate::palw_bond_budget_v1::PalwBondBudgetHeaderV1>,
+        new: Option<crate::palw_bond_budget_v1::PalwBondBudgetHeaderV1>,
+    } = 191,
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -24275,6 +24367,10 @@ impl<'a> TransitionBuilder<'a> {
                 per_quantum.checked_mul(spent.len() as u128).ok_or(PalwStateV2Error::Overflow("convicted free-prompt weight"))?
             }
         };
+        // Lane BUDGET: a budgeted claim's reversal takes back exactly what its Final (or its spends) was granted; nothing returns to its
+        // bond's window.
+        let weight = self.state.bond_budget_weight_or(&id, weight);
+        self.bond_budget_close_v1(&id);
         self.state.safe_weight = self.state.safe_weight.saturating_sub(weight);
         self.unnote_model_probe_pass(&claim, final_daa, ctx.daa_score);
         self.unnote_activation_probe_credits_v1(&id, &claim);
@@ -26152,13 +26248,27 @@ impl<'a> TransitionBuilder<'a> {
                         due.target_span = span_now;
                         let (frontier_blue_score, frontier) = self.state.safe_frontier();
                         let mut schedule = palw_execution_schedule_seeded_v1(&due, &anchor, frontier_blue_score, frontier);
-                        palw_execution_schedule_assign_quanta_windowed_v1(
+                        let window_rounds =
+                            crate::palw_execution_quanta_v1::palw_execution_span_rounds_v1(span_daa, safety.target_time_per_block_ms);
+                        // **Lane BUDGET (readiness §3e): past `palw_bond_budget_v1` every bond's Round rights are capped BEFORE the
+                        // draw's candidate set, and what the draw allocates is reserved in its window.** Below the fence, the mint as
+                        // it always was, ticket for ticket.
+                        if !self.bond_budget_round_draw_v1(
+                            ctx,
                             &mut schedule,
                             lane.execution_quantum,
                             lane.span_open_round,
-                            crate::palw_execution_quanta_v1::palw_execution_span_rounds_v1(span_daa, safety.target_time_per_block_ms),
+                            window_rounds,
                             &forfeited,
-                        );
+                        ) {
+                            palw_execution_schedule_assign_quanta_windowed_v1(
+                                &mut schedule,
+                                lane.execution_quantum,
+                                lane.span_open_round,
+                                window_rounds,
+                                &forfeited,
+                            );
+                        }
                         self.write_round_schedule(span_now, Some(schedule));
                         seeded_this_span = true;
                     } else if target.saturating_add(crate::palw_execution_lane_v1::PALW_EXEC_PENDING_GRACE_SPANS_V1) < span_now {
@@ -27990,6 +28100,9 @@ impl<'a> TransitionBuilder<'a> {
             // ADR-0160 F-W (D-3): a new-rule claim's Final weight under the C7 ceiling — the identity on
             // every attributable class and every old-rule claim.
             let contribution = crate::palw_weight_cap_v1::palw_weight_final_safe_v1(self.params, claim, contribution);
+            // **Lane BUDGET (ADR-0176 D3): the Final weight under the budget** — the grant, never beyond the claim's reserved F (the same
+            // number every re-derivation reads back). Unchanged for an unbudgeted claim.
+            let contribution = self.bond_budget_final_weight_v1(&id, contribution);
             self.state.safe_weight =
                 self.state.safe_weight.checked_add(contribution).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
         }
@@ -28038,6 +28151,9 @@ impl<'a> TransitionBuilder<'a> {
                 None if self.extras.work_priced_reward_active => self.work_priced_escrow(claim),
                 None => claim.escrowed_reward,
             };
+            // **Lane BUDGET (ADR-0176 D3, design §2.6): the reward under the budget**, before the buyback and the panel split, so every
+            // leg derives from it; the rest is never named — never minted. Unchanged for an unbudgeted claim.
+            let escrow = self.bond_budget_final_reward_v1(&id, escrow);
             let slice = self.model_buyback_at_final(&id, claim, escrow);
             let reward = escrow - slice;
             // **ADR-0124 Decisions 1 and 2: the panel's share.** A claim whose panel holds a duty
@@ -28116,6 +28232,10 @@ impl<'a> TransitionBuilder<'a> {
                 }
             }
         }
+        // Lane BUDGET: an attempt's Final is terminal for its budget (a free-prompt claim's spends come after its Final).
+        if matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            self.bond_budget_close_v1(&id);
+        }
         // ADR-0132 Upgrade C: the snapshot leaves with the claim — it was read above, once.
         self.write_claim_economics(id, None);
         // ADR-0124 Decision 3: the seats leave duty with their exposure — before the phase write
@@ -28175,6 +28295,8 @@ impl<'a> TransitionBuilder<'a> {
             }
             _ => {}
         }
+        // Lane BUDGET (ADR-0176 D4): a void is terminal for the claim's budget — and returns nothing to the window before `d + W`.
+        self.bond_budget_close_v1(&id);
         // **ADR-0152 §4-ter C3: a void by any route closes every court session on the claim
         // NEUTRALLY**, past `palw_offence_attribution`: the session is removed (its challenger's
         // reservation released by `write_court`), nobody is slashed and no court time is charged —
@@ -28388,6 +28510,8 @@ impl<'a> TransitionBuilder<'a> {
             }
             _ => None,
         };
+        // Lane BUDGET: a budgeted claim retires the weight its Final (or its spends) was granted — the number `safe_weight` received.
+        let retiring = retiring.map(|amount| self.state.bond_budget_weight_or(&id, amount));
         if let Some(amount) = retiring {
             let old = self.state.retired_safe_weight;
             let new = old.checked_add(amount).ok_or(PalwStateV2Error::Overflow("retired_safe_weight"))?;
@@ -28412,6 +28536,8 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0152 DA-6 (M3): the claim's DA record retires with it, burning unrefunded exposure.
         self.da_retire_v1(id)?;
         self.write_claim(id, None);
+        // Lane BUDGET: the claim left the state; its budget row leaves once it is out of its window too.
+        self.bond_budget_forget_v1(&id);
         // ADR-0160 F-Q: the claim's audit receipts retire with it.
         if self.state.audit_status_of_v1(&id).is_some() {
             self.write_audit_receipts_v1(id, None);
@@ -29142,6 +29268,12 @@ pub fn palw_v2_pre_object_base_v1(
     for seq in builder.state.evm_settlements.keys().copied().collect::<Vec<_>>() {
         builder.write_evm_settlement(seq, None);
     }
+    // 1c″. Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's clock — the engine created at the fence's first block (the live old
+    //      claims seeded), every reservation whose `reuse_not_before` has come released (the ONLY release), the allocation epoch rolled
+    //      and this block's carve accrued; before the execution lane's span rotation (whose Round draw reads the bonds' remaining
+    //      rights, readiness §3e), the sweeps and the objects. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
+    //      `palw_bond_budget_v1`, which no network can arm.
+    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
     // ADR-0125: the span boundary runs where the fold runs it — before any claim is finalized here.
     if let Some(lane) = extras.round_lane {
         builder.rotate_round_lane(ctx, lane.schedule_span_daa);
@@ -29519,6 +29651,12 @@ pub fn apply_palw_transition_v7(
         builder.write_evm_settlement(seq, None);
     }
 
+    // 1c″. Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's clock — the engine created at the fence's first block (the live old
+    //      claims seeded), every reservation whose `reuse_not_before` has come released (the ONLY release), the allocation epoch rolled
+    //      and this block's carve accrued; before the execution lane's span rotation (whose Round draw reads the bonds' remaining
+    //      rights, readiness §3e), the sweeps and the objects. Mirrored in `palw_v2_pre_object_base_v1`. A no-op below
+    //      `palw_bond_budget_v1`, which no network can arm.
+    palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut builder, ctx);
     // 1d. ADR-0125: the execution lane's span boundary — before the sweeps, so an attempt finalized
     //     by this block is a credit in THIS block's span, never in the one its finals just closed.
     if let Some(lane) = extras.round_lane {
@@ -29748,6 +29886,7 @@ pub fn apply_palw_transition_v7(
                     carrying_bits,
                     job_anchor: extras.own_job_anchor,
                     floor_event: PalwFloorEventSourceV1::BlockBlue,
+                    budget_block_units: crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1,
                 },
             );
             builder.room_exempt_class = None;
@@ -29791,7 +29930,9 @@ pub fn apply_palw_transition_v7(
                     | PalwStateV2Error::AuditBacklogFull { .. }
                     // ADR-0160 stage 4: lane N's level and share (past F-N a refusal for want of a unit
                     // registers the bond's demand for the class).
-                    | PalwStateV2Error::NetworkRoomExhausted { .. }),
+                    | PalwStateV2Error::NetworkRoomExhausted { .. }
+                    // Lane BUDGET (ADR-0176 D1): the bond's budget window — `apply_attempt`'s last check before its first write.
+                    | PalwStateV2Error::BondBudgetExhausted { .. }),
                 ) => {
                     builder.register_network_demand_on_v1(&refused, &envelope.attempt, ctx.daa_score);
                     merged_skips.push((ctx.block, refused.to_string()));
@@ -29888,6 +30029,7 @@ pub fn apply_palw_transition_v7(
                                     carrying_bits: merged.bits,
                                     job_anchor: merged.job_anchor,
                                     floor_event,
+                                    budget_block_units: crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1,
                                 },
                             ) {
                                 Ok(()) => {
@@ -34698,6 +34840,8 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::ProviderCourtV1) => builder.extras.kernel_route.as_ref().is_some_and(|route| route.provider_court.is_some()),
         // Lane LG14-B: the extras flag the processor resolves from `palw_legacy_held_da_v2` at the block.
         K::Fence(F::LegacyHeldDaV2) => builder.extras.legacy_held_da_v2_active,
+        // Lane BUDGET: the mirror carries the allocation's height (at or past the budget's) exactly where both fences are armed.
+        K::Fence(F::ModelBondAllocationV1) => builder.params.bond_budget().is_some_and(|mirror| mirror.allocation_at(ctx.daa_score).is_some()),
     }
 }
 
@@ -35232,6 +35376,10 @@ fn apply_object(
         }
         PalwConsensusObjectV2::LegacyLeafRecomputedV2 { accusation } => {
             apply_legacy_leaf_recompute_v2(builder, ctx, accusation)?;
+        }
+        // **Lane BUDGET (tag 140): a bond's capital assignment** — table 4 of the bond budget (`palw_bond_budget_fold_v1`).
+        PalwConsensusObjectV2::BondCapitalAssignedV1 { bond, assignments, sequence, signature: _ } => {
+            palw_bond_budget_fold_v1::apply_capital_assignment_v1(builder, ctx, bond, assignments, *sequence)?;
         }
         // (tag 108): the acceptance walk replaces the envelope by the registration it wraps, so the fold never meets one.
         PalwConsensusObjectV2::SignedRegistrationV1 { .. } => {
@@ -38043,9 +38191,15 @@ fn apply_object(
                 job_identity: if builder.extras.offence_attribution_active { *job_pin } else { Hash64::default() },
                 rcore: PalwClaimRcoreV1::default(),
             };
+            // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
+            // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
+            let budget_plan = builder.plan_free_prompt_budget_v1(ctx, &claim, quanta)?;
             builder.reserve_for_claim(&claim)?;
             let fp_pwu = claim.pwu;
             builder.write_claim(*claim_id, Some(claim));
+            if let Some(plan) = budget_plan {
+                builder.commit_bond_budget_v1(ctx, *claim_id, plan)?;
+            }
             // **ADR-0145 §6: what this claim bought, so the next one is not sold it twice.**
             //
             // Written after `write_claim` because `write_claim` is also where the row is DROPPED,
@@ -38511,7 +38665,12 @@ fn apply_receipt_spend(
     // The candidate rule, if the FP lane wants one, is `fp_certified_classes` membership at this
     // block's chain point. That is a different decision with a different proof obligation and it
     // belongs to whoever owns ADR-0074/0075, not to this remediation.
-    builder.state.safe_weight = builder.state.safe_weight.checked_add(per_quantum).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
+    // **Lane BUDGET (ADR-0176 D3, design §2.6): the spend draws on its commitment's reservation** — one block and this block's carve,
+    // strict (the coinbase pays the worker share whole, so a short reservation refuses the spend), and the quantum's weight, clipped:
+    // `safe_weight` takes the grant. The receipt census below still counts the work done (it measures production, never reward).
+    let last_quantum = spent.len() as u64 + 1 >= *quanta as u64;
+    let credited = builder.bond_budget_receipt_spend_v1(ctx, &claim_id, per_quantum, last_quantum)?;
+    builder.state.safe_weight = builder.state.safe_weight.checked_add(credited).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
     let mut updated = claim.clone();
     let PalwClaimSourceV2::FreePrompt { spent: ledger, .. } = &mut updated.source else { unreachable!("matched above") };
     ledger.insert(spend.quantum_index);
@@ -40405,6 +40564,9 @@ fn attach_riders_v1(
         m::PalwCapacityLedgerKeyV1::RiderLead(*lead_id),
         Some(m::PalwCapacityLedgerRowV1::Riders { riders: n as u16, daa: lead.accepted_daa }),
     );
+    // **Lane BUDGET (design §2.1): the riders take their share of the lead's one block** — the lead's block units fall by `n·⌊U/(1+n)⌋`,
+    // which the riders' own reservations take below (`0` where the lead is unbudgeted). Atomic with the batch.
+    let rider_block_units = builder.bond_budget_share_lead_block_v1(lead_id, n as u64)?;
     let ctx_r = PalwBlockContextV2 { subsidy: s_r, ..*ctx };
     let bits = builder.extras.economic_payout.map(|fold| fold.block_bits).unwrap_or(0);
     let canonical = crate::palw_attempt_v2::PALW_ATTEMPT_V2_TRACE_CHUNKS;
@@ -40453,6 +40615,7 @@ fn attach_riders_v1(
                 // neither BLUE nor RED (the coordinator's decision of 2026-10-03: the machine shields REAL attempt BLOCKS from the floor
                 // blocks that colour against them, and a rider is in no colouring).
                 floor_event: PalwFloorEventSourceV1::Rider,
+                budget_block_units: rider_block_units,
             },
         )
         .map_err(|refused| PalwStateV2Error::CapacityRiders(format!("rider {index}: {refused}")))?;
@@ -40733,6 +40896,17 @@ fn apply_attempt(
     // only an attempt every other rule admits is refused for want of a network unit (and registers its
     // bond's demand: step 4 skips a refused own attempt, 4b a merged one); before any write.
     builder.check_network_room_v1(&claim.bond, &claim, ctx.daa_score)?;
+    // **Lane BUDGET (ADR-0176 D1/D3): the producer bond's budget** — the claim's reservation (Q 1, B its block or its rider share, R its
+    // escrow, F its Final contribution) against the bond's window: the LAST check before any write, so step 4 skips a refused own attempt
+    // (its carve withheld as a skipped attempt's, never minted) and 4b a merged one; the claim's immature weight is held within the F it
+    // reserves. `None` below `palw_bond_budget_v1`: nothing read, nothing written.
+    let budget_plan = builder.plan_attempt_budget_v1(ctx, &claim, &attempt.artifact_root, origin.rider, origin.budget_block_units)?;
+    let claim = match &budget_plan {
+        Some(plan) => {
+            PalwClaimStateV2 { immature_contribution: claim.immature_contribution.min(plan.reservation().final_weight), ..claim }
+        }
+        None => claim,
+    };
     builder.reserve_for_claim(&claim)?;
     // **ADR-0165: a REAL attempt BLOCK's attempt (any class but the base) FULLY ACCEPTED is one event of the floor state
     // machine** — every check above passed and the claim is written below, inside the checkpoint a merged attempt's refusal
@@ -40747,6 +40921,10 @@ fn apply_attempt(
         builder.note_real_accepted(ctx.daa_score, blue);
     }
     builder.write_claim(claim_id, Some(claim));
+    // Lane BUDGET: the reservation planned above, and the claim's block consumed at once (the block exists).
+    if let Some(plan) = budget_plan {
+        builder.commit_bond_budget_v1(ctx, claim_id, plan)?;
+    }
     if let Some(read) = issuance {
         builder.write_issuance_bucket_v1(issuance_bond, Some(read.spent_v1(ctx.daa_score)));
     }
@@ -41208,6 +41386,13 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::PanelV3WorkId { key, old, new } => palw_panel_v3_fold_v1::apply_work_id_entry_v1(state, key, *old, *new, revert)?,
         PalwDeltaEntryV2::PanelV3Beacon { key, old, new } => palw_panel_v3_fold_v1::apply_beacon_entry_v1(state, *key, old, new, revert)?,
         PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } => apply_kernel_route_row_v1(state, *table, key, old, new, revert)?,
+        // Lane BUDGET: the bond budget's rows and header, verify-then-install (`palw_bond_budget_fold_v1`).
+        PalwDeltaEntryV2::BondBudgetRow { table, key, old, new } => {
+            palw_bond_budget_fold_v1::apply_bond_budget_row_v1(state, *table, key, old, new, revert)?
+        }
+        PalwDeltaEntryV2::BondBudgetHeader { old, new } => {
+            palw_bond_budget_fold_v1::apply_bond_budget_header_v1(state, old, new, revert)?
+        }
         PalwDeltaEntryV2::KernelRouteHeader { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if state.kernel_route.as_ref().map(|k| &k.header) != expected.as_ref() {
@@ -41621,6 +41806,8 @@ pub struct PalwStateCarriageV2 {
     pub panel_v3: Option<misaka_palw_panel::PermissionlessPanelStateV1>,
     /// G14 lane D: the kernel route's state, in appended tail `0xEC`, present only when `Some`.
     pub kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>,
+    /// Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's engine, in appended tail `0xEF`, present only when `Some`.
+    pub bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
     /// the duties are non-empty or the reserve is non-zero. Each row carries the exposure its seats
     /// reserved (ADR-0130, [`PalwPanelDutyRowV1`]); the tail gained it before any chain wrote one.
@@ -42316,6 +42503,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             crate::palw_kernel_route_v1::PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1.serialize(writer)?;
             kernel.serialize(writer)?;
         }
+        if let Some(budget) = &self.bond_budget {
+            crate::palw_bond_budget_v1::PALW_CARRIAGE_BOND_BUDGET_TAIL_V1.serialize(writer)?;
+            budget.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -42506,6 +42697,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_panel_v3 = false;
         let mut kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1> = None;
         let mut seen_kernel_route = false;
+        let mut bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1> = None;
+        let mut seen_bond_budget = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -42773,6 +42966,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_kernel_route = true;
                     kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::deserialize_reader(reader)?);
                 }
+                crate::palw_bond_budget_v1::PALW_CARRIAGE_BOND_BUDGET_TAIL_V1 if !seen_bond_budget => {
+                    seen_bond_budget = true;
+                    bond_budget = Some(crate::palw_bond_budget_v1::PalwBondBudgetStateV1::deserialize_reader(reader)?);
+                }
                 PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1 if !seen_seat_availability => {
                     seen_seat_availability = true;
                     seat_availability = BTreeMap::deserialize_reader(reader)?;
@@ -42916,6 +43113,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             seat_root_readiness,
             panel_v3,
             kernel_route,
+            bond_budget,
         })
     }
 }
@@ -43033,6 +43231,7 @@ impl PalwStateCarriageV2 {
             seat_root_readiness: state.seat_root_readiness.clone(),
             panel_v3: state.panel_v3.clone(),
             kernel_route: state.kernel_route.clone(),
+            bond_budget: state.bond_budget.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -43253,6 +43452,7 @@ impl PalwStateCarriageV2 {
             seat_root_readiness: self.seat_root_readiness,
             panel_v3: self.panel_v3,
             kernel_route: self.kernel_route,
+            bond_budget: self.bond_budget,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -60390,6 +60590,9 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::PanelV3Beacon { .. } => "panel_v3_beacon",
                     PalwDeltaEntryV2::KernelRouteRow { .. } => "kernel_route_row",
                     PalwDeltaEntryV2::KernelRouteHeader { .. } => "kernel_route_header",
+                    // Lane BUDGET: their round trip is the bond budget's suite (`palw_bond_budget_fold_v1`).
+                    PalwDeltaEntryV2::BondBudgetRow { .. } => "bond_budget_row",
+                    PalwDeltaEntryV2::BondBudgetHeader { .. } => "bond_budget_header",
                     PalwDeltaEntryV2::RealWork { .. } => "floor_state",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
@@ -60805,6 +61008,9 @@ pub(crate) mod tests {
             // G14 lane D (the kernel route, 160–169), declared explicitly.
             (160, PalwDeltaEntryV2::KernelRouteRow { table: 1, key: Vec::new(), old: None, new: None }),
             (161, PalwDeltaEntryV2::KernelRouteHeader { old: None, new: None }),
+            // Lane BUDGET (the bond budget, 190–199), declared explicitly.
+            (190, PalwDeltaEntryV2::BondBudgetRow { table: 1, key: Vec::new(), old: None, new: None }),
+            (191, PalwDeltaEntryV2::BondBudgetHeader { old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -61462,6 +61668,8 @@ pub(crate) mod tests {
             seat_root_readiness: _,
             panel_v3: _,
             kernel_route: _,
+            // Lane BUDGET: one Some-only block (`bond_budget/v1`), as the kernel route's; absent here.
+            bond_budget: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -73625,6 +73833,9 @@ pub(crate) mod tests {
     mod real_work_reserve_v1;
     // ADR-0170 (`palw_anchor_window_v1`): the execution lane's seed anchor as a window — merged attempts anchor, the anchor survives span boundaries, the schedule seeding reads it.
     mod anchor_window_v1;
+    // Lane BUDGET (ADR-0176 / ADR-0177): the bond budget through the fold — the unarmed fold byte for byte, the engine's creation,
+    // its deltas and carriage, the capital assignment, and (milestone 3) every reward path's reservation and consumption.
+    mod bond_budget_fold_v1;
 
     /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
     /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's
