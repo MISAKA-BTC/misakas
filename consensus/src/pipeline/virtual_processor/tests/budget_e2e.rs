@@ -21,8 +21,9 @@ use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_bond_budget_v1::{
-    PALW_BOND_BUDGET_POLICY_VERSION_V1, PALW_BUDGET_BLOCK_UNIT_V1, PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1,
-    PalwRoundRightsPolicyV1, palw_bond_budget_caps_v1,
+    PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1, PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1, PALW_BOND_BUDGET_POLICY_VERSION_V2,
+    PALW_BUDGET_BLOCK_UNIT_V1, PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1, PalwRoundRightsPolicyV1, PalwWeightValuePolicyV1,
+    palw_bond_budget_caps_v1,
 };
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_state_v2::{
@@ -54,7 +55,7 @@ fn card_collateral(bundle: &PalwConsensusParamsV2, i: usize) -> u64 {
 /// A TEST policy: per card 0's whole collateral and [`W`], `ρ` claims and one reward block; reward and weight ample.
 fn test_policy(unit: u64, rho: u32) -> PalwBondBudgetPolicyV1 {
     PalwBondBudgetPolicyV1 {
-        version: PALW_BOND_BUDGET_POLICY_VERSION_V1,
+        version: PALW_BOND_BUDGET_POLICY_VERSION_V2,
         window_daa: W,
         capital_unit_sompi: unit,
         rho,
@@ -65,6 +66,9 @@ fn test_policy(unit: u64, rho: u32) -> PalwBondBudgetPolicyV1 {
         max_open_claims_per_bond: 1_000,
         slice_rights_by_rho: false,
         round_rights: PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 },
+        liability_hold_daa: PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1,
+        export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
+        weight_value: PalwWeightValuePolicyV1::Unknown,
     }
 }
 

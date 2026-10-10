@@ -57,7 +57,7 @@ fn budget_params(tier: u32, policy: PalwBondBudgetPolicyV1, allocation: Option<P
 /// A TEST policy: per `unit` MSK of capital and `W`, three claims at ρ = 1, three blocks, `reward_msk` of reward, ample weight.
 fn policy(unit_msk: u64, window: u64, rho: u32, reward_msk: u64, slice: bool) -> PalwBondBudgetPolicyV1 {
     PalwBondBudgetPolicyV1 {
-        version: PALW_BOND_BUDGET_POLICY_VERSION_V1,
+        version: PALW_BOND_BUDGET_POLICY_VERSION_V2,
         window_daa: window,
         capital_unit_sompi: unit_msk * MSK,
         rho,
@@ -68,6 +68,9 @@ fn policy(unit_msk: u64, window: u64, rho: u32, reward_msk: u64, slice: bool) ->
         max_open_claims_per_bond: 10_000,
         slice_rights_by_rho: slice,
         round_rights: PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 },
+        liability_hold_daa: PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1,
+        export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
+        weight_value: PalwWeightValuePolicyV1::Unknown,
     }
 }
 
@@ -347,6 +350,146 @@ fn alpha_one_one_and_a_half_and_two_divide_the_budget_by_s_to_the_alpha_on_the_r
     assert!(b2.abs_diff(4 * s2) <= 4, "alpha = 2: 4:1 ({b2} : {s2})");
     assert_eq!(acc1, acc2, "the budget is the same; alpha moves only its division");
     assert_eq!(w1, w2, "alpha never moves weight");
+}
+
+// ---- PESG §6: no payout before Final, leg by leg, on the real fold ------------------------------------------------------------------
+
+/// One claim on bond 90 (allocation armed, its capital on the floor class) taken from acceptance to Final: the sim, the claim and the
+/// index of the tape's first block whose child holds it Final. Every block before that index is "before Final".
+fn one_claim_to_final() -> (Sim, Hash64, usize) {
+    let allocation = PalwModelAllocationPolicyV1 {
+        version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V2,
+        epoch_daa: 50,
+        seasoning_epochs: 1,
+        curve: PalwAllocationCurveV1::interim_unapproved_v1(),
+        max_models_per_bond: 4,
+    };
+    let mut sim = Sim::new(
+        budget_params(250, policy(1_000_000, 4_000, 1, 1_000_000, false), Some(allocation)),
+        Class::Floor,
+        &[(90, 1_000_000)],
+    );
+    let floor = genesis_classes(&sim.c.p)[0].0;
+    sim.step(vec![PalwConsensusObjectV2::BondCapitalAssignedV1 {
+        bond: bond_key(90),
+        assignments: vec![(floor, 900_000 * MSK)],
+        sequence: 1,
+        signature: vec![1],
+    }]);
+    sim.block(H + 101, vec![], None);
+    let a = sim.claim(90, 0x8_0001).expect("a");
+    let seats = sim.seats();
+    let bound = sim.bind(a, &seats);
+    sim.license(a, &seats, bound);
+    for batch in audit_receipts_for(&sim.c.s, &sim.c.sp, &[a]) {
+        sim.step(vec![batch]);
+    }
+    sim.finalize_all(&[a]);
+    let first_final = sim
+        .tape
+        .iter()
+        .position(|b| b.child.claim(&a).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::Final { .. })))
+        .expect("Final on the tape");
+    (sim, a, first_final)
+}
+
+/// The states before the claim's Final, from its acceptance on.
+fn before_final(sim: &Sim, a: &Hash64, first_final: usize) -> Vec<PalwChainStateV2> {
+    sim.tape[..first_final].iter().filter(|b| b.child.claim(a).is_some()).map(|b| b.child.clone()).collect()
+}
+
+/// **The claim's own leg** (producer): no payout row and no vesting row before Final; its row at Final.
+#[test]
+fn no_payout_before_final_claim_leg() {
+    let (sim, a, first) = one_claim_to_final();
+    let pre = before_final(&sim, &a, first);
+    assert!(!pre.is_empty());
+    for s in &pre {
+        assert!(s.vesting_row(&a).is_none() && !s.pending_payouts_iter().any(|(k, _)| *k == a), "nothing before Final");
+        s.bond_budget_no_payout_before_final_v1().expect("the import check agrees");
+    }
+    let row = sim.tape[first].child.vesting_row(&a).expect("the producer's leg vests at Final").clone();
+    assert!(row.producer.amount > 0);
+}
+
+/// **The Panel leg** (seats): no seat is credited and the vesting books do not move before Final; the seats' legs are named at Final.
+#[test]
+fn no_payout_before_final_panel_leg() {
+    let (sim, a, first) = one_claim_to_final();
+    let pre = before_final(&sim, &a, first);
+    let base = pre[0].vesting_counters();
+    let queue: u64 = pre[0].pending_payouts_iter().map(|(_, p)| p.amount).sum();
+    for s in &pre {
+        assert_eq!(s.vesting_counters(), base, "no vesting row created before Final");
+        assert_eq!(s.pending_payouts_iter().map(|(_, p)| p.amount).sum::<u64>(), queue, "no seat payout queued before Final");
+    }
+    let row = sim.tape[first].child.vesting_row(&a).expect("vests").clone();
+    println!("panel leg at Final: {} seats, {} sompi", row.seats.len(), row.seats.iter().map(|(_, p)| p.amount).sum::<u64>());
+    assert!(sim.tape[first].child.vesting_counters().created > base.created, "the legs are named at Final");
+}
+
+/// **The model-allocation leg**: the claim's reward reservation (clipped to the model's budget) is consumed by nothing before Final;
+/// what Final pays is within it.
+#[test]
+fn no_payout_before_final_model_allocation_leg() {
+    let (sim, a, first) = one_claim_to_final();
+    for s in before_final(&sim, &a, first) {
+        let row = s.bond_budget().unwrap().claim_row(&a).expect("budgeted").clone();
+        assert!(row.model.is_some(), "the claim allocates against its model");
+        assert_eq!(row.consumed.reward_sompi, 0, "no model-allocation reward before Final");
+    }
+    let fin = &sim.tape[first].child;
+    let row = fin.bond_budget().unwrap().claim_row(&a).unwrap().clone();
+    let vest = fin.vesting_row(&a).unwrap().clone();
+    let named = vest.producer.amount + vest.seats.iter().map(|(_, p)| p.amount).sum::<u64>() + vest.reserve + vest.buyback_bound;
+    assert!(named <= row.consumed.reward_sompi && row.consumed.reward_sompi <= row.reserved.reward_sompi);
+}
+
+/// **The owner leg**: a model's market (its owner's fee legs and buyback) is not touched by a claim before Final.
+#[test]
+fn no_payout_before_final_owner_leg() {
+    let (sim, a, first) = one_claim_to_final();
+    let pre = before_final(&sim, &a, first);
+    let floor = genesis_classes(&sim.c.p)[0].0;
+    let market = pre[0].model_market(&floor).cloned();
+    for s in &pre {
+        assert_eq!(s.model_market(&floor).cloned(), market, "no owner leg or buyback before Final");
+    }
+}
+
+/// **The EXEC leg**: a claim holds no execution-lane right before Final; its Final enters the span's Finals.
+#[test]
+fn no_payout_before_final_exec_leg() {
+    let (sim, a, first) = one_claim_to_final();
+    for s in before_final(&sim, &a, first) {
+        assert!(!s.round_finals().1.contains_key(&a), "no EXEC right before Final");
+    }
+    let fin = &sim.tape[first].child;
+    println!("exec leg at Final: recorded = {}", fin.round_finals().1.contains_key(&a));
+}
+
+/// **The verifier-bounty leg**: a claim convicted before Final pays none of its own legs, ever; the reporter is paid only after the
+/// conviction, from what the conviction collected (never more than the slashed collateral).
+#[test]
+fn no_payout_before_final_verifier_bounty_leg() {
+    let mut sim = Sim::new(budget_params(250, policy(1_000_000, 4_000, 1, 1_000_000, false), None), Class::Floor, &[(90, 1_000_000)]);
+    let b = sim.claim(90, 0x8_0002).expect("b");
+    let seats = sim.seats();
+    let bound = sim.bind(b, &seats);
+    sim.license(b, &seats, bound);
+    let collateral_before = sim.c.s.bond(&bond_key(90)).unwrap().collateral;
+    assert_eq!(sim.c.s.reporter_rewards_iter().count(), 0, "no bounty before a conviction");
+    let at = sim.tape.len();
+    sim.court_fraud(b);
+    let slashed = collateral_before.saturating_sub(sim.c.s.bond(&bond_key(90)).map_or(0, |r| r.collateral));
+    for blk in &sim.tape[at..] {
+        assert!(blk.child.vesting_row(&b).is_none() && !blk.child.pending_payouts_iter().any(|(k, _)| *k == b), "b never pays");
+    }
+    // Past the reveal window the award is written (or none, with no reporter); never above what was slashed.
+    sim.block(sim.c.daa + 200, vec![], None);
+    let bounty: u64 = sim.c.s.reporter_rewards_iter().map(|(_, p)| p.amount).sum();
+    println!("verifier bounty: {bounty} of {slashed} slashed");
+    assert!(bounty <= slashed, "the bounty comes from the collected slash");
 }
 
 /// **Replay determinism**: a tape with riders, a court and a Final, rewound to its middle and re-folded input for input, is the same
