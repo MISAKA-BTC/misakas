@@ -2517,7 +2517,8 @@ proofs remain in the old judge. The BERT and XLM-R weight-bearing fixture trial 
 no-fault, changed/missing/surplus model weights, copied source/kernel roots and rejection of
 unknown semantics. It proves mechanics at the fixture's scope, not a full checkpoint task.
 
-**Node integration remains required.** Historical `ArtifactBoundV1` (104) and its challenge
+**Foundation snapshot (`d5ed40277`): node integration was still required.** §14.15 records
+the subsequent consumer implementation. Historical `ArtifactBoundV1` (104) and its challenge
 (105) retain their all-parameter inventory and existing wire meaning. They cannot be converted
 into v5 statements using a later binding or names inferred from an untrusted proof. A new
 versioned, signed and rooted statement must persist the full scope, apply collateral and
@@ -2526,3 +2527,46 @@ can pass through the ordinary node. The new pure APIs do not supply that stateme
 an encoder, establish release conformance, resolve opaque-root withholding, or prove RFC02
 completion. Large/stateful conformance, full-task public G14 and the other §II.14 requirements
 remain mandatory.
+
+### 14.15 Signed model artifact statements in the node consumer
+
+The new route inner kinds **22 `BindModelArtifactV2`, 23 `RefuteModelArtifactV2` and
+24 `RegisterModelConformanceClassV2`** ride signed outer 110 and require both its
+probabilistic-constraints fence and the dormant PanelFree fence. The central allocation
+and exhaustive inner fence table name all three. The bare kernel ledger refuses them:
+only the node consumer can authenticate chain collateral and the stored scope.
+
+A signed statement commits the exact current v4/v5 descriptor, complete canonical program,
+model inventory root and parameter map. Its content id binds descriptor, program digest
+and both roots. Aux **43** stores the immutable statement/liability record, **44** its bounded
+bond index, and **45** the admitted candidate's chosen statement. Table 42 remains reserved
+for the existing chunk lane. Each bond can retain eight statements, including decided
+records. Identical content is reusable by any candidate registrant; the binder's identity
+owns liability and grants no execution or reward priority. The reservation is the existing
+100-BILI binding amount and uses the existing challenge/liability horizons.
+
+The fixed-size stored header suffices for reservation, deadline and work reads. Per-bond
+committed collateral and both live-duty withdrawal gates count the reservation until the
+stored liability horizon or refutation. Release is a clocked read, requiring no new global
+per-block scan of model programs. Binding and refutation spend the same blue-score block
+budget as other admissions/courts; admissions cannot spend the prosecution reserve. The
+metadata work tariff is `p² + 64p + 64b`, with `p` canonical program bytes and `b` map/filing
+bytes. It is a conservative structural envelope, not execution work or economic credit.
+A charged invalid proof pays the policy's dismissal fee; an over-budget proof is not judged.
+The public decoder checks PC cardinality, ordering, tile bounds, inventory name/piece/path
+counts and trailing bytes before any corresponding allocation. Legacy whole-row proofs
+are not admitted here. Valid fraud slashes the statement reservation once under the existing
+49% challenger share; self-operator bounty collection is refused.
+
+A matured statement attests only the exact descriptor/program/PC tuple carried by inner 24.
+The consumer delegates the ordinary conformance-only validation, including ranges, plan,
+prosecution and carrier bounds, and records its chosen statement. Its temporary PC
+attestation is restored before ledger rows are persisted: it never enters the global
+attested-root list and cannot be borrowed by an unrelated class. This creates metadata,
+not an execution registration. Historical 104/105 and their inventories are unchanged.
+
+The node mechanics trial uses a lowered weight-bearing BERT fixture and ordinary signed
+carriers, with independent replay. The companion SDK capture also covers the XLM-R fixture.
+This is not a published full-checkpoint task/context support PASS. Generic scoped release
+conformance, full computation G14, the arbitrary opaque/withheld bound-root case, the complete
+resource/economic/liveness contract and shipping activation remain open under §II.14.

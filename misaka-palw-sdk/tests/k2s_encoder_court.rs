@@ -942,6 +942,32 @@ fn descriptor_scoped_encoder_artifact_binding_uses_only_model_weights() {
             v2_opening.leaf_count += 2;
         }
         assert!(verify_artifact_mismatch_v2(&scope, root, false_root, &forged_tile).is_err());
+        // Optional explicit fixture export for the node test. create_new preserves an earlier
+        // capture; no source model or ordinary runtime is changed by running this test.
+        if let Ok(dir) = std::env::var("RFC02_MODEL_ARTIFACT_COURT_EXPORT_DIR") {
+            use std::io::Write;
+            let bundle = misaka_palw_sdk::tir_stream::ModelArtifactCourtBundleV2 {
+                version: 2,
+                descriptor: d5.clone(),
+                program_bytes: enc.program.encode(),
+                model_inventory_root: root,
+                params: pc.clone(),
+                honest: honest.clone(),
+                false_binding: lie.clone(),
+            };
+            let name = if fixture == "hf-enc/bert" {
+                "rfc02-bert-model-artifact-court.borsh"
+            } else {
+                "rfc02-xlmr-model-artifact-court.borsh"
+            };
+            std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(std::path::Path::new(&dir).join(name))
+                .unwrap()
+                .write_all(&borsh::to_vec(&bundle).unwrap())
+                .unwrap();
+        }
         let mut missing = pc.clone();
         missing.by_instance.remove(key);
         let missing_root = Hash64::from_bytes(missing.root());

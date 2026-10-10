@@ -3306,6 +3306,7 @@ mod conformance;
 // mempool's acceptance gate (GAP 10) and the cached ledger (GAP 8): `g14_kernel_route_e2e/real_scale.rs`.
 mod real_scale;
 mod artifact_tile;
+mod model_artifact;
 // Lane DA16: the public-material transport and the provider court (tags 150–153) — an outsider confirms or refutes a binding from the
 // bytes, providers' defaults, a common-mode outage, a false computation still the miner's, reorg and replay: `g14_kernel_route_e2e/da16.rs`.
 mod da16;

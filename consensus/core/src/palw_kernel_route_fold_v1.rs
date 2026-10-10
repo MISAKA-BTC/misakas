@@ -532,7 +532,32 @@ pub(super) fn apply_kernel_route_object_v1(
     if !builder.state.bonds.get(signer).is_some_and(|b| matches!(b.status, PalwBondStatusV2::Active)) {
         return Ok(());
     }
+    // Inner 22/23 are consensus-owned state/collateral courts, never bare-ledger moves.
+    match &object {
+        KernelRouteObjectV1::BindModelArtifactV2 { descriptor, program_bytes, model_inventory_root, param_commitments } => {
+            return super::palw_model_artifact_fold_v2::bind(
+                builder,
+                ctx,
+                signer,
+                descriptor,
+                program_bytes,
+                model_inventory_root,
+                param_commitments,
+            );
+        }
+        KernelRouteObjectV1::RefuteModelArtifactV2 { binding, proof } => {
+            return super::palw_model_artifact_fold_v2::refute(builder, ctx, signer, binding, proof);
+        }
+        _ => {}
+    }
+    let scoped = super::palw_model_artifact_fold_v2::candidate(builder, ctx, &object)?;
     let mut ledger = load_ledger(builder, ctx)?;
+    let original_attested = ledger.attested_artifacts.clone();
+    if let Some((_, id)) = &scoped {
+        let row = builder.state.kernel_route.as_ref().unwrap().model_artifact_binding_header_v2(id).unwrap();
+        ledger.attest_artifact(row.kernel_param_root.as_bytes());
+    }
+    let object = scoped.as_ref().map(|(o, _)| o).unwrap_or(&object);
     let before = loaded_rows(builder, &ledger);
     match opv_gate_v1(builder, ctx, &ledger, &object) {
         OpvGateV1::Drop => return Ok(()),
@@ -595,6 +620,17 @@ pub(super) fn apply_kernel_route_object_v1(
             }
         }
     }
+    if let Some((_, binding)) = &scoped {
+        for event in &events {
+            if let LedgerEventV1::ConformanceClassRegistered { class } = event {
+                builder.write_kernel_row(
+                    crate::palw_model_artifact_v2::PALW_MODEL_ARTIFACT_CANDIDATE_TABLE_V2,
+                    borsh::to_vec(&Hash64::from_bytes(*class)).unwrap(),
+                    Some(borsh::to_vec(binding).unwrap()),
+                );
+            }
+        }
+    }
     // The object stands: the route has now seen its signer.
     builder.note_kernel_bond(signer);
     for event in &events {
@@ -619,6 +655,9 @@ pub(super) fn apply_kernel_route_object_v1(
     // slash survives; the sync above makes this unreachable.)
     apply_settlements(builder, &events, true)?;
     persist_budget(builder, ctx, &ledger);
+    // Only the exact signed candidate used the temporary scope. Persisting this root in
+    // TABLE_ATTESTED would let an unrelated program borrow it in the next object.
+    ledger.attested_artifacts = original_attested;
     flush(builder, &ledger, &before);
     if let Some((subject, row)) = scope {
         super::palw_provider_court_fold_v1::write_court_scope_row_v1(builder, &subject, &row);

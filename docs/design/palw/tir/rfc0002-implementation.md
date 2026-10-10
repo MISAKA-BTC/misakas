@@ -1337,3 +1337,50 @@ PC root, its rooted collateral/reservation and maturity, shared admission/refuta
 matching candidate attestation and actual-node replay tests. No new object/table allocation or
 shipping activation is made by this foundation. The old v5-to-104 bridge is still unsuitable;
 full RFC02 remains open under the complete scope in §II.14.
+
+## Signed descriptor-scoped node binding — 2026-10-11
+
+The foundation's missing signed/rooted binding consumer now has dedicated inner 22–24
+under outer 110 plus dormant PanelFree, and aux 43–45. Historical 104/105 stay all-parameter.
+The exact descriptor/program/model root/PC root statement carries a real bond reservation;
+its fixed-size header permits bounded fee/deadline/collateral reads without copying program
+bytes. Each bond retains at most eight statement records. Both withdrawal duty gates and
+committed collateral include its clocked reservation; no new global closing scan is needed.
+
+Binding and refutation use the existing shared block budget, reserving prosecution room
+against admissions. Refutation charges before proof or stored-program decoding, bounds all
+public proof counts before allocation, pays only the existing 49% bounty on valid fraud,
+and charges the attacker for an invalid filing. The candidate consumer matches the explicit
+matured scope before ordinary v5 range/plan/prosecution/carrier admission, stores its statement
+link, and removes the temporary root before persisting ledger rows. No attestation or
+eligibility hook is used. The signer of the binding receives no registration/claim priority.
+
+The bounded SDK captures are fixture diagnostics, not full checkpoint certificates:
+`rfc02-bert-model-artifact-court.borsh` and `rfc02-xlmr-model-artifact-court.borsh`. The BERT
+capture has 51 model parameter declarations and **92 tensor instances**; those quantities
+must not be confused. The node trial checks pending admission refusal, honest no-fault fee,
+matching v5 candidate admission, another descriptor's refusal, absence from global attested
+rows, liability release, a changed weight's once-only conviction, invalid-proof flood costs,
+a bounded catalog/shared collateral, and independent replay. It creates no execution classes,
+jobs, claims, Finals or rewards.
+
+Final verification: **31 distinct tests passed**, including four actual-node cases with
+independent replay, three bounded-model tests, nine legacy onboarding regressions, six
+streamed-root tests, four route codec tests, the encoder fixture export, and four
+allocation/wire/dormancy checks. Final logs, source/fixture/capture/binary digests and measured outcomes are recorded in
+`evidence/rfc02-model-binding-verdict.json`. Initial node attempts failed on local disk
+capacity, a private test helper reference and a declaration/instance count assertion. The
+wire-pin regression exposed a stale tag-105 pin already present at the baseline. Comparing
+both source manifests confirmed that no existing proof type changed in this patch; the
+pin now records the previously added bounded v3 tile court. Outer 110/113 pins remain
+unchanged, and the new inner variants have explicit PanelFree allocation above; only
+successful final runs count. Completed ignored compilation objects/caches were reclaimed
+in this checkout after their owners were confirmed terminal; model inputs, binaries,
+archives, live compiler output and other checkouts were retained. The controlled node build
+uses package debug symbols disabled, with normal optimization/debug assertions and unchanged
+consensus/network limits.
+
+Full RFC02 remains open: scoped generic release conformance and execution promotion,
+large/stateful GAP-70, complete actual computation G14 (including opaque/withheld parameter
+roots), original checkpoint/task/context fidelity and every required common feature, full
+shared resource/capital accounting and honest liveness, and reviewed shipping activation.

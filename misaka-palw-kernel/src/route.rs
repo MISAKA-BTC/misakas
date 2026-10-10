@@ -60,9 +60,12 @@ pub const TAG_POST_TILED_JOB_V1: u8 = 17;
 pub const TAG_POST_PROMPT_TILE_V1: u8 = 18;
 /// RFC-0004 Part II: a typed-root object (registration, job, claim — versioned inside [`crate::spec::SpecObjectV1`]).
 pub const TAG_SPEC_V1: u8 = 19;
-// 16–18 are K2S's (K2-TIR-v4); 22 remains released.
+// 22–24: RFC02 descriptor-scoped model artifact onboarding (2026-10-11).
 /// RFC-0002: conformance-only preparation; never a reward registration.
 pub const TAG_REGISTER_CONFORMANCE_CLASS_V1: u8 = 21;
+pub const TAG_BIND_MODEL_ARTIFACT_V2: u8 = 22;
+pub const TAG_REFUTE_MODEL_ARTIFACT_V2: u8 = 23;
+pub const TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2: u8 = 24;
 /// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
 pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 
@@ -168,6 +171,28 @@ impl SaltedCommitV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum KernelRouteObjectV1 {
+    /// Consumer-owned, bonded statement: exact descriptor/program, model-only inventory and PC.
+    /// Its signer owns liability, never execution or reward priority.
+    BindModelArtifactV2 {
+        descriptor: Digest,
+        program_bytes: Vec<u8>,
+        model_inventory_root: Digest,
+        param_commitments: ParamCommitmentsV1,
+    } = 22,
+    /// Consumer-owned bounded proof bytes. The consumer charges shared court work before decoding.
+    RefuteModelArtifactV2 {
+        binding: Digest,
+        proof: Vec<u8>,
+    } = 23,
+    /// Prepare metadata over an explicit matured model statement. The consumer authenticates
+    /// the scope, then delegates the ordinary conformance-only admission to the ledger.
+    RegisterModelConformanceClassV2 {
+        binding: Digest,
+        descriptor: Digest,
+        program_bytes: Vec<u8>,
+        plan: VerificationPlanV1,
+        param_commitments: ParamCommitmentsV1,
+    } = 24,
     /// Prepare the OPV class identity for onboarding under the active kernel and OPV resource policy.
     /// Stored separately: no job, claim, reward, Final or beacon rights. Ordinary registration still needs derived eligibility.
     RegisterConformanceClass {
@@ -400,6 +425,9 @@ impl KernelRouteObjectV1 {
     /// The variant's declared discriminant.
     pub const fn tag(&self) -> u8 {
         match self {
+            Self::BindModelArtifactV2 { .. } => TAG_BIND_MODEL_ARTIFACT_V2,
+            Self::RefuteModelArtifactV2 { .. } => TAG_REFUTE_MODEL_ARTIFACT_V2,
+            Self::RegisterModelConformanceClassV2 { .. } => TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2,
             Self::RegisterConformanceClass { .. } => TAG_REGISTER_CONFORMANCE_CLASS_V1,
             Self::RegisterClass { .. } => TAG_REGISTER_CLASS_V1,
             Self::RegisterPipelineClass { .. } => TAG_REGISTER_PIPELINE_CLASS_V1,
@@ -493,6 +521,9 @@ impl KernelRouteObjectV1 {
 
 pub const fn name_of_tag(tag: u8) -> &'static str {
     match tag {
+        TAG_BIND_MODEL_ARTIFACT_V2 => "BindModelArtifactV2",
+        TAG_REFUTE_MODEL_ARTIFACT_V2 => "RefuteModelArtifactV2",
+        TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2 => "RegisterModelConformanceClassV2",
         TAG_REGISTER_CONFORMANCE_CLASS_V1 => "RegisterConformanceClass",
         TAG_REGISTER_CLASS_V1 => "RegisterClass",
         TAG_REGISTER_PIPELINE_CLASS_V1 => "RegisterPipelineClass",
@@ -521,6 +552,8 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
 /// The ceiling of a declared tag (`None`: not a declared tag).
 pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
     Some(match tag {
+        TAG_BIND_MODEL_ARTIFACT_V2 | TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2 => MAX_REGISTER_CLASS_BYTES_V1,
+        TAG_REFUTE_MODEL_ARTIFACT_V2 => 2 << 20,
         TAG_REGISTER_CONFORMANCE_CLASS_V1 => MAX_REGISTER_CLASS_BYTES_V1,
         TAG_REGISTER_CLASS_V1 => MAX_REGISTER_CLASS_BYTES_V1,
         TAG_REGISTER_PIPELINE_CLASS_V1 => MAX_REGISTER_PIPELINE_CLASS_BYTES_V1,
@@ -598,7 +631,10 @@ mod tests {
         let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_REGISTER_CONFORMANCE_CLASS_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!(max_encoded_bytes_of_tag(22).is_none(), "22 is not used");
+        assert!(max_encoded_bytes_of_tag(25).is_none(), "25 is not allocated");
+        for tag in 22..=24 {
+            assert!(max_encoded_bytes_of_tag(tag).is_some());
+        }
         assert_eq!(max_encoded_bytes_of_tag(21), Some(MAX_REGISTER_CLASS_BYTES_V1));
         assert_eq!(name_of_tag(21), "RegisterConformanceClass");
         assert!(max_encoded_bytes_of_tag(TAG_SPEC_V1).is_some() && name_of_tag(TAG_SPEC_V1) == "Spec", "RFC-0004 Part II's tag 19");

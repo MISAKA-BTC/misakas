@@ -46,6 +46,19 @@ pub struct ArtifactTileCourtBundleV3 {
     pub false_binding: kaspa_consensus_core::palw_onboarding_v1::ArtifactMismatchProofV1,
 }
 
+/// Bounded fixture/public identity witness for descriptor-scoped statements, not a release
+/// conformance or checkpoint fidelity certificate. It contains no job placeholders or full trace.
+#[derive(Clone, Debug, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct ModelArtifactCourtBundleV2 {
+    pub version: u16,
+    pub descriptor: misaka_palw_kernel::descriptor::KernelDescriptorV1,
+    pub program_bytes: Vec<u8>,
+    pub model_inventory_root: Hash64,
+    pub params: misaka_palw_kernel::trace::ParamCommitmentsV1,
+    pub honest: kaspa_consensus_core::palw_onboarding_v1::ArtifactMismatchProofV1,
+    pub false_binding: kaspa_consensus_core::palw_onboarding_v1::ArtifactMismatchProofV1,
+}
+
 /// **The inventory root and leaf count**, streamed. Equal to `palw_tir_inventory_root_v1` over the
 /// same tensors.
 pub fn palw_tir_inventory_root_streamed_v1(program: &TirProgramV1, src: &dyn PalwTirRangeSourceV1) -> Result<(Hash64, u32), String> {
