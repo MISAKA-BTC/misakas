@@ -52,8 +52,14 @@ pub const TYPED_STATE_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-typed-
 
 /// Demand stage of a memory claim's pre-state (position 0: one value per slot).
 pub const MEMORY_PRE_STATE_STAGE_V1: u8 = 0x40;
-/// Demand stage of stage `s`'s snapshot slices: `0x80 + s` (a plain retrieval class is stage 0).
+/// Demand stage of stage `s`'s snapshot slices: `0x80 + s` (a plain retrieval class is stage 0). The snapshot is registered model
+/// content: past `palw_provider_court_v1` the consumer refuses these demands (ADR-0177 D2; consensus-core `palw_court_scope_v1`).
 pub const SNAPSHOT_STAGE_BASE_V1: u8 = 0x80;
+/// **Demand stage of stage `s`'s retrieved ENTRIES: `0xC0 + s`** (lane DA16, GAP-52; position = the entry's index): the claim's own
+/// output — the item it says it retrieved, opened against the snapshot root. A claim-specific unit: what the claim stated, not the
+/// snapshot. An entry no one can open (a leaf with no well-formed item behind it) is its producer's default; a served one is public,
+/// and a wrong or malformed one convicts through `WrongItem`.
+pub const RETRIEVAL_ENTRY_STAGE_BASE_V1: u8 = 0xC0;
 
 /// The normative text of the typed-roots extension (its digest is the descriptor's identity; a new meaning is a new descriptor).
 pub const K2_TR_V1_SEMANTICS: &[u8] = b"misaka-palw-kernel K2-TR-v1: RFC-0004 Part II typed roots over K2-TIR-v1/v2 classes. \

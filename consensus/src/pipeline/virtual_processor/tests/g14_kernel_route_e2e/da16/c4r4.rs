@@ -4,7 +4,7 @@
 //! refusing to provide a model to third parties MUST NOT invalidate a registration, claim, reward or Final weight, slash a bond or
 //! impose a consensus service penalty. D2: requests are limited to claim-specific witness/state — no weight-file/range request, no
 //! request that enumerates the weights, no cumulative rebuild. DA16's court (dormant behind `palw_provider_court_v1`, which validation
-//! refuses at every height) predates the ADR; DA16's re-scope is pending. This module pins what the re-scope must change.
+//! refuses at every height) predated the ADR. This module pins what DA16's re-scope (DA16b) changed; C4R4's PoC runs un-ignored here.
 
 use super::*;
 use kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1;
@@ -15,7 +15,6 @@ use kaspa_consensus_core::palw_onboarding_v1::PalwOnboardingGateV1;
 /// leaving it unanswered slashes the lease; with every lease charged the pair lapses and the class's onboarding gate holds it
 /// `AVAILABILITY_REQUIRED`. Each is a violation the test lists. SAFE: none of them.
 #[tokio::test]
-#[ignore = "FAIL F-C4R4-19: DA16's artifact leases are availability leases (a precondition, model-byte challenges, a slash, a hold) — ADR-0177 re-scope pending"]
 async fn g14_c4r4_adr0177_refusing_to_serve_a_models_bytes_triggers_no_precondition_slash_or_hold() {
     kaspa_core::log::try_init_logger("warn");
     let truth = onb_fixture(11);
@@ -57,9 +56,17 @@ async fn g14_c4r4_adr0177_refusing_to_serve_a_models_bytes_triggers_no_precondit
     if taken1 + taken2 > 0 {
         violations.push(format!("refusing to serve the model's bytes was slashed: {taken1} and {taken2} sompi"));
     }
-    if net.api().unwrap().provider_pair_lapsed_since_v1(&v2_class, &kernel_root, binding.bound_daa) {
-        violations.push("the pair lapsed: the binding attests nothing".into());
+    // (DA16b removed the lapse mechanism: no court row can exist for an artifact subject, so nothing can lapse.)
+    let court_rows = net.api().unwrap().aux.keys().filter(|(t, _)| (43..=45).contains(t)).count();
+    if court_rows > 0 {
+        violations.push(format!("{court_rows} provider-court rows exist for the model's bytes"));
     }
+    if !net.api().unwrap().onboarding_attested_roots_v1(net.daa()).contains(&kernel_root) {
+        violations.push("the binding attests nothing".into());
+    }
+    // Lane D's gate holds a class (code `AVAILABILITY_REQUIRED`, a legacy name) while its binding is inside its REFUTATION horizon —
+    // identity, not availability. Past that horizon any hold under that code could only be availability's: there must be none.
+    net.beat_to(binding.final_daa + 1).await;
     let gate = net.api().unwrap().onboarding_gate_v1(&v2_class, &truth.artifact_root, net.daa());
     if matches!(gate, PalwOnboardingGateV1::Held { code: "AVAILABILITY_REQUIRED", .. }) {
         violations.push(format!("the class's onboarding gate holds it: {gate:?}"));

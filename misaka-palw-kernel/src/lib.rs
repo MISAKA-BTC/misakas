@@ -97,6 +97,7 @@ pub mod public;
 pub mod receipt;
 pub mod route;
 pub mod rows;
+pub mod scope;
 pub mod settle;
 pub mod spec;
 pub mod state;

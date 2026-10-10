@@ -526,11 +526,15 @@ pub mod palw_evidence_v1;
 /// RFC-0009 stage B: the provider challenge court (`palw_evidence_court_v1`, DORMANT, not yet folded into the chain state).
 pub mod palw_evidence_court_v1;
 /// Lane DA16 (RFC-0014 §16, RFC-0009 §4): public material units — what an artifact leaf, a bound kernel row or a claim position is checked
-/// against (always the chain's root), the artifact manifest, and a binding confirmed or refuted from the bytes.
+/// against (always the chain's root), the artifact manifest, and a binding confirmed or refuted from the bytes. Since ADR-0177 the
+/// ARTIFACT half is NON-CONSENSUS (optional off-chain tooling; no fold arm reads it); only `ClaimPosition` is a court unit.
 pub mod palw_public_material_v1;
 /// Lane DA16 (RFC-0009 §4.2): the provider court on the kernel route — leases, unit challenges, answers, the DA transfer, its rows and its
 /// fence `palw_provider_court_v1` (dormant, refused when armed).
 pub mod palw_provider_court_v1;
+/// Lane DA16: the court scope (ADR-0177 D2, RFC-0014 §16.4) — what a court may demand (claim-specific units only), what a verifier
+/// supplies from its own copy against the registered root, the node-level model-bytes masks and the cumulative bound.
+pub mod palw_court_scope_v1;
 /// Lane INTF (ADR-0032's 2026-10-10 amendment): the PALW reporter share, 10% below and 49% at or past the dormant fence
 /// `palw_reporter_share_v2` (refused when armed) — R-1 fixed at the conviction's close, DA-6 at the session's open.
 pub mod palw_reporter_share_v2;

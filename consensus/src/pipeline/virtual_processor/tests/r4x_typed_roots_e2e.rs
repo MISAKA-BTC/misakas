@@ -804,3 +804,6 @@ impl DebugName for ClaimStateV1 {
         format!("{self:?}")
     }
 }
+
+// Lane DA16: the court scope (ADR-0177 D2) on the typed roots — a child module so it runs on this harness unchanged.
+mod da16_scope;
