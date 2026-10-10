@@ -58,6 +58,15 @@ median 18, p90 73 (0.8B); over the 9B's whole 8k statistics median 30, p90 164. 
 About 10 % of the 9B's sites (88 of 884) are first-token-dominated (pos0 absmax > 1.5 x the rest; median x1.9, max x8.2), so a
 first-token-only clip would reach a minority of the sites.
 
+**Hypothesis (not measured), consistent with F4 and F5.** Every activation site has ONE static scale per tensor and layer, set by the
+calibrated absmax; a few outlier tokens (massive activations) set it, so ordinary tokens see few effective codes, and the two norms on the
+path (the gated RMS norm of the gated-delta output, then the MLP's input norm) re-normalise each token to unit scale and expose that noise
+floor: `L0.gdn.core` 0.004 energy-weighted becomes 0.101 at `L0.gdn.normed` (x25; the 0.8B x4.5) and 0.072 at the residual becomes 0.324 at
+`L0.norm.ffn` (x4.5; the 0.8B x1.1). The 9B's absmax / rms is 2-3 times the 0.8B's, which is the right size for the difference. The test
+that would confirm it is per-token: relative error at `L0.gdn.normed` / `L0.norm.ffn` against that token's own magnitude (it should fall as 1 / magnitude).
+The diagnostic that writes the per-position site values for that test (`palw-tir-fidelity --site-windows ... --dump-sites ... --dump-out`) is
+in this lane's working tree; it was waiting for a build slot when this was written.
+
 ## 3. What this does and does not show
 
 Shown: the refusal is a quantisation-quality property of the lowering for this checkpoint, reproducible at four layers in 2 minutes;

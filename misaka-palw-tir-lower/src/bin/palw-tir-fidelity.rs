@@ -59,6 +59,12 @@ struct Args {
     /// Headroom of i16 codes over the calibrated absmax.
     #[arg(long, default_value_t = 2.0)]
     headroom16: f64,
+    /// Headroom of i32 values over the calibrated absmax (logits, wide sites).
+    #[arg(long, default_value_t = 4.0)]
+    headroom32: f64,
+    /// Headroom of the residual stream's single i32 scale over its calibrated absmax.
+    #[arg(long, default_value_t = 4.0)]
+    headroom_resid: f64,
     /// Stop after calibration (with `--stats-out`, a statistics dump).
     #[arg(long)]
     calibrate_only: bool,
@@ -93,9 +99,22 @@ struct Args {
     /// sites whose error grows most from the first window to the last. Loads every weight as f32.
     #[arg(long, value_delimiter = ',')]
     site_windows: Vec<String>,
+    /// With `--site-windows`: keep these sites' values (comma-separated keys such as `L0.resid.mix`) for every position the run reaches and
+    /// write them to `--dump-out` as `<site>.float.f32` / `<site>.int.f32` (decoded with the site's scale), raw little-endian f32,
+    /// `[positions, width]`, plus `dump.json` (widths). Diagnosis only.
+    #[arg(long, value_delimiter = ',', requires = "dump_out")]
+    dump_sites: Vec<String>,
+    #[arg(long)]
+    dump_out: Option<PathBuf>,
     /// With `--site-windows`: write every site's errors (JSON) here.
     #[arg(long)]
     site_windows_out: Option<PathBuf>,
+    /// With `--exec`: write both sides' logits for every evaluated position — `float.f32` (the float reference) and `int.f32`
+    /// (the integer program, decoded) in this directory, raw little-endian f32, `[positions, vocab]`, sequences in order — so a
+    /// third reference (the Hugging Face logits of the same tokens) can be compared with either by `kl_compare.py`. Diagnosis
+    /// only: nothing in the artifact or its pack depends on it.
+    #[arg(long, requires = "exec")]
+    logits_out: Option<PathBuf>,
     /// Keep at most this many positions of history in any block (`LowerOpts::max_window`): a
     /// layout whose context is shorter than the history bound, whose attention cone is then
     /// counted at this window. Evaluation sequences must not be longer (the float reference
@@ -287,7 +306,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     if a.calibrate_only {
         return Ok(serde_json::json!({ "architecture": prep.spec.architecture, "sites": stats.len(), "metrics": {} }));
     }
-    let policy = QuantPolicy { headroom16: a.headroom16, ..QuantPolicy::default() };
+    let policy = QuantPolicy { headroom16: a.headroom16, headroom32: a.headroom32, headroom_resid: a.headroom_resid };
     log("materialising the integer artifact".into());
     let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &policy, &progress("materialise")).map_err(|e| e.to_string())?;
     log(format!(
@@ -346,8 +365,30 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
                 eprintln!("[{:>7.1}s]   sites: {}", t0.elapsed().as_secs_f64(), p + 1);
             }
         };
-        let mut errs = fidelity::site_errors_windows(&prep, &params_f, &stats, &policy, &mat, &eval[0], &windows, &every)
-            .map_err(|e| e.to_string())?;
+        let mut kept: BTreeMap<String, (Vec<f32>, Vec<f32>, usize)> = BTreeMap::new();
+        let want: std::collections::BTreeSet<String> = a.dump_sites.iter().cloned().collect();
+        let mut hook = |k: &str, _p: usize, fv: &[f32], codes: &[i128], sv: &[f64]| {
+            if want.contains(k) {
+                let e = kept.entry(k.to_string()).or_insert_with(|| (Vec::new(), Vec::new(), fv.len()));
+                e.0.extend_from_slice(fv);
+                e.1.extend(codes.iter().enumerate().map(|(i, c)| (*c as f64 * sv[i % sv.len()]) as f32));
+            }
+        };
+        let mut errs =
+            fidelity::site_errors_windows(&prep, &params_f, &stats, &policy, &mat, &eval[0], &windows, &every, &mut hook)
+                .map_err(|e| e.to_string())?;
+        if let Some(dir) = &a.dump_out {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let raw = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+            let mut widths = serde_json::Map::new();
+            for (k, (f, i, w)) in &kept {
+                std::fs::write(dir.join(format!("{k}.float.f32")), raw(f)).map_err(|e| e.to_string())?;
+                std::fs::write(dir.join(format!("{k}.int.f32")), raw(i)).map_err(|e| e.to_string())?;
+                widths.insert(k.clone(), serde_json::json!({ "width": w, "positions": f.len() / (*w).max(1) }));
+            }
+            std::fs::write(dir.join("dump.json"), serde_json::to_vec_pretty(&widths).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            log(format!("{} site(s) written to {}", kept.len(), dir.display()));
+        }
         let growth = |v: &Vec<f64>| v.last().copied().unwrap_or(0.0) / v.first().copied().unwrap_or(0.0).max(1e-300);
         errs.sort_by(|a, b| growth(&b.1).partial_cmp(&growth(&a.1)).unwrap_or(std::cmp::Ordering::Equal));
         for (k, v) in errs.iter().take(a.sites.max(20)) {
@@ -381,6 +422,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         log("integer program on the typed backend (misaka-palw-tir-exec)".into());
         let mut acc = fidelity::Accumulator::new((64, 192), 128);
         let mut first: Vec<Vec<f64>> = Vec::new();
+        let mut dump: Option<(Vec<f32>, Vec<f32>)> = a.logits_out.as_ref().map(|_| (Vec::new(), Vec::new()));
         let post_store = loader.load(prep.hl.post, None).map_err(|e| e.to_string())?;
         let mut float_err: Option<String> = None;
         for (si, s) in eval.iter().enumerate() {
@@ -393,6 +435,10 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
                     }
                 };
                 acc.push(p, s.len(), &f, row, s.get(p + 1).copied());
+                if let Some((df, di)) = dump.as_mut() {
+                    df.extend_from_slice(&f);
+                    di.extend(row.iter().map(|v| *v as f32));
+                }
                 if si == 0 && p < a.cross_check {
                     first.push(row.to_vec());
                 }
@@ -404,6 +450,13 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             if let Some(e) = float_err.take() {
                 return Err(format!("float reference, post block: {e}"));
             }
+        }
+        if let (Some(dir), Some((df, di))) = (&a.logits_out, &dump) {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let raw = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+            std::fs::write(dir.join("float.f32"), raw(df)).map_err(|e| e.to_string())?;
+            std::fs::write(dir.join("int.f32"), raw(di)).map_err(|e| e.to_string())?;
+            log(format!("logits written to {}: {} values per side", dir.display(), df.len()));
         }
         if a.cross_check > 0 {
             let s = &eval[0][..a.cross_check.min(eval[0].len())];
