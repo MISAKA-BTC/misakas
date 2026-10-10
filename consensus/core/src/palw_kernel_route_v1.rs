@@ -157,14 +157,34 @@ pub struct PalwKernelRouteExtrasV1 {
     pub provider_court: Option<u64>,
 }
 
-/// What the processor hands the fold for the OPV mode (RFC-0015): the network's policy and its admission list, both read from
-/// `Params::palw_panel_free_v1` ([`crate::palw_panel_free_v1::PalwPanelFreeFenceV1`]).
+/// What the processor hands the fold for the OPV mode (RFC-0015): the network's policy and the two restrictions of the DERIVED
+/// eligibility, all read from `Params::palw_panel_free_v1` ([`crate::palw_panel_free_v1::PalwPanelFreeFenceV1`]). Eligibility itself is
+/// derived in the fold from chain state (`crate::palw_opv_bootstrap_v1`), never handed in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwKernelOpvExtrasV1 {
     /// The OPV policy, a genesis constant of the route (the fence's terms, activating at the fence's height).
     pub policy: OpvPolicyV1,
-    /// **The class ids (mode-bound) the NETWORK'S policy admits for OPV** — consensus, never a registrant's choice.
-    pub admitted_classes: Vec<Hash64>,
+    /// Mode-bound class ids the network denies OPV (a restriction only).
+    pub denied_classes: Vec<Hash64>,
+    /// The effective-bits floor a class's conformance policy must reach.
+    pub min_effective_bits: u16,
+    /// GAP-70: whether a sampled conformance may satisfy E6 (`false` on every network the validation admits).
+    pub sampled_conformance_gates_reward: bool,
+    /// **TEST SEAM, empty in every build that can run a network**: mode-bound class ids a pre-derivation mechanics test treats as
+    /// eligible (the processor fills it only under `cfg(test)`, from `kernel_route_test_opv_eligible_v1`, exactly as it fills
+    /// `attested_artifacts`). The bootstrap E2E uses none.
+    pub test_eligible: Vec<Hash64>,
+    /// **G14-for-rewards**: `Some` from the fence's activation on (`None` below it, and the gate is unarmed). See
+    /// `crate::palw_opv_bootstrap_v1::palw_reward_gate_v1`.
+    pub reward_gate: Option<PalwRewardGateTermsV1>,
+}
+
+/// The terms of the G14-for-rewards gate at one block (from `Params::palw_panel_free_v1`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRewardGateTermsV1 {
+    /// The fence's activation: a class registered below it keeps earning through the OLD Panel route, in full; one registered at or
+    /// past it earns only through the onboarding/G14 path (the user's ruling of 2026-10-09: the two reward channels never mix).
+    pub fence_activation_daa: u64,
 }
 
 /// **The PALW reporter share on the kernel route, permille** (ADR-0032's 2026-10-10 amendment: 4,900 bps): what an accuser, a
@@ -513,6 +533,10 @@ pub struct KernelClaimReadV1 {
     pub aux_root: Hash64,
 }
 
+/// The first table number of the route's consensus (aux) tables; the kernel ledger's own tables are numbered below it (op 211 serves
+/// both, in key order, so a page is ledger rows then aux rows).
+pub const PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1: u8 = 32;
+
 /// One page of the route's rows, in `(table, key)` order (ledger tables first, then the consensus tables).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KernelRowsPageV1 {
@@ -523,14 +547,15 @@ pub struct KernelRowsPageV1 {
 }
 
 /// One Final of the route, for a reader and for the beacon: the kernel's receipt, how the work reached Final, and — where the route
-/// knows every fact the beacon needs — the borsh `WorkFinalEventV1` (RFC-0010's `BeaconFactSource` input).
+/// knows every fact the beacon needs — the borsh `AttributedWorkV1` (the `WorkFinalEventV1` and who stands behind it).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KernelFinalReadV1 {
     pub receipt: misaka_palw_kernel::opv::FinalReceiptV1,
     /// `PanelIndependent` (an OPV Final, never anything else) or `PanelLicensed` (the interim route does not know the licensing
     /// Panel's seed and epoch, so it exports no beacon event for it).
     pub final_path: &'static str,
-    /// Borsh of `misaka_palw_challenge::WorkFinalEventV1`; `None` for a Panel-licensed Final.
+    /// Borsh of `misaka_palw_challenge::AttributedWorkV1` (the event, then the producer bond and the consumer — `Absent` until the
+    /// route records a job's payer); `None` for a Panel-licensed Final.
     pub event: Option<Vec<u8>>,
     pub statement: &'static str,
 }
@@ -564,7 +589,17 @@ impl PalwKernelRouteStateV1 {
                         panel: None,
                     };
                     let event = receipt.to_work_final_event(&ctx)?;
-                    ("PanelIndependent", Some(borsh::to_vec(&event).map_err(|e| e.to_string())?))
+                    // Who stands behind the work: the producer bond of the Final claim (the route keeps no job poster yet, so the
+                    // consumer is Absent and the distinct rule's consumer clause is a no-op until it does).
+                    let producer = ledger.claims.get(&receipt.claim).map(|r| r.producer).unwrap_or([0u8; 64]);
+                    let attributed = misaka_palw_challenge::AttributedWorkV1 {
+                        event,
+                        attribution: misaka_palw_challenge::SourceAttributionV1 {
+                            producer_id: producer,
+                            consumer_id: misaka_palw_challenge::RootV1::Absent,
+                        },
+                    };
+                    ("PanelIndependent", Some(borsh::to_vec(&attributed).map_err(|e| e.to_string())?))
                 }
                 VerificationModeV1::PanelLicensed => ("PanelLicensed", None),
             };
@@ -664,6 +699,41 @@ impl PalwKernelRouteStateV1 {
     /// **A page of rows**, `(table, key, row)` in order, starting after `after` (exclusive; `None` = the beginning) and stopping once
     /// `max_bytes` of keys and rows are gathered (at least one row, so a page always makes progress). A reader that collects every page
     /// and rebuilds a ledger from them must reach [`Self::ledger_root`].
+    /// **A fresh reader's copy of the route, rebuilt from op 211's pages** (G14 condition 9, RFC-0014 §3.4: a non-Panel verifier
+    /// reproduces the whole post-commit path from public reads alone). `header` is op 211's Borsh header; `rows` every
+    /// `(table, key, row)` of every page — the ledger's tables below [`PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1`], the consensus (aux)
+    /// tables from it. Refused unless the rows root to the served `ledger_root` and `aux_root` and no row is served twice. Every read
+    /// of this type then runs on the reader's own copy, by the chain's own functions: the Final facts (`finals_read_v1`), the v3
+    /// seal facts (`beacon_sealed_sources_v1`), an attempt's beacon (`attempt_beacon_v1`). (Authenticating the served roots against
+    /// the chain's committed state is the state proof's job, shared by every public read.)
+    pub fn from_served_rows_v1(
+        header: &[u8],
+        rows: impl IntoIterator<Item = (u8, Vec<u8>, Vec<u8>)>,
+        ledger_root: &Hash64,
+        aux_root: &Hash64,
+    ) -> Result<Self, String> {
+        let header: PalwKernelRouteHeaderV1 =
+            borsh::from_slice(header).map_err(|e| format!("the route header does not decode: {e}"))?;
+        let mut route = Self { header, rows: LedgerRowsV1::new(), aux: BTreeMap::new() };
+        for (table, key, row) in rows {
+            let twice = if table < PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1 {
+                route.rows.insert((table, key), row).is_some()
+            } else {
+                route.aux.insert((table, key), row).is_some()
+            };
+            if twice {
+                return Err(format!("a row of table {table} is served twice"));
+            }
+        }
+        if route.ledger_root() != *ledger_root {
+            return Err("the served rows do not root to the served ledger root".into());
+        }
+        if route.aux_root() != *aux_root {
+            return Err("the served rows do not root to the served aux root".into());
+        }
+        Ok(route)
+    }
+
     pub fn rows_page_v1(&self, after: Option<(u8, Vec<u8>)>, max_bytes: usize) -> KernelRowsPageV1 {
         use std::ops::Bound::{Excluded, Unbounded};
         let total_rows = (self.rows.len() + self.aux.len()) as u64;
@@ -805,13 +875,11 @@ pub fn palw_kernel_chunk_inner_matches_target_v1(
     }
 }
 
-/// **OPV-BOOT #1's deadline, until OPV-BOOT's own lands**: the agreed `palw_conformance_chunk_target_v1(route, v2_class, daa) ->
-/// Option<u64>` (the last DAA a part may arrive; `None`: no attempt open) is OPV-BOOT's to implement over its attempt rows. Until it
-/// is wired here this answers `None`, so every conformance group is refused at its first chunk — the lane adds no acceptance before
-/// the rule that bounds it exists. (The integrator replaces this body with the call.)
+/// **OPV-BOOT #1's deadline**: the agreed `palw_conformance_chunk_target_v1(route, v2_class, daa) -> Option<u64>` (the last DAA a part
+/// may arrive; `None`: no attempt can take one — a complete check never needs the lane), implemented over the attempt rows in
+/// [`crate::palw_onboarding_v1::palw_conformance_chunk_target_v1`] and wired here (OPVB).
 pub fn palw_conformance_chunk_target_pending_v1(route: &PalwKernelRouteStateV1, v2_class: &Hash64, daa: u64) -> Option<u64> {
-    let _ = (route, v2_class, daa);
-    None
+    crate::palw_onboarding_v1::palw_conformance_chunk_target_v1(route, v2_class, daa)
 }
 
 /// **The last DAA a proof against (or a response on) a claim in `state` could still matter** — an upper bound read from the claim

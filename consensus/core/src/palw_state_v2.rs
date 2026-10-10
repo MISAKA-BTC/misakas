@@ -11088,6 +11088,10 @@ pub enum PalwStateV2Error {
     /// a lister with no bond).
     #[error("an adapter class listing is refused: {0}")]
     AdapterClassRefused(String),
+    /// **G14-for-rewards** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`, past the OPV fence): the class has not passed the
+    /// onboarding/G14 path, so it earns no reward and no consensus work weight — no claim of it is admitted on any lane.
+    #[error("class {class} earns no reward or consensus work weight: {code} ({why})")]
+    ClassNotRewardable { class: Hash64, code: &'static str, why: String },
     /// **A second IR class registration in one block** ([`PALW_TIR_REGISTRATION_MAX_PER_BLOCK_V1`]).
     /// The acceptance walk drops it by name with the block standing; this is the fold's second lock.
     #[error("IR class {class} is one IR class registration more than a block may carry ({max})")]
@@ -17350,6 +17354,17 @@ impl PalwFoldReadV1<'_> {
     /// ([`Self::check_model_market_admits`]) both ask it, so a claim and a position cannot disagree
     /// about whether the chain serves a model (the 2026-09-23 Position route matrix, P-B3: they did —
     /// a buy filled on a class whose every claim the registry refused).
+    /// **G14-for-rewards at this read** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`): `Unarmed` below the OPV fence.
+    pub(crate) fn reward_gate_v1(&self, class_id: &Hash64, daa: u64) -> crate::palw_opv_bootstrap_v1::PalwRewardGateV1 {
+        crate::palw_opv_bootstrap_v1::palw_reward_gate_v1(
+            self.state,
+            &self.params.base_class_id(),
+            self.extras.kernel_route.as_ref(),
+            class_id,
+            daa,
+        )
+    }
+
     fn class_lifecycle_refusal(&self, class_id: &Hash64) -> Option<String> {
         self.extras.model_registry.as_ref()?;
         if *class_id == self.params.base_class_id() {
@@ -17558,6 +17573,14 @@ impl PalwFoldReadV1<'_> {
             now_daa,
             incoming == PalwGatedClaimV1::Attempt,
         )?;
+        // **G14-for-rewards** (`palw_opv_bootstrap_v1::palw_reward_gate_v1`, past the OPV fence): a post-fence class that never passed
+        // the onboarding/G14 path takes no claim on any lane. Every claim this gate sees is a V2-root claim, and a V2 root is not
+        // convictable by the kernel route, so an ONBOARDED class's claims get nothing beyond the old rules below — the registry
+        // lifecycle, the Panel verify deadline and the Panel room are all asked (the Lead's GAP-81 decision: the new rewards are per
+        // CLAIM verification route; only kernel-route claims earn them). Unarmed, exempt or onboarded: the rules below, byte for byte.
+        if let crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { code, why } = self.reward_gate_v1(class_id, now_daa) {
+            return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
+        }
         let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
         let whole = incoming.whole_claims(self.params.fp_quanta_per_canonical_job as u64);
         if let Some(state) = self.class_lifecycle_refusal(class_id) {
@@ -31995,6 +32018,16 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         {
             continue;
         }
+        // **G14-for-rewards** (past the OPV fence): a post-fence class that never passed the onboarding/G14 path stays Registered and
+        // earns nothing (`docs/PRINCIPLES.md` §6: registered, never rewarded). An ONBOARDED class activates under the old rules — the
+        // onboarding gate above and the share it registered with: its V2-root claims ride the legacy channel and never earn the new
+        // rewards (the Lead's GAP-81 decision). Its new rewards are its kernel-route claims', gated per claim (`opv_gate_v1`).
+        if matches!(
+            builder.read().reward_gate_v1(&class_id, ctx.daa_score),
+            crate::palw_opv_bootstrap_v1::PalwRewardGateV1::Refused { .. }
+        ) {
+            continue;
+        }
         // **A grant that cannot be made freezes the CLASS, not the chain.**
         //
         // This was `?`, and the error propagated out of a transition that is a pure function of
@@ -34288,7 +34321,10 @@ fn apply_class_registration_v1(
             u16::try_from(committed).expect("committed is bounded by 1000 above"),
         )?;
     }
-    let weightless = *activation_daa > ctx.daa_score;
+    // **G14-for-rewards**: past the OPV fence no class is written Active (and granted share) at its registration — it activates in
+    // `activate_due_classes`, through the reward gate (`palw_opv_bootstrap_v1::palw_reward_gate_v1`).
+    let reward_gated = builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()).is_some_and(|o| o.reward_gate.is_some());
+    let weightless = *activation_daa > ctx.daa_score || reward_gated;
     if !weightless {
         // ADR-0045 Decision 3: the share table mutates HERE and at the activation edge,
         // and nowhere else. The first class funds the liveness floor whole; every later

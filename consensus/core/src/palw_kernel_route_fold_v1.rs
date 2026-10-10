@@ -202,8 +202,6 @@ pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
     // The artifact roots the route may attest: the test hook's list (empty outside a test) and every Matured or Final onboarding
     // binding — the least-trust source (`palw_onboarding_v1`).
     let mut attested = extras.attested_artifacts.clone();
-    let admitted: Vec<Hash64> = extras.opv.as_ref().map(|o| o.admitted_classes.clone()).unwrap_or_default();
-    let opv_declared = extras.opv.is_some();
     if let Some(route) = builder.state.kernel_route.as_ref() {
         attested.extend(route.onboarding_attested_roots_v1(ctx.daa_score));
     }
@@ -232,13 +230,107 @@ pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
             .map(|c| c.as_bytes())
             .collect();
     }
-    // The network policy's admissions (consensus, not a registrant's choice); idempotent, so an admitted class is one row.
-    if opv_declared {
-        for class in admitted {
-            ledger.admit_optimistic_class(class.as_bytes()).map_err(|r| refused(r.to_string()))?;
-        }
-    }
+    // RFC-0015 admission is no longer a list read here: a class is admitted to the mode at its own registration, and only while
+    // DERIVED-eligible (`opv_gate_v1`), so the ledger's admitted rows are exactly the classes that were eligible when they registered.
     Ok(ledger)
+}
+
+/// What the derived-eligibility gate decides for one kernel object.
+enum OpvGateV1 {
+    /// Apply the object as it is.
+    Pass,
+    /// Admit these (mode-bound) ids to the mode first: the registration of an eligible class.
+    Admit(Vec<misaka_palw_kernel::hash::Digest>),
+    /// Drop the object, nothing written: an OPV registration or claim of a class that is not eligible at this block.
+    Drop,
+}
+
+/// **The derived OPV eligibility at the kernel route's door** (`docs/design/palw/opv-beacon-bootstrap.md` §5.3): a registration under
+/// `OptimisticPublicVerification` is admitted only for a class `opv_eligibility_v1` derives eligible now (or that the test seam names),
+/// and every claim of an OPV class commits only while its class is eligible. A claim keeps what it was admitted with; a class that
+/// loses eligibility (its binding refuted, its kernel retired, the network's deny-list) takes no new claim.
+fn opv_gate_v1(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    ledger: &KernelLedgerV1,
+    object: &KernelRouteObjectV1,
+) -> OpvGateV1 {
+    use crate::palw_opv_bootstrap_v1::{OpvClassFactsV1, OpvEligibilityViewV1};
+    let (Some(opv), Some(route)) =
+        (builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()), builder.state.kernel_route.as_ref())
+    else {
+        return OpvGateV1::Pass;
+    };
+    let view = OpvEligibilityViewV1::of(opv);
+    let eligible =
+        |class: &misaka_palw_kernel::hash::Digest| route.opv_class_eligibility_v1(ledger, class, ctx.daa_score, &view).is_ok();
+    match object {
+        KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } if mode.is_optimistic() => {
+            let facts = OpvClassFactsV1::of_registration(*descriptor, program_bytes, plan, param_commitments);
+            match route.opv_eligibility_v1(ledger, &facts, ctx.daa_score, &view) {
+                Ok(_) => OpvGateV1::Admit(vec![facts.opv_id]),
+                // Not admitted: the kernel refuses the registration by its own rule ("not admitted"), budget and all.
+                Err(_) => OpvGateV1::Pass,
+            }
+        }
+        KernelRouteObjectV1::RegisterPipelineClassV2 { mode, .. } if mode.is_optimistic() => {
+            // No onboarding path exists for a pipeline (GAP-B4): only the test seam names one. Its ids are admitted ahead and the
+            // kernel matches the registration's own id against them (a refused registration flushes nothing).
+            OpvGateV1::Admit(view.test_eligible.iter().filter(|id| !view.denied.contains(id)).map(|id| id.as_bytes()).collect())
+        }
+        // RFC-0004 Part II (R4X): a typed-root class registers only under OPV. A `Weights` spec IS today's single-program registration
+        // (the same id, by the same function), so it takes the same derived eligibility; a `Memory` / `Retrieval` / `Composite` class
+        // has no onboarding path yet (GAP-B16), so — like a pipeline — only the test seam can name it, and never past the deny-list.
+        KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::RegisterClass { spec } }
+            if spec.mode.is_optimistic() =>
+        {
+            use misaka_palw_kernel::spec::SpecShapeV1;
+            match (spec.shape(), spec.class_id()) {
+                (Ok(SpecShapeV1::Weights(w)), _) => {
+                    let facts = OpvClassFactsV1::of_registration(w.descriptor, &w.program_bytes, &w.plan, &w.param_commitments);
+                    match route.opv_eligibility_v1(ledger, &facts, ctx.daa_score, &view) {
+                        Ok(_) => OpvGateV1::Admit(vec![facts.opv_id]),
+                        Err(_) => OpvGateV1::Pass,
+                    }
+                }
+                (Ok(_), Ok(class)) => {
+                    let id = Hash64::from_bytes(class);
+                    if view.test_eligible.contains(&id) && !view.denied.contains(&id) {
+                        OpvGateV1::Admit(vec![class])
+                    } else {
+                        OpvGateV1::Pass
+                    }
+                }
+                // A malformed spec: the kernel refuses it by its own rule.
+                _ => OpvGateV1::Pass,
+            }
+        }
+        KernelRouteObjectV1::CommitClaim { claim, .. } => match ledger.jobs.get(&claim.job_id).map(|j| j.class_binding_id) {
+            Some(class) if ledger.opv.classes.contains(&class) && !eligible(&class) => OpvGateV1::Drop,
+            _ => OpvGateV1::Pass,
+        },
+        KernelRouteObjectV1::CommitPipelineClaim { claim, .. } => {
+            match ledger.pipeline_jobs.get(&claim.job_id).map(|j| j.class_binding_id) {
+                Some(class) if ledger.opv.classes.contains(&class) && !eligible(&class) => OpvGateV1::Drop,
+                _ => OpvGateV1::Pass,
+            }
+        }
+        // Past the fence every reveal is salted (G14-R4's claim seal v2, inner kind 20): the same gate on the carried commit. A typed
+        // `Spec` claim passes here — its class's eligibility path is RFC-0004 Part II's (GAP-B16).
+        KernelRouteObjectV1::CommitClaimSalted { commit, .. } => {
+            use misaka_palw_kernel::route::SaltedCommitV1 as C;
+            let class = match commit {
+                C::Claim { claim, .. } => ledger.jobs.get(&claim.job_id).map(|j| j.class_binding_id),
+                C::Pipeline { claim, .. } => ledger.pipeline_jobs.get(&claim.job_id).map(|j| j.class_binding_id),
+                C::Spec { .. } => None,
+            };
+            match class {
+                Some(class) if ledger.opv.classes.contains(&class) && !eligible(&class) => OpvGateV1::Drop,
+                _ => OpvGateV1::Pass,
+            }
+        }
+        _ => OpvGateV1::Pass,
+    }
 }
 
 /// Write back every ledger row that changed and the scalars; `before` is the rows as `load_ledger` found them.
@@ -402,6 +494,15 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     let mut ledger = load_ledger(builder, ctx)?;
     let before = ledger.to_rows();
+    match opv_gate_v1(builder, ctx, &ledger, &object) {
+        OpvGateV1::Drop => return Ok(()),
+        OpvGateV1::Admit(classes) => {
+            for class in classes {
+                ledger.admit_optimistic_class(class).map_err(|r| refused(r.to_string()))?;
+            }
+        }
+        OpvGateV1::Pass => {}
+    }
     let kid = palw_kernel_bond_id_v1(signer);
     ledger.sync_bond(kid, builder.kernel_synced_collateral(signer, ctx.daa_score));
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
@@ -500,10 +601,15 @@ fn persist_budget(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2,
 /// **Charge one adjudication (and `court_work`) of THIS block's budget to an onboarding object** (tag 109's judgement): the same
 /// budget, row and caps the kernel's own objects spend (`load_ledger` restores it for the next kernel object of the block), so the
 /// block is bounded across both. `Ok(false)`: the budget is spent and nothing is charged (the object is dismissed, the block stands).
+///
+/// `may_spend_reserve` (C4 F-C4R4-10 / -11): every onboarding object stops short of the runs the kernel reserves for proofs
+/// (`prosecution_reserved_runs`, as every kernel object but a `FileProof` does) — except a conformance REFUTATION, which is a proof:
+/// it may spend them, and one that proves nothing pays `dismissed_proof_fee`, as a dismissed `FileProof` does.
 pub(super) fn charge_route_budget_v1(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     court_work: u64,
+    may_spend_reserve: bool,
 ) -> Result<bool, PalwStateV2Error> {
     let (policy, _, _) = route_policies(builder)?;
     let (adjudications, work) = match builder
@@ -515,9 +621,11 @@ pub(super) fn charge_route_budget_v1(
         Some((blue_score, a, w)) if blue_score == ctx.blue_score => (a, w),
         _ => (0, 0),
     };
-    // C4 F-C4R4-10: an onboarding object stops short of the runs only a `FileProof` may spend, as every kernel object but a
-    // `FileProof` does (the kernel's own `charge`) — a free dismissed refutation never takes a run reserved for a proof.
-    let runs = policy.max_adjudications_per_block.saturating_sub(policy.prosecution_reserved_runs());
+    let runs = if may_spend_reserve {
+        policy.max_adjudications_per_block
+    } else {
+        policy.max_adjudications_per_block.saturating_sub(policy.prosecution_reserved_runs())
+    };
     if adjudications >= runs || work.saturating_add(court_work) > policy.max_court_work_per_block {
         return Ok(false);
     }
@@ -527,6 +635,13 @@ pub(super) fn charge_route_budget_v1(
         Some(borsh::to_vec(&(ctx.blue_score, adjudications + 1, work.saturating_add(court_work))).expect("a budget serializes")),
     );
     Ok(true)
+}
+
+/// The route's ledger policy at this block (the fee a dismissed proof pays, for an onboarding refutation).
+pub(super) fn route_ledger_policy_v1(
+    builder: &TransitionBuilder<'_>,
+) -> Result<misaka_palw_kernel::ledger::LedgerPolicyV1, PalwStateV2Error> {
+    Ok(route_policies(builder)?.0)
 }
 
 /// **Tag 111: a seat's constraint receipt.** Its signature verified at acceptance; the fold admits it structurally against the claim's

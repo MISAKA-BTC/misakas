@@ -66,10 +66,20 @@ fn kernel_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     kernel_config_with(None)
 }
 
-/// **An OPV network** (RFC-0015): [`kernel_config`] with `Params::palw_panel_free_v1` carrying the network's admission list and the
-/// interim OPV terms, activating at DAA 1. Like the route's fence it is armed WITHOUT its validation (which refuses every height).
-fn kernel_config_opv(admitted: Vec<Hash64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
-    kernel_config_with(Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), admitted)))
+/// **An OPV network** (RFC-0015): [`kernel_config`] with `Params::palw_panel_free_v1` carrying the interim OPV terms (nothing denied),
+/// activating at DAA 1. Like the route's fence it is armed WITHOUT its validation (which refuses every height). OPV eligibility is
+/// DERIVED from chain state; these mechanics worlds predate the derivation, so they name their classes through the processor's
+/// `cfg(test)` seam ([`opv_test_eligible`]) — the bootstrap E2E (`g14_kernel_route_e2e/opv_bootstrap.rs`) uses none.
+fn kernel_config_opv(eligible: Vec<Hash64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    opv_test_eligible(&eligible);
+    kernel_config_with(Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new())))
+}
+
+/// The test seam of the pre-derivation OPV worlds (processor, `cfg(test)` only): these classes are treated as eligible.
+fn opv_test_eligible(classes: &[Hash64]) {
+    for c in classes {
+        crate::pipeline::virtual_processor::processor::kernel_route_test_opv_eligible_v1(*c);
+    }
 }
 
 fn kernel_config_with(opv: Option<PalwPanelFreeFenceV1>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
@@ -86,7 +96,7 @@ fn kernel_config_with(opv: Option<PalwPanelFreeFenceV1>) -> (Config, PalwConsens
     (Config::new(params), bundle, premine, floats)
 }
 
-/// The class ids the OPV network's policy admits: the fixture's class under `OptimisticPublicVerification`.
+/// The class ids the OPV mechanics worlds treat as eligible (test seam): the fixture's class under `OptimisticPublicVerification`.
 fn opv_admitted() -> Vec<Hash64> {
     let (d, fx) = (k2_tir_v2_descriptor(), fixture());
     vec![Hash64::from_bytes(single_class_id_v1(
@@ -2001,7 +2011,10 @@ async fn g14_opv_an_honest_claim_finalizes_with_no_panel_and_exports_a_panel_ind
     assert_eq!(finals.len(), 1);
     let f = &finals[0];
     assert_eq!((f.final_path, f.receipt.claim, f.receipt.standing), ("PanelIndependent", honest.id, FinalStandingV1::Standing));
-    let event: WorkFinalEventV1 = borsh::from_slice(f.event.as_ref().expect("an OPV Final carries the beacon's event")).unwrap();
+    let attributed: misaka_palw_challenge::AttributedWorkV1 =
+        borsh::from_slice(f.event.as_ref().expect("an OPV Final carries the beacon's event")).unwrap();
+    assert_eq!(attributed.attribution.producer_id, w.net.kid(0), "attributed to the producer bond (the distinct source rule)");
+    let event: WorkFinalEventV1 = attributed.event;
     assert_eq!(event.final_path, FinalPathV1::PanelIndependent);
     assert_eq!(event.kind, WorkSourceKindV1::RealUsefulWork);
     assert!(event.claim_final && event.da_satisfied && event.validity_independent && event.depends_on_profiles.is_empty());
@@ -2247,7 +2260,8 @@ async fn g14_opv_a_lie_that_finalized_is_convicted_within_liability_and_its_fact
     w.net.beat_to(view.final_floor_daa).await;
     assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Final { .. }), "nobody prosecuted: Final");
     let f = w.net.api().unwrap().finals_read_v1().unwrap();
-    let event: WorkFinalEventV1 = borsh::from_slice(f[0].event.as_ref().unwrap()).unwrap();
+    let event: WorkFinalEventV1 =
+        borsh::from_slice::<misaka_palw_challenge::AttributedWorkV1>(f[0].event.as_ref().unwrap()).unwrap().event;
     assert!(event.claim_final, "at Final the fact stands");
 
     let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x33);
@@ -2257,7 +2271,8 @@ async fn g14_opv_a_lie_that_finalized_is_convicted_within_liability_and_its_fact
     assert_eq!(w.net.collateral(0), before - slashed - policy.economics.admission_fee);
     let f = w.net.api().unwrap().finals_read_v1().unwrap();
     assert_eq!(f[0].receipt.standing, FinalStandingV1::ConvictedAfterFinal);
-    let event: WorkFinalEventV1 = borsh::from_slice(f[0].event.as_ref().unwrap()).unwrap();
+    let event: WorkFinalEventV1 =
+        borsh::from_slice::<misaka_palw_challenge::AttributedWorkV1>(f[0].event.as_ref().unwrap()).unwrap().event;
     assert!(!event.claim_final, "the withdrawn fact fails the beacon's eligibility by its own reason");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
@@ -3286,3 +3301,6 @@ mod da16;
 // pruned import), reading through the RPC ops' own builders, against every seat colluding (Panel) and no Panel (OPV); ADR-0177
 // non-interference: `g14_kernel_route_e2e/canonical.rs`.
 mod canonical;
+// OPV-BOOT: the OPV ↔ beacon startup cycle closed — the complete-check bootstrap from zero Finals, derived eligibility, its loss,
+// hostile complete checks, the deny-list and the test seam's pin: `g14_kernel_route_e2e/opv_bootstrap.rs`.
+mod opv_bootstrap;
