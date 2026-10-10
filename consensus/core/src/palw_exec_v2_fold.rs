@@ -293,7 +293,15 @@ impl PalwChainStateV2 {
                     job.as_ref().ok_or(R::ExecutionScopeMismatch)?,
                 )
                 .map_err(|_| R::ExecutionScopeMismatch)?;
-                match palw_exec_v2_claim_outcome_v1(&row, daa_score) {
+                let until = super::palw_kernel_route_fold_v1::exec_liability_floor_v1(
+                    root.expiry_daa,
+                    params.window_court(),
+                    &kernel.header.policy,
+                )
+                .map_err(|_| R::Overflow)?;
+                super::palw_kernel_route_fold_v1::require_exec_provider_horizon_v1(self, &slice.evidence_root, &row, daa_score, until)
+                    .map_err(|_| R::VerificationProviderHorizon)?;
+                match dependency_outcome(self, &slice.evidence_root, &row, daa_score) {
                     PalwSliceVerificationV1::Verified { final_daa } => Some((
                         final_daa,
                         palw_exec_v2_leg_cap_v1(&row, kernel.header.policy.claim_reward),
@@ -378,6 +386,23 @@ impl PalwChainStateV2 {
             return Ok(());
         }
         for (claim_id, root) in &self.exec_v2.roots {
+            if !matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. }) {
+                if let Some(kernel) = &self.kernel_route {
+                    let dependencies = std::iter::once(root.prefix_claim)
+                        .chain(self.exec_v2.slices.range((*claim_id, 0)..=(*claim_id, u32::MAX)).map(|(_, row)| row.evidence_root));
+                    for id in dependencies {
+                        if let Some(row) = kernel
+                            .rows
+                            .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&id)))
+                            .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::ledger::ClaimRowV1>(bytes).ok())
+                        {
+                            if super::palw_kernel_route_fold_v1::exec_provider_lapsed_v1(self, &id, &row) {
+                                return Err(bad("a provider lapse was not propagated to its EXEC root".into()));
+                            }
+                        }
+                    }
+                }
+            }
             let claim = self.claims.get(claim_id).ok_or_else(|| bad(format!("root {claim_id} outlives its claim")))?;
             if claim.class_id != root.class_id
                 || claim.job_identity != root.canonical_job_id
@@ -760,7 +785,7 @@ pub(super) fn apply_root_declared_v2(
                 daa,
             )
             .map_err(no)?;
-            match palw_exec_v2_claim_outcome_v1(&row, daa) {
+            match dependency_outcome(&builder.state, &declaration.prefix_claim, &row, daa) {
                 PalwSliceVerificationV1::Verified { .. } => PalwWorkPrefixStageV2::Verified {
                     verified_daa: daa,
                     route_reward: palw_exec_v2_route_reward_v1(&row, kernel.header.policy.claim_reward),
@@ -1167,19 +1192,33 @@ pub(super) fn release_final_hold_v2(
     Ok(())
 }
 
-/// **Amendment 1 (spec §10.1–10.2): every slice follows its kernel claim.** Run each block after the kernel route's closing tick, so a
-/// Final, a conviction or a default the route decided in this block is read in this block. Event-driven: only the kernel claim rows
-/// this block's transition wrote are read (the route's own journal, `KernelRouteRow` of the claims table), so the cost is bounded by
-/// the route's per-block adjudication budget, not by the size of the lane. For each slice that names one of them —
+fn dependency_outcome(
+    state: &PalwChainStateV2,
+    id: &Hash64,
+    row: &misaka_palw_kernel::ledger::ClaimRowV1,
+    daa: u64,
+) -> PalwSliceVerificationV1 {
+    let outcome = palw_exec_v2_claim_outcome_v1(row, daa);
+    if outcome != PalwSliceVerificationV1::ProvenFalse && super::palw_kernel_route_fold_v1::exec_provider_lapsed_v1(state, id, row) {
+        PalwSliceVerificationV1::Defaulted
+    } else {
+        outcome
+    }
+}
+
+/// **Amendment 1 (spec §10.1–10.2): every slice follows its kernel claim.**
+/// Run each block after the kernel route's closing tick. Read kernel claim decisions and transferred-provider subject changes in this
+/// block's journal. Only dependencies named by those entries are reconsidered;
+/// the journal also captures a post-Final provider lapse with no claim-row change.
 ///
-/// * a pending slice whose claim is **Final** becomes `Verified`; a root whose last slice is verified releases its claim's `Final` hold;
-/// * a pending or verified slice of a root that has not settled whose claim is **convicted** is *proven false*; a pending one whose
-///   claim **defaulted** (unavailable, timed out, or no longer held), or a verified one whose claim forfeited its reservation after
-///   `Final` (an unserved post-Final demand), is *defaulted*: the slice and every later slice of its root are void,
-///   the root is `Voided`, and the root claim is voided (`WorkSliceProvenFalse` / `WorkSliceDefaulted`, uncharged here — the
-///   evidence-bound charge is the route's, on the executor's kernel reservation).
+/// A Final pending dependency becomes Verified and can release the root's Final
+/// hold. Conviction remains ProvenFalse; unavailable/forfeited dependencies and
+/// transferred provider lapses become Defaulted, including after root settlement.
+/// The root is voided and unreleased funds are burned once. Provider failure never
+/// charges an executor: the provider court settles its signed reservation.
 ///
-/// A no-op on a chain with no root or no kernel route (every chain below the fence).
+/// A no-op on a chain with no root or no kernel route (below the fence). This
+/// journal selection alone does not prove a worst-case per-block resource bound.
 pub(super) fn sync_slice_verification_v2(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -1193,6 +1232,16 @@ pub(super) fn sync_slice_verification_v2(
         .filter_map(|entry| match entry {
             PalwDeltaEntryV2::KernelRouteRow { table, key, .. } if *table == misaka_palw_kernel::rows::TABLE_CLAIMS_V1 => {
                 Some(key.clone())
+            }
+            PalwDeltaEntryV2::KernelRouteRow { table, key, .. }
+                if *table == crate::palw_provider_court_v1::PALW_PROVIDER_COURT_TABLE_SUBJECTS_V1 =>
+            {
+                match borsh::from_slice::<crate::palw_provider_court_v1::ProviderSubjectV1>(key).ok()? {
+                    crate::palw_provider_court_v1::ProviderSubjectV1::KernelClaim { claim } => {
+                        Some(palw_exec_v2_kernel_key_v1(&claim))
+                    }
+                    _ => None,
+                }
             }
             _ => None,
         })
@@ -1227,7 +1276,7 @@ pub(super) fn sync_slice_verification_v2(
         };
         let pending = matches!(root.prefix, PalwWorkPrefixStageV2::Pending);
         let outcome = match &claim_row {
-            Some(claim) => palw_exec_v2_claim_outcome_v1(claim, ctx.daa_score),
+            Some(claim) => dependency_outcome(&builder.state, &root.prefix_claim, claim, ctx.daa_score),
             None if pending => PalwSliceVerificationV1::Defaulted,
             None => continue,
         };
@@ -1276,7 +1325,7 @@ pub(super) fn sync_slice_verification_v2(
         // A claim the route no longer holds cannot verify a pending slice (a default); a verified slice whose claim the route has
         // retired keeps its stage and its cap.
         let outcome = match &claim_row {
-            Some(claim) => palw_exec_v2_claim_outcome_v1(claim, ctx.daa_score),
+            Some(claim) => dependency_outcome(&builder.state, &row.evidence_root, claim, ctx.daa_score),
             None if pending => PalwSliceVerificationV1::Defaulted,
             None => continue,
         };

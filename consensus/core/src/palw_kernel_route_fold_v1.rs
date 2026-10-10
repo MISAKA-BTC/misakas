@@ -398,6 +398,50 @@ pub(super) fn exec_liability_floor_v1(
         .ok_or_else(|| refused("EXEC liability horizon overflows"))
 }
 
+/// A transfer changes who owes material, not the term signed by its providers.
+pub(super) fn require_exec_provider_horizon_v1(
+    state: &PalwChainStateV2,
+    claim: &Hash64,
+    row: &misaka_palw_kernel::ledger::ClaimRowV1,
+    daa: u64,
+    liability_floor: u64,
+) -> Result<(), &'static str> {
+    use crate::palw_provider_court_v1::ProviderSubjectV1;
+    let route = state.kernel_route.as_ref().ok_or("the EXEC kernel route is missing")?;
+    let subject = ProviderSubjectV1::KernelClaim { claim: *claim };
+    let Some(transfer) = route.provider_subject_v1(&subject).filter(|transfer| transfer.transferred_daa.is_some()) else {
+        return Ok(());
+    };
+    if transfer.lapsed_daa.is_some() {
+        return Err("a lapsed provider transfer cannot attach to EXEC");
+    }
+    let producer = route.bond_key_of(&row.producer).ok_or("the transferred EXEC producer has no bond mapping")?;
+    let operator = state.bond(&producer).ok_or("the transferred EXEC producer bond is missing")?.operator_id;
+    let until = liability_floor.max(row.liability_until.unwrap_or(0));
+    let availability = state.provider_availability_v1(&subject, daa, until, Some(operator));
+    if !availability.ready {
+        return Err("the transferred EXEC claim needs two distinct non-producer operator leases through its consumer horizon");
+    }
+    if availability.reserved < row.reserved {
+        return Err("the transferred EXEC provider leases reserve less than its claim");
+    }
+    Ok(())
+}
+
+/// A provider failure is the transferred claim's failure, including after computation Final.
+/// Ordinary expiry after the collectible horizon is not a failure.
+pub(super) fn exec_provider_lapsed_v1(state: &PalwChainStateV2, claim: &Hash64, row: &misaka_palw_kernel::ledger::ClaimRowV1) -> bool {
+    use crate::palw_provider_court_v1::ProviderSubjectV1;
+    state
+        .kernel_route
+        .as_ref()
+        .and_then(|route| route.provider_subject_v1(&ProviderSubjectV1::KernelClaim { claim: *claim }))
+        .is_some_and(|transfer| {
+            transfer.transferred_daa.is_some()
+                && transfer.lapsed_daa.is_some_and(|at| row.liability_until.is_none_or(|until| at <= until))
+        })
+}
+
 /// Consumer hooks retain the current block budget; they do not begin a new kernel block.
 pub(super) fn bind_exec_reward_v1(
     builder: &mut TransitionBuilder<'_>,
@@ -411,6 +455,8 @@ pub(super) fn bind_exec_reward_v1(
     let mut ledger = route.ledger().map_err(refused)?;
     ledger.daa = daa;
     let until = exec_liability_floor_v1(expiry, builder.params.window_court(), &ledger.policy)?;
+    let row = ledger.claims.get(&claim.as_bytes()).ok_or_else(|| refused("the EXEC reward claim is missing"))?;
+    require_exec_provider_horizon_v1(&builder.state, &claim, row, daa, until).map_err(refused)?;
     ledger.bind_exec_reward_until(root.as_bytes(), claim.as_bytes(), expiry, until).map_err(refused)?;
     flush(builder, &ledger, &before);
     Ok(())

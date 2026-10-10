@@ -1300,11 +1300,12 @@ mod amendment_1 {
                 nonce: digest(palw_exec_v2_prefix_job_nonce_v1(&claim, d.boundaries[0], &d.canonical_job_id, &d.plan_root)),
             };
             let kernel_bond = palw_kernel_bond_id_v1(&root_claim.bond);
+            let (evidence, commitments) = provider_material_fixture(PREFIX_RUN.len(), 0xDF);
             let kclaim = KernelClaimV1 {
                 job_id: job.id(),
                 producer_bond: kernel_bond,
                 generated: PREFIX_RUN.to_vec(),
-                evidence_root: digest(h64(0xDF)),
+                evidence_root: evidence.root(),
             };
             let liability_until = match &state {
                 ClaimStateV1::Final { final_daa } => Some(final_daa + s.kernel_route.as_ref().unwrap().header.policy.liability_daa),
@@ -1314,7 +1315,7 @@ mod amendment_1 {
                 producer: kernel_bond,
                 class_binding_id: digest(h64(KERNEL_CLASS)),
                 job_id: job.id(),
-                body: ClaimBodyV1::Program { claim: kclaim.clone(), evidence: evidence(), commitments: Vec::new() },
+                body: ClaimBodyV1::Program { claim: kclaim.clone(), evidence, commitments },
                 committed_daa: 100,
                 sealed_daa: 100,
                 life: ClaimLifecycleV1 {
@@ -1395,17 +1396,18 @@ mod amendment_1 {
                 nonce: digest(palw_exec_v2_slice_job_nonce_v1(&covered.slice)),
             };
             let kernel_bond = palw_kernel_bond_id_v1(&executor);
+            let (evidence, commitments) = provider_material_fixture(generated.len(), 0xE0 + index as u64);
             let claim = KernelClaimV1 {
                 job_id: job.id(),
                 producer_bond: kernel_bond,
                 generated: generated.to_vec(),
-                evidence_root: digest(h64(0xE0 + index as u64)),
+                evidence_root: evidence.root(),
             };
             let row = ClaimRowV1 {
                 producer: kernel_bond,
                 class_binding_id: digest(h64(KERNEL_CLASS)),
                 job_id: job.id(),
-                body: ClaimBodyV1::Program { claim: claim.clone(), evidence: evidence(), commitments: Vec::new() },
+                body: ClaimBodyV1::Program { claim: claim.clone(), evidence, commitments },
                 committed_daa: 100,
                 sealed_daa: 100,
                 life: ClaimLifecycleV1 {
@@ -1482,6 +1484,22 @@ mod amendment_1 {
                 field_bits: 61,
             },
         }
+    }
+
+    /// Material commitments for the seeded kernel rows. These bind actual tensor bytes
+    /// before the root opens, so a public provider challenge names an existing position.
+    /// Computation admission/Final and signatures remain the documented fold fixture seams;
+    /// this helper is not an end-to-end execution or honest-trace proof.
+    fn provider_material_fixture(
+        positions: usize,
+        tag: u64,
+    ) -> (misaka_palw_kernel::evidence::VerificationEvidenceV1, Vec<Vec<Vec<[u8; 64]>>>) {
+        let tensor = misaka_palw_tir::Tensor::new(misaka_palw_tir::DType::I64, vec![1], vec![tag as i128]).unwrap();
+        let commitments = vec![vec![vec![misaka_palw_kernel::trace::tensor_commitment(&tensor)]]; positions];
+        let mut ev = evidence();
+        ev.positions = positions as u32;
+        ev.trace_root = misaka_palw_kernel::trace::EvidenceV1::new(commitments.clone()).root();
+        (ev, commitments)
     }
 
     /// Each slice's run of the session's token stream.
@@ -2332,6 +2350,255 @@ mod amendment_1 {
         (p, s, claim, slices, pre)
     }
 
+    fn provider_terms(
+        p: &PalwStateParamsV2,
+        s: &PalwChainStateV2,
+        claim: Hash64,
+        producer: PalwBondKeyV2,
+        daa: u64,
+        until: u64,
+        first_provider: u64,
+        transfer: bool,
+    ) -> PalwChainStateV2 {
+        use crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1;
+        use crate::palw_provider_court_v1::{PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1 as MIN, ProviderSubjectV1};
+        let mut objects = Vec::new();
+        for provider in first_provider..first_provider + 2 {
+            objects.push(seat_bond_reg(provider, 2 * MIN));
+            objects.push(PalwConsensusObjectV2::ProviderLeaseV1 {
+                subject: ProviderSubjectV1::KernelClaim { claim },
+                reserved: MIN,
+                serve_until_daa: until,
+                provider: bond_key(provider),
+                signature: vec![9; 8],
+            });
+        }
+        if transfer {
+            objects.push(PalwConsensusObjectV2::DaTransferV1 { claim, producer, signature: vec![9; 8] });
+        }
+        let extras = PalwTransitionExtrasV1 {
+            kernel_route: Some(PalwKernelRouteExtrasV1 {
+                network_domain: h64(0xE7),
+                ruleset_digest: h64(0xE8),
+                provider_court: Some(0),
+                ..Default::default()
+            }),
+            ..xx()
+        };
+        step_with(s, p, s.last_point.unwrap().blue_score + 1, daa, &objects, &extras).unwrap().0
+    }
+
+    fn provider_extras() -> PalwTransitionExtrasV1 {
+        use crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1;
+        PalwTransitionExtrasV1 {
+            kernel_route: Some(PalwKernelRouteExtrasV1 {
+                network_domain: h64(0xE7),
+                ruleset_digest: h64(0xE8),
+                provider_court: Some(0),
+                ..Default::default()
+            }),
+            ..xx()
+        }
+    }
+
+    #[test]
+    fn exec_transferred_post_final_provider_court_defaults_the_root_without_charging_its_workers() {
+        use crate::palw_provider_court_v1::{
+            PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1 as B, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1 as MIN, ProviderSubjectV1,
+        };
+        use crate::palw_public_material_v1::PublicUnitV1;
+        for prefix in [true, false] {
+            let (p, s, native, slices, pre) = funded_final(0);
+            let dependency = if prefix { pre.claim_id } else { slices[0].covered.slice.evidence_root };
+            let producer = if prefix { bond_key(1) } else { slices[0].covered.slice.executor_bond };
+            let lease_at = s.last_point.unwrap().daa_score + 1;
+            let challenge_at = lease_at + 1;
+            let deadline = challenge_at + 20;
+            let until = s.exec_v2_rewards[&native].liability_until;
+            let s = provider_terms(&p, &s, dependency, producer, lease_at, until, 30, true);
+            let subject = ProviderSubjectV1::KernelClaim { claim: dependency };
+            let mut objects = vec![seat_bond_reg(34, 2 * B)];
+            for provider in 30..32 {
+                objects.push(PalwConsensusObjectV2::ProviderChallengeV1 {
+                    subject,
+                    provider: bond_key(provider),
+                    unit: PublicUnitV1::ClaimPosition { stage: 0, position: 0 },
+                    valid_until_daa: challenge_at + 10,
+                    challenger: bond_key(34),
+                    signature: vec![9; 8],
+                });
+            }
+            let (challenged, _) =
+                step_with(&s, &p, s.last_point.unwrap().blue_score + 1, challenge_at, &objects, &provider_extras()).unwrap();
+            let money =
+                challenged.vesting_row(&native).unwrap().total_sompi_u128() + challenged.exec_v2_rewards[&native].total_sompi_u128();
+            let worker_collateral: Vec<_> =
+                [bond_key(1), bond_key(20), bond_key(21)].into_iter().map(|bond| (bond, challenged.bonds[&bond].collateral)).collect();
+            let (last, _) =
+                step_with(&challenged, &p, challenged.last_point.unwrap().blue_score + 1, deadline, &[], &provider_extras()).unwrap();
+            assert!(
+                matches!(last.exec_v2_root_v1(&native).unwrap().phase, PalwWorkRootPhaseV2::Settled { .. }),
+                "inclusive last response day"
+            );
+            let (defaulted, delta) =
+                step_with(&last, &p, last.last_point.unwrap().blue_score + 1, deadline + 1, &[], &provider_extras()).unwrap();
+            assert!(matches!(defaulted.exec_v2_root_v1(&native).unwrap().phase, PalwWorkRootPhaseV2::Voided { .. }));
+            if prefix {
+                assert!(
+                    matches!(defaulted.exec_v2_root_v1(&native).unwrap().prefix, PalwWorkPrefixStageV2::Defaulted { daa } if daa == deadline + 1)
+                );
+            } else {
+                assert!(
+                    matches!(defaulted.exec_v2_slice_v1(&native, 0).unwrap().stage, PalwWorkSliceStageV2::Defaulted { daa } if daa == deadline + 1)
+                );
+            }
+            assert!(defaulted.vesting_row(&native).is_none());
+            assert!(defaulted.exec_v2_rewards.get(&native).is_none());
+            assert_eq!(defaulted.vesting_counters.burned - last.vesting_counters.burned, money);
+            assert_eq!(defaulted.vesting_counters.moved, last.vesting_counters.moved);
+            assert_eq!(defaulted.safe_weight(), 0);
+            assert_eq!(crate::palw_native_settlement_v1::native_delta_evidence_v1(&delta).voided, vec![native]);
+            for (bond, collateral) in worker_collateral {
+                assert_eq!(defaulted.bonds[&bond].collateral, collateral, "provider failure does not charge a worker");
+            }
+            for provider in 30..32 {
+                assert_eq!(defaulted.bonds[&bond_key(provider)].collateral, MIN, "only the signed provider reservation was charged");
+            }
+            let kernel_row: ClaimRowV1 = borsh::from_slice(
+                &defaulted.kernel_route.as_ref().unwrap().rows[&(TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&dependency))],
+            )
+            .unwrap();
+            assert!(matches!(kernel_row.life.state, ClaimStateV1::Final { .. }));
+            assert!(
+                kernel_row.reserved > 0,
+                "the transferred default is recorded in the provider journal, not by slashing the worker"
+            );
+            assert!(defaulted.pending_payouts_iter().next().is_none());
+            let mut stale = last.clone();
+            stale.kernel_route.as_mut().unwrap().aux = defaulted.kernel_route.as_ref().unwrap().aux.clone();
+            assert!(
+                PalwStateCarriageV2::from_state(&stale).into_state(&p, None).is_err(),
+                "restore refuses an unpropagated provider lapse"
+            );
+            let (again, _) =
+                step_with(&defaulted, &p, defaulted.last_point.unwrap().blue_score + 1, deadline + 2, &[], &provider_extras())
+                    .unwrap();
+            assert_eq!(again.vesting_counters, defaulted.vesting_counters, "default and burn settle once");
+            assert_eq!(again.safe_weight(), 0);
+        }
+    }
+
+    #[test]
+    fn exec_transferred_provider_lease_expiry_after_held_horizon_is_lawful() {
+        use crate::palw_provider_court_v1::{PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1 as MIN, ProviderSubjectV1};
+        let (p, s, native, _, pre) = funded_final(0);
+        let until = s.exec_v2_rewards[&native].liability_until;
+        let s = provider_terms(&p, &s, pre.claim_id, bond_key(1), s.last_point.unwrap().daa_score + 1, until, 30, true);
+        let subject = ProviderSubjectV1::KernelClaim { claim: pre.claim_id };
+        let (last, _) = step_with(&s, &p, s.last_point.unwrap().blue_score + 1, until, &[], &provider_extras()).unwrap();
+        assert_eq!(last.kernel_route.as_ref().unwrap().provider_leases_of_v1(&subject).len(), 2);
+        let (expired, _) = step_with(&last, &p, last.last_point.unwrap().blue_score + 1, until + 1, &[], &provider_extras()).unwrap();
+        let route = expired.kernel_route.as_ref().unwrap();
+        assert!(route.provider_leases_of_v1(&subject).is_empty());
+        assert_eq!(route.provider_subject_v1(&subject).unwrap().lapsed_daa, None);
+        assert!(matches!(expired.exec_v2_root_v1(&native).unwrap().phase, PalwWorkRootPhaseV2::Settled { .. }));
+        for provider in 30..32 {
+            assert_eq!(expired.bonds[&bond_key(provider)].collateral, 2 * MIN);
+        }
+    }
+
+    #[test]
+    fn exec_transferred_pending_claim_without_live_provider_lapses_without_an_expiry_charge() {
+        use crate::palw_provider_court_v1::{
+            PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1 as MIN, ProviderSubjectV1, palw_kernel_claim_horizon_bound_v1,
+        };
+        let (p, mut s, native) = world(Some(0));
+        with_route(&mut s, native, Some(PLAN));
+        // Seed a pending lifecycle that lasts beyond its original material term. The
+        // transfer, signed terms, expiry tick, journal and restoration are real folds.
+        let pre = Prefix::new(&mut s, native, ClaimStateV1::Challengeable { since_daa: 100, window_end_daa: 1_000_000 }, false);
+        fund_jobs(&mut s, &pre, &[], 1);
+        let until = palw_kernel_claim_horizon_bound_v1(&pre.row, &s.kernel_route.as_ref().unwrap().header.policy, None);
+        assert!(until < 1_000_000);
+        let s = provider_terms(&p, &s, pre.claim_id, bond_key(1), 106, until, 30, true);
+        let subject = ProviderSubjectV1::KernelClaim { claim: pre.claim_id };
+        let (expired, _) = step_with(&s, &p, s.last_point.unwrap().blue_score + 1, until + 1, &[], &provider_extras()).unwrap();
+        let route = expired.kernel_route.as_ref().unwrap();
+        assert!(route.provider_leases_of_v1(&subject).is_empty());
+        assert_eq!(route.provider_subject_v1(&subject).unwrap().lapsed_daa, Some(until + 1));
+        assert!(matches!(route.kernel_claim_row_v1(&pre.claim_id).unwrap().life.state, ClaimStateV1::Unavailable { .. }));
+        for provider in 30..32 {
+            assert_eq!(expired.bonds[&bond_key(provider)].collateral, 2 * MIN);
+        }
+        assert!(expired.pending_payouts_iter().next().is_none());
+    }
+
+    #[test]
+    fn exec_transferred_prefix_requires_the_providers_signed_consumer_horizon() {
+        use crate::palw_provider_court_v1::{ProviderSubjectV1, palw_kernel_claim_horizon_bound_v1};
+        let (p, mut s, native) = world(Some(0));
+        with_route(&mut s, native, Some(PLAN));
+        let pre = Prefix::new(&mut s, native, ClaimStateV1::Final { final_daa: 105 }, false);
+        fund_jobs(&mut s, &pre, &[], 1);
+        let d = pre.decl(native);
+        let policy = &s.kernel_route.as_ref().unwrap().header.policy;
+        let old = palw_kernel_claim_horizon_bound_v1(&pre.row, policy, None);
+        let until = super::palw_kernel_route_fold_v1::exec_liability_floor_v1(d.expiry_daa, p.window_court(), policy).unwrap();
+        assert!(old < until);
+        let short = provider_terms(&p, &s, pre.claim_id, bond_key(1), 106, old, 30, true);
+        let subject = ProviderSubjectV1::KernelClaim { claim: pre.claim_id };
+        assert!(short.kernel_route.as_ref().unwrap().provider_subject_v1(&subject).unwrap().transferred_daa.is_some());
+        let rows = short.kernel_route.as_ref().unwrap().rows.clone();
+        let aux = short.kernel_route.as_ref().unwrap().aux.clone();
+        let rejected = open(&p, &short, d.clone()).unwrap_err();
+        assert!(matches!(rejected, PalwStateV2Error::KernelRouteRefused(_)));
+        assert_eq!(short.kernel_route.as_ref().unwrap().rows, rows);
+        assert_eq!(short.kernel_route.as_ref().unwrap().aux, aux, "no implicit provider lease extension");
+        assert!(short.exec_v2_root_v1(&native).is_none());
+        let exact = provider_terms(&p, &s, pre.claim_id, bond_key(1), 106, until, 30, true);
+        let leases = exact.kernel_route.as_ref().unwrap().provider_leases_of_v1(&subject);
+        let admitted = open(&p, &exact, d).unwrap();
+        assert_eq!(admitted.kernel_route.as_ref().unwrap().provider_leases_of_v1(&subject), leases);
+        assert_eq!(admitted.exec_v2_liability_until_v1(&p, &native).unwrap(), Some(until));
+        assert_eq!(admitted.exec_v2_root_v1(&native).unwrap().prefix_claim, pre.claim_id);
+        assert!(admitted.pending_payouts_iter().next().is_none());
+    }
+
+    #[test]
+    fn exec_transferred_slice_is_a_named_lane_refusal_and_can_recover_with_new_signed_terms() {
+        use crate::palw_provider_court_v1::{ProviderSubjectV1, palw_kernel_claim_horizon_bound_v1};
+        let (p, mut s, native, mut slices, pre) = session_with(1_000_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
+        slices[0].row.life.state = ClaimStateV1::Final { final_daa: 105 };
+        slices[0].row.liability_until = Some(105 + s.kernel_route.as_ref().unwrap().header.policy.liability_daa);
+        slices[0].install(&mut s);
+        fund_jobs(&mut s, &pre, &slices, 1);
+        let k = &slices[0];
+        let policy = &s.kernel_route.as_ref().unwrap().header.policy;
+        let old = palw_kernel_claim_horizon_bound_v1(&k.row, policy, None);
+        let until = s.exec_v2_liability_until_v1(&p, &native).unwrap().unwrap();
+        let short = provider_terms(&p, &s, k.covered.slice.evidence_root, k.covered.slice.executor_bond, 111, old, 30, true);
+        assert_eq!(refusal(&p, &short, k.covered.clone()), PalwSliceRefusalV2::VerificationProviderHorizon);
+        let (refused, delta) =
+            step_with(&short, &p, 200, 120, &[], &xx_slices(vec![k.covered.clone(), slices[1].covered.clone()])).unwrap();
+        let codes: Vec<_> = delta
+            .entries
+            .iter()
+            .filter_map(|entry| if let PalwDeltaEntryV2::ExecV2Verdict { code, .. } = entry { Some(*code) } else { None })
+            .collect();
+        assert_eq!(codes, vec![31, PalwSliceRefusalV2::SkippedSlice.code()]);
+        assert_eq!(refused.exec_v2_root_v1(&native).unwrap().next_index, 0);
+        assert!(refused.exec_v2_slice_v1(&native, 0).is_none());
+        let recovered =
+            provider_terms(&p, &refused, k.covered.slice.evidence_root, k.covered.slice.executor_bond, 121, until, 32, false);
+        let subject = ProviderSubjectV1::KernelClaim { claim: k.covered.slice.evidence_root };
+        let leases = recovered.kernel_route.as_ref().unwrap().provider_leases_of_v1(&subject);
+        let admitted = fold_slices(&p, &recovered, recovered.last_point.unwrap().blue_score + 1, 122, vec![k.covered.clone()]);
+        assert_eq!(admitted.exec_v2_root_v1(&native).unwrap().next_index, 1);
+        assert_eq!(admitted.kernel_route.as_ref().unwrap().provider_leases_of_v1(&subject), leases);
+        assert_eq!(admitted.exec_v2_slice_v1(&native, 0).unwrap().evidence_root, k.covered.slice.evidence_root);
+        assert!(admitted.pending_payouts_iter().next().is_none());
+    }
+
     fn funded_final_with_delta(
         retirement: u64,
     ) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Vec<KernelSlice>, Prefix, PalwStateDeltaV2) {
@@ -3105,6 +3372,7 @@ mod amendment_1 {
             ExecutionScopeMismatch,
             VerificationAlreadyPaid,
             VerificationRewardBound,
+            VerificationProviderHorizon,
         ];
         let codes: std::collections::BTreeSet<u8> = all.iter().map(|r| r.code()).collect();
         assert_eq!(codes.len(), all.len());
@@ -3112,5 +3380,7 @@ mod amendment_1 {
         for r in &all {
             assert_ne!(PalwSliceRefusalV2::name_of_code(r.code()), "unknown", "{r:?}");
         }
+        assert_eq!(VerificationProviderHorizon.code(), 31);
+        assert_eq!(PalwSliceRefusalV2::name_of_code(31), "verification_provider_horizon");
     }
 }

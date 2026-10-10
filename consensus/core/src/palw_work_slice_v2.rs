@@ -665,6 +665,8 @@ pub enum PalwSliceRefusalV2 {
     VerificationAlreadyPaid,
     #[error("5: the kernel claim reward already belongs to another root")]
     VerificationRewardBound,
+    #[error("5: the transferred kernel claim lacks provider terms or collateral covering the EXEC horizon")]
+    VerificationProviderHorizon,
 }
 
 impl PalwSliceRefusalV2 {
@@ -703,6 +705,7 @@ impl PalwSliceRefusalV2 {
             R::ExecutionScopeMismatch => 28,
             R::VerificationAlreadyPaid => 29,
             R::VerificationRewardBound => 30,
+            R::VerificationProviderHorizon => 31,
         }
     }
 
@@ -740,6 +743,7 @@ impl PalwSliceRefusalV2 {
             28 => "execution_scope_mismatch",
             29 => "verification_already_paid",
             30 => "verification_reward_bound",
+            31 => "verification_provider_horizon",
             _ => "unknown",
         }
     }

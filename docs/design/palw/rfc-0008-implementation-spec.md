@@ -914,3 +914,35 @@ contract, and its capital/retention price before activation. Supporting a sessio
 specified, bounded authorization and funding transition covering every dependency and provider; there is currently no such
 transition. A larger native class court window is not that authorization. Public native post-Final conviction, the complete
 actor matrix, pruned material and worst-case resource/latency evidence remain separate acceptance requirements.
+
+### 15.5 Provider terms and transferred post-Final material failure
+
+A provider's tag-150 lease signs a claim-specific subject, reservation and `serve_until_daa`. Tag 153 moves material
+responsibility; it does not authorize a consumer to extend that signed term. When EXEC binds an already-transferred prefix
+or slice, its providers must satisfy the existing transfer predicate again through `max(H_exec, claim.liability_until)`:
+at least two live leases of distinct non-producer operator ids, with enough total reserved collateral for the kernel claim.
+A lapsed transfer or missing producer mapping fails admission. Operator-id distinctness is not proof of real-world independence.
+Claims that have not transferred retain the producer's existing DA path; no model-artifact lease or acquisition gate is introduced.
+
+The shared slice-admission reader uses the same provider predicate as the write hook. Refusal code 31 is
+`verification_provider_horizon`; codes 0–30 are unchanged. This is a carrier lane refusal, not an error that invalidates
+an otherwise valid block. The carrier reserves no slice/index or fee entitlement, and can be retried after sufficient new
+signed leases are committed. Existing leases are neither rewritten nor lengthened, and a new lease alone does not move
+responsibility. A transfer made after consumer binding already reads the claim's rooted extended horizon under tag 153.
+
+Transferred material failure after computation Final can leave the kernel claim row in `Final` with its worker reservation
+intact. EXEC therefore reads the provider subject's `lapsed_daa` as well as the kernel claim's outcome. The verdict sync's
+journal input includes table-45 subject writes, not only claims-table writes. A transferred lapse inside the claim's
+collectible horizon defaults its prefix/slice, voids the composite root, reverses native Final evidence/weight, and burns
+all still-unreleased native/slice/kernel-fee entitlements through the existing single-settlement path. Computation conviction
+keeps priority; provider failure does not convict or slash a worker. Restore refuses a retained live/settled root whose
+provider lapse has not been propagated.
+
+Provider expiry itself is lawful and uncharged. If a transferred claim still owes material and expiry leaves no live
+provider, the claim lapses; a fully spent Final does not lapse merely because its completed leases are retired. This does
+not resurrect a released reservation or promise an extended service term.
+
+These changes do not close the complete WINDOW gate. Explicit worker authorization and the capital/retention price of
+consumer binding, provider transport/retrieval through restart and pruning, full public actor/tier evidence and worst-case
+resources remain required before activation. This section does not establish `p_check`, a conviction floor, economical
+provider independence, or 128-bit soundness. All public activation validation and fence heights remain unchanged.
