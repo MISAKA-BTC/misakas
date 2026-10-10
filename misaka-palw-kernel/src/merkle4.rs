@@ -23,9 +23,18 @@ pub const FLAT_NODE_DOMAIN_V4: &[u8] = b"misaka-palw/kernel/tensor-node/flat/v4"
 fn invalid() -> Error {
     Error::new(ErrorKind::InvalidData, "invalid bounded flat-v4 opening")
 }
-fn dtype(tag: u8) -> Option<DType> {
-    DType::ALL.into_iter().find(|d| d.tag() == tag && d.committable())
+fn allowed<const V: u8>(d: DType) -> bool {
+    V == 5 || (V == 4 && d.committable())
 }
+fn dtype<const V: u8>(tag: u8) -> Option<DType> {
+    DType::ALL.into_iter().find(|d| d.tag() == tag && allowed::<V>(*d))
+}
+fn domain<const V: u8>(v4: &'static [u8], v5: &'static [u8]) -> &'static [u8] {
+    if V == 5 { v5 } else { v4 }
+}
+pub type FlatTreeV4 = FlatTree<4>;
+pub type FlatLeafHashV4 = FlatLeafHash<4>;
+pub type FlatLeafValueV4 = FlatLeafValue<4>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FlatLayoutV4 {
@@ -61,8 +70,11 @@ impl FlatLayoutV4 {
         (element < self.elements).then(|| (element / FLAT_LEAF_ELEMENTS_V4).min(self.leaves - 1))
     }
     pub fn bounds(&self, dtype: DType) -> Option<FlatMaterialBoundsV4> {
+        self.bounds_for::<4>(dtype)
+    }
+    pub(crate) fn bounds_for<const V: u8>(&self, dtype: DType) -> Option<FlatMaterialBoundsV4> {
         let rank = self.rank;
-        if !dtype.committable() {
+        if !allowed::<V>(dtype) {
             return None;
         }
         let mut nodes = 0u128;
@@ -111,18 +123,18 @@ pub struct FlatMaterialBoundsV4 {
     pub localization_replies: u64,
 }
 
-fn leaf_state(dtype: DType, index: u64, count: usize) -> blake2b_simd::State {
-    let mut s = keyed(FLAT_LEAF_DOMAIN_V4);
+fn leaf_state<const V: u8>(dtype: DType, index: u64, count: usize) -> blake2b_simd::State {
+    let mut s = keyed(domain::<V>(FLAT_LEAF_DOMAIN_V4, b"misaka-palw/kernel/tensor-leaf/flat/v5"));
     s.update(&[dtype.tag()]).update(&index.to_le_bytes()).update(&(count as u64).to_le_bytes());
     s
 }
-fn node_hash(left: &Digest, right: &Digest) -> Digest {
-    let mut s = keyed(FLAT_NODE_DOMAIN_V4);
+fn node_hash<const V: u8>(left: &Digest, right: &Digest) -> Digest {
+    let mut s = keyed(domain::<V>(FLAT_NODE_DOMAIN_V4, b"misaka-palw/kernel/tensor-node/flat/v5"));
     s.update(left).update(right);
     finish(s)
 }
-fn commitment(dtype: DType, shape: &[u64], root: &Digest) -> Digest {
-    let mut s = keyed(FLAT_COMMITMENT_DOMAIN_V4);
+fn commitment<const V: u8>(dtype: DType, shape: &[u64], root: &Digest) -> Digest {
+    let mut s = keyed(domain::<V>(FLAT_COMMITMENT_DOMAIN_V4, b"misaka-palw/kernel/tensor/flat/v5"));
     s.update(&[dtype.tag(), shape.len() as u8]);
     for d in shape {
         s.update(&d.to_le_bytes());
@@ -131,23 +143,36 @@ fn commitment(dtype: DType, shape: &[u64], root: &Digest) -> Digest {
     finish(s)
 }
 
+/// Typed header authentication without allocating a tensor. Malformed-profile
+/// courts also need to authenticate zero/small metadata before judging its type.
+pub(crate) fn header_commitment<const V: u8>(tag: u8, shape: &[u64], root: &Digest) -> Option<Digest> {
+    let d = dtype::<V>(tag)?;
+    if shape.len() > 4 {
+        return None;
+    }
+    Some(commitment::<V>(d, shape, root))
+}
+
 /// Root-only hashing of a borrowed raw-width image. Exact shape/byte length is
 /// checked before any leaf work; hashing uses constant scratch, including ragged tails.
 pub fn flat_commitment_from_bytes_v4(dtype: DType, shape: &[u64], bytes: &[u8]) -> Result<Digest, Error> {
+    flat_commitment_from_bytes::<4>(dtype, shape, bytes)
+}
+pub(crate) fn flat_commitment_from_bytes<const V: u8>(dtype: DType, shape: &[u64], bytes: &[u8]) -> Result<Digest, Error> {
     let l = FlatLayoutV4::of(shape).ok_or_else(invalid)?;
-    if !dtype.committable() || l.elements.checked_mul(dtype.width() as u64) != Some(bytes.len() as u64) {
+    if !allowed::<V>(dtype) || l.elements.checked_mul(dtype.width() as u64) != Some(bytes.len() as u64) {
         return Err(invalid());
     }
     let mut stack = [None; 64];
     for index in 0..l.leaves {
         let (first, count) = l.span(index).ok_or_else(invalid)?;
         let start = first as usize * dtype.width();
-        let mut s = leaf_state(dtype, index, count);
+        let mut s = leaf_state::<V>(dtype, index, count);
         s.update(&bytes[start..start + count * dtype.width()]);
         let mut hash = finish(s);
         let mut level = 0;
         while let Some(left) = stack[level].take() {
-            hash = node_hash(&left, &hash);
+            hash = node_hash::<V>(&left, &hash);
             level += 1;
         }
         stack[level] = Some(hash);
@@ -156,17 +181,20 @@ pub fn flat_commitment_from_bytes_v4(dtype: DType, shape: &[u64], bytes: &[u8]) 
     for left in stack.into_iter().flatten() {
         root = Some(match root {
             None => left,
-            Some(right) => node_hash(&left, &right),
+            Some(right) => node_hash::<V>(&left, &right),
         });
     }
-    Ok(commitment(dtype, shape, &root.ok_or_else(invalid)?))
+    Ok(commitment::<V>(dtype, shape, &root.ok_or_else(invalid)?))
 }
 
 /// Root-only hashing of an already resident reference tensor, using the same
 /// fixed stack and raw-width leaf buffer; it does not retain an additional tree
 /// or allocate a full raw-width copy of the tensor.
 pub fn flat_commitment_from_tensor_v4(t: &Tensor) -> Result<Digest, Error> {
-    if t.shape.len() > misaka_palw_tir::types::MAX_RANK || !t.dtype.committable() {
+    flat_commitment_from_tensor::<4>(t)
+}
+pub(crate) fn flat_commitment_from_tensor<const V: u8>(t: &Tensor) -> Result<Digest, Error> {
+    if t.shape.len() > misaka_palw_tir::types::MAX_RANK || !allowed::<V>(t.dtype) {
         return Err(invalid());
     }
     let shape: Vec<_> = t.shape.iter().map(|d| *d as u64).collect();
@@ -185,12 +213,12 @@ pub fn flat_commitment_from_tensor_v4(t: &Tensor) -> Result<Digest, Error> {
             }
             t.dtype.encode_le(*v, &mut bytes);
         }
-        let mut s = leaf_state(t.dtype, index, count);
+        let mut s = leaf_state::<V>(t.dtype, index, count);
         s.update(&bytes);
         let mut hash = finish(s);
         let mut level = 0;
         while let Some(left) = stack[level].take() {
-            hash = node_hash(&left, &hash);
+            hash = node_hash::<V>(&left, &hash);
             level += 1;
         }
         stack[level] = Some(hash);
@@ -199,21 +227,21 @@ pub fn flat_commitment_from_tensor_v4(t: &Tensor) -> Result<Digest, Error> {
     for left in stack.into_iter().flatten() {
         root = Some(match root {
             None => left,
-            Some(right) => node_hash(&left, &right),
+            Some(right) => node_hash::<V>(&left, &right),
         });
     }
-    Ok(commitment(t.dtype, &shape, &root.ok_or_else(invalid)?))
+    Ok(commitment::<V>(t.dtype, &shape, &root.ok_or_else(invalid)?))
 }
 
 /// A model holder/producer may retain the priced tree to serve/localize paths.
 /// Path reads visit one digest per level; no full tree is copied per probe.
-pub struct FlatTreeV4 {
+pub struct FlatTree<const V: u8> {
     dtype: DType,
     shape: Vec<u64>,
     layout: FlatLayoutV4,
     levels: Vec<Vec<Digest>>,
 }
-impl FlatTreeV4 {
+impl<const V: u8> FlatTree<V> {
     pub fn from_bytes(dtype: DType, shape: &[u64], bytes: &[u8]) -> Result<Self, Error> {
         Self::from_bytes_bounded(dtype, shape, bytes, u128::MAX)
     }
@@ -221,10 +249,10 @@ impl FlatTreeV4 {
     /// digest array. A root-only caller can use the fixed-scratch function above.
     pub fn from_bytes_bounded(dtype: DType, shape: &[u64], bytes: &[u8], retained_limit: u128) -> Result<Self, Error> {
         let layout = FlatLayoutV4::of(shape).ok_or_else(invalid)?;
-        if !dtype.committable() || layout.elements.checked_mul(dtype.width() as u64) != Some(bytes.len() as u64) {
+        if !allowed::<V>(dtype) || layout.elements.checked_mul(dtype.width() as u64) != Some(bytes.len() as u64) {
             return Err(invalid());
         }
-        if layout.bounds(dtype).ok_or_else(invalid)?.retained_tree_bytes > retained_limit {
+        if layout.bounds_for::<V>(dtype).ok_or_else(invalid)?.retained_tree_bytes > retained_limit {
             return Err(invalid());
         }
         let mut leaves = Vec::new();
@@ -232,7 +260,7 @@ impl FlatTreeV4 {
         for index in 0..layout.leaves {
             let (first, count) = layout.span(index).ok_or_else(invalid)?;
             let start = first as usize * dtype.width();
-            let mut s = leaf_state(dtype, index, count);
+            let mut s = leaf_state::<V>(dtype, index, count);
             s.update(&bytes[start..start + count * dtype.width()]);
             leaves.push(finish(s));
         }
@@ -242,15 +270,15 @@ impl FlatTreeV4 {
         Self::of_bounded(t, u128::MAX)
     }
     pub fn of_bounded(t: &Tensor, retained_limit: u128) -> Result<Self, Error> {
-        if t.shape.len() > misaka_palw_tir::types::MAX_RANK || !t.dtype.committable() {
+        if t.shape.len() > misaka_palw_tir::types::MAX_RANK || !allowed::<V>(t.dtype) {
             return Err(invalid());
         }
         let shape: Vec<_> = t.shape.iter().map(|d| *d as u64).collect();
         let layout = FlatLayoutV4::of(&shape).ok_or_else(invalid)?;
-        if !t.dtype.committable() || layout.elements != t.data.len() as u64 {
+        if !allowed::<V>(t.dtype) || layout.elements != t.data.len() as u64 {
             return Err(invalid());
         }
-        if layout.bounds(t.dtype).ok_or_else(invalid)?.retained_tree_bytes > retained_limit {
+        if layout.bounds_for::<V>(t.dtype).ok_or_else(invalid)?.retained_tree_bytes > retained_limit {
             return Err(invalid());
         }
         let mut leaves = Vec::new();
@@ -265,7 +293,7 @@ impl FlatTreeV4 {
                 }
                 t.dtype.encode_le(*v, &mut bytes);
             }
-            let mut s = leaf_state(t.dtype, index, count);
+            let mut s = leaf_state::<V>(t.dtype, index, count);
             s.update(&bytes);
             leaves.push(finish(s));
         }
@@ -279,7 +307,7 @@ impl FlatTreeV4 {
             let mut next = Vec::new();
             next.try_reserve_exact(levels.last().unwrap().len().div_ceil(2)).map_err(|_| invalid())?;
             for p in levels.last().unwrap().chunks(2) {
-                next.push(if p.len() == 2 { node_hash(&p[0], &p[1]) } else { p[0] });
+                next.push(if p.len() == 2 { node_hash::<V>(&p[0], &p[1]) } else { p[0] });
             }
             levels.push(next);
         }
@@ -289,12 +317,12 @@ impl FlatTreeV4 {
         self.levels.last().unwrap()[0]
     }
     pub fn commitment(&self) -> Digest {
-        commitment(self.dtype, &self.shape, &self.root())
+        commitment::<V>(self.dtype, &self.shape, &self.root())
     }
     pub fn layout(&self) -> FlatLayoutV4 {
         self.layout
     }
-    pub fn opening(&self, index: u64) -> Option<FlatLeafHashV4> {
+    pub fn opening(&self, index: u64) -> Option<FlatLeafHash<V>> {
         self.layout.span(index)?;
         let hash = self.levels[0][usize::try_from(index).ok()?];
         let mut at = index as usize;
@@ -305,33 +333,33 @@ impl FlatTreeV4 {
             }
             at >>= 1;
         }
-        Some(FlatLeafHashV4 { dtype: self.dtype.tag(), shape: self.shape.clone(), index, hash, siblings })
+        Some(FlatLeafHash { dtype: self.dtype.tag(), shape: self.shape.clone(), index, hash, siblings })
     }
 }
 
 /// Public structure only, no elements. Metadata and position are bound through
 /// the v4 leaf domain and the typed tensor commitment; the path is exact.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
-pub struct FlatLeafHashV4 {
+pub struct FlatLeafHash<const V: u8> {
     pub dtype: u8,
     pub shape: Vec<u64>,
     pub index: u64,
     pub hash: Digest,
     pub siblings: Vec<Digest>,
 }
-impl FlatLeafHashV4 {
+impl<const V: u8> FlatLeafHash<V> {
     pub fn layout(&self) -> Option<FlatLayoutV4> {
         FlatLayoutV4::of(&self.shape)
     }
     pub fn recomputed_commitment(&self) -> Option<Digest> {
-        let dtype = dtype(self.dtype)?;
+        let dtype = dtype::<V>(self.dtype)?;
         let l = self.layout()?;
         l.span(self.index)?;
         if self.siblings.len() > 64 {
             return None;
         }
-        let root = tree_root_from_path(self.hash, self.index, l.leaves, &self.siblings, node_hash)?;
-        Some(commitment(dtype, &self.shape, &root))
+        let root = tree_root_from_path(self.hash, self.index, l.leaves, &self.siblings, node_hash::<V>)?;
+        Some(commitment::<V>(dtype, &self.shape, &root))
     }
     pub fn authenticates(&self, root: &Digest) -> bool {
         self.recomputed_commitment().is_some_and(|r| r == *root)
@@ -339,7 +367,7 @@ impl FlatLeafHashV4 {
     /// Evaluate a future leaf relation with the same leaf preimage. The caller
     /// supplies exactly the declared span; a truncated/surplus value is refused.
     pub fn matches_bytes(&self, bytes: &[u8]) -> bool {
-        let Some(dtype) = dtype(self.dtype) else {
+        let Some(dtype) = dtype::<V>(self.dtype) else {
             return false;
         };
         let Some((_, count)) = self.layout().and_then(|l| l.span(self.index)) else {
@@ -348,14 +376,14 @@ impl FlatLeafHashV4 {
         if bytes.len() != count * dtype.width() {
             return false;
         }
-        let mut s = leaf_state(dtype, self.index, count);
+        let mut s = leaf_state::<V>(dtype, self.index, count);
         s.update(bytes);
         finish(s) == self.hash
     }
     /// A public reply is authenticated before comparing it with the model
     /// holder's expected tree. Bottom-up sibling comparisons select a strictly
     /// smaller divergent branch, including carried odd leaves.
-    pub fn descend(&self, actual: &Digest, expected: &FlatTreeV4) -> Result<FlatDescentV4, Error> {
+    pub fn descend(&self, actual: &Digest, expected: &FlatTree<V>) -> Result<FlatDescentV4, Error> {
         if !self.authenticates(actual) || self.dtype != expected.dtype.tag() || self.shape != expected.shape {
             return Err(invalid());
         }
@@ -392,10 +420,10 @@ pub enum FlatDescentV4 {
     DivergentLeaf(u64),
 }
 
-impl BorshDeserialize for FlatLeafHashV4 {
+impl<const V: u8> BorshDeserialize for FlatLeafHash<V> {
     fn deserialize_reader<R: Read>(r: &mut R) -> std::io::Result<Self> {
         let tag = u8::deserialize_reader(r)?;
-        dtype(tag).ok_or_else(invalid)?;
+        dtype::<V>(tag).ok_or_else(invalid)?;
         let rank = u32::deserialize_reader(r)? as usize;
         if rank > misaka_palw_tir::types::MAX_RANK {
             return Err(invalid());
@@ -418,12 +446,12 @@ impl BorshDeserialize for FlatLeafHashV4 {
 
 /// A filer-owned operand leaf, distinct from public hash-only material.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
-pub struct FlatLeafValueV4 {
-    pub opening: FlatLeafHashV4,
+pub struct FlatLeafValue<const V: u8> {
+    pub opening: FlatLeafHash<V>,
     pub bytes: Vec<u8>,
 }
-impl FlatLeafValueV4 {
-    pub fn of(t: &Tensor, tree: &FlatTreeV4, index: u64) -> Option<Self> {
+impl<const V: u8> FlatLeafValue<V> {
+    pub fn of(t: &Tensor, tree: &FlatTree<V>, index: u64) -> Option<Self> {
         if t.dtype != tree.dtype
             || t.shape.len() != tree.shape.len()
             || t.shape.iter().zip(&tree.shape).any(|(a, b)| *a as u64 != *b)
@@ -446,7 +474,7 @@ impl FlatLeafValueV4 {
         self.opening.authenticates(commitment) && self.opening.matches_bytes(&self.bytes)
     }
     pub fn elements(&self) -> Option<Vec<(u64, i128)>> {
-        let dtype = dtype(self.opening.dtype)?;
+        let dtype = dtype::<V>(self.opening.dtype)?;
         let (first, count) = self.opening.layout()?.span(self.opening.index)?;
         if !self.opening.matches_bytes(&self.bytes) {
             return None;
@@ -461,13 +489,13 @@ impl FlatLeafValueV4 {
         )
     }
 }
-impl BorshDeserialize for FlatLeafValueV4 {
+impl<const V: u8> BorshDeserialize for FlatLeafValue<V> {
     fn deserialize_reader<R: Read>(r: &mut R) -> std::io::Result<Self> {
-        let opening = FlatLeafHashV4::deserialize_reader(r)?;
-        let dtype = dtype(opening.dtype).ok_or_else(invalid)?;
+        let opening = FlatLeafHash::<V>::deserialize_reader(r)?;
+        let dtype = dtype::<V>(opening.dtype).ok_or_else(invalid)?;
         let (_, count) = opening.layout().and_then(|l| l.span(opening.index)).ok_or_else(invalid)?;
         let len = u32::deserialize_reader(r)? as usize;
-        if len != count * dtype.width() || len > FLAT_LEAF_MAX_ELEMENTS_V4 * 4 {
+        if len != count * dtype.width() || len > FLAT_LEAF_MAX_ELEMENTS_V4 * if V == 5 { 16 } else { 4 } {
             return Err(invalid());
         }
         let mut bytes = vec![0; len];

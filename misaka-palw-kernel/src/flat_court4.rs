@@ -20,7 +20,7 @@ use crate::element::{
 use crate::hash::{Digest, finish, keyed};
 use crate::merkle::AXIS_ROW;
 use crate::merkle3::{LayoutV3, LeafOpeningV3, tensor_commitment_v3};
-use crate::merkle4::{FlatLayoutV4, FlatLeafHashV4, FlatLeafValueV4};
+use crate::merkle4::{FlatLayoutV4, FlatLeafHash, FlatLeafValue};
 use crate::seg::{NodeOpeningV1, PROMPT_TILE_IDS_V1, PromptTileOpeningV1};
 use crate::trace::SourceV1;
 use crate::verify::DismissalV1;
@@ -33,27 +33,39 @@ pub const FLAT_FAULT_MAX_LEAVES_V4: usize = 1024;
 pub const FLAT_FAULT_VERSION_V4: u16 = 4;
 
 pub fn flat_trace_profile_id_v4() -> Digest {
-    let mut s = keyed(b"misaka-palw/kernel/flat-trace-profile/v4");
-    s.update(b"committable>=64:flat-v4/64-tail-merge-127;other-node:v3;params:v3;semantics:tir-v1;operand-row-only;fault-v4;bounds:dependency-union-v1/1MiB/2^30/32MiB/1024");
+    profile_id::<4>()
+}
+pub(crate) fn profile_id<const V: u8>() -> Digest {
+    let mut s = keyed(if V == 5 { b"misaka-palw/kernel/flat-trace-profile/v5" } else { b"misaka-palw/kernel/flat-trace-profile/v4" });
+    if V == 5 {
+        s.update(b"all-internal>=64:flat-v5/64-tail-merge-127;small-node:v3-whole;params:v3;semantics:tir-v1;operand-row-only;fault-set-v5;bounds:dependency-union-v1/1MiB/2^30/32MiB/1024");
+    } else {
+        s.update(b"committable>=64:flat-v4/64-tail-merge-127;other-node:v3;params:v3;semantics:tir-v1;operand-row-only;fault-v4;bounds:dependency-union-v1/1MiB/2^30/32MiB/1024");
+    }
     finish(s)
 }
-
+pub type FlatSegContextV4<'a> = FlatSegContext<'a, 4>;
+pub type FlatOperandV4 = FlatOperand<4>;
+pub type FlatLeafFaultV4 = FlatLeafFault<4>;
 /// Explicit opt-in context; an existing v4/v5 claim cannot implicitly select it.
-pub struct FlatSegContextV4<'a> {
+pub struct FlatSegContext<'a, const V: u8> {
     pub profile: Digest,
     pub claim: SegClaimContextV1<'a>,
 }
 
-fn uses_flat(dtype: DType, shape: &[usize]) -> bool {
-    dtype.committable() && LayoutV3::try_of(shape).is_some_and(|l| l.len >= 64)
+pub(crate) fn uses_flat<const V: u8>(dtype: DType, shape: &[usize]) -> bool {
+    (V == 5 || (V == 4 && dtype.committable())) && LayoutV3::try_of(shape).is_some_and(|l| l.len >= 64)
 }
 /// Producer/model-holder construction under this profile, never a v3 replacement.
 pub fn flat_profile_commitment_v4(t: &Tensor) -> Result<Digest, io::Error> {
+    profile_commitment::<4>(t)
+}
+pub(crate) fn profile_commitment<const V: u8>(t: &Tensor) -> Result<Digest, io::Error> {
     if t.shape.len() > 4 || t.shape.contains(&0) {
         return Err(invalid());
     }
-    if uses_flat(t.dtype, &t.shape) {
-        crate::merkle4::flat_commitment_from_tensor_v4(t)
+    if uses_flat::<V>(t.dtype, &t.shape) {
+        crate::merkle4::flat_commitment_from_tensor::<V>(t)
     } else {
         if t.shape.len() > 4
             || LayoutV3::try_of(&t.shape).is_none_or(|l| l.len != t.data.len() as u64)
@@ -66,19 +78,19 @@ pub fn flat_profile_commitment_v4(t: &Tensor) -> Result<Digest, io::Error> {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize)]
-pub struct FlatOperandV4 {
+pub struct FlatOperand<const V: u8> {
     pub node: Option<NodeOpeningV1>,
     /// Exactly one grammar is permitted by the source's declared type/profile.
-    pub flat: Vec<FlatLeafValueV4>,
+    pub flat: Vec<FlatLeafValue<V>>,
     pub legacy: Vec<LeafOpeningV3>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
-pub struct FlatLeafFaultV4 {
+pub struct FlatLeafFault<const V: u8> {
     pub version: u16,
     pub output: NodeOpeningV1,
     /// No output values are included in the filing.
-    pub leaf: FlatLeafHashV4,
-    pub inputs: Vec<FlatOperandV4>,
+    pub leaf: FlatLeafHash<V>,
+    pub inputs: Vec<FlatOperand<V>>,
     pub token: Option<PromptTileOpeningV1>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,9 +117,10 @@ fn na(message: &str) -> DismissalV1 {
 fn shape64(shape: &[usize]) -> Vec<u64> {
     shape.iter().map(|x| *x as u64).collect()
 }
-fn prepare<'a>(c: &FlatSegContextV4<'a>) -> Result<PreparedV1<'a>, DismissalV1> {
+pub(crate) fn prepare<'a, const V: u8>(c: &FlatSegContext<'a, V>) -> Result<PreparedV1<'a>, DismissalV1> {
     let q = &c.claim;
-    if c.profile != flat_trace_profile_id_v4()
+    if (V != 4 && V != 5)
+        || c.profile != profile_id::<V>()
         || q.positions == 0
         || q.positions > q.program.history_bound
         || q.positions > misaka_palw_tir::program::HISTORY_BOUND_V1_HELD
@@ -139,10 +152,15 @@ fn prepare<'a>(c: &FlatSegContextV4<'a>) -> Result<PreparedV1<'a>, DismissalV1> 
     }
     PreparedV1::without_scope(q.program, q.encoder.as_ref()).map_err(DismissalV1::NotAuthentic)
 }
-fn valid_at(c: &FlatSegContextV4<'_>, pr: &PreparedV1<'_>, p: u32, s: u16, n: u16) -> bool {
+fn valid_at<const V: u8>(c: &FlatSegContext<'_, V>, pr: &PreparedV1<'_>, p: u32, s: u16, n: u16) -> bool {
     p < c.claim.positions && pr.valid(s, n)
 }
-fn authenticate_node(c: &FlatSegContextV4<'_>, pr: &PreparedV1<'_>, o: &NodeOpeningV1, at: (u32, u16, u16)) -> bool {
+pub(crate) fn authenticate_node<const V: u8>(
+    c: &FlatSegContext<'_, V>,
+    pr: &PreparedV1<'_>,
+    o: &NodeOpeningV1,
+    at: (u32, u16, u16),
+) -> bool {
     (o.position, o.occurrence, o.node) == at
         && valid_at(c, pr, at.0, at.1, at.2)
         && o.authenticates(c.claim.segment_roots, c.claim.positions, pr.index(at.1, at.2), pr.node_count)
@@ -151,8 +169,8 @@ fn authenticate_node(c: &FlatSegContextV4<'_>, pr: &PreparedV1<'_>, o: &NodeOpen
 /// Per-leaf bound derived without evaluating, allocating or hashing a tensor.
 /// Counts unique dependency leaves rather than whole source tensors. Bounds are
 /// conservative for strided relations; the prover deduplicates the actual union.
-pub fn flat_leaf_court_bounds_v4(
-    c: &FlatSegContextV4<'_>,
+pub(crate) fn leaf_bounds<const V: u8>(
+    c: &FlatSegContext<'_, V>,
     p: u32,
     s: u16,
     n: u16,
@@ -161,8 +179,8 @@ pub fn flat_leaf_court_bounds_v4(
     let pr = prepare(c)?;
     bounds(c, &pr, p, s, n, index)
 }
-fn bounds(
-    c: &FlatSegContextV4<'_>,
+pub(crate) fn bounds<const V: u8>(
+    c: &FlatSegContext<'_, V>,
     pr: &PreparedV1<'_>,
     p: u32,
     s: u16,
@@ -174,14 +192,30 @@ fn bounds(
     }
     let node = pr.w.node(s, n);
     let sh = pr.shapes(p, s, n);
-    if !uses_flat(node.out.dtype, &sh.out) {
+    if !uses_flat::<V>(node.out.dtype, &sh.out) {
         return Err(na("output does not use flat profile"));
     }
     let layout = FlatLayoutV4::of(&shape64(&sh.out)).ok_or_else(|| na("invalid output shape"))?;
     let (_, count) = layout.span(index).ok_or_else(|| na("no such output leaf"))?;
-    let material = layout.bounds(node.out.dtype).ok_or_else(|| na("invalid output dtype"))?;
+    let material = layout.bounds_for::<V>(node.out.dtype).ok_or_else(|| na("invalid output dtype"))?;
+    relation_bounds(c, pr, p, s, n, count as u64, material.leaf_hash_bytes)
+}
+pub(crate) fn relation_bounds<const V: u8>(
+    c: &FlatSegContext<'_, V>,
+    pr: &PreparedV1<'_>,
+    p: u32,
+    s: u16,
+    n: u16,
+    count: u64,
+    output_bytes: u64,
+) -> Result<FlatCourtBoundsV4, DismissalV1> {
+    if !valid_at(c, pr, p, s, n) {
+        return Err(na("no such relation"));
+    }
+    let node = pr.w.node(s, n);
+    let sh = pr.shapes(p, s, n);
     let sources = operand_sources(pr, p, s, n).map_err(DismissalV1::NotAuthentic)?;
-    let mut bytes = 2 + node_opening_bytes_v1(pr.node_count) + material.leaf_hash_bytes + 4 + 1;
+    let mut bytes = 2 + node_opening_bytes_v1(pr.node_count) + output_bytes + 4 + 1;
     let program_bytes =
         size_with_limit(c.claim.program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64).map_err(|_| na("oversized program"))?;
     // Canonical parsing/type validation and the unrolled source-writer scan are
@@ -198,7 +232,7 @@ fn bounds(
         let mut flat = false;
         let committed = match src {
             OperandSourceV1::Source(SourceV1::Node { .. }) => {
-                flat = uses_flat(dtype, shape);
+                flat = uses_flat::<V>(dtype, shape);
                 bytes += node_opening_bytes_v1(pr.node_count);
                 true
             }
@@ -236,7 +270,7 @@ fn bounds(
         let l = LayoutV3::of(shape);
         let (all, max_value, leaf_bytes) = if flat {
             let f = FlatLayoutV4::of(&shape64(shape)).ok_or_else(|| na("invalid input shape"))?;
-            let b = f.bounds(dtype).ok_or_else(|| na("invalid input dtype"))?;
+            let b = f.bounds_for::<V>(dtype).ok_or_else(|| na("invalid input dtype"))?;
             (f.leaves(), b.leaf_elements, b.leaf_value_bytes)
         } else {
             let values = l.row_len.min(crate::merkle3::TILE_V3);
@@ -295,14 +329,14 @@ enum LookupLayout {
     Flat(FlatLayoutV4),
     Legacy(LayoutV3),
 }
-enum Input<'a> {
-    Proof(&'a FlatOperandV4, DType, LookupLayout),
+enum Input<'a, const V: u8> {
+    Proof(&'a FlatOperand<V>, DType, LookupLayout),
     Full(Tensor),
     Zeros,
     Scalar(i128),
 }
-struct Inputs<'a>(Vec<Input<'a>>);
-impl OperandsV1 for Inputs<'_> {
+pub(crate) struct Inputs<'a, const V: u8>(Vec<Input<'a, V>>);
+impl<const V: u8> OperandsV1 for Inputs<'_, V> {
     fn get(&self, operand: usize, e: u64) -> Result<i128, MissingV1> {
         let missing = MissingV1(operand, e);
         match self.0.get(operand) {
@@ -326,15 +360,32 @@ impl OperandsV1 for Inputs<'_> {
     }
 }
 
+pub(crate) fn value_in_opening<const V: u8>(o: &FlatOperand<V>, dtype: DType, shape: &[usize], e: u64) -> Option<i128> {
+    let l = if uses_flat::<V>(dtype, shape) {
+        LookupLayout::Flat(FlatLayoutV4::of(&shape64(shape))?)
+    } else {
+        LookupLayout::Legacy(LayoutV3::try_of(shape)?)
+    };
+    Inputs(vec![Input::Proof(o, dtype, l)]).get(0, e).ok()
+}
+
 /// A terminal hash-leaf relation court; it never accepts producer output values.
 /// Missing/borrowed/malformed/overbudget operands dismiss, not convict.
-pub fn verify_flat_leaf_fault_v4(c: &FlatSegContextV4<'_>, f: &FlatLeafFaultV4) -> Result<FlatLeafConvictionV4, DismissalV1> {
-    if f.version != FLAT_FAULT_VERSION_V4 {
+pub(crate) fn verify_leaf<const V: u8>(c: &FlatSegContext<'_, V>, f: &FlatLeafFault<V>) -> Result<FlatLeafConvictionV4, DismissalV1> {
+    if f.version != V as u16 {
         return Err(na("unsupported flat fault version"));
     }
     structural(f).map_err(|_| na("malformed bounded flat fault"))?;
     let wire = size_with_limit(f, FLAT_FAULT_MAX_BYTES_V4).map_err(|_| na("flat filing exceeds byte cap or has no wire form"))?;
     let pr = prepare(c)?;
+    verify_leaf_prepared(c, &pr, f, wire)
+}
+pub(crate) fn verify_leaf_prepared<const V: u8>(
+    c: &FlatSegContext<'_, V>,
+    pr: &PreparedV1<'_>,
+    f: &FlatLeafFault<V>,
+    wire: u64,
+) -> Result<FlatLeafConvictionV4, DismissalV1> {
     let (p, s, n) = (f.output.position, f.output.occurrence, f.output.node);
     let b = bounds(c, &pr, p, s, n, f.leaf.index)?;
     if wire > b.filing_bytes || !authenticate_node(c, &pr, &f.output, (p, s, n)) {
@@ -345,13 +396,39 @@ pub fn verify_flat_leaf_fault_v4(c: &FlatSegContextV4<'_>, f: &FlatLeafFaultV4) 
     if f.leaf.dtype != node.out.dtype.tag() || f.leaf.shape != shape64(&sh.out) || !f.leaf.authenticates(&f.output.commitment) {
         return Err(na("output hash is not the declared committed value"));
     }
-    let sources = operand_sources(&pr, p, s, n).map_err(DismissalV1::NotAuthentic)?;
-    if f.inputs.len() != sources.len() {
+    let ops = authenticate_inputs(c, &pr, p, s, n, &f.inputs, &f.token, &b.operand_leaves)?;
+    let (first, count) = f.leaf.layout().and_then(|l| l.span(f.leaf.index)).ok_or_else(|| na("invalid leaf span"))?;
+    let mut bytes = Vec::with_capacity(count * node.out.dtype.width());
+    let conviction = FlatLeafConvictionV4 { position: p, occurrence: s, node: n, leaf: f.leaf.index };
+    for e in first..first + count as u64 {
+        match element_value_v1(c.claim.program, node, &sh, e, &ops) {
+            Err(_) => return Err(na("dependency not opened")),
+            Ok(None) => return Ok(conviction),
+            Ok(Some(v)) if node.out.dtype.contains(v) => node.out.dtype.encode_le(v, &mut bytes),
+            Ok(Some(_)) => return Ok(conviction),
+        }
+    }
+    if f.leaf.matches_bytes(&bytes) { Err(DismissalV1::NoFault) } else { Ok(conviction) }
+}
+
+pub(crate) fn authenticate_inputs<'f, const V: u8>(
+    c: &FlatSegContext<'_, V>,
+    pr: &PreparedV1<'_>,
+    p: u32,
+    s: u16,
+    n: u16,
+    openings: &'f [FlatOperand<V>],
+    token: &Option<PromptTileOpeningV1>,
+    limits: &[u64],
+) -> Result<Inputs<'f, V>, DismissalV1> {
+    let sh = pr.shapes(p, s, n);
+    let sources = operand_sources(pr, p, s, n).map_err(DismissalV1::NotAuthentic)?;
+    if openings.len() != sources.len() || limits.len() != sources.len() {
         return Err(na("wrong operand count"));
     }
     let mut inputs = Vec::with_capacity(sources.len());
-    for (i, (src, o)) in sources.iter().zip(&f.inputs).enumerate() {
-        if o.flat.len() + o.legacy.len() > b.operand_leaves[i] as usize {
+    for (i, (src, o)) in sources.iter().zip(openings).enumerate() {
+        if o.flat.len() + o.legacy.len() > limits[i] as usize {
             return Err(na("operand exceeds dependency leaf bound"));
         }
         let mut root = None;
@@ -363,7 +440,7 @@ pub fn verify_flat_leaf_fault_v4(c: &FlatSegContextV4<'_>, f: &FlatLeafFaultV4) 
                     return Err(na("borrowed operand node"));
                 }
                 root = Some(opening.commitment);
-                flat = uses_flat(sh.in_dtypes[i], &sh.inputs[i]);
+                flat = uses_flat::<V>(sh.in_dtypes[i], &sh.inputs[i]);
             }
             OperandSourceV1::Source(SourceV1::Param { index, layer }) => {
                 if o.node.is_some() {
@@ -406,7 +483,7 @@ pub fn verify_flat_leaf_fault_v4(c: &FlatSegContextV4<'_>, f: &FlatLeafFaultV4) 
         }
         inputs.push(match src {
             OperandSourceV1::Token => Input::Scalar(
-                token_at(&c.claim, p, f.token.as_ref())
+                token_at(&c.claim, p, token.as_ref())
                     .filter(|t| *t < c.claim.program.token_bound)
                     .ok_or_else(|| na("missing bound token"))? as i128,
             ),
@@ -424,8 +501,7 @@ pub fn verify_flat_leaf_fault_v4(c: &FlatSegContextV4<'_>, f: &FlatLeafFaultV4) 
                     let ids = if let Some(ids) = c.claim.inline_prompt {
                         ids
                     } else {
-                        let t = f
-                            .token
+                        let t = token
                             .as_ref()
                             .filter(|t| {
                                 t.index == 0
@@ -446,19 +522,7 @@ pub fn verify_flat_leaf_fault_v4(c: &FlatSegContextV4<'_>, f: &FlatLeafFaultV4) 
             _ => return Err(na("unbound operand")),
         });
     }
-    let (first, count) = f.leaf.layout().and_then(|l| l.span(f.leaf.index)).ok_or_else(|| na("invalid leaf span"))?;
-    let mut bytes = Vec::with_capacity(count * node.out.dtype.width());
-    let ops = Inputs(inputs);
-    let conviction = FlatLeafConvictionV4 { position: p, occurrence: s, node: n, leaf: f.leaf.index };
-    for e in first..first + count as u64 {
-        match element_value_v1(c.claim.program, node, &sh, e, &ops) {
-            Err(_) => return Err(na("dependency not opened")),
-            Ok(None) => return Ok(conviction),
-            Ok(Some(v)) if node.out.dtype.contains(v) => node.out.dtype.encode_le(v, &mut bytes),
-            Ok(Some(_)) => return Ok(conviction),
-        }
-    }
-    if f.leaf.matches_bytes(&bytes) { Err(DismissalV1::NoFault) } else { Ok(conviction) }
+    Ok(Inputs(inputs))
 }
 
 struct SizeWriter {
@@ -474,27 +538,37 @@ impl Write for SizeWriter {
         Ok(())
     }
 }
-fn size_with_limit<T: BorshSerialize>(v: &T, limit: u64) -> io::Result<u64> {
+pub(crate) fn size_with_limit<T: BorshSerialize>(v: &T, limit: u64) -> io::Result<u64> {
     let mut w = SizeWriter { len: 0, limit };
     v.serialize(&mut w)?;
     Ok(w.len)
 }
-fn structural(f: &FlatLeafFaultV4) -> io::Result<()> {
-    if f.version != FLAT_FAULT_VERSION_V4 {
+pub(crate) fn structural<const V: u8>(f: &FlatLeafFault<V>) -> io::Result<()> {
+    if f.version != V as u16 {
         return Err(invalid());
     }
+    if f.leaf.shape.len() > 4 || f.leaf.siblings.len() > 64 {
+        return Err(invalid());
+    }
+    parts_structure(Some(&f.output), &f.inputs, &f.token)
+}
+pub(crate) fn parts_structure<const V: u8>(
+    output: Option<&NodeOpeningV1>,
+    inputs: &[FlatOperand<V>],
+    token: &Option<PromptTileOpeningV1>,
+) -> io::Result<()> {
     let node_ok = |n: &NodeOpeningV1| n.node_siblings.len() <= 64 && n.position_siblings.len() <= 10;
-    if f.inputs.len() > 9 || !node_ok(&f.output) || f.leaf.shape.len() > 4 || f.leaf.siblings.len() > 64 {
+    if inputs.len() > 9 || output.is_some_and(|n| !node_ok(n)) {
         return Err(invalid());
     }
     let mut leaves = 0usize;
-    for o in &f.inputs {
+    for o in inputs {
         leaves = leaves.checked_add(o.flat.len()).and_then(|n| n.checked_add(o.legacy.len())).ok_or_else(invalid)?;
         if leaves > FLAT_FAULT_MAX_LEAVES_V4 || o.node.as_ref().is_some_and(|n| !node_ok(n)) {
             return Err(invalid());
         }
         for l in &o.flat {
-            if l.opening.shape.len() > 4 || l.opening.siblings.len() > 64 || l.bytes.len() > 508 {
+            if l.opening.shape.len() > 4 || l.opening.siblings.len() > 64 || l.bytes.len() > 127 * if V == 5 { 16 } else { 4 } {
                 return Err(invalid());
             }
         }
@@ -504,13 +578,13 @@ fn structural(f: &FlatLeafFaultV4) -> io::Result<()> {
             }
         }
     }
-    if f.token.as_ref().is_some_and(|t| t.ids.len() > PROMPT_TILE_IDS_V1 || t.siblings.len() > 10) {
+    if token.as_ref().is_some_and(|t| t.ids.len() > PROMPT_TILE_IDS_V1 || t.siblings.len() > 10) {
         return Err(invalid());
     }
     Ok(())
 }
 
-fn vector<R: Read, T>(r: &mut R, max: usize, mut get: impl FnMut(&mut R) -> io::Result<T>) -> io::Result<Vec<T>> {
+pub(crate) fn vector<R: Read, T>(r: &mut R, max: usize, mut get: impl FnMut(&mut R) -> io::Result<T>) -> io::Result<Vec<T>> {
     let count = u32::deserialize_reader(r)? as usize;
     if count > max {
         return Err(invalid());
@@ -522,14 +596,14 @@ fn vector<R: Read, T>(r: &mut R, max: usize, mut get: impl FnMut(&mut R) -> io::
     }
     Ok(out)
 }
-fn optional<R: Read, T>(r: &mut R, get: impl FnOnce(&mut R) -> io::Result<T>) -> io::Result<Option<T>> {
+pub(crate) fn optional<R: Read, T>(r: &mut R, get: impl FnOnce(&mut R) -> io::Result<T>) -> io::Result<Option<T>> {
     match u8::deserialize_reader(r)? {
         0 => Ok(None),
         1 => get(r).map(Some),
         _ => Err(invalid()),
     }
 }
-fn read_node<R: Read>(r: &mut R) -> io::Result<NodeOpeningV1> {
+pub(crate) fn read_node<R: Read>(r: &mut R) -> io::Result<NodeOpeningV1> {
     Ok(NodeOpeningV1 {
         position: u32::deserialize_reader(r)?,
         occurrence: u16::deserialize_reader(r)?,
@@ -540,7 +614,7 @@ fn read_node<R: Read>(r: &mut R) -> io::Result<NodeOpeningV1> {
         position_siblings: vector(r, 10, Digest::deserialize_reader)?,
     })
 }
-fn read_legacy<R: Read>(r: &mut R) -> io::Result<LeafOpeningV3> {
+pub(crate) fn read_legacy<R: Read>(r: &mut R) -> io::Result<LeafOpeningV3> {
     let tag = u8::deserialize_reader(r)?;
     let dtype = DType::ALL.into_iter().find(|d| d.tag() == tag).ok_or_else(invalid)?;
     let shape = vector(r, 4, u64::deserialize_reader)?;
@@ -572,7 +646,7 @@ fn read_legacy<R: Read>(r: &mut R) -> io::Result<LeafOpeningV3> {
     out.recomputed_commitment().ok_or_else(invalid)?;
     Ok(out)
 }
-impl FlatLeafFaultV4 {
+impl<const V: u8> FlatLeafFault<V> {
     /// Bounded exact codec: every vector count is checked before allocation.
     pub fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
         if bytes.len() as u64 > FLAT_FAULT_MAX_BYTES_V4 {
@@ -580,19 +654,19 @@ impl FlatLeafFaultV4 {
         }
         let mut r = Cursor::new(bytes);
         let version = u16::deserialize_reader(&mut r)?;
-        if version != FLAT_FAULT_VERSION_V4 {
+        if version != V as u16 {
             return Err(invalid());
         }
         let output = read_node(&mut r)?;
-        let leaf = FlatLeafHashV4::deserialize_reader(&mut r)?;
+        let leaf = FlatLeafHash::<V>::deserialize_reader(&mut r)?;
         let mut total = 0;
         let inputs = vector(&mut r, 9, |r| {
             let node = optional(r, read_node)?;
-            let flat = vector(r, FLAT_FAULT_MAX_LEAVES_V4 - total, FlatLeafValueV4::deserialize_reader)?;
+            let flat = vector(r, FLAT_FAULT_MAX_LEAVES_V4 - total, FlatLeafValue::<V>::deserialize_reader)?;
             total += flat.len();
             let legacy = vector(r, FLAT_FAULT_MAX_LEAVES_V4 - total, read_legacy)?;
             total += legacy.len();
-            Ok(FlatOperandV4 { node, flat, legacy })
+            Ok(FlatOperand { node, flat, legacy })
         })?;
         let token = optional(&mut r, |r| {
             Ok(PromptTileOpeningV1 {
@@ -624,8 +698,8 @@ pub struct FlatDependencyUnionV4 {
     pub leaves: Vec<Vec<(u64, u64)>>,
     pub reference_refuses: bool,
 }
-pub fn flat_leaf_dependencies_v4(
-    c: &FlatSegContextV4<'_>,
+pub(crate) fn leaf_dependencies<const V: u8>(
+    c: &FlatSegContext<'_, V>,
     p: u32,
     s: u16,
     n: u16,
@@ -634,6 +708,21 @@ pub fn flat_leaf_dependencies_v4(
 ) -> Result<FlatDependencyUnionV4, DismissalV1> {
     let pr = prepare(c)?;
     let b = bounds(c, &pr, p, s, n, index)?;
+    let sh = pr.shapes(p, s, n);
+    let (first, count) = FlatLayoutV4::of(&shape64(&sh.out)).and_then(|l| l.span(index)).ok_or_else(|| na("no output span"))?;
+    record_span(c, &pr, p, s, n, first, count, own_inputs, b)
+}
+pub(crate) fn record_span<const V: u8>(
+    c: &FlatSegContext<'_, V>,
+    pr: &PreparedV1<'_>,
+    p: u32,
+    s: u16,
+    n: u16,
+    first: u64,
+    count: usize,
+    own_inputs: &[Tensor],
+    b: FlatCourtBoundsV4,
+) -> Result<FlatDependencyUnionV4, DismissalV1> {
     let sh = pr.shapes(p, s, n);
     let src = operand_sources(&pr, p, s, n).map_err(DismissalV1::NotAuthentic)?;
     if own_inputs.len() != src.len()
@@ -679,7 +768,7 @@ pub fn flat_leaf_dependencies_v4(
         .enumerate()
         .map(|(i, s)| match s {
             OperandSourceV1::Source(SourceV1::Node { .. }) => {
-                if uses_flat(sh.in_dtypes[i], &sh.inputs[i]) {
+                if uses_flat::<V>(sh.in_dtypes[i], &sh.inputs[i]) {
                     2
                 } else {
                     1
@@ -691,7 +780,7 @@ pub fn flat_leaf_dependencies_v4(
         .collect();
     let ops =
         Recording { tensors: own_inputs, kinds, reads: RefCell::new(vec![BTreeSet::new(); src.len()]), limits: b.operand_leaves };
-    let (first, count) = FlatLayoutV4::of(&shape64(&sh.out)).and_then(|l| l.span(index)).ok_or_else(|| na("no output span"))?;
+
     let mut reference_refuses = false;
     for e in first..first + count as u64 {
         match element_value_v1(c.claim.program, pr.w.node(s, n), &sh, e, &ops) {
@@ -709,11 +798,33 @@ pub fn flat_leaf_dependencies_v4(
     })
 }
 
+pub fn flat_leaf_court_bounds_v4(
+    c: &FlatSegContextV4<'_>,
+    p: u32,
+    s: u16,
+    n: u16,
+    index: u64,
+) -> Result<FlatCourtBoundsV4, DismissalV1> {
+    leaf_bounds::<4>(c, p, s, n, index)
+}
+pub fn verify_flat_leaf_fault_v4(c: &FlatSegContextV4<'_>, f: &FlatLeafFaultV4) -> Result<FlatLeafConvictionV4, DismissalV1> {
+    verify_leaf::<4>(c, f)
+}
+pub fn flat_leaf_dependencies_v4(
+    c: &FlatSegContextV4<'_>,
+    p: u32,
+    s: u16,
+    n: u16,
+    index: u64,
+    own_inputs: &[Tensor],
+) -> Result<FlatDependencyUnionV4, DismissalV1> {
+    leaf_dependencies::<4>(c, p, s, n, index, own_inputs)
+}
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::job::DecodeRuleV1;
-    use crate::merkle4::FlatTreeV4;
+    use crate::merkle4::{FlatLeafHashV4, FlatLeafValueV4, FlatTreeV4};
     use crate::seg::{SegmentedCommitmentsV1, prompt_root_of_ids_v1};
     use crate::trace::{ParamCommitmentsV1, TraceV1, trace_v1};
     use misaka_palw_tir::builder::ProgramBuilder;
@@ -805,7 +916,7 @@ mod tests {
                         OperandSourceV1::Source(SourceV1::Param { .. }) => {}
                         _ => return o,
                     }
-                    if o.node.is_some() && uses_flat(t.dtype, &t.shape) {
+                    if o.node.is_some() && uses_flat::<4>(t.dtype, &t.shape) {
                         let tree = FlatTreeV4::of(t).unwrap();
                         o.flat = reads.into_iter().map(|(index, _)| FlatLeafValueV4::of(t, &tree, index).unwrap()).collect();
                     } else {
@@ -827,7 +938,7 @@ mod tests {
             }
         }
     }
-    fn identity(n: u32) -> (TirProgramV1, MapParams) {
+    pub(crate) fn identity(n: u32) -> (TirProgramV1, MapParams) {
         let mut b = ProgramBuilder::new(4, HISTORY_BOUND_V1_SMALL);
         let weight = b.param("unknown-party.weight", DType::I16, &[n], false);
         let mut pre = b.block("pre", vec![]);
@@ -974,7 +1085,7 @@ mod tests {
         trial.program = pb.finish(pre, vec![], post, 0);
         assert!(flat_leaf_court_bounds_v4(&trial.context(), 0, 0, 0, 0).is_err());
     }
-    fn primitive_fixture(tag: u8) -> (TirProgramV1, MapParams, u16) {
+    pub(crate) fn primitive_fixture(tag: u8) -> (TirProgramV1, MapParams, u16) {
         let mut pb = ProgramBuilder::new(4, HISTORY_BOUND_V1_SMALL);
         let ashape = match tag {
             0 => vec![129],
@@ -1087,7 +1198,7 @@ mod tests {
         }
         assert_eq!(covered.len(), 23);
     }
-    fn state_fixture() -> (TirProgramV1, MapParams, u16, u16) {
+    pub(crate) fn state_fixture() -> (TirProgramV1, MapParams, u16, u16) {
         let mut pb = ProgramBuilder::new(4, HISTORY_BOUND_V1_SMALL);
         let state = pb.fixed_state("accumulator", DType::I16, &[129], -20, 20, false);
         let hist = pb.hist_state("history", DType::I16, &[129], 2, false);

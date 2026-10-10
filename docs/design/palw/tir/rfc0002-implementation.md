@@ -1694,3 +1694,22 @@ with only formatting of shared wiring afterward. The final 17 targeted cases
 cover the final flat implementation. Commands, exact names, source/binary
 hashes, logs, timing and limits are in `evidence/rfc02-flat-court-v4-verdict.json`.
 No actual-node flat-profile or full RFC02 completion is claimed.
+
+### Staged all-dtype flat-v5 fault courts — 2026-10-11
+
+RFC02 §14.23 adds a separate internal evidence profile for every node dtype.
+Large I64/I128 intermediates now use bounded flat leaves as well; wide commit
+points remain prohibited. Small nodes use a whole-value relation court.
+Authenticated malformed headers and greedy decode faults have separate courts,
+with position binding and deterministic lower-index tie handling. Output
+values are not supplied to the leaf/whole courts. The existing flat-v4 namespace
+and staged APIs retain their meaning through shared versioned implementation.
+
+Six new court tests and two new independent material tests exercise these
+components, together with regression tests for the shared implementation.
+The final full-library run passed **124 tests**, with one manual timing benchmark
+ignored and excluded. The production library check also passed. Exact source/binary hashes are recorded in
+`evidence/rfc02-flat-v5-verdict.json`. Synthetic tests establish component
+behavior only. Worst-job admission, typed node binding, hash-unit DA, aggregate
+budgets, actual-node prosecution and independent Final/redemption remain open.
+No shipping fence is activated; the complete RFC02 goal remains active.

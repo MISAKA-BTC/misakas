@@ -834,3 +834,11 @@ price revision; plans and class bindings must be rebuilt under the new identitie
 activation or resource ceiling changes. The real pilot program's static 32-position refusal is
 closed, while its full real-weight public execution/court/Final path remains unproven. See the
 [RFC02 implementation ledger](tir/rfc0002-implementation.md) for reproducible evidence and limits.
+
+**2026-10-11 flat-v5 component update:** RFC02 §14.23 stages all-dtype internal
+flat material, including I64/I128, and leaf/whole/malformed/decode courts.
+Small nodes retain v3 and use bounded whole recomputation; parameters retain
+v3. Wide commit points remain prohibited. This adds kernel component coverage
+without selecting a node profile or establishing real-size checkpoint support,
+worst-job resource bounds, DA, fresh prosecution or Final/redemption. Evidence:
+`evidence/rfc02-flat-v5-verdict.json`.

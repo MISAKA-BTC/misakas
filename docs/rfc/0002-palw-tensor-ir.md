@@ -2920,3 +2920,55 @@ Real checkpoint/task/context/fidelity, arithmetic/backend conformance, whole
 statement security and all other §II.14 requirements also remain open. This
 stage implements the dependency-leaf relation component; it does not activate
 or declare completion of the large-model path.
+
+### 14.23 Staged all-dtype internal flat-v5 material and fault kinds
+
+`misaka-palw-kernel::merkle5` and `flat_court5` add a separate, explicitly
+selected internal evidence profile. Every node value with at least 64 elements,
+including I64/I128 intermediates, uses the new flat-v5 hash namespace with
+64..127-element leaves. Smaller node values and registered parameters retain
+v3. This closes the component gap where a first wrong wide intermediate could
+not use the flat leaf relation court. It does not make wide values legal TIR
+commit points: the existing program validation and all 25 integer primitive
+semantics remain unchanged. Flat-v4 domains, bytes and public APIs retain their
+previous meaning through version-specific aliases of shared implementation.
+
+The explicit v5 fault envelope dispatches four terminal court kinds:
+
+- **Leaf:** recompute a hash-only output leaf from authenticated operand leaves,
+  including wide internal operands, using the frozen reference evaluator.
+- **Whole:** recompute every element of a sub-64 node and compare its typed v3
+  commitment. Producer output values are not required.
+- **Malformed:** authenticate the typed header preimage and convict a mismatch
+  in dtype, shape or profile grammar. Rank/count caps apply before allocation;
+  overflow and zero-dimension metadata can be authenticated without constructing
+  the claimed tensor. Unbound headers dismiss.
+- **Decode:** authenticate logits at the position selecting the delivered token,
+  then compare a rival with at most two filer-owned leaves. Equal logits select
+  the lower index. An out-of-range delivered index is convicted from the bound
+  node coordinate and declared length, with no value leaves required.
+
+The profile identifier binds this grammar; the envelope has version 5 and a
+strict fault-kind discriminant. Unknown versions/tags, truncation, surplus
+bytes and oversized nested counts are refused. Source authentication,
+validated state/history wiring and bounded dependency recording are shared
+with §14.22. The per-filing limits remain one MiB, 2^30 abstract work units,
+32 MiB scratch and 1024 operand leaves. Derived limits are checked before
+reference evaluation. These are component bounds, not measured network or
+worst-job resource guarantees.
+
+Synthetic kernel tests cover all 25 primitive samples and merged tail leaves,
+first wrong wide intermediates, small values of all six dtypes and scalar rank,
+header type/shape/overflow/grammar mismatches, decode position and tie rules,
+and bounded codecs. Independent material oracles cover all six dtypes,
+extreme I64/I128 values, root-only hashing and logarithmic divergent-leaf
+localization. No descriptor, candidate, class or shipping node route selects
+this profile. These tests do not establish real checkpoint support, privacy
+entropy, actual-node prosecution, Final/redemption or full RFC02 completion.
+
+Still required: worst-position/leaf admission for the entire profile, typed
+node statement binding, public hash-unit DA/default/session budgets and
+deadlines, shared aggregate resource accounting, public-chain acquisition,
+fresh model-holder prosecution and independent Final/redemption. The original
+§II.14 checkpoint/task/context/fidelity, conformance, economic and honest
+liveness requirements remain open. Shipping fences stay dormant.
