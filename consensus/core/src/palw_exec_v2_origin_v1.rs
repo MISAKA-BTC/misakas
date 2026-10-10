@@ -82,31 +82,100 @@ fn decode_header(mut bytes: &[u8]) -> std::io::Result<crate::header::Header> {
     Ok(header)
 }
 
+/// The ordinary envelope bytes, with allocation limited by bytes actually present. Do not add today's admission
+/// shape/version/signature policy here: a legacy claim's accepted identity remains the authority for its original header.
+fn decode_attempt(mut bytes: &[u8]) -> std::io::Result<crate::palw_attempt_v2::PalwAttemptEnvelopeV2> {
+    use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_WIRE_MAGIC, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2};
+    use borsh::BorshDeserialize;
+    let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "malformed EXEC original attempt");
+    bytes = bytes.strip_prefix(&PALW_ATTEMPT_V2_WIRE_MAGIC).ok_or_else(bad)?;
+    fn byte_vec(bytes: &mut &[u8]) -> std::io::Result<Vec<u8>> {
+        let len = u32::deserialize(bytes)? as usize;
+        if len > bytes.len() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "original attempt vector exceeds bytes"));
+        }
+        let (value, remaining) = bytes.split_at(len);
+        *bytes = remaining;
+        Ok(value.to_vec())
+    }
+    macro_rules! read {
+        () => {
+            BorshDeserialize::deserialize(&mut bytes)?
+        };
+    }
+    let attempt = PalwAttemptUnsignedV2 {
+        version: read!(),
+        network_domain: read!(),
+        challenge: read!(),
+        class_id: read!(),
+        executor_bond: read!(),
+        executor_pubkey: byte_vec(&mut bytes)?,
+        operator_id: read!(),
+        artifact_root: read!(),
+        trace_root: read!(),
+        output_root: read!(),
+        pwu: read!(),
+        trace_manifest_root: read!(),
+        trace_chunk_count: read!(),
+        trace_retention_daa: read!(),
+        execution_root: read!(),
+    };
+    let envelope = PalwAttemptEnvelopeV2 { attempt, signature: byte_vec(&mut bytes)? };
+    if !bytes.is_empty() {
+        return Err(bad());
+    }
+    Ok(envelope)
+}
+
 fn verify_header_bytes(id: Hash64, claim: &PalwClaimStateV2, bytes: &[u8]) -> Result<u64, PalwStateV2Error> {
+    verify_header_bytes_with_hashers(
+        id,
+        claim,
+        bytes,
+        crate::hashing::header::hash_with_parent_run_cache,
+        crate::hashing::header::pre_pow_hash_with_parent_run_cache,
+    )
+}
+
+// Private pipeline also permits tests to count digest invocations without timing thresholds or global counters.
+pub(super) fn verify_header_bytes_with_hashers(
+    id: Hash64,
+    claim: &PalwClaimStateV2,
+    bytes: &[u8],
+    identity: impl FnOnce(&crate::header::Header) -> Hash64,
+    pre_pow: impl FnOnce(&crate::header::Header) -> Hash64,
+) -> Result<u64, PalwStateV2Error> {
     let header = decode_header(bytes).map_err(|_| refuse(PalwWorkRootRefusalV2::AuthorizationOrigin))?;
-    if crate::hashing::header::hash_with_parent_run_cache(&header) != claim.accepted_block
-        || !crate::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
+    if !crate::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id) {
+        return Err(refuse(PalwWorkRootRefusalV2::AuthorizationOrigin));
+    }
+    let envelope = decode_attempt(&header.palw_commitment).map_err(|_| refuse(PalwWorkRootRefusalV2::AuthorizationOrigin))?;
+    // These cheap checks may reject, never authenticate, the carried bytes. The accepted identity and anchor follow.
+    if envelope.attempt.class_id != claim.class_id
+        || envelope.attempt.executor_bond != claim.bond.0
+        || crate::palw_attempt_v2::attempt_id_v2(&envelope.attempt) != id
     {
         return Err(refuse(PalwWorkRootRefusalV2::AuthorizationOrigin));
     }
-    let envelope = crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
-        .map_err(|_| refuse(PalwWorkRootRefusalV2::AuthorizationOrigin))?;
+    if identity(&header) != claim.accepted_block {
+        return Err(refuse(PalwWorkRootRefusalV2::AuthorizationOrigin));
+    }
     let anchor = crate::palw_attempt_v2::execution_anchor_v3(
         envelope.attempt.network_domain,
-        crate::hashing::header::pre_pow_hash_with_parent_run_cache(&header),
+        pre_pow(&header),
         envelope.attempt.class_id,
         &envelope.attempt.executor_bond,
         header.nonce,
     );
-    if crate::palw_attempt_v2::attempt_id_v2(&envelope.attempt) != id
-        || envelope.attempt.class_id != claim.class_id
-        || envelope.attempt.executor_bond != claim.bond.0
-        || (claim.job_identity != Hash64::default() && anchor != claim.job_identity)
-    {
+    if claim.job_identity != Hash64::default() && anchor != claim.job_identity {
         return Err(refuse(PalwWorkRootRefusalV2::AuthorizationOrigin));
     }
     Ok(header.daa_score)
 }
+
+#[cfg(test)]
+#[path = "palw_exec_v2_origin_v1/tests.rs"]
+mod tests;
 
 /// Before every native financial write. Riders do not carry their own REAL header and are not root authorizations.
 pub(super) fn capture(

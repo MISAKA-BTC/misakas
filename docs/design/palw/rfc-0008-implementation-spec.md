@@ -816,6 +816,16 @@ compressed parents: the nearly 408 MB above describes repeated hash input, not a
 408-MB vector. The optimization reduces update/iteration overhead, not that cryptographic byte work.
 It cannot substitute for worst-case release latency, resident-memory or shared-lane availability gates.
 
+The origin verifier first checks the attempt algo, decodes the envelope against actual remaining
+bytes, and rejects an attempt id, class or executor-bond mismatch before either expanded header
+digest. Both envelope byte vectors are length-checked before allocation; no current admission
+version/key/signature policy is added to this legacy provenance reader. These early checks can
+only reject. A passing proof still recomputes the full accepted header identity, then the pre-PoW
+digest and the existing anchor binding before exposing its source DAA. A cached header hash is
+never trusted. All refusals retain `AuthorizationOrigin`, and the accepted predicate is unchanged.
+An adversary can copy matching public envelope fields and still reach the identity digest, so
+this ordering does not establish the worst-case CPU/fee bound or transport availability.
+
 The node regression re-folds an actually admitted signed REAL header with EXEC dormant, proving
 the native row is unchanged and has no clock. It then uses a legacy-shaped authenticated snapshot
 with the same native data and prefix, deletes the actual source header from the node store, and

@@ -1254,6 +1254,142 @@ fn exec_v2_origin_proof_codec_rejects_hostile_parent_runs_and_substitution_befor
 }
 
 #[test]
+fn exec_v2_origin_verification_rejects_cheap_mismatches_before_expanded_hashing_with_same_verdicts() {
+    use crate::palw_state_v2::palw_exec_v2_origin_v1::verify_header_bytes_with_hashers;
+    use std::cell::Cell;
+    let (_, s, id, witness) = legacy_origin_world();
+    let original: crate::header::Header = borsh::from_slice(&witness.header).unwrap();
+    let original_claim = s.claim(&id).unwrap();
+    for case in 0..13 {
+        let mut header = original.clone();
+        let mut claim = original_claim.clone();
+        let mut claim_id = id;
+        let (expected_calls, expected_ok) = match case {
+            0 => ((1, 1), true),
+            1 => {
+                claim_id = h64(0xBAD);
+                ((0, 0), false)
+            }
+            2 => {
+                claim.class_id = h64(0xBAD);
+                ((0, 0), false)
+            }
+            3 => {
+                claim.bond = bond_key(99);
+                ((0, 0), false)
+            }
+            4 => {
+                header.pow_algo_id = crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH;
+                ((0, 0), false)
+            }
+            5 => {
+                header.palw_commitment = vec![0xFF];
+                ((0, 0), false)
+            }
+            6 => {
+                header.nonce += 1;
+                ((1, 0), false)
+            }
+            7 => {
+                header.palw_commitment.push(0);
+                ((0, 0), false)
+            }
+            8 => {
+                let mut envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).unwrap();
+                envelope.signature.push(1);
+                header.palw_commitment = envelope.encode_wire();
+                ((1, 0), false)
+            }
+            9 => {
+                claim.job_identity = h64(0xBAD);
+                ((1, 1), false)
+            }
+            10 => {
+                header.hash = h64(0xBAD);
+                ((1, 1), true)
+            }
+            11 => {
+                claim.job_identity = Hash64::default();
+                ((1, 1), true)
+            }
+            _ => {
+                let mut envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).unwrap();
+                envelope.attempt.class_id = h64(0xBAD);
+                claim.class_id = envelope.attempt.class_id;
+                header.palw_commitment = envelope.encode_wire();
+                ((0, 0), false)
+            }
+        };
+        // The previous predicate, using the ordinary codec and ordinary header digests as an independent verdict oracle.
+        let old_ok = (|| {
+            if crate::hashing::header::hash(&header) != claim.accepted_block
+                || !crate::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
+            {
+                return false;
+            }
+            let Ok(envelope) = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment) else {
+                return false;
+            };
+            let anchor = crate::palw_attempt_v2::execution_anchor_v3(
+                envelope.attempt.network_domain,
+                crate::hashing::header::pre_pow_hash_64(&header),
+                envelope.attempt.class_id,
+                &envelope.attempt.executor_bond,
+                header.nonce,
+            );
+            attempt_id_v2(&envelope.attempt) == claim_id
+                && envelope.attempt.class_id == claim.class_id
+                && envelope.attempt.executor_bond == claim.bond.0
+                && (claim.job_identity == Hash64::default() || anchor == claim.job_identity)
+        })();
+        let (identity_calls, pre_pow_calls) = (Cell::new(0), Cell::new(0));
+        let result = verify_header_bytes_with_hashers(
+            claim_id,
+            &claim,
+            &borsh::to_vec(&header).unwrap(),
+            |h| {
+                identity_calls.set(identity_calls.get() + 1);
+                crate::hashing::header::hash_with_parent_run_cache(h)
+            },
+            |h| {
+                pre_pow_calls.set(pre_pow_calls.get() + 1);
+                crate::hashing::header::pre_pow_hash_with_parent_run_cache(h)
+            },
+        );
+        assert_eq!(old_ok, expected_ok, "old verdict case {case}");
+        assert_eq!(result.is_ok(), old_ok, "unchanged verdict case {case}");
+        assert_eq!((identity_calls.get(), pre_pow_calls.get()), expected_calls, "digest calls case {case}");
+        if let Ok(issued) = result {
+            assert_eq!(issued, header.daa_score);
+        }
+    }
+}
+
+#[test]
+fn exec_v2_origin_large_parent_run_with_wrong_class_never_enters_either_header_digest() {
+    use crate::palw_state_v2::palw_exec_v2_origin_v1::verify_header_bytes_with_hashers;
+    let (_, s, id, witness) = legacy_origin_world();
+    let mut header: crate::header::Header = borsh::from_slice(&witness.header).unwrap();
+    let cap = PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1;
+    let count = (cap - witness.header.len() - 5) / kaspa_hashes::HASH64_SIZE;
+    header.parents_by_level =
+        crate::header::CompressedParents::try_from(vec![(255, (0..count).map(|i| h64(i as u64)).collect())]).unwrap();
+    let bytes = borsh::to_vec(&header).unwrap();
+    assert!(bytes.len() <= cap);
+    assert!(count * 255 * kaspa_hashes::HASH64_SIZE > 400_000_000);
+    let mut wrong = s.claim(&id).unwrap().clone();
+    wrong.class_id = h64(0xBAD);
+    let result = verify_header_bytes_with_hashers(
+        id,
+        &wrong,
+        &bytes,
+        |_| panic!("wrong class must refuse before identity hashing"),
+        |_| panic!("wrong class must refuse before pre-PoW hashing"),
+    );
+    assert!(result.is_err());
+}
+
+#[test]
 fn exec_v2_origin_capture_cannot_cap_or_reprice_native_weight_or_income() {
     let (p, state, _) = world(Some(0));
     let env = attempt(PWU, 2);

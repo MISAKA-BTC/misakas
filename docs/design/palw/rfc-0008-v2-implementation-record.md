@@ -648,3 +648,66 @@ the three changed Rust files passed. The final distinct ordinary regression tota
 0 failed, 1 ignored** (469 core + 1 node + 7 fence); the separately invoked timing test passed once.
 No public activation fence was armed, no deployment/push was performed, and broader requirements
 remain open as documented above.
+
+### EXEC origin verification: cheap refusal before expanded digests (2026-10-11)
+
+The origin verifier previously recomputed the accepted header identity before checking the algo
+and envelope, then recomputed the pre-PoW digest before rejecting an attempt-id/class/bond mismatch.
+An obviously incompatible proof could therefore feed nearly 408 MB into a header digest.
+The verifier now performs those rejection-only checks first, followed by full accepted identity
+and the original anchor binding. The result/refusal reason and the existing optional zero job
+identity behavior are preserved; successful proofs still compute both digests. Source DAA is
+returned only after all required checks pass. Native capture and carried-proof validation use
+the same dormant EXEC path. No cached hash, caller hint, version migration rule or new admission
+cap replaces accepted identity authentication.
+
+Moving envelope decoding earlier also requires bounded allocation on hostile vector lengths.
+The ordinary Borsh 1.5.1 `Vec<u8>` reader can initially allocate up to 1 MiB even when the incoming
+envelope is at most 8,192 bytes. The origin-only reader decodes the same PAV2/Borsh fields and
+checks public-key and signature lengths against bytes actually remaining before copying either.
+It rejects truncation and trailing bytes as before. It does not impose current version, signature
+length or key-shape policies on already accepted historical headers. Other ordinary envelope
+decoders and the live block/PoW/Round paths remain unchanged. The explicit struct initializer and
+nonzero-field codec comparison guard its correspondence to the ordinary wire format.
+
+Codec tests compare decoded values for 64 combinations of versions and vector sizes, including
+unsupported versions and non-admission sizes. They also compare all truncations of a small
+nonzero-field envelope, missing magic, trailing data and hostile lengths in each vector.
+A separate provenance fixture compares the old predicate using ordinary hashing/decoding with
+the new pipeline in 13 binding/substitution cases, counting each digest via local callbacks rather
+than timing or global counters. Matching fields alone never authorize changed nonce or signature
+bytes; arbitrary cached hashes remain irrelevant. A synthetic within-carriage-cap parent run
+expanding above 400 MB with a wrong class must refuse before entering either header digest.
+These fixtures do not certify native admission, soundness, economic conditions or resource maxima.
+
+The adversary may copy all matching public envelope fields and still reach the identity digest.
+Header decoding also still does work proportional to the encoded bytes. Thus this removes needless
+work on cheaply incompatible proofs, while the worst-case release CPU/RSS/fee and eight-slot lane
+availability gates remain open. No public fence is armed by this change.
+
+The broad core regression passed **473 tests, 0 failed, 1 ignored** in 31.81 seconds
+(3m 57s build), including all four new tests. The ignored case remains the previous explicit
+hash-writer timing test; no timing measurement is needed to establish zero digest invocations.
+Command: `cargo test --locked -p kaspa-consensus-core --lib -- exec_origin_attempt_codec exec_origin_header hashing::header:: header::tests:: exec_v2 palw_exec palw_lifecycle palw_vesting_read_v1 rfc0012 da_ court_ provider_ rider --test-threads=2`.
+Environment: Rust 1.93.0 / macOS aarch64, jobs 2, dev/test debug 0, incremental 0, locked dependencies.
+Log: `/tmp/rfc-exec-origin-early-refusal-core.log`.
+
+The EVM-enabled node origin regression passed **1 test, 0 failed** in 5.69 seconds (3m 56s build):
+`cargo test --locked -p kaspa-consensus --features evm --lib -- x8_g14_root_admission --test-threads=1`.
+The actually admitted signed header exercises native capture and carried proof after source-header
+deletion, with snapshot, state/delta and undo checks. Existing class/Panel/synthetic-trace seams
+remain, and it does not approve actual multi-process pruning/P2P or all historical inputs.
+Log: `/tmp/rfc-exec-origin-early-refusal-node.log`. These suite runtimes on a shared host are
+verification records, not a normalized old/new performance comparison.
+
+The unfiltered payload-fence suite passed **7 tests, 0 failed** in 0.36 seconds (5m 26s build
+including lock waiting): `cargo test --locked -p kaspa-consensus-core --test palw_exec_payload_v2_fence -- --test-threads=1`.
+Log: `/tmp/rfc-exec-origin-early-refusal-fence.log`. `cargo check --locked -p kaspad --features evm`
+also completed successfully in 6m 05s with existing warnings, recorded in
+`/tmp/rfc-exec-origin-early-refusal-daemon.log`.
+
+The final distinct regression total is **481 passed, 0 failed, 1 ignored** (473 core + 1 node +
+7 fence). `git diff --check`, rustfmt checks on the origin reader/new codec test file and a scoped
+rustfmt check of only the two new fold tests passed; existing fold-test sections were not reformatted.
+No public activation, push or deployment was performed. Full RFC6/7/8/12 completion remains unproven
+for the original coverage, resource, economic, soundness and multi-process conditions.
