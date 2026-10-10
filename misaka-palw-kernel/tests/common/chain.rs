@@ -239,7 +239,7 @@ impl Consumer {
         self.book.paid.get(bond).copied().unwrap_or(0)
     }
 
-    fn absorb(&mut self, l: &KernelLedgerV1, ev: &[LedgerEventV1]) {
+    pub fn absorb(&mut self, l: &KernelLedgerV1, ev: &[LedgerEventV1]) {
         for e in ev {
             if let LedgerEventV1::Settlement(s) = e {
                 self.settlements.push((l.daa, *s));

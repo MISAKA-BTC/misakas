@@ -102,6 +102,7 @@ pub mod settle;
 pub mod spec;
 pub mod state;
 pub mod trace;
+pub mod verifier_pay;
 pub mod verify;
 
 pub use check::{PlanAcceptanceV1, check_plan_v1};

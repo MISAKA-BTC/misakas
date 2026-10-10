@@ -24,9 +24,9 @@ use misaka_palw_tir::program_v2::TirProgramV2;
 use crate::descriptor::{KernelDescriptorV1, KernelScheduleV1};
 use crate::gate::{public_pipeline_prosecution_complete_v1, public_prosecution_complete_v1};
 use crate::hash::{Digest, finish, id, keyed, object_id};
-use crate::ledger::{ClaimRowV1, DemandKeyV1, DemandRowV1, KernelLedgerV1, LedgerPolicyV1, PipelineClassRowV1, ClassRowV1, BondRowV1};
-use crate::pipeline::{pipeline_root_v1};
+use crate::ledger::{BondRowV1, ClaimRowV1, ClassRowV1, DemandKeyV1, DemandRowV1, KernelLedgerV1, LedgerPolicyV1, PipelineClassRowV1};
 use crate::opv::{OPV_POLICY_DOMAIN_V1, OPV_STATE_VERSION_V2, OpvClaimRowV1, OpvPolicyV1, StateRootPartsV2};
+use crate::pipeline::pipeline_root_v1;
 use crate::pipeline_public::PipelineClassV1;
 use crate::public::{ProfileMaterialV1, ServedPositionV1};
 use crate::state::{
@@ -75,6 +75,10 @@ pub const TABLE_CLAIM_BEACON_SALTS_V1: u8 = 25;
 pub const TABLE_FORFEITED_CLAIM_SEALS_V1: u8 = 26;
 /// The domain of the root extension tables 25, 26 and 18 add (absent while all are empty: every older root is unchanged).
 pub const BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-beacon-seal-extension/v1";
+/// **Table 27** (`palw_verifier_pay_v1`, G14R round 3): check-fee escrows, claim draws and held default shares, key `(kind, digest)`.
+pub const TABLE_VERIFIER_PAY_V1: u8 = 27;
+/// The root extension table 27 adds once it holds a row (every older root unchanged).
+pub const VERIFIER_PAY_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-verifier-pay-extension/v1";
 
 /// `(table, borsh(key)) → borsh(row)`.
 pub type RowKeyV1 = (u8, Vec<u8>);
@@ -112,6 +116,7 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_CLAIM_BEACON_SALTS_V1 => "claim-beacon-salts",
         TABLE_JOB_POSTERS_V1 => "job-posters",
         TABLE_FORFEITED_CLAIM_SEALS_V1 => "forfeited-claim-seals",
+        TABLE_VERIFIER_PAY_V1 => "verifier-pay",
         TABLE_SPEC_CLASSES_V1 => "spec-classes",
         TABLE_SPEC_JOBS_V1 => "spec-jobs",
         TABLE_MEMORY_LINES_V1 => "memory-lines",
@@ -179,6 +184,9 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.forfeited_claim_seals {
             rows.insert((TABLE_FORFEITED_CLAIM_SEALS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.verifier_pay {
+            rows.insert((TABLE_VERIFIER_PAY_V1, bytes_of(k)), bytes_of(v));
         }
         for k in &self.opv.admitted {
             rows.insert((TABLE_OPV_ADMITTED_V1, bytes_of(k)), Vec::new());
@@ -269,6 +277,12 @@ impl KernelLedgerV1 {
                     l.forfeited_claim_seals.insert(
                         dec::<(Digest, Digest, u64)>(key, "forfeited seal key")?,
                         dec::<crate::ledger::ForfeitedSealRowV1>(row, "forfeited seal")?,
+                    );
+                }
+                TABLE_VERIFIER_PAY_V1 => {
+                    l.verifier_pay.insert(
+                        dec::<(u8, Digest)>(key, "verifier pay key")?,
+                        dec::<crate::verifier_pay::VerifierPayRowV1>(row, "verifier pay row")?,
                     );
                 }
                 TABLE_JOB_ESCROWS_V1 => {
@@ -464,7 +478,10 @@ pub fn root_of_rows(
     // RFC-0004 Part II: the typed tables, each only when non-empty (an untyped ledger's root is unchanged).
     let base = crate::spec::typed_root_v1(base, &typed);
     // OPV-BOOT GAP-B1a / C4R4 F-C4R4-08: tables 25, 26 and 18 extend the root only once any of them holds a row.
-    if [TABLE_CLAIM_BEACON_SALTS_V1, TABLE_FORFEITED_CLAIM_SEALS_V1, TABLE_JOB_POSTERS_V1].iter().any(|t| by_table.contains_key(t)) {
+    let base = if [TABLE_CLAIM_BEACON_SALTS_V1, TABLE_FORFEITED_CLAIM_SEALS_V1, TABLE_JOB_POSTERS_V1]
+        .iter()
+        .any(|t| by_table.contains_key(t))
+    {
         beacon_seal_root_extension_v1(
             &base,
             &coll(TABLE_CLAIM_BEACON_SALTS_V1),
@@ -473,7 +490,20 @@ pub fn root_of_rows(
         )
     } else {
         base
+    };
+    // `palw_verifier_pay_v1`: table 27 extends the root only once it holds a row.
+    if by_table.contains_key(&TABLE_VERIFIER_PAY_V1) {
+        verifier_pay_root_extension_v1(&base, &coll(TABLE_VERIFIER_PAY_V1))
+    } else {
+        base
     }
+}
+
+/// `H(extension; root ‖ table 27)` (`palw_verifier_pay_v1`).
+pub fn verifier_pay_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
+    let mut s = keyed(VERIFIER_PAY_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(table);
+    finish(s)
 }
 
 /// `H(extension; base root ‖ claim beacon salts ‖ forfeited claim seals ‖ job posters)` (OPV-BOOT GAP-B1a, C4R4 F-C4R4-08).

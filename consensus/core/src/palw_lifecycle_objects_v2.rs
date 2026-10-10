@@ -1928,6 +1928,17 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "SHARD",
         true,
     ),
+    // G14R round 3 (the Lead, 2026-10-10): M*-49 verifier pay and O2's held default share — kernel ledger table 27 (in the route's rows
+    // and its root extension only once non-empty), `LedgerEventV1` 25–26 (receipts). No new object kind: below the fence the kernel
+    // ledger writes no row of it and every root is unchanged.
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel ledger table 27 verifier pay (check-fee escrows, draws, held default shares); LedgerEventV1 25–26",
+        },
+        "palw_verifier_pay_v1",
+        "G14R M*-49 / O2 (ECON, readiness §3f)",
+        true,
+    ),
     a2_row(
         PalwA2SlotV1::StateEncoding { what: "bond budget engine Q/B/R/F (deltas 190–199, tail 0xEF, root block bond_budget/v1)" },
         "palw_bond_budget_v1",

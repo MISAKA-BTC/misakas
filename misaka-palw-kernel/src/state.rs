@@ -196,15 +196,24 @@ impl KernelLedgerV1 {
         let base = crate::spec::typed_root_v1(base, &self.typed_root_parts());
         // OPV-BOOT GAP-B1a / C4R4 F-C4R4-08 (tables 25, 26 and 18): an extension only once any holds a row, so every older root is
         // unchanged.
-        if self.claim_beacon_salts.is_empty() && self.forfeited_claim_seals.is_empty() && self.job_posters.is_empty() {
+        let d = |name: &str| format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes();
+        let base = if self.claim_beacon_salts.is_empty() && self.forfeited_claim_seals.is_empty() && self.job_posters.is_empty() {
+            base
+        } else {
+            crate::rows::beacon_seal_root_extension_v1(
+                &base,
+                &collection_root(&d("claim-beacon-salts"), self.claim_beacon_salts.len(), self.claim_beacon_salts.iter()),
+                &collection_root(&d("forfeited-claim-seals"), self.forfeited_claim_seals.len(), self.forfeited_claim_seals.iter()),
+                &collection_root(&d("job-posters"), self.job_posters.len(), self.job_posters.iter()),
+            )
+        };
+        // `palw_verifier_pay_v1` (table 27): an extension only once it holds a row.
+        if self.verifier_pay.is_empty() {
             return base;
         }
-        let d = |name: &str| format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes();
-        crate::rows::beacon_seal_root_extension_v1(
+        crate::rows::verifier_pay_root_extension_v1(
             &base,
-            &collection_root(&d("claim-beacon-salts"), self.claim_beacon_salts.len(), self.claim_beacon_salts.iter()),
-            &collection_root(&d("forfeited-claim-seals"), self.forfeited_claim_seals.len(), self.forfeited_claim_seals.iter()),
-            &collection_root(&d("job-posters"), self.job_posters.len(), self.job_posters.iter()),
+            &collection_root(&d("verifier-pay"), self.verifier_pay.len(), self.verifier_pay.iter()),
         )
     }
 

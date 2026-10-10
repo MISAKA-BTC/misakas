@@ -217,6 +217,8 @@ pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
     // The attested set IS the derived set (not a growing one): a binding refuted after a root was attested stops attesting it for the
     // next kernel class, and the stale row goes with it.
     ledger.attested_artifacts = attested.iter().map(|root| root.as_bytes()).collect();
+    // G14R round 3: `palw_verifier_pay_v1`'s terms (M*-49, O2), injected at every load like the attested set (not in the root).
+    ledger.verifier_pay_policy = extras.verifier_pay.map(crate::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1);
     // DA16: the claims whose material obligation moved to bonded providers — derived from the court's rooted rows, never a ledger table
     // (and nothing at all below `palw_provider_court_v1`, where no such row can exist).
     if extras.provider_court.is_some() {
@@ -725,6 +727,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
                 | r::TABLE_PROOF_SEALS_V1
                 | r::TABLE_JOB_ESCROWS_V1
                 | r::TABLE_SERVED_DEMAND_BONDS_V1
+                | r::TABLE_VERIFIER_PAY_V1
         )
     });
     if !busy {
