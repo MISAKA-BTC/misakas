@@ -674,10 +674,12 @@ fn a_self_inflicted_default_never_erases_a_provable_fraud_and_a_true_proof_never
     // The outsider's proof, kept out until after the default, still convicts inside the default's horizon.
     let outsider0 = w.l.bonds[&OUTSIDER].collateral;
     let ev = w.block(32, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof: proof.clone() }]);
-    assert_eq!(convicted(&ev), Some((900, 500, false)), "{ev:?}");
+    assert_eq!(convicted(&ev), Some((900, 450, false)), "{ev:?}");
     assert!(matches!(w.state(&id), ClaimStateV1::Convicted { .. }), "a fraud, not a default: {:?}", w.state(&id));
     assert_eq!(w.l.bonds[&OUTSIDER].collateral, outsider0, "a true proof is never charged the dismissal fee");
-    assert_eq!(w.consumer.paid(&OUTSIDER), 500, "the bounty the outsider would have had with no default");
+    // C4 F-C4R4-15: one reporter pool per claim — the bounty is the share of what THIS conviction collected (900), so the demander
+    // (50) and the accuser (450) together take the share of the 1,000 collected, never more.
+    assert_eq!(w.consumer.paid(&OUTSIDER), 450, "the share of what the conviction collected");
     assert_eq!(w.l.bonds[&PRODUCER].collateral, producer0 - 1000, "the producer loses the whole reservation");
     assert_eq!(w.l.bonds[&PRODUCER].reserved, 0);
     let colluders = (w.l.bonds[&PRODUCER].collateral + w.l.bonds[&SPAM1].collateral + w.consumer.paid(&SPAM1)) as i128

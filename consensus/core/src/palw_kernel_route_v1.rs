@@ -924,6 +924,17 @@ impl PalwKernelRouteStateV1 {
 mod tests {
     use super::*;
 
+    /// **C4 F-C4R4-16 (ADR-0032 49 %)**: the route's interim accuser share — and so the demanders' share of a default and the
+    /// onboarding challenger's — is at most 490‰; a self-reporter keeps at most 49 % of a slash, a net loss of at least 51 %.
+    #[test]
+    fn palw_kernel_route_the_interim_reporter_share_is_adr_0032s_49_percent() {
+        let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        assert_eq!(p.accuser_reward_permille, 490);
+        assert_eq!(crate::palw_onboarding_v1::PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1, 490);
+        let kept = p.claim_collateral - p.claim_collateral * u64::from(p.accuser_reward_permille) / 1000;
+        assert!(kept * 100 >= p.claim_collateral * 51, "net loss {kept} of {}", p.claim_collateral);
+    }
+
     #[test]
     fn the_interim_policy_validates_and_the_bond_digest_separates_indices() {
         let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));

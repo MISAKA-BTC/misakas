@@ -568,6 +568,32 @@ the node case that carries a Post and a Refute through tag 113 is still to be wr
 **Allocation note.** `LedgerEventV1::ServedDemandBondsBurned` is discriminant **24** (the registry's 2026-10-09 line gives G14R
 21–24; the brief says 21–23): the Lead should confirm 24 in the registry. DA16's 30 / 31 sit after it.
 
+### G14-R4 round 2 (2026-10-10): C4R4 round 4b's full-collusion breaks
+
+PoCs from `adv/c4r4` @ `162df6b16` (kernel `tests/c4r4.rs`, node `da16/c4r4.rs`), each flipped or kept as stated:
+* **F-C4R4-14 (P1) — the response lane.** A `Respond` spends no run of the block's shared adjudication budget (classifying it is
+  linear in its own carried bytes, bounded by `max_response_bytes`), so no ordering of a block can push an honest producer's valid
+  answer over budget before its deadline. A rejected response (oversized or not serving) costs its signer `dismissed_proof_fee`
+  (slashed, burned; a signer that cannot pay is refused before classification) and changes nothing the producer needs: the demand
+  keeps its deadline, and only the producer's own response records the demand's last rejection class. A valid response is free,
+  whoever signs it. The PoC proves, for junk from any bond and from the griefer as producer of its own self-demanded claim: served in
+  the first block, no default, nothing lost; every junk response paid its fee; the griefer was paid nothing.
+* **F-C4R4-13 (P2).** The proof grace after a service holds the receipts' deadline too: a `Checking` claim served past it stays
+  prosecutable (reservation held) until `served + proof_grace_daa`, then times out. Bounded: demands open only by the deadline.
+* **F-C4R4-15 (P2) — one reporter pool per claim.** The bounty is `⌊share × what this conviction collected⌋` and a pre-Final
+  default pays its demanders `⌊share × penalty⌋` (rounded down; the rest burned), so all reporters of one claim together take at most
+  `⌊share × everything collected⌋` (49 %): a coalition holding every role loses ≥ 51 %. This replaces F-C4R3-02's "as if no default"
+  basis. **Residual for ECON:** after a self-inflicted default the honest accuser's bounty falls from `share × R` to `share × (R −
+  P)`; the difference went to the colluders' Sybil demanders (≤ `share × P` = 49 BILI of 490 at the interim terms). Restoring it
+  needs the default's demander share deferred to the liability horizon and redirected to a later conviction (a held amount and its
+  demanders as state — not built).
+* **F-C4R4-16.** The interim share is 490‰ (`4d4d8423f`); pinned by core `palw_kernel_route_the_interim_reporter_share_is_adr_0032s_49_percent`.
+  C4R4's own `c4r4_reporter_share_49.rs` needs INTF's `palw_reporter_share_v2` functions and passes once both are merged.
+* **F-C4R4-17 (P2, ADR-0177 D2).** Hook `KernelLedgerV1::cumulative_scope_allows_v1(claim, stage, position)` runs in every
+  `FileDemand` before anything is reserved; it admits everything until DA16b's central predicate lands (a pure function of the rows).
+  The PoC stays an ignored FAIL.
+* F-C4R4-19 (DA16's court vs ADR-0177) is carried as C4R4 wrote it: an ignored FAIL for DA16b.
+
 ### What still refuses arming `palw_probabilistic_constraints_v1` / `palw_panel_free_v1` (end of lane, 2026-10-10)
 
 The validators (`validate_palw_probabilistic_constraints_v1`, `validate_palw_panel_free_v1`, `validate_palw_signed_registration_v1`)
@@ -587,11 +613,11 @@ refuse any armed height unconditionally. Nothing here is armable.
 8. A cached per-block ledger (§6.8, O(rows) per object) and the DoS figure measured; the mempool acceptance gate for `0x4b` objects
    (§6.10); RPC through a running service (§6.12); verdict events stored (§6.9).
 9. Node cases for constraint families 2–13 and 15 (the route E2E class is single-layer).
-10. `Respond` signed by any bond, a rejected response spending a court run for free (O-C4R3-respond): a fee or a producer-only rule.
+10. (closed, F-C4R4-14) responses ride their own lane; a rejected one pays the dismissal fee.
 11. OPV-BOOT: the conformance chunk target merged (OPVB's `b5d4ba90c`) and a node case through tag 113; beacon v3 over the bonded
     salted seals (OPVB); the prune horizon of table 26 once v3's policy is a ledger constant.
-12. ADR-0177 clean-up from merged lanes: DA16's artifact-availability gate out of the onboarding fold (DA16b); R4X's snapshot-slice
-    demand re-scoped to claim-specific material (R4X / INTF).
+12. ADR-0177 clean-up from merged lanes: DA16's artifact-availability gate out of the onboarding fold (DA16b, F-C4R4-19); R4X's
+    snapshot-slice demand re-scoped; DA16b's cumulative-scope predicate behind `cumulative_scope_allows_v1` (F-C4R4-17).
 13. Rule E (ADR-0178, FINX) armed at or below the release (fork choice).
 14. The FileProof-over-budget gap, accepted and bounded (holding one valid proof out through window + horizon ≈ 1,600 BILI > the
     1,000 BILI reservation it would save); a block producer that orders the objects pays it only on blocks it does not mine.

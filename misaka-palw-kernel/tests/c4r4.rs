@@ -188,7 +188,7 @@ fn f_c4r4_04_the_pre_final_default_liability_horizon_convicts_on_its_last_day_an
     let (_, _, until) = edge(31);
     assert_eq!(until, 231);
     let (conv_on, refused_on, _) = edge(until);
-    assert_eq!(conv_on, Some((900, 500, false)), "a proof on the horizon's last DAA convicts (the default kept 900 reserved)");
+    assert_eq!(conv_on, Some((900, 450, false)), "a proof on the horizon's last DAA convicts (the default kept 900 reserved; F-C4R4-15: the bounty is the share of the 900)");
     assert!(refused_on.is_none());
     let (conv_after, refused_after, _) = edge(until + 1);
     assert_eq!(conv_after, None, "one DAA past the horizon: no conviction");
@@ -518,4 +518,412 @@ fn f_c4r4_obs_capture_a_self_demand_stretches_one_admission_slot_to_the_hard_dea
     let (plain, stretched) = (held(false), held(true));
     eprintln!("[O-C4R4-capture] an OPV admission slot is held {plain} DAA plainly, {stretched} DAA with a self-demand served late");
     assert!(stretched > plain + 20, "a self-demand stretches the slot ({plain} → {stretched})");
+}
+
+// ══ Round 4b (2026-10-10): G14 under full collusion — the producer and every Panel seat collude; one outsider bond ═════════════
+//
+// The user's priority of 2026-10-10: even if the producer and ALL Panel seats collude, ONE public bonded verifier outside the Panel
+// reaches an objective conviction (or the correct DA default, or the dismissal of an honest claim) from public authenticated material
+// only. The tests below try to break that at the kernel's reference level, in the order the Lead set: (1) pre-empt / censor the
+// outsider's filing, (2) force a timeout or withhold so the case ends with no default, (3) reach Final before the outsider can file,
+// (4) make the outsider need secret state, (5) exhaust the shared court budget.
+
+/// One block whose objects are signed by the bonds given (the harness's `block` signs every object that names no actor with the
+/// producer; a `Respond` names none, so a junk responder needs its own signer).
+fn signed_block(w: &mut World, daa: u64, txs: Vec<(Digest, T)>) -> Vec<E> {
+    use misaka_palw_kernel::ledger::LedgerBlockV1;
+    let b = LedgerBlockV1 { daa, txs: txs.into_iter().flat_map(|(signer, t)| t.into_txs(signer)).collect() };
+    let ev = w.consumer.apply(&mut w.l, &b);
+    w.blocks.push(b);
+    w.events.extend(ev.iter().cloned());
+    ev
+}
+
+/// **F-C4R4-13 (G14 Q2, Panel route; P2 where armed): a service must not let a never-covered claim time out before the proof it
+/// enables can be filed.**
+///
+/// A Panel-licensed claim is `Checking` until the Panel's covered tally or its receipts' deadline (`committed + check_window_daa`).
+/// An open demand holds it (`Disputed` never times out), and a service closes the demand with a dismissal verdict that returns the
+/// claim to `Checking`. The proof grace a service grants (`ProofGrace`) holds only FINAL, not the timeout: served one DAA past the
+/// receipts' deadline, the claim times out in the SAME block's tick, its reservation is released, and the proof the served values
+/// enable is refused ("the claim ended without passing and holds nothing"). The colluding Panel simply never covers.
+///
+/// So when an outsider demands a lying claim while it is still `Checking`, the colluders choose the outcome: withholding costs the
+/// default penalty, but SERVING after the deadline costs nothing — neither a conviction nor a default, though the fault is now public.
+/// A detected attempt is free (no deterrence for fraud caught early), and the outsider's demand bond is merely refunded. SAFE: the
+/// outsider's proof, filed in the block after the service, convicts.
+#[test]
+fn f_c4r4_13_a_service_past_the_check_deadline_must_not_time_the_claim_out_before_its_proof() {
+    let mut w = World::new();
+    let pol = w.l.policy.clone();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let (at, lie) = w.lying(&job, 3);
+    let (id, trace) = (lie.claim.id(), lie.trace.clone());
+    // The producer publishes everything but the faulty position; the colluding Panel never covers the claim.
+    let da = Da::publishing(&lie.trace, &[at]);
+    w.block(10, vec![lie.tx]);
+    let deadline = 10 + pol.check_window_daa;
+    assert!(matches!(w.state(&id), ClaimStateV1::Checking { deadline_daa, .. } if deadline_daa == deadline));
+    let producer_c0 = w.l.bonds[&PRODUCER].collateral;
+
+    // The outsider finds the one position it cannot check and demands it on the receipts' last DAA.
+    assert_eq!(outsider(&w, id, &da), OutsiderFindingV1::Demand(vec![(0, at.0)]));
+    let ev = w.block(deadline, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 }]);
+    assert!(ev.iter().any(|e| matches!(e, E::DemandOpened { .. })), "{ev:?}");
+    // The demand holds the claim past the receipts' deadline (a Disputed claim does not time out) …
+    let ev = w.block(deadline + 1, vec![T::Respond { claim: id, stage: 0, position: at.0, bytes: position(&trace, at.0, |_| {}) }]);
+    // … and the producer serves the TRUE committed values (the fault is now public) one DAA past it.
+    assert!(ev.iter().any(|e| matches!(e, E::Served { .. })), "{ev:?}");
+    let timed_out = ev.iter().any(|e| matches!(e, E::TimedOut { claim } if *claim == id));
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!("the served values make the lie provable") };
+    let ev = w.block(deadline + 2, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+    eprintln!(
+        "[F-C4R4-13] served at {} (receipts' deadline {deadline}): timed out in the serving block = {timed_out}; the proof one DAA \
+         later: {:?}; producer collateral {} → {} (reserved {})",
+        deadline + 1,
+        convicted(&ev).map(|c| format!("convicted {c:?}")).or(refused(&ev)),
+        producer_c0,
+        w.l.bonds[&PRODUCER].collateral,
+        w.l.bonds[&PRODUCER].reserved,
+    );
+    assert!(convicted(&ev).is_some(), "the fault the service made public must still convict: {ev:?}");
+}
+
+/// **F-C4R4-14 (G14, the honest-claim leg; P1 where armed): free junk responses must not force an honest producer's default.**
+///
+/// A rejected `Respond` pays nothing, yet it spends one of the block's NON-reserved runs before it is classified. A griefer demands
+/// one position of an HONEST claim, then fills the `max_adjudications − reserved` runs of every block until the demand's deadline with
+/// junk responses ordered before the producer's valid one: the honest response is `OverBudget` (dropped) in every block, the demand
+/// defaults, the honest producer is charged the default penalty (its claim voided, no reward) and the griefer, as the demander, takes
+/// the accuser's share of it. G14's third outcome (the dismissal of an honest claim) fails. Two ways to send the junk:
+///
+/// * (a) from any bond, on the victim's own demand (a `Respond` names no actor — any registered bond may sign it, an exiting one too);
+/// * (b) from the griefer AS THE PRODUCER of a claim of its own, on a demand its own Sybil opened on that claim — so restricting
+///   `Respond` to the claim's producer does not close this: what is free is a REJECTED response, whoever signs it.
+///
+/// This is O-C4R4-respond (round 4) measured end to end; G14-R4's end-of-lane item 9 names the fix space. SAFE (both ways): a
+/// producer that sends its valid response in every block before the deadline is never defaulted.
+#[test]
+fn f_c4r4_14_free_junk_responses_must_not_force_an_honest_producers_default() {
+    // G14R's fix (the response lane): a response spends no run of the shared budget, and a rejected one costs its signer the
+    // dismissal fee. Returned: (default, honest loss, griefer paid, junk count, served at, griefer's cost).
+    let run = |own_claim: bool| -> (Option<(u64, u64)>, u64, u64, u64, Option<u64>, u64) {
+        let mut w = World::new();
+        let pol = w.l.policy.clone();
+        let free_runs = pol.max_adjudications_per_block - pol.prosecution_reserved_runs();
+        w.block(2, vec![bond(SPAM1, 10_000)]);
+        let job = w.post_job(3, &[3, 17, 9], 3, 1);
+        let h = w.honest(&job, 3);
+        let (id, trace) = (h.claim.id(), h.trace.clone());
+        let mut txs = vec![h.tx, T::PanelCovered { claim: id }];
+        // (b) the griefer's own honest claim of another job, which its Sybil (SPAM2) will demand.
+        let own = own_claim.then(|| {
+            let job2 = w.post_job(4, &[5, 1, 2], 3, 2);
+            let generated = w.greedy(&w.params, &job2.prompt, 3);
+            w.produce(&job2, SPAM1, generated, &w.params, |_| {})
+        });
+        if let Some(o) = &own {
+            txs.push(o.tx.clone());
+            txs.push(T::PanelCovered { claim: o.claim.id() });
+        }
+        w.block(10, txs);
+        // The griefer (SPAM1) demands position 1 of the honest claim.
+        let mut demands = vec![T::FileDemand { demander: SPAM1, claim: id, stage: 0, position: 1 }];
+        if let Some(o) = &own {
+            demands.push(T::FileDemand { demander: SPAM2, claim: o.claim.id(), stage: 0, position: 0 });
+        }
+        let ev = w.block(11, demands);
+        let deadline = ev
+            .iter()
+            .find_map(|e| match e {
+                E::DemandOpened { claim, deadline, .. } if *claim == id => Some(*deadline),
+                _ => None,
+            })
+            .expect("the demand opens");
+        let producer_c0 = w.l.bonds[&PRODUCER].collateral;
+        let valid = position(&trace, 1, |_| {});
+        let griefer = if own_claim { SPAM1 } else { SPAM2 };
+        let griefer_c0 = w.l.bonds[&griefer].collateral;
+        // (a) junk on the victim's own demand (position 1); (b) junk on the griefer's own demand (its claim's position 0).
+        let (target, at, signer) = match &own {
+            Some(o) => (o.claim.id(), 0, SPAM1),
+            None => (id, 1, SPAM2),
+        };
+        let (mut junk, mut dropped, mut served) = (0u64, 0u64, None);
+        let mut defaulted = None;
+        for t in 12..=deadline {
+            let mut txs: Vec<(Digest, T)> = (0..free_runs)
+                .map(|i| (signer, T::Respond { claim: target, stage: 0, position: at, bytes: vec![0xEE, i as u8, (t & 0xFF) as u8] }))
+                .collect();
+            junk += txs.len() as u64;
+            txs.push((PRODUCER, T::Respond { claim: id, stage: 0, position: 1, bytes: valid.clone() }));
+            let ev = signed_block(&mut w, t, txs);
+            if ev.iter().any(|e| matches!(e, E::Served { claim, .. } if *claim == id)) {
+                served = Some(t);
+                break;
+            }
+            if refused(&ev).is_some_and(|why| why.contains("adjudication budget")) {
+                dropped += 1;
+            }
+            if let Some(p) = ev.iter().find_map(|e| match e {
+                E::ProducerDefault { claim, penalty, .. } if *claim == id => Some(*penalty),
+                _ => None,
+            }) {
+                defaulted = Some((t, p));
+            }
+        }
+        let lost = producer_c0 - w.l.bonds[&PRODUCER].collateral;
+        eprintln!(
+            "[F-C4R4-14 {}] {free_runs} rejected responses a block ({junk} in all, free) kept the honest response over budget in \
+             {dropped} blocks; served at {served:?}; default {defaulted:?}: the honest producer lost {lost}, the griefer was paid {}",
+            if own_claim { "(b) as the producer of its own claim" } else { "(a) from any bond" },
+            w.consumer.paid(&SPAM1)
+        );
+        (defaulted, lost, w.consumer.paid(&SPAM1), junk, served, griefer_c0 - w.l.bonds[&griefer].collateral)
+    };
+    let fee = policy().dismissed_proof_fee;
+    for (case, r) in [("(a)", run(false)), ("(b)", run(true))] {
+        let (defaulted, lost, griefer_paid, junk, served, griefer_cost) = r;
+        // (1) the honest producer's valid answer is never crowded out: served in the first block, never defaulted, nothing lost;
+        assert!(defaulted.is_none() && served == Some(12) && lost == 0, "{case} the honest answer was crowded out: {r:?}");
+        // (2) every rejected response cost its sender the dismissal fee;
+        assert_eq!(griefer_cost, junk * fee, "{case} junk is never free: {r:?}");
+        // (3) nobody profits from forcing a default: the griefer was paid nothing.
+        assert_eq!(griefer_paid, 0, "{case} the griefer was paid: {r:?}");
+    }
+}
+
+/// **OBS (G14 Q4, ADR-0177's condition): without the registered model's tensors an outsider cannot convict a MatMul lie** — even with
+/// every committed value of the claim in hand. A kernel fault proof opens one column of the weight against the registered commitment;
+/// the chain never serves a weight (demands are per position: node values and stage inputs only), so for a closed model the detection
+/// probability `p` is 0, exactly as ADR-0177 states (G14 is conditional on the verifier having acquired the model). Pinned so nobody
+/// reads a closed class's quiet window as verification.
+#[test]
+fn f_c4r4_obs_g14_q4_without_the_model_an_outsider_cannot_convict_a_matmul_lie() {
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let (_, lie) = w.lying(&job, 3);
+    let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[]));
+    w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
+    let fresh = misaka_palw_kernel::ledger::KernelLedgerV1::replay(&w.genesis, &w.blocks);
+    let closed = misaka_palw_tir::MapParams::default();
+    let without = OutsiderV1 { ledger: &fresh, claim: id, material: &da, artifact: &closed, salt: [0x5A; 64] }.check();
+    let with = outsider(&w, id, &da);
+    eprintln!("[O-C4R4-Q4] every value served: with the model {with:?}; without it {without:?}");
+    assert!(matches!(with, OutsiderFindingV1::Prosecute(_)), "with the model the lie is provable");
+    assert!(!matches!(without, Ok(OutsiderFindingV1::Prosecute(_))), "without the model no proof exists: p = 0 for a closed model");
+}
+
+// ── ADR-0032 49% (2026-10-10) on the kernel route ─────────────────────────────────────────────────────────────────────────────
+
+/// **Control (holds): a plain self-conviction at 49% loses at least 51% of what it collected**, integer rounding included: the
+/// colluders' Sybil, holding the earliest seal of the canonical proof, is paid `⌊490 × slashed / 1000⌋`.
+#[test]
+fn f_c4r4_15_control_a_plain_self_conviction_at_49_percent_loses_at_least_51_percent() {
+    for collateral in [999u64, 1000, 1001, 4_321] {
+        let mut pol = policy();
+        pol.accuser_reward_permille = 490;
+        pol.claim_collateral = collateral;
+        let mut w = World::with(pol.clone());
+        let job = w.post_job(2, &[3, 17, 9], 3, 1);
+        let (_, lie) = w.lying(&job, 3);
+        let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[]));
+        w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
+        let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!() };
+        w.block(11, vec![T::SealProof { accuser: SPAM1, claim: id, seal: proof_seal_v1(&id, &SPAM1, &proof) }]);
+        let ev = w.block(20, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+        let (slashed, reward, _) = convicted(&ev).expect("convicted");
+        assert_eq!(slashed, collateral);
+        assert_eq!(w.consumer.paid(&SPAM1), reward, "the Sybil's earlier seal takes the bounty");
+        assert_eq!(reward, collateral * 490 / 1000, "⌊49% × collected⌋");
+        assert!((slashed - reward) * 100 >= slashed * 51, "net loss {} of {slashed} collected", slashed - reward);
+    }
+}
+
+/// **F-C4R4-15 (P2 where armed; ADR-0032 49%): a default, then a conviction, must not recycle more than the accuser's share of what
+/// they collected together.**
+///
+/// C4 F-C4R3-02's rule pays a conviction after a pre-Final default its bounty "as if no default had come first" (basis = the slash +
+/// what the default took), so the honest accuser is never diluted — but the default's own demander share was ALREADY paid out of that
+/// same reservation. The colluders hold both: their Sybil joins the outsider's demand (the demanders split `accuser_share × penalty`
+/// equally, so each extra Sybil dilutes the outsider) and their Sybil's earlier seal of the canonical proof takes the bounty. They
+/// recover `s × (R + P × k/(k+1))` of the `R` collected — with `s` = 49%, `P/R` = 10% (the interim ratio, 100 of 1,000 BILI) and one
+/// Sybil demander, 51.4%; with many, up to 53.9% — so the self-dealing net loss falls under ADR-0032's 51% (at the interim 500‰, to
+/// 45%). Not a profit (a defaulted claim earns no reward), but the deterrence is below the stated bound exactly where the colluders
+/// choose it: when they withheld from an outsider who later obtains the material. SAFE: what the colluders recover is at most 49% of
+/// what the default and the conviction collected.
+#[test]
+fn f_c4r4_15_a_default_then_a_self_conviction_must_not_recycle_more_than_the_accuser_share() {
+    let mut pol = policy();
+    pol.accuser_reward_permille = 490;
+    let mut w = World::with(pol.clone());
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let (at, lie) = w.lying(&job, 3);
+    let id = lie.claim.id();
+    let (withheld, full) = (Da::publishing(&lie.trace, &[at]), Da::publishing(&lie.trace, &[]));
+    w.block(10, vec![lie.tx, T::PanelCovered { claim: id }]);
+    // The colluders know their lie: their Sybil SPAM2 seals the canonical proof at once.
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &full) else { panic!() };
+    w.block(11, vec![T::SealProof { accuser: SPAM2, claim: id, seal: proof_seal_v1(&id, &SPAM2, &proof) }]);
+    // The outsider cannot check the withheld position and demands it; the colluders' Sybil SPAM1 joins the demand.
+    assert_eq!(outsider(&w, id, &withheld), OutsiderFindingV1::Demand(vec![(0, at.0)]));
+    w.block(
+        12,
+        vec![
+            T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: at.0 },
+            T::FileDemand { demander: SPAM1, claim: id, stage: 0, position: at.0 },
+        ],
+    );
+    let colluders0 = [PRODUCER, SPAM1, SPAM2].iter().map(|b| w.l.bonds[b].collateral as i128).sum::<i128>();
+    let collateral0 = w.l.bonds[&PRODUCER].collateral;
+    // The producer withholds: the demand defaults at its deadline (12 + 20).
+    let ev = w.block(12 + pol.court_deadline_daa, vec![]);
+    let penalty = ev
+        .iter()
+        .find_map(|e| match e {
+            E::ProducerDefault { penalty, .. } => Some(*penalty),
+            _ => None,
+        })
+        .expect("the producer defaulted");
+    // The outsider later obtains the material (another copy) and files the proof inside the default's liability horizon.
+    let ev = w.block(60, vec![T::FileProof { accuser: OUTSIDER, claim: id, proof }]);
+    let (slashed, reward, _) = convicted(&ev).expect("the default does not erase the fraud");
+    let collected = (collateral0 - w.l.bonds[&PRODUCER].collateral) as i128;
+    assert_eq!(collected, (penalty + slashed) as i128);
+    let recovered = (w.consumer.paid(&SPAM1) + w.consumer.paid(&SPAM2)) as i128;
+    let colluders_net =
+        [PRODUCER, SPAM1, SPAM2].iter().map(|b| w.l.bonds[b].collateral as i128).sum::<i128>() + recovered - colluders0;
+    eprintln!(
+        "[F-C4R4-15] collected {collected} (default {penalty} + slash {slashed}); colluders recovered {recovered} (demander share {} + \
+         bounty {reward}) = {:.1}% of it; net loss {} = {:.1}% (ADR-0032 bound: ≥ 51%); the outsider was paid {}",
+        w.consumer.paid(&SPAM1),
+        recovered as f64 * 100.0 / collected as f64,
+        -colluders_net,
+        -colluders_net as f64 * 100.0 / collected as f64,
+        w.consumer.paid(&OUTSIDER)
+    );
+    assert!(recovered * 1000 <= collected * 490, "the colluders recovered {recovered} of {collected}: more than 49%");
+}
+
+// ── ADR-0177 non-interference: the cumulative scope ──────────────────────────────────────────────────────────────────────────
+
+/// GF(2^61 − 1): exact arithmetic for rebuilding an integer linear map from served activations.
+const GF: i128 = (1 << 61) - 1;
+
+fn gf_pow(mut a: i128, mut e: i128) -> i128 {
+    let mut r = 1i128;
+    a = a.rem_euclid(GF);
+    while e > 0 {
+        if e & 1 == 1 {
+            r = r * a % GF;
+        }
+        a = a * a % GF;
+        e >>= 1;
+    }
+    r
+}
+
+/// Solve `W · x_p = y_p` for `W` (`out × inp`) from the rows `(x_p, y_p)`: `None` while the `x_p` do not span `inp` dimensions.
+fn rebuild_linear_map(rows: &[(Vec<i128>, Vec<i128>)], inp: usize, out: usize) -> Option<Vec<i128>> {
+    let mut m: Vec<Vec<i128>> =
+        rows.iter().map(|(x, y)| x.iter().chain(y.iter()).map(|v| v.rem_euclid(GF)).collect::<Vec<i128>>()).collect();
+    let mut rank = 0;
+    for col in 0..inp {
+        let pivot = (rank..m.len()).find(|&r| m[r][col] != 0)?;
+        m.swap(rank, pivot);
+        let inv = gf_pow(m[rank][col], GF - 2);
+        for v in m[rank].iter_mut() {
+            *v = *v * inv % GF;
+        }
+        for r in 0..m.len() {
+            if r != rank && m[r][col] != 0 {
+                let f = m[r][col];
+                for c in 0..inp + out {
+                    m[r][c] = (m[r][c] - f * m[rank][c]).rem_euclid(GF);
+                }
+            }
+        }
+        rank += 1;
+    }
+    let signed = |v: i128| if v > GF / 2 { v - GF } else { v };
+    Some((0..out).flat_map(|r| (0..inp).map(move |k| (r, k))).map(|(r, k)| signed(m[k][inp + r])).collect())
+}
+
+/// **F-C4R4-17 (ADR-0177 non-interference, the cumulative scope; P2 design conflict where armed): claim-specific demands must not
+/// rebuild the registered model.**
+///
+/// ADR-0177 keeps claim-specific evidence and its court but forbids weight-file / range requests and "repeated requests that rebuild
+/// the model (a cumulative scope)". The kernel route makes every committed POSITION of a claim demandable at once (one demand bond
+/// each), and a position's response is every node value of that position — the input AND the exact integer output of every MatMul.
+/// For a linear layer `y = W·x`, `inp` positions whose activations span `inp` dimensions determine `W` exactly. So one bond that posts
+/// one job (a prompt of its choice), lets an honest producer of a CLOSED model claim it, and demands every position, forces the
+/// producer to serve — or be defaulted — what rebuilds every weight matrix applied to a served activation, verified here against the
+/// registered commitments themselves. Its cost is one demand bond per position (burned at the horizon of an honest claim).
+///
+/// This is the G14 / ADR-0177 tension in one test: G14 needs the faulty position demandable (the outsider cannot know which), and
+/// ADR-0177 forbids the union of demands from rebuilding the model. SAFE: the served values rebuild no registered weight tensor.
+#[test]
+#[ignore = "FAIL F-C4R4-17: demanding every position of one claim rebuilds the class's projection weights exactly (the kernel's hook `cumulative_scope_allows_v1` waits for DA16b's predicate)"]
+fn f_c4r4_17_claim_specific_demands_must_not_rebuild_the_registered_weights() {
+    use misaka_palw_kernel::trace::tensor_commitment;
+    use misaka_palw_tir::Tensor;
+    use misaka_palw_tir::program::Ref;
+    let mut w = World::new();
+    let pol = w.l.policy.clone();
+    // A prompt of the extractor's choice: 20 distinct tokens (7 is prime to the 32-token vocabulary).
+    let prompt: Vec<u32> = (0..20u32).map(|i| (i * 7 + 3) % 32).collect();
+    let job = w.post_job(2, &prompt, 1, 9);
+    let h = w.honest(&job, 1);
+    let (id, trace) = (h.claim.id(), h.trace.clone());
+    w.block(10, vec![h.tx, T::PanelCovered { claim: id }]);
+    // The producer publishes NOTHING (a closed model). The extractor demands every position — each one claim-specific.
+    let positions = trace.values.len() as u32;
+    let demands = (0..positions).map(|p| T::FileDemand { demander: SPAM1, claim: id, stage: 0, position: p }).collect();
+    w.block(11, demands);
+    // An honest producer must serve each demanded position (or be defaulted).
+    let responses = (0..positions)
+        .map(|p| T::Respond { claim: id, stage: 0, position: p, bytes: position(&trace, p, |_| {}) })
+        .collect::<Vec<_>>();
+    let ev = w.block(12, responses);
+    assert_eq!(ev.iter().filter(|e| matches!(e, E::Served { .. })).count() as u32, positions, "{ev:?}");
+
+    // Rebuild, from the chain's served values ALONE, every weight a MatMul applies to a served activation.
+    let program = w.program.clone();
+    let class = w.l.classes[&w.class].clone();
+    let served = |p: u32, s: usize, n: usize| -> Option<Tensor> {
+        w.l.served.get(&(id, 0u8, p))?.values.get(s)?.get(n)?.as_ref()?.decode().ok()
+    };
+    let (mut rebuilt, mut tried) = (Vec::new(), 0usize);
+    for (s, (b, layer)) in program.occurrences().iter().enumerate() {
+        for (n, node) in program.blocks[*b as usize].nodes.iter().enumerate() {
+            let (misaka_palw_tir::Prim::MatMul, [Ref::Param(j), Ref::Node(i)]) = (&node.prim, node.inputs.as_slice()) else {
+                continue;
+            };
+            let key = (*j, if program.params[*j as usize].per_layer { *layer } else { None });
+            let Some(truth) = w.params.tensors.get(&key) else { continue };
+            let (out, inp) = (truth.shape[0], truth.shape[1]);
+            let rows: Option<Vec<(Vec<i128>, Vec<i128>)>> =
+                (0..positions).map(|p| Some((served(p, s, *i as usize)?.data, served(p, s, n)?.data))).collect();
+            let Some(rows) = rows else { continue };
+            tried += 1;
+            if let Some(data) = rebuild_linear_map(&rows, inp, out) {
+                let candidate = Tensor { data, ..truth.clone() };
+                let authentic = tensor_commitment(&candidate) == class.param_commitments.by_instance[&key];
+                assert_eq!(&candidate, truth, "an exact rebuild");
+                assert!(authentic, "and it opens the REGISTERED commitment");
+                rebuilt.push((program.params[*j as usize].name.clone(), key.1, out * inp));
+            }
+        }
+    }
+    let weights: usize = rebuilt.iter().map(|(_, _, n)| n).sum();
+    let total: usize = w.params.tensors.values().map(|t| t.data.len()).sum();
+    eprintln!(
+        "[F-C4R4-17] {positions} claim-specific demands ({} BILI of demand bonds) made the producer serve what rebuilds {} of {tried} \
+         MatMul weight instances exactly ({weights} of the model's {total} weight elements), each opening the registered commitment: \
+         {:?}",
+        positions as u64 * pol.demand_bond,
+        rebuilt.len(),
+        rebuilt.iter().map(|(name, l, _)| format!("{name}@{l:?}")).collect::<Vec<_>>()
+    );
+    assert!(rebuilt.is_empty(), "claim-specific demands rebuilt {} registered weight tensors", rebuilt.len());
 }
