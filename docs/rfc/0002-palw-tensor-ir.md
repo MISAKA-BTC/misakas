@@ -2018,6 +2018,10 @@ checks. Independent companions now attach public reference logits under predecla
 context/units/error criteria, and verify independently repeats a portable fit. The existing exact-class
 binding and beacon commit/run/fresh-verify tools accept both formats through one artifact/layout/
 static-admission/challenge/evidence path; independent imports use typed absent calibration.
+Conformance binds the node's kernel program-root domain, separately from the container graph root,
+and derives the same plan. Single-program selection uses the node prosecution/carrier/block
+limits for v1/v2/segmented v4 without shortening requested context; v4 still requires separate
+OPV admission/economics. No tool report supplies availability, activation or approved policy.
 Reference-logit gates stay separate from source identity, routing/state fidelity and task quality.
 These synthetic fixtures do not close §II.11.4: real-checkpoint source fidelity, real-node beacon and
 independent-seat

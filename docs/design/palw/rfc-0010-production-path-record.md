@@ -14,8 +14,8 @@ G14-complete profile set) and its bias/withholding/P0-10 review is external. **R
 | Item | Value |
 |---|---|
 | State | `PalwChainStateV2.panel_v3: Option<PermissionlessPanelStateV1>`; `None` below the fence |
-| Root | one Some-only block `panel_v3/v1` after `mesh/v1`, content = the engine's own root (policy, cursor, claims, retained work ids, certified outputs, reservations) |
-| Delta | explicit `170 PanelV3Cursor`, `171 PanelV3Claim`, `172 PanelV3WorkId`, `173 PanelV3Beacon`; cursor first, so revert removes rows before the cursor; per-entry `DeltaMismatch` checks; reservations re-derived after a delta |
+| Root | one Some-only block `panel_v3/v1` after `mesh/v1`, content = the engine's own root (policy, cursor, claims, retained work ids, certified outputs, reservations, frozen epoch source sets) |
+| Delta | explicit `170 PanelV3Cursor`, `171 PanelV3Claim`, `172 PanelV3WorkId`, `173 PanelV3Beacon`, `174 PanelV3EpochSources` (R10F, 2026-10-10); cursor first, so revert removes rows before the cursor; per-entry `DeltaMismatch` checks; reservations re-derived after a delta |
 | Carriage | tail `0xED` (the engine, written only when `Some`) |
 | Object | tag `120 PanelBeaconProofV3` — evidence, never a command; a proof that does not verify is dropped and the block stands |
 | Void reasons | `SealUnavailable = 120`, `BeaconUnavailable = 121`, `PermissionlessNoCapablePanel = 122`; `PanelUnavailable (10)` reused for retry exhaustion. `PalwVoidReasonV2` gained `#[borsh(use_discriminant = true)] #[repr(u8)]`; 0–10 are unchanged |
@@ -25,11 +25,12 @@ G14-complete profile set) and its bias/withholding/P0-10 review is external. **R
 **Fold order** (`apply_palw_transition_v7`; `palw_v2_pre_object_base_v1` mirrors 2f):
 
 ```text
-2f  advance_v1      releases (V2 left the Panel) → seal against the PARENT checkpoint → readiness / BeaconUnavailable →
+2f  advance_v1      releases (V2 left the Panel) → seal against the PARENT checkpoint → freeze the next epoch's beacon source
+                    set (once, in the first block reaching its release_daa, derived from the PARENT) → readiness / BeaconUnavailable →
                     due draws (first draws and receipt-timeout redraws) against the pre-object one-ledger headroom → V2 bind / V2 void
 3   objects         a certified output (tag 120) is queued
 4b″ take_block_v1   accept_beacon per queued output (failures dropped) → admit the claims this block created under the V3 rule,
-                    in V2 acceptance order (journal order of Claim{old: None}) → engine journal (170–173)
+                    in V2 acceptance order (journal order of Claim{old: None}) → engine journal (170–174)
 ```
 
 * **Rule by acceptance.** `panel_v3_rule_at(claim.accepted_daa)` — never the binder's or a retry's height. A claim accepted below
@@ -76,6 +77,46 @@ refused for this subject.
    `palw_panel_v3_final_events_v1` yields `PanelLicensed` events only;
 3. no class is G14-complete in consensus (the code-derived `PUBLIC_PROSECUTION_COMPLETE` gate is not linked), so the chain's
    eligible-profile set is empty.
+
+**The eligible source set is frozen at the epoch's commitment position (R10F, 2026-10-10; closes the RFC-0010 / codex-audit
+residual).** Before, `ChainPanelBeaconHistoryV1::eligible_profiles` re-derived the OPV-eligible set from the ledger the
+*verifying* block held, evaluated at `release_daa`: a profile denied, DA-lapsed, re-conformed or newly registered between the
+commitment and the lock changed the mixed set, so a producer could steer the beacon. Now:
+
+* **Freeze, once.** The engine's freeze stage (`stage_freeze_sources`, in `advance` and `fold`, right after the seal stage) runs
+  in the first block whose DAA reaches the next epoch's `release_daa = epoch × beacon_period_daa` (the cursor — the parent's DAA —
+  is below it, so no later block can freeze that epoch again), and only if a live claim is sealed for the epoch (no claim, no
+  beacon). It asks the host `ConsensusViewV1::epoch_sources(release_daa)`; the fold answers from the block's **parent** (the
+  pre-entropy checkpoint, never the block's own objects) with `palw_panel_v3_epoch_sources_v1`: under `Chain` the kernel route's
+  `opv_eligible_set_v1(ledger, release_daa, OPV extras)` — the same derivation the onboarding commitment freezes into its row
+  (`palw_onboarding_fold_v1`) — under `Reference` the reference's own set. The answer is sorted and de-duplicated and stored as
+  `EpochSourceSetV1 { frozen_daa, profiles }` in the engine (`PermissionlessPanelStateV1::epoch_source_rows`, keyed by epoch).
+* **Read, never re-derived.** Under `Chain`, `eligible_profiles(commitment_position)` reads
+  `frozen_sources_at(commitment_position)`; a position that is no epoch's commitment, an epoch that froze nothing, or no engine:
+  empty — nothing is re-derived. `Reference` reads return its fields as before (tests only).
+* **Bounded.** At most `MAX_EPOCH_SOURCES_V1 = 1024` profiles; an empty or over-cap derivation freezes nothing (never a truncated
+  set, which a registrant could steer by its id) — that epoch's beacon is unavailable, non-fraud. A set is dropped once its
+  epoch's contribution window has closed (`daa > release + beacon_wait_daa`, past which no output is accepted) or no live claim is
+  sealed for it, so at most `max_pending` sets exist; the engine's validation refuses an unsorted, empty, over-cap, early
+  (`frozen_daa < release`) or stale row, and the carriage import's size bound counts them.
+* **State.** Part of the engine's root (so of `panel_v3/v1`), journaled as delta `174 PanelV3EpochSources` (`None → Some` at the
+  freeze, `Some → None` at the prune, never `Some → Some`), carried in tail `0xED` with the engine, reverted with its block.
+* **Request encoding unchanged.** The epoch's subject (`panel_epoch_commitment_root_v1`, `BeaconRequestV1`) does **not** commit a
+  root of the frozen set: the set is bound by consensus state (the engine root), and leaving the request untouched keeps every
+  existing proof/test vector. No live id moves: the engine exists only past `palw_permissionless_panel_v1`, refused at every real
+  height; delta and carriage are the `NotCarried` rows `PALW_INT12_WIRE_CHANGES_V1` already classifies; the engine crate's types
+  are not int-12 wire types.
+* **Status: IMPLEMENTED_AND_TESTED at the engine and the consensus-core fold; dormant; NOT armable** (the fence stays refused and
+  the three locks below are unchanged). Tests: `misaka-palw-panel/tests/stages.rs`
+  (`an_epochs_source_set_is_frozen_once_at_its_commitment_and_dropped_after_its_window`,
+  `an_empty_or_over_cap_derivation_freezes_nothing_and_a_malformed_row_is_refused`) and `rfc0010_production_fold.rs`
+  (`the_epochs_source_set_is_frozen_at_its_commitment_and_later_eligibility_changes_do_not_move_the_beacon` — a profile denied
+  after the commitment does not change the beacon at the lock, one eligible after it is not added;
+  `a_reorg_across_the_freeze_block_reverts_it_and_the_other_branch_refreezes`;
+  `a_restart_and_a_replay_reproduce_the_frozen_set_and_a_tampered_one_does_not_load`;
+  `a_frozen_set_is_pruned_after_its_window_and_an_over_cap_derivation_freezes_nothing`). **Not verified:** the `Chain` derivation
+  feeding the freeze from a real kernel route with an OPV-eligible class (those tests drive the freeze with the `Reference` set;
+  `opv_eligible_set_v1` itself is covered by the G14 OPV-bootstrap E2E), and a processor-level reorg/IBD across a freeze block.
 
 Consequence: every V3 claim ends `BeaconUnavailable` (non-fraud) on a real chain. The fold's verification path is exercised only
 through `PalwPanelV3BeaconSourceV1::Reference` (a fixed history), which no processor resolves.
@@ -188,6 +229,7 @@ connection of its own. `misaka palw panel-v3 [--claim ID]… [--limit N] [--json
 | Beacon scheme approval, bias/withholding/last-mover/P0-10 review, `k`/`D`/delay/window numbers | EXTERNAL_GATE_PENDING |
 | Panel-independent Final path (RFC-0014 public window lapse / RFC-0015) | EXTERNAL_GATE_PENDING (A) |
 | G14-complete profile set linked into consensus | EXTERNAL_GATE_PENDING |
+| Beacon source set frozen at the epoch's commitment (was re-derived at verification) | IMPLEMENTED_AND_TESTED at the engine + fold, dormant (R10F, §2; delta 174); the `Chain` derivation from a real OPV-eligible route and a processor-level reorg/IBD across the freeze block are not yet exercised |
 | Objective L1 seal/finality rule (seal depth is not a finality primitive) | DESIGN_GAP |
 | Per-shard V3 draw: a claim of a class with a shard plan ends `PermissionlessNoCapablePanel` (a flat panel cannot license by parts) | IMPLEMENTED_AND_TESTED at the fold, dormant (agent SHARD, `shard-rfc6-10.md` §1: the engine's strata, the per-shard record written by the V3 bind; `rfc0010_shard_v3.rs`); the beacon gate is every V3 draw's |
 | State growth: terminal engine records and retained work ids are never compacted (`max_tracked_claims` fills for good) | DESIGN_GAP |

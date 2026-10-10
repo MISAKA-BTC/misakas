@@ -2959,6 +2959,11 @@ pub struct Params {
     /// Some-only in both fingerprints, collapsed from `Some(never())`, and refused when armed ([`Self::validate_palw_typed_roots_v1`])
     /// until the single full-activation release names a height for it with the others.
     pub palw_typed_roots_v1: Option<ForkActivation>,
+    /// **ECON's M\*-49 verifier pay and the held default share** ([`crate::palw_verifier_pay_v1`], G14R, readiness §3f): past this
+    /// height the kernel route's jobs escrow a per-check fee paid to drawn verifiers first out of the unchanged 49 %, and a pre-Final
+    /// default's demander share is held to the liability horizon. **Dormant**: `None` on every preset, Some-only hashed, collapsed from
+    /// `Some(never())`, refused when armed ([`Self::validate_palw_verifier_pay_v1`]).
+    pub palw_verifier_pay_v1: Option<ForkActivation>,
 
     /// **RFC-0015: Panel=0 (`OptimisticPublicVerification`) on the kernel route** ([`crate::palw_panel_free_v1`]): the separately named
     /// fence under which a network admits classes registered under the Panel-free verification mode (a fixed public challenge window,
@@ -3019,6 +3024,16 @@ pub struct Params {
     /// fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_reporter_share_v2`]) until the
     /// full-activation release names its height; needs `palw_rcore_plus` in force at or below it.
     pub palw_reporter_share_v2: Option<ForkActivation>,
+
+    /// **Lane LG14-A (RFC-0014 §6–§7 on the legacy V2 Panel route): the public filer** ([`crate::palw_legacy_public_filer_v1`]). Past
+    /// this height any Active bond may reserve a pursuit of a live V2 claim (tag 154, a deposit on its free half), which holds every
+    /// end of the claim — `Final`, the bind / receipt / redraw / unavailable / replay timeouts, a `Final` claim's retirement — until the
+    /// claim's own hard deadline (`trace_retention_daa − W_disclose`); a reserver's DA sessions ride its reservation's budget, never
+    /// DA-8's shared non-seat budget; and a direct proof (kinds 3, 4, 7) lands over another bond's open court. **Dormant, with no
+    /// activation height**: `None` on every preset and in no flag-day list, hashed Some-only in both fingerprints, collapsed from
+    /// `Some(never())`, refused when armed ([`Self::validate_palw_legacy_public_filer_v1`]) until the full-activation release names its
+    /// height; needs `palw_rcore_plus` and `palw_offence_attribution` in force at or below it.
+    pub palw_legacy_public_filer_v1: Option<ForkActivation>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
@@ -3188,6 +3203,17 @@ pub struct Params {
     /// [`Self::validate_palw_verification_vertex_v1`] refuses it off ConsensusV2 and without its prerequisites in force at or below it.
     /// Claims whose panels bound below the height license on the receipt path until they are licensed or void (spec 18 §18.6).
     pub palw_verification_vertex_v1: Option<ForkActivation>,
+
+    /// **RFC-0008 v2 (EXEC lane, `docs/design/palw/rfc-0008-implementation-spec.md`): the unified EXEC payload** ([`crate::palw_exec_v2`],
+    /// [`crate::palw_work_slice_v2`]) — one versioned envelope (`PXE2`) carrying `EXEC_TX` or `EXEC_SLICE`, the root/slice ledgers, and
+    /// the weightless closure carriage (EXEC is never a selected parent and adds no raw work, PALW weight, blue score, DAA tick or
+    /// k-anticone term). A bare height; `None` on every preset, testnet-12 included; Some-only in every hash with the `never()`
+    /// collapse, so a build without the field and a dormant network fingerprint alike. Mirrored on the V2 bundle's state params
+    /// (`exec_v2_from_daa`, written by [`Self::sync_palw_exec_payload_v2`]) because the fold holds only the bundle.
+    /// [`Self::validate_palw_exec_payload_v2`] **refuses any armed height** until the spec's section 9 gates pass
+    /// ([`crate::palw_exec_v2::PALW_EXEC_PAYLOAD_V2_ARMABLE`]); its structural prerequisites are enforced beside that refusal so the
+    /// day the gates pass is a one-constant change with every other rule already pinned.
+    pub palw_exec_payload_v2: Option<ForkActivation>,
 
     /// **RFC-0007 Part II (spec 18): the witness root in the trace manifest** ([`crate::palw_mesh_v1`]) — a class registered at or past the height pins a witness profile; its attempts commit `1 + witness_chunks` trace chunks under the v2 manifest root, so an `Unavailable` verdict can name a witness chunk. A bare height; `None` on every preset until a later flag day arms it; Some-only in every hash with the `never()` collapse; mirrored on the V2 bundle (`witness_manifest_from_daa`).
     pub palw_witness_manifest_v1: Option<ForkActivation>,
@@ -4199,6 +4225,8 @@ impl Params {
         self.validate_palw_probabilistic_constraints_v1()?;
         // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
         self.validate_palw_typed_roots_v1()?;
+        // **M*-49's dormant fence** (`crate::palw_verifier_pay_v1`): refused when armed.
+        self.validate_palw_verifier_pay_v1()?;
         // **RFC-0015's dormant fence** (`crate::palw_panel_free_v1`): refused when armed.
         self.validate_palw_panel_free_v1()?;
         self.validate_palw_signed_registration_v1()?;
@@ -4211,6 +4239,8 @@ impl Params {
         self.validate_palw_model_bond_allocation_v1()?;
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
         self.validate_palw_reporter_share_v2()?;
+        // **Lane LG14-A's public filer** (`crate::palw_legacy_public_filer_v1`): refused when armed.
+        self.validate_palw_legacy_public_filer_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **A-2 uniformity** (`crate::palw_lifecycle_objects_v2`): every lifecycle kind's owning fence needs the audit fence declared.
         self.validate_palw_lifecycle_kind_fences_v1()?;
@@ -4237,6 +4267,8 @@ impl Params {
         self.validate_palw_held_close_chunks_v1()?;
         // **RFC-0007 Part I: the verification vertex's refusals** (`crate::palw_vertex_v1`).
         self.validate_palw_verification_vertex_v1()?;
+        // **RFC-0008 v2: the EXEC payload's refusals** (`crate::palw_exec_v2`): armable on no ruleset until the section 9 gates pass.
+        self.validate_palw_exec_payload_v2()?;
         self.validate_palw_witness_manifest_v1()?;
         self.validate_palw_audit_mesh_v1()?;
         self.validate_palw_capped_onboarding_v1()?;
@@ -6570,6 +6602,10 @@ impl Params {
         if self.palw_typed_roots_v1 == Some(ForkActivation::never()) {
             self.palw_typed_roots_v1 = None;
         }
+        // The verifier-pay fence, likewise.
+        if self.palw_verifier_pay_v1 == Some(ForkActivation::never()) {
+            self.palw_verifier_pay_v1 = None;
+        }
         // The Panel-free fence, likewise.
         if self.palw_panel_free_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_panel_free_v1 = None;
@@ -6600,6 +6636,10 @@ impl Params {
         // ADR-0032's amended reporter share (lane INTF), likewise.
         if self.palw_reporter_share_v2 == Some(ForkActivation::never()) {
             self.palw_reporter_share_v2 = None;
+        }
+        // The legacy route's public filer (lane LG14-A), likewise.
+        if self.palw_legacy_public_filer_v1 == Some(ForkActivation::never()) {
+            self.palw_legacy_public_filer_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -6657,6 +6697,10 @@ impl Params {
         // RFC-0007's verification vertex, likewise.
         if self.palw_verification_vertex_v1 == Some(ForkActivation::never()) {
             self.palw_verification_vertex_v1 = None;
+        }
+        // RFC-0008 v2's EXEC payload, likewise.
+        if self.palw_exec_payload_v2 == Some(ForkActivation::never()) {
+            self.palw_exec_payload_v2 = None;
         }
         if self.palw_witness_manifest_v1 == Some(ForkActivation::never()) {
             self.palw_witness_manifest_v1 = None;
@@ -10316,6 +10360,7 @@ impl Params {
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
             palw_typed_roots_v1,
+            palw_verifier_pay_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
@@ -10324,6 +10369,7 @@ impl Params {
             palw_bond_budget_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
+            palw_legacy_public_filer_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -10340,6 +10386,7 @@ impl Params {
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
+            palw_exec_payload_v2,
             palw_witness_manifest_v1,
             palw_audit_mesh_v1,
             palw_capped_onboarding_v1,
@@ -10594,6 +10641,7 @@ impl Params {
             ("palw_gen_range_twin_v1", *palw_gen_range_twin_v1),
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
+            ("palw_verifier_pay_v1", *palw_verifier_pay_v1),
             ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
             ("palw_signed_registration_v1", *palw_signed_registration_v1),
             ("palw_tir_shard_segment_v2", *palw_tir_shard_segment_v2),
@@ -10602,6 +10650,7 @@ impl Params {
             ("palw_bond_budget_v1", palw_bond_budget_v1.as_ref().map(|fence| fence.activation)),
             ("palw_model_bond_allocation_v1", palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
+            ("palw_legacy_public_filer_v1", *palw_legacy_public_filer_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -10618,6 +10667,7 @@ impl Params {
             ("palw_improvement_v1", palw_improvement_v1.map(|fence| fence.activation)),
             ("palw_held_close_chunks_v1", *palw_held_close_chunks_v1),
             ("palw_verification_vertex_v1", *palw_verification_vertex_v1),
+            ("palw_exec_payload_v2", *palw_exec_payload_v2),
             ("palw_witness_manifest_v1", *palw_witness_manifest_v1),
             ("palw_audit_mesh_v1", *palw_audit_mesh_v1),
             ("palw_capped_onboarding_v1", *palw_capped_onboarding_v1),
@@ -10890,6 +10940,11 @@ impl Params {
             h.write(b"palw_typed_roots_v1");
             h.write(at.daa_score().to_le_bytes());
         }
+        // The verifier-pay fence, NAMED likewise.
+        if let Some(at) = self.palw_verifier_pay_v1 {
+            h.write(b"palw_verifier_pay_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
         // The Panel-free fence, NAMED likewise.
         if let Some(fence) = &self.palw_panel_free_v1 {
             h.write(b"palw_panel_free_v1");
@@ -10938,6 +10993,11 @@ impl Params {
             h.write(b"palw_reporter_share_v2");
             h.write(at.daa_score().to_le_bytes());
             h.write(crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V2.to_le_bytes());
+        }
+        // The legacy route's public filer (lane LG14-A), NAMED likewise. Some-only.
+        if let Some(at) = self.palw_legacy_public_filer_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_legacy_public_filer_v1");
+            h.write(at.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
         if let Some(at) = self.palw_fp_prefix_inherit {
@@ -11036,6 +11096,11 @@ impl Params {
         // RFC-0007's verification vertex, NAMED likewise: it changes which objects a block accepts and how a claim licenses.
         if let Some(activation) = self.palw_verification_vertex_v1 {
             h.write(b"palw_verification_vertex_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0008 v2's EXEC payload, NAMED likewise: it changes which carrier an EXEC block may be and what a chain block accepts.
+        if let Some(activation) = self.palw_exec_payload_v2.filter(|activation| *activation != ForkActivation::never()) {
+            h.write(b"palw_exec_payload_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(activation) = self.palw_witness_manifest_v1 {
@@ -11616,6 +11681,7 @@ impl Params {
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
             palw_typed_roots_v1,
+            palw_verifier_pay_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
@@ -11624,6 +11690,7 @@ impl Params {
             palw_bond_budget_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
+            palw_legacy_public_filer_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -11640,6 +11707,7 @@ impl Params {
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
+            palw_exec_payload_v2,
             palw_witness_manifest_v1,
             palw_audit_mesh_v1,
             palw_capped_onboarding_v1,
@@ -12381,6 +12449,10 @@ impl Params {
         if let Some(activation) = palw_typed_roots_v1.as_mut() {
             fork(activation, visit);
         }
+        // The verifier-pay fence. Some-only.
+        if let Some(activation) = palw_verifier_pay_v1.as_mut() {
+            fork(activation, visit);
+        }
         // The Panel-free fence. Some-only.
         if let Some(fence) = palw_panel_free_v1.as_mut() {
             fork(&mut fence.activation, visit);
@@ -12410,6 +12482,10 @@ impl Params {
         }
         // ADR-0032's amended reporter share (lane INTF). Some-only.
         if let Some(activation) = palw_reporter_share_v2.as_mut() {
+            fork(activation, visit);
+        }
+        // The legacy route's public filer (lane LG14-A). Some-only.
+        if let Some(activation) = palw_legacy_public_filer_v1.as_mut() {
             fork(activation, visit);
         }
         // palw_fp_prefix_inherit. Some-only.
@@ -12473,6 +12549,11 @@ impl Params {
         }
         // RFC-0007's verification vertex. Some-only, a bare height.
         if let Some(activation) = palw_verification_vertex_v1.as_mut() {
+            fork(activation, visit);
+        }
+        // RFC-0008 v2's EXEC payload. Some-only, a bare height.
+        // (`Some(never())` is not visited: it is the dormant spelling, so the schedule reports it as it reports `None`.)
+        if let Some(activation) = palw_exec_payload_v2.as_mut().filter(|activation| **activation != ForkActivation::never()) {
             fork(activation, visit);
         }
         if let Some(activation) = palw_witness_manifest_v1.as_mut() {
@@ -12944,6 +13025,7 @@ impl Params {
             palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1,
             palw_typed_roots_v1,
+            palw_verifier_pay_v1,
             palw_panel_free_v1,
             palw_signed_registration_v1,
             palw_tir_shard_segment_v2,
@@ -12952,6 +13034,7 @@ impl Params {
             palw_bond_budget_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
+            palw_legacy_public_filer_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -12968,6 +13051,7 @@ impl Params {
             palw_improvement_v1,
             palw_held_close_chunks_v1,
             palw_verification_vertex_v1,
+            palw_exec_payload_v2,
             palw_witness_manifest_v1,
             palw_audit_mesh_v1,
             palw_capped_onboarding_v1,
@@ -13760,6 +13844,11 @@ impl Params {
             h.write(b"palw_typed_roots_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The verifier-pay fence, Some-only for the same reason.
+        if let Some(activation) = palw_verifier_pay_v1 {
+            h.write(b"palw_verifier_pay_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // The Panel-free fence, Some-only for the same reason.
         if let Some(fence) = palw_panel_free_v1 {
             h.write(b"palw_panel_free_v1");
@@ -13803,6 +13892,11 @@ impl Params {
             h.write(b"palw_reporter_share_v2");
             h.write(activation.daa_score().to_le_bytes());
             h.write(crate::palw_state_v2::PALW_RCORE_REPORTER_REWARD_BPS_V2.to_le_bytes());
+        }
+        // The legacy route's public filer (lane LG14-A), Some-only for the same reason.
+        if let Some(activation) = palw_legacy_public_filer_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_legacy_public_filer_v1");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_inherit {
@@ -13900,6 +13994,11 @@ impl Params {
         // RFC-0007's verification vertex, Some-only for the same reason.
         if let Some(activation) = palw_verification_vertex_v1 {
             h.write(b"palw_verification_vertex_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0008 v2's EXEC payload, Some-only for the same reason.
+        if let Some(activation) = palw_exec_payload_v2.filter(|activation| *activation != ForkActivation::never()) {
+            h.write(b"palw_exec_payload_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(activation) = palw_witness_manifest_v1 {
@@ -14595,6 +14694,7 @@ impl Params {
             palw_gen_range_twin_v1: self.palw_gen_range_twin_v1,
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
+            palw_verifier_pay_v1: self.palw_verifier_pay_v1,
             palw_panel_free_v1: self.palw_panel_free_v1.clone(),
             palw_signed_registration_v1: self.palw_signed_registration_v1,
             palw_tir_shard_segment_v2: self.palw_tir_shard_segment_v2,
@@ -14603,6 +14703,7 @@ impl Params {
             palw_bond_budget_v1: self.palw_bond_budget_v1.clone(),
             palw_model_bond_allocation_v1: self.palw_model_bond_allocation_v1.clone(),
             palw_reporter_share_v2: self.palw_reporter_share_v2,
+            palw_legacy_public_filer_v1: self.palw_legacy_public_filer_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -14619,6 +14720,7 @@ impl Params {
             palw_improvement_v1: self.palw_improvement_v1,
             palw_held_close_chunks_v1: self.palw_held_close_chunks_v1,
             palw_verification_vertex_v1: self.palw_verification_vertex_v1,
+            palw_exec_payload_v2: self.palw_exec_payload_v2,
             palw_witness_manifest_v1: self.palw_witness_manifest_v1,
             palw_audit_mesh_v1: self.palw_audit_mesh_v1,
             palw_capped_onboarding_v1: self.palw_capped_onboarding_v1,
@@ -15697,6 +15799,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_typed_roots_v1: None,
+    palw_verifier_pay_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
@@ -15705,6 +15808,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
+    palw_legacy_public_filer_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -15721,6 +15825,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
+    palw_exec_payload_v2: None,
     palw_witness_manifest_v1: None,
     palw_audit_mesh_v1: None,
     palw_capped_onboarding_v1: None,
@@ -15995,6 +16100,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_typed_roots_v1: None,
+    palw_verifier_pay_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
@@ -16003,6 +16109,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
+    palw_legacy_public_filer_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -16019,6 +16126,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
+    palw_exec_payload_v2: None,
     palw_witness_manifest_v1: None,
     palw_audit_mesh_v1: None,
     palw_capped_onboarding_v1: None,
@@ -16275,6 +16383,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_typed_roots_v1: None,
+    palw_verifier_pay_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
@@ -16283,6 +16392,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
+    palw_legacy_public_filer_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -16299,6 +16409,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
+    palw_exec_payload_v2: None,
     palw_witness_manifest_v1: None,
     palw_audit_mesh_v1: None,
     palw_capped_onboarding_v1: None,
@@ -23612,6 +23723,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_gen_range_twin_v1();
     // RFC-0007's verification vertex, likewise.
     params.sync_palw_verification_vertex_v1();
+    // RFC-0008 v2's EXEC payload, likewise.
+    params.sync_palw_exec_payload_v2();
     // RFC-0007 Parts II and IV, likewise.
     params.sync_palw_witness_manifest_v1();
     params.sync_palw_audit_mesh_v1();
@@ -23622,6 +23735,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_tir_shard_segment_v2();
     // ADR-0032's amended reporter share (lane INTF), likewise.
     params.sync_palw_reporter_share_v2();
+    // The legacy route's public filer (lane LG14-A), likewise.
+    params.sync_palw_legacy_public_filer_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
     params.sync_palw_adapter_class_v1();
     // ADR-0096's decode constraint, likewise.
@@ -23895,6 +24010,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_gen_range_twin_v1: None,
     palw_probabilistic_constraints_v1: None,
     palw_typed_roots_v1: None,
+    palw_verifier_pay_v1: None,
     palw_panel_free_v1: None,
     palw_signed_registration_v1: None,
     palw_tir_shard_segment_v2: None,
@@ -23903,6 +24019,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
+    palw_legacy_public_filer_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -23919,6 +24036,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_improvement_v1: None,
     palw_held_close_chunks_v1: None,
     palw_verification_vertex_v1: None,
+    palw_exec_payload_v2: None,
     palw_witness_manifest_v1: None,
     palw_audit_mesh_v1: None,
     palw_capped_onboarding_v1: None,

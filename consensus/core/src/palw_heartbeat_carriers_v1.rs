@@ -212,6 +212,10 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::ProviderChallengeV1 { .. }
         | O::ProviderAnswerV1 { .. }
         | O::DaTransferV1 { .. }
+        // Lane LG14-A (tags 154–155): a reservation holds a claim's clocks rather than convicting; it is in the fee market, never a
+        // halt's obligation (the policy stays H-1's enumeration).
+        | O::DisputeReservedV1 { .. }
+        | O::DisputeReleasedV1 { .. }
         // LG14-B (tags 157–159, dormant): fee-market traffic, never an H-1 carrier — below their fence they ride unjudged (A-2), and
         // an H-1 carrier is asked of the gate at the template.
         | O::LegacyHeldDemandedV2 { .. }
@@ -225,6 +229,9 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         // equivocation evidence is a conviction needing no court, but like the round lane's it is outside H-1's enumeration.
         | O::VerificationVertexV1 { .. }
         | O::VertexEquivocationV1 { .. }
+        // RFC-0008 v2 (tag 130): a work-session root declaration is registry traffic in the fee market — it earns nothing and is
+        // no conviction or court move a halt must let through.
+        | O::ExecWorkRootOpenedV2 { .. }
         // RFC-0007 Part IV.1 (tags 93, 94): trap commitments and reveals are mesh traffic in the fee market.
         | O::TrapCommittedV1 { .. }
         | O::TrapRevealedV1 { .. }

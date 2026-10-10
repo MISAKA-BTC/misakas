@@ -129,6 +129,9 @@ pub use palw_class_seating_v1::{
 mod palw_held_close_fold_v1;
 #[path = "palw_vertex_fold_v1.rs"]
 mod palw_vertex_fold_v1;
+// RFC-0008 v2: the work-slice ledgers' fold arm — a child module for the same reason.
+#[path = "palw_exec_v2_fold.rs"]
+mod palw_exec_v2_fold;
 #[path = "palw_mesh_fold_v1.rs"]
 mod palw_mesh_fold_v1;
 #[path = "palw_kernel_route_fold_v1.rs"]
@@ -139,6 +142,13 @@ mod palw_onboarding_fold_v1;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
 #[path = "palw_provider_court_fold_v1.rs"]
 mod palw_provider_court_fold_v1;
+// Lane LG14-A: the legacy route's dispute reservations (tags 154–155), their lapse, release and burn, and the reserved DA budget.
+#[path = "palw_legacy_public_filer_fold_v1.rs"]
+mod palw_legacy_public_filer_fold_v1;
+pub use palw_legacy_public_filer_fold_v1::{
+    PalwFraudFilerCandidateV1, PalwFraudFilerReservationStatusV1, PalwFraudFilerStatusV1, PalwLegacyDisputeObservationV1,
+    PalwLegacyDisputeViewV1, palw_bond_text_v1, palw_legacy_dispute_reservation_check_v1,
+};
 // Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's fold — the engine's journal as deltas 190/191, the capital assignment's arm (tag
 // 140), the per-block clock and the reservation / consumption hooks. A child module for the same reason as the others.
 #[path = "palw_bond_budget_fold_v1.rs"]
@@ -151,7 +161,8 @@ mod palw_adapter_class_fold_v1;
 #[path = "palw_panel_v3_fold_v1.rs"]
 mod palw_panel_v3_fold_v1;
 pub use palw_panel_v3_fold_v1::{
-    ChainPanelBeaconHistoryV1, PalwPanelV3BeaconSourceV1, PalwPanelV3InputsV1, palw_panel_v3_final_events_v1,
+    ChainPanelBeaconHistoryV1, PalwPanelV3BeaconSourceV1, PalwPanelV3InputsV1, palw_panel_v3_epoch_sources_v1,
+    palw_panel_v3_final_events_v1,
 };
 
 /// Version 3: the integration of two independent version-2 bumps, neither of whose roots
@@ -1720,6 +1731,10 @@ pub struct PalwStateParamsV2 {
     /// tally read it). `None` on every shipped preset.
     #[borsh(skip)]
     vertex_from_daa: Option<u64>,
+    /// **RFC-0008 v2: `Params::palw_exec_payload_v2`'s height**, mirrored by `Params::sync_palw_exec_payload_v2` (the fold's root
+    /// declaration, slice admission and settlement read it). `None` on every shipped preset.
+    #[borsh(skip)]
+    exec_v2_from_daa: Option<u64>,
     /// **RFC-0007 Part II: `Params::palw_witness_manifest_v1`'s height** (mirrored by `Params::sync_palw_witness_manifest_v1`). `None` on every preset.
     #[borsh(skip)]
     witness_manifest_from_daa: Option<u64>,
@@ -1784,6 +1799,12 @@ pub struct PalwStateParamsV2 {
     /// refuses every armed one until the full-activation release names its height.
     #[borsh(skip)]
     reporter_share_v2_from_daa: Option<u64>,
+    /// **Lane LG14-A: `Params::palw_legacy_public_filer_v1`'s height**, mirrored by `Params::sync_palw_legacy_public_filer_v1` (the
+    /// dispute reservation's arms and the direct-proof session rule read it through [`Self::legacy_public_filer_active_at`]). `None`
+    /// on every shipped preset, and `validate_palw_legacy_public_filer_v1` refuses every armed one until the full-activation release
+    /// names its height.
+    #[borsh(skip)]
+    legacy_public_filer_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -2008,6 +2029,7 @@ impl PalwStateParamsV2 {
             held_close_chunks_from_daa: None,
             gen_range_twin_from_daa: None,
             vertex_from_daa: None,
+            exec_v2_from_daa: None,
             witness_manifest_from_daa: None,
             audit_mesh_from_daa: None,
             capped_from_daa: None,
@@ -2023,6 +2045,7 @@ impl PalwStateParamsV2 {
             bond_budget: None,
             audit_1004_from_daa: None,
             reporter_share_v2_from_daa: None,
+            legacy_public_filer_from_daa: None,
         })
     }
 
@@ -2433,6 +2456,23 @@ impl PalwStateParamsV2 {
         if self.reporter_share_v2_active_at(daa_score) { PALW_RCORE_REPORTER_REWARD_BPS_V2 } else { PALW_RCORE_REPORTER_REWARD_BPS_V1 }
     }
 
+    /// **Lane LG14-A: the public filer's mirror** — written by `Params::sync_palw_legacy_public_filer_v1` and by nothing else (and by
+    /// fixtures, which is how a test arms it); `None` where the fence is not armed.
+    pub fn with_legacy_public_filer_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.legacy_public_filer_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_legacy_public_filer_v1`'s height, if the network arms it (the mirror).
+    pub fn legacy_public_filer_from_daa(&self) -> Option<u64> {
+        self.legacy_public_filer_from_daa
+    }
+
+    /// **Is the legacy route's public filer in force at `daa_score`?** `false` on every shipped preset.
+    pub fn legacy_public_filer_active_at(&self, daa_score: u64) -> bool {
+        self.legacy_public_filer_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
     /// **RFC-0010: the permissionless Panel's mirror** — written by `Params::sync_palw_permissionless_panel_v1` and by nothing else
     /// (and by fixtures); `None` where the fence is not armed.
     pub fn with_panel_v3(mut self, mirror: Option<crate::palw_permissionless_panel_v1::PalwPanelV3ParamsV1>) -> Self {
@@ -2528,6 +2568,23 @@ impl PalwStateParamsV2 {
     /// **Is the verification vertex in force at `daa_score`?** `false` on every shipped preset.
     pub fn vertex_active_at(&self, daa_score: u64) -> bool {
         self.vertex_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0008 v2: the EXEC payload fence's mirror** — written by `Params::sync_palw_exec_payload_v2` and by nothing else (and by
+    /// fixtures); `None` where the fence is not armed.
+    pub fn with_exec_v2_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.exec_v2_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_exec_payload_v2`'s height, if the network arms it (the mirror).
+    pub fn exec_v2_from_daa(&self) -> Option<u64> {
+        self.exec_v2_from_daa
+    }
+
+    /// **Is the unified EXEC payload (`PXE2`, the work-slice ledgers) in force at `daa_score`?** `false` on every shipped preset.
+    pub fn exec_v2_active_at(&self, daa_score: u64) -> bool {
+        self.exec_v2_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// RFC-0007: the `witness_manifest` fence's mirror — written by its `Params::sync_*` and nothing else (and fixtures).
@@ -4660,7 +4717,8 @@ pub fn palw_accuser_exposure_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) 
             open.saturating_add(held)
         })
         .fold(0u128, u128::saturating_add);
-    courts.saturating_add(da)
+    // Lane LG14-A: a reservation's deposit (live or held) sits on the free half as a session's exposure does; zero below the fence.
+    courts.saturating_add(da).saturating_add(state.legacy_dispute_exposure_v1(bond))
 }
 
 /// **A-6: the room an accuser still has on its free half** — [`palw_rcore_gate_room_v1`] with
@@ -5378,6 +5436,12 @@ pub fn palw_rcore_deadline_v1(
     if !claim.phase.is_terminal() && da.is_some_and(|record| record.open_seat_sessions > 0) {
         return Ok(None);
     }
+    // **Lane LG14-A (RFC-0014 §7.3): a live dispute reservation holds every end of the claim** — no Final, no bind / receipt / redraw /
+    // unavailable / replay timeout, and no retirement of a Final claim — until its lapse at the claim's own hard deadline or the claim's
+    // outcome. The table is empty below `palw_legacy_public_filer_v1`, so every other row reads as it did.
+    if state.palw_legacy_dispute_holds_v1(claim_id) {
+        return Ok(None);
+    }
     // **Lane PL part C × G14 (SHARD)**: a lane-A claim whose next end past `palw_panel_unavailable_expiry` is uncharged owes no
     // deadline while an accusation is pending on it. Dormant: the fence is armed on no shipped preset.
     if !claim.phase.is_terminal() && state.palw_v2_expiry_held_v1(params, claim_id, claim) {
@@ -5404,6 +5468,9 @@ pub fn palw_rcore_deadline_v1(
                 .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?,
         ),
         PalwClaimPhaseV2::ReceiptLicensed { .. } if open_courts > 0 => None,
+        // **RFC-0008 v2: a licensed claim whose work session is not ready waits** — no `Final` deadline until every slice is accepted
+        // and verified (the claim is never voided or charged for the wait; the root's own expiry voids it, uncharged).
+        PalwClaimPhaseV2::ReceiptLicensed { .. } if state.exec_v2_holds_final_v1(claim_id) => None,
         // **RFC-0010 × G14 (SHARD): a V3 S2 licence owes no deadline while an accusation is pending** — its gate is an uncharged
         // expiry that would close the accusation neutrally. Dormant: no engine exists on any shipped chain.
         PalwClaimPhaseV2::ReceiptLicensed { .. } if state.palw_v3_s2_licence_held_v1(claim_id, claim) => None,
@@ -6077,6 +6144,20 @@ pub enum PalwVoidReasonV2 {
     /// could not enter the engine at all (a full bound, a class the V3 draw cannot serve). Not [`Self::NoCapablePanel`]: that reason
     /// keeps the E-4 obligation hold, and a V3 void charges the producer nothing and holds nothing. Explicit Borsh number **122**.
     PermissionlessNoCapablePanel = 122,
+    /// **RFC-0008 v2: the claim's work session expired before every slice was accepted and verified** — the root executor (or its
+    /// executors) did not deliver in time. A timeout is NOT a conviction (silence and absence are never an arithmetic fraud): the
+    /// claim ends with no reward, its reservation and the extra executors' exposure return, nothing is slashed and no strike is
+    /// written; a proven false slice is the verification route's conviction, not this reason. Explicit Borsh number **130**
+    /// (RFC-0008 v2's range 130–139); written only past `Params::palw_exec_payload_v2`.
+    WorkRootExpired = 130,
+    /// **RFC-0008 v2 amendment 1 (spec §10.2): a slice of the claim's work session was proven false** — its kernel claim was convicted
+    /// through the G14 route. The slice and every later slice are void and the session never settles. Not a V2 charge: the evidence-bound
+    /// slash is the kernel route's, on the slice executor's kernel reservation. Explicit Borsh number **131**.
+    WorkSliceProvenFalse = 131,
+    /// **RFC-0008 v2 amendment 1: a slice of the claim's work session defaulted** — its kernel claim is unavailable (withheld material)
+    /// or timed out, so the slice can never be verified. Same terms as [`Self::WorkSliceProvenFalse`]; the route's default penalty is the
+    /// charge. Explicit Borsh number **132**.
+    WorkSliceDefaulted = 132,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -8614,6 +8695,17 @@ pub enum PalwConsensusObjectV2 {
         signer: PalwBondKeyV2,
         signature: Vec<u8>,
     } = 109,
+    // Tags 130–139 are RFC-0008 v2's (the lead's allocation of 2026-10-08).
+    /// **RFC-0008 v2: a work-session root declaration (tag 130)** ([`crate::palw_work_slice_v2::PalwWorkRootDeclarationV2`]) — the
+    /// root bond's signed act that opens a long session on its own, already accepted, REAL attempt claim: the plan (prefix =
+    /// the claim's admitted canonical work, the slice boundaries), the job, the kernel and plan roots, the authorised extra
+    /// executors and the expiry. It earns nothing: no credit, no weight, no clock. Its signature is checked by the acceptance
+    /// layer under the claim bond's key; the fold checks the claim, its phase, the prefix, the job's one-use history, the quotas and
+    /// the executors' funded room. **Declared explicitly (130)**; below `palw_exec_payload_v2` the acceptance walk drops it by name
+    /// and the fold refuses it as the second lock.
+    ExecWorkRootOpenedV2 {
+        declaration: Box<crate::palw_work_slice_v2::PalwWorkRootDeclarationV2>,
+    } = 130,
     // Tags 150–153 are lane DA16's provider court (RFC-0009's reservation; the lead's allocation of 2026-10-09). Dropped by name below
     // `palw_provider_court_v1`; rows in the kernel route's aux tables 43–45. Every signature: the signer's ML-DSA-87 over
     // [`crate::palw_provider_court_v1::palw_provider_court_message_v1`] (kind = the tag, payload = the Borsh of the other fields).
@@ -8650,6 +8742,15 @@ pub enum PalwConsensusObjectV2 {
     /// **(tag 153): a kernel claim's producer moves the claim's DA responsibility to its leases** (irreversible; see
     /// [`crate::palw_provider_court_v1`]). **Tag 153.**
     DaTransferV1 { claim: Hash64, producer: PalwBondKeyV2, signature: Vec<u8> } = 153,
+    // Tags 154–155 are lane LG14-A's (the Lead's allocation 154–156 of 2026-10-10; 156 reserved). Dropped by name below
+    // `palw_legacy_public_filer_v1`; rows in `legacy_disputes` (delta 200, tail 0xE2). Every signature: the reserver's ML-DSA-87 over
+    // [`crate::palw_legacy_public_filer_v1::palw_legacy_dispute_message_v1`] (kind = the tag, payload = the Borsh of the other fields).
+    /// **(tag 154): a reservation of a pursuit of a live V2 claim** — a deposit on the reserver's free half that holds every end of
+    /// the claim until the claim's own hard deadline, and the reserver's own DA budget (RFC-0014 §7.2;
+    /// [`crate::palw_legacy_public_filer_v1`]). **Tag 154.**
+    DisputeReservedV1 { reservation: Box<crate::palw_legacy_public_filer_v1::PalwDisputeReservationV1>, signature: Vec<u8> } = 154,
+    /// **(tag 155): the reserver ends its own reservation**; its deposit is held until the claim resolves. **Tag 155.**
+    DisputeReleasedV1 { claim: Hash64, reserver: PalwBondKeyV2, signature: Vec<u8> } = 155,
     // ---- Lane LG14-B (RFC-0014 §4–§5 on the legacy V2 route, user decision GAP-80): tags 157–159, dormant behind
     // `palw_legacy_held_da_v2`; dropped by name below it (A-2). See [`crate::palw_legacy_held_da_v2`]. ----
     /// **(tag 157): a demand of one legacy held unit** — an interior node of a V2 claim's step or checkpoint tree, or a leaf's
@@ -8743,6 +8844,13 @@ pub fn palw_object_is_kernel_route_v1(object: &PalwConsensusObjectV2) -> bool {
             | PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. }
             | PalwConsensusObjectV2::KernelRouteChunkV1 { .. }
     )
+}
+
+/// **Is this object an RFC-0008 v2 work-session move** (tag 130) — a variant an older build cannot decode and skips (A-2)? Below
+/// `Params::palw_exec_payload_v2` the acceptance walk drops it by name before any slot, rent or budget is charged for it, and the
+/// fold refuses it as the second lock.
+pub fn palw_object_is_exec_v2(object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. })
 }
 
 /// **Is this object an RFC-0007 audit-mesh move** (tag 102 or 103) — a variant an older build cannot decode and skips (A-2)? Below
@@ -11174,6 +11282,10 @@ pub enum PalwStateV2Error {
     /// 4b a merged one; a free-prompt commitment or a rider batch is refused by name.
     #[error("bond {bond:?}'s budget refuses the claim: {why} (ADR-0176)")]
     BondBudgetExhausted { bond: PalwBondKeyV2, why: String },
+    /// **RFC-0008 v2: a work-session move the fold refuses**, by the rule's own reason (below the fence, a malformed or unbound
+    /// root declaration, a claim that may not open a session, a job already used, a quota, an unfunded executor).
+    #[error("a work-session move is refused: {0}")]
+    ExecV2Refused(String),
     /// **RFC-0007 Parts II and IV: a mesh move the fold refuses** (a trap object below its fence, an inadmissible commit or reveal,
     /// an audit leaf below `palw_audit_mesh_v1`), by the rule's own reason.
     #[error("an audit mesh move is refused: {0}")]
@@ -11217,6 +11329,11 @@ pub enum PalwStateV2Error {
     /// protocol's promotion or rollback.
     #[error("line {0} is governed by the improvement protocol: its head moves only by promotion or rollback")]
     ImprovementLineGoverned(Hash64),
+    // ---- lane LG14-A ----
+    /// **A dispute reservation move the fold refuses** (tags 154–155): below `palw_legacy_public_filer_v1` (the acceptance walk
+    /// drops it by name first; this is the second lock), or a rule of [`crate::palw_legacy_public_filer_v1`], by name.
+    #[error("the legacy route's dispute reservation refuses this: {0}")]
+    LegacyDisputeRefused(String),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -11461,6 +11578,10 @@ pub struct PalwChainStateV2 {
     /// One Some-only root block and one carriage tail (`0xE4`) once any row exists, which nothing below
     /// `Params::palw_verification_vertex_v1` can write.
     vertex: crate::palw_vertex_v1::PalwVertexStateV1,
+    /// **RFC-0008 v2: the work-slice ledgers** — `RootWorkBudget`, `WorkSliceUse` and `JobWorkUse`
+    /// ([`crate::palw_work_slice_v2::PalwExecV2StateV1`]). One Some-only root block and one carriage tail (`0xEE`) once any row
+    /// exists, which nothing below `Params::palw_exec_payload_v2` can write.
+    exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1,
     /// **RFC-0006: each IR class's layer-shard plan**, declared once by its registrant (`TirShardPlanDeclared`), with the
     /// cell shares derived at the declaration. Enters the root and the carriage (tail `0xE1`) only when non-empty —
     /// nothing can be written below `Params::palw_tir_shard_v1` — so a dormant network roots exactly as before.
@@ -11868,10 +11989,15 @@ pub struct PalwChainStateV2 {
     /// (`improvement-eval/v1`) and carriage tail (`0xCC`): empty below the fence.
     improvement_eval_jobs: BTreeMap<crate::palw_improve_eval_v1::PalwEvalJobKeyV1, crate::palw_improve_eval_v1::PalwEvalJobStateV1>,
     /// **RFC-0010: the permissionless Panel's engine** (`misaka-palw-panel`) — the claims admitted under the V3 rule in the order
-    /// the chain accepted them, their seals, snapshots, certified epoch outputs, bindings and retries. ONE Some-only root block
-    /// (`panel_v3/v1`), carriage tail `0xED`, delta numbers 170–173: `None` below `palw_permissionless_panel_v1`, which no
+    /// the chain accepted them, their seals, snapshots, certified epoch outputs, each live epoch's frozen beacon source set, bindings
+    /// and retries. ONE Some-only root block (`panel_v3/v1`), carriage tail `0xED`, delta numbers 170–174: `None` below
+    /// `palw_permissionless_panel_v1`, which no
     /// network can arm today. Its reservations are not a second ledger: a binding writes the V2 duty row and exposure.
     panel_v3: Option<misaka_palw_panel::PermissionlessPanelStateV1>,
+    /// **Lane LG14-A: the legacy route's dispute reservations**, by claim ([`crate::palw_legacy_public_filer_v1`]). One Some-only root
+    /// block (`legacy_disputes/v1`), carriage tail `0xE2`, delta 200 — all only when non-empty, which nothing below
+    /// `palw_legacy_public_filer_v1` (armed on no network) can make it.
+    legacy_disputes: BTreeMap<Hash64, crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
@@ -11960,6 +12086,11 @@ pub struct PalwChainStateV2 {
     /// refuted exposure** — what [`palw_accuser_exposure_v1`] and B-3's accuser clause read in
     /// `O(log n)`. Maintained by the two DA writers, rebuilt from the two maps, never hashed.
     da_by_accuser: BTreeSet<(PalwBondKeyV2, Hash64)>,
+    /// **Lane LG14-A: `(hard_deadline, claim)` for every dispute record that holds its claim** — the lapse sweep's queue. Maintained
+    /// by `write_legacy_dispute`, rebuilt from `legacy_disputes` by every load and delta path, never hashed.
+    legacy_dispute_deadlines: BTreeSet<(u64, Hash64)>,
+    /// **Lane LG14-A: `(bond, claim)` for every live or held reservation deposit** — what [`palw_accuser_exposure_v1`] reads.
+    legacy_disputes_by_reserver: BTreeSet<(PalwBondKeyV2, Hash64)>,
     /// **ADR-0160 F-W (lane cap-weight): per bond, the staged weight and the weight reservation of its
     /// live new-rule claims** ([`crate::palw_weight_cap_v1::PalwBondWeightIndexV1`]). Maintained by
     /// `write_claim` and `write_bond`, rebuilt from the claims by every load and delta path
@@ -12005,6 +12136,7 @@ impl PalwChainStateV2 {
             class_step_ladders: BTreeMap::new(),
             class_court_windows: BTreeMap::new(),
             vertex: crate::palw_vertex_v1::PalwVertexStateV1::default(),
+            exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1::default(),
             tir_shard_plans: BTreeMap::new(),
             tir_shard_claims: BTreeMap::new(),
             floor_state: None,
@@ -12096,6 +12228,7 @@ impl PalwChainStateV2 {
             improvement_composite_classes: BTreeMap::new(),
             improvement_eval_jobs: BTreeMap::new(),
             panel_v3: None,
+            legacy_disputes: BTreeMap::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -12123,6 +12256,8 @@ impl PalwChainStateV2 {
             vesting_payees: BTreeSet::new(),
             da_deadlines: BTreeSet::new(),
             da_by_accuser: BTreeSet::new(),
+            legacy_dispute_deadlines: BTreeSet::new(),
+            legacy_disputes_by_reserver: BTreeSet::new(),
             capacity_weight_index: Default::default(),
         }
     }
@@ -13382,7 +13517,9 @@ impl PalwChainStateV2 {
     /// never closed neutrally by a non-fraud void. Bounded: three non-seat DA sessions at once and sixteen over a claim's life,
     /// four per seat, each at most `W_disclose`; court sessions by the court's own capacity and backstop.
     pub fn palw_accusation_pending_v1(&self, claim_id: &Hash64) -> bool {
-        self.da_claims.get(claim_id).is_some_and(|record| record.open_sessions() > 0)
+        // Lane LG14-A: a live dispute reservation is a pending accusation (empty below `palw_legacy_public_filer_v1`).
+        self.palw_legacy_dispute_holds_v1(claim_id)
+            || self.da_claims.get(claim_id).is_some_and(|record| record.open_sessions() > 0)
             || self.open_courts_by_claim.get(claim_id).is_some_and(|open| *open > 0)
             || matches!(self.claims.get(claim_id).map(|claim| &claim.phase), Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
     }
@@ -14541,6 +14678,12 @@ impl PalwChainStateV2 {
             state.update(kernel.ledger_root().as_byte_slice());
             state.update(kernel.aux_root().as_byte_slice());
         }
+        // **Lane LG14-A.** Its own block, Some-only: empty until the first reservation past `palw_legacy_public_filer_v1`, which no
+        // network can arm, so a dormant network roots exactly as before.
+        if !self.legacy_disputes.is_empty() {
+            state.update(b"legacy_disputes/v1");
+            state.update(collection_root(b"legacy_disputes", &self.legacy_disputes).as_byte_slice());
+        }
         // **ADR-0124 Decisions 2 and 3.** Its own block, for the same reason: empty until a panel
         // is bound past `Params::palw_panel_economy`, and the reserve is zero until a pool leaves a
         // share unpaid, which only such a panel can do. Below the fence the root is the one a
@@ -14780,7 +14923,7 @@ impl PalwChainStateV2 {
         // **RFC-0010: the permissionless Panel's engine, ONE Some-only block** after the mesh's — the engine exists only from the
         // first block at or past `palw_permissionless_panel_v1`, which no network can arm today, so a network that never arms it
         // roots as before. The engine commits its own state (policy, cursor, claims, retained work identities, certified outputs,
-        // reservations) under one root.
+        // reservations, frozen epoch source sets) under one root.
         if let Some(panel) = &self.panel_v3 {
             state.update(b"panel_v3/v1");
             state.update(panel.root().as_byte_slice());
@@ -14795,6 +14938,15 @@ impl PalwChainStateV2 {
             for table in tables {
                 state.update(table.as_byte_slice());
             }
+        }
+        // **RFC-0008 v2: the work-slice ledgers, ONE Some-only block** — empty until a root is declared, which nothing below
+        // `palw_exec_payload_v2` can do.
+        if !self.exec_v2.is_empty() {
+            state.update(b"exec_v2/v1");
+            state.update(collection_root(b"exec_v2_roots", &self.exec_v2.roots).as_byte_slice());
+            state.update(collection_root(b"exec_v2_slices", &self.exec_v2.slices).as_byte_slice());
+            state.update(collection_root(b"exec_v2_jobs", &self.exec_v2.jobs).as_byte_slice());
+            state.update(collection_root(b"exec_v2_anchored", &self.exec_v2.anchored).as_byte_slice());
         }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
@@ -14860,6 +15012,7 @@ impl PalwChainStateV2 {
             }
         }
         self.assert_vertex_consistency_v1()?;
+        self.assert_exec_v2_consistency_v1()?;
         self.assert_mesh_consistency_v1()?;
         // RFC-0010: the permissionless Panel's engine is internally consistent and agrees with the claims, panels and duty rows.
         self.assert_panel_v3_consistency_v1(params)?;
@@ -14867,6 +15020,8 @@ impl PalwChainStateV2 {
         // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.
         if let Some(budget) = &self.bond_budget {
             budget.check_consistency().map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("bond budget: {why}")))?;
+            self.bond_budget_no_payout_before_final_v1()
+                .map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("bond budget: {why}")))?;
         }
         let mut exposure: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
         let mut safe: u128 = 0;
@@ -15183,6 +15338,12 @@ impl PalwChainStateV2 {
                 *held = held.checked_add(row.deposit).ok_or(PalwStateV2Error::Overflow("consistency trap deposit"))?;
             }
         }
+        // **RFC-0008 v2: a live root's extra executors stand behind it** — the claim's own reservation, held in
+        // `reserved_exposure` for the root's life and re-derived here from the root rows that hold it.
+        for (bond, held_by_root) in self.exec_v2_exposure_rows() {
+            let held = exposure.entry(bond).or_insert(0);
+            *held = held.checked_add(held_by_root).ok_or(PalwStateV2Error::Overflow("consistency exec v2 executor exposure"))?;
+        }
         // **ADR-0160 F-W: where the fence's mirror is set, a zero row and an absent row are one fact.**
         // A capped reservation can be 0 (a claim past its bond's `R_budget`), so a live claim may commit
         // nothing — and the ledger's writers drop a row that reaches 0 (`release_for_claim`,
@@ -15368,6 +15529,8 @@ impl PalwChainStateV2 {
             return Err(PalwStateV2Error::CarriageInconsistent("DA indexes differ from the DA sessions and records".into()));
         }
         self.assert_da_consistency_v1(params)?;
+        // Lane LG14-A: the dispute records, their indexes and their caps.
+        self.assert_legacy_disputes_consistency_v1(params)?;
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
         self.assert_held_forfeits_consistency_v1()?;
@@ -15386,6 +15549,10 @@ impl PalwChainStateV2 {
             if self.da_claims.get(id).is_some_and(|record| record.open_seat_sessions > 0) {
                 continue;
             }
+            // Lane LG14-A: a claim a live dispute reservation holds owes none (DL-1's reservation row; empty below the fence).
+            if self.palw_legacy_dispute_holds_v1(id) {
+                continue;
+            }
             // RFC-0010: the engine clocks a claim it tracks until the claim is licensed (it owes no V2 deadline).
             if matches!(claim.phase, PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. })
                 && self.panel_v3_clocks_claim_v1(id)
@@ -15396,6 +15563,10 @@ impl PalwChainStateV2 {
             if matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
                 && matches!(crate::palw_audit_door_v1::palw_capacity_audit_gate_v1(params, claim, self.audit_receipts.get(id)), Some(None))
             {
+                continue;
+            }
+            // RFC-0008 v2: a licensed claim whose work session is not ready owes none (DL-1's session row).
+            if matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) && self.exec_v2_holds_final_v1(id) {
                 continue;
             }
             // RFC-0010 × G14 (SHARD): a V3 S2 licence a pending accusation holds owes none (DL-1's G14 row), nor does a lane-A
@@ -16757,6 +16928,14 @@ pub enum PalwDeltaEntryV2 {
     PanelV3WorkId { key: Hash64, old: bool, new: bool } = 172,
     /// A certified epoch output was retained or dropped (**delta number 173**). Keyed by epoch.
     PanelV3Beacon { key: u64, old: Option<Hash64>, new: Option<Hash64> } = 173,
+    /// **An epoch's beacon source set was frozen or dropped** (**delta number 174**, RFC-0010's range). Keyed by epoch: `None → Some`
+    /// in the first block whose DAA reaches the epoch's commitment position (the freeze, once), `Some → None` once the epoch's
+    /// contribution window closed or no live claim is sealed for it. Never `Some → Some`. Dormant with the fence.
+    PanelV3EpochSources {
+        key: u64,
+        old: Option<misaka_palw_panel::EpochSourceSetV1>,
+        new: Option<misaka_palw_panel::EpochSourceSetV1>,
+    } = 174,
     /// **G14 lane D (delta number 160, declared explicitly; 160–169 are the kernel route's): a row of the kernel route state** was
     /// written, rewritten or dropped — `table` names the table (the ledger's own `1..=9`, the consensus tables `32..=34`, see
     /// [`crate::palw_kernel_route_v1`]), and the key and rows ride as their Borsh bytes. One entry for every table, so a table added
@@ -16768,6 +16947,13 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1>,
         new: Option<crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1>,
     } = 161,
+    /// **Lane LG14-A (delta number 200, declared explicitly; 200–204 are the lane's, 201–204 reserved): a claim's dispute record**
+    /// was written, rewritten or dropped. Dormant: `palw_legacy_public_filer_v1` is armed on no network, so no stored delta carries it.
+    LegacyDispute {
+        key: Hash64,
+        old: Option<crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
+        new: Option<crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
+    } = 200,
     /// **Lane BUDGET (delta number 190, declared explicitly; 190–199 are the bond budget's): a row of the bond budget** was written,
     /// rewritten or dropped — `table` names the table ([`crate::palw_bond_budget_v1::PALW_BUDGET_TABLE_BONDS_V1`] …), the key and row
     /// ride as their Borsh bytes. One entry for every table. Dormant: `palw_bond_budget_v1` is armed on no network.
@@ -16777,7 +16963,24 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_bond_budget_v1::PalwBondBudgetHeaderV1>,
         new: Option<crate::palw_bond_budget_v1::PalwBondBudgetHeaderV1>,
     } = 191,
+    /// **A row of one of RFC-0008 v2's work-slice tables was written or dropped** (**delta number 180, declared explicitly** — the
+    /// lead's allocation of 2026-10-08 is 180–189, and an explicit number cannot be moved by the order the branches merge in).
+    /// `table` names it ([`PALW_EXEC_V2_TABLE_ROOTS_V1`] …), and the key and rows ride as their borsh bytes: one entry for the three
+    /// tables, so a table added later takes a table id and not a delta discriminant. Dormant: `palw_exec_payload_v2` is armed on no
+    /// network, so no stored delta carries this variant.
+    ExecV2Row { table: u8, key: Vec<u8>, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 180,
+    /// **RFC-0008 v2's refusal record (delta number 181, a note)**: one per covered `EXEC_SLICE` carrier, in the fold's order — `code` 0
+    /// for an admitted slice, else [`crate::palw_work_slice_v2::PalwSliceRefusalV2::code`]. Applies and reverts as a no-op (like
+    /// `VestingNote`): it moves no state and no root; it makes each block's slice verdicts durable on the node that folded it and
+    /// branch-local by construction (the X8R review: the verdicts were computed and dropped).
+    ExecV2Verdict { carrier: Hash64, code: u8 } = 181,
 }
+
+/// RFC-0008 v2: the table ids of [`PalwDeltaEntryV2::ExecV2Row`].
+pub const PALW_EXEC_V2_TABLE_ROOTS_V1: u8 = 1;
+pub const PALW_EXEC_V2_TABLE_SLICES_V1: u8 = 2;
+pub const PALW_EXEC_V2_TABLE_JOBS_V1: u8 = 3;
+pub const PALW_EXEC_V2_TABLE_ANCHORED_V1: u8 = 4;
 
 /// The full effect one block application had on the state, in application order. Applying it to
 /// the same parent reproduces the transition's output exactly ([`apply_delta_v2`]); reverting it
@@ -16872,6 +17075,15 @@ impl<'a> PalwFoldReadV1<'a> {
 }
 
 impl PalwFoldReadV1<'_> {
+    /// **RFC-0008 v2 (X8R), a TEST SEAM: is `class_id` one whose REAL attempts skip the registry, seating and share gates?** Only
+    /// where the processor's `cfg(test)` hook named it (`PalwKernelRouteExtrasV1::test_admitted_classes`, empty in every build that is
+    /// not a test, and absent wherever the kernel route is not in force) — the composed EXEC-slice × G14 run's stand-in for the legacy
+    /// channel's Panel admission of the session's V2 REAL root (the Lead's GAP-81 decision: an onboarded class's V2 claims earn only
+    /// there; the harness cannot prove seat readiness).
+    pub(super) fn test_admitted_class_v1(&self, class_id: &Hash64) -> bool {
+        self.extras.kernel_route.as_ref().is_some_and(|route| route.test_admitted_classes.contains(class_id))
+    }
+
     /// **ADR-0152 S-SPEC §2 `claim_g_v1`: a claim's gain terms for the action tiers, FROZEN** (the
     /// S-4 review) — [`palw_claim_g_v1`]: the liability row's copy, else the claim record's
     /// licence-time `G_res`, else (unlicensed) its acceptance records' `w + R`. `G = g_res +
@@ -17003,9 +17215,16 @@ impl PalwFoldReadV1<'_> {
         let accuser_is_seat = panel.seats.iter().any(|seat| seat.bond == *accuser);
         let da = state.da_claims.get(claim_id);
         let exhausted = |why| Err(PalwStateV2Error::DaSessionBudgetExhausted { claim: *claim_id, accuser: *accuser, why });
+        // Lane LG14-A: a non-seat whose dispute reservation on the claim is live opens RESERVED sessions, on the reservation's own
+        // budget — never DA-8's shared non-seat budget, which a producer's Sybils could exhaust. Empty below the fence.
+        let reserved = (!accuser_is_seat).then(|| state.legacy_dispute_reservation_v1(claim_id, accuser)).flatten();
         if accuser_is_seat {
             if da.and_then(|record| record.opened_by_seat.get(accuser)).copied().unwrap_or(0) >= PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1 {
                 return exhausted("a seat opens at most four sessions on a claim over its life");
+            }
+        } else if let Some(row) = reserved {
+            if row.sessions_opened >= crate::palw_legacy_public_filer_v1::PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1 {
+                return exhausted("a dispute reservation opens at most sixteen sessions on its claim");
             }
         } else {
             if da.map(|record| record.open_other_sessions).unwrap_or(0) >= PALW_DA_OPEN_NON_SEAT_PER_CLAIM_V1 {
@@ -17680,6 +17899,10 @@ impl PalwFoldReadV1<'_> {
     /// ([`crate::palw_work_target_v1::palw_panel_held_to_final_v1`]), the rule below the fence, and
     /// the cap before the registry governs count it as its whole claims.
     fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64, incoming: PalwGatedClaimV1) -> Result<(), PalwStateV2Error> {
+        // RFC-0008 v2 (X8R): the composed run's test seam — empty in production (`test_admitted_class_v1`).
+        if self.test_admitted_class_v1(class_id) {
+            return Ok(());
+        }
         // **ADR-0165 A″: the base floor is the idle-only bonded fallback.** First, before any lifecycle or room question:
         // the floor state advanced to `now_daa` must be Idle. (The fold advances it at the block's start and after every REAL
         // attempt it accepts, so a floor attempt reads the state at its place in the fold's order.)
@@ -18567,6 +18790,10 @@ impl PalwFoldReadV1<'_> {
     /// with the fence off) [`Self::bond_class_share_v1`] is `None` and this is `Ok` without
     /// reading anything.
     fn check_bond_class_share(&self, bond: &PalwBondKeyV2, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        // RFC-0008 v2 (X8R): the composed run's test seam — empty in production (`test_admitted_class_v1`).
+        if self.test_admitted_class_v1(class_id) {
+            return Ok(());
+        }
         // ADR-0160 F-R: past `palw_capacity_verify_room` the stake-proportional share replaces
         // T-2(a)'s `⌈c/2⌉` (`bond_class_share_for_v1`); below it this is T-2(a) byte for byte.
         // ADR-0160 stage 4 (F-N): past F-N a model class's room is divided by lane N's rule over the class's
@@ -21850,6 +22077,13 @@ impl<'a> TransitionBuilder<'a> {
     /// confirmed default: DA-6's "a confirmed or released session returns its exposure"); with
     /// `convicted`, every `refuted_held` entry returns to its accuser as well (DA-6, N13).
     fn da_release_all_v1(&mut self, claim_id: Hash64, convicted: bool, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        self.da_release_sessions_v1(claim_id, convicted, now_daa)?;
+        // Lane LG14-A: every dispute reservation on the claim ends with the claim's outcome (no-op below the fence).
+        self.legacy_dispute_release_all_v1(claim_id, convicted, now_daa)
+    }
+
+    /// [`Self::da_release_all_v1`]'s DA half, unchanged.
+    fn da_release_sessions_v1(&mut self, claim_id: Hash64, convicted: bool, now_daa: u64) -> Result<(), PalwStateV2Error> {
         if !self.state.da_claims.contains_key(&claim_id) {
             return Ok(());
         }
@@ -23587,7 +23821,7 @@ impl<'a> TransitionBuilder<'a> {
         evidence_id: Hash64,
         evidence: &[u8],
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_offence_attribution_v1::{palw_check_panel_false_valid_v2, palw_false_valid_offence_id_v2};
+        use crate::palw_offence_attribution_v1::{palw_check_panel_false_valid_at_v2, palw_false_valid_offence_id_v2};
         use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
         if crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != evidence_id {
             return Err(PalwStateV2Error::ObjectiveOffenceRefused(
@@ -23610,7 +23844,7 @@ impl<'a> TransitionBuilder<'a> {
         }
         self.charge_heavy_prompt_ids_v1(ctx.daa_score, &accused, PalwOffenceKindV1::PanelFalseValidV2, evidence_id, evidence)?;
         // The reporter slot is F7's; until its fence arms it the adjudicator refuses a filled one.
-        let finding = palw_check_panel_false_valid_v2(
+        let finding = palw_check_panel_false_valid_at_v2(
             &self.state,
             &accused,
             evidence,
@@ -23618,6 +23852,7 @@ impl<'a> TransitionBuilder<'a> {
             false,
             self.identity_rules_v1(ctx.daa_score),
             None,
+            self.session_rule_v1(ctx.daa_score),
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
         let claim_id = finding.target.claim_id;
@@ -23908,6 +24143,13 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
+    /// **RFC-0014 §7.4 (lane LG14-A): the session rule a direct proof is judged under at this block** — `DirectProofFirst` past
+    /// `palw_legacy_public_filer_v1` (the bundle's mirror), int-12's `RefusedUnderSession` below it. The processor's gate reads the
+    /// same fence (`palw_session_rule_at`).
+    fn session_rule_v1(&self, now_daa: u64) -> crate::palw_offence_attribution_v1::PalwSessionRuleV1 {
+        crate::palw_offence_attribution_v1::PalwSessionRuleV1::at(self.params.legacy_public_filer_active_at(now_daa))
+    }
+
     fn identity_rules_v1(&self, now_daa: u64) -> crate::palw_offence_attribution_v1::PalwIdentityRulesV1 {
         crate::palw_offence_attribution_v1::PalwIdentityRulesV1 {
             prompt_ids_form: self.extras.prompt_ids_form_v1(),
@@ -24031,7 +24273,7 @@ impl<'a> TransitionBuilder<'a> {
         evidence_id: Hash64,
         evidence: &[u8],
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_offence_attribution_v1::{palw_check_executor_refuted_v1, palw_executor_refuted_offence_id_v1};
+        use crate::palw_offence_attribution_v1::{palw_check_executor_refuted_at_v1, palw_executor_refuted_offence_id_v1};
         use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
         if crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != evidence_id {
             return Err(PalwStateV2Error::ObjectiveOffenceRefused(
@@ -24040,13 +24282,14 @@ impl<'a> TransitionBuilder<'a> {
             ));
         }
         self.charge_heavy_prompt_ids_v1(ctx.daa_score, &accused, PalwOffenceKindV1::ExecutorRefuted, evidence_id, evidence)?;
-        let finding = palw_check_executor_refuted_v1(
+        let finding = palw_check_executor_refuted_at_v1(
             &self.state,
             &accused,
             evidence,
             self.params.fp_decode_rules_at(ctx.daa_score),
             false,
             self.identity_rules_v1(ctx.daa_score),
+            self.session_rule_v1(ctx.daa_score),
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
         let claim_id = finding.target.claim_id;
@@ -24129,7 +24372,7 @@ impl<'a> TransitionBuilder<'a> {
         evidence_id: Hash64,
         evidence: &[u8],
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_offence_attribution_v1::{palw_check_tir_identity_mismatch_v1, palw_tir_identity_offence_id_v1};
+        use crate::palw_offence_attribution_v1::{palw_check_tir_identity_mismatch_at_v1, palw_tir_identity_offence_id_v1};
         use crate::palw_offence_v1::PalwOffenceKindV1;
         if crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != evidence_id {
             return Err(PalwStateV2Error::ObjectiveOffenceRefused(
@@ -24140,9 +24383,15 @@ impl<'a> TransitionBuilder<'a> {
         if !self.params.rcore_plus_active_at(ctx.daa_score) {
             return Err(PalwStateV2Error::ObjectiveOffenceDormant);
         }
-        let finding =
-            palw_check_tir_identity_mismatch_v1(&self.state, &accused, evidence, false, self.identity_rules_v1(ctx.daa_score))
-                .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
+        let finding = palw_check_tir_identity_mismatch_at_v1(
+            &self.state,
+            &accused,
+            evidence,
+            false,
+            self.identity_rules_v1(ctx.daa_score),
+            self.session_rule_v1(ctx.daa_score),
+        )
+        .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
         let claim_id = finding.target.claim_id;
         let offence_id = palw_tir_identity_offence_id_v1(&accused.0, &claim_id);
         if self.state.consumed_offences.contains_key(&offence_id) {
@@ -24370,7 +24619,7 @@ impl<'a> TransitionBuilder<'a> {
         // Lane BUDGET: a budgeted claim's reversal takes back exactly what its Final (or its spends) was granted; nothing returns to its
         // bond's window.
         let weight = self.state.bond_budget_weight_or(&id, weight);
-        self.bond_budget_close_v1(&id);
+        self.bond_budget_close_v1(&id, ctx.daa_score);
         self.state.safe_weight = self.state.safe_weight.saturating_sub(weight);
         self.unnote_model_probe_pass(&claim, final_daa, ctx.daa_score);
         self.unnote_activation_probe_credits_v1(&id, &claim);
@@ -27421,6 +27670,20 @@ impl<'a> TransitionBuilder<'a> {
         // void or a Final) can arm what DL-1 would not rebuild. `da_claims` is empty below
         // `palw_rcore_plus`, where this is the plain insert it always was.
         let mut deadline = deadline;
+        // Lane LG14-A: DL-1's dispute-reservation row, at the same primitive — a claim a live reservation holds owes none.
+        if self.state.palw_legacy_dispute_holds_v1(&claim) {
+            return;
+        }
+        // **RFC-0008 v2: a licensed claim whose work session is not ready owes no `Final` deadline** — the same pause a DA session
+        // takes, at the same primitive, so no arm site (a licence, a court close, a DA close, a re-arm) can arm what DL-1 would not
+        // rebuild. Only a LICENSED claim's deadline is the `Final` one; a bind or a receipt deadline still fires. The roots table is
+        // empty below the fence, where this is one lookup on an empty map.
+        if self.state.exec_v2.roots.contains_key(&claim)
+            && self.state.claims.get(&claim).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }))
+            && self.state.exec_v2_holds_final_v1(&claim)
+        {
+            return;
+        }
         // Lane PL part C × G14 (SHARD): DL-1's hold row, at the same primitive — a held lane-A claim owes none.
         if self.state.claims.get(&claim).is_some_and(|c| !c.phase.is_terminal() && self.state.palw_v2_expiry_held_v1(self.params, &claim, c)) {
             return;
@@ -27709,6 +27972,9 @@ impl<'a> TransitionBuilder<'a> {
                 | PalwVoidReasonV2::SealUnavailable
                 | PalwVoidReasonV2::BeaconUnavailable
                 | PalwVoidReasonV2::PermissionlessNoCapablePanel
+                | PalwVoidReasonV2::WorkRootExpired
+                | PalwVoidReasonV2::WorkSliceProvenFalse
+                | PalwVoidReasonV2::WorkSliceDefaulted
         ) {
             return Ok(0);
         }
@@ -27745,6 +28011,9 @@ impl<'a> TransitionBuilder<'a> {
             PalwVoidReasonV2::SealUnavailable
             | PalwVoidReasonV2::BeaconUnavailable
             | PalwVoidReasonV2::PermissionlessNoCapablePanel => false,
+            // RFC-0008 v2: an expired work session is a timeout, never a charge (the guard above returns first); a slice proven false or
+            // defaulted is the kernel route's charge, never a second one here.
+            PalwVoidReasonV2::WorkRootExpired | PalwVoidReasonV2::WorkSliceProvenFalse | PalwVoidReasonV2::WorkSliceDefaulted => false,
         };
         // A free-prompt claim's receipt rights (#5) are its fraud gain as the escrow is an attempt's,
         // so they go on the same reasons. The escrow slot is the ledger's (ADR-0160 E-5): past
@@ -27790,7 +28059,10 @@ impl<'a> TransitionBuilder<'a> {
                 | PalwVoidReasonV2::PanelUnavailable
                 | PalwVoidReasonV2::SealUnavailable
                 | PalwVoidReasonV2::BeaconUnavailable
-                | PalwVoidReasonV2::PermissionlessNoCapablePanel => 0,
+                | PalwVoidReasonV2::PermissionlessNoCapablePanel
+                | PalwVoidReasonV2::WorkRootExpired
+                | PalwVoidReasonV2::WorkSliceProvenFalse
+                | PalwVoidReasonV2::WorkSliceDefaulted => 0,
             }
         };
         let nominal = claim.reserved.saturating_add(escrow).saturating_add(action);
@@ -28122,7 +28394,11 @@ impl<'a> TransitionBuilder<'a> {
         // Below the fence (every other network, and a t12 twin with the fence off) nothing moves.
         let vests = self.params.rcore_plus_active_at(final_daa);
         let mut vested: Option<PalwVestedRewardV1> = None;
+        // RFC-0008 v2: whether the claim's work session was settled (and its slice executors' legs read out below). It stays `false`
+        // for a claim with no root — every claim below the fence — and then a nil settlement below is a no-op.
+        let mut exec_settled = false;
         if claim.escrowed_reward > 0 {
+            let exec_legs: Vec<(PalwBondKeyV2, u64)>;
             // The bond must still be there to name a payee. It is, unless the registry dropped a
             // bond that still had live claims — an invariant break, not a payout policy — so this
             // errors rather than skipping: a silently unpaid producer is worse than a refused
@@ -28154,7 +28430,20 @@ impl<'a> TransitionBuilder<'a> {
             // **Lane BUDGET (ADR-0176 D3, design §2.6): the reward under the budget**, before the buyback and the panel split, so every
             // leg derives from it; the rest is never named — never minted. Unchanged for an unbudgeted claim.
             let escrow = self.bond_budget_final_reward_v1(&id, escrow);
-            let slice = self.model_buyback_at_final(&id, claim, escrow);
+            // **Lane BUDGET, PESG §6: the external export cap.** What leaves the chain's books at Final — a leg written straight into the
+            // payout queue (no vesting), or a buyback slice in a market reserve a holder can sell out of — is at most 0.51 of the
+            // collateral the claim's liability still holds; a vesting leg is not an export (it moves once the lock has ended). The rest
+            // is never named (never minted). Unchanged below the fence.
+            let export_cap = self.bond_budget_export_cap_v1(&id, claim, final_daa);
+            let escrow = match export_cap {
+                Some(cap) if !vests => escrow.min(cap),
+                _ => escrow,
+            };
+            let slice = if export_cap.is_some_and(|cap| crate::palw_model_market_v1::palw_model_buyback_slice_v1(escrow) > cap) {
+                0
+            } else {
+                self.model_buyback_at_final(&id, claim, escrow)
+            };
             let reward = escrow - slice;
             // **ADR-0124 Decisions 1 and 2: the panel's share.** A claim whose panel holds a duty
             // row — bound past `Params::palw_panel_economy`, which is the only way a row exists —
@@ -28187,6 +28476,11 @@ impl<'a> TransitionBuilder<'a> {
                                 split.reserve,
                             ),
                         };
+                    // RFC-0008 v2: the root executor's leg is split by work share with the slice executors, once (a no-op, and
+                    // `(producer_amount, [])`, for a claim with no work session).
+                    let (producer_amount, legs) = palw_exec_v2_fold::settle_at_final_v2(self, &id, producer_amount, final_daa)?;
+                    exec_legs = legs;
+                    exec_settled = true;
                     if vests {
                         // V-2: the same legs, named in the row — each credited seat's payload read
                         // from its bond HERE, at Final (I-5: a moved leg never re-reads the bond).
@@ -28218,6 +28512,9 @@ impl<'a> TransitionBuilder<'a> {
                     }
                 }
                 None if vests => {
+                    let (reward, legs) = palw_exec_v2_fold::settle_at_final_v2(self, &id, reward, final_daa)?;
+                    exec_legs = legs;
+                    exec_settled = true;
                     vested = Some(PalwVestedRewardV1 {
                         producer: PalwPayoutV2 { payload: payout_payload, amount: reward },
                         seats: Vec::new(),
@@ -28226,15 +28523,29 @@ impl<'a> TransitionBuilder<'a> {
                     });
                 }
                 None => {
+                    let (reward, legs) = palw_exec_v2_fold::settle_at_final_v2(self, &id, reward, final_daa)?;
+                    exec_legs = legs;
+                    exec_settled = true;
                     if reward > 0 {
                         self.write_payout(id, Some(PalwPayoutV2 { payload: payout_payload, amount: reward }));
                     }
                 }
             }
+            // RFC-0008 v2: each slice executor's leg, paid as a seat's is (keyed by payee, accumulated) — never a carrier subsidy.
+            // These legs are not vested: no post-Final conviction route for a slice exists in this release (a gate).
+            for (bond, amount) in &exec_legs {
+                let leg_payload = self.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?.payout_payload;
+                self.add_panel_payout(leg_payload, *amount)?;
+            }
+        }
+        // RFC-0008 v2: a claim with a session whose reward leg was nil (no escrow) still settles — once, owing nothing — so the
+        // root is marked and the executors' exposure returns.
+        if !exec_settled {
+            palw_exec_v2_fold::settle_at_final_v2(self, &id, 0, final_daa)?;
         }
         // Lane BUDGET: an attempt's Final is terminal for its budget (a free-prompt claim's spends come after its Final).
         if matches!(claim.source, PalwClaimSourceV2::Attempt) {
-            self.bond_budget_close_v1(&id);
+            self.bond_budget_close_v1(&id, final_daa);
         }
         // ADR-0132 Upgrade C: the snapshot leaves with the claim — it was read above, once.
         self.write_claim_economics(id, None);
@@ -28296,7 +28607,7 @@ impl<'a> TransitionBuilder<'a> {
             _ => {}
         }
         // Lane BUDGET (ADR-0176 D4): a void is terminal for the claim's budget — and returns nothing to the window before `d + W`.
-        self.bond_budget_close_v1(&id);
+        self.bond_budget_close_v1(&id, voided_daa);
         // **ADR-0152 §4-ter C3: a void by any route closes every court session on the claim
         // NEUTRALLY**, past `palw_offence_attribution`: the session is removed (its challenger's
         // reservation released by `write_court`), nobody is slashed and no court time is charged —
@@ -28351,6 +28662,9 @@ impl<'a> TransitionBuilder<'a> {
         // claim — before the phase write drops the row this reads. A seat's fault is the court's
         // and the quorum's business, charged where it is proven, never here.
         self.release_seat_duties(&id)?;
+        // RFC-0008 v2: a work session on the claim goes void with it and its extra executors' exposure returns (a no-op for a claim
+        // with no root, which is every claim below the fence).
+        palw_exec_v2_fold::on_claim_voided_v2(self, &id, voided_daa)?;
         self.persist_panel_liability(id, claim, voided_daa, Some((voided_daa, reason)))?;
         // Audit C5, free-prompt half: an abandoned commitment holds its reservation for the
         // configured span instead of releasing it here, so a redraw costs collateral rather than
@@ -28535,6 +28849,10 @@ impl<'a> TransitionBuilder<'a> {
         }
         // ADR-0152 DA-6 (M3): the claim's DA record retires with it, burning unrefunded exposure.
         self.da_retire_v1(id)?;
+        // Lane LG14-A: and its dispute record, burning every held reservation deposit no conviction refunded.
+        self.legacy_dispute_retire_v1(id)?;
+        // RFC-0008 v2: the claim's work session, slices and job tombstone retire with it (a no-op for a claim with no root).
+        palw_exec_v2_fold::on_claim_retired_v2(self, &id);
         self.write_claim(id, None);
         // Lane BUDGET: the claim left the state; its budget row leaves once it is out of its window too.
         self.bond_budget_forget_v1(&id);
@@ -29287,6 +29605,8 @@ pub fn palw_v2_pre_object_base_v1(
     sweep_reward_reveals(&mut builder, ctx)?;
     // ADR-0152 DA-7 (M3): the pre-object base mirrors step 2 exactly (V-4's fold order).
     sweep_da_sessions(&mut builder, ctx)?;
+    // Lane LG14-A: the dispute reservations' lapse, as the fold's step 2 runs it.
+    palw_legacy_public_filer_fold_v1::sweep_legacy_disputes(&mut builder, ctx)?;
     sweep_court_close_deadlines(&mut builder, ctx)?;
     sweep_court_deadlines(&mut builder, ctx)?;
     // Lane F2-lock (post-launch): the crossing block's re-date, right after the court sweeps as in the
@@ -29305,6 +29625,8 @@ pub fn palw_v2_pre_object_base_v1(
     // RFC-0007: the vertex rounds past their evidence window (a no-op on a chain with no row).
     palw_vertex_fold_v1::sweep_vertex_rounds_v1(&mut builder, ctx);
     palw_mesh_fold_v1::sweep_mesh_v1(&mut builder, ctx);
+    // RFC-0008 v2: the work sessions past their expiry void their claims, uncharged (a no-op on a chain with no root).
+    palw_exec_v2_fold::sweep_expired_roots_v2(&mut builder, ctx)?;
     apply_work_target_shadow(&mut builder, parent, ctx);
     apply_work_target(&mut builder, parent, ctx);
     apply_class_share_growth(&mut builder, parent, ctx);
@@ -29679,6 +30001,8 @@ pub fn apply_palw_transition_v7(
     // unanswered default, in `(deadline, claim, accuser)` order — after the claim sweep (V-4's step 2),
     // before the courts.
     sweep_da_sessions(&mut builder, ctx)?;
+    // Lane LG14-A: every dispute reservation whose claim's hard deadline is behind this block lapses, right after the DA sweep.
+    palw_legacy_public_filer_fold_v1::sweep_legacy_disputes(&mut builder, ctx)?;
     // A declared close is swept at ITS OWN window before the session's backstop is read (audit
     // H-2c). Before the backstop, because the two can coincide — `assembly_deadline_daa` is never
     // above `session.deadline_daa` — and the group's window is the tighter statement: the party
@@ -29711,6 +30035,8 @@ pub fn apply_palw_transition_v7(
     // `palw_v2_pre_object_base_v1`). A no-op on a chain with no row.
     palw_vertex_fold_v1::sweep_vertex_rounds_v1(&mut builder, ctx);
     palw_mesh_fold_v1::sweep_mesh_v1(&mut builder, ctx);
+    // RFC-0008 v2: the work sessions past their expiry void their claims, uncharged (a no-op on a chain with no root).
+    palw_exec_v2_fold::sweep_expired_roots_v2(&mut builder, ctx)?;
     // ADR-0143 Decision 6: the one-time canonicalisation, before any object of this block is
     // folded — a block that crosses the fence AND founds a line must see the index the migration
     // built, not the empty one it found.
@@ -29810,6 +30136,14 @@ pub fn apply_palw_transition_v7(
     // 3″. G14 lane D: the kernel route's closing step — demand deadlines, windows, Final, liability release, and the settlements
     //     they decide — after every object of the block. A no-op for a route with no claim and no demand (and on every network).
     palw_kernel_route_fold_v1::tick_kernel_route_v1(&mut builder, ctx)?;
+    #[cfg(test)]
+    for (table, key, row) in &extras.exec_v2_test_kernel_rows {
+        builder.write_kernel_row(*table, key.clone(), row.clone());
+    }
+    // 3‴. RFC-0008 v2 amendment 1: every work slice follows its kernel claim — Final verifies it, a conviction or a default voids its
+    //     suffix and its root — read right after the route's closing step, so what the route decided in this block counts in it. A
+    //     no-op with no root or no kernel route (every network).
+    palw_exec_v2_fold::sync_slice_verification_v2(&mut builder, ctx)?;
     // 3′. The 2026-09-23 Position route matrix, P-B1: the carrier-borne market moves acceptance
     //     refused are paid back — after every object, so no object of this block is quoted against
     //     a queue its own refunds changed (the acceptance rehearsal folds objects only, and must
@@ -30179,6 +30513,21 @@ pub fn apply_palw_transition_v7(
     //    else in the fold reads them, and at a fixed place because fixed IS the requirement.
     if extras.round_lane.is_some() {
         builder.record_round_permits(&extras.round_permit_uses)?;
+    }
+    // 7b. **RFC-0008 v2: the work slices this block's covered set carries**, after the objects (a root declared in this very block may
+    //     take a slice) and after the permits (the two ledgers never read each other). Each is judged against the running state; a
+    //     refused carrier is a lane verdict and writes nothing. A no-op on every chain below the fence.
+    if !extras.exec_v2_covered.is_empty() {
+        palw_exec_v2_fold::apply_covered_slices_v2(&mut builder, ctx, &extras.exec_v2_covered)?;
+    }
+    // 7c. **RFC-0008 v2: record what the anchor covered** — the carriers' own ledgers have spoken, so the covered set itself is
+    //     written last, at a fixed place. Drops the entries the window has passed.
+    if let Some(anchor) = &extras.exec_v2_anchor {
+        palw_exec_v2_fold::record_exec_anchor_v2(&mut builder, anchor)?;
+    }
+    #[cfg(test)]
+    for (claim, index) in &extras.exec_v2_test_verified {
+        palw_exec_v2_fold::mark_slice_verified_for_tests(&mut builder, *claim, *index, ctx.daa_score)?;
     }
 
     // 8. **ADR-0164 F-K: the breaker's epoch evaluation** — at the END of the first chain block at or past each aligned epoch boundary,
@@ -30788,7 +31137,13 @@ fn open_da_session_rcore_v1(
     // ADR-0152 §4-ter.3 step 6 (the second review's MEDIUM): the challenger of a live held forfeit on
     // this claim pauses it as a seat does, once a record — counted with the seats' sessions (DL-1 and
     // DA-5 read nothing else), after DA-8 admitted it on the budget its standing gives it.
-    let seat_like = admission.accuser_is_seat || (!claim.phase.is_terminal() && builder.held_forfeit_pauses_v1(claim_id, accuser));
+    // Lane LG14-A: a reserved session (a non-seat whose dispute reservation on the claim is live) is seat-like too, counted on its
+    // reservation's budget. Evaluated before the held-forfeit pause so a reserved session never spends that record's one pause; below
+    // `palw_legacy_public_filer_v1` no reservation exists and the expression is the one it was.
+    let reserved =
+        !admission.accuser_is_seat && builder.state.legacy_dispute_reservation_v1(&claim_id, &accuser).is_some();
+    let seat_like =
+        admission.accuser_is_seat || reserved || (!claim.phase.is_terminal() && builder.held_forfeit_pauses_v1(claim_id, accuser));
     let session = PalwDaSessionV1 {
         opened_daa: ctx.daa_score,
         deadline_daa: admission.deadline_daa,
@@ -30804,6 +31159,9 @@ fn open_da_session_rcore_v1(
         if admission.accuser_is_seat {
             let opened = record.opened_by_seat.entry(accuser).or_insert(0);
             *opened = opened.saturating_add(1);
+        } else if reserved {
+            // Lane LG14-A: on the reservation's own budget; neither DA-8 count moves.
+            builder.legacy_dispute_count_session_v1(claim_id, accuser);
         } else {
             // **The fourth review's HIGH: a record-holder's pause is not a seat's session.** It is
             // counted with the seats' OPEN sessions (`open_seat_sessions`, `paused_since`: all DA-5 and
@@ -34840,8 +35198,12 @@ fn palw_fold_kind_in_force_v1(builder: &TransitionBuilder<'_>, ctx: &PalwBlockCo
         K::Fence(F::ProviderCourtV1) => builder.extras.kernel_route.as_ref().is_some_and(|route| route.provider_court.is_some()),
         // Lane LG14-B: the extras flag the processor resolves from `palw_legacy_held_da_v2` at the block.
         K::Fence(F::LegacyHeldDaV2) => builder.extras.legacy_held_da_v2_active,
+        // Lane LG14-A: the bundle's mirror of `palw_legacy_public_filer_v1` (synced from `Params`).
+        K::Fence(F::LegacyPublicFilerV1) => builder.params.legacy_public_filer_active_at(ctx.daa_score),
         // Lane BUDGET: the mirror carries the allocation's height (at or past the budget's) exactly where both fences are armed.
         K::Fence(F::ModelBondAllocationV1) => builder.params.bond_budget().is_some_and(|mirror| mirror.allocation_at(ctx.daa_score).is_some()),
+        // RFC-0008 v2: the mirror of `palw_exec_payload_v2` (written only on a `ConsensusV2` network).
+        K::Fence(F::ExecPayloadV2) => builder.params.exec_v2_active_at(ctx.daa_score),
     }
 }
 
@@ -34964,6 +35326,11 @@ fn apply_object(
     if palw_object_is_vertex_v1(object) && !builder.params.vertex_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::VertexRefused(crate::palw_vertex_v1::PalwVertexErrorV1::Dormant.to_string()));
     }
+    // **RFC-0008 v2, likewise**: below `palw_exec_payload_v2` a work-session root declaration is a payload an older build cannot
+    // decode; the acceptance walk drops it by name, and this is the second lock.
+    if palw_object_is_exec_v2(object) && !builder.params.exec_v2_active_at(ctx.daa_score) {
+        return Err(PalwStateV2Error::ExecV2Refused(crate::palw_work_slice_v2::PalwWorkRootRefusalV2::Dormant.to_string()));
+    }
     // **RFC-0007 Part IV.1, likewise**: below `palw_audit_mesh_v1` a trap move is a payload an older build cannot decode.
     if palw_object_is_mesh_v1(object) && !builder.params.audit_mesh_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::MeshRefused(crate::palw_mesh_v1::PalwMeshErrorV1::Dormant("palw_audit_mesh_v1").to_string()));
@@ -34989,6 +35356,10 @@ fn apply_object(
         // it does not verify, the block standing ----
         PalwConsensusObjectV2::PanelBeaconProofV3 { proof } => {
             palw_panel_v3_fold_v1::queue_beacon_object_v1(builder, proof);
+        }
+        // ---- RFC-0008 v2: a work-session root declaration (tag 130) ----
+        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { declaration } => {
+            palw_exec_v2_fold::apply_root_declared_v2(builder, ctx, declaration)?;
         }
         // ---- RFC-0007 Part I: the verification vertex (tags 100, 101) ----
         PalwConsensusObjectV2::VerificationVertexV1 { vertex } => {
@@ -35366,6 +35737,14 @@ fn apply_object(
         PalwConsensusObjectV2::DaTransferV1 { claim, producer, signature: _ } => {
             palw_provider_court_fold_v1::apply_da_transfer_v1(builder, ctx, claim, producer)?;
         }
+        // Lane LG14-A (tags 154–155): the legacy route's dispute reservation. Refused below `palw_legacy_public_filer_v1` (the
+        // acceptance walk drops them by name first; this is the second lock).
+        PalwConsensusObjectV2::DisputeReservedV1 { reservation, signature: _ } => {
+            palw_legacy_public_filer_fold_v1::apply_dispute_reserved_v1(builder, ctx, reservation)?;
+        }
+        PalwConsensusObjectV2::DisputeReleasedV1 { claim, reserver, signature: _ } => {
+            palw_legacy_public_filer_fold_v1::apply_dispute_released_v1(builder, ctx, *claim, *reserver)?;
+        }
         // **Lane LG14-B (tags 157–159): the legacy V2 route's public descent, its held DA units and the leaf recompute** — dormant
         // behind `palw_legacy_held_da_v2` (each arm refuses below it: the second lock; `crate::palw_legacy_held_da_v2`).
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { demand } => {
@@ -35395,7 +35774,11 @@ fn apply_object(
             let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
             // ADR-0119 Decision 4: the CLAIM's ladder — a held class's recorded one, else the network's.
             let ladder = builder.state.class_step_ladder_v1(&claim.class_id, ladder);
-            if claim.phase.is_terminal() {
+            // Lane LG14-A × LG14-B (RFC-0014 §7.3): a `Final` claim the accuser's own live dispute reservation holds is still pursued —
+            // the fused terminal after `Final` (the held dissection's one move). The table is empty below the fence: unchanged there.
+            let reserved_final = matches!(claim.phase, PalwClaimPhaseV2::Final { .. })
+                && builder.state.legacy_dispute_reservation_v1(&claim_id, &accusation.accuser_bond).is_some();
+            if claim.phase.is_terminal() && !reserved_final {
                 return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "ShardCourtAccused" });
             }
             if accusation.executor_bond != claim.bond {
@@ -39069,6 +39452,25 @@ pub struct PalwTransitionExtrasV1 {
     /// ADR-0125: the round permits this block accepted, as the processor decided them against the
     /// parent state. Empty unless `round_lane` is `Some`.
     pub round_permit_uses: Vec<crate::palw_execution_lane_v1::PalwExecPermitUseV1>,
+    /// **RFC-0008 v2: the slice carriers the accepting block's covered set holds**, in the processor's canonical order (root, then
+    /// index, then carrier). Each is re-judged by the fold against its own running state; empty unless
+    /// `Params::palw_exec_payload_v2` is in force at the block, and then `Default` is byte-identical to the transition before the
+    /// field existed.
+    pub exec_v2_covered: Vec<crate::palw_work_slice_v2::PalwExecV2CoveredSliceV1>,
+    /// **TEST ONLY — the verification door a real route will one day own.** Slices `(root claim, index)` to mark positively verified
+    /// at this block, after the covered set. A field of the extras only so the fold's tests can reach the `#[cfg(test)]` writer; it
+    /// does not exist in any build that is not a test, and no node can name it.
+    #[cfg(test)]
+    pub exec_v2_test_verified: Vec<(Hash64, u32)>,
+    /// **TEST ONLY — kernel route rows written as the route's own closing step would write them** (`(table, key, row)`), right after
+    /// the route's tick and before the work slices follow their kernel claims (amendment 1), so the fold's tests can drive a slice's
+    /// claim to Final, a conviction or a default without the kernel's prover. No node can name it.
+    #[cfg(test)]
+    pub exec_v2_test_kernel_rows: Vec<(u8, Vec<u8>, Option<Vec<u8>>)>,
+    /// **RFC-0008 v2: the EXEC blocks the accepting block's anchor covered** (every covered carrier, whatever the fold decides about
+    /// it — a covered block is covered once), with the span clock the window is read at. `None` where the block anchors nothing,
+    /// which is `Default` and every chain below the fence.
+    pub exec_v2_anchor: Option<crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1>,
     /// **ADR-0126 Decision 3: `Params::palw_overlay_carve` resolved at the block's DAA** — the carve
     /// the claim of this block's OWN attempt escrows at, since the block that carried the attempt is
     /// this block. A merged attempt's carve rides its own record
@@ -41300,6 +41702,8 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             }
         }
         PalwDeltaEntryV2::VestingNote(_) => {}
+        // RFC-0008 v2's refusal record: a note, inert on apply and revert.
+        PalwDeltaEntryV2::ExecV2Verdict { .. } => {}
         PalwDeltaEntryV2::VestingCounters { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if state.vesting_counters != *expected {
@@ -41385,11 +41789,15 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::CapacityLedger { key, old, new } => swap_write!(state.capacity_ledger, key, old, new),
         PalwDeltaEntryV2::SeatAvailability { key, old, new } => swap_write!(state.seat_availability, key, old, new),
         PalwDeltaEntryV2::SeatRootReadiness { key, old, new } => swap_write!(state.seat_root_readiness, key, old, new),
+        PalwDeltaEntryV2::LegacyDispute { key, old, new } => swap_write!(state.legacy_disputes, key, old, new),
         // RFC-0010: the permissionless Panel engine's keyed decomposition (see `palw_panel_v3_fold_v1`).
         PalwDeltaEntryV2::PanelV3Cursor { old, new } => palw_panel_v3_fold_v1::apply_cursor_entry_v1(state, old, new, revert)?,
         PalwDeltaEntryV2::PanelV3Claim { key, old, new } => palw_panel_v3_fold_v1::apply_claim_entry_v1(state, key, old, new, revert)?,
         PalwDeltaEntryV2::PanelV3WorkId { key, old, new } => palw_panel_v3_fold_v1::apply_work_id_entry_v1(state, key, *old, *new, revert)?,
         PalwDeltaEntryV2::PanelV3Beacon { key, old, new } => palw_panel_v3_fold_v1::apply_beacon_entry_v1(state, *key, old, new, revert)?,
+        PalwDeltaEntryV2::PanelV3EpochSources { key, old, new } => {
+            palw_panel_v3_fold_v1::apply_epoch_sources_entry_v1(state, *key, old, new, revert)?
+        }
         PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } => apply_kernel_route_row_v1(state, *table, key, old, new, revert)?,
         // Lane BUDGET: the bond budget's rows and header, verify-then-install (`palw_bond_budget_fold_v1`).
         PalwDeltaEntryV2::BondBudgetRow { table, key, old, new } => {
@@ -41420,6 +41828,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
                 (None, None) => {}
             }
         }
+        PalwDeltaEntryV2::ExecV2Row { table, key, old, new } => palw_exec_v2_fold::apply_exec_v2_row_v1(state, *table, key, old, new, revert)?,
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -41592,6 +42001,10 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
     let (da_deadlines, da_by_accuser) = palw_da_indexes_of_v1(&state.da_sessions, &state.da_claims);
     state.da_deadlines = da_deadlines;
     state.da_by_accuser = da_by_accuser;
+    // Lane LG14-A: the lapse queue and the reservers' exposure index, from the dispute records.
+    let (legacy_deadlines, legacy_by_reserver) = palw_legacy_public_filer_fold_v1::palw_legacy_dispute_indexes_of_v1(&state.legacy_disputes);
+    state.legacy_dispute_deadlines = legacy_deadlines;
+    state.legacy_disputes_by_reserver = legacy_by_reserver;
     rebuild_improvement_indices_v1(state);
     palw_improve_material_fold_v1::rebuild_improvement_material_indices_v1(state);
 }
@@ -41797,6 +42210,8 @@ pub struct PalwStateCarriageV2 {
     pub class_court_windows: BTreeMap<Hash64, u64>,
     /// RFC-0007 Part I: the vertex tables in appended tail `0xE4`, present only when any is non-empty.
     pub vertex: crate::palw_vertex_v1::PalwVertexStateV1,
+    /// RFC-0008 v2: the work-slice ledgers in appended tail `0xEE`, present only when any table is non-empty.
+    pub exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1,
     /// RFC-0006: the layer-shard plans, in tail `0xE1` (with the claims'), present only when either is non-empty.
     pub tir_shard_plans: BTreeMap<Hash64, crate::palw_tir_shard_v1::PalwTirShardPlanV1>,
     /// RFC-0006: the per-shard claim records, in tail `0xE1`.
@@ -41810,6 +42225,8 @@ pub struct PalwStateCarriageV2 {
     pub panel_v3: Option<misaka_palw_panel::PermissionlessPanelStateV1>,
     /// G14 lane D: the kernel route's state, in appended tail `0xEC`, present only when `Some`.
     pub kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>,
+    /// Lane LG14-A: the legacy route's dispute records, in appended tail `0xE2`, present only when non-empty.
+    pub legacy_disputes: BTreeMap<Hash64, crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
     /// Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's engine, in appended tail `0xEF`, present only when `Some`.
     pub bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
@@ -42150,6 +42567,10 @@ const PALW_CARRIAGE_CLASS_COURT_WINDOWS_TAIL_V1: u8 = 0xE0;
 /// **RFC-0007 Part I: the vertex tables' tail** (`0xE4`; spec 18 §18.7): after the court windows' `0xE0`, disjoint from every
 /// tail another lane has taken or reserved (`0xC0`–`0xDA`, `0xE0`).
 const PALW_CARRIAGE_VERTEX_TAIL_V1: u8 = 0xE4;
+/// **RFC-0008 v2: the work-slice ledgers' tail** (`0xEE`): the lead's allocation of 2026-10-08, past `0xEB` (lane MU) and disjoint
+/// from every tail taken or reserved (`0x87`–`0xBB`, `0xC0`–`0xDA`, `0xE0`, `0xE1`, `0xE4`, `0xE6`, `0xEA`, `0xEB`);
+/// `exec_v2_tail_is_pinned_at_0xee` pins the value.
+const PALW_CARRIAGE_EXEC_V2_TAIL_V1: u8 = 0xEE;
 
 /// **RFC-0006's tail** (`tir_shard_plans`, then `tir_shard_claims`): `0xE1`, the next byte after the court windows'.
 /// Present only when either table is non-empty, which nothing can make so below `Params::palw_tir_shard_v1`.
@@ -42507,9 +42928,17 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             crate::palw_kernel_route_v1::PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1.serialize(writer)?;
             kernel.serialize(writer)?;
         }
+        if !self.legacy_disputes.is_empty() {
+            crate::palw_legacy_public_filer_v1::PALW_CARRIAGE_LEGACY_DISPUTES_TAIL_V1.serialize(writer)?;
+            self.legacy_disputes.serialize(writer)?;
+        }
         if let Some(budget) = &self.bond_budget {
             crate::palw_bond_budget_v1::PALW_CARRIAGE_BOND_BUDGET_TAIL_V1.serialize(writer)?;
             budget.serialize(writer)?;
+        }
+        if !self.exec_v2.is_empty() {
+            PALW_CARRIAGE_EXEC_V2_TAIL_V1.serialize(writer)?;
+            self.exec_v2.serialize(writer)?;
         }
         Ok(())
     }
@@ -42701,8 +43130,12 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_panel_v3 = false;
         let mut kernel_route: Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1> = None;
         let mut seen_kernel_route = false;
+        let mut legacy_disputes = BTreeMap::new();
+        let mut seen_legacy_disputes = false;
         let mut bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1> = None;
         let mut seen_bond_budget = false;
+        let mut exec_v2 = crate::palw_work_slice_v2::PalwExecV2StateV1::default();
+        let mut seen_exec_v2 = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -42958,6 +43391,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_floor_state = true;
                     floor_state = Some(crate::palw_real_share_v1::PalwFloorStateV1::deserialize_reader(reader)?);
                 }
+                PALW_CARRIAGE_EXEC_V2_TAIL_V1 if !seen_exec_v2 => {
+                    seen_exec_v2 = true;
+                    exec_v2 = crate::palw_work_slice_v2::PalwExecV2StateV1::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_SEAT_ROOT_READINESS_TAIL_V1 if !seen_seat_root_readiness => {
                     seen_seat_root_readiness = true;
                     seat_root_readiness = BTreeMap::deserialize_reader(reader)?;
@@ -42969,6 +43406,13 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                 crate::palw_kernel_route_v1::PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1 if !seen_kernel_route => {
                     seen_kernel_route = true;
                     kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::deserialize_reader(reader)?);
+                }
+                crate::palw_legacy_public_filer_v1::PALW_CARRIAGE_LEGACY_DISPUTES_TAIL_V1 if !seen_legacy_disputes => {
+                    seen_legacy_disputes = true;
+                    legacy_disputes = BTreeMap::deserialize_reader(reader)?;
+                    if legacy_disputes.is_empty() {
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "an empty legacy-dispute tail (written only when non-empty)"));
+                    }
                 }
                 crate::palw_bond_budget_v1::PALW_CARRIAGE_BOND_BUDGET_TAIL_V1 if !seen_bond_budget => {
                     seen_bond_budget = true;
@@ -43117,7 +43561,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             seat_root_readiness,
             panel_v3,
             kernel_route,
+            legacy_disputes,
             bond_budget,
+            exec_v2,
         })
     }
 }
@@ -43235,7 +43681,9 @@ impl PalwStateCarriageV2 {
             seat_root_readiness: state.seat_root_readiness.clone(),
             panel_v3: state.panel_v3.clone(),
             kernel_route: state.kernel_route.clone(),
+            legacy_disputes: state.legacy_disputes.clone(),
             bond_budget: state.bond_budget.clone(),
+            exec_v2: state.exec_v2.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -43455,8 +43903,10 @@ impl PalwStateCarriageV2 {
             seat_availability: self.seat_availability,
             seat_root_readiness: self.seat_root_readiness,
             panel_v3: self.panel_v3,
+            legacy_disputes: self.legacy_disputes,
             kernel_route: self.kernel_route,
             bond_budget: self.bond_budget,
+            exec_v2: self.exec_v2,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -43485,6 +43935,8 @@ impl PalwStateCarriageV2 {
             vesting_payees: BTreeSet::new(),
             da_deadlines: BTreeSet::new(),
             da_by_accuser: BTreeSet::new(),
+            legacy_dispute_deadlines: BTreeSet::new(),
+            legacy_disputes_by_reserver: BTreeSet::new(),
             capacity_weight_index: Default::default(),
         };
         rebuild_deadline_free_indices(&mut state);
@@ -60592,11 +61044,17 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::PanelV3Claim { .. } => "panel_v3_claim",
                     PalwDeltaEntryV2::PanelV3WorkId { .. } => "panel_v3_work_id",
                     PalwDeltaEntryV2::PanelV3Beacon { .. } => "panel_v3_beacon",
+                    PalwDeltaEntryV2::PanelV3EpochSources { .. } => "panel_v3_epoch_sources",
                     PalwDeltaEntryV2::KernelRouteRow { .. } => "kernel_route_row",
                     PalwDeltaEntryV2::KernelRouteHeader { .. } => "kernel_route_header",
+                    // Lane LG14-A: its round trip is the dispute suite's.
+                    PalwDeltaEntryV2::LegacyDispute { .. } => "legacy_dispute",
                     // Lane BUDGET: their round trip is the bond budget's suite (`palw_bond_budget_fold_v1`).
                     PalwDeltaEntryV2::BondBudgetRow { .. } => "bond_budget_row",
                     PalwDeltaEntryV2::BondBudgetHeader { .. } => "bond_budget_header",
+                    // RFC-0008 v2: its round trip is `exec_v2_fold_v1`'s.
+                    PalwDeltaEntryV2::ExecV2Row { .. } => "exec_v2_row",
+                    PalwDeltaEntryV2::ExecV2Verdict { .. } => "exec_v2_verdict",
                     PalwDeltaEntryV2::RealWork { .. } => "floor_state",
                     PalwDeltaEntryV2::Target { .. } => "target",
                     PalwDeltaEntryV2::Share { .. } => "share",
@@ -61009,12 +61467,18 @@ pub(crate) mod tests {
             (171, PalwDeltaEntryV2::PanelV3Claim { key, old: None, new: None }),
             (172, PalwDeltaEntryV2::PanelV3WorkId { key, old: false, new: true }),
             (173, PalwDeltaEntryV2::PanelV3Beacon { key: 1, old: None, new: None }),
+            (174, PalwDeltaEntryV2::PanelV3EpochSources { key: 1, old: None, new: None }),
             // G14 lane D (the kernel route, 160–169), declared explicitly.
             (160, PalwDeltaEntryV2::KernelRouteRow { table: 1, key: Vec::new(), old: None, new: None }),
             (161, PalwDeltaEntryV2::KernelRouteHeader { old: None, new: None }),
+            // Lane LG14-A (200–204), declared explicitly.
+            (200, PalwDeltaEntryV2::LegacyDispute { key, old: None, new: None }),
             // Lane BUDGET (the bond budget, 190–199), declared explicitly.
             (190, PalwDeltaEntryV2::BondBudgetRow { table: 1, key: Vec::new(), old: None, new: None }),
             (191, PalwDeltaEntryV2::BondBudgetHeader { old: None, new: None }),
+            // RFC-0008 v2 (the lead's allocation 180–189), declared explicitly: the work-slice tables' one generic entry.
+            (180, PalwDeltaEntryV2::ExecV2Row { table: PALW_EXEC_V2_TABLE_ROOTS_V1, key: Vec::new(), old: None, new: None }),
+            (181, PalwDeltaEntryV2::ExecV2Verdict { carrier: key, code: 0 }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -61672,8 +62136,12 @@ pub(crate) mod tests {
             seat_root_readiness: _,
             panel_v3: _,
             kernel_route: _,
+            // Lane LG14-A: one Some-only block, empty here.
+            legacy_disputes: _,
             // Lane BUDGET: one Some-only block (`bond_budget/v1`), as the kernel route's; absent here.
             bond_budget: _,
+            // RFC-0008 v2: one Some-only block of three, empty here.
+            exec_v2: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -71604,6 +72072,12 @@ pub(crate) mod tests {
                 prompt_ids_merkle: false,
                 round_lane: None,
                 round_permit_uses: Vec::new(),
+                exec_v2_covered: Vec::new(),
+                #[cfg(test)]
+                exec_v2_test_verified: Vec::new(),
+                #[cfg(test)]
+                exec_v2_test_kernel_rows: Vec::new(),
+                exec_v2_anchor: None,
                 escrow_carve: None,
                 objective_offence_daa: None,
             }
@@ -71864,6 +72338,12 @@ pub(crate) mod tests {
                 prompt_ids_merkle: false,
                 round_lane: None,
                 round_permit_uses: Vec::new(),
+                exec_v2_covered: Vec::new(),
+                #[cfg(test)]
+                exec_v2_test_verified: Vec::new(),
+                #[cfg(test)]
+                exec_v2_test_kernel_rows: Vec::new(),
+                exec_v2_anchor: None,
                 escrow_carve: None,
                 objective_offence_daa: None,
             };
@@ -73832,6 +74312,7 @@ pub(crate) mod tests {
     mod capacity_weight_cap_v1;
     // RFC-0007 Part I (spec 18): verification vertices, licence by tally, equivocation, `Held` leaves, the path rule.
     mod vertex_fold_v1;
+    mod exec_v2_fold_v1;
     // RFC-0007 Parts II and IV (spec 18): the witness profile's reads, the audit mesh and its traps.
     mod mesh_fold_v1;
     mod real_work_reserve_v1;
@@ -74320,7 +74801,14 @@ pub(crate) mod tests {
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::AggregateForfeit).unwrap(), vec![9]);
             // Lane PL part C (ADR-0166): `PanelUnavailable`, appended as the eleventh.
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::PanelUnavailable).unwrap(), vec![10]);
-            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[11]).is_err(), "no twelfth reason");
+            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[11]).is_err(), "no positional twelfth reason");
+            // RFC-0008 v2: `WorkRootExpired`, explicit 130 (RFC-0008 v2's range 130–139; RFC-0010 holds 120–122), so the order the
+            // branches merge in cannot move it.
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::WorkRootExpired).unwrap(), vec![130]);
+            // Amendment 1 (spec §10.2): a slice proven false (131) or defaulted (132).
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::WorkSliceProvenFalse).unwrap(), vec![131]);
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::WorkSliceDefaulted).unwrap(), vec![132]);
+            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[133]).is_err(), "nothing else in RFC-0008 v2's range");
             assert_eq!(
                 crate::palw_economics_ledger_v1::palw_void_reason_name_v1(&PalwVoidReasonV2::CourtHeldVerdict),
                 "court_held_verdict"

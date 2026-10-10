@@ -26,8 +26,8 @@
 //! * **Below the fence** every legacy held object is refused by the fold and the state is untouched.
 use super::*;
 use crate::palw_legacy_held_v2::{
-    PalwLegacyTreeV2, palw_legacy_fused_opening_v2, palw_legacy_held_answer_object_v2, palw_legacy_held_answer_v2,
-    palw_legacy_held_demand_object_v2, palw_legacy_leaf_recompute_object_v2, palw_legacy_leaf_recompute_v2,
+    PalwLegacyTreeV2, palw_legacy_held_answer_object_v2, palw_legacy_held_answer_v2, palw_legacy_held_demand_object_v2,
+    palw_legacy_leaf_recompute_object_v2, palw_legacy_leaf_recompute_v2,
 };
 use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
 use kaspa_consensus_core::palw_legacy_held_da_v2::{
@@ -53,7 +53,11 @@ const COLLUDER2: u64 = 7;
 
 fn rc_params() -> PalwStateParamsV2 {
     // testnet-12's 500‰ work ceiling: A-6's accuser room is the free half above it (at the fixture's 1,000‰ nobody may accuse).
-    params().with_fp_exposure_ceiling(500).expect("a ceiling").with_rcore_plus_mirrors(Some(RCORE_FROM_DAA), 0, Vec::new())
+    params()
+        .with_fp_exposure_ceiling(500)
+        .expect("a ceiling")
+        .with_rcore_plus_mirrors(Some(RCORE_FROM_DAA), 0, Vec::new())
+        .with_legacy_public_filer_from_daa(Some(0))
 }
 
 fn rc_extras(armed: bool) -> PalwTransitionExtrasV1 {
@@ -449,6 +453,219 @@ fn bonds_collateral(s: &PalwChainStateV2) -> (u64, u64) {
     (collateral(s, PRODUCER), collateral(s, OUTSIDER))
 }
 
+/// The actual node filer's controller on this fold fixture. Its own replica comes from the outsider; historical answers come
+/// only from public chain objects. The producer's obligations are built separately by `producer_answers`.
+fn service_filer_case(
+    f: &Fixture,
+    d: &Produced,
+    o: &Outsider,
+    claim: Hash64,
+) -> crate::palw_panel::palw_fraud_filer::PalwFraudFilerCaseV1 {
+    use crate::palw_panel::palw_fraud_filer::{PalwFraudFilerCaseV1, PalwFraudFilerRunV1, PalwFraudFilerVerdictV1};
+    let replica = Arc::new(crate::palw_legacy_held_v2::PalwLegacyReplicaV2 {
+        backend: Arc::new(f.seat()),
+        capture: Arc::new(o.capture.clone()),
+        prompt_ids: Arc::new(o.ids.clone()),
+        form: o.backend.prompt_ids_form(),
+        roots: o.roots,
+    });
+    let mut case = PalwFraudFilerCaseV1::new(kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1 {
+        claim_id: claim,
+        producer: bond_key(PRODUCER),
+        accepted_daa: 101,
+        seat: false,
+        job: kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaJobV1 {
+            accepted_block: point(101).block,
+            class_id: f.profile.shape_profile_id(),
+            artifact_root: Some(f.root),
+            execution_root: d.execution_root,
+            trace_root: d.trace_root,
+            output_root: h64(32),
+            work_leaves: d.committed_leaves.len() as u64,
+            free_prompt: false,
+            held_to_final: false,
+        },
+    });
+    case.verdict = PalwFraudFilerVerdictV1::Mismatch(Arc::new(PalwFraudFilerRunV1 {
+        execution_root: o.roots.execution_root,
+        trace_root: o.roots.trace_root,
+        legacy: Some(replica),
+        own_range: Box::new(|_, _| panic!("the LG14-B controller does not use the linear range fallback")),
+        _reservation: None,
+    }));
+    case
+}
+
+fn service_public_answer(
+    chain: &[PalwConsensusObjectV2],
+    claim: Hash64,
+    unit: PalwDaUnitV1,
+    root: Hash64,
+) -> Option<crate::palw_panel::PalwDaBuiltAnswerV1> {
+    use crate::palw_panel::PalwDaBuiltAnswerV1;
+    chain.iter().find_map(|object| match object {
+        PalwConsensusObjectV2::MaterialDisclosedV2 { claim: held, unit: asked, answer, .. }
+            if *held == claim
+                && *asked == unit
+                && kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(
+                    &unit, answer, &root,
+                ) =>
+        {
+            Some(PalwDaBuiltAnswerV1::Rcore(answer.clone()))
+        }
+        PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
+            if answer.claim == claim
+                && unit == PalwDaUnitV1::LegacyHeldV2(answer.unit)
+                && kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v2(
+                    &root,
+                    &answer.unit,
+                    &answer.binding,
+                    &answer.answer,
+                    answer.binding.step_leaf_count,
+                )
+                .is_ok() =>
+        {
+            Some(PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding.clone(), answer.answer.clone()))))
+        }
+        _ => None,
+    })
+}
+
+fn service_filer_step(
+    w: &World,
+    case: &crate::palw_panel::palw_fraud_filer::PalwFraudFilerCaseV1,
+) -> Result<crate::palw_panel::palw_fraud_filer::PalwFraudFilerStepV1, String> {
+    use crate::palw_panel::palw_fraud_filer::palw_fraud_filer_legacy_step_v2;
+    use kaspa_consensus_core::palw_legacy_public_filer_v1::{PalwFilerRoleV1, palw_fraud_filer_reservation_v1};
+    let claim = case.candidate.claim_id;
+    let view = w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).expect("public claim view");
+    let reservable = kaspa_consensus_core::palw_state_v2::palw_legacy_dispute_reservation_check_v1(
+        &w.s,
+        &rc_params(),
+        &rc_extras(true),
+        &palw_fraud_filer_reservation_v1(&view, bond_key(OUTSIDER)),
+        w.daa,
+    )
+    .is_ok();
+    let court = palw_court_duties_v2(&w.s, &[bond_key(OUTSIDER)]).iter().any(|d| d.claim_id == claim && !d.i_am_responder);
+    palw_fraud_filer_legacy_step_v2(PalwFilerRoleV1::PublicBond, Some(&view), &bond_key(OUTSIDER), reservable, court, case, |unit| {
+        service_public_answer(&w.chain, claim, *unit, view.execution_root).is_some()
+    })
+}
+
+fn service_filer_localize(w: &mut World, d: &Produced, case: &mut crate::palw_panel::palw_fraud_filer::PalwFraudFilerCaseV1) -> u64 {
+    service_filer_drive(w, d, case, |_| false).expect("all demanded units are answered")
+}
+
+fn service_filer_drive(
+    w: &mut World,
+    d: &Produced,
+    case: &mut crate::palw_panel::palw_fraud_filer::PalwFraudFilerCaseV1,
+    withhold: impl Fn(PalwLegacyHeldUnitV2) -> bool,
+) -> Result<u64, PalwLegacyHeldUnitV2> {
+    use crate::palw_panel::palw_fraud_filer::PalwFraudFilerStepV1;
+    use kaspa_consensus_core::palw_legacy_public_filer_v1::{
+        PalwFilerActionV1, PalwLegacyProbeV1, palw_dispute_reserved_object_v1, palw_fraud_filer_demand_object_v1,
+        palw_fraud_filer_reservation_v1,
+    };
+    for _ in 0..32 {
+        let claim = case.candidate.claim_id;
+        match service_filer_step(w, case).expect("the production controller can judge the own replica") {
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Reserve) => {
+                let view = w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).unwrap();
+                w.block(vec![palw_dispute_reserved_object_v1(
+                    h64(999),
+                    palw_fraud_filer_reservation_v1(&view, bond_key(OUTSIDER)),
+                    |_| SIG.to_vec(),
+                )])
+                .expect("the reservation lands");
+            }
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Demand(probe)) => {
+                let demand = palw_fraud_filer_demand_object_v1(
+                    &h64(999),
+                    claim,
+                    &d.execution_root,
+                    probe,
+                    case.binding.as_ref(),
+                    bond_key(OUTSIDER),
+                    d.backend.prompt_ids_form(),
+                    |_, _| Some(SIG.to_vec()),
+                )
+                .expect("the node's builder");
+                w.block(vec![demand]).expect("the unit opens a reserved session");
+                assert!(
+                    matches!(service_filer_step(w, case).unwrap(), PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait)),
+                    "one open session at a time"
+                );
+                if let PalwLegacyProbeV1::HeldNode { unit } = probe {
+                    if withhold(unit) {
+                        return Err(unit);
+                    }
+                }
+                let answer = match probe {
+                    PalwLegacyProbeV1::Binding { row, tile } => PalwConsensusObjectV2::MaterialDisclosedV2 {
+                        claim,
+                        unit: probe.unit(),
+                        answer: PalwDaAnswerV1::Event(
+                            d.backend.disclose_trace_event(&d.material, row, tile).expect("producer's obligation"),
+                        ),
+                        discloser: bond_key(PRODUCER),
+                        signature: SIG.to_vec(),
+                    },
+                    PalwLegacyProbeV1::HeldNode { unit } => producer_answers(d, case.binding.as_ref().unwrap(), claim, unit),
+                    _ => panic!("the production LG14-B path never scans a linear range"),
+                };
+                w.block(vec![answer]).expect("the public answer authenticates");
+            }
+            PalwFraudFilerStepV1::Learn(probe) => {
+                let answer = service_public_answer(&w.chain, claim, probe.unit(), d.execution_root).expect("public bytes");
+                case.learn(probe, &answer).expect("the actual node learns only authenticated material");
+            }
+            PalwFraudFilerStepV1::LegacyTerminal { leaf } => return Ok(leaf),
+            other => panic!("the public production controller stopped at {other:?}"),
+        }
+    }
+    panic!("the production controller did not reach its terminal");
+}
+
+fn service_filer_terminal(
+    f: &Fixture,
+    d: &Produced,
+    case: &crate::palw_panel::palw_fraud_filer::PalwFraudFilerCaseV1,
+    leaf: u64,
+) -> PalwConsensusObjectV2 {
+    use crate::palw_panel::palw_fraud_filer::{PalwFraudFilerVerdictV1, palw_fraud_filer_sign_terminal_v2};
+    let PalwFraudFilerVerdictV1::Mismatch(run) = &case.verdict else { panic!("own mismatched replica") };
+    let bound_to =
+        PalwOneMoveClaimV2 { execution_root: d.execution_root, class_id: f.profile.shape_profile_id(), artifact_root: f.root };
+    let unsigned = run
+        .legacy
+        .as_ref()
+        .unwrap()
+        .terminal(
+            case.binding.as_ref().unwrap(),
+            &case.frontiers,
+            case.witness.as_deref(),
+            leaf,
+            case.candidate.claim_id,
+            &bound_to,
+            d.trace_root,
+            bond_key(PRODUCER),
+            bond_key(OUTSIDER),
+            PALW_HELD_STEP_LADDER_V1,
+        )
+        .expect("the node's court predicate finds an actionable terminal");
+    assert!(
+        palw_fraud_filer_sign_terminal_v2(unsigned.clone(), &h64(999), 0, |_, _| {
+            panic!("the close ceiling is checked before signing")
+        })
+        .is_err()
+    );
+    assert!(palw_fraud_filer_sign_terminal_v2(unsigned.clone(), &h64(999), u64::MAX, |_, _| None).is_err());
+    palw_fraud_filer_sign_terminal_v2(unsigned, &h64(999), u64::MAX, |_, _| Some(SIG.to_vec()))
+        .expect("the node's terminal signs and rides")
+}
+
 // ---- the outsider's held route (the A-held line's, as a non-seat challenger) -------------------------------------------------------
 
 /// The held route's host for the outsider: T54g's [`HeldHost`] with the outsider's bond, and the claims it may still pursue read as a
@@ -527,12 +744,30 @@ async fn outsider_tick(
     held.begin_tick_v1(&duties, daa).await;
     let held_duties: Vec<PalwCourtDutyV2> = duties.into_iter().filter(|d| held.routes_v1(host, d, daa)).collect();
     for read in held.chain_reads_v1(host, &held_duties, daa) {
-        let objects = chain
-            .iter()
-            .filter(|o| crate::palw_panel::palw_held_chain_object_is_the_sessions_v1(o, &read.session_id, &read.claim_id))
-            .cloned()
-            .collect();
-        held.note_chain_v1(read.session_id, objects, daa);
+        let (duty, needed) = held.history_filter_v1(&held_duties, read.session_id).unwrap();
+        let cap = host.opening_cap(&duty.class_id, daa);
+        let mut objects = std::collections::BTreeMap::new();
+        for object in chain.iter().rev() {
+            if let Some(key) = crate::palw_panel::held_court::palw_held_history_object_key_v1(object, &duty, &needed, cap) {
+                objects.insert(key, object.clone());
+            }
+        }
+        held.note_history_page_v1(
+            read.session_id,
+            read.claim_id,
+            crate::palw_panel::held_court::PalwHeldHistoryPageV1 {
+                walk: crate::palw_panel::held_court::PalwHeldHistoryWalkV1 {
+                    floor: read.not_before_daa,
+                    anchor: h64(daa),
+                    next: None,
+                    selection: crate::palw_panel::held_court::palw_held_history_selection_v1(&duty, &needed, cap),
+                },
+                reset: false,
+                rewind: true,
+                objects,
+            },
+            daa,
+        );
     }
     let (pending, moved) = (&queue.pending, &queue.moved);
     let busy = |key: &(Hash64, u32, bool)| {
@@ -593,18 +828,19 @@ async fn lg14b_a_lie_in_one_fused_tile_is_localized_and_convicted_by_a_fresh_out
     assert!(witness.refutation.inputs.is_empty() && witness.refutation.kv_checkpoint.is_none(), "no history: the dissection's");
     assert!(w.s.da_sessions_of(&claim).next().is_none(), "every session answered and closed");
     // 3. The outsider's own kernel over its own history says the tile lies; it opens the held dissection.
-    let evidence = palw_legacy_fused_opening_v2(&o.backend, &o.capture, &o.ids, &witness, f.root, PALW_HELD_STEP_LADDER_V1)
-        .expect("the outsider's N1")
-        .expect("the committed tile is not the attention of its history");
-    let bound_to =
-        PalwOneMoveClaimV2 { execution_root: liar.execution_root, class_id: f.profile.shape_profile_id(), artifact_root: f.root };
-    assert_eq!(evidence.verdict_at_v2(&bound_to, PALW_HELD_STEP_LADDER_V1, true), Ok(PalwShardCourtVerdictV1::NeedsDissection));
-    let mut accusation =
-        evidence.into_accusation_v1(claim, liar.execution_root, liar.trace_root, bond_key(PRODUCER), bond_key(OUTSIDER));
-    accusation.validate_shape(PALW_HELD_STEP_LADDER_V1).expect("the shape");
-    accusation.signature = SIG.to_vec();
-    let opening = PalwConsensusObjectV2::ShardCourtAccused { accusation: Box::new(accusation) };
+    let mut service_case = service_filer_case(&f, liar, &o, claim);
+    let service_leaf = service_filer_localize(&mut w, liar, &mut service_case);
+    assert_eq!(service_leaf, located.leaf, "the production controller reads the already answered public descent and CKW");
+    let opening = service_filer_terminal(&f, liar, &service_case, service_leaf);
+    assert!(matches!(&opening, PalwConsensusObjectV2::ShardCourtAccused { .. }));
     w.block(vec![opening]).expect("the fold opens the held dissection on the outsider's accusation");
+    assert_eq!(
+        service_filer_step(&w, &service_case).unwrap(),
+        crate::palw_panel::palw_fraud_filer::PalwFraudFilerStepV1::Engine(
+            kaspa_consensus_core::palw_legacy_public_filer_v1::PalwFilerActionV1::Wait
+        ),
+        "the public controller leaves an open own court to the held loop"
+    );
     let sid =
         w.s.court_sessions_iter()
             .find(|(_, x)| x.claim == claim && x.challenger_bond == bond_key(OUTSIDER))
@@ -674,6 +910,48 @@ async fn lg14b_a_lie_in_one_fused_tile_is_localized_and_convicted_by_a_fresh_out
     let after = bonds_collateral(&w.s);
     assert!(after.0 < before.0, "the producer is charged");
     assert_eq!(after.1, before.1, "the outsider pays nothing: its refuted sessions' exposure is refunded on the conviction");
+    assert_eq!(
+        service_filer_step(&w, &service_case).unwrap(),
+        crate::palw_panel::palw_fraud_filer::PalwFraudFilerStepV1::Engine(
+            kaspa_consensus_core::palw_legacy_public_filer_v1::PalwFilerActionV1::Done(
+                kaspa_consensus_core::palw_legacy_public_filer_v1::PalwFilerPhaseV1::Convicted
+            )
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lg14b_the_node_filer_convicts_model_copy_and_matmul_faults_before_and_after_final() {
+    use crate::palw_panel::palw_fraud_filer::PalwFraudFilerStepV1;
+    use kaspa_consensus_core::palw_legacy_public_filer_v1::{PalwFilerActionV1, PalwFilerPhaseV1};
+    let f = Fixture::new(false);
+    for (gather, after_final) in [(true, false), (true, true), (false, false), (false, true)] {
+        let pick = |ctx: &PalwJobContextV2| if gather { 0 } else { matmul_leaf_at(&f.profile, ctx, 0, 3) };
+        let liar = produce_at(&f.artifact, &f.profile, Some(&pick));
+        let (s, claim) = rc_licensed(&liar, &f.canonical, &f.profile, f.root);
+        let mut w = World { s, daa: 104, chain: Vec::new() };
+        if after_final {
+            while !matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Final { .. }) {
+                w.quiet();
+            }
+        }
+        let before = bonds_collateral(&w.s);
+        let o = Outsider::start(&f, &liar);
+        let mut case = service_filer_case(&f, &liar, &o, claim);
+        let leaf = service_filer_localize(&mut w, &liar, &mut case);
+        assert_eq!(leaf, liar.leaf);
+        assert!(case.witness.is_none(), "non-fused terminals use the own model and public leaf hash, no CKW");
+        let object = service_filer_terminal(&f, &liar, &case, leaf);
+        assert!(matches!(&object, PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. }));
+        w.block(vec![object]).expect("the actual node's recompute convicts");
+        assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
+        assert_eq!(
+            service_filer_step(&w, &case).unwrap(),
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Done(PalwFilerPhaseV1::Convicted))
+        );
+        assert!(bonds_collateral(&w.s).0 < before.0);
+        assert_eq!(bonds_collateral(&w.s).1, before.1);
+    }
 }
 
 /// **The consistent-garbage shape: the trace diverges at leaf 0, the position-0 embedding gather** — whose committed tile, for an
@@ -836,20 +1114,19 @@ async fn lg14b_a_mid_layer_matmul_lie_is_convicted_from_openings_the_outsider_bu
 /// fused leaf's committed witness: each session defaults at its deadline (`ProducerWithholding`, DA-7).
 #[tokio::test(flavor = "multi_thread")]
 async fn lg14b_withheld_descent_and_witness_units_default_never_convict() {
+    use crate::palw_panel::palw_fraud_filer::PalwFraudFilerStepV1;
+    use kaspa_consensus_core::palw_legacy_public_filer_v1::{PalwFilerActionV1, PalwFilerPhaseV1};
     let f = Fixture::new(true);
     let liar = &f.d;
     for withhold_witness in [false, true] {
         let (s, claim) = rc_licensed(liar, &f.canonical, &f.profile, f.root);
         let mut w = World { s, daa: 104, chain: Vec::new() };
         let o = Outsider::start(&f, liar);
-        let unit = if withhold_witness {
-            let located = localize(&mut w, liar, &o, claim, false).expect("answered");
-            let ckw = PalwLegacyHeldUnitV2::KernelWitness { leaf: located.leaf };
-            w.block(vec![o.demand(claim, ckw, &located.binding)]).expect("demanded");
-            ckw
-        } else {
-            localize(&mut w, liar, &o, claim, true).err().expect("the first descent node is withheld")
-        };
+        let mut case = service_filer_case(&f, liar, &o, claim);
+        let unit = service_filer_drive(&mut w, liar, &mut case, |unit| {
+            matches!(unit, PalwLegacyHeldUnitV2::KernelWitness { .. }) == withhold_witness
+        })
+        .expect_err("the selected obligation is withheld");
         let session = w.s.da_sessions_of(&claim).find(|(a, _)| **a == bond_key(OUTSIDER)).map(|(_, s)| s.clone()).expect("open");
         assert!(session.units.contains(&PalwDaUnitV1::LegacyHeldV2(unit)));
         while w.daa <= session.deadline_daa + 1 && !matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { .. }) {
@@ -859,6 +1136,10 @@ async fn lg14b_withheld_descent_and_witness_units_default_never_convict() {
             panic!("defaulted: {:?}", phase_of(&w.s, &claim))
         };
         assert_eq!(reason, PalwVoidReasonV2::ProducerWithholding, "a default, not a fraud verdict ({unit:?})");
+        assert_eq!(
+            service_filer_step(&w, &case).unwrap(),
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Done(PalwFilerPhaseV1::DaDefault))
+        );
     }
 }
 
@@ -868,6 +1149,7 @@ async fn lg14b_withheld_descent_and_witness_units_default_never_convict() {
 /// outsider pays; and the claim reaches `Final`.
 #[tokio::test(flavor = "multi_thread")]
 async fn lg14b_an_honest_claim_survives_a_malicious_outsider() {
+    use crate::palw_panel::{PalwDaClaimFactsV1, PalwDaLaneV1, palw_da_built_answer_object_v1, palw_da_claim_answers_v1};
     let f = Fixture::new(false);
     let honest = &f.d;
     let (s, claim) = rc_licensed(honest, &f.canonical, &f.profile, f.root);
@@ -875,6 +1157,20 @@ async fn lg14b_an_honest_claim_survives_a_malicious_outsider() {
     let o = Outsider::start(&f, honest);
     assert_eq!(o.roots.execution_root, honest.execution_root, "an honest replica reproduces an honest claim");
     let binding = misaka_palw_base0::produce::base0_material_decode_any_v1(&honest.material).expect("decodes").binding().clone();
+    // Step-tree equality alone is not a complete judgement: a job, trace or checkpoint mismatch must take its own terminal.
+    // Force the mismatch state to exercise the actual controller's guard, without claiming an honest job is fraudulent.
+    let mut unresolved = service_filer_case(&f, honest, &o, claim);
+    unresolved.binding = Some(binding.clone());
+    let mut guard_world = World { s: w.s.clone(), daa: w.daa, chain: Vec::new() };
+    let view = guard_world.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).unwrap();
+    guard_world
+        .block(vec![kaspa_consensus_core::palw_legacy_public_filer_v1::palw_dispute_reserved_object_v1(
+            h64(999),
+            kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_reservation_v1(&view, bond_key(OUTSIDER)),
+            |_| SIG.to_vec(),
+        )])
+        .unwrap();
+    assert!(service_filer_step(&guard_world, &unresolved).unwrap_err().contains("checkpoint/trace/job localization"));
     let own = o.tree();
     assert_eq!(
         palw_legacy_descent_next_v2(Tree::Step, binding.step_leaf_count, &binding.step_merkle_root, &own, &[]),
@@ -882,34 +1178,56 @@ async fn lg14b_an_honest_claim_survives_a_malicious_outsider() {
     );
     // The honest producer's own fold answers a malicious demand at the root and at a checkpoint node.
     let producer_tree = PalwLegacyTreeV2::fold_v1(&honest.backend, &honest.material, &honest.ids).expect("a fold");
-    let checkpoint_tree = PalwLegacyTreeV2::leaves_v1(checkpoint_leaf_hashes(&honest.material));
     let height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(binding.step_leaf_count);
     let c_height = kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(u64::from(binding.checkpoint_count));
     let mut units = vec![PalwLegacyHeldUnitV2::StepNode { level: height, index: 0 }];
     if c_height >= 1 {
         units.push(PalwLegacyHeldUnitV2::CheckpointNode { level: c_height, index: 0 });
     }
+    units.push(PalwLegacyHeldUnitV2::KernelWitness { leaf: honest.leaf });
     let before = bonds_collateral(&w.s);
+    let facts = PalwDaClaimFactsV1 {
+        claim_id: claim,
+        class_id: honest.fp_job.class_id,
+        executor_bond: bond_key(PRODUCER),
+        execution_root: honest.execution_root,
+        trace_root: honest.trace_root,
+        work_leaves: binding.step_leaf_count,
+        form: honest.backend.prompt_ids_form(),
+        lane: PalwDaLaneV1::FreePrompt { panel_da_admissible: false },
+        job_pin: None,
+    };
     for unit in units {
         w.block(vec![o.demand(claim, unit, &binding)]).expect("a malicious demand still opens a session");
-        let answer = palw_legacy_held_answer_v2(
-            &unit,
-            &producer_tree,
-            &checkpoint_tree,
+        let mut built = palw_da_claim_answers_v1(
             &honest.backend,
-            &honest.material,
-            &honest.ids,
-            honest.roots(),
-            honest.backend.prompt_ids_form(),
+            &facts,
+            [honest.served()],
+            |_| panic!("the kept honest capture already verifies"),
+            &[PalwDaUnitV1::LegacyHeldV2(unit)],
+            binding.job_context.exact_decode_tokens,
+            false,
+            None,
         )
-        .expect("an honest producer answers from its fold");
-        let object = palw_legacy_held_answer_object_v2(&h64(999), claim, unit, binding.clone(), answer, bond_key(PRODUCER), |_, _| {
-            Some(SIG.to_vec())
-        })
+        .expect("the node worker answers from verified fold retention");
+        assert!(!built.remade);
+        let answer = built.answers.pop().expect("one duty").expect("not covered by a Flat").expect("the fold opens");
+        let object = palw_da_built_answer_object_v1(
+            &h64(999),
+            claim,
+            PalwDaUnitV1::LegacyHeldV2(unit),
+            answer,
+            bond_key(PRODUCER),
+            u64::MAX,
+            |_, _| Some(SIG.to_vec()),
+        )
         .expect("built");
+        assert!(matches!(&object, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }), "the worker sends tag 158");
         w.block(vec![object]).expect("an honest fold's frontier authenticates");
         assert!(w.s.da_sessions_of(&claim).next().is_none(), "refuted and closed");
     }
+    // The same fold reader used by the worker does block replay below its retained level.
+    producer_tree.leaf_hash(0).expect("replayed from the honest retention");
     let (replays, _) = producer_tree.resources();
     assert!(replays >= 1, "below the retained level the honest producer replays a block, never the whole run");
     // A recompute of an honest non-fused leaf: the court recomputes the committed tile — a false accusation.

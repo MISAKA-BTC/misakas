@@ -179,7 +179,10 @@ pub fn commitment_summary(b: &BoundCommitment) -> Value {
         },
         "static_admission": { "kernel": b.admission.kernel, "hypothetically_armed": b.admission.hypothetically_armed,
                                "shipped_schedule_outcome": b.admission.shipped_outcome, "plan_positions": b.admission.positions,
-                               "plan_error_bits": b.admission.error_bits },
+                               "plan_error_bits": b.admission.error_bits,
+                               "verification_mode_requirement": if b.admission.kernel == "K2-TIR-v4" {
+                                   "OptimisticPublicVerification: separate chain admission and economics required"
+                               } else { "node-configured verification mode" } },
         "implementation_set": b.implementation_set.entries.iter().map(|e| json!({ "role": e.role, "crate": e.crate_name,
             "version": e.crate_version, "source_digest": e.source_digest })).collect::<Vec<_>>(),
         "scope": b.params.scope.statement(b.params.policy.repetition_count),

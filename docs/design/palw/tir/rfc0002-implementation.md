@@ -2,7 +2,8 @@
 
 Goal: implement the full [RFC02 completion contract](../../../rfc/0002-palw-tensor-ir.md#ii14-completion-contract--2026-10-10)
 from the 2026-10-10 review, preserving A1–A8 and the versioned kernel boundary. **Not complete.**
-Baseline: integration `3730cc90f`, plus RFC10 audit `d6a0bd54d`. Work branch: `codex/rfc02-implementation`.
+Baseline: integration `3730cc90f`, plus RFC10 audit `d6a0bd54d`; subsequently integrated
+G14 prosecution/bounds and X8R/BUDGET integration through `123d8254e`. Work branch: `codex/rfc02-implementation`.
 
 Statuses below describe inspected code/evidence, not assumed results from earlier progress reports.
 
@@ -14,7 +15,7 @@ Statuses below describe inspected code/evidence, not assumed results from earlie
 | Compiler expansion bounds | Shared work/allocation/depth budget now also protects general frontend variables/program/bindings; strict key tracking survives nested scopes; structural/constant bounds precede canonical encoding and weight reads | Maintain coverage as descriptor and versioned graph/dimension features land; existing bounds do not prove whole-node load safety |
 | Bounded dimensions and sparse/state semantics | v1 has fixed/Hist dimensions and fixed-axis TopK; v2 stage programs exist | Versioned length commitments; efficient sparse/routing/state relations; complete evaluator/checker/court/evidence binding; long-context and boundary trials |
 | Fidelity and reproducibility | ModelSpec runtime pack has source/frontend/artifact checks, executor vectors and logit fidelity; generic companion pins source SHA/compiler/executor revisions, reproduces canonical bytes/inventory, measures pinned HF-reference logits under predeclared revision/task/context/tolerances, and follows common beacon commitment/replay while retaining SOURCE_EQUIVALENCE_UNVERIFIED | Real HF-source provenance and checkpoint-scoped routing, task quality, long-context and runtime saturation measurements; real-node beacon evidence; named failures rather than broad PASS |
-| Performance and resource contract | TIR admission derives operation/state/cone costs; runtime and court limits are distributed | Shared complete resource vector across registration/claim/proof/court; aggregate load enforcement; real-size execution/evidence/hash/storage/delivery ratios |
+| Performance and resource contract | TIR admission derives operation/state/cone costs; SDK conformance and single-program preflight now reuse node prosecution/carrier/block bounds and choose v1/v2/segmented v4; integrated public replay and court bounds | Shared complete resource vector across registration/claim/proof/court; aggregate load enforcement; real-size execution/evidence/hash/storage/delivery ratios |
 | Work/economic conservation | Existing canonical work, RFC8/BUDGET and ADR176 paths must be audited at their call sites | Root/slice/rider/model-copy uniqueness, shared capital/window accounting, no splitting or excess-PWU rights gain, role-swap tests |
 | Public dispute completeness | Kernel and TIR court modules exist; this alone proves no detection or end-to-end gate | Fresh outsider from public material through all relation classes, bounded terminal court, invalid-proof flood and honest liveness trials |
 | Real models and coverage | Dated census reports exist; fixture/structural passes are not full-task passes | Revision/task/context/storage/arithmetic/plan records, real sizes, complete modalities via RFC03, independent Final references, A6 and A8 denominators/confidence/residuals |
@@ -391,3 +392,58 @@ fidelity/routing/state/task quality; versioned bounded dimensions/sparse/state r
 shared execution/proof/verifier/court/retention/delivery and aggregate-load resource accounting;
 work/economic conservation; complete RFC03 modalities; fresh-outsider G14 and independent
 Final/redemption; and A6/A8 measured coverage. The full original completion contract remains active.
+
+
+## Integration and node-binding correction — 2026-10-10
+
+Integrated the committed G14 prosecution/bounds branch through `123d8254e`, retaining the independent
+frontend/fidelity/source-acquisition work. This imports segmented commitment-only courts and bounded
+public replay, complete fixed-length generative claim binding, public legacy pursuit/answer history,
+X8R root/slice execution, frozen beacon source sets, verifier fees and BUDGET safety caps. Their
+consensus fences remain dormant; this merge does not certify release readiness or activate them.
+
+Inspection found an actual tool/node mismatch: pack conformance used the artifact `graph_ir_root`,
+while onboarding tag 107 compares the **kernel** program root. The shared ModelSpec/independent
+companion binder now computes that kernel-domain root from canonical program bytes and derives the
+same kernel plan. Artifact inventory, graph root and class identity retain their existing domains.
+A stale commitment is refused and must be recomputed, not relabeled or reused after a beacon.
+
+Census preflight and the conformance binder now select the oldest of v1/v2/segmented v4 that satisfies
+semantic admission **and** the node's actual public-prosecution, carrier and per-block court limits.
+They share `class_prosecution_bounds_v1` and the consensus-core policy/limits rather than local relaxed
+numbers. Requested positions are not silently clamped. v4's separate OPV admission/economic requirement
+is visible; public availability, activation and approved soundness remain independent chain facts.
+v3/v5 input semantics are not substituted with static artifact parameters. Pipeline resource reporting,
+encoder companions and the full shared execution/proof/retention/delivery vector remain unfinished.
+
+**282 distinct selected tests pass**: 122 SDK unit tests, 40 SDK integration
+checks (Direct-TIR, runtime packs, beacon conformance and sparse attention), 53 kernel tests,
+50 core integration tests, 15 node segmented-court tests and two launch/release A-2 fence tests. The final exact-context binder
+rerun passes all 28 Direct-TIR/beacon tests; it is a repeat, not additional coverage. `cargo check
+--locked -p kaspad` passes with existing warnings. The node suite finishes in 814.49 s in the normal
+debug test profile, including the 8,192-position/window-1024 producer commitment and cross-segment
+continuity conviction, wrong-length claim refusal, outside-bond conviction, restart/reorg/pruned
+import, spam liveness and v5 encoder conviction plus honest Final. It is fixture/node-fold evidence,
+not real-checkpoint throughput or a shipping-network activation certificate.
+
+```sh
+cargo test --locked -p misaka-palw-sdk --lib
+cargo test --locked -p misaka-palw-sdk \
+  --test direct_tir_registration --test runtime_pack --test runtime_pack_beacon --test coverage_p2_dsa
+cargo test --locked -p misaka-palw-kernel \
+  --test k2_ledger --test k2_ledger_pipeline --test k2_real_scale \
+  --test g14_reexecution --test g14_review_regressions --test verifier_pay
+cargo test --locked -p kaspa-consensus-core \
+  --test palw_bond_budget_e2e --test palw_exec_payload_v2_fence \
+  --test lg14a_legacy_dispute_fold --test rfc0010_production_fold
+cargo test --locked -p kaspa-consensus --lib t12_a2u_mixed_verdicts -- --test-threads=1
+cargo test --locked -p kaspa-consensus --lib g14_k2s_ -- --test-threads=1
+cargo check --locked -p kaspad
+```
+
+Tests using generated fixtures, config-only 9B geometry or hypothetically armed routes are not
+real-checkpoint or shipping node activation evidence. Edited-source formatter, local Markdown
+target and source diff checks pass. Imported historical raw logs retain their original formatting
+(including trailing whitespace); their old results are not substituted for the runs above.
+
+The full RFC02 goal, §II.11.4 real-node acceptance and all original remaining requirements in this ledger remain active; RFC02 is **not complete**.

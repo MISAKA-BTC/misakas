@@ -499,6 +499,11 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 R::SealUnavailable => "seal_unavailable",
                 R::BeaconUnavailable => "beacon_unavailable",
                 R::PermissionlessNoCapablePanel => "permissionless_no_capable_panel",
+                // RFC-0008 v2: a work session not ready by its expiry voids its claim, uncharged.
+                R::WorkRootExpired => "work_root_expired",
+                // RFC-0008 v2 amendment 1: a slice of the session was convicted / defaulted through the kernel route.
+                R::WorkSliceProvenFalse => "work_slice_proven_false",
+                R::WorkSliceDefaulted => "work_slice_defaulted",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }
@@ -3173,6 +3178,35 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     // RFC-0010 — the permissionless Panel's observation (op 220; read-only)
     // ------------------------------------------------------------------------------------------
 
+    // ------------------------------------------------------------------------------------------
+    // RFC-0008 v2 — the EXEC v2 lane's observation (op 240; read-only)
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_exec_v2_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwExecV2StatusRequest,
+    ) -> RpcResult<GetPalwExecV2StatusResponse> {
+        use kaspa_consensus_core::palw_exec_v2_verify::PALW_EXEC_V2_OBSERVATION_MAX_ROOTS_V1;
+        // The request is parsed before a byte of chain state is read: a malformed id is an error, never an absence.
+        if request.root_claim_ids.len() > PALW_EXEC_V2_OBSERVATION_MAX_ROOTS_V1 {
+            return Err(RpcError::General(format!(
+                "at most {PALW_EXEC_V2_OBSERVATION_MAX_ROOTS_V1} root claim ids per request (got {})",
+                request.root_claim_ids.len()
+            )));
+        }
+        let roots = request.root_claim_ids.iter().map(|id| parse_hash64(id, "root claim id")).collect::<RpcResult<Vec<_>>>()?;
+        let block = if request.block_hash.is_empty() { None } else { Some(parse_hash64(&request.block_hash, "block hash")?) };
+        if self.config.params.palw_exec_payload_v2_fence().is_none() {
+            return Ok(GetPalwExecV2StatusResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(observation) = session.spawn_blocking(move |c| c.palw_exec_v2_observation_v1(roots, block)).await else {
+            return Ok(GetPalwExecV2StatusResponse::default());
+        };
+        Ok(GetPalwExecV2StatusResponse { available: true, observation_version: observation.version, json: observation.to_json() })
+    }
+
     async fn get_palw_panel_v3_status_call(
         &self,
         _connection: Option<&DynRpcConnection>,
@@ -3196,6 +3230,53 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Ok(GetPalwPanelV3StatusResponse::default());
         };
         Ok(GetPalwPanelV3StatusResponse { available: true, observation_version: u32::from(observation.version), json: observation.to_json() })
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Lane LG14-A — the legacy route's public dispute reads (ops 204-206; read-only)
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_legacy_dispute_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwLegacyDisputeRequest,
+    ) -> RpcResult<GetPalwLegacyDisputeResponse> {
+        use kaspa_rpc_core::convert::palw_legacy::{palw_legacy_dispute_request_v1, palw_legacy_dispute_response_v1};
+        // The request is parsed before a byte of chain state is read: a malformed id is an error, never an absence.
+        let claim = palw_legacy_dispute_request_v1(&request)?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwLegacyDisputeResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        Ok(session.spawn_blocking(move |c| palw_legacy_dispute_response_v1(c, claim)).await)
+    }
+
+    async fn get_palw_legacy_disputes_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwLegacyDisputesRequest,
+    ) -> RpcResult<GetPalwLegacyDisputesResponse> {
+        use kaspa_rpc_core::convert::palw_legacy::{palw_legacy_disputes_request_v1, palw_legacy_disputes_response_v1};
+        let (reserver, limit) = palw_legacy_disputes_request_v1(&request)?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwLegacyDisputesResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        Ok(session.spawn_blocking(move |c| palw_legacy_disputes_response_v1(c, reserver, limit)).await)
+    }
+
+    async fn get_palw_fraud_filer_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwFraudFilerStatusRequest,
+    ) -> RpcResult<GetPalwFraudFilerStatusResponse> {
+        use kaspa_rpc_core::convert::palw_legacy::{palw_fraud_filer_status_request_v1, palw_fraud_filer_status_response_v1};
+        let bond = palw_fraud_filer_status_request_v1(&request)?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwFraudFilerStatusResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        Ok(session.spawn_blocking(move |c| palw_fraud_filer_status_response_v1(c, bond)).await)
     }
 
     // ------------------------------------------------------------------------------------------

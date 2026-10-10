@@ -368,3 +368,20 @@ legacy-held pursuit (sessions, units, answered, the answer bytes' block) belongs
 - **ADR-0177 D2 for the legacy units (DA16b §7.5).** Done for item 1: past the fence a held `StepLeaf` answer owes no artifact rows
   and is checked by membership only. Items 2 and 3 remain: dissection root-claim parameter openings, and readiness (the latter is a
   user decision).
+
+## 13. Codex node responder follow-up (2026-10-10)
+
+The production DA duty path now dispatches legacy units through `palw_da_claim_answers_v1` →
+`palw_legacy_held_capture_answer_v2` → `palw_da_built_answer_object_v1`. It uses the existing verified-material loader and memory
+reservation, produces step/checkpoint frontiers and CKW from dense or folded base0-codec retention, authenticates with the consensus
+predicate, enforces the close ceiling, signs in the tag-158 context and checks the lifecycle ride rule. Obsolete tag-158 answers
+leave the queue when their unit is no longer owed. Existing tag-55 answers still use their original builder.
+
+DA policy **8 V-unit PASS**, LG14-B **6 V-fold PASS**, IR regression **19 PASS**, existing dispatch pin **1 PASS**, filer **7 V-unit
+PASS**. The honest-fold fixture now builds step/checkpoint/CKW through the actual node worker and carrier builder before applying
+the transition. The dense fixture also verifies planted-material recovery, model-copy refusal, wrong claim/unit, missing signing
+key and close ceiling. Commands, fixture corrections and logs are in the [audit implementation record](../../audit/g14-review-2026-10-10/implementation.md).
+
+This supersedes §11's unwired-producer item only. The outsider filer's descent, public tag-158 history reads and terminal wiring
+remain open, as do production-service V-node execution, non-base0 codecs, per-family admission and maximum-profile RAM/time and
+deadline evidence. The fence and consensus encoding are unchanged.

@@ -180,6 +180,19 @@ fn a_commitment_binds_every_root_from_the_artifact_and_any_change_is_a_new_commi
     let state = scratch("commit");
     let (b, root) = commit(&state, &s.pack, &s.class_file, &test_params());
     let c = &b.commitment;
+    let container = misaka_palw_tir_artifact::PalwTirContainerV1::open(&s.class_file).unwrap();
+    let bytes = container.program.encode();
+    assert_eq!(c.program_root, misaka_palw_kernel::public::program_root_v1(&bytes), "onboarding tag 107's root");
+    assert_ne!(c.program_root, *kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_graph_ir_root_v1(&bytes).as_byte_slice());
+    let descriptor = misaka_palw_sdk::preflight::kernel::reference_program_kernels()
+        .into_iter()
+        .find(|(_, d)| d.digest() == c.kernel_descriptor_id)
+        .unwrap()
+        .1;
+    let plan =
+        misaka_palw_kernel::plan::plan_for_tir_program_v1(&descriptor, &container.program, c.program_root, b.admission.positions)
+            .unwrap();
+    assert_eq!(c.verification_plan_root, plan.root(), "onboarding tag 107's bound plan");
     // Every root is real and the commitment is the contract's statement root, not JSON.
     let zero = [0u8; 64];
     for (name, d) in [
@@ -344,11 +357,12 @@ fn a_pack_without_an_exact_layout_has_no_commitment_and_a_scope_the_policy_canno
 fn static_admission_comes_first_a_program_no_kernel_expresses_has_no_commitment() {
     // The sketch fixture whose ranges are not proven is the FRONTEND's to narrow under every reference kernel.
     let fx = misaka_palw_tir_sketch::fixture::wide_v1(1);
-    let root = misaka_palw_challenge::hash::h(b"test-program-root", &fx.program.encode());
+    let root = misaka_palw_kernel::public::program_root_v1(&fx.program.encode());
     let e = static_admission(&fx.program, root, 64).unwrap_err();
     assert_eq!(e.code, "FRONTEND_REQUIRED", "{e}");
     // And a program a kernel can express yields a plan root, hypothetically armed.
     let ok = misaka_palw_tir_sketch::fixture::dense_moe_v1(1);
+    let root = misaka_palw_kernel::public::program_root_v1(&ok.program.encode());
     let a = static_admission(&ok.program, root, 64).expect("admitted when armed");
     assert!(a.hypothetically_armed);
     assert_eq!(a.shipped_outcome, "KERNEL_NOT_ACTIVE");

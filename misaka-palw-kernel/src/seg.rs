@@ -401,6 +401,7 @@ pub struct TiledJobV1 {
     pub class_binding_id: Digest,
     pub prompt_len: u32,
     pub prompt_root: Digest,
+    /// Exact output length for a decoder; zero for a v5 encoder. Historical wire name, not permission to shorten a paid job.
     pub max_new_tokens: u32,
     pub decode: DecodeRuleV1,
     pub nonce: Digest,

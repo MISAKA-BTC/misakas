@@ -279,6 +279,14 @@ pub enum RpcApiOps {
     /// RFC-0009 stage D: one PALW state collection proven against the header that commits it (a remote miner checks it against a block it
     /// pinned). Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwStateProof = 202,
+    /// Lane LG14-A (RFC-0014 §6.3; ops 204-206): one legacy V2 claim's dispute view — roots, retention, deadlines, reservations, open
+    /// DA sessions, answered units, open courts, recorded outcomes — as one versioned JSON document. Appended at the tail: a node built
+    /// before it drops the WebSocket on it.
+    GetPalwLegacyDispute = 204,
+    /// Lane LG14-A: the claims a live dispute reservation holds (every one, or one reserver's). Appended at the tail.
+    GetPalwLegacyDisputes = 205,
+    /// Lane LG14-A: one bond's standing as a public filer — its live reservations, the deposits held on it, its exposure. Appended.
+    GetPalwFraudFilerStatus = 206,
     /// RFC-0010 (lane C2; op range 220–229): a permissionless-Panel claim's status — the rule that governs it, its seal, frozen
     /// snapshot, certified-beacon state, assignment, retries and terminal reason — and the engine's overview, as one versioned
     /// JSON observation. Read-only: no rule reads it. Appended at the tail: a node built before it drops the WebSocket on it.
@@ -300,6 +308,10 @@ pub enum RpcApiOps {
     /// Onboarding P0 (the lead's allocation): a V2 class's conformance record, current attempt and posted evidence (aux tables 39 and
     /// 40, raw), the network's challenge policy and the beacon state the node derives. Appended at the tail.
     GetPalwConformanceEvidence = 231,
+    /// RFC-0008 v2 (lane X8R; op range 240–249): the EXEC v2 lane's observation — counts, roots with each work slice and the state of
+    /// its kernel-route verification claim, one block's refusal record, the lane's health — as one versioned JSON document. Read-only:
+    /// no rule reads it. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwExecV2Status = 240,
 }
 
 impl RpcApiOps {

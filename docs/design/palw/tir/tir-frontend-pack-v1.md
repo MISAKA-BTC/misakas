@@ -329,6 +329,19 @@ palw-class pack bind-class --pack ./fidelity-pack --artifact declared.palwtir \
 # The existing commit/run/verify-conformance commands accept this bound companion directly.
 ```
 
+The shared commitment derives `program_root` in the **kernel program-root domain**, as required
+by onboarding tag 107 and the registered kernel record. The container's `graph_ir_root` remains
+in the separate artifact/class domain; substituting it refuses static admission. The plan is
+re-derived over the kernel root and exact requested positions. Existing commitments made by a
+binary using the artifact root in this field require recomputation and a new commitment attempt.
+
+Single-program selection considers v1, v2 and segmented v4, oldest first, only after both semantic
+checks and the node's public-prosecution, carrier and per-block court limits pass. A semantic-only
+success with an uncarryable response is refused. Preflight does not silently shorten a requested
+context. v4 reports its separate OPV chain admission/economics requirement; v3 pipeline and v5
+encoder job-input semantics are not inferred by pretending their inputs are stored weights.
+Availability, soundness-policy approval, chain activation and Final remain separate evidence.
+
 `attach-frontend-fidelity` acquires and validates policy **before** loading reference logits or
 executing a position, then writes a new directory only after coverage and tolerance pass. There
 is no allow-out-of-tolerance flag. The policy schema is `misaka.palw.tir-frontend-fidelity.v1`,

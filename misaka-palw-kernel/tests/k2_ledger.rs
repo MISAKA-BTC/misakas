@@ -23,6 +23,25 @@ use misaka_palw_tir::Prim;
 // ── A: the producer and every Panel seat collude ──────────────────────────────────────────────────────────────────────────
 
 #[test]
+fn f_b1_a_correct_prefix_cannot_complete_a_fixed_reward_job() {
+    for delivered in [1, 2, 3, 4] {
+        let mut w = World::new();
+        let job = w.post_job(2, &[3, 17, 9], 3, 1);
+        let claim = w.honest(&job, delivered);
+        let id = claim.claim.id();
+        let ev = w.block(10, vec![claim.tx, T::PanelCovered { claim: id }]);
+        if delivered == 3 {
+            assert!(ev.contains(&E::ClaimCommitted { claim: id }), "{ev:?}");
+        } else {
+            assert!(refused(&ev).is_some_and(|why| why.contains("WrongGenerationLength")), "{ev:?}");
+            assert!(!w.l.claims.contains_key(&id), "a coalition's passing receipts cannot admit a short claim");
+            let later = w.block(270, vec![]);
+            assert!(!later.iter().any(|e| matches!(e, E::Final { claim, .. } if *claim == id)));
+        }
+    }
+}
+
+#[test]
 fn a_full_panel_collusion_loses_to_one_outside_bond_before_final_and_after_it() {
     let mut w = World::new();
     assert_ne!(w.class, [0; 64], "the class registers: it is publicly prosecutable");

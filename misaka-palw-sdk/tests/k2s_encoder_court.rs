@@ -136,6 +136,7 @@ struct Judged {
     court_work: u64,
     court_at: String,
     filing: u64,
+    commit: u128,
     retained: u128,
 }
 
@@ -168,14 +169,16 @@ fn judge(
     } else {
         None
     };
+    let withheld = misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(program);
     let cost = |r: &misaka_palw_kernel::plan::PlanRelationV1| {
-        misaka_palw_kernel::element::element_court_cost_in_v1(
+        misaka_palw_kernel::element::element_court_cost_masked_v1(
             program,
             r.block as usize,
             r.node as usize,
             seg.node_count,
             positions,
             enc.as_ref(),
+            &withheld,
         )
     };
     let mut worst = plan
@@ -207,6 +210,7 @@ fn judge(
         court_work: worst_work,
         court_at: worst.2,
         filing: bounds.max_filing_bytes,
+        commit: bounds.max_commit_bytes,
         retained: bounds.max_retained_state,
     })
 }
@@ -215,7 +219,7 @@ fn print(name: &str, j: &Judged) {
     println!(
         "[k2s-enc] {name}: PASS — {} relations, eps <= 2^-{}; MACs/position {}; values {}; position material {} B in {} parts; artifact {} B; \
          per prosecution: public {} B, verifier RAM {} B; worst element court {} B ({}), worst court work {}; filing {} B; \
-         on chain {} B; carrier fit OK",
+         commit {} B, retained claim state {} B; carrier fit OK",
         j.relations,
         j.eps_bits,
         j.macs,
@@ -229,6 +233,7 @@ fn print(name: &str, j: &Judged) {
         j.court_at,
         j.court_work,
         j.filing,
+        j.commit,
         j.retained
     );
 }
@@ -238,28 +243,40 @@ fn v5() -> misaka_palw_kernel::descriptor::KernelDescriptorV1 {
 }
 
 /// **The encoders HFX m3 names, BGE-M3 and Huihui-9B, from their configurations alone**: bge-base, bge-large, the QA checkpoint's
-/// encoder and bge-reranker-large at 512 tokens pass K2-TIR-v5's plan, check, per-prosecution gate and the node's carrier, where the
-/// generative route's position-sized bounds refused every one. BGE-M3 at its 8,192 tokens is refused by name (the reasons printed),
+/// encoder and bge-reranker-large at 512 tokens are checked against K2-TIR-v5's plan, prosecution RAM and carrier ceilings. A
+/// configuration exceeding the decoded working-memory bound is reported REFUSED, not a supported profile. BGE-M3 at 8,192 is refused,
 /// and at the widest axis v5 reads (4,096) it is judged. Huihui-9B at 8,192 positions is the decoder reference under K2-TIR-v4.
 #[test]
 fn k2s_v5_bounds_from_real_configurations() {
+    let report = |name: &str, program: &TirProgramV1| {
+        match judge(&v5(), program, 1) {
+            Ok(j) => {
+                print(name, &j);
+                assert!(j.filing < CARRIER as u64 && j.commit < 8192);
+                assert!(j.retained > j.commit && j.retained <= ROUTE.max_retained_state);
+            }
+            Err(why) => {
+                // These configurations used to assume wire bytes were working RAM. Enforce the corrected ceiling and record
+                // the unsupported profile; unrelated plan/court/carrier failures remain test failures.
+                assert!(why.starts_with("the gate refuses [Unbounded { what: \"verifier RAM\""), "{name}: {why}");
+                println!("[k2s-enc] {name}: REFUSED — {why}");
+            }
+        }
+    };
     for (name, config, pooling) in [
         ("bge-base-en-v1.5 @512", BGE_BASE, Pooling::Cls),
         ("bge-large-en-v1.5 @512", BGE_LARGE, Pooling::Cls),
         ("bge-reranker-large @512", BGE_RERANKER_LARGE, Pooling::Cls),
     ] {
         let program = encoder_view(config, 512, pooling).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let j = judge(&v5(), &program, 1).unwrap_or_else(|e| panic!("{name}: {e}"));
-        print(name, &j);
-        assert!(j.filing < CARRIER as u64 && j.retained < 8192);
+        report(name, &program);
     }
     // The QA checkpoint: its own architecture where this branch reads it (the span head is HFX's), else its encoder.
     let qa = encoder_view(BERT_BASE_QA, 512, Pooling::Cls).or_else(|e| {
         println!("[k2s-enc] bert-base-cased-squad2 @512: {e} — judged as its encoder");
         encoder_view(&BERT_BASE_QA.replace("BertForQuestionAnswering", "BertModel"), 512, Pooling::Cls)
     });
-    let j = judge(&v5(), &qa.expect("the QA checkpoint's encoder"), 1).expect("bert-base-cased-squad2 (encoder) @512");
-    print("bert-base-cased-squad2 (encoder) @512", &j);
+    report("bert-base-cased-squad2 (encoder) @512", &qa.expect("the QA checkpoint's encoder"));
     // BGE-M3: its own 8,192 tokens, then the widest axis K2-TIR-v5 reads.
     match encoder_view(BGE_M3, 8192, Pooling::Cls).and_then(|p| judge(&v5(), &p, 1)) {
         Ok(j) => print("bge-m3 @8192", &j),
@@ -346,7 +363,11 @@ fn k2s_v5_the_worst_geometry_the_ceilings_admit() {
         println!("[k2s-enc] frontier — {axis}: largest admitted {max}; next: {refused}");
         print(&format!("  at {axis} = {max}"), &j);
         assert!(j.filing < CARRIER as u64 && j.court_bytes <= 1 << 24, "{axis}");
-        assert!(j.retained < 8192, "{axis}: one segment root on chain");
+        assert!(j.commit < 8192, "{axis}: one segment root in the claim carrier");
+        assert!(
+            j.retained > j.commit && j.retained <= ROUTE.max_retained_state,
+            "{axis}: all progress, participants and proof seals are retained separately"
+        );
     }
 }
 
@@ -780,9 +801,9 @@ fn k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_materi
             let SegFindingV1::Fault(fault) = check_positions_v1(&ctx, &liar, &art, &prompt, &[0]) else {
                 panic!("{fixture}: the lie in {what} is not found")
             };
-            let SegFaultV1::Element(e) = fault.as_ref() else { panic!("{fixture}: {what}: an element fault, not {fault:?}") };
-            assert_eq!((e.position, e.occurrence, e.node), (0, s, n), "{fixture}: {what}: localized to the lying value");
-            assert_eq!(e.token.is_some(), what.starts_with("the embedding lookup"), "{fixture}: {what}: the prompt tile");
+            let e = &fault;
+            assert_eq!(e.at(), Some((0, s, n)), "{fixture}: {what}: localized to the lying value");
+            assert_eq!(e.token().is_some(), what.starts_with("the embedding lookup"), "{fixture}: {what}: the prompt tile");
             let r = check_claim_by_reexecution_v1(&ctx, &roots, None, &liar, &art, &prompt);
             assert_eq!((r.divergent, r.probes), (Some(0), 0), "{fixture}: {what}: one position, no probe");
             assert!(matches!(r.finding, SegFindingV1::Fault(_)), "{fixture}: {what}: re-execution finds it too");

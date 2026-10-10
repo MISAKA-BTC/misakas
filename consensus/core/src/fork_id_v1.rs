@@ -777,6 +777,7 @@ mod tests {
             "palw_probabilistic_constraints_v1" => params.palw_probabilistic_constraints_v1 = Some(at),
             // RFC-0004 Part II's dormant typed-roots fence: refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_typed_roots_v1" => params.palw_typed_roots_v1 = Some(at),
+            "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
             "palw_panel_free_v1" => params.palw_panel_free_v1 = Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(at)),
             "palw_signed_registration_v1" => params.palw_signed_registration_v1 = Some(at),
             // RFC-0006 per-segment pricing (SHARD): refused when armed by `validate_palw_v2`, which the probe does not run.
@@ -795,6 +796,8 @@ mod tests {
             // ADR-0032's amended reporter share (lane INTF): a bare height, refused when armed by `validate_palw_v2` (which the probe
             // does not run).
             "palw_reporter_share_v2" => params.palw_reporter_share_v2 = Some(at),
+            // Lane LG14-A's public filer: a bare height, refused when armed by `validate_palw_v2` (which the probe does not run).
+            "palw_legacy_public_filer_v1" => params.palw_legacy_public_filer_v1 = Some(at),
             // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
             // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
             "palw_dns_retirement_v1" => {
@@ -860,6 +863,9 @@ mod tests {
             "palw_held_close_chunks_v1" => params.palw_held_close_chunks_v1 = Some(at),
             // RFC-0007 Part I: a bare height.
             "palw_verification_vertex_v1" => params.palw_verification_vertex_v1 = Some(at),
+            // RFC-0008 v2: a bare height, armable on no ruleset until the section 9 gates pass (`validate_palw_exec_payload_v2`), which the
+            // probe does not run — it asks only the hashers and the schedule.
+            "palw_exec_payload_v2" => params.palw_exec_payload_v2 = Some(at),
             "palw_witness_manifest_v1" => params.palw_witness_manifest_v1 = Some(at),
             "palw_audit_mesh_v1" => params.palw_audit_mesh_v1 = Some(at),
             "palw_capped_onboarding_v1" => params.palw_capped_onboarding_v1 = Some(at),

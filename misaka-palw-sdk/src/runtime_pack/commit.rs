@@ -192,7 +192,7 @@ pub struct CommitParamsV1 {
     pub scope: ConformanceScopeV1,
     /// The candidate identity; the class id by default.
     pub candidate_id: Option<Digest>,
-    /// The positions the VerificationPlan is checked at (the class's context, clamped to the program's history bound, by default).
+    /// Exact positions the VerificationPlan is checked at (the declared class context by default; oversized/zero values refuse).
     pub plan_positions: Option<u32>,
     /// Free text recorded with the commitment, e.g. `UNAPPROVED TEST POLICY`.
     pub policy_label: String,
@@ -267,17 +267,11 @@ pub fn static_admission(
     program_root: Digest,
     positions: u32,
 ) -> Result<StaticAdmissionRec, Refusal> {
-    use misaka_palw_kernel::check::registration_outcome_v1;
-    use misaka_palw_kernel::descriptor::{
-        KernelScheduleV1, KernelStatusV1, builtin_schedule_v1, k2_tir_v1_descriptor, k2_tir_v2_descriptor,
-    };
+    use misaka_palw_kernel::descriptor::{KernelScheduleV1, KernelStatusV1, builtin_schedule_v1};
     use misaka_palw_kernel::outcome::RegistrationOutcomeV1 as O;
-    let kernels = [("K2-TIR-v1", k2_tir_v1_descriptor()), ("K2-TIR-v2", k2_tir_v2_descriptor())];
+    let kernels = crate::preflight::kernel::reference_program_kernels();
     let judge = |schedule: &KernelScheduleV1, d: &misaka_palw_kernel::descriptor::KernelDescriptorV1| {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            registration_outcome_v1(schedule, d, program, program_root, positions, 0)
-        }))
-        .unwrap_or_else(|_| O::FrontendRequired { reason: "the kernel check panicked".into() })
+        crate::preflight::kernel::node_program_outcome(schedule, d, program, program_root, positions, 0)
     };
     let mut last: Option<O> = None;
     for (name, d) in &kernels {
@@ -298,7 +292,7 @@ pub fn static_admission(
             other => last = Some(other),
         }
     }
-    let o = last.expect("two kernels were judged");
+    let o = last.expect("reference kernels were judged");
     Err(Refusal::new(failure_code(&o), format!("static semantic admission refused the program under every reference kernel: {o}")))
 }
 
@@ -411,7 +405,6 @@ pub fn bind_commitment(
     log("deriving the artifact's roots (streamed: one pass for the inventory root, one for the file digest)".into());
     let m = PalwTirManifestV1::derive_streamed(artifact).map_err(|e| Refusal::new("PACK_MISMATCH", e))?;
     let artifact_root: Digest = *m.inventory_root.as_byte_slice();
-    let program_root: Digest = *m.graph_ir_root.as_byte_slice();
     if hex(&artifact_root) != pack.inventory_root {
         return Err(Refusal::new(
             "PACK_MISMATCH",
@@ -473,13 +466,16 @@ pub fn bind_commitment(
 
     // Scope against the artifact: it must be drawable, and a prompt plus its decode must fit the class.
     let program = &container.program;
+    // Onboarding tag 107 binds the kernel record's program root. The container's graph_ir_root is a DIFFERENT domain,
+    // retained unchanged in its inventory/class identity; it is not the conformance program root or the plan's program root.
+    let program_root = misaka_palw_kernel::public::program_root_v1(&program.encode());
     if params.scope.leaves_per_repetition > m.leaf_count {
         return Err(Refusal::new(
             "SCOPE_INVALID",
             format!("the scope draws {} leaves of an artifact of {}", params.scope.leaves_per_repetition, m.leaf_count),
         ));
     }
-    let positions = params.plan_positions.unwrap_or_else(|| d.max_context.min(program.history_bound).max(1));
+    let positions = params.plan_positions.unwrap_or(d.max_context);
     if positions == 0 || positions > d.max_context || positions > program.history_bound {
         return Err(Refusal::new("SCOPE_INVALID", "plan positions must fit the declared class and program history bound"));
     }

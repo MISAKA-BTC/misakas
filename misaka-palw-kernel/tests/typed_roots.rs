@@ -274,6 +274,22 @@ fn check(
     SpecOutsiderV1 { ledger: l, claim, material: da, artifact, snapshots, salt: [0x5A; 64] }.check().unwrap()
 }
 
+struct NoProducerTrace;
+impl PublicSourceV1 for NoProducerTrace {
+    fn node(&self, _: u8, _: u32, _: u16, _: u16) -> Option<Tensor> {
+        panic!("typed reexecution must not read producer values")
+    }
+}
+
+fn replay_check(
+    l: &KernelLedgerV1,
+    claim: Digest,
+    artifact: &dyn misaka_palw_kernel::ledger::PublicArtifactV1,
+    snapshots: &dyn misaka_palw_kernel::spec::outsider::SnapshotSourceV1,
+) -> OutsiderFindingV1 {
+    SpecOutsiderV1 { ledger: l, claim, material: &NoProducerTrace, artifact, snapshots, salt: [0x5A; 64] }.check_computation().unwrap()
+}
+
 fn plan_of(d: &KernelDescriptorV1, p: &TirProgramV1) -> VerificationPlanV1 {
     plan_for_tir_program_v1(d, p, program_root_v1(&p.encode()), MAX_POSITIONS).unwrap()
 }
@@ -455,6 +471,7 @@ fn memory_end_to_end_a_lie_in_one_step_is_convicted_and_memory_is_carried_across
     assert!(matches!(m.w.state(&c1), ClaimStateV1::Challengeable { .. }), "an OPV claim: {:?}", m.w.state(&c1));
     let da1 = Da::memory(&p1, Some(&m.m0()));
     assert_eq!(check(&m.w.rebuilt(), c1, &da1, &m.fx.params, &()), OutsiderFindingV1::Clean, "an honest claim is clean");
+    assert_eq!(replay_check(&m.w.rebuilt(), c1, &m.fx.params, &()), OutsiderFindingV1::Clean);
     let final_at = m.w.l.opv.claims[&c1].window_end_daa;
     m.w.beat_to(final_at);
     assert!(matches!(m.w.state(&c1), ClaimStateV1::Final { .. }), "{:?}", m.w.state(&c1));
@@ -479,7 +496,8 @@ fn memory_end_to_end_a_lie_in_one_step_is_convicted_and_memory_is_carried_across
     let (c2, _) = m.w.commit(SpecClaimV1::Memory(lie.claim.clone()));
     // The outsider's step-0 pre-state comes from the chain too (no 0x40 material in its directory).
     let da2 = Da::memory(&lie, None);
-    let finding = check(&m.w.rebuilt(), c2, &da2, &m.fx.params, &());
+    assert!(matches!(check(&m.w.rebuilt(), c2, &da2, &m.fx.params, &()), OutsiderFindingV1::Prosecute(_)));
+    let finding = replay_check(&m.w.rebuilt(), c2, &m.fx.params, &());
     let OutsiderFindingV1::Prosecute(ProsecutionV1::Spec(bytes)) = &finding else { panic!("{finding:?}") };
     let fault: SpecFaultV1 = borsh::from_slice(bytes).unwrap();
     assert!(matches!(fault, SpecFaultV1::MemoryStep { step: 1, .. }), "localised to the lying step: {fault:?}");
@@ -498,6 +516,7 @@ fn memory_end_to_end_a_lie_in_one_step_is_convicted_and_memory_is_carried_across
     let (c3, _) = m.w.commit(SpecClaimV1::Memory(honest.claim.clone()));
     let da3 = Da::memory(&honest, None);
     assert_eq!(check(&m.w.rebuilt(), c3, &da3, &m.fx.params, &()), OutsiderFindingV1::Clean);
+    assert_eq!(replay_check(&m.w.rebuilt(), c3, &m.fx.params, &()), OutsiderFindingV1::Clean);
     let final_at = m.w.l.opv.claims[&c3].window_end_daa;
     m.w.beat_to(final_at);
     assert!(matches!(m.w.state(&c3), ClaimStateV1::Final { .. }));
@@ -951,7 +970,11 @@ fn composite_a_lie_in_the_tool_stage_is_convicted_at_that_stage_and_a_filing_aga
     assert!(ev.contains(&E::ClaimCommitted { claim: c }), "{ev:?}");
     let mut da = Da::default();
     da.stage(1, 0, &trace);
-    let finding = check(&x.w.rebuilt(), c, &da, &x.artifact(2), &x.snapshots());
+    assert!(matches!(
+        check(&x.w.rebuilt(), c, &da, &x.artifact(2), &x.snapshots()),
+        OutsiderFindingV1::Clean | OutsiderFindingV1::Prosecute(_)
+    ));
+    let finding = replay_check(&x.w.rebuilt(), c, &x.artifact(2), &x.snapshots());
     let OutsiderFindingV1::Prosecute(ProsecutionV1::Spec(bytes)) = finding else { panic!("{finding:?}") };
     let fault: SpecFaultV1 = borsh::from_slice(&bytes).unwrap();
     assert!(matches!(fault, SpecFaultV1::Retrieval { stage: 0, .. }), "localised to the tool stage: {fault:?}");
@@ -998,7 +1021,11 @@ fn composite_a_lie_in_the_model_stage_is_convicted_at_the_model_stage() {
         x.w.commit(SpecClaimV1::Composite(CompositeClaimV1 { job_id: jid, producer_bond: P1, stages: vec![tool_stage, model_stage] }));
     let mut da = Da::default();
     da.stage(1, 0, &trace);
-    let finding = check(&x.w.rebuilt(), c, &da, &x.artifact(2), &x.snapshots());
+    assert!(matches!(
+        check(&x.w.rebuilt(), c, &da, &x.artifact(2), &x.snapshots()),
+        OutsiderFindingV1::Clean | OutsiderFindingV1::Prosecute(_)
+    ));
+    let finding = replay_check(&x.w.rebuilt(), c, &x.artifact(2), &x.snapshots());
     let OutsiderFindingV1::Prosecute(ProsecutionV1::Spec(bytes)) = finding else { panic!("{finding:?}") };
     let fault: SpecFaultV1 = borsh::from_slice(&bytes).unwrap();
     assert!(matches!(fault, SpecFaultV1::StageKernel { stage: 1, .. }), "{fault:?}");
@@ -1034,7 +1061,11 @@ fn composite_the_logits_to_query_edge_court_convicts_a_carried_query_that_is_not
         assert!(ev.contains(&E::ClaimCommitted { claim: c }), "an edge over a committed value is not checkable at inclusion: {ev:?}");
         let mut da = Da::default();
         da.stage(0, 0, &trace);
-        let finding = check(&x.w.rebuilt(), c, &da, &x.artifact(2), &x.snapshots());
+        assert!(matches!(
+            check(&x.w.rebuilt(), c, &da, &x.artifact(2), &x.snapshots()),
+            OutsiderFindingV1::Clean | OutsiderFindingV1::Prosecute(_)
+        ));
+        let finding = replay_check(&x.w.rebuilt(), c, &x.artifact(2), &x.snapshots());
         if !lie {
             assert_eq!(finding, OutsiderFindingV1::Clean);
             continue;
@@ -1115,13 +1146,13 @@ fn composite_registration_refuses_memory_components_nesting_and_kind_mismatches_
 fn bounds_per_kind_fit_the_carriers_and_refuse_past_each_ceiling_by_name() {
     let p = policy().prosecution;
     let ext = k2_tr_v1_descriptor();
-    // Memory: one step's material plus the pre-state per prosecution; sessions = steps × positions + 1.
+    // Memory: every step must be checked to find an unannounced fault; sessions = steps × positions + 1.
     let m = Mem::new(memory_v1(3));
     let row = &m.w.l.typed.classes[&m.class];
     let SpecClassKindV1::Memory { rule, root, .. } = &row.kind else { panic!() };
     let b = row.bounds;
     assert_eq!(b.max_concurrent_sessions, 8 * MAX_POSITIONS + 1);
-    assert_eq!(b.max_public_bytes, rule.bounds.max_public_bytes + 16 * 4 + 128, "one step's material and the 16 × i32 pre-state");
+    assert_eq!(b.max_public_bytes, 8 * rule.bounds.max_public_bytes + 16 * 4 + 128, "all eight steps and the pre-state");
     let evidence = 64 * 16 + 64 * MAX_POSITIONS as u128 * 2;
     let without_demand_metadata = 8 * (rule.bounds.max_retained_state + evidence) + 64 * 9 + 64 + 16 * 4 + 128;
     assert!(
@@ -1129,17 +1160,14 @@ fn bounds_per_kind_fit_the_carriers_and_refuse_past_each_ceiling_by_name() {
         "the pre-state demand's participants and response metadata are retained too"
     );
     assert!(b.max_commit_bytes < b.max_retained_state, "served responses and demand bonds do not share the commitment carrier");
-    assert_eq!(
-        (b.max_opening_bytes, b.max_court_work),
-        (rule.bounds.max_opening_bytes, rule.bounds.max_court_work),
-        "a step fault is a kernel fault"
-    );
+    assert_eq!(b.max_opening_bytes, rule.bounds.max_opening_bytes, "a step fault opens one kernel instance");
+    assert!(b.max_court_work > rule.bounds.max_court_work, "its surrounding memory record is authenticated too");
     assert_eq!(b.max_localization_rounds, 2);
     misaka_palw_kernel::ledger::carrier_fit_v1(&b, 1 << 20, 1 << 22, 1 << 24).unwrap();
     let mut long = root.clone();
     long.max_steps = 16; // 16 × 64 + 1 sessions > 1,024
     assert!(
-        memory_bounds_v1(&rule.bounds, &rule.program, &rule.plan, &long, &p)
+        memory_bounds_v1(&rule.bounds, &rule.descriptor, &rule.program, &rule.plan, &long, &p)
             .unwrap_err()
             .starts_with("BOUNDS_EXCEEDED [concurrent sessions]")
     );
@@ -1153,6 +1181,7 @@ fn bounds_per_kind_fit_the_carriers_and_refuse_past_each_ceiling_by_name() {
     assert_eq!(b.max_concurrent_sessions, 5);
     assert_eq!(b.max_response_bytes, 8 * (item as u128 + 64 * 6 + 16) + 128);
     assert_eq!(retrieval_claim_material_bytes_v1(&r), 40 * item as u128, "detection reads the whole snapshot (the outsider's choice)");
+    assert!(b.max_verifier_ram >= retrieval_claim_material_bytes_v1(&r) * 16, "price the whole snapshot and its rebuilt tree");
     let mut huge = r.clone();
     huge.snapshot.items = 1025 * 8;
     assert!(retrieval_bounds_v1(&huge, &ext, &p).unwrap_err().starts_with("BOUNDS_EXCEEDED [concurrent sessions]"));

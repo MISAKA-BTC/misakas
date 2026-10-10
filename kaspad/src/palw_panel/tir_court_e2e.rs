@@ -1333,7 +1333,9 @@ fn an_ir_claims_trace_events_are_answered_in_the_ir_form() {
                 assert!(!tiled, "only a flat answer covers the other in-run events");
                 continue;
             };
-            let Ok(PalwDaAnswerV1::TirEvent(disclosure)) = answer else { panic!("tiled {tiled}: an IR event answer, got {answer:?}") };
+            let Ok(super::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::TirEvent(disclosure))) = answer else {
+                panic!("tiled {tiled}: an IR event answer, got {answer:?}")
+            };
             if matches!(*disclosure, PalwTirTraceEventDisclosureV1::OutOfRange { .. }) {
                 out_of_range += 1;
             } else {
@@ -1470,7 +1472,7 @@ fn node_answers_c(
         .zip(built.answers)
         .map(|(unit, answer)| {
             let answer = answer.expect("no flat covers an IR tiled unit").unwrap_or_else(|e| panic!("{unit:?} is answered: {e}"));
-            kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_object_v1(
+            super::palw_da_built_answer_object_v1(
                 &h64(999),
                 claim.id,
                 *unit,
@@ -1619,13 +1621,19 @@ fn the_node_answers_every_ir_step_unit_from_its_capture_dense_or_fold() {
                 .answers
             };
             let with = answers(Some(&tir));
-            assert!(matches!(&with[0], Some(Ok(PalwDaAnswerV1::TirStepNode(_)))), "{:?}", with[0]);
-            assert!(matches!(&with[1], Some(Ok(PalwDaAnswerV1::TirStepLeaf(d))) if d.opening.leaf_index == n - 1));
-            assert!(matches!(&with[2], Some(Ok(PalwDaAnswerV1::TirStepOutOfRange(_)))), "a leaf past the job, proven so");
+            assert!(matches!(&with[0], Some(Ok(super::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::TirStepNode(_))))), "{:?}", with[0]);
+            assert!(
+                matches!(&with[1], Some(Ok(super::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::TirStepLeaf(d)))) if d.opening.leaf_index == n - 1)
+            );
+            assert!(
+                matches!(&with[2], Some(Ok(super::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::TirStepOutOfRange(_))))),
+                "a leaf past the job, proven so"
+            );
             assert!(
                 matches!(
                     (&with[3], tiled),
-                    (Some(Ok(PalwDaAnswerV1::TirRowNode(_))), true) | (Some(Ok(PalwDaAnswerV1::TirStepOutOfRange(_))), false)
+                    (Some(Ok(super::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::TirRowNode(_)))), true)
+                        | (Some(Ok(super::PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::TirStepOutOfRange(_)))), false)
                 ),
                 "the last row, or a flat trace's out-of-range proof: {:?}",
                 with[3]

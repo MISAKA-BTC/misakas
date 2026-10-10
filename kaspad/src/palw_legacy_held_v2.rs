@@ -16,8 +16,10 @@
 //!
 //! **The producer's half** — the answers an honest producer owes from its retention ([`palw_legacy_held_answer_v2`]): a node's
 //! frontier and siblings from its fold (the retained level, a replayed block below it), a leaf's committed half from its own leaf
-//! prover. Wiring both halves into the node's tick is LG14-A's common filer (`palw_fraud_filer`); until it lands these are pure
-//! functions the E2E drives through the fold.
+//! prover. The node's DA worker (`palw_panel::rcore_da_answers_v1`) now dispatches due legacy units to this responder under its
+//! verified-material and memory-reservation path, then queues signed tag-158 carriers. LG14-A's common filer now owns an independent
+//! [`PalwLegacyReplicaV2`] for base0-codec replays, reads authenticated public tag-158 history and queues these step terminals. Other
+//! mismatch classes and fresh-node service completion remain separate acceptance conditions.
 
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1};
 use kaspa_consensus_core::palw_legacy_held_da_v2::{
@@ -35,6 +37,7 @@ use kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_width_v1;
 use kaspa_hashes::Hash64;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// How many replayed blocks a fold tree keeps at once (the descent and an opening read at most two edges at a time).
 const PALW_LEGACY_TREE_BLOCK_CACHE_V2: usize = 4;
@@ -89,7 +92,15 @@ impl<'a> PalwLegacyTreeV2<'a> {
     pub fn fold_v1(backend: &'a dyn PalwExecutionBackendV1, capture: &'a [u8], prompt_ids: &'a [u32]) -> Result<Self, String> {
         let material = misaka_palw_base0::produce::base0_fp_material_decode_v2(capture)
             .map_err(|e| format!("the retention is not a fold: {e:?}"))?;
-        let tree = &material.step_tree;
+        Self::from_fold_v1(backend, capture, prompt_ids, &material.step_tree)
+    }
+
+    fn from_fold_v1(
+        backend: &'a dyn PalwExecutionBackendV1,
+        capture: &'a [u8],
+        prompt_ids: &'a [u32],
+        tree: &misaka_palw_base0::fp_capture::Base0SparseStepTreeV1,
+    ) -> Result<Self, String> {
         let retain_level = u8::try_from(tree.retain_level()).map_err(|_| "the retained level is past any tree".to_string())?;
         let mut upper = vec![tree.retained_nodes().to_vec()];
         while upper.last().is_some_and(|l| l.len() > 1) {
@@ -209,7 +220,210 @@ impl PalwLegacyOwnTreeV2 for PalwLegacyTreeV2<'_> {
     }
 }
 
+/// The public filer's own execution, held under its replay reservation. It owns no producer material. Borrowed tree readers
+/// live inside each blocking step, so their block cache serves the whole descent without a self-referential or shared Cell tree.
+pub(crate) struct PalwLegacyReplicaV2 {
+    pub(crate) backend: Arc<dyn PalwExecutionBackendV1>,
+    pub(crate) capture: Arc<Vec<u8>>,
+    pub(crate) prompt_ids: Arc<Vec<u32>>,
+    pub(crate) form: PalwPromptIdsFormV1,
+    pub(crate) roots: PalwClaimRootsV1,
+}
+
+impl PalwLegacyReplicaV2 {
+    fn with_step_tree<T>(&self, use_tree: impl FnOnce(&PalwLegacyTreeV2<'_>) -> Result<T, String>) -> Result<T, String> {
+        use misaka_palw_base0::produce::{Base0RetentionV1, base0_dense_step_leaves_capped_v1, base0_material_decode_any_v1};
+        let retention = base0_material_decode_any_v1(&self.capture).map_err(|e| format!("this replica has no legacy tree: {e:?}"))?;
+        let binding = retention.binding();
+        if binding.committed_execution_root != self.roots.execution_root || binding.full_logits_trace_root != self.roots.trace_root {
+            return Err("the replica's capture is not its own execution".into());
+        }
+        let tree = match &retention {
+            Base0RetentionV1::Folded(m) => {
+                PalwLegacyTreeV2::from_fold_v1(self.backend.as_ref(), &self.capture, &self.prompt_ids, &m.step_tree)?
+            }
+            Base0RetentionV1::Dense((binding, tiles, ..)) => PalwLegacyTreeV2::leaves_v1(
+                base0_dense_step_leaves_capped_v1(binding, tiles, binding.step_leaf_count)
+                    .ok_or("the replica has no complete dense step tree")?,
+            ),
+        };
+        if tree.leaf_count() != binding.step_leaf_count || tree.root() != Some(binding.step_merkle_root) {
+            return Err("the replica's own tree does not reproduce its binding".into());
+        }
+        use_tree(&tree)
+    }
+
+    pub(crate) fn descent(
+        &self,
+        binding: &PalwStepBindingV2,
+        frontiers: &[kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyFrontierV2],
+    ) -> Result<kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyDescentStepV2, String> {
+        self.with_step_tree(|tree| {
+            if tree.leaf_count() != binding.step_leaf_count {
+                return Err("the claim's step count is not this public job's: the job/count terminal is required".into());
+            }
+            Ok(kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_descent_next_v2(
+                kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyTreeV2::Step,
+                binding.step_leaf_count,
+                &binding.step_merkle_root,
+                tree,
+                frontiers,
+            ))
+        })
+    }
+
+    /// Build an unsigned terminal only after the court's own predicate says it is guilty or needs the fused dissection.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn terminal(
+        &self,
+        binding: &PalwStepBindingV2,
+        frontiers: &[kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyFrontierV2],
+        witness: Option<&PalwCommittedKernelWitnessV2>,
+        leaf: u64,
+        claim: Hash64,
+        bound_to: &kaspa_consensus_core::palw_shard_court_v1::PalwOneMoveClaimV2,
+        trace_root: Hash64,
+        producer: PalwBondKeyV2,
+        accuser: PalwBondKeyV2,
+        ladder: u64,
+    ) -> Result<PalwConsensusObjectV2, String> {
+        use kaspa_consensus_core::palw_legacy_held_da_v2::{palw_legacy_leaf_is_fused_v2, palw_legacy_leaf_recompute_verdict_v2};
+        use kaspa_consensus_core::palw_shard_court_v1::PalwShardCourtVerdictV1;
+        if palw_legacy_leaf_is_fused_v2(binding, leaf) {
+            let witness = witness.ok_or("the fused terminal needs the public committed witness")?;
+            if witness.refutation.binding != *binding || witness.refutation.output_opening.leaf_index != leaf {
+                return Err("the public witness is not the located leaf of this claim".into());
+            }
+            let evidence = palw_legacy_fused_opening_v2(
+                self.backend.as_ref(),
+                &self.capture,
+                &self.prompt_ids,
+                witness,
+                bound_to.artifact_root,
+                ladder,
+            )?
+            .ok_or("the own history agrees with the committed fused tile: nothing guilty to file")?;
+            match evidence.verdict_at_v2(bound_to, ladder, true).map_err(|e| format!("the fused terminal does not adjudicate: {e}"))? {
+                PalwShardCourtVerdictV1::ExecutorGuilty | PalwShardCourtVerdictV1::NeedsDissection => {}
+                _ => return Err("the court does not find this fused accusation actionable".into()),
+            }
+            let accusation = evidence.into_accusation_v1(claim, bound_to.execution_root, trace_root, producer, accuser);
+            accusation.validate_shape(ladder).map_err(|e| format!("the fused accusation's shape: {e}"))?;
+            return Ok(PalwConsensusObjectV2::ShardCourtAccused { accusation: Box::new(accusation) });
+        }
+        self.with_step_tree(|tree| {
+            let committed = frontiers
+                .iter()
+                .find_map(|frontier| frontier.leaf_hash(leaf))
+                .ok_or("no public bottom frontier commits the located leaf")?;
+            let view = PalwLegacyNodeViewV2 { leaf_count: binding.step_leaf_count, divergent: leaf, frontiers, own: tree };
+            let accusation = palw_legacy_leaf_recompute_v2(
+                self.backend.as_ref(),
+                &self.capture,
+                &self.prompt_ids,
+                self.roots,
+                self.form,
+                binding,
+                &view,
+                committed,
+                leaf,
+                claim,
+                trace_root,
+                producer,
+                accuser,
+            )?;
+            match palw_legacy_leaf_recompute_verdict_v2(&accusation, bound_to, ladder)
+                .map_err(|e| format!("the recompute terminal does not adjudicate: {e}"))?
+            {
+                PalwShardCourtVerdictV1::ExecutorGuilty => {
+                    Ok(PalwConsensusObjectV2::LegacyLeafRecomputedV2 { accusation: Box::new(accusation) })
+                }
+                _ => Err("the court does not find the located leaf guilty: nothing filed".into()),
+            }
+        })
+    }
+}
+
 // ---- the producer's half -----------------------------------------------------------------------------------------------------
+
+/// Build a tag-158 answer from a verified family capture on the node's DA worker. All base0-codec families share this path:
+/// folded captures keep the retained level and replay blocks on demand, while dense captures rebuild their own committed tree.
+/// The public answer is checked with the consensus predicate before it is signed; unsupported codecs are explicit refusals.
+pub fn palw_legacy_held_capture_answer_v2(
+    backend: &dyn PalwExecutionBackendV1,
+    capture: &[u8],
+    prompt_ids: &[u32],
+    roots: PalwClaimRootsV1,
+    form: PalwPromptIdsFormV1,
+    unit: &PalwLegacyHeldUnitV2,
+) -> Result<(PalwStepBindingV2, PalwLegacyHeldAnswerV2), String> {
+    use misaka_palw_base0::produce::{Base0RetentionV1, base0_dense_step_leaves_capped_v1, base0_material_decode_any_v1};
+    let retention = base0_material_decode_any_v1(capture).map_err(|e| format!("no legacy held responder for this capture: {e:?}"))?;
+    let binding = retention.binding();
+    if binding.committed_execution_root != roots.execution_root || binding.full_logits_trace_root != roots.trace_root {
+        return Err("the legacy held capture is not the claim's binding".into());
+    }
+    let (context_hash, _, checkpoint_profile_hash) = kaspa_consensus_core::palw_step_leg::verify_binding_v1(binding)
+        .map_err(|e| format!("the legacy held binding does not verify: {e}"))?;
+    kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_demand_v2(&roots.execution_root, unit, binding)
+        .map_err(|e| format!("the legacy held unit cannot be compelled: {e}"))?;
+    let step_tree = match &retention {
+        Base0RetentionV1::Folded(m) => PalwLegacyTreeV2::from_fold_v1(backend, capture, prompt_ids, &m.step_tree)?,
+        Base0RetentionV1::Dense((binding, tiles, ..)) => PalwLegacyTreeV2::leaves_v1(
+            base0_dense_step_leaves_capped_v1(binding, tiles, binding.step_leaf_count)
+                .ok_or("the dense legacy held capture has no complete step tree")?,
+        ),
+    };
+    if step_tree.leaf_count() != binding.step_leaf_count || step_tree.root() != Some(binding.step_merkle_root) {
+        return Err("the legacy held retention does not reproduce the claim's step tree".into());
+    }
+    // Other units do not read the checkpoint tree. Avoid rebuilding a dense capture's state chunks for every step-node demand.
+    let checkpoint_hashes = if matches!(unit, PalwLegacyHeldUnitV2::CheckpointNode { .. }) {
+        match &retention {
+            Base0RetentionV1::Folded(m) => m
+                .checkpoint_leaves
+                .iter()
+                .map(|leaf| {
+                    kaspa_consensus_core::palw_step_leg::checkpoint_leaf_hash_v2(
+                        &context_hash,
+                        &checkpoint_profile_hash,
+                        &binding.state_chunk_map_id,
+                        leaf,
+                    )
+                })
+                .collect(),
+            Base0RetentionV1::Dense((_, _, _, _, chunks)) => {
+                misaka_palw_base0::legs::Base0CheckpointCaptureV1::from_chunks_v1(
+                    &binding.job_context,
+                    &binding.shape_profile,
+                    &binding.checkpoint_profile,
+                    chunks,
+                )
+                .map_err(|e| format!("the dense checkpoint leg does not rebuild: {e:?}"))?
+                .leaf_hashes
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let checkpoint_tree = PalwLegacyTreeV2::leaves_v1(checkpoint_hashes);
+    if matches!(unit, PalwLegacyHeldUnitV2::CheckpointNode { .. })
+        && (checkpoint_tree.leaf_count() != u64::from(binding.checkpoint_count)
+            || checkpoint_tree.root() != Some(binding.checkpoint_merkle_root))
+    {
+        return Err("the legacy held retention does not reproduce the claim's checkpoint tree".into());
+    }
+    let answer = palw_legacy_held_answer_v2(unit, &step_tree, &checkpoint_tree, backend, capture, prompt_ids, roots, form)?;
+    kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v2(
+        &roots.execution_root,
+        unit,
+        binding,
+        &answer,
+        binding.step_leaf_count,
+    )
+    .map_err(|e| format!("the built legacy held answer does not authenticate: {e}"))?;
+    Ok((binding.clone(), answer))
+}
 
 /// **A producer's answer to one legacy held unit, from its own retention** — a node's frontier (leaf hashes at level 0) and its
 /// siblings from `tree` (the step tree, or the checkpoint tree for a `CheckpointNode`), or a leaf's committed half from the family's

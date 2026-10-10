@@ -27,7 +27,21 @@ use crate::palw_state_v2::PalwBondKeyV2;
 /// One physical reward block in the fixed-point block ledger (ADR-0176 D2: a block is never issued as `1/m`; its attribution is).
 pub const PALW_BUDGET_BLOCK_UNIT_V1: u64 = 1_000_000;
 /// The policy versions this binary reads.
-pub const PALW_BOND_BUDGET_POLICY_VERSION_V1: u16 = 1;
+/// The budget policy's version: 2 adds PESG §6's slots (2026-10-10) — the liability hold `H_L` apart from `W`, the external export cap
+/// and the value-of-weight slot — and bounds `W` to ECON's derived range. Version 1 was never armed and is refused.
+pub const PALW_BOND_BUDGET_POLICY_VERSION_V2: u16 = 2;
+
+/// **PESG §6 / ECON §5e.4: the range `W` must stay in** (DAA): below `L = 280` claims outlive the window; above 436 the 65,536-per-span
+/// Round bound stops the shared window from saturating (interim terms, 150 s/DAA). `W` itself is POLICY — the user has not fixed it.
+pub const PALW_BOND_BUDGET_W_MIN_DAA_V1: u64 = 280;
+pub const PALW_BOND_BUDGET_W_MAX_DAA_V1: u64 = 436;
+
+/// **ECON §5e.4: the interim liability hold `H_L`** (DAA), kept apart from the issuance clock `d + W`.
+pub const PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1: u64 = 280;
+
+/// **PESG §6 / ECON §5e.4: the external export cap's ceiling**, permille of the collateral still held for the claim's liability: 0.51
+/// (the share a conviction collects, `1 − a` with the 49% return).
+pub const PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1: u16 = 510;
 /// The allocation policy's version: 2 is the power curve `A_m = S_m^α` (ADR-0177's revised goal, 2026-10-10). Version 1, the piecewise
 /// linear `f` of the "favour publication" goal, was never armed anywhere and is refused.
 pub const PALW_MODEL_ALLOCATION_POLICY_VERSION_V2: u16 = 2;
@@ -61,6 +75,8 @@ pub const PALW_BUDGET_TABLE_CLAIMS_V1: u8 = 2;
 pub const PALW_BUDGET_TABLE_RELEASES_V1: u8 = 3;
 pub const PALW_BUDGET_TABLE_ASSIGNMENTS_V1: u8 = 4;
 pub const PALW_BUDGET_TABLE_MODELS_V1: u8 = 5;
+/// PESG §6: the liability holds' expiries, `(hold_until, bond)`.
+pub const PALW_BUDGET_TABLE_LIABILITY_RELEASES_V1: u8 = 6;
 
 // ---- the four dimensions ------------------------------------------------------------------------------------------------------
 
@@ -167,6 +183,9 @@ pub struct PalwBudgetAskV1 {
     pub block_units: u64,
     pub reward_sompi: u64,
     pub final_weight: u128,
+    /// PESG §6: the collateral the claim reserves for its liability (`K`, the V2 claim's `reserved`). Open claims of one bond hold
+    /// at most its capital in total (`Σ K ≤ C`, so at most `⌊C/K⌋` open claims of reservation `K`). 0 for a row that is no claim.
+    pub liability_sompi: u128,
 }
 
 /// Where a reservation came from (recorded; `Legacy` rows are never consumed — old claims are paid under the rules they were
@@ -195,6 +214,10 @@ pub enum PalwBudgetRefusalV1 {
     },
     /// The bond holds its policy's open-claim cap.
     OpenClaims,
+    /// PESG §6: the bond's open claims would reserve more liability collateral than its capital (`Σ K > C`).
+    LiabilityExceedsCapital,
+    /// PESG §6: the bond's unsettled (pre-Final) weight would pass its Final-weight cap `F_max`.
+    UnsettledWeight,
     /// The claim already holds a reservation.
     Duplicate,
     /// No such reservation, or it is closed.
@@ -215,6 +238,10 @@ impl std::fmt::Display for PalwBudgetRefusalV1 {
         match self {
             Self::Exhausted { dim } => write!(f, "the bond's budget window has no room in {dim:?} (ADR-0176 D1)"),
             Self::OpenClaims => write!(f, "the bond holds its open-claim cap (ADR-0176 D1)"),
+            Self::LiabilityExceedsCapital => {
+                write!(f, "the bond's open claims would reserve more liability collateral than its capital (PESG §6: open <= C/K)")
+            }
+            Self::UnsettledWeight => write!(f, "the bond's unsettled pre-Final weight would pass its Final-weight cap (PESG §6)"),
             Self::Duplicate => write!(f, "the claim already holds a budget reservation"),
             Self::NotOpen => write!(f, "the claim holds no open budget reservation"),
             Self::Short { dim } => write!(f, "the claim's reservation is short in {dim:?} (ADR-0176 D3)"),
@@ -252,6 +279,25 @@ pub struct PalwBondBudgetPolicyV1 {
     pub slice_rights_by_rho: bool,
     /// Readiness §3e: how Round rights (execution tickets, fee-only Rounds included) are bounded — POLICY P-9.
     pub round_rights: PalwRoundRightsPolicyV1,
+    /// PESG §6 / ECON §5e.4: `H_L`, how long a bond's capital stays held after a claim is terminal (its liability), DAA — a clock of its
+    /// own, apart from the issuance clock `d + W` (interim 280).
+    pub liability_hold_daa: u64,
+    /// PESG §6: the most of a claim's reward that may leave the chain's own books (into the payout queue that mints, or a market
+    /// reserve) while its liability still holds collateral, permille of that collateral; at most 510 (0.51).
+    pub export_cap_permille: u16,
+    /// PESG §6: the value of Final weight — UNKNOWN today (FINX, BUDGET), so the slot is versioned and `Unknown` by default.
+    pub weight_value: PalwWeightValuePolicyV1,
+}
+
+/// **The value of a unit of Final weight** (PESG §6, ECON §5e.4: `w·v_F` belongs inside the same per-bond budget as `r`). The value is
+/// UNKNOWN, so the slot ships `Unknown` and the engine bounds weight by `F_max` alone; `SompiPerWeight` makes admission also hold
+/// `reward + final_weight · v ≤ R_max` per window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwWeightValuePolicyV1 {
+    Unknown = 0,
+    SompiPerWeight { sompi_per_weight: u64 } = 1,
 }
 
 /// **How a bond's Round rights are bounded** (readiness §3e, POLICY P-9). Both modes cap every ticket before the draw; neither leaves
@@ -271,8 +317,8 @@ impl PalwBondBudgetPolicyV1 {
     /// rate is one unit; no network could run on it, and none should read it as a recommendation.
     pub fn unapproved_probe_v1() -> Self {
         Self {
-            version: PALW_BOND_BUDGET_POLICY_VERSION_V1,
-            window_daa: 1,
+            version: PALW_BOND_BUDGET_POLICY_VERSION_V2,
+            window_daa: PALW_BOND_BUDGET_W_MIN_DAA_V1,
             capital_unit_sompi: 1,
             rho: 1,
             claims_per_unit: 1,
@@ -282,17 +328,29 @@ impl PalwBondBudgetPolicyV1 {
             max_open_claims_per_bond: 1,
             slice_rights_by_rho: false,
             round_rights: PalwRoundRightsPolicyV1::CountAgainstBlocks,
+            liability_hold_daa: PALW_BOND_BUDGET_LIABILITY_HOLD_INTERIM_DAA_V1,
+            export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
+            weight_value: PalwWeightValuePolicyV1::Unknown,
         }
     }
 
     /// The value's own refusals: the version, every rate and quantum positive, `ρ ≥ 1`, and `q·ρ` fitting a `u64` (so every cap is an
     /// exact `u128` product).
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.version != PALW_BOND_BUDGET_POLICY_VERSION_V1 {
+        if self.version != PALW_BOND_BUDGET_POLICY_VERSION_V2 {
             return Err("the bond budget policy's version is not one this binary reads");
         }
-        if self.window_daa == 0 {
-            return Err("the window W must be positive");
+        if !(PALW_BOND_BUDGET_W_MIN_DAA_V1..=PALW_BOND_BUDGET_W_MAX_DAA_V1).contains(&self.window_daa) {
+            return Err("the window W must be in ECON's derived range 280..=436 DAA (PESG §6; W itself is POLICY)");
+        }
+        if self.liability_hold_daa == 0 {
+            return Err("the liability hold H_L must be positive");
+        }
+        if self.export_cap_permille > PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1 {
+            return Err("the export cap is at most 0.51 of the collateral still held (PESG §6)");
+        }
+        if self.weight_value == (PalwWeightValuePolicyV1::SompiPerWeight { sompi_per_weight: 0 }) {
+            return Err("a known value of weight must be positive");
         }
         if self.capital_unit_sompi == 0 {
             return Err("the capital unit must be positive");
@@ -679,16 +737,43 @@ pub fn palw_bond_budget_admit_v1(
     capital: u64,
     row: Option<&PalwBudgetBondRowV1>,
     reservation: &PalwBudgetVectorV1,
+    liability_sompi: u128,
 ) -> Result<(), PalwBudgetRefusalV1> {
     let row = row.copied().unwrap_or_default();
     if row.open_claims >= policy.max_open_claims_per_bond {
         return Err(PalwBudgetRefusalV1::OpenClaims);
     }
-    let after = row.window.checked_add(*reservation).ok_or(PalwBudgetRefusalV1::Overflow)?;
-    match after.first_excess(&palw_bond_budget_caps_v1(policy, capital)) {
-        Some(dim) => Err(PalwBudgetRefusalV1::Exhausted { dim }),
-        None => Ok(()),
+    let caps = palw_bond_budget_caps_v1(policy, capital);
+    // PESG §6: the open claims' liability collateral within the capital (open ≤ ⌊C/K⌋ for a common K).
+    let liability = row.open_liability_sompi.checked_add(liability_sompi).ok_or(PalwBudgetRefusalV1::Overflow)?;
+    if liability > capital as u128 {
+        return Err(PalwBudgetRefusalV1::LiabilityExceedsCapital);
     }
+    // PESG §6: the unsettled weight — every open claim's Final-weight reservation, in or out of its window — within F_max. (A claim
+    // still open past `d + W` has left the window but not the unsettled weight.)
+    let unsettled = row.open_final_weight.checked_add(reservation.final_weight).ok_or(PalwBudgetRefusalV1::Overflow)?;
+    if unsettled > caps.final_weight {
+        return Err(PalwBudgetRefusalV1::UnsettledWeight);
+    }
+    let after = row.window.checked_add(*reservation).ok_or(PalwBudgetRefusalV1::Overflow)?;
+    if let Some(dim) = after.first_excess(&caps) {
+        return Err(PalwBudgetRefusalV1::Exhausted { dim });
+    }
+    // The value-of-weight slot: `reward + weight · v` within R_max, once the value is known.
+    if let PalwWeightValuePolicyV1::SompiPerWeight { sompi_per_weight } = policy.weight_value {
+        let valued = after.final_weight.saturating_mul(sompi_per_weight as u128).saturating_add(after.reward_sompi as u128);
+        if valued > caps.reward_sompi as u128 {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
+    }
+    Ok(())
+}
+
+/// **PESG §6: the most of a claim's reward that may leave the chain's books** while its liability holds `held` collateral:
+/// `⌊held · export_cap_permille / 1000⌋` (at most 0.51 of it).
+pub fn palw_bond_budget_export_cap_v1(policy: &PalwBondBudgetPolicyV1, held: u128) -> u64 {
+    let cap = held.saturating_mul(policy.export_cap_permille.min(PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1) as u128) / 1_000;
+    u64::try_from(cap).unwrap_or(u64::MAX)
 }
 
 /// **A rider batch's attribution of its one physical block** (design §2.1): each of `riders` gets `⌊U/(1+n)⌋`, the lead keeps the exact
@@ -802,6 +887,12 @@ pub struct PalwBudgetBondRowV1 {
     pub window: PalwBudgetVectorV1,
     pub open_claims: u32,
     pub latest_release_daa: u64,
+    /// PESG §6: `Σ K` over the bond's open claims.
+    pub open_liability_sompi: u128,
+    /// PESG §6: `Σ` Final-weight reservation over the bond's open claims (its unsettled weight's bound).
+    pub open_final_weight: u128,
+    /// PESG §6: the liability hold — the bond's capital stays held until this DAA (latest terminal + `H_L`); 0 when none.
+    pub liability_hold_until: u64,
 }
 
 /// A claim's reservation (table 2).
@@ -822,6 +913,8 @@ pub struct PalwBudgetClaimRowV1 {
     /// its consumption answers what the claim was granted (rule E's reader, hook H-4).
     pub live: bool,
     pub origin: PalwBudgetOriginV1,
+    /// PESG §6: the liability collateral `K` the claim reserved (its V2 `reserved`).
+    pub liability_sompi: u128,
 }
 
 /// A bond's capital assignment (table 4; ADR-0177 D3).
@@ -857,6 +950,8 @@ pub struct PalwBondBudgetStateV1 {
     pub releases: BTreeSet<(u64, Hash64)>,
     pub assignments: BTreeMap<PalwBondKeyV2, PalwCapitalAssignmentRowV1>,
     pub models: BTreeMap<Hash64, PalwModelBudgetRowV1>,
+    /// PESG §6: the liability holds' expiries.
+    pub liability_releases: BTreeSet<(u64, PalwBondKeyV2)>,
 }
 
 /// One journaled write of the engine (the fold turns `Header` into delta 191 and `Row` into delta 190).
@@ -922,6 +1017,7 @@ impl PalwBondBudgetStateV1 {
             releases: BTreeSet::new(),
             assignments: BTreeMap::new(),
             models: BTreeMap::new(),
+            liability_releases: BTreeSet::new(),
         }
     }
 
@@ -934,6 +1030,7 @@ impl PalwBondBudgetStateV1 {
             releases: BTreeSet::new(),
             assignments: BTreeMap::new(),
             models: BTreeMap::new(),
+            liability_releases: BTreeSet::new(),
         }
     }
 
@@ -961,6 +1058,22 @@ impl PalwBondBudgetStateV1 {
         self.bonds.get(bond).is_some_and(|row| !row.window.is_zero() && row.latest_release_daa > now)
     }
 
+    /// **PESG §6: does the bond's liability hold its capital at `now`?** — an open claim, or a terminal one within `H_L`. A clock of its
+    /// own, apart from the issuance window.
+    pub fn liability_holds(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
+        self.bonds.get(bond).is_some_and(|row| row.open_claims > 0 || row.liability_hold_until > now)
+    }
+
+    /// **The withdrawal hold**: the issuance window (`d + W`) or the liability hold (`H_L`), whichever is longer.
+    pub fn withdrawal_holds(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
+        self.window_holds(bond, now) || self.liability_holds(bond, now)
+    }
+
+    /// PESG §6: the bond's unsettled weight bound — the Final-weight reservations of its open claims.
+    pub fn unsettled_final_weight(&self, bond: &PalwBondKeyV2) -> u128 {
+        self.bonds.get(bond).map(|row| row.open_final_weight).unwrap_or(0)
+    }
+
     /// The model `m`'s available reward budget in the current epoch (0 with no allocation, no row, or an old row).
     pub fn model_available(&self, model: &Hash64) -> u64 {
         let Some(epoch) = self.header.allocation else { return 0 };
@@ -969,7 +1082,7 @@ impl PalwBondBudgetStateV1 {
     }
 
     /// The table roots and the header digest the V2 root block writes, in table order.
-    pub fn root_parts(&self) -> (Hash64, [Hash64; 5]) {
+    pub fn root_parts(&self) -> (Hash64, [Hash64; 6]) {
         use crate::palw_state_v2::palw_collection_root_of_entries_v1 as root;
         let header = keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header)]);
         (
@@ -980,6 +1093,11 @@ impl PalwBondBudgetStateV1 {
                 root(b"bond_budget_releases", self.releases.len(), self.releases.iter().map(|k| (enc(k), Vec::new()))),
                 root(b"bond_budget_assignments", self.assignments.len(), self.assignments.iter().map(|(k, v)| (enc(k), enc(v)))),
                 root(b"bond_budget_models", self.models.len(), self.models.iter().map(|(k, v)| (enc(k), enc(v)))),
+                root(
+                    b"bond_budget_liability_releases",
+                    self.liability_releases.len(),
+                    self.liability_releases.iter().map(|k| (enc(k), Vec::new())),
+                ),
             ],
         )
     }
@@ -1013,6 +1131,18 @@ impl PalwBondBudgetStateV1 {
             }
             PALW_BUDGET_TABLE_ASSIGNMENTS_V1 => swap_row(&mut self.assignments, key, expected, install),
             PALW_BUDGET_TABLE_MODELS_V1 => swap_row(&mut self.models, key, expected, install),
+            PALW_BUDGET_TABLE_LIABILITY_RELEASES_V1 => {
+                let k: (u64, PalwBondKeyV2) = borsh::from_slice(key).map_err(|_| "a liability release key does not decode")?;
+                if self.liability_releases.contains(&k) != expected.is_some() {
+                    return Err("a liability release row does not match the delta's expectation");
+                }
+                if install.is_some() {
+                    self.liability_releases.insert(k);
+                } else {
+                    self.liability_releases.remove(&k);
+                }
+                Ok(())
+            }
             _ => Err("a budget row names an unknown table"),
         }
     }
@@ -1024,12 +1154,25 @@ impl PalwBondBudgetStateV1 {
             && self.releases.is_empty()
             && self.assignments.is_empty()
             && self.models.is_empty()
+            && self.liability_releases.is_empty()
     }
 
     // ---- journaled writers ----
 
+    fn put_liability_release(&mut self, key: (u64, PalwBondKeyV2), present: bool, j: &mut Vec<PalwBudgetWriteV1>) {
+        let was = if present { !self.liability_releases.insert(key) } else { self.liability_releases.remove(&key) };
+        if was != present {
+            j.push(PalwBudgetWriteV1::Row {
+                table: PALW_BUDGET_TABLE_LIABILITY_RELEASES_V1,
+                key: enc(&key),
+                old: was.then(Vec::new),
+                new: present.then(Vec::new),
+            });
+        }
+    }
+
     fn put_bond(&mut self, bond: &PalwBondKeyV2, row: PalwBudgetBondRowV1, j: &mut Vec<PalwBudgetWriteV1>) {
-        let keep = !row.window.is_zero() || row.open_claims > 0;
+        let keep = !row.window.is_zero() || row.open_claims > 0 || row.liability_hold_until > 0;
         put(&mut self.bonds, PALW_BUDGET_TABLE_BONDS_V1, bond, keep.then_some(row), j);
     }
 
@@ -1072,6 +1215,15 @@ impl PalwBondBudgetStateV1 {
             claim.in_window = false;
             self.put_claim(&claim_id, claim.live.then_some(claim), j);
         }
+        // PESG §6: the liability holds that end now (a later hold of the same bond replaced its entry, so each entry is current).
+        let ended: Vec<(u64, PalwBondKeyV2)> = self.liability_releases.iter().take_while(|(at, _)| *at <= now).copied().collect();
+        for (at, bond) in ended {
+            self.put_liability_release((at, bond), false, j);
+            if let Some(mut row) = self.bonds.get(&bond).copied().filter(|row| row.liability_hold_until == at) {
+                row.liability_hold_until = 0;
+                self.put_bond(&bond, row, j);
+            }
+        }
     }
 
     /// **Take a reservation** (design §2.5). `admit` runs the caps and the open-claim cap (a Legacy seed does not: old claims are counted,
@@ -1090,17 +1242,39 @@ impl PalwBondBudgetStateV1 {
         admit: bool,
         j: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<(), PalwBudgetRefusalV1> {
+        self.reserve_liable(policy, capital, claim_id, bond, model, accepted_daa, reservation, 0, origin, admit, j)
+    }
+
+    /// [`Self::reserve`] for a claim that reserves `liability_sompi` of its bond's collateral (PESG §6: counted in the bond's open
+    /// liability, which admission keeps within its capital).
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve_liable(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        claim_id: Hash64,
+        bond: PalwBondKeyV2,
+        model: Option<(Hash64, u64)>,
+        accepted_daa: u64,
+        reservation: PalwBudgetVectorV1,
+        liability_sompi: u128,
+        origin: PalwBudgetOriginV1,
+        admit: bool,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
         if self.claims.contains_key(&claim_id) {
             return Err(PalwBudgetRefusalV1::Duplicate);
         }
         let row = self.bonds.get(&bond).copied();
         if admit {
-            palw_bond_budget_admit_v1(policy, capital, row.as_ref(), &reservation)?;
+            palw_bond_budget_admit_v1(policy, capital, row.as_ref(), &reservation, liability_sompi)?;
         }
         let reuse_not_before = accepted_daa.saturating_add(policy.window_daa);
         let mut row = row.unwrap_or_default();
         row.window = row.window.checked_add(reservation).ok_or(PalwBudgetRefusalV1::Overflow)?;
         row.open_claims = row.open_claims.saturating_add(1);
+        row.open_liability_sompi = row.open_liability_sompi.saturating_add(liability_sompi);
+        row.open_final_weight = row.open_final_weight.saturating_add(reservation.final_weight);
         row.latest_release_daa = row.latest_release_daa.max(reuse_not_before);
         self.put_bond(&bond, row, j);
         self.put_claim(
@@ -1116,6 +1290,7 @@ impl PalwBondBudgetStateV1 {
                 in_window: true,
                 live: true,
                 origin,
+                liability_sompi,
             }),
             j,
         );
@@ -1153,7 +1328,7 @@ impl PalwBondBudgetStateV1 {
             let granted = self.reserve_model_reward(&m, reservation.reward_sompi, j);
             debug_assert_eq!(granted, reservation.reward_sompi, "availability was read above in the same state");
         }
-        self.reserve(policy, capital, claim_id, bond, model, accepted_daa, reservation, origin, false, j)?;
+        self.reserve_liable(policy, capital, claim_id, bond, model, accepted_daa, reservation, ask.liability_sompi, origin, false, j)?;
         Ok(reservation)
     }
 
@@ -1171,7 +1346,7 @@ impl PalwBondBudgetStateV1 {
         if let (Some(m), Some(_)) = (model, self.header.allocation) {
             reservation.reward_sompi = reservation.reward_sompi.min(self.model_available(&m));
         }
-        palw_bond_budget_admit_v1(policy, capital, self.bonds.get(&bond), &reservation)?;
+        palw_bond_budget_admit_v1(policy, capital, self.bonds.get(&bond), &reservation, ask.liability_sompi)?;
         Ok(reservation)
     }
 
@@ -1212,6 +1387,7 @@ impl PalwBondBudgetStateV1 {
         let freed = claim.reserved.checked_sub(new_reserved).ok_or(PalwBudgetRefusalV1::BadShrink)?;
         let mut bond = self.bonds.get(&claim.bond).copied().unwrap_or_default();
         bond.window = bond.window.checked_sub(freed).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        bond.open_final_weight = bond.open_final_weight.checked_sub(freed.final_weight).ok_or(PalwBudgetRefusalV1::Overflow)?;
         self.put_bond(&claim.bond.clone(), bond, j);
         // A model reservation follows its claim's reward down (same epoch, same block).
         if let Some((model, epoch)) = claim.model
@@ -1271,9 +1447,24 @@ impl PalwBondBudgetStateV1 {
     /// **Close a claim** (Final, void, conviction; design §2.7): no further consumption, one fewer open claim. Its reservation stays in
     /// the window until `reuse_not_before` — closing returns no room. Idempotent.
     pub fn close(&mut self, claim_id: &Hash64, j: &mut Vec<PalwBudgetWriteV1>) {
+        self.close_at(claim_id, None, j);
+    }
+
+    /// [`Self::close`], starting the bond's liability hold until `hold_until` (PESG §6: terminal + `H_L`; `None` for a row that is
+    /// no claim). The hold only ever extends.
+    pub fn close_at(&mut self, claim_id: &Hash64, hold_until: Option<u64>, j: &mut Vec<PalwBudgetWriteV1>) {
         let Some(mut claim) = self.claims.get(claim_id).copied().filter(|c| c.open) else { return };
         let mut bond = self.bonds.get(&claim.bond).copied().unwrap_or_default();
         bond.open_claims = bond.open_claims.saturating_sub(1);
+        bond.open_liability_sompi = bond.open_liability_sompi.saturating_sub(claim.liability_sompi);
+        bond.open_final_weight = bond.open_final_weight.saturating_sub(claim.reserved.final_weight);
+        if let Some(until) = hold_until.filter(|until| *until > bond.liability_hold_until) {
+            if bond.liability_hold_until > 0 {
+                self.put_liability_release((bond.liability_hold_until, claim.bond), false, j);
+            }
+            bond.liability_hold_until = until;
+            self.put_liability_release((until, claim.bond), true, j);
+        }
         self.put_bond(&claim.bond.clone(), bond, j);
         claim.open = false;
         self.put_claim(claim_id, Some(claim), j);
@@ -1314,12 +1505,26 @@ impl PalwBondBudgetStateV1 {
             }
             if claim.open {
                 row.open_claims += 1;
+                row.open_liability_sompi += claim.liability_sompi;
+                row.open_final_weight += claim.reserved.final_weight;
             }
         }
         if self.releases.iter().any(|(_, id)| !self.claims.contains_key(id)) {
             return Err("a release names no row");
         }
-        windows.retain(|_, row| !row.window.is_zero() || row.open_claims > 0);
+        // PESG §6: every liability hold has exactly one release entry, and every entry is its bond's current hold.
+        for (bond, row) in &self.bonds {
+            if row.liability_hold_until > 0 && !self.liability_releases.contains(&(row.liability_hold_until, *bond)) {
+                return Err("a liability hold without its release");
+            }
+            if row.liability_hold_until > 0 {
+                windows.entry(*bond).or_default().liability_hold_until = row.liability_hold_until;
+            }
+        }
+        if self.liability_releases.iter().any(|(at, bond)| self.bonds.get(bond).is_none_or(|row| row.liability_hold_until != *at)) {
+            return Err("a liability release that is not its bond's hold");
+        }
+        windows.retain(|_, row| !row.window.is_zero() || row.open_claims > 0 || row.liability_hold_until > 0);
         if windows.len() != self.bonds.len() {
             return Err("the bond table does not match the claims");
         }
@@ -1327,9 +1532,11 @@ impl PalwBondBudgetStateV1 {
             let row = self.bonds.get(&bond).ok_or("a bond with claims has no row")?;
             if row.window != expected.window
                 || row.open_claims != expected.open_claims
+                || row.open_liability_sompi != expected.open_liability_sompi
+                || row.open_final_weight != expected.open_final_weight
                 || row.latest_release_daa < expected.latest_release_daa
             {
-                return Err("a bond's window or open count disagrees with its claims");
+                return Err("a bond's window, open count, open liability or unsettled weight disagrees with its claims");
             }
         }
         Ok(())
@@ -1530,8 +1737,9 @@ mod tests {
 
     /// A TEST policy (not a proposal): 1,000 BILI per unit, W = 100, q = 10, b = 4 blocks, r = 50 BILI, w = 400.
     fn policy(rho: u32, slice: bool) -> PalwBondBudgetPolicyV1 {
+        // W = 100 is outside the validated 280..=436 on purpose: the engine is exercised below validation (as the fold fixtures are).
         PalwBondBudgetPolicyV1 {
-            version: 1,
+            version: PALW_BOND_BUDGET_POLICY_VERSION_V2,
             window_daa: 100,
             capital_unit_sompi: 1_000 * BILI,
             rho,
@@ -1542,6 +1750,9 @@ mod tests {
             max_open_claims_per_bond: 1_000_000,
             slice_rights_by_rho: slice,
             round_rights: PalwRoundRightsPolicyV1::CountAgainstBlocks,
+            liability_hold_daa: 30,
+            export_cap_permille: PALW_BOND_BUDGET_EXPORT_CAP_MAX_PERMILLE_V1,
+            weight_value: PalwWeightValuePolicyV1::Unknown,
         }
     }
 
@@ -1573,11 +1784,11 @@ mod tests {
         // ask never raises a cap: a reservation is admitted against the same caps whatever it asks.
         let r_honest = palw_bond_budget_reservation_v1(
             &p,
-            PalwBudgetAskV1 { block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 5 * BILI, final_weight: 40 },
+            PalwBudgetAskV1 { block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 5 * BILI, final_weight: 40, liability_sompi: 0 },
         );
         let r_forged = palw_bond_budget_reservation_v1(
             &p,
-            PalwBudgetAskV1 { block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 5 * BILI, final_weight: 40 },
+            PalwBudgetAskV1 { block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 5 * BILI, final_weight: 40, liability_sompi: 0 },
         );
         assert_eq!(r_honest, r_forged);
     }
@@ -1648,7 +1859,7 @@ mod tests {
                 loop {
                     let r = palw_bond_budget_reservation_v1(
                         &p,
-                        PalwBudgetAskV1 { block_units: 0, reward_sompi: ask_reward, final_weight: 10_000 },
+                        PalwBudgetAskV1 { block_units: 0, reward_sompi: ask_reward, final_weight: 10_000, liability_sompi: 0 },
                     );
                     if s.reserve(&p, capital, h(n), bond(1), None, 0, r, PalwBudgetOriginV1::Rider, true, &mut j).is_err() {
                         break;
@@ -1710,6 +1921,7 @@ mod tests {
                 block_units: rng.below(3) * PALW_BUDGET_BLOCK_UNIT_V1,
                 reward_sompi: rng.below(10 * BILI),
                 final_weight: rng.below(100) as u128,
+                liability_sompi: 0,
             };
             let r = palw_bond_budget_reservation_v1(&p, ask);
             s.reserve(&p, 1_000_000 * BILI, h(1), bond(1), None, 0, r, PalwBudgetOriginV1::FreePrompt, true, &mut j).unwrap();
@@ -1754,7 +1966,10 @@ mod tests {
         // … the old claim is paid by its old rule …
         assert_eq!(s.consume(&h(7), PalwBudgetDimV1::Reward, 5, true, &mut j), None);
         // … and the bond admits nothing new until the seed leaves at 40 + W.
-        let r = palw_bond_budget_reservation_v1(&p, PalwBudgetAskV1 { block_units: 0, reward_sompi: 1, final_weight: 1 });
+        let r = palw_bond_budget_reservation_v1(
+            &p,
+            PalwBudgetAskV1 { block_units: 0, reward_sompi: 1, final_weight: 1, liability_sompi: 0 },
+        );
         assert!(s.clone().reserve(&p, 1_000 * BILI, h(8), bond(1), None, 60, r, PalwBudgetOriginV1::Attempt, true, &mut j).is_err());
         s.release_due(140, &mut j);
         s.close(&h(7), &mut j);
@@ -1810,7 +2025,8 @@ mod tests {
         s.roll_epoch(&ap, 2, 20, |_| (1_000 * BILI, true), &mut j);
         s.accrue(50 * BILI, &mut j);
         assert_eq!(s.model_available(&h(1)), 50 * BILI, "one model holds the whole weight: all that accrued");
-        let ask = PalwBudgetAskV1 { block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 70 * BILI, final_weight: 9 };
+        let ask =
+            PalwBudgetAskV1 { block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 70 * BILI, final_weight: 9, liability_sompi: 0 };
         let r = s.reserve_claim_v1(&p, 1_000 * BILI, h(5), bond(1), Some(h(1)), 21, ask, PalwBudgetOriginV1::Attempt, &mut j).unwrap();
         // Sliced by rho = 3 (⌊50 BILI / 30⌋), and the model reserved exactly what the claim did.
         assert_eq!(r.reward_sompi, 50 * BILI / 30);
@@ -2057,7 +2273,12 @@ mod tests {
             s.roll_epoch(&a, 2, 20, |b| if *b == bond(1) { (3_000 * BILI, true) } else { (1_000 * BILI, true) }, &mut j);
             s.accrue(1_000_000 * BILI, &mut j);
             let share = s.model_available(&h(1));
-            let ask = PalwBudgetAskV1 { block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: u64::MAX / 2, final_weight: 1 };
+            let ask = PalwBudgetAskV1 {
+                block_units: PALW_BUDGET_BLOCK_UNIT_V1,
+                reward_sompi: u64::MAX / 2,
+                final_weight: 1,
+                liability_sompi: 0,
+            };
             let mut admitted = Vec::new();
             for i in 0..1_000u64 {
                 match s.reserve_claim_v1(
@@ -2166,7 +2387,10 @@ mod tests {
         let grant = s.reserve_model_reward(&h(1), 5 * BILI, &mut j);
         assert_eq!(grant, 3 * BILI);
         assert_eq!(s.model_available(&h(1)), 0, "the model is spent until more accrues");
-        let r = palw_bond_budget_reservation_v1(&p, PalwBudgetAskV1 { block_units: 0, reward_sompi: grant, final_weight: 7 });
+        let r = palw_bond_budget_reservation_v1(
+            &p,
+            PalwBudgetAskV1 { block_units: 0, reward_sompi: grant, final_weight: 7, liability_sompi: 0 },
+        );
         s.reserve(&p, 1_000 * BILI, h(9), bond(1), Some((h(1), 2)), 21, r, PalwBudgetOriginV1::Attempt, true, &mut j).unwrap();
         let window = s.bond_row(&bond(1)).unwrap().window;
         // More capital on the model and a new epoch: the bond's window is untouched.
@@ -2181,17 +2405,163 @@ mod tests {
     fn policies_validate_and_probes_are_well_formed() {
         assert!(PalwBondBudgetPolicyV1::unapproved_probe_v1().validate().is_ok());
         assert!(PalwModelAllocationPolicyV1::unapproved_probe_v1().validate().is_ok());
-        let mut p = policy(1, false);
-        p.rho = 0;
-        assert!(p.validate().is_err());
-        let mut p = policy(1, false);
-        p.claims_per_unit = u64::MAX;
-        p.rho = 2;
-        assert!(p.validate().is_err());
-        let mut p = policy(1, false);
-        p.window_daa = 0;
-        assert!(p.validate().is_err());
+        let valid = PalwBondBudgetPolicyV1 { window_daa: 300, ..policy(1, false) };
+        assert!(valid.validate().is_ok());
+        let bad = |f: &dyn Fn(&mut PalwBondBudgetPolicyV1)| {
+            let mut p = valid.clone();
+            f(&mut p);
+            p.validate().is_err()
+        };
+        assert!(bad(&|p| p.rho = 0));
+        assert!(bad(&|p| {
+            p.claims_per_unit = u64::MAX;
+            p.rho = 2
+        }));
+        assert!(bad(&|p| p.version = 1), "version 1 is refused");
+        // PESG §6: W within ECON's range, at the edges.
+        assert!(bad(&|p| p.window_daa = PALW_BOND_BUDGET_W_MIN_DAA_V1 - 1));
+        assert!(!bad(&|p| p.window_daa = PALW_BOND_BUDGET_W_MIN_DAA_V1));
+        assert!(!bad(&|p| p.window_daa = PALW_BOND_BUDGET_W_MAX_DAA_V1));
+        assert!(bad(&|p| p.window_daa = PALW_BOND_BUDGET_W_MAX_DAA_V1 + 1));
+        assert!(bad(&|p| p.liability_hold_daa = 0));
+        assert!(!bad(&|p| p.export_cap_permille = 510));
+        assert!(bad(&|p| p.export_cap_permille = 511), "the export cap is at most 0.51");
+        assert!(bad(&|p| p.weight_value = PalwWeightValuePolicyV1::SompiPerWeight { sompi_per_weight: 0 }));
+        let probe = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+        assert_eq!((probe.window_daa, probe.liability_hold_daa, probe.weight_value), (280, 280, PalwWeightValuePolicyV1::Unknown));
         assert_ne!(policy(1, false).digest(), policy(2, false).digest());
+    }
+
+    // ---- PESG §6: the safety bounds, independent of economics ----
+
+    /// **Open claims per bond ≤ ⌊C/K⌋**, at the edge: seven claims of `K = C/7` fit, the eighth is refused; closing one (its Final)
+    /// admits one more while the liability hold keeps the capital held.
+    #[test]
+    fn open_claims_stop_at_capital_over_reservation() {
+        let p = policy(1, false);
+        let capital = 7_000 * BILI;
+        let k = (capital / 7) as u128;
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        let ask = PalwBudgetAskV1 { block_units: 0, reward_sompi: 0, final_weight: 0, liability_sompi: k };
+        for i in 0..7u64 {
+            s.reserve_claim_v1(&p, capital, h(i), bond(1), None, 1, ask, PalwBudgetOriginV1::Attempt, &mut j).unwrap();
+        }
+        assert_eq!(
+            s.preview_claim_v1(&p, capital, bond(1), None, ask),
+            Err(PalwBudgetRefusalV1::LiabilityExceedsCapital),
+            "the eighth"
+        );
+        // One unit under the edge still fits; the edge itself is the capital.
+        let small = PalwBudgetAskV1 { liability_sompi: 0, ..ask };
+        assert!(s.preview_claim_v1(&p, capital, bond(1), None, small).is_ok(), "a claim reserving nothing is not bounded by K");
+        s.close_at(&h(0), Some(1 + p.liability_hold_daa), &mut j);
+        assert!(s.liability_holds(&bond(1), 2) && s.withdrawal_holds(&bond(1), 2));
+        s.reserve_claim_v1(&p, capital, h(7), bond(1), None, 2, ask, PalwBudgetOriginV1::Attempt, &mut j).unwrap();
+        assert_eq!(s.bond_row(&bond(1)).unwrap().open_liability_sompi, 7 * k);
+        s.check_consistency().unwrap();
+    }
+
+    /// **The unsettled (pre-Final) weight per bond ≤ F_max**, at the edge — and it outlives the window: a claim still open past `d + W`
+    /// leaves the window (its F returns to the issuance budget) but not the unsettled weight, so a new claim is refused until one is
+    /// terminal.
+    #[test]
+    fn unsettled_weight_stops_at_the_final_weight_cap_even_past_the_window() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let f_max = palw_bond_budget_caps_v1(&p, capital).final_weight;
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        let ask = |f: u128| PalwBudgetAskV1 { block_units: 0, reward_sompi: 0, final_weight: f, liability_sompi: 0 };
+        s.reserve_claim_v1(&p, capital, h(1), bond(1), None, 1, ask(f_max - 1), PalwBudgetOriginV1::Attempt, &mut j).unwrap();
+        s.reserve_claim_v1(&p, capital, h(2), bond(1), None, 1, ask(1), PalwBudgetOriginV1::Attempt, &mut j).unwrap();
+        assert_eq!(s.unsettled_final_weight(&bond(1)), f_max, "at the edge");
+        assert_eq!(s.preview_claim_v1(&p, capital, bond(1), None, ask(1)), Err(PalwBudgetRefusalV1::UnsettledWeight));
+        // Past d + W both rows leave the window, still open: the window is empty, the unsettled weight is not.
+        s.release_due(1 + p.window_daa, &mut j);
+        assert!(s.bond_row(&bond(1)).unwrap().window.is_zero());
+        assert_eq!(s.preview_claim_v1(&p, capital, bond(1), None, ask(1)), Err(PalwBudgetRefusalV1::UnsettledWeight));
+        s.close_at(&h(2), Some(200), &mut j);
+        assert!(s.preview_claim_v1(&p, capital, bond(1), None, ask(1)).is_ok(), "one terminal claim frees its weight");
+        assert_eq!(s.preview_claim_v1(&p, capital, bond(1), None, ask(2)), Err(PalwBudgetRefusalV1::UnsettledWeight));
+        s.check_consistency().unwrap();
+    }
+
+    /// **The value-of-weight slot**: `Unknown` bounds weight by `F_max` alone; a known value holds `reward + F·v ≤ R_max`, at the edge.
+    #[test]
+    fn a_known_value_of_weight_shares_the_reward_budget() {
+        let mut p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let caps = palw_bond_budget_caps_v1(&p, capital);
+        let ask = |r: u64, f: u128| PalwBudgetAskV1 { block_units: 0, reward_sompi: r, final_weight: f, liability_sompi: 0 };
+        let s = PalwBondBudgetStateV1::new(0, &p);
+        assert!(
+            s.preview_claim_v1(&p, capital, bond(1), None, ask(caps.reward_sompi, caps.final_weight)).is_ok(),
+            "Unknown: separate"
+        );
+        p.weight_value = PalwWeightValuePolicyV1::SompiPerWeight { sompi_per_weight: 1_000 };
+        let r = caps.reward_sompi - 1_000 * 7;
+        assert!(s.preview_claim_v1(&p, capital, bond(1), None, ask(r, 7)).is_ok(), "R + F·v = R_max");
+        assert_eq!(
+            s.preview_claim_v1(&p, capital, bond(1), None, ask(r + 1, 7)),
+            Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward })
+        );
+    }
+
+    /// **The liability hold `H_L` is its own clock**: a terminal claim holds its bond's capital until `terminal + H_L` whatever the
+    /// issuance window says; the hold only extends; it ends by its release entry; deltas carry it.
+    #[test]
+    fn the_liability_hold_is_apart_from_the_issuance_window() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let before = s.clone();
+        let mut j = Vec::new();
+        let ask = PalwBudgetAskV1 { block_units: 0, reward_sompi: 1, final_weight: 1, liability_sompi: 10 };
+        s.reserve_claim_v1(&p, capital, h(1), bond(1), None, 10, ask, PalwBudgetOriginV1::Attempt, &mut j).unwrap();
+        s.reserve_claim_v1(&p, capital, h(2), bond(1), None, 10, ask, PalwBudgetOriginV1::Attempt, &mut j).unwrap();
+        s.close_at(&h(1), Some(20 + p.liability_hold_daa), &mut j);
+        s.close_at(&h(2), Some(15 + p.liability_hold_daa), &mut j);
+        assert_eq!(s.bond_row(&bond(1)).unwrap().liability_hold_until, 50, "the hold only extends");
+        assert_eq!(s.liability_releases.len(), 1);
+        // The window (W = 100) outlasts the hold here: they are separate readers.
+        s.release_due(49, &mut j);
+        assert!(s.liability_holds(&bond(1), 49) && s.window_holds(&bond(1), 49));
+        s.release_due(50, &mut j);
+        assert!(!s.liability_holds(&bond(1), 50) && s.window_holds(&bond(1), 50) && s.withdrawal_holds(&bond(1), 50));
+        s.release_due(110, &mut j);
+        assert!(!s.withdrawal_holds(&bond(1), 110));
+        s.check_consistency().unwrap();
+        // Deltas: forward from `before` is `s`, newest-first back is `before`.
+        let mut fwd = before.clone();
+        for w in &j {
+            match w {
+                PalwBudgetWriteV1::Row { table, key, old, new } => fwd.apply_row(*table, key, old, new, false).unwrap(),
+                PalwBudgetWriteV1::Header { new, .. } => fwd.header = new.clone().unwrap(),
+            }
+        }
+        assert_eq!(fwd, s);
+        let mut back = s.clone();
+        for w in j.iter().rev() {
+            match w {
+                PalwBudgetWriteV1::Row { table, key, old, new } => back.apply_row(*table, key, old, new, true).unwrap(),
+                PalwBudgetWriteV1::Header { old, .. } => back.header = old.clone().unwrap(),
+            }
+        }
+        assert_eq!(back, before);
+    }
+
+    /// **The external export cap**: `⌊0.51 · held⌋`, floored, never above 0.51 whatever the policy says.
+    #[test]
+    fn the_export_cap_is_at_most_fifty_one_percent_of_the_held_collateral() {
+        let p = policy(1, false);
+        assert_eq!(palw_bond_budget_export_cap_v1(&p, 1_000), 510);
+        assert_eq!(palw_bond_budget_export_cap_v1(&p, 999), 509, "floored");
+        assert_eq!(palw_bond_budget_export_cap_v1(&p, 0), 0, "nothing held: nothing exported");
+        let lower = PalwBondBudgetPolicyV1 { export_cap_permille: 100, ..p.clone() };
+        assert_eq!(palw_bond_budget_export_cap_v1(&lower, 1_000), 100);
+        let bent = PalwBondBudgetPolicyV1 { export_cap_permille: 900, ..p };
+        assert_eq!(palw_bond_budget_export_cap_v1(&bent, 1_000), 510, "an unvalidated policy is still held to 0.51");
     }
 
     #[test]

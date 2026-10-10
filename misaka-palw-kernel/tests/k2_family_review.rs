@@ -146,6 +146,55 @@ fn a_lie_at_every_node_of_the_reference_classes_is_localized_and_convicted() {
 
 /// Primitive tags no reference fixture contains: no negative test exists for them through a fixture.
 const MISSING_PRIM_TAGS: [u8; 0] = [];
+
+/// The verifier receives only registered artifact tensors. Any attempt to fetch a producer value fails the test.
+struct ArtifactOnly<'a>(&'a MapParams);
+
+impl misaka_palw_kernel::verify::MaterialV1 for ArtifactOnly<'_> {
+    fn node_value(&self, _: u32, _: u16, _: u16) -> Option<Tensor> {
+        panic!("re-execution must not read producer values")
+    }
+    fn param(&self, i: u16, l: Option<u16>) -> Option<Tensor> {
+        self.0.tensors.get(&(i, l)).cloned()
+    }
+}
+
+#[test]
+fn every_primitive_is_convicted_from_commitments_without_any_producer_values_or_fault_hint() {
+    use misaka_palw_kernel::public::{FaultProofWireV1, FreshVerifierV1};
+    use misaka_palw_kernel::verify::{FaultKindV1, ReexecutionV1};
+    let mut covered = BTreeSet::new();
+    for c in [
+        Claim::honest(),
+        Claim::of(wide128_v1(3), k2_tir_v2_descriptor()),
+        Claim::of(wide_v1(3), k2_tir_v2_descriptor()),
+        Claim::of(exotic_v1(), k2_tir_v1_descriptor()),
+    ] {
+        let honest = FreshVerifierV1::from_public_bytes(&c.publish(&c.trace), &[c.descriptor.clone()], c.header()).unwrap();
+        assert!(matches!(honest.reexecute(&ArtifactOnly(&c.params)).unwrap(), ReexecutionV1::Match { .. }));
+        for (s, (b, _)) in c.program.occurrences().iter().enumerate() {
+            for (n, node) in c.program.blocks[*b as usize].nodes.iter().enumerate() {
+                if c.trace.values[1][s][n].data.is_empty() {
+                    continue;
+                }
+                let mut lie = c.trace.clone();
+                bump(&mut lie.values[1][s][n], 0);
+                let fresh = FreshVerifierV1::from_public_bytes(&c.publish(&lie), &[c.descriptor.clone()], c.header()).unwrap();
+                // Neither the false value nor its location is passed to the verifier.
+                let ReexecutionV1::Fault(proof) = fresh.reexecute(&ArtifactOnly(&c.params)).unwrap() else {
+                    panic!("{:?}: a different commitment passed replay", node.prim)
+                };
+                assert_eq!((proof.position, proof.occurrence, proof.node), (1, s as u16, n as u16));
+                assert_eq!(proof.kind, FaultKindV1::CommitmentMismatch);
+                let bytes = FaultProofWireV1::of(&proof).to_bytes();
+                fresh.try_proof(&bytes).unwrap();
+                assert_eq!(honest.try_proof(&bytes), Err(misaka_palw_kernel::verify::DismissalV1::NoFault));
+                covered.insert(node.prim.tag());
+            }
+        }
+    }
+    assert_eq!(covered, (0..=24).collect(), "every declared primitive needs the no-disclosure path");
+}
 // (All 25 TIR v1 primitives are exercised: `exotic_v1` adds Broadcast, Iota, Log2Floor, IntLn and StateWrite to what the dense/MoE
 // and wide fixtures contain. The media-pipeline family's edge kinds are covered in `k2_pipeline`.)
 

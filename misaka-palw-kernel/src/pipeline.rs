@@ -819,38 +819,130 @@ pub enum EdgeDismissalV1 {
 
 /// **The edge court**: authenticate the claimed input and the upstream values against public commitments, recompute the binding.
 pub fn verify_edge_fault_v1(c: &PipelineContextV1<'_>, proof: &EdgeFaultProofV1) -> Result<(u8, u16, u32), EdgeDismissalV1> {
+    verify_edge_value_v1(c, proof.stage, proof.input, proof.position, Some(&proof.claimed), &proof.upstream)
+}
+
+/// An input binding can be convicted by comparing its expected commitment, without opening the producer's input value.
+pub fn verify_edge_commitment_fault_v1(
+    c: &PipelineContextV1<'_>,
+    stage: u8,
+    input: u16,
+    position: u32,
+    upstream: &[Tensor],
+) -> Result<(u8, u16, u32), EdgeDismissalV1> {
+    verify_edge_value_v1(c, stage, input, position, None, upstream)
+}
+
+fn verify_edge_value_v1(
+    c: &PipelineContextV1<'_>,
+    stage: u8,
+    input: u16,
+    position: u32,
+    claimed: Option<&Tensor>,
+    upstream_values: &[Tensor],
+) -> Result<(u8, u16, u32), EdgeDismissalV1> {
     use EdgeDismissalV1 as D;
     let facts = c.check_evidence().map_err(D::NotAuthentic)?;
-    let si = proof.stage as usize;
+    let si = stage as usize;
     let st = c.pipeline.stages.get(si).ok_or_else(|| D::NotAuthentic("no such stage".into()))?;
     let prog = &c.programs[st.program as usize];
-    if proof.input as usize >= prog.inputs.len() || proof.position >= facts[si].trip {
+    if input as usize >= prog.inputs.len() || position >= facts[si].trip {
         return Err(D::NotAuthentic("no such input or position".into()));
     }
-    if c.traces[si].input_at(proof.position, proof.input) != Some(&tensor_commitment(&proof.claimed)) {
+    let committed = c.traces[si].input_at(position, input).ok_or_else(|| D::NotAuthentic("no committed input".into()))?;
+    if claimed.is_some_and(|t| !crate::verify::canonical_tensor_v1(t)) {
+        return Err(D::NotAuthentic("the input is not a canonical tensor".into()));
+    }
+    if claimed.is_some_and(|t| committed != &tensor_commitment(t)) {
         return Err(D::NotAuthentic("the claimed input is not the committed one".into()));
     }
-    let up_stage = match binding_of(st, prog, proof.input as usize) {
+    let up_stage = match binding_of(st, prog, input as usize) {
         Some(Binding::StageRows { stage, .. } | Binding::StageFinal { stage }) => Some(*stage),
         _ => None,
     };
     if let Some(u) = up_stage {
         let v = c.view(u as usize);
         let t = &c.traces[u as usize];
-        if proof.upstream.len() != t.commitments.len() {
+        if upstream_values.len() != t.commitments.len() {
             return Err(D::NotAuthentic("the proof opens another number of upstream values".into()));
         }
-        for (pos, val) in proof.upstream.iter().enumerate() {
+        for (pos, val) in upstream_values.iter().enumerate() {
+            if !crate::verify::canonical_tensor_v1(val) {
+                return Err(D::NotAuthentic(format!("upstream value {pos} is not a canonical tensor")));
+            }
             if t.at(pos as u32, v.post_occurrence, v.output_node) != Some(&tensor_commitment(val)) {
                 return Err(D::NotAuthentic(format!("upstream value {pos} is not the committed one")));
             }
         }
+    } else if !upstream_values.is_empty() {
+        return Err(D::NotAuthentic("a public job/random input has no upstream openings".into()));
     }
-    let upstream = |u: u8| (Some(u) == up_stage).then(|| proof.upstream.clone());
-    match stage_input_v1(c.pipeline, c.programs, &facts, c.job, c.random, si, proof.input, proof.position, &upstream) {
-        Ok(expected) if expected == proof.claimed => Err(D::NoFault),
-        _ => Ok((proof.stage, proof.input, proof.position)),
+    let upstream = |u: u8| (Some(u) == up_stage).then(|| upstream_values.to_vec());
+    match stage_input_v1(c.pipeline, c.programs, &facts, c.job, c.random, si, input, position, &upstream) {
+        Ok(expected) if claimed.map_or_else(|| tensor_commitment(&expected) == *committed, |v| expected == *v) => Err(D::NoFault),
+        _ => Ok((stage, input, position)),
     }
+}
+
+/// Exact local replay of every stage and edge, reading only the acquired parameters and public job/random inputs.
+pub enum PipelineReexecutionV1 {
+    Match { outputs: Vec<Vec<Tensor>> },
+    StageFault { stage: u8, proof: KernelFaultProofV1 },
+    EdgeFault { stage: u8, input: u16, position: u32, upstream: Vec<Tensor> },
+}
+
+pub fn reexecute_pipeline_v1(c: &PipelineContextV1<'_>, materials: &[&dyn MaterialV1]) -> Result<PipelineReexecutionV1, String> {
+    pipeline_structure_v1(c)?;
+    if materials.len() != c.pipeline.stages.len() {
+        return Err("one acquired artifact source per stage is required".into());
+    }
+    let facts = c.check_evidence()?;
+    let mut outputs: Vec<Vec<Tensor>> = Vec::new();
+    for (si, st) in c.pipeline.stages.iter().enumerate() {
+        let prog = &c.programs[st.program as usize];
+        let upstream = |u: u8| outputs.get(u as usize).cloned();
+        let mut inputs = BTreeMap::new();
+        for position in 0..facts[si].trip {
+            for input in 0..prog.inputs.len() as u16 {
+                let value = stage_input_v1(c.pipeline, c.programs, &facts, c.job, c.random, si, input, position, &upstream);
+                if !value.as_ref().is_ok_and(|v| c.traces[si].input_at(position, input) == Some(&tensor_commitment(v))) {
+                    let upstream = match binding_of(st, prog, input as usize) {
+                        Some(Binding::StageRows { stage, .. } | Binding::StageFinal { stage }) => {
+                            outputs.get(*stage as usize).cloned().ok_or("no replay upstream output")?
+                        }
+                        _ => Vec::new(),
+                    };
+                    verify_edge_commitment_fault_v1(c, si as u8, input, position, &upstream)
+                        .map_err(|e| format!("replay edge proof did not authenticate: {e:?}"))?;
+                    return Ok(PipelineReexecutionV1::EdgeFault { stage: si as u8, input, position, upstream });
+                }
+                inputs.insert((input, position), value?);
+            }
+        }
+        struct ReplayInputs<'a> {
+            source: &'a dyn MaterialV1,
+            inputs: BTreeMap<(u16, u32), Tensor>,
+        }
+        impl MaterialV1 for ReplayInputs<'_> {
+            fn node_value(&self, _: u32, _: u16, _: u16) -> Option<Tensor> {
+                unreachable!("local stage replay")
+            }
+            fn param(&self, i: u16, l: Option<u16>) -> Option<Tensor> {
+                self.source.param(i, l)
+            }
+            fn stage_input(&self, k: u16, p: u32) -> Option<Tensor> {
+                self.inputs.get(&(k, p)).cloned()
+            }
+        }
+        let material = ReplayInputs { source: materials[si], inputs };
+        let view = c.view(si);
+        let tokens = run_tokens(&facts[si]);
+        match crate::verify::reexecute_claim_v1(&c.stage_ctx(si, &view, &tokens), &material)? {
+            crate::verify::ReexecutionV1::Fault(proof) => return Ok(PipelineReexecutionV1::StageFault { stage: si as u8, proof }),
+            crate::verify::ReexecutionV1::Match { logits, .. } => outputs.push(logits),
+        }
+    }
+    Ok(PipelineReexecutionV1::Match { outputs })
 }
 
 /// The material of honest stage traces (tests, drills, a producer serving itself).

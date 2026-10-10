@@ -271,6 +271,14 @@ pub mod palw_exec_view_v1;
 /// ADR-0125 — the execution lane's round rules (a second, a seed, capped quotas, alternating
 /// permits) as pure functions; consensus-inert until the lane that reads them is built.
 pub mod palw_execution_lane_v1;
+/// RFC-0008 v2: the unified EXEC lane's wire layer — one versioned envelope, two exclusive subtypes (`EXEC_TX`, `EXEC_SLICE`); dormant behind `palw_exec_payload_v2`.
+pub mod palw_exec_v2;
+/// RFC-0008 v2: the weightless carriage — the anchor trailer, the closure of lane heads, the covered-set root; dormant behind `palw_exec_payload_v2`.
+pub mod palw_exec_v2_anchor;
+/// RFC-0008 v2 amendment 1: the slice verification route — a slice is verified, convicted or defaulted through the G14 kernel route.
+pub mod palw_exec_v2_verify;
+/// RFC-0008 v2: the work-slice ledgers (`WorkSliceUse`, `RootWorkBudget`, `JobWorkUse`), the canonical plan, the admission refusals and the root's one settlement; dormant behind `palw_exec_payload_v2`.
+pub mod palw_work_slice_v2;
 /// Spend-once execution-round quanta: 1 verified CanonicalWork → N unique permit tickets.
 pub mod palw_execution_quanta_v1;
 pub mod palw_exposure;
@@ -490,6 +498,8 @@ pub mod palw_gen_range_twin_v1;
 pub mod palw_probabilistic_constraints_v1;
 /// RFC-0004 Part II: the typed-roots fence `palw_typed_roots_v1` — dormant, no height, refused when armed.
 pub mod palw_typed_roots_v1;
+/// ECON's M*-49 verifier pay and the held default share: the fence `palw_verifier_pay_v1` — dormant, no height, refused when armed.
+pub mod palw_verifier_pay_v1;
 /// G14 lane D: the kernel route's consensus state, messages and interim policy (fence `palw_probabilistic_constraints_v1`).
 pub mod palw_kernel_route_v1;
 /// G14 lane D phase 3: the onboarding objects (artifact binding and its refutation, the kernel binding, the conformance commitment,
@@ -544,6 +554,10 @@ pub mod palw_legacy_held_da_v2;
 /// Lane INTF (ADR-0032's 2026-10-10 amendment): the PALW reporter share, 10% below and 49% at or past the dormant fence
 /// `palw_reporter_share_v2` (refused when armed) — R-1 fixed at the conviction's close, DA-6 at the session's open.
 pub mod palw_reporter_share_v2;
+/// Lane LG14-A (RFC-0014 §6–§8 on the legacy V2 Panel route): the non-seat dispute reservation (tags 154–155) that holds a claim's ends
+/// to the claim's own hard deadline, the reserved DA budget, direct proofs over open sessions, and the common filer's pure half — fence
+/// `palw_legacy_public_filer_v1` (dormant, refused when armed).
+pub mod palw_legacy_public_filer_v1;
 /// RFC-0009 stage D: a light client's proof of one bond/class/claim against a pinned block's committed state root.
 pub mod palw_state_proof_v1;
 /// Lane PA: the 2026-10-04 audit's consensus fixes behind one dormant fence (`palw_audit_1004_v1`).

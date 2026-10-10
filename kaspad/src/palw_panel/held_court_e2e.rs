@@ -23,9 +23,9 @@
 //!   finalizes to it) is still convicted: this node's seat names the lied child at every round and
 //!   files the bottom — `CourtHeldVerdict` (F3, decision (B)).
 use super::held_court::{
-    PalwHeldMoveCtxV1, PalwHeldMoveOutcomeV1, PalwHeldMoveV1, palw_held_challenger_evidence_v1, palw_held_filing_of_duty_v1,
-    palw_held_move_deadline_v1, palw_held_move_object_v1, palw_held_move_of_duty_v1, palw_held_responder_evidence_v1,
-    palw_held_route_v1,
+    PalwHeldMoveCtxV1, PalwHeldMoveOutcomeV1, PalwHeldMoveV1, PalwHeldStep6UnitV1, palw_held_challenger_evidence_v1,
+    palw_held_filing_of_duty_v1, palw_held_move_deadline_v1, palw_held_move_object_v1, palw_held_move_of_duty_v1,
+    palw_held_responder_evidence_v1, palw_held_route_v1,
 };
 use super::{PalwDaClaimFactsV1, PalwDaLaneV1};
 use kaspa_consensus_core::palw_attempt_v2::{
@@ -564,6 +564,34 @@ fn challenger_evidence(
     palw_held_challenger_evidence_v1(seat, &filing, duty.terminal_index.expect("the leaf"), None).expect("N2")
 }
 
+/// The same real held filing and refused slice-root decoy as the held node tests, for the Consensus API history adapter tests.
+pub(super) fn held_history_fixture_v1()
+-> (PalwCourtDutyV2, PalwConsensusObjectV2, PalwConsensusObjectV2, PalwHeldStep6UnitV1, PalwConsensusObjectV2) {
+    let (artifact, profile) = held_fixture(128);
+    let root = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).unwrap().root();
+    let liar = produce(&artifact, &profile, true);
+    let (state, claim, sid) = opened(&liar, &profile, root);
+    let accused = liar.backend.attn_site_evidence_held_v1(&liar.material, liar.leaf, None, None).unwrap();
+    let site = accused.site_v1(root, false, PALW_HELD_STEP_LADDER_V1).unwrap();
+    let (lying_root, _, _) = least_lie_root(&accused, root);
+    let mut good = accused.root_claim_held_v1(&site, sid, 2).unwrap();
+    let PalwConsensusObjectV2::CourtAttnRootClaimedHeld { root: filed_root, .. } = &mut good else { unreachable!() };
+    *filed_root = lying_root;
+    let mut decoy = good.clone();
+    let PalwConsensusObjectV2::CourtAttnRootClaimedHeld { slice_sub_roots, .. } = &mut decoy else { unreachable!() };
+    slice_sub_roots[0] = h64(0xDEC0);
+    assert!(step(&state, 105, std::slice::from_ref(&decoy)).is_err());
+    let state = step(&state, 105, std::slice::from_ref(&good)).unwrap();
+    let anchor = &accused.evidence.anchor.as_ref().unwrap().anchor;
+    let positions = accused.site_v1(root, true, PALW_HELD_STEP_LADDER_V1).unwrap().site.anchor_positions;
+    let layout = kaspa_consensus_core::palw_state_chunk_map::palw_state_layout_v4(&profile, positions).unwrap();
+    let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&layout.attn, 0).unwrap();
+    let unit =
+        PalwHeldStep6UnitV1 { kind: entry.kind, layer: entry.attn_layer, checkpoint: anchor.leaf.checkpoint_index, chunk_index: 0 };
+    let chunk = disclosure_of(&accused, claim, positions, unit.checkpoint, unit.chunk_index);
+    (duty_of(&state, SEAT, sid).unwrap(), good, decoy, unit, chunk)
+}
+
 /// **The dissection played by the two nodes** from DAA 105 until the session closes: the producer's
 /// node answers from `responder` (`None`: it stays silent), this node's seat from its N2 once the
 /// filing is on chain; `lie` is a lying producer's play instead of its node's (the harness's
@@ -995,10 +1023,7 @@ fn t_a10_a_tabled_held_class_is_made_held_aware_through_the_lineage_door() {
 // the priority lane in EDF order. What it carries is folded in the block of that DAA.
 
 use super::held_court::{PalwHeldCourtV1, PalwHeldHostV1, PalwHeldMaterialV1, palw_held_moves_v1, palw_held_start_builds_v1};
-use super::{
-    COURT_MOVE_REPLAN_DAA, PalwCarrierLaneV1, PalwCarrierSiteV1, PalwCarrierSlotsV1, palw_court_queue_edf_v1,
-    palw_held_chain_object_is_the_sessions_v1,
-};
+use super::{COURT_MOVE_REPLAN_DAA, PalwCarrierLaneV1, PalwCarrierSiteV1, PalwCarrierSlotsV1, palw_court_queue_edf_v1};
 use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1};
 
 /// What a fixture node's host answers.
@@ -1183,12 +1208,30 @@ impl Node {
         }
         let held_duties: Vec<PalwCourtDutyV2> = duties.into_iter().filter(|d| self.held.routes_v1(&self.host, d, daa)).collect();
         for read in self.held.chain_reads_v1(&self.host, &held_duties, daa) {
-            let objects = chain
-                .iter()
-                .filter(|o| palw_held_chain_object_is_the_sessions_v1(o, &read.session_id, &read.claim_id))
-                .cloned()
-                .collect();
-            self.held.note_chain_v1(read.session_id, objects, daa);
+            let (duty, needed) = self.held.history_filter_v1(&held_duties, read.session_id).unwrap();
+            let cap = self.host.opening_cap(&duty.class_id, daa);
+            let mut objects = std::collections::BTreeMap::new();
+            for object in chain.iter().rev() {
+                if let Some(key) = super::held_court::palw_held_history_object_key_v1(object, &duty, &needed, cap) {
+                    objects.insert(key, object.clone());
+                }
+            }
+            self.held.note_history_page_v1(
+                read.session_id,
+                read.claim_id,
+                super::held_court::PalwHeldHistoryPageV1 {
+                    walk: super::held_court::PalwHeldHistoryWalkV1 {
+                        floor: read.not_before_daa,
+                        anchor: h64(daa),
+                        next: None,
+                        selection: super::held_court::palw_held_history_selection_v1(&duty, &needed, cap),
+                    },
+                    reset: false,
+                    rewind: true,
+                    objects,
+                },
+                daa,
+            );
         }
         let (pending, moved) = (&self.pending, &self.moved);
         let busy = |key: &(Hash64, u32, bool)| {

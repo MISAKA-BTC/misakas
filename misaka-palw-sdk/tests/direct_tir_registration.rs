@@ -706,6 +706,22 @@ fn frontend_beacon(
     assert!(misaka_palw_sdk::runtime_pack::bind::bind_frontend_class(pack_dir, &class_file, "testnet-12", &bound_dir).is_err());
     let state = dir.join("frontend-beacon-state");
     let (b, _) = commit_conformance(&bound_dir, &class_file, &state, &opts, &|_| {}).unwrap();
+    let container = misaka_palw_tir_artifact::PalwTirContainerV1::open(&class_file).unwrap();
+    assert_eq!(b.commitment.program_root, misaka_palw_kernel::public::program_root_v1(&container.program.encode()));
+    assert_ne!(b.commitment.program_root, *PalwTirManifestV1::derive_streamed(&class_file).unwrap().graph_ir_root.as_byte_slice());
+    let descriptor = misaka_palw_sdk::preflight::kernel::reference_program_kernels()
+        .into_iter()
+        .find(|(_, d)| d.digest() == b.commitment.kernel_descriptor_id)
+        .unwrap()
+        .1;
+    let plan = misaka_palw_kernel::plan::plan_for_tir_program_v1(
+        &descriptor,
+        &container.program,
+        b.commitment.program_root,
+        b.admission.positions,
+    )
+    .unwrap();
+    assert_eq!(b.commitment.verification_plan_root, plan.root());
     assert_eq!(b.class_id, *class.class_id(&PalwTirManifestV1::derive_streamed(base).unwrap().inventory_root).as_byte_slice());
     assert_eq!(b.commitment.calibration_id, misaka_palw_challenge::RootV1::Absent);
     assert!(b.admission.hypothetically_armed);

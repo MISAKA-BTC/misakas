@@ -2886,12 +2886,61 @@ message GetPalwActivationPoolResponseMessage {
 
 // RFC-0010 (lane C2): the permissionless Panel's observation (op 220; read-only). `json` is the node's versioned
 // PanelV3ObservationV1 (camelCase); fields are only appended.
+// RFC-0008 v2 (lane X8R): the EXEC v2 lane's observation (op 240; read-only). `json` is the node's versioned
+// PalwExecV2ObservationV1 (camelCase); fields are only appended.
+message GetPalwExecV2StatusRequestMessage {
+  repeated string rootClaimIds = 1;
+  string blockHash = 2;
+}
+
+message GetPalwExecV2StatusResponseMessage {
+  bool available = 1;
+  uint32 observationVersion = 2;
+  string json = 3;
+  RPCError error = 1000;
+}
+
 message GetPalwPanelV3StatusRequestMessage {
   repeated string claimIds = 1;
   uint32 limit = 2;
 }
 
 message GetPalwPanelV3StatusResponseMessage {
+  bool available = 1;
+  uint32 observationVersion = 2;
+  string json = 3;
+  RPCError error = 1000;
+}
+
+// Lane LG14-A (RFC-0014 §6.3; ops 204-206): the legacy route's public dispute reads. `json` is the node's versioned observation
+// (camelCase); fields are only appended.
+message GetPalwLegacyDisputeRequestMessage {
+  string claimId = 1;
+}
+
+message GetPalwLegacyDisputeResponseMessage {
+  bool available = 1;
+  uint32 observationVersion = 2;
+  string json = 3;
+  RPCError error = 1000;
+}
+
+message GetPalwLegacyDisputesRequestMessage {
+  string reserver = 1;
+  uint32 limit = 2;
+}
+
+message GetPalwLegacyDisputesResponseMessage {
+  bool available = 1;
+  repeated string claimIds = 2;
+  RPCError error = 1000;
+}
+
+message GetPalwFraudFilerStatusRequestMessage {
+  string bond = 1;
+}
+
+message GetPalwFraudFilerStatusResponseMessage {
   bool available = 1;
   uint32 observationVersion = 2;
   string json = 3;

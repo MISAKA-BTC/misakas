@@ -85,11 +85,17 @@ impl SegMaterialV1 for SegDa<'_> {
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
         (!self.withhold.contains(&p) && p < self.claim.c.positions()).then(|| self.claim.c.position_path(p).1)
     }
+    fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+        if self.withhold.contains(&p) {
+            return None;
+        }
+        self.claim.c.commitments.get(p as usize).cloned()
+    }
 }
 
 /// Positions assembled from the parts the chain's blocks carry, with the bytes a verifier reads counted.
 struct FromBlocks {
-    positions: BTreeMap<u32, (Vec<Vec<Tensor>>, Vec<Digest>)>,
+    positions: BTreeMap<u32, misaka_palw_kernel::seg_da::AssembledPositionV1>,
     read: Cell<u128>,
 }
 
@@ -101,7 +107,10 @@ impl SegMaterialV1 for FromBlocks {
         Some(v)
     }
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
-        self.positions.get(&p).map(|(_, siblings)| siblings.clone())
+        self.positions.get(&p).map(|(_, siblings, _)| siblings.clone())
+    }
+    fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+        self.positions.get(&p).map(|(_, _, commitments)| commitments.clone())
     }
 }
 
@@ -245,7 +254,7 @@ impl SegWorld {
         self.tiled_job_generating(prompt, 2).await
     }
 
-    /// [`Self::tiled_job`] of a job that generates at most `max_new_tokens` ids.
+    /// [`Self::tiled_job`] of a job that requires exactly `max_new_tokens` ids.
     async fn tiled_job_generating(&mut self, prompt: &[u32], max_new_tokens: u32) -> Digest {
         self.jobs += 1;
         let job = TiledJobV1 {
@@ -434,8 +443,8 @@ async fn g14_k2s_a_lie_in_one_segment_is_localized_and_convicted_with_bounded_by
     let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &da, &art, &lie.tokens, &[1200]) else {
         panic!("the lie is not found")
     };
-    let SegFaultV1::Element(e) = fault.as_ref() else { panic!("an element fault") };
-    assert_eq!((e.position, e.occurrence, e.node), (1200, s, n), "localized to the lying value");
+    let e = &fault;
+    assert_eq!(e.at(), Some((1200, s, n)), "localized to the lying value");
     let bytes = fault.to_bytes();
     let bounds = w.net.ledger().classes[&w.class].bounds;
     let per_position: u128 = lie.values[1200].iter().flatten().map(|t| (t.len() * t.dtype.width()) as u128).sum();
@@ -516,6 +525,47 @@ async fn g14_k2s_a_withheld_segment_is_demanded_and_defaults_never_a_conviction(
     assert!(ledger.seg_progress.keys().all(|(c, _, _)| *c != claim.id), "no progress row outlives the demand");
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay of the default");
+}
+
+/// A correct one-token prefix cannot complete a fixed two-token job (F-B1), even with a genuine producer seal and signature.
+#[tokio::test]
+async fn g14_k2s_a_short_correct_claim_is_refused_before_it_can_earn_the_fixed_reward() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = SegWorld::new().await;
+    let prompt = [1, 3, 5];
+    let job = w.tiled_job(&prompt).await;
+    let trace = trace_v1(&w.f.program, &w.f.params, &prompt).unwrap();
+    let last = trace.values.last().unwrap().last().unwrap();
+    let generated = vec![DecodeRuleV1::Greedy.select(&last[w.f.program.logits as usize]).unwrap()];
+    let c = seg_commitments_of_trace_v1(&trace);
+    let ledger = w.net.ledger();
+    let class = &ledger.classes[&w.class];
+    let evidence = build_segmented_evidence_v1(
+        class.header(w.class),
+        &class.descriptor,
+        prompt.len() as u32,
+        &prompt_root_of_ids_v1(&prompt),
+        &[],
+        &c,
+    );
+    let claim = KernelClaimV1 { job_id: job, producer_bond: w.net.kid(0), generated, evidence_root: evidence.root() };
+    let id = claim.id();
+    let salt = misaka_palw_kernel::hash::id(b"misaka-palw/test/claim-salt", &id);
+    let seal = w.net.route(0, &K::SealClaim { producer: w.net.kid(0), job, seal: claim_seal_v2(&id, &salt) });
+    w.net.send_all(vec![(0, seal)]).await;
+    let reveal = w.net.route(
+        0,
+        &K::CommitClaimSalted { salt, commit: SaltedCommitV1::Segmented { claim, evidence, segment_roots: c.segment_roots() } },
+    );
+    // The mempool authenticates the carrier; state-dependent claim binding is the block fold's job. A colluding miner carrying
+    // the valid signature still cannot make this wrong-length claim enter the ledger or become eligible for a reward.
+    w.net.send_all(vec![(0, reveal)]).await;
+    assert!(!w.net.ledger().claims.contains_key(&id), "the block fold refuses the short claim");
+    // A full completion of the same job still commits and reaches Final.
+    let complete = w.claim(0, job, &prompt, None).await;
+    w.net.beat_to(w.net.daa() + 80).await;
+    assert!(matches!(w.net.claim_state(&complete.id), ClaimStateV1::Final { .. }));
+    assert!(!w.net.ledger().claims.contains_key(&id));
 }
 
 /// **GAP 10: the mempool runs the kernel route's acceptance gate** — a carrier whose signature its bond's key does not verify, and one
@@ -724,10 +774,18 @@ impl SegWorld {
     /// chain's blocks, as a fresh verifier reads them.
     async fn serve_and_read(&mut self, claim: &SegClaim, missing: &[u32]) -> FromBlocks {
         let view = self.fresh_record(&claim.id);
+        let mask = misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&self.f.program);
         let mut answers = Vec::new();
         for &p in missing {
             for i in 0..position_parts_v1(&self.f.program, p).unwrap().len() as u32 {
                 let part = position_part_v1(&self.f.program, p, &claim.values[p as usize], claim.c.position_path(p).1, i).unwrap();
+                for c in &part.chunks {
+                    assert_eq!(
+                        matches!(c.body, misaka_palw_kernel::seg_da::ChunkBodyV1::Withheld),
+                        mask[c.occurrence as usize][c.node as usize],
+                        "a model-dependent value owes only its commitment"
+                    );
+                }
                 let respond = K::Respond { claim: claim.id, stage: 0, position: p, bytes: borsh::to_vec(&part).unwrap() };
                 answers.push((0usize, self.net.route(0, &respond)));
             }
@@ -753,8 +811,8 @@ impl SegWorld {
 /// * it publishes nothing off-chain and never prosecutes.
 ///
 /// The outsider is the last genesis card, a bond the route has never seen. From the node's read API and the chain's blocks only, it
-/// checks position 1,200 of the first lie. That check is a demand of positions 1,199 and 1,200. The coalition's producer serves them on
-/// chain (else it defaults). The outsider reads the parts back from the blocks and files one element court, and the fold convicts.
+/// streams its registered-model replay, then descends the first differing segment without a fault-position hint. The coalition's
+/// producer serves each demanded path/position on chain (else it defaults). The outsider reads the blocks and files an element court.
 /// The real bond is slashed, the slash splits exactly into the accuser's reward and the burn, and the next coinbase pays the reward.
 /// The second lie's producer withholds instead: at the demand's deadline the claim is Unavailable — the default charged, never a
 /// conviction, never Final. The third lie is in the output (a delivered id that is not the decode of honest logits): the decode court
@@ -787,15 +845,32 @@ async fn g14_k2s_the_producer_and_every_other_bond_collude_and_one_outside_bond_
     // The verifier's own copy of the artifact (owned: the world is driven while it checks).
     let params = w.f.params.clone();
     let art = move |j: u16, l: Option<u16>| params.tensors.get(&(j, l)).cloned();
-    let nothing = SegDa { claim: &lie, withhold: 0..positions, read: Cell::new(0) };
-    let SegFindingV1::Demand(missing) = check_positions_v1(&view.context(), &nothing, &art, &lie.tokens, &[1200]) else {
-        panic!("material nobody published is a demand")
-    };
-    assert_eq!(missing, vec![1199, 1200]);
-    // The producer must serve or default: it serves, on chain, in parts, and the outsider reads them back from the blocks.
-    let chain = w.demand_served_and_read(outsider, &lie, &missing).await;
-    let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &lie.tokens, &[1200]) else {
-        panic!("the served lie is found")
+    let own = misaka_palw_kernel::seg_detect::prepare_reexecution_v1(&view.context(), &art, &lie.tokens).unwrap();
+    let mut chain = FromBlocks { positions: BTreeMap::new(), read: Cell::new(0) };
+    let mut demanded = std::collections::BTreeSet::new();
+    let fault = loop {
+        let r = misaka_palw_kernel::seg_detect::check_claim_by_reexecution_v1(
+            &view.context(),
+            &own.roots,
+            own.decode_mismatch,
+            &chain,
+            &art,
+            &lie.tokens,
+        );
+        assert!(r.probes <= 10);
+        match r.finding {
+            SegFindingV1::Fault(fault) => {
+                assert_eq!(r.divergent, Some(1200), "the fault was localized from public paths");
+                break fault;
+            }
+            SegFindingV1::Demand(missing) => {
+                assert!(!missing.is_empty() && missing.iter().all(|p| demanded.insert(*p)), "no repeated demand");
+                assert!(demanded.len() <= 12 && demanded.len() <= 16, "the single bond's distinct DA units are bounded");
+                let served = w.demand_served_and_read(outsider, &lie, &missing).await;
+                chain.positions.extend(served.positions);
+            }
+            other => panic!("the public prosecution stopped: {other:?}"),
+        }
     };
     let bytes = fault.to_bytes();
     let bounds = w.net.ledger().classes[&w.class].bounds;
@@ -914,12 +989,12 @@ impl SegWorld {
         self.net.send_all(vec![(card, o)]).await;
     }
 
-    /// The outsider's check of `positions` over what the producer published (everything it committed), by name.
-    fn fault_from_published(&self, claim: &SegClaim, positions: &[u32]) -> SegFaultV1 {
+    /// Localize an unknown fault from the public roots and the outsider's registered model.
+    fn fault_from_published(&self, claim: &SegClaim) -> SegFaultV1 {
         let view = self.fresh_record(&claim.id);
         let art = |j: u16, l: Option<u16>| self.f.params.tensors.get(&(j, l)).cloned();
         let da = SegDa { claim, withhold: 0..0, read: Cell::new(0) };
-        match check_positions_v1(&view.context(), &da, &art, &claim.tokens, positions) {
+        match misaka_palw_kernel::seg_detect::reexecute_claim_v1(&view.context(), &da, &art, &claim.tokens).finding {
             SegFindingV1::Fault(f) => *f,
             other => panic!("the lie is not found: {other:?}"),
         }
@@ -947,25 +1022,25 @@ async fn g14_k2s_input_borrowed_and_garbage_traces_are_convicted_on_the_node() {
     let mut traced = prompt.clone();
     traced[4200] = (traced[4200] + 1) % 32;
     let lie = w.claim_over(0, job, &prompt, &traced, &|_| {}, false).await;
-    let fault = w.fault_from_published(&lie, &[4200]);
-    let SegFaultV1::Element(e) = &fault else { panic!("an element fault: {fault:?}") };
-    assert_eq!((e.position, e.occurrence, e.node), (4200, 0, 0), "the embedding row the token reads");
-    assert_eq!(e.token.as_ref().map(|t| t.index), Some(1), "opened by the job's second tile");
+    let fault = w.fault_from_published(&lie);
+    let e = &fault;
+    assert_eq!(e.at(), Some((4200, 0, 0)), "the embedding row the token reads");
+    assert_eq!(e.token().map(|t| t.index), Some(1), "opened by the job's second tile");
     w.file(outsider, &lie.id, &fault).await;
     assert!(w.net.ledger().claims[&lie.id].convicted, "an input lie is convicted");
     // The borrowed trace.
     let job = w.tiled_job(&prompt).await;
     let other: Vec<u32> = prompt.iter().map(|t| (t + 7) % 32).collect();
     let borrowed = w.claim_over(0, job, &prompt, &other, &|_| {}, false).await;
-    let fault = w.fault_from_published(&borrowed, &[0]);
-    let SegFaultV1::Element(e) = &fault else { panic!("an element fault: {fault:?}") };
-    assert_eq!((e.position, e.occurrence, e.node, e.token.as_ref().map(|t| t.index)), (0, 0, 0, Some(0)));
+    let fault = w.fault_from_published(&borrowed);
+    let e = &fault;
+    assert_eq!((e.at(), e.token().map(|t| t.index)), (Some((0, 0, 0)), Some(0)));
     w.file(outsider, &borrowed.id, &fault).await;
     assert!(w.net.ledger().claims[&borrowed.id].convicted, "a borrowed trace is convicted");
     // The garbage trace.
     let job = w.tiled_job(&prompt).await;
     let garbage = w.claim_over(0, job, &prompt, &prompt, &garble, false).await;
-    let fault = w.fault_from_published(&garbage, &[0]);
+    let fault = w.fault_from_published(&garbage);
     w.file(outsider, &garbage.id, &fault).await;
     assert!(w.net.ledger().claims[&garbage.id].convicted, "a garbage trace is convicted");
     let z = w.net.replay().await;
@@ -989,7 +1064,7 @@ async fn g14_k2s_a_lie_is_convicted_after_final_within_the_liability_horizon() {
     assert!(matches!(w.net.claim_state(&lie.id), ClaimStateV1::Final { .. }), "{:?}", w.net.claim_state(&lie.id));
     assert!(w.net.ledger().claims[&lie.id].liability_until.is_some_and(|u| u > w.net.daa()), "liability runs");
     let (collateral, owed) = (w.net.collateral(0), w.net.owed(outsider));
-    let fault = w.fault_from_published(&lie, &[700]);
+    let fault = w.fault_from_published(&lie);
     w.file(outsider, &lie.id, &fault).await;
     let ledger = w.net.ledger();
     assert!(ledger.claims[&lie.id].convicted, "convicted post-Final");
@@ -1028,7 +1103,7 @@ async fn g14_k2s_spam_demands_never_preempt_a_proof_and_simultaneous_filers_get_
     w.net.send_all(spam).await;
     let open = w.net.ledger().demands.keys().filter(|(c, _, _)| *c == lie.id).count();
     assert_eq!(open, coalition.len() * per as usize, "every spam session is open");
-    let fault = w.fault_from_published(&lie, &[1200]);
+    let fault = w.fault_from_published(&lie);
     let (collateral, ledger_burned) = (w.net.collateral(0), w.net.ledger().burned);
     let oa = w.net.route(a, &K::FileProof { accuser: w.net.kid(a), claim: lie.id, proof: ProsecutionV1::Segmented(fault.to_bytes()) });
     let ob = w.net.route(b, &K::FileProof { accuser: w.net.kid(b), claim: lie.id, proof: ProsecutionV1::Segmented(fault.to_bytes()) });
@@ -1376,8 +1451,8 @@ async fn g14_k2s_a_history_bearing_class_held_at_8192_positions_convicts_a_conti
     let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &lie.tokens, &[4096]) else {
         panic!("the continuity lie is found")
     };
-    let SegFaultV1::Element(e) = fault.as_ref() else { panic!("an element fault: {fault:?}") };
-    assert_eq!((e.position, e.occurrence, e.node), (4096, 1, window), "localized to the window");
+    let e = &fault;
+    assert_eq!(e.at(), Some((4096, 1, window)), "localized to the window");
     let bytes = fault.to_bytes();
     let bounds = w.net.ledger().classes[&w.class].bounds;
     let parts = position_parts_v1(&w.f.program, 4096).unwrap().len();
@@ -1526,18 +1601,37 @@ async fn g14_k2s_v5_an_encoder_class_on_the_node_convicts_its_lies_and_finalizes
         let claim = w.encoder_claim(0, job, &prompt, Some(lie)).await;
         let view = w.fresh_record(&claim.id);
         assert!(view.encoder.is_some() && view.positions == 1, "{what}: a v5 claim of one position");
+        let own = misaka_palw_kernel::seg_detect::prepare_reexecution_v1(&view.context(), &art, &claim.tokens).unwrap();
         let nothing = SegDa { claim: &claim, withhold: 0..1, read: Cell::new(0) };
-        let SegFindingV1::Demand(missing) = check_positions_v1(&view.context(), &nothing, &art, &claim.tokens, &[0]) else {
+        let SegFindingV1::Demand(missing) = misaka_palw_kernel::seg_detect::check_claim_by_reexecution_v1(
+            &view.context(),
+            &own.roots,
+            own.decode_mismatch,
+            &nothing,
+            &art,
+            &claim.tokens,
+        )
+        .finding
+        else {
             panic!("{what}: a demand")
         };
         assert_eq!(missing, vec![0]);
         let chain = w.demand_served_and_read(outsider, &claim, &missing).await;
-        let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &claim.tokens, &[0]) else {
+        let SegFindingV1::Fault(fault) = misaka_palw_kernel::seg_detect::check_claim_by_reexecution_v1(
+            &view.context(),
+            &own.roots,
+            own.decode_mismatch,
+            &chain,
+            &art,
+            &claim.tokens,
+        )
+        .finding
+        else {
             panic!("{what}: the lie is found")
         };
-        let SegFaultV1::Element(e) = fault.as_ref() else { panic!("{what}: an element fault") };
-        assert_eq!((e.position, e.occurrence, e.node), (0, lie.0, lie.1), "{what}: localized");
-        assert_eq!(e.token.is_some(), lie == (0, lookup), "{what}: the job's tile opens the ids");
+        let e = &fault;
+        assert_eq!(e.at(), Some((0, lie.0, lie.1)), "{what}: localized");
+        assert_eq!(e.token().is_some(), lie == (0, lookup), "{what}: the job's tile opens the ids");
         let bytes = fault.to_bytes();
         assert!(bytes.len() as u64 <= w.net.ledger().classes[&w.class].bounds.max_filing_bytes, "{what}: within the priced bound");
         w.file(outsider, &claim.id, &fault).await;
@@ -1546,6 +1640,13 @@ async fn g14_k2s_v5_an_encoder_class_on_the_node_convicts_its_lies_and_finalizes
     // The honest claim: an honest element filed is dismissed; Final at the window's end.
     let job = w.tiled_job_generating(&prompt, 0).await;
     let honest = w.encoder_claim(0, job, &prompt, None).await;
+    let public = w.fresh_record(&honest.id);
+    let no_values = SegDa { claim: &honest, withhold: 0..1, read: Cell::new(0) };
+    assert_eq!(
+        misaka_palw_kernel::seg_detect::reexecute_claim_v1(&public.context(), &no_values, &art, &honest.tokens).finding,
+        SegFindingV1::Clean
+    );
+    assert_eq!(no_values.read.get(), 0, "honest encoder replay requires no producer values");
     let view = w.fresh_record(&honest.id);
     let published = SegDa { claim: &honest, withhold: 0..0, read: Cell::new(0) };
     assert_eq!(check_positions_v1(&view.context(), &published, &art, &honest.tokens, &[0]), SegFindingV1::Clean);

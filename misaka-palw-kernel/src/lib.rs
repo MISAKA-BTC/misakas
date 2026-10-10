@@ -111,10 +111,12 @@ pub mod seg_da;
 pub mod seg_detect;
 pub mod seg_encoder;
 pub mod seg_ledger;
+pub mod seg_scope;
 pub mod settle;
 pub mod spec;
 pub mod state;
 pub mod trace;
+pub mod verifier_pay;
 pub mod verify;
 
 pub use check::{PlanAcceptanceV1, check_plan_v1};

@@ -16,8 +16,9 @@
 //! * a source whose Final passed through a Panel licence — `FinalPathV1::PanelLicensed` is refused for
 //!   `SubjectKindV1::PanelAssignment` (the circularity work → Panel → Final → beacon → Panel). Every Final the V2 lattice writes
 //!   is Panel-licensed; the separate kernel route can supply Panel-independent OPV Finals;
-//! * a source outside the derived OPV-eligible profile set. [`ChainPanelBeaconHistoryV1`] reads the kernel route and OPV extras;
-//!   freezing that set at the epoch's commitment is still a release blocker;
+//! * a source outside the epoch's FROZEN source set: the derived OPV-eligible profiles at the epoch's commitment position, frozen
+//!   once by the engine in the first block whose DAA reaches `release_daa` (from that block's parent) and read back by
+//!   [`ChainPanelBeaconHistoryV1`] — never re-derived from the ledger the verifying block holds;
 //! * the claims being assigned, a work accepted before the epoch's start `S`, a duplicate, reordered or substituted contribution,
 //!   a forged accumulator/anchor/output (the contract's recomputation).
 //!
@@ -72,7 +73,8 @@ pub trait PanelBeaconHistoryV1 {
     fn sealed_sources(&self) -> Vec<SealedSourceV3>;
     /// The last position the branch has settled (the carrying block's selected parent's DAA).
     fn tip_position(&self) -> u64;
-    /// Source profiles that were Active AND G14-complete (derived OPV-eligible) at the epoch's commitment position.
+    /// Source profiles that were Active AND G14-complete (derived OPV-eligible) at the epoch's commitment position — for the chain's
+    /// history, the set the engine FROZE at that position (`PermissionlessPanelStateV1::frozen_sources_at`), never a re-derivation.
     fn eligible_profiles(&self, commitment_position: u64) -> BTreeSet<Digest>;
     /// The canonical work identities of the non-terminal claims sealed for `epoch`: the candidates under test, never sources.
     fn pending_work_of_epoch(&self, epoch: u64) -> BTreeSet<Digest>;
