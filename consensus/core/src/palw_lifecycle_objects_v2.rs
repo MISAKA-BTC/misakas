@@ -1499,17 +1499,22 @@ pub enum PalwKernelInnerFenceV1 {
     /// `Params::palw_typed_roots_v1` (RFC-0004 Part II, R4X): a typed-root object (inner 19) and a typed-root proof
     /// (`ProsecutionV1::Spec` inside a filing, inner 7).
     TypedRootsV1,
+    /// BOTH `Params::palw_panel_free_v1` and `Params::palw_typed_roots_v1`: an object an inner kind of the first carries in a form of
+    /// the second — G14R's salted claim reveal (inner 20, `palw_panel_free_v1`) wrapping a typed-root claim (`SaltedCommitV1::Spec`,
+    /// 19). Its row names `palw_typed_roots_v1`; in force only where `palw_panel_free_v1` is too (as `ProviderCourtV1` needs the
+    /// kernel route's).
+    PanelFreeAndTypedRootsV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 2] = [Self::PanelFreeV1, Self::TypedRootsV1];
+    pub const ALL: [Self; 3] = [Self::PanelFreeV1, Self::TypedRootsV1, Self::PanelFreeAndTypedRootsV1];
 
     /// The `Params` field the fence is resolved from.
     pub const fn params_field(self) -> &'static str {
         match self {
             Self::PanelFreeV1 => "palw_panel_free_v1",
-            Self::TypedRootsV1 => "palw_typed_roots_v1",
+            Self::TypedRootsV1 | Self::PanelFreeAndTypedRootsV1 => "palw_typed_roots_v1",
         }
     }
 }
@@ -1619,6 +1624,29 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         "consensus/core/src/palw_improve_state_v1.rs::PalwNoChangeReasonV1",
         PalwInt12WireChangeV1::NotCarried("an improvement epoch row's outcome, written by the fold"),
     ),
+    // `pre` (ADR-0175): `CandidateSelected` (2) appended; the fold writes it only past `palw_model_immutable_v1`.
+    (
+        "consensus/core/src/palw_improve_state_v1.rs::PalwPromotionOutcomeV1",
+        PalwInt12WireChangeV1::NotCarried(
+            "an improvement epoch row's decision, written by the fold; CandidateSelected (2) only past palw_model_immutable_v1",
+        ),
+    ),
+    // SMALL (RFC-0009 RDA4, RFC-0001 P1): the signer protocol and the worker frame — node-local wire forms, never a block's.
+    (
+        "consensus/core/src/dns_finality.rs::SigningPurpose",
+        PalwInt12WireChangeV1::NotCarried(
+            "the node ↔ signer protocol's purpose tag; a block carries signatures, never a purpose (RDA4 = 8 is offered only under \
+             palw_receipt_spend_v4)",
+        ),
+    ),
+    (
+        "consensus/core/src/dns_finality.rs::SignerMessageDigest",
+        PalwInt12WireChangeV1::NotCarried("the node ↔ signer protocol's typed digest; never a block's carriage"),
+    ),
+    (
+        "consensus/core/src/palw_freeprompt_v3.rs::PalwFpWorkerFrameV1",
+        PalwInt12WireChangeV1::NotCarried("the worker ↔ gateway v3-serve frame (Cancelled = 8); node-local, no consensus object"),
+    ),
     (
         "consensus/core/src/palw_state_v2.rs::impl BorshDeserialize for PalwStateCarriageV2",
         PalwInt12WireChangeV1::NotCarried(
@@ -1672,6 +1700,24 @@ pub enum PalwA2SlotV1 {
     /// State, delta, carriage-tail or engine encodings — never a block's carriage. Below the fence the fold must be byte-identical to
     /// int-12's (the same PALW state root at every block), which the int-12 replay checks.
     StateEncoding { what: &'static str },
+    /// **Kinds int-12 decodes and judges, recognized and refused BY NAME past the fence** — the acceptance walk drops the object
+    /// before any slot, rent, signature or state write, and the carrying block stands (ADR-0175 "有効化と履歴"). Below the fence
+    /// int-12's own rule for them, unchanged. Reconciled exactly with [`palw_int12_kind_refused_past_fence_v1`].
+    Int12RefusedByName { tags: &'static [u8], what: &'static str },
+    /// **Kinds int-12 decodes and folds, whose fold a fence changes by STATE** (a refusal that depends on the rows, a new id formula,
+    /// a different outcome) — never a block verdict. Below the fence the fold is byte-identical to int-12's, which the pin test's
+    /// armed-far node and the int-12 replay check block by block.
+    Int12FoldPastFence { tags: &'static [u8], what: &'static str },
+}
+
+/// **The fence past which an object of a kind the live build decodes is recognized and refused by name** (`None`: no such fence;
+/// the kind's rule is int-12's at every height). The one question the table asks of the processor's acceptance walk and the pure
+/// fold (each asks [`palw_model_definition_update_v1`] under `palw_model_immutable_v1`). `Some` is a `Params` field name.
+pub fn palw_int12_kind_refused_past_fence_v1(object: &PalwConsensusObjectV2) -> Option<&'static str> {
+    match palw_lifecycle_kind_owner_v1(object) {
+        PalwLifecycleKindOwnerV1::Int12 => palw_model_definition_update_v1(object).map(|_| "palw_model_immutable_v1"),
+        PalwLifecycleKindOwnerV1::Fence(_) => None,
+    }
 }
 
 /// One row: the slot, the `Params` field of the fence that owns it, the lane or RFC that holds the allocation, and whether the code is
@@ -1698,15 +1744,22 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::ObjectTags { lo: 108, hi: 108 }, "palw_signed_registration_v1", "RFC-0009 signed-expiry registration", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 109, hi: 109 }, "palw_probabilistic_constraints_v1", "OB-P0 conformance evidence", true),
     // The kernel route's block 110–119: 110 route, 111 receipt (landed); 113 `KernelRouteChunkV1`, the route's own chunk lane (G14-R4,
-    // `g14/r4-fixes`, merged into `adv/c4r4`). 112 and 114–119 are unallocated: no row, so a kind landing there fails the table test
-    // until the Lead allocates it.
+    // `g14/r4-fixes`, merged into `adv/c4r4`) — the Lead, 2026-10-10: tag 113 → `palw_probabilistic_constraints_v1`. Its merge adds
+    // `O::KernelRouteChunkV1 { .. }` to the `ProbabilisticConstraintsV1` arm of `palw_lifecycle_kind_owner_v1`, the
+    // `PALW_LIFECYCLE_NEW_KINDS_V1` entry, its `PALW_A2_NEW_KIND_WIRE_V1` pin, and flips this row to landed; the tests name each.
+    // 112 and 114–119 are unallocated: no row, so a kind landing there fails the table test until the Lead allocates it.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 110, hi: 111 }, "palw_probabilistic_constraints_v1", "G14 lane D kernel route", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 113, hi: 113 }, "palw_probabilistic_constraints_v1", "G14-R4 KernelRouteChunkV1", false),
     // 120 `PanelBeaconProofV3` (landed); 121–129 unallocated.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 120, hi: 120 }, "palw_permissionless_panel_v1", "RFC-0010 V3 production fold", true),
     // 130 `ExecWorkRootOpenedV2` (X8R, `rfc8/x8r-review`).
     a2_row(PalwA2SlotV1::ObjectTags { lo: 130, hi: 139 }, "palw_exec_payload_v2", "X8R RFC-0008 v2", false),
-    // DA16: lease, challenge, answer, transfer.
+    // 140–149: BUDGET (ADR-0176/0177, allocated 2026-10-10) — no row until its kinds exist: BUDGET adds one row per kind range with
+    // the fence that owns it (`palw_bond_budget_v1` or `palw_model_bond_allocation_v1`, `PALW_A2_TAG_ALLOCATIONS_V1`) in the commit
+    // that creates the kinds. A kind there without its row fails `every_kind_in_the_enum_has_exactly_one_owner` and
+    // `every_landed_kind_sits_in_its_row_with_the_rows_fence`.
+    // DA16: lease, challenge, answer, transfer. A change to their wire form (DA16's re-scope: the `Artifact` lease subject removed
+    // under this fence) re-pins `PALW_A2_NEW_KIND_WIRE_V1` in the same commit and keeps this row's fence, or adds a row for another.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 150, hi: 153 }, "palw_provider_court_v1", "DA16 provider court", true),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
@@ -1734,6 +1787,14 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "palw_typed_roots_v1",
         "R4X",
         true,
+    ),
+    // G14R's salted reveal of a typed-root claim: `PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1` (both fences), by a guarded arm
+    // of `palw_kernel_route_inner_fence_v1` ahead of inner 20's own — never the hand-written gate arm `g14/r4-fixes` carries.
+    a2_row(
+        PalwA2SlotV1::KernelNested { what: "SaltedCommitV1::Spec (19) inside CommitClaimSalted (inner 20)" },
+        "palw_typed_roots_v1",
+        "G14R × R4X (also needs palw_panel_free_v1)",
+        false,
     ),
     // ---- header carriage forms and coinbase trailers ----
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 7, magic: *b"PFS4" }, "palw_receipt_spend_v4", "RFC-0009 V4 receipt carriage", true),
@@ -1769,14 +1830,69 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::StateEncoding { what: "per-shard V3 draw (strata; delta 171, tail 0xED)" },
         "palw_permissionless_panel_v1",
         "SHARD",
-        false,
+        true,
     ),
     a2_row(
         PalwA2SlotV1::StateEncoding { what: "per-segment pricing and the shard engine's encodings" },
         "palw_tir_shard_segment_v2",
         "SHARD",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "bond budget engine Q/B/R/F (deltas 190–199, tail 0xEF, root block bond_budget/v1)" },
+        "palw_bond_budget_v1",
+        "BUDGET (ADR-0176)",
         false,
     ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "model coinbase allocated by distinct locked miner capital f(S_m) inside the budget" },
+        "palw_model_bond_allocation_v1",
+        "BUDGET (ADR-0177)",
+        false,
+    ),
+    // ADR-0032 (2026-10-10): R-1's reporter share 49% and DA-6's exposure at it. testnet-12 arms R-core+ at genesis, so below this
+    // fence the share must stay int-12's 1,000 bps (and the params fingerprint int-12's); INTF moves `pre`'s unfenced constant here.
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "R-1 reporter share and DA-6 exposure: 1,000 bps below, 4,900 bps past" },
+        "palw_reporter_share_v2",
+        "INTF (ADR-0032 amendment)",
+        false,
+    ),
+    // ---- kinds the live build decodes, judged anew past a fence (ADR-0175, `pre`) ----
+    a2_row(
+        PalwA2SlotV1::Int12RefusedByName {
+            tags: &[27, 28, 29, 37, 81],
+            what: "ModelVersionPublished/Promoted/Withdrawn, ModelLineBenefitsDeclared granting EARLY_VERSION, LineageHeadRolledBack: \
+                   recognized and refused at acceptance, not applied, the block stands",
+        },
+        "palw_model_immutable_v1",
+        "ADR-0175 immutable registrations (pre)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::Int12FoldPastFence {
+            tags: &[3, 26, 39, 61, 68, 70, 91],
+            what: "a Dormant class re-registered with a changed definition refused; a shard plan attached to an older class refused; a \
+                   line's id H(class, root, founder, name); an epoch's winner CandidateSelected with no head move, a policy keeps the \
+                   head, dissolution keeps the head history",
+        },
+        "palw_model_immutable_v1",
+        "ADR-0175 immutable registrations (pre)",
+        true,
+    ),
+];
+
+/// **The Lead's object-tag allocations** (`remaining-rfc-integration-matrix.md` §2) as `(lo, hi, owner, fences a row there may
+/// name)`. Every object-tag row of [`PALW_A2_KIND_FENCE_TABLE_V1`] lies inside one allocation and names one of its fences, and every
+/// kind added after the live build lies inside one (`every_tag_row_is_inside_its_allocation`): a lane cannot land a kind outside its
+/// block, nor under another lane's fence.
+pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
+    (104, 109, "G14 lane D onboarding, RFC-0009, OB-P0", &["palw_probabilistic_constraints_v1", "palw_signed_registration_v1"]),
+    (110, 119, "kernel route (G14)", &["palw_probabilistic_constraints_v1"]),
+    (120, 129, "RFC-0010 V3 production fold", &["palw_permissionless_panel_v1"]),
+    (130, 139, "EXEC payload v2 (X8R)", &["palw_exec_payload_v2"]),
+    (140, 149, "BUDGET (ADR-0176/0177)", &["palw_bond_budget_v1", "palw_model_bond_allocation_v1"]),
+    (150, 153, "DA16 provider court", &["palw_provider_court_v1"]),
 ];
 
 #[cfg(test)]
@@ -3736,6 +3852,201 @@ pub(crate) mod tests {
                     );
                 }
             }
+        }
+
+        /// **Every object-tag row lies inside one of the Lead's allocations and names one of its fences, and so does every kind added
+        /// after the live build** ([`PALW_A2_TAG_ALLOCATIONS_V1`]). BUDGET's 140–149 have no row until BUDGET creates its kinds; a kind
+        /// there without one fails `every_landed_kind_sits_in_its_row_with_the_rows_fence`, and a row naming a fence outside
+        /// `palw_bond_budget_v1` / `palw_model_bond_allocation_v1` fails here.
+        #[test]
+        fn every_tag_row_is_inside_its_allocation() {
+            for (i, (lo, hi, owner, fences)) in PALW_A2_TAG_ALLOCATIONS_V1.iter().enumerate() {
+                assert!(lo <= hi && !fences.is_empty(), "{owner}");
+                assert!(!PALW_LIFECYCLE_INT12_KINDS_V1.iter().any(|(t, _)| (lo..=hi).contains(&t)), "{owner} overlaps int-12's tags");
+                for (lo2, hi2, owner2, _) in &PALW_A2_TAG_ALLOCATIONS_V1[i + 1..] {
+                    assert!(hi < lo2 || hi2 < lo, "overlapping allocations: {owner} and {owner2}");
+                }
+            }
+            let allocation_of = |tag: u8| PALW_A2_TAG_ALLOCATIONS_V1.iter().find(|(lo, hi, _, _)| (*lo..=*hi).contains(&tag));
+            for row in PALW_A2_KIND_FENCE_TABLE_V1 {
+                let PalwA2SlotV1::ObjectTags { lo, hi } = row.slot else { continue };
+                for tag in lo..=hi {
+                    let (_, _, owner, fences) =
+                        allocation_of(tag).unwrap_or_else(|| panic!("tag {tag} of {row:?} is not allocated: ask the Lead"));
+                    assert!(fences.contains(&row.fence), "{row:?}: tag {tag} is {owner}'s, whose fences are {fences:?}");
+                }
+            }
+            for (tag, name, fence) in PALW_LIFECYCLE_NEW_KINDS_V1 {
+                let (_, _, owner, fences) =
+                    allocation_of(*tag).unwrap_or_else(|| panic!("{name} (tag {tag}) is outside every allocation"));
+                assert!(fences.contains(&fence.params_field()), "{name} (tag {tag}) is {owner}'s: {fences:?}");
+            }
+        }
+
+        /// **ADR-0175 in the central table: the live build's kinds refused by name past `palw_model_immutable_v1` are exactly the
+        /// `Int12RefusedByName` rows** — every int-12 kind is asked ([`palw_int12_kind_refused_past_fence_v1`], the policy the
+        /// acceptance walk and the fold ask), from a near-zero body and, for tag 37, from a declaration granting `EARLY_VERSION`. A
+        /// kind added to the policy without its row, or a row the policy does not refuse, fails. Every `Int12*` row names int-12 tags
+        /// and a `Params` fence; no new kind is ever refused by this route (its own fence owns it).
+        #[test]
+        fn the_int12_kinds_refused_past_a_fence_are_the_rows() {
+            use PalwA2SlotV1 as S;
+            let samples_of = |tag: u8| -> Vec<PalwConsensusObjectV2> {
+                let mut out: Vec<PalwConsensusObjectV2> = minimal_decode(&[tag]).into_iter().collect();
+                if tag == 37 {
+                    let mut declared = out.first().cloned().expect("tag 37 decodes from a near-zero body");
+                    let PalwConsensusObjectV2::ModelLineBenefitsDeclared { tiers, .. } = &mut declared else { unreachable!("tag 37") };
+                    let mut tier: crate::palw_model_benefits_v1::PalwModelBenefitTierV1 = zeros();
+                    tier.grants = crate::palw_model_benefits_v1::grant::EARLY_VERSION;
+                    tiers.push(tier);
+                    out.push(declared);
+                }
+                out
+            };
+            let by_name: Vec<(&[u8], &PalwA2RowV1)> = PALW_A2_KIND_FENCE_TABLE_V1
+                .iter()
+                .filter_map(|r| match r.slot {
+                    S::Int12RefusedByName { tags, .. } => Some((tags, r)),
+                    _ => None,
+                })
+                .collect();
+            assert!(!by_name.is_empty(), "ADR-0175's row");
+            for (tag, name) in PALW_LIFECYCLE_INT12_KINDS_V1 {
+                let refused: std::collections::BTreeSet<&str> =
+                    samples_of(tag).iter().filter_map(palw_int12_kind_refused_past_fence_v1).collect();
+                let rows: Vec<_> = by_name.iter().filter(|(tags, _)| tags.contains(&tag)).collect();
+                match refused.len() {
+                    0 => assert!(rows.is_empty(), "{name} (tag {tag}) has an Int12RefusedByName row the policy does not refuse"),
+                    1 => {
+                        assert_eq!(rows.len(), 1, "{name} (tag {tag}) is refused past {refused:?}: exactly one row");
+                        assert!(
+                            refused.contains(rows[0].1.fence),
+                            "{name} (tag {tag}): the row's fence is the policy's ({refused:?})"
+                        );
+                    }
+                    _ => panic!("{name} (tag {tag}) refused past two fences: {refused:?}"),
+                }
+            }
+            for row in PALW_A2_KIND_FENCE_TABLE_V1 {
+                let (S::Int12RefusedByName { tags, .. } | S::Int12FoldPastFence { tags, .. }) = row.slot else { continue };
+                for tag in tags {
+                    assert!(PALW_LIFECYCLE_INT12_KINDS_V1.iter().any(|(t, _)| t == tag), "{row:?}: tag {tag} is not the live build's");
+                }
+                assert!(row.landed && params_has_fence(row.fence), "{row:?}: a landed row naming a Params fence");
+            }
+            for (tag, name, _) in PALW_LIFECYCLE_NEW_KINDS_V1 {
+                assert_eq!(palw_int12_kind_refused_past_fence_v1(&zero_filled_kind(*tag)), None, "{name}: its own fence owns it");
+            }
+        }
+
+        /// **Each landed post-int-12 kind's wire form, pinned** — `(tag, digest)`: an FNV-1a over the kind's variant declaration in
+        /// `PalwConsensusObjectV2` and every wire type reachable from it by name (A2U's manifest reader, comments and whitespace removed).
+        /// A lane that creates a kind adds its pin; a lane that CHANGES a landed kind's form (DA16's re-scope of 150–153) re-pins it in the
+        /// same commit and confirms the change rides under the row's fence (or adds a row for the fence it does ride under).
+        /// `every_landed_kind_is_pinned_to_its_wire_form` fails on a missing, stale or moved pin and prints the current values.
+        const PALW_A2_NEW_KIND_WIRE_V1: &[(u8, u64)] = &[
+            (104, 0x98d7608e0a24ad99),
+            (105, 0xdaed6c0cfaf81e2f),
+            (106, 0x888f101d106c24bc),
+            (107, 0x0081a402000ddbf4),
+            (108, 0xac8ecc3ff97ec415),
+            (109, 0xc7d6537424a66090),
+            (110, 0x7da0346d0633de78),
+            (111, 0x2d490db20d075bfe),
+            (120, 0xcbb24fb8f993e5c6),
+            (150, 0x5fb8c8b2822f8386),
+            (151, 0x6a81242ebaeba7fd),
+            (152, 0xc48f175fa3456d1e),
+            (153, 0x74bac59d2cf50cd4),
+        ];
+
+        /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline
+        /// fields included) in tag order. The frozen manifest pins the enum as a whole, which every new kind changes (`ObjectEnum`); this pin
+        /// closes that gap: a field added to, or a type changed inside, a kind the live build decodes fails
+        /// `every_landed_kind_is_pinned_to_its_wire_form` and is an `Int12Inner` change to classify, never a re-pin. Checked against
+        /// `0b1c11b87`'s source on 2026-10-10 (every variant equal on this branch, `g14/r4-fixes` and `adv/c4r4`).
+        const PALW_A2_INT12_VARIANTS_WIRE_V1: u64 = 0xd1982421da455cca;
+
+        /// `PalwConsensusObjectV2`'s variants, squashed as the manifest reader reads them, by name.
+        fn object_variant_decls(
+            types: &std::collections::BTreeMap<String, (u64, String)>,
+        ) -> std::collections::BTreeMap<String, String> {
+            let (_, decl) = types.get("consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2").expect("the object enum");
+            let b = decl.as_bytes();
+            let open = decl.find("PalwConsensusObjectV2{").expect("the enum's body") + "PalwConsensusObjectV2".len();
+            let close = group_end(b, open) - 1;
+            let mut out = std::collections::BTreeMap::new();
+            let (mut depth, mut start) = (0usize, open + 1);
+            for i in open + 1..=close {
+                match b[i] {
+                    b'{' | b'(' | b'[' | b'<' if i < close => depth += 1,
+                    b'}' | b')' | b']' | b'>' if depth > 0 => depth -= 1,
+                    _ => {}
+                }
+                if (b[i] == b',' && depth == 0) || i == close {
+                    let mut segment = &decl[start..i];
+                    while segment.starts_with("#[") {
+                        segment = &segment[group_end(segment.as_bytes(), 1)..];
+                    }
+                    let name: String = segment.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+                    if !name.is_empty() {
+                        out.insert(name, segment.to_string());
+                    }
+                    start = i + 1;
+                }
+            }
+            out
+        }
+
+        /// Each landed post-int-12 kind's wire digest (see [`PALW_A2_NEW_KIND_WIRE_V1`]), in the kind table's order.
+        fn new_kind_wire_digests() -> Vec<(u8, u64)> {
+            let mut types = wire_types_of(&repo_root());
+            let variants = object_variant_decls(&types);
+            // The enum itself is a leaf: an envelope (108) wraps "an object", not every kind's form.
+            types.remove("consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2");
+            PALW_LIFECYCLE_NEW_KINDS_V1
+                .iter()
+                .map(|(tag, name, _)| {
+                    let segment = variants.get(*name).unwrap_or_else(|| panic!("{name}'s declaration in PalwConsensusObjectV2"));
+                    let idents: Vec<&str> =
+                        segment.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).filter(|s| !s.is_empty()).collect();
+                    let mut text = segment.clone();
+                    for item in reachable_from(&types, &idents) {
+                        for (key, (digest, _)) in types.iter().filter(|(key, _)| item_of(key) == item) {
+                            text.push_str(&format!("|{key}={digest:016x}"));
+                        }
+                    }
+                    (*tag, fnv64(text.as_bytes()))
+                })
+                .collect()
+        }
+
+        /// **Every landed post-int-12 kind is pinned to its wire form** ([`PALW_A2_NEW_KIND_WIRE_V1`]). A lane that creates a kind,
+        /// or changes one (a field, a nested variant, a type it reaches), re-pins it in the same commit — and with the pin confirms
+        /// the change rides under its row's fence (DA16's re-scope of 150–153 under `palw_provider_court_v1`; BUDGET's 140–149). The
+        /// failure prints the current pins.
+        #[test]
+        fn every_landed_kind_is_pinned_to_its_wire_form() {
+            let types = wire_types_of(&repo_root());
+            let variants = object_variant_decls(&types);
+            let mut int12 = String::new();
+            for (tag, name) in PALW_LIFECYCLE_INT12_KINDS_V1 {
+                let declared = variants.get(name).unwrap_or_else(|| panic!("the live build's {name} (tag {tag}) is declared"));
+                int12.push_str(&format!("{tag}:{declared};"));
+            }
+            let int12 = fnv64(int12.as_bytes());
+            let now = new_kind_wire_digests();
+            let listing: Vec<String> = now.iter().map(|(tag, digest)| format!("    ({tag}, 0x{digest:016x}),")).collect();
+            assert!(
+                PALW_A2_INT12_VARIANTS_WIRE_V1 == int12 && PALW_A2_NEW_KIND_WIRE_V1 == &now[..],
+                "[a2u-pins] A-2 wire pins differ (A-2 uniformity).\n\
+                 * PALW_A2_INT12_VARIANTS_WIRE_V1 (pinned 0x{PALW_A2_INT12_VARIANTS_WIRE_V1:016x}, now 0x{int12:016x}): a variant the live \
+                 build decodes changed its declaration — classify it (an Int12Inner row and a guarded owner arm, or a re-read and its \
+                 probe), never by re-pinning alone.\n\
+                 * PALW_A2_NEW_KIND_WIRE_V1: a lane that creates or changes a post-int-12 kind re-pins it here and keeps the change under \
+                 its row's fence. Current pins:\n[a2u-pins-begin]\n{}\n[a2u-pins-end]",
+                listing.join("\n")
+            );
         }
     }
 }

@@ -13697,6 +13697,10 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
                     "a typed-root object is refused: palw_typed_roots_v1 is not in force at this block (RFC-0004 Part II)".to_string()
                 }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
+                    "a salted typed-root claim is refused: palw_panel_free_v1 and palw_typed_roots_v1 are not both in force at this block"
+                        .to_string()
+                }
             });
         }
         Ok(())
@@ -13712,6 +13716,9 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => self.palw_kernel_opv_at(daa_score),
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
                 self.palw_kernel_typed_roots_at(daa_score)
+            }
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
+                self.palw_kernel_opv_at(daa_score) && self.palw_kernel_typed_roots_at(daa_score)
             }
         }
     }

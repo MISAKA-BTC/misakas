@@ -43,8 +43,9 @@ use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::config::params::{ForkActivation, Params};
 use kaspa_consensus_core::errors::block::RuleError;
 use kaspa_consensus_core::palw_lifecycle_objects_v2::{
-    PALW_LIFECYCLE_NEW_KINDS_V1, PALW_LIFECYCLE_TX_VERSION_V2, PalwKernelInnerFenceV1, PalwLifecycleKindFenceV1,
-    PalwLifecycleKindOwnerV1, PalwLifecycleTxPayloadV2, palw_lifecycle_kind_owner_v1, palw_lifecycle_object_may_ride_v2,
+    PALW_A2_KIND_FENCE_TABLE_V1, PALW_KERNEL_ROUTE_INNER_KINDS_V1, PALW_LIFECYCLE_NEW_KINDS_V1, PALW_LIFECYCLE_TX_VERSION_V2,
+    PalwKernelInnerFenceV1, PalwLifecycleKindFenceV1, PalwLifecycleKindOwnerV1, PalwLifecycleTxPayloadV2,
+    palw_int12_kind_refused_past_fence_v1, palw_lifecycle_kind_owner_v1, palw_lifecycle_object_may_ride_v2,
 };
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_state_v2::{
@@ -137,7 +138,32 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.palw_panel_free_v1 =
                     Some(kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1::interim_v1(at, Vec::new()));
             }
-            PalwKernelInnerFenceV1::TypedRootsV1 => params.palw_typed_roots_v1 = Some(at),
+            PalwKernelInnerFenceV1::TypedRootsV1 | PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
+                params.palw_typed_roots_v1 = Some(at)
+            }
+        }
+    }
+    // Every other fence a LANDED row of the central table names (formulas, state encodings, the live build's kinds judged anew):
+    // a row that lands with a fence this harness does not arm fails here, so node C judges every block with it far above.
+    for row in PALW_A2_KIND_FENCE_TABLE_V1.iter().filter(|row| row.landed) {
+        match row.fence {
+            "palw_probabilistic_constraints_v1"
+            | "palw_signed_registration_v1"
+            | "palw_permissionless_panel_v1"
+            | "palw_provider_court_v1"
+            | "palw_receipt_spend_v4"
+            | "palw_panel_free_v1"
+            | "palw_typed_roots_v1" => {} // armed above, through their enums
+            "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
+            // ADR-0175 needs model lines at or below it (`validate_palw_model_immutable_v1`); artifact root ownership is t12's.
+            // testnet-12 runs model lines from genesis: never move them (a later height would disarm the live registry below it).
+            "palw_model_immutable_v1" => {
+                if params.palw_model_lines_fence().is_none() {
+                    params.palw_model_lines = Some(at);
+                }
+                params.palw_model_immutable_v1 = Some(at);
+            }
+            other => panic!("a landed A-2 row's fence {other} is not armed by this harness: arm it here ({row:?})"),
         }
     }
 }
@@ -358,6 +384,110 @@ fn provider_answer() -> Obj {
     *signature = vec![1; 64];
     assert_eq!(palw_lifecycle_object_may_ride_v2(&answer), Ok(()));
     answer
+}
+
+/// **ADR-0175's refusals by name** (`Int12RefusedByName`): signed objects of the live build's kinds that mutate a registration —
+/// a version published, promoted, withdrawn, a lineage head rolled back, a benefits declaration granting `EARLY_VERSION`. The live
+/// build decodes and judges them (its isolation passes each: signed); below `palw_model_immutable_v1` every build judges them by
+/// int-12's rule, past it they are recognized and refused, the block standing.
+fn adr0175_objects() -> Vec<Obj> {
+    let mut out = Vec::new();
+    for tag in [27u8, 28, 29, 81, 37] {
+        let mut object = zero_filled_kind(tag);
+        match &mut object {
+            Obj::ModelVersionPublished { signature, .. }
+            | Obj::ModelVersionPromoted { signature, .. }
+            | Obj::ModelVersionWithdrawn { signature, .. }
+            | Obj::LineageHeadRolledBack { signature, .. } => *signature = vec![1; 64],
+            Obj::ModelLineBenefitsDeclared { tiers, signature, .. } => {
+                *signature = vec![1; 64];
+                let mut tier: kaspa_consensus_core::palw_model_benefits_v1::PalwModelBenefitTierV1 = zeros();
+                tier.grants = kaspa_consensus_core::palw_model_benefits_v1::grant::EARLY_VERSION;
+                tiers.push(tier);
+            }
+            other => unreachable!("tag {tag}: {other:?}"),
+        }
+        assert_eq!(palw_lifecycle_object_may_ride_v2(&object), Ok(()), "the live build's isolation passes it: {object:?}");
+        assert_eq!(palw_int12_kind_refused_past_fence_v1(&object), Some("palw_model_immutable_v1"), "{object:?}");
+        out.push(object);
+    }
+    out
+}
+
+/// **Every kernel-route inner kind, carried inside tag 110** — each `PALW_KERNEL_ROUTE_INNER_KINDS_V1` row's kind from a near-zero
+/// body, encoded as the route carries it (`version ‖ borsh`), so an inner kind a lane adds (G14-R4's 15, K2S's 16–18, G14R's 20) is
+/// carried the moment its row exists. Below tag 110's fence every one is the live build's undecodable payload.
+fn kernel_inner_kinds(bond: PalwBondKeyV2) -> Vec<(u8, Obj)> {
+    PALW_KERNEL_ROUTE_INNER_KINDS_V1
+        .iter()
+        .map(|(inner, name, _)| {
+            let object: misaka_palw_kernel::route::KernelRouteObjectV1 =
+                minimal_decode(&[*inner]).unwrap_or_else(|| panic!("inner {inner} ({name}) decodes from a near-zero body"));
+            (*inner, Obj::KernelRouteV1 { bytes: object.encode(), signer: bond, signature: vec![1; 64] })
+        })
+        .collect()
+}
+
+/// Harness card `card`'s ML-DSA-87 signature over `message` under the model registry's context (the processor's
+/// `palw_model_check_bond_signature`).
+fn card_signs(card: usize, message: Hash64) -> Vec<u8> {
+    libcrux_ml_dsa::ml_dsa_87::sign(
+        &TestConsensus::palw_v2_registry_keypair(card as u64).signing_key,
+        message.as_byte_slice(),
+        kaspa_consensus_core::palw_model_lines_v1::PALW_MODEL_LINE_MLDSA87_CONTEXT,
+        [0x22u8; 32],
+    )
+    .expect("sign")
+    .as_ref()
+    .to_vec()
+}
+
+/// **A line founded on a genesis class, and its next version published as a preview, each signed by card 1** — the live build's
+/// registry at work (testnet-12 runs it from genesis). Returns the founding, the publication (carried once the founding folded) and
+/// the line's id, which ADR-0175 derives differently past its fence (`model_line_id_at_v1`).
+fn adr0175_line(chain: &T12Chain, config: &Config, base: Hash64, immutable: bool) -> (Obj, Obj, Hash64) {
+    use kaspa_consensus_core::palw_model_lines_v1::{
+        model_line_id_at_v1, palw_model_line_founded_message_v1, palw_model_version_message_v1,
+    };
+    let (_, state) = chain.tip_state();
+    let class_id = *state
+        .classes_iter()
+        .find(|(id, class)| **id != base && matches!(class.status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Active))
+        .expect("an Active genesis class besides the floor")
+        .0;
+    let card = 1usize;
+    let founder = chain.bonds[card];
+    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        config.params.net.to_string().as_bytes(),
+        Some(config.params.genesis.hash),
+    );
+    let name = b"a2u-adr-0175".to_vec();
+    let (root1, root2) = (Hash64::from_bytes([0xa1; 64]), Hash64::from_bytes([0xa2; 64]));
+    let founded = Obj::ModelLineFounded {
+        class_id,
+        root: root1,
+        founder,
+        name: name.clone(),
+        signature: card_signs(card, palw_model_line_founded_message_v1(domain, &class_id, &name, &founder, &root1)),
+    };
+    let line_id = model_line_id_at_v1(&class_id, &root1, &founder, &name, immutable);
+    let published = Obj::ModelVersionPublished {
+        line_id,
+        version: 2,
+        root: root2,
+        parent: Some(1),
+        adopted_from: None,
+        runtime_hash: None,
+        dataset_commitment: None,
+        training_config_hash: None,
+        notes_hash: None,
+        preview: true,
+        signature: card_signs(
+            card,
+            palw_model_version_message_v1(domain, &line_id, 2, &root2, Some(1), None, None, None, None, None, true),
+        ),
+    };
+    (founded, published, line_id)
 }
 
 fn reread_probes() -> Vec<Obj> {
@@ -599,6 +729,12 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     for probe in reread_probes() {
         payloads.push(("a live-build kind carrying a re-read value (tag 68, profile 6)".into(), payload_of(&probe)));
     }
+    for object in adr0175_objects() {
+        payloads.push((format!("ADR-0175: {object:?}").chars().take(60).collect(), payload_of(&object)));
+    }
+    for (inner, object) in kernel_inner_kinds(bond) {
+        payloads.push((format!("kernel-route inner kind {inner} inside tag 110"), payload_of(&object)));
+    }
     let route = Obj::KernelRouteV1 { bytes: vec![5; 512], signer: bond, signature: vec![1; 64] };
     let one_chunk: Vec<Obj> = [route.clone(), well_formed(bond)[1].clone(), well_formed(bond)[5].clone(), provider_answer()]
         .iter()
@@ -629,6 +765,16 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         );
     }
     carry(&mut a, &mut wallet, &config, &payloads).await;
+
+    // ---- ADR-0175's kinds folding under the live build's rule: a line founded (tag 26), then its next version published (27) ----
+    let (founded, published, line_id) = adr0175_line(&a, &config, bundle.state.base_class_id(), false);
+    carry(&mut a, &mut wallet, &config, &[("a line founded (tag 26)".into(), payload_of(&founded))]).await;
+    carry(&mut a, &mut wallet, &config, &[("its next version published (tag 27)".into(), payload_of(&published))]).await;
+    assert_eq!(
+        a.tip_state().1.model_versions_of(&line_id).len(),
+        2,
+        "below palw_model_immutable_v1 the live build's registry applies the version (every node and int-12 replay this)"
+    );
 
     // ---- the mixed block: an ATTEMPT block (its claim folds) carrying a licence that folds, a duplicate the walk refuses, and new
     //      kinds riding unjudged ----
@@ -672,7 +818,7 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     }
 
     // ---- nothing was folded, charged or opened past what the live build does ----
-    assert!(state.kernel_route().is_none(), "no kernel route state: every 104–111 object skipped");
+    assert!(state.kernel_route().is_none(), "no kernel route state: every 104–111 object and every inner kind skipped");
     assert!(state.panel_v3().is_none(), "no Panel V3 state: the 120 objects skipped");
     for chunk in &one_chunk {
         assert!(
@@ -774,4 +920,49 @@ async fn t12_a2u_mixed_verdicts_every_new_kind_below_its_fence_launch_ruleset() 
 async fn t12_a2u_mixed_verdicts_every_new_kind_below_its_fence_release_ruleset() {
     let dump = the_mixed_verdict_chain(Ruleset::Release).await;
     write_dump(Ruleset::Release, &dump);
+}
+
+/// One chain for the ADR-0175 pair: testnet-12 (its model registry in force from genesis), `palw_model_immutable_v1` at DAA 1 when
+/// `immutable` (its own validation passing). A line is founded (allowed on both: past the fence it is an independent registration),
+/// then its next version is published — signed by the line's developer — beside the five refused kinds, in ONE block. Returns the
+/// line's versions.
+async fn adr0175_versions_after_publishing(immutable: bool) -> usize {
+    let (mut config, _, premine, floats) = t12_with_harness_cards();
+    assert!(config.params.palw_model_lines_fence().is_some_and(|f| f.is_active(1)), "testnet-12 runs the model registry");
+    if immutable {
+        config.params.palw_model_immutable_v1 = Some(ForkActivation::new(1));
+        config.params.validate_palw_model_immutable_v1().expect("ADR-0175's prerequisites: model lines, artifact root ownership");
+    }
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!("testnet-12 is V2") };
+    let bundle = bundle.clone();
+    let mut a = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let ttpb = config.params.target_time_per_block();
+    while a.daa_of(a.sink()) < 2 {
+        a.heartbeat(ttpb, Vec::new()).await;
+    }
+    let mut wallet = Wallet { coins: floats.clone() };
+    let (founded, published, line_id) = adr0175_line(&a, &config, bundle.state.base_class_id(), immutable);
+    carry(&mut a, &mut wallet, &config, &[("a line founded".into(), payload_of(&founded))]).await;
+    assert_eq!(a.tip_state().1.model_versions_of(&line_id).len(), 1, "the line is founded (immutable: {immutable})");
+    let mut payloads: Vec<(String, Vec<u8>)> = vec![("its next version published".into(), payload_of(&published))];
+    payloads.extend(adr0175_objects().iter().map(|o| (format!("ADR-0175: {o:?}").chars().take(60).collect(), payload_of(o))));
+    let blocks = carry(&mut a, &mut wallet, &config, &payloads).await;
+    assert_eq!(blocks, 1, "one block carries the publication and the five refused kinds");
+    let versions = a.tip_state().1.model_versions_of(&line_id).len();
+    eprintln!(
+        "[a2u adr-0175] immutable {immutable}: {} definition updates in one valid block; the line holds {versions} version(s)",
+        payloads.len()
+    );
+    versions
+}
+
+/// **ADR-0175 at its fence** (`Int12RefusedByName`, the ADR's "有効化と履歴"): the live build's rule applies a developer's signed
+/// version; with `palw_model_immutable_v1` in force the same publication is recognized and NOT applied — and in both the block
+/// carrying it (and the five other refused kinds) stands, each carrier in it. Below the fence the mixed-verdict chains above carry
+/// the same kinds and every node, int-12 included, agrees.
+#[tokio::test]
+async fn t12_a2u_adr0175_past_its_fence_a_definition_update_is_refused_and_its_block_stands() {
+    kaspa_core::log::try_init_logger("warn");
+    assert_eq!(adr0175_versions_after_publishing(false).await, 2, "the live build's rule: the version is applied");
+    assert_eq!(adr0175_versions_after_publishing(true).await, 1, "past palw_model_immutable_v1: refused, not applied");
 }
