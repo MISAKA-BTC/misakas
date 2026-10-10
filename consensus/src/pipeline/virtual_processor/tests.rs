@@ -16895,6 +16895,9 @@ mod t12_operator_anchor_fence;
 // RFC-0010 (the permissionless Panel's production fold): a testnet-12 chain crossing a bypassed (never armable) fence — the V3 claim bound
 // on a heartbeat, lane A draining the legacy claim, IBD and reorg of the engine state.
 mod t12_permissionless_panel_e2e;
+// Lane BUDGET (ADR-0176): the bond budget through the real pipeline on testnet-12 (a bypassed, never armable fence) — equal ceilings for
+// a fast and a slow producer, ρ ×1/×100/×1000, no recovery before accepted + W, IBD, reorg and restart.
+mod budget_e2e;
 // Lane V02 (post-launch, 2026-09-26): `palw_final_lock_full_collateral` crossed on a real chain — lock-heavy
 // seats bind from the height and void their anchor below it.
 mod t12_final_lock_full_collateral_fence;

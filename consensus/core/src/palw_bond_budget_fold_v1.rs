@@ -42,12 +42,21 @@ impl PalwChainStateV2 {
         self.bond_budget.as_ref().and_then(|b| b.final_weight_granted(claim))
     }
 
+    /// **Would the fold's strict budget draw take a receipt spend of `claim_id`?** (hook H-5: the processor asks it of the PARENT state
+    /// before admitting a receipt block) — one block and `carve()` left on the claim's reservation; `true` for an unbudgeted claim, and
+    /// the carve is not read then.
+    pub fn bond_budget_spend_fits_v1(&self, claim_id: &Hash64, carve: impl FnOnce() -> u64) -> bool {
+        let Some(budget) = self.bond_budget.as_ref() else { return true };
+        let Some(blocks) = budget.remaining(claim_id, PalwBudgetDimV1::BlockUnits) else { return true };
+        blocks >= PALW_BUDGET_BLOCK_UNIT_V1 as u128
+            && budget.remaining(claim_id, PalwBudgetDimV1::Reward).is_some_and(|reward| reward >= carve() as u128)
+    }
+
     /// The caps of `bond` under `policy` at its current locked capital (RPC op 250's numbers).
     pub fn bond_budget_caps_v1(&self, policy: &PalwBondBudgetPolicyV1, bond: &PalwBondKeyV2) -> PalwBudgetVectorV1 {
         palw_bond_budget_caps_v1(policy, self.bonds.get(bond).map(|r| r.collateral).unwrap_or(0))
     }
 
-    #[allow(dead_code)] // BUDGET-M3
     /// **A Final claim's weight, as the fold credited it**: the budget's grant where the claim holds a row, else `unbudgeted` (the old
     /// rule's expression, computed by the caller). The one answer every re-derivation reads, so `finalize_claim`, the consistency check,
     /// the reversal and the retirement cannot drift apart.
@@ -102,7 +111,6 @@ pub(super) fn apply_bond_budget_header_v1(
 /// **A claim's planned reservation** — computed before the path's first write (so a refusal leaves the builder as it found it) and
 /// committed after the claim is written.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // BUDGET-M3: the reservation hooks are wired into the reward paths in milestone 3.
 pub(super) struct PalwBudgetPlanV1 {
     policy: PalwBondBudgetPolicyV1,
     capital: u64,
@@ -117,7 +125,6 @@ pub(super) struct PalwBudgetPlanV1 {
     consume_blocks_now: u64,
 }
 
-#[allow(dead_code)] // BUDGET-M3
 impl PalwBudgetPlanV1 {
     pub(super) fn reservation(&self) -> &PalwBudgetVectorV1 {
         &self.reservation
@@ -128,7 +135,6 @@ fn budget_refused(bond: PalwBondKeyV2, why: PalwBudgetRefusalV1) -> PalwStateV2E
     PalwStateV2Error::BondBudgetExhausted { bond, why: why.to_string() }
 }
 
-#[allow(dead_code)] // BUDGET-M3: the hooks below `bond_budget_op` are wired into the reward paths in milestone 3.
 impl TransitionBuilder<'_> {
     /// The engine's journal, as deltas.
     fn journal_bond_budget(&mut self, writes: Vec<PalwBudgetWriteV1>) {
@@ -243,7 +249,11 @@ impl TransitionBuilder<'_> {
                 Ok::<(), PalwBudgetRefusalV1>(())
             })
             .expect("created above");
-        out.map_err(|why| budget_refused(bond, why))
+        // The plan read this same engine state, so the commit cannot refuse; were it to, the block fails (never a skip: the claim's other
+        // rows are written by now).
+        out.map_err(|why| {
+            PalwStateV2Error::BondBudgetRefused(format!("bond {bond:?}: the planned reservation could not be committed: {why}"))
+        })
     }
 
     /// Create the engine (delta 191, `None → Some`) and seed the window from every live old claim (design §2.9).

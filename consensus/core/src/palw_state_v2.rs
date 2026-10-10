@@ -3845,6 +3845,8 @@ pub fn palw_bond_backs_live_duty_v1(state: &PalwChainStateV2, key: &PalwBondKeyV
         || state.kernel_reserved(key) > 0
         || state.onboarding_reserved(key) > 0
         || state.provider_court_reserved(key) > 0
+        // Lane BUDGET (ADR-0176 D4): the capital that earned a budget window stays until the window has passed (design §2.4).
+        || state.bond_budget_window_holds(key, now_daa)
     {
         return true;
     }
@@ -3886,6 +3888,8 @@ pub fn palw_bond_backs_live_duty_v2(
         || state.kernel_reserved(key) > 0
         || state.onboarding_reserved(key) > 0
         || state.provider_court_reserved(key) > 0
+        // Lane BUDGET (ADR-0176 D4): the capital that earned a budget window stays until the window has passed (design §2.4).
+        || state.bond_budget_window_holds(key, now_daa)
     {
         return true;
     }
@@ -8973,6 +8977,10 @@ struct PalwAttemptOriginV1 {
     /// **ADR-0165: what this attempt is to the floor state machine** — see [`PalwFloorEventSourceV1`]. The machine's one
     /// reader is `apply_attempt`; a rider ([`Self::rider`]) is [`PalwFloorEventSourceV1::Rider`] and moves nothing.
     floor_event: PalwFloorEventSourceV1,
+    /// **Lane BUDGET (ADR-0176 D2): the reward-block units this claim takes** — one block for an attempt block's own or a merged
+    /// block's attempt, a rider's share of its lead's one block for a rider ([`crate::palw_bond_budget_v1::palw_rider_block_attribution_v1`]).
+    /// Read only past `palw_bond_budget_v1`.
+    budget_block_units: u64,
 }
 
 /// **ADR-0165: where an attempt's event for the floor state machine comes from** — whether it is an event at all, and its
@@ -14851,10 +14859,11 @@ impl PalwChainStateV2 {
                         // ADR-0160 F-W (D-3): both sums under the C7 ceiling, as `finalize_claim` and
                         // `retire_claim` price a new-rule claim (the identity on every other).
                         let final_safe = |c: u128| crate::palw_weight_cap_v1::palw_weight_final_safe_v1(params, claim, c);
-                        safe = safe.checked_add(final_safe(contribution)).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
-                        safe_ceiling = safe_ceiling
-                            .checked_add(final_safe(canonical.unwrap_or(claim.pwu as u128)))
-                            .ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+                        // Lane BUDGET: a budgeted claim weighs what its Final was granted, in both sums.
+                        let credited = self.bond_budget_weight_or(id, final_safe(contribution));
+                        let ceiling = self.bond_budget_weight_or(id, final_safe(canonical.unwrap_or(claim.pwu as u128)));
+                        safe = safe.checked_add(credited).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+                        safe_ceiling = safe_ceiling.checked_add(ceiling).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                     }
                     // A free-prompt Final licenses; only SPENT quanta weighed blocks.
                     PalwClaimSourceV2::FreePrompt { quanta, spent } => {
@@ -14864,6 +14873,8 @@ impl PalwChainStateV2 {
                         let spent_weight = per_quantum
                             .checked_mul(spent.len() as u128)
                             .ok_or(PalwStateV2Error::Overflow("consistency spent weight"))?;
+                        // Lane BUDGET: a budgeted claim's spends added what they were granted.
+                        let spent_weight = self.bond_budget_weight_or(id, spent_weight);
                         // **The free-prompt lane is NOT priced by Decision 7** — see the open
                         // question recorded at `apply_receipt_spend`. It contributes identically to
                         // both sums, so the bound below neither tightens nor loosens around it.
@@ -24212,6 +24223,10 @@ impl<'a> TransitionBuilder<'a> {
                 per_quantum.checked_mul(spent.len() as u128).ok_or(PalwStateV2Error::Overflow("convicted free-prompt weight"))?
             }
         };
+        // Lane BUDGET: a budgeted claim's reversal takes back exactly what its Final (or its spends) was granted; nothing returns to its
+        // bond's window.
+        let weight = self.state.bond_budget_weight_or(&id, weight);
+        self.bond_budget_close_v1(&id);
         self.state.safe_weight = self.state.safe_weight.saturating_sub(weight);
         self.unnote_model_probe_pass(&claim, final_daa, ctx.daa_score);
         self.unnote_activation_probe_credits_v1(&id, &claim);
@@ -27927,6 +27942,9 @@ impl<'a> TransitionBuilder<'a> {
             // ADR-0160 F-W (D-3): a new-rule claim's Final weight under the C7 ceiling — the identity on
             // every attributable class and every old-rule claim.
             let contribution = crate::palw_weight_cap_v1::palw_weight_final_safe_v1(self.params, claim, contribution);
+            // **Lane BUDGET (ADR-0176 D3): the Final weight under the budget** — the grant, never beyond the claim's reserved F (the same
+            // number every re-derivation reads back). Unchanged for an unbudgeted claim.
+            let contribution = self.bond_budget_final_weight_v1(&id, contribution);
             self.state.safe_weight =
                 self.state.safe_weight.checked_add(contribution).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
         }
@@ -27975,6 +27993,9 @@ impl<'a> TransitionBuilder<'a> {
                 None if self.extras.work_priced_reward_active => self.work_priced_escrow(claim),
                 None => claim.escrowed_reward,
             };
+            // **Lane BUDGET (ADR-0176 D3, design §2.6): the reward under the budget**, before the buyback and the panel split, so every
+            // leg derives from it; the rest is never named — never minted. Unchanged for an unbudgeted claim.
+            let escrow = self.bond_budget_final_reward_v1(&id, escrow);
             let slice = self.model_buyback_at_final(&id, claim, escrow);
             let reward = escrow - slice;
             // **ADR-0124 Decisions 1 and 2: the panel's share.** A claim whose panel holds a duty
@@ -28053,6 +28074,10 @@ impl<'a> TransitionBuilder<'a> {
                 }
             }
         }
+        // Lane BUDGET: an attempt's Final is terminal for its budget (a free-prompt claim's spends come after its Final).
+        if matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            self.bond_budget_close_v1(&id);
+        }
         // ADR-0132 Upgrade C: the snapshot leaves with the claim — it was read above, once.
         self.write_claim_economics(id, None);
         // ADR-0124 Decision 3: the seats leave duty with their exposure — before the phase write
@@ -28112,6 +28137,8 @@ impl<'a> TransitionBuilder<'a> {
             }
             _ => {}
         }
+        // Lane BUDGET (ADR-0176 D4): a void is terminal for the claim's budget — and returns nothing to the window before `d + W`.
+        self.bond_budget_close_v1(&id);
         // **ADR-0152 §4-ter C3: a void by any route closes every court session on the claim
         // NEUTRALLY**, past `palw_offence_attribution`: the session is removed (its challenger's
         // reservation released by `write_court`), nobody is slashed and no court time is charged —
@@ -28325,6 +28352,8 @@ impl<'a> TransitionBuilder<'a> {
             }
             _ => None,
         };
+        // Lane BUDGET: a budgeted claim retires the weight its Final (or its spends) was granted — the number `safe_weight` received.
+        let retiring = retiring.map(|amount| self.state.bond_budget_weight_or(&id, amount));
         if let Some(amount) = retiring {
             let old = self.state.retired_safe_weight;
             let new = old.checked_add(amount).ok_or(PalwStateV2Error::Overflow("retired_safe_weight"))?;
@@ -28349,6 +28378,8 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0152 DA-6 (M3): the claim's DA record retires with it, burning unrefunded exposure.
         self.da_retire_v1(id)?;
         self.write_claim(id, None);
+        // Lane BUDGET: the claim left the state; its budget row leaves once it is out of its window too.
+        self.bond_budget_forget_v1(&id);
         // ADR-0160 F-Q: the claim's audit receipts retire with it.
         if self.state.audit_status_of_v1(&id).is_some() {
             self.write_audit_receipts_v1(id, None);
@@ -29695,6 +29726,7 @@ pub fn apply_palw_transition_v7(
                     carrying_bits,
                     job_anchor: extras.own_job_anchor,
                     floor_event: PalwFloorEventSourceV1::BlockBlue,
+                    budget_block_units: crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1,
                 },
             );
             builder.room_exempt_class = None;
@@ -29738,7 +29770,9 @@ pub fn apply_palw_transition_v7(
                     | PalwStateV2Error::AuditBacklogFull { .. }
                     // ADR-0160 stage 4: lane N's level and share (past F-N a refusal for want of a unit
                     // registers the bond's demand for the class).
-                    | PalwStateV2Error::NetworkRoomExhausted { .. }),
+                    | PalwStateV2Error::NetworkRoomExhausted { .. }
+                    // Lane BUDGET (ADR-0176 D1): the bond's budget window — `apply_attempt`'s last check before its first write.
+                    | PalwStateV2Error::BondBudgetExhausted { .. }),
                 ) => {
                     builder.register_network_demand_on_v1(&refused, &envelope.attempt, ctx.daa_score);
                     merged_skips.push((ctx.block, refused.to_string()));
@@ -29835,6 +29869,7 @@ pub fn apply_palw_transition_v7(
                                     carrying_bits: merged.bits,
                                     job_anchor: merged.job_anchor,
                                     floor_event,
+                                    budget_block_units: crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1,
                                 },
                             ) {
                                 Ok(()) => {
@@ -37741,9 +37776,15 @@ fn apply_object(
                 job_identity: if builder.extras.offence_attribution_active { *job_pin } else { Hash64::default() },
                 rcore: PalwClaimRcoreV1::default(),
             };
+            // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
+            // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
+            let budget_plan = builder.plan_free_prompt_budget_v1(ctx, &claim, quanta)?;
             builder.reserve_for_claim(&claim)?;
             let fp_pwu = claim.pwu;
             builder.write_claim(*claim_id, Some(claim));
+            if let Some(plan) = budget_plan {
+                builder.commit_bond_budget_v1(ctx, *claim_id, plan)?;
+            }
             // **ADR-0145 §6: what this claim bought, so the next one is not sold it twice.**
             //
             // Written after `write_claim` because `write_claim` is also where the row is DROPPED,
@@ -38209,7 +38250,12 @@ fn apply_receipt_spend(
     // The candidate rule, if the FP lane wants one, is `fp_certified_classes` membership at this
     // block's chain point. That is a different decision with a different proof obligation and it
     // belongs to whoever owns ADR-0074/0075, not to this remediation.
-    builder.state.safe_weight = builder.state.safe_weight.checked_add(per_quantum).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
+    // **Lane BUDGET (ADR-0176 D3, design §2.6): the spend draws on its commitment's reservation** — one block and this block's carve,
+    // strict (the coinbase pays the worker share whole, so a short reservation refuses the spend), and the quantum's weight, clipped:
+    // `safe_weight` takes the grant. The receipt census below still counts the work done (it measures production, never reward).
+    let last_quantum = spent.len() as u64 + 1 >= *quanta as u64;
+    let credited = builder.bond_budget_receipt_spend_v1(ctx, &claim_id, per_quantum, last_quantum)?;
+    builder.state.safe_weight = builder.state.safe_weight.checked_add(credited).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
     let mut updated = claim.clone();
     let PalwClaimSourceV2::FreePrompt { spent: ledger, .. } = &mut updated.source else { unreachable!("matched above") };
     ledger.insert(spend.quantum_index);
@@ -40098,6 +40144,9 @@ fn attach_riders_v1(
         m::PalwCapacityLedgerKeyV1::RiderLead(*lead_id),
         Some(m::PalwCapacityLedgerRowV1::Riders { riders: n as u16, daa: lead.accepted_daa }),
     );
+    // **Lane BUDGET (design §2.1): the riders take their share of the lead's one block** — the lead's block units fall by `n·⌊U/(1+n)⌋`,
+    // which the riders' own reservations take below (`0` where the lead is unbudgeted). Atomic with the batch.
+    let rider_block_units = builder.bond_budget_share_lead_block_v1(lead_id, n as u64)?;
     let ctx_r = PalwBlockContextV2 { subsidy: s_r, ..*ctx };
     let bits = builder.extras.economic_payout.map(|fold| fold.block_bits).unwrap_or(0);
     let canonical = crate::palw_attempt_v2::PALW_ATTEMPT_V2_TRACE_CHUNKS;
@@ -40146,6 +40195,7 @@ fn attach_riders_v1(
                 // neither BLUE nor RED (the coordinator's decision of 2026-10-03: the machine shields REAL attempt BLOCKS from the floor
                 // blocks that colour against them, and a rider is in no colouring).
                 floor_event: PalwFloorEventSourceV1::Rider,
+                budget_block_units: rider_block_units,
             },
         )
         .map_err(|refused| PalwStateV2Error::CapacityRiders(format!("rider {index}: {refused}")))?;
@@ -40426,6 +40476,17 @@ fn apply_attempt(
     // only an attempt every other rule admits is refused for want of a network unit (and registers its
     // bond's demand: step 4 skips a refused own attempt, 4b a merged one); before any write.
     builder.check_network_room_v1(&claim.bond, &claim, ctx.daa_score)?;
+    // **Lane BUDGET (ADR-0176 D1/D3): the producer bond's budget** — the claim's reservation (Q 1, B its block or its rider share, R its
+    // escrow, F its Final contribution) against the bond's window: the LAST check before any write, so step 4 skips a refused own attempt
+    // (its carve withheld as a skipped attempt's, never minted) and 4b a merged one; the claim's immature weight is held within the F it
+    // reserves. `None` below `palw_bond_budget_v1`: nothing read, nothing written.
+    let budget_plan = builder.plan_attempt_budget_v1(ctx, &claim, &attempt.artifact_root, origin.rider, origin.budget_block_units)?;
+    let claim = match &budget_plan {
+        Some(plan) => {
+            PalwClaimStateV2 { immature_contribution: claim.immature_contribution.min(plan.reservation().final_weight), ..claim }
+        }
+        None => claim,
+    };
     builder.reserve_for_claim(&claim)?;
     // **ADR-0165: a REAL attempt BLOCK's attempt (any class but the base) FULLY ACCEPTED is one event of the floor state
     // machine** — every check above passed and the claim is written below, inside the checkpoint a merged attempt's refusal
@@ -40440,6 +40501,10 @@ fn apply_attempt(
         builder.note_real_accepted(ctx.daa_score, blue);
     }
     builder.write_claim(claim_id, Some(claim));
+    // Lane BUDGET: the reservation planned above, and the claim's block consumed at once (the block exists).
+    if let Some(plan) = budget_plan {
+        builder.commit_bond_budget_v1(ctx, claim_id, plan)?;
+    }
     if let Some(read) = issuance {
         builder.write_issuance_bucket_v1(issuance_bond, Some(read.spent_v1(ctx.daa_score)));
     }

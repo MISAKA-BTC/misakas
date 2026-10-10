@@ -151,7 +151,9 @@ A bond-level shortfall **refuses** the claim, by path:
 * rider: the batch is refused (`CapacityRiders`);
 * free-prompt commitment: refused by name.
 
-The check runs before the path's first write, so a skip restores nothing. A model-level shortfall only **clips `R`**. The claim
+The check runs before the path's first write, so a skip restores nothing. A skipped own attempt's carve is withheld only past
+`palw_audit_2026_09_23` (`palw_v2_skipped_own_attempt_carve`), so validation requires that fence at or below `palw_bond_budget_v1`:
+below it, a refused attempt's block would be paid its whole worker carve. A model-level shortfall only **clips `R`**. The claim
 is admitted with the smaller reward reservation, and its weight and count are untouched (§3.5).
 
 ### 2.6 Consumption (payout, maturity, Final, reward blocks)

@@ -16602,6 +16602,15 @@ impl VirtualStateProcessor {
                 envelope.spend.claim_id, claim.execution_root
             ));
         }
+        // **Lane BUDGET (ADR-0176 D3, hook H-5): the fold's strict budget draw**, asked here against the PARENT state, so a receipt block
+        // whose commitment's reservation cannot pay it (one block, this block's carve) is refused for the reason the fold would refuse
+        // it. `true` for every unbudgeted claim — every claim of every network that never armed `palw_bond_budget_v1` — and the carve
+        // is not even read then.
+        if !state.bond_budget_spend_fits_v1(&envelope.spend.claim_id, || {
+            state_params.worker_carve_at(point.subsidy, self.palw_escrow_for_carrier_at(point.block, point.daa_score, point.daa_score))
+        }) {
+            return Err(format!("claim {}'s bond budget cannot pay this receipt block (ADR-0176)", envelope.spend.claim_id));
+        }
         let slot = fp_draw_slot_v3(final_daa, freeprompt.receipt_maturity_daa())
             .ok_or_else(|| "the draw slot overflows the DAA space".to_string())?;
         // Derived from the block's OWN selected parent, so the walk is the candidate's and the
