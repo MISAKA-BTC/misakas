@@ -47,10 +47,15 @@ Run r1: integration `89ffb1fb7` (kaspad sha256 `6e9b1936…`, misaka `211e708d�
 `5048b7880` (calibrated_context) + `fa13939b9` (offline gate height), sha256 `e789d9c4…`), genesis `76a7e10d…`, params `f2da0947…`,
 Apple M1 Max 32 GiB, macOS, shared with other agents (load 30–370).
 
+Run r2 (the 9B with `gdn_core_wide`, 2026-10-11): integration `9fbdb3f83` (the VSTALL fix; the 10-10 stalls were a self-deadlock in older builds) merged into
+`onboard/h1-hf-closed-loop`; kaspad `b9fb6773…`, misaka `9d3be910…`, palw-class `bdc76da0…` built from this branch; genesis `7944dd26…`, params `34ca6774…`; the
+devnet ran DAA 2 -> 121 with no stall (about 5 h, nine nodes, idle but for the registrations) and was stopped with SIGINT after the observe stage. L5/L6 are not
+reachable: the fences are dormant and the chain holds no G14 / on-chain conformance state; nothing here is armed.
+
 ## 3. Model matrix
 
 Evidence directories are under `docs/evidence/hf-onboarding/`. Fit = the pack builder's measurement against the float32 Hugging Face
-reference (tolerance: slope [0.97, 1.03], corr >= 0.99, top-1 >= 0.8, mean KL <= 0.1). All L4 rows: pack `verify --strict --rebuild` VERIFIED
+reference (tolerance: slope [0.97, 1.03], corr >= 0.99, top-1 >= 0.8, mean KL <= 0.1). All L4 rows (the five original ones below and the 9B row): pack `verify --strict --rebuild` VERIFIED
 with nothing skipped, registration folded as `Candidate`, A/B/C agree on class row + registry row + `classes` state proof, a restarted node and a
 fresh IBD node agree, a 1-bit-modified artifact is refused, `SYNTHETIC_BEACON_CONFORMANCE_PASS` (synthetic facts, UNAPPROVED test policy).
 None is eligible (L5) or produced useful work (L6): the chain has no G14 / on-chain conformance state for any of them.
@@ -62,15 +67,16 @@ None is eligible (L5) or produced useful work (L6): the chain has no G14 / on-ch
 | HuggingFaceTB/SmolLM2-1.7B-Instruct @31b70e2e | text, 512 | **L4** | `20261008-smollm2-1.7b-r1` | 0.0791 / 0.938 | closest to the KL limit; the reorg probe's result is routed to the fork-choice lane (internal) |
 | Qwen/Qwen3.5-0.8B @2fc06364 | text, 512 (gated-delta hybrid) | **L4** | `20261008-qwen35-0.8b-r2` | 0.0120 / 1.000 | |
 | zai-org/glm-edge-1.5b-chat @7b201d3c | text, 512 | **L4** | `20261009-glm-edge-1.5b-r1` | 0.0016 / 1.000 | artifact 1,642,067,712 B, VERIFIED with `--rebuild` |
-| huihui-ai/Huihui-Qwen3.5-9B-abliterated @05b9e7c9, 8k text | text decoder only (vision tower, MTP head not converted), 8,192 | **L1** | `20261008-huihui-qwen35-9b-r1`, `20261010-huihui-qwen35-9b-fit-diagnosis` | **0.268 / 0.688: refused** | the real 8k build ran to the end (calibration 1 x 8,192, conversion 9,649 MiB) and the fit gate refused it; four-layer diagnosis in the evidence; no artifact, nothing registered |
+| huihui-ai/Huihui-Qwen3.5-9B-abliterated @05b9e7c9, 8k text | text decoder only (vision tower, MTP head not converted), 8,192 | **L4** (with `gdn_core_wide`; **L1** and refused without it) | `20261011-huihui-qwen35-9b-r2` (L4); `20261008-huihui-qwen35-9b-r1` and `20261010-huihui-qwen35-9b-fit-diagnosis` (the refusal and its diagnosis) | default grid 0.268 / 0.688 (refused); **with `gdn_core_wide` 0.00388 / 0.969** (slope 0.9985, corr 0.99933) | the 8k statistics of the first run reused (pinned `--stats-in` + their sequences); artifact 10,118,057,600 B, `pack verify --strict --rebuild` VERIFIED; registered `Candidate` as class `8e90e27fea9e22e0` (root `96415a29ca74f93c`), A/B/C agree, restart and fresh-IBD agree, a 1-bit-modified artifact refused by `pack verify` (exit 2) and by the registration gate (exit 34); synthetic-beacon conformance only; preflight still says `SEAT_MEMORY_SHORT` (mine blocked: no seat tier holds the class) |
 | isichan-ai/Mitsuba_and_HiMitsuba-27B-GGUF (PTQ1_0) @33e63d45 | text decoder only, 512 | **L1** | `20261009-mitsuba-27b-ptq1-r2` | not run | convert ok, register ok from headers; L2 = disk gap (29,098,688,419 B artifact; peak 60-90 GB); the strict verify also needs a float reference, and no Hugging Face checkpoint of these weights was downloaded (a reference computed from the GGUF itself would be the lowering grading itself) |
 | Qwen/Qwen3-0.6B, deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B, HuggingFaceTB/SmolVLM-256M-Instruct | header-only | L1 | `20261009-qwen3-0.6b-l1`, `20261009-r1-distill-qwen-1.5b-l1`, `20261009-smolvlm-256m-l1` | not run | SmolVLM is text-class (partial-task) only |
 | Qwen/Qwen1.5-MoE-A2.7B-Chat, deepseek-ai/DeepSeek-V2-Lite-Chat | header-only | L1 | `20261009-qwen15-moe-a2.7b-l1`, `20261009-deepseek-v2-lite-l1` | not run | convert + register ok; `SEAT_MEMORY_SHORT` (no seat tier holds the class) |
+| zai-org/GLM-5 @c183ef8c, zai-org/GLM-5.3 @aca966e4 | header-only (1.51 TB / 0.76 TB) | L0 | `20261011-glm-5-l1`, `20261011-glm-5.3-l1` | not run | GLM-5: `COURT_COST_OVER_CEILING` + `SEAT_MEMORY_SHORT` (the architecture lowers, the class is over the court's ceiling); GLM-5.3: `ARCH_REFUSED` (cross-layer index sharing, `ATTN_TOKEN_INDEXER_SHARED_V1`, refused by name) |
 | Qwen4-exp (in-repo synthetic fixture) | header-only | L1 | `20261009-qwen4-exp-fixture-l1` | not run | synthetic weights, 64-id tokenizer |
 | google/flan-t5-small, DeepSeek-V4 (in-repo fixture) | header-only | L0 | `20261009-flan-t5-small-l1`, `20261009-deepseek-v4-fixture-l1` | not run | `CLOSE_SIZE_OVER_CAP` (+ `COURT_COST_OVER_CEILING`, `QUANT_NO_DESCRIPTOR` for V4) |
 
-Three columns, never merged: **synthetic-beacon conformance** (the five L4 rows only, synthetic facts), **dormant registration**
-(registry `Candidate`; the same five rows), **full-task Active/Final** (none).
+Three columns, never merged: **synthetic-beacon conformance** (the six L4 rows only, synthetic facts), **dormant registration**
+(registry `Candidate`; the same six rows), **full-task Active/Final** (none).
 
 ## 4. Failures routed
 
@@ -78,10 +84,11 @@ From `failures.json` of each run (category, code, owner):
 
 | code | category | owner | seen at |
 |---|---|---|---|
-| `HF_FIT_OUT_OF_TOLERANCE` | CONFORMANCE_FAILED | A (lowering quality) / H1 (calibration policy) | Huihui-9B 8k |
+| `HF_FIT_OUT_OF_TOLERANCE` | CONFORMANCE_FAILED | A (lowering quality) / H1 (calibration policy) | Huihui-9B 8k (cause found: the gated-delta core's grid under the per-head norm; resolved by `LowerOpts::gdn_core_wide`, a pinned registrant option, see `20261010-huihui-qwen35-9b-fit-diagnosis`) |
 | `ARTIFACT_DISK_GAP` | TEST_INFRASTRUCTURE_FAILED | H1 (disk) | Mitsuba 27B |
-| `SEAT_MEMORY_SHORT` | LAYOUT_OR_RESOURCE_REFUSED | C | 9B, Mitsuba, Qwen1.5-MoE, DeepSeek-V2-Lite |
-| `CLOSE_SIZE_OVER_CAP`, `COURT_COST_OVER_CEILING` | LAYOUT_OR_RESOURCE_REFUSED | C | flan-t5-small, DeepSeek-V4 fixture |
+| `SEAT_MEMORY_SHORT` | LAYOUT_OR_RESOURCE_REFUSED | C | 9B, Mitsuba, Qwen1.5-MoE, DeepSeek-V2-Lite, GLM-5 |
+| `CLOSE_SIZE_OVER_CAP`, `COURT_COST_OVER_CEILING` | LAYOUT_OR_RESOURCE_REFUSED | C | flan-t5-small, DeepSeek-V4 fixture, GLM-5 |
+| `ARCH_REFUSED` (`ATTN_TOKEN_INDEXER_SHARED_V1`) | FRONTEND_REQUIRED | A | GLM-5.3 |
 | `QUANT_NO_DESCRIPTOR` | FRONTEND_REQUIRED | A | DeepSeek-V4 fixture |
 | `NOT_RUN_PIPELINE_ADMISSION` | TASK_UNSUPPORTED | A -> B | flan-t5-small |
 | `DUPLICATE_DROPPED_FEE_SPENT`, `E-MODEL-UNKNOWN`, `NODELESS_BOND_REGISTRATION_ABSENT` | client / registration tooling | C1 / Lead | Qwen2.5-0.5B |

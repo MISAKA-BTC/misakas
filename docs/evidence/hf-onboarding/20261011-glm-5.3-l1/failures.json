@@ -1,1 +1,20 @@
-[]
+[
+ {
+  "schema": "misaka.h1.failure.v1",
+  "recorded_at": "2026-10-11T03:56:23+0900",
+  "model": "glm-5.3",
+  "stage": "preflight",
+  "category": "FRONTEND_REQUIRED",
+  "code": "ARCH_REFUSED",
+  "command": "misaka model preflight hf://zai-org/GLM-5.3@aca966e4e02791568aa6a4ced368624b3d897f42 --depth shape --max-context 512",
+  "expected": "convert/register/mine ok at the declared context",
+  "observed": "ARCH_REFUSED [convert]  \u2014 the generic frontend refuses this architecture\n--- tail ---\nARCH_REFUSED [convert]  \u2014 the generic frontend refuses this architecture",
+  "model_revision": "aca966e4e02791568aa6a4ced368624b3d897f42",
+  "integration_sha": "fb7a36d598e3d90e3afa8d3df0f2112380a1f333",
+  "failing_fixture": null,
+  "owner": "A",
+  "security_consequence": "",
+  "reproduction": "RUN=20261011-glm-5.3-l1 bash tests/hf-onboarding/onboard.sh preflight glm-5.3",
+  "log": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261011-glm-5.3-l1/preflight/blocker-1.txt"
+ }
+]
