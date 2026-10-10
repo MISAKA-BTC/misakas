@@ -12989,6 +12989,7 @@ impl PalwPanelService {
                 network_domain,
                 bond_key,
                 seat_replays.has_room(false),
+                &materials,
                 &mut court_pending,
                 &mut court_due,
                 &mut court_moved,
@@ -18730,9 +18731,16 @@ mod accepted_objects_walk_tests {
         parents: HashMap<BlockHash, BlockHash>,
         acceptance: HashMap<BlockHash, Arc<AcceptanceData>>,
         blocks: HashMap<BlockHash, Block>,
+        targets: HashMap<Hash64, kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1>,
     }
 
     impl kaspa_consensus_core::api::ConsensusApi for Chain {
+        fn palw_fraud_filer_target_v1(
+            &self,
+            claim: Hash64,
+        ) -> Option<kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1> {
+            self.targets.get(&claim).cloned()
+        }
         fn get_sink(&self) -> BlockHash {
             self.sink
         }
@@ -18815,6 +18823,104 @@ mod accepted_objects_walk_tests {
             append(&mut chain, n, 100 + n / 4, n.saturating_sub(1).max(1));
         }
         chain
+    }
+
+    #[test]
+    fn the_fp_bootstrap_reads_only_the_recorded_accepted_commitment_and_pins_every_job_field() {
+        use super::palw_fraud_filer::{input::tests::payload, palw_fraud_filer_fp_payload_v1 as read};
+        use kaspa_consensus_core::palw_offence_attribution_v1::{PalwClaimSourceKindV1, PalwOffenceTargetV1};
+        let payload = payload();
+        let c = &payload.commitment;
+        let claim = payload.claim_id();
+        let target = PalwOffenceTargetV1 {
+            claim_id: claim,
+            class_id: c.job.class_id,
+            artifact_root: hash(333),
+            executor_bond: PalwBondKeyV2(c.job.executor_bond),
+            execution_root: c.execution_root,
+            lane: Some(PalwClaimSourceKindV1::FreePrompt),
+            segment_count: Some(2),
+            phase: None,
+            job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(c),
+            trace_root: c.trace_root,
+            output_root: c.output_root,
+        };
+        let mut candidate = kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1 {
+            claim_id: claim,
+            producer: target.executor_bond,
+            accepted_daa: 101,
+            seat: false,
+            job: kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaJobV1 {
+                accepted_block: hash(2),
+                class_id: c.job.class_id,
+                artifact_root: Some(target.artifact_root),
+                execution_root: c.execution_root,
+                trace_root: c.trace_root,
+                output_root: c.output_root,
+                work_leaves: c.work_leaves,
+                free_prompt: true,
+                held_to_final: false,
+            },
+        };
+        let commitment_tx = |p: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3| {
+            Transaction::new(
+                TX_VERSION,
+                vec![],
+                vec![],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+                0,
+                borsh::to_vec(p).unwrap(),
+            )
+        };
+        let mut foreign = payload.clone();
+        foreign.commitment.job.job_nonce[0] ^= 1;
+        let txs = vec![commitment_tx(&payload), commitment_tx(&foreign), commitment_tx(&payload)];
+        let mut chain = Chain::default();
+        chain.blocks.insert(hash(1), Block::new(Header::from_precomputed_hash(hash(1), vec![]), txs.clone()));
+        chain.targets.insert(claim, target.clone());
+        let accept = |indices: &[usize]| {
+            Arc::new(vec![MergesetBlockAcceptanceData {
+                block_hash: hash(1),
+                accepted_transactions: indices
+                    .iter()
+                    .map(|i| AcceptedTxEntry { transaction_id: txs[*i].id(), index_within_block: *i as u32 })
+                    .collect(),
+            }])
+        };
+        chain.acceptance.insert(hash(2), accept(&[1]));
+        assert!(
+            read(&chain, &candidate, c.job.network_domain).unwrap_err().contains("not present"),
+            "unaccepted exact decoys are ignored"
+        );
+        chain.acceptance.insert(hash(2), accept(&[1, 2]));
+        assert_eq!(
+            read(&chain, &candidate, c.job.network_domain).unwrap().claim_id(),
+            claim,
+            "reads an accepted mergeset block, not the fold point's txs"
+        );
+        assert!(read(&chain, &candidate, hash(999)).is_err());
+        candidate.job.work_leaves += 1;
+        assert!(read(&chain, &candidate, c.job.network_domain).is_err());
+        candidate.job.work_leaves -= 1;
+        chain.targets.get_mut(&claim).unwrap().job_identity = hash(987);
+        assert!(read(&chain, &candidate, c.job.network_domain).is_err());
+        chain.targets.insert(claim, target.clone());
+        chain.targets.get_mut(&claim).unwrap().lane = Some(PalwClaimSourceKindV1::Attempt);
+        assert!(read(&chain, &candidate, c.job.network_domain).is_err());
+        chain.targets.insert(claim, target.clone());
+        let saved = chain.acceptance.remove(&hash(2)).unwrap();
+        assert!(read(&chain, &candidate, c.job.network_domain).unwrap_err().contains("acceptance"));
+        chain.acceptance.insert(hash(2), saved);
+        let saved = chain.blocks.remove(&hash(1)).unwrap();
+        assert!(read(&chain, &candidate, c.job.network_domain).unwrap_err().contains("block"));
+        chain.blocks.insert(hash(1), saved);
+        let mut bad = (*accept(&[2])).clone();
+        bad[0].accepted_transactions[0].transaction_id = hash(888);
+        chain.acceptance.insert(hash(2), Arc::new(bad));
+        assert!(read(&chain, &candidate, c.job.network_domain).unwrap_err().contains("transaction id"));
+        chain.acceptance.insert(hash(2), accept(&[2]));
+        assert_eq!(read(&chain, &candidate, c.job.network_domain).unwrap().claim_id(), claim);
     }
 
     #[test]

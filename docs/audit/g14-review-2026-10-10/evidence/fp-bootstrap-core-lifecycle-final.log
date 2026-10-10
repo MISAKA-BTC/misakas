@@ -1,0 +1,82 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/core)
+warning: unused import: `crate::palw_panel_v2::PalwReceiptVerdictV2 as Verdict`
+  --> consensus/core/src/palw_state_v2/tests/mesh_fold_v1.rs:10:5
+   |
+10 | use crate::palw_panel_v2::PalwReceiptVerdictV2 as Verdict;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_pipeline_da_fold_v1.rs:472:14
+    |
+472 |         let (mut run, claim_id) = claimed(&binding, false);
+    |              ----^^^
+    |              |
+    |              help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `seed`
+   --> consensus/core/src/palw_improve_state_v1.rs:960:29
+    |
+960 |     pub(crate) fn result_v1(seed: u8) -> PalwEvalResultV1 {
+    |                             ^^^^ help: if this is intentional, prefix it with an underscore: `_seed`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: function `bound_opened` is never used
+    --> consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs:1176:8
+     |
+1176 |     fn bound_opened() -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+     |        ^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspa-consensus-core` (lib test) generated 5 warnings (run `cargo fix --lib -p kaspa-consensus-core --tests` to apply 4 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 20s
+     Running unittests src/lib.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-f189e885ba5285ec)
+
+running 31 tests
+test palw_lifecycle_objects_v2::tests::a2u::every_tag_row_is_inside_its_allocation ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_int12_kind_list_is_frozen ... ok
+test palw_lifecycle_objects_v2::tests::a2u::a_not_in_force_kind_is_undecodable_in_the_live_builds_words ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_appended_form_has_a_guarded_owner_arm ... ok
+test palw_lifecycle_objects_v2::tests::a_bond_registration_cannot_declare_collateral_it_did_not_lock ... ok
+test palw_lifecycle_objects_v2::tests::a_bond_registration_without_a_signature_does_not_ride ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_kernel_inner_kind_has_exactly_one_row ... ok
+test palw_lifecycle_objects_v2::tests::a_bond_registration_that_locks_its_collateral_rides ... ok
+test palw_lifecycle_objects_v2::tests::a_malformed_carrier_is_skipped_with_a_reason ... ok
+test palw_lifecycle_objects_v2::tests::a_lifecycle_object_rides_a_transaction_and_arrives_in_acceptance_order ... ok
+test palw_lifecycle_objects_v2::tests::admission_accepts_exactly_what_the_walk_extracts ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_new_kind_table_is_the_owner_function ... ok
+test palw_lifecycle_objects_v2::tests::an_unsigned_reporter_commitment_may_not_ride ... ok
+test palw_lifecycle_objects_v2::tests::an_historical_full_v2_possession_proof_still_rides_and_reaches_the_fold ... ok
+test palw_lifecycle_objects_v2::tests::a_class_registration_rides_only_when_it_carries_what_checks_it ... ok
+test palw_lifecycle_objects_v2::tests::certification_objects_ride_and_extract_unchanged ... ok
+test palw_lifecycle_objects_v2::tests::naming_the_carrier_by_id_is_a_fixed_point_no_registrant_can_solve ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_kind_in_the_enum_has_exactly_one_owner ... ok
+test palw_lifecycle_objects_v2::tests::the_seed_testnet_11_carried_at_daa_1945_still_decodes ... ok
+test palw_lifecycle_objects_v2::tests::the_band_id_is_what_selects_this_walk ... ok
+test palw_lifecycle_objects_v2::tests::objects_that_must_not_ride_are_skipped_with_their_own_reason ... ok
+test palw_lifecycle_objects_v2::tests::a2u::below_its_fence_a_new_kind_is_judged_as_the_live_build_judges_undecodable_bytes ... ok
+test palw_lifecycle_objects_v2::tests::the_two_unauthenticated_objects_may_not_ride ... ok
+test palw_lifecycle_objects_v2::tests::consensus_object_discriminants_are_the_ones_the_chain_carries ... ok
+test palw_lifecycle_objects_v2::tests::derived_artifacts_ride_signed_and_shaped_and_extract_unchanged ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_fence_list_is_the_enum ... ok
+test palw_lifecycle_objects_v2::tests::a2u::an_owning_fence_needs_the_audit_fence_declared ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_int12_kinds_refused_past_a_fence_are_the_rows ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_int12_wire_type_is_unchanged_or_classified ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 3582 filtered out; finished in 0.25s
+

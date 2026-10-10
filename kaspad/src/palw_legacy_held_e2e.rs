@@ -166,6 +166,17 @@ fn rc_licensed_at_header(
     artifact_root: Hash64,
     job_anchor: Option<Hash64>,
 ) -> (PalwChainStateV2, Hash64) {
+    rc_licensed_job(d, canonical, profile, artifact_root, job_anchor, None)
+}
+
+fn rc_licensed_job(
+    d: &Produced,
+    canonical: &PalwJobContextV2,
+    profile: &PalwShapeProfileV3,
+    artifact_root: Hash64,
+    job_anchor: Option<Hash64>,
+    fp_payload: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3>,
+) -> (PalwChainStateV2, Hash64) {
     let class_id = profile.shape_profile_id();
     let bond = |n: u64| PalwConsensusObjectV2::BondRegistered {
         bond: bond_key(n),
@@ -232,8 +243,43 @@ fn rc_licensed_at_header(
         },
         signature: vec![0; 8],
     };
-    let claim = attempt_id_v2(&env.attempt);
-    let s = if let Some(anchor) = job_anchor {
+    let claim = fp_payload.map_or_else(|| attempt_id_v2(&env.attempt), |p| p.claim_id());
+    let s = if let Some(payload) = fp_payload {
+        let freeprompt = kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3::new(
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+            8,
+            64,
+            2048,
+            128,
+            600,
+            600,
+            1,
+        )
+        .unwrap();
+        let tx = kaspa_consensus_core::tx::Transaction::new(
+            kaspa_consensus_core::constants::TX_VERSION,
+            vec![],
+            vec![],
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+            0,
+            borsh::to_vec(payload).unwrap(),
+        );
+        let extracted = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_under_ruleset_v3(
+            &[tx],
+            h64(999),
+            &freeprompt,
+            point(101).block,
+            false,
+            LADDER,
+            true,
+            d.backend.prompt_ids_form(),
+            |_, _, _, _| true,
+        );
+        assert!(extracted.skipped.is_empty(), "FP extraction: {:?}", extracted.skipped);
+        assert_eq!(extracted.objects.len(), 1);
+        rc_step(&s, 101, &[extracted.objects[0].object.clone()]).expect("the actual FP claim fold")
+    } else if let Some(anchor) = job_anchor {
         // The older localizer fixtures have no header. This identity fixture threads the real v7 fold's header inputs,
         // rather than editing a claim's recorded identity after its acceptance.
         let p = rc_params();
@@ -959,6 +1005,175 @@ async fn lg14b_a_lie_in_one_fused_tile_is_localized_and_convicted_by_a_fresh_out
             )
         )
     );
+}
+
+/// An actual FP commitment/fold, all three colluding Valid receipts, and the production own-replay helper on a fresh model.
+/// The verifier receives only the public payload and DA answers; it never opens the producer's capture.
+#[tokio::test(flavor = "multi_thread")]
+async fn lg14b_public_fp_bootstrap_own_replay_localizes_and_convicts_after_colluding_valid() {
+    use crate::palw_panel::palw_fraud_filer::{
+        PalwFraudFilerCaseV1, PalwFraudFilerVerdictV1, palw_fraud_filer_execute_v1, palw_fraud_filer_fp_input_v1,
+    };
+    use kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3;
+    use kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3;
+    let f = Fixture::new(false);
+    let pick = |_: &PalwJobContextV2| 0;
+    let liar = produce_at(&f.artifact, &f.profile, Some(&pick));
+    let prompt: Vec<usize> = liar.ids.iter().map(|id| *id as usize).collect();
+    let producer = liar
+        .backend
+        .execute_free_prompt_with_drill_fault_v2(
+            &liar.fp_job,
+            &prompt,
+            kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1::Leaf { leaf: liar.leaf },
+        )
+        .unwrap();
+    let payload = PalwFpCommitmentTxPayloadV3 {
+        version: liar.fp_job.version,
+        commitment: palw_fp_commitment_from_context_v3(&liar.fp_job, &liar.ctx, &producer, 999_999).unwrap(),
+        prompt_token_ids: liar.ids.clone(),
+        signature: vec![0x6B; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+    };
+    assert_eq!(payload.commitment.execution_root, liar.execution_root);
+    for (after_final, withhold) in [(false, false), (true, false), (true, true)] {
+        let (s, claim) = rc_licensed_job(&liar, &f.canonical, &f.profile, f.root, None, Some(&payload));
+        let mut w = World { s, daa: 104, chain: vec![] };
+        if after_final {
+            for _ in 0..2_000 {
+                if matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Final { .. }) {
+                    break;
+                }
+                w.quiet();
+            }
+            assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Final { .. }));
+        }
+        if after_final {
+            let p = rc_params();
+            assert!(w.s.vesting_row(&claim).is_none(), "FP has no reward vesting row");
+            assert!(w.s.palw_fraud_filer_candidates_v1(&p, &bond_key(OUTSIDER), w.daa).iter().any(|c| c.claim_id == claim));
+            let expiry = w.s.panel_liability(&claim).unwrap().expiry_daa;
+            assert!(!w.s.palw_fraud_filer_candidates_v1(&p, &bond_key(OUTSIDER), expiry).iter().any(|c| c.claim_id == claim));
+            assert!(
+                kaspa_consensus_core::palw_state_v2::palw_da_accusation_admissible_v2(
+                    &w.s,
+                    &p,
+                    &rc_extras(true),
+                    &claim,
+                    &bond_key(OUTSIDER),
+                    expiry
+                )
+                .is_err()
+            );
+            let view = w.s.palw_legacy_dispute_view_v1(&p, &claim).unwrap();
+            let reservation =
+                kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_reservation_v1(&view, bond_key(OUTSIDER));
+            assert!(
+                kaspa_consensus_core::palw_state_v2::palw_legacy_dispute_reservation_check_v1(
+                    &w.s,
+                    &p,
+                    &rc_extras(true),
+                    &reservation,
+                    expiry,
+                )
+                .is_err()
+            );
+            let dormant = p.clone().with_legacy_public_filer_from_daa(None);
+            assert!(
+                kaspa_consensus_core::palw_state_v2::palw_legacy_dispute_reservation_check_v1(
+                    &w.s,
+                    &dormant,
+                    &rc_extras(true),
+                    &reservation,
+                    w.daa,
+                )
+                .is_err()
+            );
+            assert!(w.s.palw_fraud_filer_candidates_v1(&dormant, &bond_key(OUTSIDER), w.daa).is_empty());
+            assert!(
+                kaspa_consensus_core::palw_state_v2::palw_da_accusation_admissible_v2(
+                    &w.s,
+                    &dormant,
+                    &rc_extras(true),
+                    &claim,
+                    &bond_key(OUTSIDER),
+                    w.daa
+                )
+                .is_err()
+            );
+        }
+        if after_final && !withhold {
+            // Begin just inside the original liability window; every subsequent DA answer crosses that old expiry.
+            let expiry = w.s.panel_liability(&claim).unwrap().expiry_daa;
+            for _ in 0..2_000 {
+                if w.daa >= expiry - 1 {
+                    break;
+                }
+                w.quiet();
+            }
+            assert_eq!(w.daa, expiry - 1);
+        }
+        let target = kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_target_v1(&w.s, &claim).unwrap();
+        assert_eq!(target.job_identity, kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&payload.commitment));
+        assert_eq!(target.lane, Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt));
+        let backend = f.seat();
+        let form = backend.prompt_ids_form();
+        let input = palw_fraud_filer_fp_input_v1(&backend, &payload, form, &[]).unwrap();
+        let ceiling = backend.fp_job_context_v1(&input.job).unwrap();
+        let run = tokio::task::spawn_blocking(move || {
+            palw_fraud_filer_execute_v1(Box::new(backend), ceiling, input.prompt_ids, form, None, Some(input.job), None)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_ne!(run.execution_root, target.execution_root);
+        assert!(run.legacy.is_some());
+        let mut case = PalwFraudFilerCaseV1::new(kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1 {
+            claim_id: claim,
+            producer: target.executor_bond,
+            accepted_daa: 101,
+            seat: false,
+            job: kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaJobV1 {
+                accepted_block: point(101).block,
+                class_id: target.class_id,
+                artifact_root: Some(target.artifact_root),
+                execution_root: target.execution_root,
+                trace_root: target.trace_root,
+                output_root: target.output_root,
+                work_leaves: payload.commitment.work_leaves,
+                free_prompt: true,
+                held_to_final: false,
+            },
+        });
+        case.verdict = PalwFraudFilerVerdictV1::Mismatch(Arc::new(run));
+        let before = bonds_collateral(&w.s);
+        if withhold {
+            service_filer_drive(&mut w, &liar, &mut case, |_| true).expect_err("the required public frontier is withheld");
+            for _ in 0..2_000 {
+                if matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { .. }) {
+                    break;
+                }
+                w.quiet();
+            }
+            assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
+            assert!(bonds_collateral(&w.s).0 < before.0);
+            assert_eq!(bonds_collateral(&w.s).1, before.1);
+            continue;
+        }
+        let leaf = service_filer_localize(&mut w, &liar, &mut case);
+        if after_final {
+            let view = w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).unwrap();
+            assert!(
+                w.s.panel_liability(&claim).unwrap().expiry_daa >= view.hard_deadline_daa,
+                "the active pursuit holds FP liability"
+            );
+        }
+        assert_eq!(leaf, liar.leaf);
+        let terminal = service_filer_terminal(&f, &liar, &case, leaf);
+        w.block(vec![terminal]).expect("the production FP terminal convicts");
+        assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
+        assert!(bonds_collateral(&w.s).0 < before.0);
+        assert_eq!(bonds_collateral(&w.s).1, before.1);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

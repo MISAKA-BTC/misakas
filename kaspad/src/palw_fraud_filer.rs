@@ -40,6 +40,9 @@
 
 use super::*;
 use std::collections::BTreeSet;
+#[path = "palw_fraud_filer_input.rs"]
+pub(super) mod input;
+pub(super) use input::{palw_fraud_filer_fp_input_v1, palw_fraud_filer_fp_payload_v1};
 
 use super::reporter_filer::{
     PalwConvictionDoorV1, PalwConvictionFilingV1, PalwFileOutcomeV1, PalwFilingOriginV1, PalwReporterFilerV1,
@@ -58,6 +61,7 @@ use kaspa_consensus_core::palw_legacy_public_filer_v1::{
 };
 use kaspa_consensus_core::palw_state_v2::{PalwFraudFilerCandidateV1, PalwLegacyDisputeViewV1};
 use kaspa_consensus_core::palw_step_leg::PalwStepBindingV2;
+use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_core::{debug, error};
 
 /// The court queue's round of this filer's reservation of a claim — a round no other lane keys by (P2-6 `u32::MAX`, the reporter
@@ -259,6 +263,7 @@ pub(super) struct PalwFraudFilerCaseV1 {
     pub(super) witness: Option<Box<PalwCommittedKernelWitnessV2>>,
     pub(super) legacy_wanted: Option<PalwLegacyHeldUnitV2>,
     pub(super) runs: u8,
+    input_retry_at: u64,
     /// The last item sent, when, and how many times.
     pub(super) sent: Option<(PalwFraudFilerSentV1, u64, u8)>,
     /// Reporter-door handoffs of the claim's direct proof, bounded like the replay lane's.
@@ -277,6 +282,7 @@ impl PalwFraudFilerCaseV1 {
             witness: None,
             legacy_wanted: None,
             runs: 0,
+            input_retry_at: 0,
             sent: None,
             direct_handed: 0,
             direct_asked_at: None,
@@ -453,13 +459,20 @@ impl PalwFraudFilerBookV1 {
 
     /// **The next claim to replay**: none while one runs or the held runs are at their cap; else the oldest pending case this bond
     /// files as a non-seat (not a seat of its panel), oldest acceptance first.
+    #[cfg(test)]
     pub(super) fn next_replay(&self) -> Option<Hash64> {
+        self.next_replay_at(0)
+    }
+
+    fn next_replay_at(&self, current_daa: u64) -> Option<Hash64> {
         if self.running.is_some() || self.held_runs() >= PALW_FRAUD_FILER_HELD_RUNS_V1 {
             return None;
         }
         self.cases
             .values()
-            .filter(|case| matches!(case.verdict, PalwFraudFilerVerdictV1::Pending) && !case.candidate.seat)
+            .filter(|case| {
+                matches!(case.verdict, PalwFraudFilerVerdictV1::Pending) && !case.candidate.seat && current_daa >= case.input_retry_at
+            })
             .min_by_key(|case| (case.candidate.accepted_daa, case.candidate.claim_id))
             .map(|case| case.candidate.claim_id)
     }
@@ -820,6 +833,61 @@ pub(super) fn palw_fraud_filer_sign_terminal_v2(
     Ok(object)
 }
 
+/// Run only the verifier's own backend. FP execution uses the job's controls and determines its executed context itself.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn palw_fraud_filer_execute_v1(
+    backend: Box<dyn PalwExecutionBackendV1>,
+    mut ctx: PalwJobContextV2,
+    prompt32: Vec<u32>,
+    prompt_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    attempt_draw: Option<bool>,
+    fp_job: Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
+    reserved: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
+) -> Result<PalwFraudFilerRunV1, String> {
+    let prompt: Vec<usize> = prompt32.iter().map(|id| *id as usize).collect();
+    let outcome = if let Some(job) = fp_job.as_ref() {
+        let run = backend.execute_free_prompt(job, &prompt)?;
+        ctx = backend
+            .fp_job_context_for_executed_v1(job, run.facts.decode_tokens_executed)
+            .ok_or("the backend cannot derive its own FP executed context")?;
+        run.outcome
+    } else {
+        backend.execute(&ctx, &prompt)?
+    };
+    let backend: Arc<dyn PalwExecutionBackendV1> = Arc::from(backend);
+    let material = Arc::new(outcome.material);
+    let prompt32 = Arc::new(prompt32);
+    let own_backend = backend.clone();
+    let own_material = material.clone();
+    let own_prompt = prompt32.clone();
+    let legacy = misaka_palw_base0::produce::base0_material_decode_any_v1(&material).is_ok().then(|| {
+        Arc::new(PalwLegacyReplicaV2 {
+            backend,
+            capture: material,
+            prompt_ids: prompt32,
+            form: prompt_form,
+            roots: kaspa_consensus_core::palw_backend::PalwClaimRootsV1 {
+                execution_root: outcome.execution_root,
+                trace_root: outcome.trace_root,
+                anchor: ctx.job_id,
+                attempt_draw: if fp_job.is_some() { None } else { attempt_draw },
+                output_root: fp_job.as_ref().map(|_| outcome.output_root),
+                job_pin: fp_job.as_ref().map(|_| kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&ctx)),
+            },
+        })
+    });
+    Ok(PalwFraudFilerRunV1 {
+        execution_root: outcome.execution_root,
+        trace_root: outcome.trace_root,
+        output_root: outcome.output_root,
+        own_range: Box::new(move |first, count| {
+            own_backend.held_step_range_answer_v1(&own_material, &own_prompt, first, count).map(|opening| opening.leaf_hashes)
+        }),
+        legacy,
+        _reservation: reserved,
+    })
+}
+
 impl PalwPanelService {
     /// **The filer's half of the tick** (the module's header): read the candidates and the accepted answers once a DAA, poll and judge
     /// the replay in flight, start the next one where the seat's slots have room, and step every pursued case through the engine —
@@ -834,6 +902,7 @@ impl PalwPanelService {
         network_domain: Hash64,
         bond_key: PalwBondKeyV2,
         seat_replay_room: bool,
+        public_materials: &HashMap<Hash64, Vec<Vec<u8>>>,
         court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
         court_due: &mut HashMap<(Hash64, u32, bool), u64>,
         court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
@@ -936,8 +1005,16 @@ impl PalwPanelService {
                 _ => {}
             }
         }
-        if seat_replay_room && let Some(claim) = book.next_replay() {
-            self.fraud_filer_start_replay_v1(session, book, claim, network_domain);
+        if seat_replay_room && let Some(claim) = book.next_replay_at(current_daa) {
+            self.fraud_filer_start_replay_v1(
+                session,
+                book,
+                claim,
+                network_domain,
+                current_daa,
+                public_materials.get(&claim).map(Vec::as_slice).unwrap_or(&[]),
+            )
+            .await;
         }
         // Every pursued case, one engine step each (a step that reads an answer runs on to the next).
         let role = book.role.unwrap_or(PalwFilerRoleV1::PublicBond);
@@ -1301,15 +1378,17 @@ impl PalwPanelService {
         }
     }
 
-    /// **Start this node's replay of `claim`'s job** off the loop — the anchor's job derived from the claim's block
-    /// (`attempt_job_for_claim`), on the class's own backend, under the host ledger's reservation at the full seat's need (lane B's
-    /// replay, kept whole: the capture is what this node's own ranges are opened from). A claim this host cannot replay is unjudged.
-    fn fraud_filer_start_replay_v1(
+    /// Start an attempt derived from its header, or an FP job/input authenticated against its accepted commitment and recorded pin.
+    /// Run the verifier's own model under the full-seat memory reservation, retaining only its own capture. Missing public history
+    /// or input waits without spending a run; a backend that cannot execute the job remains explicitly unjudged.
+    async fn fraud_filer_start_replay_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         book: &mut PalwFraudFilerBookV1,
         claim: Hash64,
         network_domain: Hash64,
+        current_daa: u64,
+        public_material: &[Vec<u8>],
     ) {
         let Some(case) = book.cases.get(&claim) else { return };
         let candidate = case.candidate.clone();
@@ -1319,18 +1398,41 @@ impl PalwPanelService {
             debug!("[{PALW_PANEL}] claim {claim}: the fraud filer does not judge it — {why}");
             book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(why));
         };
-        if job.free_prompt {
-            return unjudged(book, "a free prompt's job is its caller's, served, never derived".into());
-        }
         let Some(artifact_root) = job.artifact_root else { return unjudged(book, "its class is gone from the registry".into()) };
         let mut backend = match self.resolve_backend(session, job.class_id, artifact_root) {
             Ok(backend) => backend,
             Err(why) => return unjudged(book, format!("its class does not resolve on this host ({why})")),
         };
-        let Some((ctx, prompt)) =
-            self.attempt_job_for_claim(session, backend.as_ref(), network_domain, job.accepted_block, job.class_id, &producer)
-        else {
-            return unjudged(book, "its block's header is not held here".into());
+        let prompt_form = self.class_prompt_ids_form(job.class_id);
+        // The transaction and recorded claim authenticate the FP job. Missing history/input remains pending and spends no run.
+        let (ctx, mut prompt, fp_payload) = if job.free_prompt {
+            let snapshot = candidate.clone();
+            let payload = session.clone().spawn_blocking(move |c| palw_fraud_filer_fp_payload_v1(c, &snapshot, network_domain)).await;
+            let payload = match payload {
+                Ok(payload) => payload,
+                Err(why) => {
+                    if let Some(case) = book.cases.get_mut(&claim) {
+                        case.input_retry_at = current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+                    }
+                    debug!("[{PALW_PANEL}] claim {claim}: the fraud filer's public FP commitment waits: {why}");
+                    return;
+                }
+            };
+            // Budget the declared ceiling, even if the producer claims an early stop. Only the verifier's run decides its context.
+            let Some(ctx) = backend.fp_job_context_v1(&payload.commitment.job) else {
+                return unjudged(book, "this backend cannot derive the FP job's ceiling context".into());
+            };
+            (ctx, Vec::new(), Some(payload))
+        } else {
+            let Some((ctx, prompt)) =
+                self.attempt_job_for_claim(session, backend.as_ref(), network_domain, job.accepted_block, job.class_id, &producer)
+            else {
+                if let Some(case) = book.cases.get_mut(&claim) {
+                    case.input_retry_at = current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+                }
+                return;
+            };
+            (ctx, prompt, None)
         };
         let backends = self.backends();
         let reserved =
@@ -1352,46 +1454,30 @@ impl PalwPanelService {
                     return;
                 }
             };
+        // Hold the full replay reservation before deriving/copying/authenticating FP input, including the Merkle-root temporary.
+        let fp_job = if let Some(payload) = fp_payload {
+            let input = match palw_fraud_filer_fp_input_v1(backend.as_ref(), &payload, prompt_form, public_material) {
+                Ok(input) => input,
+                Err(why) => {
+                    if let Some(case) = book.cases.get_mut(&claim) {
+                        case.input_retry_at = current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+                    }
+                    debug!("[{PALW_PANEL}] claim {claim}: the fraud filer's authenticated public FP input waits: {why}");
+                    return;
+                }
+            };
+            prompt = input.prompt_ids.into_iter().map(|id| id as usize).collect();
+            Some(input.job)
+        } else {
+            None
+        };
         let Ok(prompt32) = prompt.iter().map(|id| u32::try_from(*id)).collect::<Result<Vec<u32>, _>>() else {
             return unjudged(book, "a prompt id past u32".into());
         };
         info!("[{PALW_PANEL}] claim {claim}: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)");
         let attempt_draw = self.attempt_draw_for_claim(session, job.accepted_block);
-        let prompt_form = self.class_prompt_ids_form(job.class_id);
         let handle = tokio::task::spawn_blocking(move || {
-            let outcome = backend.execute(&ctx, &prompt)?;
-            let backend: Arc<dyn PalwExecutionBackendV1> = Arc::from(backend);
-            let material = Arc::new(outcome.material);
-            let prompt32 = Arc::new(prompt32);
-            let own_backend = backend.clone();
-            let own_material = material.clone();
-            let own_prompt = prompt32.clone();
-            let legacy = misaka_palw_base0::produce::base0_material_decode_any_v1(&material).is_ok().then(|| {
-                Arc::new(PalwLegacyReplicaV2 {
-                    backend,
-                    capture: material,
-                    prompt_ids: prompt32,
-                    form: prompt_form,
-                    roots: kaspa_consensus_core::palw_backend::PalwClaimRootsV1 {
-                        execution_root: outcome.execution_root,
-                        trace_root: outcome.trace_root,
-                        anchor: ctx.job_id,
-                        attempt_draw,
-                        output_root: None,
-                        job_pin: None,
-                    },
-                })
-            });
-            Ok(PalwFraudFilerRunV1 {
-                execution_root: outcome.execution_root,
-                trace_root: outcome.trace_root,
-                output_root: outcome.output_root,
-                own_range: Box::new(move |first, count| {
-                    own_backend.held_step_range_answer_v1(&own_material, &own_prompt, first, count).map(|opening| opening.leaf_hashes)
-                }),
-                legacy,
-                _reservation: Some(reserved),
-            })
+            palw_fraud_filer_execute_v1(backend, ctx, prompt32, prompt_form, attempt_draw, fp_job, Some(reserved))
         });
         book.running = Some(PalwFraudFilerReplayV1 { candidate, handle });
     }
@@ -1451,6 +1537,25 @@ mod tests {
             court_convicted: false,
             da_defaulted: false,
         }
+    }
+
+    #[test]
+    fn waiting_public_input_does_not_spend_a_run_or_block_another_pending_claim() {
+        let mut book = PalwFraudFilerBookV1::default();
+        let first = candidate(1, 100, false);
+        let second = candidate(2, 101, false);
+        book.refresh(vec![first.clone(), second.clone()], 100);
+        book.cases.get_mut(&first.claim_id).unwrap().input_retry_at = 130;
+        assert_eq!(book.next_replay_at(100), Some(second.claim_id));
+        assert_eq!(book.next_replay_at(129), Some(second.claim_id));
+        assert_eq!(book.next_replay_at(130), Some(first.claim_id));
+        let case = &book.cases[&first.claim_id];
+        assert_eq!(case.runs, 0);
+        assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::Pending));
+        let mut changed = first.clone();
+        changed.job.accepted_block = Hash64::from_u64_word(999);
+        book.refresh(vec![changed, second], 110);
+        assert_eq!(book.next_replay_at(110), Some(first.claim_id), "a new job clears its predecessor's wait");
     }
 
     /// A run whose roots are `execution_root` / `trace_root`, opening no range (the tests never read one).

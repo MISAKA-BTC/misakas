@@ -182,7 +182,7 @@ fn produce(artifact: &Arc<Base0ArtifactV1>, profile: &PalwShapeProfileV3, lie: b
         network_domain: h64(999),
         class_id: profile.shape_profile_id(),
         executor_bond: bond_key(PRODUCER).0,
-        executor_pubkey: vec![7; 4],
+        executor_pubkey: vec![PRODUCER as u8; 4],
         operator_id: palw_operator_id_v2(&op_key(20 + PRODUCER)),
         anchor_block: h64(0xA0),
         anchor_daa: 100,

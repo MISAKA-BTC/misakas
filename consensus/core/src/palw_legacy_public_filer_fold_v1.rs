@@ -258,6 +258,31 @@ impl TransitionBuilder<'_> {
 
 // ---- the arms -----------------------------------------------------------------------------------------------------------------
 
+/// The post-Final public DA stage. Attempts retain their existing unmatured vesting rule. Past the public-filer fence an FP
+/// claim (which has no vesting row) instead needs its unvoided, unexpired liability and enough retained time for the DA answer.
+/// The reservation arm, candidate discovery and ordinary DA admission share this predicate.
+pub(super) fn palw_final_public_dispute_open_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    now_daa: u64,
+) -> bool {
+    if !matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) {
+        return false;
+    }
+    if state.vesting.get(claim_id).is_some_and(|row| row.matured_at.is_none()) {
+        return true;
+    }
+    params.legacy_public_filer_active_at(now_daa)
+        && matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. })
+        && state
+            .panel_liabilities
+            .get(claim_id)
+            .is_some_and(|row| row.free_prompt && row.voided_daa.is_none() && row.void_reason.is_none() && now_daa < row.expiry_daa)
+        && now_daa.checked_add(palw_da_disclose_window_daa_v1(params)).is_some_and(|deadline| deadline <= claim.trace_retention_daa)
+}
+
 /// **Tag 154: a reservation** (RFC-0014 §7.2). Past the fence; the claim has a pursuit to hold; the roots are the claim's; the
 /// reserver is an Active bond at or above the floor and not the producer, has never reserved this claim, and is inside the caps; the
 /// claim's hard deadline has not passed; the deposit fits the reserver's free half. The signature is the processor's.
@@ -275,8 +300,7 @@ pub(super) fn apply_dispute_reserved_v1(
     }
     let claim_id = reservation.claim;
     let claim = builder.state.claims.get(&claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
-    let final_row_open = matches!(claim.phase, PalwClaimPhaseV2::Final { .. })
-        && builder.state.vesting.get(&claim_id).is_some_and(|row| row.matured_at.is_none());
+    let final_row_open = palw_final_public_dispute_open_v1(&builder.state, builder.params, &claim_id, &claim, now);
     if !palw_dispute_phase_reservable_v1(&claim.phase, final_row_open) {
         return Err(refused("the claim has no pursuit a reservation may hold (voided, or Final past its post-Final stage)"));
     }
@@ -616,7 +640,7 @@ impl PalwFraudFilerStatusV1 {
 
 impl PalwChainStateV2 {
     /// **The claims `me`'s filer may pursue at `now_daa`**, oldest acceptance first: past the fence, every claim at a reservable stage
-    /// (`palw_dispute_phase_reservable_v1`: unlicensed, licensed, or `Final` with its vesting row unmatured) that is not `me`'s own,
+    /// (`palw_dispute_phase_reservable_v1`: unlicensed, licensed, or an open public post-Final stage) that is not `me`'s own,
     /// and every claim on which `me` holds a dispute record (so a restarted filer finds its own pursuits). Empty below the fence.
     pub fn palw_fraud_filer_candidates_v1(
         &self,
@@ -632,8 +656,7 @@ impl PalwChainStateV2 {
             .iter()
             .filter(|(claim_id, claim)| {
                 let known = self.legacy_disputes.get(claim_id).is_some_and(|record| record.knows(me));
-                let final_row_open = matches!(claim.phase, PalwClaimPhaseV2::Final { .. })
-                    && self.vesting.get(claim_id).is_some_and(|row| row.matured_at.is_none());
+                let final_row_open = palw_final_public_dispute_open_v1(self, params, claim_id, claim, now_daa);
                 claim.bond != *me && (known || palw_dispute_phase_reservable_v1(&claim.phase, final_row_open))
             })
             .filter_map(|(claim_id, claim)| {

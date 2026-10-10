@@ -352,3 +352,33 @@ blocking replayは起動時candidateのsnapshotとhandleを保持する。refres
 [book / worker](evidence/filer-reorg-job-final.log)、[LG14-B回帰](evidence/reorg-job-legacy-final.log)、[reader回帰](evidence/reorg-job-reader-final.log)。default feature、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`。consensus encoding・fenceは変更していない。
 
 このjob変更の修正はnode policyのV-unitであり、稼働nodeへ競合branchを投入してservice tickから新jobをreplayしconvictするV-nodeはまだない。full-serviceのfresh start/reorg、free-promptの公開job/input bootstrap、checkpoint/traceの残る局所化、全family／profile、retired discovery、累積scope・全枠飽和・恒久retentionと期限内包含は未完で、G14全域の完成判定は行わない。
+
+
+## 公開FP commitment/inputからの独立再実行とpost-Final FPの追及
+
+共通filerは従来、free-promptを無条件にUnjudgedとしていた。node起動時のFP bootstrapを追加し、recorded accepted blockのacceptance dataが指すmergeset blockから0x4a transactionを読む。accepted transaction id、claim hash、domain/class/bond、三root、work leaves、記録済みjob pinとartifact rootを照合する。accepted carrierが保持されていない場合やinputが未取得の場合はPendingを維持し、replay retryを消費しない。30 DAAの再試行間隔を設け、input待ちの最古claimが他claimのreplayを塞がない。job変更でこの待ち時間もresetする。
+
+PublicDA user jobはaccepted payloadのidsを使い、canonical jobは自身のjob anchorからbackendで導出してrootとcountを照合する。PanelDA user jobは、nodeへ既に届いたFPM1/FPC1/FPA1のjob wireを認証済みjobのcanonical encodingへ先に照合し、同じjobの正しい長さのinput prefixだけを読む。untrusted jobやvectorのdeserializeをせず、u32::MAX等の不正なids countもallocation前に拒否する。その後、共有prompt admissionでroot/countを認証する。producer captureとoutput tailは長さの整合のみを確認し、deserialize・copy・実行・判定の入力にはしない。diskのown-retentionやproducer private checkpointも参照しない。このfallbackは配布・取得保証ではない。PanelDAではstranger向けgossip自体が制限されるため、inputを拒否されても追及できるpublic DA bootstrapはまだ必要である。
+
+actual replay workerは、モデル保有前提どおりfresh backendからexecute_free_promptを実行する。host ledgerの見積りにはjobのdeclared decode ceiling contextを使い、FP inputのcopy／canonical derivation／Merkle-root検証より前にfull replay reservationを取得する。producerが宣言したexecuted countでメモリを小さくしない。own runのfactsからactual executed contextを導出し、三root、own capture/range、own output/job pinを持つbase0-codec replicaを保存する。attemptも同じrun assemblyを使う。producerのoutput token列やcaptureを再実行の入力にはしない。
+
+新しいactual FP fold testから、FP Finalにvesting rowがないため、candidate discoveryとreservationが拒否し、さらに通常DA admissionも拒否することが分かった。既存の休眠palw_legacy_public_filer_v1 fence内で、この3箇所を共通のpost-Final predicateへ変更した。FPにはunvoided・unexpiredのliability rowとDA回答期限内のtrace retentionを要求する。unmatured vestingを持つ既存attemptの判定は維持する。FPのpursuitを責任期間内に開始した場合はda_rekeyの単一writer経由でliability expiryも延ばし、予約中に次のDA要求が失効することを防ぐ。新field、wire encoding、activation heightは追加していない。
+
+この段階でもG14全域は未達。PanelDA withheld inputのcourt bootstrap、canonical FPのbad input-rootからbootstrap前に直接証拠／DA defaultへ進む経路、prefix-state等の公開stateからのstartup、非base0 codec・全familyの正規eligibility、full-service fresh-nodeのmempool/template包含、post-retirement discovery、恒久prune後の取得／再要求、累積scope・全枠飽和・最大profileの実測RAM／期限内包含が残る。FPM/FPC/FPAのinput prefix読出しの成功を、producerのprivate stateなしに全PanelDA claimを再実行できる証明とは数えない。ADR-0177はユーザー確認どおり維持する。
+
+
+| 検証 | 結果と範囲 |
+| --- | --- |
+| current kaspad lib-test binary `palw_filer_replay::palw_filer_held::e2e:: --test-threads=2` | **24 PASS**（LG14-B 10 V-fold＋2 V-unit、既存held replay 12件）。新FP V-foldはactual accepted-tx extractionとFP claim fold、全3 PanelのValid、fresh own-modelのproduction replay helper、actual common controllerのreservation→binding→frontier→tag159→CourtFraudをFinal前後に検査する。Final後の追及は元のliability期限直前に開始して期限を跨ぐ。Final後のfrontier非応答はProducerWithholdingへdefaultし、CourtFraudと混同しない。expired liabilityとbelow-fenceのcandidate／reservation／DA admission拒否、liability hold、delta apply/revertとcarriage reloadも確認した |
+| `cargo test -p kaspad --lib palw_fraud_filer --locked` | **18 V-unit PASS**（book/controller 15、FP input/replay 3）。PublicDA三root再現、producerの短いexecuted countに依存しないown run/pin、canonical derivation、PanelDA inputのexact-job/root/count確認、truncated/trailing carrier拒否、capture/output tailを解釈しないprefix読出し、input待ちのretry fairnessを検査 |
+| current kaspad lib-test binary `accepted_objects_walk_tests --test-threads=2` | **7 V-unit PASS**。新API adapterでunaccepted exact decoy、別job、accepted mergeset tx、txid/index source error、domain／work leaves／recorded pin／laneの不一致、失われたacceptance/blockと復旧を確認。既存paged readerの認証／reorg回帰もPASS |
+| current kaspad lib-test binary `reporter_filer::tests --test-threads=2` | **21 V-unit PASS**。既存reporter doorのcommit/file/reveal、dedup、gate拒否、期限とrestart回帰 |
+
+[held / FP fold](evidence/fp-bootstrap-held-final.log)、[filer / input](evidence/fp-bootstrap-filer-final.log)、[accepted reader](evidence/fp-bootstrap-reader-final.log)、[reporter](evidence/fp-bootstrap-reporter-final.log)。default feature、CARGO_INCREMENTAL=0、CARGO_BUILD_JOBS=2。binary直実行の3群は直前の同じsourceでcargoがbuildしたkaspad_lib-7d8fbaae022c6e79を用いた。
+
+初回の新FP fixtureは短い仮署名をstateless extractionが拒否し、署名wire長をML-DSA-87定数へ合わせた。次にfixtureのFP job pubkeyが登録producer bondのkeyと違うためBondKeyMismatchを正しく返し、共通held fixtureのjob keyを登録値へ合わせた。さらにFinal後の予約拒否を再現し、上述の3箇所の共通predicateとliability holdを修正した。通常signature検証を緩めておらず、fold fixtureのsignature callbackは従来と同じtest doubleである。API adapterも小型のfake chainであり、full nodeのacceptance／startupからconvictionまでの一続きのV-nodeとは数えない。
+
+
+coreのlifecycle/A2U回帰は **31 PASS**、既存legacy dispute foldは **7 PASS**。通常featureのkaspad binary checkも成功した。[lifecycle](evidence/fp-bootstrap-core-lifecycle-final.log)、[dispute fold](evidence/fp-bootstrap-core-dispute-final.log)、[binary check](evidence/fp-bootstrap-binary-final.log)。Final後のFP予約拒否の修正前の再現logは[こちら](evidence/fp-bootstrap-fold-debug.log)。警告は既存のunused/dead-code等が残る。
+
+最終sourceの `scripts/t12-repin.sh --shipping --drift-only` は **361 ok、差分なし**。fresh harvest logの再読込もexit 0。pinの書換えは行っていない。[repin](evidence/fp-bootstrap-repin-final.log)、[harvest tests](evidence/fp-bootstrap-repin-harvest-tests.log)、[harvest lib](evidence/fp-bootstrap-repin-harvest-lib.log)、[log再検証](evidence/fp-bootstrap-repin-replay-final.log)。

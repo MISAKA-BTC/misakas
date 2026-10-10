@@ -26,6 +26,8 @@
 
 - integration `589d9aa3e`のremote-miner drill adapterを`7bd999b17`でmergeし、RPC binaryのcheckを通した。共通filerでは受理block/job/role変更時に旧判定・探索・queueを破棄し、起動時snapshotと違う旧replay結果を適用しない。blocking workerは予約を保持してdrainし、book clear後も終わるまで次のworkerを開始しない。filer 14 V-unit、LG14-B 9 V-fold＋2 V-unit、public reader 6 V-unit PASS。full nodeのreorg完走は未検証。
 
+- free-promptの公開accepted commitmentからjob/inputを認証し、fresh modelの独立replayへ接続した。FPにvesting rowがなくFinal後のreservationとDA admissionが止まる経路も、既存public-filer fence内で共通predicateとliability保持へ修正した。PanelDA withheld inputのbootstrap、bad canonical root、公開prefix-state、full service／全family・最大profileは残る。検証結果とfixtureの範囲は[FP修正記録](../../audit/g14-review-2026-10-10/implementation.md#公開fp-commitmentinputからの独立再実行とpost-final-fpの追及)を参照。
+
 G14全域の完成判定はしていない。ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
 
 ## 統合ブランチ

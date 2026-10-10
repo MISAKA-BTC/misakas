@@ -17148,7 +17148,7 @@ impl PalwFoldReadV1<'_> {
     /// fold's opening reads, so the filer's fee-safe de-duplication and the fold cannot disagree.
     ///
     /// * **Accusable (DA-8):** a panel is bound — `PanelBound`, `ReceiptLicensed`, or a redrawn
-    ///   `Provisional` — or the claim is `Final` with its vesting row unmatured and unmoved; never a
+    ///   `Provisional` — or the claim has an open public post-Final stage (unmatured vesting, or FP liability past the filer fence); never a
     ///   voided claim. `now + W_disclose ≤ trace_retention_daa`.
     /// * **The accuser (DA-8):** not the producer; Active and at or above the floor; with no session
     ///   of its own open on the claim; a seat of the claim's CURRENT panel within its four sessions
@@ -17174,7 +17174,8 @@ impl PalwFoldReadV1<'_> {
             PalwClaimPhaseV2::Provisional if claim.rebound_daa.is_some() && panel.is_some() => PalwDaStageV1::Live,
             PalwClaimPhaseV2::PanelBound { .. } => PalwDaStageV1::Live,
             PalwClaimPhaseV2::ReceiptLicensed { .. } => PalwDaStageV1::Licensed,
-            PalwClaimPhaseV2::Final { .. } if state.vesting.get(claim_id).is_some_and(|row| row.matured_at.is_none()) => {
+            PalwClaimPhaseV2::Final { .. }
+                if palw_legacy_public_filer_fold_v1::palw_final_public_dispute_open_v1(state, self.params, claim_id, claim, now_daa) => {
                 PalwDaStageV1::FinalRow
             }
             PalwClaimPhaseV2::Voided { .. } | PalwClaimPhaseV2::DefaultDisputed { .. } => {
@@ -22053,6 +22054,15 @@ impl<'a> TransitionBuilder<'a> {
     /// before `Final` too: a seat-paused licensed claim can outlast the licence's lock window, and a
     /// default at the `Licensed` stage charges S4 on live locks.)
     fn da_rekey_v1(&mut self, claim_id: Hash64, until: u64, now_daa: u64) {
+        // FP has no vesting row. Past the public-filer fence, a pursuit opened inside its liability window holds that row too,
+        // so the next authenticated demand cannot lose its post-Final stage halfway through the reserved pursuit.
+        if self.params.legacy_public_filer_active_at(now_daa)
+            && self.state.claims.get(&claim_id).is_some_and(|claim| matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }))
+            && let Some(row) = self.state.panel_liabilities.get(&claim_id).cloned()
+            && row.voided_daa.is_none() && row.void_reason.is_none() && now_daa < row.expiry_daa && row.expiry_daa < until
+        {
+            self.write_panel_liability(claim_id, Some(crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1 { expiry_daa: until, ..row }));
+        }
         if let Some(row) = self.state.vesting.get(&claim_id).cloned()
             && row.expiry_daa < until
         {

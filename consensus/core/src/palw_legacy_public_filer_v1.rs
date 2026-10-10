@@ -207,7 +207,7 @@ pub fn palw_dispute_hard_deadline_v1(claim: &PalwClaimStateV2, w_disclose: u64) 
 }
 
 /// **Does `claim` have a pursuit a reservation may hold** — `Provisional`, `PanelBound`, `ReceiptLicensed`, or `Final` with its
-/// vesting row unmatured (`final_row_open`, the post-`Final` DA stage)? `Voided` and `DefaultDisputed` (which no R-core+ chain holds)
+/// public post-Final stage open (`final_row_open`: unmatured vesting, or FP liability past the filer fence)? `Voided` and `DefaultDisputed` (which no R-core+ chain holds)
 /// never.
 pub fn palw_dispute_phase_reservable_v1(phase: &PalwClaimPhaseV2, final_row_open: bool) -> bool {
     match phase {
