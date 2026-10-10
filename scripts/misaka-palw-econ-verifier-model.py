@@ -1446,7 +1446,133 @@ def section13() -> None:
 # =====================================================================================================================================
 
 
-SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11, 12: section12, 13: section13}
+# =====================================================================================================================================
+# §14 EXEC workers: a conditional offer is not a guaranteed receipt
+# =====================================================================================================================================
+
+
+@dataclass(frozen=True)
+class ExecWorkerPriceBound:
+    status: str
+    required_minimum_sompi: int | None
+    net_lower_sompi: Q | None
+
+
+def exec_worker_price_bound(
+    cost_upper_sompi: Q | None,
+    joint_collect_floor: Q | None,
+    conditional_net_minimum_sompi: int | None,
+) -> ExecWorkerPriceBound:
+    """A mathematical bound, not a consensus gate or a measured class verdict.
+
+    The offer input is a *minimum actually collectible on the joint outcome*,
+    not a posted escrow/leg/allocation ceiling. That outcome includes native
+    root Final and survival to release. No independence or positive floor is
+    inferred. All fees replace native issuance inside the same allocation.
+    Cost covers every outcome, including abort with zero income.
+    """
+    if cost_upper_sompi is not None and cost_upper_sompi < 0:
+        raise ValueError("negative worker cost upper bound")
+    if joint_collect_floor is not None and not 0 <= joint_collect_floor <= 1:
+        raise ValueError("joint collection probability outside [0,1]")
+    if conditional_net_minimum_sompi is not None and (
+        type(conditional_net_minimum_sompi) is not int or not 0 <= conditional_net_minimum_sompi < 2**64
+    ):
+        raise ValueError("conditional worker entitlement is not a u64 sompi amount")
+    if cost_upper_sompi is None or joint_collect_floor is None:
+        return ExecWorkerPriceBound("UNKNOWN", None, None)
+    if joint_collect_floor == 0:
+        if cost_upper_sompi > 0:
+            return ExecWorkerPriceBound("UNFINANCEABLE_AT_ZERO_FLOOR", None, -cost_upper_sompi)
+        return ExecWorkerPriceBound("VACUOUS_ZERO_COST", 0, Q(0))
+    raw = cost_upper_sompi / joint_collect_floor
+    required = -(-raw.numerator // raw.denominator)
+    if required >= 2**64:
+        return ExecWorkerPriceBound("UNREPRESENTABLE", required, None)
+    if conditional_net_minimum_sompi is None:
+        return ExecWorkerPriceBound("UNKNOWN_MINIMUM_CONTRACT", required, None)
+    net = joint_collect_floor * conditional_net_minimum_sompi - cost_upper_sompi
+    return ExecWorkerPriceBound("MEETS_STATED_BOUND" if net >= 0 else "UNDERPRICED", required, net)
+
+
+def joint_floor_without_independence(first: Q, second: Q) -> Q:
+    if not 0 <= first <= 1 or not 0 <= second <= 1:
+        raise ValueError("marginal probability outside [0,1]")
+    return max(Q(0), first + second - 1)
+
+
+def section14() -> None:
+    head(14, "EXEC worker price contract: Final, release, abort and capital (conditional bounds only)")
+    show("DERIVED", "price criterion fixed before scenarios",
+         "p_collect_lower * minimum_net_on_collection >= cost_upper, including abort; both bounds need evidence")
+    show("DERIVED", "minimum offered entitlement",
+         "ceil(cost_upper / p_collect_lower), exact sompi; an escrow/allocation ceiling is not a minimum")
+    show("DERIVED", "cost basis",
+         "compute + recomputation + acquisition/material + carrier/filing + capital rate * distinct capital-time area + other losses")
+    show("DERIVED", "capital-time area",
+         "integrate distinct locked capital over its actual clocks; include signed liability and bounded second-clock/exit costs, avoid double counting overlaps")
+    show("DERIVED", "abort/default receipt",
+         "zero before native root Final; returning poster escrow is not worker income and does not erase computation/capital cost")
+    show("DERIVED", "security and collection floors",
+         "p_min (fraud conviction) is not p_collect; no class floor or native minimum contract is supplied here -> UNKNOWN")
+
+    # ASSUMED scenarios, declared before evaluation. None is a market price,
+    # a node cost measurement, an approved policy or a class security PASS.
+    sompi = 100_000_000
+    compute, material, carrier = Q(sompi), Q(sompi, 10), Q(sompi, 50)
+    capital_area = Q(1_000 * sompi * 280)  # distinct sompi*DAA, ASSUMED
+    capital_rate = Q(1, 100_000_000)  # sompi per sompi*DAA, ASSUMED
+    cost = compute + material + carrier + capital_area * capital_rate
+    probability = Q(4, 5)  # JOINT floor, ASSUMED, not a product
+    exact = cost / probability
+    fee = -(-exact.numerator // exact.denominator)
+    show("ASSUMED", "scenario compute/material/carrier, capital area/rate and JOINT collection floor",
+         f"{compute}/{material}/{carrier} sompi; {capital_area} sompi*DAA at {capital_rate}; p={probability}")
+    scenario = exec_worker_price_bound(cost, probability, fee)
+    show("DERIVED", "scenario minimum at the fixed bounds", f"{fee} sompi -> {scenario.status} (conditional only)")
+    check(scenario.net_lower_sompi == 0, "EXEC price: the exact floor covers compute, material, carriers AND capital")
+    check(exec_worker_price_bound(cost, probability, fee - 1).status == "UNDERPRICED",
+          "EXEC price: one sompi below the exact floor loses money")
+    check(exec_worker_price_bound(cost, probability, int((compute + material + carrier) / probability)).status == "UNDERPRICED",
+          "EXEC price: ignoring capital cost underprices fault-free work")
+    check(exec_worker_price_bound(cost, probability, None).status == "UNKNOWN_MINIMUM_CONTRACT",
+          "EXEC price: a policy reward or posted escrow ceiling does not establish a conditional minimum")
+    check(exec_worker_price_bound(cost, None, fee).status == "UNKNOWN",
+          "EXEC price: a missing collection floor cannot silently become one")
+    check(exec_worker_price_bound(None, probability, fee).status == "UNKNOWN",
+          "EXEC price: missing measured cost bounds stay unknown")
+
+    for offer in (0, fee, 2**64 - 1):
+        check(exec_worker_price_bound(cost, Q(0), offer).status == "UNFINANCEABLE_AT_ZERO_FLOOR",
+              "EXEC price: no finite conditional fee finances positive cost when the collection floor is zero")
+    show("DERIVED", "no native root Final after truthful worker computation Finals",
+         "p_collect = 0; any positive worker cost loses money for every finite Final-only offer")
+    # Two marginals do not license multiplication: the events may be disjoint.
+    marginal = Q(1, 2)
+    safe_joint = joint_floor_without_independence(marginal, marginal)
+    check(safe_joint == 0, "EXEC price: Final and healthy-window marginal floors can have zero joint floor")
+    misleading = exec_worker_price_bound(Q(sompi, 10), marginal * marginal, sompi)
+    actual = exec_worker_price_bound(Q(sompi, 10), safe_joint, sompi)
+    check(misleading.status == "MEETS_STATED_BOUND" and actual.status == "UNFINANCEABLE_AT_ZERO_FLOOR",
+          "EXEC price: an invented independence assumption can turn an unfinanceable offer into a false assurance")
+    show("DERIVED", "two 50% marginals without independence", "joint floor 0, not 25%; price remains unfinanceable at that floor")
+    check(joint_floor_without_independence(Q(9, 10), Q(9, 10)) == Q(4, 5),
+          "EXEC price: the conservative joint lower bound is 80%, not an assumed 81% product")
+    check(exec_worker_price_bound(Q(1), Q(1, 2**65), 2**64 - 1).status == "UNREPRESENTABLE",
+          "EXEC price: a minimum above u64 cannot wrap or clamp into a payable quote")
+    check(exec_worker_price_bound(Q(7, 3), Q(2, 3), 4).required_minimum_sompi == 4,
+          "EXEC price: fractional sompi and probability round upward once at the final quote")
+    for bad in (Q(-1), Q(2)):
+        try:
+            exec_worker_price_bound(cost, bad, fee)
+        except ValueError:
+            pass
+        else:
+            check(False, "EXEC price: invalid probability was accepted")
+    show("DERIVED", "scope", "model checks cover arithmetic and counterexamples; they supply no measured cost, collection floor, minimum contract or activation approval")
+
+
+SECTIONS = {1: section1, 2: lambda: (section2(), section2b()), 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11, 12: section12, 13: section13, 14: section14}
 
 
 def main() -> int:

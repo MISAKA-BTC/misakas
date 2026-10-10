@@ -87,6 +87,10 @@ fn world(fence: Option<u64>) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
 }
 
 fn world_with(p: PalwStateParamsV2) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+    world_with_panel(p, true)
+}
+
+fn world_with_panel(p: PalwStateParamsV2, bind_panel: bool) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
     let mut objects = register_class_and_bond();
     // The producer's bond posts enough for more than one claim (the second-claim tests).
     if let Some(PalwConsensusObjectV2::BondRegistered { collateral, .. }) = objects.last_mut() {
@@ -98,7 +102,12 @@ fn world_with(p: PalwStateParamsV2) -> (PalwStateParamsV2, PalwChainStateV2, Has
     let env = attempt(PWU, 1);
     let claim = attempt_id_v2(&env.attempt);
     let funded = PalwBlockContextV2 { subsidy: 1_000_000, ..ctx(2, 101, 2) };
-    let (s1, _) = apply_door(&s0, &p, &funded, &[], Some(&env), &xx()).expect("the claim lands");
+    let (mut s1, _) = apply_door(&s0, &p, &funded, &[], Some(&env), &xx()).expect("the claim lands");
+    if !bind_panel {
+        assert!(matches!(s1.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Provisional));
+        s1.claims.get_mut(&claim).unwrap().job_identity = h64(JOB);
+        return (p, s1, claim);
+    }
     let (mut s2, _) = apply_door(
         &s1,
         &p,
@@ -113,6 +122,87 @@ fn world_with(p: PalwStateParamsV2) -> (PalwStateParamsV2, PalwChainStateV2, Has
     // Surgery: the fixture's attempt records no job identity (that is the attribution fence's), so write the one the session binds.
     s2.claims.get_mut(&claim).expect("the claim").job_identity = h64(JOB);
     (p, s2, claim)
+}
+
+#[test]
+fn exec_root_freezes_rider_reallocation_without_disabling_riders_before_open() {
+    use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_TRACE_CHUNKS, attempt_trace_manifest_root_v1};
+    use crate::palw_capacity_s567_v1::palw_rider_challenge_v1;
+    let (p, native, lead) = world_with_panel(xp(Some(0)).with_capacity_s567_mirror(None, Some(0), None), false);
+    let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(1000).unwrap();
+    let extras = xx();
+    let context = ctx(5, 104, 5);
+    let mut rider = attempt(PWU, 2);
+    rider.attempt.challenge = palw_rider_challenge_v1(&lead, 0);
+    rider.attempt.trace_root = h64(0x52);
+    rider.attempt.trace_chunk_count = PALW_ATTEMPT_V2_TRACE_CHUNKS;
+    rider.attempt.trace_manifest_root = attempt_trace_manifest_root_v1(rider.attempt.trace_root, rider.attempt.trace_chunk_count);
+    rider.attempt.trace_retention_daa = native.claim(&lead).unwrap().trace_retention_daa;
+    let riders = [rider];
+    let escrow = native.claim(&lead).unwrap().escrowed_reward;
+    assert!(escrow > 0);
+
+    // Positive control: an admissible rider really takes half of this lead's escrow before an EXEC root exists.
+    riders_cheap_refusal_v1(&native, &context, &lead, &riders).expect("ordinary rider reader");
+    let mut before = TransitionBuilder::new(&native, &p, false, false, false, false, &extras);
+    attach_riders_v1(&mut before, &context, &p, Some(&admission), &lead, &riders).expect("ordinary rider writer");
+    assert_eq!(before.state.claim(&lead).unwrap().escrowed_reward, escrow / 2);
+    assert_eq!(before.state.claim(&attempt_id_v2(&riders[0].attempt)).unwrap().escrowed_reward, escrow / 2);
+
+    // Open while the native claim is still Provisional and within the same rider window.
+    let (rooted, _) = step_with(&native, &p, 4, 103, &[open_object(decl(lead))], &xx_declare()).expect("root opens");
+    let refusal = riders_cheap_refusal_v1(&rooted, &context, &lead, &riders).expect_err("root allocation is frozen");
+    assert!(refusal.to_string().contains("EXEC root"), "{refusal}");
+    let mut after = TransitionBuilder::new(&rooted, &p, false, false, false, false, &extras);
+    let refusal = attach_riders_v1(&mut after, &context, &p, Some(&admission), &lead, &riders)
+        .expect_err("full writer must enforce the same allocation freeze");
+    assert!(refusal.to_string().contains("EXEC root"), "{refusal}");
+    assert!(after.entries.is_empty(), "refusal precedes every financial write");
+    assert_eq!(after.state.state_root(), rooted.state_root());
+    assert_eq!(after.state.claim(&lead).unwrap().escrowed_reward, escrow);
+
+    // Objects are queued before rider admission. Neither order in one block may split an allocation that block opened.
+    // Exercise both the cheap-reader profile and the checkpoint/restore profile through the actual full fold.
+    for cheap_first in [false, true] {
+        let p = p.clone().with_audit_1004_from_daa(cheap_first.then_some(0));
+        let extras = xx_declare();
+        let fold = |objects: &[PalwConsensusObjectV2]| {
+            apply_palw_transition_v7(
+                &native,
+                &p,
+                Some(&admission),
+                &context,
+                objects,
+                PalwBlockWorkV3::None,
+                &[],
+                Hash64::default(),
+                false,
+                false,
+                false,
+                false,
+                &extras,
+            )
+            .expect("a refused rider does not invalidate its carrier block")
+        };
+        let root = open_object(decl(lead));
+        let rider_object = PalwConsensusObjectV2::AttemptRidersV1 { lead, riders: riders.to_vec() };
+        let (control, _, control_skips) = fold(&[root.clone()]);
+        assert!(control_skips.is_empty(), "{control_skips:?}");
+        for objects in [[root.clone(), rider_object.clone()], [rider_object.clone(), root.clone()]] {
+            let (state, delta, skips) = fold(&objects);
+            assert_eq!(skips.len(), 1, "{skips:?}");
+            assert!(skips[0].1.contains("EXEC root"), "{skips:?}");
+            assert_eq!(state.state_root(), control.state_root(), "the refused rider changes no root, payout or capacity right");
+            state.assert_internal_consistency(&p).unwrap();
+            state.assert_deadline_consistency(&p).unwrap();
+            assert_eq!(apply_delta_v2(&native, &delta, &p).unwrap().state_root(), state.state_root());
+            assert_eq!(revert_delta_v2(&state, &delta, &p).unwrap().state_root(), native.state_root());
+            let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
+            let restored =
+                borsh::from_slice::<PalwStateCarriageV2>(&carriage).unwrap().into_state(&p, Some(state.state_root())).unwrap();
+            assert_eq!(restored.state_root(), state.state_root());
+        }
+    }
 }
 
 #[test]

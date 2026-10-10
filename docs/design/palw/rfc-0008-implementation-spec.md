@@ -1000,3 +1000,62 @@ Cryptographic consent to a finite reservation/retention term is not a sufficient
 terms before signing. A minimum offered compensation, capital/retention cost, abort/timeout economics and measured class
 costs remain required; neither voluntary signing nor a policy hash proves profitability or positive detection probability.
 This section does not resolve the full WINDOW/ECON or pruned public-material/actor/resource acceptance gates.
+
+### 15.7 Worker price criterion and allocation freeze
+
+Worker computation Final is not the event that pays an EXEC-bound job. Collection requires the native root's Final and
+survival of every applicable dependency/default and vesting condition through release. If the native root expires,
+§13 cancels its fee holds and returns the remaining job escrow to the poster. This is no worker income, even when all
+worker computations were truthful and reached kernel Final. Their retained kernel liability is not cancelled with the
+root. A signature authorizing these terms proves consent; it does not establish a profitable price.
+
+Fix the criterion before a class measurement or model comparison. For an honest worker define:
+
+```
+C_upper = compute + recomputation + material/acquisition + carriers/filing
+          + capital_rate * distinct_capital_time_area + other_outcome_costs
+p_collect_lower = proven lower bound of the JOINT native-Final-and-collectible-at-release event
+M_net_min = funded minimum actually collectible on that joint event, after all clips and charges
+p_collect_lower * M_net_min >= C_upper
+required_M = ceil(C_upper / p_collect_lower)   // only if p_collect_lower > 0
+```
+
+Costs include abort/default outcomes, retention after a root's cancellation, transport and retrieval conditions, and
+second-clock/exit delay. Count each locked unit of capital once at each instant, using the actual composite reservations
+and holds; adding every named row's amount can double count the same collateral. A finite DAA horizon is not a proved
+wall-clock bound when chain progress or material retrieval is unavailable. Cost/time assumptions and their evidence
+must therefore be explicit; an unbounded or unmeasured relevant cost remains unknown.
+
+`M_net_min` is a minimum, not the root's allocation ceiling, a displayed leg estimate or the poster's gross job escrow.
+It must cover Native BUDGET clipping, each executor's share, all fee/issuance substitutions and applicable deductions.
+The fee path replaces native issuance inside the one allocation (§13); it cannot be added to native income a second
+time. A future minimum-price contract must bind the funded amount, work scope, worker, policy, deadline and hold/release
+conditions before signature, refuse insufficient funding before reserving the worker, and make its stated minimum
+enforceable at settlement. §15.6's retention nonce does not currently commit such a minimum. No new approval or money
+parameter is inferred here.
+
+`p_min` for conviction and `p_check` for checks are different quantities. Native Final and healthy-release marginal
+floors cannot be multiplied without a justified independence argument. With only two marginal floors `a` and `b`, the
+conservative joint floor is `max(0, a + b - 1)`. If the actual joint floor is zero and honest work has positive cost,
+no finite Final-only conditional offer finances that cost. Missing cost, collection or minimum-contract evidence yields
+UNKNOWN, not a positive class verdict. A zero-cost example is vacuous; it is not economic security approval. Quotes
+above the u64 sompi range are unrepresentable and must not wrap or clamp into a payable offer.
+
+An EXEC root also freezes the native claim's existing allocation basis. A Provisional lead can normally split its
+escrow among riders within the rider window, but once a retained EXEC root names that lead, both the cheap rider reader
+and the full writer refuse that split before financial writes. Root objects are applied before queued rider batches:
+opening a root and attaching riders in the same block is refused in either object order. Refusal skips the rider batch
+without invalidating the block. Legitimate rider splitting before root declaration is preserved. This prevents later
+re-attribution of a root's budget; it does not turn that budget ceiling into a guaranteed minimum contract.
+
+`scripts/misaka-palw-econ-verifier-model.py` §14 checks exact-rational arithmetic, one-sompi underpricing, omitted capital
+cost, zero collection, dependent outcomes and overflow using declared ASSUMED scenarios. It supplies no measured class
+cost, collection floor, funded minimum or policy approval. The node expiry regression uses actual signed kernel runs
+and Final transitions, with the native REAL admission harness's synthetic trace commitment/Panel seam; it proves the
+worker/non-native-Final payout rule, not a production owner-only veto or an all-honest native Final probability floor.
+The allocation-freeze regression exercises the core reader, writer, full fold, both audit profiles and both object orders,
+including journal replay, undo and carriage restore; core header signatures remain a fixture seam.
+
+No public fence height, live Round ticket rule, wire tag or carriage layout changes. WINDOW/ECON remains unapproved until
+the evidence and enforceable contract above, native post-Final public-court paths, material/restart/pruning and resource
+acceptance conditions are closed.

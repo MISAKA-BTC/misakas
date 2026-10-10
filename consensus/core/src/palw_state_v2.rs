@@ -40773,6 +40773,9 @@ fn riders_cheap_refusal_v1(
     if !matches!(lead.source, PalwClaimSourceV2::Attempt) || !matches!(lead.phase, PalwClaimPhaseV2::Provisional) {
         return refuse("the lead is not a Provisional attempt claim");
     }
+    if state.exec_v2_root_v1(lead_id).is_some() {
+        return refuse("an EXEC root already freezes the lead's allocation");
+    }
     if lead.accepted_daa.saturating_add(m::PALW_RIDERS_WINDOW_DAA_V1) < ctx.daa_score {
         return refuse("the lead was accepted more than the riders' window ago");
     }
@@ -40810,6 +40813,9 @@ fn attach_riders_v1(
     let lead = builder.state.claims.get(lead_id).cloned().ok_or_else(|| PalwStateV2Error::CapacityRiders(format!("lead {lead_id} is not held")))?;
     if !matches!(lead.source, PalwClaimSourceV2::Attempt) || !matches!(lead.phase, PalwClaimPhaseV2::Provisional) {
         return refuse("the lead is not a Provisional attempt claim");
+    }
+    if builder.state.exec_v2_root_v1(lead_id).is_some() {
+        return refuse("an EXEC root already freezes the lead's allocation");
     }
     if lead.accepted_daa.saturating_add(m::PALW_RIDERS_WINDOW_DAA_V1) < ctx.daa_score {
         return refuse("the lead was accepted more than the riders' window ago");

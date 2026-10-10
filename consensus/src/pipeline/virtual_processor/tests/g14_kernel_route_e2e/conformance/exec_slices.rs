@@ -36,6 +36,8 @@
 //! Not run here (and why): the REAL root claim's own `Final` and the capped escrow settlement need the root class's Panel (the
 //! legacy channel), which an onboarded class does not have on this harness; the settlement is pinned at fold level
 //! (`exec_v2_fold_v1::amendment_1`).
+//! The REAL attempt's trace-root lottery search is also a synthetic commitment, not a native trace witness. The kernel runs
+//! are checked against their actual public material; do not use this harness to claim honest native receipt/Final evidence.
 use super::*;
 use crate::pipeline::virtual_processor::processor::exec_v2_test_admit_class_v1;
 use crate::pipeline::virtual_processor::tests::OnetimeTxSelector;
@@ -603,13 +605,26 @@ async fn opened(
     lie: impl Fn(usize) -> bool,
     extra: impl FnOnce(&Cw, &RealRun, &PalwWorkRootDeclarationV2) -> Vec<(usize, KernelJobV1)>,
 ) -> Session {
+    opened_with_lifetime(cw, lie_prefix, lie, extra, 5_000).await
+}
+
+/// Fix the offered expiry before any worker signs. A short real interval lets
+/// the abort case reach its actual deadline without changing the network clocks.
+async fn opened_with_lifetime(
+    cw: &mut Cw,
+    lie_prefix: bool,
+    lie: impl Fn(usize) -> bool,
+    extra: impl FnOnce(&Cw, &RealRun, &PalwWorkRootDeclarationV2) -> Vec<(usize, KernelJobV1)>,
+    lifetime_daa: u64,
+) -> Session {
     // The seam (module doc): the onboarded class takes REAL work from here. Residual: the legacy channel's Panel admission of a V2 root
     // (GAP-81), which this harness cannot prove.
     exec_v2_test_admit_class_v1(cw.v2_class, 0);
     let class = cw.v2_class;
     let real = real_attempt(cw, ROOT_CARD, class, 0xA77E).await;
     let initial = palw_exec_v2_token_state_root_v1(&[&real.stream()]);
-    let draft = declaration(cw, &real, Hash64::default(), initial);
+    let mut draft = declaration(cw, &real, Hash64::default(), initial);
+    draft.expiry_daa = cw.net.daa().checked_add(lifetime_daa).unwrap();
     let extra = extra(cw, &real, &draft);
     let (prefix, slices, extras) = kernel_claims(cw, &real, &draft, lie_prefix, lie, extra).await;
     let mut decl = declaration(cw, &real, Hash64::from_bytes(prefix.claim.id), initial);
@@ -768,6 +783,91 @@ async fn x8_g14_an_outsider_convicts_a_slices_kernel_claim_and_its_suffix_and_ro
     assert_eq!(read.roots[0].slices[1].verification_state.as_deref(), Some("Convicted"));
     let z = replay_with_lane(&cw.net, &s.lane).await;
     cw.net.assert_same(&z, "replay");
+}
+
+/// Truthful worker computations can all finalize and still have zero income:
+/// only native root Final authorizes its fee/share settlement. Cancellation
+/// refunds the poster while the signed kernel fraud-liability term remains.
+#[tokio::test]
+async fn x8_g14_completed_worker_claims_earn_nothing_when_the_root_expires_on_the_real_node() {
+    let mut cw = active_world().await;
+    let mut s = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), 256).await;
+    let native = s.real.claim;
+    for (index, claim) in s.slices.iter().enumerate() {
+        s.lane.push(carry_slice(&mut cw, native, index as u32, &claim.claim).await);
+    }
+    let api = cw.net.api().unwrap();
+    let last_final = s
+        .slices
+        .iter()
+        .chain(std::iter::once(&s.prefix))
+        .map(|claim| api.claim_read_v1(&claim.claim.id).unwrap().unwrap().opv.unwrap().final_floor_daa)
+        .max()
+        .unwrap();
+    let expiry = cw.net.chain.tip_state().1.exec_v2_root_v1(&native).unwrap().expiry_daa;
+    assert!(last_final + 1 < expiry, "the signed expiry must allow all worker computations to finalize");
+    cw.net.beat_to(last_final + 1).await;
+    let before = cw.net.chain.tip_state().1;
+    assert!(before.exec_v2_root_v1(&native).unwrap().ready_for_final());
+    assert!(!before.claim(&native).unwrap().phase.is_terminal(), "worker Finals are not native root Final");
+    let ledger = cw.net.ledger();
+    let poster = cw.net.kid(REGISTRANT);
+    let poster_collateral = ledger.bonds[&poster].collateral;
+    let poster_reserved = ledger.bonds[&poster].reserved;
+    let escrow_sum: u64 = s
+        .slices
+        .iter()
+        .chain(std::iter::once(&s.prefix))
+        .map(|claim| {
+            let row = &ledger.claims[&claim.claim.id];
+            assert!(matches!(row.life.state, ClaimStateV1::Final { .. }));
+            assert!(!row.rewarded && row.reserved > 0);
+            let escrow = ledger.job_escrows[&claim.job.id()];
+            assert_eq!(escrow.poster, poster);
+            escrow.amount
+        })
+        .sum();
+    assert!(escrow_sum > 0);
+    let worker_collateral: Vec<_> = EXECUTORS.iter().map(|card| (*card, cw.net.collateral(*card))).collect();
+    for card in EXECUTORS {
+        assert_eq!(
+            before.reserved_exposure(&cw.net.bond(card)),
+            s.real.executor_exposure_sompi,
+            "completed work still holds one native reservation per participating worker"
+        );
+    }
+    // Do not fabricate a native Panel receipt. The root owner never completes
+    // that route; its agreed expiry is the real cancellation transition.
+    cw.net.beat_to(expiry).await;
+    let after = cw.net.chain.tip_state().1;
+    assert!(matches!(after.exec_v2_root_v1(&native).unwrap().phase,
+        PalwWorkRootPhaseV2::Voided { voided_daa, .. } if voided_daa == expiry));
+    assert!(matches!(after.claim(&native).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::WorkRootExpired, .. }));
+    assert!(after.vesting_row(&native).is_none() && after.exec_v2_reward_vesting_v1(&native).is_none());
+    let ledger = cw.net.ledger();
+    assert_eq!(ledger.bonds[&poster].collateral, poster_collateral, "cancellation debits no fee or reward");
+    assert!(
+        ledger.bonds[&poster].reserved <= poster_reserved - escrow_sum,
+        "all four job escrows are returned; unrelated obligations may also have expired"
+    );
+    for claim in s.slices.iter().chain(std::iter::once(&s.prefix)) {
+        assert!(!ledger.job_escrows.contains_key(&claim.job.id()));
+        assert!(!ledger.exec_reward_holds.contains_key(&claim.claim.id));
+        let row = &ledger.claims[&claim.claim.id];
+        assert!(!row.rewarded, "a truthful worker Final earns no fee after the root cancels");
+        assert!(
+            row.reserved > 0 && row.liability_until.unwrap() > cw.net.daa(),
+            "returning the job escrow does not shorten the worker's signed fraud-liability term"
+        );
+    }
+    for (card, collateral) in worker_collateral {
+        assert_eq!(cw.net.collateral(card), collateral, "no worker payment or slashing on this abort");
+        assert_eq!(after.reserved_exposure(&cw.net.bond(card)), 0, "native root reservation returns once");
+    }
+    let read = cw.net.chain.ctx.consensus.palw_exec_v2_observation_v1(vec![native], None).unwrap();
+    assert!(read.roots[0].next_job_nonce.is_none());
+    let replay = replay_with_lane(&cw.net, &s.lane).await;
+    cw.net.assert_same(&replay, "completed work, unpaid root expiry replay");
 }
 
 /// **(b) The honest twin**: every kernel claim — the prefix's and each slice's — finalizes after its public window with no Panel; each
