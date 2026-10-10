@@ -2570,3 +2570,35 @@ carriers, with independent replay. The companion SDK capture also covers the XLM
 This is not a published full-checkpoint task/context support PASS. Generic scoped release
 conformance, full computation G14, the arbitrary opaque/withheld bound-root case, the complete
 resource/economic/liveness contract and shipping activation remain open under §II.14.
+
+### 14.16 Descriptor-scoped finite-domain conformance reference
+
+`ModelConformanceDomainV2` derives a finite input domain from the complete validated
+program and verification plan, using the exact current v4/v5 descriptor. For v4 it
+includes every nonempty token word of lengths `1..=plan.max_positions`; for v5 it
+includes every word of lengths `1..=L`, with the encoder's canonical ids padding and
+count injected as job inputs. Stateful decoder cases start from the reference's initial
+state independently and replay the complete prefix. Repeating one token does not cover
+this domain. Stateless programs use the same domain without a dependency-based shortcut.
+
+Before model tensor decoding or execution, the constructor caps input cases, model leaves,
+raw model bytes, a conservative reference RAM envelope, and reference work. The envelope
+includes all retained node values at worst-case H, declared states and constants, decoded
+model parameters, job inputs, operand clones and primitive scratch. These are local
+reference limits, not a change to network admission limits or proof that the full shared
+resource vector is complete. The constructor also checks the plan's program binding and
+ranges. Callers cannot supply a smaller input count or work estimate.
+
+The reference validates every inventory coordinate, re-roots the exact source bytes,
+recomputes the v3 parameter commitments from those same bytes, and hashes every node's
+shape, dtype and integer values for every input case, including stage inputs and state
+writes. The result binds descriptor, complete program, plan, source and PC roots, case
+count and input order. Comparing claimed implementation roots proves equality with this
+reference result; it does not establish the identity or independence of the implementations
+that supplied those roots, or fidelity to a source floating-point checkpoint.
+
+This is a pure reference dependency for the authenticated conformance consumer. It does
+not yet create a node conformance record, execution registration, Final or reward. Large
+vocabularies/context domains exceed exhaustive enumeration; they still require the scalable
+GAP-70 digest/refutation path. No input subset, sampled signal or raised limit substitutes
+for that requirement, and no shipping fence is armed here.

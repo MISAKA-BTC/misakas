@@ -1384,3 +1384,34 @@ Full RFC02 remains open: scoped generic release conformance and execution promot
 large/stateful GAP-70, complete actual computation G14 (including opaque/withheld parameter
 roots), original checkpoint/task/context fidelity and every required common feature, full
 shared resource/capital accounting and honest liveness, and reviewed shipping activation.
+
+## Descriptor-scoped finite-domain conformance reference — 2026-10-11
+
+The preceding goal turn made implementation progress: signed model statement consumer,
+31 checks and verified push at `32092793b`. The reference review was read again before
+this change; the complete RFC02 goal and all §II.14 requirements remain active.
+
+The old complete-check is a V2 all-parameter, stateless single-token enumeration. It cannot
+be reinterpreted as encoder sequence or stateful-prefix conformance. The new pure domain
+is derived from the exact v4/v5 descriptor and checked program/plan. It enumerates every
+nonempty token word at all lengths within the program's encoder axis or decoder plan,
+not just repeated tokens or selected prompts. The reference starts each word independently,
+checks source coordinates before allocation, derives source and v3 PC roots jointly,
+injects encoder ids/count as inputs, and hashes all typed intermediate/state values.
+Local work and memory envelopes are derived before tensor decoding/replay. No new wire
+allocation, consensus row, activation setting or eligibility exception is introduced.
+
+Final verification: **26 distinct checks passed**: six new conformance tests, six inventory
+regressions, three signed-model decoder/header tests, nine legacy onboarding/court tests,
+and the wire-pin and shipping-dormancy checks. The new tests cover all 14 binary words up
+to length three for an encoder and a stateful decoder, independent prefix initialization,
+hidden intermediate corruption with unchanged logits, incorrect source/PC/role roots,
+malformed inventories, resource caps and refusal of the saved BERT/actual Qwen programs
+whose input vocabularies exceed enumeration. Verification and limitations are recorded in
+`evidence/rfc02-model-conformance-verdict.json`.
+These are mechanics checks, not full-checkpoint support or independent runtime-pack
+certification. The next integration must authenticate the exact statement/candidate,
+charge the derived work before judging, persist a scope-bound result and maintain every
+eligibility, G14, source-fidelity, capital/resource and shipping gate. Real vocabularies and
+large/context domains remain outside exhaustive enumeration and require GAP-70's scalable
+complete digest/refutation contract; nothing here relaxes that requirement.

@@ -1,0 +1,7 @@
+
+running 3 tests
+test palw_model_artifact_v2::tests::bounded_model_decoder_preserves_instance_wire_and_refuses_counts_and_legacy_rows ... ok
+test palw_model_artifact_v2::tests::model_binding_identity_binds_every_scope_coordinate_and_reservation_uses_the_horizon ... ok
+test palw_model_artifact_v2::tile_decoder_tests::bounded_model_tile_decoder_matches_wire_and_rejects_inventory_lengths_before_reading_body ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3626 filtered out; finished in 0.00s
