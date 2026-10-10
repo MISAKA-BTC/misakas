@@ -92,7 +92,7 @@ fn canonical_config(opv: bool) -> (Config, PalwConsensusParamsV2, Premine, Premi
         opv_test_eligible(&opv_admitted());
     }
     params.palw_panel_free_v1 =
-        if opv { Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), opv_admitted())) } else { None };
+        if opv { Some(PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new())) } else { None };
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
     params.skip_proof_of_work = true;
     assert!(params.validate_palw_v2().is_err(), "the real validation still refuses the fence; only this harness bypasses it");
