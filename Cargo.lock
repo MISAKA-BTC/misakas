@@ -3757,6 +3757,7 @@ dependencies = [
  "misaka-palw-remote",
  "misaka-palw-sdk",
  "misaka-palw-tir",
+ "misaka-palw-tir-lower",
  "misaka-palw-tir-sketch",
  "once_cell",
  "parking_lot",

@@ -1615,6 +1615,9 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         | K::Withdraw { .. }
         | K::SealClaim { .. }
         | K::SealProof { .. } => None,
+        // K2S (K2-TIR-v4/v5): tag 110's own fence; its classes register only under OPV (`palw_panel_free_v1`, inner 13), so none of
+        // these can act where that fence is not armed either.
+        K::CommitSegmentedClaim { .. } | K::PostTiledJob { .. } | K::PostPromptTile { .. } => None,
         K::CommitClaimSalted { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
         K::RegisterClassV2 { .. } | K::RegisterPipelineClassV2 { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
         K::Spec { .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
@@ -1636,6 +1639,9 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (11, "Withdraw", None),
     (12, "SealClaim", None),
     (15, "SealProof", None),
+    (16, "CommitSegmentedClaim", None),
+    (17, "PostTiledJob", None),
+    (18, "PostPromptTile", None),
     (13, "RegisterClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (14, "RegisterPipelineClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (19, "Spec", Some(PalwKernelInnerFenceV1::TypedRootsV1)),
@@ -1853,17 +1859,27 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::KernelInner { lo: 16, hi: 18 },
         "palw_probabilistic_constraints_v1",
         "K2S segmented / tiled / prompt tile",
-        false,
+        true,
     ),
     a2_row(PalwA2SlotV1::KernelInner { lo: 19, hi: 19 }, "palw_typed_roots_v1", "R4X Spec (RFC-0004 Part II)", true),
     // G14R's salted claim seal v2, beside the OPV registrations (the Lead, 2026-10-09): below `palw_panel_free_v1` the kernel refuses
     // it and the gate drops it through this table. Inner kinds 21 and 22 are not allocated.
     a2_row(PalwA2SlotV1::KernelInner { lo: 20, hi: 20 }, "palw_panel_free_v1", "G14R CommitClaimSalted (salted claim seal v2)", true),
+    // K2S: a segmented fault rides a filing (inner 7) under tag 110's own fence, as the filing does, so no guarded arm is needed;
+    // `ClaimBodyV1::Segmented` is the kernel ledger's state, never carried.
     a2_row(
-        PalwA2SlotV1::KernelNested { what: "ProsecutionV1::Segmented (3), ClaimBodyV1::Segmented (2)" },
+        PalwA2SlotV1::KernelNested { what: "ProsecutionV1::Segmented (3) inside FileProof (inner 7); ClaimBodyV1::Segmented (2)" },
         "palw_probabilistic_constraints_v1",
         "K2S",
-        false,
+        true,
+    ),
+    // K2S × G14R: a salted reveal of a segmented claim (K2-TIR-v4/v5 classes are OPV-only, so past `palw_panel_free_v1` every
+    // segmented claim reveals salted); inner 20's own fence, so no guarded arm.
+    a2_row(
+        PalwA2SlotV1::KernelNested { what: "SaltedCommitV1::Segmented (16) inside CommitClaimSalted (inner 20)" },
+        "palw_panel_free_v1",
+        "K2S × G14R",
+        true,
     ),
     // `ClaimBodyV1::Spec` (3) is the kernel ledger's state, never carried; the carried form is the filing's proof.
     a2_row(
@@ -3546,6 +3562,7 @@ pub(crate) mod tests {
             let filing = |proof| K::FileProof { accuser: [1; 64], claim: [2; 64], proof };
             assert_eq!(palw_kernel_route_inner_fence_v1(&filing(P::Spec(vec![9]))), Some(PalwKernelInnerFenceV1::TypedRootsV1));
             assert_eq!(palw_kernel_route_inner_fence_v1(&filing(P::Kernel(vec![9]))), None, "a filing of a kind tag 110 knows");
+            assert_eq!(palw_kernel_route_inner_fence_v1(&filing(P::Segmented(vec![9]))), None, "K2S: a segmented fault is tag 110's");
         }
 
         /// The source directories whose types a payload can carry: consensus-core and every crate it decodes with (the PALW crates

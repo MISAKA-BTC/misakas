@@ -124,6 +124,9 @@ pub enum CourtIdV1 {
     MatMulScalar = 2,
     /// One stage input at one position: its binding recomputed from public job facts and the authenticated upstream values.
     EdgeRecompute = 3,
+    /// **K2-TIR-v4**: one output element of one committed value, recomputed from one Merkle leaf per input dependency line
+    /// ([`crate::element`]) — bounded by the tile, never by the tensor.
+    ElementRecompute = 4,
 }
 
 #[cfg(test)]

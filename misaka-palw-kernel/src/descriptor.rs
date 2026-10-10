@@ -205,6 +205,60 @@ pub fn k2_tir_v3_descriptor() -> KernelDescriptorV1 {
     d
 }
 
+pub const K2_TIR_V4_SEMANTICS: &[u8] = b"misaka-palw-kernel K2-TIR-v4 (real scale): K2-TIR-v2 semantics for every TIR v1 family; \
+tiled dual-root tensor commitments (v3: leaves of at most 4096 elements of one row or column); every committed value of a position \
+(derived windows included) under a position root, position roots under segment roots of 1024 positions, segment roots under a claim \
+root carried on chain; element courts (one output element, one leaf per input dependency line; a window judged against the previous \
+position's window and the new row; greedy decode by a rival element); per-position demands served in parts; prompts posted in \
+tiles of 4096 ids under a prompt root; OptimisticPublicVerification only";
+
+/// **K2-TIR-v4** (`docs/design/palw/k2-real-scale.md`): K2-TIR-v2's families and checkers under the real-scale commitment and court
+/// suites — segmented claims ([`crate::seg`]), element courts ([`crate::element`]), per-position DA ([`crate::seg_da`]). A new descriptor:
+/// classes bound to v1–v3 keep their rules. The whole-claim evidence bound is a parse bound here (2^60): the gate bounds ONE prosecution
+/// instead, and reports the whole-claim material as the producer's DA obligation.
+pub fn k2_tir_v4_descriptor() -> KernelDescriptorV1 {
+    let mut d = k2_tir_v2_descriptor();
+    d.version = 4;
+    d.semantics_digest = crate::hash::id(KERNEL_DESCRIPTOR_DOMAIN_V1, K2_TIR_V4_SEMANTICS);
+    d.commitment_suite_id = 3;
+    d.court_suite_id = 4;
+    for f in &mut d.families {
+        f.court = CourtIdV1::ElementRecompute;
+    }
+    d.limits.max_claim_evidence_bytes = 1 << 60;
+    d.limits.max_court_bytes = 1 << 24;
+    d
+}
+
+/// Whether a descriptor's claims are segmented (K2-TIR-v4's commitment suite; K2-TIR-v5 too).
+pub fn is_segmented_v1(d: &KernelDescriptorV1) -> bool {
+    d.commitment_suite_id == 3
+}
+
+pub const K2_TIR_V5_SEMANTICS: &[u8] = b"misaka-palw-kernel K2-TIR-v5 (encoders and heads): K2-TIR-v4 for a program of ONE position whose \
+last two params, input.ids (idx [L], L <= 4096) and input.count (idx []), are the job's input and not the artifact: the job's prompt ids \
+padded to L with id 0, and the prompt's length; no node reads the per-position token; a tiled job of no generated id and a claim of no \
+delivered id; the result is the program's output node at position 0; OptimisticPublicVerification only";
+
+/// The memory model of K2-TIR-v5: params past `first_input` are the job's input (`crate::seg_encoder`).
+pub const MEMORY_MODEL_JOB_INPUTS_V1: u32 = 2;
+
+/// **K2-TIR-v5** (`docs/design/palw/k2-real-scale.md` §12): K2-TIR-v4 (its families, commitments, element courts, DA and gate) for a
+/// bidirectional encoder or a head over one: ONE position over a padded token axis whose ids and count are the job's input
+/// ([`crate::seg_encoder`]). A new descriptor: v4 classes keep their rules.
+pub fn k2_tir_v5_descriptor() -> KernelDescriptorV1 {
+    let mut d = k2_tir_v4_descriptor();
+    d.version = 5;
+    d.semantics_digest = crate::hash::id(KERNEL_DESCRIPTOR_DOMAIN_V1, K2_TIR_V5_SEMANTICS);
+    d.memory_model_id = MEMORY_MODEL_JOB_INPUTS_V1;
+    d
+}
+
+/// Whether a descriptor's classes are encoders with job-bound inputs (K2-TIR-v5).
+pub fn is_encoder_v1(d: &KernelDescriptorV1) -> bool {
+    is_segmented_v1(d) && d.memory_model_id == MEMORY_MODEL_JOB_INPUTS_V1
+}
+
 /// Where a descriptor stands in the release sequence (ADR-0172 §3: proposal → reference + independent
 /// implementation → vectors/review → shadow → LOCKED_IN → ACTIVE). These are release states, not a ballot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -260,12 +314,13 @@ impl KernelScheduleV1 {
     }
 }
 
-/// **The shipped schedule: K2-TIR-v1, v2 and v3 are implemented and not active** — no network arms any.
+/// **The shipped schedule: K2-TIR-v1, v2, v3 and v4 are implemented and not active** — no network arms any.
 pub fn builtin_schedule_v1() -> KernelScheduleV1 {
     KernelScheduleV1::default()
         .with(k2_tir_v1_descriptor().digest(), KernelStatusV1::Implemented)
         .with(k2_tir_v2_descriptor().digest(), KernelStatusV1::Implemented)
         .with(k2_tir_v3_descriptor().digest(), KernelStatusV1::Implemented)
+        .with(k2_tir_v4_descriptor().digest(), KernelStatusV1::Implemented)
 }
 
 /// What a bound class commits beside its program/artifact (RFC-0011 §16.3(4)).

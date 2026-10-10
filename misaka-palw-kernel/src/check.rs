@@ -213,7 +213,7 @@ pub fn check_plan_with_v1(
         return Err(O::IncompleteCoverage { what: "the state boundaries are not one per state, as declared".into() });
     }
     // 6. Budgets and ceilings.
-    let budgets = derive_budgets(program, &expected);
+    let budgets = derive_budgets(descriptor, program, &expected, plan.max_positions);
     if plan.budgets != budgets {
         return Err(O::IncompleteCoverage { what: "the declared budgets are not the derived ones".into() });
     }

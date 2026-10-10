@@ -489,8 +489,8 @@ impl PipelineEvidenceV1 {
     }
 }
 
-/// The class header a pipeline claim is about.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The class header a pipeline claim is about (borsh: the wire form `getPalwKernelClaim` serves beside the record, GAP 6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PipelineHeaderV1 {
     pub network_domain: Digest,
     pub ruleset_digest: Digest,

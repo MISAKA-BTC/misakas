@@ -22,11 +22,11 @@ use misaka_palw_tir::program::TirProgramV1;
 use misaka_palw_tir::program_v2::TirProgramV2;
 
 use crate::descriptor::{KernelDescriptorV1, KernelScheduleV1};
-use crate::gate::{public_pipeline_prosecution_complete_v1, public_prosecution_complete_v1};
+use crate::gate::public_pipeline_prosecution_complete_v1;
 use crate::hash::{Digest, finish, id, keyed, object_id};
-use crate::ledger::{ClaimRowV1, DemandKeyV1, DemandRowV1, KernelLedgerV1, LedgerPolicyV1, PipelineClassRowV1, ClassRowV1, BondRowV1};
-use crate::pipeline::{pipeline_root_v1};
+use crate::ledger::{BondRowV1, ClaimRowV1, ClassRowV1, DemandKeyV1, DemandRowV1, KernelLedgerV1, LedgerPolicyV1, PipelineClassRowV1};
 use crate::opv::{OPV_POLICY_DOMAIN_V1, OPV_STATE_VERSION_V2, OpvClaimRowV1, OpvPolicyV1, StateRootPartsV2};
+use crate::pipeline::pipeline_root_v1;
 use crate::pipeline_public::PipelineClassV1;
 use crate::public::{ProfileMaterialV1, ServedPositionV1};
 use crate::state::{
@@ -62,6 +62,14 @@ pub const TABLE_SERVED_DEMAND_BONDS_V1: u8 = 17;
 /// C4R4 F-C4R4-08: `job → the bond that posted it`, written past `palw_panel_free_v1` and kept (in the beacon-seal extension). 19 is
 /// G14-R4's (unused), 20–21 K2S's.
 pub const TABLE_JOB_POSTERS_V1: u8 = 18;
+// 20–21: K2-TIR-v4 (lane K2S, allocated 2026-10-08), in the root only when non-empty.
+// 22–24: RFC-0004 Part II's typed tables.
+/// K2-TIR-v4: `tiled job id → TiledJobRowV1` (the job and its posted-tile bitmap).
+pub const TABLE_TILED_JOBS_V1: u8 = 20;
+/// K2-TIR-v4: `(claim, stage, position) → SegProgressV1` (a position demand's served parts; a served position).
+pub const TABLE_SEG_PROGRESS_V1: u8 = 21;
+/// The domain of the root extension the two K2-TIR-v4 tables add (absent while both are empty: every older root is unchanged).
+pub const SEG_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-seg-extension/v1";
 /// RFC-0004 Part II: `class → ComputationSpecV1` (typed classes), `job → SpecJobV1`, `memory class → MemoryLineV1`. Each table is in
 /// the root only when non-empty ([`crate::spec::typed_root_v1`]), so every ledger without a typed row roots as before.
 pub const TABLE_SPEC_CLASSES_V1: u8 = 22;
@@ -106,6 +114,8 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_OPV_ADMITTED_V1 => "opv-admitted",
         TABLE_OPV_CLASSES_V1 => "opv-classes",
         TABLE_OPV_CLAIMS_V1 => "opv-claims",
+        TABLE_TILED_JOBS_V1 => "tiled-jobs",
+        TABLE_SEG_PROGRESS_V1 => "seg-progress",
         TABLE_PROOF_SEALS_V1 => "proof-seals",
         TABLE_JOB_ESCROWS_V1 => "job-escrows",
         TABLE_SERVED_DEMAND_BONDS_V1 => "served-demand-bonds",
@@ -188,6 +198,12 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.opv.claims {
             rows.insert((TABLE_OPV_CLAIMS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.tiled_jobs {
+            rows.insert((TABLE_TILED_JOBS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.seg_progress {
+            rows.insert((TABLE_SEG_PROGRESS_V1, bytes_of(k)), bytes_of(v));
         }
         for (k, c) in &self.typed.classes {
             rows.insert((TABLE_SPEC_CLASSES_V1, bytes_of(k)), bytes_of(&c.spec));
@@ -283,6 +299,12 @@ impl KernelLedgerV1 {
                 TABLE_OPV_CLAIMS_V1 => {
                     l.opv.claims.insert(dec(key, "opv claim key")?, dec::<OpvClaimRowV1>(row, "opv claim")?);
                 }
+                TABLE_TILED_JOBS_V1 => {
+                    l.tiled_jobs.insert(dec(key, "tiled job key")?, dec(row, "tiled job")?);
+                }
+                TABLE_SEG_PROGRESS_V1 => {
+                    l.seg_progress.insert(dec::<DemandKeyV1>(key, "progress key")?, dec(row, "demand progress")?);
+                }
                 TABLE_SPEC_CLASSES_V1 => specs.push((dec(key, "spec class key")?, dec(row, "spec class")?)),
                 TABLE_SPEC_JOBS_V1 => {
                     l.typed.jobs.insert(dec(key, "spec job key")?, dec(row, "spec job")?);
@@ -305,6 +327,25 @@ impl KernelLedgerV1 {
     }
 }
 
+impl KernelLedgerV1 {
+    /// **This ledger exactly as [`KernelLedgerV1::from_rows`] would rebuild it from `rows`** — the rows it was just flushed to. The
+    /// consumer-derived inputs a fold sets on every load and never writes (the attested artifacts, the admitted OPV classes) are read
+    /// back from the rows, the derived live-claim index is rebuilt and the block's scratch budget cleared. A consumer that caches the
+    /// ledger between objects (GAP 8) caches this, so a cached load and a rebuilt one are the same ledger (`to_rows` equal).
+    pub fn as_rebuilt_from_v1(mut self, rows: &LedgerRowsV1) -> Self {
+        fn dec<T: borsh::BorshDeserialize>(b: &[u8]) -> Option<T> {
+            borsh::from_slice(b).ok()
+        }
+        self.attested_artifacts = rows.keys().filter(|(t, _)| *t == TABLE_ATTESTED_V1).filter_map(|(_, k)| dec::<Digest>(k)).collect();
+        self.opv.admitted = rows.keys().filter(|(t, _)| *t == TABLE_OPV_ADMITTED_V1).filter_map(|(_, k)| dec::<Digest>(k)).collect();
+        self.opv_rebuild_live();
+        self.restore_budget(Default::default());
+        // DA16's provider-liable set is consumer-derived (re-injected before every object), never a row: the rows' ledger has none.
+        self.provider_liable = Default::default();
+        self
+    }
+}
+
 /// A single-program class's derived row from its record: decode the program, resolve the descriptor and recompute the gate's bounds
 /// (all pure functions of the record and the policy — what registration computed).
 fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, String> {
@@ -315,9 +356,9 @@ fn class_row_of(l: &KernelLedgerV1, r: &ClassRecordV1) -> Result<ClassRowV1, Str
         .cloned()
         .ok_or_else(|| "a stored class names a kernel this binary does not implement".to_string())?;
     let program = TirProgramV1::decode_canonical(&r.program_bytes).map_err(|e| format!("a stored class's program: {e}"))?;
-    let nodes: u64 = program.occurrences().iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
-    let bounds = public_prosecution_complete_v1(&d, &r.plan, nodes, &ProfileMaterialV1::kernel_route(true), &l.policy.prosecution)
-        .map_err(|g| format!("a stored class is no longer publicly prosecutable: {g:?}"))?;
+    let bounds =
+        crate::gate::class_prosecution_bounds_v1(&d, &r.plan, &program, &ProfileMaterialV1::kernel_route(true), &l.policy.prosecution)
+            .map_err(|g| format!("a stored class is no longer publicly prosecutable: {g:?}"))?;
     Ok(ClassRowV1 {
         descriptor: d,
         program_bytes: r.program_bytes.clone(),
@@ -387,7 +428,9 @@ fn sort_key(table: u8, key: &[u8]) -> (Vec<u8>, u8, u32) {
         k.extend_from_slice(&u64::from_le_bytes(daa).to_be_bytes());
         return (k, 0, 0);
     }
-    if matches!(table, TABLE_DEMANDS_V1 | TABLE_SERVED_V1 | TABLE_SERVED_DEMAND_BONDS_V1) && key.len() == 64 + 1 + 4 {
+    if matches!(table, TABLE_DEMANDS_V1 | TABLE_SERVED_V1 | TABLE_SERVED_DEMAND_BONDS_V1 | TABLE_SEG_PROGRESS_V1)
+        && key.len() == 64 + 1 + 4
+    {
         let stage = key[64];
         let mut p = [0u8; 4];
         p.copy_from_slice(&key[65..69]);
@@ -461,7 +504,10 @@ pub fn root_of_rows(
         }
         .root(),
     };
-    // RFC-0004 Part II: the typed tables, each only when non-empty (an untyped ledger's root is unchanged).
+    // K2-TIR-v4: tables 20 and 21 extend the root only once either holds a row; then RFC-0004 Part II's typed tables, each only
+    // when non-empty (an untyped ledger's root is unchanged).
+    let seg = by_table.contains_key(&TABLE_TILED_JOBS_V1) || by_table.contains_key(&TABLE_SEG_PROGRESS_V1);
+    let base = if seg { seg_root_extension_v1(&base, &coll(TABLE_TILED_JOBS_V1), &coll(TABLE_SEG_PROGRESS_V1)) } else { base };
     let base = crate::spec::typed_root_v1(base, &typed);
     // OPV-BOOT GAP-B1a / C4R4 F-C4R4-08: tables 25, 26 and 18 extend the root only once any of them holds a row.
     if [TABLE_CLAIM_BEACON_SALTS_V1, TABLE_FORFEITED_CLAIM_SEALS_V1, TABLE_JOB_POSTERS_V1].iter().any(|t| by_table.contains_key(t)) {
@@ -480,6 +526,13 @@ pub fn root_of_rows(
 pub fn beacon_seal_root_extension_v1(base: &Digest, salts: &Digest, forfeited: &Digest, posters: &Digest) -> Digest {
     let mut s = keyed(BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1);
     s.update(base).update(salts).update(forfeited).update(posters);
+    finish(s)
+}
+
+/// `H(extension; base root ‖ tiled jobs ‖ demand progress)` (K2-TIR-v4, tables 20 and 21).
+pub fn seg_root_extension_v1(base: &Digest, tiled: &Digest, progress: &Digest) -> Digest {
+    let mut s = keyed(SEG_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(tiled).update(progress);
     finish(s)
 }
 
