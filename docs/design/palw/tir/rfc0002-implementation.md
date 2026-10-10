@@ -892,3 +892,117 @@ public claim material, outsider conviction, independent Final/redemption, or A6/
 gates. The next node evidence must bind the actual inventory and kernel roots and carry an
 actual-weight segmented claim through public checking and its terminal court. Preserve all
 remaining shared-feature, complete-task, resource aggregate and coverage requirements.
+
+
+### Native segmented trace and actual-weight delivery court (2026-10-10)
+
+`misaka-palw-sdk::kernel_execution::native_trace_v3` now bridges an arbitrary canonical
+PALWTIR1 decoder artifact to the existing v3 node commitments and segmented position/segment/
+claim roots. It consults no ModelSpec, model name or official compiler. It rederives the exact
+plan, rejects wrong plans, vocabulary and context before execution, and uses the same static
+prosecution/carrier/block admission ceilings as the node. Dormant kernels can be prepared
+locally; other static refusals are not bypassed, and activation is not granted.
+
+The node's typed CPU executor visits **every node**, including nodes without a legacy commit
+flag. The sink checks occurrence, node, declared type, resolved shape and element count. A
+wider native storage buffer is allowed only when every mathematical value fits the declared
+wire dtype, before converting it to canonical little-endian bytes. The bounded raw v3 hasher
+preserves the existing commitment preimages. A callback receives one complete position after
+the native step succeeds; an incomplete failed step is discarded. Earlier values are not
+needed for root construction. Only position roots survive streaming; decoded position capture
+is optional and **private**, and caller retention is separately budgeted.
+
+Explicit local limits cover the hashing buffers and current commitment/root/capture workspaces.
+They exclude native executor buffers, mapped model weights, caller-retained visits and process
+overhead, so they are not a new whole-process or ordinary-verifier RAM guarantee. Kernel
+resource prices, wire forms, descriptors, activation fences and economic accounting are unchanged.
+`position_path_of_roots_v1` generates the established segment path from the retained roots alone;
+odd leaves and segment boundaries match the full retained-commitment implementation.
+
+`decode_fault_from_logits_v3` builds a delivery-lie proof from the selecting logits and an
+authenticated node opening. It authenticates position/node paths, declared type/shape and value
+commitment before returning even a clean result. It opens at most the delivered/rival leaves,
+self-grades through the existing terminal Decode court, and requires no producer state or model
+parameter values. Model acquisition and disclosure policy remain separate caller obligations.
+
+The generic `prepare-kernel-decode-court` example authenticates all actual parameter instances
+against a prepared v3 map, computes the actual inventory root through the node artifact API,
+runs a fixed full prompt and one Greedy output, and saves a small reproduction bundle. Only the
+final position is privately captured. The bundle contains the canonical program, exact plan,
+parameter commitment map, roots, public prompt/output ids and a delivery proof. It contains no
+private position values or raw weights. It is off-chain reproduction data, not a consensus
+object, an attestation or proof of registration.
+
+The actual-weight protocol was fixed before execution in
+[evidence/qwen25-real-native-court-protocol.json](evidence/qwen25-real-native-court-protocol.json):
+32 positions of the established lowered pilot, one Greedy output, a 64-MiB hash-workspace cap,
+1-GiB trace-workspace cap and 4-GiB aggregate parameter payload cap. The tokens are fixed in the
+protocol; no lengths or limits were substituted during execution. Every actual model instance
+matches the previously recorded parameter map. Source SHA-256 observations before and after the
+completed run match the established 1,835,572,288-byte artifact.
+
+| Actual observation | Result |
+|---|---:|
+| Positions completed from initial state | 32 |
+| Nodes committed per position / total | 7,658 / 245,056 |
+| Native execution plus node hashing/capture elapsed | 169.916 s |
+| Whole process wall time, including authentication/inventory | 228.26 s |
+| Whole process maximum RSS | 2,143,010,816 bytes |
+| Derived local trace workspace bound | 255,478,864 bytes |
+| Largest per-node hash workspace bound | 19,489,760 bytes |
+| Actual inventory leaves | 1,445,797 |
+| Honest Greedy token / substituted token | 1 / 2 |
+| Terminal delivery proof | 17,924 bytes |
+| Public reproduction bundle | 161,675 bytes |
+
+The descriptor, program, 32-position plan and parameter roots match the prior real pilot. The
+actual inventory root is `5c02fc51ad06f17066c64dca3b79c4bbf986fdd399b7e583a6384ff8d00580d13aeefb2f42c3cbec3a1499f639b6463e792ac40394ba590bc902e1b65fbeed9a`;
+it is a distinct domain from the kernel parameter root. The resulting claim root is
+`06f55704be0edec0b0b5d6e4f83a1b791037259d222aef829d1ba5f907977779ea99209d14f92ebde51e1f8e443be3cae1a0a2e9052fa0c1b41f65b769bf69d9`.
+Full roots, source/code/binary hashes and raw observations are recorded in
+[evidence/qwen25-real-native-court-verdict.json](evidence/qwen25-real-native-court-verdict.json).
+
+The selecting logits are not normally withheld by this program's existing scope. The existing
+court convicts the substituted delivered token and dismisses a weaker-rival filing against the
+honest output as `NoFault`. A **separate test process**, using only the committed public bundle
+and parameter commitments, replays that conviction and dismissal and refuses copied-position
+and tampered-commitment openings. It has no full weights, producer process or private trace.
+This proves offline consumption of the actual delivery witness; it does not prove public RPC
+acquisition or the correctness of the claim's internal computation.
+
+Validation: four kernel segment/path tests, three SDK native-trace/court tests and one actual
+public-bundle integration test passed (**8 distinct tests**). Five diagnostic checks refuse
+zero/oversized positions, zero workspace and replacing either input file, and preserve any
+previous complete output. The trace differential test compares every value and root through a
+sliding history window and MoE; it is synthetic evidence, separate from the actual-weight run.
+The initial test build ran out of disk space; only inactive completed caches inside this
+worktree's ignored incremental directory were removed, preserving sources, actual artifacts,
+evidence and working/recent cache sessions, before the successful final tests/build.
+
+Reproduce using the existing actual artifact and prepared map:
+
+```sh
+cargo test --locked -p misaka-palw-kernel --lib seg::tests
+cargo test --locked -p misaka-palw-sdk --lib kernel_execution
+cargo build --locked -p misaka-palw-sdk --example prepare-kernel-decode-court
+/usr/bin/time -l target/debug/examples/prepare-kernel-decode-court \
+  target/rfc02-real/qwen25-pilot/qwen25-32.palwtir \
+  target/rfc02-real/qwen25-pilot/kernel-params-v3.borsh 32 64 1024 4096 \
+  target/rfc02-real/qwen25-pilot/native-decode-court-32.borsh
+cargo test --locked -p misaka-palw-sdk --test real_native_decode_court
+```
+
+This is local debug CPU execution with existing package optimizations, every-node observation,
+fused kernels off and no Metal feature. SHA-256/authentication/inventory reads warm the artifact
+before execution. RSS is for the complete process, not court/verifier RSS. The elapsed time
+combines native computation and commitment generation; no source-model throughput ratio or
+latency/economic admission criterion is inferred from it.
+
+**Full RFC02 remains incomplete.** The native trace covers the lowered pilot's full 32-position
+job, not the source checkpoint's original 32,768 context or complete task quality. It does not
+establish independent floating-source fidelity or whole-claim computational integrity. The next
+node test must register/onboard these actual program, inventory and kernel roots, carry the
+actual-weight claim and public delivery witness through the mempool, blocks, public RPC and
+court, and verify independent settlement. Fresh checking of state/weight/routing lies, longer
+contexts, all remaining shared features and complete tasks, aggregate resources, A6/A8 and
+economic gates remain required. Shipping activation fences remain off.

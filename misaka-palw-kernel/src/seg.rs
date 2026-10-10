@@ -131,6 +131,16 @@ pub fn segment_roots_of_position_roots_v1(position_roots: &[Digest]) -> Vec<Dige
         .collect()
 }
 
+/// A streamed producer's position path, using only the retained position roots. No earlier
+/// node values or node commitments are required. The path uses the established segment tree.
+pub fn position_path_of_roots_v1(position_roots: &[Digest], p: u32) -> Option<(Digest, Vec<Digest>)> {
+    let positions = u32::try_from(position_roots.len()).ok()?;
+    let root = *position_roots.get(p as usize)?;
+    let (first, end) = segment_bounds_v1(positions, p / SEG_LEN_V4)?;
+    let leaves = (first..end).map(|q| segment_leaf_v1(q, &position_roots[q as usize])).collect();
+    Some((root, tree_path(leaves, (p - first) as usize, seg_node)))
+}
+
 /// **A producer's segmented commitments**: every node commitment of every position, `commitments[p][occurrence][node]`
 /// (v3 tensor commitments), and the trees over them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -486,6 +496,26 @@ pub fn build_segmented_evidence_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streamed_position_paths_match_retained_commitments_at_segment_and_odd_boundaries() {
+        for count in [1, 3, 1024, 1025, 2049] {
+            let c = commitments(count, &[1, 2]);
+            let roots = c.segment_roots();
+            for p in [0, count / 2, count - 1] {
+                let (root, path) = position_path_of_roots_v1(&c.position_roots, p).unwrap();
+                assert_eq!((root, path.clone()), c.position_path(p));
+                assert!(position_in_segment(p, &root, &path, &roots, count));
+                let mut wrong = path.clone();
+                if let Some(first) = wrong.first_mut() {
+                    first[0] ^= 1;
+                    assert!(!position_in_segment(p, &root, &wrong, &roots, count));
+                }
+            }
+            assert!(position_path_of_roots_v1(&c.position_roots, count).is_none());
+        }
+        assert!(position_path_of_roots_v1(&[], 0).is_none());
+    }
 
     fn commitments(positions: u32, per: &[usize]) -> SegmentedCommitmentsV1 {
         SegmentedCommitmentsV1::new(

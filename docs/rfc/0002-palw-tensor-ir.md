@@ -2348,3 +2348,29 @@ verifier memory bounds, source-model fidelity, full context/task support, public
 Final. The same-node-binary registration and actual-weight public claim/court path remain
 required. Protocol, commands, scope, raw results and hashes are in the
 [RFC02 implementation ledger](../design/palw/tir/rfc0002-implementation.md).
+
+
+### 14.10 Native segmented roots and real delivery-court evidence
+
+A canonical decoder artifact can now produce existing v3 node and segmented roots through the
+node's typed executor, without a ModelSpec or compiler registry. The local SDK path rederives
+its exact plan and reuses unchanged node static prosecution/carrier/block ceilings. It streams
+one successful complete position at a time, checks native values against declared wire types,
+and keeps only position roots unless private capture is explicitly requested. Local hash/trace
+caps exclude native buffers, mapped weights and caller retention; activation and economic
+rights remain independent chain facts.
+
+The fixed real Qwen2.5 lowered pilot completed 32 positions, committing 245,056 node values.
+Native computation plus node hashing/capture took 169.916 s; whole-process maximum RSS was
+2,143,010,816 bytes. Its public reproduction bundle is 161,675 bytes, with no private position
+values or raw weights. A 17,924-byte existing Decode court proof convicts a substituted output
+token, while honest delivery is dismissed. A separate offline test consumes only that public
+witness to reproduce the outcomes and refuse copied/tampered openings. Eight relevant tests
+and five refusal checks passed.
+
+This establishes actual-weight trace construction and offline terminal delivery-court evidence.
+It does not establish registration, public RPC acquisition, full computational integrity,
+independent source/task fidelity, original full context, outsider node G14 or Final. Same-node
+registration/public claim/prosecution/settlement and the remaining full-scope requirements are
+still required. Protocol, commands, measurements, raw evidence and hashes are in the
+[RFC02 implementation ledger](../design/palw/tir/rfc0002-implementation.md).
