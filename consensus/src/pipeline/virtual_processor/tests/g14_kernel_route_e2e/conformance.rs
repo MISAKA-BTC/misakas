@@ -1045,8 +1045,8 @@ impl Cw {
     ///   no G14 bypass of the registry lifecycle, the Panel room, the verify deadline, seating or the bond-share split.
     /// Returns the class and the old rules' refusal.
     pub(super) async fn onboarded_v2_claims_on_the_legacy_channel(&mut self, producer: usize) -> (Hash64, String) {
-        let asked = match self.net.chain.tip_state().1.class(&self.v2_class).unwrap().status {
-            PalwClassStatusV2::Registered { pending_share_permille, .. } => pending_share_permille,
+        let asked = match &self.net.chain.tip_state().1.class(&self.v2_class).unwrap().status {
+            PalwClassStatusV2::Registered { pending_share_permille, .. } => *pending_share_permille,
             other => panic!("registered before its conformance: {other:?}"),
         };
         self.pass_conformance().await;
