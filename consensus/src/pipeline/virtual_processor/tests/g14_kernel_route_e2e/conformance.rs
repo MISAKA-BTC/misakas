@@ -241,11 +241,9 @@ impl Cw {
             let generated = greedy(fx, &ledger, &class, &job.prompt, job.max_new_tokens as usize);
             let produced = produce(fx, &ledger, &class, job, self.net.kid(producer), generated, |_| {});
             let id = produced.claim.id();
-            seals.push((
-                producer,
-                self.net.route(producer, &K::SealClaim { producer: self.net.kid(producer), job: job.id(), seal: claim_seal_v1(&id) }),
-            ));
-            reveals.push((producer, produced.object));
+            let (seal, reveal) = seal_and_reveal(&ledger, self.net.kid(producer), &produced.object);
+            seals.push((producer, self.net.route(producer, &seal)));
+            reveals.push((producer, reveal));
             ids.push(id);
         }
         self.net.send(seals).await;
@@ -763,8 +761,8 @@ async fn g14_conformance_forged_evidence_is_refuted_withheld_evidence_defaults_a
 
 /// **Hostile evidence never panics, never passes, and is never judged for free.** A refutation with a junk opening (absurd leaf count,
 /// wrong coordinates, ragged bytes) and one naming a check that does not exist are dismissed — each charging the block's adjudication
-/// budget; five in one block: the four-adjudication test block judges four and the fifth is not charged. Evidence carrying an outcome
-/// the seed never selected, or two outcomes for one check, is a forgery: CONFORMANCE_FAILED, counted. The chain carries on.
+/// budget; five in one block: the four-adjudication test block judges two (two runs are reserved for proofs, C4 F-C4R4-10) and the
+/// rest are not charged. Evidence carrying an outcome the seed never selected, or two outcomes for one check, is a forgery: CONFORMANCE_FAILED, counted. The chain carries on.
 #[tokio::test]
 async fn g14_conformance_hostile_evidence_is_dismissed_or_failed_spends_budget_and_never_stops_the_chain() {
     kaspa_core::log::try_init_logger("warn");
@@ -800,7 +798,7 @@ async fn g14_conformance_hostile_evidence_is_dismissed_or_failed_spends_budget_a
     assert_eq!(cw.attempt(), posted, "every junk refutation is dismissed");
     let (blue, adjudications, _work): (u64, u32, u64) =
         borsh::from_slice(&cw.budget_row().expect("the budget row")).expect("a budget row decodes");
-    assert_eq!(adjudications, 4, "four junk refutations spent the four-adjudication block; the fifth found it spent");
+    assert_eq!(adjudications, 2, "junk refutations stop short of the two runs reserved for proofs (C4 F-C4R4-10)");
     assert!(blue > 0);
     cw.net.beat_to(posted.evidence.unwrap().window_end_daa + 1).await;
     assert_eq!(state(&cw).0, S::G14Eligible, "the honest evidence passed through the junk");

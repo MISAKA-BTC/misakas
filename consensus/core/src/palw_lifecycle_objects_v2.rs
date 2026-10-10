@@ -340,6 +340,21 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
                 Ok(())
             }
         }
+        // (tag 113, C4 F-C4R3-03): a chunk of the route's own lane carries its opener's signature and one carrier's worth of a part.
+        PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, signature } => {
+            if signature.is_empty() {
+                Err("a kernel route chunk must carry its opener's signature — unsigned, anyone could open a group as any bond")
+            } else if chunk.count == 0
+                || chunk.count > crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT
+                || chunk.index >= chunk.count
+                || chunk.bytes.is_empty()
+                || chunk.bytes.len() > crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES
+            {
+                Err("a kernel route chunk's index, count or part is out of range")
+            } else {
+                Ok(())
+            }
+        }
         // (tag 111): a seat's receipt carries its signature; everything else is the kernel's structural admission.
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. } => Err("a kernel constraint receipt must carry the seat's signature"),
@@ -1229,7 +1244,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         | O::ConformanceCommittedV1 { .. }
         | O::ConformanceEvidenceV1 { .. }
         | O::KernelRouteV1 { .. }
-        | O::KernelConstraintReceiptV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ProbabilisticConstraintsV1),
+        | O::KernelConstraintReceiptV1 { .. }
+        | O::KernelRouteChunkV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ProbabilisticConstraintsV1),
         // RFC-0009: the signed-expiry registration envelope (108).
         O::SignedRegistrationV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::SignedRegistrationV1),
         // RFC-0010: the certified Panel epoch output (120).
@@ -1358,6 +1374,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (109, "ConformanceEvidenceV1", PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1),
     (110, "KernelRouteV1", PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1),
     (111, "KernelConstraintReceiptV1", PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1),
+    (113, "KernelRouteChunkV1", PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1),
     (120, "PanelBeaconProofV3", PalwLifecycleKindFenceV1::PermissionlessPanelV1),
     (150, "ProviderLeaseV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
     (151, "ProviderChallengeV1", PalwLifecycleKindFenceV1::ProviderCourtV1),
@@ -1528,6 +1545,10 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         // Guarded arms first: a variant appended INSIDE an inner kind is owned by its fence, so a build without the variant (whose
         // kernel decode fails on it) and this one read the object the same way below that fence. R4X's typed-root proof rides a filing.
         K::FileProof { proof: misaka_palw_kernel::route::ProsecutionV1::Spec(_), .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
+        // G14R's salted reveal of a typed-root claim needs both fences (inner 20 carrying `SaltedCommitV1::Spec`).
+        K::CommitClaimSalted { commit: misaka_palw_kernel::route::SaltedCommitV1::Spec { .. }, .. } => {
+            Some(PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1)
+        }
         K::RegisterClass { .. }
         | K::RegisterPipelineClass { .. }
         | K::PostJob { .. }
@@ -1539,7 +1560,9 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         | K::Respond { .. }
         | K::RequestExit { .. }
         | K::Withdraw { .. }
-        | K::SealClaim { .. } => None,
+        | K::SealClaim { .. }
+        | K::SealProof { .. } => None,
+        K::CommitClaimSalted { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
         K::RegisterClassV2 { .. } | K::RegisterPipelineClassV2 { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
         K::Spec { .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
     }
@@ -1559,9 +1582,11 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (10, "RequestExit", None),
     (11, "Withdraw", None),
     (12, "SealClaim", None),
+    (15, "SealProof", None),
     (13, "RegisterClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (14, "RegisterPipelineClassV2", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (19, "Spec", Some(PalwKernelInnerFenceV1::TypedRootsV1)),
+    (20, "CommitClaimSalted", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -1749,7 +1774,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // `PALW_LIFECYCLE_NEW_KINDS_V1` entry, its `PALW_A2_NEW_KIND_WIRE_V1` pin, and flips this row to landed; the tests name each.
     // 112 and 114–119 are unallocated: no row, so a kind landing there fails the table test until the Lead allocates it.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 110, hi: 111 }, "palw_probabilistic_constraints_v1", "G14 lane D kernel route", true),
-    a2_row(PalwA2SlotV1::ObjectTags { lo: 113, hi: 113 }, "palw_probabilistic_constraints_v1", "G14-R4 KernelRouteChunkV1", false),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 113, hi: 113 }, "palw_probabilistic_constraints_v1", "G14-R4 KernelRouteChunkV1", true),
     // 120 `PanelBeaconProofV3` (landed); 121–129 unallocated.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 120, hi: 120 }, "palw_permissionless_panel_v1", "RFC-0010 V3 production fold", true),
     // 130 `ExecWorkRootOpenedV2` (X8R, `rfc8/x8r-review`).
@@ -1764,7 +1789,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 13, hi: 14 }, "palw_panel_free_v1", "RFC-0015 OPV registrations", true),
-    a2_row(PalwA2SlotV1::KernelInner { lo: 15, hi: 15 }, "palw_probabilistic_constraints_v1", "G14-R4 SealProof", false),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 15, hi: 15 }, "palw_probabilistic_constraints_v1", "G14-R4 SealProof", true),
     a2_row(
         PalwA2SlotV1::KernelInner { lo: 16, hi: 18 },
         "palw_probabilistic_constraints_v1",
@@ -1774,7 +1799,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::KernelInner { lo: 19, hi: 19 }, "palw_typed_roots_v1", "R4X Spec (RFC-0004 Part II)", true),
     // G14R's salted claim seal v2, beside the OPV registrations (the Lead, 2026-10-09): below `palw_panel_free_v1` the kernel refuses
     // it and the gate drops it through this table. Inner kinds 21 and 22 are not allocated.
-    a2_row(PalwA2SlotV1::KernelInner { lo: 20, hi: 20 }, "palw_panel_free_v1", "G14R CommitClaimSalted (salted claim seal v2)", false),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 20, hi: 20 }, "palw_panel_free_v1", "G14R CommitClaimSalted (salted claim seal v2)", true),
     a2_row(
         PalwA2SlotV1::KernelNested { what: "ProsecutionV1::Segmented (3), ClaimBodyV1::Segmented (2)" },
         "palw_probabilistic_constraints_v1",
@@ -1794,7 +1819,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::KernelNested { what: "SaltedCommitV1::Spec (19) inside CommitClaimSalted (inner 20)" },
         "palw_typed_roots_v1",
         "G14R × R4X (also needs palw_panel_free_v1)",
-        false,
+        true,
     ),
     // ---- header carriage forms and coinbase trailers ----
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 7, magic: *b"PFS4" }, "palw_receipt_spend_v4", "RFC-0009 V4 receipt carriage", true),

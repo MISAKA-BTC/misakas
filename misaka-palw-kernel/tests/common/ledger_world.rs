@@ -52,10 +52,14 @@ pub fn policy() -> LedgerPolicyV1 {
         accuser_reward_permille: 500,
         default_penalty: 100,
         claim_reward: 7,
+        job_fee: 2,
+        job_escrow_ttl_daa: 300,
         max_adjudications_per_block: 64,
+        prosecution_reserve_permille: 500,
         max_court_work_per_block: u64::MAX,
         claim_seal_delay_daa: 1,
         seal_ttl_daa: 100,
+        seal_deposit: 1,
         prosecution: PROSECUTION,
     }
 }
@@ -143,7 +147,17 @@ impl World {
             program: fx.program,
             params: fx.params,
         };
-        let ev = w.block(1, vec![bond(PRODUCER, 5000), bond(OUTSIDER, 1000), bond(SPAM1, 1000), bond(SPAM2, 1000), w.register()]);
+        let ev = w.block(
+            1,
+            vec![
+                bond(PRODUCER, 5000),
+                bond(OUTSIDER, 1000),
+                bond(SPAM1, 1000),
+                bond(SPAM2, 1000),
+                bond(super::chain::POSTER, super::chain::POSTER_COLLATERAL),
+                w.register(),
+            ],
+        );
         if let Some(class) = ev.iter().find_map(|e| match e {
             E::ClassRegistered { class } => Some(*class),
             _ => None,
@@ -161,6 +175,8 @@ impl World {
 
     pub fn block(&mut self, daa: u64, txs: Vec<T>) -> Vec<E> {
         // Seal, then reveal: every claim of this block is sealed in a block at the ledger's current DAA first.
+        // Past `palw_panel_free_v1` every reveal carries its seal's salt (OPV-BOOT GAP-B1a).
+        let txs = super::chain::salted(&self.l, txs);
         let seals = seals_for(&txs);
         if !seals.is_empty() && self.l.daa < daa {
             let sb = block_of(self.l.daa, seals, PRODUCER);
