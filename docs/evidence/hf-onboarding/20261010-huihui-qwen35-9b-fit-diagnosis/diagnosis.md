@@ -58,28 +58,64 @@ median 18, p90 73 (0.8B); over the 9B's whole 8k statistics median 30, p90 164. 
 About 10 % of the 9B's sites (88 of 884) are first-token-dominated (pos0 absmax > 1.5 x the rest; median x1.9, max x8.2), so a
 first-token-only clip would reach a minority of the sites.
 
-**Hypothesis (not measured), consistent with F4 and F5.** Every activation site has ONE static scale per tensor and layer, set by the
-calibrated absmax; a few outlier tokens (massive activations) set it, so ordinary tokens see few effective codes, and the two norms on the
-path (the gated RMS norm of the gated-delta output, then the MLP's input norm) re-normalise each token to unit scale and expose that noise
-floor: `L0.gdn.core` 0.004 energy-weighted becomes 0.101 at `L0.gdn.normed` (x25; the 0.8B x4.5) and 0.072 at the residual becomes 0.324 at
-`L0.norm.ffn` (x4.5; the 0.8B x1.1). The 9B's absmax / rms is 2-3 times the 0.8B's, which is the right size for the difference. The test
-that would confirm it is per-token: relative error at `L0.gdn.normed` / `L0.norm.ffn` against that token's own magnitude (it should fall as 1 / magnitude).
-The diagnostic that writes the per-position site values for that test (`palw-tir-fidelity --site-windows ... --dump-sites ... --dump-out`) is
-in this lane's working tree; it was waiting for a build slot when this was written.
+**F6 — the hypothesis "a few outlier tokens set the static scale" is wrong; the per-token test refutes it.** The per-position values of the layer-0 sites
+over 96 positions (`palw-tir-fidelity --site-windows 0..96 --dump-sites ... --dump-out`; `per-token/token-magnitude.out`): the token's rms at
+`L0.gdn.core` and `L0.gdn.normed` is nearly constant (0.035-0.071 and 0.062-0.068; the largest only at position 0), and the relative error does not
+fall as 1 / magnitude (log-log slope -0.25 at the core). Magnitude across tokens is not the variable.
+
+**F7 — the variable is the magnitude across HEADS, and the cause is the grid of the gated-delta core.** `L0.gdn.core` is `[32 heads x 128]` and is delivered on ONE
+scale per tensor; the gated RMS norm after it is per head (`groups = 32`). The 32 heads' rms differ by a factor of 32,500 within the layer (p10 2.6e-4, median
+2.9e-2, p90 0.10; `per-token/head-range.out`). The quantisation noise of the tensor is about the same absolute size in every head (median 8e-5), so a quiet
+head sits on one or two code steps (relative core error 0.055 in the quietest quarter, 0.002 in the loudest) and the per-head norm lifts each head to unit scale:
+the relative error at `gdn.normed` is **0.996 in the quietest quarter of (token, head) cells, 0.223, 0.041, 0.030** in the quarters above. Ten of the 32 heads
+(1, 11, 12, 13, 20, 21, 24, 25, 30, 31) have a median normed error of 0.36-1.00; they carry 1.0 % of the normed energy and **91 % of its squared error**
+(`per-token/bad-heads.out`). That is the 0.101 at `L0.gdn.normed`, and the x4.5 growth to `L0.norm.ffn` is the next norm lifting the residual that the bad heads'
+noise reached through `out_proj`.
+
+**F8 — the integer norm is exact; the whole error is the grid of its input.** Applying an EXACT float gated norm to the integer core (the dumped codes, decoded)
+gives a relative error against the float `gdn.normed` of 0.0831 (energy weighted); the integer program's own `gdn.normed` is 0.0830 and agrees head by head
+(`per-token/exact-norm-on-int-core.out`). So neither the integer RMS norm, its eps nor the gate table is at fault: the core's resolution is.
+
+**F9 — the lever, measured.** The core is already an `i32` value on the wire (`gdn_step_q36`'s output); only its scale key is the 16-bit-grid one. Delivering it at the
+wide rail's key (`wide_key`: the calibrated absmax at 32-bit resolution with `WIDE_RECURRENT_HEADROOM` = 256, i.e. 21 bits of range) changes only the constants
+materialised for the core's output scale and the norm's eps - the node graph is identical (`tests/gdn_core_wide.rs` asserts program bytes equal, tensors different).
+Measured against the Hugging Face float32 logits, same 32 positions (`gdn-core-wide-fit.txt`):
+
+| model / depth | default grid | core on the wide grid |
+|---|---|---|
+| Huihui-9B, 4 layers, headroom16 2.0 | KL 0.0810, corr 0.971, top-1 0.719 | **KL 0.0013, corr 0.99955, top-1 0.938** |
+| Huihui-9B, 4 layers, headroom16 1.0 | KL 0.0495, corr 0.982, top-1 0.812 | KL 0.0083, corr 0.9971, top-1 0.844 |
+| Qwen3.5-0.8B, 4 layers, headroom16 2.0 | KL 0.0132, corr 0.99766, top-1 0.844 | KL 0.0045, corr 0.99918, top-1 0.906 |
+| **Huihui-9B, all 32 layers, 8k-calibration statistics, headroom16 2.0** | **KL 0.26754, slope 0.9451, corr 0.95069, top-1 0.688 (the refused build, reproduced)** | **KL 0.00388, slope 1.0001, corr 0.99933, top-1 0.969** |
+
+The full-depth default row reproduces the refused real build to every printed digit (KL 0.26754, corr 0.95069, top-1 0.688) in 95 s, so the fidelity tool is a faithful
+probe of the pack builder's fit. With the lever the 9B is inside the default tolerance (slope [0.97, 1.03], corr >= 0.99, top-1 >= 0.8, KL <= 0.1) with margin on every
+number, at the default headroom16 2.0 (the headroom16 = 1.0 of F3 is no longer wanted: with the finer core the clipping side dominates).
 
 ## 3. What this does and does not show
 
-Shown: the refusal is a quantisation-quality property of the lowering for this checkpoint, reproducible at four layers in 2 minutes;
-the optimum `headroom16` cuts the four-layer KL by 40 % against the default; the error enters at layer 0 where the gated-delta branch meets the
-residual and the following RMS norm.
+Shown: the refusal is a quantisation-quality property of the lowering for this checkpoint, localised to the grid of the gated-delta core feeding a per-head norm
+(F6-F8); a lowering option that gives that tensor a finer grid takes the real 32-layer model from KL 0.268 to 0.0039 on the pack builder's own fit measure (F9); the same
+option helps the registered-class model Qwen3.5-0.8B at four layers (KL 0.0132 -> 0.0045).
 
-Not shown: which operation in that path is responsible (an ablation that forces one site to exact float is the next test and lives in
-the lowering lane); whether `headroom16 = 1.0` at 32 layers is any better than the default (not measured: a full-depth fit costs about
-2 h and the four-layer result already says it cannot reach the tolerance); any effect on a registered model (none was touched).
+Not shown: that the same holds for unseen text (the fit is 32 positions of two README sequences, as for every model here); anything about any other layer kind (the
+ten bad heads were found in layer 0; the option moves every gated-delta layer's core, and the full-depth number is what counts); that the option is the best possible
+lever (a per-head scale, or a finer grid for the gated norm's gate, were not tried).
 
-## 4. Routing
+## 4. What changed in the tree (this branch)
 
-`CONFORMANCE_FAILED / HF_FIT_OUT_OF_TOLERANCE`, owner A (lowering quality) / H1 (calibration policy). Candidate levers for the Lead's
-decision (none is armed or implemented here): (a) a pack-recorded `headroom16 = 1.0` profile for the 9B (a policy value the pack already
-pins and `verify --rebuild` honours; clipping risk on unseen prompts is the cost); (b) an ablation lane on `L0.gdn.normed -> resid -> norm.ffn`;
-(c) wider (i32) sites on that path, which changes the program and therefore any NEW registration's root, never a registered one (ADR-0175).
+* `LowerOpts::gdn_core_wide` (default `false`; with it off every program and artifact is byte for byte as before: `tests/gdn_core_wide.rs` pins the program and the tensors
+  against the default, and `palw-class pack verify --rebuild --strict` of the registered-class Qwen3.5-0.8B pack gives the same result on the integration binary and on this
+  one). The node graph with it ON is the same program (same bytes); the materialised constants and tensors differ, so the artifact, and its root, are a different class.
+* The runtime pack pins it (`profile.gdn_core_wide`, absent when false; the calibration identity hashes under `...calibration-id.v2` ONLY when it is set, v1 otherwise), so
+  `pack verify --rebuild` lowers the same way; `palw-class pack build --gdn-core-wide`; `palw-tir-fidelity --gdn-core-wide`.
+* `palw-class pack build` accepts pinned statistics together with the calibration sequences they were measured on (`--stats-in` + `--calib`): the statistics are read, the
+  sequences give a recurrent model's artifact its `calibrated_context` (the combination `verify --rebuild` already used), so the 8k calibration (5 h) need not be repeated.
+* Four-layer prefix, the whole pipeline: `pack build --gdn-core-wide --stats-in --calib` -> fit KL 0.00129 -> `pack verify --rebuild --strict` VERIFIED
+  (`pipe-hui-L4-verify.json`).
+
+## 5. Routing
+
+Not armed and not registered. Registrations are immutable (ADR-0175): a class built with the option is a NEW class (a different artifact root) of the same checkpoint,
+never a replacement of one already registered. The lowering owner (lane A) should review the option before it is a documented registrant choice; for the 9B the real 8k
+build with the option is `../20261011-huihui-qwen35-9b-r2`.

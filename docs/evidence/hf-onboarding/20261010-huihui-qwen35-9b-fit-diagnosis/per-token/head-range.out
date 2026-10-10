@@ -1,0 +1,11 @@
+heads 32 head-rms of core: p10 0.000255 med 0.0291 p90 0.102 max/min 32544.6
+abs error of core per head: p10 1.49e-05 med 8.29e-05 p90 0.000313 (near-uniform if quantisation noise is per-tensor)
+rel core err per head: med 0.0053 p90 0.0698 max 3.3674
+rel normed err per head: med 0.0815 p90 0.9976 max 1.0381
+corr(log head-rms, log rel_core) -0.91 slope -0.62 ; corr(log rel_core, log rel_normed) 0.70 slope 0.81
+  head rms in [6.2e-06,0.00179]: rel core 0.0553 -> rel normed 0.9956 ; abs core err 1.82e-05
+  head rms in [0.00179,0.0291]: rel core 0.0094 -> rel normed 0.2233 ; abs core err 8.98e-05
+  head rms in [0.0291,0.0715]: rel core 0.0027 -> rel normed 0.0409 ; abs core err 0.000131
+  head rms in [0.0715,0.202]: rel core 0.0021 -> rel normed 0.0303 ; abs core err 0.000204
+  per-head median head-rms: [0.009, 0.002, 0.087, 0.102, 0.025, 0.133, 0.046, 0.077, 0.072, 0.059, 0.01, 0.007, 0.001, 0.001, 0.084, 0.072, 0.099, 0.1, 0.036, 0.029, 0.0, 0.0, 0.024, 0.024, 0.0, 0.0, 0.049, 0.048, 0.083, 0.075, 0.0, 0.0]
+  per-head median rel normed err: [0.363, 0.851, 0.046, 0.003, 0.112, 0.024, 0.081, 0.035, 0.038, 0.045, 0.394, 0.713, 0.99, 0.935, 0.032, 0.049, 0.036, 0.034, 0.142, 0.008, 0.997, 0.991, 0.007, 0.174, 0.998, 0.995, 0.003, 0.004, 0.05, 0.039, 0.996, 0.997]
