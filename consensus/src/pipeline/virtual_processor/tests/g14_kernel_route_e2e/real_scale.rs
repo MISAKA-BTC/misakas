@@ -434,8 +434,8 @@ async fn g14_k2s_a_lie_in_one_segment_is_localized_and_convicted_with_bounded_by
     let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &da, &art, &lie.tokens, &[1200]) else {
         panic!("the lie is not found")
     };
-    let SegFaultV1::Element(e) = fault.as_ref() else { panic!("an element fault") };
-    assert_eq!((e.position, e.occurrence, e.node), (1200, s, n), "localized to the lying value");
+    let e = &fault;
+    assert_eq!(e.at(), Some((1200, s, n)), "localized to the lying value");
     let bytes = fault.to_bytes();
     let bounds = w.net.ledger().classes[&w.class].bounds;
     let per_position: u128 = lie.values[1200].iter().flatten().map(|t| (t.len() * t.dtype.width()) as u128).sum();
@@ -948,9 +948,9 @@ async fn g14_k2s_input_borrowed_and_garbage_traces_are_convicted_on_the_node() {
     traced[4200] = (traced[4200] + 1) % 32;
     let lie = w.claim_over(0, job, &prompt, &traced, &|_| {}, false).await;
     let fault = w.fault_from_published(&lie, &[4200]);
-    let SegFaultV1::Element(e) = &fault else { panic!("an element fault: {fault:?}") };
-    assert_eq!((e.position, e.occurrence, e.node), (4200, 0, 0), "the embedding row the token reads");
-    assert_eq!(e.token.as_ref().map(|t| t.index), Some(1), "opened by the job's second tile");
+    let e = &fault;
+    assert_eq!(e.at(), Some((4200, 0, 0)), "the embedding row the token reads");
+    assert_eq!(e.token().map(|t| t.index), Some(1), "opened by the job's second tile");
     w.file(outsider, &lie.id, &fault).await;
     assert!(w.net.ledger().claims[&lie.id].convicted, "an input lie is convicted");
     // The borrowed trace.
@@ -958,8 +958,8 @@ async fn g14_k2s_input_borrowed_and_garbage_traces_are_convicted_on_the_node() {
     let other: Vec<u32> = prompt.iter().map(|t| (t + 7) % 32).collect();
     let borrowed = w.claim_over(0, job, &prompt, &other, &|_| {}, false).await;
     let fault = w.fault_from_published(&borrowed, &[0]);
-    let SegFaultV1::Element(e) = &fault else { panic!("an element fault: {fault:?}") };
-    assert_eq!((e.position, e.occurrence, e.node, e.token.as_ref().map(|t| t.index)), (0, 0, 0, Some(0)));
+    let e = &fault;
+    assert_eq!((e.at(), e.token().map(|t| t.index)), (Some((0, 0, 0)), Some(0)));
     w.file(outsider, &borrowed.id, &fault).await;
     assert!(w.net.ledger().claims[&borrowed.id].convicted, "a borrowed trace is convicted");
     // The garbage trace.
@@ -1376,8 +1376,8 @@ async fn g14_k2s_a_history_bearing_class_held_at_8192_positions_convicts_a_conti
     let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &lie.tokens, &[4096]) else {
         panic!("the continuity lie is found")
     };
-    let SegFaultV1::Element(e) = fault.as_ref() else { panic!("an element fault: {fault:?}") };
-    assert_eq!((e.position, e.occurrence, e.node), (4096, 1, window), "localized to the window");
+    let e = &fault;
+    assert_eq!(e.at(), Some((4096, 1, window)), "localized to the window");
     let bytes = fault.to_bytes();
     let bounds = w.net.ledger().classes[&w.class].bounds;
     let parts = position_parts_v1(&w.f.program, 4096).unwrap().len();
@@ -1535,9 +1535,9 @@ async fn g14_k2s_v5_an_encoder_class_on_the_node_convicts_its_lies_and_finalizes
         let SegFindingV1::Fault(fault) = check_positions_v1(&view.context(), &chain, &art, &claim.tokens, &[0]) else {
             panic!("{what}: the lie is found")
         };
-        let SegFaultV1::Element(e) = fault.as_ref() else { panic!("{what}: an element fault") };
-        assert_eq!((e.position, e.occurrence, e.node), (0, lie.0, lie.1), "{what}: localized");
-        assert_eq!(e.token.is_some(), lie == (0, lookup), "{what}: the job's tile opens the ids");
+        let e = &fault;
+        assert_eq!(e.at(), Some((0, lie.0, lie.1)), "{what}: localized");
+        assert_eq!(e.token().is_some(), lie == (0, lookup), "{what}: the job's tile opens the ids");
         let bytes = fault.to_bytes();
         assert!(bytes.len() as u64 <= w.net.ledger().classes[&w.class].bounds.max_filing_bytes, "{what}: within the priced bound");
         w.file(outsider, &claim.id, &fault).await;

@@ -154,6 +154,8 @@ impl W {
 /// A producer's claim: its values (honest, or with a lie), commitments, evidence and the claim object.
 struct Produced {
     values: Vec<Vec<Vec<Tensor>>>,
+    /// The verifier's own re-execution (the honest trace): what a withheld value is checked with (`seg_scope`).
+    own: Vec<Vec<Vec<Tensor>>>,
     c: SegmentedCommitmentsV1,
     claim: KernelClaimV1,
     evidence: misaka_palw_kernel::seg::SegmentedEvidenceV2,
@@ -163,6 +165,9 @@ struct Produced {
 impl SegMaterialV1 for Produced {
     fn position(&self, p: u32) -> Option<Vec<Vec<Tensor>>> {
         self.values.get(p as usize).cloned()
+    }
+    fn own(&self, p: u32) -> Option<Vec<Vec<Tensor>>> {
+        self.own.get(p as usize).cloned()
     }
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
         (p < self.c.positions()).then(|| self.c.position_path(p).1)
@@ -177,6 +182,7 @@ fn produce(w: &W, job: Digest, prompt: &[u32], lie: Option<(u32, u16, u16)>) -> 
     tokens.push(g0);
     let trace = trace_v1(&w.program, &w.params, &tokens).unwrap();
     let g1 = DecodeRuleV1::Greedy.select(&trace.values[tokens.len() - 1][post][w.program.logits as usize]).unwrap();
+    let own = trace.values.clone();
     let mut values = trace.values.clone();
     if let Some((p, s, n)) = lie {
         let t = &mut values[p as usize][s as usize][n as usize];
@@ -188,7 +194,7 @@ fn produce(w: &W, job: Digest, prompt: &[u32], lie: Option<(u32, u16, u16)>) -> 
     let evidence =
         build_segmented_evidence_v1(class.header(w.class), &w.d, prompt.len() as u32, &prompt_root_of_ids_v1(prompt), &[g0], &c);
     let claim = KernelClaimV1 { job_id: job, producer_bond: PROD, generated: vec![g0, g1], evidence_root: evidence.root() };
-    Produced { values, c, claim, evidence, tokens }
+    Produced { values, own, c, claim, evidence, tokens }
 }
 
 /// Seal, then reveal: the claim's events. Past `palw_panel_free_v1` (the OPV policy's activation) the seal is claim seal v2 and the
@@ -385,6 +391,12 @@ impl SegMaterialV1 for Counted<'_> {
     fn position_siblings(&self, p: u32) -> Option<Vec<Digest>> {
         self.inner.position_siblings(p)
     }
+    fn commitments(&self, p: u32) -> Option<Vec<Vec<Digest>>> {
+        self.inner.commitments(p)
+    }
+    fn own(&self, p: u32) -> Option<Vec<Vec<Tensor>>> {
+        self.inner.own(p)
+    }
     fn position_path(&self, p: u32) -> Option<(Digest, Vec<Digest>)> {
         self.probes.set(self.probes.get() + 1);
         (p < self.inner.c.positions()).then(|| self.inner.c.position_path(p))
@@ -451,8 +463,7 @@ fn k2s_a_reexecuting_verifier_finds_any_lie_with_certainty_reading_two_positions
     read.dedup();
     assert_eq!(read, vec![2999, 3000], "two positions of material, whatever the context");
     let SegFindingV1::Fault(fault) = r.finding else { panic!("the lie is not found: {:?}", r.finding) };
-    let SegFaultV1::Element(e) = fault.as_ref() else { panic!("an element fault") };
-    assert_eq!((e.position, e.occurrence, e.node), (3000, s, n));
+    assert_eq!(fault.at(), Some((3000, s, n)), "{fault:?}");
     let bytes = fault.to_bytes();
     eprintln!(
         "[k2s] SG-06 re-execution check: {} positions, divergent position {:?} after {} position paths, material read {} B \
@@ -558,8 +569,17 @@ fn k2s_a_position_is_served_in_parts_and_its_demand_bonds_wait_for_the_grace() {
     assert_eq!(w.l.bonds[&OUT].reserved, 0, "settled at the grace's end");
     // A fresh verifier rebuilds the position from the served parts alone and checks it.
     let view = w.l.seg_claim_view_v1(&id).unwrap();
-    let (values, siblings) = assemble_position_v1(&w.program, &view.segment_roots, view.positions, 1, &served).unwrap();
-    assert_eq!(values, honest.values[1]);
+    let (values, siblings, commitments) =
+        assemble_position_v1(&w.program, &view.segment_roots, view.positions, 1, &served).unwrap();
+    assert_eq!(commitments, honest.commitments(1).unwrap(), "every node commitment, withheld values' included");
+    let withheld = misaka_palw_kernel::seg_scope::seg_withheld_mask_v1(&w.program);
+    for (s, occ) in values.iter().enumerate() {
+        for (n, t) in occ.iter().enumerate() {
+            if !withheld[s][n] {
+                assert_eq!(t, &honest.values[1][s][n], "a served value is the committed one");
+            }
+        }
+    }
     assert_eq!(siblings, honest.c.position_path(1).1);
 }
 

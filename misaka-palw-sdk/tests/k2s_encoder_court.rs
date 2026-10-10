@@ -780,9 +780,9 @@ fn k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_materi
             let SegFindingV1::Fault(fault) = check_positions_v1(&ctx, &liar, &art, &prompt, &[0]) else {
                 panic!("{fixture}: the lie in {what} is not found")
             };
-            let SegFaultV1::Element(e) = fault.as_ref() else { panic!("{fixture}: {what}: an element fault, not {fault:?}") };
-            assert_eq!((e.position, e.occurrence, e.node), (0, s, n), "{fixture}: {what}: localized to the lying value");
-            assert_eq!(e.token.is_some(), what.starts_with("the embedding lookup"), "{fixture}: {what}: the prompt tile");
+            let e = &fault;
+            assert_eq!(e.at(), Some((0, s, n)), "{fixture}: {what}: localized to the lying value");
+            assert_eq!(e.token().is_some(), what.starts_with("the embedding lookup"), "{fixture}: {what}: the prompt tile");
             let r = check_claim_by_reexecution_v1(&ctx, &roots, None, &liar, &art, &prompt);
             assert_eq!((r.divergent, r.probes), (Some(0), 0), "{fixture}: {what}: one position, no probe");
             assert!(matches!(r.finding, SegFindingV1::Fault(_)), "{fixture}: {what}: re-execution finds it too");
