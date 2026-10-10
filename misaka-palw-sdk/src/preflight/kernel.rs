@@ -101,11 +101,17 @@ pub fn node_program_outcome(
             }
         };
         let carrier = kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 as u128;
+        let admission_work =
+            match misaka_palw_kernel::gate::program_claim_admission_work_v1(&bounds, program.encode().len(), program, &plan) {
+                Ok(work) => work,
+                Err(why) => return O::ExternalBlocker { why },
+            };
         for (what, required, limit) in [
             ("prosecution filing carrier", bounds.max_filing_bytes as u128, carrier),
             ("prosecution response carrier", bounds.max_response_bytes, carrier),
             ("claim commitment carrier", bounds.max_commit_bytes, carrier),
-            ("court work per block", bounds.max_court_work as u128, policy.max_court_work_per_block as u128),
+            ("guaranteed proof work per block", bounds.max_court_work as u128, policy.guaranteed_proof_work_v1() as u128),
+            ("claim admission work per block", admission_work as u128, policy.admission_work_limit_v1() as u128),
         ] {
             if required > limit {
                 return O::BoundsExceeded { what, required, limit };

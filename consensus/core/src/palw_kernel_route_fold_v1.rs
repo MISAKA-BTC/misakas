@@ -661,18 +661,14 @@ pub(super) fn charge_route_budget_v1(
         Some((blue_score, a, w)) if blue_score == ctx.blue_score => (a, w),
         _ => (0, 0),
     };
-    let runs = if may_spend_reserve {
-        policy.max_adjudications_per_block
-    } else {
-        policy.max_adjudications_per_block.saturating_sub(policy.prosecution_reserved_runs())
-    };
-    if adjudications >= runs || work.saturating_add(court_work) > policy.max_court_work_per_block {
+    let spent = misaka_palw_kernel::ledger::BlockBudgetV1 { adjudications, court_work: work };
+    let Some(next) = spent.charged_v1(&policy, court_work, may_spend_reserve) else {
         return Ok(false);
-    }
+    };
     builder.write_kernel_row(
         PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,
         Vec::new(),
-        Some(borsh::to_vec(&(ctx.blue_score, adjudications + 1, work.saturating_add(court_work))).expect("a budget serializes")),
+        Some(borsh::to_vec(&(ctx.blue_score, next.adjudications, next.court_work)).expect("a budget serializes")),
     );
     Ok(true)
 }

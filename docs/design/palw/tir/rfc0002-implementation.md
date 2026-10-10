@@ -501,3 +501,73 @@ hash optimization. They are not claimed as an additional node run of the optimiz
 compatibility here rests on the original-preimage oracle and the listed court/SDK regressions.
 
 The original full RFC02 goal remains active and **not complete**.
+
+
+## Verified increment — shared claim admission and proof work, 2026-10-10
+
+The dormant `palw_probabilistic_constraints_v1` route previously counted structural claim
+acceptance as an adjudication with zero work. It now derives a tariff from the registered
+`max_commit_bytes`, the existing 64 KiB carrier allowance and the public class schema: 16 work
+units per bounded byte. Single-program schemas price every declared artifact instance (including
+unused instances), independently of the registrant's commitment subset. Pipeline and typed
+schemas include their stage/component records. The calculation uses checked arithmetic and a
+counting Borsh writer; no temporary schema/trace serialization is required to count the tariff.
+This tariff is deterministic chain accounting, not a claim about measured CPU instruction cost.
+
+All four claim kinds, including salted reveals, check the class carrier envelope before trace
+copies; seal readiness and OPV capacity precede charged structure work. Duplicate/unready
+reveals remain free. Ready malformed traces spend work without changing rooted state. A refused
+budget charge spends nothing and retains the seal for retry. Registration checks both admission
+fit and worst-court fit in the reserved proof-work share. `BlockBudgetV1::charged_v1` is also the
+node onboarding fold's transition, so persisted blue-score-scoped work cannot be bypassed by
+alternating onboarding and kernel objects. Both the work sum and the run sum reject overflow.
+The scratch field/row retains its existing `court_work` name and encoding; plan bytes, descriptor
+semantics, work credit and state-root grammar are unchanged. Consensus presets/fences remain
+unarmed: this is a pre-activation revision of the fenced kernel route, not a live fork.
+
+SDK program admission uses the same program tariff and reserved proof-work ceiling. Pipeline
+SDK reporting still needs its complete node resource gate; no new claim of full pipeline
+preflight equivalence is made. The whole resource vector, graph-dependent semantic validation
+costs, producer/evidence budgets and network-wide retained-state accounting remain incomplete.
+A zero-reserve policy explicitly offers only a full-block court ceiling; it provides no reserved
+work guarantee. Production policy retains its 500-permille reserve. Two existing isolated
+full-block court/pricing tests explicitly select zero reserve; reserve liveness is tested by the
+new aggregate scenario rather than by weakening the production limit.
+
+New adversarial checks exercise two simultaneously sealed jobs, refusal before the run ceiling,
+a fresh replaying outsider's conviction from the remaining work, the honest claim's next-block
+retry, a ready wrong trace charged without state change, a class-oversized trace inside the global
+route envelope, impossible admission/proof-reserve registration, and `u64::MAX` work exhaustion.
+These are generated fixtures, not real-checkpoint performance or shipping activation evidence.
+
+
+Validation: **173 distinct tests pass** (123 kernel, 28 SDK, 8 consensus-core route tests,
+14 consensus node-path tests), plus `cargo check --locked -p kaspad`. The extra overflow rerun
+is a repeat, not a 174th test. The C4 suite retains one existing ignored test. Final source
+formatting/diff checks pass. The completed SDK/node test executables were checked for Cargo
+freshness without changing their SHA-256, after the final source edits.
+
+```sh
+cargo test --locked -p misaka-palw-kernel --test k2_ledger_route --test k2_ledger \
+  --test k2_ledger_pipeline --test k2_real_scale --test typed_roots --test c4r4 \
+  --test k2_rows --test k2_opv --test k2_opv_pipeline
+cargo test --locked -p misaka-palw-sdk --test direct_tir_registration --test runtime_pack_beacon
+cargo test --locked -p kaspa-consensus-core --lib palw_kernel_route
+cargo test --locked -p kaspa-consensus --lib g14_k2s_ -- --test-threads=1 \
+  --skip g14_k2s_a_history_bearing_class_held_at_8192_positions_convicts_a_continuity_lie_across_segments
+cargo check --locked -p kaspad
+```
+
+Logs: `/tmp/rfc02-admission-final-all.log`, `/tmp/rfc02-admission-overflow-final.log`,
+`/tmp/rfc02-admission-sdk-final.log`, `/tmp/rfc02-admission-core-final.log`,
+`/tmp/rfc02-admission-node-courts.log`, `/tmp/rfc02-admission-node-check-final.log`.
+The 8192-position history scenario was **not rerun in this increment**; its earlier pass on
+`07b76fe2c` does not establish that scope on the new revision. Node-path evidence uses test
+activation/public-artifact hooks and generated weights, not shipping activation or a real
+checkpoint. Public economic admission, full modalities and A6/A8 coverage remain open.
+
+A separate baseline integration issue was found while checking formatting: gateway
+`src/main.rs`'s scoped candidate spawn is missing the closing map closure, so repository-wide
+formatting cannot parse that unchanged file. It needs repair/build verification before gateway
+public-task drills. Unrelated formatter edits were discarded; no gateway/source changes are
+included in this resource increment.

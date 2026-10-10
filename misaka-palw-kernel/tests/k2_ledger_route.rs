@@ -496,6 +496,7 @@ fn the_court_work_budget_bounds_what_one_block_can_make_the_network_run() {
     assert!(work > 0);
     let mut p = policy();
     p.max_court_work_per_block = work;
+    p.prosecution_reserve_permille = 0; // This test isolates the full-block court ceiling; reserve liveness is tested below.
     let mut w = World::with(p);
     let job = w.post_job(2, &[3, 17, 9], 3, 1);
     let h = w.honest(&job, 3);
@@ -1002,4 +1003,122 @@ fn a_claims_challenge_subject_feeds_the_single_contracts_seed_and_the_ledger_sto
     // The legacy per-claim beacon is gone: the public record the ledger assembles carries none, and an outsider's checks use its
     // own salt (the faults it finds are convictable whatever vectors found them).
     assert_eq!(w.l.public_record(&id1).unwrap().0.beacon, [0; 64]);
+}
+
+#[test]
+fn aggregate_claim_work_stops_at_the_proof_reserve_and_a_fresh_outsider_still_convicts() {
+    let probe = World::new();
+    let row = &probe.l.classes[&probe.class];
+    let cost = row.admission_work_v1().unwrap();
+    let court = row.bounds.max_court_work;
+    let mut p = policy();
+    p.max_court_work_per_block = 2 * cost + court - 1;
+    p.prosecution_reserve_permille = (court as u128 * 1000).div_ceil(p.max_court_work_per_block as u128) as u16;
+    assert!(
+        p.admission_work_limit_v1() >= cost && p.admission_work_limit_v1() < 2 * cost,
+        "the test must reach work exhaustion before run exhaustion: cost {cost}, court {court}"
+    );
+    let mut w = World::with(p);
+    let job_a = w.post_job(2, &[3, 17, 9], 3, 1);
+    let job_b = w.post_job(2, &[3, 17, 9], 3, 2);
+    let (_, lie) = w.lying(&job_a, 3);
+    let id = lie.claim.id();
+    let da = Da::publishing(&lie.trace, &[]);
+    let honest = w.honest(&job_b, 3);
+    let retry = honest.tx.clone();
+    let ev = w.block(10, vec![lie.tx, honest.tx, T::PanelCovered { claim: id }]);
+    assert!(w.l.claims.contains_key(&id));
+    assert_eq!(ev.iter().filter(|e| matches!(e, E::ClaimCommitted { .. })).count(), 1);
+    assert!(refused(&ev).is_some_and(|why| why.contains("budget")), "{ev:?}");
+    assert_eq!(w.l.budget_used().court_work, cost);
+    let used = w.l.budget_used();
+    let (_, obj) = retry.clone().signed(PRODUCER);
+    refused_with(&mut w, &obj, PRODUCER, RefusalKindV1::OverBudget);
+    assert_eq!(w.l.budget_used(), used);
+    let OutsiderFindingV1::Prosecute(proof) = outsider(&w, id, &da) else { panic!("no proof") };
+    let ev = direct(&mut w, &O::FileProof { accuser: OUTSIDER, claim: id, proof }, OUTSIDER).unwrap();
+    assert!(convicted(&ev).is_some(), "{ev:?}");
+    assert_eq!(w.l.budget_used().court_work, cost + court);
+    // The honest sealed claim retries next block; rejection did not consume its seal or collateral.
+    let ev = w.block(11, vec![retry]);
+    assert!(ev.iter().any(|e| matches!(e, E::ClaimCommitted { .. })), "{ev:?}");
+}
+
+#[test]
+fn malformed_claims_spend_admission_work_but_class_oversize_is_refused_before_trace_copy() {
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let h = w.honest(&job, 3);
+    seal_first(&mut w, &h.claim);
+    w.l.begin_block(3).unwrap();
+    let (_, mut obj) = h.tx.signed(PRODUCER);
+    let O::CommitClaim { commitments, .. } = &mut obj else { panic!() };
+    commitments[0][0][0][0] ^= 1;
+    let cost = w.l.classes[&w.class].admission_work_v1().unwrap();
+    let r = refused_with(&mut w, &obj, PRODUCER, RefusalKindV1::Rule);
+    assert!(r.why.contains("trace root"));
+    assert_eq!(w.l.budget_used().court_work, cost);
+    w.l.begin_block(4).unwrap();
+    let cap = w.l.classes[&w.class].bounds.max_commit_bytes + misaka_palw_kernel::gate::CLAIM_CARRIER_OVERHEAD_BYTES_V1;
+    let O::CommitClaim { commitments, .. } = &mut obj else { panic!() };
+    *commitments = vec![vec![vec![[0; 64]; (cap / 64 + 1) as usize]]];
+    assert!(obj.encoded_len() <= obj.max_encoded_bytes(), "test must reach the class ceiling");
+    let r = refused_with(&mut w, &obj, PRODUCER, RefusalKindV1::Oversized);
+    assert!(r.why.contains("class bound"));
+    assert_eq!(w.l.budget_used(), Default::default());
+}
+
+#[test]
+fn registration_refuses_an_unusable_admission_budget_and_work_addition_never_wraps() {
+    let w = World::new();
+    let row = &w.l.classes[&w.class];
+    let cost = row.admission_work_v1().unwrap();
+    let mut impossible = row.bounds;
+    impossible.max_commit_bytes = u128::MAX;
+    assert!(misaka_palw_kernel::gate::claim_admission_work_v1(&impossible, 0).is_err());
+    impossible.max_commit_bytes = u64::MAX as u128;
+    assert!(misaka_palw_kernel::gate::claim_admission_work_v1(&impossible, 0).is_err());
+    let mut p = policy();
+    p.max_court_work_per_block = row.bounds.max_court_work + cost;
+    p.prosecution_reserve_permille = 999;
+    assert!(p.admission_work_limit_v1() < cost, "fixture must require more than 0.1% of the block");
+    let d = k2_tir_v1_descriptor();
+    let mut l = KernelLedgerV1::genesis(p, active_for(&d), vec![d]).unwrap();
+    l.sync_bond(PRODUCER, 5000);
+    l.attest_artifact(row.param_commitments.root());
+    let (_, obj) = w.register().signed(PRODUCER);
+    let root = l.root();
+    let r = l.apply_object(&obj, &auth(PRODUCER)).unwrap_err();
+    assert!(r.why.contains("non-proof work budget"), "{r}");
+    assert_eq!(l.root(), root);
+    assert!(l.classes.is_empty());
+    let mut p = policy();
+    p.max_court_work_per_block = 2 * row.bounds.max_court_work.max(cost);
+    p.prosecution_reserve_permille = 1;
+    assert!(cost <= p.admission_work_limit_v1());
+    let d = k2_tir_v1_descriptor();
+    let mut l = KernelLedgerV1::genesis(p, active_for(&d), vec![d]).unwrap();
+    l.sync_bond(PRODUCER, 5000);
+    l.attest_artifact(row.param_commitments.root());
+    let root = l.root();
+    let r = l.apply_object(&obj, &auth(PRODUCER)).unwrap_err();
+    assert!(r.why.contains("guaranteed proof work"), "{r}");
+    assert_eq!(l.root(), root);
+    assert!(l.classes.is_empty());
+    // Reuse a live claim and exhaust u64 exactly; a positive court cannot fit via saturation.
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let h = w.honest(&job, 3);
+    let id = h.claim.id();
+    w.block(10, vec![h.tx]);
+    w.l.restore_budget(misaka_palw_kernel::ledger::BlockBudgetV1 { adjudications: 0, court_work: u64::MAX });
+    let used = w.l.budget_used();
+    refused_with(
+        &mut w,
+        &O::FileProof { accuser: SPAM1, claim: id, proof: ProsecutionV1::Kernel(vec![1, 2, 3]) },
+        SPAM1,
+        RefusalKindV1::OverBudget,
+    );
+    assert_eq!(w.l.budget_used(), used);
+    assert_eq!(w.l.policy.admission_work_limit_v1(), u64::MAX - u64::MAX / 2);
 }

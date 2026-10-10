@@ -59,6 +59,45 @@ pub struct ProsecutionBoundsV1 {
     pub deadline_daa: u64,
 }
 
+/// Structural claim admission shares the court's deterministic byte-work tariff. This is not
+/// producer execution work, PWU or economic credit. Price the largest registered carrier and the
+/// public class schema read by the structure checker, before cloning or authenticating a trace.
+/// Keep this derived value outside the frozen plan/bounds wire grammar.
+pub fn claim_admission_work_v1(bounds: &ProsecutionBoundsV1, schema_bytes: u128) -> Result<u64, String> {
+    bounds
+        .max_commit_bytes
+        .checked_add(CLAIM_CARRIER_OVERHEAD_BYTES_V1)
+        .and_then(|bytes| bytes.checked_add(schema_bytes))
+        .and_then(|bytes| bytes.checked_mul(16))
+        .and_then(|work| u64::try_from(work).ok())
+        .ok_or_else(|| "claim admission byte work exceeds u64".into())
+}
+
+pub const CLAIM_CARRIER_OVERHEAD_BYTES_V1: u128 = 1 << 16;
+
+/// A shared upper bound for a single-program schema, independent of which unused artifact
+/// parameters the registrar supplies. Each declared commitment instance has at most 69 wire bytes.
+pub fn program_claim_admission_work_v1(
+    bounds: &ProsecutionBoundsV1,
+    program_bytes: usize,
+    program: &TirProgramV1,
+    plan: &VerificationPlanV1,
+) -> Result<u64, String> {
+    let instances = program
+        .params
+        .iter()
+        .try_fold(0u128, |sum, p| sum.checked_add(if p.per_layer { program.schedule.layers.len() as u128 } else { 1 }))
+        .ok_or("parameter instance count overflow")?;
+    let plan_bytes = borsh::object_length(plan).map_err(|e| e.to_string())? as u128;
+    let schema = instances
+        .checked_mul(69)
+        .and_then(|bytes| bytes.checked_add(program_bytes as u128))
+        .and_then(|bytes| bytes.checked_add(plan_bytes))
+        .and_then(|bytes| bytes.checked_add(8))
+        .ok_or("class schema byte overflow")?;
+    claim_admission_work_v1(bounds, schema)
+}
+
 /// One reason a plan/profile is not publicly prosecutable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProsecutionGapV1 {

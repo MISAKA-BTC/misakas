@@ -154,10 +154,11 @@ pub struct LedgerPolicyV1 {
     /// The most court / classification / inclusion-check runs one block may trigger; an object past it is refused (dropped).
     pub max_adjudications_per_block: u32,
     /// **Prosecution room that is always there** (C4 F-C4R3-05, round 2): this share (permille) of every block's
-    /// `max_adjudications_per_block` only a `FileProof` may spend — admissions (claims, registrations, pipeline jobs) and responses use
+    /// `max_adjudications_per_block` and byte/court work only a `FileProof` may spend — admissions (claims, registrations, pipeline jobs) and responses use
     /// the rest — so no flood of claims can leave an outsider without a court run in the block that carries its proof. Below 1000.
     pub prosecution_reserve_permille: u16,
-    /// The most court work (the class's declared worst court work, summed over the block's filed proofs) one block may trigger.
+    /// The most shared structural admission and court work one block may trigger. The stored field
+    /// name remains `court_work`; claim byte tariffs and worst-case public courts spend this same budget.
     pub max_court_work_per_block: u64,
     /// A claim commits only over its producer's seal at least this old (≥ 1: a seal in the same block as the reveal proves nothing).
     pub claim_seal_delay_daa: u64,
@@ -173,6 +174,23 @@ impl LedgerPolicyV1 {
     /// The court runs of every block only a `FileProof` may spend (C4 F-C4R3-05, round 2).
     pub const fn prosecution_reserved_runs(&self) -> u32 {
         (self.max_adjudications_per_block as u64 * self.prosecution_reserve_permille as u64 / 1000) as u32
+    }
+
+    /// Ordinary admission cannot spend the work reserved for public proofs. Use u128 before
+    /// scaling: policies near u64::MAX must not overflow or silently eliminate the reserve.
+    pub fn admission_work_limit_v1(&self) -> u64 {
+        let reserved = self.max_court_work_per_block as u128 * self.prosecution_reserve_permille as u128 / 1000;
+        self.max_court_work_per_block.saturating_sub(reserved.min(u64::MAX as u128) as u64)
+    }
+
+    /// A registered court must fit the room left after admissions fill their share. With no
+    /// configured reserve the policy explicitly supplies only the full-block ceiling.
+    pub fn guaranteed_proof_work_v1(&self) -> u64 {
+        if self.prosecution_reserve_permille == 0 {
+            self.max_court_work_per_block
+        } else {
+            self.max_court_work_per_block - self.admission_work_limit_v1()
+        }
     }
 
     /// **What a dismissed filing that ran a court forfeits** (C4 F-C4R4-05): `dismissed_proof_fee` for each
@@ -261,6 +279,10 @@ pub struct ClassRowV1 {
 }
 
 impl ClassRowV1 {
+    pub fn admission_work_v1(&self) -> Result<u64, String> {
+        crate::gate::program_claim_admission_work_v1(&self.bounds, self.program_bytes.len(), &self.program, &self.plan)
+    }
+
     pub fn header(&self, class_binding_id: Digest) -> EvidenceHeaderV1 {
         EvidenceHeaderV1 {
             network_domain: self.network_domain,
@@ -296,6 +318,12 @@ pub struct PipelineClassRowV1 {
 }
 
 impl PipelineClassRowV1 {
+    pub fn admission_work_v1(&self) -> Result<u64, String> {
+        let bytes = borsh::object_length(&(&self.pipeline_bytes, &self.program_bytes, &self.plan, &self.param_commitments))
+            .map_err(|e| format!("pipeline schema: {e}"))?;
+        crate::gate::claim_admission_work_v1(&self.bounds, bytes as u128)
+    }
+
     pub fn header(&self, class_binding_id: Digest) -> PipelineHeaderV1 {
         PipelineHeaderV1 { network_domain: self.network_domain, ruleset_digest: self.ruleset_digest, class_binding_id }
     }
@@ -638,7 +666,26 @@ pub struct LedgerBlockV1 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BlockBudgetV1 {
     pub adjudications: u32,
+    /// Shared admission byte work plus public court work (the persisted wire field keeps its name).
     pub court_work: u64,
+}
+
+impl BlockBudgetV1 {
+    /// Shared by the kernel ledger and the node's onboarding fold. Refusals consume neither a
+    /// run nor work; only public proof/refutation paths may use the reserved share.
+    pub fn charged_v1(self, policy: &LedgerPolicyV1, work: u64, may_spend_reserve: bool) -> Option<Self> {
+        let runs = if may_spend_reserve {
+            policy.max_adjudications_per_block
+        } else {
+            policy.max_adjudications_per_block.saturating_sub(policy.prosecution_reserved_runs())
+        };
+        let work_limit = if may_spend_reserve { policy.max_court_work_per_block } else { policy.admission_work_limit_v1() };
+        let court_work = self.court_work.checked_add(work)?;
+        if self.adjudications >= runs || court_work > work_limit {
+            return None;
+        }
+        Some(Self { adjudications: self.adjudications.checked_add(1)?, court_work })
+    }
 }
 
 /// **Any public source of the artifact's tensors** — a registry mirror, a DA provider, the model's host. Whatever it returns is
@@ -1359,13 +1406,8 @@ impl KernelLedgerV1 {
     /// Charge one adjudication (and `court_work`) to the block, or refuse the object as over budget. Nothing is charged on a refusal.
     pub(crate) fn charge(&mut self, name: &'static str, court_work: u64) -> Result<(), KernelRefusalV1> {
         let b = self.budget;
-        // C4 F-C4R3-05 (round 2): a share of the block is reserved for proofs; everything else stops short of it.
-        let runs = if name == "FileProof" {
-            self.policy.max_adjudications_per_block
-        } else {
-            self.policy.max_adjudications_per_block - self.policy.prosecution_reserved_runs()
-        };
-        if b.adjudications >= runs || b.court_work.saturating_add(court_work) > self.policy.max_court_work_per_block {
+        let next = b.charged_v1(&self.policy, court_work, name == "FileProof");
+        if next.is_none() {
             return Err(KernelRefusalV1::new(
                 name,
                 RefusalKindV1::OverBudget,
@@ -1377,7 +1419,7 @@ impl KernelLedgerV1 {
                 ),
             ));
         }
-        self.budget = BlockBudgetV1 { adjudications: b.adjudications + 1, court_work: b.court_work.saturating_add(court_work) };
+        self.budget = next.expect("checked");
         Ok(())
     }
 
@@ -1501,25 +1543,22 @@ impl KernelLedgerV1 {
             &self.policy.prosecution,
         )
         .map_err(|g| rule(format!("not publicly prosecutable: {g:?}")))?;
-        if bounds.max_court_work > self.policy.max_court_work_per_block {
-            return Err(rule("the class's worst court does not fit one block's court budget: nobody could prosecute it".into()));
-        }
+        self.check_court_work_v1(bounds.max_court_work).map_err(rule)?;
         if let Some(p) = opv {
             self.opv_class_economics(&p, &bounds).map_err(rule)?;
         }
-        self.classes.insert(
-            class,
-            ClassRowV1 {
-                descriptor: d,
-                program_bytes: program_bytes.to_vec(),
-                program,
-                plan: plan.clone(),
-                param_commitments: pc.clone(),
-                network_domain: self.policy.network_domain,
-                ruleset_digest: self.policy.ruleset_digest,
-                bounds,
-            },
-        );
+        let row = ClassRowV1 {
+            descriptor: d,
+            program_bytes: program_bytes.to_vec(),
+            program,
+            plan: plan.clone(),
+            param_commitments: pc.clone(),
+            network_domain: self.policy.network_domain,
+            ruleset_digest: self.policy.ruleset_digest,
+            bounds,
+        };
+        self.check_admission_work_v1(row.admission_work_v1().map_err(rule)?).map_err(rule)?;
+        self.classes.insert(class, row);
         if mode.is_optimistic() {
             self.opv.classes.insert(class);
         }
@@ -1574,9 +1613,7 @@ impl KernelLedgerV1 {
         if stream_stage(&pipeline).is_some() != decode.is_some() {
             return Err(rule("a stream stage's output needs a decode rule; a pipeline without one has none".into()));
         }
-        if bounds.max_court_work > self.policy.max_court_work_per_block {
-            return Err(rule("the class's worst court does not fit one block's court budget: nobody could prosecute it".into()));
-        }
+        self.check_court_work_v1(bounds.max_court_work).map_err(rule)?;
         let binding = PipelineClassV1 {
             descriptor_digest: d.digest(),
             pipeline_root: pipeline_root_v1(&pipeline, &programs),
@@ -1594,22 +1631,21 @@ impl KernelLedgerV1 {
         if let Some(p) = opv {
             self.opv_class_economics(&p, &bounds).map_err(rule)?;
         }
-        self.pipeline_classes.insert(
-            class,
-            PipelineClassRowV1 {
-                descriptor: d,
-                pipeline_bytes: pipeline_bytes.to_vec(),
-                pipeline,
-                program_bytes: program_bytes.to_vec(),
-                programs,
-                plan: plan.clone(),
-                param_commitments: pcs.to_vec(),
-                binding,
-                network_domain: self.policy.network_domain,
-                ruleset_digest: self.policy.ruleset_digest,
-                bounds,
-            },
-        );
+        let row = PipelineClassRowV1 {
+            descriptor: d,
+            pipeline_bytes: pipeline_bytes.to_vec(),
+            pipeline,
+            program_bytes: program_bytes.to_vec(),
+            programs,
+            plan: plan.clone(),
+            param_commitments: pcs.to_vec(),
+            binding,
+            network_domain: self.policy.network_domain,
+            ruleset_digest: self.policy.ruleset_digest,
+            bounds,
+        };
+        self.check_admission_work_v1(row.admission_work_v1().map_err(rule)?).map_err(rule)?;
+        self.pipeline_classes.insert(class, row);
         if mode.is_optimistic() {
             self.opv.classes.insert(class);
         }
@@ -1863,15 +1899,12 @@ impl KernelLedgerV1 {
         let job = self.jobs.get(&claim.job_id).ok_or_else(|| rule("no such job".into()))?;
         let class = self.classes.get(&job.class_binding_id).ok_or_else(|| rule("no such class".into()))?;
         self.opv_claim_gate(&job.class_binding_id).map_err(rule)?;
+        Self::check_claim_carrier_v1(NAME, &class.bounds, &(claim, evidence, commitments))?;
         if let Some(f) = binding_fault_v1(job, claim, evidence, class.program.token_bound) {
             return Err(rule(format!("binding fault {f:?}")));
         }
         if evidence.header != class.header(job.class_binding_id) {
             return Err(rule(format!("binding fault {:?}", BindingFaultV1::WrongClass)));
-        }
-        // The trace commitments are carried with the claim (they bound every later opening): they must be the evidence's.
-        if EvidenceV1::new(commitments.to_vec()).root() != evidence.trace_root {
-            return Err(rule("the carried trace commitments are not the evidence's trace root".into()));
         }
         let id = claim.id();
         if self.claims.contains_key(&id) {
@@ -1880,7 +1913,12 @@ impl KernelLedgerV1 {
         // Cheap objective checks first: an unsealed or unready reveal never spends the block's adjudication budget (C4 O-C4-14).
         self.reveal_ready(&claim.job_id, &claim.producer_bond, &id, salt).map_err(rule)?;
         self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
-        self.charge(NAME, 0)?;
+        let work = class.admission_work_v1().map_err(rule)?;
+        self.charge(NAME, work)?;
+        // The trace commitments are carried with the claim (they bound every later opening): they must be the evidence's.
+        if EvidenceV1::new(commitments.to_vec()).root() != evidence.trace_root {
+            return Err(rule("the carried trace commitments are not the evidence's trace root".into()));
+        }
         let job = self.jobs.get(&claim.job_id).expect("checked");
         let class = self.classes.get(&job.class_binding_id).expect("checked");
         // Everything a court checks before any relation, checked now: a claim is never committed in a shape a court could only
@@ -1923,6 +1961,7 @@ impl KernelLedgerV1 {
         let job = self.pipeline_jobs.get(&claim.job_id).ok_or_else(|| rule("no such job".into()))?;
         let class = self.pipeline_classes.get(&job.class_binding_id).ok_or_else(|| rule("no such class".into()))?;
         self.opv_claim_gate(&job.class_binding_id).map_err(rule)?;
+        Self::check_claim_carrier_v1(NAME, &class.bounds, &(claim, evidence, stages))?;
         use BindingFaultV1 as F;
         let fault = |f: F| Err(rule(format!("binding fault {f:?}")));
         if claim.evidence_root != evidence.root() {
@@ -1958,11 +1997,6 @@ impl KernelLedgerV1 {
         if claim.output_root != evidence.output_root {
             return Err(rule("binding fault WrongOutput".into()));
         }
-        if stages.len() != evidence.stages.len()
-            || stages.iter().zip(&evidence.stages).any(|(s, e)| s.evidence().root() != e.trace_root)
-        {
-            return Err(rule("the carried trace commitments are not the evidence's trace roots".into()));
-        }
         let id = claim.id();
         if self.claims.contains_key(&id) {
             return Err(rule("an exact duplicate claim".into()));
@@ -1970,7 +2004,13 @@ impl KernelLedgerV1 {
         // Cheap objective checks first: an unsealed or unready reveal never spends the block's adjudication budget (C4 O-C4-14).
         self.reveal_ready(&claim.job_id, &claim.producer_bond, &id, salt).map_err(rule)?;
         self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
-        self.charge(NAME, 0)?;
+        let work = class.admission_work_v1().map_err(rule)?;
+        self.charge(NAME, work)?;
+        if stages.len() != evidence.stages.len()
+            || stages.iter().zip(&evidence.stages).any(|(s, e)| s.evidence().root() != e.trace_root)
+        {
+            return Err(rule("the carried trace commitments are not the evidence's trace roots".into()));
+        }
         let job = self.pipeline_jobs.get(&claim.job_id).expect("checked");
         let class = self.pipeline_classes.get(&job.class_binding_id).expect("checked");
         let h = class.header(job.class_binding_id);
@@ -2071,6 +2111,42 @@ impl KernelLedgerV1 {
                 .unwrap_or_default(),
             ClaimBodyV1::Spec(b) => self.spec_derived_mask(row, b, stage),
         }
+    }
+
+    pub(crate) fn check_court_work_v1(&self, work: u64) -> Result<(), String> {
+        if work > self.policy.max_court_work_per_block {
+            return Err("the class's worst court does not fit one block's court budget: nobody could prosecute it".into());
+        }
+        if work > self.policy.guaranteed_proof_work_v1() {
+            return Err("the class's worst court does not fit guaranteed proof work: admissions could starve prosecution".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_admission_work_v1(&self, work: u64) -> Result<(), String> {
+        if work > self.policy.admission_work_limit_v1() {
+            return Err("the class's structural claim admission cannot fit the block's non-proof work budget".into());
+        }
+        Ok(())
+    }
+
+    /// Count the borrowed carrier before allocating/copying a trace or hashing evidence. A global
+    /// route envelope alone would let a small class carry arbitrarily larger malformed traces.
+    pub(crate) fn check_claim_carrier_v1<T: BorshSerialize>(
+        name: &'static str,
+        bounds: &ProsecutionBoundsV1,
+        value: &T,
+    ) -> Result<(), KernelRefusalV1> {
+        let len = borsh::object_length(value).map_err(|e| KernelRefusalV1::rule(name, e.to_string()))? as u128;
+        let cap = bounds.max_commit_bytes.saturating_add(crate::gate::CLAIM_CARRIER_OVERHEAD_BYTES_V1);
+        if len > cap {
+            return Err(KernelRefusalV1::new(
+                name,
+                RefusalKindV1::Oversized,
+                format!("claim carrier {len} bytes exceeds class bound {cap}"),
+            ));
+        }
+        Ok(())
     }
 
     /// The prosecution bounds of a registered class of any kind (single program, pipeline, typed).
@@ -2816,7 +2892,7 @@ impl KernelLedgerV1 {
 /// (version, tag, claim, stage, position, length) and of the evidence object a `CommitClaim` carries beside the commitments.
 const FILE_PROOF_OVERHEAD_V1: u128 = 1 + 1 + 64 + 64 + 1 + 4;
 const RESPOND_OVERHEAD_V1: u128 = 1 + 1 + 64 + 1 + 4 + 4;
-const COMMIT_OVERHEAD_V1: u128 = 1 << 16;
+const COMMIT_OVERHEAD_V1: u128 = crate::gate::CLAIM_CARRIER_OVERHEAD_BYTES_V1;
 
 /// **A class is prosecutable only if its worst filing, its largest response and its commitments fit the carriers** — the encoded-size
 /// ceilings of the objects that carry them. A court that cannot be carried by a `FileProof`, a response that cannot be carried by a

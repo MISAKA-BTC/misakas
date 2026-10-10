@@ -393,6 +393,25 @@ pub struct SpecClassRowV1 {
     pub bounds: ProsecutionBoundsV1,
 }
 
+impl SpecClassRowV1 {
+    pub fn admission_work_v1(&self) -> Result<u64, String> {
+        let mut bytes = borsh::object_length(&self.spec).map_err(|e| e.to_string())? as u128;
+        // Composite records name their components by id: their model schemas are still read by
+        // admission and must not disappear from the tariff. Memory embeds its rule in the spec.
+        if let SpecClassKindV1::Composite { components, .. } = &self.kind {
+            for component in components {
+                let component_bytes = match component {
+                    ComponentV1::Model(model) => borsh::object_length(&(&model.program_bytes, &model.plan, &model.param_commitments)),
+                    ComponentV1::Retrieval(root) => borsh::object_length(root),
+                }
+                .map_err(|e| e.to_string())? as u128;
+                bytes = bytes.checked_add(component_bytes).ok_or("composite schema byte overflow")?;
+            }
+        }
+        crate::gate::claim_admission_work_v1(&self.bounds, bytes)
+    }
+}
+
 /// **The typed part of the ledger** (tables 22–24; every one in the root only when non-empty).
 #[derive(Clone, Debug, Default)]
 pub struct TypedStateV1 {

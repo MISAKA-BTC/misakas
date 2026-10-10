@@ -2229,6 +2229,17 @@ An executor's chosen memory budget does not set consensus capacity. Validator/co
 remain independently enforced even when a producer owns a large GPU. New resource-contract or
 limit semantics require an explicit version/fence; legacy admission keeps its exact meaning.
 
+The pre-activation `palw_probabilistic_constraints_v1` route now prices structural claim
+admission from the registered commitment envelope and public schema, using the same byte-work
+tariff and persisted block budget as public courts. Program, pipeline, segmented and typed
+claims check their class envelope before copying traces; registrations must fit admission's
+share and a worst court must fit the work reserved for proofs. Onboarding judgements and kernel
+objects use the same budget transition. This changes hypothetical admission behind that dormant
+fence; it does not change the live legacy route or the frozen TIR/plan grammar. SDK program
+preflight applies the same admission/proof-work limits. This is **partial resource accounting**:
+the byte tariff does not certify hardware instruction counts, and the complete executor,
+evidence-generation, aggregate state/network and semantic checker resource vector remains open.
+
 ### II.14.5 Work and economic conservation
 
 Resource bounds, canonical work and economic credit are separate. Apply defined canonicalization

@@ -166,9 +166,8 @@ impl KernelLedgerV1 {
         }
         self.charge(NAME, 0)?;
         let row = self.spec_class_row_of(spec, true).map_err(rule)?;
-        if row.bounds.max_court_work > self.policy.max_court_work_per_block {
-            return Err(rule("the class's worst court does not fit one block's court budget: nobody could prosecute it".into()));
-        }
+        self.check_court_work_v1(row.bounds.max_court_work).map_err(rule)?;
+        self.check_admission_work_v1(row.admission_work_v1().map_err(rule)?).map_err(rule)?;
         self.opv_class_economics(&opv, &row.bounds).map_err(rule)?;
         if let SpecClassKindV1::Memory { rule: r, root, .. } = &row.kind {
             let m0 = slot_commitments_v1(&root.slots, &r.param_commitments).expect("checked at registration");
@@ -296,9 +295,16 @@ impl KernelLedgerV1 {
         let class_id = job.class();
         let class = self.typed.classes.get(&class_id).ok_or_else(|| rule("no such class".into()))?;
         self.opv_claim_gate(&class_id).map_err(rule)?;
+        Self::check_claim_carrier_v1(NAME, &class.bounds, claim)?;
         if self.claims.contains_key(&id) {
             return Err(rule("an exact duplicate claim".into()));
         }
+        self.reveal_ready(&job_id, &producer, &id, salt).map_err(rule)?;
+        self.opv_claim_capacity(&class_id, &producer, &job_id).map_err(rule)?;
+        let work = class.admission_work_v1().map_err(rule)?;
+        self.charge(NAME, work)?;
+        let job = self.typed.jobs.get(&job_id).expect("checked");
+        let class = self.typed.classes.get(&class_id).expect("checked");
         // Cheap objective checks first (no court): shapes, the line head, the carried post-state, the result's order, the edges.
         let (pre_state, pre_source) = match (claim, job, &class.kind) {
             (SpecClaimV1::Memory(c), SpecJobV1::Memory(j), SpecClassKindV1::Memory { rule: r, root, writers }) => {
@@ -353,9 +359,6 @@ impl KernelLedgerV1 {
             }
             _ => return Err(rule("the claim is not of its job's kind".into())),
         };
-        self.reveal_ready(&job_id, &producer, &id, salt).map_err(rule)?;
-        self.opv_claim_capacity(&class_id, &producer, &job_id).map_err(rule)?;
-        self.charge(NAME, 0)?;
         // Then every structure a court checks first, per step / model stage.
         let job = self.typed.jobs.get(&job_id).expect("checked");
         let class = self.typed.classes.get(&class_id).expect("checked");

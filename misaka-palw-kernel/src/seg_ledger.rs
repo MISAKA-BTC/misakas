@@ -275,6 +275,16 @@ impl KernelLedgerV1 {
             return Err(rule("a segmented claim of a class that is not K2-TIR-v4".into()));
         }
         self.opv_claim_gate(&job.class_binding_id).map_err(rule)?;
+        Self::check_claim_carrier_v1(NAME, &class.bounds, &(claim, evidence, segment_roots))?;
+        let id = claim.id();
+        if self.claims.contains_key(&id) {
+            return Err(rule("an exact duplicate claim".into()));
+        }
+        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id, salt).map_err(rule)?;
+        self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
+        let work = class.admission_work_v1().map_err(rule)?;
+        self.charge(NAME, work)?;
+        let class = self.classes.get(&job.class_binding_id).expect("checked");
         if claim.evidence_root != evidence.root() {
             return Err(rule("binding fault WrongEvidence".into()));
         }
@@ -311,13 +321,6 @@ impl KernelLedgerV1 {
             return Err(rule("binding fault WrongInput".into()));
         }
         evidence.check_structure(segment_roots).map_err(rule)?;
-        let id = claim.id();
-        if self.claims.contains_key(&id) {
-            return Err(rule("an exact duplicate claim".into()));
-        }
-        self.reveal_ready(&claim.job_id, &claim.producer_bond, &id, salt).map_err(rule)?;
-        self.opv_claim_capacity(&job.class_binding_id, &claim.producer_bond, &claim.job_id).map_err(rule)?;
-        self.charge(NAME, 0)?;
         let body = ClaimBodyV1::Segmented { claim: claim.clone(), evidence: evidence.clone(), segment_roots: segment_roots.to_vec() };
         self.admit(id, claim.producer_bond, job.class_binding_id, claim.job_id, body, out).map_err(rule)?;
         self.seals.remove(&(claim.job_id, claim.producer_bond));
