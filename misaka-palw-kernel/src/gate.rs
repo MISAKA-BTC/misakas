@@ -467,7 +467,11 @@ pub fn public_prosecution_complete_v4(
         max_localization_rounds: 2,
         max_court_work: b.worst_court_work,
         max_verifier_ram: b.artifact_bytes.saturating_add(position_bytes.saturating_mul(2)),
+        // The segmented commitment (segment roots + the fixed claim part) is what a CommitSegmentedClaim carries; codex's
+        // review (2026-10-10) separated it from the retained state. v4's retained state and RAM have NOT been re-derived
+        // with codex's conservative accounting (served responses, prosecution metadata, 16 B decoded elements): open, G14 (codex).
         max_retained_state: (segments as u128).saturating_mul(64).saturating_add(SEG_CLAIM_FIXED_BYTES_V4),
+        max_commit_bytes: (segments as u128).saturating_mul(64).saturating_add(SEG_CLAIM_FIXED_BYTES_V4),
         max_concurrent_sessions: 2,
         deadline_daa: policy.court_deadline_daa,
     };
