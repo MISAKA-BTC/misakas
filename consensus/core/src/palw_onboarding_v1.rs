@@ -441,17 +441,8 @@ impl PalwKernelRouteStateV1 {
     /// It is [`Self::onboarding_identity_gate_v1`] with DA16's artifact-lapse hold in front (a kernel-bound, standing class whose pair
     /// lapsed after it was bound). ADR-0177 withdraws that hold (DA16b re-scopes it), so the G14-for-rewards gate never asks it.
     pub fn onboarding_gate_v1(&self, class: &Hash64, artifact_root: &Hash64, daa: u64) -> PalwOnboardingGateV1 {
-        if let Some(binding) = self.kernel_binding_v1(class)
-            && self.kernel_class_record_v1(&binding.kernel_class).is_some()
-            && self
-                .artifact_binding_v1(class, &binding.kernel_param_root)
-                .is_some_and(|row| self.provider_pair_lapsed_since_v1(class, &binding.kernel_param_root, row.bound_daa))
-        {
-            return PalwOnboardingGateV1::Held {
-                code: "AVAILABILITY_REQUIRED",
-                why: "the artifact's bytes stopped being publicly obtainable inside the binding's horizon (every provider was charged): re-bind over live leases",
-            };
-        }
+        // ADR-0177 / DA16b: the artifact-lapse hold is withdrawn with the `Artifact` lease subject (its lapse rows no longer exist), so
+        // the gate is its identity part. (The integration merge kept this caller of the removed `provider_pair_lapsed_since_v1`.)
         self.onboarding_identity_gate_v1(class, artifact_root, daa)
     }
 
