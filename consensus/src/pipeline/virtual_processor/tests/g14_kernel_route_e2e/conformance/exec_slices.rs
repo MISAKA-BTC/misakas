@@ -33,7 +33,7 @@
 //! admission, not for G14-for-rewards, and no reward gate can replace it (record §14). The slice and route half — the carriage, the
 //! bindings, the kernel claims, the outsider's conviction and demand, the OPV Finals, the sync — is the real node's, unseamed.
 //!
-//! Not run here (and why): the REAL root claim's own `Final` and the capped, netted settlement need the root class's Panel (the
+//! Not run here (and why): the REAL root claim's own `Final` and the capped escrow settlement need the root class's Panel (the
 //! legacy channel), which an onboarded class does not have on this harness; the settlement is pinned at fold level
 //! (`exec_v2_fold_v1::amendment_1`).
 use super::*;
@@ -661,6 +661,13 @@ async fn x8_g14_an_outsider_convicts_a_slices_kernel_claim_and_its_suffix_and_ro
         state.claim(&root_claim).unwrap().phase
     );
     assert_eq!(cw.net.collateral(ROOT_CARD), root_bond_collateral, "the root bond is not charged for another bond's lie");
+    let ledger = cw.net.ledger();
+    for k in s.slices.iter().chain(std::iter::once(&s.prefix)) {
+        assert!(!ledger.exec_reward_holds.contains_key(&k.claim.id), "void releases every reward hold");
+        assert!(!ledger.job_escrows.contains_key(&k.job.id()), "void refunds every bound job escrow");
+        assert!(!ledger.claims[&k.claim.id].rewarded, "void creates no producer reward");
+    }
+
     // Op 240's read model names it.
     let read = cw.net.chain.ctx.consensus.palw_exec_v2_observation_v1(vec![root_claim], None).expect("the payload is armed");
     assert_eq!(read.roots[0].slices[1].verification_state.as_deref(), Some("Convicted"));
@@ -678,6 +685,7 @@ async fn x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready
     let root_claim = s.real.claim;
     let state = cw.net.chain.tip_state().1;
     assert!(state.exec_v2_holds_final_v1(&root_claim), "the root holds its claim's Final while its slices are unverified");
+    let poster_collateral = cw.net.collateral(REGISTRANT);
     let api = cw.net.api().unwrap();
     let ends: Vec<u64> = s
         .slices
@@ -690,7 +698,14 @@ async fn x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready
         assert!(matches!(cw.net.claim_state(&k.claim.id), ClaimStateV1::Final { .. }), "{:?}", cw.net.claim_state(&k.claim.id));
     }
     let state = cw.net.chain.tip_state().1;
-    let reward = cw.net.ledger().policy.claim_reward;
+    let ledger = cw.net.ledger();
+    assert_eq!(cw.net.collateral(REGISTRANT), poster_collateral, "kernel Finals cannot debit EXEC fees before root Final");
+    for k in s.slices.iter().chain(std::iter::once(&s.prefix)) {
+        assert!(!ledger.claims[&k.claim.id].rewarded, "EXEC producer has no early reward");
+        assert!(ledger.job_escrows.contains_key(&k.job.id()), "poster escrow remains reserved");
+        assert_eq!(ledger.exec_reward_holds[&k.claim.id].owner_root, root_claim.as_bytes());
+    }
+    let reward = ledger.policy.claim_reward;
     for index in 0..3u32 {
         match state.exec_v2_slice_v1(&root_claim, index).unwrap().stage {
             PalwWorkSliceStageV2::Verified { leg_cap, route_reward, .. } => {

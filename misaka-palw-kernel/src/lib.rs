@@ -92,6 +92,7 @@ pub mod hash;
 pub mod improve;
 pub mod job;
 pub mod ledger;
+pub mod exec_reward;
 pub mod lifecycle;
 pub mod merkle;
 pub mod merkle3;

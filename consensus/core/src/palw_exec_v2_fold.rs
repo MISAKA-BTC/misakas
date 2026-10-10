@@ -36,7 +36,7 @@ use crate::palw_work_slice_v2::{
     PALW_EXEC_V2_MAX_PENDING_PER_BOND, PALW_EXEC_V2_MAX_ROOT_LIFETIME_DAA, PALW_EXEC_V2_MAX_SLICES_PER_BLOCK,
     PalwExecV2CoveredSliceV1, PalwExecV2StateV1, PalwSliceAdmissionV2, PalwSliceRefusalV2, PalwWorkPrefixStageV2,
     PalwWorkRootDeclarationV2, PalwWorkRootPhaseV2, PalwWorkRootRefusalV2, PalwWorkRootV2, PalwWorkSliceRowV2, PalwWorkSliceStageV2,
-    palw_work_plan_range_v2, settle_root_partial_v2, settle_root_v2,
+    palw_work_plan_range_v2, settle_root_v2,
 };
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
@@ -254,6 +254,19 @@ impl PalwChainStateV2 {
                     .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&slice.evidence_root)))
                     .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::ledger::ClaimRowV1>(bytes).ok())
                     .ok_or(R::VerificationClaimMissing)?;
+                if row.rewarded {
+                    return Err(R::VerificationAlreadyPaid);
+                }
+                if let Some(bytes) = kernel
+                    .rows
+                    .get(&(misaka_palw_kernel::rows::TABLE_EXEC_REWARD_HOLDS_V1, palw_exec_v2_kernel_key_v1(&slice.evidence_root)))
+                {
+                    let hold: misaka_palw_kernel::exec_reward::ExecRewardHoldV1 =
+                        borsh::from_slice(bytes).map_err(|_| R::VerificationRewardBound)?;
+                    if hold.owner_root != slice.root_claim_id.as_bytes() {
+                        return Err(R::VerificationRewardBound);
+                    }
+                }
                 let job = kernel
                     .rows
                     .get(&(misaka_palw_kernel::rows::TABLE_JOBS_V1, borsh::to_vec(&row.job_id).expect("a digest serializes")))
@@ -308,6 +321,37 @@ impl PalwChainStateV2 {
     /// `assert_internal_consistency`. Empty tables are consistent by construction.
     pub(super) fn assert_exec_v2_consistency_v1(&self, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
         let bad = |why: String| PalwStateV2Error::CarriageInconsistent(format!("exec v2: {why}"));
+        if let Some(kernel) = &self.kernel_route {
+            use misaka_palw_kernel::{exec_reward::ExecRewardHoldV1, rows::TABLE_EXEC_REWARD_HOLDS_V1};
+            let mut expected = BTreeMap::new();
+            for (id, root) in &self.exec_v2.roots {
+                if matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete)
+                    && root.prefix != PalwWorkPrefixStageV2::Unbound
+                {
+                    let hold = ExecRewardHoldV1 { owner_root: id.as_bytes(), expires_daa: root.expiry_daa };
+                    if expected.insert(root.prefix_claim.as_bytes(), hold).is_some() {
+                        return Err(bad("a prefix reward is bound more than once".into()));
+                    }
+                    for (_, slice) in self.exec_v2.slices.range((*id, 0)..=(*id, u32::MAX)) {
+                        if expected.insert(slice.evidence_root.as_bytes(), hold).is_some() {
+                            return Err(bad("a kernel reward is bound more than once".into()));
+                        }
+                    }
+                }
+            }
+            let mut actual = BTreeMap::new();
+            for ((table, key), value) in &kernel.rows {
+                if *table == TABLE_EXEC_REWARD_HOLDS_V1 {
+                    let claim: misaka_palw_kernel::hash::Digest =
+                        borsh::from_slice(key).map_err(|_| bad("bad reward hold key".into()))?;
+                    let hold: ExecRewardHoldV1 = borsh::from_slice(value).map_err(|_| bad("bad reward hold row".into()))?;
+                    actual.insert(claim, hold);
+                }
+            }
+            if expected != actual {
+                return Err(bad("EXEC roots and kernel reward holds differ".into()));
+            }
+        }
         if self.exec_v2.is_empty() {
             return Ok(());
         }
@@ -633,6 +677,9 @@ pub(super) fn apply_root_declared_v2(
                 .rows
                 .get(&(misaka_palw_kernel::rows::TABLE_JOBS_V1, borsh::to_vec(&row.job_id).expect("a digest serializes")))
                 .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::job::KernelJobV1>(bytes).ok());
+            if row.rewarded {
+                return Err(no(R::PrefixAlreadyPaid));
+            }
             let inputs = PalwExecV2PrefixInputsV1 {
                 root_claim_id: claim_id,
                 prefix_work: admitted,
@@ -689,6 +736,15 @@ pub(super) fn apply_root_declared_v2(
         }
     }
     // ---- writes ----
+    if builder.state.kernel_route.is_some() {
+        super::palw_kernel_route_fold_v1::bind_exec_reward_v1(
+            builder,
+            claim_id,
+            declaration.prefix_claim,
+            declaration.expiry_daa,
+            daa,
+        )?;
+    }
     for bond in &declaration.extra_executors {
         let held = builder.state.reserved_exposure.get(bond).copied().unwrap_or(0);
         let next = held.checked_add(exposure).ok_or(PalwStateV2Error::Overflow("exec v2 executor exposure"))?;
@@ -771,6 +827,15 @@ fn accept_slice_v2(
 ) -> Result<(), PalwStateV2Error> {
     let slice = &carrier.slice;
     let mut root = builder.state.exec_v2.roots.get(&slice.root_claim_id).expect("admission found the root").clone();
+    if builder.state.kernel_route.is_some() {
+        super::palw_kernel_route_fold_v1::bind_exec_reward_v1(
+            builder,
+            slice.root_claim_id,
+            slice.evidence_root,
+            root.expiry_daa,
+            ctx.daa_score,
+        )?;
+    }
     builder.write_exec_slice(
         (slice.root_claim_id, slice.slice_index),
         Some(PalwWorkSliceRowV2 {
@@ -858,119 +923,76 @@ impl PalwChainStateV2 {
 // Settlement at Final, void with the claim, retirement with the claim, expiry
 // ---------------------------------------------------------------------------------------------
 
-/// **The root's one settlement, at the claim's `Final`.** `amount` is the root executor's reward leg (the producer's, after the
-/// panel's share); returns what the root executor keeps and the other executors' legs. A claim without a root keeps all of
-/// `amount`. A root that is `Settled` already pays nothing a second time. A root that is not ready — unreachable, the claim holds
-/// its `Final` — pays only the prefix and the verified slices (the rest is never named), never wedging the chain on a broken
-/// invariant. On a ready root the root becomes `Settled` in the same journaled step, so a restart or a reorg that replays the
-/// block finds the marker and the payments together.
+/// The root's one settlement. Bound kernel fees stay escrowed until this step and replace
+/// native issuance within the executor's share. All debits, refunds and the Settled marker
+/// belong to the same journal; a duplicate Final pays nothing.
 pub(super) fn settle_at_final_v2(
     builder: &mut TransitionBuilder<'_>,
     claim_id: &Hash64,
     amount: u64,
     final_daa: u64,
 ) -> Result<(u64, Vec<(PalwBondKeyV2, u64)>), PalwStateV2Error> {
-    let Some(root) = builder.state.exec_v2.roots.get(claim_id).cloned() else { return Ok((amount, Vec::new())) };
+    let Some(mut root) = builder.state.exec_v2.roots.get(claim_id).cloned() else { return Ok((amount, Vec::new())) };
     match root.phase {
-        PalwWorkRootPhaseV2::Settled { .. } => return Ok((0, Vec::new())),
-        PalwWorkRootPhaseV2::Voided { .. } => {
-            // A voided root never settles slices; the claim cannot reach Final through a void, so this is unreachable. Pay the prefix.
-            let prefix = settle_root_partial_v2(amount, root.total_work, root.prefix_work(), &[], root.root_bond)
-                .ok_or(PalwStateV2Error::Overflow("exec v2 prefix settlement"))?;
-            return Ok((prefix.root_leg, Vec::new()));
-        }
+        PalwWorkRootPhaseV2::Settled { .. } | PalwWorkRootPhaseV2::Voided { .. } => return Ok((0, Vec::new())),
         PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete => {}
     }
-    let rows: Vec<&PalwWorkSliceRowV2> =
-        builder.state.exec_v2.slices.range((*claim_id, 0)..=(*claim_id, u32::MAX)).map(|(_, row)| row).collect();
-    let work_of = |row: &PalwWorkSliceRowV2| row.range.work().ok_or(PalwStateV2Error::Overflow("exec v2 slice work"));
-    let (settlement, settled) = if root.ready_for_final() {
-        let credited: Vec<(PalwBondKeyV2, u64)> =
-            rows.iter().map(|row| work_of(row).map(|work| (row.executor, work))).collect::<Result<_, _>>()?;
-        (settle_root_v2(amount, root.total_work, root.prefix_work(), &credited, root.root_bond), true)
-    } else {
-        let verified: Vec<(PalwBondKeyV2, u64)> = rows
-            .iter()
-            .filter(|row| matches!(row.stage, PalwWorkSliceStageV2::Verified { .. }))
-            .map(|row| work_of(row).map(|work| (row.executor, work)))
-            .collect::<Result<_, _>>()?;
-        (settle_root_partial_v2(amount, root.total_work, root.prefix_work(), &verified, root.root_bond), false)
-    };
-    let mut settlement = settlement.ok_or(PalwStateV2Error::Overflow("exec v2 settlement"))?;
-    if !settled {
-        // Unreachable by construction; recorded loudly in debug builds and degraded safely in release.
-        debug_assert!(false, "a root reached Final without being ready");
+    if !root.ready_for_final() || final_daa >= root.expiry_daa {
+        return Err(PalwStateV2Error::ExecV2Refused("root Final requires complete verification before expiry".into()));
     }
-    // **Amendment 1, §10.5 (revised by the X8R round-2 review): a slice executor's leg is capped at the sum of its slices' leg caps** —
-    // each fixed when the slice verified: the reservation its kernel claim then held, less the route's own Final reward on it
-    // (`palw_exec_v2_leg_cap_v1`). So a leg plus the route's reward never exceeds what a conviction inside the claim's liability
-    // horizon could collect, and no timing of the root's Final moves a cap (read here, at settlement, the reservation of every claim
-    // past its horizon is already released). The excess stays with the root executor (`sum(paid) == allocation`; nothing minted).
-    // Where no kernel route exists (the test door's arithmetic chains) there is no claim to cap by.
+    let rows: Vec<((Hash64, u32), PalwWorkSliceRowV2)> =
+        builder.state.exec_v2.slices.range((*claim_id, 0)..=(*claim_id, u32::MAX)).map(|(key, row)| (*key, row.clone())).collect();
+    let credited: Vec<_> = rows
+        .iter()
+        .map(|(_, row)| row.range.work().map(|work| (row.executor, work)).ok_or(PalwStateV2Error::Overflow("exec v2 slice work")))
+        .collect::<Result<_, _>>()?;
+    let mut settlement = settle_root_v2(amount, root.total_work, root.prefix_work(), &credited, root.root_bond)
+        .ok_or(PalwStateV2Error::Overflow("exec v2 settlement"))?;
     if builder.state.kernel_route.is_some() {
         let mut held: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
-        for row in &rows {
+        for (_, row) in &rows {
             let cap = match row.stage {
                 PalwWorkSliceStageV2::Verified { leg_cap, .. } => leg_cap,
                 _ => 0,
             };
-            let entry = held.entry(row.executor).or_insert(0);
-            *entry = entry.saturating_add(cap);
+            let entry = held.entry(row.executor).or_default();
+            *entry = entry.checked_add(cap).ok_or(PalwStateV2Error::Overflow("exec v2 leg cap"))?;
         }
-        let mut excess: u64 = 0;
-        for (bond, amount) in settlement.slice_legs.iter_mut() {
+        let mut excess = 0u64;
+        for (bond, leg) in &mut settlement.slice_legs {
             let cap = held.get(bond).copied().unwrap_or(0);
-            if *amount > cap {
-                excess = excess.checked_add(*amount - cap).ok_or(PalwStateV2Error::Overflow("exec v2 leg cap"))?;
-                *amount = cap;
-            }
+            excess = excess.checked_add(leg.saturating_sub(cap)).ok_or(PalwStateV2Error::Overflow("exec v2 leg cap"))?;
+            *leg = (*leg).min(cap);
         }
-        settlement.slice_legs.retain(|(_, amount)| *amount > 0);
         settlement.root_leg = settlement.root_leg.checked_add(excess).ok_or(PalwStateV2Error::Overflow("exec v2 leg cap"))?;
-    }
-    // **ADR-0176 D2 (X8R round 3): one work, one right, one budget.** The kernel claims that verify the prefix and the slices were each
-    // paid the route's own `Final` reward for the same work this allocation pays for. That reward is an advance on the work's share of
-    // the root's one allocation: each slice executor's leg is its share less what the route paid it (aggregated per bond, never below
-    // 0), and the root executor keeps `amount − Σ route rewards − Σ slice legs`. So `Σ legs + root leg + Σ route rewards == amount`
-    // whenever the route rewards fit inside it. A prefix advance above its share can leave the remaining slice legs larger than the
-    // unspent allocation, so cap their aggregate by that remainder, proportionally by executor (no bond-order priority). This cannot
-    // recover an advance that already exceeded the allocation: that remains a reward-path activation blocker. Zero where no kernel
-    // route exists (the test door's arithmetic chains): every snapshot is 0 there.
-    let mut route_by_bond: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
-    let mut route_total: u64 = root.prefix.route_reward();
-    for row in &rows {
-        if let PalwWorkSliceStageV2::Verified { route_reward, .. } = row.stage
-            && route_reward > 0
-        {
-            let entry = route_by_bond.entry(row.executor).or_insert(0);
-            *entry = entry.checked_add(route_reward).ok_or(PalwStateV2Error::Overflow("exec v2 route reward"))?;
-            route_total = route_total.checked_add(route_reward).ok_or(PalwStateV2Error::Overflow("exec v2 route reward"))?;
+        let mut caps: BTreeMap<_, _> = settlement.slice_legs.iter().copied().collect();
+        caps.insert(root.root_bond, settlement.root_leg);
+        let mut claims = vec![(root.prefix_claim, root.root_bond)];
+        claims.extend(rows.iter().map(|(_, row)| (row.evidence_root, row.executor)));
+        let paid = super::palw_kernel_route_fold_v1::finish_exec_rewards_v1(builder, *claim_id, &claims, &caps, final_daa)?;
+        let mut fees: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+        for ((_, bond), fee) in claims.iter().zip(&paid) {
+            let entry = fees.entry(*bond).or_default();
+            *entry = entry.checked_add(*fee).ok_or(PalwStateV2Error::Overflow("exec v2 fee total"))?;
         }
-    }
-    if route_total > 0 {
-        let mut legs: u64 = 0;
-        for (bond, leg) in settlement.slice_legs.iter_mut() {
-            let advanced = route_by_bond.get(bond).copied().unwrap_or(0);
-            *leg -= (*leg).min(advanced);
-            legs = legs.checked_add(*leg).ok_or(PalwStateV2Error::Overflow("exec v2 legs"))?;
+        settlement.root_leg -= fees.get(&root.root_bond).copied().unwrap_or(0);
+        for (bond, leg) in &mut settlement.slice_legs {
+            *leg -= fees.get(bond).copied().unwrap_or(0);
         }
-        let remaining = amount.saturating_sub(route_total);
-        if legs > remaining {
-            let uncapped = legs;
-            legs = 0;
-            for (_, leg) in &mut settlement.slice_legs {
-                *leg = (u128::from(*leg) * u128::from(remaining) / u128::from(uncapped)) as u64;
-                legs = legs.checked_add(*leg).ok_or(PalwStateV2Error::Overflow("exec v2 capped legs"))?;
+        if let PalwWorkPrefixStageV2::Verified { route_reward, .. } = &mut root.prefix {
+            *route_reward = paid[0];
+        }
+        for ((key, mut row), fee) in rows.into_iter().zip(paid.into_iter().skip(1)) {
+            if let PalwWorkSliceStageV2::Verified { route_reward, .. } = &mut row.stage {
+                *route_reward = fee;
             }
+            builder.write_exec_slice(key, Some(row));
         }
-        settlement.slice_legs.retain(|(_, amount)| *amount > 0);
-        settlement.root_leg = remaining.checked_sub(legs).ok_or(PalwStateV2Error::Overflow("exec v2 remaining allocation"))?;
     }
-    // Release the extra executors' exposure and mark the root settled: the marker and the payments are one journaled step.
+    settlement.slice_legs.retain(|(_, leg)| *leg > 0);
     release_executor_exposure_v2(builder, &root)?;
-    let mut done = root;
-    done.phase = PalwWorkRootPhaseV2::Settled { settled_daa: final_daa };
-    builder.write_exec_root(*claim_id, Some(done));
+    root.phase = PalwWorkRootPhaseV2::Settled { settled_daa: final_daa };
+    builder.write_exec_root(*claim_id, Some(root));
     Ok((settlement.root_leg, settlement.slice_legs))
 }
 
@@ -994,6 +1016,7 @@ pub(super) fn on_claim_voided_v2(
     voided_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     let Some(root) = builder.state.exec_v2.roots.get(claim_id).cloned() else { return Ok(()) };
+    super::palw_kernel_route_fold_v1::cancel_exec_rewards_v1(builder, *claim_id, voided_daa)?;
     if !matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
         return Ok(());
     }
@@ -1039,9 +1062,9 @@ pub(super) fn on_claim_retired_v2(builder: &mut TransitionBuilder<'_>, claim_id:
     builder.write_exec_root(*claim_id, None);
 }
 
-/// **Roots past their expiry that are not ready void their claims** (uncharged: a timeout is not a conviction). Run at the start
-/// of every block's fold, before its objects. A root whose claim is already terminal was handled by the void hook; a ready root is
-/// finalizing and is left alone. Bounded by [`PALW_EXEC_V2_MAX_OPEN_ROOTS`].
+/// **Every open root expires, including a ready root whose REAL Final is delayed.**
+/// Run before objects; release job escrows without reward or debit. This bounds reservation retention
+/// independently of court progress. Bounded by [`PALW_EXEC_V2_MAX_OPEN_ROOTS`].
 pub(super) fn sweep_expired_roots_v2(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     if builder.state.exec_v2.roots.is_empty() {
         return Ok(());
@@ -1052,9 +1075,7 @@ pub(super) fn sweep_expired_roots_v2(builder: &mut TransitionBuilder<'_>, ctx: &
         .roots
         .iter()
         .filter(|(_, root)| {
-            matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete)
-                && ctx.daa_score >= root.expiry_daa
-                && !root.ready_for_final()
+            matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) && ctx.daa_score >= root.expiry_daa
         })
         .map(|(id, _)| *id)
         .collect();
@@ -1232,6 +1253,7 @@ pub(super) fn void_suffix_v2(
     daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     let Some(root) = builder.state.exec_v2.roots.get(&root_id).cloned() else { return Ok(()) };
+    super::palw_kernel_route_fold_v1::cancel_exec_rewards_v1(builder, root_id, daa)?;
     if !matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
         return Ok(());
     }
@@ -1275,6 +1297,7 @@ pub(super) fn void_prefix_v2(
     daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     let Some(root) = builder.state.exec_v2.roots.get(&root_id).cloned() else { return Ok(()) };
+    super::palw_kernel_route_fold_v1::cancel_exec_rewards_v1(builder, root_id, daa)?;
     if !matches!(root.phase, PalwWorkRootPhaseV2::Open | PalwWorkRootPhaseV2::Complete) {
         return Ok(());
     }

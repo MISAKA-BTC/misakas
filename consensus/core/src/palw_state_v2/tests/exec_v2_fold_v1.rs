@@ -1248,6 +1248,7 @@ mod amendment_1 {
         /// Put the job and the claim into the route (setup surgery).
         fn install(&self, s: &mut PalwChainStateV2) {
             let route = s.kernel_route.as_mut().expect("a route");
+            route.ledger_cache.clear();
             route.rows.insert((TABLE_JOBS_V1, borsh::to_vec(&self.job.id()).unwrap()), borsh::to_vec(&self.job).unwrap());
             route.rows.insert((TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&self.claim_id)), borsh::to_vec(&self.row).unwrap());
         }
@@ -1342,6 +1343,7 @@ mod amendment_1 {
         /// Put the job and the claim (as it now stands) into the route — state surgery for the setup, outside any block.
         fn install(&self, s: &mut PalwChainStateV2) {
             let route = s.kernel_route.as_mut().expect("a route");
+            route.ledger_cache.clear();
             route.rows.insert((TABLE_JOBS_V1, borsh::to_vec(&self.job.id()).unwrap()), borsh::to_vec(&self.job).unwrap());
             route.rows.insert((TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&self.claim_id)), borsh::to_vec(&self.row).unwrap());
         }
@@ -1517,6 +1519,7 @@ mod amendment_1 {
         refuses(bad, "useful-work key");
         let mut bad = s.clone();
         let kernel = bad.kernel_route.as_mut().unwrap();
+        kernel.ledger_cache.clear();
         let mut job = slices[0].job.clone();
         job.prompt.pop();
         kernel.rows.insert(
@@ -1877,42 +1880,33 @@ mod amendment_1 {
         assert_eq!(producer + leg_a + leg_b, twin_leg, "nothing minted, nothing lost");
     }
 
-    /// **A leg and the route's own Final reward on the same claim stay under the claim's reservation** (the route's invariant
-    /// `claim_reward < claim_collateral`, carried to the slice leg): a rewarded claim reserving `claim_reward + 7` caps its slice's leg
-    /// at 7.
+    /// Computation Final is unrewarded: the entire held reservation caps the executor's gross share.
     #[test]
-    fn a_leg_cap_is_net_of_the_routes_final_reward_on_the_same_claim() {
+    fn a_bound_leg_uses_the_held_reservation_without_a_policy_sized_advance() {
         let (p, s, claim, slices) = session(1_000_000_000_000);
-        let reward = s.kernel_route.as_ref().unwrap().header.policy.claim_reward;
-        assert!(reward > 0, "the route pays a Final reward");
         let s = license(&p, &s, claim, 45, 111);
         let s = carry_all(&p, &s, &slices);
         let finals = slices
             .iter()
             .map(|k| {
-                let tight = k.covered.slice.executor_bond == bond_key(20);
                 k.write_with(|row| {
                     row.life.state = ClaimStateV1::Final { final_daa: 130 };
                     row.liability_until = Some(330);
-                    row.rewarded = true;
-                    if tight {
-                        row.reserved = reward + 7;
+                    if k.covered.slice.executor_bond == bond_key(20) {
+                        row.reserved = 7;
                     }
                 })
             })
             .collect();
         let s = kernel_block(&p, &s, 60, 130, finals);
-        assert!(matches!(s.exec_v2_slice_v1(&claim, 0).unwrap().stage, PalwWorkSliceStageV2::Verified { leg_cap: 7, .. }));
         assert!(matches!(
-            s.exec_v2_slice_v1(&claim, 1).unwrap().stage,
-            PalwWorkSliceStageV2::Verified { leg_cap, .. } if leg_cap == 1_000_000_000_000 - reward
+            s.exec_v2_slice_v1(&claim, 0).unwrap().stage,
+            PalwWorkSliceStageV2::Verified { leg_cap: 7, route_reward: 0, .. }
         ));
         let s = run_to_terminal(&p, s, claim, 70, 131);
-        let (producer, leg_a, leg_b, twin_leg) = paid_legs(&s, claim);
-        // ADR-0176 D2 (X8R round 3): the route already paid 3 × its reward for this work — more than the root's whole allocation here
-        // (the route's interim reward is 5 KAS, the fixture's allocation a fraction of one) — so the allocation pays nothing more.
-        assert!(3 * reward > twin_leg, "the fixture's route rewards exceed the allocation");
-        assert_eq!((producer, leg_a, leg_b), (0, 0, 0), "one work, one right: nothing is paid twice");
+        let (producer, leg_a, leg_b, allocation) = paid_legs(&s, claim);
+        assert_eq!(leg_a, 14);
+        assert_eq!(producer + leg_a + leg_b, allocation);
     }
 
     /// **A verified slice whose kernel claim forfeits its reservation after Final is defaulted** (the X8R round-2 review): the route
@@ -2144,73 +2138,153 @@ mod amendment_1 {
         ));
     }
 
-    /// **ADR-0176 D2 (X8R round 3): one work, one right, one budget.** Every kernel claim of the session (the prefix's and the three
-    /// slices') is paid the route's `Final` reward `r`; the root's one allocation `A` then pays each piece its work share less what the
-    /// route already paid for it, so `root leg + Σ slice legs + 4 r == A` and each executor's total is exactly its work share.
-    #[test]
-    fn one_work_one_right_the_routes_rewards_on_the_bound_claims_are_drawn_from_the_roots_one_allocation() {
-        const R: u64 = 1_000;
-        let (p, s, claim, slices, _) = session_with(1_000_000_000, ClaimStateV1::Final { final_daa: 105 }, true, Some(R));
-        assert_eq!(s.exec_v2_root_v1(&claim).unwrap().prefix, PalwWorkPrefixStageV2::Verified { verified_daa: 110, route_reward: R });
-        let s = license(&p, &s, claim, 45, 111);
-        let s = carry_all(&p, &s, &slices);
-        let finals = slices
-            .iter()
-            .map(|k| {
-                k.write_with(|row| {
-                    row.life.state = ClaimStateV1::Final { final_daa: 130 };
-                    row.rewarded = true;
-                })
-            })
-            .collect();
-        let s = kernel_block(&p, &s, 60, 130, finals);
-        for index in 0..3 {
-            assert!(matches!(
-                s.exec_v2_slice_v1(&claim, index).unwrap().stage,
-                PalwWorkSliceStageV2::Verified { route_reward: R, .. }
-            ));
+    /// Install real kernel reservations and their consumer bond mappings. These rows are setup,
+    /// and all subsequent Final/void debits, refunds and rewards use the production fold.
+    fn fund_jobs(s: &mut PalwChainStateV2, pre: &Prefix, slices: &[KernelSlice], amount: u64) {
+        use crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1;
+        use misaka_palw_kernel::ledger::{BondRowV1, JobEscrowRowV1};
+        use misaka_palw_kernel::rows::{TABLE_BONDS_V1, TABLE_JOB_ESCROWS_V1};
+        let mut jobs = vec![pre.job.id()];
+        jobs.extend(slices.iter().map(|k| k.job.id()));
+        let mut reservations = std::collections::BTreeMap::new();
+        reservations.insert(s.claims.values().next().unwrap().bond, pre.row.reserved);
+        for slice in slices {
+            *reservations.entry(slice.covered.slice.executor_bond).or_insert(0) += slice.row.reserved;
         }
-        for k in &slices {
-            assert_eq!(s.exec_v2_root_of_kernel_claim_v1(&k.claim_id), Some(claim), "every bound claim names its root");
+        let poster = bond_key(6);
+        *reservations.entry(poster).or_insert(0) += amount * jobs.len() as u64;
+        let route = s.kernel_route.as_mut().unwrap();
+        route.ledger_cache.clear();
+        for (bond, reserved) in reservations {
+            assert!(reserved <= COLLATERAL);
+            let id = palw_kernel_bond_id_v1(&bond);
+            route.aux.insert((PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, borsh::to_vec(&id).unwrap()), borsh::to_vec(&bond).unwrap());
+            route.rows.insert(
+                (TABLE_BONDS_V1, borsh::to_vec(&id).unwrap()),
+                borsh::to_vec(&BondRowV1 { collateral: COLLATERAL, reserved, exit_requested: None }).unwrap(),
+            );
         }
-        let s = run_to_terminal(&p, s, claim, 70, 131);
-        let (producer, leg_a, leg_b, twin_leg) = paid_legs(&s, claim);
-        let root = s.exec_v2_root_v1(&claim).unwrap();
-        let work = |index| s.exec_v2_slice_v1(&claim, index).unwrap().range.work().unwrap();
-        let share = |work: u64| (twin_leg as u128 * work as u128 / root.total_work as u128) as u64;
-        assert!(share(root.prefix_work()) > R, "the fixture's shares exceed the route reward");
-        assert_eq!(leg_a, share(work(0) + work(2)) - 2 * R, "bond 20: its two slices' shares less the two route rewards");
-        assert_eq!(leg_b, share(work(1)) - R, "bond 21: its share less the route reward");
-        assert_eq!(producer + leg_a + leg_b + 4 * R, twin_leg, "one allocation pays the session, route rewards included");
+        for job in jobs {
+            route.rows.insert(
+                (TABLE_JOB_ESCROWS_V1, borsh::to_vec(&job).unwrap()),
+                borsh::to_vec(&JobEscrowRowV1 { poster: palw_kernel_bond_id_v1(&poster), amount, posted_daa: 105 }).unwrap(),
+            );
+        }
     }
 
     #[test]
-    fn a_prefix_advance_above_its_share_cannot_make_new_slice_payments_exceed_the_remaining_budget() {
-        let (pt, st, claim_t) = world(Some(0));
-        let twin = run_to_terminal(&pt, license(&pt, &st, claim_t, 45, 111), claim_t, 70, 111);
-        let allocation = twin.vesting_row(&claim_t).unwrap().producer.amount;
-        for advance in [allocation * 3 / 4, allocation + 1] {
-            let (p, s, claim, slices, _) = session_with(1_000_000_000, ClaimStateV1::Final { final_daa: 105 }, true, Some(advance));
+    fn root_final_pays_actual_job_fees_within_one_allocation_and_refunds_unused_escrow() {
+        use misaka_palw_kernel::rows::{TABLE_EXEC_REWARD_HOLDS_V1, TABLE_JOB_ESCROWS_V1};
+        for fee in [0, 1_000, 200_000] {
+            let (p, mut s, claim, slices, pre) = session_with(1_000_000, ClaimStateV1::Final { final_daa: 105 }, false, Some(fee));
+            fund_jobs(&mut s, &pre, &slices, fee);
             let s = license(&p, &s, claim, 45, 111);
             let s = carry_all(&p, &s, &slices);
             let s =
                 kernel_block(&p, &s, 60, 130, slices.iter().map(|k| k.write(ClaimStateV1::Final { final_daa: 130 }, false)).collect());
+            let before = s.bonds[&bond_key(6)].collateral;
+            assert_eq!(before, COLLATERAL, "no poster debit before root Final");
+            assert_eq!(s.kernel_route.as_ref().unwrap().rows.keys().filter(|(t, _)| *t == TABLE_JOB_ESCROWS_V1).count(), 4);
+            assert_eq!(s.exec_v2_root_v1(&claim).unwrap().prefix.route_reward(), 0);
             let s = run_to_terminal(&p, s, claim, 70, 131);
-            let (producer, leg_a, leg_b, twin_leg) = paid_legs(&s, claim);
-            assert_eq!(twin_leg, allocation);
-            assert_eq!(producer + leg_a + leg_b, allocation.saturating_sub(advance), "only the unspent budget can be paid");
+            let (producer, total_a, total_b, allocation) = paid_legs(&s, claim);
             let root = s.exec_v2_root_v1(&claim).unwrap();
+            let mut route_total = root.prefix.route_reward();
+            let mut fee_a = 0;
+            let mut fee_b = 0;
+            for index in 0..3 {
+                if let PalwWorkSliceStageV2::Verified { route_reward, .. } = s.exec_v2_slice_v1(&claim, index).unwrap().stage {
+                    route_total += route_reward;
+                    if index == 1 {
+                        fee_b += route_reward;
+                    } else {
+                        fee_a += route_reward;
+                    }
+                }
+            }
             let work = |index| s.exec_v2_slice_v1(&claim, index).unwrap().range.work().unwrap();
             let share = |work: u64| (allocation as u128 * work as u128 / root.total_work as u128) as u64;
-            let (gross_a, gross_b) = (share(work(0) + work(2)), share(work(1)));
-            let remaining = allocation.saturating_sub(advance);
-            let expected_a = if gross_a + gross_b > remaining {
-                (remaining as u128 * gross_a as u128 / (gross_a + gross_b) as u128) as u64
-            } else {
-                gross_a
-            };
-            assert_eq!(leg_a, expected_a, "a budget shortage is shared proportionally by executor, without bond-order priority",);
+            assert_eq!(total_a, share(work(0) + work(2)));
+            assert_eq!(total_b, share(work(1)));
+            assert_eq!(producer + root.prefix.route_reward() + total_a + total_b, allocation);
+            assert!(fee_a <= total_a && fee_b <= total_b);
+            assert_eq!(before - s.bonds[&bond_key(6)].collateral, route_total, "actual debit equals actual fee payout");
+            assert!(route_total <= 4 * fee);
+            assert!(
+                s.kernel_route
+                    .as_ref()
+                    .unwrap()
+                    .rows
+                    .keys()
+                    .all(|(t, _)| *t != TABLE_JOB_ESCROWS_V1 && *t != TABLE_EXEC_REWARD_HOLDS_V1)
+            );
         }
+    }
+
+    #[test]
+    fn void_and_ready_root_expiry_release_all_escrows_without_a_reward() {
+        use misaka_palw_kernel::rows::{TABLE_EXEC_REWARD_HOLDS_V1, TABLE_JOB_ESCROWS_V1};
+        for ready_at_expiry in [false, true] {
+            let (p, mut s, claim, slices, pre) = session_with(1_000_000, ClaimStateV1::Final { final_daa: 105 }, false, None);
+            fund_jobs(&mut s, &pre, &slices, 1_000);
+            let s = license(&p, &s, claim, 45, 111);
+            let s = carry_all(&p, &s, &slices);
+            let before = s.bonds[&bond_key(6)].collateral;
+            let s = if ready_at_expiry {
+                let s = kernel_block(
+                    &p,
+                    &s,
+                    60,
+                    130,
+                    slices.iter().map(|k| k.write(ClaimStateV1::Final { final_daa: 130 }, false)).collect(),
+                );
+                assert!(s.exec_v2_root_v1(&claim).unwrap().ready_for_final());
+                let expiry = s.exec_v2_root_v1(&claim).unwrap().expiry_daa;
+                step(&s, &p, 61, expiry, &[]).unwrap().0
+            } else {
+                kernel_block(
+                    &p,
+                    &s,
+                    60,
+                    130,
+                    vec![slices[1].write(ClaimStateV1::Unavailable { daa: 130, producer_defaulted: true }, false)],
+                )
+            };
+            assert!(matches!(s.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { .. }));
+            assert_eq!(s.bonds[&bond_key(6)].collateral, before);
+            assert!(s.vesting_row(&claim).is_none());
+            assert!(s.pending_payouts_iter().all(|(_, row)| row.payload != s.bond(&bond_key(20)).unwrap().payout_payload
+                && row.payload != s.bond(&bond_key(21)).unwrap().payout_payload));
+            assert!(
+                s.kernel_route
+                    .as_ref()
+                    .unwrap()
+                    .rows
+                    .keys()
+                    .all(|(t, _)| *t != TABLE_JOB_ESCROWS_V1 && *t != TABLE_EXEC_REWARD_HOLDS_V1)
+            );
+        }
+    }
+
+    #[test]
+    fn paid_prefix_and_paid_slice_cannot_attach_to_an_exec_root() {
+        let (p, mut s, claim) = world(Some(0));
+        with_route(&mut s, claim, Some(PLAN));
+        let pre = Prefix::new(&mut s, claim, ClaimStateV1::Final { final_daa: 105 }, true);
+        assert!(matches!(open(&p, &s, pre.decl(claim)), Err(PalwStateV2Error::ExecV2Refused(_))));
+        let (p, s, claim, slices) = session(1000);
+        let s = kernel_block(
+            &p,
+            &s,
+            45,
+            111,
+            vec![slices[0].write_with(|row| {
+                row.life.state = ClaimStateV1::Final { final_daa: 111 };
+                row.rewarded = true;
+            })],
+        );
+        assert_eq!(s.exec_v2_admit_slice_v1(&p, 112, &slices[0].covered, 0), Err(PalwSliceRefusalV2::VerificationAlreadyPaid));
+        assert_eq!(s.exec_v2_root_v1(&claim).unwrap().next_index, 0);
     }
 
     #[test]
@@ -2245,6 +2319,8 @@ mod amendment_1 {
             VerificationClaimNotBound("x"),
             VerificationClaimFailed,
             ExecutionScopeMismatch,
+            VerificationAlreadyPaid,
+            VerificationRewardBound,
         ];
         let codes: std::collections::BTreeSet<u8> = all.iter().map(|r| r.code()).collect();
         assert_eq!(codes.len(), all.len());

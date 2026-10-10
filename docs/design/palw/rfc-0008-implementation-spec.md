@@ -458,28 +458,16 @@ DA protocol. **Limit:** it binds the REAL claim's *output*; the REAL claim's V2 
 That is G14C's GAP-81, and this binding is the shape GAP-81's option "bind the V2 claim 1:1 to a kernel claim of the same job" would
 take.
 
-**ADR-0176 D2 — one work, one right, one budget.** A session's work is paid once, from the root claim's single allocation `A`: the
-root executor's reward leg that its REAL `Final` releases (BUDGET clips it before any split, §2.6 of its design). The kernel claims
-that verify the prefix and the slices are verification vehicles. Each draws `Q` from its own producer's window, because a claim is a
-claim (D2's `m·N` claims), but no reward right of its own. Their route `Final` reward is an advance on the same work's share of `A`.
-At settlement, with `e_i` a piece's work share (capped as in 10.5) and `r_i` the route reward paid on its bound claim:
+**ADR-0176 D2 — one work, one right, one budget.** The round-3 advance/netting design recorded here is superseded by §13.
+Bound kernel claims are verification vehicles: their computation Final cannot pay the producer or spend the poster's job escrow.
+At root Final, their actual fee payments replace native issuance inside the executor's share of the root's one allocation.
+Already-paid standalone work cannot attach later. EXEC weight remains 0 and carriers mint nothing.
 
-```text
-slice executor's leg  = e_i − min(e_i, r_i)        (aggregated per bond)
-root executor's leg   = A − Σ r_i (prefix included) − Σ slice legs
-Σ legs + root leg + Σ r_i = A                      (when Σ r_i ≤ A; nothing minted, the withheld Σ r_i is never paid twice)
-```
-
-A piece whose share is at least its route reward is paid exactly its share in total; a piece whose share is smaller keeps its route
-reward and the root executor bears the difference. EXEC weight stays 0; carriers pay no worker share (`B` = 0 per carrier).
-
-**Hooks for lane BUDGET (`palw_bond_budget_v1`; the engine is BUDGET's, not built here).**
-
-| Hook | Called / read where | What the engine does |
+| Hook | Current consumer | Conservation |
 | --- | --- | --- |
-| H-3 (BUDGET's name) | an `EXEC_SLICE` carrier | nothing: the lane mints nothing, so no carrier calls `bond_budget_consume_block_v1` |
-| H-3a `palw_bond_budget_bind_vehicle_v1(kernel_claim, root_claim)` | the declaration (the prefix claim) and slice admission (the slice's claim); the read `PalwChainStateV2::exec_v2_root_of_kernel_claim_v1` answers it at any time | re-attributes the bound kernel claim's `R` (and `F`, 0 today) to the root claim's reservation: its route `FinalReward` is consumed from the ROOT's `R` (Clip), never from a fresh reservation on the executor's bond; its own `Q` and `d + W` stay as they are (D4). A route reward paid before the binding was charged to the executor's own budget; the settlement still nets it from `A`, so the right is never doubled |
-| H-3b | the root claim's `Final` | the reward is clipped before the split; `settle_at_final_v2` splits the clipped amount and nets the bound claims' route rewards, so `consume(root, R, A, Clip)` covers the whole session |
+| H-3 | `EXEC_SLICE` carrier | no block/reward issuance from the carrier |
+| H-3a | root declaration / slice admission → `bind_exec_reward_v1` | rooted table-27 hold; no additional root reward reservation, no early fee debit |
+| H-3b | native `finalize_claim` → `bond_budget_final_reward_v1` → `settle_at_final_v2` | clip the root's allocation once before splitting; actual fee payments reduce native issuance by the same amount |
 
 **GAP-61 — superseded by the Lead's GAP-81 decision; the seam is re-scoped, not replaced.** OPVB's reward gate is now per claim
 verification route (`opv/bootstrap-beacon` `c3221bc34`, unbuilt at this writing): the gate's `Onboarded` grants a V2-root claim nothing
@@ -667,3 +655,64 @@ occurrences; it never enumerates positions or tensor elements. Structural weight
 uses a visited set, so shared Concat/Slice paths do not expand exponentially. The bounded
 structural-cap measurement is evidence for this algorithm, not proof that every allowed graph
 and 256-root restart fits the node's release latency budget.
+
+
+## 13. BUDGET correction — root Final authorizes bound kernel fees
+
+The kernel computation lifecycle and the EXEC reward lifecycle have different Finals. A bound kernel claim reaching
+computation Final emits reward 0, remains `rewarded = false`, and retains its poster's escrow. It may verify the corresponding
+prefix or slice but cannot create a producer payout before the root's REAL Final. No untrusted kernel route object can bind,
+finish or cancel a hold: the EXEC consumer calls those hooks only after its execution-binding checks.
+
+### 13.1 Rooted hold and retention
+
+Kernel table 27 is `kernel claim digest → ExecRewardHoldV1 { owner_root, expires_daa }`.
+Its collection domain is `misaka-palw/kernel/ledger-collection/exec-reward-holds/v1`; its root extension domain is
+`misaka-palw/kernel/ledger-exec-reward-holds-extension/v1`. The extension is absent when table 27 is empty,
+so all unarmed preset rows, existing wire records and historical roots are unchanged. Direct ledger roots, row roots,
+restoration and the consumer's journal compose the same extension, after the beacon extension.
+
+At most `256 × (128 + 1)` holds exist. Consumer consistency requires exactly one hold for the prefix and every accepted slice
+of each open/complete bound root, no duplicate owner and no hold for a closed root. An already-paid prefix is refused at root
+declaration; an already-paid slice is refused with code 29; a conflicting reward owner uses code 30. Existing refusal codes stay
+pinned. Computation Final with no prior payout may attach. Binding to a different owner, finishing twice or finishing an expired,
+non-Final or failed claim refuses without a write.
+
+The escrow reservation remains on the poster's actual collateral until the root settles or cancels. Idle-job expiry cannot
+release a held escrow first. The root's existing bounded expiry is the latest permitted root Final, including when all pieces
+are verified but REAL Final is delayed by a court. The block's initial expiry sweep voids such a root and refunds its bound
+escrows. This is a financial hold deadline, not a reduction in the native finality delay or the required fraud liability window.
+
+### 13.2 Source and cap accounting
+
+Let `A` be the root executor allocation after the native bond-budget clip, buyback and panel split. Aggregate each executor's
+registered IR work before rounding, apply its frozen slice leg caps, and obtain gross shares `e_b` with `Σ e_b = A`.
+For each bound claim, in prefix-then-slice-index order:
+
+```
+f_i = min(job escrow amount, actual poster collateral remaining, executor share remaining)
+executor share remaining -= f_i
+native leg_b = e_b - Σ fee payments to b
+Σ native legs + Σ f_i = A
+Σ actual poster debits = Σ f_i
+```
+
+A single ledger batch releases the FULL escrow reservation, debits only `f_i`, pays exactly `f_i` to the claim producer,
+and releases the unused reservation to its poster. Re-sync poster collateral against the consumer's real bonds before the batch.
+`apply_settlements` matches a FinalReward to PayJobEscrow of the SAME claim; another claim's debit cannot fund it.
+The actual amounts, rather than `policy.claim_reward`, are saved in the existing prefix/slice `route_reward` fields at root Final.
+When `A = 0`, every escrow is released and every producer leg is 0. No additional R reservation is created for a bound claim;
+consuming the root's gross allocation once covers native and fee funding together.
+
+All ledger rows, poster debits, payout rows, exposure releases and the root `Settled` marker are journaled by the same transition.
+The existing delta/carriage rules apply and revert them together. A second root Final returns no new payment. A voided root pays
+zero; an incomplete root cannot invoke settlement. Default, conviction or expiry cancels every bound hold and releases escrow
+without reward or collateral debit. A previously verified piece receives no partial payment from an unsuccessful root.
+
+### 13.3 Remaining acceptance boundaries
+
+This correction does not prove post-root-Final recovery. Kernel liability can expire before a delayed root Final; a Settled root
+is still outside dependency-verdict propagation, and slice/native/kernel payouts do not yet all share the root's vesting horizon.
+Those WINDOW requirements remain activation blockers. Standalone kernel budget consumers, fee-only Round B policy,
+market-fee R policy, whole-model soundness, economics, pruned authorization history and worst-case resources retain their
+separate requirements in the full RFC6/7/8/12 audit. No preset or public activation validation is armed by this change.

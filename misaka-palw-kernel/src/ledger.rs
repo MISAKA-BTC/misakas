@@ -734,6 +734,8 @@ pub struct KernelLedgerV1 {
     pub proof_seals: BTreeMap<(Digest, Digest), SealRowV1>,
     /// GAP-5: `job → its poster's escrow` — reserved at posting, paid out (once) as the job's Final reward, or returned.
     pub job_escrows: BTreeMap<Digest, JobEscrowRowV1>,
+    /// Consumer-bound EXEC rewards: escrow stays reserved until the owning root settles or cancels.
+    pub exec_reward_holds: BTreeMap<Digest, crate::exec_reward::ExecRewardHoldV1>,
     /// **The demand bonds of SERVED positions, awaiting their fate** (K2S's producer-side DA griefing, G14-R4): a position served on
     /// chain keeps its demanders' bonds reserved; they are refunded the moment the claim is convicted, defaults or times out, and
     /// burned only when its liability horizon ends with no conviction — a true demand that leads to a conviction is never penalised.
@@ -827,6 +829,7 @@ impl KernelLedgerV1 {
             seals: BTreeMap::new(),
             proof_seals: BTreeMap::new(),
             job_escrows: BTreeMap::new(),
+            exec_reward_holds: BTreeMap::new(),
             served_demands: BTreeMap::new(),
             claim_beacon_salts: BTreeMap::new(),
             forfeited_claim_seals: BTreeMap::new(),
@@ -1287,10 +1290,21 @@ impl KernelLedgerV1 {
     /// **ADR-0176 HOOK `budget-final` (lane BUDGET; not built here):** the reward is paid only within the R / F reservation the claim
     /// made at acceptance (`budget-accept`), re-checked here; the budget is not recovered before `d + W`, whatever the claim's fate.
     fn pay_from_job_escrow(&mut self, job: &Digest, claim: &Digest, producer: Digest, out: &mut Vec<LedgerEventV1>) -> u64 {
+        self.pay_from_job_escrow_capped(job, claim, producer, u64::MAX, out)
+    }
+
+    pub(crate) fn pay_from_job_escrow_capped(
+        &mut self,
+        job: &Digest,
+        claim: &Digest,
+        producer: Digest,
+        cap: u64,
+        out: &mut Vec<LedgerEventV1>,
+    ) -> u64 {
         let Some(row) = self.job_escrows.remove(job) else { return 0 };
         let collateral = self.bonds.get(&row.poster).map_or(0, |b| b.collateral);
         // Never instruct more than the poster's bond still holds (another subsystem may have slashed it since).
-        let paid = row.amount.min(collateral);
+        let paid = row.amount.min(collateral).min(cap);
         if let Some(b) = self.bonds.get_mut(&row.poster) {
             b.reserved = b.reserved.saturating_sub(row.amount);
             b.collateral -= paid;
@@ -1311,12 +1325,15 @@ impl KernelLedgerV1 {
     fn release_idle_job_escrows(&mut self, out: &mut Vec<LedgerEventV1>) {
         let ttl = self.policy.job_escrow_ttl_daa;
         let seal_ttl = self.policy.seal_ttl_daa;
+        let held_jobs: BTreeSet<_> =
+            self.exec_reward_holds.keys().filter_map(|id| self.claims.get(id).map(|row| row.job_id)).collect();
         let idle: Vec<Digest> = self
             .job_escrows
             .iter()
             .filter(|(job, row)| {
                 let expired = row.posted_daa.saturating_add(ttl);
                 self.daa > expired
+                    && !held_jobs.contains(*job)
                     && !self.job_claims.get(*job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job)
                     && (self.daa > expired.saturating_add(seal_ttl)
                         || self.seals.range((**job, [0u8; 64])..=(**job, [0xFFu8; 64])).next().is_none())
@@ -2617,7 +2634,11 @@ impl KernelLedgerV1 {
                     // (`palw_bond_budget_v1`, not built): this payout also re-checks and consumes the producer bond's reservation.
                     let (job, convicted) = (row.job_id, row.convicted);
                     let mut paid = Vec::new();
-                    let reward = if convicted { 0 } else { self.pay_from_job_escrow(&job, &id, producer, &mut paid) };
+                    let reward = if convicted || self.exec_reward_holds.contains_key(&id) {
+                        0
+                    } else {
+                        self.pay_from_job_escrow(&job, &id, producer, &mut paid)
+                    };
                     self.claims.get_mut(&id).expect("listed").rewarded = reward > 0;
                     out.push(LedgerEventV1::Final { claim: id, reward });
                     out.extend(paid);

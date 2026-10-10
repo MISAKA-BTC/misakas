@@ -291,6 +291,8 @@ pub enum PalwWorkRootRefusalV2 {
     /// GAP-62: the declaration names no kernel claim the route holds.
     #[error("the declaration's prefix claim is not held by the kernel route")]
     PrefixClaimMissing,
+    #[error("the prefix kernel claim has already been paid")]
+    PrefixAlreadyPaid,
     /// GAP-62: the prefix claim is a pipeline claim (pipeline-class sessions await a segment state, as their slices do).
     #[error("the prefix claim is not a single-program kernel claim")]
     PrefixKindUnsupported,
@@ -624,6 +626,10 @@ pub enum PalwSliceRefusalV2 {
     VerificationClaimFailed,
     #[error("5: the kernel run's execution scope differs from its registered IR work interval")]
     ExecutionScopeMismatch,
+    #[error("5: the kernel claim has already been paid")]
+    VerificationAlreadyPaid,
+    #[error("5: the kernel claim reward already belongs to another root")]
+    VerificationRewardBound,
 }
 
 impl PalwSliceRefusalV2 {
@@ -660,6 +666,8 @@ impl PalwSliceRefusalV2 {
             R::VerificationClaimNotBound(_) => 26,
             R::VerificationClaimFailed => 27,
             R::ExecutionScopeMismatch => 28,
+            R::VerificationAlreadyPaid => 29,
+            R::VerificationRewardBound => 30,
         }
     }
 
@@ -695,6 +703,8 @@ impl PalwSliceRefusalV2 {
             26 => "verification_claim_not_bound",
             27 => "verification_claim_failed",
             28 => "execution_scope_mismatch",
+            29 => "verification_already_paid",
+            30 => "verification_reward_bound",
             _ => "unknown",
         }
     }
@@ -724,11 +734,9 @@ pub fn settle_root_v2(
     settle_core_v2(allocation, allocation, total_work, slices, root_bond)
 }
 
-/// **A partial settlement** — the defensive door for a root that reaches the claim's `Final` without every slice verified (the
-/// claim holds its `Final` while the root is not ready, so this is unreachable by construction; it is here so that if the
-/// invariant were ever broken the chain pays only what was verified and never wedges). Only the prefix and the *verified*
-/// slices are payable: `payable = floor(allocation × (prefix + verified) / total)`; the rest of the allocation is never named
-/// (never minted). Shares are still `floor(allocation × work / total)`, and the root keeps `payable − Σ shares`.
+/// Legacy partial-share arithmetic, retained for partition-conservation tests.
+/// No production reward consumer calls this calculator: an incomplete root cannot settle,
+/// and a voided root pays zero. It does not authorize a partial Final or a payout.
 pub fn settle_root_partial_v2(
     allocation: u64,
     total_work: u64,
@@ -913,7 +921,11 @@ mod tests {
         d.plan_root = h(901);
         d.kernel_version = 900;
         d.total_work = 900;
-        assert_eq!(a.job_work_id(&h(50)), d.job_work_id(&h(50)), "repartitioning or changing output/verification metadata is the same work");
+        assert_eq!(
+            a.job_work_id(&h(50)),
+            d.job_work_id(&h(50)),
+            "repartitioning or changing output/verification metadata is the same work"
+        );
         let mut e = decl();
         e.canonical_job_id = h(9);
         assert_ne!(a.job_work_id(&h(50)), e.job_work_id(&h(50)), "job");

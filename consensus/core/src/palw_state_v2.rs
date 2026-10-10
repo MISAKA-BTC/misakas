@@ -29454,6 +29454,9 @@ pub fn palw_v2_pre_object_base_v1(
     // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
     //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
     builder.advance_floor_state(ctx.daa_score);
+    // EXEC expiry is checked before REAL Final deadlines, including after a DAA jump.
+    // Mirrored in the pre-object base: an expired ready root refunds escrow instead of settling.
+    palw_exec_v2_fold::sweep_expired_roots_v2(&mut builder, ctx)?;
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the fold's step 2 closes the reveal windows here, right after the claim
     // sweep; mirrored so the acceptance rehearsal judges every object on the state step 3 sees.
@@ -29478,8 +29481,6 @@ pub fn palw_v2_pre_object_base_v1(
     // RFC-0007: the vertex rounds past their evidence window (a no-op on a chain with no row).
     palw_vertex_fold_v1::sweep_vertex_rounds_v1(&mut builder, ctx);
     palw_mesh_fold_v1::sweep_mesh_v1(&mut builder, ctx);
-    // RFC-0008 v2: the work sessions past their expiry void their claims, uncharged (a no-op on a chain with no root).
-    palw_exec_v2_fold::sweep_expired_roots_v2(&mut builder, ctx)?;
     apply_work_target_shadow(&mut builder, parent, ctx);
     apply_work_target(&mut builder, parent, ctx);
     apply_class_share_growth(&mut builder, parent, ctx);
@@ -29844,6 +29845,9 @@ pub fn apply_palw_transition_v7(
     // 2. Deadline sweeps — everything strictly past is resolved before this block says anything.
     //    (A deadline equal to ctx.daa_score is still actionable by this block's objects.) Claims
     //    first, then the court backstop: the order is fixed, and fixed IS the requirement.
+    // EXEC expiry is checked before REAL Final deadlines, including after a DAA jump.
+    // Mirrored in the pre-object base: an expired ready root refunds escrow instead of settling.
+    palw_exec_v2_fold::sweep_expired_roots_v2(&mut builder, ctx)?;
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the reveal windows this block is past close here, after the claim sweep
     // (whose convictions, if any, open windows that run from this block) and before the court
@@ -29886,8 +29890,6 @@ pub fn apply_palw_transition_v7(
     // `palw_v2_pre_object_base_v1`). A no-op on a chain with no row.
     palw_vertex_fold_v1::sweep_vertex_rounds_v1(&mut builder, ctx);
     palw_mesh_fold_v1::sweep_mesh_v1(&mut builder, ctx);
-    // RFC-0008 v2: the work sessions past their expiry void their claims, uncharged (a no-op on a chain with no root).
-    palw_exec_v2_fold::sweep_expired_roots_v2(&mut builder, ctx)?;
     // ADR-0143 Decision 6: the one-time canonicalisation, before any object of this block is
     // folded — a block that crosses the fence AND founds a line must see the index the migration
     // built, not the empty one it found.

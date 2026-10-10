@@ -81,6 +81,9 @@ pub const TYPED_TABLES_V1: [u8; 3] = [TABLE_SPEC_CLASSES_V1, TABLE_SPEC_JOBS_V1,
 pub const TABLE_CLAIM_BEACON_SALTS_V1: u8 = 25;
 /// OPV-BOOT GAP-B1a: `(job, producer, sealed_daa) → a claim seal that expired unrevealed past `palw_panel_free_v1``.
 pub const TABLE_FORFEITED_CLAIM_SEALS_V1: u8 = 26;
+/// EXEC consumer escrow holds, keyed by kernel claim. Empty below the EXEC fence.
+pub const TABLE_EXEC_REWARD_HOLDS_V1: u8 = 27;
+pub const EXEC_REWARD_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-exec-reward-holds-extension/v1";
 /// The domain of the root extension tables 25, 26 and 18 add (absent while all are empty: every older root is unchanged).
 pub const BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-beacon-seal-extension/v1";
 
@@ -125,6 +128,7 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_SPEC_CLASSES_V1 => "spec-classes",
         TABLE_SPEC_JOBS_V1 => "spec-jobs",
         TABLE_MEMORY_LINES_V1 => "memory-lines",
+        TABLE_EXEC_REWARD_HOLDS_V1 => "exec-reward-holds",
         _ => "attested-artifacts",
     };
     format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes()
@@ -174,6 +178,9 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.proof_seals {
             rows.insert((TABLE_PROOF_SEALS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.exec_reward_holds {
+            rows.insert((TABLE_EXEC_REWARD_HOLDS_V1, bytes_of(k)), bytes_of(v));
         }
         for (k, v) in &self.job_escrows {
             rows.insert((TABLE_JOB_ESCROWS_V1, bytes_of(k)), bytes_of(v));
@@ -287,6 +294,9 @@ impl KernelLedgerV1 {
                         dec::<crate::ledger::ForfeitedSealRowV1>(row, "forfeited seal")?,
                     );
                 }
+                TABLE_EXEC_REWARD_HOLDS_V1 => {
+                    l.exec_reward_holds.insert(dec(key, "EXEC reward claim")?, dec(row, "EXEC reward hold")?);
+                }
                 TABLE_JOB_ESCROWS_V1 => {
                     l.job_escrows.insert(dec(key, "job escrow key")?, dec::<crate::ledger::JobEscrowRowV1>(row, "job escrow")?);
                 }
@@ -323,6 +333,7 @@ impl KernelLedgerV1 {
         }
         // The live-claim index is derived (not committed): rebuilt from the rows, exactly as a restored ledger does.
         l.opv_rebuild_live();
+        l.validate_exec_reward_holds()?;
         Ok(l)
     }
 }
@@ -510,7 +521,10 @@ pub fn root_of_rows(
     let base = if seg { seg_root_extension_v1(&base, &coll(TABLE_TILED_JOBS_V1), &coll(TABLE_SEG_PROGRESS_V1)) } else { base };
     let base = crate::spec::typed_root_v1(base, &typed);
     // OPV-BOOT GAP-B1a / C4R4 F-C4R4-08: tables 25, 26 and 18 extend the root only once any of them holds a row.
-    if [TABLE_CLAIM_BEACON_SALTS_V1, TABLE_FORFEITED_CLAIM_SEALS_V1, TABLE_JOB_POSTERS_V1].iter().any(|t| by_table.contains_key(t)) {
+    let base = if [TABLE_CLAIM_BEACON_SALTS_V1, TABLE_FORFEITED_CLAIM_SEALS_V1, TABLE_JOB_POSTERS_V1]
+        .iter()
+        .any(|t| by_table.contains_key(t))
+    {
         beacon_seal_root_extension_v1(
             &base,
             &coll(TABLE_CLAIM_BEACON_SALTS_V1),
@@ -519,7 +533,18 @@ pub fn root_of_rows(
         )
     } else {
         base
+    };
+    if by_table.contains_key(&TABLE_EXEC_REWARD_HOLDS_V1) {
+        exec_reward_root_extension_v1(&base, &coll(TABLE_EXEC_REWARD_HOLDS_V1))
+    } else {
+        base
     }
+}
+
+pub fn exec_reward_root_extension_v1(base: &Digest, holds: &Digest) -> Digest {
+    let mut s = keyed(EXEC_REWARD_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(holds);
+    finish(s)
 }
 
 /// `H(extension; base root ‖ claim beacon salts ‖ forfeited claim seals ‖ job posters)` (OPV-BOOT GAP-B1a, C4R4 F-C4R4-08).

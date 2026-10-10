@@ -331,6 +331,9 @@ pub fn palw_exec_v2_slice_statement_v1(
         .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&claim_id)))
         .and_then(|bytes| borsh::from_slice::<ClaimRowV1>(bytes).ok())
         .ok_or("the kernel route holds no such claim")?;
+    if row.rewarded {
+        return Err("the kernel claim has already been paid".into());
+    }
     let ClaimBodyV1::Program { claim, .. } = &row.body else {
         return Err("the claim is a pipeline claim: pipeline-class slices await a segment state".into());
     };
