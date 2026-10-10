@@ -95,6 +95,8 @@ pub mod ledger;
 pub mod lifecycle;
 pub mod merkle;
 pub mod merkle3;
+/// Bounded raw-width producer hashing of the unchanged v3 tensor commitments.
+pub mod merkle3_stream;
 pub mod mode;
 pub mod opv;
 pub mod outcome;

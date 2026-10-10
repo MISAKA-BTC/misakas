@@ -2306,3 +2306,22 @@ court and differential/reference/root tests verify the optimization; they do not
 real-weight node path, source fidelity, long context, model security or Final/redemption. Evidence,
 commands and remaining full-scope gates are in the implementation ledger's
 [whole-value Gather pricing revision](../design/palw/tir/rfc0002-implementation.md).
+
+#### 14.8 Generic bounded preparation of real parameter commitments
+
+The SDK and `palw-class kernel-params` prepare the existing segmented-kernel v3 parameter map
+from canonical artifact byte ranges without model/config/frontend selection. The raw-width
+builder reads every element once and reproduces both commitment trees using checked bounded
+buffers; it allocates no complete tensor or i128 expansion. Every model-instance workspace and
+the aggregate payload cap are checked before any payload read. Decoder/encoder parameter roles
+follow the explicit descriptor memory model; unknown memory models refuse, and v5 job-input slots are
+excluded only under encoder semantics. Partial preparation publishes no map.
+
+On the full real Qwen2.5 pilot artifact, all 1,636 instance roots and the complete param map agree
+with decoded reference hashing. Streaming measured 57.985 s and 38,223,872-byte maximum process
+RSS, versus 223.809 s and 4,131,471,360 bytes for the decoded diagnostic. These local debug
+measurements concern producer/verifier **root preparation**, with explicit off-chain caps. They
+change no wire preimage, kernel identity, resource price, network activation or economic right.
+They do not prove source-model fidelity, execution, public node prosecution or Final. Commands,
+bounds, raw evidence and the remaining full-scope work are in the
+[RFC02 implementation ledger](../design/palw/tir/rfc0002-implementation.md).

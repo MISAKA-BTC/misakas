@@ -731,3 +731,85 @@ registered roots, authenticated public material, fresh checking/court and Final 
 path. Independent floating reference/task fidelity, long context and other common model features,
 A6/A8 coverage and aggregate resource/economic gates remain required; synthetic/static success
 must not replace them.
+
+### Bounded real-artifact v3 parameter-root preparation (2026-10-10)
+
+`merkle3_stream` builds the unchanged v3 dual-root commitment directly from narrow row-major
+bytes. It reads every tensor byte once, hashes row tiles as they arrive, and retains one 4096-row
+batch of column hash states. Column hashes are placed in canonical `(line, tile)` order before
+folding. Both trees, odd-node promotion, scalar/flat/batched shapes, dtype widths, and the shared
+leaf prefix are identical to decoded hashing. No full tensor or i128 expansion is allocated.
+
+The algorithm derives a checked workspace bound (leaf hashes/folding, column states, one
+<=64-KiB byte buffer and fixed slack) before allocating or reading payload. The SDK's
+`kernel_params` validates the program and checks every model instance's workspace plus the
+aggregate payload limit **before reading any instance**. A source failure returns no completed
+map. It supports independent range sources and direct container-file reads. The latter fill the
+kernel's buffer without an extra read-ahead allocation. These are explicit off-chain preparation
+limits, not a node resource ceiling or a restriction on all models by this host's capacity.
+The bound excludes program/instance metadata, the caller's cache, allocator overhead and process
+RSS; the actual process RSS is measured separately.
+
+Preparation's parameter roles are selected by the descriptor's memory model, not inferred from names: v4
+prepares all declared model instances, while v5 validates its encoder binding and excludes the
+job's ids/count slots. Unknown memory models refuse. The resulting keyed param/layer map is the
+existing `ParamCommitmentsV1`, byte-compatible with decoded `of_v3`; its root is a **kernel param
+root**, not the legacy inventory root or a claim/evidence root. A verifier must compare it to an
+authenticated class binding. Computing a root grants no registration, source fidelity, model
+availability, activation, economic credit or Final.
+
+The public CLI entry `palw-class kernel-params` takes a canonical PALWTIR1 artifact, explicit
+workspace/payload caps, and an output file. It needs no model name, ModelSpec, source configuration
+or official compiler. It writes the Borsh parameter map atomically only after all instances succeed;
+it refuses replacing the source artifact and keeps a previous output intact on preparation errors.
+`--encoder` selects the v5 job-input roles explicitly. The output reports descriptor/program/param
+roots, model declaration/instance counts, payload, workspace and elapsed time. No network is armed.
+
+Actual measurement on the existing 32-token Qwen2.5 pilot artifact (same source revision and
+artifact/program SHA-256 as the earlier evidence), using the debug CLI on this Mac:
+
+| Method | Instances / payload | Algorithm elapsed | Maximum process RSS |
+|---|---|---:|---:|
+| Raw-width streaming, 64 MiB tensor workspace cap | 1,636 / 1,835,516,100 bytes | 57.985 s | 38,223,872 bytes |
+| Decoded reference, one full tensor at a time, 8 GiB reference cap | Same; every instance compared | 223.809 s | 4,131,471,360 bytes |
+
+The streamed algorithm's largest workspace bound is 27,275,264 bytes. The command's 4-GiB
+aggregate payload limit and 64-MiB tensor workspace limit were fixed before the measurement.
+All 1,636 decoded tensor roots and the complete param/layer map root match:
+`1c07cbbadb1ec7166361a6ffdda43c7c5740183dbb8ecd9659e7c4c5c906cf5495ac5df4fd25617829628b3cec7969e43eeee06bed08c0beeaa51d76b023f729`.
+The artifact SHA-256 was observed early during the streaming run and again after both runs,
+unchanged at `435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64`. This is a measured
+full real-weight commitment computation and decoded-hashing comparison; it is **not** an
+independent float-model reference, integer execution check, public-node conviction or Final.
+The decoded reference is a diagnostic with a separate, deliberately much larger memory cap;
+ordinary root preparation uses the streaming path.
+
+Reproduction (the artifact stays in local ignored material):
+
+```sh
+cargo build --locked -p misaka-palw-sdk --bin palw-class --example check-kernel-params-reference
+/usr/bin/time -l target/debug/palw-class kernel-params \
+  target/rfc02-real/qwen25-pilot/qwen25-32.palwtir \
+  --tensor-workspace-mib 64 --payload-limit-mib 4096 \
+  --out target/rfc02-real/qwen25-pilot/kernel-params-v3.borsh --json
+/usr/bin/time -l target/debug/examples/check-kernel-params-reference \
+  target/rfc02-real/qwen25-pilot/qwen25-32.palwtir \
+  target/rfc02-real/qwen25-pilot/kernel-params-v3.borsh 8192
+cargo test --locked -p misaka-palw-kernel --lib merkle3
+cargo test --locked -p misaka-palw-sdk --lib kernel_params
+cargo test --locked -p misaka-palw-sdk --test kernel_params_cli --test kernel_preflight_cli
+```
+
+Eight kernel root/proof tests, three SDK preparation tests and four CLI tests pass (15 distinct
+checks; the existing manual hardware hash benchmark remains ignored). Tests cover all dtypes,
+scalar through rank-four/batched shapes, odd and partial leaves, simultaneous 4097x4097 row/column
+tile boundaries, original leaf authentication, overflow/cap/source failures, all layer identities,
+weight changes, explicit encoder roles, and output/source preservation. The real 112,864-byte
+Borsh parameter map, source observations, reports and comparison/validation logs are recorded in
+`evidence/qwen25-real-params-v3-*`. No weight payload is committed to the repository.
+
+Full RFC02 scope remains open. These exact real program and parameter roots now supply the
+registration/evidence preparation needed for the same-node public execution/checker/court path.
+That path, authenticated public material, outsider conviction and independent Final/redemption
+must still be measured with real artifact operands; root preparation cannot stand in for those
+gates. All previously listed fidelity, context, feature, resource/economic and A6/A8 gates remain.

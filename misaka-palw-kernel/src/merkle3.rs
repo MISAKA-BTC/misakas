@@ -132,8 +132,7 @@ pub(crate) fn leaf_hash_v3(dtype: DType, axis: u8, line: u64, tile: u64, values:
 /// The unchanged v3 preimage, streamed through a fixed 4 KiB encoding buffer. BLAKE2 update boundaries have no wire meaning.
 /// A producer can hash contiguous rows or strided columns directly, without allocating index/value vectors for every leaf.
 fn leaf_hash_values_v3(dtype: DType, axis: u8, line: u64, tile: u64, count: u64, values: impl Iterator<Item = i128>) -> Digest {
-    let mut s = keyed(TENSOR_LEAF_DOMAIN_V3);
-    s.update(&[dtype.tag(), axis]).update(&line.to_le_bytes()).update(&tile.to_le_bytes()).update(&count.to_le_bytes());
+    let mut s = leaf_state_v3(dtype, axis, line, tile, count);
     let width = dtype.width();
     let mut encoded = [0u8; 4096];
     let mut used = 0;
@@ -149,6 +148,13 @@ fn leaf_hash_values_v3(dtype: DType, axis: u8, line: u64, tile: u64, count: u64,
         s.update(&encoded[..used]);
     }
     finish(s)
+}
+
+/// The exact shared leaf prefix; raw-width producers and decoded-value courts use one preimage.
+pub(crate) fn leaf_state_v3(dtype: DType, axis: u8, line: u64, tile: u64, count: u64) -> blake2b_simd::State {
+    let mut s = keyed(TENSOR_LEAF_DOMAIN_V3);
+    s.update(&[dtype.tag(), axis]).update(&line.to_le_bytes()).update(&tile.to_le_bytes()).update(&count.to_le_bytes());
+    s
 }
 
 pub(crate) fn node_hash_v3(l: &Digest, r: &Digest) -> Digest {
