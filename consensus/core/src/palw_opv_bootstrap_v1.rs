@@ -471,6 +471,9 @@ pub enum OpvIneligibleV1 {
     PolicyNotVerified(String),
     /// A pipeline OPV class: no onboarding path exists for pipelines (GAP-B4).
     PipelineNotOnboardable,
+    /// RFC-0004 Part II: a `Retrieval` class (or a `Composite` with a retrieval stage) — no conformance statement exists for a snapshot
+    /// yet (the snapshot binding of GAP-52), so none is eligible.
+    SnapshotNotOnboardable,
 }
 
 impl OpvIneligibleV1 {
@@ -483,7 +486,7 @@ impl OpvIneligibleV1 {
             Self::NotOnboarded | Self::ConformanceNotPassed | Self::ConformanceOfAnotherStatement | Self::NotG14Complete(_) => {
                 N::G14Eligible
             }
-            Self::PipelineNotOnboardable => N::G14Eligible,
+            Self::PipelineNotOnboardable | Self::SnapshotNotOnboardable => N::G14Eligible,
             Self::BindingNotStanding => N::ArtifactMatured,
             Self::ResourceUnbounded(_) => N::BoundsFit,
             Self::PolicyNotVerified(_) => N::PolicyVerified,
@@ -503,6 +506,7 @@ impl OpvIneligibleV1 {
             Self::ResourceUnbounded(String::new()),
             Self::PolicyNotVerified(String::new()),
             Self::PipelineNotOnboardable,
+            Self::SnapshotNotOnboardable,
         ]
     }
 
@@ -518,6 +522,7 @@ impl OpvIneligibleV1 {
             Self::ResourceUnbounded(_) => "RESOURCE_UNBOUNDED",
             Self::PolicyNotVerified(_) => "POLICY_NOT_VERIFIED",
             Self::PipelineNotOnboardable => "PIPELINE_NOT_ONBOARDABLE",
+            Self::SnapshotNotOnboardable => "SNAPSHOT_NOT_ONBOARDABLE",
         }
     }
 }
@@ -696,6 +701,65 @@ impl PalwKernelRouteStateV1 {
 
     /// **Eligibility of an OPV class by id** (registered single-program or pipeline): a pipeline class is eligible only through the
     /// test seam (no onboarding path).
+    /// **A typed-root class's derived OPV eligibility** (RFC-0004 Part II; lane G14C GAP-50, closing OPVB's GAP-B16 for the kinds
+    /// that have a path). A typed class adds no relation of its own that a conformance would sample (its memory edges, retrieval
+    /// orderings and composite edges are exact and checked at inclusion or by their own exact courts), so its eligibility is derived
+    /// from the classes whose computation it runs:
+    ///
+    /// * `Weights` — the identical single-program registration's (E1–E7 through its own kernel binding);
+    /// * `Memory` — its rule program's single-program registration over the class's weights (the base weights AND `M0`: the
+    ///   parameter commitments the artifact binding covers), E1–E7 through that registration's kernel binding;
+    /// * `Composite` — every stage's component, each eligible in its own right (a model stage: a registered single-program OPV class;
+    ///   a retrieval stage: never, below);
+    /// * `Retrieval` — never: no conformance statement exists for a snapshot yet ([`OpvIneligibleV1::SnapshotNotOnboardable`]).
+    ///
+    /// The typed class's own id is checked against the deny-list first (and the test seam, which only names), so a typed class can be
+    /// denied without denying the model it reuses.
+    pub fn opv_spec_eligibility_v1(
+        &self,
+        ledger: &KernelLedgerV1,
+        spec: &misaka_palw_kernel::spec::ComputationSpecV1,
+        daa: u64,
+        view: &OpvEligibilityViewV1<'_>,
+    ) -> Result<OpvEligibleV1, OpvIneligibleV1> {
+        use misaka_palw_kernel::spec::{SpecClassKindV1, SpecShapeV1};
+        let class = spec.class_id().map_err(OpvIneligibleV1::NotG14Complete)?;
+        let id = Hash64::from_bytes(class);
+        if view.denied.contains(&id) {
+            return Err(OpvIneligibleV1::Denied);
+        }
+        if view.test_eligible.contains(&id) {
+            return Ok(OpvEligibleV1::TestHook);
+        }
+        let of_weights = |w: &misaka_palw_kernel::spec::WeightsRootV1| {
+            OpvClassFactsV1::of_registration(w.descriptor, &w.program_bytes, &w.plan, &w.param_commitments)
+        };
+        match spec.shape().map_err(OpvIneligibleV1::NotG14Complete)? {
+            SpecShapeV1::Weights(w) | SpecShapeV1::Memory(w, _) => self.opv_eligibility_v1(ledger, &of_weights(w), daa, view),
+            SpecShapeV1::Retrieval(_) => Err(OpvIneligibleV1::SnapshotNotOnboardable),
+            SpecShapeV1::Composite(c) => {
+                let mut eligible = Err(OpvIneligibleV1::NotG14Complete("a composite with no stage".into()));
+                for stage in &c.stages {
+                    if ledger.classes.contains_key(&stage.component) {
+                        eligible = Ok(self.opv_class_eligibility_v1(ledger, &stage.component, daa, view)?);
+                    } else if let Some(row) = ledger.typed.classes.get(&stage.component) {
+                        match &row.kind {
+                            SpecClassKindV1::Retrieval { .. } => return Err(OpvIneligibleV1::SnapshotNotOnboardable),
+                            _ => {
+                                return Err(OpvIneligibleV1::NotG14Complete(
+                                    "a composite stage that is neither a model nor a tool".into(),
+                                ));
+                            }
+                        }
+                    } else {
+                        return Err(OpvIneligibleV1::NotOnboarded);
+                    }
+                }
+                eligible
+            }
+        }
+    }
+
     pub fn opv_class_eligibility_v1(
         &self,
         ledger: &KernelLedgerV1,

@@ -809,3 +809,5 @@ impl DebugName for ClaimStateV1 {
 
 // Lane DA16: the court scope (ADR-0177 D2) on the typed roots — a child module so it runs on this harness unchanged.
 mod da16_scope;
+// Lane G14C (GAP-50/51): typed classes eligible only through their components; node recovery of the typed rows and the line.
+mod g14c;

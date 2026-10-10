@@ -264,6 +264,18 @@ fn opv_gate_v1(
     let view = OpvEligibilityViewV1::of(opv);
     let eligible =
         |class: &misaka_palw_kernel::hash::Digest| route.opv_class_eligibility_v1(ledger, class, ctx.daa_score, &view).is_ok();
+    // A typed claim's class, through its job (an unknown job or class: the kernel refuses the claim by its own rule, so pass it on).
+    let spec_claim_eligible = |claim: &misaka_palw_kernel::spec::SpecClaimV1| {
+        use misaka_palw_kernel::spec::SpecJobV1 as J;
+        let Some(job) = ledger.typed.jobs.get(&claim.job_id()) else { return true };
+        let class = match job {
+            J::Memory(j) => j.class,
+            J::Retrieval(j) => j.class,
+            J::Composite(j) => j.class,
+        };
+        let Some(row) = ledger.typed.classes.get(&class) else { return true };
+        route.opv_spec_eligibility_v1(ledger, &row.spec, ctx.daa_score, &view).is_ok()
+    };
     match object {
         KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } if mode.is_optimistic() => {
             let facts = OpvClassFactsV1::of_registration(*descriptor, program_bytes, plan, param_commitments);
@@ -278,30 +290,16 @@ fn opv_gate_v1(
             // kernel matches the registration's own id against them (a refused registration flushes nothing).
             OpvGateV1::Admit(view.test_eligible.iter().filter(|id| !view.denied.contains(id)).map(|id| id.as_bytes()).collect())
         }
-        // RFC-0004 Part II (R4X): a typed-root class registers only under OPV. A `Weights` spec IS today's single-program registration
-        // (the same id, by the same function), so it takes the same derived eligibility; a `Memory` / `Retrieval` / `Composite` class
-        // has no onboarding path yet (GAP-B16), so — like a pipeline — only the test seam can name it, and never past the deny-list.
+        // RFC-0004 Part II (R4X): a typed-root class registers only under OPV, admitted by its derived eligibility (G14C GAP-50):
+        // a `Weights` spec IS today's single-program registration; a `Memory` class's is its rule program's over its weights; a
+        // `Composite` needs every stage's component eligible; a `Retrieval` class has no conformance statement yet (never eligible but
+        // through the test seam, and never past the deny-list).
         KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::RegisterClass { spec } }
             if spec.mode.is_optimistic() =>
         {
-            use misaka_palw_kernel::spec::SpecShapeV1;
-            match (spec.shape(), spec.class_id()) {
-                (Ok(SpecShapeV1::Weights(w)), _) => {
-                    let facts = OpvClassFactsV1::of_registration(w.descriptor, &w.program_bytes, &w.plan, &w.param_commitments);
-                    match route.opv_eligibility_v1(ledger, &facts, ctx.daa_score, &view) {
-                        Ok(_) => OpvGateV1::Admit(vec![facts.opv_id]),
-                        Err(_) => OpvGateV1::Pass,
-                    }
-                }
-                (Ok(_), Ok(class)) => {
-                    let id = Hash64::from_bytes(class);
-                    if view.test_eligible.contains(&id) && !view.denied.contains(&id) {
-                        OpvGateV1::Admit(vec![class])
-                    } else {
-                        OpvGateV1::Pass
-                    }
-                }
-                // A malformed spec: the kernel refuses it by its own rule.
+            match (spec.class_id(), route.opv_spec_eligibility_v1(ledger, spec, ctx.daa_score, &view)) {
+                (Ok(class), Ok(_)) => OpvGateV1::Admit(vec![class]),
+                // Not admitted, or a malformed spec: the kernel refuses it by its own rule.
                 _ => OpvGateV1::Pass,
             }
         }
@@ -322,12 +320,18 @@ fn opv_gate_v1(
             let class = match commit {
                 C::Claim { claim, .. } => ledger.jobs.get(&claim.job_id).map(|j| j.class_binding_id),
                 C::Pipeline { claim, .. } => ledger.pipeline_jobs.get(&claim.job_id).map(|j| j.class_binding_id),
-                C::Spec { .. } => None,
+                // A typed claim is re-gated by its class's DERIVED eligibility (G14C): a class whose component lost eligibility (its
+                // binding refuted, its kernel retired, denied) takes no new claim.
+                C::Spec { claim } => return if spec_claim_eligible(claim) { OpvGateV1::Pass } else { OpvGateV1::Drop },
             };
             match class {
                 Some(class) if ledger.opv.classes.contains(&class) && !eligible(&class) => OpvGateV1::Drop,
                 _ => OpvGateV1::Pass,
             }
+        }
+        // The unsalted typed reveal (kind 19, before salted seals are required) is gated the same way.
+        KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::CommitClaim { claim } } => {
+            if spec_claim_eligible(claim) { OpvGateV1::Pass } else { OpvGateV1::Drop }
         }
         _ => OpvGateV1::Pass,
     }

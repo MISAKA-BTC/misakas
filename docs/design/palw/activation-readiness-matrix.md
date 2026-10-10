@@ -216,6 +216,43 @@ unified EXEC and the new economic rules. Owners: BUDGET (BUDGET, WORK, WINDOW, N
 X8R (SLICE, EXEC's RECOVERY), ECON (ECON). POLICY for the user: whether fee-only Rounds count against B_max or get their own
 execution cap, and whether market fee income counts in R_max.
 
+## 3f. User rulings on ECON's results (2026-10-10)
+
+- **Verifier pay: M\*-49 adopted.** Users pay a per-check fee from the job's escrow, and drawn verifiers are paid first out
+  of the unchanged 49%. It is implemented behind a new dormant fence. The lazy-verifier question stays open.
+- **The default's demander share is held until the liability horizon.** This closes the 441-vs-490 residual of the single
+  49% cap.
+- **Model allocation `f(S_m)` stays in the design** (the model leg is not dropped). Keep searching for an answer and parameters
+  that make publishing overwhelmingly better. Work on the premise that **bond gathered = users gathered**. An adversary able to
+  post more bond than that is read like the same outcome under BFT, outside the security assumption, as a stake majority is
+  for BFT. ECON re-evaluates `f` under that honest-capital-majority assumption.
+- **W is not fixed now.** ECON's derived range is 280–436 DAA at the interim terms.
+- **Follow-up rulings (2026-10-10), on ECON round 2:**
+  - **The design: linear `f` with a verification-attestation gate.** Per model-epoch, stake-drawn verifiers (m = 47, k = 24, both an
+    unapproved interim policy) each check a sampled Final claim with their own copy, and the allocation is paid only when k attest.
+  - **The gate is consistent with ADR-0177 D1.** It withholds only the model-allocation subsidy, and the reason is "verification
+    was not attested", never "the model was not served". Claims, escrow, Final, weight and slashing are untouched, and there is no
+    availability audit and no slash.
+  - **The adversary bound is 1/3** of capital and of verifier stake, as in BFT. The bars fail at 0.40 / 0.44.
+  - **BUDGET implements it now**, as an extension of `palw_model_bond_allocation_v1`. The values are an unapproved policy.
+
+## 3g. ADR-0177 goal changed: bond-aggregation advantage (user, 2026-10-10)
+
+The goal is now "strongly favour models that gather more effective locked miner bond", no longer "favour publication itself".
+Publication is the means by which other miners can join; equal capital is treated equally whoever owns it.
+- "Publish always beats equal self-funding" is removed from the release requirements. ECON's counter-examples stay as the record
+  of the old goal.
+- The curve candidate is `A_m = S_m^α` (α > 1, compare α = 2) inside the fixed PALW budget. α is POLICY. The new acceptance
+  requirement quantifies the advantage: capital range, multiplier, and whether it holds for allocation, actual payment or net
+  profit, below the individual caps.
+- Large-capital concentration, including adversarial capital, is accepted as residual risk. Inflating small capital
+  (double counting, epoch-edge moves, key or claim splitting) stays forbidden.
+- **`p = 0` compute-skipping is a separate, unresolved safety gate.** The curve is never its evidence. Reports split "honest
+  verifiers function" from "every owner closes, p = 0".
+- Unchanged: Q/B/R/F individual caps, the total budget, distinct capital and the common hold. Block issuance, beacon, Final
+  weight and fork choice are not scaled by bond aggregation.
+- The verification-attestation gate (ECON round 2) may continue as a dormant subsidy condition. It is not a p = 0 resolution.
+
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
 Waves, because the Mac (32 GiB, ~40 GB free disk) cannot build a dozen targets at once, and builds are batched (user rule): each lane

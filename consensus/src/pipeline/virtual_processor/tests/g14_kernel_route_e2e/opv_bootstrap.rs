@@ -1201,3 +1201,78 @@ async fn g14_opv_bootstrap_a_withheld_v3_seal_vetoes_the_attempt_and_is_counted(
     let z = net.replay().await;
     net.assert_same(&z, "replay");
 }
+
+/// **G14C (GAP-71b, OPVB's GAP-B10): a fresh complete-check verifier from public reads.** Two bootstrap classes post their complete
+/// checks — one honest, one forged (an implementation's leaf root off) — and the fold judges them (pass / counted failure). A node
+/// started afterwards by IBD serves op 231 (the attempt row, the program) and op 211 (the kernel binding's commitments root, the bound
+/// plan's position bound) through the RPC ops' own builders; the SDK's `fresh_verify_complete_check_v1` re-runs each whole check from
+/// the verifier's own copy of the registered artifact and agrees with both verdicts. A verifier holding another model is refused
+/// (`ARTIFACT_NOT_REGISTERED`): G14 is conditional on having the registered model (ADR-0177), never on the chain serving it.
+#[tokio::test]
+async fn g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_and_its_own_artifact() {
+    use super::canonical::{Rpc, ibd_node};
+    use misaka_palw_sdk::onboarding_chain::{PublicCompleteCheckReadsV1, fresh_verify_complete_check_v1};
+    kaspa_core::log::try_init_logger("warn");
+    let unhex = |text: &str| {
+        let mut out = vec![0u8; text.len() / 2];
+        faster_hex::hex_decode(text.as_bytes(), &mut out).expect("the RPC serves hex");
+        out
+    };
+    let mut net = Net::over_cfg(boot_config(0, Vec::new()), TestConsensus::new);
+    net.beat_to(1).await;
+    let onbs = onboard_all(&mut net, vec![Spec::honest(61, 1, true), Spec::honest(62, 3, true)]).await;
+    for o in &onbs {
+        commit(&mut net, o, 0x22).await;
+    }
+    let honest = complete_post(&net, &onbs[0]);
+    let forged = {
+        let mut p = complete_post(&net, &onbs[1]);
+        p.leaves.backend[0] ^= 1;
+        p
+    };
+    let o = net.evidence(onbs[0].card, onbs[0].v2, ConformanceEvidenceActionV1::PostComplete(Box::new(honest.clone())));
+    net.send(vec![(onbs[0].card, o)]).await;
+    let o = net.evidence(onbs[1].card, onbs[1].v2, ConformanceEvidenceActionV1::PostComplete(Box::new(forged)));
+    net.send(vec![(onbs[1].card, o)]).await;
+    assert_eq!(net.attempt(onbs[0].v2).record.state, S::G14Eligible, "the honest check passed in the fold");
+    assert_eq!(net.attempt(onbs[1].v2).record.state, S::RegisteredDormant, "the forged check failed in the fold");
+
+    let node = ibd_node(&net).await;
+    let rpc = Rpc::of(&node.chain);
+    let (route, _) = rpc.route();
+    for (i, o) in onbs.iter().enumerate() {
+        let read = rpc.conformance(o.v2);
+        assert!(read.available && read.found, "op 231 serves the attempt");
+        let binding = route.kernel_binding_v1(&o.v2).expect("op 211's rows hold the kernel binding");
+        let record = route.kernel_class_record_v1(&binding.kernel_class).expect("and the bound kernel class");
+        let reads = PublicCompleteCheckReadsV1 {
+            attempt_row: unhex(&read.attempt_row),
+            program: unhex(&read.program),
+            max_positions: record.plan.max_positions,
+            kernel_param_root: binding.kernel_param_root,
+        };
+        let report = fresh_verify_complete_check_v1(&reads, &ops_of(&o.f)).expect("the fresh verifier runs");
+        assert!(report.agrees, "class {i}: {}", report.why);
+        assert!(report.honest_passes);
+        assert_eq!(report.chain_says_passed, i == 0, "class {i}");
+        assert_eq!(
+            report.chain_post_id == Some(report.honest_post_id),
+            i == 0,
+            "class {i}: the judged post is the honest one iff it passed"
+        );
+        if i == 0 {
+            assert_eq!(report.honest_post_id, honest.id());
+        }
+    }
+    // A verifier holding another model cannot verify (and the chain asks it for nothing).
+    let read = rpc.conformance(onbs[0].v2);
+    let binding = route.kernel_binding_v1(&onbs[0].v2).unwrap();
+    let reads = PublicCompleteCheckReadsV1 {
+        attempt_row: unhex(&read.attempt_row),
+        program: unhex(&read.program),
+        max_positions: route.kernel_class_record_v1(&binding.kernel_class).unwrap().plan.max_positions,
+        kernel_param_root: binding.kernel_param_root,
+    };
+    let refusal = fresh_verify_complete_check_v1(&reads, &ops_of(&onbs[1].f)).expect_err("another model's artifact");
+    assert_eq!(refusal.code, "ARTIFACT_NOT_REGISTERED");
+}

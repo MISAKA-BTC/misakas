@@ -95,6 +95,37 @@ only partial everywhere.
 | F17 | Post-fence V2 REAL work of a class the reward gate `Passed` | the V2 attempt lane, through OB's gate | none: the gate's evidence is the bound KERNEL class, not the V2 claim | **Hole, not met** (GAP-81). |
 | — | BASE-0 base class | bonded fallback | — | Exempt (`BASE_FLOOR`); not useful-computation reward; outside G14 by design. |
 
+## 2a. Refresh against integration `2d93ac288` (2026-10-10, after milestones 2–3 and LG14-B / BUDGET merged)
+
+The §3 tables below are the milestone-1 baseline. This table is the current state per family; where it differs, it wins. "V-node"
+means a real-node chain-path test on `g14/completion` at this head (run `g14c-m6`: 45 tests — `g14_canonical`, `r4x_`, `g14_opv_bootstrap` — pass), with the canonical harness's post-genesis
+bond, a node started after the claim (IBD or pruned import) and reads through the RPC ops' builders, unless noted.
+
+| Family | C1 public entry | C2 fresh node | C7 RPC leg | Lie types at V-node | Recovery (C8) | Eligibility / reward gate | Open |
+|---|---|---|---|---|---|---|---|
+| F1 K2-TIR v1/v2 single program | V-node | V-node (IBD, pruned) | builders + JSON wire (socket hop: drill) | MatMul, quantization/rounding, decode, garbage, DA default, wrong-challenge dismissal; boundary / copy / borrowed refused at inclusion | V-node (parent N13–N15 + canonical) | OPVB derived (E1–E7) + per-claim reward gate (GAP-81 decided) | routing / history: pinned refused by carrier fit (K2S v4, GAP-30/31) |
+| F2 pipelines | GAP | GAP | GAP | V-ref only | — | no onboarding path (GAP-B4) | waits for K2S's header wire form (GAP-20/21) |
+| F3 K2-TIR-v4 real scale | — | — | — | K2S branch only | — | — | K2S (GAP-30/31/32) |
+| F4 v5 encoders / heads | — | — | — | K2S WIP | — | — | K2S (GAP-40) |
+| F5 private / fused material | refused by construction | | | | | never registers | — |
+| F6 typed roots | V-node (fresh pruned node in the post-Final case) | partial | — | memory step lie, withheld pre-state, retrieval wrong / missed item, composite tool AND model stage, memory lie after Final with line rollback | replay, pruned import, real restart | **derived** (G14C GAP-50): Memory via its rule program, Composite via every component, Retrieval never; **re-gated at every commit** (this head) | retrieval snapshot statement (GAP-52 binding is DA16's; conformance for snapshots: DESIGN) |
+| F7 EXEC slices | (X8 branch) | | | X8 branch | X8 branch | per-claim reward gate (GAP-81) | X8R not on this head |
+| F8 conformance | V-node | V-node (op 231/212 from an IBD node) | builders | complete check: the fold judges; a fresh node re-verifies from reads + its own artifact (GAP-71b) | B07 | only the complete check gates rewards (GAP-70) | digest court: DESIGN |
+| F9–F16 legacy V2 Panel route | fold-level (LG14-B: any bond) | — | — | **V-fold** (LG14-B, kaspad `lg14b_*`): garbage gather (tag 159), mid-layer matmul (tag 159), fused-tile lie (CKW → held dissection), withheld node / CKW → `ProducerWithholding`, honest vs malicious outsider; every seat colluding; [C12] gaps (a)–(c) closed at fold level | V-fold delta re-apply / revert / carriage | the user's GAP-80: legacy must meet G14 | **V-node on the canonical harness: GAP** — needs a held fixture class registered on the testnet-12 harness and LG14-A's common filer (the responder wiring); Final hold + pre-emption for non-seat pursuits (LG14-A); RPC 207–209 |
+
+**BUDGET (ADR-0176) hooks on this head.** Wired behind `palw_bond_budget_v1` (dormant): the V2 attempt and merged attempt, riders, the
+free-prompt commitment and receipt spends, Final (reward and weight clip), immature weight, retire / void / conviction close hooks,
+and the model allocation (BUDGET's rows 1–5, 7, 9–11, 19). **Not calling them yet:**
+- the kernel route's Final reward (hook H-1: reserve at kernel claim commit, consume at `FinalReward`) — the route's OPV producer
+  rewards with it (H-2);
+- RFC-0004 typed-root claims (H-1 for spec jobs);
+- RFC-0008 EXEC reward legs / reward blocks (H-3; X8R not on this head);
+- rule E's reads of budgeted Final weight (H-4; FINX);
+- the FP admission pre-checks (H-5).
+
+Until those call the engine, every kernel-route, OPV, typed-root and EXEC reward stays non-reward-bearing (ADR-0176), independently
+of G14.
+
 ## 3. Family matrices
 
 ### 3.1 F1 — K2-TIR v1/v2 single-program classes (Panel-licensed with every interim seat colluding, and OPV)
@@ -592,3 +623,26 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   whole-instance courts vs 1.58 MB carriable (pinned: `g14_canonical_a_routing_and_history_class_is_refused_by_the_node_carrier_fit_until_element_courts`).
   Owner: K2S (K2-TIR-v4 element courts, GAP-30/31). GAP-71b (SDK fresh complete-check verifier) waits on OPVB's `PostComplete`,
   which is not on the integration line.
+* 2026-10-10 — G14C on `34b6c3f5e` (+ this branch): **GAP-71b verified** — `misaka_palw_sdk::onboarding_chain::fresh_verify_complete_check_v1`
+  re-runs a complete check from op 231 / op 211 reads and the verifier's own copy of the registered artifact (the post is in no served
+  row; a post passes the fold only if it IS the honest post, so the chain's verdict is checked by post id); node test
+  `opv_bootstrap::g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_and_its_own_artifact` (an honest and a forged
+  check, another model refused `ARTIFACT_NOT_REGISTERED`). **GAP-50 implemented + verified at node level** —
+  `PalwKernelRouteStateV1::opv_spec_eligibility_v1` (consensus-core, dormant behind `palw_panel_free_v1` + `palw_typed_roots_v1`):
+  `Weights`/`Memory` through the rule program's single-program registration, `Composite` through every stage's component,
+  `Retrieval` never (`SNAPSHOT_NOT_ONBOARDABLE`, until a snapshot conformance statement exists); the OPV gate admits typed classes by
+  it; test `r4x_typed_roots_e2e::g14c::r4x_g14c_typed_classes_are_eligible_only_through_their_components` (only the component is
+  seamed). **GAP-51 verified** — a memory lie that finalized, convicted from a pruned-import node inside liability, the line rolled
+  back; a composite model-stage lie convicted at that stage; the typed rows and the line across a real restart. Residual: typed
+  claims are not re-gated at commit (a class whose component later loses eligibility keeps taking claims). Run `g14c-m4`: consensus-core
+  `palw_opv_bootstrap` 6/6; node `g14_canonical`/`r4x_`/`g14_opv_bootstrap`/`g14_conformance`/`g14_onboarding`/`g14_rewards`/`da16_`
+  66 pass, 1 fail not this lane's (`da16_scope_a_snapshot_is_never_demanded_…`: expects the producer to lose only the default
+  penalty, but r4-fixes also burns the 1 BILI OPV admission fee); after the composite test's snapshot-copy fix, `r4x_g14c` 4/4.
+  Integration note: `34b6c3f5e`'s cherry-pick names `ledger_cache` / `KernelLedgerCacheV1`, which exist only on `k2/real-scale`;
+  this branch drops that field from `from_rows` so the tree compiles.
+* 2026-10-10 — refresh against `2d93ac288` (§2a): typed claims re-gated at commit (`palw_kernel_route_fold_v1::opv_gate_v1`, both the
+  salted and the unsalted typed reveal: a class whose component lost eligibility takes no new claim; test
+  `r4x_typed_roots_e2e::g14c::r4x_g14c_a_typed_class_whose_component_lost_eligibility_takes_no_new_claim`, with a `cfg(test)` seam
+  inverse `kernel_route_test_opv_ineligible_v1`); legacy rows updated to LG14-B's V-fold; BUDGET hook coverage listed. Integration
+  compile fix: `2d93ac288` did not build — the BUDGET merge dropped the `Ok(())` and closing brace of LG14-B's
+  `palw_legacy_held_signature_ok` in `processor.rs`; restored.
