@@ -3307,6 +3307,7 @@ mod conformance;
 mod real_scale;
 mod artifact_tile;
 mod model_artifact;
+mod model_conformance;
 // Lane DA16: the public-material transport and the provider court (tags 150–153) — an outsider confirms or refutes a binding from the
 // bytes, providers' defaults, a common-mode outage, a false computation still the miner's, reorg and replay: `g14_kernel_route_e2e/da16.rs`.
 mod da16;

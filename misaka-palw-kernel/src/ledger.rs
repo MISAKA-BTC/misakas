@@ -1020,7 +1020,8 @@ impl KernelLedgerV1 {
         self.authorize(obj, auth)?;
         let mut out = Vec::new();
         match obj {
-            KernelRouteObjectV1::BindModelArtifactV2 { .. }
+            KernelRouteObjectV1::CompleteModelConformanceV2 { .. }
+            | KernelRouteObjectV1::BindModelArtifactV2 { .. }
             | KernelRouteObjectV1::RefuteModelArtifactV2 { .. }
             | KernelRouteObjectV1::RegisterModelConformanceClassV2 { .. } => {
                 return Err(KernelRefusalV1::rule(name, "model artifact statements require the authenticated consensus consumer"));

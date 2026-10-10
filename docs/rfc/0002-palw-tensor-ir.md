@@ -2538,8 +2538,10 @@ only the node consumer can authenticate chain collateral and the stored scope.
 
 A signed statement commits the exact current v4/v5 descriptor, complete canonical program,
 model inventory root and parameter map. Its content id binds descriptor, program digest
-and both roots. Aux **43** stores the immutable statement/liability record, **44** its bounded
-bond index, and **45** the admitted candidate's chosen statement. Table 42 remains reserved
+and both roots. Aux **46** stores the immutable statement/liability record, **47** its bounded
+bond index, and **48** the admitted candidate's chosen statement. Tables 43–45 belong to
+the provider court; the earlier model allocation overlapped them and is corrected before
+shipping activation. Table 42 remains reserved
 for the existing chunk lane. Each bond can retain eight statements, including decided
 records. Identical content is reusable by any candidate registrant; the binder's identity
 owns liability and grants no execution or reward priority. The reservation is the existing
@@ -2597,8 +2599,40 @@ count and input order. Comparing claimed implementation roots proves equality wi
 reference result; it does not establish the identity or independence of the implementations
 that supplied those roots, or fidelity to a source floating-point checkpoint.
 
-This is a pure reference dependency for the authenticated conformance consumer. It does
-not yet create a node conformance record, execution registration, Final or reward. Large
+At the `f7f93d0d3` reference snapshot this was a pure dependency without a node consumer.
+The authenticated consumer is specified in §14.17 below. Large
 vocabularies/context domains exceed exhaustive enumeration; they still require the scalable
 GAP-70 digest/refutation path. No input subset, sampled signal or raised limit substitutes
 for that requirement, and no shipping fence is armed here.
+
+
+### 14.17 Authenticated finite-domain conformance and direct execution registration
+
+Inner **25 `CompleteModelConformanceV2`**, carried by authenticated outer 110, requires
+both probabilistic-constraints and PanelFree fences. It names a scoped candidate and a
+matured model statement. Any active bond may submit the complete source inventory and
+three claimed implementation roots; neither the binder nor the first registrant receives
+priority. The consumer checks the exact descriptor/program/plan/source/PC relation and
+every input in §14.16's bounded domain before writing a fixed-size conformance row in aux
+**49**. Aux **50** counts judged checks per blue-score block, with a maximum of two.
+
+Before decoding the stored program or proof, a judged attempt reserves shared admission
+work equal to `p² + 64p + 64b + 2^26`, checks the actor's free collateral, and charges the
+actor's dismissal fee on success or failure. Proof bytes, operand counts, names and piece
+lengths are bounded before allocation. Invalid attempts create no conformance record and
+do not slash the model binder. An already checked class is not rerun. A successful check
+selects its proved statement in aux 48, so an earlier candidate with a false declared source
+root cannot permanently poison the class.
+
+Ordinary inner 13 `RegisterClassV2` may then derive OPV eligibility from that exact checked
+scope. Admission rechecks descriptor standing, denial, binding standing, plan prosecution
+bounds, carrier fit, court work and economics, and the complete-check policy. Temporary PC
+attestation is removed before persistence. This path introduces no model-name or compiler
+allowlist, V2 decoder identity, persistent global attestation, or new payout. A candidate
+alone is not an execution registration or beacon source.
+
+This consumer certifies the bounded integer function and the source-to-PC relation. Claimed
+role roots do not certify independent runtime implementations or source checkpoint fidelity.
+Large vocabularies/context remain outside exhaustive enumeration and need GAP-70. The full
+shared resource/liveness contract, real-checkpoint task/context coverage and the remaining
+§II.14 requirements stay open. Shipping fences remain dormant.

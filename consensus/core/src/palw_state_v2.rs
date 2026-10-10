@@ -141,6 +141,8 @@ mod palw_kernel_route_fold_v1;
 mod palw_onboarding_fold_v1;
 #[path = "palw_model_artifact_fold_v2.rs"]
 mod palw_model_artifact_fold_v2;
+#[path = "palw_model_conformance_fold_v2.rs"]
+mod palw_model_conformance_fold_v2;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
 #[path = "palw_provider_court_fold_v1.rs"]
 mod palw_provider_court_fold_v1;

@@ -60,12 +60,13 @@ pub const TAG_POST_TILED_JOB_V1: u8 = 17;
 pub const TAG_POST_PROMPT_TILE_V1: u8 = 18;
 /// RFC-0004 Part II: a typed-root object (registration, job, claim — versioned inside [`crate::spec::SpecObjectV1`]).
 pub const TAG_SPEC_V1: u8 = 19;
-// 22–24: RFC02 descriptor-scoped model artifact onboarding (2026-10-11).
+// 22–25: RFC02 descriptor-scoped model onboarding and complete conformance (2026-10-11).
 /// RFC-0002: conformance-only preparation; never a reward registration.
 pub const TAG_REGISTER_CONFORMANCE_CLASS_V1: u8 = 21;
 pub const TAG_BIND_MODEL_ARTIFACT_V2: u8 = 22;
 pub const TAG_REFUTE_MODEL_ARTIFACT_V2: u8 = 23;
 pub const TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2: u8 = 24;
+pub const TAG_COMPLETE_MODEL_CONFORMANCE_V2: u8 = 25;
 /// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
 pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 
@@ -171,6 +172,12 @@ impl SaltedCommitV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum KernelRouteObjectV1 {
+    /// Consumer-owned exact finite-domain conformance over an explicit model statement.
+    CompleteModelConformanceV2 {
+        class: Digest,
+        binding: Digest,
+        proof: Vec<u8>,
+    } = 25,
     /// Consumer-owned, bonded statement: exact descriptor/program, model-only inventory and PC.
     /// Its signer owns liability, never execution or reward priority.
     BindModelArtifactV2 {
@@ -425,6 +432,7 @@ impl KernelRouteObjectV1 {
     /// The variant's declared discriminant.
     pub const fn tag(&self) -> u8 {
         match self {
+            Self::CompleteModelConformanceV2 { .. } => TAG_COMPLETE_MODEL_CONFORMANCE_V2,
             Self::BindModelArtifactV2 { .. } => TAG_BIND_MODEL_ARTIFACT_V2,
             Self::RefuteModelArtifactV2 { .. } => TAG_REFUTE_MODEL_ARTIFACT_V2,
             Self::RegisterModelConformanceClassV2 { .. } => TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2,
@@ -521,6 +529,7 @@ impl KernelRouteObjectV1 {
 
 pub const fn name_of_tag(tag: u8) -> &'static str {
     match tag {
+        TAG_COMPLETE_MODEL_CONFORMANCE_V2 => "CompleteModelConformanceV2",
         TAG_BIND_MODEL_ARTIFACT_V2 => "BindModelArtifactV2",
         TAG_REFUTE_MODEL_ARTIFACT_V2 => "RefuteModelArtifactV2",
         TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2 => "RegisterModelConformanceClassV2",
@@ -554,6 +563,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
     Some(match tag {
         TAG_BIND_MODEL_ARTIFACT_V2 | TAG_REGISTER_MODEL_CONFORMANCE_CLASS_V2 => MAX_REGISTER_CLASS_BYTES_V1,
         TAG_REFUTE_MODEL_ARTIFACT_V2 => 2 << 20,
+        TAG_COMPLETE_MODEL_CONFORMANCE_V2 => 90_000 + 134,
         TAG_REGISTER_CONFORMANCE_CLASS_V1 => MAX_REGISTER_CLASS_BYTES_V1,
         TAG_REGISTER_CLASS_V1 => MAX_REGISTER_CLASS_BYTES_V1,
         TAG_REGISTER_PIPELINE_CLASS_V1 => MAX_REGISTER_PIPELINE_CLASS_BYTES_V1,
@@ -631,10 +641,13 @@ mod tests {
         let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_REGISTER_CONFORMANCE_CLASS_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!(max_encoded_bytes_of_tag(25).is_none(), "25 is not allocated");
-        for tag in 22..=24 {
+        assert!(max_encoded_bytes_of_tag(26).is_none(), "26 is not allocated");
+        for tag in 22..=25 {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
+        let complete = KernelRouteObjectV1::CompleteModelConformanceV2 { class: [1; 64], binding: [2; 64], proof: vec![0; 90_000] };
+        assert_eq!(complete.encoded_len(), max_encoded_bytes_of_tag(25).unwrap());
+        assert_eq!(KernelRouteObjectV1::decode(&complete.encode()).unwrap(), complete);
         assert_eq!(max_encoded_bytes_of_tag(21), Some(MAX_REGISTER_CLASS_BYTES_V1));
         assert_eq!(name_of_tag(21), "RegisterConformanceClass");
         assert!(max_encoded_bytes_of_tag(TAG_SPEC_V1).is_some() && name_of_tag(TAG_SPEC_V1) == "Spec", "RFC-0004 Part II's tag 19");

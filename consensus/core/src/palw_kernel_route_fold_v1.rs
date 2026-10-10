@@ -534,6 +534,9 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     // Inner 22/23 are consensus-owned state/collateral courts, never bare-ledger moves.
     match &object {
+        KernelRouteObjectV1::CompleteModelConformanceV2 { class, binding, proof } => {
+            return super::palw_model_conformance_fold_v2::complete(builder, ctx, signer, class, binding, proof);
+        }
         KernelRouteObjectV1::BindModelArtifactV2 { descriptor, program_bytes, model_inventory_root, param_commitments } => {
             return super::palw_model_artifact_fold_v2::bind(
                 builder,
@@ -558,6 +561,31 @@ pub(super) fn apply_kernel_route_object_v1(
         ledger.attest_artifact(row.kernel_param_root.as_bytes());
     }
     let object = scoped.as_ref().map(|(o, _)| o).unwrap_or(&object);
+    if let KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } = &object {
+        if mode.is_optimistic() {
+            if let (Some(route), Some(opv)) =
+                (builder.state.kernel_route.as_ref(), builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()))
+            {
+                let facts = crate::palw_opv_bootstrap_v1::OpvClassFactsV1::of_registration(
+                    *descriptor,
+                    program_bytes,
+                    plan,
+                    param_commitments,
+                );
+                if route
+                    .model_conformance_eligibility_v2(
+                        &ledger,
+                        &facts,
+                        ctx.daa_score,
+                        &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1::of(opv),
+                    )
+                    .is_ok()
+                {
+                    ledger.attest_artifact(facts.param_root);
+                }
+            }
+        }
+    }
     let before = loaded_rows(builder, &ledger);
     match opv_gate_v1(builder, ctx, &ledger, &object) {
         OpvGateV1::Drop => return Ok(()),

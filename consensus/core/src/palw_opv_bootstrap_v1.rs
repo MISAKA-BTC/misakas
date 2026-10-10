@@ -530,6 +530,8 @@ impl OpvIneligibleV1 {
 /// Why a class IS eligible.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpvEligibleV1 {
+    /// Full finite-domain conformance derived directly from a scoped model statement.
+    ScopedModel { binding: Hash64 },
     /// Derived from chain state through the conformance of this V2 class.
     Derived { v2_class: Hash64 },
     /// TEST SEAM only (`OpvEligibilityViewV1::test_eligible`).
@@ -563,6 +565,11 @@ impl PalwKernelRouteStateV1 {
         }
         if ledger.schedule.standing_at(&facts.descriptor, daa) != KernelStandingV1::Active {
             return Err(OpvIneligibleV1::KernelNotActive);
+        }
+        if self.model_conformance_v2(&id).is_some() {
+            return self
+                .model_conformance_eligibility_v2(ledger, facts, daa, view)
+                .map(|binding| OpvEligibleV1::ScopedModel { binding });
         }
         let candidates: Vec<(Hash64, KernelBindingRowV1)> = self
             .kernel_bindings_v1()
@@ -794,6 +801,12 @@ impl PalwKernelRouteStateV1 {
         for (_, binding) in self.kernel_bindings_v1() {
             if let Some(facts) = OpvClassFactsV1::of_registered(ledger, &binding.kernel_class.as_bytes()) {
                 candidates.insert(facts.opv_id);
+            }
+        }
+        // A direct scoped model becomes a beacon source only after actual registration.
+        for class in &ledger.opv.classes {
+            if self.model_conformance_v2(&Hash64::from_bytes(*class)).is_some() {
+                candidates.insert(*class);
             }
         }
         // The test seam's ids count only where this ledger holds them (the seam is process-wide in a test binary).

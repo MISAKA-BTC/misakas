@@ -1341,7 +1341,9 @@ full RFC02 remains open under the complete scope in §II.14.
 ## Signed descriptor-scoped node binding — 2026-10-11
 
 The foundation's missing signed/rooted binding consumer now has dedicated inner 22–24
-under outer 110 plus dormant PanelFree, and aux 43–45. Historical 104/105 stay all-parameter.
+under outer 110 plus dormant PanelFree. That snapshot allocated aux 43–45, which overlapped
+the provider court; the current consumer corrects model statements to 46–48 before shipping
+activation. Historical 104/105 stay all-parameter.
 The exact descriptor/program/model root/PC root statement carries a real bond reservation;
 its fixed-size header permits bounded fee/deadline/collateral reads without copying program
 bytes. Each bond retains at most eight statement records. Both withdrawal duty gates and
@@ -1415,3 +1417,37 @@ charge the derived work before judging, persist a scope-bound result and maintai
 eligibility, G14, source-fidelity, capital/resource and shipping gate. Real vocabularies and
 large/context domains remain outside exhaustive enumeration and require GAP-70's scalable
 complete digest/refutation contract; nothing here relaxes that requirement.
+
+
+## Authenticated finite-domain conformance consumer — 2026-10-11
+
+Inner 25 now authenticates a complete source inventory against an exact matured model
+statement and candidate. It charges shared admission work and the submitter's fee before
+stored-program/proof decoding, limits judged runs to two per blue-score block, and stores
+only a fixed scope-bound result. Invalid posts consume the actor's budget and collateral,
+not the binder's reservation. Successful conformance can select a truthful binding even
+when the first candidate declared a false source root. Ordinary inner 13 then derives
+execution eligibility from that checked scope, without model/compiler identity hooks or
+persistent global PC attestation. The eligibility predicate rechecks the existing standing,
+denial, prosecution, carrier, court economics and complete-policy conditions.
+
+The earlier model aux allocation overlapped the provider court's 43–45. Model statement,
+bond index and candidate link now use 46–48; checked conformance and block count use 49–50.
+This correction precedes shipping activation. It is not a live-state migration.
+
+**62 distinct tests passed:** 32 core, four kernel route and 26 actual-node cases. The new
+three node cases cover encoder/stateful-decoder registration, exact scope/denial checks,
+candidate exclusion from beacon sources, first-registrant poisoning, bad role roots,
+invalid-post flood charging, honest recovery, fresh public verification, an actual element
+conviction, honest encoder Final and independent replay. Twenty-three existing node cases
+cover scoped model binding, OPV bootstrap, public read/promotion and provider courts.
+Those regressions ran before the last four-byte wire-ceiling correction; the final boundary
+roundtrip, core checks and three new node cases passed after it. Raw logs, source/binary
+hashes and explicit limitations are in `evidence/rfc02-scoped-consumer-verdict.json`.
+The first node compile referenced a private field; the test now uses the public accessor.
+
+These are synthetic mechanics tests. They do not establish real-checkpoint fidelity,
+independent runtime-pack certification, a complete network resource/liveness proof, or
+full RFC02 completion. Large domains still need GAP-70; all §II.14 feature, checkpoint/task/
+context, capital/resource, G14, independent redemption and activation requirements remain
+mandatory. Shipping fences remain dormant.

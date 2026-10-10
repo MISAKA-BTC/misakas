@@ -543,3 +543,242 @@ mod tests {
         assert!(ModelConformanceDomainV2::new(&d, &decoder, &plan(&d, &decoder, 32)).unwrap_err().contains("input cases"));
     }
 }
+
+// 43–45 belong to the provider court; 46–48 hold scoped model statements.
+pub const MODEL_CONFORMANCE_TABLE_V2: u8 = 49;
+pub const MODEL_CONFORMANCE_BLOCK_TABLE_V2: u8 = 50;
+pub const MODEL_CONFORMANCE_MAX_PROOF_BYTES_V2: usize = 90_000;
+pub const MODEL_CONFORMANCE_CHECKS_PER_BLOCK_V2: u32 = 2;
+
+/// One complete source inventory and all implementation result roots. Outer 110
+/// signs the explicit class and binding; the roots include descriptor/program/plan.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct ModelConformancePostV2 {
+    pub version: u16,
+    pub operands: Vec<PalwArtifactOperandV1>,
+    pub implementation_roots: [Digest; 3],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct ModelConformanceRowV2 {
+    pub binding: Hash64,
+    pub descriptor: Digest,
+    pub program_root: Digest,
+    pub plan_root: Digest,
+    pub model_root: Hash64,
+    pub pc_root: Digest,
+    pub trace_root: Digest,
+    pub cases: u64,
+    pub work: u64,
+    pub ram_envelope: u64,
+    pub checked_daa: u64,
+}
+
+impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
+    pub fn model_conformance_v2(&self, class: &Hash64) -> Option<ModelConformanceRowV2> {
+        self.aux_row(MODEL_CONFORMANCE_TABLE_V2, &borsh::to_vec(class).ok()?)
+    }
+}
+
+/// Envelope charged for every judged post before stored-program or proof decoding.
+/// The derived reference work is capped at MAX_WORK and included here in full;
+/// static validation and wire work use the same model metadata tariff as binding.
+pub fn model_conformance_charge_v2(program_bytes: usize, proof_bytes: usize) -> Option<u64> {
+    crate::palw_model_artifact_v2::model_artifact_work_v2(program_bytes, proof_bytes)?.checked_add(MODEL_CONFORMANCE_MAX_WORK_V2)
+}
+
+pub fn decode_model_conformance_post_v2(data: &[u8]) -> std::io::Result<ModelConformancePostV2> {
+    use borsh::BorshDeserialize;
+    use std::io::{Cursor, Error, ErrorKind, Read};
+    let invalid = || Error::new(ErrorKind::InvalidData, "model conformance proof exceeds bounds");
+    if data.len() > MODEL_CONFORMANCE_MAX_PROOF_BYTES_V2 {
+        return Err(invalid());
+    }
+    let mut r = Cursor::new(data);
+    let version = u16::deserialize_reader(&mut r)?;
+    if version != 2 {
+        return Err(invalid());
+    }
+    let count = u32::deserialize_reader(&mut r)?;
+    if count as u64 > MODEL_CONFORMANCE_MAX_CASES_V2 || count as usize > data.len() / 13 {
+        return Err(invalid());
+    }
+    let mut operands = Vec::with_capacity(count as usize);
+    let mut total = 0u64;
+    for _ in 0..count {
+        let names = u32::deserialize_reader(&mut r)? as usize;
+        if names > misaka_palw_tir::program::MAX_NAME_BYTES {
+            return Err(invalid());
+        }
+        let mut name = vec![0u8; names];
+        r.read_exact(&mut name)?;
+        let tensor_name = String::from_utf8(name).map_err(|_| invalid())?;
+        let layer = Option::<u16>::deserialize_reader(&mut r)?;
+        let row_start = u32::deserialize_reader(&mut r)?;
+        let n = u32::deserialize_reader(&mut r)? as usize;
+        total = total.checked_add(n as u64).ok_or_else(invalid)?;
+        if n > crate::palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1 as usize || total > MODEL_CONFORMANCE_MAX_RAW_BYTES_V2 {
+            return Err(invalid());
+        }
+        let mut bytes = vec![0u8; n];
+        r.read_exact(&mut bytes)?;
+        operands.push(PalwArtifactOperandV1 { tensor_name, layer, row_start, bytes });
+    }
+    let implementation_roots = <[Digest; 3]>::deserialize_reader(&mut r)?;
+    if r.position() as usize != data.len() {
+        return Err(invalid());
+    }
+    Ok(ModelConformancePostV2 { version, operands, implementation_roots })
+}
+
+impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
+    /// E1–E7 over a checked direct-TIR statement. No compiler/model registry or
+    /// sampled result enters this predicate. The complete source relation is stored
+    /// by the authenticated consumer; prosecution/resource/policy facts are rechecked now.
+    pub fn model_conformance_eligibility_v2(
+        &self,
+        ledger: &misaka_palw_kernel::ledger::KernelLedgerV1,
+        facts: &crate::palw_opv_bootstrap_v1::OpvClassFactsV1,
+        daa: u64,
+        view: &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1<'_>,
+    ) -> Result<Hash64, crate::palw_opv_bootstrap_v1::OpvIneligibleV1> {
+        use crate::palw_onboarding_v1::ArtifactBindingStateV1;
+        use crate::palw_opv_bootstrap_v1::OpvIneligibleV1 as I;
+        let class = Hash64::from_bytes(facts.opv_id);
+        if view.denied.contains(&class) {
+            return Err(I::Denied);
+        }
+        if ledger.schedule.standing_at(&facts.descriptor, daa) != misaka_palw_kernel::descriptor::KernelStandingV1::Active {
+            return Err(I::KernelNotActive);
+        }
+        let checked = self.model_conformance_v2(&class).ok_or(I::ConformanceNotPassed)?;
+        if checked.descriptor != facts.descriptor
+            || checked.program_root != facts.program_root
+            || checked.plan_root != facts.plan_root
+            || checked.pc_root != facts.param_root
+            || self.model_artifact_candidate_binding_v2(&class) != Some(checked.binding)
+        {
+            return Err(I::ConformanceOfAnotherStatement);
+        }
+        let binding = self.model_artifact_binding_header_v2(&checked.binding).ok_or(I::BindingNotStanding)?;
+        if !matches!(binding.state_at(daa), ArtifactBindingStateV1::Matured | ArtifactBindingStateV1::Final)
+            || binding.descriptor != facts.descriptor
+            || binding.program_root != facts.program_root
+            || binding.kernel_param_root.as_bytes() != facts.param_root
+            || binding.model_inventory_root != checked.model_root
+        {
+            return Err(I::BindingNotStanding);
+        }
+        let row = ledger
+            .classes
+            .get(&facts.opv_id)
+            .or_else(|| ledger.conformance_classes.get(&facts.opv_id).map(|(_, r)| r))
+            .ok_or_else(|| I::NotG14Complete("scoped class is absent from the ledger".into()))?;
+        let bounds = misaka_palw_kernel::gate::class_prosecution_bounds_v1(
+            &row.descriptor,
+            &row.plan,
+            &row.program,
+            &misaka_palw_kernel::public::ProfileMaterialV1::kernel_route(true),
+            &ledger.policy.prosecution,
+        )
+        .map_err(|g| I::NotG14Complete(format!("scoped plan is not publicly prosecutable: {g:?}")))?;
+        if bounds != row.bounds {
+            return Err(I::NotG14Complete("scoped prosecution bounds changed".into()));
+        }
+        let p = view.policy;
+        misaka_palw_kernel::ledger::carrier_fit_v1(
+            &bounds,
+            p.carrier.filing_cap as usize,
+            p.carrier.response_cap as usize,
+            p.carrier.commit_cap as usize,
+        )
+        .map_err(I::ResourceUnbounded)?;
+        if bounds.max_court_work > ledger.policy.max_court_work_per_block
+            || p.censorship_cost(&ledger.policy, bounds.max_court_work) <= p.max_gain_per_claim(&ledger.policy)
+        {
+            return Err(I::ResourceUnbounded("scoped court work or prosecution economics does not fit".into()));
+        }
+        let policy = crate::palw_opv_bootstrap_v1::palw_onboarding_complete_check_policy_v1();
+        policy.validate().map_err(|e| I::PolicyNotVerified(e.to_string()))?;
+        if !misaka_palw_challenge::EffectiveBitsV1::Complete.meets(view.min_effective_bits)
+            || checked.cases == 0
+            || checked.cases > MODEL_CONFORMANCE_MAX_CASES_V2
+            || checked.work > MODEL_CONFORMANCE_MAX_WORK_V2
+            || checked.ram_envelope > MODEL_CONFORMANCE_MAX_RAM_ENVELOPE_V2
+        {
+            return Err(I::PolicyNotVerified("scoped complete-check limits do not hold".into()));
+        }
+        Ok(checked.binding)
+    }
+}
+
+#[cfg(test)]
+mod consumer_codec_tests {
+    use super::*;
+    #[test]
+    fn scoped_model_post_codec_roundtrips_and_rejects_counts_versions_and_trailing_bytes() {
+        let post = ModelConformancePostV2 {
+            version: 2,
+            operands: vec![PalwArtifactOperandV1 { tensor_name: "weights".into(), layer: None, row_start: 0, bytes: vec![1, 2] }],
+            implementation_roots: [[1; 64]; 3],
+        };
+        let bytes = borsh::to_vec(&post).unwrap();
+        assert_eq!(decode_model_conformance_post_v2(&bytes).unwrap(), post);
+        let mut bad = bytes.clone();
+        bad[0] = 3;
+        assert!(decode_model_conformance_post_v2(&bad).is_err());
+        let mut bad = bytes.clone();
+        bad[2..6].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(decode_model_conformance_post_v2(&bad).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        let mut bad = bytes;
+        bad.push(0);
+        assert!(decode_model_conformance_post_v2(&bad).is_err());
+    }
+    #[test]
+    fn scoped_model_post_codec_rejects_name_and_piece_floods_before_reading_bodies() {
+        let mut name = 2u16.to_le_bytes().to_vec();
+        name.extend(1u32.to_le_bytes());
+        name.extend(129u32.to_le_bytes());
+        name.resize(300, 0);
+        assert_eq!(decode_model_conformance_post_v2(&name).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        let mut piece = 2u16.to_le_bytes().to_vec();
+        piece.extend(1u32.to_le_bytes());
+        piece.extend(1u32.to_le_bytes());
+        piece.push(b'w');
+        piece.push(0);
+        piece.extend(0u32.to_le_bytes());
+        piece.extend(32769u32.to_le_bytes());
+        assert_eq!(decode_model_conformance_post_v2(&piece).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        let p = ModelConformancePostV2 {
+            version: 2,
+            operands: (0..3)
+                .map(|i| PalwArtifactOperandV1 {
+                    tensor_name: "w".into(),
+                    layer: None,
+                    row_start: i * 32768,
+                    bytes: vec![0; if i == 2 { 1 } else { 32768 }],
+                })
+                .collect(),
+            implementation_roots: [[0; 64]; 3],
+        };
+        assert_eq!(decode_model_conformance_post_v2(&borsh::to_vec(&p).unwrap()).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn scoped_model_aux_allocations_are_disjoint_from_provider_and_onboarding_tables() {
+        use crate::palw_model_artifact_v2::*;
+        use crate::palw_provider_court_v1::*;
+        let slots = [
+            PALW_PROVIDER_COURT_TABLE_LEASES_V1,
+            PALW_PROVIDER_COURT_TABLE_CHALLENGES_V1,
+            PALW_PROVIDER_COURT_TABLE_SUBJECTS_V1,
+            PALW_MODEL_ARTIFACT_BINDINGS_TABLE_V2,
+            PALW_MODEL_ARTIFACT_BOND_INDEX_TABLE_V2,
+            PALW_MODEL_ARTIFACT_CANDIDATE_TABLE_V2,
+            MODEL_CONFORMANCE_TABLE_V2,
+            MODEL_CONFORMANCE_BLOCK_TABLE_V2,
+        ];
+        assert_eq!(slots, [43, 44, 45, 46, 47, 48, 49, 50]);
+        assert_eq!(slots.into_iter().collect::<std::collections::BTreeSet<_>>().len(), slots.len());
+        assert!(slots.iter().all(|s| *s > crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_RESERVED_42_V1));
+    }
+}

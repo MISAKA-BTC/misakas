@@ -12,10 +12,11 @@ use misaka_palw_kernel::trace::ParamCommitmentsV1;
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 
-// RFC02 allocation 2026-10-11: 42 stays reserved for the chunk lane.
-pub const PALW_MODEL_ARTIFACT_BINDINGS_TABLE_V2: u8 = 43;
-pub const PALW_MODEL_ARTIFACT_BOND_INDEX_TABLE_V2: u8 = 44;
-pub const PALW_MODEL_ARTIFACT_CANDIDATE_TABLE_V2: u8 = 45;
+// RFC02 corrected allocation 2026-10-11: 41–42 chunk lane, 43–45 provider court.
+// The dormant first implementation reused 43–45 incorrectly; no shipping network could arm it.
+pub const PALW_MODEL_ARTIFACT_BINDINGS_TABLE_V2: u8 = 46;
+pub const PALW_MODEL_ARTIFACT_BOND_INDEX_TABLE_V2: u8 = 47;
+pub const PALW_MODEL_ARTIFACT_CANDIDATE_TABLE_V2: u8 = 48;
 pub const PALW_MODEL_ARTIFACT_BINDINGS_PER_BOND_V2: usize = 8;
 pub const PALW_MODEL_ARTIFACT_PROOF_OVERHEAD_V2: usize = 128 << 10;
 
