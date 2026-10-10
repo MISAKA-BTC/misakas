@@ -4,6 +4,9 @@
 > This draft and its record live on the unpushed branch `fin/palw-finality-consistency`. V6 is named here only as "the stale-incumbent
 > comparison"; its mechanics are in the internal record, §3.
 
+**Numbering (2026-10-10):** drafted as ADR-0175; renumbered ADR-0178 because the user's ADR-0175 is "registered models are permanently
+immutable". Code, tests and the record say ADR-0178.
+
 **Status:** ACCEPTED — the user adopted rule E (2026-10-09). Implemented behind the dormant fence `palw_fork_choice_rule_e_v1`
 (lane FINX successor, 2026-10-09; §9), refused when armed in this binary; it ships armed only in the single full-activation release,
 which assigns its height. User decisions already taken (2026-10-08): no public advisory; no early dedicated fence; **the fix ships in
@@ -99,8 +102,10 @@ Under one dormant fence, `Params::palw_fork_choice_rule_e_v1` (a height, read at
    client can check). **Participation** is the number of distinct executor bonds of the side's exclusive attempt claims that are
    registered in `F`'s registry — the common past (a losing draw and an unbonded header make no claim; a bond registered after `F`
    never counts). The **economic keys** `(frontier, safe, live)` are the fold's own per-claim expressions, priced at each tip, summed
-   over the exclusive claims (F-W's per-bond cap applied over that set; the frontier by the resolved-prefix rule restricted to it).
-   Every side is computed from per-claim records by one function, the one a client reading the fork-choice leaf v2 calls. Order:
+   over the exclusive claims (F-W's per-bond cap applied over that set; the frontier by the resolved-prefix rule restricted to it;
+   past `palw_bond_budget_v1`, each `(bond, window)` at most its `F_max` — §10). Every side goes through one accumulator over
+   per-claim records, the one a client reading the fork-choice leaf v2 calls; a node streams the records from its state, with no
+   claim-count refusal (§10.2). Order:
    participation first **once the lower tip stands at least `W_p` = 20 DAA above `F`** (symmetric in the pair; for an incumbent
    facing a branch at least as long, its own history since the fork), then the economic keys.
 2. **The gate.** A non-extension candidate replaces the incumbent on a strict win; a tie goes to GHOSTDAG's order where
@@ -193,8 +198,8 @@ Code (all behind the fence; below it the build is byte-identical):
   header sites are theirs): window and registry trees, openings, provers and verifiers, and the client's pair. Note:
   `docs/design/palw/rule-e-leaf-v2-note.md`.
 * Tests armed through the real pipeline: `hb_fork_choice_probe::finality_consistency::rule_e` (V1–V6 flipped, V7 by the relay
-  policy's unit test, the merge-past attacker, a Sybil peer flood, the bounded search cost); the seven status-quo tests are
-  unchanged and still pass unarmed. Results: the record, §10.
+  policy's unit test, the merge-past attacker, a Sybil peer flood, Sybil bonds registered after the fork, the bounded search cost,
+  three combined rejoin cases); the seven status-quo tests are unchanged and still pass unarmed. Results: the record, §10.
 
 Residuals, named (in addition to §5's):
 
@@ -208,3 +213,48 @@ Residuals, named (in addition to §5's):
   branch's — an attacker's own registered bonds (losing draws included, at the price of a signature each).
 * **IBD ties keep the incumbent**, even at an even split (the relay decides those once the blocks arrive), and a network with no
   claims inside the retirement horizon cannot be told apart by the claim-set difference.
+
+## 10. ADR-0176 and ADR-0177 applied to rule E (2026-10-10)
+
+**ADR-0176 D3 / RFC-0014 §16.10 — Final weight is bounded per bond, and fork choice reads the same versioned allocation.**
+
+* **Participation** counts a bond once, whatever number of claims it holds in an exclusive past, so speed buys none; a bond's
+  attempt counts only once the fold accepted it, which past `palw_bond_budget_v1` means its claim budget `Q_max` was reserved.
+  The header-level pre-filter of the search also counts bonds, not headers.
+* **The economic keys** read each claim through `PalwRuleEBondBudgetV1` (the interface; lane BUDGET implements it, FINX does not).
+  Where an allocation governs a claim, the record carries the allocated weights (Final: consumed at `Final`; live: the
+  reservation's provisional weight) and the terms `(version, window, F_max)`; the side credits each `(bond, version, window)` at
+  most `F_max` on the safe key and on the live total, whatever the engine reports. Where none governs it (below the fence; a claim
+  accepted under an older ruleset, which completes under it — ADR-0176 §4) the record is priced as before. The selector
+  `palw_rule_e_bond_budget_v1` is the one place every path (node, IBD, leaf v2) learns the allocation; today it returns "none".
+* **Measured** (unit, `a_fast_forger_counts_once_and_its_budget_caps_its_credit`): one bond with 20,000 exclusive claims against an
+  honest bond of the same budget that did its real work — participation 1 each, both credited exactly `F_max`, the pair ties; the
+  same records without an allocation sum to 1,500× `F_max` (the pre-budget path ADR-0176 D3 forbids in the new ruleset).
+* **Contract for BUDGET** (on the trait): `allocation` is a function of the state alone; `None` exactly where no allocation
+  governs; `Some` gives the very weights the fold adds to the state's safe weight / bounded immature for that claim, so rule E's
+  sum over a whole state equals the state's accumulators (BUDGET's acceptance test); it reads no availability input.
+
+**A finding the budget work exposed (fixed here).** Rule E refused a comparison when a side's exclusive past held more than 16,384
+claims. Under ADR-0160 S that is reachable by claim volume alone (at ρ = 1,000 a 13,000 MSK bond holds 2,000 outstanding claims and
+issues 100 a DAA; the honest network's own volume at ρ ≥ 100 passes it inside the finality depth), and a refusal keeps the
+incumbent — a veto bought with claim volume. A node now streams each side from its state (memory: bonds, budget groups, distinct
+blue scores) and never refuses on volume; the bound stays only where records are materialized: a leaf v2 window (not built past it)
+and a client's opening (the client STOPs). L2FC must decide the window's form at high ρ (the leaf-v2 note).
+
+**ADR-0177 — nothing in fork choice depends on model availability.** Rule E's inputs are the fold's accepted claims (phase, bond,
+attempt flag, weights), the bond registry, blue/DAA scores, headers and reachability. None is a model's distribution, a peer count,
+an acquisition result or a lease. Two indirect readers, for the record: (a) a claim's phase is the fold's — an availability-based
+void, if any dormant code still had one, would reach rule E through the phase; ADR-0177 removes such voids at the fold (lane DA16b),
+and rule E adds none; (b) a claim's price reads class shares only under `palw_uncertified_weightless` (genesis-only: the devnet
+and rc presets arm it at genesis, testnet-12 does not), and class shares derive from admitted claims (ADR-0132); a seat's readiness
+(ADR-0135) proves the seat's own copy of the model it computes with — the producer's possession, not distribution to anyone else.
+Whether ADR-0177 reaches seat readiness is a question for the Lead, not a fork-choice input. The participation key counts a voided attempt (its signature still lies above the fork), so no void — of any cause —
+moves participation.
+
+## 11. What blocks arming (2026-10-10)
+
+* **Code:** BUDGET's engine behind the interface (`palw_bond_budget_v1`); L2FC's envelope and the leaf's form at high ρ; the relay
+  below the merge-depth root has a unit test only — a real multi-node run (record §6) is the E2E.
+* **Policy:** `W_p` beyond testnet-12; whether participation stays one-per-bond or becomes budget-weighted (a capital split into
+  minimum bonds before the fork counts once per bond — the per-bond caps of ADR-0176 do not reach a count); the heights.
+* **External:** review of the mechanism (internal) and the multi-node runs.

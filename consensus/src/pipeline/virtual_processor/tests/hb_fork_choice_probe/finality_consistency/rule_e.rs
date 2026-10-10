@@ -1,4 +1,4 @@
-//! **ADR-0175: rule E armed through the real pipeline — every violation above, and the attacks it is built to hold** (FINX,
+//! **ADR-0178: rule E armed through the real pipeline — every violation above, and the attacks it is built to hold** (FINX,
 //! 2026-10-09). INTERNAL, as the module above.
 //!
 //! Rule E is armed from DAA 1 on testnet-12's fork-choice set (`armed_rule_e`: arming it is refused in this binary, so the Config
@@ -15,7 +15,9 @@
 //! | `finx_e_v6_carrier_…`, `finx_e_v6_clock_…` | V6 | (`finx_p0_e`, `finx_p0_f`) X reversed | X stands |
 //! | V7 | V7 | the relay skips every block below the merge-depth root | `palw_fork_choice_rule_e_v1::tests` (the relay's policy and its per-peer budget) |
 //! | `finx_e_merge_past_…` | — | X stands | X stands, and the merged public attempts count for neither side (an above-the-fork count would rank the attacker first) |
-//! | `finx_e_sybil_…` | V5 (Sybil) | the fresh node stays on a Sybil branch | the fresh node moves to the honest branch |
+//! | `finx_e_sybil_peers_first_…` | V5 (Sybil) | the fresh node stays on a Sybil branch | the fresh node moves to the honest branch |
+//! | `finx_e_sybil_flood_…` | V5 (Sybil flood) | the fresh node stays on the Sybil branch | the honest branch outranks twelve junk tips (more than one resolve validates) and is taken |
+//! | `finx_e_sybil_bonds_…` | — | the heavy node stays on the Sybil side | bonds registered after the fork count for nothing |
 //! | `finx_e_dos_…` | — | no continuation runs | a heartbeat flood costs no validation; an attempt flood at most `PALW_RULE_E_MAX_EXTRA_CANDIDATES_V1` a resolve |
 //!
 //! **Weights in this harness.** PoW is skipped, so a heartbeat carries almost no blue work and an attempt header 2^20: the side
@@ -226,7 +228,7 @@ async fn finx_e_v1_the_lighter_branch_more_bonds_worked_on_is_weighed_and_taken(
 /// **V2 flipped where bonds stay active; the heartbeat-only partition is the named residual.**
 ///
 /// * Heartbeat-only, three and six slots, armed: still split at the heal and after three rounds — nothing unforgeable exists on
-///   either side (ADR-0175 residual a; the record's §2.3 bound).
+///   either side (ADR-0178 residual a; the record's §2.3 bound).
 /// * Three slots with bonds on both sides (cards 2 and 3 on the heavy side, card 4 on the light side), heartbeats only after the
 ///   heal (no panel ever binds, so the economic keys tie for good). Unarmed: a deep economic tie keeps both incumbents — split for
 ///   good. Armed: the split holds while the fork is shallower than `W_p`, and heals once both tips stand `W_p` above the fork, on
@@ -697,6 +699,67 @@ async fn finx_e_sybil_peers_first_cannot_hold_a_fresh_node() {
     }
 }
 
+/// **A Sybil peer flood past the search's bound cannot hide the honest branch.** A fresh node hears, before the honest branch:
+/// one heavy Sybil branch (card 6 attempting four times in `SPLIT` slots — GHOSTDAG's heaviest), and twelve junk tips on the
+/// fork — more than [`PALW_RULE_E_MAX_EXTRA_CANDIDATES_V1`] — each an attempt by the same registered bond, as if relayed by twelve
+/// Sybil peers. Then the honest branch (cards 2, 3 and 4 once each, lighter than the Sybil branch). Unarmed: the node stays on the
+/// Sybil branch (V1, V5). Armed: the honest branch ranks first by header-level participation (three bonds against one per junk
+/// tip), is weighed ahead of the flood and taken; no resolve validates more than the bound.
+#[tokio::test]
+async fn finx_e_sybil_flood_past_the_search_bound_cannot_hide_the_honest_branch() {
+    kaspa_core::log::try_init_logger("warn");
+    const FLOOD: usize = 12;
+    assert!(FLOOD > PALW_RULE_E_MAX_EXTRA_CANDIDATES_V1, "the flood outnumbers what one resolve validates");
+    for armed in ARMS {
+        let tag = format!("E Sybil flood {}", arm(armed));
+        let mut n = net_ruled(None, armed);
+        shared_prefix(&mut n).await;
+        let shared = blocks_in_topological_order(&n.light);
+        // Twelve junk tips on the fork by card 6, built and never inserted on their maker (all twelve stand on the fork)…
+        let flood: Vec<Block> = (0..FLOOD).map(|_| n.heavy.build_attempt(6, 1_000, Vec::new(), &|_| true).0.to_immutable()).collect();
+        // …then the heavy Sybil branch on the same maker, and the honest branch.
+        let mut sybil = Vec::new();
+        for slot in 0..SPLIT {
+            sybil.extend(free_slot(&mut n.heavy, &mut n.nonce, 2, Vec::new()).await);
+            if slot % 6 == 0 {
+                sybil.push(free_attempt(&mut n.heavy, 6).await.0);
+            }
+        }
+        let mut honest = Vec::new();
+        for slot in 0..SPLIT {
+            honest.extend(free_slot(&mut n.light, &mut n.nonce, 1, Vec::new()).await);
+            if slot < 3 {
+                honest.push(free_attempt(&mut n.light, 2 + slot).await.0);
+            }
+        }
+        let (st, ht) = (n.heavy.sink(), n.light.sink());
+        let mut fresh = n.fresh_node();
+        feed(&mut fresh, &shared).await;
+        feed(&mut fresh, &sybil).await;
+        feed(&mut fresh, &flood).await;
+        let before_honest = fresh.sink();
+        feed(&mut fresh, &honest).await;
+        let vp = fresh.vp();
+        let tips_on_fork = flood.iter().filter(|b| vp.reachability_service.is_dag_ancestor_of(b.header.hash, st)).count();
+        assert_eq!(tips_on_fork, 0, "{tag}: the junk tips are off the Sybil branch");
+        assert!(bw(&fresh, st) > bw(&fresh, ht), "{tag}: the Sybil branch is the heavier");
+        eprintln!(
+            "[finx {tag}] fresh node on {} after the honest branch arrived (on {} before it, with {FLOOD} junk tips held); continuations {}, most extra validations in one {}",
+            if fresh.sink() == ht { "the HONEST tip" } else { "a Sybil tip" },
+            if before_honest == st { "the Sybil branch" } else { "another tip" },
+            vp.palw_rule_e_searches.load(Relaxed),
+            vp.palw_rule_e_max_extra_validated.load(Relaxed),
+        );
+        assert_eq!(before_honest, st, "{tag}: the node heard the Sybil branch and its flood first and is on it");
+        if armed {
+            assert_eq!(fresh.sink(), ht, "{tag}: the honest branch, ranked ahead of the flood, weighed and taken");
+            assert!(vp.palw_rule_e_max_extra_validated.load(Relaxed) <= PALW_RULE_E_MAX_EXTRA_CANDIDATES_V1);
+        } else {
+            assert_eq!(fresh.sink(), st, "{tag}: the status quo — the Sybil branch heard first holds");
+        }
+    }
+}
+
 /// **The search's cost is bounded.** An honest node four slots past a fork point F is handed a flood of light tips on F:
 ///
 /// 1. thirty sibling heartbeats — heartbeat-only branches score no header-level participation: armed, no validation at all;
@@ -779,7 +842,7 @@ async fn feed_interleaved(to: &mut T12Chain, a: &Slots, b: &Slots) {
 /// slots — both sides' finality points pass the fork.
 ///
 /// * The relay cannot rejoin anyone: both nodes are sealed against the other branch, armed or not — rule E does not cross
-///   finality (ADR-0175 residual b). Asserted, so the residual is pinned rather than assumed.
+///   finality (ADR-0178 residual b). Asserted, so the residual is pinned rather than assumed.
 /// * The minority's old datadir: rule E's IBD commit (the claim-set difference of the two states, as the flow runs it) COMMITS the
 ///   majority's chain, and the majority's keeps its own — the minority's way back over IBD agrees with the rule.
 /// * A verified resync (an empty datadir that hears both sides slot by slot, as it would from one peer on each): armed, it lands on

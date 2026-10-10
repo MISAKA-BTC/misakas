@@ -5,7 +5,7 @@
 > branch `fin/palw-finality-consistency`. The fix ships in the single full-activation release (C3 or rule E — the user's choice).
 
 Lane FINX · branch `fin/palw-finality-consistency` (from the integration head `9ea89994b`) · decision draft:
-[ADR-0175](../../adr/0175-fork-choice-heals-a-partition-on-bonded-participation.md).
+[ADR-0178](../../adr/0178-fork-choice-heals-a-partition-on-bonded-participation.md).
 
 **Status (2026-10-09): rule E ADOPTED by the user and IMPLEMENTED behind the dormant fence `palw_fork_choice_rule_e_v1`** (§10).
 §0–§9 are the analysis that led there, unchanged: the candidates in the model (`consensus/core/tests/finality_palw_consistency_model.rs`)
@@ -165,7 +165,7 @@ i.e. the DNS confirmation lag (GAP: the live lag is not measured here; it is the
 disappears when the overlay is not Active, when validators stall past the veto's 120-DAA TTL, when the gate abstains, and when RFC-0012
 retires the overlay — then the window below applies. As a function of the victim's anchor lag `L` (sink DAA minus its last DNS-final
 anchor's DAA) and the veto's TTL (120 DAA): reach `L − 1` DAA for `3 < L ≤ 120`, none for `L ≤ 3`, the finality depth for `L > 120` or no
-Active/confirmed overlay (ADR-0175 §6). **So C3 or rule E is a hard prerequisite of arming the DNS retirement** (ADR-0175 §6).
+Active/confirmed overlay (ADR-0178 §6). **So C3 or rule E is a hard prerequisite of arming the DNS retirement** (ADR-0178 §6).
 
 Window without the veto (DERIVED from the rules; ~120 s a DAA): lower bound 3 DAA (≈ 6 min) — the shallow window is 2. Upper bound the
 victim's finality point (600 blue: 154–300 DAA, 5.2–10.2 h). In practice the carrier form closes once the public chain carries licences of its own claims
@@ -476,13 +476,16 @@ chains a node can follow, so a mixed network still disagrees.
 * Model: `cargo test -p kaspa-consensus-core --test finality_palw_consistency_model -- --nocapture` (≈ 2 min; prints §5's tables).
 * Pipeline: `~/Downloads/MISAKA-wt-b/buildslot.sh cargo test -p kaspa-consensus --lib finx_p0 -- --nocapture --test-threads 2`
   (≈ 10 min of tests after the build; `finx_p0_b` is the long one).
+* Rule E (§10): `~/Downloads/MISAKA-wt-b/buildslot.sh cargo test --offline --no-fail-fast -p kaspa-consensus-core -p kaspa-consensus
+  -p kaspa-p2p-flows --lib -- palw_fork_choice_rule_e finality_consistency partition_rejoin rfc12_zero_dns_matrix rfc0012_retirement
+  partition_watch live_r1 fork_id_v1 --nocapture` (logs `finx-e7-tests.log`, `finx-e8-tests.log` in `MISAKA-wt-b/`).
 
 ## 9. GAPs
 
 * **The live DNS confirmation lag** — V6's reach on the live chain while the DNS BFT veto confirms (§3.1). Read it off the fleet.
 * **The merge-borrow variant of V6** (§3.1) is analysis only; neither the model (no merging) nor a pipeline test exercises it. It decides
   the definition the fix must use (exclusive past), not whether the fix is needed.
-* **C3 and rule E are not implemented in real code**, even behind a test-only fence: C3's fork-relative keys need the weight of each claim
+* *(Superseded 2026-10-09: rule E is implemented, §10.)* **C3 and rule E are not implemented in real code**, even behind a test-only fence: C3's fork-relative keys need the weight of each claim
   in a tip's exclusive past, which `retired_safe_weight` and the F-W capacity index aggregate away — re-deriving them is the
   implementation's first piece of work. The C3-vs-E comparison rests on the model.
 
@@ -491,11 +494,12 @@ chains a node can follow, so a mixed network still disagrees.
 * testnet-12's real attempt cadence per card is not measured here; it sizes `W_p` (§5).
 * E's participation count needs the attempt headers above the fork on both branches: header-only data, bounded by the finality depth,
   but its cost on a node fed many junk branches is not measured. A header-level pre-filter (participation is computable before bodies
-  arrive) is the obvious bound.
+  arrive) is the obvious bound. *(2026-10-09: implemented and measured in the pipeline, §10.1 DoS row; a real node under a peer
+  flood is still a GAP.)*
 
 ## 10. Rule E, implemented (2026-10-09)
 
-Decision record: [ADR-0175](../../adr/0175-fork-choice-heals-a-partition-on-bonded-participation.md) §4 (as implemented) and §9.
+Decision record: [ADR-0178](../../adr/0178-fork-choice-heals-a-partition-on-bonded-participation.md) §4 (as implemented) and §9.
 Code: `consensus/core/src/palw_fork_choice_rule_e_v1.rs`, `consensus/core/src/palw_fork_choice_rule_e_leaf_v2.rs`,
 `consensus/src/pipeline/virtual_processor/palw_rule_e.rs`; the gate in `dns_reorg_outcome`, the continuation in
 `sink_search_algorithm`, the IBD commit and the relay in `protocol/flows`. Leaf v2 (for lane L2FC): `rule-e-leaf-v2-note.md`.
@@ -503,7 +507,8 @@ Code: `consensus/core/src/palw_fork_choice_rule_e_v1.rs`, `consensus/core/src/pa
 **The definition the implementation settled on** (it refines §4's PROPOSED text so a header-verified client can evaluate it):
 exclusive claims are those a tip's own chain accepted above the two tips' common selected-chain ancestor `F` that the other tip's
 state does not hold; participation counts bonds of `F`'s registry; participation counts once the LOWER tip stands `W_p` = 20 DAA
-above `F`. Every side is computed from per-claim records by one function the node and the leaf-v2 client share.
+above `F`. Every side goes through one accumulator over per-claim records, which the node (streaming from its state) and the
+leaf-v2 client share.
 
 ### 10.1 What the pipeline shows (MEASURED, `hb_fork_choice_probe::finality_consistency::rule_e`)
 
@@ -511,7 +516,26 @@ above `F`. Every side is computed from per-claim records by one function the nod
 attempt blocks is GHOSTDAG's heavier, whatever its producer count. The scenarios set "heavier" with one bond attempting repeatedly
 against more bonds attempting once. (The model's heartbeat 2^24 is the live weight; the pipeline's conclusions do not depend on it.)
 
-RESULTS-PLACEHOLDER
+Each scenario runs both arms on the same script (logs `finx-e7-tests.log`, 2026-10-09 09:42, and `finx-e8-tests.log`, 2026-10-10,
+after the merge of the integration head and §10.4's changes). Where the unarmed arm is a status-quo test's own scenario that test is
+named, unchanged and still passing.
+
+| test | violation | unarmed (status quo) | armed (rule E) |
+|---|---|---|---|
+| `finx_e_v1_…` (24 slots; one bond ×4 on the heavy side, two bonds ×1 on the light side, economic tie) | V1 | split: each node on its own tip; no continuation runs | both nodes on the LIGHT tip (participation 2 vs 1, keys `(0,0,0)` both); 154 continuations on the heavy node, at most 2 extra validations in one; the node's pair equals the leaf-v2 client's; both nodes record a weighed refusal of the heavier tip (LIVE-R1 N2 holds on it only with long-lived outbound peers on that chain) |
+| `finx_e_v2_…` heartbeat-only, 3 and 6 slots | V2 | (`finx_p0_a`) split | split at the heal and three rounds later — residual (a) |
+| `finx_e_v2_…` bonds on both sides, 3 slots | V2 | split for all 29 rounds | split while the fork is shallower than `W_p`, agreed from round 17 on, on the side with the exclusive attempt |
+| `finx_e_v3_…` (depth 60) | V3 | the light node never moves; its finality point passes the fork at round 25 — sealed | the light node moves at round 14, before any seal |
+| `finx_e_v4_v5_…` | V4, V5 | (`finx_p0_c`) IBD and relay disagree; arrival order decides | relay: both nodes on the heavy tip (the light side's licence is of a claim both hold — it decides nothing); IBD: an old light datadir staging the heavy chain Commits (participation 2 vs 0), an old heavy datadir staging the light chain keeps its incumbent (the status quo on the same states: the opposite pair); fresh nodes in either order: the heavy tip |
+| `finx_e_v6_carrier_…` | V6 | (`finx_p0_e`) X reversed | X stands at 32, 60 and 62 blue score deep |
+| `finx_e_v6_clock_…` | V6 | (`finx_p0_f`) X reversed | X stands (8 DAA deep) |
+| V7 (`palw_fork_choice_rule_e_v1::tests::the_relay_weighs_…`) | V7 | every block below the merge-depth root skipped | a non-heartbeat block below the root is validated; heartbeats still skipped; a peer's budget is 16 at once, one per 15 s (unit; the p2p E2E is §6's multi-node run) |
+| `finx_e_merge_past_…` | V6 (merge borrow) | the victim moves to the PRIVATE branch: X gone, Y present | the victim stays public: X present, Y absent; exclusive participation 1 vs 2, where an above-the-fork count gives 4 vs 3 |
+| `finx_e_sybil_peers_first_…` (three Sybil branches, one bond each, heard first) | V5 (Sybil) | the fresh node stays on a Sybil tip (+1,048,623 blue work over the honest one) | the fresh node takes the honest tip (three bonds vs one); 355 continuations, at most 5 extra validations in one |
+| `finx_e_sybil_bonds_registered_after_the_fork_…` | — | the heavy node stays on the Sybil side | both nodes on the honest side: the Sybil side's two new bonds count 0 against the honest 1 |
+| `finx_e_dos_…` (30 heartbeat tips, then 12 attempt tips, on F) | — | no continuation; 24.5 ms / 43.3 ms per inserted block | 0 extra validations after the heartbeat flood, 8 (the bound, reached) after the attempt flood; 25.9 ms / 114.5 ms per inserted block; the honest tip stays the sink |
+| `finx_e_a_partition_heals_while_a_private_branch_is_released` | V6 + partition | both nodes end on the private branch: X gone, Y present | both nodes on the public side A: X present, Y absent |
+| `finx_e_rejoin_…` (40 slots, depth 60: past the seal) | residual (b) | — | relay: each node sealed on its own; IBD under rule E: the minority's datadir staging the majority Commits (2 vs 1), the majority's staging the minority keeps; a verified resync hearing both sides lands on the majority armed, on the minority under the status quo |
 
 ### 10.2 Findings the implementation added
 
@@ -531,9 +555,23 @@ RESULTS-PLACEHOLDER
 * **LIVE-R1's N2 watchdog reads rule E** past the fence: the refusal record is taken at the sink rule E settles on, and a refusal is
   weighed when rule E weighed the pair and the refused tip does not outrank the sink.
 
-### 10.3 Residuals (stated; ADR-0175 §5 and §9)
+* **The leaf-v2 window opening** refused a valid opening whose boundary record was the window's first (exactly one record at or below
+  the fork): the verifier read "a boundary exists" as "the range does not start at 0". Fixed (c8bf7eca6), with the case in the test.
+
+### 10.3 Residuals (stated; ADR-0178 §5 and §9)
 
 Heartbeat-only partitions stay split; a partition longer than the seal stays split on the relay path (the minority's way back is the
 IBD commit, which rule E decides for the majority, or a verified resync); IBD ties keep the incumbent; a lighter branch with no
 registered bond's attempt above the fork is never weighed by the search's continuation; a flood that takes the continuation's eight
 validations needs header-level participation at least the honest branch's.
+
+### 10.4 ADR-0176 and ADR-0177 (2026-10-10)
+
+Recorded in ADR-0178 §10–§11. In short: participation is one per bond however many claims; the economic keys read the claim through
+`PalwRuleEBondBudgetV1` (lane BUDGET implements it) and credit each `(bond, version, window)` at most `F_max` on both keys —
+MEASURED in `a_fast_forger_counts_once_and_its_budget_caps_its_credit` (a 20,000-claim forger and an honest bond of the same budget
+tie at `F_max`; without an allocation the same records sum to 1,500 `F_max`); `a_record_reads_the_allocation_and_the_streamed_side_is_the_records_side`
+pins that a node's streamed side equals the records' side with and without an engine. **Finding**: the 16,384-claim fail-closed
+was a veto purchasable with claim volume under ADR-0160 S (ρ = 1,000: 100 claims a DAA per 13,000 MSK bond); a node now streams
+each side and never refuses on volume; the bound remains for a leaf window and a client's opening only. ADR-0177: rule E reads no
+availability input (ADR-0178 §10 lists its inputs and the two indirect readers).

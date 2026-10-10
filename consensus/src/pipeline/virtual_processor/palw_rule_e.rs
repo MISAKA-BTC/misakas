@@ -1,4 +1,4 @@
-//! **ADR-0175: rule E, the virtual processor's half** (`Params::palw_fork_choice_rule_e_v1`, dormant).
+//! **ADR-0178: rule E, the virtual processor's half** (`Params::palw_fork_choice_rule_e_v1`, dormant).
 //!
 //! The comparator itself is pure and lives in [`kaspa_consensus_core::palw_fork_choice_rule_e_v1`]. This file supplies what only a
 //! node holding both tips can: each tip's PALW state, the two tips' common selected-chain ancestor `F` (chain reachability) and its
@@ -73,7 +73,7 @@ pub(crate) struct PalwRuleESearchV1 {
 }
 
 impl VirtualStateProcessor {
-    /// Whether rule E (ADR-0175) is in force at `daa_score` — the incumbent's DAA at every reader.
+    /// Whether rule E (ADR-0178) is in force at `daa_score` — the incumbent's DAA at every reader.
     pub(crate) fn palw_rule_e_active_at(&self, daa_score: u64) -> bool {
         self.palw_fork_choice_rule_e.is_some_and(|f| f != ForkActivation::never() && f.is_active(daa_score))
     }
@@ -136,7 +136,7 @@ impl VirtualStateProcessor {
     /// **Rule E's two sides for tips `a` and `b`, and whether participation counts**: each tip's claims accepted above their fork
     /// `F` that the other tip's state does not hold, weighed by the fold's own expressions at that tip; participation over `F`'s
     /// registry; the even split over `F`'s bond count. Each side priced at its own tip, the weight fence read at that tip's DAA.
-    /// `None` where either tip or `F` cannot be weighed or a side holds more than the bound allows (the callers fail closed).
+    /// `None` where either tip or `F` cannot be weighed or an arithmetic bound is hit (the callers fail closed); never on claim volume.
     pub(crate) fn palw_rule_e_pair_v1(
         &self,
         states: &mut PalwRuleEStatesV1,
@@ -164,7 +164,7 @@ impl VirtualStateProcessor {
         Some((pair, palw_rule_e_participation_counts_v1(fork.lower_span)))
     }
 
-    /// **Rule E's deep-reorg gate** (ADR-0175): may `candidate` replace the incumbent `prev_sink`? Unweighable refuses.
+    /// **Rule E's deep-reorg gate** (ADR-0178): may `candidate` replace the incumbent `prev_sink`? Unweighable refuses.
     pub(crate) fn palw_rule_e_gate_v1(&self, candidate: BlockHash, prev_sink: BlockHash, incumbent_daa: u64) -> PalwDeepReorgV2 {
         let mut states = PalwRuleEStatesV1::default();
         let Some((pair, counts)) = self.palw_rule_e_pair_v1(&mut states, candidate, prev_sink) else {

@@ -1,4 +1,4 @@
-//! **ADR-0175: rule E — the fork choice weighs each tip's exclusive past, bonded participation first
+//! **ADR-0178: rule E — the fork choice weighs each tip's exclusive past, bonded participation first
 //! (`palw_fork_choice_rule_e_v1`).**
 //!
 //! Past the fence (read at the INCUMBENT's DAA, as every fork-choice fence here is) a non-extension candidate is weighed against
@@ -20,11 +20,19 @@
 //! losing lottery draw and an unbonded header never count; a bond registered after `F` never counts.
 //!
 //! **One computation, three callers.** Every claim is first reduced to a [`PalwRuleEClaimRecordV1`] (the fold's own price at the
-//! tip), and a side is computed from records alone ([`palw_rule_e_side_from_records_v1`]). The virtual processor builds both tips'
-//! records from its states and `F` from its chain; the IBD flow, which holds two consensus instances and no shared DAG, uses the
-//! claim-set difference bounded by what both states still retain ([`palw_rule_e_sides_by_claim_set_v1`]); a header-verified
-//! client reads the same records from the fork-choice leaf v2 ([`crate::palw_fork_choice_rule_e_leaf_v2`]). All three meet
+//! tip), and a side is accumulated from records alone ([`palw_rule_e_side_from_records_v1`]; a node streams them straight from its
+//! state, [`PalwChainStateV2::palw_rule_e_side_v1`], through the same accumulator). The virtual processor builds both tips' sides
+//! from its states and `F` from its chain; the IBD flow, which holds two consensus instances and no shared DAG, uses the claim-set
+//! difference bounded by what both states still retain ([`palw_rule_e_sides_by_claim_set_v1`]); a header-verified client reads
+//! the same records from the fork-choice leaf v2 ([`crate::palw_fork_choice_rule_e_leaf_v2`]). All three meet
 //! [`palw_rule_e_decide_v1`] / [`palw_rule_e_order_v1`].
+//!
+//! **ADR-0176 D3 — one bond's credit is its budget's, however fast it claims.** Participation counts a bond once, whatever number
+//! of claims it has in an exclusive past. The economic keys read each claim through [`PalwRuleEBondBudgetV1`] — the versioned
+//! per-bond allocation of lane BUDGET's engine (`palw_bond_budget_v1`; not built here) — and credit each `(bond, version,
+//! window)` at most its `F_max(C, W)` over the safe weight and the live total alike ([`PalwRuleEBudgetTermsV1`]). Until that
+//! engine exists every claim reads as before ([`PalwRuleENoBondBudgetV1`]). No input of rule E is a model's availability
+//! (ADR-0177): a side reads the fold's accepted claims, their phases and weights, the bond registry, scores and headers.
 //!
 //! **Dormant**: `None` on every preset and in no flag-day list; hashed Some-only into `consensus_params_id` and
 //! `consensus_schedule_id`, collapsed whole from `Some(never())`. Arming it is refused by [`Params::validate_palw_fork_choice_rule_e_v1`]
@@ -53,9 +61,12 @@ use std::collections::{BTreeMap, BTreeSet};
 /// before participation outranks it.
 pub const PALW_RULE_E_PARTICIPATION_DEPTH_DAA_V1: u64 = 20;
 
-/// The most claims one side's exclusive past may hold for a node to weigh it. A side past it cannot be weighed: the reorg is
-/// refused, the incumbent kept (fail closed). An honest exclusive past is bounded by the finality depth (testnet-12: 600 blue,
-/// ≤ 300 DAA) at the attempt rate; this is orders of magnitude above that and bounds what a junk branch can make a node do.
+/// The most records a fork-choice leaf v2 window materializes, and the most a client takes from one opening (past it the leaf
+/// is not built and the client STOPs). **A node does not apply it**: it streams a side from its state
+/// ([`PalwChainStateV2::palw_rule_e_side_v1`], memory in the side's bonds and distinct blue scores, not its claims), because a
+/// claim-count bound that refuses turns claim volume into a veto: at ρ = 1,000 a 13,000 MSK bond may hold 2,000 outstanding
+/// claims and issue 100 a DAA (ADR-0160 S), so a handful of bonds — or the honest network's own volume — passes it inside the
+/// finality depth, and every comparison with that branch would keep whichever incumbent it faces.
 pub const PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1: usize = 16_384;
 
 /// The most candidates the sink search UTXO-validates and weighs AFTER its first acceptable one (GHOSTDAG's heaviest), highest
@@ -88,10 +99,10 @@ pub const PALW_RULE_E_DEEP_RELAY_REFILL_MS_V1: u64 = 15_000;
 pub const PALW_FORK_CHOICE_RULE_E_ARMABLE_V1: bool = false;
 
 /// The refusal an armed rule E meets in this binary — named, so a test can tell it from every other refusal.
-pub const PALW_FORK_CHOICE_RULE_E_UNARMABLE_V1: &str = "palw_fork_choice_rule_e_v1 cannot be armed in this binary: ADR-0175's rule E ships with the full-activation release, which assigns its height";
+pub const PALW_FORK_CHOICE_RULE_E_UNARMABLE_V1: &str = "palw_fork_choice_rule_e_v1 cannot be armed in this binary: ADR-0178's rule E ships with the full-activation release, which assigns its height";
 
 /// The ordering rule's refusals.
-pub const PALW_DNS_RETIREMENT_NEEDS_RULE_E_V1: &str = "palw_dns_retirement_v1 needs palw_fork_choice_rule_e_v1 armed at or below it (ADR-0175: the DNS overlay's veto may retire only \
+pub const PALW_DNS_RETIREMENT_NEEDS_RULE_E_V1: &str = "palw_dns_retirement_v1 needs palw_fork_choice_rule_e_v1 armed at or below it (ADR-0178: the DNS overlay's veto may retire only \
      once rule E decides deep reorgs)";
 pub const PALW_RULE_E_ABOVE_DNS_RETIREMENT_V1: &str =
     "palw_fork_choice_rule_e_v1 is armed above palw_dns_retirement_v1 — rule E must be in force no later than the DNS veto retires";
@@ -138,15 +149,17 @@ impl Params {
 /// One side's standing under rule E: what its exclusive past holds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PalwRuleESideV1 {
-    /// Distinct common bonds with an accepted attempt claim in the exclusive past.
+    /// Distinct common bonds with an accepted attempt claim in the exclusive past — one per bond, however many claims it has.
     pub participation: u32,
     /// The accepted blue score of the deepest `Final` exclusive claim below the oldest unresolved exclusive claim (0: none).
     pub safe_frontier_blue_score: u64,
-    /// The safe weight of the exclusive `Final` claims, priced as the fold prices it.
+    /// The safe weight of the exclusive `Final` claims, priced as the fold prices it (each budgeted `(bond, window)` at most its
+    /// `F_max`).
     pub safe_weight: u128,
-    /// `safe_weight` plus the exclusive claims' bounded immature weight (F-W's per-bond cap applied over the exclusive set).
+    /// `safe_weight` plus the exclusive claims' bounded immature weight (F-W's per-bond cap over the exclusive set; each budgeted
+    /// `(bond, window)`'s safe and live together at most its `F_max`).
     pub live_total: u128,
-    /// How many exclusive claims the side holds (for the cost bound and the report).
+    /// How many exclusive claims the side holds (the report; saturating).
     pub exclusive_claims: u32,
 }
 
@@ -159,7 +172,7 @@ impl PalwRuleESideV1 {
 /// Why a side could not be weighed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwRuleEErrorV1 {
-    /// The exclusive past holds more than [`PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1`] claims.
+    /// A leaf v2 window would hold more than [`PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1`] records (never a node's side).
     TooManyExclusiveClaims,
     /// An arithmetic bound.
     Overflow,
@@ -176,6 +189,67 @@ pub enum PalwRuleEClaimStatusV1 {
     Voided,
 }
 
+/// **ADR-0176 D3 — the terms of the per-bond allocation that governs one claim, as rule E credits it.** Lane BUDGET's engine
+/// (`palw_bond_budget_v1`) reserves at a claim's acceptance its share of the bond's budget for the interval `I` (length `W` DAA)
+/// it draws from; rule E groups a side's claims by `(bond, version, window)` and credits each group at most
+/// `final_weight_ceiling` — over its `Final` weight (the safe key) and over its `Final` and provisional weight together (the live
+/// total). Committed in the record, so a node, the IBD path and a leaf-v2 client read one allocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwRuleEBudgetTermsV1 {
+    /// The allocation's version — the one the fold, DAA and fork choice read at this state (ADR-0176 D3: one versioned
+    /// allocation for every writer and reader).
+    pub version: u16,
+    /// BUDGET's index of the bond's interval `I` the claim's reservation draws from.
+    pub window: u64,
+    /// `F_max(C, W)` of `(bond, I)` at this state: the most Final weight the bond's claims of `I` may carry together. Where records
+    /// of one group disagree, the smallest is taken.
+    pub final_weight_ceiling: u128,
+}
+
+/// **One claim's allocation** as BUDGET's engine reports it at a state: the terms, and the weights the fold credits the claim
+/// there — what rule E reads in place of the pre-budget expressions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRuleEBudgetAllocationV1 {
+    pub terms: PalwRuleEBudgetTermsV1,
+    /// A `Final` claim's weight as allocated (consumed from its reservation at `Final`, re-checked there).
+    pub final_weight: u128,
+    /// A live claim's provisional weight as reserved (any separate provisional cap of ADR-0176 D1 already applied).
+    pub provisional_weight: u128,
+}
+
+/// **The interface rule E reads BUDGET's engine through** (ADR-0176 D3, RFC-0014 §16.10; FINX defines it, BUDGET implements it).
+///
+/// Contract, for an implementation:
+/// * `allocation(state, id, claim)` is a function of `state` alone (a delta walk, an IBD staging consensus and a client's leaf
+///   must get the same answer), and it is `None` exactly where no allocation governs the claim — below `palw_bond_budget_v1`
+///   at the claim's acceptance, or a claim accepted under an older ruleset, which completes under that ruleset (ADR-0176 §4);
+/// * `Some`: `final_weight` is what the fold adds to the state's safe weight at that claim's `Final` and `provisional_weight` what
+///   it holds in the state's bounded immature weight while the claim is live — the same numbers, so rule E's sums over all of a
+///   state's claims and the state's own accumulators agree (BUDGET's acceptance test);
+/// * the reservations make `Σ final_weight + Σ provisional_weight` over a `(bond, window)` at most `final_weight_ceiling`; rule E
+///   clamps it there regardless, so an engine error cannot buy fork-choice weight;
+/// * it reads no model availability, peer count or acquisition result (ADR-0177).
+pub trait PalwRuleEBondBudgetV1: Sync {
+    fn allocation(&self, state: &PalwChainStateV2, claim_id: &Hash64, claim: &PalwClaimStateV2)
+    -> Option<PalwRuleEBudgetAllocationV1>;
+}
+
+/// No allocation governs any claim: every binary until BUDGET's engine exists, and every state below its fence.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PalwRuleENoBondBudgetV1;
+
+impl PalwRuleEBondBudgetV1 for PalwRuleENoBondBudgetV1 {
+    fn allocation(&self, _: &PalwChainStateV2, _: &Hash64, _: &PalwClaimStateV2) -> Option<PalwRuleEBudgetAllocationV1> {
+        None
+    }
+}
+
+/// **The one place rule E learns which allocation is in force** — every path (the node's sides, the IBD commit, the leaf v2
+/// window) asks this. BUDGET wires its engine here, selected by its fence; until then, none.
+pub fn palw_rule_e_bond_budget_v1(_params: &PalwStateParamsV2) -> &'static dyn PalwRuleEBondBudgetV1 {
+    &PalwRuleENoBondBudgetV1
+}
+
 /// **One claim, reduced to what rule E reads** — priced at the state it is read from, exactly as the fold prices it there. The
 /// unit the node computes a side from and the unit a fork-choice leaf v2 commits, so the two cannot price a claim differently.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -188,31 +262,56 @@ pub struct PalwRuleEClaimRecordV1 {
     /// An attempt claim (participation counts these only); a free-prompt claim otherwise.
     pub attempt: bool,
     pub status: PalwRuleEClaimStatusV1,
-    /// `Final`: `palw_claim_safe_contribution_v3` under F-W's `palw_weight_final_safe_v1` for an attempt, the spent quanta's weight
-    /// for a free-prompt claim. 0 otherwise.
+    /// `Final`: the allocation's `final_weight` where one governs the claim; otherwise `palw_claim_safe_contribution_v3` under
+    /// F-W's `palw_weight_final_safe_v1` for an attempt, the spent quanta's weight for a free-prompt claim. 0 otherwise.
     pub safe_weight: u128,
-    /// `Live`: F-W's staged weight where the cap applies (`capped`), `immature_contribution` otherwise. 0 otherwise.
+    /// `Live`: the allocation's `provisional_weight` where one governs the claim; otherwise F-W's staged weight where the cap
+    /// applies (`capped`), `immature_contribution` otherwise. 0 otherwise.
     pub live_weight: u128,
-    /// The live weight goes through its bond's F-W cap.
+    /// The live weight goes through its bond's F-W cap (never where `budget` is `Some`).
     pub capped: bool,
     /// The bond's collateral at this state, where `capped` (the cap's input; `None`: no such bond, cap 0).
     pub bond_collateral: Option<u64>,
+    /// ADR-0176 D3: the allocation's terms where one governs the claim ([`PalwRuleEBondBudgetV1`]); `None` otherwise.
+    pub budget: Option<PalwRuleEBudgetTermsV1>,
 }
 
 impl PalwChainStateV2 {
-    /// **One claim's record at this state** — the fold's expressions: `palw_claim_safe_contribution_v3` and F-W's
-    /// `palw_weight_final_safe_v1` for a `Final` attempt, the spent quanta for a free-prompt `Final`, F-W's staged weight for a live
-    /// new-rule claim and `immature_contribution` for an old-rule one. `uncertified_weightless` and `canonical_work_daa` are the
-    /// params' readings, taken once for every record of a comparison.
+    /// **One claim's record at this state** — the allocation `budget` reports for it where one governs it; otherwise the fold's
+    /// expressions: `palw_claim_safe_contribution_v3` and F-W's `palw_weight_final_safe_v1` for a `Final` attempt, the spent quanta
+    /// for a free-prompt `Final`, F-W's staged weight for a live new-rule claim and `immature_contribution` for an old-rule one.
+    /// `uncertified_weightless` and `canonical_work_daa` are the params' readings, taken once for every record of a comparison.
+    #[allow(clippy::too_many_arguments)]
     pub fn palw_rule_e_record_v1(
         &self,
         params: &PalwStateParamsV2,
         uncertified_weightless: bool,
         canonical_work_daa: Option<u64>,
         shares: &BTreeMap<Hash64, u16>,
+        budget: &dyn PalwRuleEBondBudgetV1,
         claim_id: Hash64,
         claim: &PalwClaimStateV2,
     ) -> Result<PalwRuleEClaimRecordV1, PalwRuleEErrorV1> {
+        let record = |status, safe_weight, live_weight, capped, bond_collateral, budget| PalwRuleEClaimRecordV1 {
+            claim_id,
+            accepted_blue_score: claim.accepted_blue_score,
+            bond: claim.bond,
+            attempt: matches!(claim.source, PalwClaimSourceV2::Attempt),
+            status,
+            safe_weight,
+            live_weight,
+            capped,
+            bond_collateral,
+            budget,
+        };
+        if let Some(allocation) = budget.allocation(self, &claim_id, claim) {
+            let (status, safe, live) = match &claim.phase {
+                PalwClaimPhaseV2::Final { .. } => (PalwRuleEClaimStatusV1::Final, allocation.final_weight, 0),
+                PalwClaimPhaseV2::Voided { .. } => (PalwRuleEClaimStatusV1::Voided, 0, 0),
+                _ => (PalwRuleEClaimStatusV1::Live, 0, allocation.provisional_weight),
+            };
+            return Ok(record(status, safe, live, false, None, Some(allocation.terms)));
+        }
         let (status, safe_weight, live_weight, capped) = match &claim.phase {
             PalwClaimPhaseV2::Final { .. } => {
                 let weight = match &claim.source {
@@ -235,26 +334,19 @@ impl PalwChainStateV2 {
             }
             _ => (PalwRuleEClaimStatusV1::Live, 0, claim.immature_contribution, false),
         };
-        Ok(PalwRuleEClaimRecordV1 {
-            claim_id,
-            accepted_blue_score: claim.accepted_blue_score,
-            bond: claim.bond,
-            attempt: matches!(claim.source, PalwClaimSourceV2::Attempt),
-            status,
-            safe_weight,
-            live_weight,
-            capped,
-            bond_collateral: if capped { self.bond(&claim.bond).map(|record| record.collateral) } else { None },
-        })
+        let collateral = if capped { self.bond(&claim.bond).map(|record| record.collateral) } else { None };
+        Ok(record(status, safe_weight, live_weight, capped, collateral, None))
     }
 
-    /// **The records of this state's claims that `exclusive` admits** — one side's exclusive past. Fails past
-    /// [`PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1`] (the caller fails closed).
+    /// **The records of this state's claims that `exclusive` admits**, priced with `budget` — a leaf v2 window's leaves. Fails
+    /// past [`PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1`] (the leaf is then not built). A node's side does not collect records: see
+    /// [`Self::palw_rule_e_side_v1`].
     pub fn palw_rule_e_records_v1(
         &self,
         params: &PalwStateParamsV2,
         uncertified_weightless: bool,
         canonical_work_daa: Option<u64>,
+        budget: &dyn PalwRuleEBondBudgetV1,
         mut exclusive: impl FnMut(&Hash64, &PalwClaimStateV2) -> bool,
     ) -> Result<Vec<PalwRuleEClaimRecordV1>, PalwRuleEErrorV1> {
         let shares: BTreeMap<Hash64, u16> = self.class_shares_iter().map(|(k, v)| (*k, *v)).collect();
@@ -264,66 +356,137 @@ impl PalwChainStateV2 {
                 if records.len() == PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1 {
                     return Err(PalwRuleEErrorV1::TooManyExclusiveClaims);
                 }
-                records.push(self.palw_rule_e_record_v1(params, uncertified_weightless, canonical_work_daa, &shares, *id, claim)?);
+                records.push(self.palw_rule_e_record_v1(
+                    params,
+                    uncertified_weightless,
+                    canonical_work_daa,
+                    &shares,
+                    budget,
+                    *id,
+                    claim,
+                )?);
             }
         }
         Ok(records)
     }
+
+    /// **One side of rule E straight from this state**: every claim `exclusive` admits, priced as
+    /// [`Self::palw_rule_e_record_v1`] prices it and accumulated as [`palw_rule_e_side_from_records_v1`] accumulates it — the
+    /// same side, without collecting the records. No claim-count bound: memory is the side's bonds, its budget groups and its
+    /// distinct blue scores, and the walk is one pass over claims this state already holds.
+    pub fn palw_rule_e_side_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        uncertified_weightless: bool,
+        canonical_work_daa: Option<u64>,
+        budget: &dyn PalwRuleEBondBudgetV1,
+        mut exclusive: impl FnMut(&Hash64, &PalwClaimStateV2) -> bool,
+        common_bond: impl Fn(&PalwBondKeyV2) -> bool,
+    ) -> Result<PalwRuleESideV1, PalwRuleEErrorV1> {
+        let shares: BTreeMap<Hash64, u16> = self.class_shares_iter().map(|(k, v)| (*k, *v)).collect();
+        let mut side = PalwRuleESideAccV1::default();
+        for (id, claim) in self.claims_iter() {
+            if exclusive(id, claim) {
+                let record =
+                    self.palw_rule_e_record_v1(params, uncertified_weightless, canonical_work_daa, &shares, budget, *id, claim)?;
+                side.push(&record, common_bond(&record.bond))?;
+            }
+        }
+        side.finish()
+    }
 }
 
-/// **One side of rule E from its exclusive records** — the one place a side is computed, by the node and by a header-verified
-/// client alike. `common_bond` says whether a bond counts toward participation (registered in the common past). Participation:
-/// the distinct common bonds of attempt records; safe weight: the `Final` records' weights; live total: safe plus the uncapped
-/// live weights plus, per bond, F-W's `min(Σ staged, W_cap(collateral))` over its capped live records; the frontier: the
-/// deepest `Final` record below the oldest live one (the fold's resolved-prefix rule restricted to the records).
+/// The accumulator every side goes through — records pushed in any order.
+#[derive(Default)]
+struct PalwRuleESideAccV1 {
+    bonds: BTreeSet<PalwBondKeyV2>,
+    safe: u128,
+    immature: u128,
+    /// F-W: per bond, the staged weight of its capped records and the collateral its cap reads.
+    staged: BTreeMap<PalwBondKeyV2, (u128, Option<u64>)>,
+    /// ADR-0176 D3: per `(bond, version, window)`, the `Final` weight, the provisional weight and the ceiling.
+    budgeted: BTreeMap<(PalwBondKeyV2, u16, u64), (u128, u128, u128)>,
+    oldest_live: Option<u64>,
+    finals: BTreeSet<u64>,
+    count: u64,
+}
+
+impl PalwRuleESideAccV1 {
+    fn push(&mut self, record: &PalwRuleEClaimRecordV1, common_bond: bool) -> Result<(), PalwRuleEErrorV1> {
+        self.count = self.count.saturating_add(1);
+        if record.attempt && common_bond {
+            self.bonds.insert(record.bond);
+        }
+        match record.status {
+            PalwRuleEClaimStatusV1::Final => {
+                self.finals.insert(record.accepted_blue_score);
+            }
+            PalwRuleEClaimStatusV1::Live => {
+                self.oldest_live = Some(self.oldest_live.map_or(record.accepted_blue_score, |o| o.min(record.accepted_blue_score)));
+            }
+            PalwRuleEClaimStatusV1::Voided => return Ok(()),
+        }
+        let add = |sum: &mut u128, weight: u128| -> Result<(), PalwRuleEErrorV1> {
+            *sum = sum.checked_add(weight).ok_or(PalwRuleEErrorV1::Overflow)?;
+            Ok(())
+        };
+        let is_final = record.status == PalwRuleEClaimStatusV1::Final;
+        if let Some(terms) = record.budget {
+            let group = self.budgeted.entry((record.bond, terms.version, terms.window)).or_insert((0, 0, terms.final_weight_ceiling));
+            group.2 = group.2.min(terms.final_weight_ceiling);
+            return if is_final { add(&mut group.0, record.safe_weight) } else { add(&mut group.1, record.live_weight) };
+        }
+        if is_final {
+            add(&mut self.safe, record.safe_weight)
+        } else if record.capped {
+            let entry = self.staged.entry(record.bond).or_insert((0, record.bond_collateral));
+            add(&mut entry.0, record.live_weight)
+        } else {
+            add(&mut self.immature, record.live_weight)
+        }
+    }
+
+    fn finish(self) -> Result<PalwRuleESideV1, PalwRuleEErrorV1> {
+        let (mut safe, mut immature) = (self.safe, self.immature);
+        for (sum, collateral) in self.staged.values() {
+            immature = immature
+                .checked_add((*sum).min(collateral.map(palw_bond_weight_cap_v1).unwrap_or(0)))
+                .ok_or(PalwRuleEErrorV1::Overflow)?;
+        }
+        for (finals, provisional, ceiling) in self.budgeted.values() {
+            let credited_safe = (*finals).min(*ceiling);
+            let credited_total = finals.saturating_add(*provisional).min(*ceiling);
+            safe = safe.checked_add(credited_safe).ok_or(PalwRuleEErrorV1::Overflow)?;
+            immature = immature.checked_add(credited_total - credited_safe).ok_or(PalwRuleEErrorV1::Overflow)?;
+        }
+        let resolved_through = self.oldest_live.map(|oldest| oldest.saturating_sub(1)).unwrap_or(u64::MAX);
+        Ok(PalwRuleESideV1 {
+            participation: u32::try_from(self.bonds.len()).unwrap_or(u32::MAX),
+            safe_frontier_blue_score: self.finals.range(..=resolved_through).next_back().copied().unwrap_or(0),
+            safe_weight: safe,
+            live_total: safe.checked_add(immature).ok_or(PalwRuleEErrorV1::Overflow)?,
+            exclusive_claims: u32::try_from(self.count).unwrap_or(u32::MAX),
+        })
+    }
+}
+
+/// **One side of rule E from its exclusive records** — the accumulator every side goes through, by the node (streamed from its
+/// state, [`PalwChainStateV2::palw_rule_e_side_v1`]) and by a header-verified client alike. `common_bond` says whether a bond
+/// counts toward participation (registered in the common past). Participation: the distinct common bonds of attempt records —
+/// one per bond, however many records it has; safe weight: the `Final` records' weights; live total: safe plus the uncapped live
+/// weights plus, per bond, F-W's `min(Σ staged, W_cap(collateral))` over its capped live records; records an allocation governs
+/// (ADR-0176 D3): per `(bond, version, window)`, `min(Σ final, F_max)` to the safe weight and `min(Σ final + Σ provisional,
+/// F_max)` to the live total; the frontier: the deepest `Final` record below the oldest live one (the fold's resolved-prefix rule
+/// restricted to the records).
 pub fn palw_rule_e_side_from_records_v1<'a>(
     records: impl IntoIterator<Item = &'a PalwRuleEClaimRecordV1>,
     common_bond: impl Fn(&PalwBondKeyV2) -> bool,
 ) -> Result<PalwRuleESideV1, PalwRuleEErrorV1> {
-    let mut bonds: BTreeSet<PalwBondKeyV2> = BTreeSet::new();
-    let (mut safe, mut immature, mut count) = (0u128, 0u128, 0usize);
-    let mut staged: BTreeMap<PalwBondKeyV2, (u128, Option<u64>)> = BTreeMap::new();
-    let mut oldest_live: Option<u64> = None;
-    let mut finals: Vec<u64> = Vec::new();
+    let mut side = PalwRuleESideAccV1::default();
     for record in records {
-        count += 1;
-        if count > PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1 {
-            return Err(PalwRuleEErrorV1::TooManyExclusiveClaims);
-        }
-        if record.attempt && common_bond(&record.bond) {
-            bonds.insert(record.bond);
-        }
-        match record.status {
-            PalwRuleEClaimStatusV1::Final => {
-                safe = safe.checked_add(record.safe_weight).ok_or(PalwRuleEErrorV1::Overflow)?;
-                finals.push(record.accepted_blue_score);
-            }
-            PalwRuleEClaimStatusV1::Voided => {}
-            PalwRuleEClaimStatusV1::Live => {
-                oldest_live = Some(oldest_live.map_or(record.accepted_blue_score, |o| o.min(record.accepted_blue_score)));
-                if record.capped {
-                    let entry = staged.entry(record.bond).or_insert((0, record.bond_collateral));
-                    entry.0 = entry.0.checked_add(record.live_weight).ok_or(PalwRuleEErrorV1::Overflow)?;
-                } else {
-                    immature = immature.checked_add(record.live_weight).ok_or(PalwRuleEErrorV1::Overflow)?;
-                }
-            }
-        }
+        side.push(record, common_bond(&record.bond))?;
     }
-    for (sum, collateral) in staged.values() {
-        immature = immature
-            .checked_add((*sum).min(collateral.map(palw_bond_weight_cap_v1).unwrap_or(0)))
-            .ok_or(PalwRuleEErrorV1::Overflow)?;
-    }
-    let resolved_through = oldest_live.map(|oldest| oldest.saturating_sub(1)).unwrap_or(u64::MAX);
-    let frontier = finals.into_iter().filter(|bs| *bs <= resolved_through).max().unwrap_or(0);
-    Ok(PalwRuleESideV1 {
-        participation: bonds.len() as u32,
-        safe_frontier_blue_score: frontier,
-        safe_weight: safe,
-        live_total: safe.checked_add(immature).ok_or(PalwRuleEErrorV1::Overflow)?,
-        exclusive_claims: count as u32,
-    })
+    side.finish()
 }
 
 /// The bonds registered in both states — the IBD path's common past, where no fork block is known.
@@ -359,8 +522,9 @@ pub struct PalwRuleEPairV1 {
 /// **Both sides of rule E for two states**, each restricted to the claims its predicate admits AND the other state does not hold
 /// (a claim both tips hold — by id — decides nothing, wherever and whenever each accepted it). `common_bond` and `common_bonds` are
 /// the common past's registry (participation's bonds and the even split's `n`). Each side is priced at its own state, with the
-/// weight fence read at that state's own point (`uncertified_weightless_a` / `_b`) — as a fork-choice leaf commits it. The one
-/// place every node path builds a pair.
+/// weight fence read at that state's own point (`uncertified_weightless_a` / `_b`) and the allocation of
+/// [`palw_rule_e_bond_budget_v1`] — as a fork-choice leaf commits it — and streamed ([`PalwChainStateV2::palw_rule_e_side_v1`]):
+/// no claim-count refusal. The one place every node path builds a pair.
 #[allow(clippy::too_many_arguments)]
 pub fn palw_rule_e_sides_v1(
     a: &PalwChainStateV2,
@@ -374,17 +538,24 @@ pub fn palw_rule_e_sides_v1(
     common_bond: impl Fn(&PalwBondKeyV2) -> bool,
     common_bonds: usize,
 ) -> Result<PalwRuleEPairV1, PalwRuleEErrorV1> {
-    let records_a = a.palw_rule_e_records_v1(params, uncertified_weightless_a, canonical_work_daa, |id, claim| {
-        b.claim(id).is_none() && a_exclusive(id, claim)
-    })?;
-    let records_b = b.palw_rule_e_records_v1(params, uncertified_weightless_b, canonical_work_daa, |id, claim| {
-        a.claim(id).is_none() && b_exclusive(id, claim)
-    })?;
-    Ok(PalwRuleEPairV1 {
-        a: palw_rule_e_side_from_records_v1(&records_a, &common_bond)?,
-        b: palw_rule_e_side_from_records_v1(&records_b, &common_bond)?,
-        even_split_min: palw_rule_e_even_split_min_v1(common_bonds),
-    })
+    let budget = palw_rule_e_bond_budget_v1(params);
+    let side_a = a.palw_rule_e_side_v1(
+        params,
+        uncertified_weightless_a,
+        canonical_work_daa,
+        budget,
+        |id, claim| a_exclusive(id, claim) && b.claim(id).is_none(),
+        &common_bond,
+    )?;
+    let side_b = b.palw_rule_e_side_v1(
+        params,
+        uncertified_weightless_b,
+        canonical_work_daa,
+        budget,
+        |id, claim| b_exclusive(id, claim) && a.claim(id).is_none(),
+        &common_bond,
+    )?;
+    Ok(PalwRuleEPairV1 { a: side_a, b: side_b, even_split_min: palw_rule_e_even_split_min_v1(common_bonds) })
 }
 
 /// **The relay path's pair**: `a` and `b` with their common selected-chain ancestor's state `fork` (its registry is the common
@@ -710,6 +881,7 @@ mod tests {
                 live_weight: live,
                 capped,
                 bond_collateral: if capped { Some(13_000 * 100_000_000) } else { None },
+                budget: None,
             }
         };
         use PalwRuleEClaimStatusV1::{Final, Live, Voided};
@@ -730,6 +902,143 @@ mod tests {
         assert_eq!(side.live_total, 150 + 7 + 3 + cap, "bond 5's two capped records meet one cap");
         assert_eq!(side.safe_frontier_blue_score, 12, "the deepest Final below the oldest live record (15)");
         assert_eq!(side.exclusive_claims, 8);
+    }
+
+    fn budget_bond(i: u32) -> PalwBondKeyV2 {
+        PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(11), i))
+    }
+
+    /// A budgeted attempt record of `bond` in BUDGET window `window` (ceiling `ceiling`).
+    fn budgeted(
+        id: u64,
+        bond: u32,
+        status: PalwRuleEClaimStatusV1,
+        weight: u128,
+        window: u64,
+        ceiling: u128,
+    ) -> PalwRuleEClaimRecordV1 {
+        PalwRuleEClaimRecordV1 {
+            claim_id: Hash64::from_u64_word(id),
+            accepted_blue_score: 100 + id % 50,
+            bond: budget_bond(bond),
+            attempt: true,
+            status,
+            safe_weight: if status == PalwRuleEClaimStatusV1::Final { weight } else { 0 },
+            live_weight: if status == PalwRuleEClaimStatusV1::Live { weight } else { 0 },
+            capped: false,
+            bond_collateral: None,
+            budget: Some(PalwRuleEBudgetTermsV1 { version: 1, window, final_weight_ceiling: ceiling }),
+        }
+    }
+
+    /// **ADR-0176 D3: a fast forger gets no more from rule E than its bond's budget.** One bond (the forger) with 20,000 exclusive
+    /// claims — more than a leaf window holds, which a node still weighs — against one honest bond of the same budget that did its
+    /// ten claims' worth: participation one each, and each credited exactly its `F_max` on both economic keys, so the pair ties
+    /// and the forger's speed buys nothing. Two windows are two ceilings, for both alike. Without an allocation the same records
+    /// sum unbounded — the pre-budget path ADR-0176 D3 forbids in the new ruleset, which BUDGET's engine closes through
+    /// [`PalwRuleEBondBudgetV1`].
+    #[test]
+    fn a_fast_forger_counts_once_and_its_budget_caps_its_credit() {
+        use PalwRuleEClaimStatusV1::{Final, Live};
+        const F_MAX: u128 = 1_000;
+        let all = |_: &PalwBondKeyV2| true;
+        let n = PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1 as u64 + 3_616;
+        let forger: Vec<_> = (0..n).map(|i| budgeted(i, 1, if i % 4 == 0 { Live } else { Final }, 100, 7, F_MAX)).collect();
+        let honest: Vec<_> = (0..10u64).map(|i| budgeted(1_000_000 + i, 2, Final, 100, 7, F_MAX)).collect();
+        let (f, h) =
+            (palw_rule_e_side_from_records_v1(&forger, all).unwrap(), palw_rule_e_side_from_records_v1(&honest, all).unwrap());
+        assert_eq!((f.participation, h.participation), (1, 1), "one bond counts once, however many claims it has");
+        assert_eq!((f.safe_weight, f.live_total), (F_MAX, F_MAX), "the forger: its F_max on both keys");
+        assert_eq!((h.safe_weight, h.live_total), (F_MAX, F_MAX), "the honest bond: the same ceiling, reached by its real work");
+        assert_eq!(f.exclusive_claims as u64, n, "past the leaf window's bound and still weighed — volume is no veto");
+        assert_eq!(palw_rule_e_order_v1(&side_with_frontier(f, 0), &side_with_frontier(h, 0), true), Ordering::Equal);
+        // Provisional weight shares the same ceiling: a live-only forger fills the live total, not the safe key.
+        let live_only: Vec<_> = (0..500u64).map(|i| budgeted(i, 1, Live, 100, 7, F_MAX)).collect();
+        let l = palw_rule_e_side_from_records_v1(&live_only, all).unwrap();
+        assert_eq!((l.safe_weight, l.live_total), (0, F_MAX));
+        // Two windows: two ceilings, for the forger exactly as for an honest bond.
+        let mut two = forger.clone();
+        two.extend((0..50u64).map(|i| budgeted(2_000_000 + i, 1, Final, 100, 8, F_MAX)));
+        assert_eq!(palw_rule_e_side_from_records_v1(&two, all).unwrap().safe_weight, 2 * F_MAX);
+        // Records of one group that disagree on the ceiling: the smallest.
+        let mut disagree = honest.clone();
+        disagree[3].budget = Some(PalwRuleEBudgetTermsV1 { version: 1, window: 7, final_weight_ceiling: 400 });
+        assert_eq!(palw_rule_e_side_from_records_v1(&disagree, all).unwrap().safe_weight, 400);
+        // Without an allocation: the fold's pre-budget sum, unbounded per bond.
+        let unbudgeted: Vec<_> = forger.iter().map(|r| PalwRuleEClaimRecordV1 { budget: None, ..*r }).collect();
+        let u = palw_rule_e_side_from_records_v1(&unbudgeted, all).unwrap();
+        assert_eq!(u.participation, 1);
+        assert!(u.safe_weight > 1_000 * F_MAX, "pre-budget: {} — what BUDGET's allocation bounds", u.safe_weight);
+    }
+
+    fn side_with_frontier(mut side: PalwRuleESideV1, frontier: u64) -> PalwRuleESideV1 {
+        side.safe_frontier_blue_score = frontier;
+        side
+    }
+
+    /// A stand-in for BUDGET's engine: one window, a fixed ceiling, each claim's allocation `pwu`-proportional.
+    struct MockBudget;
+    impl PalwRuleEBondBudgetV1 for MockBudget {
+        fn allocation(&self, _: &PalwChainStateV2, _: &Hash64, claim: &PalwClaimStateV2) -> Option<PalwRuleEBudgetAllocationV1> {
+            Some(PalwRuleEBudgetAllocationV1 {
+                terms: PalwRuleEBudgetTermsV1 { version: 1, window: claim.accepted_daa / 100, final_weight_ceiling: 250 },
+                final_weight: claim.pwu as u128,
+                provisional_weight: claim.pwu as u128 / 2,
+            })
+        }
+    }
+
+    /// **The record reads the allocation in force, and a node's streamed side is the records' side.** A state holding a live and
+    /// a `Final` attempt of one bond and a `Final` attempt of another: with no allocation (every binary today) the records carry
+    /// the fold's prices and no terms; with an engine they carry its weights and terms, uncapped by F-W. Either way the side a
+    /// node streams from the state equals the side accumulated from the collected records — the leaf window's and a client's.
+    #[test]
+    fn a_record_reads_the_allocation_and_the_streamed_side_is_the_records_side() {
+        use crate::palw_state_v2::{PalwClaimPhaseV2, palw_claim_template_v1};
+        let shipped = crate::config::params::palw_t12_shipped_params();
+        let params = shipped.palw_rule_e_state_params_v1().expect("testnet-12 is ConsensusV2");
+        let mut state = PalwChainStateV2::genesis();
+        let claim = |bond: u32, daa: u64, pwu: u64, phase: PalwClaimPhaseV2| {
+            let mut c = palw_claim_template_v1(Hash64::from_u64_word(0xC1A5), budget_bond(bond), daa, 0, 0);
+            c.pwu = pwu;
+            c.immature_contribution = pwu as u128 / 3;
+            c.phase = phase;
+            c
+        };
+        let claims = [
+            (Hash64::from_u64_word(1), claim(1, 120, 300, PalwClaimPhaseV2::Provisional)),
+            (Hash64::from_u64_word(2), claim(1, 130, 200, PalwClaimPhaseV2::Final { final_daa: 250 })),
+            (Hash64::from_u64_word(3), claim(2, 140, 90, PalwClaimPhaseV2::Final { final_daa: 260 })),
+        ];
+        for (id, c) in &claims {
+            state.set_false_valid_rows_for_tests(*id, Some(c.clone()), None, None, 0);
+        }
+        let shares = BTreeMap::new();
+        let all = |_: &PalwBondKeyV2| true;
+        let engines: [(&str, &dyn PalwRuleEBondBudgetV1); 2] = [("none", &PalwRuleENoBondBudgetV1), ("mock", &MockBudget)];
+        for (engine, budget) in engines {
+            for (id, c) in &claims {
+                let r = state.palw_rule_e_record_v1(params, false, None, &shares, budget, *id, c).unwrap();
+                let fin = matches!(c.phase, PalwClaimPhaseV2::Final { .. });
+                if engine == "mock" {
+                    assert_eq!(r.budget.map(|t| (t.window, t.final_weight_ceiling)), Some((1, 250)), "{engine}: the terms");
+                    assert!(!r.capped, "{engine}: an allocation replaces F-W's provisional cap");
+                    assert_eq!((r.safe_weight, r.live_weight), if fin { (c.pwu as u128, 0) } else { (0, c.pwu as u128 / 2) });
+                } else {
+                    assert_eq!(r.budget, None, "{engine}: no terms below BUDGET's fence");
+                    assert_eq!(r.safe_weight, if fin { c.pwu as u128 } else { 0 }, "{engine}: the fold's price");
+                }
+            }
+            let records = state.palw_rule_e_records_v1(params, false, None, budget, |_, _| true).unwrap();
+            let from_records = palw_rule_e_side_from_records_v1(&records, all).unwrap();
+            let streamed = state.palw_rule_e_side_v1(params, false, None, budget, |_, _| true, all).unwrap();
+            assert_eq!(streamed, from_records, "{engine}: one accumulator");
+            assert_eq!(streamed.participation, 2, "{engine}");
+            if engine == "mock" {
+                // Bond 1: Final 200 + provisional 150 against 250 → safe 200, live 250. Bond 2: Final 90 → 90, 90.
+                assert_eq!((streamed.safe_weight, streamed.live_total), (290, 340), "{engine}: each bond within its ceiling");
+            }
+        }
     }
 
     #[test]

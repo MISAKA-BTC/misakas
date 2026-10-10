@@ -1,4 +1,4 @@
-//! **ADR-0175 × RFC-0009 L2: the rule-E part of the fork-choice leaf v2** — what a header-verified client needs to evaluate rule E
+//! **ADR-0178 × RFC-0009 L2: the rule-E part of the fork-choice leaf v2** — what a header-verified client needs to evaluate rule E
 //! exactly as a node does (dormant: it rides `palw_fork_choice_rule_e_v1`, per lane L2FC's contract that a comparator fence reading
 //! more ships its leaf version under the same fence). INTERNAL until the full-activation release.
 //!
@@ -23,8 +23,8 @@
 
 use crate::config::params::Params;
 use crate::palw_fork_choice_rule_e_v1::{
-    PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1, PalwRuleEClaimRecordV1, PalwRuleEErrorV1, PalwRuleEPairV1, palw_rule_e_even_split_min_v1,
-    palw_rule_e_side_from_records_v1,
+    PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1, PalwRuleEClaimRecordV1, PalwRuleEErrorV1, PalwRuleEPairV1, palw_rule_e_bond_budget_v1,
+    palw_rule_e_even_split_min_v1, palw_rule_e_side_from_records_v1,
 };
 use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwStateParamsV2};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -292,7 +292,8 @@ fn root_from_range(
 }
 
 /// **A state's window**: the record of every claim accepted above `blue_score − finality_depth`, in `(accepted_blue_score,
-/// claim_id)` order, priced at this state ([`PalwChainStateV2::palw_rule_e_records_v1`]).
+/// claim_id)` order, priced at this state with the allocation in force ([`PalwChainStateV2::palw_rule_e_records_v1`],
+/// [`palw_rule_e_bond_budget_v1`]). Past [`PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1`] records it fails and no leaf v2 is built.
 pub fn palw_rule_e_window_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -302,8 +303,13 @@ pub fn palw_rule_e_window_v1(
     finality_depth: u64,
 ) -> Result<(u64, Vec<PalwRuleEClaimRecordV1>), PalwRuleEErrorV1> {
     let floor = blue_score.saturating_sub(finality_depth);
-    let mut records = state
-        .palw_rule_e_records_v1(params, uncertified_weightless, canonical_work_daa, |_, claim| claim.accepted_blue_score > floor)?;
+    let mut records = state.palw_rule_e_records_v1(
+        params,
+        uncertified_weightless,
+        canonical_work_daa,
+        palw_rule_e_bond_budget_v1(params),
+        |_, claim| claim.accepted_blue_score > floor,
+    )?;
     records.sort_by(|a, b| (a.accepted_blue_score, a.claim_id).cmp(&(b.accepted_blue_score, b.claim_id)));
     Ok((floor, records))
 }
@@ -531,6 +537,7 @@ mod tests {
             live_weight: if status == PalwRuleEClaimStatusV1::Live { 10 } else { 0 },
             capped: false,
             bond_collateral: None,
+            budget: None,
         }
     }
 
