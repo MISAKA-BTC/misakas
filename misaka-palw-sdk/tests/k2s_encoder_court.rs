@@ -394,10 +394,14 @@ fn ledger_policy() -> LedgerPolicyV1 {
         accuser_reward_permille: 500,
         default_penalty: 100,
         claim_reward: 7,
+        job_fee: 2,
+        job_escrow_ttl_daa: 300,
         max_adjudications_per_block: 64,
+        prosecution_reserve_permille: 500,
         max_court_work_per_block: u64::MAX,
         claim_seal_delay_daa: 1,
         seal_ttl_daa: 100,
+        seal_deposit: 1,
         prosecution: ROUTE,
     }
 }
@@ -421,6 +425,8 @@ fn opv_policy() -> OpvPolicyV1 {
             work_credit_per_claim: 13,
             external_gain_bound: 80,
             assumed_detection_permille: 500,
+            fresh_producer_slots: 2,
+            admission_fee: 3,
             max_live_claims_per_producer: 3,
             max_live_claims_total: 5,
             default_burn_permille: 100,
