@@ -377,6 +377,7 @@ impl PalwChainStateV2 {
     /// **The consistency of the work-slice ledgers** against each other and against the claims, checked with the rest of
     /// `assert_internal_consistency`. Empty tables are consistent by construction.
     pub(super) fn assert_exec_v2_consistency_v1(&self, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
+        self.assert_exec_origins()?;
         super::palw_exec_v2_rewards_v1::consistent(self, params)?;
         let bad = |why: String| PalwStateV2Error::CarriageInconsistent(format!("exec v2: {why}"));
         if let Some(kernel) = &self.kernel_route {
@@ -759,6 +760,7 @@ pub(super) fn apply_exec_v2_row_v1(
             Ok(())
         }
         PALW_EXEC_V2_TABLE_REWARD_HOLDS_V1 => swap(&mut state.exec_v2_reward_holds, key, old, new, revert),
+        PALW_EXEC_V2_TABLE_ORIGINS_V1 => swap(&mut state.exec_v2_origins, key, old, new, revert),
         PALW_EXEC_V2_TABLE_JOB_USES_V1 => {
             let id: Hash64 =
                 borsh::from_slice(key).map_err(|_| PalwStateV2Error::DeltaMismatch("EXEC job-use key does not decode"))?;
@@ -901,7 +903,7 @@ pub(super) fn apply_root_declared_v2(
     {
         return Err(no(R::JobWorkAlreadyUsed));
     }
-    let job_use = super::palw_exec_v2_history_v1::authorize(builder.extras, declaration, &claim, daa)?;
+    let job_use = super::palw_exec_v2_history_v1::authorize(&builder.state, declaration, &claim, daa)?;
     if builder.state.exec_v2_job_uses.len() >= crate::palw_work_slice_v2::PALW_EXEC_V2_MAX_JOB_USES_V1 {
         return Err(no(R::JobHistoryQuota));
     }

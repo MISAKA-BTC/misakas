@@ -6,49 +6,20 @@ use crate::palw_work_slice_v2::{
 };
 
 pub(super) fn authorize(
-    extras: &PalwTransitionExtrasV1,
+    state: &PalwChainStateV2,
     declaration: &PalwWorkRootDeclarationV2,
     claim: &PalwClaimStateV2,
     now: u64,
 ) -> Result<PalwExecJobUseV1, PalwStateV2Error> {
-    let refuse = |why: PalwWorkRootRefusalV2| PalwStateV2Error::ExecV2Refused(why.to_string());
-    let issued = match extras.exec_v2_origin_headers.get(&claim.accepted_block) {
-        Some(bytes) => {
-            let header: crate::header::Header =
-                borsh::from_slice(bytes).map_err(|_| refuse(PalwWorkRootRefusalV2::AuthorizationOrigin))?;
-            if crate::hashing::header::hash(&header) != claim.accepted_block
-                || !crate::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
-            {
-                return Err(refuse(PalwWorkRootRefusalV2::AuthorizationOrigin));
-            }
-            let envelope = crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
-                .map_err(|_| refuse(PalwWorkRootRefusalV2::AuthorizationOrigin))?;
-            let anchor = crate::palw_attempt_v2::execution_anchor_v3(
-                envelope.attempt.network_domain,
-                crate::hashing::header::pre_pow_hash_64(&header),
-                envelope.attempt.class_id,
-                &envelope.attempt.executor_bond,
-                header.nonce,
-            );
-            if crate::palw_attempt_v2::attempt_id_v2(&envelope.attempt) != declaration.root_claim_id
-                || envelope.attempt.class_id != claim.class_id
-                || envelope.attempt.executor_bond != claim.bond.0
-                || anchor != claim.job_identity
-            {
-                return Err(refuse(PalwWorkRootRefusalV2::AuthorizationOrigin));
-            }
-            header.daa_score
-        }
-        None => {
-            // Only an explicitly named arithmetic fixture seam may omit the original header.
-            #[cfg(test)]
-            if let Some(issued) = extras.exec_v2_test_origin_daa {
-                return authorize_at(declaration, claim, issued, now);
-            }
-            return Err(refuse(PalwWorkRootRefusalV2::AuthorizationOrigin));
-        }
-    };
-    authorize_at(declaration, claim, issued, now)
+    // Never consult local headers or accept a late supplied clock here. Legacy unrecorded claims are not fresh authorization.
+    let row = state
+        .exec_v2_origins
+        .get(&declaration.root_claim_id)
+        .ok_or_else(|| PalwStateV2Error::ExecV2Refused(PalwWorkRootRefusalV2::AuthorizationUnrecorded.to_string()))?;
+    if row.source_block != claim.accepted_block {
+        return Err(PalwStateV2Error::ExecV2Refused(PalwWorkRootRefusalV2::AuthorizationOrigin.to_string()));
+    }
+    authorize_at(declaration, claim, row.issued_daa, now)
 }
 
 fn authorize_at(
@@ -206,6 +177,10 @@ impl PalwChainStateV2 {
                 || row.canonical_job_id != root.canonical_job_id
                 || row.source_block != claim.accepted_block
                 || row.issued_daa > claim.accepted_daa
+                || self
+                    .exec_v2_origins
+                    .get(id)
+                    .is_some_and(|origin| origin.issued_daa != row.issued_daa || origin.source_block != row.source_block)
                 || root.opened_daa < claim.accepted_daa
                 || root.opened_daa >= row.expires_daa
             {

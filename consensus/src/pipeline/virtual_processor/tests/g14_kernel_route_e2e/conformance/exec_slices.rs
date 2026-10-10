@@ -416,6 +416,55 @@ async fn kernel_claims(
     (prefix, slices, out.collect())
 }
 
+/// Remove only the original REAL header while exercising root admission from an authenticated snapshot.
+/// This is a node reader/fold test, not an actual pruning/P2P transport drill; no DAG mining runs while that header is absent.
+#[tokio::test]
+async fn x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_absent() {
+    use crate::model::stores::headers::{HeaderStore, HeaderStoreReader};
+    use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, PalwStateCarriageV2};
+    let mut cw = active_world().await;
+    exec_v2_test_admit_class_v1(cw.v2_class, 0);
+    let class = cw.v2_class;
+    let real = real_attempt(&mut cw, ROOT_CARD, class, 0xA77E).await;
+    let initial = palw_exec_v2_token_state_root_v1(&[&real.stream()]);
+    let draft = declaration(&cw, &real, Hash64::default(), initial);
+    let (prefix, _, _) = kernel_claims(&mut cw, &real, &draft, false, |_| false, Vec::new()).await;
+    let mut decl = declaration(&cw, &real, Hash64::from_bytes(prefix.claim.id), initial);
+    decl.expiry_daa = draft.expiry_daa;
+    decl.signature = sign(ROOT_CARD, decl.signing_message(cw.net.domain).as_byte_slice(), PALW_EXEC_V2_ROOT_MLDSA87_CONTEXT, 0x71);
+    let object = Obj::ExecWorkRootOpenedV2 { declaration: Box::new(decl) };
+    let (tip, state) = cw.net.chain.tip_state();
+    let origin = state.exec_v2_origin_v1(&real.claim).unwrap().clone();
+    let vp = cw.net.chain.vp();
+    let stored = vp.headers_store.get_header_with_block_level(origin.source_block).unwrap();
+    assert_eq!(origin.issued_daa, stored.header.daa_score);
+    let p = &cw.net.bundle.state;
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
+    let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(p, Some(state.state_root())).unwrap();
+    let point = PalwBlockContextV2 {
+        block: tip,
+        daa_score: cw.net.daa() + 1,
+        blue_score: state.last_point().unwrap().blue_score + 1,
+        subsidy: 0,
+    };
+    assert!(vp.palw_h1_carrier_refusal_on(&state, p, &point, &object).is_none(), "full header positive control");
+    let (full, full_delta) = vp.palw_v2_fold_accepted_with_delta_for_tests(&state, p, &point, std::slice::from_ref(&object)).unwrap();
+    vp.headers_store.delete(origin.source_block).unwrap();
+    assert!(vp.headers_store.get_header(origin.source_block).is_err(), "the original full header really is absent");
+    let refusal = vp.palw_h1_carrier_refusal_on(&restored, p, &point, &object);
+    let result = vp.palw_v2_fold_accepted_with_delta_for_tests(&restored, p, &point, std::slice::from_ref(&object));
+    // Restore the DAG header before any further block processing, including assertion failure teardown.
+    vp.headers_store.insert(origin.source_block, stored.header, stored.block_level).unwrap();
+    assert!(refusal.is_none(), "snapshot authority must not consult the missing original header: {refusal:?}");
+    let (pruned, pruned_delta) = result.unwrap();
+    assert_eq!(full.state_root(), pruned.state_root());
+    assert_eq!(borsh::to_vec(&full_delta).unwrap(), borsh::to_vec(&pruned_delta).unwrap());
+    assert_eq!(
+        pruned.exec_v2_job_use_v1(&pruned.exec_v2_root_v1(&real.claim).unwrap().job_work_id).unwrap().issued_daa,
+        origin.issued_daa
+    );
+}
+
 /// Exercise the canonical prefix's context and its continuations without the expensive REAL lottery.
 /// This covers kernel admission only; the composed tests below additionally bind an admitted REAL claim.
 #[tokio::test]

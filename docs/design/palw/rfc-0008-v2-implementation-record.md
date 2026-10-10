@@ -525,3 +525,20 @@ that an execution anchor cannot recur. The public fence remains refused; source-
 for pruned joiners, multi-process replay and release resource bounds are separate open requirements.
 Current verification is recorded in the RFC6/7/8/12 design audit, rather than inferred from the
 original milestone's counts above.
+
+The subsequent §12.7 correction captures the original REAL clock at native acceptance in
+authenticated state, instead of fetching its header again when a root opens. Own and merged
+native work retain the header that admission checked. Inner table 8, conditional
+`exec_v2_origins/v1` root domain and optional F3 carriage tail carry one 136-byte primary entry
+per eligible live native claim; there is no separate EXEC cap on native work. Claim retirement
+removes that entry through the same journal while the one-use history remains independent.
+Capture leaves native weight/income and admission clock rules unchanged. Root opening enforces
+the finite profile using only recorded state, including after original-header deletion.
+
+Unrecorded legacy claims cannot receive a clock from a late local lookup: new root opening
+explicitly refuses with `AuthorizationUnrecorded`. This is an interim fail-closed rule, not an
+approved permanent exclusion. Legacy provenance migration, real pruned P2P recovery, release
+resource measurements and the finite profile's coverage of eligible DAG work remain open.
+An already opened root's authenticated F2 history continues to supply its original clock when
+F3 is absent. The native header-loss regression exercises signed root reader/fold and snapshot
+restore, with no DAG mining while the original header is absent; it is not an actual pruning drill.

@@ -1015,10 +1015,119 @@ fn the_rows_retire_with_their_claim_and_the_state_returns_to_the_session_free_ro
 }
 
 #[test]
+fn exec_v2_root_authorization_survives_header_loss_and_ignores_late_clock_inputs() {
+    let (p, s, claim) = world(Some(0));
+    let origin = s.exec_v2_origin_v1(&claim).unwrap();
+    assert_eq!(origin.issued_daa, 100);
+    assert_eq!(origin.source_block, s.claim(&claim).unwrap().accepted_block);
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
+    let restarted = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&p, Some(s.state_root())).unwrap();
+    let mut pruned = xx_declare();
+    pruned.exec_v2_test_origin_daa = None;
+    let mut full = pruned.clone();
+    full.exec_v2_origin_headers.insert(origin.source_block, vec![0xFF]);
+    full.exec_v2_test_origin_daa = Some(109); // even the test-only native seam cannot renew root authority
+    let objects = [open_object(decl(claim))];
+    let (a, da) = step_with(&s, &p, 10, 110, &objects, &full).unwrap();
+    let (b, db) = step_with(&restarted, &p, 10, 110, &objects, &pruned).unwrap();
+    assert_eq!(a.state_root(), b.state_root());
+    assert_eq!(borsh::to_vec(&da).unwrap(), borsh::to_vec(&db).unwrap());
+    assert_eq!(a.exec_v2_job_uses.values().next().unwrap().issued_daa, 100);
+    // An already opened F2 root remains recoverable without the later F3 provenance extension.
+    let mut old_opened = PalwStateCarriageV2::from_state(&a);
+    old_opened.exec_v2_origins.clear();
+    let old_root = old_opened.clone().into_state(&p, None).unwrap().state_root();
+    let restored_old = borsh::from_slice::<PalwStateCarriageV2>(&borsh::to_vec(&old_opened).unwrap())
+        .unwrap()
+        .into_state(&p, Some(old_root))
+        .unwrap();
+    assert_eq!(restored_old.exec_v2_root_v1(&claim), a.exec_v2_root_v1(&claim));
+    assert_eq!(restored_old.exec_v2_job_uses, a.exec_v2_job_uses);
+    assert!(restored_old.exec_v2_origin_v1(&claim).is_none());
+    let mut legacy = s.clone();
+    legacy.exec_v2_origins.clear();
+    for extras in [&full, &pruned] {
+        let error = step_with(&legacy, &p, 10, 110, &objects, extras).unwrap_err();
+        assert!(
+            error.to_string().contains("no recorded original"),
+            "missing recorded authority cannot be backfilled at root admission: {error}"
+        );
+    }
+}
+
+#[test]
+fn exec_v2_origin_capture_cannot_cap_or_reprice_native_weight_or_income() {
+    let (p, state, _) = world(Some(0));
+    let env = attempt(PWU, 2);
+    let id = attempt_id_v2(&env.attempt);
+    let point = ctx(20, 111, 20);
+    // Original source clocks are data, not a second native admission clock. Root eligibility is checked separately.
+    let extras = PalwTransitionExtrasV1 { exec_v2_test_origin_daa: Some(112), ..xx() };
+    let (active, _) = apply_door(&state, &p, &point, &[], Some(&env), &extras).unwrap();
+    let (inactive, _) = apply_door(&state, &p.clone().with_exec_v2_from_daa(None), &point, &[], Some(&env), &extras).unwrap();
+    assert_eq!(active.claim(&id), inactive.claim(&id));
+    assert!(active.claim(&id).is_some(), "ordinary native work remains admitted");
+    assert_eq!(active.safe_weight, inactive.safe_weight);
+    assert_eq!(active.bounded_immature, inactive.bounded_immature);
+    assert_eq!(active.pending_payouts, inactive.pending_payouts);
+    assert_eq!(active.reserved_exposure, inactive.reserved_exposure);
+    assert_eq!(active.exec_v2_origin_v1(&id).unwrap().issued_daa, 112);
+    assert!(inactive.exec_v2_origin_v1(&id).is_none());
+}
+
+#[test]
+fn exec_v2_origin_is_rooted_bounded_by_live_claims_and_retires_through_the_same_journal() {
+    let (p, s, claim) = world_with(xp(Some(0)).with_claim_retirement_daa(700).unwrap());
+    let before = PalwStateCarriageV2::from_state(&s);
+    let mut changed = s.clone();
+    changed.exec_v2_origins.get_mut(&claim).unwrap().issued_daa += 1;
+    assert_ne!(changed.state_root(), s.state_root());
+    let mut bad = before.clone();
+    bad.exec_v2_origins.get_mut(&claim).unwrap().source_block = h64(0xBAD);
+    assert!(bad.into_state(&p, None).is_err());
+    let mut orphan = before.clone();
+    orphan.exec_v2_origins.insert(h64(0xBAD), orphan.exec_v2_origins[&claim].clone());
+    assert!(orphan.into_state(&p, None).is_err());
+    let mut invalid_time = before.clone();
+    invalid_time.exec_v2_origins.get_mut(&claim).unwrap().issued_daa = s.claim(&claim).unwrap().accepted_daa + 1;
+    assert!(invalid_time.into_state(&p, Some(s.state_root())).is_err(), "original clock is authenticated by the snapshot root");
+    let bytes = borsh::to_vec(&before).unwrap();
+    let tail = borsh::to_vec(&s.exec_v2_origins).unwrap();
+    assert_eq!(bytes[bytes.len() - tail.len() - 1], PALW_CARRIAGE_EXEC_V2_ORIGINS_TAIL_V1);
+    let mut repeated = bytes.clone();
+    repeated.push(PALW_CARRIAGE_EXEC_V2_ORIGINS_TAIL_V1);
+    repeated.extend_from_slice(&tail);
+    assert!(borsh::from_slice::<PalwStateCarriageV2>(&repeated).is_err());
+    assert!(borsh::from_slice::<PalwStateCarriageV2>(&bytes[..bytes.len() - 1]).is_err());
+    let mut excess = bytes[..bytes.len() - tail.len()].to_vec();
+    excess.extend_from_slice(&(s.claims.len() as u32 + 1).to_le_bytes());
+    assert!(borsh::from_slice::<PalwStateCarriageV2>(&excess).unwrap_err().to_string().contains("exceeds live claims"));
+    let extras = xx();
+    let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+    // Removal uses the native claim's sole writer; rollback restores both claim and immutable origin.
+    builder.write_claim(claim, None);
+    assert!(builder.state.exec_v2_origin_v1(&claim).is_none());
+    assert!(
+        builder
+            .entries
+            .iter()
+            .any(|e| matches!(e, PalwDeltaEntryV2::ExecV2Row { table: PALW_EXEC_V2_TABLE_ORIGINS_V1, new: None, .. }))
+    );
+    let opened = open(&p, &s, decl(claim)).unwrap();
+    let voided = step(&opened, &p, 71, 5_000, &[]).unwrap().0;
+    let retired = run_to_retirement(&p, voided, claim);
+    assert!(retired.exec_v2_origin_v1(&claim).is_none());
+    assert_eq!(retired.exec_v2_job_use_count_v1(), 1);
+    assert_eq!(PALW_CARRIAGE_EXEC_V2_ORIGINS_TAIL_V1, 0xF3);
+    assert_eq!(PALW_EXEC_V2_TABLE_ORIGINS_V1, 8);
+}
+
+#[test]
 fn exec_v2_authorization_reads_the_original_header_and_refuses_substitution_or_renewal() {
     use crate::palw_attempt_v2::execution_anchor_v3;
     use crate::palw_state_v2::palw_exec_v2_history_v1::authorize;
-    let (_, state, id) = world(Some(0));
+    use crate::palw_state_v2::palw_exec_v2_origin_v1::source_time;
+    let (_, mut state, id) = world(Some(0));
     let envelope = attempt(PWU, 1);
     assert_eq!(attempt_id_v2(&envelope.attempt), id);
     let mut header = crate::header::Header::from_precomputed_hash(Hash64::default(), vec![]);
@@ -1042,14 +1151,17 @@ fn exec_v2_authorization_reads_the_original_header_and_refuses_substitution_or_r
     declaration.canonical_job_id = claim.job_identity;
     let mut extras = PalwTransitionExtrasV1::default();
     extras.exec_v2_origin_headers.insert(claim.accepted_block, borsh::to_vec(&header).unwrap());
-    let row = authorize(&extras, &declaration, &claim, 110).unwrap();
+    let issued = source_time(&extras, id, &claim).unwrap();
+    assert_eq!(issued, 100);
+    state.exec_v2_origins.insert(id, PalwExecOriginV1 { source_block: claim.accepted_block, issued_daa: issued });
+    let row = authorize(&state, &declaration, &claim, 110).unwrap();
     assert_eq!((row.issued_daa, row.expires_daa), (100, 100_100));
-    assert!(authorize(&extras, &declaration, &claim, 100_099).is_ok());
-    assert!(authorize(&extras, &declaration, &claim, 100_100).unwrap_err().to_string().contains("expired"));
+    assert!(authorize(&state, &declaration, &claim, 100_099).is_ok());
+    assert!(authorize(&state, &declaration, &claim, 100_100).unwrap_err().to_string().contains("expired"));
     let mut late = claim.clone();
     late.accepted_daa = 100_100;
-    assert!(authorize(&extras, &declaration, &late, 100_101).unwrap_err().to_string().contains("expired"));
-    assert!(authorize(&PalwTransitionExtrasV1::default(), &declaration, &claim, 110).unwrap_err().to_string().contains("header"));
+    assert!(authorize(&state, &declaration, &late, 100_101).unwrap_err().to_string().contains("expired"));
+    assert!(source_time(&PalwTransitionExtrasV1::default(), id, &claim).unwrap_err().to_string().contains("header"));
     for field in 0..4 {
         let mut substituted = header.clone();
         match field {
@@ -1060,7 +1172,7 @@ fn exec_v2_authorization_reads_the_original_header_and_refuses_substitution_or_r
         }
         let mut wrong = extras.clone();
         wrong.exec_v2_origin_headers.insert(claim.accepted_block, borsh::to_vec(&substituted).unwrap());
-        assert!(authorize(&wrong, &declaration, &claim, 110).is_err(), "cached header hash cannot authorize substituted bytes");
+        assert!(source_time(&wrong, id, &claim).is_err(), "cached header hash cannot authorize substituted bytes");
     }
     for field in 0..3 {
         let mut wrong = claim.clone();
@@ -1069,11 +1181,11 @@ fn exec_v2_authorization_reads_the_original_header_and_refuses_substitution_or_r
             1 => wrong.class_id = h64(99),
             _ => wrong.bond = bond_key(99),
         }
-        assert!(authorize(&extras, &declaration, &wrong, 110).is_err());
+        assert!(source_time(&extras, id, &wrong).is_err());
     }
     let mut wrong = declaration.clone();
     wrong.root_claim_id = h64(99);
-    assert!(authorize(&extras, &wrong, &claim, 110).is_err());
+    assert!(source_time(&extras, wrong.root_claim_id, &claim).is_err());
     // Genuine header binding with an unrepresentable finite authorization is still refused.
     header.daa_score = u64::MAX - 99_999;
     claim.accepted_daa = header.daa_score;
@@ -1082,7 +1194,9 @@ fn exec_v2_authorization_reads_the_original_header_and_refuses_substitution_or_r
     declaration.canonical_job_id = claim.job_identity;
     extras.exec_v2_origin_headers.clear();
     extras.exec_v2_origin_headers.insert(claim.accepted_block, borsh::to_vec(&header).unwrap());
-    assert!(authorize(&extras, &declaration, &claim, header.daa_score).unwrap_err().to_string().contains("expired"));
+    let issued = source_time(&extras, id, &claim).unwrap();
+    state.exec_v2_origins.insert(id, PalwExecOriginV1 { source_block: claim.accepted_block, issued_daa: issued });
+    assert!(authorize(&state, &declaration, &claim, header.daa_score).unwrap_err().to_string().contains("expired"));
 }
 
 #[test]
@@ -1100,15 +1214,23 @@ fn exec_v2_authorization_history_survives_retirement_and_cannot_be_renewed_after
     assert_eq!(retired.exec_v2_job_use_v1(&key), Some(&use_row));
 
     // A new native claim/root id is not fresh authorization. These are the arithmetic header/attribution fixtures.
-    let add_claim = |state: &PalwChainStateV2, daa, nonce, job| {
+    let add_claim = |state: &PalwChainStateV2, daa, nonce, job, issued| {
         let word = state.last_point.unwrap().blue_score + 1;
         let env = attempt(PWU, nonce);
         let id = attempt_id_v2(&env.attempt);
-        let (mut next, _) = apply_door(state, &p, &ctx(word, daa, word), &[], Some(&env), &xx()).unwrap();
+        let (mut next, _) = apply_door(
+            state,
+            &p,
+            &ctx(word, daa, word),
+            &[],
+            Some(&env),
+            &PalwTransitionExtrasV1 { exec_v2_test_origin_daa: Some(issued), ..xx() },
+        )
+        .unwrap();
         next.claims.get_mut(&id).unwrap().job_identity = job;
         (next, id)
     };
-    let (copied, copy) = add_claim(&retired, retired.last_point.unwrap().daa_score + 1, 2, h64(JOB));
+    let (copied, copy) = add_claim(&retired, retired.last_point.unwrap().daa_score + 1, 2, h64(JOB), 100);
     let point = copied.last_point.unwrap();
     let mut declaration = decl(copy);
     declaration.expiry_daa = point.daa_score + 5_000;
@@ -1119,7 +1241,7 @@ fn exec_v2_authorization_history_survives_retirement_and_cannot_be_renewed_after
     // Half-open deadline: deletion at the exact expiry never licenses reuse of the old source.
     let after = step(&retired, &p, retired.last_point.unwrap().blue_score + 1, use_row.expires_daa, &[]).unwrap().0;
     assert_eq!(after.exec_v2_job_use_count_v1(), 0);
-    let (expired, copy) = add_claim(&after, use_row.expires_daa, 3, h64(JOB));
+    let (expired, copy) = add_claim(&after, use_row.expires_daa, 3, h64(JOB), 100);
     let point = expired.last_point.unwrap();
     let mut declaration = decl(copy);
     declaration.expiry_daa = point.daa_score + 5_000;
@@ -1128,7 +1250,7 @@ fn exec_v2_authorization_history_survives_retirement_and_cannot_be_renewed_after
     assert!(rejected.to_string().contains("authorization has expired"), "{rejected}");
 
     // Fresh authorization may repeat legitimate inputs. Give its actual fresh origin time, not the old source a new TTL.
-    let (fresh, claim) = add_claim(&after, use_row.expires_daa, 4, h64(JOB + 1));
+    let (fresh, claim) = add_claim(&after, use_row.expires_daa, 4, h64(JOB + 1), use_row.expires_daa);
     let point = fresh.last_point.unwrap();
     let mut declaration = decl(claim);
     declaration.canonical_job_id = h64(JOB + 1);
@@ -2009,6 +2131,7 @@ mod amendment_1 {
         let json: serde_json::Value = serde_json::from_str(&read.to_json()).unwrap();
         assert_eq!(read.job_use_history_total, 1);
         assert_eq!(json["jobUseHistoryTotal"], 1);
+        assert_eq!(json["authorizationOriginsTotal"], 1);
         assert_eq!(json["roots"][0]["retentionTerms"]["liabilityUntil"], terms.liability_until);
         assert_eq!(json["roots"][0]["retentionTerms"]["policyRoot"], terms.policy_root.to_string());
         assert_eq!(json["roots"][0]["retentionTerms"]["executorExposureSompi"], terms.executor_exposure_sompi.to_string());
@@ -3460,7 +3583,8 @@ mod amendment_1 {
         let bytes = borsh::to_vec(&carriage).unwrap();
         let tail = borsh::to_vec(&s.exec_v2_reward_holds).unwrap();
         let history_len = if s.exec_v2_job_uses.is_empty() { 0 } else { 1 + borsh::to_vec(&s.exec_v2_job_uses).unwrap().len() };
-        let tail_end = bytes.len() - history_len;
+        let origin_len = if s.exec_v2_origins.is_empty() { 0 } else { 1 + borsh::to_vec(&s.exec_v2_origins).unwrap().len() };
+        let tail_end = bytes.len() - history_len - origin_len;
         assert_eq!(bytes[tail_end - tail.len() - 1], PALW_CARRIAGE_EXEC_V2_REWARD_HOLDS_TAIL_V1);
         assert_eq!(PALW_CARRIAGE_EXEC_V2_REWARD_HOLDS_TAIL_V1, 0xF1);
         let mut twice = bytes.clone();
@@ -3710,7 +3834,8 @@ mod amendment_1 {
         let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
         let tail = borsh::to_vec(&s.exec_v2_rewards).unwrap();
         let history_len = if s.exec_v2_job_uses.is_empty() { 0 } else { 1 + borsh::to_vec(&s.exec_v2_job_uses).unwrap().len() };
-        let tail_end = bytes.len() - history_len;
+        let origin_len = if s.exec_v2_origins.is_empty() { 0 } else { 1 + borsh::to_vec(&s.exec_v2_origins).unwrap().len() };
+        let tail_end = bytes.len() - history_len - origin_len;
         assert_eq!(bytes[tail_end - tail.len() - 1], PALW_CARRIAGE_EXEC_V2_REWARDS_TAIL_V1);
         let mut twice = bytes.clone();
         twice.push(PALW_CARRIAGE_EXEC_V2_REWARDS_TAIL_V1);

@@ -70,6 +70,13 @@ pub const PALW_EXEC_V2_JOB_AUTHORIZATION_DAA_V1: u64 = 100_000;
 pub const PALW_EXEC_V2_MAX_JOB_USES_V1: usize = 100_000;
 pub const PALW_EXEC_V2_JOB_USE_SWEEP_V1: usize = PALW_EXEC_V2_MAX_OPEN_ROOTS;
 
+/// The original carrying-header clock, captured before native admission writes and retired with its claim.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwExecOriginV1 {
+    pub source_block: Hash64,
+    pub issued_daa: u64,
+}
+
 /// Authenticated one-use history survives its native claim, without retaining collateral or material beyond signed terms.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwExecJobUseV1 {
@@ -262,6 +269,8 @@ where
 pub enum PalwWorkRootRefusalV2 {
     #[error("the REAL job authorization header is unavailable or does not match its native claim")]
     AuthorizationOrigin,
+    #[error("the REAL job has no recorded original authorization clock; legacy provenance migration is required")]
+    AuthorizationUnrecorded,
     #[error("the REAL job authorization has expired or its finite expiry overflows")]
     AuthorizationExpired,
     #[error("the work-slice lane is not in force at this height")]

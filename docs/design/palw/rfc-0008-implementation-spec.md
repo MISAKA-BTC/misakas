@@ -668,12 +668,15 @@ an overflow or a terminal `u64::MAX` deadline is refused. This is a fixed v1 aut
 not a lease renewed by later acceptance, claim retirement or root opening. It does not shorten an
 already opened root's signed execution/material terms or extend any collateral hold.
 
-For each declaration the production pipeline supplies the original serialized header from its
-header store. The fold recomputes its full hash, requires a REAL attempt algorithm, decodes the
+Section 12.7 captures this clock when the native claim is accepted. Root opening reads only that
+authenticated state row; later header availability or caller-supplied bytes cannot change it.
+The fold recomputes the carrying header's full hash, requires a REAL attempt algorithm, decodes the
 attempt, and binds its attempt id, class, executor bond and recomputed execution anchor to the
-accepted native claim. Missing or substituted bytes are refused. The cached header hash alone is
-insufficient. Core arithmetic fixtures have an explicitly named test-only source-time seam; it
-is absent from the production extras type. An execution anchor may repeat among same-template,
+native claim at capture. The anchor check applies when native attribution recorded an anchor;
+a zero legacy native attribution is not itself a new native refusal. Missing or substituted bytes
+are refused at capture. The cached header hash alone is insufficient. Core arithmetic fixtures
+have an explicitly named test-only source-time seam at native capture; it is absent from the
+production extras type. An execution anchor may repeat among same-template,
 same-nonce-bucket sibling headers; uniqueness of a hash or a different claim id is not a replay proof.
 
 `exec_v2_job_uses[job_work_id]` stores the first owner root, class, canonical REAL job, authenticated
@@ -699,12 +702,52 @@ keys. Duplicate or truncated tails and live roots without history are refused. P
 this profile cannot synthesize authorization terms; their migration/replay needs an explicit
 procedure. Public activation remains refused. Snapshot authentication and journal rollback are
 local recovery evidence, not proof of transport/pruning availability or multi-process P2P replay.
-In particular, root admission currently reads the original header from the local header store.
-Before activation, prove that every eligible live REAL claim's original header is retained and
-transferred to joining nodes, or capture its authenticated original clock in canonical state at
-native admission. A source's later acceptance time is not a substitute. Local header presence
-must never decide consensus differently between a full node and a pruned joiner. The present
-history mechanism alone does not close that provenance requirement.
+Local header presence must never decide root admission differently between a full node and a
+pruned joiner. The original-history profile alone did not meet that requirement; the capture
+mechanism below removes that lookup for newly recorded claims. Legacy migration and actual
+pruned P2P transfer/replay remain required before activation.
+
+### 12.7 Native capture of the original clock
+
+`exec_v2_origins[native_claim_id] = { source_block, issued_daa }` is populated atomically with
+native claim acceptance while the EXEC fence is active. The production walk retains the very
+header used for admission and key derivation, for both its own attempt and merged attempts.
+It supplies its serialized bytes to the capture check in §12.6 before native financial writes.
+Root readers and folds never look up the original header or reconstruct its clock later.
+A rider has no independent REAL carrying header and records no root authorization, as in the
+prior header-backed root rule. Fresh native admission already needs its source header; recording
+the clock does not introduce a new historical-header requirement at root opening.
+
+The raw source clock is data, not a new cap on native admission, weight or income. Capture imposes
+no new source/acceptance DAA ordering, authorization-expiry or overflow condition on native work.
+Root authorization separately enforces the fixed finite profile in §12.6. Proving that profile's
+source/acceptance ordering covers all eligible DAG work remains an activation requirement.
+
+This map has no independent EXEC population cap: at most one row belongs to each live native
+claim. Retirement deletes the row through the same claim writer and journal; the independent
+job-use history continues until its original deadline. Restore rejects orphan rows, non-attempt
+owners, zero source hashes and source blocks differing from the native claim. Decoding bounds
+the count by the carried live-claim population before allocation and requires strictly ordered
+unique keys. One primary key/row encodes to 136 bytes before allocator, clone and journal costs;
+release resource approval for the live native population is still required.
+
+The conditional root domain is `exec_v2_origins/v1`, optional carriage tail is `0xF3`, and inner
+`ExecV2Row` table is 8. F3 is emitted before the existing F2 history tail. Empty origin state
+adds no root domain or tail; existing root/slice wire fields and top-level object tags are unchanged.
+Application, undo and authenticated carriage restore preserve the original clock. Observation
+reports `authorizationOriginsTotal` separately from active roots and job-use history.
+
+Claims accepted before this fence or restored without a recorded clock are refused for new
+root opening with an explicit `AuthorizationUnrecorded` reason. A late header supplied by a full
+node cannot backfill the row or renew the deadline. This is a fail-closed interim implementation,
+not approval to exclude legacy eligible work permanently. An explicit authenticated migration
+procedure for those claims remains necessary. Already opened roots with F2 history keep their
+authenticated original clock even when no F3 row exists; absence never authorizes a new root.
+
+A real-node reader/fold regression removes the original header and admits the same signed root
+from an authenticated snapshot, producing the same state root and delta as the full-header control.
+It restores the header before further DAG processing. That proves local root-lookup independence;
+it does not prove actual pruning, multi-process P2P transport, legacy migration or native Final.
 
 
 ## 13. BUDGET correction — root Final authorizes bound kernel fees

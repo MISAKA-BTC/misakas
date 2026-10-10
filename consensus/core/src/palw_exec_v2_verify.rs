@@ -543,6 +543,7 @@ pub struct PalwExecV2ObservationV1 {
     pub jobs_total: usize,
     /// Includes retired roots whose finite authorization still needs reuse protection; separate from active indexes.
     pub job_use_history_total: usize,
+    pub authorization_origins_total: usize,
     pub anchored_total: usize,
     pub roots: Vec<PalwExecV2RootObservationV1>,
     pub unknown_roots: Vec<String>,
@@ -759,6 +760,7 @@ pub fn palw_exec_v2_observation_with_retention_v2(
         slices_total: table.slices.len(),
         jobs_total: table.jobs.len(),
         job_use_history_total: state.exec_v2_job_use_count_v1(),
+        authorization_origins_total: state.exec_v2_origin_count_v1(),
         anchored_total: table.anchored.len(),
         roots: observed,
         unknown_roots: unknown,

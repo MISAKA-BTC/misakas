@@ -1094,6 +1094,8 @@ pub(super) enum PalwMergedOwnedWorkV1 {
         Option<kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2>,
         /// ADR-0132 Upgrade C: the block's own compact `bits`, for its claim's snapshot.
         u32,
+        /// The exact header admitted above, retained for the native keys and original EXEC clock.
+        Arc<Header>,
     ),
     Spend(BlockHash, kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3),
 }
@@ -2784,10 +2786,10 @@ impl VirtualStateProcessor {
                                 let merged_refs: Vec<kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>> = merged_owned
                                     .iter()
                                     .map(|owned| match owned {
-                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope, subsidy, carve, bits) => self
+                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope, subsidy, carve, bits, origin_header) => self
                                             .palw_merged_attempt_work_v1(
                                                 *blue,
-                                                self.headers_store.get_header(*blue).ok().as_deref(),
+                                                Some(origin_header.as_ref()),
                                                 envelope,
                                                 *subsidy,
                                                 *carve,
@@ -2819,7 +2821,7 @@ impl VirtualStateProcessor {
                                 // carries no attempt.
                                 let (own_execution_key, own_job_anchor) = match attempt.as_ref() {
                                     Some(envelope) => self.palw_attempt_keys_v1(
-                                        self.headers_store.get_header(current).ok().as_deref(),
+                                        Some(header.as_ref()),
                                         &envelope.attempt,
                                     ),
                                     None => (kaspa_hashes::Hash64::default(), kaspa_hashes::Hash64::default()),
@@ -2843,6 +2845,20 @@ impl VirtualStateProcessor {
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &{
                                         let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
+                                        if state_params.exec_v2_active_at(point.daa_score) {
+                                            if attempt.is_some() {
+                                                if let Ok(bytes) = borsh::to_vec(header.as_ref()) {
+                                                    extras.exec_v2_origin_headers.insert(current, bytes);
+                                                }
+                                            }
+                                            for owned in &merged_owned {
+                                                if let PalwMergedOwnedWorkV1::Attempt(source, _, _, _, _, origin_header) = owned {
+                                                    if let Ok(bytes) = borsh::to_vec(origin_header.as_ref()) {
+                                                        extras.exec_v2_origin_headers.insert(*source, bytes);
+                                                    }
+                                                }
+                                            }
+                                        }
                                         if let Some(staged) = evm_staged.as_ref() {
                                             extras.evm_actions = staged.result.market_actions.clone();
                                         }
@@ -6904,7 +6920,7 @@ impl VirtualStateProcessor {
         }
         let (works, _skips) = self.palw_v2_merged_works(ghostdag_data, state, state_params, mergeset_non_daa, point);
         for work in &works {
-            if let PalwMergedOwnedWorkV1::Attempt(blue, _, subsidy, carve, _) = work {
+            if let PalwMergedOwnedWorkV1::Attempt(blue, _, subsidy, carve, _, _) = work {
                 withheld.insert(*blue, self.native_base_withheld_at(*blue, point.daa_score, state_params.worker_carve_at(*subsidy, *carve)));
             }
         }
@@ -7575,6 +7591,11 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
     > {
         let (execution_key, job_anchor) = self.palw_attempt_keys_v1(Some(header), &envelope.attempt);
+        let mut extras = self.palw_transition_extras_for_objects(state, point, objects);
+        extras.own_job_anchor = job_anchor;
+        if let Ok(bytes) = borsh::to_vec(header) {
+            extras.exec_v2_origin_headers.insert(point.block, bytes);
+        }
         kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
             state,
             state_params,
@@ -7588,10 +7609,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
-                own_job_anchor: job_anchor,
-                ..self.palw_transition_extras_for(point)
-            },
+            &extras,
         )
     }
 
@@ -7619,6 +7637,12 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
     > {
         let merged = [self.palw_merged_attempt_work_v1(blue, blue_header, envelope, subsidy, None, 0)];
+        let mut extras = self.palw_transition_extras_for(point);
+        if let Some(header) = blue_header {
+            if let Ok(bytes) = borsh::to_vec(header) {
+                extras.exec_v2_origin_headers.insert(blue, bytes);
+            }
+        }
         kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
             state,
             state_params,
@@ -7632,7 +7656,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for(point),
+            &extras,
         )
     }
 
@@ -15860,24 +15884,13 @@ impl VirtualStateProcessor {
 
     fn palw_transition_extras_for_objects(
         &self,
-        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        _state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
     ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
         let mut extras = self.palw_transition_extras_for(point);
         extras.model_court_window_active = self.palw_model_court_window_active_at(point.daa_score);
         extras.class_court_windows = self.palw_class_court_windows_for_objects(objects, point.daa_score);
-        for object in objects {
-            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ExecWorkRootOpenedV2 { declaration } = object {
-                if let Some(claim) = state.claim(&declaration.root_claim_id) {
-                    if let Ok(header) = self.headers_store.get_header(claim.accepted_block) {
-                        if let Ok(bytes) = borsh::to_vec(header.as_ref()) {
-                            extras.exec_v2_origin_headers.insert(claim.accepted_block, bytes);
-                        }
-                    }
-                }
-            }
-        }
         extras
     }
 
@@ -17175,6 +17188,7 @@ impl VirtualStateProcessor {
                     self.palw_escrow_for_carrier_at(*blue, header.daa_score, point.daa_score),
                     // ADR-0132 Upgrade C: the merged block's own `bits`, the lottery its forward faced.
                     header.bits,
+                    header.clone(),
                 )),
                 Ok(None) => match self.palw_v2_check_receipt_spend(&header, state, state_params, point) {
                     Ok(Some(envelope)) => works.push(PalwMergedOwnedWorkV1::Spend(*blue, envelope)),
